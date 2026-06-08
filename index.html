@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <title>AgentDeck</title>
+  <link rel="stylesheet" href="vendor/xterm.css" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <nav id="rail"></nav>
+  <div id="deck"></div>
+
+  <!-- Add / edit column dialog -->
+  <dialog id="colDialog">
+    <h3 id="dlgTitle">添加列</h3>
+    <label>标题</label>
+    <input id="titleInput" placeholder="例如：Agent · 重构" autocomplete="off" spellcheck="false" />
+    <label>工作目录（cwd，留空 = 主目录）</label>
+    <input id="cwdInput" placeholder="/Users/jinhao/some-project" autocomplete="off" spellcheck="false" />
+    <label>启动命令（可选，开列/重开时自动运行）</label>
+    <input id="cmdInput" placeholder="例如：claude --dangerously-skip-permissions" autocomplete="off" spellcheck="false" />
+    <div class="presets">
+      <button type="button" class="preset" data-cmd="claude --dangerously-skip-permissions">Claude（跳权限）</button>
+      <button type="button" class="preset" data-cmd="agy">Antigravity</button>
+      <button type="button" class="preset" data-cmd="grok">Grok</button>
+    </div>
+    <p class="hint">设了启动命令后，每次开 app 这一列会自动跑它，省得手敲。留空 = 干净终端。每列独立，互不影响。</p>
+    <div class="row">
+      <button class="btn" id="dlgCancel">取消</button>
+      <button class="btn primary" id="dlgSave">保存</button>
+    </div>
+  </dialog>
+
+  <!-- In-column search bar (Cmd+F) -->
+  <div id="searchBar" hidden>
+    <input id="searchInput" placeholder="搜索…" autocomplete="off" spellcheck="false" />
+    <span id="searchInfo"></span>
+    <button class="search-btn" id="searchPrev" title="上一个 (Shift+Enter)">▲</button>
+    <button class="search-btn" id="searchNext" title="下一个 (Enter)">▼</button>
+    <button class="search-btn" id="searchClose" title="关闭 (Esc)">✕</button>
+  </div>
+
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-search.js"></script>
+  <script src="vendor/addon-webgl.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>
