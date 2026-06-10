@@ -827,6 +827,21 @@ document.addEventListener('keydown', (e) => {
   if (handled) { e.preventDefault(); e.stopPropagation(); }
 }, true);
 
+// ---- Toast: transient feedback for link clicks ----
+// Tells the user *why* a click didn't land where expected (the path doesn't
+// exist on disk / only an ancestor exists) instead of failing silently.
+const toastEl = document.createElement('div');
+toastEl.id = 'toast';
+document.body.appendChild(toastEl);
+let toastTimer;
+function showToast(text) {
+  toastEl.textContent = text;
+  toastEl.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove('show'), 4000);
+}
+window.deck.onToast(showToast);
+
 // ---- Broadcast input (Cmd+B): send one prompt to every column ----
 const bcastBar = document.getElementById('bcastBar');
 const bcastInput = document.getElementById('bcastInput');

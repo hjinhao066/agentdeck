@@ -245,6 +245,22 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
 }
 .search-btn:hover { background: var(--accent-soft); color: var(--accent); }
 
+/* Toast: transient link-click feedback */
+#toast {
+  position: fixed; left: 50%; bottom: 56px;
+  transform: translateX(-50%) translateY(8px);
+  max-width: 70vw; padding: 8px 14px;
+  background: var(--card-head); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px;
+  font-size: 12px; line-height: 1.4;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+  opacity: 0; pointer-events: none;
+  transition: opacity .2s ease, transform .2s ease;
+  z-index: 60;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
 /* Broadcast bar (Cmd+B): one prompt to every column */
 #bcastBar {
   position: fixed; z-index: 50;

@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('deck', {
   ptyReplay: (id) => ipcRenderer.invoke('pty:replay', { id }),
   reloadRenderer: () => ipcRenderer.send('reload-renderer'),
 
+  // Transient feedback messages (e.g. clicked path doesn't exist).
+  onToast: (cb) => ipcRenderer.on('toast', (_e, m) => cb(m.text)),
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data)),
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, m) => cb(m.id)),
 });

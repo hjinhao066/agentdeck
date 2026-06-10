@@ -221,16 +221,23 @@ function resolveClick(msg, allowAncestor) {
       if (cont[1]) cands.push(a + cont[1], a + ' ' + cont[1]);
     }
   }
-  // Resolve every candidate and keep the deepest hit. Ancestor fallback (for
-  // absolute paths) runs per candidate: a joined path that only partially
+  // Resolve every candidate and keep the deepest hit, tracking exact hits and
+  // ancestor fallbacks separately so the renderer can tell the user when the
+  // clicked path itself doesn't exist (agents fabricate example paths a lot).
+  // Per-candidate ancestor fallback matters: a joined path that only partially
   // exists ("…/Chrome/Default/Cache" where Cache is missing) still lands on
   // its deepest real ancestor, while nonsense joins resolve shallow and lose.
-  let best = null;
+  let exact = null, anc = null;
   for (const c of cands) {
-    const hit = resolveLongestExisting(anchor(c), isAbs && allowAncestor);
-    if (hit && (!best || hit.length > best.length)) best = hit;
+    const e = resolveLongestExisting(anchor(c), false);
+    if (e && (!exact || e.length > exact.length)) exact = e;
+    if (isAbs && allowAncestor) {
+      const a = resolveLongestExisting(anchor(c), true);
+      if (a && (!anc || a.length > anc.length)) anc = a;
+    }
   }
-  return best;
+  if (anc && (!exact || anc.length > exact.length)) return { target: anc, fallback: true };
+  return exact ? { target: exact, fallback: false } : null;
 }
 
 function createWindow() {
@@ -314,26 +321,29 @@ app.whenReady().then(() => {
   });
   // Option+click: open the file in the editor, jumping to the :line the agent
   // printed. No ancestor fallback — a miss in the editor is worse than a no-op.
+  const shortText = (s) => { s = String(s || ''); return s.length > 64 ? s.slice(0, 61) + '…' : s; };
+
   ipcMain.on('open-in-editor', (_e, msg) => {
-    const target = resolveClick(msg, false); // a miss must not open some ancestor in the editor
-    if (!target) return;
+    const r = resolveClick(msg, false); // a miss must not open some ancestor in the editor
+    if (!r) { send('toast', { text: '路径不存在：' + shortText(msg && msg.raw) }); return; }
     const editor = editorCli();
-    if (!editor) { shell.openPath(target); return; }
+    if (!editor) { shell.openPath(r.target); return; }
     // recover ":406" / ":406:12" from the clicked text or its wrapped tail
     const lm = ((msg.raw || '') + ' ' + (Array.isArray(msg.cont) ? msg.cont[0] || '' : '')).match(/:(\d+(?::\d+)?)(?!\d)/);
-    try { execFile(editor, ['-g', lm ? `${target}:${lm[1]}` : target]); } catch (_) {}
+    try { execFile(editor, ['-g', lm ? `${r.target}:${lm[1]}` : r.target]); } catch (_) {}
   });
 
   ipcMain.on('reveal-path', (_e, msg) => {
     // Ancestor fallback only for absolute paths; a relative miss should be a
     // no-op, not a Finder window on some unrelated folder.
-    const target = resolveClick(msg, true);
-    if (!target) return;
+    const r = resolveClick(msg, true);
+    if (!r) { send('toast', { text: '路径不存在：' + shortText(msg && msg.raw) }); return; }
+    if (r.fallback) send('toast', { text: '该路径不完整存在，已打开最深的真实一层：' + r.target });
     try {
-      const stat = fs.statSync(target);
+      const stat = fs.statSync(r.target);
       // A directory opens in Finder; a file is revealed within its parent folder.
-      if (stat.isDirectory()) shell.openPath(target);
-      else shell.showItemInFolder(target);
+      if (stat.isDirectory()) shell.openPath(r.target);
+      else shell.showItemInFolder(r.target);
     } catch (_) {}
   });
 
