@@ -422,12 +422,28 @@ function buildColumn(col) {
     term.registerLinkProvider({
       provideLinks(y, callback) {
         const buf = term.buffer.active;
-        const { str, colOf, rowOf, widthOf } = wrappedLineToCells(buf, y - 1, term.cols);
+        const { str, colOf, rowOf, widthOf, endRow } = wrappedLineToCells(buf, y - 1, term.cols);
         if (!str) { callback(undefined); return; }
         const found = findLinks(str);
         if (!found.length) { callback(undefined); return; }
         callback(found.map((m) => {
           const last = m.end - 1;
+          // A file path that runs to the very end of its logical line may have
+          // been hard-wrapped by the agent's TUI (real newline, so it's a
+          // different logical line). Hand the next two logical lines to the
+          // main process, which only uses a join if the joined path exists.
+          let cont;
+          if (m.kind === 'file' && !str.slice(m.end).trim()) {
+            cont = [];
+            let row = endRow + 1;
+            for (let i = 0; i < 2 && row < buf.length; i++) {
+              const nl = wrappedLineToCells(buf, row, term.cols);
+              const t = nl.str.trim();
+              if (!t) break;
+              cont.push(t);
+              row = nl.endRow + 1;
+            }
+          }
           return {
             text: m.text,
             // 1-based, inclusive cells; start/end may sit on different rows when
@@ -436,7 +452,7 @@ function buildColumn(col) {
               start: { x: colOf[m.start] + 1, y: rowOf[m.start] },
               end:   { x: colOf[last] + widthOf[last], y: rowOf[last] },
             },
-            activate: (event) => openLink(m, event, col.id),
+            activate: (event) => openLink(m, event, col.id, cont),
             decorations: { pointerCursor: true, underline: true },
           };
         }));
@@ -465,10 +481,12 @@ function wrappedLineToCells(buf, row, cols) {
   let str = '';
   const colOf = [], rowOf = [], widthOf = [];
   let cell;
+  let endRow = start; // last buffer row of this wrapped group
   for (let r = start; r < buf.length; r++) {
     const line = buf.getLine(r);
     if (!line) break;
     if (r > start && !line.isWrapped) break; // next logical line begins
+    endRow = r;
     for (let x = 0; x < cols; x++) {
       cell = line.getCell(x, cell);
       if (!cell) continue;
@@ -479,7 +497,7 @@ function wrappedLineToCells(buf, row, cols) {
       str += chars;
     }
   }
-  return { str, colOf, rowOf, widthOf };
+  return { str, colOf, rowOf, widthOf, endRow };
 }
 function trimTrail(text, s, e) {
   while (e > s && /[.,;:!?)\]}>'"]/.test(text[e - 1])) e--;
@@ -526,7 +544,7 @@ function findLinks(text) {
   }
   return out;
 }
-function openLink(m, event, colId) {
+function openLink(m, event, colId, cont) {
   if (m.kind === 'url') {
     // Cmd+click opens in browser (like native Terminal.app);
     // plain click also opens URLs for convenience.
@@ -534,13 +552,13 @@ function openLink(m, event, colId) {
     return;
   }
   // Option+click opens the file in the editor (VS Code/Cursor) at its :line.
-  if (event && event.altKey) { window.deck.openInEditor(m.text, colId); return; }
+  if (event && event.altKey) { window.deck.openInEditor(m.text, colId, cont); return; }
   // Plain click reveals in Finder. Normalization (file:// prefix, ~ expansion,
   // unescaping "\ ", trimming trailing prose, stripping :line suffixes, and
   // anchoring relative paths to the column's shell cwd) is done in the main
   // process, which resolves the longest path that actually exists — so deep
   // paths with spaces land on the real file instead of a shallow parent.
-  window.deck.revealPath(m.text, colId);
+  window.deck.revealPath(m.text, colId, cont);
 }
 
 // Quote a path for the shell: leave simple paths bare, single-quote anything

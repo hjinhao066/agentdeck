@@ -199,6 +199,40 @@ function resolveLongestExisting(raw, allowAncestor = true) {
   return (dir && fs.existsSync(dir)) ? dir : null;
 }
 
+// Resolve a clicked link to a real path. Narrow columns make agent TUIs
+// hard-wrap long paths across lines (real newlines, not xterm soft-wrap), so
+// the matcher only ever sees the first fragment. The renderer sends up to two
+// follow-up lines as `cont`; try every join (the wrap may or may not have
+// consumed a space) and keep whichever candidate resolves deepest. A join only
+// wins if the joined path actually exists, so unrelated next lines are inert.
+function resolveClick(msg, allowAncestor) {
+  const raw = (msg && msg.raw) || '';
+  const isAbs = /^(file:\/\/|\/|~)/.test(raw);
+  if (!isAbs && !(msg && msg.id)) return null;
+  const anchor = (r) => (isAbs ? r : path.join(ptyCwd(msg.id) || HOME, r));
+  const cont = (Array.isArray(msg && msg.cont) ? msg.cont : [])
+    .slice(0, 2)
+    .map((c) => String(c).replace(/^[\s│⎿>]+/u, '').slice(0, 300))
+    .filter(Boolean);
+  const cands = [raw];
+  if (cont[0]) {
+    for (const a of [raw + cont[0], raw + ' ' + cont[0]]) {
+      cands.push(a);
+      if (cont[1]) cands.push(a + cont[1], a + ' ' + cont[1]);
+    }
+  }
+  // Resolve every candidate and keep the deepest hit. Ancestor fallback (for
+  // absolute paths) runs per candidate: a joined path that only partially
+  // exists ("…/Chrome/Default/Cache" where Cache is missing) still lands on
+  // its deepest real ancestor, while nonsense joins resolve shallow and lose.
+  let best = null;
+  for (const c of cands) {
+    const hit = resolveLongestExisting(anchor(c), isAbs && allowAncestor);
+    if (hit && (!best || hit.length > best.length)) best = hit;
+  }
+  return best;
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1600,
@@ -281,25 +315,19 @@ app.whenReady().then(() => {
   // Option+click: open the file in the editor, jumping to the :line the agent
   // printed. No ancestor fallback — a miss in the editor is worse than a no-op.
   ipcMain.on('open-in-editor', (_e, msg) => {
-    const raw = (msg && msg.raw) || '';
-    const isAbs = /^(file:\/\/|\/|~)/.test(raw);
-    const cand = isAbs ? raw : path.join(ptyCwd(msg && msg.id) || HOME, raw);
-    const target = resolveLongestExisting(cand, false);
+    const target = resolveClick(msg, false); // a miss must not open some ancestor in the editor
     if (!target) return;
     const editor = editorCli();
     if (!editor) { shell.openPath(target); return; }
-    const lm = raw.match(/:(\d+(?::\d+)?)(?!\d)/); // recover ":406" / ":406:12"
+    // recover ":406" / ":406:12" from the clicked text or its wrapped tail
+    const lm = ((msg.raw || '') + ' ' + (Array.isArray(msg.cont) ? msg.cont[0] || '' : '')).match(/:(\d+(?::\d+)?)(?!\d)/);
     try { execFile(editor, ['-g', lm ? `${target}:${lm[1]}` : target]); } catch (_) {}
   });
 
   ipcMain.on('reveal-path', (_e, msg) => {
-    const raw = (msg && msg.raw) || '';
-    const isAbs = /^(file:\/\/|\/|~)/.test(raw);
-    // Relative references (Claude Code's "src/renderer.js:406") are anchored to
-    // the clicked column's live shell cwd. No ancestor fallback for those: a
-    // miss should be a no-op, not a Finder window on some unrelated folder.
-    const cand = isAbs ? raw : path.join(ptyCwd(msg && msg.id) || HOME, raw);
-    const target = resolveLongestExisting(cand, isAbs);
+    // Ancestor fallback only for absolute paths; a relative miss should be a
+    // no-op, not a Finder window on some unrelated folder.
+    const target = resolveClick(msg, true);
     if (!target) return;
     try {
       const stat = fs.statSync(target);

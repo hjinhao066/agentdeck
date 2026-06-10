@@ -11,9 +11,11 @@ contextBridge.exposeInMainWorld('deck', {
   agentdeckDump: (id, title, text) => ipcRenderer.send('agentdeck:dump', { id, title, text }),
   // Open a URL in the default browser; reveal a local path in Finder.
   openExternal: (url) => ipcRenderer.send('open-external', url),
-  revealPath: (p, id) => ipcRenderer.send('reveal-path', { raw: p, id }),
+  // `cont` = up to two follow-up terminal lines, used to re-join paths the
+  // agent's TUI hard-wrapped across lines.
+  revealPath: (p, id, cont) => ipcRenderer.send('reveal-path', { raw: p, id, cont }),
   // Option+click: open the path in the editor (VS Code/Cursor) at its :line.
-  openInEditor: (p, id) => ipcRenderer.send('open-in-editor', { raw: p, id }),
+  openInEditor: (p, id, cont) => ipcRenderer.send('open-in-editor', { raw: p, id, cont }),
   // Replay text saved when the app last quit (read-once; null if none).
   ptySaved: (id) => ipcRenderer.invoke('pty:saved', { id }),
 
