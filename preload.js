@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('deck', {
   // Open a URL in the default browser; reveal a local path in Finder.
   openExternal: (url) => ipcRenderer.send('open-external', url),
   revealPath: (p, id) => ipcRenderer.send('reveal-path', { raw: p, id }),
+  // Option+click: open the path in the editor (VS Code/Cursor) at its :line.
+  openInEditor: (p, id) => ipcRenderer.send('open-in-editor', { raw: p, id }),
+  // Replay text saved when the app last quit (read-once; null if none).
+  ptySaved: (id) => ipcRenderer.invoke('pty:saved', { id }),
 
   ptySpawn: (id, cwd, cols, rows) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),

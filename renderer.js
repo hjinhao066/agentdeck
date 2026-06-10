@@ -20,6 +20,7 @@ const ICONS = {
   reset: S('<polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>'),
   fit:   S('<polyline points="4 7 4 4 7 4"/><polyline points="20 7 20 4 17 4"/><polyline points="4 17 4 20 7 20"/><polyline points="20 17 20 20 17 20"/>'),
   grip:  '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg>',
+  send:  S('<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>'),
 };
 
 // ---- Config / state ----
@@ -117,6 +118,8 @@ function buildRail() {
   fitBtn.id = 'fitBtn';
   if (config.fitWindow) fitBtn.classList.add('accent');
   rail.appendChild(fitBtn);
+
+  rail.appendChild(railBtn(ICONS.send, '广播：同一条输入发给所有列 (Cmd+B)', () => toggleBroadcast()));
 
   const spacer = document.createElement('div'); spacer.className = 'rail-spacer'; rail.appendChild(spacer);
 
@@ -272,6 +275,9 @@ function buildColumn(col) {
       fontFamily: 'SFMono-Regular, "SF Mono", Menlo, Monaco, "PingFang SC", "Courier New", monospace',
       fontSize: 13, lineHeight: 1.0, cursorBlink: true, scrollback: 12000,
       theme: TERM_THEME[config.theme], allowProposedApi: true,
+      // Option+click is our "open in editor" gesture on links; don't let xterm
+      // also interpret it as click-to-move-cursor (sends arrow keys to the TUI).
+      altClickMovesCursor: false,
     });
     const fit = new FitAddonNS.FitAddon();
     term.loadAddon(fit);
@@ -369,7 +375,17 @@ function buildColumn(col) {
         if (replay) term.write(replay);
         window.deck.ptyResize(col.id, term.cols, term.rows);
       } else {
-        // Fresh spawn: new pty + auto-run startup command.
+        // Fresh spawn. If the previous app run left a saved session for this
+        // column, replay it first so the agent's history survives a restart.
+        const saved = await window.deck.ptySaved(col.id);
+        if (saved) {
+          term.write(saved);
+          // The replay may end mid-TUI: leave alternate screen, re-show the
+          // cursor, drop mouse/bracketed-paste modes, reset colors — then a
+          // dim separator before the fresh shell starts below.
+          term.write('\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[0m');
+          term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n');
+        }
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows);
         if (col.cmd) setTimeout(() => window.deck.ptyInput(col.id, col.cmd + '\r'), 700);
       }
@@ -517,11 +533,13 @@ function openLink(m, event, colId) {
     window.deck.openExternal(m.text);
     return;
   }
-  // Reveal in Finder. Normalization (file:// prefix, ~ expansion, unescaping
-  // "\ ", trimming trailing prose, stripping :line suffixes, and anchoring
-  // relative paths to the column's shell cwd) is done in the main process,
-  // which resolves the longest path that actually exists — so deep paths with
-  // spaces land on the real file instead of a shallow parent.
+  // Option+click opens the file in the editor (VS Code/Cursor) at its :line.
+  if (event && event.altKey) { window.deck.openInEditor(m.text, colId); return; }
+  // Plain click reveals in Finder. Normalization (file:// prefix, ~ expansion,
+  // unescaping "\ ", trimming trailing prose, stripping :line suffixes, and
+  // anchoring relative paths to the column's shell cwd) is done in the main
+  // process, which resolves the longest path that actually exists — so deep
+  // paths with spaces land on the real file instead of a shallow parent.
   window.deck.revealPath(m.text, colId);
 }
 
@@ -719,7 +737,12 @@ document.getElementById('dlgSave').onclick = () => {
   if (needsRespawn) respawnColumn(col); // a cwd or startup-command change restarts the shell
   dlg.close();
 };
-titleInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('dlgSave').click(); });
+// Enter saves from any field of the dialog, not just the title.
+[titleInput, cwdInput, cmdInput].forEach((el) => {
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); document.getElementById('dlgSave').click(); }
+  });
+});
 
 // ---- Boot ----
 buildRail();
@@ -770,6 +793,8 @@ document.addEventListener('keydown', (e) => {
     if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(idx); }
   } else if (k === 'f' || k === 'F') {
     openSearch();
+  } else if (k === 'b' || k === 'B') {
+    toggleBroadcast();
   } else if (e.shiftKey && (k === 'r' || k === 'R')) {
     // Hot reload: reload renderer only, pty processes stay alive.
     window.deck.reloadRenderer();
@@ -783,6 +808,32 @@ document.addEventListener('keydown', (e) => {
   }
   if (handled) { e.preventDefault(); e.stopPropagation(); }
 }, true);
+
+// ---- Broadcast input (Cmd+B): send one prompt to every column ----
+const bcastBar = document.getElementById('bcastBar');
+const bcastInput = document.getElementById('bcastInput');
+function toggleBroadcast() {
+  if (bcastBar.hidden) { bcastBar.hidden = false; bcastInput.focus(); bcastInput.select(); }
+  else closeBroadcast();
+}
+function closeBroadcast() {
+  bcastBar.hidden = true;
+  const t = terms.get(focusedId);
+  if (t) t.term.focus();
+}
+function sendBroadcast() {
+  const text = bcastInput.value;
+  if (!text.trim()) return;
+  terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, text + '\r'); });
+  bcastInput.value = '';
+}
+bcastInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  if (e.key === 'Enter') { e.preventDefault(); sendBroadcast(); }
+  else if (e.key === 'Escape') { e.preventDefault(); closeBroadcast(); }
+});
+document.getElementById('bcastSend').onclick = () => sendBroadcast();
+document.getElementById('bcastClose').onclick = () => closeBroadcast();
 
 // ---- In-column search (Cmd+F) ----
 const searchBar = document.getElementById('searchBar');

@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { execFileSync } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -116,6 +116,25 @@ function killPty(id) {
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
 }
 
+// Session replays: each column's recent output is saved here on quit and
+// written back into the terminal on next launch, above a separator line.
+const SESS_DIR = path.join(app.getPath('userData'), 'sessions');
+
+// Editor CLI for Option+click "open at line". Prefer VS Code, then Cursor;
+// resolved against the GUI-fixed PATH. Cached after first lookup.
+let editorCliCache;
+function editorCli() {
+  if (editorCliCache !== undefined) return editorCliCache;
+  editorCliCache = null;
+  for (const name of ['code', 'cursor']) {
+    for (const dir of ENV.PATH.split(':')) {
+      const p = path.join(dir, name);
+      try { fs.accessSync(p, fs.constants.X_OK); editorCliCache = p; return p; } catch (_) {}
+    }
+  }
+  return editorCliCache;
+}
+
 // Live cwd of a column's shell (the user may have cd'd since spawn). macOS has
 // no /proc, so ask lsof; only runs on a link click, so the spawn cost is fine.
 function ptyCwd(id) {
@@ -226,6 +245,22 @@ app.whenReady().then(() => {
     const buf = ptyBuffers.get(id);
     return buf ? buf.chunks.join('') : null;
   });
+  // Saved session replay from the previous app run: read once, then delete so
+  // a hot reload (where the pty is still alive) can never double-replay it.
+  ipcMain.handle('pty:saved', (_e, { id }) => {
+    const f = path.join(SESS_DIR, id + '.txt');
+    try { const text = fs.readFileSync(f, 'utf-8'); fs.unlinkSync(f); return text; }
+    catch (_) { return null; }
+  });
+  // Prune replays for columns that no longer exist in the saved layout.
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+    const ids = new Set(((cfg && cfg.columns) || []).map((c) => c.id));
+    for (const f of fs.readdirSync(SESS_DIR)) {
+      if (!ids.has(f.replace(/\.txt$/, ''))) fs.unlinkSync(path.join(SESS_DIR, f));
+    }
+  } catch (_) {}
+
   // Renderer asks us to reload itself (Cmd+Shift+R). Pty processes stay alive.
   ipcMain.on('reload-renderer', () => {
     const w = BrowserWindow.getAllWindows()[0];
@@ -243,6 +278,20 @@ app.whenReady().then(() => {
   ipcMain.on('open-external', (_e, url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
   });
+  // Option+click: open the file in the editor, jumping to the :line the agent
+  // printed. No ancestor fallback — a miss in the editor is worse than a no-op.
+  ipcMain.on('open-in-editor', (_e, msg) => {
+    const raw = (msg && msg.raw) || '';
+    const isAbs = /^(file:\/\/|\/|~)/.test(raw);
+    const cand = isAbs ? raw : path.join(ptyCwd(msg && msg.id) || HOME, raw);
+    const target = resolveLongestExisting(cand, false);
+    if (!target) return;
+    const editor = editorCli();
+    if (!editor) { shell.openPath(target); return; }
+    const lm = raw.match(/:(\d+(?::\d+)?)(?!\d)/); // recover ":406" / ":406:12"
+    try { execFile(editor, ['-g', lm ? `${target}:${lm[1]}` : target]); } catch (_) {}
+  });
+
   ipcMain.on('reveal-path', (_e, msg) => {
     const raw = (msg && msg.raw) || '';
     const isAbs = /^(file:\/\/|\/|~)/.test(raw);
@@ -265,6 +314,13 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  // Persist each column's recent output so the next launch can replay it.
+  try {
+    fs.mkdirSync(SESS_DIR, { recursive: true });
+    for (const [id, buf] of ptyBuffers) {
+      try { fs.writeFileSync(path.join(SESS_DIR, id + '.txt'), buf.chunks.join(''), 'utf-8'); } catch (_) {}
+    }
+  } catch (_) {}
   for (const [id, p] of ptys) {
     try { p.kill(); } catch (_) {}
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit

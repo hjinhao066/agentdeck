@@ -244,3 +244,21 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   background: transparent; color: var(--icon); cursor: pointer; font-size: 12px;
 }
 .search-btn:hover { background: var(--accent-soft); color: var(--accent); }
+
+/* Broadcast bar (Cmd+B): one prompt to every column */
+#bcastBar {
+  position: fixed; z-index: 50;
+  left: 50%; bottom: 18px; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 8px;
+  background: var(--card-head);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+}
+#bcastBar[hidden] { display: none; }
+#bcastInput {
+  width: 420px; border: none; outline: none;
+  background: transparent; color: var(--text);
+  font-size: 13px; padding: 2px 4px;
+}
