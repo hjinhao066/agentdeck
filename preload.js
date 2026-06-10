@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('deck', {
   agentdeckDump: (id, title, text) => ipcRenderer.send('agentdeck:dump', { id, title, text }),
   // Open a URL in the default browser; reveal a local path in Finder.
   openExternal: (url) => ipcRenderer.send('open-external', url),
-  revealPath: (p) => ipcRenderer.send('reveal-path', p),
+  revealPath: (p, id) => ipcRenderer.send('reveal-path', { raw: p, id }),
 
   ptySpawn: (id, cwd, cols, rows) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),

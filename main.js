@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { execFileSync } = require('child_process');
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -115,6 +116,18 @@ function killPty(id) {
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
 }
 
+// Live cwd of a column's shell (the user may have cd'd since spawn). macOS has
+// no /proc, so ask lsof; only runs on a link click, so the spawn cost is fine.
+function ptyCwd(id) {
+  const p = id && ptys.get(id);
+  if (!p || isWin) return null;
+  try {
+    const out = execFileSync('lsof', ['-a', '-p', String(p.pid), '-d', 'cwd', '-Fn'], { encoding: 'utf-8' });
+    const m = out.match(/^n(\/.*)$/m);
+    return m ? m[1] : null;
+  } catch (_) { return null; }
+}
+
 // Resolve the longest path that actually exists on disk from a best-effort
 // candidate string. Clicking a path printed in terminal output is ambiguous when
 // the path contains spaces: the link matcher may also capture trailing prose
@@ -123,24 +136,46 @@ function killPty(id) {
 // source of truth — try the whole string, then drop one space-separated token
 // from the end at a time, returning the first candidate that exists. This lets
 // the click land on the deepest real file/dir even with spaces + trailing text.
-function resolveLongestExisting(raw) {
+// Agents reference code as "file.js:406" (line) or "file.js:406:12" (line:col);
+// strip that suffix when testing existence so the click lands on the file.
+function stripLine(s) { return s.replace(/:\d+(?::\d+)?$/, ''); }
+function tryExists(cand) {
+  if (cand.length >= 2 && fs.existsSync(cand)) return cand;
+  const noLine = stripLine(cand);
+  if (noLine !== cand && noLine.length >= 2 && fs.existsSync(noLine)) return noLine;
+  return null;
+}
+function resolveLongestExisting(raw, allowAncestor = true) {
   if (!raw || typeof raw !== 'string') return null;
   let s = raw.replace(/^file:\/\//, '');
   if (s === '~' || s.startsWith('~/')) s = HOME + s.slice(1);
   s = s.replace(/\\ /g, ' ').replace(/\s+$/, '');
   if (!s.startsWith('/')) return null;
 
-  if (fs.existsSync(s)) return s;
+  const whole = tryExists(s);
+  if (whole) return whole;
 
   const tokens = s.split(' ');
   for (let n = tokens.length; n >= 1; n--) {
     const cand = tokens.slice(0, n).join(' ')
       .replace(/[.,;:!?)\]}>'"，。、；：！？）】」]+$/u, '');
-    if (cand.length >= 2 && fs.existsSync(cand)) return cand;
+    const hit = tryExists(cand);
+    if (hit) return hit;
   }
+  // A path glued to trailing CJK prose ("/path/file.js这个文件") has no space to
+  // split on. Back off at each CJK character, longest prefix first, so paths
+  // that themselves contain Chinese filenames still resolve to the deepest
+  // real file instead of falling through to an ancestor directory.
+  for (let i = s.length - 1; i > 0; i--) {
+    if (/[\u3000-\u9fff\uf900-\ufaff]/.test(s[i])) {
+      const hit = tryExists(s.slice(0, i).replace(/\s+$/, ''));
+      if (hit) return hit;
+    }
+  }
+  if (!allowAncestor) return null;
   // Nothing matched exactly — fall back to the nearest existing ancestor so the
   // click still lands somewhere sensible.
-  let dir = path.dirname(s);
+  let dir = path.dirname(stripLine(s));
   while (dir && dir !== path.dirname(dir) && !fs.existsSync(dir)) dir = path.dirname(dir);
   return (dir && fs.existsSync(dir)) ? dir : null;
 }
@@ -208,8 +243,14 @@ app.whenReady().then(() => {
   ipcMain.on('open-external', (_e, url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
   });
-  ipcMain.on('reveal-path', (_e, raw) => {
-    const target = resolveLongestExisting(raw);
+  ipcMain.on('reveal-path', (_e, msg) => {
+    const raw = (msg && msg.raw) || '';
+    const isAbs = /^(file:\/\/|\/|~)/.test(raw);
+    // Relative references (Claude Code's "src/renderer.js:406") are anchored to
+    // the clicked column's live shell cwd. No ancestor fallback for those: a
+    // miss should be a no-op, not a Finder window on some unrelated folder.
+    const cand = isAbs ? raw : path.join(ptyCwd(msg && msg.id) || HOME, raw);
+    const target = resolveLongestExisting(cand, isAbs);
     if (!target) return;
     try {
       const stat = fs.statSync(target);

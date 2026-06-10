@@ -420,7 +420,7 @@ function buildColumn(col) {
               start: { x: colOf[m.start] + 1, y: rowOf[m.start] },
               end:   { x: colOf[last] + widthOf[last], y: rowOf[last] },
             },
-            activate: (event) => openLink(m, event),
+            activate: (event) => openLink(m, event, col.id),
             decorations: { pointerCursor: true, underline: true },
           };
         }));
@@ -489,15 +489,28 @@ function findLinks(text) {
   while ((m = fileRe.exec(text))) {
     const raw = m[0];
     if (/^https?:/.test(raw) || raw.length < 4) continue;
+    if (m.index > 0 && text[m.index - 1] === '.') continue; // "./x" is relative — relRe below handles it
     const slashes = (raw.match(/\//g) || []).length;
     if (!raw.startsWith('~') && slashes < 2) continue; // noise guard for bare /a/b
     const s = m.index, e = trimTrail(text, s, s + raw.length);
     if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL
     out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
   }
+  // Relative references the agents print constantly: "src/renderer.js:406",
+  // "main.js:128". To stay quiet on ordinary prose ("and/or", "Node.js"), a
+  // candidate needs either a slash-path ending in a dotted filename, or a bare
+  // filename with a :line suffix. The main process anchors these to the
+  // column's live shell cwd before resolving.
+  const relRe = /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?|[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g;
+  while ((m = relRe.exec(text))) {
+    const s = m.index, e = trimTrail(text, s, s + m[0].length);
+    if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
+    if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
+    out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+  }
   return out;
 }
-function openLink(m, event) {
+function openLink(m, event, colId) {
   if (m.kind === 'url') {
     // Cmd+click opens in browser (like native Terminal.app);
     // plain click also opens URLs for convenience.
@@ -505,10 +518,11 @@ function openLink(m, event) {
     return;
   }
   // Reveal in Finder. Normalization (file:// prefix, ~ expansion, unescaping
-  // "\ ", and trimming any trailing prose) is done in the main process, which
-  // resolves the longest path that actually exists — so deep paths with spaces
-  // land on the real file instead of a shallow parent.
-  window.deck.revealPath(m.text);
+  // "\ ", trimming trailing prose, stripping :line suffixes, and anchoring
+  // relative paths to the column's shell cwd) is done in the main process,
+  // which resolves the longest path that actually exists — so deep paths with
+  // spaces land on the real file instead of a shallow parent.
+  window.deck.revealPath(m.text, colId);
 }
 
 // Quote a path for the shell: leave simple paths bare, single-quote anything
