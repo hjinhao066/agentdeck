@@ -92,13 +92,22 @@ function bufferAppend(id, data) {
 function spawnPty(id, cwd, cols, rows) {
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
-  const p = pty.spawn(shellFile(), [], {
-    name: 'xterm-256color',
-    cols: cols || 80,
-    rows: rows || 24,
-    cwd: dir,
-    env: ENV,
-  });
+  let p;
+  try {
+    p = pty.spawn(shellFile(), [], {
+      name: 'xterm-256color',
+      cols: cols || 80,
+      rows: rows || 24,
+      cwd: dir,
+      env: ENV,
+    });
+  } catch (err) {
+    // Spawn can fail (fd exhaustion, bad shell). Surface it in the column
+    // instead of throwing inside the IPC handler and crashing the main process.
+    send('pty:data', { id, data: `\r\n[AgentDeck] shell 启动失败: ${err.message}\r\n` });
+    send('pty:exit', { id });
+    return;
+  }
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
   p.onExit(() => { ptys.delete(id); ptyBuffers.delete(id); send('pty:exit', { id }); });
   ptys.set(id, p);

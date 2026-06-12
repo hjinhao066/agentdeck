@@ -225,6 +225,23 @@ function fitAll() {
   requestAnimationFrame(() => terms.forEach(({ fit }) => { try { fit.fit(); } catch (_) {} }));
 }
 
+// Background CJK glyph self-heal (see the focusin handler in createColumn):
+// rebuild every visible terminal's glyph atlas once a minute, so corruption
+// also clears while the user just watches a column without refocusing it.
+// One redraw per column per minute is imperceptible.
+setInterval(() => {
+  if (document.hidden) return;
+  terms.forEach(({ term, alive }) => { if (alive) { try { term.clearTextureAtlas(); } catch (_) {} } });
+}, 60000);
+
+// Rebuild once fonts finish loading: the first atlas can be built from metrics
+// measured before "SF Mono"/"PingFang SC" were ready, which also misplaces CJK.
+if (document.fonts && document.fonts.ready) {
+  document.fonts.ready.then(() => {
+    terms.forEach(({ term, fit }) => { try { fit.fit(); term.clearTextureAtlas(); } catch (_) {} });
+  });
+}
+
 function mkBtn(svg, tip, onClick) {
   const b = document.createElement('button');
   b.className = 'icon-btn'; b.innerHTML = svg; b.title = tip; b.onclick = onClick;
@@ -326,9 +343,13 @@ function buildColumn(col) {
       pinScroll();
     }, true);
     // Belt-and-suspenders: if a scroll event fires during composition, revert it.
-    deckEl.addEventListener('scroll', () => {
-      if (composing) pinScroll();
-    }, { passive: false });
+    // Named + tracked so removeCol/respawnColumn can unbind it: this listener
+    // lives on the shared deckEl, so unlike the termEl listeners above it does
+    // NOT die with the column's DOM and would otherwise pile up one per
+    // (re)created column.
+    const onDeckScroll = () => { if (composing) pinScroll(); };
+    deckEl.addEventListener('scroll', onDeckScroll, { passive: false });
+    const disposers = [() => deckEl.removeEventListener('scroll', onDeckScroll)];
 
     // Prevent any scroll drift inside termEl for non-composition or voice inputs
     termEl.addEventListener('scroll', (e) => {
@@ -341,7 +362,7 @@ function buildColumn(col) {
         try { e.target.scrollLeft = 0; } catch (_) {}
       }
     }, { capture: true, passive: true });
-    terms.set(col.id, { term, fit, search, el: termEl, wrap, titleEl: title, dot, alive: true });
+    terms.set(col.id, { term, fit, search, el: termEl, wrap, titleEl: title, dot, alive: true, state: 'plain', disposers });
 
     // Cmd+C copies the selection (paste is handled natively by xterm).
     term.attachCustomKeyEventHandler((e) => {
@@ -402,7 +423,14 @@ function buildColumn(col) {
       raf = requestAnimationFrame(() => { try { fit.fit(); } catch (_) {} });
     });
     ro.observe(termEl);
+    disposers.push(() => ro.disconnect()); // observers outlive detached nodes and pin them in memory
     termEl.addEventListener('mousedown', () => { term.focus(); focusedId = col.id; });
+
+    // CJK glyph self-heal: the WebGL renderer's glyph atlas occasionally
+    // corrupts after heavy CJK output (hanzi render shifted/overlapped until a
+    // resize forces an atlas rebuild). Rebuilding on focus is the same repair a
+    // manual sidebar drag used to trigger, minus the drag.
+    termEl.addEventListener('focusin', () => { try { term.clearTextureAtlas(); } catch (_) {} });
 
     // Drag a file from Finder onto a column → insert its (shell-quoted) path,
     // just like dragging onto a native terminal. Without this, Electron's
@@ -653,9 +681,20 @@ function move(col, dir) {
 function removeCol(col) {
   const t = terms.get(col.id);
   if (t && t.alive && t.state === 'working' && !confirm('该列有任务正在运行，确认关闭该列？')) return;
-  if (t) { t.term.dispose(); t.wrap.remove(); terms.delete(col.id); }
+  const idx = columns.indexOf(col);
+  if (t) {
+    (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
+    t.term.dispose(); t.wrap.remove(); terms.delete(col.id);
+  }
   window.deck.ptyKill(col.id);
-  columns.splice(columns.indexOf(col), 1);
+  columns.splice(idx, 1);
+  // Don't leave focusedId pointing at the removed column: every focusedId-based
+  // shortcut (Cmd+W, Cmd+arrows, search, broadcast) would silently no-op until
+  // the user happens to click another column.
+  if (focusedId === col.id) {
+    focusedId = null;
+    if (columns.length) focusColumnByIndex(Math.min(idx, columns.length - 1));
+  }
   saveConfig();
 }
 function addColumn(c) {
@@ -709,8 +748,13 @@ function attachRename(titleEl, col) {
 function respawnColumn(col) {
   const t = terms.get(col.id);
   window.deck.ptyKill(col.id);
-  if (t) { t.term.dispose(); terms.delete(col.id); }
+  if (t) {
+    (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
+    t.term.dispose(); terms.delete(col.id);
+  }
+  const oldId = col.id;
   col.id = newId();
+  if (focusedId === oldId) focusedId = col.id;
   const fresh = buildColumn(col);
   if (t) t.wrap.replaceWith(fresh); else render();
   saveConfig();

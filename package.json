@@ -37,7 +37,8 @@
     "mac": {
       "target": "dmg",
       "category": "public.app-category.developer-tools",
-      "icon": "build/icon.icns"
+      "icon": "build/icon.icns",
+      "identity": "AgentDeck Dev"
     }
   }
 }
