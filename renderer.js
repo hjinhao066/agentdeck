@@ -401,31 +401,43 @@ function buildColumn(col) {
     });
 
     // --- Connect to pty: reconnect if alive (hot reload), or spawn fresh ---
+    // While replayed output is being parsed, xterm auto-ANSWERS any terminal
+    // queries it contains (cursor-position ESC[6n, device-attributes ESC[c, …
+    // agent TUIs emit these constantly). Those answers fire onData like
+    // keystrokes — without the mute they get typed into the fresh shell as
+    // garbage like `1;2c56;3R54;3R54;…`, which the shell echoes, which gets
+    // SAVED on quit and replayed again next launch, snowballing every restart.
+    let replayMuted = false;
     const reconnect = async () => {
       const alive = await window.deck.ptyIsAlive(col.id);
       if (alive) {
         // Hot-reload path: pty survived, replay its buffered output and resize.
         const replay = await window.deck.ptyReplay(col.id);
-        if (replay) term.write(replay);
+        if (replay) {
+          replayMuted = true;
+          term.write(replay, () => { replayMuted = false; });
+        }
         window.deck.ptyResize(col.id, term.cols, term.rows);
       } else {
         // Fresh spawn. If the previous app run left a saved session for this
         // column, replay it first so the agent's history survives a restart.
         const saved = await window.deck.ptySaved(col.id);
         if (saved) {
+          replayMuted = true;
           term.write(saved);
           // The replay may end mid-TUI: leave alternate screen, re-show the
           // cursor, drop mouse/bracketed-paste modes, reset colors — then a
           // dim separator before the fresh shell starts below.
           term.write('\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[0m');
-          term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n');
+          // Writes are parsed in order: this callback marks the end of replay.
+          term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n', () => { replayMuted = false; });
         }
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows);
         if (col.cmd) setTimeout(() => window.deck.ptyInput(col.id, col.cmd + '\r'), 700);
       }
     };
     reconnect();
-    term.onData((d) => window.deck.ptyInput(col.id, d));
+    term.onData((d) => { if (!replayMuted) window.deck.ptyInput(col.id, d); });
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
     if (deckEl.firstElementChild === wrap) { term.focus(); focusedId = col.id; } // focus leftmost on boot
 

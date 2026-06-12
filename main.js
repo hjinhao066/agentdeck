@@ -60,6 +60,14 @@ function buildEnv() {
   env.CLICOLOR = '1';
   env.COLORTERM = 'truecolor';
 
+  // When AgentDeck itself was launched from a terminal (`open` during dev),
+  // Apple Terminal's session vars leak through. /etc/zshrc_Apple_Terminal sees
+  // TERM_SESSION_ID and runs its session-restore inside every column's shell,
+  // printing `rm: ~/.zsh_sessions/...: No such file or directory` on startup.
+  delete env.TERM_SESSION_ID;
+  delete env.SHELL_SESSION_ID;
+  delete env.ITERM_SESSION_ID;
+
   return env;
 }
 const ENV = buildEnv();
