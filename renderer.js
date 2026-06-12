@@ -225,15 +225,6 @@ function fitAll() {
   requestAnimationFrame(() => terms.forEach(({ fit }) => { try { fit.fit(); } catch (_) {} }));
 }
 
-// Background CJK glyph self-heal (see the focusin handler in createColumn):
-// rebuild every visible terminal's glyph atlas once a minute, so corruption
-// also clears while the user just watches a column without refocusing it.
-// One redraw per column per minute is imperceptible.
-setInterval(() => {
-  if (document.hidden) return;
-  terms.forEach(({ term, alive }) => { if (alive) { try { term.clearTextureAtlas(); } catch (_) {} } });
-}, 60000);
-
 // Rebuild once fonts finish loading: the first atlas can be built from metrics
 // measured before "SF Mono"/"PingFang SC" were ready, which also misplaces CJK.
 if (document.fonts && document.fonts.ready) {
@@ -305,13 +296,17 @@ function buildColumn(col) {
     // several agent TUIs repaint at once. Must load after open() (needs the
     // canvas). If the WebGL context is lost (driver hiccup, too many contexts),
     // dispose it so xterm transparently falls back to the DOM renderer.
-    try {
-      if (WebglAddonNS && WebglAddonNS.WebglAddon) {
-        const webgl = new WebglAddonNS.WebglAddon();
-        webgl.onContextLoss(() => { try { webgl.dispose(); } catch (_) {} });
+    let webgl = null;
+    const attachWebgl = () => {
+      if (!(WebglAddonNS && WebglAddonNS.WebglAddon)) return;
+      try {
+        if (webgl) { try { webgl.dispose(); } catch (_) {} }
+        webgl = new WebglAddonNS.WebglAddon();
+        webgl.onContextLoss(() => { try { webgl.dispose(); } catch (_) {} webgl = null; });
         term.loadAddon(webgl);
-      }
-    } catch (_) {}
+      } catch (_) { webgl = null; }
+    };
+    attachWebgl();
     try { fit.fit(); } catch (_) {}
 
     // --- IME / voice-input scroll-drift fix ---
@@ -444,11 +439,22 @@ function buildColumn(col) {
     disposers.push(() => ro.disconnect()); // observers outlive detached nodes and pin them in memory
     termEl.addEventListener('mousedown', () => { term.focus(); focusedId = col.id; });
 
-    // CJK glyph self-heal: the WebGL renderer's glyph atlas occasionally
-    // corrupts after heavy CJK output (hanzi render shifted/overlapped until a
-    // resize forces an atlas rebuild). Rebuilding on focus is the same repair a
-    // manual sidebar drag used to trigger, minus the drag.
-    termEl.addEventListener('focusin', () => { try { term.clearTextureAtlas(); } catch (_) {} });
+    // Renderer self-heal on focus: the WebGL renderer occasionally corrupts
+    // after heavy CJK output. Mild form = shifted/overlapped hanzi (a glyph
+    // atlas rebuild fixes it); severe form = the ENTIRE screen turns into
+    // identical garbage tiles, ASCII included, and clearTextureAtlas() does
+    // NOT recover it — the WebGL context itself is trashed without ever
+    // firing onContextLoss. So on focus we rebuild the whole addon (new
+    // context + new atlas), which heals both forms and also revives columns
+    // that fell back to the DOM renderer after a real context loss. Throttled
+    // so rapid column-hopping can't churn GPU contexts (Chromium caps ~16 and
+    // silently kills the oldest, which would corrupt OTHER columns).
+    let lastWebglReset = 0;
+    termEl.addEventListener('focusin', () => {
+      const now = Date.now();
+      if (now - lastWebglReset > 15000) { lastWebglReset = now; attachWebgl(); }
+      else try { term.clearTextureAtlas(); } catch (_) {}
+    });
 
     // Drag a file from Finder onto a column → insert its (shell-quoted) path,
     // just like dragging onto a native terminal. Without this, Electron's
