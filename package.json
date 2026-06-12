@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "TweetDeck-style multi-column deck for terminal AI agents (tmux-backed on macOS)",
   "main": "main.js",
   "scripts": {

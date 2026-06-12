@@ -330,24 +330,42 @@ function buildColumn(col) {
       termEl.scrollLeft = 0;
       termEl.scrollTop = 0;
     };
+    let lastCompositionTs = 0;
     termEl.addEventListener('compositionstart', () => {
       composing = true;
+      lastCompositionTs = Date.now();
       savedDeckScroll = deckEl.scrollLeft;
       savedViewportScroll = xtermViewport ? xtermViewport.scrollLeft : 0;
     }, true);
     termEl.addEventListener('compositionupdate', () => {
+      lastCompositionTs = Date.now();
       if (composing) requestAnimationFrame(pinScroll);
     }, true);
     termEl.addEventListener('compositionend', () => {
       composing = false;
       pinScroll();
     }, true);
+    // Voice dictation can end a composition session WITHOUT firing
+    // compositionend (e.g. focus moves to another column mid-dictation). A
+    // stuck composing=true would lock the whole deck's scrolling forever via
+    // onDeckScroll below, so treat losing focus as end-of-composition.
+    termEl.addEventListener('focusout', () => { composing = false; }, true);
     // Belt-and-suspenders: if a scroll event fires during composition, revert it.
     // Named + tracked so removeCol/respawnColumn can unbind it: this listener
     // lives on the shared deckEl, so unlike the termEl listeners above it does
     // NOT die with the column's DOM and would otherwise pile up one per
     // (re)created column.
-    const onDeckScroll = () => { if (composing) pinScroll(); };
+    const onDeckScroll = () => {
+      if (!composing) return;
+      // Composition cannot outlive focus; a stale flag must not pin the deck.
+      if (!termEl.contains(document.activeElement)) { composing = false; return; }
+      // Drift only happens while the preedit text is actively changing (the
+      // browser auto-scrolls the textarea into view on each update). During a
+      // dictation pause let the user scroll the deck freely instead of
+      // snapping back — voice IMEs keep one composition open for minutes.
+      if (Date.now() - lastCompositionTs > 2000) return;
+      pinScroll();
+    };
     deckEl.addEventListener('scroll', onDeckScroll, { passive: false });
     const disposers = [() => deckEl.removeEventListener('scroll', onDeckScroll)];
 
