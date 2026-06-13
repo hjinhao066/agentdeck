@@ -2,3 +2,5 @@ node_modules/
 dist/
 send-to-kindle/
 zmd-fork/
+# mcporter (agent-reach) drops its config in the cwd it was installed from
+config/mcporter.json
