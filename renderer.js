@@ -1,7 +1,7 @@
 const { Terminal } = window;            // from vendor/xterm.js (UMD global)
 const FitAddonNS = window.FitAddon;      // from vendor/addon-fit.js
 const SearchAddonNS = window.SearchAddon; // from vendor/addon-search.js
-const WebglAddonNS = window.WebglAddon;   // from vendor/addon-webgl.js
+const CanvasAddonNS = window.CanvasAddon; // from vendor/addon-canvas.js
 
 if (/Mac/.test(navigator.userAgent)) document.body.classList.add('is-mac');
 
@@ -24,9 +24,11 @@ const ICONS = {
 };
 
 // ---- Config / state ----
-const DEFAULT_WIDTH = 420;
+const DEFAULT_WIDTH = 460; // fallback ~⅓ of a typical Mac deck before layout is known
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 1100;
+// Left panel (toolbar + column list): draggable width + collapse-to-icons.
+const NAV_DEFAULT_W = 184, NAV_MIN_W = 130, NAV_MAX_W = 360, NAV_COLLAPSED_W = 56;
 
 const TERM_THEME = {
   dark:  { background: '#000000', foreground: '#e7e9ea', cursor: '#1d9bf0', selectionBackground: 'rgba(29,155,240,0.35)' },
@@ -34,6 +36,15 @@ const TERM_THEME = {
 };
 
 function newId() { return 'c' + Date.now() + Math.floor(Math.random() * 1000); }
+// A column whose startup command is Claude Code. On RESTORE (app restart) we
+// resume the prior conversation with `claude --continue` instead of launching a
+// brand-new session — but only when one already exists for the cwd.
+function isClaudeCmd(cmd) { return /^\s*claude(\s|$)/.test(cmd || ''); }
+function withClaudeResume(cmd) {
+  const t = (cmd || '').trim();
+  if (/(^|\s)(--continue|-c|--resume|-r)(\s|$)/.test(t)) return cmd; // already resuming
+  return t.replace(/^claude/, 'claude --continue');
+}
 // Fresh / reset layout: three agent columns that auto-launch on open.
 function defaultColumns() {
   const agents = [
@@ -44,11 +55,13 @@ function defaultColumns() {
   return agents.map((a) => ({ id: newId(), title: a.title, cwd: '', cmd: a.cmd, width: DEFAULT_WIDTH }));
 }
 
-let config = { theme: 'dark', fitWindow: false, columns: defaultColumns() };
+let config = { theme: 'dark', fitWindow: false, navWidth: 184, navCollapsed: false, columns: defaultColumns() };
 const saved = window.deck.loadConfig();
 if (saved) {
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
+  if (saved.navWidth) config.navWidth = saved.navWidth;
+  if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (Array.isArray(saved.columns) && saved.columns.length) {
     config.columns = saved.columns.map((c) => ({
       id: c.id || newId(), title: c.title || 'Agent', cwd: c.cwd || '', cmd: c.cmd || '', width: c.width || DEFAULT_WIDTH,
@@ -94,7 +107,7 @@ function applyTheme(theme) {
   saveConfig();
 }
 
-// ---- Left rail ----
+// ---- Left panel toolbar (add / broadcast / fit / theme / reset / collapse) ----
 function railBtn(svg, tip, onClick, accent) {
   const b = document.createElement('button');
   b.className = 'rail-btn' + (accent ? ' accent' : '');
@@ -102,14 +115,18 @@ function railBtn(svg, tip, onClick, accent) {
   return b;
 }
 function buildRail() {
-  const rail = document.getElementById('rail');
-  rail.innerHTML = '';
-  const logo = document.createElement('div');
-  logo.className = 'logo'; logo.textContent = 'A';
-  rail.appendChild(logo);
+  const top = document.getElementById('navTop');
+  const bottom = document.getElementById('navBottom');
+  top.innerHTML = ''; bottom.innerHTML = '';
 
-  rail.appendChild(railBtn(ICONS.plus, '添加列', () => addAndFocusColumn(), true));
+  // Top row = primary actions: collapse the panel, add a column, broadcast.
+  const collapseBtn = railBtn(ICONS.left, '折叠侧边栏', () => setNavCollapsed(!config.navCollapsed));
+  collapseBtn.id = 'navCollapseBtn';
+  top.appendChild(collapseBtn);
+  top.appendChild(railBtn(ICONS.plus, '添加列 (Cmd+N)', () => addAndFocusColumn(), true));
+  top.appendChild(railBtn(ICONS.send, '广播：同一条输入发给所有列 (Cmd+B)', () => toggleBroadcast()));
 
+  // Bottom row = utilities, pinned under the list.
   const fitBtn = railBtn(ICONS.fit, '等比例适应窗口 / 横向滚动', () => {
     config.fitWindow = !config.fitWindow;
     fitBtn.classList.toggle('accent', config.fitWindow);
@@ -117,21 +134,58 @@ function buildRail() {
   });
   fitBtn.id = 'fitBtn';
   if (config.fitWindow) fitBtn.classList.add('accent');
-  rail.appendChild(fitBtn);
-
-  rail.appendChild(railBtn(ICONS.send, '广播：同一条输入发给所有列 (Cmd+B)', () => toggleBroadcast()));
-
-  const spacer = document.createElement('div'); spacer.className = 'rail-spacer'; rail.appendChild(spacer);
+  bottom.appendChild(fitBtn);
 
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
-  rail.appendChild(themeBtn);
+  bottom.appendChild(themeBtn);
 
-  rail.appendChild(railBtn(ICONS.reset, '恢复默认布局', () => {
+  bottom.appendChild(railBtn(ICONS.reset, '恢复默认布局', () => {
     if (!confirm('恢复默认列布局？现有列的终端会关闭。')) return;
     columns.forEach((c) => window.deck.ptyKill(c.id));
-    columns = defaultColumns(); saveConfig(); render();
+    columns = defaultColumns();
+    const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
+    saveConfig(); render();
   }));
+}
+
+// ---- Left panel width + collapse ----
+function applyNavWidth() {
+  const w = config.navCollapsed ? NAV_COLLAPSED_W : (config.navWidth || NAV_DEFAULT_W);
+  colNavEl.style.flex = '0 0 ' + w + 'px';
+  colNavEl.style.width = w + 'px';
+}
+function setNavCollapsed(v) {
+  config.navCollapsed = v;
+  colNavEl.classList.toggle('collapsed', v);
+  const btn = document.getElementById('navCollapseBtn');
+  if (btn) { btn.innerHTML = v ? ICONS.right : ICONS.left; btn.title = v ? '展开侧边栏' : '折叠侧边栏'; }
+  applyNavWidth();
+  saveConfig();
+  fitAll(); // deck width changed
+}
+function attachNavResize(handle) {
+  handle.addEventListener('mousedown', (e) => {
+    if (config.navCollapsed) return; // no resizing while collapsed
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = colNavEl.getBoundingClientRect().width;
+    document.body.classList.add('resizing');
+    const onMove = (ev) => {
+      const w = Math.max(NAV_MIN_W, Math.min(NAV_MAX_W, startW + (ev.clientX - startX)));
+      colNavEl.style.flex = '0 0 ' + w + 'px';
+      colNavEl.style.width = w + 'px';
+    };
+    const onUp = () => {
+      document.body.classList.remove('resizing');
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      config.navWidth = Math.round(colNavEl.getBoundingClientRect().width);
+      saveConfig(); fitAll();
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
 }
 
 // ---- Render ----
@@ -149,7 +203,7 @@ deckEl.addEventListener('wheel', (e) => {
   clearTimeout(userScrollTimeout);
   userScrollTimeout = setTimeout(() => { isUserScrollingDeck = false; }, 500);
 
-  if (config.fitWindow && columns.length <= FIT_MAX) return; // nothing to scroll
+  if (config.fitWindow && columns.length <= FIT_COLS) return; // nothing to scroll
   if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
     deckEl.scrollLeft += e.deltaX;
     e.preventDefault();
@@ -173,40 +227,40 @@ function render() {
   deckEl.innerHTML = '';
   columns.forEach((col) => deckEl.appendChild(buildColumn(col)));
   updateColumnStyles();
+  renderColNav();
 }
 
-// Max columns the "fit window" mode will squeeze onto one screen. Beyond this,
-// the leftmost FIT_MAX fill the screen and the rest overflow into a scroll.
-const FIT_MAX = 4;
+// "Fit window" divides the deck area (screen minus the sidebar) into FIT_COLS
+// EQUAL columns: that many fill the screen exactly, more keep the same width and
+// scroll. 3 on macOS, 4 on Windows (wide external displays). The same divisor
+// sets a new column's default width (deckWidth / FIT_COLS).
+const FIT_COLS = env.platform === 'win32' ? 4 : 3;
+
+// Default width for a freshly added column: one equal slice of the current deck
+// area. Falls back to a fixed width before the deck has been laid out.
+function defaultColWidth() {
+  const W = deckEl ? deckEl.clientWidth : 0;
+  if (!W) return DEFAULT_WIDTH;
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(W / FIT_COLS)));
+}
 
 function updateColumnStyles() {
   const colEls = deckEl.querySelectorAll('.column');
   const n = columns.length;
 
-  if (config.fitWindow && n <= FIT_MAX) {
-    // Few enough columns: spread them across the whole viewport, proportional
-    // to each column's stored width. No horizontal scroll needed.
-    deckEl.style.overflowX = 'hidden';
-    colEls.forEach((wrap, i) => {
-      const col = columns[i]; if (!col) return;
-      wrap.style.flex = `${col.width} ${col.width} 0%`;
-      wrap.style.width = '';
-    });
-    return;
-  }
-
   if (config.fitWindow) {
-    // More than FIT_MAX columns: scale every column by one factor so the first
-    // FIT_MAX exactly fill the screen; the rest keep the same scale and scroll.
-    const W = deckEl.clientWidth;
-    const firstSum = columns.slice(0, FIT_MAX).reduce((s, c) => s + c.width, 0) || 1;
-    const k = W / firstSum;
-    colEls.forEach((wrap, i) => {
-      const col = columns[i]; if (!col) return;
-      wrap.style.flex = '0 0 auto';
-      wrap.style.width = Math.round(col.width * k) + 'px';
-    });
-    deckEl.style.overflowX = 'scroll';
+    if (n <= FIT_COLS) {
+      // Up to FIT_COLS columns: flex them to equal widths filling the screen,
+      // no scroll, no rounding gap.
+      deckEl.style.overflowX = 'hidden';
+      colEls.forEach((wrap) => { wrap.style.flex = '1 1 0'; wrap.style.width = ''; });
+    } else {
+      // More: pin every column to one equal slice so the first FIT_COLS fill
+      // the screen and the rest scroll, all the same width.
+      const w = Math.floor(deckEl.clientWidth / FIT_COLS);
+      colEls.forEach((wrap) => { wrap.style.flex = '0 0 auto'; wrap.style.width = w + 'px'; });
+      deckEl.style.overflowX = 'scroll';
+    }
     return;
   }
 
@@ -239,11 +293,13 @@ function mkBtn(svg, tip, onClick) {
   return b;
 }
 
-function buildColumn(col) {
+function buildColumn(col, isFresh) {
   const wrap = document.createElement('div');
   wrap.className = 'column';
   wrap.dataset.colId = col.id; // lets drag-reorder map a DOM column back to its id
-  if (config.fitWindow) wrap.style.flex = `${col.width} ${col.width} 0%`;
+  // updateColumnStyles() runs right after and is the source of truth for sizing;
+  // this just avoids a first-frame flash before it does.
+  if (config.fitWindow) wrap.style.flex = '1 1 0';
   else { wrap.style.flex = '0 0 auto'; wrap.style.width = (col.width || DEFAULT_WIDTH) + 'px'; }
 
   const head = document.createElement('div');
@@ -292,21 +348,17 @@ function buildColumn(col) {
     const search = new SearchAddonNS.SearchAddon();
     term.loadAddon(search);
     term.open(termEl);
-    // GPU-accelerated rendering: far lower CPU and smoother scrolling when
-    // several agent TUIs repaint at once. Must load after open() (needs the
-    // canvas). If the WebGL context is lost (driver hiccup, too many contexts),
-    // dispose it so xterm transparently falls back to the DOM renderer.
-    let webgl = null;
-    const attachWebgl = () => {
-      if (!(WebglAddonNS && WebglAddonNS.WebglAddon)) return;
-      try {
-        if (webgl) { try { webgl.dispose(); } catch (_) {} }
-        webgl = new WebglAddonNS.WebglAddon();
-        webgl.onContextLoss(() => { try { webgl.dispose(); } catch (_) {} webgl = null; });
-        term.loadAddon(webgl);
-      } catch (_) { webgl = null; }
-    };
-    attachWebgl();
+    // Renderer: the Canvas addon (2D canvas), NOT WebGL. Each WebGL terminal
+    // holds its own GPU context, and Chromium hard-caps live WebGL contexts
+    // (~16) and silently EVICTS the oldest when a new one is created — including
+    // on focus, where the old code rebuilt the context per column. That eviction
+    // (and GPU texture purges of un-focused terminals, which WebGL never
+    // repaints) is exactly why switching to one column turned the others into
+    // garbage tiles, and why clicking a garbled one "fixed" it (it forced that
+    // one to repaint). The Canvas renderer has no such context cap or eviction,
+    // so the corruption can't happen — at a small CPU cost vs WebGL. Must load
+    // after open() (needs the canvas element).
+    try { if (CanvasAddonNS && CanvasAddonNS.CanvasAddon) term.loadAddon(new CanvasAddonNS.CanvasAddon()); } catch (_) {}
     try { fit.fit(); } catch (_) {}
 
     // --- IME / voice-input scroll-drift fix ---
@@ -433,7 +485,14 @@ function buildColumn(col) {
           term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n', () => { replayMuted = false; });
         }
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows);
-        if (col.cmd) setTimeout(() => window.deck.ptyInput(col.id, col.cmd + '\r'), 700);
+        if (col.cmd) {
+          let launch = col.cmd;
+          // Restoring a Claude column → continue its previous conversation.
+          if (!isFresh && isClaudeCmd(col.cmd) && await window.deck.claudeHasSession(col.cwd || env.home)) {
+            launch = withClaudeResume(col.cmd);
+          }
+          setTimeout(() => window.deck.ptyInput(col.id, launch + '\r'), 700);
+        }
       }
     };
     reconnect();
@@ -449,24 +508,7 @@ function buildColumn(col) {
     });
     ro.observe(termEl);
     disposers.push(() => ro.disconnect()); // observers outlive detached nodes and pin them in memory
-    termEl.addEventListener('mousedown', () => { term.focus(); focusedId = col.id; });
-
-    // Renderer self-heal on focus: the WebGL renderer occasionally corrupts
-    // after heavy CJK output. Mild form = shifted/overlapped hanzi (a glyph
-    // atlas rebuild fixes it); severe form = the ENTIRE screen turns into
-    // identical garbage tiles, ASCII included, and clearTextureAtlas() does
-    // NOT recover it — the WebGL context itself is trashed without ever
-    // firing onContextLoss. So on focus we rebuild the whole addon (new
-    // context + new atlas), which heals both forms and also revives columns
-    // that fell back to the DOM renderer after a real context loss. Throttled
-    // so rapid column-hopping can't churn GPU contexts (Chromium caps ~16 and
-    // silently kills the oldest, which would corrupt OTHER columns).
-    let lastWebglReset = 0;
-    termEl.addEventListener('focusin', () => {
-      const now = Date.now();
-      if (now - lastWebglReset > 15000) { lastWebglReset = now; attachWebgl(); }
-      else try { term.clearTextureAtlas(); } catch (_) {}
-    });
+    termEl.addEventListener('mousedown', () => { term.focus(); focusedId = col.id; syncNav(); });
 
     // Drag a file from Finder onto a column → insert its (shell-quoted) path,
     // just like dragging onto a native terminal. Without this, Electron's
@@ -687,6 +729,7 @@ function attachReorder(grip, col) {
       // Reflow DOM to match the array — appendChild moves live nodes, no reload.
       columns.forEach((c) => { const w = terms.get(c.id) && terms.get(c.id).wrap; if (w) deckEl.appendChild(w); });
       updateColumnStyles();
+      renderColNav();
     };
     const onUp = () => {
       document.removeEventListener('mousemove', onMove);
@@ -712,6 +755,7 @@ function move(col, dir) {
   if (dir === 1) deckEl.insertBefore(nodes[j], nodes[idx]);
   else deckEl.insertBefore(nodes[idx], nodes[j]);
   updateColumnStyles();
+  renderColNav();
 }
 // Surgical add/remove so touching one column never blanks the others' live output.
 function removeCol(col) {
@@ -732,13 +776,15 @@ function removeCol(col) {
     if (columns.length) focusColumnByIndex(Math.min(idx, columns.length - 1));
   }
   saveConfig();
+  renderColNav();
 }
 function addColumn(c) {
-  const col = { id: newId(), width: DEFAULT_WIDTH, cwd: '', ...c };
+  const col = { id: newId(), width: defaultColWidth(), cwd: '', ...c };
   columns.push(col);
   saveConfig();
-  deckEl.appendChild(buildColumn(col));
+  deckEl.appendChild(buildColumn(col, true)); // brand-new column: never auto-resume
   updateColumnStyles();
+  renderColNav();
 }
 // Smallest unused positive integer, so new columns read 1,2,3… and fill gaps.
 function nextTitle() {
@@ -773,9 +819,8 @@ function attachRename(titleEl, col) {
       titleEl.contentEditable = 'false';
       window.getSelection().removeAllRanges();
       const v = titleEl.textContent.trim();
-      if (!cancelled && v) col.title = v;
-      titleEl.textContent = col.title; // normalize (drop stray newlines / restore on cancel)
-      saveConfig();
+      if (!cancelled && v) setColumnTitle(col, v); // syncs header + sidebar + saves
+      else titleEl.textContent = col.title; // normalize (drop stray newlines / restore on cancel)
     }, { once: true });
   });
 }
@@ -791,10 +836,154 @@ function respawnColumn(col) {
   const oldId = col.id;
   col.id = newId();
   if (focusedId === oldId) focusedId = col.id;
-  const fresh = buildColumn(col);
+  const fresh = buildColumn(col, true); // cwd/cmd just changed: start fresh, no auto-resume
   if (t) t.wrap.replaceWith(fresh); else render();
   saveConfig();
   updateColumnStyles();
+  renderColNav();
+}
+
+// ---- Column sidebar (list of columns: click to jump, double-click to rename) ----
+// One source of truth for a column's name so the header title and the sidebar
+// entry never drift: rename in either place flows through here.
+function setColumnTitle(col, title) {
+  col.title = title;
+  const t = terms.get(col.id);
+  if (t && t.titleEl && t.titleEl.textContent !== title) t.titleEl.textContent = title;
+  const nav = navItems.get(col.id);
+  if (nav && nav.label.textContent !== title) nav.label.textContent = title;
+  saveConfig();
+}
+
+const colNavEl = document.getElementById('colNav');
+const navListEl = document.getElementById('navList');
+const navItems = new Map(); // id -> { el, dot, label }
+
+// Rebuild the whole list from `columns`. Cheap (plain DOM, no terminals), so we
+// just call it on every structural change (add/remove/reorder/respawn).
+function renderColNav() {
+  if (!navListEl) return;
+  navItems.clear();
+  navListEl.innerHTML = '';
+  columns.forEach((col, i) => {
+    const item = document.createElement('div');
+    item.className = 'colnav-item';
+    item.dataset.colId = col.id;
+    const dot = document.createElement('span'); dot.className = 'cn-dot';
+    const label = document.createElement('span'); label.className = 'cn-label';
+    label.textContent = col.title; label.title = '双击重命名';
+    // Right slot: the Cmd+number hint for the first 9 columns, swapped for a
+    // delete ✕ on hover.
+    const right = document.createElement('span'); right.className = 'cn-right';
+    const idx = document.createElement('span'); idx.className = 'cn-index';
+    idx.textContent = i < 9 ? String(i + 1) : '';
+    const del = document.createElement('button');
+    del.className = 'cn-del'; del.innerHTML = ICONS.close; del.title = '删除该列';
+    del.addEventListener('mousedown', (e) => e.stopPropagation()); // don't start a drag
+    del.addEventListener('click', (e) => { e.stopPropagation(); removeCol(col); });
+    right.append(idx, del);
+    item.append(dot, label, right);
+    // Drag reorders (deck follows); a plain click jumps; double click renames.
+    attachNavReorder(item, col);
+    attachNavRename(label, col);
+    navListEl.appendChild(item);
+    navItems.set(col.id, { el: item, dot, label });
+  });
+  const countEl = document.getElementById('navCount');
+  if (countEl) countEl.textContent = String(columns.length);
+  syncNav();
+}
+
+// Mirror each entry's status dot and mark the focused column as active.
+function syncNav() {
+  navItems.forEach((nav, id) => {
+    const entry = terms.get(id);
+    nav.dot.style.background = (entry && entry.dot && entry.dot.style.background) || DOT.plain;
+    nav.el.classList.toggle('active', id === focusedId);
+  });
+}
+
+function jumpToColumn(col) {
+  const t = terms.get(col.id);
+  if (!t) return;
+  t.term.focus(); focusedId = col.id;
+  t.wrap.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  syncNav();
+}
+
+// Drag a sidebar entry to reorder; the deck columns reflow to match live (no
+// reload). Below the move threshold it's a plain click → jump to that column.
+function attachNavReorder(item, col) {
+  item.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    const label = item.querySelector('.cn-label');
+    if (label && label.isContentEditable) return; // renaming, not dragging
+    e.preventDefault(); // don't text-select the label while pressing
+    const srcId = col.id;
+    const startX = e.clientX, startY = e.clientY;
+    let dragging = false;
+    const onMove = (ev) => {
+      if (!dragging) {
+        if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
+        dragging = true;
+        document.body.classList.add('reordering');
+      }
+      const overEl = document.elementFromPoint(ev.clientX, ev.clientY);
+      const overItem = overEl && overEl.closest('.colnav-item');
+      const overId = overItem && overItem.dataset.colId;
+      if (!overId || overId === srcId) return;
+      const from = columns.findIndex((c) => c.id === srcId);
+      const to = columns.findIndex((c) => c.id === overId);
+      if (from < 0 || to < 0 || from === to) return;
+      const [moved] = columns.splice(from, 1);
+      columns.splice(to, 0, moved);
+      // Reflow the deck to match the array — appendChild moves live nodes.
+      columns.forEach((c) => { const w = terms.get(c.id) && terms.get(c.id).wrap; if (w) deckEl.appendChild(w); });
+      updateColumnStyles();
+      renderColNav(); // rebuild the sidebar in the new order (replaces nodes)
+      const fresh = navItems.get(srcId); // re-mark the moved entry as dragging
+      if (fresh) fresh.el.classList.add('cn-dragging');
+    };
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.classList.remove('reordering');
+      if (dragging) {
+        const fresh = navItems.get(srcId);
+        if (fresh) fresh.el.classList.remove('cn-dragging');
+        saveConfig();
+      } else {
+        jumpToColumn(col); // it was a click, not a drag
+      }
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  });
+}
+
+// Inline rename on the sidebar entry, mirrored back to the column header.
+function attachNavRename(labelEl, col) {
+  labelEl.addEventListener('dblclick', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    labelEl.contentEditable = 'true'; labelEl.spellcheck = false; labelEl.focus();
+    const range = document.createRange(); range.selectNodeContents(labelEl);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    let cancelled = false;
+    const onKey = (ev) => {
+      ev.stopPropagation();
+      if (ev.key === 'Enter') { ev.preventDefault(); labelEl.blur(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); cancelled = true; labelEl.blur(); }
+    };
+    labelEl.addEventListener('keydown', onKey);
+    labelEl.addEventListener('blur', () => {
+      labelEl.removeEventListener('keydown', onKey);
+      labelEl.contentEditable = 'false';
+      window.getSelection().removeAllRanges();
+      const v = labelEl.textContent.trim();
+      if (!cancelled && v) setColumnTitle(col, v);
+      else labelEl.textContent = col.title;
+    }, { once: true });
+  });
 }
 
 // ---- Add / edit dialog ----
@@ -829,8 +1018,7 @@ document.getElementById('dlgSave').onclick = () => {
   col.title = title;
   col.cwd = cwd;
   col.cmd = cmd;
-  const t = terms.get(col.id);
-  if (t) t.titleEl.textContent = title; // title updates live, shell untouched
+  setColumnTitle(col, title); // title updates live in header + sidebar; shell untouched
   saveConfig();
   if (needsRespawn) respawnColumn(col); // a cwd or startup-command change restarts the shell
   dlg.close();
@@ -844,6 +1032,8 @@ document.getElementById('dlgSave').onclick = () => {
 
 // ---- Boot ----
 buildRail();
+setNavCollapsed(config.navCollapsed); // sets class + width + collapse-button icon
+attachNavResize(document.getElementById('navResizer'));
 applyTheme(config.theme);
 render();
 window.addEventListener('resize', () => { updateColumnStyles(); fitAll(); });
@@ -870,6 +1060,7 @@ setInterval(() => {
     try { window.deck.agentdeckDump(id, entry.titleEl ? entry.titleEl.textContent : '', text); } catch (_) {}
     if (entry.alive) { entry.state = classify(text); setDot(entry, entry.state); } // exited dots stay dim
   });
+  syncNav(); // mirror status dots + active highlight into the sidebar
 }, 1500);
 
 // ---- Keyboard shortcuts ----
@@ -878,7 +1069,7 @@ function focusColumnByIndex(idx) {
   const col = columns[Math.max(0, Math.min(idx, columns.length - 1))];
   if (!col) return;
   const t = terms.get(col.id);
-  if (t) { t.term.focus(); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); }
+  if (t) { t.term.focus(); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav(); }
 }
 document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos

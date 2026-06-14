@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('deck', {
   openInEditor: (p, id, cont) => ipcRenderer.send('open-in-editor', { raw: p, id, cont }),
   // Replay text saved when the app last quit (read-once; null if none).
   ptySaved: (id) => ipcRenderer.invoke('pty:saved', { id }),
+  // True if Claude Code has a resumable session in this cwd (→ use --continue).
+  claudeHasSession: (cwd) => ipcRenderer.invoke('claude:has-session', { cwd }),
 
   ptySpawn: (id, cwd, cols, rows) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),

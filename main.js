@@ -91,6 +91,7 @@ function bufferAppend(id, data) {
   if (!buf) { buf = { chunks: [], totalSize: 0 }; ptyBuffers.set(id, buf); }
   buf.chunks.push(data);
   buf.totalSize += data.length;
+  buf.dirty = true; // flushed to disk by the periodic crash-safety flush below
   // Trim oldest chunks when over budget.
   while (buf.totalSize > PTY_BUFFER_MAX && buf.chunks.length > 1) {
     buf.totalSize -= buf.chunks.shift().length;
@@ -133,9 +134,25 @@ function killPty(id) {
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
 }
 
-// Session replays: each column's recent output is saved here on quit and
-// written back into the terminal on next launch, above a separator line.
+// Session replays: each column's recent output is saved here and written back
+// into the terminal on next launch, above a separator line. Saved continuously
+// (not just on quit) so an ABNORMAL exit — crash, force-quit, power loss, where
+// `before-quit` never fires — still has the last seen output to replay.
 const SESS_DIR = path.join(app.getPath('userData'), 'sessions');
+
+function writeSession(id, buf) {
+  if (!buf) return;
+  try {
+    fs.mkdirSync(SESS_DIR, { recursive: true });
+    fs.writeFileSync(path.join(SESS_DIR, id + '.txt'), buf.chunks.join(''), 'utf-8');
+    buf.dirty = false;
+  } catch (_) {}
+}
+// Periodically persist any column whose output changed since the last flush.
+function flushSessions() {
+  for (const [id, buf] of ptyBuffers) { if (buf && buf.dirty) writeSession(id, buf); }
+}
+setInterval(flushSessions, 3000);
 
 // Editor CLI for Option+click "open at line". Prefer VS Code, then Cursor;
 // resolved against the GUI-fixed PATH. Cached after first lookup.
@@ -319,6 +336,19 @@ app.whenReady().then(() => {
     }
   } catch (_) {}
 
+  // Does Claude Code have a resumable session in this cwd? Claude stores each
+  // session at ~/.claude/projects/<cwd-with-nonalnum-turned-to-dash>/<id>.jsonl,
+  // so a non-empty matching project dir means `claude --continue` will resume
+  // the real conversation instead of erroring on a fresh directory.
+  ipcMain.handle('claude:has-session', (_e, { cwd }) => {
+    try {
+      const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
+      const enc = dir.replace(/[^a-zA-Z0-9]/g, '-');
+      const projDir = path.join(HOME, '.claude', 'projects', enc);
+      return fs.existsSync(projDir) && fs.readdirSync(projDir).some((f) => f.endsWith('.jsonl'));
+    } catch (_) { return false; }
+  });
+
   // Renderer asks us to reload itself (Cmd+Shift+R). Pty processes stay alive.
   ipcMain.on('reload-renderer', () => {
     const w = BrowserWindow.getAllWindows()[0];
@@ -369,13 +399,9 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
-  // Persist each column's recent output so the next launch can replay it.
-  try {
-    fs.mkdirSync(SESS_DIR, { recursive: true });
-    for (const [id, buf] of ptyBuffers) {
-      try { fs.writeFileSync(path.join(SESS_DIR, id + '.txt'), buf.chunks.join(''), 'utf-8'); } catch (_) {}
-    }
-  } catch (_) {}
+  // Final flush of each column's recent output so the next launch can replay it
+  // (the periodic flush already covers crashes that skip this handler).
+  for (const [id, buf] of ptyBuffers) writeSession(id, buf);
   for (const [id, p] of ptys) {
     try { p.kill(); } catch (_) {}
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
