@@ -12,7 +12,10 @@ on:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # Pinned to VS 2022, not windows-latest: the latest image ships VS 2026,
+    # which electron's bundled node-gyp can't detect ("could not find Visual
+    # Studio 2017 or newer"), so node-pty's native build fails.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
