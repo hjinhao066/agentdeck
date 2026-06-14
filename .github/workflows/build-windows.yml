@@ -1,0 +1,42 @@
+name: Build Windows
+
+# Builds the Windows installer on a windows-latest runner (Visual Studio +
+# Python preinstalled), so node-pty's native module compiles for Electron
+# without needing a local toolchain. Produces dist/*.exe as a downloadable
+# artifact, and attaches it to the GitHub Release when triggered by a v* tag.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # postinstall runs `electron-rebuild -f -w node-pty`, compiling the native
+      # pty for the Electron ABI using the runner's bundled MSVC + Python.
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Windows installer
+        run: npm run dist:win
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentDeck-Windows-installer
+          path: dist/*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
