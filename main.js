@@ -33,9 +33,14 @@ const spoolPath = (id) => path.join(WATCH_SPOOL, id + '.txt');
 // found. Prepend the usual homebrew + user bin dirs so columns can run them.
 function buildEnv() {
   const env = { ...process.env };
-  const extra = ['/opt/homebrew/bin', '/usr/local/bin', path.join(HOME, '.local/bin'), '/usr/bin', '/bin'];
-  const cur = (env.PATH || '').split(':');
-  env.PATH = [...extra, ...cur].filter((p, i, a) => p && a.indexOf(p) === i).join(':');
+  // Prepend the usual Unix bin dirs only on macOS/Linux. On Windows PATH uses
+  // ';' separators and entries like "C:\…" contain ':', so splitting on ':'
+  // would shred it — and the GUI PATH there already finds node/claude/etc.
+  if (!isWin) {
+    const extra = ['/opt/homebrew/bin', '/usr/local/bin', path.join(HOME, '.local/bin'), '/usr/bin', '/bin'];
+    const cur = (env.PATH || '').split(':');
+    env.PATH = [...extra, ...cur].filter((p, i, a) => p && a.indexOf(p) === i).join(':');
+  }
   env.TERM = 'xterm-256color';
 
   // GUI apps launched from Finder/Dock don't inherit the shell's locale, so the
@@ -160,10 +165,15 @@ let editorCliCache;
 function editorCli() {
   if (editorCliCache !== undefined) return editorCliCache;
   editorCliCache = null;
+  // Windows resolves CLIs via extensions (code.cmd, cursor.cmd) and splits PATH
+  // on ';'. Use the platform's delimiter and try the right suffixes.
+  const exts = isWin ? ['.cmd', '.exe', '.bat', ''] : [''];
   for (const name of ['code', 'cursor']) {
-    for (const dir of ENV.PATH.split(':')) {
-      const p = path.join(dir, name);
-      try { fs.accessSync(p, fs.constants.X_OK); editorCliCache = p; return p; } catch (_) {}
+    for (const dir of (ENV.PATH || '').split(path.delimiter)) {
+      for (const ext of exts) {
+        const p = path.join(dir, name + ext);
+        try { fs.accessSync(p, fs.constants.X_OK); editorCliCache = p; return p; } catch (_) {}
+      }
     }
   }
   return editorCliCache;
