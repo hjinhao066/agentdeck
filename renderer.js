@@ -27,6 +27,11 @@ const ICONS = {
 const DEFAULT_WIDTH = 460; // fallback ~⅓ of a typical Mac deck before layout is known
 const MIN_WIDTH = 260;
 const MAX_WIDTH = 1100;
+// "Fit window" splits the deck area (screen minus sidebar) into this many EQUAL
+// columns. Was a fixed constant; now a saved, user-pickable value (2–5) via the
+// fit button's hover menu. Default 3 on macOS, 4 on Windows (wide displays).
+const DEFAULT_FIT_COLS = env.platform === 'win32' ? 4 : 3;
+const FIT_COLS_CHOICES = [2, 3, 4, 5];
 // Left panel (toolbar + column list): draggable width + collapse-to-icons.
 const NAV_DEFAULT_W = 184, NAV_MIN_W = 130, NAV_MAX_W = 360, NAV_COLLAPSED_W = 56;
 
@@ -55,11 +60,12 @@ function defaultColumns() {
   return agents.map((a) => ({ id: newId(), title: a.title, cwd: '', cmd: a.cmd, width: DEFAULT_WIDTH }));
 }
 
-let config = { theme: 'dark', fitWindow: false, navWidth: 184, navCollapsed: false, columns: defaultColumns() };
+let config = { theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184, navCollapsed: false, columns: defaultColumns() };
 const saved = window.deck.loadConfig();
 if (saved) {
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
+  if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
   if (saved.navWidth) config.navWidth = saved.navWidth;
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (Array.isArray(saved.columns) && saved.columns.length) {
@@ -127,14 +133,48 @@ function buildRail() {
   top.appendChild(railBtn(ICONS.send, '广播：同一条输入发给所有列 (Cmd+B)', () => toggleBroadcast()));
 
   // Bottom row = utilities, pinned under the list.
-  const fitBtn = railBtn(ICONS.fit, '等比例适应窗口 / 横向滚动', () => {
+  // Fit button: a CLICK toggles equal-fit on/off (keeps the current column
+  // count); HOVERING reveals a menu to pick how many EQUAL columns fill the
+  // screen (2–5). Picking a number turns fit on. Overflow columns past that
+  // count keep the same slice width and scroll.
+  const fitWrap = document.createElement('div');
+  fitWrap.className = 'fit-wrap';
+
+  const fitBtn = railBtn(ICONS.fit, '等比例适应窗口（悬停选择列数）/ 横向滚动', () => {
     config.fitWindow = !config.fitWindow;
-    fitBtn.classList.toggle('accent', config.fitWindow);
-    saveConfig(); updateColumnStyles(); fitAll();
+    applyFit();
   });
   fitBtn.id = 'fitBtn';
-  if (config.fitWindow) fitBtn.classList.add('accent');
-  bottom.appendChild(fitBtn);
+
+  const fitMenu = document.createElement('div');
+  fitMenu.className = 'fit-menu';
+  FIT_COLS_CHOICES.forEach((n) => {
+    const item = document.createElement('button');
+    item.className = 'fit-menu-item';
+    item.textContent = String(n);
+    item.title = n + ' 列均分';
+    item.dataset.cols = String(n);
+    item.onclick = (e) => {
+      e.stopPropagation();
+      config.fitCols = n;
+      config.fitWindow = true;
+      applyFit();
+    };
+    fitMenu.appendChild(item);
+  });
+
+  function applyFit() {
+    fitBtn.classList.toggle('accent', config.fitWindow);
+    fitMenu.querySelectorAll('.fit-menu-item').forEach((el) => {
+      el.classList.toggle('active', config.fitWindow && Number(el.dataset.cols) === fitCols());
+    });
+    saveConfig(); updateColumnStyles(); fitAll();
+  }
+  applyFit();
+
+  fitWrap.appendChild(fitBtn);
+  fitWrap.appendChild(fitMenu);
+  bottom.appendChild(fitWrap);
 
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
@@ -203,7 +243,7 @@ deckEl.addEventListener('wheel', (e) => {
   clearTimeout(userScrollTimeout);
   userScrollTimeout = setTimeout(() => { isUserScrollingDeck = false; }, 500);
 
-  if (config.fitWindow && columns.length <= FIT_COLS) return; // nothing to scroll
+  if (config.fitWindow && columns.length <= fitCols()) return; // nothing to scroll
   if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
     deckEl.scrollLeft += e.deltaX;
     e.preventDefault();
@@ -230,18 +270,18 @@ function render() {
   renderColNav();
 }
 
-// "Fit window" divides the deck area (screen minus the sidebar) into FIT_COLS
+// "Fit window" divides the deck area (screen minus the sidebar) into fitCols()
 // EQUAL columns: that many fill the screen exactly, more keep the same width and
-// scroll. 3 on macOS, 4 on Windows (wide external displays). The same divisor
-// sets a new column's default width (deckWidth / FIT_COLS).
-const FIT_COLS = env.platform === 'win32' ? 4 : 3;
+// scroll. The divisor is user-pickable (2–5) via the fit button's hover menu and
+// also sets a new column's default width (deckWidth / fitCols()).
+function fitCols() { return config.fitCols || DEFAULT_FIT_COLS; }
 
 // Default width for a freshly added column: one equal slice of the current deck
 // area. Falls back to a fixed width before the deck has been laid out.
 function defaultColWidth() {
   const W = deckEl ? deckEl.clientWidth : 0;
   if (!W) return DEFAULT_WIDTH;
-  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(W / FIT_COLS)));
+  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(W / fitCols())));
 }
 
 function updateColumnStyles() {
@@ -249,15 +289,16 @@ function updateColumnStyles() {
   const n = columns.length;
 
   if (config.fitWindow) {
-    if (n <= FIT_COLS) {
-      // Up to FIT_COLS columns: flex them to equal widths filling the screen,
+    const cols = fitCols();
+    if (n <= cols) {
+      // Up to fitCols() columns: flex them to equal widths filling the screen,
       // no scroll, no rounding gap.
       deckEl.style.overflowX = 'hidden';
       colEls.forEach((wrap) => { wrap.style.flex = '1 1 0'; wrap.style.width = ''; });
     } else {
-      // More: pin every column to one equal slice so the first FIT_COLS fill
+      // More: pin every column to one equal slice so the first fitCols() fill
       // the screen and the rest scroll, all the same width.
-      const w = Math.floor(deckEl.clientWidth / FIT_COLS);
+      const w = Math.floor(deckEl.clientWidth / cols);
       colEls.forEach((wrap) => { wrap.style.flex = '0 0 auto'; wrap.style.width = w + 'px'; });
       deckEl.style.overflowX = 'scroll';
     }
