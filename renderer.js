@@ -251,9 +251,28 @@ deckEl.addEventListener('wheel', (e) => {
   }
 }, { capture: true, passive: false });
 
+// The drift-guard below must fire only for STRAY auto-scrolls (the browser
+// pulling the focused xterm textarea back into view after it moves during IME /
+// typing), never for a deliberate drag of the bottom scrollbar. A scrollbar drag
+// fires no 'wheel' event, so isUserScrollingDeck stays false and the textarea is
+// still focused: the old guard snapped every drag frame back, so the bar smeared
+// (残影) and could not be dragged. Stray auto-scrolls happen within a frame or
+// two of textarea input/focus, so we only arm the guard for a short window after
+// that activity; outside it, scrollbar drags are honored normally.
+let lastTextareaActivityTs = 0;
+const markTextareaActivity = (e) => {
+  if (e.target && e.target.classList && e.target.classList.contains('xterm-helper-textarea')) {
+    lastTextareaActivityTs = Date.now();
+  }
+};
+['input', 'compositionstart', 'compositionupdate', 'compositionend', 'focusin']
+  .forEach((type) => deckEl.addEventListener(type, markTextareaActivity, true));
+
 let lastValidDeckScrollLeft = deckEl.scrollLeft;
 deckEl.addEventListener('scroll', () => {
-  if (!isUserScrollingDeck && document.activeElement && document.activeElement.classList.contains('xterm-helper-textarea')) {
+  const driftLikely = Date.now() - lastTextareaActivityTs < 300;
+  if (!isUserScrollingDeck && driftLikely &&
+      document.activeElement && document.activeElement.classList.contains('xterm-helper-textarea')) {
     deckEl.scrollLeft = lastValidDeckScrollLeft;
   } else {
     lastValidDeckScrollLeft = deckEl.scrollLeft;
