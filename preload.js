@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('deck', {
   saveConfig: (cfg) => ipcRenderer.send('save-config', cfg),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
   clipboardWrite: (t) => clipboard.writeText(t),
+  clipboardRead: () => clipboard.readText(),
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
   getPathForFile: (file) => webUtils.getPathForFile(file),
   // Push a column's rendered screen text so the watch-ai daemon can see it.

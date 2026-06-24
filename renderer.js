@@ -509,6 +509,21 @@ function buildColumn(col, isFresh) {
         window.deck.clipboardWrite(text);
         return false;
       }
+      // Ctrl+V pastes the clipboard (macOS Cmd+V already pastes natively).
+      // A terminal normally sends Ctrl+V to the pty as a literal ^V AND cancels
+      // the browser's native paste, so a synthesized Ctrl+V from a voice tool
+      // (闪电说) never lands — only Ctrl+Shift+V did, because xterm leaves that
+      // one alone. Intercept plain Ctrl+V, suppress the default ^V, and paste
+      // explicitly via xterm so bracketed-paste-aware apps (Claude, vim, …)
+      // still receive it correctly. Shift/Alt are excluded so Ctrl+Shift+V and
+      // any future bindings keep their behavior.
+      if (e.type === 'keydown' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
+          (e.key === 'v' || e.key === 'V' || e.code === 'KeyV')) {
+        const text = window.deck.clipboardRead();
+        if (text) term.paste(text);
+        e.preventDefault();
+        return false;
+      }
       return true;
     });
 
