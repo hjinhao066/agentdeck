@@ -79,9 +79,37 @@ const ENV = buildEnv();
 
 // Each column is just an independent shell process. One dying never touches the
 // others — close it and open a fresh one. (No tmux: kept deliberately simple.)
+// Windows columns run PowerShell, NOT cmd.exe: the agent launchers are
+// PowerShell-flavored (`claude` is a .ps1) and the user drives columns with
+// PowerShell syntax (Set-Location, ';'). cmd.exe chokes on both. Resolve the
+// always-present Windows PowerShell 5.1 by absolute path so we never depend on
+// COMSPEC (which points at cmd.exe) or PATH.
 function shellFile() {
-  if (isWin) return process.env.COMSPEC || 'powershell.exe';
+  if (isWin) {
+    const root = process.env.SystemRoot || 'C:\\Windows';
+    const ps = path.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    return fs.existsSync(ps) ? ps : 'powershell.exe';
+  }
   return ENV.SHELL || '/bin/zsh';
+}
+
+// One-letter launchers, injected into every Windows PowerShell column so an
+// agent starts by typing a single letter + Enter:
+//   c → Claude (in the playground repo)   a → Antigravity   g → Grok
+// Defined at global scope so they survive into the interactive session, and
+// shipped via -EncodedCommand (base64 of UTF-16LE) so no shell-quoting can
+// mangle the braces/quotes/semicolons. -NoExit keeps the prompt afterwards;
+// the profile still loads (no -NoProfile), then these override anything.
+function shellArgs() {
+  if (!isWin) return [];
+  const init = [
+    "function global:c { Set-Location 'D:\\aiproject\\playground'; claude --dangerously-skip-permissions }",
+    "function global:a { agy }",
+    "function global:g { grok }",
+    "Write-Host 'AgentDeck shortcuts:  c = Claude   a = Antigravity   g = Grok' -ForegroundColor DarkGray",
+  ].join('; ');
+  const b64 = Buffer.from(init, 'utf16le').toString('base64');
+  return ['-NoLogo', '-NoExit', '-EncodedCommand', b64];
 }
 
 const ptys = new Map(); // columnId -> pty process
@@ -108,7 +136,7 @@ function spawnPty(id, cwd, cols, rows) {
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   let p;
   try {
-    p = pty.spawn(shellFile(), [], {
+    p = pty.spawn(shellFile(), shellArgs(), {
       name: 'xterm-256color',
       cols: cols || 80,
       rows: rows || 24,
