@@ -10,6 +10,12 @@ on:
     tags:
       - 'v*'
 
+# Needed by the release-attach step: the default GITHUB_TOKEN is read-only
+# here, which made every tag build fail at the last step with "Resource not
+# accessible by integration" (v0.4.0 died this way).
+permissions:
+  contents: write
+
 jobs:
   windows:
     # Pinned to VS 2022, not windows-latest: the latest image ships VS 2026,
