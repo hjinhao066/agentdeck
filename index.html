@@ -37,6 +37,47 @@
     </div>
   </dialog>
 
+  <!-- Shortcuts & tips (help button in the sidebar, or Cmd+/) -->
+  <dialog id="helpDialog">
+    <h3>快捷键与使用提示</h3>
+    <div class="help-section">列</div>
+    <div class="help-grid">
+      <span><kbd>⌘ N</kbd></span><span>新建列</span>
+      <span><kbd>⌘ W</kbd></span><span>关闭当前列（有任务在跑会先确认）</span>
+      <span><kbd>⌘ 1…9</kbd></span><span>跳到第 N 列</span>
+      <span><kbd>⌘ ←</kbd> <kbd>⌘ →</kbd></span><span>左右切换聚焦列</span>
+      <span><kbd>⌘ J</kbd></span><span>跳到等你回复的列（红点），多列循环</span>
+      <span><kbd>⌘ ⏎</kbd></span><span>放大 / 还原当前列（双击列头空白处同效）</span>
+      <span>双击列名</span><span>重命名（Enter 确认，Esc 取消）</span>
+      <span>拖动 ⠿ 把手</span><span>拖拽排序（侧边栏条目也可以拖）</span>
+    </div>
+    <div class="help-section">输入与搜索</div>
+    <div class="help-grid">
+      <span><kbd>⌘ F</kbd></span><span>列内搜索（Enter 下一个，Shift+Enter 上一个）</span>
+      <span><kbd>⌘ B</kbd></span><span>广播：同一条输入发给所有列</span>
+      <span><kbd>⌘ V</kbd></span><span>粘贴截图 → 自动存成 PNG 并输入其路径</span>
+      <span>拖文件进列</span><span>自动输入该文件的路径</span>
+      <span><kbd>⌘ 点击</kbd> URL</span><span>用浏览器打开</span>
+      <span>点击路径</span><span>在访达中显示</span>
+      <span><kbd>⌥ 点击</kbd> 路径</span><span>用编辑器打开并跳到 :行号</span>
+    </div>
+    <div class="help-section">状态灯</div>
+    <div class="help-grid">
+      <span><i class="legend-dot" style="background:#536471"></i></span><span>灰 = 未开始</span>
+      <span><i class="legend-dot" style="background:#ffd400"></i></span><span>黄（呼吸）= AI 干活中</span>
+      <span><i class="legend-dot" style="background:#f4212e"></i></span><span>红（闪烁）= 等你回复 — Dock 角标同步计数</span>
+      <span><i class="legend-dot" style="background:#00ba7c"></i></span><span>绿 = 已完成</span>
+      <span><i class="legend-dot" style="box-shadow: inset 0 0 0 1.5px #5c6670"></i></span><span>空心 = 进程已退出</span>
+    </div>
+    <div class="help-section">其他</div>
+    <div class="help-grid">
+      <span><kbd>⌘ /</kbd></span><span>打开本说明</span>
+      <span><kbd>⌘ ⇧ R</kbd></span><span>热重载界面（终端进程不断）</span>
+      <span>拖侧边栏右缘</span><span>调宽度；一直拖到最左 = 折叠成图标栏</span>
+    </div>
+    <div class="row"><button class="btn primary" id="helpClose">好</button></div>
+  </dialog>
+
   <!-- In-column search bar (Cmd+F) -->
   <div id="searchBar" hidden>
     <input id="searchInput" placeholder="搜索…" autocomplete="off" spellcheck="false" />

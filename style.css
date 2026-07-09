@@ -19,9 +19,11 @@
   --accent-soft: rgba(29, 155, 240, 0.12);
   --pill-bg: rgba(0, 0, 0, 0.05);
   --pill-bg-hover: rgba(0, 0, 0, 0.09);
-  /* Scrollbars are chrome, not accent: neutral in both themes. */
-  --scrollbar-thumb: rgba(15, 20, 25, 0.22);
-  --scrollbar-thumb-hover: rgba(15, 20, 25, 0.40);
+  /* Scrollbar thumbs stay ORANGE by explicit owner choice: a neutral gray
+     thumb is invisible on the black theme, and the orange doubles as a
+     "where am I in the deck" landmark. Do not neutralize again. */
+  --scrollbar-thumb: rgba(217, 119, 46, 0.45);
+  --scrollbar-thumb-hover: rgba(217, 119, 46, 0.7);
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.14), 0 1px 3px rgba(0, 0, 0, 0.08);
   --backdrop: rgba(15, 20, 25, 0.25);
 }
@@ -43,8 +45,8 @@
   --accent-soft: rgba(29, 155, 240, 0.22);
   --pill-bg: rgba(255, 255, 255, 0.10);
   --pill-bg-hover: rgba(255, 255, 255, 0.16);
-  --scrollbar-thumb: rgba(255, 255, 255, 0.20);
-  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.35);
+  --scrollbar-thumb: rgba(217, 119, 46, 0.45);
+  --scrollbar-thumb-hover: rgba(217, 119, 46, 0.7);
   --shadow-pop: 0 8px 28px rgba(0, 0, 0, 0.5);
   --backdrop: rgba(0, 0, 0, 0.45);
 }
@@ -238,6 +240,7 @@ body.is-mac #colNav { padding-top: 38px; }
   outline: 2px solid var(--accent); border-radius: 5px;
   padding: 1px 4px; margin: -1px -4px; background: var(--card);
   color: var(--text);
+  align-self: flex-start; min-width: 40px; /* size to the text, not the row */
 }
 
 /* Drag handle on the panel's right edge to resize its width */
@@ -346,6 +349,8 @@ body.is-mac #colNav { padding-top: 38px; }
   overflow: visible; text-overflow: clip; cursor: text;
   outline: 2px solid var(--accent); border-radius: 5px;
   padding: 1px 5px; margin: 0 -5px; background: var(--card);
+  /* Shrink to the text while editing — a full-header-width box looks broken. */
+  flex: 0 1 auto; min-width: 48px; max-width: 65%;
 }
 .col-head .grip {
   -webkit-app-region: no-drag;
@@ -507,4 +512,29 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   width: 420px; border: none; outline: none;
   background: transparent; color: var(--text);
   font-size: 13px; padding: 2px 4px;
+}
+
+/* Help dialog (shortcuts & tips) */
+#helpDialog { width: 480px; max-height: 80vh; overflow-y: auto; }
+#helpDialog::-webkit-scrollbar { width: 8px; }
+#helpDialog::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; }
+.help-section {
+  margin: 16px 0 8px;
+  font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted);
+}
+.help-grid {
+  display: grid; grid-template-columns: minmax(96px, auto) 1fr;
+  gap: 7px 14px; align-items: center;
+  font-size: 13px; line-height: 1.4;
+}
+.help-grid kbd {
+  display: inline-block; padding: 2px 7px;
+  background: var(--pill-bg); border: 1px solid var(--border); border-radius: 6px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; white-space: nowrap;
+}
+.legend-dot {
+  display: inline-block; width: 9px; height: 9px; border-radius: 999px;
+  vertical-align: middle;
 }

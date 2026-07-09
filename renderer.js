@@ -23,6 +23,7 @@ const ICONS = {
   send:  S('<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>'),
   up:    S('<polyline points="18 15 12 9 6 15"/>'),
   down:  S('<polyline points="6 9 12 15 18 9"/>'),
+  help:  S('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
 };
 
 // ---- Config / state ----
@@ -35,7 +36,7 @@ const MAX_WIDTH = 1100;
 const DEFAULT_FIT_COLS = env.platform === 'win32' ? 4 : 3;
 const FIT_COLS_CHOICES = [2, 3, 4, 5];
 // Left panel (toolbar + column list): draggable width + collapse-to-icons.
-const NAV_DEFAULT_W = 184, NAV_MIN_W = 130, NAV_MAX_W = 360, NAV_COLLAPSED_W = 56;
+const NAV_DEFAULT_W = 184, NAV_MIN_W = 90, NAV_MAX_W = 360, NAV_COLLAPSED_W = 56;
 
 const TERM_THEME = {
   dark:  { background: '#000000', foreground: '#e7e9ea', cursor: '#1d9bf0', selectionBackground: 'rgba(29,155,240,0.35)' },
@@ -217,6 +218,8 @@ function buildRail() {
   themeBtn.id = 'themeBtn';
   bottom.appendChild(themeBtn);
 
+  bottom.appendChild(railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()));
+
   bottom.appendChild(railBtn(ICONS.reset, '恢复默认布局', () => {
     if (!confirm('恢复默认列布局？现有列的终端会关闭。')) return;
     columns.forEach((c) => window.deck.ptyKill(c.id));
@@ -248,8 +251,10 @@ function attachNavResize(handle) {
     const startX = e.clientX;
     const startW = colNavEl.getBoundingClientRect().width;
     document.body.classList.add('resizing');
+    let rawW = startW; // where the pointer actually wants the edge, unclamped
     const onMove = (ev) => {
-      const w = Math.max(NAV_MIN_W, Math.min(NAV_MAX_W, startW + (ev.clientX - startX)));
+      rawW = startW + (ev.clientX - startX);
+      const w = Math.max(NAV_MIN_W, Math.min(NAV_MAX_W, rawW));
       colNavEl.style.flex = '0 0 ' + w + 'px';
       colNavEl.style.width = w + 'px';
     };
@@ -257,6 +262,13 @@ function attachNavResize(handle) {
       document.body.classList.remove('resizing');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
+      // Dragged well past the minimum → collapse to the icon rail (same as the
+      // collapse button). navWidth keeps its pre-drag value for re-expanding.
+      if (rawW < NAV_MIN_W - 30) {
+        colNavEl.style.flex = ''; colNavEl.style.width = '';
+        setNavCollapsed(true);
+        return;
+      }
       config.navWidth = Math.round(colNavEl.getBoundingClientRect().width);
       saveConfig(); fitAll();
     };
@@ -1192,6 +1204,14 @@ function attachNavRename(labelEl, col) {
   });
 }
 
+// ---- Help dialog (shortcuts & tips) ----
+const helpDlg = document.getElementById('helpDialog');
+function toggleHelp() {
+  if (helpDlg.open) helpDlg.close();
+  else helpDlg.showModal();
+}
+document.getElementById('helpClose').onclick = () => helpDlg.close();
+
 // ---- Add / edit dialog ----
 const dlg = document.getElementById('colDialog');
 const titleInput = document.getElementById('titleInput');
@@ -1400,6 +1420,8 @@ document.addEventListener('keydown', (e) => {
     openSearch();
   } else if (k === 'b' || k === 'B') {
     toggleBroadcast();
+  } else if (k === '/') {
+    toggleHelp();
   } else if (k === 'Enter') {
     toggleZoom(focusedId || (columns[0] && columns[0].id));
   } else if (k === 'j' || k === 'J') {
