@@ -596,6 +596,7 @@ function buildColumn(col, isFresh) {
           (e.key === 'v' || e.key === 'V' || e.code === 'KeyV')) {
         const text = window.deck.clipboardRead();
         if (text) term.paste(text);
+        else pasteImageAsPath(); // clipboard holds an image (screenshot) → paste its temp-file path
         e.preventDefault();
         return false;
       }
@@ -670,19 +671,20 @@ function buildColumn(col, isFresh) {
       term.focus(); focusedId = col.id; syncNav();
     });
 
-    // Paste an IMAGE (e.g. a fresh screenshot on the clipboard) → save it to a
-    // temp PNG and type its shell-quoted path, mirroring the drag-drop-a-file
-    // behavior. Text pastes fall through to xterm's native handling.
+    // Paste an IMAGE (e.g. a fresh screenshot on the clipboard) → main saves
+    // it to a temp PNG and we type its shell-quoted path, mirroring the
+    // drag-drop-a-file behavior. Text pastes fall through to xterm's native
+    // handling. (The Ctrl+V key handler below covers the same for Windows,
+    // where the DOM paste event is suppressed.)
+    const pasteImageAsPath = () => window.deck.pasteImageSave().then((p) => {
+      if (p) { term.focus(); window.deck.ptyInput(col.id, shellQuote(p) + ' '); }
+      return !!p;
+    }).catch(() => false);
     termEl.addEventListener('paste', (e) => {
       const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
-      const imgItem = items.find((it) => it.kind === 'file' && /^image\//.test(it.type));
-      if (!imgItem) return;
-      const file = imgItem.getAsFile();
-      if (!file) return;
+      if (!items.some((it) => it.kind === 'file' && /^image\//.test(it.type))) return;
       e.preventDefault(); e.stopPropagation();
-      file.arrayBuffer().then((buf) => window.deck.pasteImageSave(buf)).then((p) => {
-        if (p) { term.focus(); window.deck.ptyInput(col.id, shellQuote(p) + ' '); }
-      }).catch(() => {});
+      pasteImageAsPath();
     }, true);
 
     // Drag a file from Finder onto a column → insert its (shell-quoted) path,

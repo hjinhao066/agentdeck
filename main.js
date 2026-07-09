@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -405,11 +405,13 @@ app.whenReady().then(() => {
       if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
     }
   } catch (_) {}
-  ipcMain.handle('paste-image:save', (_e, buf) => {
+  ipcMain.handle('paste-image:save', () => {
     try {
+      const img = clipboard.readImage();
+      if (img.isEmpty()) return null;
       fs.mkdirSync(PASTE_DIR, { recursive: true });
       const f = path.join(PASTE_DIR, 'paste-' + Date.now() + '.png');
-      fs.writeFileSync(f, Buffer.from(buf));
+      fs.writeFileSync(f, img.toPNG());
       return f;
     } catch (_) { return null; }
   });
