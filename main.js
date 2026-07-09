@@ -52,7 +52,6 @@ function buildEnv() {
   const UTF8 = 'en_US.UTF-8';
   env.LANG = UTF8;
   env.LC_CTYPE = UTF8;
-  env.LC_ALL = UTF8;
 
   // Color-capable env, forced. GUI apps — and apps relaunched from a tool shell
   // (e.g. an agent terminal that exports NO_COLOR=1 / FORCE_COLOR=0 / TERM=dumb
@@ -240,8 +239,10 @@ function resolveLongestExisting(raw, allowAncestor = true) {
   if (!raw || typeof raw !== 'string') return null;
   let s = raw.replace(/^file:\/\//, '');
   if (s === '~' || s.startsWith('~/')) s = HOME + s.slice(1);
-  s = s.replace(/\\ /g, ' ').replace(/\s+$/, '');
-  if (!s.startsWith('/')) return null;
+  // Un-escape "\ " only on Unix — in Windows paths a backslash is the separator.
+  if (!isWin) s = s.replace(/\\ /g, ' ');
+  s = s.replace(/\s+$/, '');
+  if (!path.isAbsolute(s)) return null; // accepts "/…" and Windows "C:\…"
 
   const whole = tryExists(s);
   if (whole) return whole;
@@ -279,7 +280,7 @@ function resolveLongestExisting(raw, allowAncestor = true) {
 // wins if the joined path actually exists, so unrelated next lines are inert.
 function resolveClick(msg, allowAncestor) {
   const raw = (msg && msg.raw) || '';
-  const isAbs = /^(file:\/\/|\/|~)/.test(raw);
+  const isAbs = /^(file:\/\/|\/|~|[A-Za-z]:[\\/])/.test(raw);
   if (!isAbs && !(msg && msg.id)) return null;
   const anchor = (r) => (isAbs ? r : path.join(ptyCwd(msg.id) || HOME, r));
   const cont = (Array.isArray(msg && msg.cont) ? msg.cont : [])
@@ -338,7 +339,12 @@ app.whenReady().then(() => {
     catch (_) { e.returnValue = null; }
   });
   ipcMain.on('save-config', (_e, cfg) => {
-    try { fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2), 'utf-8'); } catch (_) {}
+    // Atomic write: a crash mid-write must not corrupt config.json (which would
+    // silently reset the whole deck layout to defaults on next launch).
+    try {
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), 'utf-8');
+      fs.renameSync(configPath + '.tmp', configPath);
+    } catch (_) {}
   });
   ipcMain.on('env-info-sync', (e) => { e.returnValue = { platform: process.platform, home: HOME }; });
 
@@ -387,6 +393,32 @@ app.whenReady().then(() => {
     } catch (_) { return false; }
   });
 
+  // Pasting an image into a column: the renderer sends the PNG bytes; save to a
+  // temp file and return the path, which gets typed into the pty (mirrors the
+  // drag-drop-a-file flow, but for screenshots on the clipboard).
+  const PASTE_DIR = path.join(os.tmpdir(), 'agentdeck-paste');
+  // Startup sweep: pasted screenshots older than 24h are stale (Windows %TEMP%
+  // is never auto-cleaned, so without this the dir grows without bound).
+  try {
+    for (const f of fs.readdirSync(PASTE_DIR)) {
+      const p = path.join(PASTE_DIR, f);
+      if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
+    }
+  } catch (_) {}
+  ipcMain.handle('paste-image:save', (_e, buf) => {
+    try {
+      fs.mkdirSync(PASTE_DIR, { recursive: true });
+      const f = path.join(PASTE_DIR, 'paste-' + Date.now() + '.png');
+      fs.writeFileSync(f, Buffer.from(buf));
+      return f;
+    } catch (_) { return null; }
+  });
+
+  // Dock badge (macOS): number of columns blocked waiting for the user.
+  ipcMain.on('attn:count', (_e, n) => {
+    if (isMac && app.dock) { try { app.dock.setBadge(n > 0 ? String(n) : ''); } catch (_) {} }
+  });
+
   // Renderer asks us to reload itself (Cmd+Shift+R). Pty processes stay alive.
   ipcMain.on('reload-renderer', () => {
     const w = BrowserWindow.getAllWindows()[0];
@@ -398,6 +430,11 @@ app.whenReady().then(() => {
   ipcMain.on('agentdeck:dump', (_e, { id, text }) => {
     try { fs.mkdirSync(WATCH_SPOOL, { recursive: true }); fs.writeFileSync(spoolPath(id), text || '', 'utf-8'); }
     catch (_) {}
+  });
+  // Metadata-only keepalive for an unchanged screen (see preload agentdeckTouch).
+  ipcMain.on('agentdeck:touch', (_e, { id }) => {
+    const now = new Date();
+    try { fs.utimesSync(spoolPath(id), now, now); } catch (_) {}
   });
 
   // Open URLs in the browser / reveal local paths in Finder (clicked links).
@@ -437,6 +474,7 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it
   // (the periodic flush already covers crashes that skip this handler).
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);

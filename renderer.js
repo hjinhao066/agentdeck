@@ -21,6 +21,8 @@ const ICONS = {
   fit:   S('<polyline points="4 7 4 4 7 4"/><polyline points="20 7 20 4 17 4"/><polyline points="4 17 4 20 7 20"/><polyline points="20 17 20 20 17 20"/>'),
   grip:  '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/></svg>',
   send:  S('<path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>'),
+  up:    S('<polyline points="18 15 12 9 6 15"/>'),
+  down:  S('<polyline points="6 9 12 15 18 9"/>'),
 };
 
 // ---- Config / state ----
@@ -80,27 +82,62 @@ function saveConfig() { config.columns = columns; window.deck.saveConfig(config)
 // ---- Terminals ----
 const terms = new Map(); // id -> { term, fit, el, wrap, titleEl, dot, alive }
 let focusedId = null;    // id of the column whose terminal last had focus
+let zoomedId = null;     // column temporarily maximized to fill the deck (Cmd+Enter / double-click header)
+
+// Zoom in/out of one column. Focus follows the zoom so typing lands where
+// you're looking; while zoomed, moving focus (Cmd+←→/1-9/J) re-zooms onto the
+// newly focused column instead of typing into a hidden one.
+function toggleZoom(id) {
+  if (!id || !terms.has(id)) return;
+  zoomedId = zoomedId === id ? null : id;
+  updateColumnStyles();
+  fitAll();
+  const t = terms.get(id);
+  if (t) { t.term.focus(); focusedId = id; syncNav(); }
+}
 
 window.deck.onPtyData((id, data) => { const t = terms.get(id); if (t) t.term.write(data); });
 window.deck.onPtyExit((id) => {
   const t = terms.get(id);
-  if (t) { t.alive = false; t.term.write('\r\n\x1b[2m[已退出 / process exited]\x1b[0m\r\n'); setDot(t, 'exited'); }
+  if (t) {
+    t.alive = false; t.state = 'exited';
+    // Finalize a running timer so the exited column shows "✓ total", not a
+    // frozen mid-count.
+    if (t.workStart) { t.workedMs = Date.now() - t.workStart; t.workStart = 0; t.doneAt = Date.now(); }
+    t.term.write('\r\n\x1b[2m[已退出 / process exited]\x1b[0m\r\n');
+    setDot(t, 'exited'); syncNav();
+  }
 });
 
-// Per-column status dot: blue=working, green=idle/done, gray=plain shell, dim=exited.
-const DOT = { working: '#1d9bf0', idle: '#00ba7c', plain: '#536471', exited: '#5c6670' };
-const WORKING_RE = /esc to interrupt|Running\.\.\.|\(\d+s\s*·|[↑↓]\s*[\d.]+k?\s+tokens|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]/;
-const AGENT_RE = /bypass permissions|for shortcuts|Build anything|Antigravity|Claude Code|❯/;
-function classify(text) {
-  const tail = text.split('\n').slice(-15).join('\n');
-  if (WORKING_RE.test(tail)) return 'working';
-  if (AGENT_RE.test(text)) return 'idle';
+// Per-column status: 5 states matching the owner's mental model —
+//   plain   gray   = not started (plain shell, or agent launched but never given work)
+//   working yellow = AI is running a turn (breathing pulse)
+//   input   red    = agent stopped to ASK the user something (permission / y-n / options)
+//   done    green  = agent finished: idle at its prompt AFTER having worked
+//   exited  ring   = pty process died
+// "done" vs "plain" can't be told apart from screen text alone (both are an idle
+// prompt), so each column remembers hasWorked; idleTicks debounces the working→done
+// flip (~3s) so the dot doesn't flash green in the gaps between tool calls.
+// Regexes largely borrowed from watch-ai's battle-tested ACTIVE_PATTERNS/idle sets.
+const WORKING_RE = /esc to interrupt|Running(?:\.\.\.|…)|⎿\s+Running|\(\d+s\s*·|…\s*\(\d+s|[↑↓]\s*[\d.]+k?\s+tokens|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]/;
+// Only structurally dialog-shaped patterns: prose like "Would you like me to
+// also…?" at the end of a normal reply must NOT hold a column red forever.
+// Claude/Grok permission prompts always render a "❯ 1." option list; y/n
+// prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
+const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|waiting for (?:your |user )?(?:input|confirmation|approval|permission)/im;
+const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Antigravity|Claude Code|Composer|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^❯\s*$|│\s*❯/im;
+const DOT_TIP = { plain: '未开始', working: '干活中…', input: '等你回复！', done: '已完成', exited: '已退出' };
+function classify(text, entry) {
+  const lines = text.split('\n');
+  if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+  if (WORKING_RE.test(lines.slice(-15).join('\n'))) return 'working';
+  if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
 }
 function setDot(entry, state) {
   if (!entry || !entry.dot) return;
-  entry.dot.style.background = DOT[state];
-  entry.dot.style.boxShadow = state === 'working' ? '0 0 6px #1d9bf0' : 'none';
+  entry.dot.className = 'dot ' + state;
+  entry.dot.title = DOT_TIP[state] || '';
 }
 
 // ---- Theme ----
@@ -280,9 +317,16 @@ deckEl.addEventListener('scroll', () => {
 });
 
 function render() {
-  // tear down existing terminals; pty processes keep running until killed
-  terms.forEach(({ term }) => term.dispose());
+  // tear down existing terminals; pty processes keep running until killed.
+  // Run each entry's disposers too — the deckEl scroll listener and the
+  // ResizeObserver live outside the column's DOM and would leak per column
+  // on every full re-render (e.g. 恢复默认布局) otherwise.
+  terms.forEach((t) => {
+    (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
+    t.term.dispose();
+  });
   terms.clear();
+  zoomedId = null;
   deckEl.innerHTML = '';
   columns.forEach((col) => deckEl.appendChild(buildColumn(col)));
   updateColumnStyles();
@@ -306,6 +350,20 @@ function defaultColWidth() {
 function updateColumnStyles() {
   const colEls = deckEl.querySelectorAll('.column');
   const n = columns.length;
+
+  // Zoom mode: one column fills the whole deck, the rest are hidden. Transient
+  // (never persisted) — a restart always comes back unzoomed.
+  if (zoomedId && terms.has(zoomedId)) {
+    colEls.forEach((wrap) => {
+      const is = wrap.dataset.colId === zoomedId;
+      wrap.style.display = is ? 'flex' : 'none';
+      wrap.classList.toggle('zoomed', is);
+      if (is) { wrap.style.flex = '1 1 0'; wrap.style.width = ''; }
+    });
+    deckEl.style.overflowX = 'hidden';
+    return;
+  }
+  colEls.forEach((wrap) => { wrap.style.display = ''; wrap.classList.remove('zoomed'); });
 
   if (config.fitWindow) {
     const cols = fitCols();
@@ -372,6 +430,11 @@ function buildColumn(col, isFresh) {
   title.title = '双击重命名';
   attachRename(title, col);
 
+  // Live elapsed-time readout: counts up while the agent works, then freezes
+  // as "✓ 2m 14s" for a few minutes after it finishes.
+  const timerEl = document.createElement('span');
+  timerEl.className = 'work-timer';
+
   const secondary = document.createElement('span');
   secondary.className = 'secondary';
   secondary.append(
@@ -380,7 +443,13 @@ function buildColumn(col, isFresh) {
     mkBtn(ICONS.edit, '编辑', () => openDialog(columns.indexOf(col))),
     mkBtn(ICONS.close, '删除该列', () => removeCol(col)),
   );
-  head.append(grip, dot, title, secondary);
+  head.append(grip, dot, title, timerEl, secondary);
+  // Double-click an empty part of the header to zoom the column (the title
+  // owns double-click for rename; buttons/grip own their clicks).
+  head.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.title') || e.target.closest('.icon-btn') || e.target.closest('.grip')) return;
+    toggleZoom(col.id);
+  });
 
   const termEl = document.createElement('div');
   termEl.className = 'term';
@@ -487,7 +556,13 @@ function buildColumn(col, isFresh) {
         try { e.target.scrollLeft = 0; } catch (_) {}
       }
     }, { capture: true, passive: true });
-    terms.set(col.id, { term, fit, search, el: termEl, wrap, titleEl: title, dot, alive: true, state: 'plain', disposers });
+    terms.set(col.id, {
+      term, fit, search, el: termEl, wrap, titleEl: title, dot, timerEl, alive: true, state: 'plain', disposers,
+      // Status-machine memory: hasWorked separates green "just finished" from
+      // gray "idle since launch"; idleTicks debounces working→done (~3s);
+      // workStart/workedMs drive the header timer; lastDump skips redundant IPC.
+      hasWorked: false, idleTicks: 0, workStart: 0, workedMs: 0, doneAt: 0, lastDump: '',
+    });
 
     // Cmd+C copies the selection (paste is handled natively by xterm).
     term.attachCustomKeyEventHandler((e) => {
@@ -566,7 +641,11 @@ function buildColumn(col, isFresh) {
           if (!isFresh && isClaudeCmd(col.cmd) && await window.deck.claudeHasSession(col.cwd || env.home)) {
             launch = withClaudeResume(col.cmd);
           }
-          setTimeout(() => window.deck.ptyInput(col.id, launch + '\r'), 700);
+          // Capture the id: if the user edits the column within 700ms,
+          // respawnColumn assigns a NEW id and this stale timer must not fire
+          // into the fresh pty (whose own timer will run the command).
+          const spawnId = col.id;
+          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, launch + '\r'); }, 700);
         }
       }
     };
@@ -583,7 +662,28 @@ function buildColumn(col, isFresh) {
     });
     ro.observe(termEl);
     disposers.push(() => ro.disconnect()); // observers outlive detached nodes and pin them in memory
-    termEl.addEventListener('mousedown', () => { term.focus(); focusedId = col.id; syncNav(); });
+    // Clicking anywhere in the column (incl. its header) makes it the focused
+    // column — otherwise Cmd+W etc. silently act on the previously focused one.
+    // Buttons/grip/inline-rename keep their own behavior.
+    wrap.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.icon-btn') || e.target.closest('.grip') || e.target.closest('[contenteditable="true"]')) return;
+      term.focus(); focusedId = col.id; syncNav();
+    });
+
+    // Paste an IMAGE (e.g. a fresh screenshot on the clipboard) → save it to a
+    // temp PNG and type its shell-quoted path, mirroring the drag-drop-a-file
+    // behavior. Text pastes fall through to xterm's native handling.
+    termEl.addEventListener('paste', (e) => {
+      const items = Array.from((e.clipboardData && e.clipboardData.items) || []);
+      const imgItem = items.find((it) => it.kind === 'file' && /^image\//.test(it.type));
+      if (!imgItem) return;
+      const file = imgItem.getAsFile();
+      if (!file) return;
+      e.preventDefault(); e.stopPropagation();
+      file.arrayBuffer().then((buf) => window.deck.pasteImageSave(buf)).then((p) => {
+        if (p) { term.focus(); window.deck.ptyInput(col.id, shellQuote(p) + ' '); }
+      }).catch(() => {});
+    }, true);
 
     // Drag a file from Finder onto a column → insert its (shell-quoted) path,
     // just like dragging onto a native terminal. Without this, Electron's
@@ -711,6 +811,16 @@ function findLinks(text) {
     if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL
     out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
   }
+  // Windows absolute paths: "C:\Users\jinhao\proj\file.js:12" or "C:/…". Only
+  // matched on Windows so a stray "C:\" in prose can't hijack macOS output.
+  if (env.platform === 'win32') {
+    const winRe = /\b[A-Za-z]:[\\/](?:[^\s"'`<>|:*?，。、；：！？（）【】「」]| (?![\s\\/]))+(?::\d+(?::\d+)?)?/gu;
+    while ((m = winRe.exec(text))) {
+      const s = m.index, e = trimTrail(text, s, s + m[0].length);
+      if (out.some((o) => s < o.end && e > o.start)) continue;
+      out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+    }
+  }
   // Relative references the agents print constantly: "src/renderer.js:406",
   // "main.js:128". To stay quiet on ordinary prose ("and/or", "Node.js"), a
   // candidate needs either a slash-path ending in a dotted filename, or a bare
@@ -752,6 +862,7 @@ function shellQuote(p) {
 // ---- Resize handle ----
 function attachResize(handle, wrap, col) {
   handle.addEventListener('mousedown', (e) => {
+    if (zoomedId) return; // zoomed: hidden columns would snapshot width 0
     e.preventDefault();
     const startX = e.clientX;
     const startW = wrap.getBoundingClientRect().width;
@@ -769,8 +880,13 @@ function attachResize(handle, wrap, col) {
       document.body.classList.remove('resizing');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      col.width = Math.round(wrap.getBoundingClientRect().width);
-      if (isFit) cols.forEach((c, idx) => { if (columns[idx]) columns[idx].width = Math.round(c.getBoundingClientRect().width); });
+      // Clamp saved widths and never persist a 0 from a hidden/collapsed column.
+      const clampW = (w) => Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(w)));
+      col.width = clampW(wrap.getBoundingClientRect().width);
+      if (isFit) cols.forEach((c, idx) => {
+        const r = c.getBoundingClientRect().width;
+        if (columns[idx] && r > 0) columns[idx].width = clampW(r);
+      });
       saveConfig();
       if (isFit) updateColumnStyles();
       fitAll();
@@ -843,6 +959,7 @@ function removeCol(col) {
   }
   window.deck.ptyKill(col.id);
   columns.splice(idx, 1);
+  if (zoomedId === col.id) { zoomedId = null; updateColumnStyles(); fitAll(); }
   // Don't leave focusedId pointing at the removed column: every focusedId-based
   // shortcut (Cmd+W, Cmd+arrows, search, broadcast) would silently no-op until
   // the user happens to click another column.
@@ -869,6 +986,7 @@ function nextTitle() {
 }
 // New column with no dialog: auto-numbered title, default (global) cwd, focused.
 function addAndFocusColumn() {
+  if (zoomedId) { zoomedId = null; updateColumnStyles(); } // new column must be visible
   addColumn({ title: nextTitle() });
   setTimeout(() => focusColumnByIndex(columns.length - 1), 80); // wait for its terminal
 }
@@ -911,6 +1029,7 @@ function respawnColumn(col) {
   const oldId = col.id;
   col.id = newId();
   if (focusedId === oldId) focusedId = col.id;
+  if (zoomedId === oldId) zoomedId = col.id; // stay zoomed across a respawn
   const fresh = buildColumn(col, true); // cwd/cmd just changed: start fresh, no auto-resume
   if (t) t.wrap.replaceWith(fresh); else render();
   saveConfig();
@@ -945,8 +1064,12 @@ function renderColNav() {
     item.className = 'colnav-item';
     item.dataset.colId = col.id;
     const dot = document.createElement('span'); dot.className = 'cn-dot';
+    const text = document.createElement('span'); text.className = 'cn-text';
     const label = document.createElement('span'); label.className = 'cn-label';
     label.textContent = col.title; label.title = '双击重命名';
+    // Live activity line: the column's last terminal line, mission-control style.
+    const sub = document.createElement('span'); sub.className = 'cn-sub';
+    text.append(label, sub);
     // Right slot: the Cmd+number hint for the first 9 columns, swapped for a
     // delete ✕ on hover.
     const right = document.createElement('span'); right.className = 'cn-right';
@@ -957,30 +1080,36 @@ function renderColNav() {
     del.addEventListener('mousedown', (e) => e.stopPropagation()); // don't start a drag
     del.addEventListener('click', (e) => { e.stopPropagation(); removeCol(col); });
     right.append(idx, del);
-    item.append(dot, label, right);
+    item.append(dot, text, right);
     // Drag reorders (deck follows); a plain click jumps; double click renames.
     attachNavReorder(item, col);
     attachNavRename(label, col);
     navListEl.appendChild(item);
-    navItems.set(col.id, { el: item, dot, label });
+    navItems.set(col.id, { el: item, dot, label, sub });
   });
   const countEl = document.getElementById('navCount');
   if (countEl) countEl.textContent = String(columns.length);
   syncNav();
 }
 
-// Mirror each entry's status dot and mark the focused column as active.
+// Mirror each entry's status dot and mark the focused column as active — both
+// in the sidebar and on the deck column itself (accent bar via .focused).
 function syncNav() {
   navItems.forEach((nav, id) => {
     const entry = terms.get(id);
-    nav.dot.style.background = (entry && entry.dot && entry.dot.style.background) || DOT.plain;
+    const state = (entry && entry.state) || 'plain';
+    nav.dot.className = 'cn-dot ' + state;
+    nav.dot.title = DOT_TIP[state] || '';
     nav.el.classList.toggle('active', id === focusedId);
   });
+  terms.forEach((t, id) => { if (t.wrap) t.wrap.classList.toggle('focused', id === focusedId); });
 }
 
 function jumpToColumn(col) {
   const t = terms.get(col.id);
   if (!t) return;
+  // While zoomed, jumping re-zooms onto the target instead of focusing a hidden column.
+  if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   t.term.focus(); focusedId = col.id;
   t.wrap.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
   syncNav();
@@ -1106,6 +1235,13 @@ document.getElementById('dlgSave').onclick = () => {
 });
 
 // ---- Boot ----
+// The search/broadcast bars use the app's SVG icon set (the raw Unicode glyphs
+// in index.html render at inconsistent optical sizes).
+document.getElementById('searchPrev').innerHTML = ICONS.up;
+document.getElementById('searchNext').innerHTML = ICONS.down;
+document.getElementById('searchClose').innerHTML = ICONS.close;
+document.getElementById('bcastSend').innerHTML = ICONS.send;
+document.getElementById('bcastClose').innerHTML = ICONS.close;
 buildRail();
 setNavCollapsed(config.navCollapsed); // sets class + width + collapse-button icon
 attachNavResize(document.getElementById('navResizer'));
@@ -1129,13 +1265,114 @@ function dumpScreen(term) {
   }
   return lines.join('\n');
 }
+// Format elapsed ms compactly: 42s → 3m 12s → 1h 05m.
+function fmtElapsed(ms) {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm ' + String(s % 60).padStart(2, '0') + 's';
+  return Math.floor(s / 3600) + 'h ' + String(Math.floor((s % 3600) / 60)).padStart(2, '0') + 'm';
+}
+const DONE_TIMER_LINGER = 5 * 60_000; // keep "✓ 2m 14s" visible this long after finishing
+
+// A screen line that's just chrome (prompt, separators, spinner) isn't "activity".
+const SUB_NOISE_RE = /^[❯>\s│⎿─╌═\-—·.]*$|^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]\s*$/;
+function lastActivityLine(text) {
+  const lines = text.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const t = lines[i].trim();
+    if (t && !SUB_NOISE_RE.test(t)) return t.length > 60 ? t.slice(0, 59) + '…' : t;
+  }
+  return '';
+}
+
+let lastAttnCount = -1;
 setInterval(() => {
+  let attn = 0;
   terms.forEach((entry, id) => {
-    const text = dumpScreen(entry.term);
-    try { window.deck.agentdeckDump(id, entry.titleEl ? entry.titleEl.textContent : '', text); } catch (_) {}
-    if (entry.alive) { entry.state = classify(text); setDot(entry, entry.state); } // exited dots stay dim
+    let text = dumpScreen(entry.term);
+    // A restored session replays the PREVIOUS run's output above a separator.
+    // That old text can contain working/permission-prompt chrome; only what's
+    // below the separator is live, so classification (and watch-ai) must not
+    // see the replayed part. Once real output scrolls the separator out of the
+    // 40-line window this is a no-op.
+    const sep = text.lastIndexOf('以上为上次会话的输出');
+    if (sep >= 0) {
+      const nl = text.indexOf('\n', sep);
+      text = nl >= 0 ? text.slice(nl + 1) : '';
+    }
+    // Skip the full disk write when nothing changed on screen — with several
+    // idle columns that was multiple synchronous writes/sec. But watch-ai
+    // treats a spool file older than 8s as a dead column, so the mtime must
+    // still be bumped: send a cheap "touch" instead of the text.
+    if (text !== entry.lastDump) {
+      entry.lastDump = text;
+      try { window.deck.agentdeckDump(id, entry.titleEl ? entry.titleEl.textContent : '', text); } catch (_) {}
+    } else {
+      try { window.deck.agentdeckTouch(id); } catch (_) {}
+    }
+
+    if (entry.alive) {
+      let st = classify(text, entry);
+      if (st === 'working' || st === 'input') {
+        entry.hasWorked = true;
+        entry.idleTicks = 0;
+        if (!entry.workStart) { entry.workStart = Date.now(); entry.workedMs = 0; }
+      } else if (st === 'done') {
+        // Debounce: hold yellow through the short gaps between tool calls so
+        // the dot never flickers green mid-task (~3s ≈ watch-ai's stability window).
+        entry.idleTicks++;
+        if (entry.idleTicks < 2) {
+          st = 'working';
+        } else if (entry.workStart) {
+          entry.workedMs = Date.now() - entry.workStart;
+          entry.workStart = 0;
+          entry.doneAt = Date.now();
+        }
+      } else {
+        // 'plain' after working (e.g. a spinner in a bare shell finished, or an
+        // agent whose idle footer we don't recognize): finalize the timer with
+        // the same 2-tick debounce so it doesn't count up forever next to a
+        // gray dot — and give hasWorked columns their green.
+        entry.idleTicks++;
+        if (entry.idleTicks >= 2) {
+          if (entry.workStart) {
+            entry.workedMs = Date.now() - entry.workStart;
+            entry.workStart = 0;
+            entry.doneAt = Date.now();
+          }
+          if (entry.hasWorked) st = 'done';
+        } else if (entry.workStart) {
+          st = 'working';
+        }
+      }
+      entry.state = st;
+      setDot(entry, st);
+      if (st === 'input') attn++;
+
+      // Header timer: live count-up while working / waiting, "✓ total" when done.
+      if (entry.timerEl) {
+        let label = '';
+        if (entry.workStart) label = fmtElapsed(Date.now() - entry.workStart);
+        else if (entry.workedMs && entry.doneAt && Date.now() - entry.doneAt < DONE_TIMER_LINGER) label = '✓ ' + fmtElapsed(entry.workedMs);
+        if (entry.timerEl.textContent !== label) entry.timerEl.textContent = label;
+        entry.timerEl.classList.toggle('done', !entry.workStart && !!label);
+      }
+    }
+
+    // Sidebar live activity line (skipped while the sidebar is collapsed).
+    const nav = navItems.get(id);
+    if (nav && nav.sub && !config.navCollapsed) {
+      const line = entry.alive ? lastActivityLine(text) : '已退出';
+      if (nav.sub.textContent !== line) nav.sub.textContent = line;
+    }
   });
   syncNav(); // mirror status dots + active highlight into the sidebar
+
+  // Dock badge: how many agents are blocked waiting on the human.
+  if (attn !== lastAttnCount) {
+    lastAttnCount = attn;
+    try { window.deck.setAttnCount(attn); } catch (_) {}
+  }
 }, 1500);
 
 // ---- Keyboard shortcuts ----
@@ -1144,7 +1381,9 @@ function focusColumnByIndex(idx) {
   const col = columns[Math.max(0, Math.min(idx, columns.length - 1))];
   if (!col) return;
   const t = terms.get(col.id);
-  if (t) { t.term.focus(); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav(); }
+  if (!t) return;
+  if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
+  t.term.focus(); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav();
 }
 document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos
@@ -1159,6 +1398,16 @@ document.addEventListener('keydown', (e) => {
     openSearch();
   } else if (k === 'b' || k === 'B') {
     toggleBroadcast();
+  } else if (k === 'Enter') {
+    toggleZoom(focusedId || (columns[0] && columns[0].id));
+  } else if (k === 'j' || k === 'J') {
+    // Jump to the (next) column waiting on the user; cycle on repeat presses.
+    const waiting = columns.filter((c) => { const t = terms.get(c.id); return t && t.state === 'input'; });
+    if (!waiting.length) { showToast('没有等待回复的列'); }
+    else {
+      const cur = waiting.findIndex((c) => c.id === focusedId);
+      jumpToColumn(waiting[(cur + 1) % waiting.length]);
+    }
   } else if (e.shiftKey && (k === 'r' || k === 'R')) {
     // Hot reload: reload renderer only, pty processes stay alive.
     window.deck.reloadRenderer();
@@ -1203,7 +1452,11 @@ function closeBroadcast() {
 function sendBroadcast() {
   const text = bcastInput.value;
   if (!text.trim()) return;
-  terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, text + '\r'); });
+  // Send the text and the CR as separate writes: Ink-based TUIs (Claude Code)
+  // treat text+\r arriving in one chunk as a paste and insert a newline into
+  // the input box instead of submitting.
+  terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, text); });
+  setTimeout(() => { terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, '\r'); }); }, 60);
   bcastInput.value = '';
 }
 bcastInput.addEventListener('keydown', (e) => {
@@ -1226,15 +1479,24 @@ const SEARCH_DECOR = {
   },
 };
 
+// Keep the floating bar glued to its column across deck scrolls and resizes.
+function positionSearchBar() {
+  const t = terms.get(searchColId);
+  if (!t) return;
+  const r = t.wrap.getBoundingClientRect();
+  searchBar.style.top = Math.round(r.top + 8) + 'px';
+  searchBar.style.left = Math.round(Math.max(8, r.right - 312)) + 'px';
+}
+deckEl.addEventListener('scroll', () => { if (!searchBar.hidden) positionSearchBar(); });
+window.addEventListener('resize', () => { if (!searchBar.hidden) positionSearchBar(); });
+
 function openSearch() {
   const col = columns.find((c) => c.id === focusedId) || columns[0];
   if (!col) return;
   const t = terms.get(col.id);
   if (!t || !t.search) return;
   searchColId = col.id;
-  const r = t.wrap.getBoundingClientRect();
-  searchBar.style.top = Math.round(r.top + 8) + 'px';
-  searchBar.style.left = Math.round(Math.max(8, r.right - 312)) + 'px';
+  positionSearchBar();
   searchBar.hidden = false;
   searchInput.focus(); searchInput.select();
   if (searchInput.value) doSearch(1);

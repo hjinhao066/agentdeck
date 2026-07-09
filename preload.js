@@ -10,6 +10,13 @@ contextBridge.exposeInMainWorld('deck', {
   getPathForFile: (file) => webUtils.getPathForFile(file),
   // Push a column's rendered screen text so the watch-ai daemon can see it.
   agentdeckDump: (id, title, text) => ipcRenderer.send('agentdeck:dump', { id, title, text }),
+  // Screen unchanged: just bump the spool's mtime so watch-ai keeps seeing it
+  // as live (it treats files older than ~8s as dead columns).
+  agentdeckTouch: (id) => ipcRenderer.send('agentdeck:touch', { id }),
+  // Pasted-image support: save PNG bytes to a temp file, get its path back.
+  pasteImageSave: (buf) => ipcRenderer.invoke('paste-image:save', buf),
+  // Dock badge: how many columns are blocked waiting for the user.
+  setAttnCount: (n) => ipcRenderer.send('attn:count', n),
   // Open a URL in the default browser; reveal a local path in Finder.
   openExternal: (url) => ipcRenderer.send('open-external', url),
   // `cont` = up to two follow-up terminal lines, used to re-join paths the
