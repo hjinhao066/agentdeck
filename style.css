@@ -262,9 +262,9 @@ body.is-mac #colNav { padding-top: 38px; }
   display: flex; overflow-x: auto; overflow-y: hidden;
   background: var(--app-bg);
 }
-/* 28px = fat-finger friendly (owner request 2026-07-17: the thin bar was hard
-   to hit with the mouse). Keep the transparent track from the v0.5.1 rework. */
-#deck::-webkit-scrollbar { height: 28px; }
+/* 22px = fat-finger friendly but not bulky (owner request 2026-07-17: 28px
+   felt too wide, dialed back to 80%). Keep the transparent track from v0.5.1. */
+#deck::-webkit-scrollbar { height: 22px; }
 #deck::-webkit-scrollbar-track { background: transparent; }
 #deck::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb); border-radius: 999px;
