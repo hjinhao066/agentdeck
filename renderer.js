@@ -63,7 +63,7 @@ function defaultColumns() {
   return agents.map((a) => ({ id: newId(), title: a.title, cwd: '', cmd: a.cmd, width: DEFAULT_WIDTH }));
 }
 
-let config = { theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184, navCollapsed: false, columns: defaultColumns() };
+let config = { theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184, navCollapsed: false, fontSize: 13, columns: defaultColumns() };
 const saved = window.deck.loadConfig();
 if (saved) {
   if (saved.theme) config.theme = saved.theme;
@@ -71,6 +71,7 @@ if (saved) {
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
   if (saved.navWidth) config.navWidth = saved.navWidth;
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
+  if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (Array.isArray(saved.columns) && saved.columns.length) {
     config.columns = saved.columns.map((c) => ({
       id: c.id || newId(), title: c.title || 'Agent', cwd: c.cwd || '', cmd: c.cmd || '', width: c.width || DEFAULT_WIDTH,
@@ -149,6 +150,28 @@ function applyTheme(theme) {
   if (btn) { btn.innerHTML = theme === 'dark' ? ICONS.sun : ICONS.moon; btn.title = theme === 'dark' ? '切换浅色' : '切换深色'; }
   terms.forEach(({ term }) => { term.options.theme = TERM_THEME[theme]; });
   saveConfig();
+}
+
+// ---- Terminal font size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
+const FONT_MIN = 8, FONT_MAX = 32, FONT_DEFAULT = 13;
+function setFontSize(size) {
+  size = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
+  if (size === config.fontSize) return;
+  config.fontSize = size;
+  terms.forEach(({ term }) => { term.options.fontSize = size; });
+  fitAll();
+  saveConfig();
+  showToast(`字体大小 ${size}px`);
+}
+// Returns +1/-1 for a font-size keydown, 0 for reset, null otherwise.
+function fontSizeDelta(e) {
+  if (e.type !== 'keydown' || e.altKey) return null;
+  if (!(e.ctrlKey || e.metaKey) || (e.ctrlKey && e.metaKey)) return null;
+  const k = e.key;
+  if (k === '+' || k === '=') return 1;
+  if (k === '-' || k === '_') return -1;
+  if (k === '0') return 0;
+  return null;
 }
 
 // ---- Left panel toolbar (add / broadcast / fit / theme / reset / collapse) ----
@@ -478,7 +501,7 @@ function buildColumn(col, isFresh) {
       // "PingFang SC" gives CJK output a consistent face (xterm already lays CJK
       // out as double-width cells, so columns still line up).
       fontFamily: 'SFMono-Regular, "SF Mono", Menlo, Monaco, "PingFang SC", "Courier New", monospace',
-      fontSize: 13, lineHeight: 1.0, cursorBlink: true, scrollback: 12000,
+      fontSize: config.fontSize, lineHeight: 1.0, cursorBlink: true, scrollback: 12000,
       theme: TERM_THEME[config.theme], allowProposedApi: true,
       // Option+click is our "open in editor" gesture on links; don't let xterm
       // also interpret it as click-to-move-cursor (sends arrow keys to the TUI).
@@ -1444,6 +1467,15 @@ document.addEventListener('keydown', (e) => {
     handled = false;
   }
   if (handled) { e.preventDefault(); e.stopPropagation(); }
+}, true);
+// Font size works everywhere, including inside a terminal: capture phase runs
+// before xterm's own handlers, so Ctrl+- never reaches the pty as ^_.
+document.addEventListener('keydown', (e) => {
+  const zd = fontSizeDelta(e);
+  if (zd === null) return;
+  setFontSize(zd === 0 ? FONT_DEFAULT : config.fontSize + zd);
+  e.preventDefault();
+  e.stopPropagation();
 }, true);
 
 // ---- Toast: transient feedback for link clicks ----
