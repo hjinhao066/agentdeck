@@ -332,6 +332,18 @@ function createWindow() {
   win.loadFile('index.html');
 }
 
+// Two instances sharing one userData dir fight over the GPU disk cache and one
+// dies with 0xc0000409 (seen on Windows, 2026-07-17). Focus the existing window
+// instead of racing it.
+if (!app.requestSingleInstanceLock()) {
+  app.exit(0);
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0];
+    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+  });
+}
+
 app.whenReady().then(() => {
   const configPath = path.join(app.getPath('userData'), 'config.json');
   ipcMain.on('load-config-sync', (e) => {

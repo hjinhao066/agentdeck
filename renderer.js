@@ -498,9 +498,13 @@ function buildColumn(col, isFresh) {
   // Create the terminal once the element is in the DOM (next frame).
   requestAnimationFrame(() => {
     const term = new Terminal({
-      // "PingFang SC" gives CJK output a consistent face (xterm already lays CJK
-      // out as double-width cells, so columns still line up).
-      fontFamily: 'SFMono-Regular, "SF Mono", Menlo, Monaco, "PingFang SC", "Courier New", monospace',
+      // Platform-aware stack: the mac list is all-macOS fonts, so on Windows it
+      // used to fall through to Courier New + the browser's default CJK (SimSun).
+      // "PingFang SC"/"Microsoft YaHei" give CJK output a consistent face (xterm
+      // already lays CJK out as double-width cells, so columns still line up).
+      fontFamily: env.platform === 'win32'
+        ? '"Cascadia Mono", Consolas, "Microsoft YaHei", monospace'
+        : 'SFMono-Regular, "SF Mono", Menlo, Monaco, "PingFang SC", "Courier New", monospace',
       fontSize: config.fontSize, lineHeight: 1.0, cursorBlink: true, scrollback: 12000,
       theme: TERM_THEME[config.theme], allowProposedApi: true,
       // Option+click is our "open in editor" gesture on links; don't let xterm
