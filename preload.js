@@ -18,6 +18,8 @@ contextBridge.exposeInMainWorld('deck', {
   pasteImageSave: () => ipcRenderer.invoke('paste-image:save'),
   // Dock badge: how many columns are blocked waiting for the user.
   setAttnCount: (n) => ipcRenderer.send('attn:count', n),
+  // Windows popup for a non-Claude column turning done/input (click → jump).
+  notifyState: (payload) => ipcRenderer.send('notify-state', payload),
   // Open a URL in the default browser; reveal a local path in Finder.
   openExternal: (url) => ipcRenderer.send('open-external', url),
   // `cont` = up to two follow-up terminal lines, used to re-join paths the

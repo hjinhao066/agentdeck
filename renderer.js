@@ -1418,6 +1418,24 @@ function lastActivityLine(text) {
   return '';
 }
 
+// Popup notifications for NON-Claude agents (Antigravity/Grok/anything). The
+// Claude popup hook only covers Claude Code — hooks are a Claude feature — so
+// those columns are skipped here to avoid double popups. Everything else rides
+// the same screen-based state machine as the dots: fire once per transition to
+// green (done, after real work) or red (input), and only while the deck window
+// is unfocused (if he's already looking at it, the dots are enough).
+function maybeNotifyState(id, entry, st) {
+  const prev = entry.lastNotifyState;
+  entry.lastNotifyState = st;
+  if (prev === undefined || prev === st) return; // boot tick / no transition
+  if (st !== 'input' && st !== 'done') return;
+  if (st === 'done' && !entry.hasWorked) return;
+  if (document.hasFocus()) return;
+  const col = columns.find((c) => c.id === id);
+  if (!col || isClaudeCmd(col.cmd)) return;
+  try { window.deck.notifyState({ id, title: col.title, state: st }); } catch (_) {}
+}
+
 let lastAttnCount = -1;
 setInterval(() => {
   let attn = 0;
@@ -1480,6 +1498,7 @@ setInterval(() => {
       }
       entry.state = st;
       setDot(entry, st);
+      maybeNotifyState(id, entry, st);
       if (st === 'input') attn++;
 
       // Header timer: live count-up while working / waiting, "✓ total" when done.

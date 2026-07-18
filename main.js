@@ -531,6 +531,41 @@ app.whenReady().then(() => {
     } catch (_) { return null; }
   });
 
+  // Popup notification for a NON-Claude column turning done/input (Windows).
+  // Reuses the Claude hook's popup script directly in -Show mode: same look,
+  // same click-to-jump via -ColId → `AgentDeck.exe --focus-column=<id>`. The
+  // script's replace-old-popup logic lives in its hook mode, so the per-column
+  // replacement is done here instead: kill the previous popup before spawning.
+  // macOS is a no-op — watch-ai covers agent-idle notifications there.
+  const POPUP_PS1 = path.join(HOME, '.claude', 'hooks', 'claude-popup.ps1');
+  const popupProcs = new Map(); // colId → popup ChildProcess
+  ipcMain.on('notify-state', (_e, { id, title, state }) => {
+    if (!isWin || !fs.existsSync(POPUP_PS1)) return;
+    const prev = popupProcs.get(id);
+    if (prev && prev.pid && prev.exitCode === null) {
+      try { execFile('taskkill', ['/pid', String(prev.pid), '/T', '/F']); } catch (_) {}
+    }
+    const event = state === 'input' ? 'notification' : 'stop';
+    const payload = {
+      title: state === 'input' ? `${title} 在等你` : `${title} 跑完了`,
+      message: state === 'input' ? '这一列有东西等你回答，点击直达' : '任务已结束，点击直达这一列',
+      event,
+    };
+    const dataPath = path.join(os.tmpdir(), `agentdeck-notify-${Date.now()}.json`);
+    try { fs.writeFileSync(dataPath, JSON.stringify(payload)); } catch (_) { return; }
+    let hwnd = '0';
+    try { hwnd = BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE(0).toString(); } catch (_) {}
+    try {
+      const child = spawn('powershell.exe', [
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', POPUP_PS1,
+        '-Show', '-Event', event, '-DataFile', dataPath, '-Session', 'deck-' + id,
+        '-TargetHwnd', hwnd, '-ColId', id,
+      ], { windowsHide: true, detached: true, stdio: 'ignore' });
+      child.unref();
+      popupProcs.set(id, child);
+    } catch (_) {}
+  });
+
   // Dock badge (macOS): number of columns blocked waiting for the user.
   ipcMain.on('attn:count', (_e, n) => {
     if (isMac && app.dock) { try { app.dock.setBadge(n > 0 ? String(n) : ''); } catch (_) {} }
