@@ -343,7 +343,16 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', (_e, argv) => {
     const win = BrowserWindow.getAllWindows()[0];
-    if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    if (win) {
+      if (win.isMinimized()) win.restore();
+      // Windows foreground lock: a plain focus() from a background process only
+      // flashes the taskbar and the deck stays buried under e.g. Chrome. Pin it
+      // topmost for a beat, then release, and steal focus explicitly.
+      win.setAlwaysOnTop(true);
+      win.show();
+      win.setAlwaysOnTop(false);
+      app.focus({ steal: true });
+    }
     // `AgentDeck.exe --focus-column=<id>`: an external notifier (the Claude
     // popup hook) asks the deck to jump to the column that fired the event.
     // The id came from that column's AGENTDECK_COL_ID env.
