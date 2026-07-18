@@ -1422,15 +1422,14 @@ function lastActivityLine(text) {
 // Claude popup hook only covers Claude Code — hooks are a Claude feature — so
 // those columns are skipped here to avoid double popups. Everything else rides
 // the same screen-based state machine as the dots: fire once per transition to
-// green (done, after real work) or red (input), and only while the deck window
-// is unfocused (if he's already looking at it, the dots are enough).
+// green (done, after real work) or red (input). Fires regardless of window
+// focus so the behavior matches the Claude hook popups exactly.
 function maybeNotifyState(id, entry, st) {
   const prev = entry.lastNotifyState;
   entry.lastNotifyState = st;
   if (prev === undefined || prev === st) return; // boot tick / no transition
   if (st !== 'input' && st !== 'done') return;
   if (st === 'done' && !entry.hasWorked) return;
-  if (document.hasFocus()) return;
   const col = columns.find((c) => c.id === id);
   if (!col || isClaudeCmd(col.cmd)) return;
   try { window.deck.notifyState({ id, title: col.title, state: st }); } catch (_) {}
