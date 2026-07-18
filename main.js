@@ -585,11 +585,15 @@ app.whenReady().then(() => {
     let hwnd = '0';
     try { hwnd = BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE(0).toString(); } catch (_) {}
     try {
+      // NO detached:true here: on Windows, detached (DETACHED_PROCESS) +
+      // windowsHide (CREATE_NO_WINDOW) leaves powershell.exe with no console
+      // at all and PS 5.1 dies before running the script — silently, since
+      // stdio is ignored. Cost one evening to find (2026-07-17).
       const child = spawn('powershell.exe', [
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', POPUP_PS1,
         '-Show', '-Event', event, '-DataFile', dataPath, '-Session', 'deck-' + id,
         '-TargetHwnd', hwnd, '-ColId', id,
-      ], { windowsHide: true, detached: true, stdio: 'ignore' });
+      ], { windowsHide: true, stdio: 'ignore' });
       child.on('error', (err) => nlog(`notify-fail spawn error: ${err.message}`));
       child.unref();
       popupProcs.set(id, child);
