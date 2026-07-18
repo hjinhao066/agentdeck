@@ -1428,10 +1428,16 @@ function maybeNotifyState(id, entry, st) {
   const prev = entry.lastNotifyState;
   entry.lastNotifyState = st;
   if (prev === undefined || prev === st) return; // boot tick / no transition
-  if (st !== 'input' && st !== 'done') return;
-  if (st === 'done' && !entry.hasWorked) return;
   const col = columns.find((c) => c.id === id);
-  if (!col || isClaudeCmd(col.cmd)) return;
+  // Every transition goes to the main-process diagnostic log, with the reason
+  // a popup was withheld — the popup chain is otherwise silent when it breaks.
+  let skip = '';
+  if (st !== 'input' && st !== 'done') skip = 'state';
+  else if (st === 'done' && !entry.hasWorked) skip = 'noWork';
+  else if (!col) skip = 'noCol';
+  else if (isClaudeCmd(col.cmd)) skip = 'claude';
+  try { window.deck.stateDebug({ id, title: col ? col.title : '?', prev, st, hasWorked: entry.hasWorked, skip }); } catch (_) {}
+  if (skip) return;
   try { window.deck.notifyState({ id, title: col.title, state: st }); } catch (_) {}
 }
 

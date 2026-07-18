@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('deck', {
   setAttnCount: (n) => ipcRenderer.send('attn:count', n),
   // Windows popup for a non-Claude column turning done/input (click → jump).
   notifyState: (payload) => ipcRenderer.send('notify-state', payload),
+  // Column state transitions, mirrored to the main-process diagnostic log.
+  stateDebug: (payload) => ipcRenderer.send('state-debug', payload),
   // Open a URL in the default browser; reveal a local path in Finder.
   openExternal: (url) => ipcRenderer.send('open-external', url),
   // `cont` = up to two follow-up terminal lines, used to re-join paths the

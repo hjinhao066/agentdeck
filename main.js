@@ -29,6 +29,19 @@ const HOME = os.homedir();
 const WATCH_SPOOL = path.join(HOME, '.local', 'share', 'watch-ai', 'agentdeck');
 const spoolPath = (id) => path.join(WATCH_SPOOL, id + '.txt');
 
+// Notification-chain diagnostic log (%TEMP%\agentdeck-notify.log): every column
+// state transition the renderer sees + every popup spawn attempt. The popup
+// path is invisible when it fails (try/catch everywhere), so this is the only
+// way to tell "classify never flipped" from "spawn silently died".
+const NOTIFY_LOG = path.join(os.tmpdir(), 'agentdeck-notify.log');
+function nlog(m) {
+  try {
+    const st = fs.existsSync(NOTIFY_LOG) && fs.statSync(NOTIFY_LOG);
+    if (st && st.size > 512 * 1024) fs.unlinkSync(NOTIFY_LOG);
+  } catch (_) {}
+  try { fs.appendFileSync(NOTIFY_LOG, new Date().toISOString().slice(11, 19) + ' ' + m + '\n'); } catch (_) {}
+}
+
 // When launched from Finder the GUI PATH is minimal, so tmux/claude/etc. aren't
 // found. Prepend the usual homebrew + user bin dirs so columns can run them.
 function buildEnv() {
@@ -335,6 +348,12 @@ function createWindow() {
   win.loadFile('index.html');
 }
 
+// Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
+// its own userData (own config/sessions AND own single-instance lock), so an
+// end-to-end test deck can run alongside the real one without touching it.
+const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
+if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
+
 // Two instances sharing one userData dir fight over the GPU disk cache and one
 // dies with 0xc0000409 (seen on Windows, 2026-07-17). Focus the existing window
 // instead of racing it.
@@ -549,7 +568,8 @@ app.whenReady().then(() => {
   const POPUP_PS1 = path.join(HOME, '.claude', 'hooks', 'claude-popup.ps1');
   const popupProcs = new Map(); // colId → popup ChildProcess
   ipcMain.on('notify-state', (_e, { id, title, state }) => {
-    if (!isWin || !fs.existsSync(POPUP_PS1)) return;
+    nlog(`notify-request col=${id} state=${state} title=${title}`);
+    if (!isWin || !fs.existsSync(POPUP_PS1)) { nlog(`notify-skip isWin=${isWin} ps1=${fs.existsSync(POPUP_PS1)}`); return; }
     const prev = popupProcs.get(id);
     if (prev && prev.pid && prev.exitCode === null) {
       try { execFile('taskkill', ['/pid', String(prev.pid), '/T', '/F']); } catch (_) {}
@@ -561,7 +581,7 @@ app.whenReady().then(() => {
       event,
     };
     const dataPath = path.join(os.tmpdir(), `agentdeck-notify-${Date.now()}.json`);
-    try { fs.writeFileSync(dataPath, JSON.stringify(payload)); } catch (_) { return; }
+    try { fs.writeFileSync(dataPath, JSON.stringify(payload)); } catch (_) { nlog('notify-fail write dataFile'); return; }
     let hwnd = '0';
     try { hwnd = BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE(0).toString(); } catch (_) {}
     try {
@@ -570,9 +590,16 @@ app.whenReady().then(() => {
         '-Show', '-Event', event, '-DataFile', dataPath, '-Session', 'deck-' + id,
         '-TargetHwnd', hwnd, '-ColId', id,
       ], { windowsHide: true, detached: true, stdio: 'ignore' });
+      child.on('error', (err) => nlog(`notify-fail spawn error: ${err.message}`));
       child.unref();
       popupProcs.set(id, child);
-    } catch (_) {}
+      nlog(`notify-spawned pid=${child.pid} event=${event}`);
+    } catch (err) { nlog(`notify-fail spawn throw: ${err.message}`); }
+  });
+  // Renderer-side state transitions (see maybeNotifyState) land here purely
+  // for the diagnostic log.
+  ipcMain.on('state-debug', (_e, p) => {
+    nlog(`transition col=${p.id} ${p.prev}->${p.st} hasWorked=${p.hasWorked}${p.skip ? ' SKIP=' + p.skip : ''} title=${p.title}`);
   });
 
   // Dock badge (macOS): number of columns blocked waiting for the user.
