@@ -262,9 +262,9 @@ body.is-mac #colNav { padding-top: 38px; }
   display: flex; overflow-x: auto; overflow-y: hidden;
   background: var(--app-bg);
 }
-/* 22px = fat-finger friendly but not bulky (owner request 2026-07-17: 28px
-   felt too wide, dialed back to 80%). Keep the transparent track from v0.5.1. */
-#deck::-webkit-scrollbar { height: 22px; }
+/* 15px = owner request 2026-07-17: 22px still too wide, dialed to 70%
+   (22 * 0.7 ≈ 15). Keep the transparent track from v0.5.1. */
+#deck::-webkit-scrollbar { height: 15px; }
 #deck::-webkit-scrollbar-track { background: transparent; }
 #deck::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb); border-radius: 999px;
