@@ -1227,6 +1227,18 @@ function jumpToColumn(col) {
   syncNav();
 }
 
+// Popup-notification click: jump straight to the column whose agent fired the
+// event (id = that pty's AGENTDECK_COL_ID). Stale id — the column respawned
+// since — falls back to a column waiting for input, then to a just-done one.
+window.deck.onFocusColumn((id) => {
+  let col = columns.find((c) => c.id === id);
+  if (!col) {
+    const byState = (s) => columns.find((c) => { const t = terms.get(c.id); return t && t.state === s; });
+    col = byState('input') || byState('done');
+  }
+  if (col) jumpToColumn(col);
+});
+
 // Drag a sidebar entry to reorder; the deck columns reflow to match live (no
 // reload). Below the move threshold it's a plain click → jump to that column.
 function attachNavReorder(item, col) {

@@ -140,7 +140,10 @@ function spawnPty(id, cwd, cols, rows) {
       cols: cols || 80,
       rows: rows || 24,
       cwd: dir,
-      env: ENV,
+      // AGENTDECK_COL_ID rides down to whatever runs in the column (agents,
+      // their hooks, …) so an external notifier can say "jump to THIS column"
+      // by relaunching us with --focus-column=<id> (see second-instance).
+      env: { ...ENV, AGENTDECK_COL_ID: id },
     });
   } catch (err) {
     // Spawn can fail (fd exhaustion, bad shell). Surface it in the column
@@ -338,9 +341,14 @@ function createWindow() {
 if (!app.requestSingleInstanceLock()) {
   app.exit(0);
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_e, argv) => {
     const win = BrowserWindow.getAllWindows()[0];
     if (win) { if (win.isMinimized()) win.restore(); win.focus(); }
+    // `AgentDeck.exe --focus-column=<id>`: an external notifier (the Claude
+    // popup hook) asks the deck to jump to the column that fired the event.
+    // The id came from that column's AGENTDECK_COL_ID env.
+    const arg = (argv || []).find((a) => typeof a === 'string' && a.startsWith('--focus-column='));
+    if (arg && win) win.webContents.send('focus-column', { id: arg.slice('--focus-column='.length) });
   });
 }
 
