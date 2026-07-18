@@ -2,7 +2,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('elect
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { execFile, execFileSync } = require('child_process');
+const { execFile, execFileSync, spawn } = require('child_process');
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -403,6 +403,101 @@ app.whenReady().then(() => {
       const projDir = path.join(HOME, '.claude', 'projects', enc);
       return fs.existsSync(projDir) && fs.readdirSync(projDir).some((f) => f.endsWith('.jsonl'));
     } catch (_) { return false; }
+  });
+
+  // ---- Auto column naming ----
+  // The renderer sends the line the user just submitted to an agent; compress
+  // it into a short label for the column header. Three tiers, each falling
+  // through to the next on any failure: OpenRouter (needs ~/.openrouter_key,
+  // fast + cheap) → local `claude -p` (present on both machines, slow but free
+  // with the subscription) → plain keyword truncation (always works, offline).
+  const TITLE_PROMPT = (text) =>
+    '下面是用户发给终端里 AI agent 的一条指令。请用不超过10个字概括这个任务，作为终端列的标签。' +
+    '中文优先；若指令是纯英文，标签可用不超过3个英文单词。只输出标签本身，不要标点、引号或任何解释。\n\n指令：' + text;
+
+  function cleanTitle(raw) {
+    if (!raw) return null;
+    let t = String(raw).replace(/\x1b\[[0-9;]*m/g, '');
+    t = (t.split('\n').map((s) => s.trim()).filter(Boolean)[0] || '');
+    t = t.replace(/^(标签|label)\s*[:：]\s*/i, '');
+    t = t.replace(/^["'「『【\[]+/, '').replace(/["'」』】\]。.！!？?，,]+$/, '').trim();
+    if (!t) return null;
+    if (/[一-鿿]/.test(t)) return t.slice(0, 12);
+    return t.length > 20 ? t.slice(0, 20).trim() : t;
+  }
+
+  async function titleViaOpenRouter(text) {
+    let key;
+    try { key = fs.readFileSync(path.join(HOME, '.openrouter_key'), 'utf8').trim(); } catch (_) { return null; }
+    if (!key) return null;
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 10000);
+    try {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'google/gemini-2.5-flash-lite',
+          models: ['google/gemini-2.5-flash-lite', 'anthropic/claude-haiku-4.5'],
+          messages: [{ role: 'user', content: TITLE_PROMPT(text) }],
+          max_tokens: 2000,
+        }),
+        signal: ctl.signal,
+      });
+      if (!res.ok) return null;
+      const j = await res.json();
+      return cleanTitle(j.choices && j.choices[0] && j.choices[0].message && j.choices[0].message.content);
+    } catch (_) { return null; } finally { clearTimeout(timer); }
+  }
+
+  // `claude -p` calls are serialized: several columns naming at once would
+  // otherwise each boot a full CLI. Prompt goes via stdin (no quoting issues).
+  let claudeCliChain = Promise.resolve();
+  function titleViaClaudeCli(text) {
+    const run = () => new Promise((resolve) => {
+      let done = false;
+      const finish = (v) => { if (!done) { done = true; resolve(v); } };
+      let child;
+      try {
+        child = spawn('claude', ['-p', '--model', 'haiku'], { shell: true, windowsHide: true, cwd: HOME, env: buildEnv() });
+      } catch (_) { return finish(null); }
+      const timer = setTimeout(() => {
+        // shell:true wraps the CLI in cmd.exe on Windows: kill the whole tree.
+        if (isWin) { try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F']); } catch (_) {} }
+        else { try { child.kill('SIGKILL'); } catch (_) {} }
+        finish(null);
+      }, 60000);
+      let out = '';
+      child.stdout.on('data', (d) => { out += d; });
+      child.on('error', () => { clearTimeout(timer); finish(null); });
+      child.on('close', () => { clearTimeout(timer); finish(cleanTitle(out)); });
+      child.stdin.on('error', () => {});
+      child.stdin.end(TITLE_PROMPT(text));
+    });
+    const p = claudeCliChain.then(run, run);
+    claudeCliChain = p.then(() => {}, () => {});
+    return p;
+  }
+
+  function titleHeuristic(text) {
+    let t = String(text).replace(/\s+/g, ' ').trim();
+    const fillers = /^(请你?|帮我|帮忙|麻烦你?|你|给我|我想要?|我要|我需要|需要|能不能|可不可以|可以)/;
+    for (let i = 0; i < 5 && fillers.test(t); i++) t = t.replace(fillers, '').trim();
+    t = t.replace(/(一下|吧|呢|啊|哈|谢谢|thanks|please)[。.!！?？\s]*$/i, '').trim();
+    const strip = (s) => s.replace(/[，。,.!！?？、；;：:\s]+$/, '');
+    if (/[一-鿿]/.test(t)) return strip(t.slice(0, 10)) || null;
+    const words = t.split(' ').slice(0, 3).join(' ');
+    return strip(words.length > 20 ? words.slice(0, 20) : words) || null;
+  }
+
+  const titleCache = new Map(); // prompt → label; re-submits of the same line are free
+  ipcMain.handle('title:summarize', async (_e, { text }) => {
+    const t = String(text || '').slice(0, 400).trim();
+    if (!t) return null;
+    if (titleCache.has(t)) return titleCache.get(t);
+    const label = (await titleViaOpenRouter(t)) || (await titleViaClaudeCli(t)) || titleHeuristic(t);
+    if (label) titleCache.set(t, label);
+    return label;
   });
 
   // Pasting an image into a column: the renderer sends the PNG bytes; save to a

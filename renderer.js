@@ -63,6 +63,11 @@ function defaultColumns() {
   return agents.map((a) => ({ id: newId(), title: a.title, cwd: '', cmd: a.cmd, width: DEFAULT_WIDTH }));
 }
 
+// Titles the app itself assigned (auto numbers, preset agent names) are fair
+// game for auto-naming; anything else counts as a manual rename.
+const AUTO_TITLES = new Set(['Agent', 'Antigravity', 'Claude', 'Grok']);
+function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AUTO_TITLES.has(String(t).trim()); }
+
 let config = { theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184, navCollapsed: false, fontSize: 13, columns: defaultColumns() };
 const saved = window.deck.loadConfig();
 if (saved) {
@@ -75,11 +80,76 @@ if (saved) {
   if (Array.isArray(saved.columns) && saved.columns.length) {
     config.columns = saved.columns.map((c) => ({
       id: c.id || newId(), title: c.title || 'Agent', cwd: c.cwd || '', cmd: c.cmd || '', width: c.width || DEFAULT_WIDTH,
+      // Pre-feature configs carry no manualTitle: infer it. Auto-ish titles
+      // (pure numbers, preset agent names) stay auto-renamable; anything else
+      // was typed by the user and must never be auto-renamed.
+      manualTitle: c.manualTitle !== undefined ? !!c.manualTitle : isManualTitle(c.title),
     }));
   }
 }
 let columns = config.columns;
 function saveConfig() { config.columns = columns; window.deck.saveConfig(config); }
+
+// ---- Auto column naming ----
+// Each prompt the user submits to a column gets summarized (main process:
+// OpenRouter → `claude -p` → keyword truncation) into a ≤10-char label for the
+// header, so the deck reads as tasks ("修登录bug") instead of "1 2 3". A manual
+// rename (double-click header/sidebar, edit dialog) locks the column for good.
+const autoNameSeq = new Map();   // col.id → latest request seq (stale replies dropped)
+const autoNameLast = new Map();  // col.id → last prompt already summarized
+const AUTONAME_SKIP = /^(好的?|谢谢|继续|可以|行|嗯+|没问题|开始吧?|开干|test|hi|hello|go( ahead)?|ok(ay)?|yes|no|q|exit|quit|clear|cls|pwd|ls( -[a-z]+)?)$/i;
+
+function maybeAutoName(col, line) {
+  if (!line || col.manualTitle) return;
+  if (line.length < 4) return;
+  if (!/[一-鿿]/.test(line) && line.length < 6) return;   // short ASCII: "y", "ls", …
+  if (/^[\d\s.,]+$/.test(line)) return;                    // menu selections ("1", "2 3")
+  if (line.startsWith('/') || line.startsWith('!')) return; // slash/bang commands, not tasks
+  if (AUTONAME_SKIP.test(line)) return;
+  if (line === (col.cmd || '').trim()) return;             // re-typed launch command
+  if (autoNameLast.get(col.id) === line) return;
+  autoNameLast.set(col.id, line);
+  const seq = (autoNameSeq.get(col.id) || 0) + 1;
+  autoNameSeq.set(col.id, seq);
+  window.deck.summarizeTitle(line).then((label) => {
+    if (!label || col.manualTitle) return;
+    if (autoNameSeq.get(col.id) !== seq) return;  // a newer prompt won
+    if (!columns.includes(col)) return;           // column removed meanwhile
+    setColumnTitle(col, label);
+  }).catch(() => {});
+}
+
+// Rebuild the line being typed from raw pty input so the submitted prompt can
+// be caught. Printables append, backspace deletes, Enter submits. Escape
+// sequences (arrow keys, and xterm's auto-replies to terminal queries) are
+// skipped; inside a bracketed paste a newline is literal content, not "send".
+function makePromptTracker(col) {
+  let buf = '', inPaste = false;
+  return (d) => {
+    for (let i = 0; i < d.length; ) {
+      const ch = d[i];
+      if (ch === '\x1b') {
+        if (d.startsWith('[200~', i + 1)) { inPaste = true; i += 6; continue; }
+        if (d.startsWith('[201~', i + 1)) { inPaste = false; i += 6; continue; }
+        const m = /^\x1b(\[[0-9;?]*[@-~]|O.|.)/.exec(d.slice(i, i + 24));
+        i += m ? m[0].length : 1;
+        continue;
+      }
+      if (ch === '\r' || ch === '\n') {
+        if (inPaste) buf += ' ';
+        else { const line = buf.trim(); buf = ''; maybeAutoName(col, line); }
+        i++;
+        continue;
+      }
+      if (ch === '\x7f' || ch === '\b') { buf = buf.slice(0, -1); i++; continue; }
+      if (ch === '\x03' || ch === '\x15') { buf = ''; i++; continue; }  // ^C / ^U clear the line
+      if (ch < ' ') { i++; continue; }
+      buf += ch;
+      if (buf.length > 2000) buf = buf.slice(-2000);
+      i++;
+    }
+  };
+}
 
 // ---- Terminals ----
 const terms = new Map(); // id -> { term, fit, el, wrap, titleEl, dot, alive }
@@ -690,7 +760,8 @@ function buildColumn(col, isFresh) {
       }
     };
     reconnect();
-    term.onData((d) => { if (!replayMuted) window.deck.ptyInput(col.id, d); });
+    const trackPrompt = makePromptTracker(col);
+    term.onData((d) => { if (!replayMuted) { window.deck.ptyInput(col.id, d); trackPrompt(d); } });
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
     if (deckEl.firstElementChild === wrap) { term.focus(); focusedId = col.id; } // focus leftmost on boot
 
@@ -1053,7 +1124,7 @@ function attachRename(titleEl, col) {
       titleEl.contentEditable = 'false';
       window.getSelection().removeAllRanges();
       const v = titleEl.textContent.trim();
-      if (!cancelled && v) setColumnTitle(col, v); // syncs header + sidebar + saves
+      if (!cancelled && v) { col.manualTitle = true; setColumnTitle(col, v); } // syncs header + sidebar + saves; locks out auto-naming
       else titleEl.textContent = col.title; // normalize (drop stray newlines / restore on cancel)
     }, { once: true });
   });
@@ -1225,7 +1296,7 @@ function attachNavRename(labelEl, col) {
       labelEl.contentEditable = 'false';
       window.getSelection().removeAllRanges();
       const v = labelEl.textContent.trim();
-      if (!cancelled && v) setColumnTitle(col, v);
+      if (!cancelled && v) { col.manualTitle = true; setColumnTitle(col, v); }
       else labelEl.textContent = col.title;
     }, { once: true });
   });
@@ -1265,9 +1336,10 @@ document.getElementById('dlgSave').onclick = () => {
   const title = titleInput.value.trim() || 'Agent';
   const cwd = cwdInput.value.trim();
   const cmd = cmdInput.value.trim();
-  if (editIndex === null) { addColumn({ title, cwd, cmd }); dlg.close(); return; }
+  if (editIndex === null) { addColumn({ title, cwd, cmd, manualTitle: titleInput.value.trim() !== '' }); dlg.close(); return; }
   const col = columns[editIndex];
   const needsRespawn = (col.cwd || '') !== cwd || (col.cmd || '') !== cmd;
+  if (title !== col.title) col.manualTitle = true; // typed a new name here = manual rename
   col.title = title;
   col.cwd = cwd;
   col.cmd = cmd;

@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('deck', {
   ptySaved: (id) => ipcRenderer.invoke('pty:saved', { id }),
   // True if Claude Code has a resumable session in this cwd (→ use --continue).
   claudeHasSession: (cwd) => ipcRenderer.invoke('claude:has-session', { cwd }),
+  // Auto column naming: compress a submitted prompt into a ≤10-char label.
+  summarizeTitle: (text) => ipcRenderer.invoke('title:summarize', { text }),
 
   ptySpawn: (id, cwd, cols, rows) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
