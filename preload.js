@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('deck', {
   setAttnCount: (n) => ipcRenderer.send('attn:count', n),
   // Windows popup for a non-Claude column turning done/input (click → jump).
   notifyState: (payload) => ipcRenderer.send('notify-state', payload),
+  // Retract this column's popup — it fired "done" but the agent resumed working.
+  notifyCancel: (payload) => ipcRenderer.send('notify-cancel', payload),
   // Column state transitions, mirrored to the main-process diagnostic log.
   stateDebug: (payload) => ipcRenderer.send('state-debug', payload),
   // Open a URL in the default browser; reveal a local path in Finder.

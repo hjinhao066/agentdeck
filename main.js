@@ -610,6 +610,16 @@ app.whenReady().then(() => {
       nlog(`notify-spawned pid=${child.pid} event=${event}`);
     } catch (err) { nlog(`notify-fail spawn throw: ${err.message}`); }
   });
+  // The column went back to working after a "done" popup — that popup was
+  // premature, take it off the screen.
+  ipcMain.on('notify-cancel', (_e, { id }) => {
+    const prev = popupProcs.get(id);
+    if (prev && prev.pid && prev.exitCode === null) {
+      nlog(`notify-cancel col=${id} killing pid=${prev.pid}`);
+      try { execFile('taskkill', ['/pid', String(prev.pid), '/T', '/F']); } catch (_) {}
+      popupProcs.delete(id);
+    }
+  });
   // Renderer-side state transitions (see maybeNotifyState) land here purely
   // for the diagnostic log.
   ipcMain.on('state-debug', (_e, p) => {

@@ -1421,24 +1421,52 @@ function lastActivityLine(text) {
 // Popup notifications for NON-Claude agents (Antigravity/Grok/anything). The
 // Claude popup hook only covers Claude Code — hooks are a Claude feature — so
 // those columns are skipped here to avoid double popups. Everything else rides
-// the same screen-based state machine as the dots: fire once per transition to
-// green (done, after real work) or red (input). Fires regardless of window
+// the same screen-based state machine as the dots. Fires regardless of window
 // focus so the behavior matches the Claude hook popups exactly.
+//
+// 'input' pops on the transition edge — a permission prompt mid-task IS the
+// moment to fetch the user. 'done' must NOT pop on the edge: mid-task the
+// screen can look idle for several seconds (tool execution, redraws between
+// steps), which false-fired "跑完了" popups. So done waits for the state to
+// hold NOTIFY_STABLE_TICKS consecutive ticks (~12s), and if the column goes
+// back to working anyway, the already-shown popup is retracted (notifyCancel).
+const NOTIFY_STABLE_TICKS = 8; // × ~1.5s tick ≈ 12s of quiet screen
 function maybeNotifyState(id, entry, st) {
   const prev = entry.lastNotifyState;
   entry.lastNotifyState = st;
-  if (prev === undefined || prev === st) return; // boot tick / no transition
   const col = columns.find((c) => c.id === id);
-  // Every transition goes to the main-process diagnostic log, with the reason
-  // a popup was withheld — the popup chain is otherwise silent when it breaks.
-  let skip = '';
-  if (st !== 'input' && st !== 'done') skip = 'state';
-  else if (st === 'done' && !entry.hasWorked) skip = 'noWork';
-  else if (!col) skip = 'noCol';
-  else if (isClaudeCmd(col.cmd)) skip = 'claude';
-  try { window.deck.stateDebug({ id, title: col ? col.title : '?', prev, st, hasWorked: entry.hasWorked, skip }); } catch (_) {}
-  if (skip) return;
-  try { window.deck.notifyState({ id, title: col.title, state: st }); } catch (_) {}
+  if (prev !== undefined && prev !== st) {
+    let skip = '';
+    if (st !== 'input' && st !== 'done') skip = 'state';
+    else if (st === 'done' && !entry.hasWorked) skip = 'noWork';
+    else if (!col) skip = 'noCol';
+    else if (col && isClaudeCmd(col.cmd)) skip = 'claude';
+    else if (st === 'done') skip = 'await-stable';
+    try { window.deck.stateDebug({ id, title: col ? col.title : '?', prev, st, hasWorked: entry.hasWorked, skip }); } catch (_) {}
+  }
+  if (!col) return;
+  if (st === 'working') {
+    // Resumed (or never really finished): a shown "跑完了" popup was premature.
+    if (entry.doneNotified) { try { window.deck.notifyCancel({ id }); } catch (_) {} }
+    entry.doneNotified = false;
+    return;
+  }
+  if (isClaudeCmd(col.cmd)) return;
+  if (st === 'input') {
+    entry.doneNotified = false;
+    if (prev !== undefined && prev !== st) {
+      try { window.deck.notifyState({ id, title: col.title, state: st }); } catch (_) {}
+    }
+    return;
+  }
+  if (st === 'done') {
+    if (prev === undefined) { entry.doneNotified = true; return; } // already idle at boot — nothing finished
+    if (!entry.hasWorked || entry.doneNotified) return;
+    if (entry.idleTicks < NOTIFY_STABLE_TICKS) return; // not stable yet
+    entry.doneNotified = true;
+    try { window.deck.stateDebug({ id, title: col.title, prev, st: 'done-stable', hasWorked: true, skip: '' }); } catch (_) {}
+    try { window.deck.notifyState({ id, title: col.title, state: 'done' }); } catch (_) {}
+  }
 }
 
 let lastAttnCount = -1;
