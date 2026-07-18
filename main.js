@@ -451,14 +451,22 @@ app.whenReady().then(() => {
     '下面是用户发给终端里 AI agent 的一条指令。请用不超过10个字概括这个任务，作为终端列的标签。' +
     '中文优先；若指令是纯英文，标签可用不超过3个英文单词。只输出标签本身，不要标点、引号或任何解释。\n\n指令：' + text;
 
+  // Strip characters that can only be transport damage — lone surrogates and
+  // U+FFFD — so a mojibake input line can never become a mojibake column title
+  // (seen 2026-07-17: a title of GBK-mangled hanzi with dangling \udcXX tails).
+  // Array.from iterates by code point, so real astral chars survive intact.
+  function stripBadChars(s) {
+    return Array.from(String(s)).filter((c) => c !== '�' && !(c.length === 1 && c >= '\uD800' && c <= '\uDFFF')).join('');
+  }
+
   function cleanTitle(raw) {
     if (!raw) return null;
-    let t = String(raw).replace(/\x1b\[[0-9;]*m/g, '');
+    let t = stripBadChars(raw).replace(/\x1b\[[0-9;]*m/g, '');
     t = (t.split('\n').map((s) => s.trim()).filter(Boolean)[0] || '');
     t = t.replace(/^(标签|label)\s*[:：]\s*/i, '');
     t = t.replace(/^["'「『【\[]+/, '').replace(/["'」』】\]。.！!？?，,]+$/, '').trim();
     if (!t) return null;
-    if (/[一-鿿]/.test(t)) return t.slice(0, 12);
+    if (/[一-鿿]/.test(t)) return Array.from(t).slice(0, 12).join('');
     return t.length > 20 ? t.slice(0, 20).trim() : t;
   }
 
@@ -528,10 +536,12 @@ app.whenReady().then(() => {
 
   const titleCache = new Map(); // prompt → label; re-submits of the same line are free
   ipcMain.handle('title:summarize', async (_e, { text }) => {
-    const t = String(text || '').slice(0, 400).trim();
+    const t = Array.from(stripBadChars(text || '')).slice(0, 400).join('').trim();
     if (!t) return null;
     if (titleCache.has(t)) return titleCache.get(t);
+    nlog(`title-request line=${JSON.stringify(t.slice(0, 80))}`);
     const label = (await titleViaOpenRouter(t)) || (await titleViaClaudeCli(t)) || titleHeuristic(t);
+    nlog(`title-result label=${JSON.stringify(label)}`);
     if (label) titleCache.set(t, label);
     return label;
   });
