@@ -70,6 +70,7 @@ html, body {
   overflow: hidden;
 }
 body { display: flex; }
+[hidden] { display: none !important; }
 
 /* ===== Left panel: primary actions · column list · utilities ===== */
 #colNav {
@@ -436,6 +437,17 @@ dialog input {
   padding: 10px 12px; font-size: 13px; outline: none;
   transition: border-color .15s ease, box-shadow .15s ease;
 }
+dialog textarea,
+dialog select {
+  width: 100%; background: var(--app-bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px 12px; font: inherit; font-size: 13px; outline: none;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+dialog textarea { min-height: 132px; resize: vertical; line-height: 1.5; }
+dialog textarea:focus,
+dialog select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.task-dialog { width: 520px; }
 dialog input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 dialog .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 dialog .preset {
@@ -540,3 +552,222 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   display: inline-block; width: 9px; height: 9px; border-radius: 999px;
   vertical-align: middle;
 }
+
+/* ===== Conductor Board =====
+   This is a second projection of the live column/session model. Hiding it or
+   opening it never recreates a terminal. */
+#boardView {
+  flex: 1; min-width: 0; height: 100%;
+  display: flex; flex-direction: column;
+  background: var(--app-bg);
+}
+.board-workspace {
+  flex: 1; min-height: 0; min-width: 0;
+  display: flex;
+}
+.board-toolbar {
+  flex: 0 0 76px;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--card-head); border-bottom: 1px solid var(--hairline);
+  -webkit-app-region: drag;
+}
+.board-toolbar h1 { font-size: 20px; line-height: 1.15; letter-spacing: -0.02em; }
+.board-kicker {
+  margin-bottom: 3px; color: var(--muted);
+  font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
+}
+.board-toolbar-actions { display: flex; gap: 8px; -webkit-app-region: no-drag; }
+#boardScroller {
+  flex: 1 1 56%; min-width: 340px; min-height: 0; overflow: auto;
+  background: var(--app-bg);
+}
+#boardScroller::-webkit-scrollbar { width: 12px; height: 15px; }
+#boardScroller::-webkit-scrollbar-track { background: transparent; }
+#boardScroller::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb); border: 2px solid transparent;
+  background-clip: padding-box; border-radius: 999px;
+}
+#boardScroller::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+#boardSurface {
+  position: relative; min-width: 100%; min-height: 100%;
+  background-color: var(--app-bg);
+}
+#boardEdges, #boardNodes { position: absolute; inset: 0; overflow: visible; }
+#boardEdges { pointer-events: none; }
+.board-edge { fill: none; stroke-width: 2; opacity: .82; }
+.board-edge.delegation { stroke: var(--accent); }
+.board-edge.dependency { stroke: #d9902f; stroke-dasharray: 8 5; }
+.board-edge.handoff { stroke: var(--st-done); stroke-dasharray: 2 5; }
+#boardArrowDelegation path { fill: var(--accent); }
+#boardArrowDependency path { fill: #d9902f; }
+#boardArrowHandoff path { fill: var(--st-done); }
+.board-edge-label {
+  fill: var(--muted); font-size: 10px; text-anchor: middle;
+  paint-order: stroke; stroke: var(--app-bg); stroke-width: 5px; stroke-linejoin: round;
+}
+.board-node {
+  position: absolute; z-index: 2;
+  display: flex; flex-direction: column;
+  padding: 13px 14px 12px;
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--border); border-top: 3px solid var(--st-plain);
+  border-radius: 14px; box-shadow: 0 5px 18px rgba(0,0,0,.22);
+  cursor: default; transition: border-color .15s ease, transform .12s ease, box-shadow .15s ease;
+}
+:root[data-theme="light"] .board-node { box-shadow: 0 5px 16px rgba(15,20,25,.10); }
+.board-node:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+.board-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-pop); }
+.board-node.connect-source { outline: 2px dashed var(--accent); outline-offset: 4px; }
+.board-node[data-state="working"] { border-top-color: var(--st-working); }
+.board-node[data-state="input"] { border-top-color: var(--st-input); }
+.board-node[data-state="done"] { border-top-color: var(--st-done); }
+.board-node[data-state="exited"] { border-top-color: var(--st-exited); }
+.board-node.manual {
+  border-style: dashed; border-top-style: solid;
+  background: var(--card-head);
+}
+.board-node-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.board-role {
+  font-size: 10px; line-height: 20px; padding: 0 7px;
+  border-radius: 5px; background: var(--accent-soft); color: var(--accent);
+  font-weight: 750; letter-spacing: .05em; text-transform: uppercase;
+}
+.board-node.manual .board-role { background: var(--pill-bg); color: var(--muted); }
+.board-agent { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board-node h2 {
+  margin: 8px -7px 7px; min-height: 25px; padding: 4px 7px;
+  font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  background: var(--card-head); border: 1px solid var(--hairline); border-radius: 6px;
+  cursor: text;
+}
+.board-node h2:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.board-node h2[contenteditable="true"] {
+  white-space: normal; overflow: visible; text-overflow: clip;
+  background: var(--app-bg);
+}
+.board-node-status { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 650; }
+.board-node-status .legend-dot { background: var(--st-plain); }
+.board-node[data-state="working"] .board-node-status .legend-dot { background: var(--st-working); }
+.board-node[data-state="input"] .board-node-status .legend-dot { background: var(--st-input); }
+.board-node[data-state="done"] .board-node-status .legend-dot { background: var(--st-done); }
+.board-node[data-state="exited"] .board-node-status .legend-dot {
+  background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-exited);
+}
+.board-relation, .board-progress {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 11px; line-height: 1.35;
+}
+.board-relation { color: var(--muted); margin-top: 6px; }
+.board-progress { color: var(--text); min-height: 15px; margin-top: 3px; opacity: .82; }
+.board-node-actions {
+  display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+  margin-top: auto;
+}
+.board-inspect, .board-connect {
+  border: none; background: transparent; color: var(--accent);
+  font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.board-connect { color: var(--muted); }
+.board-inspect:hover, .board-connect:hover { text-decoration: underline; }
+.board-link-chip {
+  position: absolute; z-index: 4; transform: translate(-50%, -50%);
+  max-width: 170px; padding: 4px 7px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--card-head); color: var(--text);
+  font-size: 9px; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  box-shadow: 0 2px 8px rgba(0,0,0,.22); cursor: pointer;
+}
+.board-link-chip.delegation { border-color: var(--accent); }
+.board-link-chip.dependency { border-color: #d9902f; }
+.board-link-chip.handoff { border-color: var(--st-done); }
+.board-link-chip.blocked { color: #f6b44c; font-weight: 700; }
+#boardEmpty {
+  position: absolute; left: 56px; top: 10px;
+  display: flex; flex-direction: column; gap: 6px;
+  color: var(--muted); font-size: 13px;
+}
+#boardEmpty strong { color: var(--text); font-size: 15px; }
+.board-legend {
+  flex: 0 0 42px;
+  display: flex; align-items: center; gap: 18px;
+  padding: 0 20px; border-top: 1px solid var(--hairline);
+  background: var(--card-head); color: var(--muted); font-size: 11px;
+}
+.board-legend > span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.board-manual-note { margin-left: auto; }
+
+#boardConnectNotice {
+  flex: 0 0 34px;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  background: var(--accent-soft); color: var(--text);
+  border-bottom: 1px solid var(--accent);
+  font-size: 12px;
+}
+#boardConnectNotice button {
+  border: none; background: transparent; color: var(--accent); font-weight: 700; cursor: pointer;
+}
+
+/* The board inspector hosts the SAME .term element that normally lives in its
+   deck column. It is not a snapshot or second terminal instance. */
+#boardInspector {
+  flex: 0 1 46%; min-width: 410px; max-width: 720px;
+  display: flex; flex-direction: column; min-height: 0;
+  background: var(--card); border-left: 1px solid var(--border);
+}
+.board-inspector-head {
+  flex: 0 0 auto; min-height: 68px;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 12px 9px 14px; background: var(--card-head); border-bottom: 1px solid var(--hairline);
+}
+.board-inspector-head h2 {
+  max-width: 330px; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.board-inspector-head p {
+  margin-top: 3px; max-width: 390px; color: var(--muted); font-size: 10px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.board-inspector-actions { display: flex; gap: 6px; }
+.board-inspector-actions .btn { height: 30px; padding: 0 10px; font-size: 11px; }
+#boardInspectorState {
+  flex: 0 0 28px; padding: 6px 14px;
+  border-bottom: 1px solid var(--hairline); color: var(--muted);
+  font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+#boardInspectorState[data-state="working"] { color: var(--st-working); }
+#boardInspectorState[data-state="input"] { color: var(--st-input); }
+#boardInspectorState[data-state="done"] { color: var(--st-done); }
+#boardTerminalHost {
+  flex: 1; min-height: 0; display: flex; overflow: hidden; background: var(--term-bg);
+}
+#boardTerminalHost .term { flex: 1; height: 100%; min-height: 0; }
+#boardInspectorEmpty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 7px; padding: 24px; color: var(--muted); text-align: center; font-size: 12px;
+}
+#boardInspectorEmpty strong { color: var(--text); font-size: 14px; }
+.column.board-inspected::after {
+  content: "Terminal is open in Conductor Board";
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  color: var(--muted); font-size: 12px;
+}
+
+.link-dialog { width: 560px; }
+.link-endpoints {
+  display: flex; align-items: center; gap: 10px; margin: 12px 0 2px;
+  color: var(--muted); font-size: 12px;
+}
+.link-endpoints strong {
+  min-width: 0; max-width: 210px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.link-use-result {
+  margin-top: 7px; border: none; background: transparent; color: var(--accent);
+  font-size: 11px; font-weight: 700; cursor: pointer;
+}
+.link-control-option {
+  display: flex; align-items: flex-start; gap: 9px; margin-top: 13px;
+  color: var(--text); font-size: 11px; line-height: 1.4; cursor: pointer;
+}
+.link-control-option input { width: 15px; height: 15px; margin-top: 1px; flex: 0 0 auto; }
+.link-dialog-actions .row-spacer { flex: 1; }
+.btn.danger { background: rgba(244,33,46,.14); color: var(--st-input); }

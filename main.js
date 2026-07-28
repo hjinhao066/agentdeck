@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('elect
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
@@ -125,6 +126,11 @@ function shellArgs() {
 }
 
 const ptys = new Map(); // columnId -> pty process
+const managedSessions = new Map(); // columnId -> unguessable board-control token
+let boardControlDir = '';
+let boardCliPath = '';
+let boardRendererReady = false;
+const pendingBoardCommands = new Map(); // requestId -> { command, delivered }
 
 // --- Hot-reload support: buffer recent pty output so the renderer can replay
 // it after a webContents.reload() without losing visible terminal content. ---
@@ -143,9 +149,19 @@ function bufferAppend(id, data) {
   }
 }
 
-function spawnPty(id, cwd, cols, rows) {
+function spawnPty(id, cwd, cols, rows, managed) {
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
+  const token = managed ? crypto.randomBytes(24).toString('hex') : '';
+  if (token) managedSessions.set(id, token);
+  else managedSessions.delete(id);
+  const terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  if (token) {
+    terminalEnv.AGENTDECK_MANAGED = '1';
+    terminalEnv.AGENTDECK_CONTROL_TOKEN = token;
+    terminalEnv.AGENTDECK_CONTROL_DIR = boardControlDir;
+    terminalEnv.AGENTDECK_BOARD_CLI = boardCliPath;
+  }
   let p;
   try {
     p = pty.spawn(shellFile(), shellArgs(), {
@@ -156,9 +172,10 @@ function spawnPty(id, cwd, cols, rows) {
       // AGENTDECK_COL_ID rides down to whatever runs in the column (agents,
       // their hooks, …) so an external notifier can say "jump to THIS column"
       // by relaunching us with --focus-column=<id> (see second-instance).
-      env: { ...ENV, AGENTDECK_COL_ID: id },
+      env: terminalEnv,
     });
   } catch (err) {
+    managedSessions.delete(id);
     // Spawn can fail (fd exhaustion, bad shell). Surface it in the column
     // instead of throwing inside the IPC handler and crashing the main process.
     send('pty:data', { id, data: `\r\n[AgentDeck] shell 启动失败: ${err.message}\r\n` });
@@ -166,7 +183,18 @@ function spawnPty(id, cwd, cols, rows) {
     return;
   }
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
-  p.onExit(() => { ptys.delete(id); ptyBuffers.delete(id); send('pty:exit', { id }); });
+  p.onExit(() => {
+    // Ignore a late exit from an older PTY generation. This matters if a
+    // column is respawned quickly with the same id.
+    if (ptys.get(id) === p) {
+      writeSession(id, ptyBuffers.get(id));
+      ptys.delete(id);
+      managedSessions.delete(id);
+      // Keep the frozen buffer until the column is explicitly removed. It lets
+      // a renderer reload still show an exited terminal's useful final output.
+      send('pty:exit', { id });
+    }
+  });
   ptys.set(id, p);
 }
 
@@ -179,14 +207,107 @@ function killPty(id) {
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
+  managedSessions.delete(id);
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
+}
+
+function boardResponsePath(requestId) {
+  if (!/^[a-zA-Z0-9._-]{1,200}$/.test(String(requestId || ''))) return null;
+  return path.join(boardControlDir, 'responses', `${requestId}.json`);
+}
+
+function writeBoardResponse(requestId, payload) {
+  const file = boardResponsePath(requestId);
+  if (!file) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(payload), 'utf8');
+    // Windows rename does not replace an existing file. A long-running
+    // create-child request is first written as done:false, then done:true.
+    try { fs.unlinkSync(file); } catch (_) {}
+    fs.renameSync(tmp, file);
+  } catch (_) {}
+}
+
+let processingBoardRequests = false;
+function dispatchPendingBoardCommands() {
+  if (!boardRendererReady) return;
+  for (const pending of pendingBoardCommands.values()) {
+    if (pending.delivered) continue;
+    pending.delivered = true;
+    send('board:command', pending.command);
+  }
+}
+
+function processBoardRequests() {
+  if (processingBoardRequests || !boardControlDir) return;
+  processingBoardRequests = true;
+  try {
+    const dir = path.join(boardControlDir, 'requests');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.endsWith('.json')) continue;
+      const file = path.join(dir, name);
+      let request;
+      try { request = JSON.parse(fs.readFileSync(file, 'utf8')); }
+      catch (_) { try { fs.unlinkSync(file); } catch (_) {} continue; }
+      try { fs.unlinkSync(file); } catch (_) {}
+      const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token);
+      if (!caller) {
+        writeBoardResponse(request.id, { done: true, error: 'Control request rejected: terminal is not conductor-managed.' });
+        continue;
+      }
+      const action = String(request.action || '');
+      if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status'].includes(action)) {
+        writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
+        continue;
+      }
+      delete request.token;
+      const command = { ...request, callerId: caller[0] };
+      // Do not discard an authenticated request while the renderer is loading.
+      // It stays here until the renderer acknowledges it with board:response;
+      // board:ready replays pending commands after a hot reload.
+      if (!pendingBoardCommands.has(command.id)) {
+        pendingBoardCommands.set(command.id, { command, delivered: false });
+      }
+    }
+    dispatchPendingBoardCommands();
+  } catch (_) {
+  } finally {
+    processingBoardRequests = false;
+  }
+}
+
+function setupBoardControl() {
+  boardControlDir = path.join(app.getPath('userData'), 'board-control');
+  const requestDir = path.join(boardControlDir, 'requests');
+  const responseDir = path.join(boardControlDir, 'responses');
+  const toolsDir = path.join(boardControlDir, 'tools');
+  try {
+    fs.mkdirSync(requestDir, { recursive: true });
+    fs.mkdirSync(responseDir, { recursive: true });
+    fs.mkdirSync(toolsDir, { recursive: true });
+    // Requests cannot survive an app restart because their caller PTY and
+    // in-memory capability token cannot survive it either.
+    for (const dir of [requestDir, responseDir]) {
+      for (const file of fs.readdirSync(dir)) {
+        try { fs.unlinkSync(path.join(dir, file)); } catch (_) {}
+      }
+    }
+    boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
+    fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
+  } catch (err) {
+    nlog(`board-control setup failed: ${err.message}`);
+  }
+  setInterval(processBoardRequests, 250);
 }
 
 // Session replays: each column's recent output is saved here and written back
 // into the terminal on next launch, above a separator line. Saved continuously
 // (not just on quit) so an ABNORMAL exit — crash, force-quit, power loss, where
 // `before-quit` never fires — still has the last seen output to replay.
-const SESS_DIR = path.join(app.getPath('userData'), 'sessions');
+let SESS_DIR;
 
 function writeSession(id, buf) {
   if (!buf) return;
@@ -345,6 +466,8 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+  win.webContents.on('did-start-loading', () => { boardRendererReady = false; });
+  win.webContents.on('destroyed', () => { boardRendererReady = false; });
   win.loadFile('index.html');
 }
 
@@ -353,6 +476,7 @@ function createWindow() {
 // end-to-end test deck can run alongside the real one without touching it.
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
+SESS_DIR = path.join(app.getPath('userData'), 'sessions');
 
 // Two instances sharing one userData dir fight over the GPU disk cache and one
 // dies with 0xc0000409 (seen on Windows, 2026-07-17). Focus the existing window
@@ -381,6 +505,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(() => {
+  setupBoardControl();
   const configPath = path.join(app.getPath('userData'), 'config.json');
   ipcMain.on('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
@@ -396,13 +521,29 @@ app.whenReady().then(() => {
   });
   ipcMain.on('env-info-sync', (e) => { e.returnValue = { platform: process.platform, home: HOME }; });
 
-  ipcMain.on('pty:spawn', (_e, { id, cwd, cols, rows }) => spawnPty(id, cwd, cols, rows));
+  ipcMain.on('pty:spawn', (_e, { id, cwd, cols, rows, managed }) => spawnPty(id, cwd, cols, rows, !!managed));
   ipcMain.on('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
   ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }
   });
   ipcMain.on('pty:kill', (_e, { id }) => killPty(id));
+
+  ipcMain.on('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
+    pendingBoardCommands.delete(requestId);
+    writeBoardResponse(requestId, {
+      done: !!done,
+      result: typeof result === 'string' ? result.slice(0, 12000) : '',
+      error: typeof error === 'string' ? error.slice(0, 2000) : '',
+      childId: typeof childId === 'string' ? childId : '',
+      snapshot: snapshot && typeof snapshot === 'object' ? snapshot : undefined,
+    });
+  });
+  ipcMain.on('board:ready', () => {
+    boardRendererReady = true;
+    for (const pending of pendingBoardCommands.values()) pending.delivered = false;
+    dispatchPendingBoardCommands();
+  });
 
   // --- Hot-reload IPC ---
   // Check whether a pty is still running (used by renderer after reload).
@@ -416,8 +557,16 @@ app.whenReady().then(() => {
   // a hot reload (where the pty is still alive) can never double-replay it.
   ipcMain.handle('pty:saved', (_e, { id }) => {
     const f = path.join(SESS_DIR, id + '.txt');
-    try { const text = fs.readFileSync(f, 'utf-8'); fs.unlinkSync(f); return text; }
-    catch (_) { return null; }
+    let text = null;
+    try { text = fs.readFileSync(f, 'utf-8'); fs.unlinkSync(f); }
+    catch (_) {
+      const buf = ptyBuffers.get(id);
+      if (buf) text = buf.chunks.join('');
+    }
+    // A fresh spawn must start a fresh in-memory replay generation; otherwise
+    // old output is appended again and duplicated on the next reload.
+    ptyBuffers.delete(id);
+    return text;
   });
   // Prune replays for columns that no longer exist in the saved layout.
   try {

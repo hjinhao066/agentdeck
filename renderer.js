@@ -2,6 +2,7 @@ const { Terminal } = window;            // from vendor/xterm.js (UMD global)
 const FitAddonNS = window.FitAddon;      // from vendor/addon-fit.js
 const SearchAddonNS = window.SearchAddon; // from vendor/addon-search.js
 const CanvasAddonNS = window.CanvasAddon; // from vendor/addon-canvas.js
+const BoardCore = window.BoardCore;
 
 if (/Mac/.test(navigator.userAgent)) document.body.classList.add('is-mac');
 
@@ -24,6 +25,7 @@ const ICONS = {
   up:    S('<polyline points="18 15 12 9 6 15"/>'),
   down:  S('<polyline points="6 9 12 15 18 9"/>'),
   help:  S('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
+  board: S('<rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M6 9v3h12V9M12 12v3"/>'),
 };
 
 // ---- Config / state ----
@@ -44,6 +46,7 @@ const TERM_THEME = {
 };
 
 function newId() { return 'c' + Date.now() + Math.floor(Math.random() * 1000); }
+function newTaskId() { return 't' + Date.now() + Math.floor(Math.random() * 100000); }
 // A column whose startup command is Claude Code. On RESTORE (app restart) we
 // resume the prior conversation with `claude --continue` instead of launching a
 // brand-new session — but only when one already exists for the cwd.
@@ -60,7 +63,10 @@ function defaultColumns() {
     { title: 'Claude', cmd: 'claude --dangerously-skip-permissions' },
     { title: 'Grok', cmd: 'grok' },
   ];
-  return agents.map((a) => ({ id: newId(), title: a.title, cwd: '', cmd: a.cmd, width: DEFAULT_WIDTH }));
+  return agents.map((a) => ({
+    id: newId(), taskId: newTaskId(), title: a.title, cwd: '', cmd: a.cmd,
+    width: DEFAULT_WIDTH, role: 'manual', relationship: 'Independent manual terminal',
+  }));
 }
 
 // Titles the app itself assigned (auto numbers, preset agent names) are fair
@@ -68,7 +74,11 @@ function defaultColumns() {
 const AUTO_TITLES = new Set(['Agent', 'Antigravity', 'Claude', 'Grok']);
 function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AUTO_TITLES.has(String(t).trim()); }
 
-let config = { theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184, navCollapsed: false, fontSize: 13, columns: defaultColumns() };
+let config = {
+  theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184,
+  navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
+  boardResponses: {},
+};
 const saved = window.deck.loadConfig();
 if (saved) {
   if (saved.theme) config.theme = saved.theme;
@@ -77,18 +87,71 @@ if (saved) {
   if (saved.navWidth) config.navWidth = saved.navWidth;
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
+  if (saved.activeView === 'board') config.activeView = 'board';
+  if (saved.boardResponses && typeof saved.boardResponses === 'object' && !Array.isArray(saved.boardResponses)) {
+    config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).slice(-200));
+  }
+  if (Array.isArray(saved.links)) {
+    config.links = saved.links.map(BoardCore.normalizeLink).filter((link) => link.id && link.fromTaskId && link.toTaskId);
+  }
   if (Array.isArray(saved.columns) && saved.columns.length) {
-    config.columns = saved.columns.map((c) => ({
+    config.columns = saved.columns.map((c) => BoardCore.normalizeColumn({
       id: c.id || newId(), title: c.title || 'Agent', cwd: c.cwd || '', cmd: c.cmd || '', width: c.width || DEFAULT_WIDTH,
       // Pre-feature configs carry no manualTitle: infer it. Auto-ish titles
       // (pure numbers, preset agent names) stay auto-renamable; anything else
       // was typed by the user and must never be auto-renamed.
       manualTitle: c.manualTitle !== undefined ? !!c.manualTitle : isManualTitle(c.title),
+      taskId: c.taskId || newTaskId(),
+      role: c.role || 'manual',
+      parentTaskId: c.parentTaskId,
+      taskTitle: c.taskTitle,
+      taskPrompt: c.taskPrompt,
+      relationship: c.relationship,
+      progress: c.progress,
+      result: c.result,
+      requestId: c.requestId,
+      waitRequestIds: c.waitRequestIds,
+      createdByRequestId: c.createdByRequestId,
+      taskCompleted: c.taskCompleted,
+      initialPromptSent: c.initialPromptSent,
+      agentType: c.agentType,
+      displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
     }));
   }
 }
 let columns = config.columns;
+let activeView = config.activeView;
 function saveConfig() { config.columns = columns; window.deck.saveConfig(config); }
+function columnLabel(col) { return (col && (col.displayTitle || col.title || col.taskTitle)) || 'Terminal'; }
+function columnRelationshipLabel(col) {
+  if (!col) return '';
+  if (col.role === 'worker' && col.parentTaskId) {
+    const parent = columns.find((candidate) => candidate.taskId === col.parentTaskId);
+    if (parent) return `Delegated by ${columnLabel(parent)}`;
+  }
+  return col.relationship || (col.role === 'manual' ? 'Independent manual terminal' : 'Managed task');
+}
+function uniqueDisplayTitle(value, col) {
+  return BoardCore.uniqueDisplayTitle(value || columnLabel(col), columns, col.taskId);
+}
+function setColumnDisplayTitle(col, value) {
+  const requested = BoardCore.cleanText(value, 200);
+  if (!requested) {
+    showToast('A terminal title cannot be empty.');
+    return false;
+  }
+  const label = uniqueDisplayTitle(requested, col);
+  col.displayTitle = label;
+  col.manualTitle = true;
+  const t = terms.get(col.id);
+  if (t && t.titleEl) t.titleEl.textContent = label;
+  const nav = navItems.get(col.id);
+  if (nav && nav.label) nav.label.textContent = label;
+  if (label !== requested) showToast(`Title already used. Renamed to “${label}”.`);
+  saveConfig();
+  renderBoardGraph();
+  return true;
+}
 
 // ---- Auto column naming ----
 // Each prompt the user submits to a column gets summarized (main process:
@@ -177,7 +240,7 @@ window.deck.onPtyExit((id) => {
     // frozen mid-count.
     if (t.workStart) { t.workedMs = Date.now() - t.workStart; t.workStart = 0; t.doneAt = Date.now(); }
     t.term.write('\r\n\x1b[2m[已退出 / process exited]\x1b[0m\r\n');
-    setDot(t, 'exited'); syncNav();
+    setDot(t, 'exited'); syncNav(); syncBoardState();
   }
 });
 
@@ -256,11 +319,16 @@ function buildRail() {
   const bottom = document.getElementById('navBottom');
   top.innerHTML = ''; bottom.innerHTML = '';
 
-  // Top row = primary actions: collapse the panel, add a column, broadcast.
+  // Top row = primary actions: collapse, add an independent terminal, board,
+  // and broadcast. The plus button always creates a manual terminal; managed
+  // terminals are created only through the conductor workflow.
   const collapseBtn = railBtn(ICONS.left, '折叠侧边栏', () => setNavCollapsed(!config.navCollapsed));
   collapseBtn.id = 'navCollapseBtn';
   top.appendChild(collapseBtn);
-  top.appendChild(railBtn(ICONS.plus, '添加列 (Cmd+N)', () => addAndFocusColumn(), true));
+  top.appendChild(railBtn(ICONS.plus, '新建独立终端 (Cmd+N)', () => addAndFocusColumn(), true));
+  const boardBtn = railBtn(ICONS.board, 'Conductor Board (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
+  boardBtn.id = 'boardViewBtn';
+  top.appendChild(boardBtn);
   top.appendChild(railBtn(ICONS.send, '广播：同一条输入发给所有列 (Cmd+B)', () => toggleBroadcast()));
 
   // Bottom row = utilities, pinned under the list.
@@ -315,8 +383,12 @@ function buildRail() {
 
   bottom.appendChild(railBtn(ICONS.reset, '恢复默认布局', () => {
     if (!confirm('恢复默认列布局？现有列的终端会关闭。')) return;
-    columns.forEach((c) => window.deck.ptyKill(c.id));
+    columns.forEach((c) => {
+      cancelManagedRequests(c, 'Layout reset by the user.');
+      window.deck.ptyKill(c.id);
+    });
     columns = defaultColumns();
+    config.links = [];
     const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
     saveConfig(); render();
   }));
@@ -372,6 +444,432 @@ function attachNavResize(handle) {
 
 // ---- Render ----
 const deckEl = document.getElementById('deck');
+const boardViewEl = document.getElementById('boardView');
+const boardSurfaceEl = document.getElementById('boardSurface');
+const boardEdgesEl = document.getElementById('boardEdges');
+const boardNodesEl = document.getElementById('boardNodes');
+const boardEmptyEl = document.getElementById('boardEmpty');
+const boardInspectorEl = document.getElementById('boardInspector');
+const boardTerminalHostEl = document.getElementById('boardTerminalHost');
+const boardInspectorEmptyEl = document.getElementById('boardInspectorEmpty');
+const boardInspectorTitleEl = document.getElementById('boardInspectorTitle');
+const boardInspectorMetaEl = document.getElementById('boardInspectorMeta');
+const boardInspectorStateEl = document.getElementById('boardInspectorState');
+const boardInspectorSendTaskEl = document.getElementById('boardInspectorSendTask');
+let selectedBoardId = null;
+let connectSourceTaskId = null;
+
+function restoreBoardTerminal() {
+  if (!selectedBoardId) return;
+  const entry = terms.get(selectedBoardId);
+  if (entry && entry.el && entry.wrap && entry.el.parentElement === boardTerminalHostEl) {
+    const resizer = entry.wrap.querySelector('.resizer');
+    entry.wrap.insertBefore(entry.el, resizer || null);
+    entry.wrap.classList.remove('board-inspected');
+  }
+}
+
+function selectBoardNode(columnId, focusTerminal) {
+  const col = columns.find((candidate) => candidate.id === columnId);
+  if (!col) return;
+  if (selectedBoardId && selectedBoardId !== columnId) restoreBoardTerminal();
+  selectedBoardId = columnId;
+  boardNodesEl.querySelectorAll('.board-node').forEach((card) => {
+    card.classList.toggle('selected', card.dataset.columnId === columnId);
+  });
+  const entry = terms.get(columnId);
+  boardInspectorTitleEl.textContent = columnLabel(col);
+  boardInspectorMetaEl.textContent = `${col.role === 'conductor' ? 'Conductor' : col.role === 'worker' ? 'Worker' : 'Manual'} · ${col.agentType || BoardCore.inferAgentType(col.cmd)} · ${columnRelationshipLabel(col)}`;
+  boardInspectorEmptyEl.hidden = !!entry;
+  boardTerminalHostEl.hidden = !entry;
+  if (!entry) {
+    setTimeout(() => {
+      if (activeView === 'board' && selectedBoardId === columnId) selectBoardNode(columnId, focusTerminal);
+    }, 100);
+    return;
+  }
+  if (entry.el.parentElement !== boardTerminalHostEl) {
+    boardTerminalHostEl.innerHTML = '';
+    boardTerminalHostEl.appendChild(entry.el);
+    entry.wrap.classList.add('board-inspected');
+  }
+  focusedId = columnId;
+  requestAnimationFrame(() => {
+    try { entry.fit.fit(); } catch (_) {}
+    if (focusTerminal) entry.term.focus();
+  });
+  syncNav();
+  syncBoardState();
+}
+
+function showView(view) {
+  activeView = view === 'board' ? 'board' : 'terminals';
+  config.activeView = activeView;
+  deckEl.hidden = activeView === 'board';
+  boardViewEl.hidden = activeView !== 'board';
+  const button = document.getElementById('boardViewBtn');
+  if (button) button.classList.toggle('accent', activeView === 'board');
+  if (activeView === 'board') {
+    closeSearch();
+    closeBroadcast();
+    renderBoardGraph();
+  } else {
+    restoreBoardTerminal();
+    requestAnimationFrame(() => { updateColumnStyles(); fitAll(); });
+  }
+  saveConfig();
+}
+
+function inspectColumn(columnId) {
+  const col = columns.find((c) => c.id === columnId);
+  if (!col) return;
+  showView('terminals');
+  setTimeout(() => jumpToColumn(col), 40);
+}
+
+function boardStateFor(col) {
+  const entry = terms.get(col.id);
+  return entry ? entry.state : 'plain';
+}
+
+function boardStatusLabel(col, state) {
+  const terminalLabel = BoardCore.stateLabel(state, false);
+  return col.taskCompleted ? `Task completed · Terminal ${terminalLabel}` : terminalLabel;
+}
+
+function allBoardLinks() {
+  const validTaskIds = new Set(columns.map((col) => col.taskId));
+  const byTaskId = new Map(columns.map((col) => [col.taskId, col]));
+  const links = (config.links || []).map(BoardCore.normalizeLink)
+    .filter((link) => validTaskIds.has(link.fromTaskId) && validTaskIds.has(link.toTaskId))
+    .map((link) => ({
+      ...link,
+      // The ownership tree is the ACL source of truth. Never claim that an
+      // edge grants control unless the target actually belongs to that parent.
+      grantedControl: link.type === 'delegation' &&
+        byTaskId.get(link.toTaskId).parentTaskId === link.fromTaskId,
+    }));
+  columns.filter((col) => col.parentTaskId && validTaskIds.has(col.parentTaskId)).forEach((col) => {
+    const exists = links.some((link) =>
+      link.type === 'delegation' && link.fromTaskId === col.parentTaskId && link.toTaskId === col.taskId);
+    if (!exists) {
+      links.push({
+        id: `managed:${col.parentTaskId}:${col.taskId}`,
+        fromTaskId: col.parentTaskId,
+        toTaskId: col.taskId,
+        type: 'delegation',
+        message: col.taskPrompt || '',
+        grantedControl: true,
+        synthetic: true,
+      });
+    }
+  });
+  return links;
+}
+
+function beginBoardRename(titleEl, col) {
+  if (!titleEl || !col) return;
+  titleEl.contentEditable = 'true';
+  titleEl.spellcheck = false;
+  titleEl.focus();
+  const range = document.createRange();
+  range.selectNodeContents(titleEl);
+  const selection = window.getSelection();
+  selection.removeAllRanges();
+  selection.addRange(range);
+  let cancelled = false;
+  const onKey = (event) => {
+    event.stopPropagation();
+    if (event.key === 'Enter') { event.preventDefault(); titleEl.blur(); }
+    else if (event.key === 'Escape') { event.preventDefault(); cancelled = true; titleEl.blur(); }
+  };
+  titleEl.addEventListener('keydown', onKey);
+  titleEl.addEventListener('blur', () => {
+    titleEl.removeEventListener('keydown', onKey);
+    titleEl.contentEditable = 'false';
+    selection.removeAllRanges();
+    if (!cancelled) {
+      if (!setColumnDisplayTitle(col, titleEl.textContent)) titleEl.textContent = columnLabel(col);
+    } else titleEl.textContent = columnLabel(col);
+  }, { once: true });
+}
+
+function renderBoardGraph() {
+  if (!boardSurfaceEl) return;
+  const layout = BoardCore.graphLayout(columns, { nodeWidth: 260, nodeHeight: 156, gapX: 94, gapY: 44, padding: 56 });
+  const managedCount = columns.filter((c) => c.role !== 'manual').length;
+  const scroller = document.getElementById('boardScroller');
+  const surfaceW = Math.max(layout.width, (scroller && scroller.clientWidth) - 16, 720);
+  const surfaceH = Math.max(layout.height, boardViewEl.clientHeight - 132, 520);
+  boardSurfaceEl.style.width = surfaceW + 'px';
+  boardSurfaceEl.style.height = surfaceH + 'px';
+  boardEdgesEl.setAttribute('width', String(surfaceW));
+  boardEdgesEl.setAttribute('height', String(surfaceH));
+  boardEdgesEl.setAttribute('viewBox', `0 0 ${surfaceW} ${surfaceH}`);
+  boardEdgesEl.innerHTML = '<defs>' +
+    '<marker id="boardArrowDelegation" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
+    '<marker id="boardArrowDependency" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
+    '<marker id="boardArrowHandoff" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
+    '</defs>';
+  boardNodesEl.innerHTML = '';
+  boardEmptyEl.hidden = managedCount > 0;
+
+  const nodeByTaskId = new Map(layout.nodes.map((node) => [node.taskId, node]));
+  const stateByTaskId = Object.fromEntries(columns.map((col) => [col.taskId, boardStateFor(col)]));
+  allBoardLinks().forEach((link) => {
+    const from = nodeByTaskId.get(link.fromTaskId);
+    const to = nodeByTaskId.get(link.toTaskId);
+    if (!from || !to) return;
+    let x1, y1, x2, y2, path;
+    if (Math.abs(from.x - to.x) < 40) {
+      const forward = from.y <= to.y;
+      x1 = from.x + from.width / 2;
+      y1 = forward ? from.y + from.height : from.y;
+      x2 = to.x + to.width / 2;
+      y2 = forward ? to.y : to.y + to.height;
+      const side = from.x + from.width + 32;
+      path = `M ${x1} ${y1} C ${side} ${y1}, ${side} ${y2}, ${x2} ${y2}`;
+    } else {
+      const forward = from.x < to.x;
+      x1 = forward ? from.x + from.width : from.x;
+      y1 = from.y + from.height / 2;
+      x2 = forward ? to.x : to.x + to.width;
+      y2 = to.y + to.height / 2;
+      const bend = Math.max(42, Math.abs(x2 - x1) / 2);
+      path = `M ${x1} ${y1} C ${x1 + (forward ? bend : -bend)} ${y1}, ${x2 + (forward ? -bend : bend)} ${y2}, ${x2} ${y2}`;
+    }
+    const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    pathEl.setAttribute('class', `board-edge ${link.type}`);
+    pathEl.setAttribute('d', path);
+    const marker = link.type === 'delegation' ? 'Delegation' : link.type === 'handoff' ? 'Handoff' : 'Dependency';
+    pathEl.setAttribute('marker-end', `url(#boardArrow${marker})`);
+    boardEdgesEl.appendChild(pathEl);
+    const chip = document.createElement('button');
+    const linkState = BoardCore.linkState(link, columns, stateByTaskId);
+    chip.className = `board-link-chip ${link.type}${linkState === 'Blocked' ? ' blocked' : ''}`;
+    chip.dataset.linkId = link.id;
+    chip.dataset.linkState = linkState;
+    chip.style.left = `${(x1 + x2) / 2}px`;
+    chip.style.top = `${(y1 + y2) / 2}px`;
+    chip.textContent = `${BoardCore.linkLabel(link.type)} · ${linkState}`;
+    chip.title = 'Edit or remove this relationship';
+    chip.onclick = (event) => { event.stopPropagation(); openLinkDialog(link); };
+    boardNodesEl.appendChild(chip);
+  });
+
+  layout.nodes.forEach((node) => {
+    const col = columns.find((candidate) => candidate.id === node.id);
+    if (!col) return;
+    const card = document.createElement('article');
+    card.className = `board-node ${col.role || 'manual'}${selectedBoardId === col.id ? ' selected' : ''}`;
+    card.dataset.columnId = col.id;
+    card.dataset.state = boardStateFor(col);
+    card.style.left = node.x + 'px';
+    card.style.top = node.y + 'px';
+    card.style.width = node.width + 'px';
+    card.style.height = node.height + 'px';
+
+    const top = document.createElement('div');
+    top.className = 'board-node-top';
+    const role = document.createElement('span');
+    role.className = 'board-role';
+    role.textContent = col.role === 'conductor' ? 'Conductor' : col.role === 'worker' ? 'Worker' : 'Manual';
+    const agent = document.createElement('span');
+    agent.className = 'board-agent';
+    agent.textContent = col.agentType || BoardCore.inferAgentType(col.cmd);
+    top.append(role, agent);
+
+    const title = document.createElement('h2');
+    title.className = 'board-title-bar';
+    title.textContent = columnLabel(col);
+    title.tabIndex = 0;
+    title.title = 'Double-click, press Enter, or press F2 to rename';
+    title.addEventListener('dblclick', (event) => { event.stopPropagation(); beginBoardRename(title, col); });
+    title.addEventListener('keydown', (event) => {
+      if ((event.key === 'Enter' || event.key === 'F2') && title.contentEditable !== 'true') {
+        event.preventDefault();
+        event.stopPropagation();
+        beginBoardRename(title, col);
+      }
+    });
+    const status = document.createElement('div');
+    status.className = 'board-node-status';
+    const statusDot = document.createElement('i');
+    statusDot.className = 'legend-dot';
+    const statusText = document.createElement('span');
+    statusText.className = 'board-status-text';
+    status.append(statusDot, statusText);
+    const relation = document.createElement('p');
+    relation.className = 'board-relation';
+    relation.textContent = columnRelationshipLabel(col);
+    const progress = document.createElement('p');
+    progress.className = 'board-progress';
+    progress.textContent = col.result || col.progress || '';
+    progress.title = progress.textContent;
+    const actions = document.createElement('div');
+    actions.className = 'board-node-actions';
+    const connect = document.createElement('button');
+    connect.className = 'board-connect';
+    connect.textContent = 'Connect';
+    connect.onclick = (event) => { event.stopPropagation(); startBoardConnect(col); };
+    const inspect = document.createElement('button');
+    inspect.className = 'board-inspect';
+    inspect.textContent = 'Inspect here';
+    inspect.onclick = (event) => { event.stopPropagation(); selectBoardNode(col.id, true); };
+    actions.append(connect, inspect);
+    card.append(top, title, status, relation, progress, actions);
+    card.addEventListener('click', (event) => {
+      if (event.target.closest('button') || event.target.closest('[contenteditable="true"]')) return;
+      if (connectSourceTaskId && connectSourceTaskId !== col.taskId) {
+        const source = columns.find((candidate) => candidate.taskId === connectSourceTaskId);
+        if (source) openLinkDialog(null, source, col);
+      } else {
+        selectBoardNode(col.id, true);
+      }
+    });
+    boardNodesEl.appendChild(card);
+  });
+  syncBoardState();
+  if (activeView === 'board' && columns.length) {
+    const selected = columns.find((col) => col.id === selectedBoardId) ||
+      columns.find((col) => col.role === 'conductor') || columns[0];
+    setTimeout(() => selectBoardNode(selected.id, false), 0);
+  }
+}
+
+function syncBoardState() {
+  if (!boardNodesEl) return;
+  boardNodesEl.querySelectorAll('.board-node').forEach((card) => {
+    const col = columns.find((candidate) => candidate.id === card.dataset.columnId);
+    if (!col) return;
+    const state = boardStateFor(col);
+    card.dataset.state = state;
+    const statusText = card.querySelector('.board-status-text');
+    if (statusText) statusText.textContent = boardStatusLabel(col, state);
+    const progress = card.querySelector('.board-progress');
+    const entry = terms.get(col.id);
+    const live = entry && entry.lastDump ? lastActivityLine(entry.lastDump) : '';
+    const text = col.result || col.progress || live;
+    if (progress && progress.textContent !== text) {
+      progress.textContent = text;
+      progress.title = text;
+    }
+  });
+  const selected = columns.find((col) => col.id === selectedBoardId);
+  if (selected) {
+    const state = boardStateFor(selected);
+    boardInspectorTitleEl.textContent = columnLabel(selected);
+    boardInspectorStateEl.textContent = `${boardStatusLabel(selected, state)}${selected.progress ? ` · ${selected.progress}` : ''}`;
+    boardInspectorStateEl.dataset.state = state;
+    boardInspectorSendTaskEl.hidden = selected.role === 'manual' || selected.taskCompleted || !selected.taskPrompt;
+    boardInspectorSendTaskEl.textContent = selected.initialPromptSent ? 'Resend task' : 'Send task';
+  }
+  const stateByTaskId = Object.fromEntries(columns.map((col) => [col.taskId, boardStateFor(col)]));
+  allBoardLinks().forEach((link) => {
+    const chip = boardNodesEl.querySelector(`.board-link-chip[data-link-id="${CSS.escape(link.id)}"]`);
+    if (!chip) return;
+    const state = BoardCore.linkState(link, columns, stateByTaskId);
+    chip.dataset.linkState = state;
+    chip.classList.toggle('blocked', state === 'Blocked');
+    chip.textContent = `${BoardCore.linkLabel(link.type)} · ${state}`;
+  });
+}
+
+function boardCliCommand() {
+  return env.platform === 'win32'
+    ? 'node "$env:AGENTDECK_BOARD_CLI"'
+    : 'node "$AGENTDECK_BOARD_CLI"';
+}
+
+function managedTaskPrompt(col) {
+  const cli = boardCliCommand();
+  const common =
+    `\n\nAgentDeck managed-terminal protocol:\n` +
+    `- Report useful progress with: ${cli} progress --message "what changed"\n` +
+    `- Delegate a real child terminal with: ${cli} create-child --title "subtask" --task "full instructions" --agent claude\n` +
+    `- For parallel work, use spawn-child with the same arguments, record the returned task id, then run: ${cli} wait --task "task-id"\n` +
+    `- Send a follow-up or answer with: ${cli} send --task "task-id" --message "message"\n` +
+    `- Managed workers may delegate downstream workers the same way. create-child waits and prints the worker's result.\n` +
+    `- Finish by running: ${cli} complete --result "concise result, files changed, and validation"\n` +
+    `- Never control or send input to manual terminals. They are intentionally isolated.\n`;
+  if (col.role === 'conductor') {
+    return `You are the conductor for this AgentDeck task.\n\nTask: ${col.taskTitle}\n\n${col.taskPrompt}` +
+      `\n\nPlan and execute the parent task. Delegate bounded subtasks when useful, collect their returned results, integrate them, validate the whole outcome, and then complete the parent task.` + common;
+  }
+  return `You are a managed AgentDeck worker.\n\nDelegated task: ${col.taskTitle}\n\n${col.taskPrompt}` +
+    `\n\nDo the work in this terminal. You may create downstream workers when useful. Return a concrete result to your parent.` + common;
+}
+
+function queueInitialPrompt(col, delay) {
+  if (!col || col.role === 'manual' || col.initialPromptSent || !col.taskPrompt) return;
+  if (!col.cmd) {
+    // A raw shell has no conversational prompt. Keep the task visible on the
+    // Board and the managed CLI available, but never execute prose as shell code.
+    col.initialPromptSent = true;
+    col.progress = 'Task ready in managed shell';
+    saveConfig();
+    syncBoardState();
+    return;
+  }
+  const id = col.id;
+  whenTerminalReady(col, () => {
+    if (!columns.includes(col) || col.id !== id || col.role === 'manual' ||
+        col.taskCompleted || col.initialPromptSent) return;
+    const entry = terms.get(id);
+    if (!entry) return;
+    // xterm paste uses bracketed-paste mode when the agent supports it, so the
+    // multi-line instructions arrive as one prompt instead of separate shell commands.
+    entry.term.paste(managedTaskPrompt(col));
+    setTimeout(() => window.deck.ptyInput(id, '\r'), 40);
+    col.initialPromptSent = true;
+    col.progress = 'Task assigned';
+    saveConfig();
+    syncBoardState();
+  }, 'Waiting for agent prompt', delay || 0);
+}
+
+const promptQueueIds = new Set();
+function whenTerminalReady(col, callback, waitingLabel, initialDelay) {
+  if (!col) return;
+  const originalId = col.id;
+  const queueId = `${originalId}:${waitingLabel || 'terminal'}`;
+  if (promptQueueIds.has(queueId)) return;
+  const startedAt = Date.now();
+  promptQueueIds.add(queueId);
+  const check = () => {
+    if (!columns.includes(col) || col.id !== originalId) {
+      promptQueueIds.delete(queueId);
+      return;
+    }
+    const entry = terms.get(originalId);
+    // A raw shell is ready as soon as its PTY exists. Agent TUIs must expose a
+    // recognizable idle prompt; permission/trust input never receives a task.
+    const ready = entry && entry.alive && (!col.cmd ||
+      (entry.state !== 'input' && AGENT_IDLE_RE.test(entry.lastDump || '')));
+    if (ready) {
+      promptQueueIds.delete(queueId);
+      callback();
+      return;
+    }
+    const nextProgress = entry && entry.state === 'input'
+      ? 'Agent needs startup input before task delivery'
+      : (waitingLabel || 'Waiting for terminal prompt');
+    if (col.progress !== nextProgress) {
+      col.progress = nextProgress;
+      saveConfig();
+      syncBoardState();
+    }
+    if (Date.now() - startedAt >= 120_000) {
+      promptQueueIds.delete(queueId);
+      col.progress = 'Task delivery paused: use Send task after the agent is ready';
+      saveConfig();
+      syncBoardState();
+      return;
+    }
+    setTimeout(check, 500);
+  };
+  setTimeout(check, Math.max(0, Number(initialDelay) || 0));
+}
 
 // Two-finger horizontal swipe should always page between columns, even over an
 // empty terminal. xterm's viewport otherwise swallows wheel events (and only
@@ -422,6 +920,8 @@ deckEl.addEventListener('scroll', () => {
 });
 
 function render() {
+  restoreBoardTerminal();
+  boardTerminalHostEl.innerHTML = '';
   // tear down existing terminals; pty processes keep running until killed.
   // Run each entry's disposers too — the deckEl scroll listener and the
   // ResizeObserver live outside the column's DOM and would leak per column
@@ -436,6 +936,7 @@ function render() {
   columns.forEach((col) => deckEl.appendChild(buildColumn(col)));
   updateColumnStyles();
   renderColNav();
+  renderBoardGraph();
 }
 
 // "Fit window" divides the deck area (screen minus the sidebar) into fitCols()
@@ -531,7 +1032,7 @@ function buildColumn(col, isFresh) {
   grip.className = 'grip'; grip.innerHTML = ICONS.grip; grip.title = '拖拽排序';
   attachReorder(grip, col);
   const dot = document.createElement('span'); dot.className = 'dot';
-  const title = document.createElement('span'); title.className = 'title'; title.textContent = col.title;
+  const title = document.createElement('span'); title.className = 'title'; title.textContent = columnLabel(col);
   title.title = '双击重命名';
   attachRename(title, col);
 
@@ -744,12 +1245,14 @@ function buildColumn(col, isFresh) {
           // Writes are parsed in order: this callback marks the end of replay.
           term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n', () => { replayMuted = false; });
         }
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual');
+        let resumedAgent = false;
         if (col.cmd) {
           let launch = col.cmd;
           // Restoring a Claude column → continue its previous conversation.
           if (!isFresh && isClaudeCmd(col.cmd) && await window.deck.claudeHasSession(col.cwd || env.home)) {
             launch = withClaudeResume(col.cmd);
+            resumedAgent = true;
           }
           // Capture the id: if the user edits the column within 700ms,
           // respawnColumn assigns a NEW id and this stale timer must not fire
@@ -757,6 +1260,18 @@ function buildColumn(col, isFresh) {
           const spawnId = col.id;
           setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, launch + '\r'); }, 700);
         }
+        if (!isFresh && col.role !== 'manual' && !col.taskCompleted) {
+          // A cold restart killed the old CLI caller. Re-deliver managed
+          // instructions unless this exact Claude conversation can resume.
+          col.requestId = null;
+          col.waitRequestIds = [];
+          if (!resumedAgent) {
+            col.initialPromptSent = false;
+            col.progress = 'Restoring managed task';
+          }
+          saveConfig();
+        }
+        queueInitialPrompt(col, col.cmd ? 700 : 0);
       }
     };
     reconnect();
@@ -768,8 +1283,14 @@ function buildColumn(col, isFresh) {
     // Re-fit on any size change of this column (drag-resize, window resize, fit toggle).
     let raf;
     const ro = new ResizeObserver(() => {
+      if (activeView === 'board' && termEl.parentElement !== boardTerminalHostEl) return;
       cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => { try { fit.fit(); } catch (_) {} });
+      raf = requestAnimationFrame(() => {
+        try {
+          fit.fit();
+          if (activeView === 'board' && term.rows > 0) term.refresh(0, term.rows - 1);
+        } catch (_) {}
+      });
     });
     ro.observe(termEl);
     disposers.push(() => ro.disconnect()); // observers outlive detached nodes and pin them in memory
@@ -1060,17 +1581,57 @@ function move(col, dir) {
   updateColumnStyles();
   renderColNav();
 }
+function managedSubtree(root, includeRoot) {
+  if (!root || root.role === 'manual') return [];
+  return columns.filter((candidate) =>
+    (includeRoot && candidate.taskId === root.taskId) || isManagedDescendant(root, candidate));
+}
+
+function releaseManagedSubtree(root, includeRoot, reason) {
+  const targets = managedSubtree(root, includeRoot);
+  const targetTaskIds = new Set(targets.map((target) => target.taskId));
+  config.links = (config.links || []).map((link) =>
+    targetTaskIds.has(link.toTaskId) && link.grantedControl ? { ...link, grantedControl: false } : link);
+  targets.sort((a, b) => taskDepth(b) - taskDepth(a)).forEach((target) => {
+    cancelManagedRequests(target, reason);
+    target.role = 'manual';
+    target.parentTaskId = null;
+    target.relationship = 'Independent manual terminal';
+    target.taskPrompt = '';
+    target.progress = 'Independent terminal';
+    target.taskCompleted = false;
+    target.initialPromptSent = false;
+    target.createdByRequestId = null;
+    respawnColumn(target);
+  });
+  return targets;
+}
+
 // Surgical add/remove so touching one column never blanks the others' live output.
 function removeCol(col) {
   const t = terms.get(col.id);
-  if (t && t.alive && t.state === 'working' && !confirm('该列有任务正在运行，确认关闭该列？')) return;
+  const descendants = managedSubtree(col, false);
+  const active = [col, ...descendants].some((candidate) => {
+    const entry = terms.get(candidate.id);
+    return entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
+  });
+  if (active && !confirm('This terminal or one of its managed descendants is active. Close it and release descendants as independent terminals?')) return;
   const idx = columns.indexOf(col);
+  if (descendants.length) {
+    releaseManagedSubtree(col, false, `Parent task "${columnLabel(col)}" was removed.`);
+  }
+  cancelManagedRequests(col, `Task "${columnLabel(col)}" was removed.`);
+  if (selectedBoardId === col.id) {
+    restoreBoardTerminal();
+    selectedBoardId = null;
+  }
   if (t) {
     (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
     t.term.dispose(); t.wrap.remove(); terms.delete(col.id);
   }
   window.deck.ptyKill(col.id);
   columns.splice(idx, 1);
+  config.links = (config.links || []).filter((link) => link.fromTaskId !== col.taskId && link.toTaskId !== col.taskId);
   if (zoomedId === col.id) { zoomedId = null; updateColumnStyles(); fitAll(); }
   // Don't leave focusedId pointing at the removed column: every focusedId-based
   // shortcut (Cmd+W, Cmd+arrows, search, broadcast) would silently no-op until
@@ -1081,14 +1642,20 @@ function removeCol(col) {
   }
   saveConfig();
   renderColNav();
+  renderBoardGraph();
 }
 function addColumn(c) {
-  const col = { id: newId(), width: defaultColWidth(), cwd: '', ...c };
+  const col = BoardCore.normalizeColumn({
+    id: newId(), taskId: newTaskId(), width: defaultColWidth(), cwd: '',
+    role: 'manual', relationship: 'Independent manual terminal', ...c,
+  });
   columns.push(col);
   saveConfig();
   deckEl.appendChild(buildColumn(col, true)); // brand-new column: never auto-resume
   updateColumnStyles();
   renderColNav();
+  renderBoardGraph();
+  return col;
 }
 // Smallest unused positive integer, so new columns read 1,2,3… and fill gaps.
 function nextTitle() {
@@ -1098,9 +1665,12 @@ function nextTitle() {
 }
 // New column with no dialog: auto-numbered title, default (global) cwd, focused.
 function addAndFocusColumn() {
+  const stayOnBoard = activeView === 'board';
   if (zoomedId) { zoomedId = null; updateColumnStyles(); } // new column must be visible
-  addColumn({ title: nextTitle() });
-  setTimeout(() => focusColumnByIndex(columns.length - 1), 80); // wait for its terminal
+  const col = addColumn({ title: nextTitle(), role: 'manual' });
+  if (stayOnBoard) setTimeout(() => selectBoardNode(col.id, true), 100);
+  else setTimeout(() => focusColumnByIndex(columns.length - 1), 80); // wait for its terminal
+  return col;
 }
 // Double-click the title to rename it inline (Enter commits, Esc cancels). Uses
 // the same span (contentEditable) so terms.titleEl stays valid.
@@ -1124,8 +1694,8 @@ function attachRename(titleEl, col) {
       titleEl.contentEditable = 'false';
       window.getSelection().removeAllRanges();
       const v = titleEl.textContent.trim();
-      if (!cancelled && v) { col.manualTitle = true; setColumnTitle(col, v); } // syncs header + sidebar + saves; locks out auto-naming
-      else titleEl.textContent = col.title; // normalize (drop stray newlines / restore on cancel)
+      if (!cancelled && v) setColumnDisplayTitle(col, v);
+      else titleEl.textContent = columnLabel(col); // normalize (drop stray newlines / restore on cancel)
     }, { once: true });
   });
 }
@@ -1133,6 +1703,8 @@ function attachRename(titleEl, col) {
 // pty's exit event can't bleed into the new terminal).
 function respawnColumn(col) {
   const t = terms.get(col.id);
+  const wasBoardSelected = selectedBoardId === col.id;
+  if (wasBoardSelected) restoreBoardTerminal();
   window.deck.ptyKill(col.id);
   if (t) {
     (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
@@ -1142,11 +1714,13 @@ function respawnColumn(col) {
   col.id = newId();
   if (focusedId === oldId) focusedId = col.id;
   if (zoomedId === oldId) zoomedId = col.id; // stay zoomed across a respawn
+  if (wasBoardSelected) selectedBoardId = col.id;
   const fresh = buildColumn(col, true); // cwd/cmd just changed: start fresh, no auto-resume
   if (t) t.wrap.replaceWith(fresh); else render();
   saveConfig();
   updateColumnStyles();
   renderColNav();
+  renderBoardGraph();
 }
 
 // ---- Column sidebar (list of columns: click to jump, double-click to rename) ----
@@ -1155,10 +1729,12 @@ function respawnColumn(col) {
 function setColumnTitle(col, title) {
   col.title = title;
   const t = terms.get(col.id);
-  if (t && t.titleEl && t.titleEl.textContent !== title) t.titleEl.textContent = title;
+  const label = columnLabel(col);
+  if (t && t.titleEl && t.titleEl.textContent !== label) t.titleEl.textContent = label;
   const nav = navItems.get(col.id);
-  if (nav && nav.label.textContent !== title) nav.label.textContent = title;
+  if (nav && nav.label.textContent !== label) nav.label.textContent = label;
   saveConfig();
+  renderBoardGraph();
 }
 
 const colNavEl = document.getElementById('colNav');
@@ -1178,7 +1754,7 @@ function renderColNav() {
     const dot = document.createElement('span'); dot.className = 'cn-dot';
     const text = document.createElement('span'); text.className = 'cn-text';
     const label = document.createElement('span'); label.className = 'cn-label';
-    label.textContent = col.title; label.title = '双击重命名';
+    label.textContent = columnLabel(col); label.title = '双击重命名';
     // Live activity line: the column's last terminal line, mission-control style.
     const sub = document.createElement('span'); sub.className = 'cn-sub';
     text.append(label, sub);
@@ -1220,6 +1796,10 @@ function syncNav() {
 function jumpToColumn(col) {
   const t = terms.get(col.id);
   if (!t) return;
+  if (activeView === 'board') {
+    selectBoardNode(col.id, true);
+    return;
+  }
   // While zoomed, jumping re-zooms onto the target instead of focusing a hidden column.
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   t.term.focus(); focusedId = col.id;
@@ -1308,8 +1888,8 @@ function attachNavRename(labelEl, col) {
       labelEl.contentEditable = 'false';
       window.getSelection().removeAllRanges();
       const v = labelEl.textContent.trim();
-      if (!cancelled && v) { col.manualTitle = true; setColumnTitle(col, v); }
-      else labelEl.textContent = col.title;
+      if (!cancelled && v) setColumnDisplayTitle(col, v);
+      else labelEl.textContent = columnLabel(col);
     }, { once: true });
   });
 }
@@ -1333,7 +1913,7 @@ let editIndex = null;
 function openDialog(idx) {
   editIndex = (typeof idx === 'number') ? idx : null;
   dlgTitle.textContent = editIndex === null ? '添加列' : '编辑列';
-  titleInput.value = editIndex === null ? '' : (columns[editIndex].title || '');
+  titleInput.value = editIndex === null ? '' : columnLabel(columns[editIndex]);
   cwdInput.value = editIndex === null ? '' : (columns[editIndex].cwd || '');
   cmdInput.value = editIndex === null ? '' : (columns[editIndex].cmd || '');
   dlg.showModal();
@@ -1348,14 +1928,17 @@ document.getElementById('dlgSave').onclick = () => {
   const title = titleInput.value.trim() || 'Agent';
   const cwd = cwdInput.value.trim();
   const cmd = cmdInput.value.trim();
-  if (editIndex === null) { addColumn({ title, cwd, cmd, manualTitle: titleInput.value.trim() !== '' }); dlg.close(); return; }
+  if (editIndex === null) {
+    addColumn({ title, displayTitle: titleInput.value.trim() ? title : '', cwd, cmd, manualTitle: titleInput.value.trim() !== '' });
+    dlg.close();
+    return;
+  }
   const col = columns[editIndex];
   const needsRespawn = (col.cwd || '') !== cwd || (col.cmd || '') !== cmd;
-  if (title !== col.title) col.manualTitle = true; // typed a new name here = manual rename
-  col.title = title;
+  const titleChanged = title !== columnLabel(col);
   col.cwd = cwd;
   col.cmd = cmd;
-  setColumnTitle(col, title); // title updates live in header + sidebar; shell untouched
+  if (titleChanged) setColumnDisplayTitle(col, title); // keep auto-title behavior when only cwd/cmd changed
   saveConfig();
   if (needsRespawn) respawnColumn(col); // a cwd or startup-command change restarts the shell
   dlg.close();
@@ -1366,6 +1949,487 @@ document.getElementById('dlgSave').onclick = () => {
     if (e.key === 'Enter') { e.preventDefault(); document.getElementById('dlgSave').click(); }
   });
 });
+
+// ---- User-created board relationships ----
+const connectNoticeEl = document.getElementById('boardConnectNotice');
+const connectNoticeTextEl = document.getElementById('boardConnectNoticeText');
+const linkDlg = document.getElementById('boardLinkDialog');
+const linkDlgTitle = document.getElementById('boardLinkDialogTitle');
+const linkSourceLabel = document.getElementById('linkSourceLabel');
+const linkTargetLabel = document.getElementById('linkTargetLabel');
+const linkTypeInput = document.getElementById('linkTypeInput');
+const linkMessageInput = document.getElementById('linkMessageInput');
+const linkGrantControl = document.getElementById('linkGrantControl');
+const linkControlOption = document.getElementById('linkControlOption');
+const linkRemoveBtn = document.getElementById('linkRemove');
+let editingBoardLink = null;
+let linkDialogSource = null;
+let linkDialogTarget = null;
+
+function cancelBoardConnect() {
+  connectSourceTaskId = null;
+  connectNoticeEl.hidden = true;
+  boardNodesEl.querySelectorAll('.board-node').forEach((card) => card.classList.remove('connect-source'));
+}
+
+function startBoardConnect(col) {
+  connectSourceTaskId = col.taskId;
+  connectNoticeTextEl.textContent = `Connecting from “${columnLabel(col)}”. Select a target node.`;
+  connectNoticeEl.hidden = false;
+  boardNodesEl.querySelectorAll('.board-node').forEach((card) => {
+    const candidate = columns.find((item) => item.id === card.dataset.columnId);
+    card.classList.toggle('connect-source', candidate && candidate.taskId === col.taskId);
+  });
+}
+
+function updateLinkControlOption() {
+  const delegation = linkTypeInput.value === 'delegation';
+  linkControlOption.hidden = !delegation;
+  if (!delegation) linkGrantControl.checked = false;
+  const canGrant = linkDialogSource && linkDialogSource.role !== 'manual';
+  linkGrantControl.disabled = !canGrant;
+  if (delegation && !canGrant) {
+    linkControlOption.title = 'Only an existing managed conductor/worker can receive control capability.';
+  } else {
+    linkControlOption.title = '';
+  }
+}
+
+function openLinkDialog(link, source, target) {
+  editingBoardLink = link ? { ...link } : null;
+  linkDialogSource = source || columns.find((col) => col.taskId === link.fromTaskId);
+  linkDialogTarget = target || columns.find((col) => col.taskId === link.toTaskId);
+  if (!linkDialogSource || !linkDialogTarget || linkDialogSource === linkDialogTarget) {
+    showToast('Choose two different terminals to connect.');
+    return;
+  }
+  linkDlgTitle.textContent = link ? 'Edit relationship' : 'Connect terminals';
+  linkSourceLabel.textContent = columnLabel(linkDialogSource);
+  linkTargetLabel.textContent = columnLabel(linkDialogTarget);
+  linkTypeInput.value = (link && link.type) || 'dependency';
+  linkMessageInput.value = (link && link.message) || '';
+  linkGrantControl.checked = !!(link && link.grantedControl);
+  linkRemoveBtn.hidden = !link;
+  updateLinkControlOption();
+  cancelBoardConnect();
+  linkDlg.showModal();
+  setTimeout(() => linkTypeInput.focus(), 30);
+}
+
+function sendExplicitBoardMessage(target, message, delay) {
+  const text = BoardCore.cleanText(message, 12000);
+  if (!text) return;
+  whenTerminalReady(target, () => {
+    const entry = terms.get(target.id);
+    if (!entry || !entry.alive) {
+      showToast(`Relationship saved, but “${columnLabel(target)}” is not available for input.`);
+      return;
+    }
+    entry.term.paste(text);
+    setTimeout(() => window.deck.ptyInput(target.id, '\r'), 40);
+  }, 'Waiting to deliver relationship message', delay || 0);
+}
+
+function hasActiveTerminal(targets) {
+  return targets.some((target) => {
+    const entry = terms.get(target.id);
+    return entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
+  });
+}
+
+function revokeRelationshipControl(source, target) {
+  if (!source || !target) return false;
+  if (target.role === 'worker' && target.parentTaskId === source.taskId) {
+    const subtree = managedSubtree(target, true);
+    if (hasActiveTerminal(subtree) &&
+        !confirm('Revoking control restarts this managed terminal and releases its descendants as independent terminals. Continue?')) {
+      return false;
+    }
+    releaseManagedSubtree(target, true, `Control from "${columnLabel(source)}" was revoked.`);
+    return true;
+  }
+  return false;
+}
+
+function grantRelationshipControl(source, target, message) {
+  const grantError = BoardCore.controlGrantError(columns, source, target, MAX_TASK_DEPTH);
+  if (grantError) throw new Error(grantError);
+  const alreadyGranted = target.role === 'worker' && target.parentTaskId === source.taskId;
+  if (!alreadyGranted && hasActiveTerminal([target]) &&
+      !confirm('Granting control restarts this terminal with a managed capability. Continue?')) {
+    return false;
+  }
+  if (!alreadyGranted) {
+    cancelManagedRequests(target, `Terminal was reassigned to "${columnLabel(source)}".`);
+    config.links = (config.links || []).map((link) =>
+      link.toTaskId === target.taskId && link.grantedControl ? { ...link, grantedControl: false } : link);
+  }
+  target.role = 'worker';
+  target.parentTaskId = source.taskId;
+  target.relationship = `Explicitly delegated by ${columnLabel(source)}`;
+  target.taskTitle = target.taskTitle || target.title;
+  target.taskPrompt = BoardCore.cleanText(message, 20000) ||
+    `Continue the work in this terminal under conductor "${columnLabel(source)}".`;
+  target.requestId = null;
+  target.waitRequestIds = [];
+  target.createdByRequestId = null;
+  target.taskCompleted = false;
+  // First grant always delivers the complete managed protocol after the real
+  // agent prompt is ready. No terminal history or hidden context is copied.
+  if (!alreadyGranted) target.initialPromptSent = false;
+  if (!alreadyGranted) respawnColumn(target);
+  return !alreadyGranted;
+}
+
+document.getElementById('boardConnectCancel').onclick = cancelBoardConnect;
+linkTypeInput.onchange = updateLinkControlOption;
+document.getElementById('linkCancel').onclick = () => { linkDlg.close(); editingBoardLink = null; };
+document.getElementById('linkUseSourceResult').onclick = () => {
+  if (!linkDialogSource) return;
+  linkMessageInput.value = linkDialogSource.result || linkDialogSource.progress || '';
+  linkMessageInput.focus();
+};
+document.getElementById('linkSave').onclick = () => {
+  if (!linkDialogSource || !linkDialogTarget) return;
+  try {
+    const type = linkTypeInput.value;
+    const message = BoardCore.cleanText(linkMessageInput.value, 12000);
+    const grant = type === 'delegation' && linkGrantControl.checked;
+    const old = editingBoardLink;
+    const existing = (config.links || []).find((candidate) =>
+      candidate.fromTaskId === linkDialogSource.taskId &&
+      candidate.toTaskId === linkDialogTarget.taskId &&
+      candidate.type === (old ? old.type : type));
+    let restarted = false;
+    if (!grant && (type === 'delegation' || (old && old.grantedControl)) &&
+        linkDialogTarget.parentTaskId === linkDialogSource.taskId) {
+      const revoked = revokeRelationshipControl(linkDialogSource, linkDialogTarget);
+      if (!revoked && linkDialogTarget.parentTaskId === linkDialogSource.taskId) return;
+      restarted = revoked;
+    } else if (grant) {
+      restarted = grantRelationshipControl(linkDialogSource, linkDialogTarget, message);
+      if (!restarted && !(linkDialogTarget.role === 'worker' &&
+          linkDialogTarget.parentTaskId === linkDialogSource.taskId)) return;
+    }
+    const normalized = BoardCore.normalizeLink({
+      id: old && !old.synthetic ? old.id : `link-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+      fromTaskId: linkDialogSource.taskId,
+      toTaskId: linkDialogTarget.taskId,
+      type,
+      message,
+      grantedControl: grant,
+      createdAt: old && old.createdAt,
+    });
+    const duplicateIndex = (config.links || []).findIndex((candidate) =>
+      candidate.id === normalized.id ||
+      (!old && candidate.fromTaskId === normalized.fromTaskId &&
+       candidate.toTaskId === normalized.toTaskId && candidate.type === normalized.type));
+    if (duplicateIndex >= 0) config.links[duplicateIndex] = normalized;
+    else config.links.push(normalized);
+    saveConfig();
+    renderBoardGraph();
+    linkDlg.close();
+    // A first-time grant includes the exact message inside the managed task
+    // prompt. Existing grants and non-control relationships send only the
+    // user-selected message, never arbitrary terminal history.
+    if (message && !(grant && restarted) && (!old || old.message !== message || !existing)) {
+      sendExplicitBoardMessage(linkDialogTarget, message, 0);
+    }
+    showToast(`${BoardCore.linkLabel(type)} saved.`);
+  } catch (err) {
+    showToast(err && err.message ? err.message : String(err));
+  }
+};
+linkRemoveBtn.onclick = () => {
+  if (!editingBoardLink || !linkDialogSource || !linkDialogTarget) return;
+  if (editingBoardLink.grantedControl &&
+      linkDialogTarget.parentTaskId === linkDialogSource.taskId &&
+      !revokeRelationshipControl(linkDialogSource, linkDialogTarget)) return;
+  config.links = (config.links || []).filter((link) => link.id !== editingBoardLink.id);
+  if (editingBoardLink.synthetic && linkDialogTarget.parentTaskId === linkDialogSource.taskId) {
+    linkDialogTarget.parentTaskId = null;
+    linkDialogTarget.relationship = linkDialogTarget.role === 'manual' ? 'Independent manual terminal' : 'Unlinked managed task';
+  }
+  saveConfig();
+  renderBoardGraph();
+  linkDlg.close();
+  showToast('Relationship removed.');
+};
+
+document.getElementById('boardInspectorOpenPage').onclick = () => {
+  if (selectedBoardId) inspectColumn(selectedBoardId);
+};
+document.getElementById('boardInspectorRename').onclick = () => {
+  const col = columns.find((candidate) => candidate.id === selectedBoardId);
+  if (!col) return;
+  const value = prompt('Terminal display title', columnLabel(col));
+  if (value !== null) setColumnDisplayTitle(col, value);
+};
+boardInspectorSendTaskEl.onclick = () => {
+  const col = columns.find((candidate) => candidate.id === selectedBoardId);
+  if (!col || col.role === 'manual' || col.taskCompleted || !col.taskPrompt) return;
+  col.initialPromptSent = false;
+  col.progress = 'Task delivery requested';
+  saveConfig();
+  syncBoardState();
+  queueInitialPrompt(col, 0);
+};
+
+// ---- Conductor Board control plane ----
+// The main process authenticates each command with a per-PTY capability token.
+// Renderer ownership checks are the second boundary: a managed terminal can
+// create descendants and message only its own descendant tasks. Manual
+// terminals have neither a token nor a place in this ownership tree.
+const MAX_MANAGED_TASKS = 48;
+const MAX_TASK_DEPTH = 8;
+
+function respondBoard(requestId, payload) {
+  const id = BoardCore.cleanText(requestId, 200);
+  if (!id) return;
+  const response = {
+    done: !!payload.done,
+    result: BoardCore.cleanText(payload.result, 12000),
+    error: BoardCore.cleanText(payload.error, 2000),
+    childId: BoardCore.cleanText(payload.childId, 160),
+    snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : undefined,
+    updatedAt: Date.now(),
+  };
+  config.boardResponses[id] = response;
+  const ids = Object.keys(config.boardResponses);
+  if (ids.length > 200) {
+    ids.sort((a, b) => (config.boardResponses[a].updatedAt || 0) - (config.boardResponses[b].updatedAt || 0))
+      .slice(0, ids.length - 200).forEach((oldId) => delete config.boardResponses[oldId]);
+  }
+  saveConfig();
+  window.deck.boardRespond({ requestId: id, ...response });
+}
+
+function cancelManagedRequests(col, reason) {
+  if (!col || col.role === 'manual') return;
+  const requestIds = Array.from(new Set([col.requestId, ...(col.waitRequestIds || [])].filter(Boolean)));
+  requestIds.forEach((requestId) => respondBoard(requestId, {
+    done: true,
+    error: reason || 'Managed task was cancelled.',
+    childId: col.taskId,
+  }));
+  col.requestId = null;
+  col.waitRequestIds = [];
+}
+
+function taskDepth(col) {
+  return BoardCore.taskDepth(columns, col);
+}
+
+function isManagedDescendant(parent, target) {
+  return BoardCore.isManagedDescendant(columns, parent, target);
+}
+
+function taskSnapshot(caller) {
+  const visible = columns.filter((col) =>
+    col.taskId === caller.taskId || isManagedDescendant(caller, col));
+  return {
+    updatedAt: new Date().toISOString(),
+    tasks: visible.map((col) => ({
+      taskId: col.taskId,
+      parentTaskId: col.parentTaskId || null,
+      terminalId: col.id,
+      title: columnLabel(col),
+      role: col.role || 'manual',
+      agentType: col.agentType || BoardCore.inferAgentType(col.cmd),
+      terminalState: (terms.get(col.id) && terms.get(col.id).state) || 'plain',
+      taskState: col.taskCompleted ? 'completed' : 'active',
+      progress: col.progress || '',
+      result: col.result || '',
+    })),
+  };
+}
+
+function finishManagedTask(col, result) {
+  if (!col || col.role === 'manual' || col.taskCompleted) return;
+  col.taskCompleted = true;
+  col.result = BoardCore.cleanText(result, 12000) || 'Completed';
+  col.progress = 'Completed';
+  if (col.requestId) {
+    respondBoard(col.requestId, { done: true, result: col.result, childId: col.taskId });
+    col.requestId = null;
+  }
+  (col.waitRequestIds || []).forEach((requestId) =>
+    respondBoard(requestId, { done: true, result: col.result, childId: col.taskId }));
+  col.waitRequestIds = [];
+  saveConfig();
+  syncBoardState();
+}
+
+function createManagedChild(message, caller) {
+  const title = BoardCore.cleanText(message.title, 200);
+  const task = BoardCore.cleanText(message.task, 20000);
+  if (!title || !task) throw new Error('A child task needs both a title and instructions.');
+  if (columns.filter((col) => col.role !== 'manual').length >= MAX_MANAGED_TASKS) {
+    throw new Error(`Managed task limit reached (${MAX_MANAGED_TASKS}). Complete or remove tasks before delegating more.`);
+  }
+  if (taskDepth(caller) + 1 > MAX_TASK_DEPTH) {
+    throw new Error(`Maximum delegation depth reached (${MAX_TASK_DEPTH}).`);
+  }
+  const agent = BoardCore.cleanText(message.agent, 80) || 'claude';
+  const child = addColumn({
+    title,
+    taskTitle: title,
+    taskPrompt: task,
+    role: 'worker',
+    parentTaskId: caller.taskId,
+    relationship: BoardCore.cleanText(message.relationship, 200) || `Delegated by ${columnLabel(caller)}`,
+    agentType: BoardCore.inferAgentType(BoardCore.commandForAgent(agent, message.command)),
+    cmd: BoardCore.commandForAgent(agent, message.command),
+    cwd: BoardCore.cleanText(message.cwd, 1000) || caller.cwd || '',
+    requestId: message.action === 'create-child' ? message.id : null,
+    createdByRequestId: message.id,
+    waitRequestIds: [],
+    progress: 'Queued by parent',
+    initialPromptSent: false,
+  });
+  config.links.push(BoardCore.normalizeLink({
+    id: `link-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+    fromTaskId: caller.taskId,
+    toTaskId: child.taskId,
+    type: 'delegation',
+    message: task,
+    grantedControl: true,
+  }));
+  saveConfig();
+  renderBoardGraph();
+  if (message.action === 'create-child') {
+    respondBoard(message.id, { done: false, childId: child.taskId });
+  } else {
+    respondBoard(message.id, { done: true, childId: child.taskId, result: child.taskId });
+  }
+  return child;
+}
+
+window.deck.onBoardCommand((message) => {
+  const cached = config.boardResponses[message.id];
+  if (cached) {
+    window.deck.boardRespond({ requestId: message.id, ...cached });
+    return;
+  }
+  if (message.action === 'create-child' || message.action === 'spawn-child') {
+    const existingChild = columns.find((col) => col.createdByRequestId === message.id);
+    if (existingChild) {
+      respondBoard(message.id, existingChild.taskCompleted
+        ? { done: true, childId: existingChild.taskId, result: existingChild.result }
+        : message.action === 'create-child'
+          ? { done: false, childId: existingChild.taskId }
+          : { done: true, childId: existingChild.taskId, result: existingChild.taskId });
+      return;
+    }
+  }
+  const caller = columns.find((col) => col.id === message.callerId);
+  if (!caller || caller.role === 'manual') {
+    respondBoard(message.id, { done: true, error: 'Managed caller terminal no longer exists.' });
+    return;
+  }
+  try {
+    if (message.action === 'create-child' || message.action === 'spawn-child') {
+      createManagedChild(message, caller);
+      return;
+    }
+    if (message.action === 'progress') {
+      caller.progress = BoardCore.cleanText(message.message, 1000);
+      saveConfig();
+      syncBoardState();
+      respondBoard(message.id, { done: true, result: 'Progress recorded.' });
+      return;
+    }
+    if (message.action === 'complete') {
+      const result = BoardCore.cleanText(message.result, 12000);
+      if (!result) throw new Error('Completion requires a useful result.');
+      finishManagedTask(caller, result);
+      respondBoard(message.id, { done: true, result: 'Result delivered.' });
+      return;
+    }
+    if (message.action === 'wait') {
+      const target = columns.find((col) => col.taskId === message.taskId);
+      if (!target || !isManagedDescendant(caller, target)) {
+        throw new Error('wait target is not a managed descendant of this terminal.');
+      }
+      if (target.taskCompleted) {
+        respondBoard(message.id, { done: true, result: target.result, childId: target.taskId });
+      } else {
+        target.waitRequestIds = Array.from(new Set([...(target.waitRequestIds || []), message.id]));
+        respondBoard(message.id, { done: false, childId: target.taskId });
+      }
+      return;
+    }
+    if (message.action === 'send') {
+      const target = columns.find((col) => col.taskId === message.taskId);
+      if (!target || !isManagedDescendant(caller, target)) {
+        throw new Error('send target is not a managed descendant of this terminal.');
+      }
+      const text = BoardCore.cleanText(message.message, 12000);
+      const entry = terms.get(target.id);
+      if (!text || !entry || !entry.alive) throw new Error('Target terminal is not available for input.');
+      entry.term.paste(text);
+      setTimeout(() => window.deck.ptyInput(target.id, '\r'), 40);
+      respondBoard(message.id, { done: true, result: 'Message sent.' });
+      return;
+    }
+    if (message.action === 'status') {
+      respondBoard(message.id, { done: true, snapshot: taskSnapshot(caller) });
+      return;
+    }
+    throw new Error(`Unsupported board action: ${message.action}`);
+  } catch (err) {
+    respondBoard(message.id, { done: true, error: err && err.message ? err.message : String(err) });
+  }
+});
+window.deck.boardReady();
+
+// ---- Assign top-level conductor task dialog ----
+const taskDlg = document.getElementById('taskDialog');
+const taskTitleInput = document.getElementById('taskTitleInput');
+const taskPromptInput = document.getElementById('taskPromptInput');
+const taskAgentInput = document.getElementById('taskAgentInput');
+const taskCwdInput = document.getElementById('taskCwdInput');
+
+function openTaskDialog() {
+  taskTitleInput.value = '';
+  taskPromptInput.value = '';
+  taskCwdInput.value = '';
+  taskDlg.showModal();
+  setTimeout(() => taskTitleInput.focus(), 40);
+}
+
+document.getElementById('boardToTerminals').onclick = () => showView('terminals');
+document.getElementById('boardNewTerminal').onclick = () => addAndFocusColumn();
+document.getElementById('boardNewTask').onclick = openTaskDialog;
+document.getElementById('taskCancel').onclick = () => taskDlg.close();
+document.getElementById('taskCreate').onclick = () => {
+  const title = BoardCore.cleanText(taskTitleInput.value, 200);
+  const taskPrompt = BoardCore.cleanText(taskPromptInput.value, 20000);
+  if (!title || !taskPrompt) {
+    showToast('Add a task title and instructions.');
+    return;
+  }
+  const cmd = BoardCore.commandForAgent(taskAgentInput.value);
+  const col = addColumn({
+    title,
+    taskTitle: title,
+    taskPrompt,
+    role: 'conductor',
+    relationship: 'Top-level task',
+    agentType: BoardCore.inferAgentType(cmd),
+    cmd,
+    cwd: BoardCore.cleanText(taskCwdInput.value, 1000),
+    progress: 'Task assigned',
+    initialPromptSent: false,
+    manualTitle: true,
+  });
+  taskDlg.close();
+  if (activeView === 'board') {
+    renderBoardGraph();
+    setTimeout(() => selectBoardNode(col.id, true), 100);
+  }
+  else setTimeout(() => jumpToColumn(col), 100);
+};
 
 // ---- Boot ----
 // The search/broadcast bars use the app's SVG icon set (the raw Unicode glyphs
@@ -1380,7 +2444,10 @@ setNavCollapsed(config.navCollapsed); // sets class + width + collapse-button ic
 attachNavResize(document.getElementById('navResizer'));
 applyTheme(config.theme);
 render();
-window.addEventListener('resize', () => { updateColumnStyles(); fitAll(); });
+window.addEventListener('resize', () => {
+  if (activeView === 'board') renderBoardGraph();
+  else { updateColumnStyles(); fitAll(); }
+});
 // A file dropped anywhere but a terminal would otherwise make the window
 // navigate to file://… — swallow those so the app never reloads.
 window.addEventListener('dragover', (e) => e.preventDefault());
@@ -1442,7 +2509,7 @@ function maybeNotifyState(id, entry, st) {
     else if (!col) skip = 'noCol';
     else if (col && isClaudeCmd(col.cmd)) skip = 'claude';
     else if (st === 'done') skip = 'await-stable';
-    try { window.deck.stateDebug({ id, title: col ? col.title : '?', prev, st, hasWorked: entry.hasWorked, skip }); } catch (_) {}
+    try { window.deck.stateDebug({ id, title: col ? columnLabel(col) : '?', prev, st, hasWorked: entry.hasWorked, skip }); } catch (_) {}
   }
   if (!col) return;
   if (st === 'working') {
@@ -1455,7 +2522,7 @@ function maybeNotifyState(id, entry, st) {
   if (st === 'input') {
     entry.doneNotified = false;
     if (prev !== undefined && prev !== st) {
-      try { window.deck.notifyState({ id, title: col.title, state: st }); } catch (_) {}
+      try { window.deck.notifyState({ id, title: columnLabel(col), state: st }); } catch (_) {}
     }
     return;
   }
@@ -1464,8 +2531,8 @@ function maybeNotifyState(id, entry, st) {
     if (!entry.hasWorked || entry.doneNotified) return;
     if (entry.idleTicks < NOTIFY_STABLE_TICKS) return; // not stable yet
     entry.doneNotified = true;
-    try { window.deck.stateDebug({ id, title: col.title, prev, st: 'done-stable', hasWorked: true, skip: '' }); } catch (_) {}
-    try { window.deck.notifyState({ id, title: col.title, state: 'done' }); } catch (_) {}
+    try { window.deck.stateDebug({ id, title: columnLabel(col), prev, st: 'done-stable', hasWorked: true, skip: '' }); } catch (_) {}
+    try { window.deck.notifyState({ id, title: columnLabel(col), state: 'done' }); } catch (_) {}
   }
 }
 
@@ -1552,6 +2619,7 @@ setInterval(() => {
     }
   });
   syncNav(); // mirror status dots + active highlight into the sidebar
+  syncBoardState();
 
   // Dock badge: how many agents are blocked waiting on the human.
   if (attn !== lastAttnCount) {
@@ -1565,6 +2633,10 @@ setInterval(() => {
 function focusColumnByIndex(idx) {
   const col = columns[Math.max(0, Math.min(idx, columns.length - 1))];
   if (!col) return;
+  if (activeView === 'board') {
+    selectBoardNode(col.id, true);
+    return;
+  }
   const t = terms.get(col.id);
   if (!t) return;
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
@@ -1581,6 +2653,8 @@ document.addEventListener('keydown', (e) => {
     if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(idx); }
   } else if (k === 'f' || k === 'F') {
     openSearch();
+  } else if (e.shiftKey && (k === 'b' || k === 'B')) {
+    showView(activeView === 'board' ? 'terminals' : 'board');
   } else if (k === 'b' || k === 'B') {
     toggleBroadcast();
   } else if (k === '/') {
@@ -1679,7 +2753,8 @@ const SEARCH_DECOR = {
 function positionSearchBar() {
   const t = terms.get(searchColId);
   if (!t) return;
-  const r = t.wrap.getBoundingClientRect();
+  const anchor = activeView === 'board' && t.el.parentElement === boardTerminalHostEl ? t.el : t.wrap;
+  const r = anchor.getBoundingClientRect();
   searchBar.style.top = Math.round(r.top + 8) + 'px';
   searchBar.style.left = Math.round(Math.max(8, r.right - 312)) + 'px';
 }
@@ -1723,3 +2798,7 @@ searchInput.addEventListener('keydown', (e) => {
 document.getElementById('searchNext').onclick = () => doSearch(1);
 document.getElementById('searchPrev').onclick = () => doSearch(-1);
 document.getElementById('searchClose').onclick = () => closeSearch();
+
+// View restoration comes last because showView() closes the search/broadcast
+// overlays, whose DOM bindings are initialized just above.
+showView(config.activeView);

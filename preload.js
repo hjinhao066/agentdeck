@@ -38,7 +38,7 @@ contextBridge.exposeInMainWorld('deck', {
   // Auto column naming: compress a submitted prompt into a ≤10-char label.
   summarizeTitle: (text) => ipcRenderer.invoke('title:summarize', { text }),
 
-  ptySpawn: (id, cwd, cols, rows) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows }),
+  ptySpawn: (id, cwd, cols, rows, managed) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   ptyKill: (id) => ipcRenderer.send('pty:kill', { id }),
@@ -53,4 +53,9 @@ contextBridge.exposeInMainWorld('deck', {
   onFocusColumn: (cb) => ipcRenderer.on('focus-column', (_e, m) => cb(m.id)),
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data)),
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, m) => cb(m.id)),
+  // Capability-checked commands emitted by conductor-managed terminals via
+  // board-cli.js. Manual terminals never receive the control token.
+  onBoardCommand: (cb) => ipcRenderer.on('board:command', (_e, m) => cb(m)),
+  boardRespond: (payload) => ipcRenderer.send('board:response', payload),
+  boardReady: () => ipcRenderer.send('board:ready'),
 });

@@ -15,6 +15,107 @@
     <div id="navResizer" title="拖动调整宽度"></div>
   </nav>
   <div id="deck"></div>
+  <section id="boardView" hidden aria-label="Conductor Board">
+    <header class="board-toolbar">
+      <div>
+        <div class="board-kicker">Live orchestration</div>
+        <h1>Conductor Board</h1>
+      </div>
+      <div class="board-toolbar-actions">
+        <button class="btn" id="boardToTerminals">Terminal deck</button>
+        <button class="btn" id="boardNewTerminal">New terminal</button>
+        <button class="btn primary" id="boardNewTask">Assign conductor task</button>
+      </div>
+    </header>
+    <div id="boardConnectNotice" hidden>
+      <span id="boardConnectNoticeText"></span>
+      <button id="boardConnectCancel">Cancel connect</button>
+    </div>
+    <div class="board-workspace">
+      <div id="boardScroller">
+        <div id="boardSurface">
+          <svg id="boardEdges" aria-hidden="true"></svg>
+          <div id="boardNodes"></div>
+          <div id="boardEmpty" hidden>
+            <strong>No conductor tasks yet</strong>
+            <span>Assign a top-level task, or keep using independent manual terminals.</span>
+          </div>
+        </div>
+      </div>
+      <aside id="boardInspector" aria-label="Selected task terminal">
+        <header class="board-inspector-head">
+          <div>
+            <div class="board-kicker">Selected live session</div>
+            <h2 id="boardInspectorTitle">Select a task</h2>
+            <p id="boardInspectorMeta"></p>
+          </div>
+          <div class="board-inspector-actions">
+            <button class="btn" id="boardInspectorRename">Rename</button>
+            <button class="btn" id="boardInspectorSendTask" hidden>Send task</button>
+            <button class="btn" id="boardInspectorOpenPage">Terminal page</button>
+          </div>
+        </header>
+        <div id="boardInspectorState"></div>
+        <div id="boardTerminalHost"></div>
+        <div id="boardInspectorEmpty">
+          <strong>Select any node</strong>
+          <span>Its real interactive terminal will appear here without hiding the graph.</span>
+        </div>
+      </aside>
+    </div>
+    <footer class="board-legend">
+      <span><i class="legend-dot" style="background:var(--st-working)"></i> Working</span>
+      <span><i class="legend-dot" style="background:var(--st-input)"></i> Needs input</span>
+      <span><i class="legend-dot" style="background:var(--st-done)"></i> Completed</span>
+      <span class="board-manual-note">Manual terminals are independent and never controlled by a conductor.</span>
+    </footer>
+  </section>
+
+  <dialog id="boardLinkDialog" class="link-dialog">
+    <h3 id="boardLinkDialogTitle">Connect terminals</h3>
+    <p class="link-endpoints"><strong id="linkSourceLabel"></strong><span>→</span><strong id="linkTargetLabel"></strong></p>
+    <label for="linkTypeInput">Relationship type</label>
+    <select id="linkTypeInput">
+      <option value="delegation">Delegation: source assigns work to target</option>
+      <option value="dependency">Dependency: target waits on source</option>
+      <option value="handoff">Message / handoff channel</option>
+    </select>
+    <label for="linkMessageInput">Initial task or handoff message (optional)</label>
+    <textarea id="linkMessageInput" placeholder="Only this message will be sent. Terminal history is never copied automatically."></textarea>
+    <button class="link-use-result" id="linkUseSourceResult" type="button">Use source result / progress</button>
+    <label class="link-control-option" id="linkControlOption">
+      <input type="checkbox" id="linkGrantControl" />
+      <span>Grant source control of target. This converts the target to a managed worker and restarts its shell so the control capability can be injected.</span>
+    </label>
+    <p class="hint" id="linkSafetyHint">Creating a link never merges terminal context or sends history. Only the message above is sent.</p>
+    <div class="row link-dialog-actions">
+      <button class="btn danger" id="linkRemove" hidden>Remove link</button>
+      <span class="row-spacer"></span>
+      <button class="btn" id="linkCancel">Cancel</button>
+      <button class="btn primary" id="linkSave">Save relationship</button>
+    </div>
+  </dialog>
+
+  <dialog id="taskDialog" class="task-dialog">
+    <h3>Assign a conductor task</h3>
+    <p class="hint">This creates a real managed terminal. The conductor can delegate through the board control channel, while manual terminals remain isolated.</p>
+    <label for="taskTitleInput">Task title</label>
+    <input id="taskTitleInput" placeholder="Ship the authentication refactor" autocomplete="off" spellcheck="false" />
+    <label for="taskPromptInput">Task instructions</label>
+    <textarea id="taskPromptInput" placeholder="Describe the outcome, constraints, and validation required." spellcheck="true"></textarea>
+    <label for="taskAgentInput">Conductor agent</label>
+    <select id="taskAgentInput">
+      <option value="claude">Claude</option>
+      <option value="agy">Antigravity</option>
+      <option value="grok">Grok</option>
+    </select>
+    <label for="taskCwdInput">Working directory (optional)</label>
+    <input id="taskCwdInput" placeholder="Defaults to your home directory" autocomplete="off" spellcheck="false" />
+    <div class="row">
+      <button class="btn" id="taskCancel">Cancel</button>
+      <button class="btn primary" id="taskCreate">Create and run</button>
+    </div>
+  </dialog>
 
   <!-- Add / edit column dialog -->
   <dialog id="colDialog">
@@ -74,6 +175,12 @@
     </div>
     <div class="help-section">其他</div>
     <div class="help-grid">
+      <span><kbd>⌘ ⇧ B</kbd></span><span>打开 / 关闭 Conductor Board</span>
+      <span>Assign conductor task</span><span>创建顶层任务和真实 conductor 终端；它可以生成 worker 与下游 worker</span>
+      <span>Inspect here</span><span>在 Board 右侧直接操作同一个真实 xterm/node-pty 终端；图和终端同时可见</span>
+      <span>Connect</span><span>显式创建 delegation / dependency / handoff 关系；点击连线标签可修改或删除</span>
+      <span>双击节点标题 / F2</span><span>设置持久显示名；内部会话 ID 和自动标题不变</span>
+      <span>Manual terminal</span><span>用 + / ⌘ N 创建，始终独立，conductor 无法控制</span>
       <span><kbd>⌘ /</kbd></span><span>打开本说明</span>
       <span><kbd>⌘ ⇧ R</kbd></span><span>热重载界面（终端进程不断）</span>
       <span>拖侧边栏右缘</span><span>调宽度；一直拖到最左 = 折叠成图标栏</span>
@@ -101,6 +208,7 @@
   <script src="vendor/addon-fit.js"></script>
   <script src="vendor/addon-search.js"></script>
   <script src="vendor/addon-canvas.js"></script>
+  <script src="board-core.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
