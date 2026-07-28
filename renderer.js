@@ -77,7 +77,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {},
+  boardResponses: {}, boardPositions: {},
 };
 const saved = window.deck.loadConfig();
 if (saved) {
@@ -88,6 +88,7 @@ if (saved) {
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (saved.activeView === 'board') config.activeView = 'board';
+  config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
   if (saved.boardResponses && typeof saved.boardResponses === 'object' && !Array.isArray(saved.boardResponses)) {
     config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).slice(-200));
   }
@@ -389,6 +390,7 @@ function buildRail() {
     });
     columns = defaultColumns();
     config.links = [];
+    config.boardPositions = {};
     const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
     saveConfig(); render();
   }));
@@ -445,6 +447,7 @@ function attachNavResize(handle) {
 // ---- Render ----
 const deckEl = document.getElementById('deck');
 const boardViewEl = document.getElementById('boardView');
+const boardScrollerEl = document.getElementById('boardScroller');
 const boardSurfaceEl = document.getElementById('boardSurface');
 const boardEdgesEl = document.getElementById('boardEdges');
 const boardNodesEl = document.getElementById('boardNodes');
@@ -458,6 +461,10 @@ const boardInspectorStateEl = document.getElementById('boardInspectorState');
 const boardInspectorSendTaskEl = document.getElementById('boardInspectorSendTask');
 let selectedBoardId = null;
 let connectSourceTaskId = null;
+let boardLinkDrag = null;
+const BOARD_NODE_WIDTH = 260;
+const BOARD_NODE_HEIGHT = 156;
+const BOARD_PADDING = 56;
 
 function restoreBoardTerminal() {
   if (!selectedBoardId) return;
@@ -594,12 +601,259 @@ function beginBoardRename(titleEl, col) {
   }, { once: true });
 }
 
+function baseBoardLayout() {
+  return BoardCore.graphLayout(columns, {
+    nodeWidth: BOARD_NODE_WIDTH,
+    nodeHeight: BOARD_NODE_HEIGHT,
+    gapX: 94,
+    gapY: 44,
+    padding: BOARD_PADDING,
+  });
+}
+
+function autoArrangeBoard() {
+  const layout = baseBoardLayout();
+  config.boardPositions = Object.fromEntries(layout.nodes.map((node) => [
+    node.taskId,
+    { x: Math.round(node.x), y: Math.round(node.y) },
+  ]));
+  saveConfig();
+  renderBoardGraph();
+  showToast('Board arranged.');
+}
+
+function boardCanvasPoint(clientX, clientY) {
+  const rect = boardScrollerEl.getBoundingClientRect();
+  return {
+    x: clientX - rect.left + boardScrollerEl.scrollLeft,
+    y: clientY - rect.top + boardScrollerEl.scrollTop,
+  };
+}
+
+function boardNodeGeometry(taskId) {
+  const card = boardNodesEl.querySelector(`.board-node[data-task-id="${CSS.escape(taskId)}"]`);
+  if (!card) return null;
+  return {
+    x: parseFloat(card.style.left) || 0,
+    y: parseFloat(card.style.top) || 0,
+    width: card.offsetWidth || BOARD_NODE_WIDTH,
+    height: card.offsetHeight || BOARD_NODE_HEIGHT,
+  };
+}
+
+function boardEdgeGeometry(from, to) {
+  let x1, y1, x2, y2, path;
+  if (Math.abs(from.x - to.x) < 40) {
+    const forward = from.y <= to.y;
+    x1 = from.x + from.width / 2;
+    y1 = forward ? from.y + from.height : from.y;
+    x2 = to.x + to.width / 2;
+    y2 = forward ? to.y : to.y + to.height;
+    const side = Math.max(from.x, to.x) + Math.max(from.width, to.width) + 36;
+    path = `M ${x1} ${y1} C ${side} ${y1}, ${side} ${y2}, ${x2} ${y2}`;
+  } else {
+    const forward = from.x < to.x;
+    x1 = forward ? from.x + from.width : from.x;
+    y1 = from.y + from.height / 2;
+    x2 = forward ? to.x : to.x + to.width;
+    y2 = to.y + to.height / 2;
+    const bend = Math.max(42, Math.abs(x2 - x1) / 2);
+    path = `M ${x1} ${y1} C ${x1 + (forward ? bend : -bend)} ${y1}, ${x2 + (forward ? -bend : bend)} ${y2}, ${x2} ${y2}`;
+  }
+  return { x1, y1, x2, y2, path };
+}
+
+function updateBoardSurfaceSize() {
+  const cards = Array.from(boardNodesEl.querySelectorAll('.board-node'));
+  const maxRight = Math.max(0, ...cards.map((card) =>
+    (parseFloat(card.style.left) || 0) + (card.offsetWidth || BOARD_NODE_WIDTH)));
+  const maxBottom = Math.max(0, ...cards.map((card) =>
+    (parseFloat(card.style.top) || 0) + (card.offsetHeight || BOARD_NODE_HEIGHT)));
+  const width = Math.max(boardScrollerEl.clientWidth - 16, maxRight + 180, 720);
+  const height = Math.max(boardScrollerEl.clientHeight - 16, maxBottom + 140, 520);
+  boardSurfaceEl.style.width = `${width}px`;
+  boardSurfaceEl.style.height = `${height}px`;
+  boardEdgesEl.setAttribute('width', String(width));
+  boardEdgesEl.setAttribute('height', String(height));
+  boardEdgesEl.setAttribute('viewBox', `0 0 ${width} ${height}`);
+}
+
+function updateRenderedBoardLinks() {
+  allBoardLinks().forEach((link) => {
+    const from = boardNodeGeometry(link.fromTaskId);
+    const to = boardNodeGeometry(link.toTaskId);
+    if (!from || !to) return;
+    const geometry = boardEdgeGeometry(from, to);
+    const path = boardEdgesEl.querySelector(`.board-edge[data-link-id="${CSS.escape(link.id)}"]`);
+    if (path) path.setAttribute('d', geometry.path);
+    const chip = boardNodesEl.querySelector(`.board-link-chip[data-link-id="${CSS.escape(link.id)}"]`);
+    if (chip) {
+      chip.style.left = `${(geometry.x1 + geometry.x2) / 2}px`;
+      chip.style.top = `${(geometry.y1 + geometry.y2) / 2}px`;
+    }
+  });
+}
+
+function maybeAutoScrollBoard(clientX, clientY) {
+  const rect = boardScrollerEl.getBoundingClientRect();
+  const edge = 42;
+  let dx = 0, dy = 0;
+  if (clientX < rect.left + edge) dx = -16;
+  else if (clientX > rect.right - edge) dx = 16;
+  if (clientY < rect.top + edge) dy = -16;
+  else if (clientY > rect.bottom - edge) dy = 16;
+  if (dx || dy) boardScrollerEl.scrollBy(dx, dy);
+}
+
+function attachBoardNodeDrag(card, col) {
+  card.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || event.target.closest('button, h2, [contenteditable="true"]')) return;
+    const startPoint = boardCanvasPoint(event.clientX, event.clientY);
+    const startX = parseFloat(card.style.left) || 0;
+    const startY = parseFloat(card.style.top) || 0;
+    let dragging = false;
+    card.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent) => {
+      const point = boardCanvasPoint(moveEvent.clientX, moveEvent.clientY);
+      if (!dragging && Math.hypot(point.x - startPoint.x, point.y - startPoint.y) < 4) return;
+      dragging = true;
+      card.classList.add('dragging');
+      maybeAutoScrollBoard(moveEvent.clientX, moveEvent.clientY);
+      const current = boardCanvasPoint(moveEvent.clientX, moveEvent.clientY);
+      card.style.left = `${Math.max(16, Math.round(startX + current.x - startPoint.x))}px`;
+      card.style.top = `${Math.max(16, Math.round(startY + current.y - startPoint.y))}px`;
+      updateBoardSurfaceSize();
+      updateRenderedBoardLinks();
+      moveEvent.preventDefault();
+    };
+    const onUp = () => {
+      card.removeEventListener('pointermove', onMove);
+      card.removeEventListener('pointerup', onUp);
+      card.removeEventListener('pointercancel', onUp);
+      card.classList.remove('dragging');
+      if (!dragging) return;
+      card.dataset.justDragged = 'true';
+      setTimeout(() => { delete card.dataset.justDragged; }, 0);
+      config.boardPositions[col.taskId] = {
+        x: Math.round(parseFloat(card.style.left) || 16),
+        y: Math.round(parseFloat(card.style.top) || 16),
+      };
+      saveConfig();
+      updateBoardSurfaceSize();
+      updateRenderedBoardLinks();
+    };
+    card.addEventListener('pointermove', onMove);
+    card.addEventListener('pointerup', onUp);
+    card.addEventListener('pointercancel', onUp);
+  });
+}
+
+function clearBoardLinkDrag() {
+  document.body.classList.remove('linking-board');
+  boardNodesEl.querySelectorAll('.board-node.link-target').forEach((card) => card.classList.remove('link-target'));
+  const preview = boardEdgesEl.querySelector('.board-edge-preview');
+  if (preview) preview.remove();
+  boardLinkDrag = null;
+}
+
+function boardLinkTargetAt(clientX, clientY, sourceTaskId) {
+  const candidates = Array.from(boardNodesEl.querySelectorAll('.board-node'))
+    .filter((card) => card.dataset.taskId !== sourceTaskId)
+    .map((card) => {
+      const rect = card.getBoundingClientRect();
+      const inside = clientX >= rect.left - 10 && clientX <= rect.right + 10 &&
+        clientY >= rect.top - 10 && clientY <= rect.bottom + 10;
+      const dx = clientX - (rect.left + rect.width / 2);
+      const dy = clientY - (rect.top + rect.height / 2);
+      return { card, inside, distance: Math.hypot(dx, dy) };
+    })
+    .filter((candidate) => candidate.inside)
+    .sort((a, b) => a.distance - b.distance);
+  const card = candidates[0] && candidates[0].card;
+  return card ? {
+    card,
+    column: columns.find((col) => col.taskId === card.dataset.taskId),
+  } : null;
+}
+
+function attachBoardLinkDrag(port, source) {
+  port.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    event.preventDefault();
+    clearBoardLinkDrag();
+    const sourceCard = port.closest('.board-node');
+    const start = boardNodeGeometry(source.taskId);
+    if (!sourceCard || !start) return;
+    const preview = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    preview.setAttribute('class', 'board-edge-preview');
+    preview.setAttribute('marker-end', 'url(#boardArrowPreview)');
+    boardEdgesEl.appendChild(preview);
+    boardLinkDrag = { source, target: null, moved: false, preview, startClientX: event.clientX, startClientY: event.clientY };
+    document.body.classList.add('linking-board');
+    port.setPointerCapture(event.pointerId);
+
+    const onMove = (moveEvent) => {
+      if (!boardLinkDrag) return;
+      maybeAutoScrollBoard(moveEvent.clientX, moveEvent.clientY);
+      const point = boardCanvasPoint(moveEvent.clientX, moveEvent.clientY);
+      if (Math.hypot(moveEvent.clientX - boardLinkDrag.startClientX, moveEvent.clientY - boardLinkDrag.startClientY) > 4) {
+        boardLinkDrag.moved = true;
+      }
+      const hit = boardLinkTargetAt(moveEvent.clientX, moveEvent.clientY, source.taskId);
+      const targetCard = hit && hit.card;
+      const target = hit && hit.column;
+      boardNodesEl.querySelectorAll('.board-node.link-target').forEach((card) =>
+        card.classList.toggle('link-target', card === targetCard && !!target));
+      boardLinkDrag.target = target;
+      const from = boardNodeGeometry(source.taskId);
+      const targetGeometry = target ? boardNodeGeometry(target.taskId) : null;
+      if (from) {
+        const x1 = from.x + from.width;
+        const y1 = from.y + from.height / 2;
+        const x2 = targetGeometry ? targetGeometry.x : point.x;
+        const y2 = targetGeometry ? targetGeometry.y + targetGeometry.height / 2 : point.y;
+        const direction = x2 >= x1 ? 1 : -1;
+        const bend = Math.max(56, Math.abs(x2 - x1) / 2);
+        preview.setAttribute('d', `M ${x1} ${y1} C ${x1 + direction * bend} ${y1}, ${x2 - direction * bend} ${y2}, ${x2} ${y2}`);
+      }
+    };
+    const onUp = (upEvent) => {
+      port.removeEventListener('pointermove', onMove);
+      port.removeEventListener('pointerup', onUp);
+      port.removeEventListener('pointercancel', onUp);
+      const drag = boardLinkDrag;
+      const finalHit = drag && boardLinkTargetAt(upEvent.clientX, upEvent.clientY, source.taskId);
+      const target = (finalHit && finalHit.column) || (drag && drag.target);
+      const moved = drag && drag.moved;
+      clearBoardLinkDrag();
+      if (moved && target) {
+        port.dataset.suppressClick = 'true';
+        setTimeout(() => { delete port.dataset.suppressClick; }, 0);
+        openLinkDialog(null, source, target);
+      }
+    };
+    port.addEventListener('pointermove', onMove);
+    port.addEventListener('pointerup', onUp);
+    port.addEventListener('pointercancel', onUp);
+  });
+  port.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (port.dataset.suppressClick === 'true') {
+      delete port.dataset.suppressClick;
+      return;
+    }
+    startBoardConnect(source);
+  });
+}
+
 function renderBoardGraph() {
   if (!boardSurfaceEl) return;
-  const layout = BoardCore.graphLayout(columns, { nodeWidth: 260, nodeHeight: 156, gapX: 94, gapY: 44, padding: 56 });
+  clearBoardLinkDrag();
+  const layout = BoardCore.applyBoardPositions(baseBoardLayout(), config.boardPositions);
   const managedCount = columns.filter((c) => c.role !== 'manual').length;
-  const scroller = document.getElementById('boardScroller');
-  const surfaceW = Math.max(layout.width, (scroller && scroller.clientWidth) - 16, 720);
+  const surfaceW = Math.max(layout.width, boardScrollerEl.clientWidth - 16, 720);
   const surfaceH = Math.max(layout.height, boardViewEl.clientHeight - 132, 520);
   boardSurfaceEl.style.width = surfaceW + 'px';
   boardSurfaceEl.style.height = surfaceH + 'px';
@@ -610,6 +864,7 @@ function renderBoardGraph() {
     '<marker id="boardArrowDelegation" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
     '<marker id="boardArrowDependency" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
     '<marker id="boardArrowHandoff" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
+    '<marker id="boardArrowPreview" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"></path></marker>' +
     '</defs>';
   boardNodesEl.innerHTML = '';
   boardEmptyEl.hidden = managedCount > 0;
@@ -620,27 +875,11 @@ function renderBoardGraph() {
     const from = nodeByTaskId.get(link.fromTaskId);
     const to = nodeByTaskId.get(link.toTaskId);
     if (!from || !to) return;
-    let x1, y1, x2, y2, path;
-    if (Math.abs(from.x - to.x) < 40) {
-      const forward = from.y <= to.y;
-      x1 = from.x + from.width / 2;
-      y1 = forward ? from.y + from.height : from.y;
-      x2 = to.x + to.width / 2;
-      y2 = forward ? to.y : to.y + to.height;
-      const side = from.x + from.width + 32;
-      path = `M ${x1} ${y1} C ${side} ${y1}, ${side} ${y2}, ${x2} ${y2}`;
-    } else {
-      const forward = from.x < to.x;
-      x1 = forward ? from.x + from.width : from.x;
-      y1 = from.y + from.height / 2;
-      x2 = forward ? to.x : to.x + to.width;
-      y2 = to.y + to.height / 2;
-      const bend = Math.max(42, Math.abs(x2 - x1) / 2);
-      path = `M ${x1} ${y1} C ${x1 + (forward ? bend : -bend)} ${y1}, ${x2 + (forward ? -bend : bend)} ${y2}, ${x2} ${y2}`;
-    }
+    const geometry = boardEdgeGeometry(from, to);
     const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathEl.setAttribute('class', `board-edge ${link.type}`);
-    pathEl.setAttribute('d', path);
+    pathEl.dataset.linkId = link.id;
+    pathEl.setAttribute('d', geometry.path);
     const marker = link.type === 'delegation' ? 'Delegation' : link.type === 'handoff' ? 'Handoff' : 'Dependency';
     pathEl.setAttribute('marker-end', `url(#boardArrow${marker})`);
     boardEdgesEl.appendChild(pathEl);
@@ -649,8 +888,8 @@ function renderBoardGraph() {
     chip.className = `board-link-chip ${link.type}${linkState === 'Blocked' ? ' blocked' : ''}`;
     chip.dataset.linkId = link.id;
     chip.dataset.linkState = linkState;
-    chip.style.left = `${(x1 + x2) / 2}px`;
-    chip.style.top = `${(y1 + y2) / 2}px`;
+    chip.style.left = `${(geometry.x1 + geometry.x2) / 2}px`;
+    chip.style.top = `${(geometry.y1 + geometry.y2) / 2}px`;
     chip.textContent = `${BoardCore.linkLabel(link.type)} · ${linkState}`;
     chip.title = 'Edit or remove this relationship';
     chip.onclick = (event) => { event.stopPropagation(); openLinkDialog(link); };
@@ -663,6 +902,7 @@ function renderBoardGraph() {
     const card = document.createElement('article');
     card.className = `board-node ${col.role || 'manual'}${selectedBoardId === col.id ? ' selected' : ''}`;
     card.dataset.columnId = col.id;
+    card.dataset.taskId = col.taskId;
     card.dataset.state = boardStateFor(col);
     card.style.left = node.x + 'px';
     card.style.top = node.y + 'px';
@@ -708,17 +948,29 @@ function renderBoardGraph() {
     progress.title = progress.textContent;
     const actions = document.createElement('div');
     actions.className = 'board-node-actions';
-    const connect = document.createElement('button');
-    connect.className = 'board-connect';
-    connect.textContent = 'Connect';
-    connect.onclick = (event) => { event.stopPropagation(); startBoardConnect(col); };
     const inspect = document.createElement('button');
     inspect.className = 'board-inspect';
     inspect.textContent = 'Inspect here';
     inspect.onclick = (event) => { event.stopPropagation(); selectBoardNode(col.id, true); };
-    actions.append(connect, inspect);
-    card.append(top, title, status, relation, progress, actions);
+    actions.append(inspect);
+    const inPort = document.createElement('span');
+    inPort.className = 'board-port in';
+    inPort.setAttribute('aria-hidden', 'true');
+    const outPort = document.createElement('button');
+    outPort.className = 'board-port out';
+    outPort.type = 'button';
+    outPort.title = `Drag to link from ${columnLabel(col)}; click for keyboard connect mode`;
+    outPort.setAttribute('aria-label', `Connect from ${columnLabel(col)}`);
+    card.append(inPort, outPort, top, title, status, relation, progress, actions);
+    attachBoardNodeDrag(card, col);
+    attachBoardLinkDrag(outPort, col);
     card.addEventListener('click', (event) => {
+      if (card.dataset.justDragged === 'true') {
+        delete card.dataset.justDragged;
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
       if (event.target.closest('button') || event.target.closest('[contenteditable="true"]')) return;
       if (connectSourceTaskId && connectSourceTaskId !== col.taskId) {
         const source = columns.find((candidate) => candidate.taskId === connectSourceTaskId);
@@ -729,6 +981,8 @@ function renderBoardGraph() {
     });
     boardNodesEl.appendChild(card);
   });
+  updateBoardSurfaceSize();
+  updateRenderedBoardLinks();
   syncBoardState();
   if (activeView === 'board' && columns.length) {
     const selected = columns.find((col) => col.id === selectedBoardId) ||
@@ -1632,6 +1886,7 @@ function removeCol(col) {
   window.deck.ptyKill(col.id);
   columns.splice(idx, 1);
   config.links = (config.links || []).filter((link) => link.fromTaskId !== col.taskId && link.toTaskId !== col.taskId);
+  delete config.boardPositions[col.taskId];
   if (zoomedId === col.id) { zoomedId = null; updateColumnStyles(); fitAll(); }
   // Don't leave focusedId pointing at the removed column: every focusedId-based
   // shortcut (Cmd+W, Cmd+arrows, search, broadcast) would silently no-op until
@@ -1971,10 +2226,15 @@ function cancelBoardConnect() {
   connectNoticeEl.hidden = true;
   boardNodesEl.querySelectorAll('.board-node').forEach((card) => card.classList.remove('connect-source'));
 }
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  if (boardLinkDrag) clearBoardLinkDrag();
+  if (connectSourceTaskId) cancelBoardConnect();
+});
 
 function startBoardConnect(col) {
   connectSourceTaskId = col.taskId;
-  connectNoticeTextEl.textContent = `Connecting from “${columnLabel(col)}”. Select a target node.`;
+  connectNoticeTextEl.textContent = `Linking from “${columnLabel(col)}”. Click a target card, or cancel.`;
   connectNoticeEl.hidden = false;
   boardNodesEl.querySelectorAll('.board-node').forEach((card) => {
     const candidate = columns.find((item) => item.id === card.dataset.columnId);
@@ -2006,7 +2266,7 @@ function openLinkDialog(link, source, target) {
   linkDlgTitle.textContent = link ? 'Edit relationship' : 'Connect terminals';
   linkSourceLabel.textContent = columnLabel(linkDialogSource);
   linkTargetLabel.textContent = columnLabel(linkDialogTarget);
-  linkTypeInput.value = (link && link.type) || 'dependency';
+  linkTypeInput.value = (link && link.type) || (linkDialogSource.role === 'manual' ? 'handoff' : 'delegation');
   linkMessageInput.value = (link && link.message) || '';
   linkGrantControl.checked = !!(link && link.grantedControl);
   linkRemoveBtn.hidden = !link;
@@ -2399,6 +2659,7 @@ function openTaskDialog() {
 }
 
 document.getElementById('boardToTerminals').onclick = () => showView('terminals');
+document.getElementById('boardAutoArrange').onclick = autoArrangeBoard;
 document.getElementById('boardNewTerminal').onclick = () => addAndFocusColumn();
 document.getElementById('boardNewTask').onclick = openTaskDialog;
 document.getElementById('taskCancel').onclick = () => taskDlg.close();

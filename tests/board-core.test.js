@@ -106,3 +106,35 @@ test('managed request ownership persists while manual terminals discard it', () 
   assert.deepEqual(manual.waitRequestIds, []);
   assert.equal(manual.createdByRequestId, null);
 });
+
+test('freeform board positions are sanitized, persisted, and applied without moving explicit nodes', () => {
+  const layout = BoardCore.graphLayout([
+    { id: 'a', taskId: 'a', role: 'conductor' },
+    { id: 'b', taskId: 'b', role: 'worker', parentTaskId: 'a' },
+    { id: 'c', taskId: 'c', role: 'manual' },
+  ]);
+  const positioned = BoardCore.applyBoardPositions(layout, {
+    a: { x: 420.4, y: 88.7 },
+    b: { x: -50, y: '160' },
+    bad: { x: 'nope', y: 20 },
+  });
+  const byTask = new Map(positioned.nodes.map((node) => [node.taskId, node]));
+  assert.deepEqual({ x: byTask.get('a').x, y: byTask.get('a').y }, { x: 420, y: 89 });
+  assert.deepEqual({ x: byTask.get('b').x, y: byTask.get('b').y }, { x: 16, y: 160 });
+  assert.ok(positioned.width >= 732);
+  assert.equal(BoardCore.normalizeBoardPositions({ bad: { x: NaN, y: 1 } }).bad, undefined);
+});
+
+test('new auto-positioned nodes avoid a saved freeform card', () => {
+  const layout = {
+    width: 600,
+    height: 400,
+    nodes: [
+      { taskId: 'placed', x: 40, y: 40, width: 260, height: 156 },
+      { taskId: 'new', x: 40, y: 40, width: 260, height: 156 },
+    ],
+  };
+  const positioned = BoardCore.applyBoardPositions(layout, { placed: { x: 40, y: 40 } });
+  assert.equal(positioned.nodes[0].y, 40);
+  assert.ok(positioned.nodes[1].y > 196);
+});

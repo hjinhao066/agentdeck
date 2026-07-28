@@ -577,7 +577,11 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   margin-bottom: 3px; color: var(--muted);
   font-size: 10px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase;
 }
-.board-toolbar-actions { display: flex; gap: 8px; -webkit-app-region: no-drag; }
+.board-toolbar-actions { display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag; }
+.board-gesture-hint {
+  margin-right: 4px; color: var(--muted);
+  font-size: 10px; letter-spacing: .01em; white-space: nowrap;
+}
 #boardScroller {
   flex: 1 1 56%; min-width: 340px; min-height: 0; overflow: auto;
   background: var(--app-bg);
@@ -592,6 +596,9 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
 #boardSurface {
   position: relative; min-width: 100%; min-height: 100%;
   background-color: var(--app-bg);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--muted) 24%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: 8px 8px;
 }
 #boardEdges, #boardNodes { position: absolute; inset: 0; overflow: visible; }
 #boardEdges { pointer-events: none; }
@@ -599,9 +606,17 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
 .board-edge.delegation { stroke: var(--accent); }
 .board-edge.dependency { stroke: #d9902f; stroke-dasharray: 8 5; }
 .board-edge.handoff { stroke: var(--st-done); stroke-dasharray: 2 5; }
+.board-edge-preview {
+  fill: none; stroke: var(--accent); stroke-width: 3;
+  stroke-linecap: round; opacity: .96;
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--accent) 72%, transparent));
+  stroke-dasharray: 7 5; animation: cable-flow .55s linear infinite;
+}
+@keyframes cable-flow { to { stroke-dashoffset: -12; } }
 #boardArrowDelegation path { fill: var(--accent); }
 #boardArrowDependency path { fill: #d9902f; }
 #boardArrowHandoff path { fill: var(--st-done); }
+#boardArrowPreview path { fill: var(--accent); }
 .board-edge-label {
   fill: var(--muted); font-size: 10px; text-anchor: middle;
   paint-order: stroke; stroke: var(--app-bg); stroke-width: 5px; stroke-linejoin: round;
@@ -613,12 +628,22 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   background: var(--card); color: var(--text);
   border: 1px solid var(--border); border-top: 3px solid var(--st-plain);
   border-radius: 14px; box-shadow: 0 5px 18px rgba(0,0,0,.22);
-  cursor: default; transition: border-color .15s ease, transform .12s ease, box-shadow .15s ease;
+  cursor: grab; touch-action: none; user-select: none;
+  transition: border-color .15s ease, transform .12s ease, box-shadow .15s ease;
 }
 :root[data-theme="light"] .board-node { box-shadow: 0 5px 16px rgba(15,20,25,.10); }
 .board-node:hover { transform: translateY(-2px); box-shadow: var(--shadow-pop); }
+.board-node.dragging {
+  z-index: 8; cursor: grabbing; transform: none;
+  box-shadow: 0 16px 38px rgba(0,0,0,.38), 0 0 0 2px var(--accent-soft);
+  transition: box-shadow .12s ease;
+}
 .board-node.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow-pop); }
 .board-node.connect-source { outline: 2px dashed var(--accent); outline-offset: 4px; }
+.board-node.link-target {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 24px color-mix(in srgb, var(--accent) 34%, transparent);
+}
 .board-node[data-state="working"] { border-top-color: var(--st-working); }
 .board-node[data-state="input"] { border-top-color: var(--st-input); }
 .board-node[data-state="done"] { border-top-color: var(--st-done); }
@@ -639,7 +664,7 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   margin: 8px -7px 7px; min-height: 25px; padding: 4px 7px;
   font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   background: var(--card-head); border: 1px solid var(--hairline); border-radius: 6px;
-  cursor: text;
+  cursor: text; user-select: text;
 }
 .board-node h2:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .board-node h2[contenteditable="true"] {
@@ -664,12 +689,36 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   display: flex; align-items: center; justify-content: flex-end; gap: 10px;
   margin-top: auto;
 }
-.board-inspect, .board-connect {
+.board-inspect {
   border: none; background: transparent; color: var(--accent);
   font-size: 11px; font-weight: 700; cursor: pointer;
 }
-.board-connect { color: var(--muted); }
-.board-inspect:hover, .board-connect:hover { text-decoration: underline; }
+.board-inspect:hover { text-decoration: underline; }
+.board-port {
+  position: absolute; z-index: 9; top: 50%;
+  width: 20px; height: 32px; margin-top: -16px; padding: 0;
+  border: none; background: transparent; cursor: crosshair;
+  -webkit-app-region: no-drag;
+}
+.board-port::before {
+  content: ''; position: absolute; top: 10px;
+  width: 10px; height: 10px; border-radius: 999px;
+  background: var(--card); border: 2px solid var(--muted);
+  box-shadow: 0 0 0 3px var(--app-bg);
+  transition: transform .12s ease, border-color .12s ease, background .12s ease, box-shadow .12s ease;
+}
+.board-port.in { left: -11px; pointer-events: none; }
+.board-port.in::before { left: 2px; }
+.board-port.out { right: -11px; }
+.board-port.out::before { right: 2px; border-color: var(--accent); background: var(--accent); }
+.board-port.out:hover::before, .board-port.out:focus-visible::before,
+body.linking-board .board-port.out::before {
+  transform: scale(1.32); box-shadow: 0 0 0 4px var(--accent-soft), 0 0 13px var(--accent);
+}
+.board-node.link-target .board-port.in::before {
+  transform: scale(1.4); border-color: var(--accent); background: var(--accent);
+  box-shadow: 0 0 0 5px var(--accent-soft), 0 0 14px var(--accent);
+}
 .board-link-chip {
   position: absolute; z-index: 4; transform: translate(-50%, -50%);
   max-width: 170px; padding: 4px 7px;
@@ -706,6 +755,14 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
 }
 #boardConnectNotice button {
   border: none; background: transparent; color: var(--accent); font-weight: 700; cursor: pointer;
+}
+
+@media (max-width: 1180px) {
+  .board-gesture-hint { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .board-edge-preview { animation: none; }
+  .board-node, .board-port::before { transition: none; }
 }
 
 /* The board inspector hosts the SAME .term element that normally lives in its

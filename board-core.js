@@ -265,6 +265,53 @@
     };
   }
 
+  function normalizeBoardPositions(input) {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) return {};
+    const result = {};
+    Object.entries(input).forEach(([taskId, position]) => {
+      const id = cleanText(taskId, 160);
+      if (!id || !position || typeof position !== 'object') return;
+      const x = Number(position.x);
+      const y = Number(position.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      result[id] = {
+        x: Math.max(16, Math.min(100000, Math.round(x))),
+        y: Math.max(16, Math.min(100000, Math.round(y))),
+      };
+    });
+    return result;
+  }
+
+  function applyBoardPositions(inputLayout, inputPositions, options) {
+    const layout = inputLayout || { nodes: [], width: 0, height: 0 };
+    const positions = normalizeBoardPositions(inputPositions);
+    const gap = Math.max(8, Number(options && options.collisionGap) || 24);
+    const placed = [];
+    const overlaps = (candidate) => placed.some((other) =>
+      candidate.x < other.x + other.width + gap &&
+      candidate.x + candidate.width + gap > other.x &&
+      candidate.y < other.y + other.height + gap &&
+      candidate.y + candidate.height + gap > other.y);
+
+    // Honor every explicitly placed node exactly, including intentional
+    // overlaps. Only auto-positioned new nodes are nudged away from them.
+    const explicitIds = new Set(Object.keys(positions));
+    const nodes = (layout.nodes || []).map((node) => {
+      const position = positions[node.taskId];
+      const resolved = { ...node, x: position ? position.x : node.x, y: position ? position.y : node.y };
+      if (position) placed.push(resolved);
+      return resolved;
+    });
+    nodes.filter((node) => !explicitIds.has(node.taskId)).forEach((node) => {
+      while (overlaps(node)) node.y += node.height + gap;
+      placed.push(node);
+    });
+    const pad = 64;
+    const width = Math.max(Number(layout.width) || 0, ...nodes.map((node) => node.x + node.width + pad), 0);
+    const height = Math.max(Number(layout.height) || 0, ...nodes.map((node) => node.y + node.height + pad), 0);
+    return { ...layout, nodes, width, height };
+  }
+
   return {
     AGENT_COMMANDS,
     STATE_LABELS,
@@ -283,5 +330,7 @@
     isManagedDescendant,
     controlGrantError,
     graphLayout,
+    normalizeBoardPositions,
+    applyBoardPositions,
   };
 });

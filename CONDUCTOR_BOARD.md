@@ -50,7 +50,11 @@ Board instead of executing natural-language instructions as shell code.
 
 ## User-created relationships
 
-The node **Connect** action creates a directional, persisted relationship:
+Drag the blue output port on any node directly onto another node to create a
+directional, persisted relationship. The relationship dialog opens only after
+the cable is dropped, so the source and target are already selected. Clicking
+the output port remains as a keyboard-friendly fallback: click the destination
+card next.
 
 - **Delegation**: source assigns work to target. Control remains off unless the
   user explicitly grants it.
@@ -64,6 +68,18 @@ the text entered in the relationship dialog is sent (a first-time control grant
 wraps that text in the documented managed-terminal protocol). Click an edge
 label to edit or remove the relationship. Control grants reject cycles, and a
 terminal has at most one controlling parent.
+
+## Canvas layout
+
+Every card can be dragged freely by its body. Its `{x, y}` canvas position is
+persisted by stable task ID and restored across renderer reloads and app
+restarts. Directional cables and relationship labels follow the card live while
+it moves. Newly created terminals get a collision-safe automatic position.
+
+**Auto arrange** restores a clean DAG layout at any time: conductors and workers
+are placed in dependency-depth lanes, while independent manual terminals remain
+in their own lane. Auto arrange writes those positions back to the same
+freeform model, so users can immediately continue adjusting the result.
 
 ## Display titles
 
