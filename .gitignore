@@ -4,3 +4,5 @@ app.asar.new
 app.asar.new.unpacked/
 send-to-kindle/
 zmd-fork/
+# mcporter (agent-reach) drops its config in the cwd it was installed from
+config/mcporter.json
