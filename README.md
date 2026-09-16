@@ -35,6 +35,8 @@ Use Node.js 22.12+ or 24 LTS and `npm ci`. node-pty 1.1 includes Node-API binari
 for Windows x64/arm64 and macOS x64/arm64, so those platforms do not require a C++
 toolchain for ordinary installs. `npm run rebuild` is an explicit source-rebuild
 fallback and requires the appropriate compiler toolchain.
+The install check also restores executable permissions on the macOS PTY helper;
+the upstream npm tarball otherwise installs that file without execute bits.
 
 ```sh
 npm test
