@@ -27,12 +27,15 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
 
       # postinstall runs `electron-rebuild -f -w node-pty`, compiling the native
       # pty for the Electron ABI using the runner's bundled MSVC + Python.
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Regression tests
+        run: npm test
 
       - name: Build Windows installer
         run: npm run dist:win

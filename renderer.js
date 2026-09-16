@@ -232,7 +232,10 @@ function toggleZoom(id) {
   if (t) { t.term.focus(); focusedId = id; syncNav(); }
 }
 
-window.deck.onPtyData((id, data) => { const t = terms.get(id); if (t) t.term.write(data); });
+window.deck.onPtyData((id, data) => {
+  const t = terms.get(id);
+  if (t) { t.lastOutputAt = Date.now(); t.term.write(data); }
+});
 window.deck.onPtyExit((id) => {
   const t = terms.get(id);
   if (t) {
@@ -1530,7 +1533,22 @@ function buildColumn(col, isFresh) {
     };
     reconnect();
     const trackPrompt = makePromptTracker(col);
-    term.onData((d) => { if (!replayMuted) { window.deck.ptyInput(col.id, d); trackPrompt(d); } });
+    term.onData((d) => {
+      if (!replayMuted) {
+        window.deck.ptyInput(col.id, d); trackPrompt(d);
+        // Includes agents launched manually in a blank terminal. Auto-replies
+        // contain escape sequences and must never count as a submitted turn.
+        if (d === '\r') {
+          const entry = terms.get(col.id);
+          if (entry) {
+            entry.hasWorked = true;
+            entry.lastOutputAt = Date.now();
+            entry.notificationState = { state: 'working', notified: null, since: null };
+            window.deck.notifyCancel({ id: col.id });
+          }
+        }
+      }
+    });
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
     if (deckEl.firstElementChild === wrap) { term.focus(); focusedId = col.id; } // focus leftmost on boot
 
@@ -2057,8 +2075,14 @@ function jumpToColumn(col) {
   }
   // While zoomed, jumping re-zooms onto the target instead of focusing a hidden column.
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
+  // Explicit navigation must bypass the IME drift guard. Focus only after
+  // scrolling, otherwise focusin arms that guard and snaps the deck back.
+  isUserScrollingDeck = true;
+  clearTimeout(userScrollTimeout);
+  t.wrap.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
+  lastValidDeckScrollLeft = deckEl.scrollLeft;
   t.term.focus(); focusedId = col.id;
-  t.wrap.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+  userScrollTimeout = setTimeout(() => { isUserScrollingDeck = false; }, 350);
   syncNav();
 }
 
@@ -2066,12 +2090,21 @@ function jumpToColumn(col) {
 // event (id = that pty's AGENTDECK_COL_ID). Stale id — the column respawned
 // since — falls back to a column waiting for input, then to a just-done one.
 window.deck.onFocusColumn((id) => {
-  let col = columns.find((c) => c.id === id);
+  const col = columns.find((c) => c.id === id);
   if (!col) {
-    const byState = (s) => columns.find((c) => { const t = terms.get(c.id); return t && t.state === s; });
-    col = byState('input') || byState('done');
+    showToast('这个终端已关闭，通知已失效。');
+    return;
   }
-  if (col) jumpToColumn(col);
+  // A modal dialog traps focus; close it before selecting the input target.
+  document.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
+  if (activeView === 'board') showView('terminals');
+  let tries = 0;
+  const jump = () => {
+    if (!columns.some((candidate) => candidate.id === id)) return;
+    if (!terms.has(id) && tries++ < 30) { setTimeout(jump, 50); return; }
+    jumpToColumn(col);
+  };
+  jump();
 });
 
 // Drag a sidebar entry to reorder; the deck columns reflow to match live (no
@@ -2718,7 +2751,15 @@ window.addEventListener('drop', (e) => e.preventDefault());
 // it can notify when an agent running inside AgentDeck goes idle.
 function dumpScreen(term) {
   const buf = term.buffer.active;
-  const end = buf.length;
+  // Fresh/tall terminals have many blank rows below the cursor. Starting at
+  // buffer.length used to discard all actual output in the first few rows.
+  let end = buf.length;
+  const floor = Math.max(0, end - Math.max(term.rows, 40));
+  while (end > floor) {
+    const line = buf.getLine(end - 1);
+    if (line && line.translateToString(true).trim()) break;
+    end--;
+  }
   const lines = [];
   for (let i = Math.max(0, end - 40); i < end; i++) {
     const ln = buf.getLine(i);
@@ -2746,57 +2787,19 @@ function lastActivityLine(text) {
   return '';
 }
 
-// Popup notifications for NON-Claude agents (Antigravity/Grok/anything). The
-// Claude popup hook only covers Claude Code — hooks are a Claude feature — so
-// those columns are skipped here to avoid double popups. Everything else rides
-// the same screen-based state machine as the dots. Fires regardless of window
-// focus so the behavior matches the Claude hook popups exactly.
-//
-// 'input' pops on the transition edge — a permission prompt mid-task IS the
-// moment to fetch the user. 'done' must NOT pop on the edge: mid-task the
-// screen can look idle for several seconds (tool execution, redraws between
-// steps), which false-fired "跑完了" popups. So done waits for the state to
-// hold NOTIFY_STABLE_TICKS consecutive ticks (~12s), and if the column goes
-// back to working anyway, the already-shown popup is retracted (notifyCancel).
-const NOTIFY_STABLE_TICKS = 8; // × ~1.5s tick ≈ 12s of quiet screen
+// Cross-platform notifications include every agent, independent of the launch
+// command. Keep the policy pure so quiet periods and repeat turns are tested.
 function maybeNotifyState(id, entry, st) {
-  const prev = entry.lastNotifyState;
-  entry.lastNotifyState = st;
-  const col = columns.find((c) => c.id === id);
-  if (prev !== undefined && prev !== st) {
-    let skip = '';
-    if (st !== 'input' && st !== 'done') skip = 'state';
-    else if (st === 'done' && !entry.hasWorked) skip = 'noWork';
-    else if (!col) skip = 'noCol';
-    else if (col && isClaudeCmd(col.cmd)) skip = 'claude';
-    else if (st === 'done') skip = 'await-stable';
-    try { window.deck.stateDebug({ id, title: col ? columnLabel(col) : '?', prev, st, hasWorked: entry.hasWorked, skip }); } catch (_) {}
-  }
-  if (!col) return;
-  if (st === 'working') {
-    // Resumed (or never really finished): a shown "跑完了" popup was premature.
-    if (entry.doneNotified) { try { window.deck.notifyCancel({ id }); } catch (_) {} }
-    entry.doneNotified = false;
-    return;
-  }
-  if (isClaudeCmd(col.cmd)) return;
-  if (st === 'input') {
-    entry.doneNotified = false;
-    if (prev !== undefined && prev !== st) {
-      try { window.deck.notifyState({ id, title: columnLabel(col), state: st }); } catch (_) {}
-    }
-    return;
-  }
-  if (st === 'done') {
-    if (prev === undefined) { entry.doneNotified = true; return; } // already idle at boot — nothing finished
-    if (!entry.hasWorked || entry.doneNotified) return;
-    if (entry.idleTicks < NOTIFY_STABLE_TICKS) return; // not stable yet
-    entry.doneNotified = true;
-    try { window.deck.stateDebug({ id, title: columnLabel(col), prev, st: 'done-stable', hasWorked: true, skip: '' }); } catch (_) {}
-    try { window.deck.notifyState({ id, title: columnLabel(col), state: 'done' }); } catch (_) {}
+  const result = window.NotificationPolicy.advance(entry.notificationState || {}, {
+    state: st, hasWorked: entry.hasWorked, lastActivity: entry.lastOutputAt || 0,
+  });
+  entry.notificationState = result.next;
+  if (result.action === 'cancel') window.deck.notifyCancel({ id });
+  else if (result.action) {
+    const col = columns.find((candidate) => candidate.id === id);
+    if (col) window.deck.notifyState({ id, title: columnLabel(col), state: result.action });
   }
 }
-
 let lastAttnCount = -1;
 setInterval(() => {
   let attn = 0;
@@ -2816,10 +2819,10 @@ setInterval(() => {
     // idle columns that was multiple synchronous writes/sec. But watch-ai
     // treats a spool file older than 8s as a dead column, so the mtime must
     // still be bumped: send a cheap "touch" instead of the text.
-    if (text !== entry.lastDump) {
+    if (env.legacyWatch && text !== entry.lastDump) {
       entry.lastDump = text;
       try { window.deck.agentdeckDump(id, entry.titleEl ? entry.titleEl.textContent : '', text); } catch (_) {}
-    } else {
+    } else if (env.legacyWatch) {
       try { window.deck.agentdeckTouch(id); } catch (_) {}
     }
 

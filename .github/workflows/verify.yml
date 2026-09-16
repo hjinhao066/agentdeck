@@ -1,0 +1,62 @@
+name: Verify and package both platforms
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm audit --audit-level=high
+      - run: npm run test:e2e
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        run: npm run dist:win
+      - name: Test Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:AGENTDECK_TEST_EXECUTABLE = "$pwd/dist/win-unpacked/AgentDeck.exe"
+          npm run test:e2e
+      - name: Package macOS Intel and Apple Silicon
+        if: runner.os == 'macOS'
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npx electron-builder --mac --x64 --arm64 --config.mac.identity=null --publish never
+      - name: Test macOS package
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ "$(uname -m)" = "arm64" ]; then
+            export AGENTDECK_TEST_EXECUTABLE="$PWD/dist/mac-arm64/AgentDeck.app/Contents/MacOS/AgentDeck"
+          else
+            export AGENTDECK_TEST_EXECUTABLE="$PWD/dist/mac/AgentDeck.app/Contents/MacOS/AgentDeck"
+          fi
+          npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: AgentDeck-${{ runner.os }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-results-${{ runner.os }}
+          path: test-results/

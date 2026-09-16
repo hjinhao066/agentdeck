@@ -1,9 +1,42 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, screen, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
+const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
+const { createNotifications } = require('./notifications');
+let mainWindow = null;
+let notifications = null;
+let pendingFocusColumn = null;
+
+// Every privileged channel belongs exclusively to the local deck main frame.
+// Notification windows expose a separate, minimal bridge.
+const mainPage = path.join(__dirname, 'index.html');
+function validMessage(payload) {
+  if (payload && typeof payload === 'object') {
+    if ('id' in payload && !validId(payload.id)) return false;
+    if ('data' in payload && (typeof payload.data !== 'string' || payload.data.length > 1000000)) return false;
+    if ('cols' in payload && (!Number.isInteger(payload.cols) || payload.cols < 1 || payload.cols > 1000)) return false;
+    if ('rows' in payload && (!Number.isInteger(payload.rows) || payload.rows < 1 || payload.rows > 1000)) return false;
+  }
+  return true;
+}
+function onMain(channel, handler) {
+  ipcMain.on(channel, (event, payload) => {
+    if (!trustedSender(event, mainWindow, mainPage) || !validMessage(payload)) {
+      event.returnValue = null;
+      return;
+    }
+    try { handler(event, payload); } catch (error) { nlog(`IPC ${channel}: ${error.message}`); event.returnValue = null; }
+  });
+}
+function handleMain(channel, handler) {
+  ipcMain.handle(channel, (event, payload) => {
+    if (!trustedSender(event, mainWindow, mainPage) || !validMessage(payload)) throw new Error('Rejected IPC');
+    return handler(event, payload);
+  });
+}
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -28,7 +61,7 @@ const HOME = os.homedir();
 // Spool dir the watch-ai daemon reads to "see" inside AgentDeck columns (it
 // can't via AppleScript/tmux). Each column's rendered screen is dumped here.
 const WATCH_SPOOL = path.join(HOME, '.local', 'share', 'watch-ai', 'agentdeck');
-const spoolPath = (id) => path.join(WATCH_SPOOL, id + '.txt');
+const spoolPath = (id) => privateFile(WATCH_SPOOL, id);
 
 // Notification-chain diagnostic log (%TEMP%\agentdeck-notify.log): every column
 // state transition the renderer sees + every popup spawn attempt. The popup
@@ -140,22 +173,25 @@ const PTY_BUFFER_MAX = 200_000; // ~200 KB per pty (plenty for a full screen)
 function bufferAppend(id, data) {
   let buf = ptyBuffers.get(id);
   if (!buf) { buf = { chunks: [], totalSize: 0 }; ptyBuffers.set(id, buf); }
-  buf.chunks.push(data);
-  buf.totalSize += data.length;
-  buf.dirty = true; // flushed to disk by the periodic crash-safety flush below
-  // Trim oldest chunks when over budget.
-  while (buf.totalSize > PTY_BUFFER_MAX && buf.chunks.length > 1) {
-    buf.totalSize -= buf.chunks.shift().length;
-  }
+  boundedAppend(buf, data, PTY_BUFFER_MAX);
 }
 
 function spawnPty(id, cwd, cols, rows, managed) {
+  if (!validId(id) || ptys.size >= 100) return;
+  // Internal notifications replace watch-ai spools by default, avoiding double
+  // alerts and persistent plaintext terminal output in a shared directory.
+  if (process.env.AGENTDECK_LEGACY_WATCH !== '1') {
+    try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
+  }
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
   const terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  // Never inherit an outer deck's managed capability into an independent shell.
+  for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
+  terminalEnv.AGENTDECK_NATIVE_NOTIFICATIONS = '1';
   if (token) {
     terminalEnv.AGENTDECK_MANAGED = '1';
     terminalEnv.AGENTDECK_CONTROL_TOKEN = token;
@@ -190,6 +226,7 @@ function spawnPty(id, cwd, cols, rows, managed) {
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
       managedSessions.delete(id);
+      if (notifications) notifications.cancel(id);
       // Keep the frozen buffer until the column is explicitly removed. It lets
       // a renderer reload still show an exited terminal's useful final output.
       send('pty:exit', { id });
@@ -199,11 +236,12 @@ function spawnPty(id, cwd, cols, rows, managed) {
 }
 
 function send(channel, payload) {
-  const w = BrowserWindow.getAllWindows()[0];
+  const w = mainWindow;
   if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
 }
 
 function killPty(id) {
+  if (notifications) notifications.cancel(id);
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
@@ -212,7 +250,7 @@ function killPty(id) {
 }
 
 function boardResponsePath(requestId) {
-  if (!/^[a-zA-Z0-9._-]{1,200}$/.test(String(requestId || ''))) return null;
+  if (!validId(requestId)) return null;
   return path.join(boardControlDir, 'responses', `${requestId}.json`);
 }
 
@@ -246,11 +284,16 @@ function processBoardRequests() {
   try {
     const dir = path.join(boardControlDir, 'requests');
     fs.mkdirSync(dir, { recursive: true });
-    for (const name of fs.readdirSync(dir)) {
+    for (const name of fs.readdirSync(dir).slice(0, 64)) {
       if (!name.endsWith('.json')) continue;
       const file = path.join(dir, name);
       let request;
-      try { request = JSON.parse(fs.readFileSync(file, 'utf8')); }
+      try {
+        const stat = fs.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) throw new Error('Invalid request file');
+        request = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (!request || typeof request !== 'object' || !validId(request.id) || name !== `${request.id}.json`) throw new Error('Invalid request');
+      }
       catch (_) { try { fs.unlinkSync(file); } catch (_) {} continue; }
       try { fs.unlinkSync(file); } catch (_) {}
       const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token);
@@ -264,6 +307,10 @@ function processBoardRequests() {
         continue;
       }
       delete request.token;
+      if (pendingBoardCommands.size >= 256) {
+        writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
+        continue;
+      }
       const command = { ...request, callerId: caller[0] };
       // Do not discard an authenticated request while the renderer is loading.
       // It stays here until the renderer acknowledges it with board:response;
@@ -285,9 +332,11 @@ function setupBoardControl() {
   const responseDir = path.join(boardControlDir, 'responses');
   const toolsDir = path.join(boardControlDir, 'tools');
   try {
-    fs.mkdirSync(requestDir, { recursive: true });
-    fs.mkdirSync(responseDir, { recursive: true });
-    fs.mkdirSync(toolsDir, { recursive: true });
+    fs.mkdirSync(boardControlDir, { recursive: true, mode: 0o700 });
+    if (!isWin) fs.chmodSync(boardControlDir, 0o700);
+    fs.mkdirSync(requestDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(responseDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(toolsDir, { recursive: true, mode: 0o700 });
     // Requests cannot survive an app restart because their caller PTY and
     // in-memory capability token cannot survive it either.
     for (const dir of [requestDir, responseDir]) {
@@ -312,8 +361,10 @@ let SESS_DIR;
 function writeSession(id, buf) {
   if (!buf) return;
   try {
-    fs.mkdirSync(SESS_DIR, { recursive: true });
-    fs.writeFileSync(path.join(SESS_DIR, id + '.txt'), buf.chunks.join(''), 'utf-8');
+    fs.mkdirSync(SESS_DIR, { recursive: true, mode: 0o700 });
+    const file = privateFile(SESS_DIR, id);
+    fs.writeFileSync(file + '.tmp', buf.chunks.join(''), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(file + '.tmp', file);
     buf.dirty = false;
   } catch (_) {}
 }
@@ -349,7 +400,7 @@ function ptyCwd(id) {
   const p = id && ptys.get(id);
   if (!p || isWin) return null;
   try {
-    const out = execFileSync('lsof', ['-a', '-p', String(p.pid), '-d', 'cwd', '-Fn'], { encoding: 'utf-8' });
+    const out = execFileSync('lsof', ['-a', '-p', String(p.pid), '-d', 'cwd', '-Fn'], { encoding: 'utf-8', timeout: 1500, maxBuffer: 65536 });
     const m = out.match(/^n(\/.*)$/m);
     return m ? m[1] : null;
   } catch (_) { return null; }
@@ -464,11 +515,38 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false,
     },
+  });
+  mainWindow = win;
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (event) => event.preventDefault());
+  win.webContents.on('will-attach-webview', (event) => event.preventDefault());
+  win.on('closed', () => {
+    if (mainWindow === win) mainWindow = null;
+    if (!isMac) app.quit();
   });
   win.webContents.on('did-start-loading', () => { boardRendererReady = false; });
   win.webContents.on('destroyed', () => { boardRendererReady = false; });
-  win.loadFile('index.html');
+  win.loadFile(mainPage);
+}
+
+function focusColumn(id) {
+  if (!validId(id)) return;
+  pendingFocusColumn = id;
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  const win = mainWindow;
+  if (win.isMinimized()) win.restore();
+  win.setAlwaysOnTop(true);
+  win.show();
+  app.focus({ steal: true });
+  win.focus();
+  win.setAlwaysOnTop(false);
+  if (boardRendererReady) {
+    send('focus-column', { id });
+    pendingFocusColumn = null;
+  }
 }
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
@@ -485,33 +563,25 @@ if (!app.requestSingleInstanceLock()) {
   app.exit(0);
 } else {
   app.on('second-instance', (_e, argv) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      // Windows foreground lock: a plain focus() from a background process only
-      // flashes the taskbar and the deck stays buried under e.g. Chrome. Pin it
-      // topmost for a beat, then release, and steal focus explicitly.
-      win.setAlwaysOnTop(true);
-      win.show();
-      win.setAlwaysOnTop(false);
-      app.focus({ steal: true });
-    }
-    // `AgentDeck.exe --focus-column=<id>`: an external notifier (the Claude
-    // popup hook) asks the deck to jump to the column that fired the event.
-    // The id came from that column's AGENTDECK_COL_ID env.
     const arg = (argv || []).find((a) => typeof a === 'string' && a.startsWith('--focus-column='));
-    if (arg && win) win.webContents.send('focus-column', { id: arg.slice('--focus-column='.length) });
+    if (arg) focusColumn(arg.slice('--focus-column='.length));
+    else if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show(); mainWindow.focus();
+    }
   });
 }
 
 app.whenReady().then(() => {
+  session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  session.defaultSession.setPermissionCheckHandler(() => false);
   setupBoardControl();
   const configPath = path.join(app.getPath('userData'), 'config.json');
-  ipcMain.on('load-config-sync', (e) => {
+  onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
     catch (_) { e.returnValue = null; }
   });
-  ipcMain.on('save-config', (_e, cfg) => {
+  onMain('save-config', (_e, cfg) => {
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
@@ -519,17 +589,19 @@ app.whenReady().then(() => {
       fs.renameSync(configPath + '.tmp', configPath);
     } catch (_) {}
   });
-  ipcMain.on('env-info-sync', (e) => { e.returnValue = { platform: process.platform, home: HOME }; });
+  onMain('env-info-sync', (e) => { e.returnValue = {
+    platform: process.platform, home: HOME, legacyWatch: process.env.AGENTDECK_LEGACY_WATCH === '1',
+  }; });
 
-  ipcMain.on('pty:spawn', (_e, { id, cwd, cols, rows, managed }) => spawnPty(id, cwd, cols, rows, !!managed));
-  ipcMain.on('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
-  ipcMain.on('pty:resize', (_e, { id, cols, rows }) => {
+  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed }) => spawnPty(id, cwd, cols, rows, !!managed));
+  onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
+  onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }
   });
-  ipcMain.on('pty:kill', (_e, { id }) => killPty(id));
+  onMain('pty:kill', (_e, { id }) => killPty(id));
 
-  ipcMain.on('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
+  onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
     pendingBoardCommands.delete(requestId);
     writeBoardResponse(requestId, {
       done: !!done,
@@ -539,24 +611,28 @@ app.whenReady().then(() => {
       snapshot: snapshot && typeof snapshot === 'object' ? snapshot : undefined,
     });
   });
-  ipcMain.on('board:ready', () => {
+  onMain('board:ready', () => {
     boardRendererReady = true;
     for (const pending of pendingBoardCommands.values()) pending.delivered = false;
     dispatchPendingBoardCommands();
+    if (pendingFocusColumn) {
+      send('focus-column', { id: pendingFocusColumn });
+      pendingFocusColumn = null;
+    }
   });
 
   // --- Hot-reload IPC ---
   // Check whether a pty is still running (used by renderer after reload).
-  ipcMain.handle('pty:is-alive', (_e, { id }) => ptys.has(id));
+  handleMain('pty:is-alive', (_e, { id }) => ptys.has(id));
   // Return all buffered output for a pty so the renderer can replay it.
-  ipcMain.handle('pty:replay', (_e, { id }) => {
+  handleMain('pty:replay', (_e, { id }) => {
     const buf = ptyBuffers.get(id);
     return buf ? buf.chunks.join('') : null;
   });
   // Saved session replay from the previous app run: read once, then delete so
   // a hot reload (where the pty is still alive) can never double-replay it.
-  ipcMain.handle('pty:saved', (_e, { id }) => {
-    const f = path.join(SESS_DIR, id + '.txt');
+  handleMain('pty:saved', (_e, { id }) => {
+    const f = privateFile(SESS_DIR, id);
     let text = null;
     try { text = fs.readFileSync(f, 'utf-8'); fs.unlinkSync(f); }
     catch (_) {
@@ -581,7 +657,7 @@ app.whenReady().then(() => {
   // session at ~/.claude/projects/<cwd-with-nonalnum-turned-to-dash>/<id>.jsonl,
   // so a non-empty matching project dir means `claude --continue` will resume
   // the real conversation instead of erroring on a fresh directory.
-  ipcMain.handle('claude:has-session', (_e, { cwd }) => {
+  handleMain('claude:has-session', (_e, { cwd }) => {
     try {
       const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
       const enc = dir.replace(/[^a-zA-Z0-9]/g, '-');
@@ -656,12 +732,13 @@ app.whenReady().then(() => {
       } catch (_) { return finish(null); }
       const timer = setTimeout(() => {
         // shell:true wraps the CLI in cmd.exe on Windows: kill the whole tree.
-        if (isWin) { try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F']); } catch (_) {} }
+        if (isWin) { try { execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {}); } catch (_) {} }
         else { try { child.kill('SIGKILL'); } catch (_) {} }
         finish(null);
       }, 60000);
       let out = '';
-      child.stdout.on('data', (d) => { out += d; });
+      child.stdout.on('data', (d) => { if (out.length < 8000) out += d.toString().slice(0, 8000 - out.length); });
+      child.stderr.resume();
       child.on('error', () => { clearTimeout(timer); finish(null); });
       child.on('close', () => { clearTimeout(timer); finish(cleanTitle(out)); });
       child.stdin.on('error', () => {});
@@ -684,13 +761,18 @@ app.whenReady().then(() => {
   }
 
   const titleCache = new Map(); // prompt → label; re-submits of the same line are free
-  ipcMain.handle('title:summarize', async (_e, { text }) => {
+  let pendingTitles = 0;
+  handleMain('title:summarize', async (_e, { text }) => {
     const t = Array.from(stripBadChars(text || '')).slice(0, 400).join('').trim();
     if (!t) return null;
     if (titleCache.has(t)) return titleCache.get(t);
-    nlog(`title-request line=${JSON.stringify(t.slice(0, 80))}`);
-    const label = (await titleViaOpenRouter(t)) || (await titleViaClaudeCli(t)) || titleHeuristic(t);
-    nlog(`title-result label=${JSON.stringify(label)}`);
+    if (pendingTitles >= 4) return titleHeuristic(t);
+    // Prompts may contain secrets. Never record them in diagnostic logs.
+    pendingTitles++;
+    let label;
+    try { label = (await titleViaOpenRouter(t)) || (await titleViaClaudeCli(t)) || titleHeuristic(t); }
+    finally { pendingTitles--; }
+    if (titleCache.size >= 100) titleCache.delete(titleCache.keys().next().value);
     if (label) titleCache.set(t, label);
     return label;
   });
@@ -707,7 +789,7 @@ app.whenReady().then(() => {
       if (Date.now() - fs.statSync(p).mtimeMs > 24 * 60 * 60 * 1000) fs.unlinkSync(p);
     }
   } catch (_) {}
-  ipcMain.handle('paste-image:save', () => {
+  handleMain('paste-image:save', () => {
     try {
       const img = clipboard.readImage();
       if (img.isEmpty()) return null;
@@ -718,105 +800,71 @@ app.whenReady().then(() => {
     } catch (_) { return null; }
   });
 
-  // Popup notification for a NON-Claude column turning done/input (Windows).
-  // Reuses the Claude hook's popup script directly in -Show mode: same look,
-  // same click-to-jump via -ColId → `AgentDeck.exe --focus-column=<id>`. The
-  // script's replace-old-popup logic lives in its hook mode, so the per-column
-  // replacement is done here instead: kill the previous popup before spawning.
-  // macOS is a no-op — watch-ai covers agent-idle notifications there.
-  const POPUP_PS1 = path.join(HOME, '.claude', 'hooks', 'claude-popup.ps1');
-  const popupProcs = new Map(); // colId → popup ChildProcess
-  ipcMain.on('notify-state', (_e, { id, title, state }) => {
-    nlog(`notify-request col=${id} state=${state} title=${title}`);
-    if (!isWin || !fs.existsSync(POPUP_PS1)) { nlog(`notify-skip isWin=${isWin} ps1=${fs.existsSync(POPUP_PS1)}`); return; }
-    const prev = popupProcs.get(id);
-    if (prev && prev.pid && prev.exitCode === null) {
-      try { execFile('taskkill', ['/pid', String(prev.pid), '/T', '/F']); } catch (_) {}
-    }
-    const event = state === 'input' ? 'notification' : 'stop';
-    const payload = {
-      title: state === 'input' ? `${title} 在等你` : `${title} 跑完了`,
-      message: state === 'input' ? '这一列有东西等你回答，点击直达' : '任务已结束，点击直达这一列',
-      event,
-    };
-    const dataPath = path.join(os.tmpdir(), `agentdeck-notify-${Date.now()}.json`);
-    try { fs.writeFileSync(dataPath, JSON.stringify(payload)); } catch (_) { nlog('notify-fail write dataFile'); return; }
-    let hwnd = '0';
-    try { hwnd = BrowserWindow.getAllWindows()[0].getNativeWindowHandle().readBigUInt64LE(0).toString(); } catch (_) {}
-    try {
-      // NO detached:true here: on Windows, detached (DETACHED_PROCESS) +
-      // windowsHide (CREATE_NO_WINDOW) leaves powershell.exe with no console
-      // at all and PS 5.1 dies before running the script — silently, since
-      // stdio is ignored. Cost one evening to find (2026-07-17).
-      const child = spawn('powershell.exe', [
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', POPUP_PS1,
-        '-Show', '-Event', event, '-DataFile', dataPath, '-Session', 'deck-' + id,
-        '-TargetHwnd', hwnd, '-ColId', id,
-      ], { windowsHide: true, stdio: 'ignore' });
-      child.on('error', (err) => nlog(`notify-fail spawn error: ${err.message}`));
-      child.unref();
-      popupProcs.set(id, child);
-      nlog(`notify-spawned pid=${child.pid} event=${event}`);
-    } catch (err) { nlog(`notify-fail spawn throw: ${err.message}`); }
+  notifications = createNotifications({ BrowserWindow, ipcMain, screen, focusColumn,
+    getMainWindow: () => mainWindow });
+  onMain('notify-state', (_event, payload) => {
+    if (payload && ptys.has(payload.id)) notifications.show(payload);
   });
-  // The column went back to working after a "done" popup — that popup was
-  // premature, take it off the screen.
-  ipcMain.on('notify-cancel', (_e, { id }) => {
-    const prev = popupProcs.get(id);
-    if (prev && prev.pid && prev.exitCode === null) {
-      nlog(`notify-cancel col=${id} killing pid=${prev.pid}`);
-      try { execFile('taskkill', ['/pid', String(prev.pid), '/T', '/F']); } catch (_) {}
-      popupProcs.delete(id);
-    }
-  });
+  onMain('notify-cancel', (_event, { id }) => notifications.cancel(id));
   // Renderer-side state transitions (see maybeNotifyState) land here purely
   // for the diagnostic log.
-  ipcMain.on('state-debug', (_e, p) => {
+  onMain('state-debug', (_e, p) => {
     nlog(`transition col=${p.id} ${p.prev}->${p.st} hasWorked=${p.hasWorked}${p.skip ? ' SKIP=' + p.skip : ''} title=${p.title}`);
   });
 
   // Dock badge (macOS): number of columns blocked waiting for the user.
-  ipcMain.on('attn:count', (_e, n) => {
+  onMain('attn:count', (_e, n) => {
     if (isMac && app.dock) { try { app.dock.setBadge(n > 0 ? String(n) : ''); } catch (_) {} }
   });
 
   // Renderer asks us to reload itself (Cmd+Shift+R). Pty processes stay alive.
-  ipcMain.on('reload-renderer', () => {
-    const w = BrowserWindow.getAllWindows()[0];
+  onMain('reload-renderer', () => {
+    const w = mainWindow;
     if (w && !w.isDestroyed()) w.webContents.reload();
   });
 
   // Renderer pushes each column's rendered screen; mirror it to the watch-ai
   // spool so the daemon can detect idle agents running inside AgentDeck.
-  ipcMain.on('agentdeck:dump', (_e, { id, text }) => {
+  onMain('agentdeck:dump', (_e, { id, text }) => {
+    if (process.env.AGENTDECK_LEGACY_WATCH !== '1') return;
     try { fs.mkdirSync(WATCH_SPOOL, { recursive: true }); fs.writeFileSync(spoolPath(id), text || '', 'utf-8'); }
     catch (_) {}
   });
   // Metadata-only keepalive for an unchanged screen (see preload agentdeckTouch).
-  ipcMain.on('agentdeck:touch', (_e, { id }) => {
+  onMain('agentdeck:touch', (_e, { id }) => {
+    if (process.env.AGENTDECK_LEGACY_WATCH !== '1') return;
     const now = new Date();
     try { fs.utimesSync(spoolPath(id), now, now); } catch (_) {}
   });
 
   // Open URLs in the browser / reveal local paths in Finder (clicked links).
-  ipcMain.on('open-external', (_e, url) => {
+  onMain('open-external', (_e, url) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url).catch(() => {});
   });
   // Option+click: open the file in the editor, jumping to the :line the agent
   // printed. No ancestor fallback — a miss in the editor is worse than a no-op.
   const shortText = (s) => { s = String(s || ''); return s.length > 64 ? s.slice(0, 61) + '…' : s; };
 
-  ipcMain.on('open-in-editor', (_e, msg) => {
+  onMain('open-in-editor', (_e, msg) => {
     const r = resolveClick(msg, false); // a miss must not open some ancestor in the editor
     if (!r) { send('toast', { text: '路径不存在：' + shortText(msg && msg.raw) }); return; }
     const editor = editorCli();
     if (!editor) { shell.openPath(r.target); return; }
     // recover ":406" / ":406:12" from the clicked text or its wrapped tail
     const lm = ((msg.raw || '') + ' ' + (Array.isArray(msg.cont) ? msg.cont[0] || '' : '')).match(/:(\d+(?::\d+)?)(?!\d)/);
-    try { execFile(editor, ['-g', lm ? `${r.target}:${lm[1]}` : r.target]); } catch (_) {}
+    const args = ['-g', lm ? `${r.target}:${lm[1]}` : r.target];
+    const onError = (error) => { if (error) send('toast', { text: '无法启动编辑器：' + error.message }); };
+    // Windows cannot execFile a .cmd shim. Pass single-quoted literals through
+    // an encoded PowerShell command; filenames never become shell syntax.
+    if (isWin && /\.(cmd|bat)$/i.test(editor)) {
+      const quote = (value) => "'" + value.replace(/'/g, "''") + "'";
+      const command = '& ' + [editor, ...args].map(quote).join(' ');
+      execFile(shellFile(), ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(command, 'utf16le').toString('base64')],
+        { windowsHide: true, timeout: 10000 }, onError);
+    } else execFile(editor, args, { timeout: 10000 }, onError);
   });
 
-  ipcMain.on('reveal-path', (_e, msg) => {
+  onMain('reveal-path', (_e, msg) => {
     // Ancestor fallback only for absolute paths; a relative miss should be a
     // no-op, not a Finder window on some unrelated folder.
     const r = resolveClick(msg, true);
@@ -831,10 +879,13 @@ app.whenReady().then(() => {
   });
 
   createWindow();
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  const initialFocus = process.argv.find((arg) => arg.startsWith('--focus-column='));
+  if (initialFocus && validId(initialFocus.slice(15))) pendingFocusColumn = initialFocus.slice(15);
+  app.on('activate', () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); });
 });
 
 app.on('before-quit', () => {
+  if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it
   // (the periodic flush already covers crashes that skip this handler).
