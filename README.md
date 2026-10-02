@@ -22,8 +22,9 @@ the middle:
   stays within its assigned column width, including when switching views or zooming.
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
-  output; restoring replays that output and relaunches the agent (Claude resumes
-  with `--continue`). Delete removes the session and its conversation.
+  output; restoring replays that output and relaunches the agent. New Claude and
+  Grok columns resume their own saved model session by ID; older columns without
+  an ID start fresh and show a warning. Delete removes the session and its conversation.
 - **Schedule** sends a prompt to a session (or a fresh one) once, on chosen
   weekdays at a time, or every N minutes/hours. It runs only while AgentDeck is
   open; a run that was due while it was closed is shown as missed, not fired

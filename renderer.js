@@ -76,15 +76,6 @@ const TERM_THEME = {
 
 function newId() { return 'c' + Date.now() + Math.floor(Math.random() * 1000); }
 function newTaskId() { return 't' + Date.now() + Math.floor(Math.random() * 100000); }
-// A column whose startup command is Claude Code. On RESTORE (app restart) we
-// resume the prior conversation with `claude --continue` instead of launching a
-// brand-new session — but only when one already exists for the cwd.
-function isClaudeCmd(cmd) { return /^\s*claude(\s|$)/.test(cmd || ''); }
-function withClaudeResume(cmd) {
-  const t = (cmd || '').trim();
-  if (/(^|\s)(--continue|-c|--resume|-r)(\s|$)/.test(t)) return cmd; // already resuming
-  return t.replace(/^claude/, 'claude --continue');
-}
 // Fresh / reset layout: three agent columns that auto-launch on open.
 function defaultColumns() {
   const agents = [
@@ -158,6 +149,7 @@ if (saved) {
       agentProvider: c.agentProvider,
       agentModel: c.agentModel,
       agentEffort: c.agentEffort,
+      modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       // every launch opens on the chat view; 终端/对话 in the header switches for this run
       view: undefined,
@@ -453,7 +445,7 @@ function buildChrome() {
       config.links = [];
       config.boardPositions = {};
       const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
-      saveConfig(); render();
+      saveConfig(); render(true);
     }));
 }
 function applyFit() {
@@ -1249,7 +1241,7 @@ deckEl.addEventListener('scroll', () => {
   }
 });
 
-function render() {
+function render(isFresh = false) {
   SidePane.restoreTerminal();
   ChatUI.onRender();
   restoreBoardTerminal();
@@ -1265,7 +1257,7 @@ function render() {
   terms.clear();
   zoomedId = null;
   deckEl.innerHTML = '';
-  columns.forEach((col) => deckEl.appendChild(buildColumn(col)));
+  columns.forEach((col) => deckEl.appendChild(buildColumn(col, isFresh)));
   updateColumnStyles();
   renderColNav();
   renderBoardGraph();
@@ -1593,6 +1585,15 @@ function buildColumn(col, isFresh) {
         // Fresh spawn. If the previous app run left a saved session for this
         // column, replay it first so the agent's history survives a restart.
         const saved = await window.deck.ptySaved(col.id);
+
+        const plan = window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
+        const { launch, resumedAgent, showLegacyWarning } = plan;
+        if (col.modelSessionId !== plan.sessionId) {
+          if (plan.sessionId) col.modelSessionId = plan.sessionId;
+          else delete col.modelSessionId;
+          saveConfig();
+        }
+
         if (saved) {
           replayMuted = true;
           term.write(saved, () => {
@@ -1604,19 +1605,18 @@ function buildColumn(col, isFresh) {
             // dim separator before the fresh shell starts below.
             term.write('\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[0m');
             // Writes are parsed in order: this callback marks the end of replay.
-            term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n', () => { replayMuted = false; });
+            const replayMsg = resumedAgent
+              ? '\r\n\x1b[2m── 上次输出回放，进程已结束（模型上下文将通过 CLI 恢复）──\x1b[0m\r\n'
+              : showLegacyWarning
+                ? '\r\n\x1b[33m── 上次输出回放；此栏未绑定模型会话，本次将新开对话 ──\x1b[0m\r\n'
+                : '\r\n\x1b[2m── 上次输出回放，进程已结束──\x1b[0m\r\n';
+            term.write(replayMsg, () => { replayMuted = false; });
           });
         }
         // 队长 gets a control token too; the columns it drives never do.
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain);
-        let resumedAgent = false;
-        if (col.cmd) {
-          let launch = col.cmd;
-          // Restoring a Claude column → continue its previous conversation.
-          if (!isFresh && isClaudeCmd(col.cmd) && !MainSession.skipsResume(col) && await window.deck.claudeHasSession(col.cwd || env.home)) {
-            launch = withClaudeResume(col.cmd);
-            resumedAgent = true;
-          }
+
+        if (launch) {
           // Capture the id: if the user edits the column within 700ms,
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
@@ -2214,12 +2214,18 @@ function respawnColumn(col, opts) {
   }
   const oldId = col.id;
   col.id = newId();
+  delete col.modelSessionId;
   if (!(opts && opts.freshChat)) ChatUI.onColumnIdChanged(oldId, col.id);
   if (focusedId === oldId) focusedId = col.id;
   if (zoomedId === oldId) zoomedId = col.id; // stay zoomed across a respawn
   if (wasBoardSelected) selectedBoardId = col.id;
   const fresh = buildColumn(col, true); // cwd/cmd just changed: start fresh, no auto-resume
-  if (t) t.wrap.replaceWith(fresh); else render();
+  if (t) t.wrap.replaceWith(fresh);
+  else {
+    const next = columns[columns.indexOf(col) + 1];
+    const nextWrap = next && terms.get(next.id) && terms.get(next.id).wrap;
+    deckEl.insertBefore(fresh, nextWrap && nextWrap.parentElement === deckEl ? nextWrap : null);
+  }
   saveConfig();
   updateColumnStyles();
   renderColNav();
@@ -2365,6 +2371,7 @@ document.getElementById('dlgSave').onclick = () => {
   }
   col.cwd = cwd;
   col.cmd = cmd;
+  if (needsRespawn) delete col.modelSessionId;
   if (titleChanged) setColumnDisplayTitle(col, title); // keep auto-title behavior when only cwd/cmd changed
   saveConfig();
   if (needsRespawn) respawnColumn(col); // a cwd or startup-command change restarts the shell
@@ -2915,7 +2922,7 @@ Sidebar.init(deckHost);
 MainSession.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
-render();
+render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
 syncChromeState();
 window.addEventListener('resize', () => {
   if (activeView === 'board') renderBoardGraph();

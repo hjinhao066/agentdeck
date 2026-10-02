@@ -283,6 +283,34 @@
     }
   }
 
+  function prepareAgentCommand(cmd, provider, uuid, isResume) {
+    const t = (cmd || '').trim();
+    if (provider !== 'Claude' && provider !== 'Grok') return cmd;
+    if (/(^|\s)(--session-id|-s|--continue|-c|--resume|-r)(\s|=|$)/.test(t)) return cmd;
+    if (inferProvider(t, null) !== provider) return cmd;
+    const executable = t.match(/^(?:"[^"]+"|'[^']+'|\S+)/);
+    if (!executable) return cmd;
+    const flag = provider === 'Claude' ? (isResume ? '--resume' : '--session-id') : (isResume ? '-r' : '-s');
+    return `${executable[0]} ${flag} ${uuid}${t.slice(executable[0].length)}`;
+  }
+
+  function planAgentLaunch(cmd, storedId, isFresh, skipResume, newId) {
+    const provider = inferProvider(cmd, null);
+    const canResume = provider === 'Claude' || provider === 'Grok';
+    const explicit = /(^|\s)(--session-id|-s|--continue|-c|--resume|-r)(\s|=|$)/.test(cmd || '');
+    if (!canResume || explicit) return { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: false };
+
+    const validId = typeof storedId === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(storedId);
+    const startFresh = isFresh || skipResume;
+    if (!startFresh && !validId) {
+      return { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: true };
+    }
+    const sessionId = startFresh ? newId() : storedId;
+    const launch = prepareAgentCommand(cmd, provider, sessionId, !startFresh);
+    if (launch === cmd) return { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: false };
+    return { launch, sessionId, resumedAgent: !startFresh, showLegacyWarning: false };
+  }
+
   return {
     PROVIDER_ICONS,
     stripAnsi,
@@ -293,5 +321,7 @@
     formatTooltip,
     resolveAgentInfo,
     renderBadge,
+    prepareAgentCommand,
+    planAgentLaunch,
   };
 });

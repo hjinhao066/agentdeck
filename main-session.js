@@ -145,6 +145,7 @@
       }
     });
     col.cmd = M.freshCommand(col.cmd);
+    delete col.modelSessionId;
     s.cmd = col.cmd;
     const fresh = host.respawnColumn(col, { freshChat: true });   // new id, new shell, new token
     s.colId = fresh.id;
@@ -338,9 +339,7 @@
     if (!s || !isMain(col) || !s.pending.length) return '';
     return takePending(true);
   }
-  // Claude's --continue picks the newest conversation in the folder: right
-  // after a clear that can still be the cleared one, so don't resume until the
-  // new 队长 has finished a turn of its own.
+  // A cleared 队长 starts a new model context, including after a cold restart.
   function skipsResume(col) {
     const s = state();
     return !!(s && s.fresh && col && col.isMain && col.id === s.colId);
