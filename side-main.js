@@ -105,7 +105,8 @@ function registerSideIpc(ctx) {
     ses.setPermissionCheckHandler(() => false);
     ses.on('will-download', (event) => event.preventDefault());
     view = new WebContentsView({
-      webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false },
+      // throttled while hidden: a busy web page must not burn CPU behind a closed pane
+      webPreferences: { session: ses, sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: true },
     });
     const wc = view.webContents;
     wc.setWindowOpenHandler(({ url }) => {
