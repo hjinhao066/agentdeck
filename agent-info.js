@@ -104,7 +104,7 @@
 
   function shortModelName(rawModel) {
     if (!rawModel) return null;
-    let str = String(rawModel).trim();
+    let str = String(rawModel).trim().replace(/\s+/g, ' ');
 
     // Remove effort/thinking suffix for short label
     str = str.replace(/[-(](high|xhigh|max|medium|low|thinking|fast)[)]?$/i, '');

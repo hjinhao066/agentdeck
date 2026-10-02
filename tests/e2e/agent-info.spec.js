@@ -68,14 +68,13 @@ test('plain shell column displays no fake model and keeps badge hidden', async (
 });
 
 test('Cursor provider is preserved across model switches and updates header + sidebar', async () => {
-  // Set launch command to cursor-agent and write initial live model to terminal
+  // Change only the identity metadata; the running process stays the stand-in.
+  // Let it redraw model changes through the PTY: ConPTY can overwrite direct
+  // xterm writes with its own screen snapshot when terminal view resizes it.
   await page.evaluate(() => {
     const c = columns.find((x) => x.id === 'col-cursor');
     if (c) c.cmd = 'cursor-agent --model claude-opus-5-5-high';
-    const entry = terms.get('col-cursor');
-    if (entry && entry.term) {
-      entry.term.write('\r\n────────────────────────────────────────\r\nModel: claude-opus-5-5-high | Weekly Reset: 16hr\r\n');
-    }
+    window.deck.ptyInput('col-cursor', '/model claude-opus-5-5-high\r');
   });
 
   const cursorCol = page.locator('.column[data-col-id="col-cursor"]');
@@ -86,10 +85,7 @@ test('Cursor provider is preserved across model switches and updates header + si
 
   // Now simulate switching model in terminal to claude-sonnet-5-5-high
   await page.evaluate(() => {
-    const entry = terms.get('col-cursor');
-    if (entry && entry.term) {
-      entry.term.write('\r\n────────────────────────────────────────\r\nModel: claude-sonnet-5-5-high | Weekly Reset: 16hr\r\n');
-    }
+    window.deck.ptyInput('col-cursor', '/model claude-sonnet-5-5-high\r');
   });
 
   // Verify header badge updates to Sonnet 5.5 while provider remains Cursor
@@ -105,13 +101,13 @@ test('Cursor provider is preserved across model switches and updates header + si
   // A switch in raw terminal view must override the earlier chat-view footer.
   await page.evaluate(() => {
     window.ChatUI.setMode('col-cursor', 'term');
-    terms.get('col-cursor').term.write('\r\nModel: gemini-3.8-flash-high\r\n');
+    window.deck.ptyInput('col-cursor', '/model gemini-3.8-flash-high\r');
   });
   await expect(cursorBadge.locator('.agent-model-label')).toHaveText('Flash 3.8', { timeout: 15000 });
   await expect(cursorNav.locator('.agent-model-label')).toHaveText('Flash 3.8');
   await expect(cursorBadge).toHaveClass(/provider-cursor/);
   await page.evaluate(() => {
-    terms.get('col-cursor').term.write('\r\nModel: grok-4.7-high-fast\r\n');
+    window.deck.ptyInput('col-cursor', '/model grok-4.7-high-fast\r');
   });
   await expect(cursorBadge.locator('.agent-model-label')).toHaveText('Grok 4.7', { timeout: 15000 });
   await expect(cursorNav.locator('.agent-model-label')).toHaveText('Grok 4.7');
@@ -150,7 +146,7 @@ test('status footer extends full width and clips overflow without CSS ellipsis',
 
 
 test('terminal model labels render as text rather than HTML', async () => {
-  await page.evaluate(() => terms.get('col-cursor').term.write('\r\nModel: <img>\r\n'));
+  await page.evaluate(() => window.deck.ptyInput('col-cursor', '/model <img>\r'));
   const badge = page.locator('.column[data-col-id="col-cursor"] .col-badge');
   await expect(badge.locator('.agent-model-label')).toHaveText('<img>', { timeout: 15000 });
   await expect(badge.locator('img')).toHaveCount(0);

@@ -2,6 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const AgentInfo = require('../agent-info.js');
 
+test('statusline nonbreaking spaces preserve the model family and version', () => {
+  assert.equal(AgentInfo.shortModelName('Gemini\u00a03.8\u00a0Flash\u00a0(High) [93/100 left]'), 'Flash 3.8');
+  assert.equal(AgentInfo.shortModelName('Opus\u00a05.5'), 'Opus 5.5');
+});
+
 test('provider inference from launch command', () => {
   assert.equal(AgentInfo.inferProvider('cursor-agent --model claude-opus-5-5-high'), 'Cursor');
   assert.equal(AgentInfo.inferProvider('cursor-agent --model claude-sonnet-5-5-high'), 'Cursor');
