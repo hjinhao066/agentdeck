@@ -77,3 +77,8 @@ test('a worker question is read out and handed to 队长, not the user', () => {
   // a later receipt wins over an earlier question
   assert.equal(M.parseReceipt('【提问】\n问题：x\n后来想通了\n【回执】\n摘要：done').question, '');
 });
+
+test('shells are recognized by name or full path; agents are not shells', () => {
+  for (const n of ['zsh', '-zsh', '/bin/zsh', '/opt/homebrew/bin/fish', 'C:\\\\Windows\\\\System32\\\\cmd.exe', 'pwsh.exe', '']) assert.equal(M.isShellProcess(n), true, n);
+  for (const n of ['node', 'claude', '/usr/local/bin/agy', 'grok', 'python3']) assert.equal(M.isShellProcess(n), false, n);
+});

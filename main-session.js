@@ -229,11 +229,15 @@
       if (entry.state === 'done' || entry.state === 'plain') {
         task.idleSince = task.idleSince || Date.now();
         if (Date.now() - task.idleSince < FALLBACK_AFTER) continue;
-        if ((task.startedAt || task.sentAt) < startedAt) {
+        // 1) a reply already saved for this turn; 2) a 【回执】 still on screen
+        // (after a hot reload the terminal kept running); 3) say what happened
+        const saved = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId && t.reply);
+        const fromScreen = M.parseReceipt(entry.lastScreen || '', filePaths);
+        if (saved) settle(task, M.parseReceipt(saved.reply, filePaths));
+        else if (fromScreen.explicit) settle(task, fromScreen);
+        else if ((task.startedAt || task.sentAt) < startedAt) {
           settle(task, { summary: 'AgentDeck 重启过，没收到这件活的回执，去那一列看结果。', files: [], images: [], failed: '', explicit: false });
-        } else {
-          settle(task, M.parseReceipt(entry.lastScreen || '', filePaths));
-        }
+        } else settle(task, fromScreen);
       } else {
         task.idleSince = 0;
       }

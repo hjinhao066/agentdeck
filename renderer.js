@@ -166,7 +166,22 @@ if (saved) {
 config.columns = SidebarCore.orderedColumns(config.columns, config.folders);
 let columns = config.columns;
 let activeView = config.activeView;
-function saveConfig() { config.columns = columns; window.deck.saveConfig(config); }
+// Changes arriving together (a drag, 队长 task updates) are written once:
+// the main process writes config.json synchronously, so bursts would stall
+// both processes. Leaving or reloading the page writes immediately.
+let saveTimer = 0;
+function saveConfig() {
+  config.columns = columns;
+  if (!saveTimer) saveTimer = setTimeout(flushConfig, 150);
+}
+function flushConfig() {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  config.columns = columns;
+  window.deck.saveConfig(config);
+}
+window.addEventListener('pagehide', flushConfig);
+document.addEventListener('visibilitychange', () => { if (document.hidden && saveTimer) flushConfig(); });
 function columnLabel(col) { return (col && (col.displayTitle || col.title || col.taskTitle)) || 'Terminal'; }
 function columnRelationshipLabel(col) {
   if (!col) return '';
@@ -2054,14 +2069,12 @@ function removeFolder(folderId) {
 // shell is in the column's foreground (an agent). Windows' ConPTY cannot tell
 // us the foreground process, so there the agent's own screen must be visible.
 // allowShell: the column is a plain shell on purpose (a Schedule target).
-const SHELL_NAMES = /^-?(zsh|bash|sh|fish|dash|ksh|tcsh|csh|nu|pwsh|powershell|cmd)(\.exe)?$/i;
 async function agentInForeground(col, allowShell) {
   if (allowShell && !col.cmd) return true;
   const entry = terms.get(col.id);
   if (env.platform === 'win32') return !!entry && AGENT_IDLE_RE.test(entry.lastScreen || '');
   try {
-    const name = await window.deck.ptyForeground(col.id);
-    return !!name && !SHELL_NAMES.test(name);
+    return !MainCore.isShellProcess(await window.deck.ptyForeground(col.id));
   } catch (_) { return false; }
 }
 

@@ -172,9 +172,9 @@ test('dragging a session into a folder moves its column, and the order persists'
   expect(await deckOrder()).toEqual(['ws-d', 'ws-a', 'ws-b', 'ws-c']);
   // moving it never restarted its terminal
   expect(await alive('ws-d')).toBe(true);
-  const saved = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
-  expect(saved.columns.map((c) => c.id)).toEqual(['ws-d', 'ws-a', 'ws-b', 'ws-c']);
-  expect(saved.columns[0].folderId).toBe(saved.folders[0].id);
+  const disk = () => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
+  await expect.poll(() => disk().columns.map((c) => c.id)).toEqual(['ws-d', 'ws-a', 'ws-b', 'ws-c']);
+  expect(disk().columns[0].folderId).toBe(disk().folders[0].id);
 
   // clicking a row jumps to its column
   await page.locator('.colnav-item[data-col-id="ws-c"]').click();
@@ -245,8 +245,7 @@ test('Schedule sends a prompt on time, and runs due while closed are reported as
   await page.evaluate(() => { config.schedules[0].nextAt = Date.now() - 3600_000; Pages.tick(true); });
   expect(await page.evaluate(() => config.schedules[0].lastStatus)).toBe('missed');
   expect((await page.evaluate(() => window.deck.ptyReplay('ws-c'))).split('scheduled hello').length).toBe(before.split('scheduled hello').length);
-  const saved = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
-  expect(saved.schedules[0].id).toBe(id);
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).schedules?.[0]?.lastStatus).toBe('missed');
   await page.keyboard.press('Escape');
 });
 

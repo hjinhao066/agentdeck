@@ -48,7 +48,11 @@
     const needle = (sent[0] || '').slice(0, 18);
     if (needle.length < 2) return -1;
     const flat = (l) => promptGlyphs(l).replace(/\s+/g, ' ');
-    for (let i = 0; i < Math.min(lines.length, 12); i++) {
+    // the echo comes first: look at the first 12 lines that have text (blank
+    // padding from redraws doesn't count), never deeper into the reply
+    let seen = 0;
+    for (let i = 0; i < lines.length && seen < 12; i++) {
+      if (lines[i].trim()) seen++;
       if (!flat(lines[i]).includes(needle)) continue;
       let end = i;
       // the TUI wraps a long prompt onto indented continuation rows
@@ -125,6 +129,15 @@
         if (lines.slice(j + 1, i).some((l) => PROMPT_ROW.test(l))) return lines.slice(0, j);
         break;
       }
+    }
+    // TUIs without a ruled box (Codex, Grok…): a lone prompt row near the end
+    // with only short status lines under it starts the input area
+    for (let i = end; i >= Math.max(0, end - 6); i--) {
+      if (!PROMPT_ROW.test(lines[i])) continue;
+      const below = lines.slice(i + 1, end + 1).filter((l) => l.trim());
+      // needs the agent's own footer under it, so a reply ending in "> quote" stays
+      if (below.length && below.some(isChrome) && below.every((l) => isChrome(l) || l.trim().length <= 120)) return lines.slice(0, i);
+      break;
     }
     return lines;
   }

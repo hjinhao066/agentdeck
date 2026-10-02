@@ -127,6 +127,14 @@
 
   function statusLabel(state) { return STATUS[state] || STATUS.plain; }
 
+  // node-pty reports the foreground process as a bare name ("zsh", "-zsh")
+  // on macOS but can fall back to the shell's full path ("/bin/zsh").
+  const SHELL_NAMES = /^-?(zsh|bash|sh|fish|dash|ksh|tcsh|csh|nu|pwsh|powershell|cmd)(\.exe)?$/i;
+  function isShellProcess(name) {
+    const base = String(name || '').trim().replace(/^.*[\\/]/, '');
+    return !base || SHELL_NAMES.test(base);
+  }
+
   // One compact line per session for `ledger`.
   function ledgerText(rows) {
     if (!rows.length) return '还没有别的会话。';
@@ -147,5 +155,5 @@
     return picked.map((t) => `用户：${oneLine(t.user, 600)}\n回复：${oneLine(t.reply, 800) || '（没有文字回复）'}`).join('\n\n');
   }
 
-  return { RECEIPT_CONTRACT, STATUS, instructions, parseReceipt, receiptsForModel, statusLabel, ledgerText, readText, MAX_SUMMARY };
+  return { RECEIPT_CONTRACT, STATUS, isShellProcess, instructions, parseReceipt, receiptsForModel, statusLabel, ledgerText, readText, MAX_SUMMARY };
 });

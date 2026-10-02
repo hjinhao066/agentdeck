@@ -188,3 +188,14 @@ test('a multi-line prompt echoed line by line is not part of the reply', () => {
   assert.ok(reply.startsWith('GOT please write the report'), reply);
   assert.ok(!reply.includes('约定'));
 });
+
+test('a TUI without a ruled box: the lone prompt row and footer are cut, a closing quote is kept', () => {
+  const codex = ['> fix it', '', '• Fixed the null check in app.js', '', '› Ask Codex to do anything', '', '  ⏎ send   ⌃J newline   100% context left'];
+  assert.equal(C.extractReply(codex, 'fix it', 80), 'Fixed the null check in app.js');
+  assert.deepEqual(C.cutInputBox(['answer', '> a closing quote']), ['answer', '> a closing quote']);
+});
+
+test('blank redraw padding before the echo does not hide it', () => {
+  const screen = [...Array(20).fill(''), '> please summarize', 'line two', '', '⏺ Summary here', ''];
+  assert.equal(C.extractReply(screen, 'please summarize\nline two', 80), 'Summary here');
+});
