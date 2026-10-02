@@ -534,6 +534,8 @@ function createWindow() {
     minWidth: 640,
     minHeight: 480,
     title: 'AgentDeck',
+    // Tests need a visible layout, but must never activate over the user's app.
+    show: !tudArg,
     focusable: !tudArg,
     backgroundColor: '#000000',
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
@@ -547,6 +549,7 @@ function createWindow() {
     },
   });
   mainWindow = win;
+  if (tudArg) win.once('ready-to-show', () => win.showInactive());
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
@@ -601,6 +604,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(() => {
+  if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   setupBoardControl();

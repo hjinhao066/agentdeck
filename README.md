@@ -260,7 +260,9 @@ local installation. Windows CI produces an NSIS installer.
 
 Test a packaged app with `AGENTDECK_TEST_EXECUTABLE` set to its executable before
 running `npm run test:e2e`. Tests use temporary userData and empty shell columns,
-never the real layout or live agent sessions. With `--test-user-data=<dir>` the
+never the real layout or live agent sessions. Test windows are shown without
+activating the app; each spec opens its own instance, and CI runs the suite once
+against source and once against the packaged app. With `--test-user-data=<dir>` the
 Skills page scans `<dir>/skills-home` instead of the real home folder, so tests
 never list or edit the user's own skills.
 
