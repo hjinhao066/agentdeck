@@ -8,6 +8,7 @@ if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
   require('fs').writeFileSync(process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE, JSON.stringify({
     child: Object.hasOwn(process.env, 'CLAUDE_CODE_CHILD_SESSION'),
     skip: Object.hasOwn(process.env, 'CLAUDE_CODE_SKIP_PROMPT_HISTORY'),
+    statusWidth: process.env.CCSTATUSLINE_WIDTH,
   }));
 }
 // A TUI redraws the current screen; old prompts must not look like a live menu.
@@ -17,7 +18,8 @@ let model = 'Fake';
 function box() {
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
   process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
-  process.stdout.write('\x1b[33mContext: 23%\x1b[0m | \x1b[31mSession: 26.0%\x1b[0m\n');
+  const extra = process.env.AGENTDECK_TEST_LONG_STATUS ? ' | Total: 211.5M | Cost: $35.33 | Weekly: 13.0% | LastField: complete' : '';
+  process.stdout.write('\x1b[33mContext: 23%\x1b[0m | \x1b[31mSession: 26.0%\x1b[0m' + extra + '\n');
   process.stdout.write('\x1b[36mModel: ' + model + ' | Weekly Reset: 16hr\x1b[0m\n');
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
 }

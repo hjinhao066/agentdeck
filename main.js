@@ -134,6 +134,11 @@ function buildEnv() {
   delete env.CLAUDE_CODE_CHILD_SESSION;
   delete env.CLAUDE_CODE_SKIP_PROMPT_HISTORY;
 
+  // The chat footer uses a smaller font than xterm. Let ccstatusline emit the
+  // whole line instead of replacing its suffix with dots at the PTY width;
+  // xterm wraps it and the footer joins wrapped rows, then clips at its edge.
+  env.CCSTATUSLINE_WIDTH = '4096';
+
   return env;
 }
 const ENV = buildEnv();

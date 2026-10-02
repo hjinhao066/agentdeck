@@ -158,8 +158,10 @@ running underneath: use the 终端/对话 toggle in a column header to switch.
   cost, resets, permission mode) are copied live from the terminal with their
   colors, extending to the right edge of allocated content and cleanly
   overflow-clipped without CSS ellipsis. They are found as the rows below the
-  TUI's input box. If the CLI itself has already shortened a line with `...`,
-  the missing suffix never reaches xterm and cannot be recovered by the view.
+  TUI's input box. PTYs set `CCSTATUSLINE_WIDTH=4096` so ccstatusline emits the
+  whole line rather than shortening it to xterm's wider character cells. Wrapped
+  rows are joined before the smaller footer font is clipped. Other CLI-side
+  truncation still cannot be recovered after the missing text has been discarded.
 
 - Clicking a link or file path in a bubble opens it in the right side pane, with
   tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens

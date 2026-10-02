@@ -20,7 +20,7 @@ test.beforeAll(async () => {
       { id: 'col-shell', taskId: 'task-3', title: 'Shell Col', cmd: '', cwd: profile, width: 460, role: 'manual' },
     ],
   }));
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
+  const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'), AGENTDECK_TEST_LONG_STATUS: '1' };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -116,9 +116,13 @@ test('Cursor provider is preserved across model switches and updates header + si
 });
 
 test('status footer extends full width and clips overflow without CSS ellipsis', async () => {
+  // The stand-in does not repaint on resize like a real TUI. Ask it to redraw
+  // after the earlier terminal/chat switches so ConPTY has a complete screen.
+  await page.evaluate(() => window.deck.ptyInput('col-agent', 'redraw footer\r'));
   const col = page.locator('.column[data-col-id="col-agent"]');
   const footer = col.locator('.tui-footer');
-  await expect(footer).toBeVisible();
+  await expect(footer).toBeVisible({ timeout: 15000 });
+  await expect(footer.locator('.tf-row').first()).toContainText('LastField: complete');
 
   // Verify CSS properties: text-overflow is clip (NOT ellipsis), padding-right is 0
   const footerLine = footer.locator('.tf-row').first();
