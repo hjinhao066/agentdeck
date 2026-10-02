@@ -12,7 +12,7 @@ window.notification.onItems((items) => {
     const title = document.createElement('strong');
     title.textContent = item.title;
     const hint = document.createElement('small');
-    hint.textContent = '点击跳转到终端，继续输入';
+    hint.textContent = '点击跳到这个对话，继续输入';
     open.append(label, title, hint);
     open.onclick = () => window.notification.open(item.id);
     const close = document.createElement('button');

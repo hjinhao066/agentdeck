@@ -56,7 +56,7 @@ does not do the work in its own column.
 
 ## Chat view and side pane
 
-Columns that start an agent (or have a role) open as a chat page. Each turn shows
+Every column opens as a chat page, on every launch. Each turn shows
 your prompt (pinned while you read its answer) and the agent's final reply,
 rendered as Markdown, not commands or tool output. The real terminal is still
 running underneath: use the 终端/对话 toggle in a column header to switch.

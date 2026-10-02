@@ -44,10 +44,9 @@
   }
 
   // ---- view mode ----
-  // Agent columns open as chat; a bare shell stays a terminal until you flip it.
+  // Every column opens as a chat page; the header toggle shows the raw terminal.
   function modeOf(col) {
-    if (col.view === 'chat' || col.view === 'term') return col.view;
-    return col.cmd || (col.role && col.role !== 'manual') ? 'chat' : 'term';
+    return col.view === 'term' ? 'term' : 'chat';
   }
   const isChatMode = (id) => { const col = columnById(id); return !!col && modeOf(col) === 'chat' && views.has(id); };
 

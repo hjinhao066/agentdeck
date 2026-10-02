@@ -101,6 +101,33 @@ test('a very long prompt is not cut: it goes to the agent as a file', async () =
   await expect(col.locator('.composer textarea')).toHaveValue('');
 });
 
+test('a new plain session opens as a chat page, and an agent started in it shows its status lines', async () => {
+  const id = await page.evaluate(() => addAndFocusColumn().id);
+  const col = page.locator(`.column[data-col-id="${id}"]`);
+  await expect(col).toHaveClass(/chat-mode/);
+  await expect.poll(() => page.evaluate((i) => window.deck.ptyIsAlive(i), id)).toBe(true);
+  await page.evaluate(([i, cmd]) => window.deck.ptyInput(i, cmd + '\r'), [id, FAKE]);
+  await expect(col.locator('.tui-footer')).toContainText('Weekly Reset', { timeout: 15000 });
+  await page.evaluate((i) => removeCol(columns.find((c) => c.id === i)), id);
+});
+
+test('the side browser stays inside its pane when the page is zoomed', async () => {
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck').webContents.setZoomFactor(0.8));
+  await page.evaluate(() => SidePane.openBrowser('about:blank'.replace('about:blank', 'https://example.invalid/')));
+  await expect(page.locator('#sbView')).toBeVisible();
+  const expected = await page.evaluate(() => { const r = document.getElementById('sbView').getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map((v) => Math.round(v * 0.8)); });
+  const actual = () => application.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck');
+    const view = win.contentView.children[win.contentView.children.length - 1];
+    const b = view.getBounds();
+    return [b.x, b.y, b.width, b.height];
+  });
+  // within rounding of the pane's rectangle in window pixels
+  await expect.poll(async () => Math.max(...(await actual()).map((v, i) => Math.abs(v - expected[i])))).toBeLessThanOrEqual(2);
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck').webContents.setZoomFactor(1));
+  await page.locator('#sideClose').click();
+});
+
 test('the split control sets equal columns and the sidebar collapses', async () => {
   await page.locator('#tbSplit .split-btn[data-cols="4"]').click();
   const widths = () => page.evaluate(() => [...deckEl.querySelectorAll('.column')].map((c) => Math.round(c.getBoundingClientRect().width)));

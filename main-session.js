@@ -210,7 +210,9 @@
       if (task.colId !== id || !['queued', 'working', 'input'].includes(task.status)) continue;
       if (!entry.alive) { settle(task, { summary: '', files: [], images: [], failed: '这个会话的终端已经退出', explicit: true }); continue; }
       if (task.status === 'queued') continue;
-      if (entry.state === 'input' && task.status !== 'input') {
+      if (entry.state === 'input') {
+        // just answered: the old prompt can still be on screen for a moment
+        if (task.status === 'input' || (task.answeredAt && Date.now() - task.answeredAt < 5000)) continue;
         task.status = 'input';
         // a confirmation or permission prompt goes to 队长 first, with only its last lines
         const excerpt = String(entry.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
@@ -219,7 +221,9 @@
         update(task);
         continue;
       }
-      if (entry.state === 'working' && task.status === 'input') { task.status = 'working'; update(task); continue; }
+      // the prompt is gone (answered here or in the column): back to work
+      if (task.status === 'input') { task.status = 'working'; update(task); }
+      if (entry.state === 'working') { task.idleSince = 0; continue; }
       // The reply normally arrives through the chat turn (onTurnDone). If the
       // app restarted mid-task, or no turn was recorded, don't wait forever.
       if (entry.state === 'done' || entry.state === 'plain') {
@@ -326,7 +330,7 @@
         if (!seq) throw new Error('answer 的 --key 只能是 y、n、1-9、enter、esc。');
         window.deck.ptyInput(col.id, seq);
         if (seq.length === 1 && seq !== '\r' && seq !== '\x1b') setTimeout(() => window.deck.ptyInput(col.id, '\r'), 60);
-        s.tasks.forEach((t) => { if (t.colId === col.id && t.status === 'input') { t.status = 'working'; update(t); } });
+        s.tasks.forEach((t) => { if (t.colId === col.id && t.status === 'input') { t.status = 'working'; t.answeredAt = Date.now(); update(t); } });
         return { done: true, result: `已替「${host.columnLabel(col)}」按了 ${key}。` };
       }
       default:

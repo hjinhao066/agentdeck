@@ -134,10 +134,16 @@ function registerSideIpc(ctx) {
     applyBounds();
     return view;
   }
+  // The page reports CSS pixels; the view is placed in window pixels. They
+  // differ by the page's zoom (⌘− / ⌘= in the View menu), which used to push
+  // the browser out of the side pane.
   function applyBounds() {
     if (!view || view.webContents.isDestroyed()) return;
     const b = lastBounds;
-    view.setBounds({ x: b.x, y: b.y, width: b.width, height: b.height });
+    const win = getWindow();
+    let z = 1;
+    try { if (win && !win.isDestroyed()) z = win.webContents.getZoomFactor() || 1; } catch (_) {}
+    view.setBounds({ x: Math.round(b.x * z), y: Math.round(b.y * z), width: Math.round(b.width * z), height: Math.round(b.height * z) });
     view.setVisible(b.visible && b.width > 0 && b.height > 0);
   }
 

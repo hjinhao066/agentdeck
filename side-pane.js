@@ -78,6 +78,8 @@
     // The native browser view floats above the page, so it has to follow the
     // placeholder's rectangle and step aside whenever a dialog is open.
     new ResizeObserver(() => syncBounds()).observe(sbView);
+    // its size can stay the same while it moves (sidebar collapse, page zoom)
+    new ResizeObserver(() => syncBounds()).observe(document.getElementById('center'));
     window.addEventListener('resize', () => syncBounds());
     new MutationObserver(() => syncBounds()).observe(document.body, { subtree: true, attributes: true, attributeFilter: ['open'] });
     apply(false);

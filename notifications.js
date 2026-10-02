@@ -15,8 +15,9 @@ function createNotifications({ BrowserWindow, ipcMain, screen, focusColumn, getM
     const display = main && !main.isDestroyed()
       ? screen.getDisplayMatching(main.getBounds()) : screen.getPrimaryDisplay();
     const area = display.workArea;
-    const width = Math.min(380, area.width - 24);
-    const height = Math.min(440, items.size * 96 + 16, area.height - 24);
+    // half the area of the original 380px cards (owner request): ~0.71 per side
+    const width = Math.min(270, area.width - 24);
+    const height = Math.min(320, items.size * 66 + 10, area.height - 24);
     win.setBounds({ x: area.x + area.width - width - 12,
       y: area.y + area.height - height - 12, width, height });
   }
@@ -30,7 +31,7 @@ function createNotifications({ BrowserWindow, ipcMain, screen, focusColumn, getM
     }
     if (!win || win.isDestroyed()) {
       ready = false;
-      win = new BrowserWindow({ width: 380, height: 112, show: false,
+      win = new BrowserWindow({ width: 270, height: 76, show: false,
         frame: false, resizable: false, minimizable: false, maximizable: false,
         skipTaskbar: true, alwaysOnTop: true, backgroundColor: '#15191f',
         title: 'AgentDeck notifications',

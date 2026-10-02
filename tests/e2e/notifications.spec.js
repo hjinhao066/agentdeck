@@ -55,7 +55,8 @@ test('background popup, fifth column reveal, focus and actual keyboard input', a
   expect(focusedTitle).not.toBe('AgentDeck notifications');
   await popup.locator('[data-column-id="test-4"] .open').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('test-4');
-  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('test-4').term.textarea)).toBe(true);
+  // chat view (the default): the composer gets the keyboard
+  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('test-4').wrap.querySelector('.composer textarea'))).toBe(true);
   expect(await page.evaluate(() => {
     const bounds = terms.get('test-4').wrap.getBoundingClientRect();
     return bounds.left >= deckEl.getBoundingClientRect().left - 1 && bounds.right <= innerWidth + 1;
@@ -68,6 +69,8 @@ test('background popup, fifth column reveal, focus and actual keyboard input', a
 });
 
 test('minimized/zoomed/board view notifications restore the exact input target', async () => {
+  // terminal view: the xterm itself gets the keyboard
+  await page.evaluate(() => { ChatUI.setMode('test-3', 'term'); ChatUI.setMode('test-2', 'term'); });
   await page.evaluate(() => toggleZoom('test-0'));
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck').minimize());
   let popup = await popupFor('test-3', 'input');

@@ -154,7 +154,8 @@ if (saved) {
       initialPromptSent: c.initialPromptSent,
       agentType: c.agentType,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
-      view: c.view === 'chat' || c.view === 'term' ? c.view : undefined,
+      // every launch opens on the chat view; 终端/对话 in the header switches for this run
+      view: undefined,
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
