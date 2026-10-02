@@ -4,6 +4,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_workspace_only:
+        description: Diagnose the packaged Windows workspace test without rerunning the full matrix
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -11,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-2022, macos-14]
+        os: ${{ fromJSON(inputs.windows_workspace_only && '["windows-2022"]' || '["windows-2022","macos-14"]') }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -21,17 +26,27 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+        if: ${{ !inputs.windows_workspace_only }}
       - run: npm audit --audit-level=high
+        if: ${{ !inputs.windows_workspace_only }}
       - run: npm run test:e2e
+        if: ${{ !inputs.windows_workspace_only }}
       - name: Package Windows
         if: runner.os == 'Windows'
         run: npm run dist:win
       - name: Test Windows package
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && !inputs.windows_workspace_only
         shell: pwsh
         run: |
           $env:AGENTDECK_TEST_EXECUTABLE = "$pwd/dist/win-unpacked/AgentDeck.exe"
           npm run test:e2e
+      - name: Diagnose packaged Windows workspace shutdown
+        if: runner.os == 'Windows' && inputs.windows_workspace_only
+        shell: pwsh
+        run: |
+          $env:AGENTDECK_TEST_EXECUTABLE = "$pwd/dist/win-unpacked/AgentDeck.exe"
+          $env:AGENTDECK_TEST_EXIT_DIAG = '1'
+          npx playwright test tests/e2e/workspace.spec.js
       - name: Package macOS Intel and Apple Silicon
         if: runner.os == 'macOS'
         env:

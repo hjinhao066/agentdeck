@@ -41,7 +41,21 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(4);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) {
+    let timer;
+    try {
+      await Promise.race([
+        application.close(),
+        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Electron close exceeded 20s')), 20000); }),
+      ]);
+    } catch (error) {
+      const log = path.join(profile, 'exit-diag.log');
+      console.error('Electron exit phases:', fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '(no exit log)');
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 

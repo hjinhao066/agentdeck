@@ -19,6 +19,10 @@ let pendingFocusColumn = null;
 // end-to-end test deck can run alongside the real one without touching it.
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
+function testExitDiag(phase) {
+  if (!tudArg || process.env.AGENTDECK_TEST_EXIT_DIAG !== '1') return;
+  try { fs.appendFileSync(path.join(app.getPath('userData'), 'exit-diag.log'), `${Date.now()} ${phase}\n`); } catch (_) {}
+}
 
 // Every privileged channel belongs exclusively to the local deck main frame.
 // Notification windows expose a separate, minimal bridge.
@@ -554,7 +558,9 @@ function createWindow() {
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
   win.on('closed', () => {
+    testExitDiag('window closed');
     if (sidePane) sidePane.dispose();
+    testExitDiag('side pane disposed');
     if (mainWindow === win) mainWindow = null;
     if (!isMac) app.quit();
   });
@@ -959,14 +965,21 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  testExitDiag('before-quit start');
   if (notifications) notifications.dispose();
+  testExitDiag('notifications disposed');
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it
   // (the periodic flush already covers crashes that skip this handler).
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);
+  testExitDiag('sessions flushed');
   for (const [id, p] of ptys) {
+    testExitDiag(`pty kill start ${id}`);
     try { p.kill(); } catch (_) {}
+    testExitDiag(`pty kill done ${id}`);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }
+  testExitDiag('before-quit done');
 });
+app.on('will-quit', () => testExitDiag('will-quit'));
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });
