@@ -96,11 +96,15 @@ test('old SGR mouse reports are removed without losing real Chinese prompts or r
     { user: mouse + '请检查中文显示', reply: '回答：正常' + mouse, done: true },
     { user: mouse, reply: '', done: true },
     { user: '文档例子 <35;18;11M', reply: '保留原文', done: true },
+    { user: '0;11M' + mouse + '不是，我说的是 GPT 6', reply: '', done: true },
+    { user: '0;11M 是示例坐标', reply: '', done: true },
   ] }, 'mouse');
   assert.equal(saved.turns[0].user, '请检查中文显示');
   assert.equal(saved.turns[0].reply, '回答：正常');
   assert.equal(saved.turns[1].user, '');
   assert.equal(saved.turns[2].user, '文档例子 <35;18;11M');
+  assert.equal(saved.turns[3].user, '不是，我说的是 GPT 6');
+  assert.equal(saved.turns[4].user, '0;11M 是示例坐标');
 });
 
 test('a turn open when the app closed keeps its partial reply and is marked unfinished', () => {

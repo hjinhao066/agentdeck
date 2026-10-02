@@ -28,7 +28,10 @@
   const legacyMouseReport = /<\d{1,3};\d{1,5};\d{1,5}[Mm]/g;
   const legacyMouseRun = /(?:<\d{1,3};\d{1,5};\d{1,5}[Mm]){4,}/;
   function stripLegacyMouseReports(text) {
-    return legacyMouseRun.test(text) ? text.replace(legacyMouseReport, '') : text;
+    if (!legacyMouseRun.test(text)) return text;
+    // A PTY chunk could begin inside a mouse report, leaving its final two
+    // coordinates before the repeated complete reports.
+    return text.replace(legacyMouseReport, '').replace(/^\d{1,5};\d{1,5}[Mm]/, '');
   }
 
   // ---- pulling the final reply out of a terminal screen ----
