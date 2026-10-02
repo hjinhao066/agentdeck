@@ -18,6 +18,7 @@ test.beforeAll(async () => {
       { id: 'col-agent', taskId: 'task-1', title: 'Agent Col', cmd: FAKE, cwd: profile, width: 460, role: 'manual' },
       { id: 'col-cursor', taskId: 'task-2', title: 'Cursor Col', cmd: FAKE, cwd: profile, width: 460, role: 'manual' },
       { id: 'col-shell', taskId: 'task-3', title: 'Shell Col', cmd: '', cwd: profile, width: 460, role: 'manual' },
+      { id: 'col-cached', taskId: 'task-4', title: 'Restored Codex', cmd: '', cwd: profile, width: 460, role: 'manual', agentProvider: 'Codex', agentModel: 'gpt-6-luna', agentEffort: 'high' },
     ],
   }));
   const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'), AGENTDECK_TEST_LONG_STATUS: '1' };
@@ -28,8 +29,8 @@ test.beforeAll(async () => {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  await expect(page.locator('.column')).toHaveCount(3);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length), { timeout: 20000 }).toBe(3);
+  await expect(page.locator('.column')).toHaveCount(4);
+  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length), { timeout: 20000 }).toBe(4);
 });
 
 test.afterAll(async () => {
@@ -65,6 +66,20 @@ test('plain shell column displays no fake model and keeps badge hidden', async (
 
   const shellNav = page.locator('.colnav-item[data-col-id="col-shell"]');
   await expect(shellNav.locator('.cn-badge')).toBeHidden();
+});
+
+test('saved model identity is restored on a fresh shell in both header and sidebar', async () => {
+  const col = page.locator('.column[data-col-id="col-cached"]');
+  const badge = col.locator('.col-badge');
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveClass(/provider-codex/);
+  await expect(badge.locator('.agent-model-label')).toHaveText('GPT-6 Luna');
+  await expect(badge).toHaveAttribute('title', 'Codex · GPT-6 Luna (high)');
+
+  const navBadge = page.locator('.colnav-item[data-col-id="col-cached"] .cn-badge');
+  await expect(navBadge).toBeVisible();
+  await expect(navBadge).toHaveClass(/provider-codex/);
+  await expect(navBadge.locator('.agent-model-label')).toHaveText('GPT-6 Luna');
 });
 
 test('Cursor provider is preserved across model switches and updates header + sidebar', async () => {

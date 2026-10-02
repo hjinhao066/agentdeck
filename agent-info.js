@@ -9,7 +9,7 @@
 
   const PROVIDER_ICONS = {
     Cursor: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 3 10.5 21 13.5 13.5 21 10.5 3 3"/></svg>',
-    Claude: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>',
+    Claude: '<svg viewBox="0 0 100 100" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"/></svg>',
     Antigravity: '<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2C12 7.5 7.5 12 2 12C7.5 12 12 16.5 12 22C12 16.5 16.5 12 22 12C16.5 12 12 7.5 12 2Z"/></svg>',
     Grok: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="20" x2="20" y2="4"/><line x1="13" y1="20" x2="20" y2="13"/><line x1="4" y1="11" x2="11" y2="4"/></svg>',
     Codex: '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 0 0-9 9c0 2.12.74 4.07 1.97 5.61L4 21l3.5-.94A8.96 8.96 0 0 0 12 21a9 9 0 0 0 9-9 9 9 0 0 0-9-9z"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -31,11 +31,12 @@
     // 2. Fallback to observed live provider heading when launch command is empty or generic
     if (screenText) {
       const clean = stripAnsi(screenText);
-      if (/^\s*(?:[│╭─*]\s*)*(?:Cursor Agent|Cursor CLI|cursor-agent)\b/im.test(clean)) return 'Cursor';
-      if (/^\s*(?:[│╭─*]\s*)*(?:Claude Code|Welcome to Claude Code)\b/im.test(clean)) return 'Claude';
-      if (/^\s*(?:[│╭─*]\s*)*(?:Antigravity|AGY CLI)\b/im.test(clean)) return 'Antigravity';
-      if (/^\s*(?:[│╭─*]\s*)*(?:Grok CLI|Welcome to Grok)\b/im.test(clean)) return 'Grok';
-      if (/^\s*(?:[│╭─*]\s*)*(?:OpenAI Codex|Codex CLI|Welcome to Codex)\b/im.test(clean)) return 'Codex';
+      const prefix = '^\\s*(?:[│╭─*>_❯]\\s*)*';
+      if (new RegExp(prefix + '(?:Cursor Agent|Cursor CLI|cursor-agent)\\b', 'im').test(clean)) return 'Cursor';
+      if (new RegExp(prefix + '(?:Claude Code|Welcome to Claude Code)\\b', 'im').test(clean)) return 'Claude';
+      if (new RegExp(prefix + '(?:Antigravity|AGY CLI|Gemini CLI|Google Gemini)\\b', 'im').test(clean)) return 'Antigravity';
+      if (new RegExp(prefix + '(?:Grok CLI|Grok Code|Welcome to Grok)\\b', 'im').test(clean)) return 'Grok';
+      if (new RegExp(prefix + '(?:OpenAI Codex|Codex CLI|Welcome to Codex)\\b', 'im').test(clean)) return 'Codex';
     }
 
     return null;
@@ -53,6 +54,8 @@
           const val = m[1].trim();
           if (val && !/^None$/i.test(val)) return val;
         }
+        const codex = raw.match(/^\s*(gpt[- ]?\d+(?:\.\d+)?(?:[- ](?:sol|astra|luna|terra|codex|mini|nano|pro))?(?:[- ](?:xhigh|high|max|medium|low))?)(?=\s*(?:[|│·•]|$))/i);
+        if (codex) return codex[1].trim();
       }
     }
 
@@ -72,7 +75,7 @@
         }
 
         // Dedicated model switch / banner: e.g. "Switched model to claude-opus-5-5-high" or "> /model claude-sonnet-5-5-high"
-        const switchMatch = line.match(/(?:^|[|│>❯$#]\s*)(?:switched to model|switched model to|using model:?|current model:?)\s+([a-zA-Z0-9_.-]+)/i);
+        const switchMatch = line.match(/(?:^|[|│>❯$#•*]\s*)(?:model\s+changed\s+to|switched to model|switched model to|using model:?|current model:?)\s+([a-zA-Z0-9_.-]+)/i);
         if (switchMatch) {
           const val = switchMatch[1].trim();
           if (val) return val;
@@ -95,6 +98,8 @@
     for (let i = lines.length - 1; i >= 0; i--) {
       const live = lines[i].match(/(?:^|[|│])\s*(?:Thinking|Effort):\s*(xhigh|high|max|medium|low)\b/i);
       if (live) return live[1].toLowerCase();
+      const changed = lines[i].match(/^\s*[•*]?\s*Model changed to\s+[a-zA-Z0-9_.-]+\s+(xhigh|high|max|medium|low)\b/i);
+      if (changed) return changed[1].toLowerCase();
     }
     const model = String(rawModel || '').match(/(?:[-(\s])(xhigh|high|max|medium|low)(?=$|[)\s-])/i);
     if (model) return model[1].toLowerCase();
@@ -142,18 +147,22 @@
     if (/^grok/i.test(str)) return 'Grok';
 
     // OpenAI / Codex / o1 / o3
-    m = str.match(/gpt[- ]?(\d+(?:\.\d+)?o?)/i);
-    if (m) return 'GPT-' + m[1];
+    m = str.match(/gpt[- ]?(\d+(?:\.\d+)?o?)(?:[- ](sol|astra|luna|terra|codex|mini|nano|pro))?/i);
+    if (m) return 'GPT-' + m[1] + (m[2] ? ' ' + m[2][0].toUpperCase() + m[2].slice(1) : '');
     m = str.match(/(gpt[- ]?4(?:[.]5|o))/i);
     if (m) return m[1].toUpperCase().replace(' ', '-');
     m = str.match(/(o[13](?:-mini)?)/i);
     if (m) return m[1].toLowerCase();
 
+    // Meta Muse models may be namespaced in provider model ids.
+    m = str.match(/(?:meta[-/ ]*)?muse(?:[-/ ]+(spark|\d+(?:\.\d+)?))?/i);
+    if (m) return 'Muse' + (m[1] ? ' ' + (m[1].toLowerCase() === 'spark' ? 'Spark' : m[1]) : '');
+
     // Stand-in fake agent
     if (/^fake$/i.test(str)) return 'Fake';
 
     // Fallback: clean up hyphens/underscores, keep it short
-    const cleaned = str.replace(/^models?\//i, '').replace(/[-_]/g, ' ').trim();
+    const cleaned = str.replace(/^models?\//i, '').split('/').pop().replace(/[-_]/g, ' ').trim();
     if (cleaned.length <= 10) return cleaned;
     const words = cleaned.split(/\s+/);
     if (words.length > 1 && (words[0] + ' ' + words[1]).length <= 12) {
@@ -218,9 +227,10 @@
     }
 
     // Model extraction
-    const rawModel = extractModel(screen, cmd, footers);
+    const liveModel = extractModel(screen, '', footers);
+    const rawModel = liveModel || (col && col.agentModel) || extractModel('', cmd, null);
     const shortModel = shortModelName(rawModel);
-    const effort = extractEffort(rawModel, cmd, screen);
+    const effort = extractEffort(rawModel, cmd, screen) || (col && col.agentEffort) || null;
     const tooltip = formatTooltip(provider, rawModel, effort);
     const key = `${provider}:${rawModel || ''}:${effort || ''}`;
 
