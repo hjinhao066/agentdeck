@@ -90,6 +90,19 @@ test('chats are normalised and keep every turn, never evicting old ones', () => 
   assert.equal(C.normalizeChat({ captainArchive: 'true', turns: [] }, 'worker').captainArchive, undefined);
 });
 
+test('old SGR mouse reports are removed without losing real Chinese prompts or replies', () => {
+  const mouse = '<35;18;11M<0;21;31m';
+  const saved = C.normalizeChat({ turns: [
+    { user: mouse + '请检查中文显示', reply: '回答：正常' + mouse, done: true },
+    { user: mouse, reply: '', done: true },
+    { user: '文档例子 <35;18;11M', reply: '保留原文', done: true },
+  ] }, 'mouse');
+  assert.equal(saved.turns[0].user, '请检查中文显示');
+  assert.equal(saved.turns[0].reply, '回答：正常');
+  assert.equal(saved.turns[1].user, '');
+  assert.equal(saved.turns[2].user, '文档例子 <35;18;11M');
+});
+
 test('a turn open when the app closed keeps its partial reply and is marked unfinished', () => {
   const saved = C.normalizeChat({ turns: [
     { id: 'a', ts: 1, user: 'done one', reply: 'ok', done: true },

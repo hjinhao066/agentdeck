@@ -314,7 +314,7 @@
     const mine = el('div', 'msg-tools user-tools');
     const copyMine = svgButton('msg-tool', 'copy', '复制这条消息');
     copyMine.addEventListener('click', () => {
-      window.deck.clipboardWrite(turn.user || '');
+      host.clipboardWrite(turn.user || '');
       copyMine.innerHTML = host.ICONS.check;
       setTimeout(() => { copyMine.innerHTML = host.ICONS.copy; }, 1200);
     });
@@ -339,7 +339,7 @@
     const tools = el('div', 'msg-tools');
     const copy = svgButton('msg-tool', 'copy', '复制回复');
     copy.addEventListener('click', () => {
-      window.deck.clipboardWrite(turn.reply || '');
+      host.clipboardWrite(turn.reply || '');
       copy.innerHTML = host.ICONS.check;
       setTimeout(() => { copy.innerHTML = host.ICONS.copy; }, 1200);
     });

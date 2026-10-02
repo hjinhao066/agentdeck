@@ -22,6 +22,14 @@
     return w;
   }
   const rtrim = (s) => s.replace(/\s+$/, '');
+  // Old prompt recordings could treat xterm SGR mouse reports as typed text
+  // after dropping ESC[. Only scrub runs of reports, so a quoted single
+  // sequence in an actual prompt remains intact.
+  const legacyMouseReport = /<\d{1,3};\d{1,5};\d{1,5}[Mm]/g;
+  const legacyMouseRun = /(?:<\d{1,3};\d{1,5};\d{1,5}[Mm]){2,}/;
+  function stripLegacyMouseReports(text) {
+    return legacyMouseRun.test(text) ? text.replace(legacyMouseReport, '') : text;
+  }
 
   // ---- pulling the final reply out of a terminal screen ----
   const BULLET = /^ {0,2}([⏺●•◆▪◦])\s+(.*)$/;
@@ -190,8 +198,8 @@
       chat.turns.push({
         id: typeof t.id === 'string' ? t.id.slice(0, 40) : 'u' + chat.turns.length,
         ts: Number.isFinite(t.ts) ? t.ts : 0,
-        user: t.user.slice(0, MAX_TEXT),
-        reply: typeof t.reply === 'string' ? t.reply.slice(0, MAX_TEXT) : '',
+        user: stripLegacyMouseReports(t.user).slice(0, MAX_TEXT),
+        reply: typeof t.reply === 'string' ? stripLegacyMouseReports(t.reply).slice(0, MAX_TEXT) : '',
         done: !!t.done,
         // the app closed (or the terminal was replaced) before this turn ended
         ...(t.interrupted === true ? { interrupted: true } : {}),

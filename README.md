@@ -125,6 +125,10 @@ Every column opens as a chat page, on every launch. Each turn shows
 your prompt (pinned while you read its answer) and the agent's final reply,
 rendered as Markdown, not commands or tool output. The real terminal is still
 running underneath: use the 终端/对话 toggle in a column header to switch.
+Prompts typed in the raw terminal also appear in the chat, including Chinese
+text; terminal mouse reports are excluded. Each prompt and final reply has a
+visible copy button that copies its plain text. Older chats containing repeated
+mouse-report fragments are cleaned when loaded, preserving adjacent text.
 
 - A new blank session (no launch command, nothing said yet) offers Claude,
   Antigravity, Grok, Cursor CLI and Codex (ChatGPT) buttons. A click types that agent's launch

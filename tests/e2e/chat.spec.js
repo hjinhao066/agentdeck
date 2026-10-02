@@ -8,6 +8,7 @@ const path = require('path');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const OLD_TURNS = 450;                    // more than the 400 the chat file used to keep
 const oldPrompt = (i) => `oldprompt-${String(i).padStart(4, '0')}`;
+const MOUSE = '<35;18;11M<0;21;31m';
 let application, page, profile, demoFile;
 test.describe.configure({ mode: 'serial' });
 
@@ -41,7 +42,9 @@ test.beforeAll(async () => {
   // a long saved conversation from earlier runs (made-up stand-in turns)
   fs.mkdirSync(path.join(profile, 'chats'), { recursive: true });
   fs.writeFileSync(path.join(profile, 'chats', 'chat-3.json'), JSON.stringify({ v: 1, id: 'chat-3', turns: Array.from({ length: OLD_TURNS }, (_, i) => ({
-    id: `old${i}`, ts: Date.now() - (OLD_TURNS - i) * 60_000, user: oldPrompt(i), reply: `old reply ${i}`, done: true, atts: [],
+    id: `old${i}`, ts: Date.now() - (OLD_TURNS - i) * 60_000,
+    user: i === 440 ? MOUSE + '中文历史' : oldPrompt(i),
+    reply: i === 440 ? '历史回复' + MOUSE : `old reply ${i}`, done: true, atts: [],
   })) }));
   await launch(4);
 });
@@ -121,6 +124,71 @@ test('a prompt typed straight into the raw terminal is saved as a turn, even in 
   expect((await turns('chat-2')).find((t) => t.user === 'typed in the raw terminal').reply).toContain('GOT typed in the raw terminal');
   await page.evaluate(() => ChatUI.setMode('chat-2', 'chat'));
   await expect(page.locator('.column[data-col-id="chat-2"] .msg.user .bubble').last()).toHaveText('typed in the raw terminal');
+});
+
+test('terminal mouse reports are skipped across chunks before a Chinese prompt is recorded', async () => {
+  const submitted = await page.evaluate(() => {
+    const lines = [];
+    const original = ChatUI.onSubmitted;
+    ChatUI.onSubmitted = (_col, line) => lines.push(line);
+    try {
+      const track = makePromptTracker({ manualTitle: true });
+      track('\x1b[<35;18;'); track('11M\x1b[<0;21;31m');
+      track('\x1b['); track('A');
+      track('请正常显示中文\r');
+    } finally { ChatUI.onSubmitted = original; }
+    return lines;
+  });
+  expect(submitted).toEqual(['请正常显示中文']);
+});
+
+test('chat mode shows and copies the Chinese raw-terminal prompt and its final reply', async () => {
+  const id = 'chat-2';
+  const column = page.locator(`.column[data-col-id="${id}"]`);
+  await page.evaluate((i) => ChatUI.setMode(i, 'term'), id);
+  await page.evaluate((i) => terms.get(i).term.focus(), id);
+  await page.keyboard.insertText('终端输入中文正常');
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await turns(id)).find((t) => t.user === '终端输入中文正常')?.done, { timeout: 20000 }).toBe(true);
+  await page.evaluate((i) => ChatUI.setMode(i, 'chat'), id);
+  const turn = column.locator('.turn').last();
+  await expect(turn.locator('.msg.user .bubble')).toHaveText('终端输入中文正常');
+  await expect(turn.locator('.reply')).toContainText('GOT 终端输入中文正常');
+  const userCopy = turn.locator('.user-tools .msg-tool').first();
+  const replyCopy = turn.locator('.msg.assistant .msg-tool').first();
+  await expect(userCopy).toBeVisible();
+  await expect(replyCopy).toBeVisible();
+  // Route copy to an in-page spy: never touch the machine's real clipboard.
+  const copied = await page.evaluate((i) => {
+    const values = [];
+    const original = deckHost.clipboardWrite;
+    deckHost.clipboardWrite = (text) => values.push(text);
+    try {
+      const wrap = document.querySelector(`.column[data-col-id="${i}"] .turn:last-child`);
+      wrap.querySelector('.user-tools .msg-tool').click();
+      wrap.querySelector('.msg.assistant .msg-tool').click();
+    } finally { deckHost.clipboardWrite = original; }
+    return values;
+  }, id);
+  expect(copied).toEqual(['终端输入中文正常', (await turns(id)).at(-1).reply]);
+});
+
+test('saved mouse-report fragments are absent from history bubbles and both copies', async () => {
+  const turn = page.locator('.column[data-col-id="chat-3"] .turn').filter({ hasText: '中文历史' });
+  await expect(turn.locator('.msg.user .bubble')).toHaveText('中文历史');
+  await expect(turn.locator('.reply')).toHaveText('历史回复');
+  const copied = await page.evaluate(() => {
+    const values = [];
+    const original = deckHost.clipboardWrite;
+    deckHost.clipboardWrite = (text) => values.push(text);
+    try {
+      const user = document.querySelector('.column[data-col-id="chat-3"] .msg.user[data-turn="old440"]');
+      user.querySelector('.user-tools .msg-tool').click();
+      document.querySelector('.column[data-col-id="chat-3"] .msg.assistant[data-turn="old440"] .msg-tool').click();
+    } finally { deckHost.clipboardWrite = original; }
+    return values;
+  });
+  expect(copied).toEqual(['中文历史', '历史回复']);
 });
 
 test('a long saved conversation keeps every turn; the view loads older ones on request', async () => {

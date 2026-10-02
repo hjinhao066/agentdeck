@@ -249,17 +249,22 @@ function maybeAutoName(col, line) {
 // sequences (arrow keys, and xterm's auto-replies to terminal queries) are
 // skipped; inside a bracketed paste a newline is literal content, not "send".
 function makePromptTracker(col) {
-  let buf = '', inPaste = false;
+  let buf = '', inPaste = false, escape = '', x10Bytes = 0;
   return (d) => {
     for (let i = 0; i < d.length; ) {
       const ch = d[i];
-      if (ch === '\x1b') {
-        if (d.startsWith('[200~', i + 1)) { inPaste = true; i += 6; continue; }
-        if (d.startsWith('[201~', i + 1)) { inPaste = false; i += 6; continue; }
-        const m = /^\x1b(\[[0-9;?]*[@-~]|O.|.)/.exec(d.slice(i, i + 24));
-        i += m ? m[0].length : 1;
+      if (x10Bytes) { x10Bytes--; i++; continue; }
+      if (escape) {
+        escape += ch; i++;
+        if (escape === '\x1b[' || escape === '\x1bO') continue;
+        if (escape.startsWith('\x1b[') && !/[@-~]/.test(ch) && escape.length < 64) continue;
+        if (escape === '\x1b[200~') inPaste = true;
+        else if (escape === '\x1b[201~') inPaste = false;
+        else if (escape === '\x1b[M') x10Bytes = 3;
+        escape = '';
         continue;
       }
+      if (ch === '\x1b') { escape = ch; i++; continue; }
       if (ch === '\r' || ch === '\n') {
         if (inPaste) buf += ' ';
         else { const line = buf.trim(); buf = ''; maybeAutoName(col, line); ChatUI.onSubmitted(col, line); }
@@ -2867,6 +2872,7 @@ applyTheme(config.theme);
 const deckHost = {
   columns: () => columns, terms, config, saveConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName,
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
+  clipboardWrite: (text) => window.deck.clipboardWrite(text),
   platform: env.platform,
   focusedId: () => focusedId,
   setFocused: (id) => { focusedId = id; syncNav(); },
