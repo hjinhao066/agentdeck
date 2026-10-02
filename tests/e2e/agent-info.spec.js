@@ -154,6 +154,7 @@ test('Cursor provider is preserved across model switches and updates header + si
   const cursorBadge = cursorCol.locator('.col-badge');
   await expect.poll(() => cursorCol.locator('.col-badge .agent-model-label').textContent(), { timeout: 15000 }).toBe('Opus 5.5');
   await expect(cursorBadge).toHaveClass(/provider-cursor/);
+  await expect(cursorBadge.locator('.agent-provider-icon')).toHaveAttribute('data-icon-provider', 'claude');
   await expect(cursorBadge).toHaveAttribute('title', /Cursor · Claude Opus 5.5/);
 
   // Now simulate switching model in terminal to claude-sonnet-5-5-high
@@ -179,12 +180,15 @@ test('Cursor provider is preserved across model switches and updates header + si
   await expect(cursorBadge.locator('.agent-model-label')).toHaveText('Flash 3.8', { timeout: 15000 });
   await expect(cursorNav.locator('.agent-model-label')).toHaveText('Flash 3.8');
   await expect(cursorBadge).toHaveClass(/provider-cursor/);
+  await expect(cursorBadge.locator('.agent-provider-icon')).toHaveAttribute('data-icon-provider', 'antigravity');
   await page.evaluate(() => {
     window.deck.ptyInput('col-cursor', '/model grok-4.7-high-fast\r');
   });
   await expect(cursorBadge.locator('.agent-model-label')).toHaveText('Grok 4.7', { timeout: 15000 });
   await expect(cursorNav.locator('.agent-model-label')).toHaveText('Grok 4.7');
   await expect(cursorBadge).toHaveClass(/provider-cursor/);
+  await expect(cursorBadge.locator('.agent-provider-icon')).toHaveAttribute('data-icon-provider', 'grok');
+  await expect(cursorNav.locator('.agent-provider-icon')).toHaveAttribute('data-icon-provider', 'grok');
   await page.evaluate(() => window.ChatUI.setMode('col-cursor', 'chat'));
 });
 

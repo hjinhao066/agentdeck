@@ -389,6 +389,11 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .agent-badge.provider-antigravity { color: #3b82f6; }
 .agent-badge.provider-grok { color: #e5e5e5; }
 .agent-badge.provider-codex { color: #10a37f; }
+.agent-provider-icon[data-icon-provider="cursor"] { color: #00d8ff; }
+.agent-provider-icon[data-icon-provider="claude"] { color: #d97706; }
+.agent-provider-icon[data-icon-provider="antigravity"] { color: #3b82f6; }
+.agent-provider-icon[data-icon-provider="grok"] { color: #e5e5e5; }
+.agent-provider-icon[data-icon-provider="codex"] { color: #10a37f; }
 
 /* ===== Status dots (header .dot + sidebar .cn-dot share one system) =====
    gray = not started · yellow (breathing) = working · red (pulse) = waiting

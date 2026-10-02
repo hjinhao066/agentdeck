@@ -289,10 +289,17 @@
     badgeEl.hidden = false;
     badgeEl.dataset.infoKey = info.key;
 
-    const iconSvg = PROVIDER_ICONS[info.provider] || '';
+    const model = info.shortModel || '';
+    let iconProvider = info.provider;
+    if (/^(?:Opus|Sonnet|Haiku)\b/i.test(model)) iconProvider = 'Claude';
+    else if (/^Grok\b/i.test(model)) iconProvider = 'Grok';
+    else if (/^(?:GPT-|o[13]\b)/i.test(model)) iconProvider = 'Codex';
+    else if (/^(?:Gemini\b|Flash\b|Pro\b)/i.test(model)) iconProvider = 'Antigravity';
+
+    const iconSvg = PROVIDER_ICONS[iconProvider] || '';
     const labelText = info.shortModel || '';
 
-    badgeEl.innerHTML = `<span class="agent-provider-icon" aria-hidden="true">${iconSvg}</span>`;
+    badgeEl.innerHTML = `<span class="agent-provider-icon" data-icon-provider="${iconProvider.toLowerCase()}" aria-hidden="true">${iconSvg}</span>`;
     if (labelText) {
       const label = document.createElement('span');
       label.className = 'agent-model-label';
