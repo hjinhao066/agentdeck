@@ -122,6 +122,7 @@ if (saved) {
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
+  config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (saved.activeView === 'board') config.activeView = 'board';
@@ -1382,7 +1383,7 @@ function buildColumn(col, isFresh) {
   }
   secondary.append(
     col.isMain
-      ? mkBtn(ICONS.eraser, '清空上下文（只清队长，其他对话和已派的活不受影响）', () => MainSession.clearContext())
+      ? mkBtn(ICONS.eraser, '清空上下文（只清队长的模型上下文；已派的活、回执和之前的对话都保留）', () => MainSession.clearContext())
       : mkBtn(ICONS.archive, '归档（结束终端，对话保留，可恢复）', () => archiveColumn(col)),
     mkBtn(ICONS.edit, '编辑（标题、目录、启动命令）', () => openDialog(columns.indexOf(col))),
     mkBtn(ICONS.close, '关闭并删除', () => removeCol(col)),
@@ -1590,7 +1591,7 @@ function buildColumn(col, isFresh) {
         if (col.cmd) {
           let launch = col.cmd;
           // Restoring a Claude column → continue its previous conversation.
-          if (!isFresh && isClaudeCmd(col.cmd) && await window.deck.claudeHasSession(col.cwd || env.home)) {
+          if (!isFresh && isClaudeCmd(col.cmd) && !MainSession.skipsResume(col) && await window.deck.claudeHasSession(col.cwd || env.home)) {
             launch = withClaudeResume(col.cmd);
             resumedAgent = true;
           }
@@ -2177,7 +2178,9 @@ function attachRename(titleEl, col) {
 }
 // cwd change needs a fresh shell; rebuild just this column (new id so the old
 // pty's exit event can't bleed into the new terminal).
-function respawnColumn(col) {
+// opts.freshChat: the conversation stays under the old id (ChatUI.retireChat
+// ran first) and the new id starts an empty one.
+function respawnColumn(col, opts) {
   const t = terms.get(col.id);
   const wasBoardSelected = selectedBoardId === col.id;
   if (wasBoardSelected) restoreBoardTerminal();
@@ -2189,7 +2192,7 @@ function respawnColumn(col) {
   }
   const oldId = col.id;
   col.id = newId();
-  ChatUI.onColumnIdChanged(oldId, col.id);
+  if (!(opts && opts.freshChat)) ChatUI.onColumnIdChanged(oldId, col.id);
   if (focusedId === oldId) focusedId = col.id;
   if (zoomedId === oldId) zoomedId = col.id; // stay zoomed across a respawn
   if (wasBoardSelected) selectedBoardId = col.id;

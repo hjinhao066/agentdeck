@@ -65,7 +65,8 @@
     return platform === 'win32' ? 'node "$env:AGENTDECK_BOARD_CLI"' : 'node "$AGENTDECK_BOARD_CLI"';
   }
 
-  function instructions(platform) {
+  // note: extra lines (after a context reset) placed before the closing line.
+  function instructions(platform, note) {
     const cli = boardCli(platform);
     return [
       '你是 AgentDeck 的「队长」：常驻的总负责人。你听懂用户要什么，把活派给各个会话（deck 里的列，也就是你的队员），再把简短回执告诉用户。',
@@ -76,7 +77,8 @@
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令"   把指令发进已有的会话`,
-      `   ${cli} read --id 会话id [--turns 3]       读某个会话已保存的对话，只在用户追问细节时用`,
+      `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话，只在用户追问细节时用；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
+      `   ${cli} read --id captain-history --find "关键词" [--turns 3]   跨全部清空前的队长记录搜索，按需读取简短结果`,
       `   ${cli} receipts                        取回还没看过的回执`,
       `   ${cli} answer --to 会话id --key y|n|1|2|3|enter|esc   回答停在确认或权限提示上的会话`,
       '3. 一件新事用 new。交给已有的会话、或者同一件活的补充和修改，用 tell 发回正在做这件事的那个会话，只转发新指令，不要把文件正文再贴一遍。',
@@ -97,8 +99,73 @@
       `   Cursor 把档位写在模型名最后，只用这些名字：${CURSOR_MODELS.join('、')}。`,
       '   Antigravity 和 Claude Code 用 --effort 写档位（Antigravity 没有 xhigh）。',
       '',
+      ...(note ? [note, ''] : []),
       '现在只回复一句「队长已就绪」，然后等用户的指令。',
     ].join('\n');
+  }
+
+  // What a freshly cleared 队长 is told: where its old conversation is, and
+  // the work still out. Ids and titles only, never the old conversation.
+  const MAX_NOTE_TASKS = 20;
+  function resetNote(oldId, active) {
+    const lines = ['用户刚清空了你的模型上下文。'];
+    if (oldId) lines.push(`清空前的对话没有删，存在 ${oldId}；用户问起以前的事时用 read --id ${oldId} --find 关键词 按需读，不要整段搬进来。`);
+    const list = (active || []).slice(-MAX_NOTE_TASKS);
+    if (list.length) {
+      lines.push('清空前派出去、还没结束的活（回执和提问会照常发给你）：');
+      list.forEach((t) => lines.push(`   - 「${oneLine(t.title, 60)}」(${t.colId})：${TASK_STATUS[t.status] || t.status}`));
+    }
+    return lines.join('\n');
+  }
+  const TASK_STATUS = { queued: '排队中', working: '干活中', input: '停在确认', asking: '在问你' };
+
+  // A relaunch after a reset must start the agent fresh, never pick up the
+  // cleared conversation again: drop resume flags from the launch command.
+  function freshCommand(cmd) {
+    const source = String(cmd || '');
+    const words = source.match(/(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g) || [];
+    if (!words.length) return '';
+    const name = words[0].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+    if (!['claude', 'cursor-agent', 'agy', 'gemini', 'grok'].includes(name)) return source;
+    const claude = name === 'claude';
+    const out = [words[0]];
+    for (let i = 1; i < words.length; i++) {
+      const w = words[i];
+      if (name === 'cursor-agent' && i === 1 && /^resume$/i.test(w)) { if (words[i + 1] && !words[i + 1].startsWith('-')) i++; continue; }
+      if (/^--(continue|resume)=/.test(w)) continue;
+      if (w === '--continue' || (claude && w === '-c')) continue;
+      if (w === '--resume' || (claude && w === '-r')) {
+        if (words[i + 1] && !words[i + 1].startsWith('-')) i++;
+        continue;
+      }
+      out.push(w);
+    }
+    return out.length === words.length ? source : out.join(' ');
+  }
+
+  // Earlier 队长 conversations (config.captainHistory). Only this metadata is
+  // capped; the chat files themselves are never deleted with it.
+  const MAX_HISTORY = 50;
+  const HISTORY_ID = /^[A-Za-z0-9_-]{1,80}$/;
+  function normalizeHistory(list) {
+    const seen = new Set();
+    const num = (v) => (Number.isFinite(v) ? v : 0);
+    return (Array.isArray(list) ? list : []).filter((h) => h && typeof h.id === 'string' && HISTORY_ID.test(h.id) && !seen.has(h.id) && seen.add(h.id))
+      .map((h) => ({ id: h.id, from: num(h.from), to: num(h.to), turns: Math.max(0, Math.round(num(h.turns))), clearedAt: num(h.clearedAt) }))
+      .slice(-MAX_HISTORY);
+  }
+  function stamp(ts) {
+    if (!ts) return '?';
+    const d = new Date(ts);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function historyText(list, shown = 10) {
+    if (!list || !list.length) return '';
+    const recent = list.slice(-shown).reverse();
+    const lines = recent.map((h) => `${h.id}  ${stamp(h.from)} 到 ${stamp(h.to)}  ${h.turns} 条`);
+    const more = list.length > recent.length ? `\n    （更早的还有 ${list.length - recent.length} 段）` : '';
+    return '清空上下文前的队长对话（用 read --id 读，可加 --find 关键词）：\n' + lines.map((l) => '    ' + l).join('\n') + more;
   }
 
   // Reads the 【回执】 block the worker wrote at the end of its reply. Without
@@ -200,13 +267,22 @@
     }).join('\n');
   }
 
-  // A session's saved turns for `read`, newest last, each cut short.
-  function readText(title, turns, n) {
+  // A session's saved turns for `read`, newest last, each cut short. find keeps
+  // only turns containing every word of it. Task cards (in a 队长 conversation)
+  // show as the work handed out and its receipt.
+  function readText(title, turns, n, find) {
     const count = Math.max(1, Math.min(10, Math.round(Number(n) || 3)));
-    const picked = turns.filter((t) => t.kind !== 'task').slice(-count);
-    if (!picked.length) return `「${title}」还没有保存的对话。`;
-    return picked.map((t) => `用户：${oneLine(t.user, 600)}\n回复：${oneLine(t.reply, 800) || '（没有文字回复）'}`).join('\n\n');
+    const words = String(find || '').toLowerCase().split(/\s+/).filter(Boolean).slice(0, 6);
+    const hit = (t) => { const low = `${t.user}\n${t.reply}`.toLowerCase(); return words.every((w) => low.includes(w)); };
+    const picked = turns.filter((t) => (t.user || t.reply) && hit(t)).slice(-count);
+    if (!picked.length) return words.length ? `「${title}」里没有包含「${oneLine(find, 60)}」的对话。` : `「${title}」还没有保存的对话。`;
+    return picked.map((t) => (t.sourceId ? `记录：${t.sourceId}\n` : '') + (t.kind === 'task'
+      ? `派活：「${oneLine(t.user, 120)}」${t.task && t.task.colId ? ` (${t.task.colId})` : ''}\n回执：${oneLine(t.reply, 800) || '（还没有）'}`
+      : `用户：${oneLine(t.user, 600)}\n回复：${oneLine(t.reply, 800) || '（没有文字回复）'}`)).join('\n\n');
   }
 
-  return { RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, receiptsForModel, statusLabel, ledgerText, readText, MAX_SUMMARY };
+  return {
+    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt,
+    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
+  };
 });

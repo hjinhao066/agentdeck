@@ -92,8 +92,23 @@ again with the current provider, model and effort instructions.
   as success.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
-- 清空上下文 (only in the 队长 header) restarts the 队长's own column and clears its
-  bubbles and pending receipts. Other columns, their files and running work stay.
+- 清空上下文 (only in the 队长 header) clears only the 队长's model context. Its
+  column restarts as a fresh agent process (resume flags such as `--continue` are
+  dropped from its launch command, and it is not resumed on the next app start until
+  it has finished a turn of its own) and gets the default instructions again, plus a
+  short note: the id of its old conversation and the work still out. Other columns
+  are never restarted or interrupted. Unread receipts and questions, and receipts
+  typed to the old context it had not answered yet, go to the new 队长; cards for
+  unfinished work move to the new chat and their receipts arrive there. If the 队长
+  is busy, the confirmation says its current turn will be cut off.
+- The old conversation is kept, not deleted: it stays in userData/`chats` under the
+  old column id. `ledger` lists the latest ones (`config.json` keeps metadata for the
+  last 50; older files stay on disk) and the 队长 reads one on demand with
+  `read --id <old id> [--turns N] [--find 关键词]`, with the same capability-token
+  check as every other command. Nothing from it is put into the new context unasked.
+  `read --id captain-history --find "关键词"` searches across all retired Captain
+  chats, including ones older than the metadata list. It requires a keyword and
+  returns only a few matching turns (default 3, at most 10), each cut short.
 
 ## Chat view and side pane
 

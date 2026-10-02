@@ -56,6 +56,62 @@ test('队长 instructions name the commands', () => {
   assert.match(M.RECEIPT_CONTRACT, /【回执】/);
 });
 
+test('a cleared 队长 is relaunched fresh: resume flags are dropped, everything else kept', () => {
+  assert.equal(M.freshCommand('claude --continue --dangerously-skip-permissions --effort high'), 'claude --dangerously-skip-permissions --effort high');
+  assert.equal(M.freshCommand('claude -c --effort high'), 'claude --effort high');
+  assert.equal(M.freshCommand('claude --resume 1234-abcd --effort high'), 'claude --effort high');
+  assert.equal(M.freshCommand('/usr/local/bin/claude -r abc'), '/usr/local/bin/claude');
+  assert.equal(M.freshCommand('claude --resume=abc --effort high'), 'claude --effort high');
+  assert.equal(M.freshCommand('cursor-agent --resume chat-1 --model claude-opus-5-5-high'), 'cursor-agent --model claude-opus-5-5-high');
+  assert.equal(M.freshCommand('cursor-agent resume chat-1'), 'cursor-agent');
+  // -c / -r mean something else to other tools
+  assert.equal(M.freshCommand('agy -c conf.toml --model gemini-3.8-flash-high'), 'agy -c conf.toml --model gemini-3.8-flash-high');
+  assert.equal(M.freshCommand('node "/x/fake agent.js"  --flag'), 'node "/x/fake agent.js"  --flag');
+  assert.equal(M.freshCommand('node "resume --continue.js"'), 'node "resume --continue.js"');
+  assert.equal(M.freshCommand('"C:\\Program Files\\Claude\\claude.exe" --resume "chat id" --model "model  with spaces"'), '"C:\\Program Files\\Claude\\claude.exe" --model "model  with spaces"');
+  assert.equal(M.freshCommand(''), '');
+});
+
+test('the reset note gives ids and open work, never the old conversation', () => {
+  const note = M.resetNote('c123', [{ title: '写周报', colId: 'c9', status: 'working' }, { title: 'x', colId: 'c8', status: 'input' }]);
+  assert.match(note, /清空了你的模型上下文/);
+  assert.match(note, /read --id c123/);
+  assert.match(note, /「写周报」\(c9\)：干活中/);
+  assert.match(note, /「x」\(c8\)：停在确认/);
+  assert.ok(!M.resetNote('', []).includes('read --id'));
+  const many = M.resetNote('c1', Array.from({ length: 60 }, (_, i) => ({ title: 't' + i, colId: 'c' + i, status: 'queued' })));
+  assert.equal(many.split('\n').filter((l) => l.startsWith('   - ')).length, 20);
+  // the default instructions stay whole; the note sits before the closing line
+  const brief = M.instructions('darwin', note);
+  assert.ok(brief.startsWith(M.instructions('darwin').split('\n').slice(0, -1).join('\n')));
+  assert.ok(brief.indexOf('read --id c123') < brief.indexOf('队长已就绪'));
+  assert.match(M.instructions(), /--find/);
+});
+
+test('old 队长 conversations: capped metadata, listed in the ledger, read and searched on demand', () => {
+  const list = M.normalizeHistory([
+    { id: 'c1', from: 1, to: 2, turns: 3, clearedAt: 4 }, { id: 'c1', turns: 9 }, { id: '../x', turns: 1 }, null, { id: 'c2', turns: 'x' },
+  ]);
+  assert.deepEqual(list, [{ id: 'c1', from: 1, to: 2, turns: 3, clearedAt: 4 }, { id: 'c2', from: 0, to: 0, turns: 0, clearedAt: 0 }]);
+  assert.equal(M.normalizeHistory(Array.from({ length: 80 }, (_, i) => ({ id: 'h' + i }))).length, M.MAX_HISTORY);
+  assert.equal(M.historyText([]), '');
+  const text = M.historyText(Array.from({ length: 12 }, (_, i) => ({ id: 'h' + i, from: Date.now(), to: Date.now(), turns: i })));
+  assert.match(text, /read --id/);
+  assert.ok(text.indexOf('h11') < text.indexOf('h2 '), 'newest first');
+  assert.ok(!text.includes('h1 '));
+  assert.match(text, /更早的还有 2 段/);
+  const turns = [
+    { user: 'plan the alpha release', reply: 'ok' },
+    { kind: 'task', user: '写周报', reply: 'stand-in finished', task: { colId: 'c9' } },
+    { user: 'other', reply: 'beta notes' },
+  ];
+  assert.match(M.readText('t', turns, 10), /派活：「写周报」 \(c9\)\n回执：stand-in finished/);
+  const found = M.readText('t', turns, 10, 'ALPHA release');
+  assert.match(found, /用户：plan the alpha release/);
+  assert.ok(!found.includes('beta'));
+  assert.match(M.readText('t', turns, 10, 'nothing-like-this'), /没有包含/);
+});
+
 test('receipt fields glued onto one line by reflow are split again', () => {
   const r = M.parseReceipt('GOT it\n【回执】\n摘要：stand-in finished the report文件：/var/T/report.md');
   assert.equal(r.summary, 'stand-in finished the report');

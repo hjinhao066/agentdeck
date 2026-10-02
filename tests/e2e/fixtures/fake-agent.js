@@ -4,6 +4,9 @@
 // carrying the AgentDeck receipt contract gets a 【回执】 block back; "ask me"
 // makes it stop at a y/n question like a permission prompt.
 const readline = require('readline');
+// A TUI redraws the current screen; old prompts must not look like a live menu.
+process.stdout.write('\x1b[?1049h');
+process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 function box() {
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
   process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
@@ -22,6 +25,8 @@ function answer() {
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
   if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
+  process.stdout.write('\x1b[2J\x1b[H');
+  process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
   let out = '\n⏺ GOT ' + first.slice(-40) + '\n  wrote ' + process.env.AGENTDECK_DEMO_FILE + '\n';
   if (text.includes('AgentDeck 约定')) out += '\n  【回执】\n  摘要：stand-in finished ' + first.slice(0, 30) + '\n  文件：' + process.env.AGENTDECK_DEMO_FILE + '\n';
   process.stdout.write(out);

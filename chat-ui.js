@@ -347,6 +347,9 @@
     if (col.isMain) {
       empty.append(el('strong', null, '队长在这里'),
         el('span', null, '说要做什么，队长会把活派给各个对话：新事新开一列，补充发回原来那一列。做完的回执会以卡片出现在这里，点标题跳过去。'));
+      if (window.MainSession && window.MainSession.history().length) {
+        empty.appendChild(el('span', null, '模型上下文清空过，之前的对话还存在本机，没有删除。问起以前的事，队长会按需读取，不会整段带进新的上下文。'));
+      }
       v.scroll.appendChild(empty);
       return;
     }
@@ -587,6 +590,7 @@
     let marker = null;
     try { marker = entry.term.registerMarker(0); } catch (_) {}
     pending.set(col.id, { turn, marker, startedAt: Date.now(), sent: sent || turn.user });
+    if (window.MainSession) window.MainSession.onTurnStarted(col.id, turn);
     appendTurn(col.id, turn);
     scheduleSave(col.id);
     if (window.Sidebar) window.Sidebar.touchTime(col.id);
@@ -849,14 +853,17 @@
     scheduleSave(id);
     if (window.Pages) window.Pages.refresh();
   }
-  function clearChat(id) {
-    const open = pending.get(id);
-    try { if (open && open.marker) open.marker.dispose(); } catch (_) {}
-    pending.delete(id);
-    chats.set(id, C.emptyChat(id));
-    clearTimeout(saveTimers.get(id)); saveTimers.delete(id);
-    window.deck.chatSave(id, chatFor(id));
-    renderChat(id);
+  // 队长's context is cleared: its conversation stays saved under the old id
+  // (readable with `read --id`), the respawned column starts an empty one.
+  // Call before the terminal goes away so an open turn keeps what it has.
+  function retireChat(id) {
+    finalizeTurn(id);
+    forget(id);
+    const chat = chats.get(id);
+    if (!chat || !chat.turns.length) { chats.delete(id); window.deck.chatDelete(id); return null; }
+    chat.captainArchive = true;
+    window.deck.chatSave(id, chat);
+    return { turns: chat.turns.length, from: chat.turns[0].ts || 0, to: chat.turns[chat.turns.length - 1].ts || 0 };
   }
   const turnsOf = (id) => (chats.get(id) || { turns: [] }).turns;
 
@@ -1010,6 +1017,7 @@
     focusSearch, reveal, lastTurnTs, artifactSources,
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
-    addCard, updateCard, clearChat, turnsOf,
+    addCard, updateCard, retireChat, turnsOf,
+    captainArchives: () => [...chats.values()].filter((c) => c.captainArchive),
   };
 })();

@@ -189,5 +189,5 @@ test('队长 instructions call the board CLI the way the column\'s shell reads e
   assert.equal(M.instructions('linux'), mac);
   assert.equal(M.instructions(), mac);
   // the host passes its platform when it briefs 队长
-  assert.match(fs.readFileSync(path.join(__dirname, '..', 'main-session.js'), 'utf8'), /M\.instructions\(host\.platform\)/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'main-session.js'), 'utf8'), /M\.instructions\(host\.platform[,)]/);
 });

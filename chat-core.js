@@ -178,6 +178,7 @@
   function normalizeChat(raw, id) {
     const chat = emptyChat(id);
     if (!raw || typeof raw !== 'object' || !Array.isArray(raw.turns)) return chat;
+    if (raw.captainArchive === true) chat.captainArchive = true;
     for (const t of raw.turns.filter((x) => x && typeof x.user === 'string').slice(-MAX_TURNS)) {
       chat.turns.push({
         id: typeof t.id === 'string' ? t.id.slice(0, 40) : 'u' + chat.turns.length,

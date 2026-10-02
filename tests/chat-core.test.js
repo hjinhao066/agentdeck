@@ -82,6 +82,8 @@ test('chats are normalised and capped', () => {
   assert.equal(chat.turns.length, C.MAX_TURNS);
   assert.equal(chat.turns[chat.turns.length - 1].user, 'q449');
   assert.deepEqual(C.normalizeChat('nope', 'c2'), { v: 1, id: 'c2', turns: [] });
+  assert.equal(C.normalizeChat({ captainArchive: true, turns: [] }, 'old-captain').captainArchive, true);
+  assert.equal(C.normalizeChat({ captainArchive: 'true', turns: [] }, 'worker').captainArchive, undefined);
 });
 
 test('search covers prompts, replies and titles, newest first, all words must match', () => {

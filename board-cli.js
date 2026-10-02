@@ -87,7 +87,9 @@ function usage() {
     '  ledger                                   every session: id, title, state, last receipt\n' +
     '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|cursor|grok | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction"\n' +
-    '  read --id <session-id> [--turns 3]       saved prompts and final replies, cut short\n' +
+    '  read --id <session-id> [--turns 3] [--find "words"]   saved prompts and final replies, cut short;\n' +
+    '                                           also a 队长 conversation from before a clear (ids in ledger)\n' +
+    '  read --id captain-history --find "words"   search across all old 队长 conversations\n' +
     '  receipts                                 receipts not yet seen\n' +
     '  answer --to <session-id> --key y|n|1-9|enter|esc   answer a confirmation prompt\n'
   );
@@ -191,7 +193,10 @@ async function main() {
   if (action === 'read') {
     const id = String(args.id || args._[1] || '').trim();
     if (!id) fail('read requires --id.');
-    const response = await request({ action: 'main-read', to: id, turns: Number(args.turns) || 3 }, false);
+    const response = await request({
+      action: 'main-read', to: id, turns: Number(args.turns) || 3,
+      find: typeof args.find === 'string' ? args.find : '',
+    }, false);
     process.stdout.write(`${response.result}\n`);
     return;
   }

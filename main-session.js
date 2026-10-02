@@ -20,7 +20,10 @@
     return n;
   }
 
-  // config.mainSession = { colId, cmd, gen, pending: [receipt], tasks: [task] }
+  // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], tasks: [task], fresh }
+  // inflight: receipts already typed to 队长 whose turn has not finished yet.
+  // fresh: the context was cleared and 队长 has not finished a turn since.
+  // config.captainHistory: conversations from before a clear (MainCore.normalizeHistory).
   function state() {
     const s = host.config.mainSession;
     if (!s || typeof s !== 'object') return null;
@@ -35,11 +38,17 @@
   function save() { host.saveConfig(); }
 
   function normalize() {
+    host.config.captainHistory = M.normalizeHistory(host.config.captainHistory);
     const s = host.config.mainSession;
     if (!s || typeof s !== 'object' || typeof s.colId !== 'string') { host.config.mainSession = null; return; }
     s.gen = Number.isFinite(s.gen) ? s.gen : 1;
     s.cmd = typeof s.cmd === 'string' ? s.cmd : '';
     s.pending = Array.isArray(s.pending) ? s.pending.slice(-50) : [];
+    s.inflight = Array.isArray(s.inflight) ? s.inflight.slice(-50) : [];
+    // A turn open at shutdown cannot acknowledge these items after relaunch.
+    s.pending = [...s.inflight, ...s.pending].slice(-50);
+    s.inflight = [];
+    s.fresh = !!s.fresh;
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
     // the column was closed while the app was down
     if (!host.columns().some((c) => c.id === s.colId && c.isMain)) host.config.mainSession = null;
@@ -61,16 +70,25 @@
   function create(cmd, cwd) {
     if (mainCol()) { open(); return mainCol(); }
     const col = host.createMain({ cmd, cwd });
-    host.config.mainSession = { colId: col.id, cmd, gen: 1, pending: [], tasks: [] };
+    host.config.mainSession = { colId: col.id, cmd, gen: 1, pending: [], inflight: [], tasks: [], fresh: false };
     save();
     window.Sidebar.render();
     brief(col);
     return col;
   }
   // The instructions go straight into the terminal; they are not a user bubble.
-  function brief(col) {
+  // Receipts wait until the instructions are in: briefing is the column whose
+  // brief has not gone out yet.
+  let briefing = '';
+  function brief(col, note) {
     if (!col.cmd) return;   // a bare shell would run them as commands
-    host.sendWhenReady(col, M.instructions(host.platform), { silent: true });
+    const id = col.id;
+    briefing = id;
+    const done = () => { if (briefing === id) briefing = ''; };
+    host.sendWhenReady(col, M.instructions(host.platform, note), {
+      silent: true, onSent: done,
+      onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
+    });
   }
   function initDialog() {
     document.querySelectorAll('#mainDialog .preset').forEach((b) => {
@@ -87,21 +105,53 @@
     });
   }
 
-  // ---- clear context: the main column starts over, nothing else is touched ----
+  // ---- clear context: only 队长's model context starts over ----
+  // Its agent restarts fresh and is briefed again. Work out in other columns,
+  // unread receipts and questions carry over to the new context; the old
+  // conversation stays saved under the old column id for `read --id`.
   function clearContext() {
     const col = mainCol();
     const s = state();
     if (!col || !s) return;
-    if (!confirm('清空队长的上下文？队长的气泡和模型上下文会清掉，相当于这一列重新开始。\n其他会话不受影响，已经派出去的活继续进行。')) return;
+    const entry = host.terms.get(col.id);
+    const busy = !!entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
+    const kept = '\n\n派出去的活不会中断；没处理的回执和提问留给清空后的队长；之前的对话存在本机，不会删除，队长需要时按需读取。';
+    if (!confirm(busy
+      ? '队长现在正在回复（或停在确认提示上）。清空会打断它这一轮，这一轮没说完的不会再有。\n确定现在清空队长的模型上下文吗？' + kept
+      : '只清空队长的模型上下文：队长重新启动，重新读一遍默认说明。' + kept)) return;
+    // receipts typed in but not answered yet go to the new context again
+    const requeue = s.inflight;
+    s.inflight = [];
+    const oldId = col.id;
+    const retired = window.ChatUI.retireChat(oldId);
+    if (retired) {
+      host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { id: oldId, ...retired, clearedAt: Date.now() }]);
+    }
+    s.pending = [...requeue, ...s.pending].slice(-50);
     s.gen += 1;
-    s.pending = [];
-    window.ChatUI.clearChat(col.id);
-    const fresh = host.respawnColumn(col);   // new id, new shell, new token
+    const waiting = new Set(s.pending.map((p) => p.taskId).filter(Boolean));
+    const latest = new Map(s.tasks.map((t) => [t.colId, t]));
+    const carried = s.tasks.filter((t) => !CLOSED.includes(t.status) || waiting.has(t.id) || (t.status === 'asking' && latest.get(t.colId) === t));
+    carried.forEach((t) => { t.gen = s.gen; });
+    // An acknowledged notification can still need a decision. Remind the new
+    // context once, even if the old Captain already finished its own reply.
+    carried.forEach((t) => {
+      if (t.status === 'input' && !s.pending.some((p) => p.colId === t.colId && p.waiting)) {
+        push(t, { waiting: confirmationExcerpt(host.terms.get(t.colId)) });
+      } else if (t.status === 'asking' && t.receipt?.question && !s.pending.some((p) => p.colId === t.colId && p.question)) {
+        push(t, { question: t.receipt.question });
+      }
+    });
+    col.cmd = M.freshCommand(col.cmd);
+    s.cmd = col.cmd;
+    const fresh = host.respawnColumn(col, { freshChat: true });   // new id, new shell, new token
     s.colId = fresh.id;
+    s.fresh = true;
+    carried.forEach((t) => window.ChatUI.addCard(s.colId, t));
     save();
     window.Sidebar.render();
-    brief(fresh);
-    host.showToast('队长的上下文已清空，重新开始');
+    brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status))));
+    host.showToast('队长的模型上下文已清空；派出去的活、回执和之前的对话都还在');
   }
 
   // ---- handing out work ----
@@ -164,8 +214,19 @@
   function push(task, item) {
     const s = state();
     if (!s || task.gen !== s.gen) return;
-    s.pending.push({ colId: task.colId, title: task.title, ts: Date.now(), ...item });
+    s.pending.push({ taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
     if (s.pending.length > 50) s.pending.splice(0, s.pending.length - 50);
+  }
+  // Hand every pending receipt to 队长's model as text; they count as in
+  // flight until its turn ends.
+  function takePending(nextTurn = false) {
+    const s = state();
+    const text = M.receiptsForModel(s.pending);
+    const turnId = nextTurn ? '' : (window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '');
+    s.inflight = [...s.inflight, ...s.pending.map((p) => ({ ...p, deliveryTurnId: turnId }))].slice(-50);
+    s.pending = [];
+    save();
+    return text;
   }
   // Receipts and questions reach 队长 by themselves: when its agent is idle,
   // they are typed in as one message (no user bubble) and its answer shows up
@@ -174,18 +235,17 @@
   function deliver(entry) {
     const s = state();
     const col = mainCol();
+    const id = col && col.id;
     closeOrphans();
-    if (delivering || !s || !col || !col.cmd || !s.pending.length || !entry.alive) return;
+    if (delivering || !s || !col || !col.cmd || !s.pending.length || !entry.alive || briefing === col.id) return;
     if (entry.state === 'working' || entry.state === 'input') return;
     if (Date.now() - (entry.lastOutputAt || 0) < 1500) return;   // let it settle first
     // only into 队长's agent, never into a shell it may have dropped back to
     delivering = true;
     host.agentInForeground(col, false).then((ok) => {
       delivering = false;
-      if (!ok || !s.pending.length || mainCol() !== col) return;
-      const text = M.receiptsForModel(s.pending);
-      s.pending = [];
-      save();
+      if (!ok || !s.pending.length || mainCol() !== col || col.id !== id || briefing === id) return;
+      const text = takePending(true);
       window.ChatUI.sendPrompt(col, '', null, { prefix: text.trim(), force: true });
     }, () => { delivering = false; });
   }
@@ -202,6 +262,10 @@
   }
 
   // ---- heartbeat: called for every column on the 1.5s status loop ----
+  function confirmationExcerpt(entry) {
+    return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
+      .map((l) => l.slice(0, 140)).join('\n') || '（看不到提示内容）';
+  }
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
@@ -215,9 +279,7 @@
         if (task.status === 'input' || (task.answeredAt && Date.now() - task.answeredAt < 5000)) continue;
         task.status = 'input';
         // a confirmation or permission prompt goes to 队长 first, with only its last lines
-        const excerpt = String(entry.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
-          .map((l) => l.slice(0, 140)).join('\n');
-        push(task, { waiting: excerpt || '（看不到提示内容）' });
+        push(task, { waiting: confirmationExcerpt(entry) });
         update(task);
         continue;
       }
@@ -243,9 +305,23 @@
       }
     }
   }
+  function onTurnStarted(colId, turn) {
+    const s = state();
+    if (!s || colId !== s.colId) return;
+    s.inflight.forEach((p) => { if (!p.deliveryTurnId) p.deliveryTurnId = turn.id; });
+    save();
+  }
   function onTurnDone(colId, turn) {
     const s = state();
     if (!s) return;
+    if (colId === s.colId) {
+      if (s.inflight.length || s.fresh) {
+        s.inflight = s.inflight.filter((p) => p.deliveryTurnId !== turn.id);
+        s.fresh = false;
+        save();
+      }
+      return;
+    }
     const task = s.tasks.find((t) => t.colId === colId && t.turnId === turn.id);
     if (task) settle(task, M.parseReceipt(turn.reply, filePaths));
   }
@@ -257,10 +333,14 @@
   function outgoingPrefix(col) {
     const s = state();
     if (!s || !isMain(col) || !s.pending.length) return '';
-    const text = M.receiptsForModel(s.pending);
-    s.pending = [];
-    save();
-    return text;
+    return takePending(true);
+  }
+  // Claude's --continue picks the newest conversation in the folder: right
+  // after a clear that can still be the cleared one, so don't resume until the
+  // new 队长 has finished a turn of its own.
+  function skipsResume(col) {
+    const s = state();
+    return !!(s && s.fresh && col && col.isMain && col.id === s.colId);
   }
 
   // ---- commands from the main session's terminal (board-cli) ----
@@ -281,18 +361,28 @@
     switch (message.action) {
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
-        return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '') };
+        const history = M.historyText(host.config.captainHistory);
+        return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '') + (history ? '\n' + history : '') };
       }
       case 'main-receipts': {
-        const text = M.receiptsForModel(s.pending).trim();
-        s.pending = [];
-        save();
+        const text = takePending().trim();
         return { done: true, result: text || '没有新的回执。' };
       }
       case 'main-read': {
+        const find = window.BoardCore.cleanText(message.find, 200);
+        if (message.to === 'captain-history') {
+          if (!find.trim()) throw new Error('查队长历史需要 --find 关键词，避免把所有旧对话带回上下文。');
+          const turns = window.ChatUI.captainArchives().flatMap((chat) => chat.turns.map((t) => ({ ...t, sourceId: chat.id })))
+            .sort((a, b) => a.ts - b.ts);
+          return { done: true, result: M.readText('队长历史', turns, message.turns, find) };
+        }
         const col = findTarget(message.to);
-        if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
-        return { done: true, result: M.readText(host.columnLabel(col), window.ChatUI.turnsOf(col.id), message.turns) };
+        if (col) return { done: true, result: M.readText(host.columnLabel(col), window.ChatUI.turnsOf(col.id), message.turns, find) };
+        // a 队长 conversation from before a clear: only ids listed in captainHistory
+        const key = String(message.to || '').trim();
+        const old = (host.config.captainHistory || []).find((h) => h.id === key) || window.ChatUI.captainArchives().find((chat) => chat.id === key);
+        if (!old) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
+        return { done: true, result: M.readText('清空前的队长对话', window.ChatUI.turnsOf(old.id), message.turns, find) };
       }
       case 'main-new': {
         const title = window.BoardCore.cleanText(message.title, 80).replace(/\s+/g, ' ');
@@ -379,8 +469,9 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, handle, onTick, onTurnDone, outgoingPrefix, renderCard,
+    init, open, create, clearContext, handle, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
+    history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),
   };
 })();
