@@ -12,6 +12,13 @@ test.describe.configure({ mode: 'serial' });
 
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-badge-test-'));
+  fs.mkdirSync(path.join(profile, 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'sessions', 'col-replay.txt'), [
+    '>_ OpenAI Codex (v0.160.0)',
+    'permissions: YOLO mode',
+    'GPT-6-Luna xhigh · ~',
+    '← for agents · ? for shortcuts',
+  ].join('\r\n'));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [
@@ -19,6 +26,7 @@ test.beforeAll(async () => {
       { id: 'col-cursor', taskId: 'task-2', title: 'Cursor Col', cmd: FAKE, cwd: profile, width: 460, role: 'manual' },
       { id: 'col-shell', taskId: 'task-3', title: 'Shell Col', cmd: '', cwd: profile, width: 460, role: 'manual' },
       { id: 'col-cached', taskId: 'task-4', title: 'Restored Codex', cmd: '', cwd: profile, width: 460, role: 'manual', agentProvider: 'Codex', agentModel: 'gpt-6-luna', agentEffort: 'high' },
+      { id: 'col-replay', taskId: 'task-5', title: 'Uncached Codex', cmd: '', cwd: profile, width: 460, role: 'manual' },
     ],
   }));
   const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'), AGENTDECK_TEST_LONG_STATUS: '1' };
@@ -29,8 +37,8 @@ test.beforeAll(async () => {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  await expect(page.locator('.column')).toHaveCount(4);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length), { timeout: 20000 }).toBe(4);
+  await expect(page.locator('.column')).toHaveCount(5);
+  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length), { timeout: 20000 }).toBe(5);
 });
 
 test.afterAll(async () => {
@@ -80,6 +88,23 @@ test('saved model identity is restored on a fresh shell in both header and sideb
   await expect(navBadge).toBeVisible();
   await expect(navBadge).toHaveClass(/provider-codex/);
   await expect(navBadge.locator('.agent-model-label')).toHaveText('GPT-6 Luna');
+});
+
+test('uncached Codex identity is recovered from terminal replay after restart', async () => {
+  const col = page.locator('.column[data-col-id="col-replay"]');
+  const badge = col.locator('.col-badge');
+  await expect.poll(() => badge.locator('.agent-model-label').textContent(), { timeout: 15000 }).toBe('GPT-6 Luna');
+  await expect(badge).toHaveClass(/provider-codex/);
+  await expect(badge).toHaveAttribute('title', 'Codex · GPT-6 Luna (xhigh)');
+
+  const navBadge = page.locator('.colnav-item[data-col-id="col-replay"] .cn-badge');
+  await expect(navBadge).toHaveClass(/provider-codex/);
+  await expect(navBadge.locator('.agent-model-label')).toHaveText('GPT-6 Luna');
+  await expect.poll(() => {
+    const config = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
+    const column = config.columns.find((item) => item.id === 'col-replay');
+    return column && `${column.agentProvider}:${column.agentModel}:${column.agentEffort}`;
+  }).toBe('Codex:GPT-6-Luna xhigh:xhigh');
 });
 
 test('Cursor provider is preserved across model switches and updates header + sidebar', async () => {

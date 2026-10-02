@@ -74,6 +74,12 @@
           if (val && !/^None$/i.test(val)) return val;
         }
 
+        // Codex writes its selected model directly in the TUI footer, without
+        // a "Model:" label. When that footer isn't split into rows by xterm,
+        // the restored screen dump is the remaining source after a restart.
+        const codexFooter = line.match(/^\s*(gpt[- ]?\d+(?:\.\d+)?(?:[- ](?:sol|astra|luna|terra|codex|mini|nano|pro))?(?:[- ](?:xhigh|high|max|medium|low))?)(?=\s*(?:[|│·•]))/i);
+        if (codexFooter) return codexFooter[1].trim();
+
         // Dedicated model switch / banner: e.g. "Switched model to claude-opus-5-5-high" or "> /model claude-sonnet-5-5-high"
         const switchMatch = line.match(/(?:^|[|│>❯$#•*]\s*)(?:model\s+changed\s+to|switched to model|switched model to|using model:?|current model:?)\s+([a-zA-Z0-9_.-]+)/i);
         if (switchMatch) {

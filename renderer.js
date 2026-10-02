@@ -1583,7 +1583,10 @@ function buildColumn(col, isFresh) {
         const replay = await window.deck.ptyReplay(col.id);
         if (replay) {
           replayMuted = true;
-          term.write(replay, () => { replayMuted = false; });
+          term.write(replay, () => {
+            updateAgentIdentityBadge(col.id, terms.get(col.id), dumpScreen(term));
+            replayMuted = false;
+          });
         }
         window.deck.ptyResize(col.id, term.cols, term.rows);
       } else {
@@ -1592,13 +1595,17 @@ function buildColumn(col, isFresh) {
         const saved = await window.deck.ptySaved(col.id);
         if (saved) {
           replayMuted = true;
-          term.write(saved);
-          // The replay may end mid-TUI: leave alternate screen, re-show the
-          // cursor, drop mouse/bracketed-paste modes, reset colors — then a
-          // dim separator before the fresh shell starts below.
-          term.write('\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[0m');
-          // Writes are parsed in order: this callback marks the end of replay.
-          term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n', () => { replayMuted = false; });
+          term.write(saved, () => {
+            // Inspect the restored TUI while its alternate screen and footer
+            // are still intact; leaving it first can discard Codex's footer.
+            updateAgentIdentityBadge(col.id, terms.get(col.id), dumpScreen(term));
+            // The replay may end mid-TUI: leave alternate screen, re-show the
+            // cursor, drop mouse/bracketed-paste modes, reset colors — then a
+            // dim separator before the fresh shell starts below.
+            term.write('\x1b[?1049l\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[0m');
+            // Writes are parsed in order: this callback marks the end of replay.
+            term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n', () => { replayMuted = false; });
+          });
         }
         // 队长 gets a control token too; the columns it drives never do.
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain);
@@ -2959,6 +2966,29 @@ function lastActivityLine(text) {
   return '';
 }
 
+function updateAgentIdentityBadge(id, entry, screenText) {
+  if (!window.AgentInfo || !entry) return;
+  const col = columns.find((candidate) => candidate.id === id);
+  if (!col) return;
+  let footer = entry.footerLines;
+  if (!ChatUI.isChatMode(id)) {
+    try { footer = ChatUI.readFooter(entry.term); } catch (_) { footer = null; }
+  }
+  entry.footerLines = footer;
+  const info = window.AgentInfo.resolveAgentInfo(col, entry, screenText);
+  if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
+  const nav = navItems.get(id);
+  if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar');
+  if (info.provider && (col.agentProvider !== info.provider ||
+      (info.rawModel && col.agentModel !== info.rawModel) ||
+      (info.effort && col.agentEffort !== info.effort))) {
+    col.agentProvider = info.provider;
+    if (info.rawModel) col.agentModel = info.rawModel;
+    if (info.effort) col.agentEffort = info.effort;
+    saveConfig();
+  }
+}
+
 // Cross-platform notifications include every agent, independent of the launch
 // command. Keep the policy pure so quiet periods and repeat turns are tested.
 function maybeNotifyState(id, entry, st) {
@@ -3052,31 +3082,10 @@ setInterval(() => {
     ChatUI.onTick(id, entry, text);
     MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
 
-    if (window.AgentInfo) {
-      const col = columns.find((c) => c.id === id);
-      if (col) {
-        let footer = entry.footerLines;
-        if (!ChatUI.isChatMode(id)) {
-          try { footer = ChatUI.readFooter(entry.term); } catch (_) { footer = null; }
-        }
-        entry.footerLines = footer;
-        // A restarted terminal replays its prior output above a separator. It
-        // is excluded from status classification, but remains the best source
-        // for recovering the last provider/model before the new shell starts.
-        const info = window.AgentInfo.resolveAgentInfo(col, entry, identityText);
-        if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
-        const nav = navItems.get(id);
-        if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar');
-        if (info.provider && (col.agentProvider !== info.provider ||
-            (info.rawModel && col.agentModel !== info.rawModel) ||
-            (info.effort && col.agentEffort !== info.effort))) {
-          col.agentProvider = info.provider;
-          if (info.rawModel) col.agentModel = info.rawModel;
-          if (info.effort) col.agentEffort = info.effort;
-          saveConfig();
-        }
-      }
-    }
+    // A restarted terminal replays the PREVIOUS run's output above a
+    // separator. It is excluded from status classification, but remains the
+    // best source for recovering the last provider/model before a fresh shell.
+    updateAgentIdentityBadge(id, entry, identityText);
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);

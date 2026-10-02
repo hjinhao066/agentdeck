@@ -44,6 +44,19 @@ test('Codex banner and model-change output identify OpenAI models', () => {
   assert.equal(footer.effort, 'high');
 });
 
+test('Codex model is recovered from the restored terminal footer without footer rows', () => {
+  const screen = [
+    '>_ OpenAI Codex (v0.160.0)',
+    'permissions: YOLO mode',
+    'GPT-6-Luna xhigh · ~',
+  ].join('\n');
+  const info = AgentInfo.resolveAgentInfo({ cmd: '' }, null, screen);
+  assert.equal(info.provider, 'Codex');
+  assert.equal(info.rawModel, 'GPT-6-Luna xhigh');
+  assert.equal(info.shortModel, 'GPT-6 Luna');
+  assert.equal(info.effort, 'xhigh');
+});
+
 test('restored provider/model identity is a fallback, live model status wins', () => {
   const col = { cmd: '', agentProvider: 'Codex', agentModel: 'gpt-6-luna', agentEffort: 'high' };
   const restored = AgentInfo.resolveAgentInfo(col, null, 'jinhao@MacBook ~ %');
