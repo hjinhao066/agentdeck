@@ -24,6 +24,39 @@ test('provider inference from launch command', () => {
   assert.equal(AgentInfo.inferProvider('bash'), null);
 });
 
+test('Codex banner and model-change output identify OpenAI models', () => {
+  const screen = [
+    '>_ OpenAI Codex (v0.160.0)',
+    'Model changed to gpt-6-luna high',
+  ].join('\n');
+  const col = { cmd: '' };
+  const info = AgentInfo.resolveAgentInfo(col, null, screen);
+  assert.equal(info.provider, 'Codex');
+  assert.equal(info.rawModel, 'gpt-6-luna');
+  assert.equal(info.shortModel, 'GPT-6 Luna');
+  assert.equal(info.effort, 'high');
+  assert.equal(AgentInfo.PROVIDER_ICONS.Grok.includes('<svg'), true);
+
+  const footer = AgentInfo.resolveAgentInfo({ cmd: 'codex' }, null, '', ['GPT-6-Luna high · ~ · Respond to greeting']);
+  assert.equal(footer.provider, 'Codex');
+  assert.equal(footer.rawModel, 'GPT-6-Luna high');
+  assert.equal(footer.shortModel, 'GPT-6 Luna');
+  assert.equal(footer.effort, 'high');
+});
+
+test('restored provider/model identity is a fallback, live model status wins', () => {
+  const col = { cmd: '', agentProvider: 'Codex', agentModel: 'gpt-6-luna', agentEffort: 'high' };
+  const restored = AgentInfo.resolveAgentInfo(col, null, 'jinhao@MacBook ~ %');
+  assert.equal(restored.provider, 'Codex');
+  assert.equal(restored.shortModel, 'GPT-6 Luna');
+  assert.equal(restored.effort, 'high');
+
+  const live = AgentInfo.resolveAgentInfo(col, null, 'Model changed to gpt-6.1-sol max');
+  assert.equal(live.rawModel, 'gpt-6.1-sol');
+  assert.equal(live.shortModel, 'GPT-6.1 Sol');
+  assert.equal(live.effort, 'max');
+});
+
 test('Cursor provider stays Cursor even when switching model family to Claude/Grok/Gemini', () => {
   const col = { cmd: 'cursor-agent --model claude-opus-5-5-high' };
   
@@ -215,6 +248,10 @@ test('model identity does not trust command arguments, typed model requests or p
   assert.equal(AgentInfo.extractModel('> /model gemini-3.8-flash-high', 'cursor-agent --model claude-opus-5-5-high'), 'claude-opus-5-5-high');
   assert.equal(AgentInfo.shortModelName('gpt-5.5-high'), 'GPT-5.5');
   assert.equal(AgentInfo.shortModelName('gpt-6.1-high'), 'GPT-6.1');
+  assert.equal(AgentInfo.shortModelName('gpt-6-luna-high'), 'GPT-6 Luna');
+  assert.equal(AgentInfo.shortModelName('gpt-6.1-sol'), 'GPT-6.1 Sol');
+  assert.equal(AgentInfo.shortModelName('meta/muse-spark'), 'Muse Spark');
+  assert.equal(AgentInfo.shortModelName('meta-muse'), 'Muse');
   assert.equal(AgentInfo.extractEffort('grok-4.7-high-fast', '', ''), 'high');
   assert.equal(AgentInfo.extractEffort('Opus 5.5', 'claude --effort high', 'Thinking: xhigh'), 'xhigh');
 });

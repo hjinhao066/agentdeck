@@ -155,6 +155,9 @@ if (saved) {
       taskCompleted: c.taskCompleted,
       initialPromptSent: c.initialPromptSent,
       agentType: c.agentType,
+      agentProvider: c.agentProvider,
+      agentModel: c.agentModel,
+      agentEffort: c.agentEffort,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       // every launch opens on the chat view; 终端/对话 in the header switches for this run
       view: undefined,
@@ -2348,6 +2351,11 @@ document.getElementById('dlgSave').onclick = () => {
   const col = columns[editIndex];
   const needsRespawn = (col.cwd || '') !== cwd || (col.cmd || '') !== cmd;
   const titleChanged = title !== columnLabel(col);
+  if ((col.cmd || '') !== cmd) {
+    col.agentProvider = null;
+    col.agentModel = null;
+    col.agentEffort = null;
+  }
   col.cwd = cwd;
   col.cmd = cmd;
   if (titleChanged) setColumnDisplayTitle(col, title); // keep auto-title behavior when only cwd/cmd changed
@@ -2969,6 +2977,7 @@ setInterval(() => {
   let attn = 0;
   terms.forEach((entry, id) => {
     let text = dumpScreen(entry.term);
+    const identityText = text;
     // A restored session replays the PREVIOUS run's output above a separator.
     // That old text can contain working/permission-prompt chrome; only what's
     // below the separator is live, so classification (and watch-ai) must not
@@ -3051,13 +3060,19 @@ setInterval(() => {
           try { footer = ChatUI.readFooter(entry.term); } catch (_) { footer = null; }
         }
         entry.footerLines = footer;
-        const info = window.AgentInfo.resolveAgentInfo(col, entry, text);
+        // A restarted terminal replays its prior output above a separator. It
+        // is excluded from status classification, but remains the best source
+        // for recovering the last provider/model before the new shell starts.
+        const info = window.AgentInfo.resolveAgentInfo(col, entry, identityText);
         if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
         const nav = navItems.get(id);
         if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar');
-        if (!col.cmd && info.provider && (col.agentProvider !== info.provider || col.agentModel !== info.model)) {
+        if (info.provider && (col.agentProvider !== info.provider ||
+            (info.rawModel && col.agentModel !== info.rawModel) ||
+            (info.effort && col.agentEffort !== info.effort))) {
           col.agentProvider = info.provider;
-          col.agentModel = info.model;
+          if (info.rawModel) col.agentModel = info.rawModel;
+          if (info.effort) col.agentEffort = info.effort;
           saveConfig();
         }
       }
