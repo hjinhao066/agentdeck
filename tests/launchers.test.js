@@ -40,6 +40,10 @@ test('a missing CLI is recognized from the shell, and only a new error counts', 
   assert.equal(B.launchErrors('% cursor-agent\nzsh: command not found: cursor-agent', cmd), 1);
   assert.equal(B.launchErrors('bash: cursor-agent: command not found', cmd), 1);
   assert.equal(B.launchErrors("cursor-agent: The term 'cursor-agent' is not recognized as a name of a cmdlet", cmd), 1);
+  assert.equal(B.launchErrors('cursor-agent : 无法将“cursor-agent”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。', cmd), 1);
+  assert.equal(B.launchErrors('无法将“cursor-agent”项识别\n为 cmdlet、函数、脚本文件或可运行程序的名称。', cmd), 1);
+  assert.equal(B.launchErrors('“cursor-agent”不是内部或外部命令，也不是可运行的程序或批处理文件。', cmd), 1);
+  assert.equal(B.launchErrors('无法将“grok”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。', cmd), 0);
   assert.equal(B.launchErrors('fish: Unknown command: cursor-agent', cmd), 1);
   assert.equal(B.launchErrors('zsh: no such file or directory: /opt/x/agy', '/opt/x/agy --effort high'), 1);
   // a narrow column soft-wraps the message mid-word

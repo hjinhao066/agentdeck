@@ -22,6 +22,9 @@ function box() {
   process.stdout.write('\x1b[33mContext: 23%\x1b[0m | \x1b[31mSession: 26.0%\x1b[0m' + extra + '\n');
   process.stdout.write('\x1b[36mModel: ' + model + ' | Weekly Reset: 16hr\x1b[0m\n');
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
+  // Keep a recognizable provider footer after replies, like a real TUI. Narrow
+  // ConPTY columns can wrap the longer permission line across several rows.
+  process.stdout.write('Claude Code\n');
 }
 console.log('Welcome to Claude Code (test stand-in)');
 box();

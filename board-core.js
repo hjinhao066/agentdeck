@@ -54,7 +54,7 @@
       : command;
   }
   // zsh, bash, fish, PowerShell and cmd wording for a program that isn't there
-  const NOT_FOUND_RE = /command not found|unknown command|is not recognized|no such file or directory|未找到命令|找不到命令/gi;
+  const NOT_FOUND_RE = /command not found|unknown command|is not recognized|no such file or directory|未找到命令|找不到命令|无法将.{0,240}?识别为\s*cmdlet|不是内部或外部命令/gi;
 
   const STATE_LABELS = Object.freeze({
     plain: 'Not started',

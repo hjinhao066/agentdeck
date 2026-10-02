@@ -8,6 +8,10 @@ const path = require('path');
 // status lines. Columns run a small TUI stand-in, never a real agent.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 let application, page, profile, demoFile;
+const deliveredPrompts = () => {
+  const file = path.join(profile, 'delivered-prompts.jsonl');
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((line) => JSON.parse(line)) : [];
+};
 
 const deckOrder = () => page.evaluate(() => [...deckEl.querySelectorAll('.column')].map((c) => c.dataset.colId));
 const alive = (id) => page.evaluate((i) => window.deck.ptyIsAlive(i), id);
@@ -24,7 +28,7 @@ test.beforeAll(async () => {
       id: `ws-${k}`, taskId: `task-${k}`, title: `Session ${k}`, cmd: FAKE, cwd: profile, width: 460, role: 'manual',
     })),
   }));
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile };
+  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'delivered-prompts.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -231,20 +235,17 @@ test('Schedule sends a prompt on time, and runs due while closed are reported as
 
   // make it due now and let the runner pick it up
   await page.evaluate(() => { config.schedules[0].nextAt = Date.now() - 1000; Pages.tick(false); });
-  await expect.poll(() => page.evaluate(() => window.deck.ptyReplay('ws-c')), { timeout: 15000 }).toContain('scheduled hello').catch(async (e) => {
-    console.log('SCHED', JSON.stringify(await page.evaluate(() => ({
-      cols: columns.map((c) => c.id), s: config.schedules[0], st: terms.get('ws-c') && { alive: terms.get('ws-c').alive, state: terms.get('ws-c').state, screen: terms.get('ws-c').lastScreen },
-    }))));
-    throw e;
-  });
+  // ConPTY may split screen redraws with control sequences between letters.
+  // Verify what the stand-in received, rather than relying on its screen echo.
+  await expect.poll(deliveredPrompts, { timeout: 15000 }).toContain('scheduled hello');
   await expect(page.locator('.column[data-col-id="ws-c"] .msg.user .bubble').last()).toHaveText('scheduled hello');
   expect(await page.evaluate(() => config.schedules[0].lastStatus)).toBe('ok');
 
   // overdue at launch: reported, not fired
-  const before = await page.evaluate(() => window.deck.ptyReplay('ws-c'));
+  const before = deliveredPrompts().filter((text) => text === 'scheduled hello').length;
   await page.evaluate(() => { config.schedules[0].nextAt = Date.now() - 3600_000; Pages.tick(true); });
   expect(await page.evaluate(() => config.schedules[0].lastStatus)).toBe('missed');
-  expect((await page.evaluate(() => window.deck.ptyReplay('ws-c'))).split('scheduled hello').length).toBe(before.split('scheduled hello').length);
+  expect(deliveredPrompts().filter((text) => text === 'scheduled hello').length).toBe(before);
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).schedules?.[0]?.lastStatus).toBe('missed');
   await page.keyboard.press('Escape');
 });
@@ -269,23 +270,27 @@ test('a schedule can open a fresh session and deliver once the agent is ready', 
   expect(id).toBeTruthy();
   // once the stand-in agent is ready, the prompt is delivered and answered
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.alive, id), { timeout: 15000 }).toBe(true);
-  await expect.poll(() => page.evaluate((i) => window.deck.ptyReplay(i), id), { timeout: 20000 }).toContain('please write the report');
+  await expect.poll(deliveredPrompts, { timeout: 20000 }).toContain('please write the report');
   await expect(page.locator(`.column[data-col-id="${id}"] .reply`).last()).toContainText('GOT please write the report', { timeout: 20000 });
 });
 
 test('a schedule can open a fresh bare shell session and execute', async () => {
   const beforeIds = await page.evaluate(() => columns.map((c) => c.id));
-  await page.evaluate((cwd) => {
+  const marker = path.join(profile, 'executed-shell.txt');
+  const command = `node -e "require('fs').writeFileSync('${marker.replace(/\\/g, '/')}', 'fresh-session-'+(40+2))"`;
+  await page.evaluate(({ cwd, command }) => {
     config.schedules.push(ScheduleCore.arm(ScheduleCore.normalizeSchedule({
-      id: 'fresh-shell', prompt: 'node -e "console.log(\'fresh-session-\'+(40+2))"', target: 'new', agent: 'shell', cwd, kind: 'interval', every: 60, createdAt: Date.now(),
+      id: 'fresh-shell', prompt: command, target: 'new', agent: 'shell', cwd, kind: 'interval', every: 60, createdAt: Date.now(),
     }), Date.now()));
     config.schedules[config.schedules.length - 1].nextAt = Date.now() - 500;
     Pages.tick(false);
-  }, profile);
+  }, { cwd: profile, command });
   await expect.poll(() => page.evaluate(() => columns.length)).toBe(beforeIds.length + 1);
   const id = await page.evaluate((old) => columns.find((c) => !old.includes(c.id))?.id, beforeIds);
   expect(id).toBeTruthy();
-  // a plain shell ran it: the output only exists if the line was delivered and executed
+  // The marker only exists if the shell executed the delivered command; ConPTY
+  // screen wrapping must not make a successful execution look like a failure.
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.alive, id), { timeout: 15000 }).toBe(true);
-  await expect.poll(() => page.evaluate((i) => dumpScreen(terms.get(i).term).replace(/\n/g, ''), id), { timeout: 15000 }).toContain('fresh-session-42');
+  await expect.poll(() => fs.existsSync(marker), { timeout: 15000 }).toBe(true);
+  expect(fs.readFileSync(marker, 'utf8')).toBe('fresh-session-42');
 });
