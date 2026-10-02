@@ -48,3 +48,14 @@ test('conversations round trip, stay private, and bad ids never touch disk', () 
   deleteChat(dir, 'c1');
   assert.equal(loadAllChats(dir).length, 0);
 });
+
+test('a long conversation is saved and loaded whole, unfinished turn marker included', () => {
+  const dir = path.join(tmp, 'long-chats');
+  const turns = Array.from({ length: 1200 }, (_, i) => ({ id: 't' + i, ts: i, user: 'q' + i, reply: 'a' + i, done: true }));
+  turns.push({ id: 'open', ts: 1200, user: 'still running', reply: 'half a reply', done: false, interrupted: true });
+  assert.equal(saveChat(dir, 'long', { turns }), true);
+  const [chat] = loadAllChats(dir);
+  assert.equal(chat.turns.length, 1201);
+  assert.equal(chat.turns[0].user, 'q0');
+  assert.deepEqual([chat.turns[1200].reply, chat.turns[1200].done, chat.turns[1200].interrupted], ['half a reply', false, true]);
+});

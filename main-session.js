@@ -42,7 +42,9 @@
     const s = host.config.mainSession;
     if (!s || typeof s !== 'object' || typeof s.colId !== 'string') { host.config.mainSession = null; return; }
     s.gen = Number.isFinite(s.gen) ? s.gen : 1;
-    s.cmd = typeof s.cmd === 'string' ? s.cmd : '';
+    s.cmd = typeof s.cmd === 'string' ? window.BoardCore.upgradeLegacyCommand(s.cmd) : '';
+    const col = host.columns().find((c) => c.id === s.colId && c.isMain);
+    if (col && col.cmd) s.cmd = col.cmd;
     s.pending = Array.isArray(s.pending) ? s.pending.slice(-50) : [];
     s.inflight = Array.isArray(s.inflight) ? s.inflight.slice(-50) : [];
     // A turn open at shutdown cannot acknowledge these items after relaunch.
@@ -293,7 +295,8 @@
         if (Date.now() - task.idleSince < FALLBACK_AFTER) continue;
         // 1) a reply already saved for this turn; 2) a 【回执】 still on screen
         // (after a hot reload the terminal kept running); 3) say what happened
-        const saved = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId && t.reply);
+        // a reply cut off when the app closed is not that turn's final reply
+        const saved = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId && t.reply && !t.interrupted);
         const fromScreen = M.parseReceipt(entry.lastScreen || '', filePaths);
         if (saved) settle(task, M.parseReceipt(saved.reply, filePaths));
         else if (fromScreen.explicit) settle(task, fromScreen);
@@ -392,7 +395,7 @@
         if (existing) return { done: true, result: `已开新会话 ${existing.id}「${host.columnLabel(existing)}」。` };
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
-        if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok，或用 --command 写完整启动命令。`);
+        if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
         const custom = window.BoardCore.cleanText(message.command, 1000);
         const cmd = custom || (agent ? window.BoardCore.commandForAgent(agent) : s.cmd);
         const col = host.createSession({ title, cmd, cwd: window.BoardCore.cleanText(message.cwd, 1000), createdByRequestId: message.id, displayTitle: title, manualTitle: true }, true);

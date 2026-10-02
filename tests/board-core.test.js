@@ -16,8 +16,48 @@ test('infers known agents and resolves commands', () => {
   assert.equal(BoardCore.inferAgentType('claude --continue'), 'Claude');
   assert.equal(BoardCore.inferAgentType('agy'), 'Antigravity');
   assert.equal(BoardCore.inferAgentType('grok -i'), 'Grok');
+  assert.equal(BoardCore.inferAgentType('cursor-agent --force'), 'Cursor');
+  assert.equal(BoardCore.inferAgentType('codex --dangerously-bypass-approvals-and-sandbox'), 'Codex');
+  assert.equal(BoardCore.inferAgentType('gemini --yolo'), 'Antigravity');
   assert.equal(BoardCore.commandForAgent('claude'), 'claude --dangerously-skip-permissions --effort high');
+  assert.equal(BoardCore.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  assert.equal(BoardCore.commandForAgent('grok'), 'grok --permission-mode bypassPermissions');
+  assert.equal(BoardCore.commandForAgent('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
+  assert.equal(BoardCore.commandForAgent('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(BoardCore.commandForAgent('gemini'), 'gemini --yolo');
   assert.equal(BoardCore.commandForAgent('grok', 'custom-agent'), 'custom-agent');
+});
+
+test('upgrades legacy default commands while preserving custom commands and configurations', () => {
+  // exact legacy presets
+  assert.equal(
+    BoardCore.upgradeLegacyCommand('agy --model gemini-3.8-flash-high --effort high'),
+    'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high'
+  );
+  assert.equal(
+    BoardCore.upgradeLegacyCommand('cursor-agent --model claude-opus-5-5-high'),
+    'cursor-agent --force --model claude-opus-5-5-high'
+  );
+  assert.equal(
+    BoardCore.upgradeLegacyCommand('claude --dangerously-skip-permissions'),
+    'claude --dangerously-skip-permissions --effort high'
+  );
+  // plain legacy aliases
+  assert.equal(BoardCore.upgradeLegacyCommand('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  assert.equal(BoardCore.upgradeLegacyCommand('grok'), 'grok --permission-mode bypassPermissions');
+  assert.equal(BoardCore.upgradeLegacyCommand('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
+  assert.equal(BoardCore.upgradeLegacyCommand('cursor-agent'), 'cursor-agent --force --model claude-opus-5-5-high');
+  assert.equal(BoardCore.upgradeLegacyCommand('claude'), 'claude --dangerously-skip-permissions --effort high');
+  assert.equal(BoardCore.upgradeLegacyCommand('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(BoardCore.upgradeLegacyCommand('gemini'), 'gemini --yolo');
+
+  // custom commands remain completely untouched
+  assert.equal(BoardCore.upgradeLegacyCommand('cursor-agent --model claude-sonnet-5-5-xhigh'), 'cursor-agent --model claude-sonnet-5-5-xhigh');
+  assert.equal(BoardCore.upgradeLegacyCommand('agy --model gemini-3.1-pro-high --effort high'), 'agy --model gemini-3.1-pro-high --effort high');
+  assert.equal(BoardCore.upgradeLegacyCommand('claude --effort low'), 'claude --effort low');
+  assert.equal(BoardCore.upgradeLegacyCommand('./run-custom-worker.sh'), './run-custom-worker.sh');
+  assert.equal(BoardCore.upgradeLegacyCommand('python test.py'), 'python test.py');
+  assert.equal(BoardCore.upgradeLegacyCommand(''), '');
 });
 
 test('lays out a downstream dependency graph and keeps manual terminals separate', () => {

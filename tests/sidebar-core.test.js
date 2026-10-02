@@ -49,12 +49,24 @@ test('folder and archive normalization drops junk and duplicates', () => {
   assert.deepEqual(archived.map((a) => a.id), ['new', 'old']);
 });
 
-test('队长 is always the first column and never listed among sessions', () => {
+test('队长 is always the first column, pinned on its own, never inside folders or loose sessions', () => {
   const list = [{ id: 'a' }, { id: 'm', isMain: true, folderId: 'f1' }, { id: 'b', folderId: 'f1' }];
   const folders = [{ id: 'f1', name: 'Work' }];
   assert.deepEqual(S.orderedColumns(list, folders).map((c) => c.id), ['m', 'b', 'a']);
+  assert.equal(S.captainOf(list).id, 'm');
+  assert.equal(S.captainOf([{ id: 'a' }]), null);
   const { groups, loose } = S.groupSessions(list, folders);
   assert.deepEqual(groups[0].items.map((c) => c.id), ['b']);
   assert.deepEqual(loose.map((c) => c.id), ['a']);
   assert.deepEqual(S.moveColumn(list, folders, 'a', { folderId: 'f1', beforeId: 'b' }).map((c) => c.id), ['m', 'a', 'b']);
+  // dropping a session before 队长 still leaves 队长 first
+  assert.deepEqual(S.moveColumn(list, folders, 'a', { folderId: null, beforeId: 'm' })[0].id, 'm');
+});
+
+test('队长 cannot be dragged into a folder or reordered', () => {
+  const list = [{ id: 'm', isMain: true, folderId: null }, { id: 'a', folderId: null }, { id: 'b', folderId: 'f1' }];
+  const folders = [{ id: 'f1', name: 'Work' }];
+  const after = S.moveColumn(list, folders, 'm', { folderId: 'f1', beforeId: 'b' });
+  assert.deepEqual(after.map((c) => c.id), ['m', 'b', 'a']);
+  assert.equal(list[0].folderId, null);
 });

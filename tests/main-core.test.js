@@ -64,6 +64,9 @@ test('a cleared 队长 is relaunched fresh: resume flags are dropped, everything
   assert.equal(M.freshCommand('claude --resume=abc --effort high'), 'claude --effort high');
   assert.equal(M.freshCommand('cursor-agent --resume chat-1 --model claude-opus-5-5-high'), 'cursor-agent --model claude-opus-5-5-high');
   assert.equal(M.freshCommand('cursor-agent resume chat-1'), 'cursor-agent');
+  assert.equal(M.freshCommand('codex resume chat-1 --dangerously-bypass-approvals-and-sandbox'), 'codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(M.freshCommand('codex resume --last --dangerously-bypass-approvals-and-sandbox'), 'codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(M.freshCommand('codex resume'), 'codex');
   // -c / -r mean something else to other tools
   assert.equal(M.freshCommand('agy -c conf.toml --model gemini-3.8-flash-high'), 'agy -c conf.toml --model gemini-3.8-flash-high');
   assert.equal(M.freshCommand('node "/x/fake agent.js"  --flag'), 'node "/x/fake agent.js"  --flag');
@@ -135,7 +138,7 @@ test('a worker question is read out and handed to 队长, not the user', () => {
 
 test('shells are recognized by name or full path; agents are not shells', () => {
   for (const n of ['zsh', '-zsh', '/bin/zsh', '/opt/homebrew/bin/fish', 'C:\\\\Windows\\\\System32\\\\cmd.exe', 'pwsh.exe', '']) assert.equal(M.isShellProcess(n), true, n);
-  for (const n of ['node', 'claude', '/usr/local/bin/agy', 'grok', 'python3']) assert.equal(M.isShellProcess(n), false, n);
+  for (const n of ['node', 'claude', '/usr/local/bin/agy', 'grok', 'codex', 'gemini', 'python3']) assert.equal(M.isShellProcess(n), false, n);
 });
 
 
@@ -146,4 +149,7 @@ test('Windows agent detection discards stale chrome and recognizes wrapped shell
   assert.equal(M.isWindowsShellPrompt('PS C:\\work> node fake-agent.js\n' + chrome), false);
   assert.equal(M.windowsAgentOutput('AgentDeck shortcuts: Antigravity\nPS C:\\work> '), '');
   assert.equal(M.windowsAgentOutput('PS C:\\work> node fake-agent.js\n' + chrome), chrome);
+  const codexChrome = 'OpenAI Codex\n› Ask Codex to do anything\n  100% context left';
+  assert.equal(M.windowsAgentOutput(codexChrome + '\nPS C:\\work> '), '');
+  assert.equal(M.windowsAgentOutput('PS C:\\work> codex --dangerously-bypass-approvals-and-sandbox\n' + codexChrome), codexChrome);
 });

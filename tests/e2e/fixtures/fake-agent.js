@@ -4,6 +4,12 @@
 // carrying the AgentDeck receipt contract gets a 【回执】 block back; "ask me"
 // makes it stop at a y/n question like a permission prompt.
 const readline = require('readline');
+if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
+  require('fs').writeFileSync(process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE, JSON.stringify({
+    child: Object.hasOwn(process.env, 'CLAUDE_CODE_CHILD_SESSION'),
+    skip: Object.hasOwn(process.env, 'CLAUDE_CODE_SKIP_PROMPT_HISTORY'),
+  }));
+}
 // A TUI redraws the current screen; old prompts must not look like a live menu.
 process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));

@@ -9,11 +9,14 @@ adds explicit task relationships without taking control of manual terminals.
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
-- **Left sidebar** (collapsible, resizable): 新对话, 搜索, Schedule, Artifacts, Skills, then
-  folders, loose sessions and 已归档. Every session is a live terminal column.
+- **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
+  then the 队长 row (once the Captain exists), folders, loose sessions and 已归档.
+  Every session is a live terminal column.
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
-  sessions in exactly the sidebar order (folders first), so swiping walks the list.
+  sessions in exactly the sidebar order (队长 first, then folders), so swiping walks the list.
+  The 队长 row is pinned: clicking it selects the Captain and shows its saved
+  conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
   top bar picks 自由 (per-column widths) or 2–5 equal columns.
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
@@ -56,7 +59,9 @@ skipped.
 ## 队长 (Captain)
 
 One standing column, opened from the sidebar entry 队长 (creating it the first
-time, with the agent you pick; afterwards it only returns to it). You tell it what
+time, with the agent you pick; afterwards it only returns to it). Once created it
+also has its own pinned row at the top of the session list. There is only ever
+one, always the first column of the deck. You tell it what
 you want; it hands the work to other columns and brings back short receipts. It
 does not do the work in its own column. On restart, an existing Captain is briefed
 again with the current provider, model and effort instructions.
@@ -67,7 +72,7 @@ again with the current provider, model and effort instructions.
   columns), run in its own terminal. Only the 队长's terminal holds the
   capability token those commands need; the columns it drives get none.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
-  permissions) unless it picks another with `--agent claude|agy|cursor|grok` or a full
+  permissions) unless it picks another with `--agent claude|agy|cursor|grok|codex` or a full
   `--command`. Its instructions list the providers and the models their CLIs report
   on this account, with a routing preference: bulk ordinary work to Antigravity
   `gemini-3.8-flash-high`; code and important work to Cursor CLI
@@ -106,6 +111,9 @@ again with the current provider, model and effort instructions.
   last 50; older files stay on disk) and the 队长 reads one on demand with
   `read --id <old id> [--turns N] [--find 关键词]`, with the same capability-token
   check as every other command. Nothing from it is put into the new context unasked.
+  For you, the 队长 column has a 查看清空上下文前的队长对话 button above its current
+  chat: each earlier conversation opens read-only from the saved file, without
+  restarting anything.
   `read --id captain-history --find "关键词"` searches across all retired Captain
   chats, including ones older than the metadata list. It requires a keyword and
   returns only a few matching turns (default 3, at most 10), each cut short.
@@ -118,7 +126,7 @@ rendered as Markdown, not commands or tool output. The real terminal is still
 running underneath: use the 终端/对话 toggle in a column header to switch.
 
 - A new blank session (no launch command, nothing said yet) offers Claude,
-  Antigravity, Grok and Cursor CLI buttons. A click types that agent's launch
+  Antigravity, Grok, Cursor CLI and Codex (ChatGPT) buttons. A click types that agent's launch
   command into the session's own shell; the terminal and its history stay. Only once
   the agent really is the foreground process is the command saved for the session,
   so reopening AgentDeck starts it again. A CLI that is not installed is reported
@@ -128,9 +136,9 @@ running underneath: use the 终端/对话 toggle in a column header to switch.
   launch is sent only from a recognized PowerShell prompt. A half-typed line is cleared first with editing keys only (^U; Ctrl+End, Ctrl+Home
   in PowerShell), never ^C. The buttons also disappear when you
   start an agent in the terminal yourself. Defaults: `claude
-  --dangerously-skip-permissions --effort high`, `agy --model gemini-3.8-flash-high
-  --effort high`, `grok`, `cursor-agent --model claude-opus-5-5-high` (`cursor-agent`,
-  never `agent`, which other tools also install).
+  --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high
+  --effort high`, `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
+  never `agent`, which other tools also install), `codex --dangerously-bypass-approvals-and-sandbox`.
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -139,9 +147,18 @@ running underneath: use the 终端/对话 toggle in a column header to switch.
 - Automatic sends (Schedule, 队长) never type into a bare shell, which would run
   each line as a command: on macOS/Linux they wait until something other than the
   shell is in the column's foreground; on Windows until the agent's screen shows.
+- Left sidebar rows and column header leftmost compact identity badges show
+  the tool/provider (Cursor, Antigravity/Gemini, Claude, Grok, Codex/ChatGPT)
+  alongside the short current model label (e.g. `Opus 5.5`), updating live
+  when switching models inside the CLI while preserving the tool provider (for
+  instance, Cursor remains Cursor even when running Claude or Gemini models).
+  Full provider, model and effort appear in the tooltip; plain shells display
+  no fake model.
 - Under the composer, the agent's own status lines (model, context, session,
   cost, resets, permission mode) are copied live from the terminal with their
-  colors. They are found as the rows below the TUI's input box.
+  colors, extending to the right edge of allocated content and cleanly
+  overflow-clipped without CSS ellipsis. They are found as the rows below the
+  TUI's input box.
 
 - Clicking a link or file path in a bubble opens it in the right side pane, with
   tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens
@@ -150,10 +167,34 @@ running underneath: use the 终端/对话 toggle in a column header to switch.
 - The left sidebar searches every conversation, titles and full text of prompts and
   replies only. Shortcuts: ⌘/Ctrl+K search, ⌘/Ctrl+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
-  and are not committed. Folders, archived sessions and schedules live in the
+  (one private JSON file per session, written atomically) and are not committed.
+  Folders, archived sessions and schedules live in the
   local `config.json` in the same folder. Turning a reply into a bubble is heuristic, so a TUI
   that redraws unusually may produce an imperfect bubble; the terminal view
   always has the full output. Syncing to a private GitHub repo is planned.
+
+### Conversation history
+
+AgentDeck removes inherited Claude child-session and skip-history flags from each
+new terminal, so an agent launching the app cannot disable independent CLI history.
+
+- Every prompt and final reply is kept across quitting and relaunching, whether
+  you typed it in the composer or straight into the terminal (in either view).
+  A line typed at a password or passphrase prompt is not recorded.
+- No turn is ever dropped to make room. A long chat shows its latest 150 turns;
+  显示更早的… loads older ones, and search reaches every turn.
+- Quitting while an agent is still answering keeps the reply seen so far and
+  marks the turn as unfinished. The same happens if a session's terminal is
+  restarted mid-turn.
+- Archive, restore, relaunch and clearing the 队长's context keep each chat under
+  its session's id.
+- Limits: history only exists from when AgentDeck recorded it. Older or deleted
+  conversations and agent CLIs' own transcripts are not imported. A reply is the
+  screen-extracted final answer, cut at 20,000 characters. A prompt over 8,000
+  characters goes out as a file, and its bubble keeps the opening plus that file.
+  All chats are loaded into memory at launch. A single chat file larger than
+  64 MB is no longer written: you get a warning, and what was saved before stays.
+  Delete (not archive) removes a session's conversation for good.
 
 ## Desktop notifications
 

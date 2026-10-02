@@ -88,9 +88,9 @@ function withClaudeResume(cmd) {
 // Fresh / reset layout: three agent columns that auto-launch on open.
 function defaultColumns() {
   const agents = [
-    { title: 'Antigravity', cmd: 'agy' },
-    { title: 'Claude', cmd: 'claude --dangerously-skip-permissions' },
-    { title: 'Grok', cmd: 'grok' },
+    { title: 'Antigravity', cmd: BoardCore.commandForAgent('agy') },
+    { title: 'Claude', cmd: BoardCore.commandForAgent('claude') },
+    { title: 'Grok', cmd: BoardCore.commandForAgent('grok') },
   ];
   return agents.map((a) => ({
     id: newId(), taskId: newTaskId(), title: a.title, cwd: '', cmd: a.cmd,
@@ -136,7 +136,7 @@ if (saved) {
   }
   if (Array.isArray(saved.columns) && saved.columns.length) {
     config.columns = saved.columns.map((c) => BoardCore.normalizeColumn({
-      id: c.id || newId(), title: c.title || 'Agent', cwd: c.cwd || '', cmd: c.cmd || '', width: c.width || DEFAULT_WIDTH,
+      id: c.id || newId(), title: c.title || 'Agent', cwd: c.cwd || '', cmd: BoardCore.upgradeLegacyCommand(c.cmd || ''), width: c.width || DEFAULT_WIDTH,
       // Pre-feature configs carry no manualTitle: infer it. Auto-ish titles
       // (pure numbers, preset agent names) stay auto-renamable; anything else
       // was typed by the user and must never be auto-renamed.
@@ -333,7 +333,7 @@ const WORKING_RE = /esc to interrupt|Running(?:\.\.\.|…)|⎿\s+Running|\(\d+s\
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
 const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|waiting for (?:your |user )?(?:input|confirmation|approval|permission)/im;
-const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Antigravity|Claude Code|Composer|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^❯\s*$|│\s*❯/im;
+const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 const DOT_TIP = { plain: '未开始', working: '干活中…', input: '等你回复！', done: '已完成', exited: '已退出' };
 function classify(text, entry) {
   const lines = text.split('\n');
@@ -1362,6 +1362,13 @@ function buildColumn(col, isFresh) {
 
   const head = document.createElement('div');
   head.className = 'col-head';
+  const badgeEl = document.createElement('span');
+  badgeEl.className = 'agent-badge col-badge';
+  badgeEl.hidden = true;
+  if (window.AgentInfo) {
+    const info = window.AgentInfo.resolveAgentInfo(col, null, null);
+    window.AgentInfo.renderBadge(badgeEl, info, 'header');
+  }
   const grip = document.createElement('span');
   grip.className = 'grip'; grip.innerHTML = ICONS.grip; grip.title = '拖拽排序';
   attachReorder(grip, col);
@@ -1388,7 +1395,7 @@ function buildColumn(col, isFresh) {
     mkBtn(ICONS.edit, '编辑（标题、目录、启动命令）', () => openDialog(columns.indexOf(col))),
     mkBtn(ICONS.close, '关闭并删除', () => removeCol(col)),
   );
-  head.append(grip, dot, title, timerEl, secondary);
+  head.append(badgeEl, grip, dot, title, timerEl, secondary);
   // Double-click an empty part of the header to zoom the column (the title
   // owns double-click for rename; buttons/grip own their clicks).
   head.addEventListener('dblclick', (e) => {
@@ -1507,7 +1514,7 @@ function buildColumn(col, isFresh) {
       }
     }, { capture: true, passive: true });
     terms.set(col.id, {
-      term, fit, search, el: termEl, wrap, titleEl: title, dot, timerEl, alive: true, state: 'plain', disposers,
+      term, fit, search, el: termEl, wrap, titleEl: title, badgeEl, dot, timerEl, alive: true, state: 'plain', disposers,
       // Status-machine memory: hasWorked separates green "just finished" from
       // gray "idle since launch"; idleTicks debounces working→done (~3s);
       // workStart/workedMs drive the header timer; lastDump skips redundant IPC.
@@ -3029,6 +3036,26 @@ setInterval(() => {
 
     ChatUI.onTick(id, entry, text);
     MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
+
+    if (window.AgentInfo) {
+      const col = columns.find((c) => c.id === id);
+      if (col) {
+        let footer = entry.footerLines;
+        if (!ChatUI.isChatMode(id)) {
+          try { footer = ChatUI.readFooter(entry.term); } catch (_) { footer = null; }
+        }
+        entry.footerLines = footer;
+        const info = window.AgentInfo.resolveAgentInfo(col, entry, text);
+        if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
+        const nav = navItems.get(id);
+        if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar');
+        if (!col.cmd && info.provider && (col.agentProvider !== info.provider || col.agentModel !== info.model)) {
+          col.agentProvider = info.provider;
+          col.agentModel = info.model;
+          saveConfig();
+        }
+      }
+    }
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);

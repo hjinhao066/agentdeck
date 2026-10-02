@@ -39,7 +39,8 @@
   }
 
   // Folders in their order, each with its sessions in deck order, then loose
-  // sessions. 队长 (the main session) has its own entry and is never listed here.
+  // sessions. 队长 (the main session) is not part of any group: the sidebar
+  // pins it as its own protected row above the folders (captainOf).
   function groupSessions(columns, folders) {
     const groups = folders.map((folder) => ({ folder, items: [] }));
     const byId = new Map(groups.map((g) => [g.folder.id, g]));
@@ -52,17 +53,21 @@
     return { groups, loose };
   }
 
-  // 队长 is always the first column of the deck.
+  // 队长 is always the first column of the deck, and the first sidebar row.
   function orderedColumns(columns, folders) {
     const { groups, loose } = groupSessions(columns, folders);
     return [...columns.filter((c) => c.isMain), ...groups.flatMap((g) => g.items), ...loose];
   }
+  function captainOf(columns) {
+    return columns.find((c) => c.isMain) || null;
+  }
 
   // Move a session into a folder (null = loose), optionally before another
-  // session of that group. Returns the new deck order.
+  // session of that group. Returns the new deck order. 队长 never moves.
   function moveColumn(columns, folders, id, target) {
     const col = columns.find((c) => c.id === id);
     if (!col) return columns.slice();
+    if (col.isMain) return orderedColumns(columns, folders);
     const folderId = target && target.folderId && folders.some((f) => f.id === target.folderId) ? target.folderId : null;
     col.folderId = folderId;
     const rest = columns.filter((c) => c !== col);
@@ -111,6 +116,6 @@
 
   return {
     MAX_FOLDERS, validId, newFolderId, normalizeFolders, folderOf, groupSessions,
-    orderedColumns, moveColumn, nextFolderName, removeFolder, normalizeArchived,
+    orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, normalizeArchived,
   };
 });

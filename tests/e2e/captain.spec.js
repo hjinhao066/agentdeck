@@ -64,13 +64,44 @@ test('there is one Captain: the sidebar entry creates it first, then just return
   await expect(page.locator('.column.is-main')).toHaveCount(1);
   mainId = await page.evaluate(() => config.mainSession.colId);
   expect(await page.evaluate(() => deckEl.querySelector('.column').dataset.colId)).toBe(mainId);
-  await expect(page.locator(`.colnav-item[data-col-id="${mainId}"]`)).toHaveCount(0);   // not a regular session
+  // a protected row of its own, first in the session list, without archive/delete actions
+  const row = page.locator(`.colnav-item.captain-item[data-col-id="${mainId}"]`);
+  await expect(row).toHaveCount(1);
+  expect(await page.evaluate(() => document.querySelector('#navList .colnav-item').dataset.colId)).toBe(mainId);
+  await expect(row.locator('.cn-actions')).toHaveCount(0);
   await expect.poll(() => page.evaluate((i) => window.deck.ptyIsAlive(i), mainId)).toBe(true);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeHidden();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(mainId);
+  // the list row selects it too, and shows its conversation even from terminal view
+  await page.locator('.colnav-item[data-col-id="cap-y"]').click();
+  await page.evaluate((i) => ChatUI.setMode(i, 'term'), mainId);
+  await row.click();
+  await expect.poll(() => page.evaluate(() => focusedId)).toBe(mainId);
+  await expect(page.locator(`.column[data-col-id="${mainId}"]`)).toHaveClass(/chat-mode/);
+  await expect(page.locator('#mainDialog')).toBeHidden();
   expect(await page.evaluate(() => columns.filter((c) => c.isMain).length)).toBe(1);
+  await expect(page.locator('.colnav-item.captain-item')).toHaveCount(1);
+});
+
+// (moveSession refusing 队长 is covered by the sidebar-core unit test)
+test('the Captain row cannot be dragged into a folder or onto the archive, nor archived', async () => {
+  const folder = await page.evaluate(() => Sidebar.createFolder(false).id);
+  const row = page.locator('.colnav-item.captain-item');
+  const first = () => page.evaluate(() => ({ id: columns[0].id, folderId: columns[0].folderId || null, deck: deckEl.querySelector('.column').dataset.colId }));
+  for (const target of [`.nav-folder-head[data-folder-id="${folder}"]`, '.nav-section[data-section="archived"]']) {
+    const from = await row.boundingBox();
+    const to = await page.locator(target).boundingBox();
+    await page.mouse.move(from.x + 30, from.y + from.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(to.x + 30, to.y + to.height / 2, { steps: 6 });
+    await page.mouse.up();
+    expect(await first()).toEqual({ id: mainId, folderId: null, deck: mainId });
+  }
+  await page.evaluate(() => archiveColumn(MainSession.mainCol()));
+  expect(await page.evaluate(() => [columns.filter((c) => c.isMain).length, (config.archived || []).length])).toEqual([1, 0]);
+  await expect(page.locator(`#navList .colnav-item.captain-item[data-col-id="${mainId}"]`)).toHaveCount(1);
 });
 
 test('new: a fresh column gets the task as its first message, and the receipt comes back', async () => {
@@ -323,4 +354,27 @@ test('after a restart the conversation from before the clear is still listed and
   await run(id, `clear; node "${CLI}" read --id captain-history --find "status please" --turns 1`);
   await expect.poll(() => screen(id), { timeout: 15000 }).toContain(`记录：${oldCaptainId}`);
   expect(await screen(id)).toContain('用户：status please');
+});
+
+test('after a restart the Captain row is still pinned and shows its saved conversation, older ones read-only', async () => {
+  const id = await page.evaluate(() => config.mainSession.colId);
+  const row = page.locator('.colnav-item.captain-item');
+  await expect(row).toHaveCount(1);
+  await expect(row).toHaveAttribute('data-col-id', id);
+  expect(await page.evaluate(() => [columns.filter((c) => c.isMain).length, deckEl.querySelector('.column').dataset.colId])).toEqual([1, id]);
+  await page.locator('.colnav-item[data-col-id="cap-y"]').click();
+  await page.evaluate((i) => ChatUI.setMode(i, 'term'), id);
+  await row.click();
+  await expect.poll(() => page.evaluate(() => focusedId)).toBe(id);
+  const col = page.locator(`.column[data-col-id="${id}"]`);
+  await expect(col).toHaveClass(/chat-mode/);
+  await expect(col.locator('.chat-scroll > .turn .task-card.st-done', { hasText: 'Worker y' })).toHaveCount(1);
+  // the conversation from before the clear, from its saved file, read-only
+  const turnsBefore = await page.evaluate((i) => ChatUI.turnsOf(i).length, id);
+  await col.locator('.retired-toggle').click();
+  const seg = col.locator(`.retired-chat[data-chat-id="${oldCaptainId}"]`);
+  await seg.locator('summary').click();
+  await expect(seg.locator('.msg.user .bubble', { hasText: 'status please' })).toBeVisible();
+  expect(await page.evaluate((i) => ChatUI.turnsOf(i).length, id)).toBe(turnsBefore);
+  expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), id)).toBe(true);
 });

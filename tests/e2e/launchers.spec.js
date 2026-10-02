@@ -50,9 +50,12 @@ test.afterAll(async () => {
 });
 
 test('only a blank session offers the agents, with their real launch commands', async () => {
-  await expect(launcher('ln-blank')).toHaveText(['Claude', 'Antigravity', 'Grok', 'Cursor CLI']);
-  await expect(launcher('ln-blank').nth(3)).toHaveAttribute('data-cmd', 'cursor-agent --model claude-opus-5-5-high');
-  await expect(launcher('ln-blank').nth(1)).toHaveAttribute('data-cmd', 'agy --model gemini-3.8-flash-high --effort high');
+  await expect(launcher('ln-blank')).toHaveText(['Claude', 'Antigravity', 'Grok', 'Cursor CLI', 'Codex (ChatGPT)']);
+  await expect(launcher('ln-blank').nth(0)).toHaveAttribute('data-cmd', 'claude --dangerously-skip-permissions --effort high');
+  await expect(launcher('ln-blank').nth(1)).toHaveAttribute('data-cmd', 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  await expect(launcher('ln-blank').nth(2)).toHaveAttribute('data-cmd', 'grok --permission-mode bypassPermissions');
+  await expect(launcher('ln-blank').nth(3)).toHaveAttribute('data-cmd', 'cursor-agent --force --model claude-opus-5-5-high');
+  await expect(launcher('ln-blank').nth(4)).toHaveAttribute('data-cmd', 'codex --dangerously-bypass-approvals-and-sandbox');
   await expect.poll(() => agentUp('ln-agent'), { timeout: 20000 }).toBe(true);
   await expect(launcher('ln-agent')).toHaveCount(0);
 });
@@ -63,7 +66,7 @@ test('a CLI that is not installed is reported and the session stays blank', asyn
   const note = page.locator('.column[data-col-id="ln-blank"] .launch-note.failed');
   await expect(note).toContainText('没找到 agentdeck-no-such-cli', { timeout: 20000 });
   expect(await colCmd('ln-blank')).toBe('');
-  await expect(launcher('ln-blank')).toHaveCount(4);
+  await expect(launcher('ln-blank')).toHaveCount(5);
   await expect(launcher('ln-blank').first()).toBeEnabled();
 });
 
@@ -98,12 +101,12 @@ test('a button starts the agent once, in the same session, and the composer then
 });
 
 test('an agent started by hand in the terminal hides the buttons; leaving it brings them back', async () => {
-  await expect(launcher('ln-manual')).toHaveCount(4);
+  await expect(launcher('ln-manual')).toHaveCount(5);
   await page.evaluate((c) => window.deck.ptyInput('ln-manual', c + '\r'), FAKE);
   await expect(launcher('ln-manual')).toHaveCount(0, { timeout: 15000 });
   expect(await colCmd('ln-manual')).toBe('');
   await page.evaluate(() => window.deck.ptyInput('ln-manual', '\x03'));
-  await expect(launcher('ln-manual')).toHaveCount(4, { timeout: 15000 });
+  await expect(launcher('ln-manual')).toHaveCount(5, { timeout: 15000 });
 });
 
 test('the chosen agent comes back after a restart, with the conversation', async () => {
@@ -114,5 +117,70 @@ test('the chosen agent comes back after a restart, with the conversation', async
   await expect.poll(() => agentUp('ln-blank'), { timeout: 20000 }).toBe(true);
   await expect(launcher('ln-blank')).toHaveCount(0);
   await expect(page.locator('.column[data-col-id="ln-blank"] .msg.user .bubble').last()).toHaveText('hello launcher');
-  await expect(launcher('ln-manual')).toHaveCount(4);
+  await expect(launcher('ln-manual')).toHaveCount(5);
+});
+
+test('all five launchers use canonical bypass commands and generate safe launch bytes', async () => {
+  const launchers = await page.evaluate(() => window.BoardCore.LAUNCHERS.map((l) => ({
+    key: l.key, label: l.label, cmd: l.cmd,
+    canonical: window.BoardCore.commandForAgent(l.key),
+    unixInput: window.BoardCore.launchInput(l.cmd, 'darwin'),
+    winInput: window.BoardCore.launchInput(l.cmd, 'win32'),
+  })));
+  expect(launchers).toHaveLength(5);
+  expect(launchers.map((l) => l.label)).toEqual(['Claude', 'Antigravity', 'Grok', 'Cursor CLI', 'Codex (ChatGPT)']);
+  for (const l of launchers) {
+    expect(l.cmd).toBe(l.canonical);
+    expect(l.unixInput).toBe('\x15' + l.cmd + '\r');
+    expect(l.winInput).toBe('\x1b[1;5F\x1b[1;5H' + l.cmd + '\r');
+    expect(l.winInput).not.toContain('\x03');
+  }
+});
+
+test('saved default migration upgrades legacy commands while preserving custom commands', async () => {
+  const result = await page.evaluate(() => {
+    const B = window.BoardCore;
+    return {
+      legacyAgy: B.upgradeLegacyCommand('agy --model gemini-3.8-flash-high --effort high'),
+      plainAgy: B.upgradeLegacyCommand('agy'),
+      plainGrok: B.upgradeLegacyCommand('grok'),
+      legacyCursor: B.upgradeLegacyCommand('cursor-agent --model claude-opus-5-5-high'),
+      plainCursor: B.upgradeLegacyCommand('cursor-agent'),
+      plainClaude: B.upgradeLegacyCommand('claude --dangerously-skip-permissions'),
+      customModel: B.upgradeLegacyCommand('cursor-agent --model claude-sonnet-5-5-xhigh'),
+      customScript: B.upgradeLegacyCommand('./run-worker.sh --flag'),
+      blankShell: B.upgradeLegacyCommand(''),
+    };
+  });
+  expect(result.legacyAgy).toBe('agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  expect(result.plainAgy).toBe('agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  expect(result.plainGrok).toBe('grok --permission-mode bypassPermissions');
+  expect(result.legacyCursor).toBe('cursor-agent --force --model claude-opus-5-5-high');
+  expect(result.plainCursor).toBe('cursor-agent --force --model claude-opus-5-5-high');
+  expect(result.plainClaude).toBe('claude --dangerously-skip-permissions --effort high');
+  expect(result.customModel).toBe('cursor-agent --model claude-sonnet-5-5-xhigh');
+  expect(result.customScript).toBe('./run-worker.sh --flag');
+  expect(result.blankShell).toBe('');
+});
+
+test('Windows launch readiness recognizes Codex screen and shell prompt transitions', async () => {
+  const ready = await page.evaluate(async () => {
+    const oldPlatform = env.platform;
+    const entry = terms.get('ln-agent');
+    const oldScreen = entry.lastScreen;
+    const col = columns.find((c) => c.id === 'ln-agent');
+    try {
+      env.platform = 'win32';
+      entry.lastScreen = 'PS C:\\repo> codex --dangerously-bypass-approvals-and-sandbox\r\nOpenAI Codex\r\n› Ask Codex to do anything\r\n  100% context left';
+      const running = await agentInForeground(col, false);
+      entry.lastScreen += '\r\nPS C:\\repo> ';
+      const shell = await agentInForeground(col, false);
+      return { running, shell };
+    } finally {
+      env.platform = oldPlatform;
+      entry.lastScreen = oldScreen;
+    }
+  });
+  expect(ready.running).toBe(true);
+  expect(ready.shell).toBe(false);
 });

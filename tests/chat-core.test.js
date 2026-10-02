@@ -75,15 +75,53 @@ test('menu answers are not treated as new questions', () => {
   assert.equal(C.isPromptAnswer('yes please refactor this'), false);
 });
 
-test('chats are normalised and capped', () => {
+test('chats are normalised and keep every turn, never evicting old ones', () => {
   const raw = { turns: Array.from({ length: 450 }, (_, i) => ({ id: 't' + i, ts: i, user: 'q' + i, reply: 'a' + i, done: true })) };
   raw.turns.push({ user: 5 }, null);
   const chat = C.normalizeChat(raw, 'c1');
-  assert.equal(chat.turns.length, C.MAX_TURNS);
+  assert.equal(chat.turns.length, 450);
+  assert.equal(chat.turns[0].user, 'q0');
   assert.equal(chat.turns[chat.turns.length - 1].user, 'q449');
+  for (let i = 0; i < 300; i++) C.addTurn(chat, { id: 'n' + i, ts: 1000 + i, user: 'n' + i, reply: '', done: true });
+  assert.equal(chat.turns.length, 750);
+  assert.equal(chat.turns[0].user, 'q0');
   assert.deepEqual(C.normalizeChat('nope', 'c2'), { v: 1, id: 'c2', turns: [] });
   assert.equal(C.normalizeChat({ captainArchive: true, turns: [] }, 'old-captain').captainArchive, true);
   assert.equal(C.normalizeChat({ captainArchive: 'true', turns: [] }, 'worker').captainArchive, undefined);
+});
+
+test('a turn open when the app closed keeps its partial reply and is marked unfinished', () => {
+  const saved = C.normalizeChat({ turns: [
+    { id: 'a', ts: 1, user: 'done one', reply: 'ok', done: true },
+    { id: 'b', ts: 2, user: 'cut off', reply: 'half of the answer', done: false, interrupted: true },
+    { id: 'c', ts: 3, user: 'never answered', reply: '', done: false },
+  ] }, 'x');
+  assert.equal(saved.turns[1].interrupted, true);
+  assert.equal(C.normalizeChat({ turns: [{ user: 'u', interrupted: 'yes' }] }, 'y').turns[0].interrupted, undefined);
+  C.closeOpenTurns(saved);
+  assert.deepEqual(saved.turns.map((t) => [t.done, !!t.interrupted, t.reply]),
+    [[true, false, 'ok'], [true, true, 'half of the answer'], [true, true, '']]);
+});
+
+test('turns recorded before the saved chat loaded are merged after it, without duplicates', () => {
+  const saved = { v: 1, id: 'c', turns: [{ id: 'a', user: 'old' }, { id: 'b', user: 'older still saved' }] };
+  const mem = { v: 1, id: 'c', turns: [{ id: 'b', user: 'dup' }, { id: 'z', user: 'typed during startup' }] };
+  assert.deepEqual(C.mergeChats(saved, mem).turns.map((t) => t.id), ['a', 'b', 'z']);
+  assert.equal(C.mergeChats(saved, undefined), saved);
+});
+
+test('the chat view renders a window of the latest turns, older ones on request', () => {
+  assert.equal(C.windowStart(40, C.RENDER_STEP), 0);
+  assert.equal(C.windowStart(500, C.RENDER_STEP), 500 - C.RENDER_STEP);
+  assert.equal(C.windowStart(500, C.RENDER_STEP * 2), 500 - C.RENDER_STEP * 2);
+  assert.equal(C.windowStart(500, 10_000), 0);
+});
+
+test('lines typed at a password prompt are never recorded as prompts', () => {
+  for (const row of ['Password:', '[sudo] password for me: ', "Enter passphrase for key '/Users/me/.ssh/id_ed25519': ", '请输入密码：', 'Enter PIN: '])
+    assert.equal(C.isSecretPrompt(row), true, row);
+  for (const row of ['> ', 'me@mac proj % ', '│ > fix the password reset page', 'PS C:\\> ', ''])
+    assert.equal(C.isSecretPrompt(row), false, row);
 });
 
 test('search covers prompts, replies and titles, newest first, all words must match', () => {

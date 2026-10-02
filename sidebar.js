@@ -1,5 +1,6 @@
 // Left sidebar, Cursor style: New chat / Search / Schedule / Artifacts on top,
-// then folders, loose sessions and the archive. Every session is a live
+// then the pinned 队长 row (once it exists), folders, loose sessions and the
+// archive. Every session is a live
 // terminal column; the deck shows them in exactly this order, so dragging a
 // session into a folder also moves its column. Plain script; everything it
 // needs from the deck comes in through init().
@@ -95,9 +96,10 @@
     const navItems = host.navItems;
     navItems.clear();
     listEl.textContent = '';
+    captainMirror.disconnect();
     const main = window.MainSession && window.MainSession.mainCol();
     captainRow.dot.hidden = !main;
-    if (main) navItems.set(main.id, { el: captainRow.el, dot: captainRow.dot, label: null, sub: null, meta: null });
+    if (main) listEl.appendChild(captainListRow(main));
     const folders = host.folders();
     const cols = host.columns();
     const { groups, loose } = SC.groupSessions(cols, folders);
@@ -134,6 +136,48 @@
       listEl.appendChild(head);
     }
     host.syncNav();
+  }
+
+  // 队长's own row, pinned first like its column in the deck. It cannot be
+  // dragged, filed into a folder, archived or deleted from the list; the top
+  // 队长 entry still creates it and its dot mirrors this row's.
+  const captainMirror = new MutationObserver((records) => {
+    records.forEach((r) => { captainRow.dot.className = r.target.className; });
+  });
+  function captainListRow(col) {
+    const item = el('div', 'colnav-item captain-item');
+    item.dataset.colId = col.id;
+    item.dataset.captain = '1';
+    item.title = '队长：固定在最前面，不能拖进文件夹或归档';
+    const badge = el('span', 'agent-badge cn-badge');
+    badge.hidden = true;
+    const dot = el('span', 'cn-dot');
+    const text = el('span', 'cn-text');
+    const label = el('span', 'cn-label', host.columnLabel(col));
+    const sub = el('span', 'cn-sub');
+    text.append(label, sub);
+    const meta = el('span', 'cn-meta', ago(host.lastTurnTs(col.id)));
+    item.append(badge, iconEl('crown', 'cn-crown'), dot, text, meta);
+    item.addEventListener('click', () => selectCaptain(col));
+    item.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      openMenu({ x: e.clientX, y: e.clientY }, [
+        { label: '打开对话', run: () => selectCaptain(col) },
+        { label: '打开终端', run: () => { host.jumpToColumn(col); host.showSideTerminal(); } },
+      ]);
+    });
+    host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge });
+    if (window.AgentInfo) {
+      const entry = host.terms && host.terms.get(col.id);
+      window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar');
+    }
+    captainMirror.observe(dot, { attributes: true, attributeFilter: ['class'] });
+    return item;
+  }
+  // Selecting it shows its saved conversation.
+  function selectCaptain(col) {
+    host.jumpToColumn(col);
+    if (!host.isChatMode(col.id)) host.setMode(col.id, 'chat');
   }
 
   function folderBlock(g) {
@@ -175,6 +219,8 @@
   function sessionRow(col) {
     const item = el('div', 'colnav-item');
     item.dataset.colId = col.id;
+    const badge = el('span', 'agent-badge cn-badge');
+    badge.hidden = true;
     const dot = el('span', 'cn-dot');
     const text = el('span', 'cn-text');
     const label = el('span', 'cn-label', host.columnLabel(col));
@@ -188,14 +234,19 @@
       iconButton('archive', '归档', () => host.archiveColumn(col)),
       iconButton('more', '更多', (e) => sessionMenu(col, label, e.currentTarget), 'nav-more'),
     );
-    item.append(dot, text, meta, actions);
+    item.append(badge, dot, text, meta, actions);
     attachDrag(item, col);
     label.addEventListener('dblclick', (e) => {
       e.preventDefault(); e.stopPropagation();
       inlineEdit(label, host.columnLabel(col), (v) => host.renameSession(col, v));
     });
     item.addEventListener('contextmenu', (e) => { e.preventDefault(); sessionMenu(col, label, { x: e.clientX, y: e.clientY }); });
-    host.navItems.set(col.id, { el: item, dot, label, sub, meta });
+    host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge });
+    if (window.AgentInfo) {
+      const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
+      const info = window.AgentInfo.resolveAgentInfo(col, entry, entry?.lastScreen);
+      window.AgentInfo.renderBadge(badge, info, 'sidebar');
+    }
     return item;
   }
 
@@ -360,7 +411,7 @@
     if (!over || !listEl.contains(over)) return null;
     const row = over.closest('.colnav-item');
     if (row) {
-      if (row.dataset.colId === srcId) return { kind: 'noop' };
+      if (row.dataset.colId === srcId || row.dataset.captain) return { kind: 'noop' };
       const group = row.closest('[data-group]');
       const folderId = group ? group.dataset.group || null : null;
       const r = row.getBoundingClientRect();

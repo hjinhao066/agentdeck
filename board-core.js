@@ -6,25 +6,53 @@
   'use strict';
 
   const CLAUDE = 'claude --dangerously-skip-permissions --effort high';
-  const AGY = 'agy --model gemini-3.8-flash-high --effort high';
+  const AGY = 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high';
   // `cursor-agent`, never `agent`: that name collides with other tools' binaries.
-  const CURSOR = 'cursor-agent --model claude-opus-5-5-high';
+  const CURSOR = 'cursor-agent --force --model claude-opus-5-5-high';
+  const GROK = 'grok --permission-mode bypassPermissions';
+  const CODEX = 'codex --dangerously-bypass-approvals-and-sandbox';
+  const GEMINI = 'gemini --yolo';
   const AGENT_COMMANDS = Object.freeze({
     claude: CLAUDE,
     antigravity: AGY,
     agy: AGY,
-    grok: 'grok',
+    grok: GROK,
     cursor: CURSOR,
     'cursor-agent': CURSOR,
+    codex: CODEX,
+    'codex (chatgpt)': CODEX,
+    chatgpt: CODEX,
+    gemini: GEMINI,
     shell: '',
   });
   // What a blank session offers to start, in this order.
   const LAUNCHERS = Object.freeze([
     { key: 'claude', label: 'Claude', cmd: CLAUDE },
     { key: 'agy', label: 'Antigravity', cmd: AGY },
-    { key: 'grok', label: 'Grok', cmd: 'grok' },
+    { key: 'grok', label: 'Grok', cmd: GROK },
     { key: 'cursor', label: 'Cursor CLI', cmd: CURSOR },
+    { key: 'codex', label: 'Codex (ChatGPT)', cmd: CODEX },
   ].map(Object.freeze));
+  const LEGACY_COMMANDS = Object.freeze({
+    agy: AGY,
+    'agy --model gemini-3.8-flash-high --effort high': AGY,
+    grok: GROK,
+    cursor: CURSOR,
+    'cursor-agent': CURSOR,
+    'cursor-agent --model claude-opus-5-5-high': CURSOR,
+    claude: CLAUDE,
+    'claude --dangerously-skip-permissions': CLAUDE,
+    codex: CODEX,
+    gemini: GEMINI,
+  });
+
+  function upgradeLegacyCommand(command) {
+    if (typeof command !== 'string') return command;
+    const trimmed = command.trim();
+    return Object.prototype.hasOwnProperty.call(LEGACY_COMMANDS, trimmed)
+      ? LEGACY_COMMANDS[trimmed]
+      : command;
+  }
   // zsh, bash, fish, PowerShell and cmd wording for a program that isn't there
   const NOT_FOUND_RE = /command not found|unknown command|is not recognized|no such file or directory|未找到命令|找不到命令/gi;
 
@@ -84,6 +112,8 @@
     if (/^\s*(?:agy|antigravity)(?:\s|$)/.test(cmd)) return 'Antigravity';
     if (/^\s*grok(?:\s|$)/.test(cmd)) return 'Grok';
     if (/^\s*cursor-agent(?:\s|$)/.test(cmd)) return 'Cursor';
+    if (/^\s*codex(?:\s|$)/.test(cmd)) return 'Codex';
+    if (/^\s*gemini(?:\s|$)/.test(cmd)) return 'Antigravity';
     return cmd ? 'Custom agent' : 'Shell';
   }
 
@@ -367,6 +397,8 @@
   return {
     AGENT_COMMANDS,
     LAUNCHERS,
+    LEGACY_COMMANDS,
+    upgradeLegacyCommand,
     STATE_LABELS,
     cleanText,
     normalizeRole,

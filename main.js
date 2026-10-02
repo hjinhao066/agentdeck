@@ -8,6 +8,7 @@ const { validId, trustedSender, privateFile, boundedAppend } = require('./securi
 const { createNotifications } = require('./notifications');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
+const BoardCore = require('./board-core');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
@@ -128,6 +129,11 @@ function buildEnv() {
   delete env.SHELL_SESSION_ID;
   delete env.ITERM_SESSION_ID;
 
+  // Deck columns are independent user sessions, even if an agent launched the
+  // app. Child-session flags would disable the CLI's own transcript/history.
+  delete env.CLAUDE_CODE_CHILD_SESSION;
+  delete env.CLAUDE_CODE_SKIP_PROMPT_HISTORY;
+
   return env;
 }
 const ENV = buildEnv();
@@ -158,9 +164,9 @@ function shellFile() {
 function shellArgs() {
   if (!isWin) return [];
   const init = [
-    "function global:c { Set-Location 'D:\\aiproject\\playground'; claude --dangerously-skip-permissions }",
-    "function global:a { agy }",
-    "function global:g { grok }",
+    `function global:c { Set-Location 'D:\\aiproject\\playground'; ${BoardCore.commandForAgent('claude')} }`,
+    `function global:a { ${BoardCore.commandForAgent('agy')} }`,
+    `function global:g { ${BoardCore.commandForAgent('grok')} }`,
     "Write-Host 'AgentDeck shortcuts:  c = Claude   a = Antigravity   g = Grok' -ForegroundColor DarkGray",
   ].join('; ');
   const b64 = Buffer.from(init, 'utf16le').toString('base64');

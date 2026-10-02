@@ -1,0 +1,30 @@
+const { test, expect, _electron: electron } = require('@playwright/test');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+test('independent PTYs do not inherit flags that disable CLI history', async () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-env-'));
+  const fake = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    columns: [{ id: 'env-agent', title: 'env-agent', cmd: fake, cwd: profile, role: 'manual' }],
+  }));
+  const flagsFile = path.join(profile, 'history-flags.json');
+  const childEnv = { ...process.env, CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SKIP_PROMPT_HISTORY: '1', AGENTDECK_TEST_HISTORY_FLAGS_FILE: flagsFile };
+  delete childEnv.ELECTRON_RUN_AS_NODE;
+  let application;
+  try {
+    application = await electron.launch({
+      executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+      args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`],
+      env: childEnv,
+    });
+    const page = await application.firstWindow();
+    await expect(page.locator('.column')).toHaveCount(1);
+    await expect.poll(() => fs.existsSync(flagsFile)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(flagsFile, 'utf8'))).toEqual({ child: false, skip: false });
+  } finally {
+    if (application) await application.close();
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});

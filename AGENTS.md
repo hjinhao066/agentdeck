@@ -49,6 +49,13 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Saved conversations live in `userData/chats` (private, never committed, never
   pushed to this public repo). Any cloud sync must target a separate private repo.
   Folders, archived sessions and schedules are in the local `config.json` too.
+- History is durable: every turn is kept (no turn-count eviction; the chat view
+  renders a window and loads older turns on request). Prompts submitted in the raw
+  terminal are recorded in either view, except lines typed at a password prompt.
+  A turn still open when the app closes or its terminal is replaced keeps the
+  reply captured so far and is marked `interrupted`, never shown as complete.
+  A chat too large to write is refused with a toast, never trimmed. Column ids
+  (and so chat files) survive archive, restore and relaunch.
 - Deck order always equals sidebar order (folders first, then loose sessions;
   `SidebarCore.orderedColumns`). Reorder by moving live column nodes, never by
   rebuilding terminals. Archive kills the PTY with `keepReplay` so restore can
@@ -62,10 +69,16 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - The status lines under a chat composer are read from the rows below the TUI's
   input box; `extractReply` must keep cutting that box and everything below it.
 - 队长 (main session, `main-session.js`/`main-core.js`): exactly one column with
-  `isMain`, always first in the deck, never in the session list. Its terminal is
+  `isMain`, always first in the deck. Once it exists, the sidebar also shows it as
+  a protected row pinned above the folders (selecting it shows its conversation);
+  that row is never dragged, filed into a folder, archived or deleted like an
+  ordinary session, and the top 队长 entry stays for creating/jumping. Its terminal is
   the only manual column spawned with a control token; `main-*` board actions are
   accepted only from that column. Columns it drives never get a token. Nothing new
   is exposed to the page: the existing board request channel carries it.
+- Clearing the 队长's context keeps the old chat as a `captainArchive` file under
+  the old id. The 队长 column shows those read-only from the chats already loaded
+  (no terminal restart, no new main-process read); they never enter its model context.
 - Receipts come from the worker's own 【回执】/【提问】 block in its final reply; full
   output, logs and file bodies never go into the 队长's context. Tests must drive
   workers with the stand-in agent (`--command`), never a real agent CLI.

@@ -38,9 +38,10 @@
   // Only models each CLI listed on the owner's accounts; launch commands match
   // BoardCore's presets.
   const PROVIDERS = [
-    'Antigravity：agy --model gemini-3.8-flash-high --effort high　其他模型：gemini-3.1-pro-high、claude-sonnet-4-6、claude-opus-4-6-thinking；--effort 可选 low|medium|high|max',
-    'Cursor CLI：cursor-agent --model claude-opus-5-5-high　其他模型：claude-sonnet-5-5-high、grok-4.7-high-fast、gemini-3.8-flash-high',
+    'Antigravity：agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high　其他模型：gemini-3.1-pro-high、claude-sonnet-4-6、claude-opus-4-6-thinking；--effort 可选 low|medium|high|max',
+    'Cursor CLI：cursor-agent --force --model claude-opus-5-5-high　其他模型：claude-sonnet-5-5-high、grok-4.7-high-fast、gemini-3.8-flash-high',
     'Claude Code：claude --dangerously-skip-permissions --effort high',
+    'Codex (ChatGPT)：codex --dangerously-bypass-approvals-and-sandbox',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
   const ROUTING = [
@@ -75,7 +76,7 @@
       '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。',
       '2. 只用下面这些终端命令和别的会话打交道：',
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
-      `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
+      `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令"   把指令发进已有的会话`,
       `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话，只在用户追问细节时用；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
       `   ${cli} read --id captain-history --find "关键词" [--turns 3]   跨全部清空前的队长记录搜索，按需读取简短结果`,
@@ -126,12 +127,16 @@
     const words = source.match(/(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g) || [];
     if (!words.length) return '';
     const name = words[0].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
-    if (!['claude', 'cursor-agent', 'agy', 'gemini', 'grok'].includes(name)) return source;
+    if (!['claude', 'cursor-agent', 'agy', 'gemini', 'grok', 'codex'].includes(name)) return source;
     const claude = name === 'claude';
     const out = [words[0]];
     for (let i = 1; i < words.length; i++) {
       const w = words[i];
-      if (name === 'cursor-agent' && i === 1 && /^resume$/i.test(w)) { if (words[i + 1] && !words[i + 1].startsWith('-')) i++; continue; }
+      if (['cursor-agent', 'codex'].includes(name) && i === 1 && /^resume$/i.test(w)) {
+        if (words[i + 1] && !words[i + 1].startsWith('-')) i++;
+        continue;
+      }
+      if (name === 'codex' && w === '--last') continue;
       if (/^--(continue|resume)=/.test(w)) continue;
       if (w === '--continue' || (claude && w === '-c')) continue;
       if (w === '--resume' || (claude && w === '-r')) {

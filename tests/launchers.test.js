@@ -8,17 +8,20 @@ const B = require('../board-core');
 const M = require('../main-core');
 const S = require('../schedule-core');
 
-test('a blank session offers Claude, Antigravity, Grok and Cursor CLI, in that order', () => {
-  assert.deepEqual(B.LAUNCHERS.map((l) => l.label), ['Claude', 'Antigravity', 'Grok', 'Cursor CLI']);
+test('a blank session offers Claude, Antigravity, Grok, Cursor CLI and Codex (ChatGPT), in that order', () => {
+  assert.deepEqual(B.LAUNCHERS.map((l) => l.label), ['Claude', 'Antigravity', 'Grok', 'Cursor CLI', 'Codex (ChatGPT)']);
   for (const l of B.LAUNCHERS) assert.equal(B.commandForAgent(l.key), l.cmd, l.key);
-  assert.equal(B.commandForAgent('agy'), 'agy --model gemini-3.8-flash-high --effort high');
-  assert.equal(B.commandForAgent('cursor'), 'cursor-agent --model claude-opus-5-5-high');
+  assert.equal(B.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  assert.equal(B.commandForAgent('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(B.commandForAgent('cursor-agent'), B.commandForAgent('cursor'));
+  assert.equal(B.commandForAgent('grok'), 'grok --permission-mode bypassPermissions');
+  assert.equal(B.commandForAgent('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
   assert.match(B.commandForAgent('claude'), /^claude --dangerously-skip-permissions/);
   // `agent` collides with another tool's binary on the owner's machine
   assert.ok(B.LAUNCHERS.every((l) => !/^agent(\s|$)/.test(l.cmd)));
-  assert.equal(B.inferAgentType('cursor-agent --model claude-sonnet-5-5-high'), 'Cursor');
+  assert.equal(B.inferAgentType('cursor-agent --force --model claude-sonnet-5-5-high'), 'Cursor');
   assert.equal(B.inferAgentType('agy --model gemini-3.1-pro-high'), 'Antigravity');
+  assert.equal(B.inferAgentType('codex --dangerously-bypass-approvals-and-sandbox'), 'Codex');
   assert.throws(() => { B.LAUNCHERS[0].cmd = 'rm -rf ~'; });
 });
 
@@ -29,6 +32,7 @@ test('the dialogs offer the same launch commands as the blank-session buttons', 
   assert.ok(groups.length >= 2);
   for (const cmds of groups) assert.deepEqual(cmds, B.LAUNCHERS.map((l) => l.cmd));
   assert.match(html, /<option value="cursor">Cursor CLI<\/option>/);
+  assert.match(html, /<option value="codex">Codex \(ChatGPT\)<\/option>/);
 });
 
 test('a missing CLI is recognized from the shell, and only a new error counts', () => {
@@ -56,16 +60,17 @@ test('Schedule can open a fresh Cursor CLI session', () => {
 test('agent names resolve to their launch commands; a custom command wins; unknown falls back to Claude', () => {
   assert.equal(B.commandForAgent('  Cursor '), B.commandForAgent('cursor'));
   assert.equal(B.commandForAgent('antigravity'), B.commandForAgent('agy'));
-  assert.equal(B.commandForAgent('cursor-agent'), 'cursor-agent --model claude-opus-5-5-high');
+  assert.equal(B.commandForAgent('cursor-agent'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(B.commandForAgent('shell'), '');
   assert.equal(B.commandForAgent('agent'), B.commandForAgent('claude'));
   assert.equal(B.commandForAgent('cursor', '  cursor-agent --model claude-sonnet-5-5-xhigh '), 'cursor-agent --model claude-sonnet-5-5-xhigh');
   // every launcher is recognized back from its command
-  const types = { claude: 'Claude', agy: 'Antigravity', grok: 'Grok', cursor: 'Cursor' };
+  const types = { claude: 'Claude', agy: 'Antigravity', grok: 'Grok', cursor: 'Cursor', codex: 'Codex' };
   for (const l of B.LAUNCHERS) assert.equal(B.inferAgentType(l.cmd), types[l.key], l.key);
   // the defaults run at the "ordinary code" tier
   for (const key of ['claude', 'agy']) assert.match(B.commandForAgent(key), /--effort high$/);
   assert.match(B.commandForAgent('cursor'), /--model claude-opus-5-5-high$/);
+  assert.match(B.commandForAgent('cursor'), /^cursor-agent --force/);
 });
 
 test('every --agent name offered anywhere resolves to a real preset, never the silent default', () => {
@@ -122,8 +127,8 @@ test('a launch only counts as started once the agent is identified; a Windows ti
 
 test('队长 knows the providers, only verified models, and the routing preferences', () => {
   const text = M.instructions();
-  for (const key of ['agy', 'cursor', 'claude']) assert.ok(text.includes(B.commandForAgent(key)), key);
-  assert.match(text, /--agent claude\|agy\|cursor\|grok \| --command/);
+  for (const key of ['agy', 'cursor', 'claude', 'codex']) assert.ok(text.includes(B.commandForAgent(key)), key);
+  assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex \| --command/);
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [

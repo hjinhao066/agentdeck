@@ -8,7 +8,9 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const MAX_TURNS = 400;
+  // Saved conversations keep every turn; the chat view renders a window of
+  // them at a time and loads older ones on request.
+  const RENDER_STEP = 150;
   const MAX_TEXT = 20000;
 
   // ---- text helpers ----
@@ -172,6 +174,11 @@
     const t = String(line || '').trim();
     return !t || /^(\d{1,2}|y|n|yes|no|ok)$/i.test(t);
   }
+  // A line typed at a password/passphrase prompt is not echoed and must never
+  // be saved as a prompt. row: the terminal row the cursor is on.
+  function isSecretPrompt(row) {
+    return /(password|passphrase|passcode|密码|口令|\bPIN\b)[^\n]{0,80}[:：]\s*$/i.test(String(row || '').trimEnd() + ' ');
+  }
 
   // ---- saved conversations ----
   function emptyChat(id) { return { v: 1, id, turns: [] }; }
@@ -179,13 +186,15 @@
     const chat = emptyChat(id);
     if (!raw || typeof raw !== 'object' || !Array.isArray(raw.turns)) return chat;
     if (raw.captainArchive === true) chat.captainArchive = true;
-    for (const t of raw.turns.filter((x) => x && typeof x.user === 'string').slice(-MAX_TURNS)) {
+    for (const t of raw.turns.filter((x) => x && typeof x.user === 'string')) {
       chat.turns.push({
         id: typeof t.id === 'string' ? t.id.slice(0, 40) : 'u' + chat.turns.length,
         ts: Number.isFinite(t.ts) ? t.ts : 0,
         user: t.user.slice(0, MAX_TEXT),
         reply: typeof t.reply === 'string' ? t.reply.slice(0, MAX_TEXT) : '',
         done: !!t.done,
+        // the app closed (or the terminal was replaced) before this turn ended
+        ...(t.interrupted === true ? { interrupted: true } : {}),
         // files and pasted images sent with the prompt (paths)
         atts: Array.isArray(t.atts) ? t.atts.filter((a) => typeof a === 'string' && a.length <= 2000).slice(0, 20) : [],
         ...(t.kind === 'task' && t.task && typeof t.task === 'object' ? { kind: 'task', task: normalizeTask(t.task) } : {}),
@@ -205,8 +214,28 @@
   }
   function addTurn(chat, turn) {
     chat.turns.push(turn);
-    if (chat.turns.length > MAX_TURNS) chat.turns.splice(0, chat.turns.length - MAX_TURNS);
     return turn;
+  }
+  // A turn still open in a saved file can never get its reply now: keep what
+  // was captured and mark it unfinished instead of passing it off as complete.
+  function closeOpenTurns(chat) {
+    for (const t of chat.turns) {
+      if (t.done) continue;
+      t.done = true;
+      t.interrupted = true;
+    }
+    return chat;
+  }
+  // Turns recorded before the saved file was loaded go after the saved ones.
+  function mergeChats(saved, mem) {
+    if (!mem || mem === saved || !mem.turns.length) return saved;
+    const ids = new Set(saved.turns.map((t) => t.id));
+    saved.turns.push(...mem.turns.filter((t) => !ids.has(t.id)));
+    return saved;
+  }
+  // First index of the turns a window of `shown` turns from the end starts at.
+  function windowStart(total, shown) {
+    return Math.max(0, total - Math.max(1, shown || RENDER_STEP));
   }
 
   // ---- search ----
@@ -405,8 +434,8 @@
   }
 
   return {
-    MAX_TURNS, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isChrome, reflow,
-    emptyChat, normalizeChat, addTurn, searchChats,
+    RENDER_STEP, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
   };
 });

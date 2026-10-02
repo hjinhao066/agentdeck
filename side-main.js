@@ -11,7 +11,9 @@ const ChatCore = require('./chat-core');
 
 const MAX_TEXT_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
-const MAX_CHAT_BYTES = 6 * 1024 * 1024;
+// Saved chats keep every turn. A chat past this size is not written at all
+// (never trimmed to fit) and the page is told, so nothing goes missing quietly.
+const MAX_CHAT_BYTES = 64 * 1024 * 1024;
 const MAX_DIR_ENTRIES = 300;
 
 // ---- previews ----
@@ -84,7 +86,16 @@ function registerSideIpc(ctx) {
   const rawOf = (msg) => (msg && typeof msg.raw === 'string' && msg.raw.length <= 2000 ? msg : null);
 
   handleMain('chat:load-all', () => loadAllChats(chatDir()));
-  onMain('chat:save', (_e, { id, chat }) => { if (chat && typeof chat === 'object') saveChat(chatDir(), id, chat); });
+  const refused = new Set();
+  onMain('chat:save', (_e, { id, chat }) => {
+    if (!chat || typeof chat !== 'object' || !validId(id)) return;
+    let ok = false;
+    try { ok = saveChat(chatDir(), id, chat); } catch (_) {}
+    if (ok) { refused.delete(id); return; }
+    if (refused.has(id)) return;
+    refused.add(id);
+    send('toast', { text: '这个对话的记录没能保存（太大或写入失败），之前存下的记录还在。' });
+  });
   onMain('chat:delete', (_e, { id }) => deleteChat(chatDir(), id));
 
   handleMain('preview:read', (_e, msg) => {

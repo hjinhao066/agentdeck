@@ -13,6 +13,7 @@
   const views = new Map();     // column id -> dom handles
   const pending = new Map();   // column id -> { turn, marker, startedAt }
   const saveTimers = new Map();
+  const unsaved = new Set();   // saves asked for before the saved chats were loaded
   let loaded = false;
   let nav = null;              // left-hand search handles
 
@@ -110,7 +111,7 @@
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null };
+    const v = { id: col.id, wrap, chat, scroll, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
     views.set(col.id, v);
     applyMode(col);
 
@@ -274,18 +275,26 @@
       box.classList.add('md');
       box.innerHTML = C.renderMarkdown(turn.reply, { breaks: true });
       linkifyTree(box, v.id);
-    } else {
+    } else if (!turn.interrupted) {
       box.classList.add('quiet');
       box.textContent = '这一轮没有文字回复，过程在终端里。';
     }
+    if (turn.done && turn.interrupted) {
+      box.classList.add('interrupted');
+      box.appendChild(el('div', 'reply-note', turn.reply
+        ? '这一轮还没结束，终端就关掉了（退出 AgentDeck 或终端重启）。上面是关掉前已经看到的部分。'
+        : '这一轮还没结束，终端就关掉了（退出 AgentDeck 或终端重启），没来得及收到回复。'));
+    }
     return box;
   }
-  function turnRows(v, turn) {
+  // readOnly: a turn from a retired 队长 conversation; it is not tracked in
+  // v.rows, so live updates of the current chat never touch it.
+  function turnRows(v, turn, readOnly) {
     if (turn.kind === 'task') {
       const wrap = el('div', 'turn task-turn');
       wrap.dataset.turn = turn.id;
       wrap.appendChild(window.MainSession.renderCard({ id: turn.id, ...turn.task }, v.id));
-      v.rows.set(turn.id, { user: wrap, asst: wrap, turn });
+      if (!readOnly) v.rows.set(turn.id, { user: wrap, asst: wrap, turn });
       return wrap;
     }
     const wrap = el('div', 'turn');
@@ -337,7 +346,7 @@
     tools.append(copy, el('span', 'msg-time', fmtTime(turn.ts)));
     asst.append(body, tools);
     wrap.append(user, asst);
-    v.rows.set(turn.id, { user, asst, turn });
+    if (!readOnly) v.rows.set(turn.id, { user, asst, turn });
     return wrap;
   }
   const nearBottom = (s) => s.scrollHeight - s.scrollTop - s.clientHeight < 90;
@@ -462,20 +471,74 @@
     };
     setTimeout(check, 500);
   }
-  function renderChat(id) {
+  // Every turn stays saved; a long chat renders its latest C.RENDER_STEP turns
+  // and loads older ones a step at a time.
+  function earlierButton(hidden, onClick) {
+    const b = el('button', 'chat-earlier', `显示更早的 ${Math.min(hidden, C.RENDER_STEP)} 轮（前面还有 ${hidden} 轮）`);
+    b.type = 'button';
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  // Content inserted above stays out of the way: what you were reading does not move.
+  function keepScroll(scroll, change) {
+    const fromBottom = scroll.scrollHeight - scroll.scrollTop;
+    change();
+    scroll.scrollTop = scroll.scrollHeight - fromBottom;
+  }
+  function renderChat(id, keepPosition) {
     const v = views.get(id);
     if (!v) return;
     v.scroll.textContent = '';
     v.rows.clear();
     v.live = null;
+    const col = columnById(id) || {};
+    const retired = col.isMain ? retiredHistory(v) : null;
+    if (retired) v.scroll.appendChild(retired);
     const turns = chatFor(id).turns;
-    if (!turns.length) { emptyState(v, columnById(id) || {}); return; }
-    turns.forEach((t) => v.scroll.appendChild(turnRows(v, t)));
-    requestAnimationFrame(() => { v.scroll.scrollTop = v.scroll.scrollHeight; });
+    if (!turns.length) { emptyState(v, col); return; }
+    const from = C.windowStart(turns.length, v.shown);
+    if (from > 0) {
+      v.scroll.appendChild(earlierButton(from, () => keepScroll(v.scroll, () => { v.shown += C.RENDER_STEP; renderChat(id, true); })));
+    }
+    turns.slice(from).forEach((t) => v.scroll.appendChild(turnRows(v, t)));
+    if (!keepPosition) requestAnimationFrame(() => { v.scroll.scrollTop = v.scroll.scrollHeight; });
+  }
+  // 队长's conversations from before each context clear, read-only, from the
+  // chats already loaded (nothing new is read from disk, no terminal restarts).
+  function retiredHistory(v) {
+    const first = (c) => (c.turns[0] && c.turns[0].ts) || 0;
+    const old = captainArchives().filter((c) => c.turns.length).sort((a, b) => first(a) - first(b));
+    if (!old.length) return null;
+    const box = el('div', 'retired');
+    const total = old.reduce((n, c) => n + c.turns.length, 0);
+    const toggle = el('button', 'chat-earlier retired-toggle', v.showRetired ? '收起清空上下文前的对话' : `查看清空上下文前的队长对话（${old.length} 段，共 ${total} 轮）`);
+    toggle.type = 'button';
+    toggle.addEventListener('click', () => keepScroll(v.scroll, () => { v.showRetired = !v.showRetired; renderChat(v.id, true); }));
+    box.appendChild(toggle);
+    if (!v.showRetired) return box;
+    old.forEach((chat) => {
+      const seg = el('details', 'retired-chat');
+      seg.dataset.chatId = chat.id;
+      const last = chat.turns[chat.turns.length - 1].ts || 0;
+      seg.appendChild(el('summary', 'retired-head', `清空前的队长对话 · ${fmtTime(first(chat))} – ${fmtTime(last)} · ${chat.turns.length} 轮 · 只读`));
+      const list = el('div', 'retired-turns');
+      let shown = C.RENDER_STEP;
+      const fill = () => {
+        list.textContent = '';
+        const from = C.windowStart(chat.turns.length, shown);
+        if (from > 0) list.appendChild(earlierButton(from, () => keepScroll(v.scroll, () => { shown += C.RENDER_STEP; fill(); })));
+        chat.turns.slice(from).forEach((t) => list.appendChild(turnRows(v, t, true)));
+      };
+      seg.addEventListener('toggle', () => { if (seg.open && !list.childNodes.length) fill(); });
+      seg.appendChild(list);
+      box.appendChild(seg);
+    });
+    return box;
   }
   function appendTurn(id, turn) {
     const v = views.get(id);
     if (!v) return;
+    v.shown++;
     v.scroll.querySelector('.chat-empty')?.remove();
     v.scroll.appendChild(turnRows(v, turn));
     v.scroll.scrollTop = v.scroll.scrollHeight;
@@ -556,6 +619,7 @@
   function renderFooter(v, entry) {
     let lines = null;
     try { lines = readFooter(entry.term); } catch (_) { lines = null; }
+    entry.footerLines = lines;
     const key = lines ? JSON.stringify(lines) : '';
     if (key === v.footerKey) return;
     v.footerKey = key;
@@ -563,7 +627,7 @@
     v.footer.hidden = !lines;
     if (!lines) return;
     lines.forEach((segs) => {
-      const row = el('div', 'tf-row');
+      const row = el('div', 'tf-row tui-footer-line');
       segs.forEach((s) => {
         const span = el('span', null, s.text);
         if (s.color) span.style.color = s.color;
@@ -576,10 +640,10 @@
   }
 
   // ---- turns ----
-  function recording(col) { return loaded && modeOf(col) === 'chat' && views.has(col.id); }
-
-  function beginTurn(col, text, atts, sent, force) {
-    if (!(force ? loaded && views.has(col.id) : recording(col))) return null;
+  // Recorded in either view: a prompt typed in the raw terminal is history too.
+  // Turns started before the saved chats finish loading are merged after them.
+  function beginTurn(col, text, atts, sent) {
+    if (!views.has(col.id)) return null;
     const entry = host.terms.get(col.id);
     if (!entry) return null;
     if (pending.has(col.id)) finalizeTurn(col.id);
@@ -624,6 +688,7 @@
     }
     try { if (open.marker) open.marker.dispose(); } catch (_) {}
     open.turn.done = true;
+    delete open.turn.interrupted;
     refreshTurn(id, open.turn);
     scheduleSave(id);
     if (window.MainSession) window.MainSession.onTurnDone(id, open.turn);
@@ -632,26 +697,30 @@
   }
 
   // Called from the 1.5s status loop with the column's screen text.
+  // The chat furniture updates only in chat view; open turns end in either view.
   function onTick(id, entry, text) {
     const v = views.get(id);
-    if (!v || !isChatMode(id)) return;
-    v.stop.hidden = entry.state !== 'working';
-    v.agentDot.className = 'cp-agent-dot ' + (entry.alive ? entry.state || 'plain' : 'exited');
-    renderFooter(v, entry);
-    setAttention(v, id, entry.state === 'input' ? text : null);
-    const col = columnById(id);
-    if (needsLauncher(col) && entry.alive && !launching.has(id) && !v.checkingAgent) {
-      v.checkingAgent = true;
-      host.agentInForeground(col, false).then((up) => {
-        v.checkingAgent = false;
-        if (up === !!v.agentUp || views.get(id) !== v) return;
-        v.agentUp = up;
-        if (needsLauncher(col)) renderChat(id);
-      }, () => { v.checkingAgent = false; });
+    if (!v) return;
+    const chatMode = isChatMode(id);
+    if (chatMode) {
+      v.stop.hidden = entry.state !== 'working';
+      v.agentDot.className = 'cp-agent-dot ' + (entry.alive ? entry.state || 'plain' : 'exited');
+      renderFooter(v, entry);
+      setAttention(v, id, entry.state === 'input' ? text : null);
+      const col = columnById(id);
+      if (needsLauncher(col) && entry.alive && !launching.has(id) && !v.checkingAgent) {
+        v.checkingAgent = true;
+        host.agentInForeground(col, false).then((up) => {
+          v.checkingAgent = false;
+          if (up === !!v.agentUp || views.get(id) !== v) return;
+          v.agentUp = up;
+          if (needsLauncher(col)) renderChat(id);
+        }, () => { v.checkingAgent = false; });
+      }
     }
     const open = pending.get(id);
     if (!open) return;
-    if (v.live) v.live.textContent = entry.state === 'working' ? host.lastActivityLine(text) : '';
+    if (v.live && chatMode) v.live.textContent = entry.state === 'working' ? host.lastActivityLine(text) : '';
     if (!entry.alive) { finalizeTurn(id); return; }
     if (entry.state === 'working' || entry.state === 'input') return;
     const quiet = Date.now() - (entry.lastOutputAt || 0);
@@ -707,8 +776,8 @@
   // Type a prompt into the column's terminal as if sent from the composer.
   // Attachments go first, as paths the agent can open. Used by the composer,
   // Schedule and 队长. opts: prefix/suffix go to the terminal but
-  // not into the bubble; silent sends no bubble at all; force records a turn
-  // even in terminal view (so a receipt can be read back).
+  // not into the bubble; silent sends no bubble at all. Every other send is
+  // recorded as a turn in either view (force is accepted for older callers).
   // Returns the recorded turn, true when sent without one, or false.
   // No length limit: a prompt longer than this is saved as a .txt file and the
   // agent gets its opening plus "read this file first".
@@ -722,7 +791,7 @@
     const body = paths ? paths + (prompt ? ' ' + prompt : '') : prompt;
     const text = (o.prefix || '') + body + (o.suffix || '');
     // display/displayAtts: what the bubble shows when it differs from what is typed
-    const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text, o.force);
+    const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text);
     // bracketed paste keeps multi-line text one prompt; the CR goes separately so
     // Ink-based TUIs submit instead of inserting a newline
     const bracketed = entry.term.modes && entry.term.modes.bracketedPasteMode;
@@ -753,7 +822,15 @@
   function onSubmitted(col, line) {
     const entry = host.terms.get(col.id);
     if (!entry || entry.state === 'input' || C.isPromptAnswer(line)) return;
+    if (C.isSecretPrompt(cursorRow(entry.term))) return;
     beginTurn(col, line);
+  }
+  function cursorRow(term) {
+    try {
+      const buf = term.buffer.active;
+      const ln = buf.getLine(buf.baseY + buf.cursorY);
+      return ln ? ln.translateToString(true) : '';
+    } catch (_) { return ''; }
   }
   // Text sent on the column's behalf (broadcast, board messages).
   function noteSent(col, text) {
@@ -777,13 +854,37 @@
   }
 
   // ---- storage ----
-  function scheduleSave(id) {
+  // Nothing is written before the saved chats are loaded: an early save would
+  // replace the file on disk with only the turns of this launch.
+  function saveNow(id) {
     clearTimeout(saveTimers.get(id));
-    saveTimers.set(id, setTimeout(() => { saveTimers.delete(id); window.deck.chatSave(id, chatFor(id)); }, 1500));
+    saveTimers.delete(id);
+    if (!loaded) { unsaved.add(id); return; }
+    if (chats.has(id)) window.deck.chatSave(id, chats.get(id));
+  }
+  function scheduleSave(id) {
+    if (!loaded) { unsaved.add(id); return; }
+    clearTimeout(saveTimers.get(id));
+    saveTimers.set(id, setTimeout(() => saveNow(id), 1500));
   }
   function flushSaves() {
-    saveTimers.forEach((timer, id) => { clearTimeout(timer); window.deck.chatSave(id, chatFor(id)); });
-    saveTimers.clear();
+    [...saveTimers.keys()].forEach(saveNow);
+  }
+  // Leaving the page (quit, reload): a turn still running keeps the reply seen
+  // so far and is marked unfinished, instead of being saved with no reply.
+  function onLeave() {
+    pending.forEach((open, id) => {
+      const entry = host.terms.get(id);
+      if (entry) {
+        try {
+          const seen = C.extractReply(readLines(entry.term, open.marker), open.sent, entry.term.cols);
+          if (seen) open.turn.reply = seen;
+        } catch (_) {}
+      }
+      open.turn.interrupted = true;
+      saveNow(id);
+    });
+    flushSaves();
   }
   function forget(id) {
     const open = pending.get(id);
@@ -801,25 +902,34 @@
   function onColumnArchived(id) {
     finalizeTurn(id);
     forget(id);
-    if (chats.has(id)) window.deck.chatSave(id, chatFor(id));
+    saveNow(id);
   }
   function deleteArchivedChat(id) {
     chats.delete(id);
     window.deck.chatDelete(id);
   }
+  // The terminal was replaced under a new id (its old one is already gone):
+  // an open turn stays, marked unfinished, and the chat is written under the
+  // new id before the old file is removed.
   function onColumnIdChanged(oldId, newId) {
+    const open = pending.get(oldId);
+    if (open) { open.turn.done = true; open.turn.interrupted = true; }
+    forget(oldId);
     const chat = chats.get(oldId);
-    pending.delete(oldId);
-    views.delete(oldId);
     if (chat) {
       chat.id = newId;
       chats.delete(oldId); chats.set(newId, chat);
-      window.deck.chatDelete(oldId);
-      scheduleSave(newId);
+      saveNow(newId);
+      if (loaded) window.deck.chatDelete(oldId);
     }
   }
+  // All terminals are rebuilt while their shells keep running: open turns stay
+  // open and are read from the new terminal when they end.
   function onRender() {
-    pending.clear();
+    pending.forEach((open) => {
+      try { if (open.marker) open.marker.dispose(); } catch (_) {}
+      open.marker = null;
+    });
     views.clear();
   }
   // ---- 队长 (main session) cards ----
@@ -862,10 +972,11 @@
     const chat = chats.get(id);
     if (!chat || !chat.turns.length) { chats.delete(id); window.deck.chatDelete(id); return null; }
     chat.captainArchive = true;
-    window.deck.chatSave(id, chat);
+    saveNow(id);
     return { turns: chat.turns.length, from: chat.turns[0].ts || 0, to: chat.turns[chat.turns.length - 1].ts || 0 };
   }
   const turnsOf = (id) => (chats.get(id) || { turns: [] }).turns;
+  const captainArchives = () => [...chats.values()].filter((c) => c.captainArchive);
 
   function lastTurnTs(id) {
     const turns = (chats.get(id) || { turns: [] }).turns;
@@ -970,7 +1081,17 @@
       if (modeOf(col) !== 'chat') setMode(colId, 'chat');
       requestAnimationFrame(() => {
         const v = views.get(colId);
-        const row = v && v.rows.get(turnId);
+        if (!v) return;
+        let row = v.rows.get(turnId);
+        if (!row) {
+          // an older turn outside the rendered window
+          const turns = chatFor(colId).turns;
+          const at = turns.findIndex((t) => t.id === turnId);
+          if (at < 0) return;
+          v.shown = Math.max(v.shown, turns.length - at);
+          renderChat(colId, true);
+          row = v.rows.get(turnId);
+        }
         if (!row) return;
         const target = role === 'reply' ? row.asst : row.user;
         target.scrollIntoView({ block: 'center' });
@@ -997,15 +1118,17 @@
     host = h;
     initNav();
     initKeys();
-    window.addEventListener('pagehide', flushSaves);
+    window.addEventListener('pagehide', onLeave);
     try {
       const saved = await window.deck.chatLoadAll();
       (saved || []).forEach((chat) => {
-        chat.turns.forEach((t) => { t.done = true; });   // a turn open at shutdown will never get its reply
-        chats.set(chat.id, chat);
+        C.closeOpenTurns(chat);
+        chats.set(chat.id, C.mergeChats(chat, chats.get(chat.id)));
       });
     } catch (_) {}
     loaded = true;
+    unsaved.forEach((id) => scheduleSave(id));
+    unsaved.clear();
     views.forEach((v, id) => renderChat(id));
     if (nav.input.value.trim()) runSearch();
     if (window.Sidebar) window.Sidebar.render();
@@ -1014,10 +1137,9 @@
   window.ChatUI = {
     init, mountColumn, isChatMode, focusInput, setMode, onSubmitted, noteSent, sendPrompt,
     onTick, onExit, onColumnMouseDown, onColumnRemoved, onColumnArchived, deleteArchivedChat, onColumnIdChanged, onRender,
-    focusSearch, reveal, lastTurnTs, artifactSources,
+    focusSearch, reveal, lastTurnTs, artifactSources, readFooter,
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
-    addCard, updateCard, retireChat, turnsOf,
-    captainArchives: () => [...chats.values()].filter((c) => c.captainArchive),
+    addCard, updateCard, retireChat, turnsOf, captainArchives,
   };
 })();
