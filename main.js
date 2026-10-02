@@ -242,8 +242,10 @@ function send(channel, payload) {
   if (w && !w.isDestroyed()) w.webContents.send(channel, payload);
 }
 
-function killPty(id) {
+function killPty(id, keepReplay) {
   if (notifications) notifications.cancel(id);
+  // Archived sessions keep their last output so restoring replays it.
+  if (keepReplay) writeSession(id, ptyBuffers.get(id));
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
@@ -292,7 +294,8 @@ function processBoardRequests() {
       let request;
       try {
         const stat = fs.lstatSync(file);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 65536) throw new Error('Invalid request file');
+        // 2 MB: room for long tasks 队长 hands out (they become files further on)
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 2 * 1024 * 1024) throw new Error('Invalid request file');
         request = JSON.parse(fs.readFileSync(file, 'utf8'));
         if (!request || typeof request !== 'object' || !validId(request.id) || name !== `${request.id}.json`) throw new Error('Invalid request');
       }
@@ -304,7 +307,10 @@ function processBoardRequests() {
         continue;
       }
       const action = String(request.action || '');
-      if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status'].includes(action)) {
+      // main-* actions are honored only for the 队长 (main session) column; the renderer
+      // checks the caller before doing anything.
+      if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status',
+        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-receipts', 'main-answer'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -512,7 +518,7 @@ function createWindow() {
     title: 'AgentDeck',
     backgroundColor: '#000000',
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
-    trafficLightPosition: isMac ? { x: 14, y: 16 } : undefined,
+    trafficLightPosition: isMac ? { x: 16, y: 13 } : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -607,7 +613,7 @@ app.whenReady().then(() => {
     const p = ptys.get(id);
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }
   });
-  onMain('pty:kill', (_e, { id }) => killPty(id));
+  onMain('pty:kill', (_e, { id, keepReplay }) => killPty(id, !!keepReplay));
 
   onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
     pendingBoardCommands.delete(requestId);
@@ -632,6 +638,12 @@ app.whenReady().then(() => {
   // --- Hot-reload IPC ---
   // Check whether a pty is still running (used by renderer after reload).
   handleMain('pty:is-alive', (_e, { id }) => ptys.has(id));
+  // Name of the foreground process (e.g. "zsh" or "node"), so automatic sends
+  // never type prose into a bare shell. Only the name, never the command line.
+  handleMain('pty:foreground', (_e, { id }) => {
+    const p = ptys.get(id);
+    try { return p ? String(p.process || '').slice(0, 64) : ''; } catch (_) { return ''; }
+  });
   // Return all buffered output for a pty so the renderer can replay it.
   handleMain('pty:replay', (_e, { id }) => {
     const buf = ptyBuffers.get(id);
@@ -655,7 +667,7 @@ app.whenReady().then(() => {
   // Prune replays for columns that no longer exist in the saved layout.
   try {
     const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-    const ids = new Set(((cfg && cfg.columns) || []).map((c) => c.id));
+    const ids = new Set([...((cfg && cfg.columns) || []), ...((cfg && cfg.archived) || [])].map((c) => c && c.id));
     for (const f of fs.readdirSync(SESS_DIR)) {
       if (!ids.has(f.replace(/\.txt$/, ''))) fs.unlinkSync(path.join(SESS_DIR, f));
     }
@@ -789,6 +801,27 @@ app.whenReady().then(() => {
   // temp file and return the path, which gets typed into the pty (mirrors the
   // drag-drop-a-file flow, but for screenshots on the clipboard).
   const PASTE_DIR = path.join(os.tmpdir(), 'agentdeck-paste');
+  // Prompts too long to paste into a terminal are saved as a private text file
+  // the agent is asked to read. Kept in userData; files older than 60 days go.
+  const LONG_DIR = path.join(app.getPath('userData'), 'long-prompts');
+  try {
+    for (const f of fs.readdirSync(LONG_DIR)) {
+      const file = path.join(LONG_DIR, f);
+      if (Date.now() - fs.statSync(file).mtimeMs > 60 * 86_400_000) fs.unlinkSync(file);
+    }
+  } catch (_) {}
+  handleMain('prompt:save-long', (_e, { text }) => {
+    if (typeof text !== 'string' || !text || text.length > 50_000_000) return null;
+    try {
+      fs.mkdirSync(LONG_DIR, { recursive: true, mode: 0o700 });
+      const d = new Date();
+      const stamp = d.getFullYear() + String(d.getMonth() + 1).padStart(2, '0') + String(d.getDate()).padStart(2, '0') + '-' +
+        String(d.getHours()).padStart(2, '0') + String(d.getMinutes()).padStart(2, '0') + String(d.getSeconds()).padStart(2, '0');
+      const file = path.join(LONG_DIR, `prompt-${stamp}-${crypto.randomBytes(3).toString('hex')}.txt`);
+      fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
+      return file;
+    } catch (_) { return null; }
+  });
   // Startup sweep: pasted screenshots older than 24h are stale (Windows %TEMP%
   // is never auto-cleaned, so without this the dir grows without bound).
   try {
@@ -806,6 +839,14 @@ app.whenReady().then(() => {
       fs.writeFileSync(f, img.toPNG());
       return f;
     } catch (_) { return null; }
+  });
+
+  // Composer "+": the user picks files in a native dialog; only the paths
+  // they chose go back to the page.
+  handleMain('pick-files', async () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return [];
+    const r = await dialog.showOpenDialog(mainWindow, { properties: ['openFile', 'openDirectory', 'multiSelections'] });
+    return r.canceled ? [] : r.filePaths.slice(0, 50);
   });
 
   notifications = createNotifications({ BrowserWindow, ipcMain, screen, focusColumn,

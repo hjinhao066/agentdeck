@@ -83,3 +83,14 @@ test('the header toggle flips a column back to the raw terminal', async () => {
   await column.locator('.view-toggle').click();
   await expect(column).toHaveClass(/chat-mode/);
 });
+
+test('your own message can be copied and put back into the composer to edit', async () => {
+  const column = page.locator('.column').first();
+  const mine = column.locator('.msg.user', { hasText: 'hello chat view' }).first();
+  await mine.hover();
+  // (the copy button is not clicked here: it would overwrite the real clipboard)
+  await expect(mine.locator('.user-tools .msg-tool')).toHaveCount(2);
+  await mine.locator('.user-tools .msg-tool').nth(1).click();
+  await expect(column.locator('.composer textarea')).toHaveValue('hello chat view');
+  await column.locator('.composer textarea').fill('');
+});

@@ -27,6 +27,32 @@ const ICONS = {
   help:  S('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
   side:  S('<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/>'),
   board: S('<rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M6 9v3h12V9M12 12v3"/>'),
+  newChat: S('<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a1 1 0 0 1 3 3l-9 9a2 2 0 0 1-.85.5l-2.87.84a.5.5 0 0 1-.62-.62l.84-2.87a2 2 0 0 1 .5-.85z"/>'),
+  search: S('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
+  clock: S('<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>'),
+  artifacts: S('<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>'),
+  folder: S('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
+  folderOpen: S('<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>'),
+  folderPlus: S('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/>'),
+  chevRight: S('<polyline points="9 18 15 12 9 6"/>'),
+  chevDown: S('<polyline points="6 9 12 15 18 9"/>'),
+  more: S('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
+  archive: S('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'),
+  restore: S('<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>'),
+  trash: S('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
+  panelLeft: S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>'),
+  panelRight: S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>'),
+  arrowUp: S('<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>'),
+  stop: '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>',
+  copy: S('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'),
+  check: S('<polyline points="20 6 9 17 4 12"/>'),
+  globe: S('<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'),
+  image: S('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'),
+  terminal: S('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
+  file: S('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'),
+  eraser: S('<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'),
+  crown: S('<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>'),
+  eye: S('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>'),
 };
 
 // ---- Config / state ----
@@ -39,11 +65,12 @@ const MAX_WIDTH = 1100;
 const DEFAULT_FIT_COLS = env.platform === 'win32' ? 4 : 3;
 const FIT_COLS_CHOICES = [2, 3, 4, 5];
 // Left panel (toolbar + column list): draggable width + collapse-to-icons.
-const NAV_DEFAULT_W = 184, NAV_MIN_W = 90, NAV_MAX_W = 360, NAV_COLLAPSED_W = 56;
+// Collapsing hides it completely (Cursor style); the top bar then shows its toggle.
+const NAV_DEFAULT_W = 252, NAV_MIN_W = 200, NAV_MAX_W = 420;
 
 const TERM_THEME = {
-  dark:  { background: '#000000', foreground: '#e7e9ea', cursor: '#1d9bf0', selectionBackground: 'rgba(29,155,240,0.35)' },
-  light: { background: '#ffffff', foreground: '#0f1419', cursor: '#1d9bf0', selectionBackground: 'rgba(29,155,240,0.25)' },
+  dark:  { background: '#141414', foreground: '#e6e6e6', cursor: '#4b9bff', selectionBackground: 'rgba(75,155,255,0.35)' },
+  light: { background: '#ffffff', foreground: '#1d1d1f', cursor: '#2f6fde', selectionBackground: 'rgba(47,111,222,0.25)' },
 };
 
 function newId() { return 'c' + Date.now() + Math.floor(Math.random() * 1000); }
@@ -76,16 +103,24 @@ const AUTO_TITLES = new Set(['Agent', 'Antigravity', 'Claude', 'Grok']);
 function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AUTO_TITLES.has(String(t).trim()); }
 
 let config = {
-  theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: 184,
+  theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
   boardResponses: {}, boardPositions: {},
+  // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
+  folders: [], archived: [], schedules: [], navArchivedOpen: false,
 };
 const saved = window.deck.loadConfig();
 if (saved) {
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
-  if (saved.navWidth) config.navWidth = saved.navWidth;
+  // widths from the old, narrower sidebar fall back to the new default
+  if (saved.navWidth) config.navWidth = saved.navWidth < NAV_MIN_W ? NAV_DEFAULT_W : Math.min(NAV_MAX_W, saved.navWidth);
+  config.folders = SidebarCore.normalizeFolders(saved.folders);
+  config.archived = SidebarCore.normalizeArchived(saved.archived);
+  if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
+  config.navArchivedOpen = !!saved.navArchivedOpen;
+  config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (saved.activeView === 'board') config.activeView = 'board';
@@ -120,9 +155,14 @@ if (saved) {
       agentType: c.agentType,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       view: c.view === 'chat' || c.view === 'term' ? c.view : undefined,
+      folderId: typeof c.folderId === 'string' ? c.folderId : null,
+      isMain: !!c.isMain,
+      lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
   }
 }
+// The deck always shows sessions in sidebar order: folders first, then loose ones.
+config.columns = SidebarCore.orderedColumns(config.columns, config.folders);
 let columns = config.columns;
 let activeView = config.activeView;
 function saveConfig() { config.columns = columns; window.deck.saveConfig(config); }
@@ -322,110 +362,102 @@ function fontSizeDelta(e) {
   return null;
 }
 
-// ---- Left panel toolbar (add / broadcast / fit / theme / reset / collapse) ----
+// ---- Window chrome: sidebar head, top bar over the deck, sidebar footer ----
 function railBtn(svg, tip, onClick, accent) {
   const b = document.createElement('button');
+  b.type = 'button';
   b.className = 'rail-btn' + (accent ? ' accent' : '');
   b.innerHTML = svg; b.title = tip; b.onclick = onClick;
   return b;
 }
-function buildRail() {
-  const top = document.getElementById('navTop');
+function buildChrome() {
+  const head = document.getElementById('navHead');
+  const tbLeft = document.getElementById('tbLeft');
+  const tbSplit = document.getElementById('tbSplit');
+  const tbRight = document.getElementById('tbRight');
   const bottom = document.getElementById('navBottom');
-  top.innerHTML = ''; bottom.innerHTML = '';
+  [head, tbLeft, tbSplit, tbRight, bottom].forEach((n) => { n.innerHTML = ''; });
 
-  // Top row = primary actions: collapse, add an independent terminal, board,
-  // and broadcast. The plus button always creates a manual terminal; managed
-  // terminals are created only through the conductor workflow.
-  const collapseBtn = railBtn(ICONS.left, '折叠侧边栏', () => setNavCollapsed(!config.navCollapsed));
+  const collapseBtn = railBtn(ICONS.panelLeft, '收起侧边栏', () => setNavCollapsed(true));
   collapseBtn.id = 'navCollapseBtn';
-  top.appendChild(collapseBtn);
-  top.appendChild(railBtn(ICONS.plus, '新建独立终端 (Cmd+N)', () => addAndFocusColumn(), true));
-  const boardBtn = railBtn(ICONS.board, 'Conductor Board (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
-  boardBtn.id = 'boardViewBtn';
-  top.appendChild(boardBtn);
-  top.appendChild(railBtn(ICONS.send, '广播：同一条输入发给所有列 (Cmd+B)', () => toggleBroadcast()));
+  head.appendChild(collapseBtn);
 
-  // Bottom row = utilities, pinned under the list.
-  // Fit button: a CLICK toggles equal-fit on/off (keeps the current column
-  // count); HOVERING reveals a menu to pick how many EQUAL columns fill the
-  // screen (2–5). Picking a number turns fit on. Overflow columns past that
-  // count keep the same slice width and scroll.
-  const fitWrap = document.createElement('div');
-  fitWrap.className = 'fit-wrap';
+  // Shown only while the sidebar is collapsed.
+  const expandBtn = railBtn(ICONS.panelLeft, '展开侧边栏', () => setNavCollapsed(false));
+  expandBtn.id = 'navExpandBtn';
+  tbLeft.append(expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
 
-  const fitBtn = railBtn(ICONS.fit, '等比例适应窗口（悬停选择列数）/ 横向滚动', () => {
-    config.fitWindow = !config.fitWindow;
-    applyFit();
-  });
-  fitBtn.id = 'fitBtn';
-
-  const fitMenu = document.createElement('div');
-  fitMenu.className = 'fit-menu';
+  // Column widths: free (each column keeps its own width, drag the edges) or
+  // N equal columns filling the deck; more than N keep that width and scroll.
+  const free = document.createElement('button');
+  free.type = 'button'; free.className = 'split-btn'; free.dataset.cols = '0';
+  free.textContent = '自由'; free.title = '自由宽度：每列保持自己的宽度，拖列边调整';
+  free.onclick = () => { config.fitWindow = false; applyFit(); };
+  tbSplit.appendChild(free);
   FIT_COLS_CHOICES.forEach((n) => {
     const item = document.createElement('button');
-    item.className = 'fit-menu-item';
-    item.textContent = String(n);
-    item.title = n + ' 列均分';
-    item.dataset.cols = String(n);
-    item.onclick = (e) => {
-      e.stopPropagation();
-      config.fitCols = n;
-      config.fitWindow = true;
-      applyFit();
-    };
-    fitMenu.appendChild(item);
+    item.type = 'button'; item.className = 'split-btn'; item.dataset.cols = String(n);
+    item.textContent = String(n); item.title = n + ' 列均分屏幕';
+    item.onclick = () => { config.fitCols = n; config.fitWindow = true; applyFit(); };
+    tbSplit.appendChild(item);
   });
-
-  function applyFit() {
-    fitBtn.classList.toggle('accent', config.fitWindow);
-    fitMenu.querySelectorAll('.fit-menu-item').forEach((el) => {
-      el.classList.toggle('active', config.fitWindow && Number(el.dataset.cols) === fitCols());
-    });
-    saveConfig(); updateColumnStyles(); fitAll();
-  }
   applyFit();
 
-  fitWrap.appendChild(fitBtn);
-  fitWrap.appendChild(fitMenu);
-  bottom.appendChild(fitWrap);
+  const boardBtn = railBtn(ICONS.board, 'Conductor Board (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
+  boardBtn.id = 'boardViewBtn';
+  const sideBtn = railBtn(ICONS.panelRight, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle());
+  sideBtn.id = 'sideToggleBtn';
+  tbRight.append(railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast()), boardBtn, sideBtn);
 
+  const brand = document.createElement('span');
+  brand.className = 'nav-brand';
+  brand.textContent = 'AgentDeck';
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
-  bottom.appendChild(themeBtn);
-
-  bottom.appendChild(railBtn(ICONS.side, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle()));
-  bottom.appendChild(railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()));
-
-  bottom.appendChild(railBtn(ICONS.reset, '恢复默认布局', () => {
-    if (!confirm('恢复默认列布局？现有列的终端会关闭。')) return;
-    columns.forEach((c) => {
-      cancelManagedRequests(c, 'Layout reset by the user.');
-      window.deck.ptyKill(c.id);
-      ChatUI.onColumnRemoved(c.id);
-    });
-    columns = defaultColumns();
-    config.links = [];
-    config.boardPositions = {};
-    const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
-    saveConfig(); render();
-  }));
+  bottom.append(brand, themeBtn,
+    railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()),
+    railBtn(ICONS.reset, '恢复默认布局', () => {
+      if (!confirm('恢复默认布局？现有对话的终端会关闭，对话记录会删掉。已归档的不受影响。')) return;
+      columns.forEach((c) => {
+        cancelManagedRequests(c, 'Layout reset by the user.');
+        window.deck.ptyKill(c.id);
+        ChatUI.onColumnRemoved(c.id);
+      });
+      columns = defaultColumns();
+      config.links = [];
+      config.boardPositions = {};
+      const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
+      saveConfig(); render();
+    }));
+}
+function applyFit() {
+  document.querySelectorAll('#tbSplit .split-btn').forEach((b) => {
+    const n = Number(b.dataset.cols);
+    b.classList.toggle('active', config.fitWindow ? n === fitCols() : n === 0);
+  });
+  saveConfig(); updateColumnStyles(); fitAll();
+}
+function syncChromeState() {
+  const side = document.getElementById('sideToggleBtn');
+  if (side) side.classList.toggle('on', SidePane.isOpen() && activeView !== 'board');
+  const board = document.getElementById('boardViewBtn');
+  if (board) board.classList.toggle('on', activeView === 'board');
 }
 
 // ---- Left panel width + collapse ----
 function applyNavWidth() {
-  const w = config.navCollapsed ? NAV_COLLAPSED_W : (config.navWidth || NAV_DEFAULT_W);
+  const w = config.navCollapsed ? 0 : (config.navWidth || NAV_DEFAULT_W);
   colNavEl.style.flex = '0 0 ' + w + 'px';
   colNavEl.style.width = w + 'px';
 }
 function setNavCollapsed(v) {
   config.navCollapsed = v;
   colNavEl.classList.toggle('collapsed', v);
-  const btn = document.getElementById('navCollapseBtn');
-  if (btn) { btn.innerHTML = v ? ICONS.right : ICONS.left; btn.title = v ? '展开侧边栏' : '折叠侧边栏'; }
+  document.body.classList.toggle('nav-collapsed', v);
   applyNavWidth();
   saveConfig();
   fitAll(); // deck width changed
+  requestAnimationFrame(() => SidePane.syncBounds());
 }
 function attachNavResize(handle) {
   handle.addEventListener('mousedown', (e) => {
@@ -445,8 +477,8 @@ function attachNavResize(handle) {
       document.body.classList.remove('resizing');
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      // Dragged well past the minimum → collapse to the icon rail (same as the
-      // collapse button). navWidth keeps its pre-drag value for re-expanding.
+      // Dragged well past the minimum → hide the sidebar (same as the collapse
+      // button). navWidth keeps its pre-drag value for re-expanding.
       if (rawW < NAV_MIN_W - 30) {
         colNavEl.style.flex = ''; colNavEl.style.width = '';
         setNavCollapsed(true);
@@ -531,9 +563,9 @@ function showView(view) {
   SidePane.onViewChange();
   deckEl.hidden = activeView === 'board';
   boardViewEl.hidden = activeView !== 'board';
-  const button = document.getElementById('boardViewBtn');
-  if (button) button.classList.toggle('accent', activeView === 'board');
+  syncChromeState();
   if (activeView === 'board') {
+    Pages.hide();
     closeSearch();
     closeBroadcast();
     renderBoardGraph();
@@ -1019,7 +1051,7 @@ function syncBoardState() {
     if (statusText) statusText.textContent = boardStatusLabel(col, state);
     const progress = card.querySelector('.board-progress');
     const entry = terms.get(col.id);
-    const live = entry && entry.lastDump ? lastActivityLine(entry.lastDump) : '';
+    const live = entry && entry.lastScreen ? lastActivityLine(entry.lastScreen) : '';
     const text = col.result || col.progress || live;
     if (progress && progress.textContent !== text) {
       progress.textContent = text;
@@ -1117,7 +1149,7 @@ function whenTerminalReady(col, callback, waitingLabel, initialDelay) {
     // A raw shell is ready as soon as its PTY exists. Agent TUIs must expose a
     // recognizable idle prompt; permission/trust input never receives a task.
     const ready = entry && entry.alive && (!col.cmd ||
-      (entry.state !== 'input' && AGENT_IDLE_RE.test(entry.lastDump || '')));
+      (entry.state !== 'input' && AGENT_IDLE_RE.test(entry.lastScreen || '')));
     if (ready) {
       promptQueueIds.delete(queueId);
       callback();
@@ -1273,6 +1305,16 @@ function updateColumnStyles() {
   deckEl.style.overflowX = deckEl.scrollWidth > deckEl.clientWidth ? 'scroll' : 'auto';
 }
 
+// Equal-split widths depend on the deck's width, which changes with the
+// sidebar and the right pane, not only with the window.
+let lastDeckWidth = 0;
+new ResizeObserver(() => {
+  const w = deckEl.clientWidth;
+  if (!w || w === lastDeckWidth) return;
+  lastDeckWidth = w;
+  if (config.fitWindow) updateColumnStyles();
+}).observe(deckEl);
+
 function fitAll() {
   requestAnimationFrame(() => terms.forEach(({ fit }) => { try { fit.fit(); } catch (_) {} }));
 }
@@ -1317,11 +1359,16 @@ function buildColumn(col, isFresh) {
 
   const secondary = document.createElement('span');
   secondary.className = 'secondary';
+  if (col.isMain) {
+    wrap.classList.add('is-main');
+    title.title = '队长：把活派给各个对话，再把回执带回来';
+  }
   secondary.append(
-    mkBtn(ICONS.left, '左移', () => move(col, -1)),
-    mkBtn(ICONS.right, '右移', () => move(col, 1)),
-    mkBtn(ICONS.edit, '编辑', () => openDialog(columns.indexOf(col))),
-    mkBtn(ICONS.close, '删除该列', () => removeCol(col)),
+    col.isMain
+      ? mkBtn(ICONS.eraser, '清空上下文（只清队长，其他对话和已派的活不受影响）', () => MainSession.clearContext())
+      : mkBtn(ICONS.archive, '归档（结束终端，对话保留，可恢复）', () => archiveColumn(col)),
+    mkBtn(ICONS.edit, '编辑（标题、目录、启动命令）', () => openDialog(columns.indexOf(col))),
+    mkBtn(ICONS.close, '关闭并删除', () => removeCol(col)),
   );
   head.append(grip, dot, title, timerEl, secondary);
   // Double-click an empty part of the header to zoom the column (the title
@@ -1520,7 +1567,8 @@ function buildColumn(col, isFresh) {
           // Writes are parsed in order: this callback marks the end of replay.
           term.write('\r\n\x1b[2m── 以上为上次会话的输出（已恢复）──\x1b[0m\r\n', () => { replayMuted = false; });
         }
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual');
+        // 队长 gets a control token too; the columns it drives never do.
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain);
         let resumedAgent = false;
         if (col.cmd) {
           let launch = col.cmd;
@@ -1704,7 +1752,7 @@ function wrappedLineToCells(buf, row, cols) {
   return { str, colOf, rowOf, widthOf, endRow };
 }
 function trimTrail(text, s, e) {
-  while (e > s && /[.,;:!?)\]}>'"]/.test(text[e - 1])) e--;
+  while (e > s && /[\s.,;:!?)\]}>'"]/.test(text[e - 1])) e--;
   return e;
 }
 function findLinks(text) {
@@ -1846,20 +1894,7 @@ function attachReorder(grip, col) {
   });
 }
 
-// ---- Reorder / remove / add ----
-function move(col, dir) {
-  const idx = columns.indexOf(col);
-  const j = idx + dir;
-  if (j < 0 || j >= columns.length) return;
-  [columns[idx], columns[j]] = [columns[j], columns[idx]];
-  saveConfig();
-  // Reorder DOM nodes only — keep the live terminals so nothing reloads.
-  const nodes = deckEl.children;
-  if (dir === 1) deckEl.insertBefore(nodes[j], nodes[idx]);
-  else deckEl.insertBefore(nodes[idx], nodes[j]);
-  updateColumnStyles();
-  renderColNav();
-}
+// ---- Remove / archive / add ----
 function managedSubtree(root, includeRoot) {
   if (!root || root.role === 'manual') return [];
   return columns.filter((candidate) =>
@@ -1888,18 +1923,28 @@ function releaseManagedSubtree(root, includeRoot, reason) {
 
 // Surgical add/remove so touching one column never blanks the others' live output.
 function removeCol(col) {
-  const t = terms.get(col.id);
   const descendants = managedSubtree(col, false);
   const active = [col, ...descendants].some((candidate) => {
     const entry = terms.get(candidate.id);
     return entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
   });
   if (active && !confirm('This terminal or one of its managed descendants is active. Close it and release descendants as independent terminals?')) return;
-  const idx = columns.indexOf(col);
   if (descendants.length) {
     releaseManagedSubtree(col, false, `Parent task "${columnLabel(col)}" was removed.`);
   }
   cancelManagedRequests(col, `Task "${columnLabel(col)}" was removed.`);
+  ChatUI.onColumnRemoved(col.id);
+  if (col.isMain) config.mainSession = null;
+  detachColumn(col, false);
+  saveConfig();
+  renderColNav();
+  renderBoardGraph();
+}
+// Take a column off the deck: its terminal, pty and board relationships.
+// keepReplay saves the terminal's output first (archive) so a restore replays it.
+function detachColumn(col, keepReplay) {
+  const t = terms.get(col.id);
+  const idx = columns.indexOf(col);
   if (selectedBoardId === col.id) {
     restoreBoardTerminal();
     selectedBoardId = null;
@@ -1909,9 +1954,8 @@ function removeCol(col) {
     (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
     t.term.dispose(); t.wrap.remove(); terms.delete(col.id);
   }
-  ChatUI.onColumnRemoved(col.id);
-  window.deck.ptyKill(col.id);
-  columns.splice(idx, 1);
+  window.deck.ptyKill(col.id, keepReplay);
+  if (idx >= 0) columns.splice(idx, 1);
   config.links = (config.links || []).filter((link) => link.fromTaskId !== col.taskId && link.toTaskId !== col.taskId);
   delete config.boardPositions[col.taskId];
   if (zoomedId === col.id) { zoomedId = null; updateColumnStyles(); fitAll(); }
@@ -1920,23 +1964,143 @@ function removeCol(col) {
   // the user happens to click another column.
   if (focusedId === col.id) {
     focusedId = null;
-    if (columns.length) focusColumnByIndex(Math.min(idx, columns.length - 1));
+    if (columns.length) focusColumnByIndex(Math.min(Math.max(idx, 0), columns.length - 1));
   }
+  updateColumnStyles();
+}
+
+// Archive: the terminal stops, the conversation and last output are kept, and
+// the session waits in the sidebar's 已归档 section until restored.
+function archiveColumn(col) {
+  if (!columns.includes(col)) return;
+  if (col.isMain) { showToast('队长不能归档；不想要了可以关掉它'); return; }
+  const descendants = managedSubtree(col, false);
+  const busy = [col, ...descendants].some((candidate) => {
+    const entry = terms.get(candidate.id);
+    return entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
+  });
+  if (busy && !confirm(`「${columnLabel(col)}」还在干活。归档会结束它的终端（对话记录保留，随时可以恢复）。继续吗？`)) return;
+  if (descendants.length) releaseManagedSubtree(col, false, `Parent task "${columnLabel(col)}" was archived.`);
+  cancelManagedRequests(col, `Task "${columnLabel(col)}" was archived.`);
+  ChatUI.onColumnArchived(col.id);
+  detachColumn(col, true);
+  const snapshot = { ...col, role: 'manual', relationship: 'Independent manual terminal', archivedAt: Date.now() };
+  config.archived = [snapshot, ...(config.archived || []).filter((a) => a.id !== col.id)];
   saveConfig();
   renderColNav();
   renderBoardGraph();
+  showToast(`已归档「${columnLabel(col)}」，在左侧「已归档」里可以恢复`);
+}
+function restoreArchived(id, focus) {
+  const a = (config.archived || []).find((x) => x.id === id);
+  if (!a) return null;
+  config.archived = config.archived.filter((x) => x !== a);
+  const { archivedAt, ...rest } = a;
+  const col = BoardCore.normalizeColumn({ ...rest, role: 'manual', relationship: 'Independent manual terminal' });
+  if (col.folderId && !config.folders.some((f) => f.id === col.folderId)) col.folderId = null;
+  if (zoomedId) { zoomedId = null; updateColumnStyles(); }
+  Pages.hide();
+  insertColumn(col, false); // not fresh: replays its saved output and resumes Claude
+  showToast(`已恢复「${columnLabel(col)}」`);
+  if (focus) whenMounted(col, () => jumpToColumn(col));
+  return col;
+}
+function deleteArchived(id) {
+  config.archived = (config.archived || []).filter((x) => x.id !== id);
+  ChatUI.deleteArchivedChat(id);
+  saveConfig();
+  renderColNav();
+}
+// Put a column into the deck at its sidebar position and build its terminal.
+function insertColumn(col, isFresh) {
+  columns.push(col);
+  columns = SidebarCore.orderedColumns(columns, config.folders);
+  const next = columns[columns.indexOf(col) + 1];
+  const nextWrap = next && terms.get(next.id) && terms.get(next.id).wrap;
+  deckEl.insertBefore(buildColumn(col, isFresh), nextWrap && nextWrap.parentElement === deckEl ? nextWrap : null);
+  updateColumnStyles();
+  saveConfig();
+  renderColNav();
+  renderBoardGraph();
+}
+// The terminal is created on the next frame; run fn once it exists.
+function whenMounted(col, fn, tries = 0) {
+  if (!columns.includes(col)) return;
+  if (terms.has(col.id)) { fn(); return; }
+  if (tries < 60) setTimeout(() => whenMounted(col, fn, tries + 1), 50);
+}
+// Reorder the live column nodes to match `columns` (no terminal reloads).
+function reflowDeck() {
+  columns.forEach((c) => { const w = terms.get(c.id) && terms.get(c.id).wrap; if (w) deckEl.appendChild(w); });
+  updateColumnStyles();
+}
+function moveSession(id, target) {
+  columns = SidebarCore.moveColumn(columns, config.folders, id, target);
+  reflowDeck();
+  saveConfig();
+  renderColNav();
+}
+function removeFolder(folderId) {
+  config.folders = SidebarCore.removeFolder(columns, config.folders, folderId);
+  (config.archived || []).forEach((a) => { if (a.folderId === folderId) a.folderId = null; });
+  columns = SidebarCore.orderedColumns(columns, config.folders);
+  reflowDeck();
+  saveConfig();
+  renderColNav();
+}
+// Automatic sends must never land in a bare shell: it would run every line of
+// the text as a command. They go out only while something other than the
+// shell is in the column's foreground (an agent). Windows' ConPTY cannot tell
+// us the foreground process, so there the agent's own screen must be visible.
+// allowShell: the column is a plain shell on purpose (a Schedule target).
+const SHELL_NAMES = /^-?(zsh|bash|sh|fish|dash|ksh|tcsh|csh|nu|pwsh|powershell|cmd)(\.exe)?$/i;
+async function agentInForeground(col, allowShell) {
+  if (allowShell && !col.cmd) return true;
+  const entry = terms.get(col.id);
+  if (env.platform === 'win32') return !!entry && AGENT_IDLE_RE.test(entry.lastScreen || '');
+  try {
+    const name = await window.deck.ptyForeground(col.id);
+    return !!name && !SHELL_NAMES.test(name);
+  } catch (_) { return false; }
+}
+
+// Schedule and 队长: wait until the session can take a prompt (agent at its
+// idle prompt, not busy or asking something), then send it like the composer
+// does. opts are passed to ChatUI.sendPrompt, plus timeout/onSent/onGiveUp
+// and allowShell (see agentInForeground).
+function sendWhenReady(col, text, opts) {
+  const o = opts || {};
+  const started = Date.now();
+  const id = col.id;
+  const check = async () => {
+    if (!columns.includes(col) || col.id !== id) return;
+    const entry = terms.get(col.id);
+    if (entry && entry.alive) {
+      const idle = entry.state !== 'input' && entry.state !== 'working';
+      const quiet = Date.now() - (entry.lastOutputAt || 0);
+      // unknown agents never show a recognizable idle footer: settle for quiet output
+      const ready = !col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000);
+      if (idle && ready && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
+        const sent = await ChatUI.sendPrompt(col, text, null, o);   // a long prompt goes out as a file
+        if (sent && o.onSent) o.onSent(sent === true ? null : sent);
+        if (sent) return;
+      }
+    }
+    if (Date.now() - started > (o.timeout || 120_000)) {
+      if (o.onGiveUp) o.onGiveUp();
+      else showToast(`没发出去：「${columnLabel(col)}」一直没准备好`);
+      return;
+    }
+    setTimeout(check, 500);
+  };
+  check();
 }
 function addColumn(c) {
   const col = BoardCore.normalizeColumn({
     id: newId(), taskId: newTaskId(), width: defaultColWidth(), cwd: '',
     role: 'manual', relationship: 'Independent manual terminal', ...c,
   });
-  columns.push(col);
-  saveConfig();
-  deckEl.appendChild(buildColumn(col, true)); // brand-new column: never auto-resume
-  updateColumnStyles();
-  renderColNav();
-  renderBoardGraph();
+  insertColumn(col, true); // brand-new column: never auto-resume
   return col;
 }
 // Smallest unused positive integer, so new columns read 1,2,3… and fill gaps.
@@ -1946,12 +2110,27 @@ function nextTitle() {
   return String(n);
 }
 // New column with no dialog: auto-numbered title, default (global) cwd, focused.
-function addAndFocusColumn() {
+function addAndFocusColumn(opts) {
   const stayOnBoard = activeView === 'board';
   if (zoomedId) { zoomedId = null; updateColumnStyles(); } // new column must be visible
-  const col = addColumn({ title: nextTitle(), role: 'manual' });
+  Pages.hide();
+  const col = addColumn({ title: nextTitle(), role: 'manual', folderId: (opts && opts.folderId) || null });
   if (stayOnBoard) setTimeout(() => selectBoardNode(col.id, true), 100);
-  else setTimeout(() => focusColumnByIndex(columns.length - 1), 80); // wait for its terminal
+  else whenMounted(col, () => jumpToColumn(col)); // wait for its terminal
+  return col;
+}
+// A session opened by Schedule or 队长; background runs don't steal focus.
+function createSession(c, background) {
+  const col = addColumn({ ...c, title: c.title || nextTitle(), cmd: c.cmd || '', cwd: c.cwd || '', role: 'manual' });
+  if (!background) whenMounted(col, () => jumpToColumn(col));
+  return col;
+}
+// 队长: always the first column, always a chat page.
+function createMain(c) {
+  if (zoomedId) { zoomedId = null; updateColumnStyles(); }
+  Pages.hide();
+  const col = addColumn({ title: '队长', displayTitle: '队长', manualTitle: true, cmd: c.cmd || '', cwd: c.cwd || '', role: 'manual', isMain: true, view: 'chat' });
+  whenMounted(col, () => jumpToColumn(col));
   return col;
 }
 // Double-click the title to rename it inline (Enter commits, Esc cancels). Uses
@@ -2005,6 +2184,7 @@ function respawnColumn(col) {
   updateColumnStyles();
   renderColNav();
   renderBoardGraph();
+  return col;
 }
 
 // ---- Column sidebar (list of columns: click to jump, double-click to rename) ----
@@ -2016,64 +2196,40 @@ function setColumnTitle(col, title) {
   const label = columnLabel(col);
   if (t && t.titleEl && t.titleEl.textContent !== label) t.titleEl.textContent = label;
   const nav = navItems.get(col.id);
-  if (nav && nav.label.textContent !== label) nav.label.textContent = label;
+  if (nav && nav.label && nav.label.textContent !== label) nav.label.textContent = label;
   saveConfig();
   renderBoardGraph();
 }
 
 const colNavEl = document.getElementById('colNav');
-const navListEl = document.getElementById('navList');
-const navItems = new Map(); // id -> { el, dot, label }
+const navItems = new Map(); // id -> { el, dot, label, sub, meta } (filled by sidebar.js)
 
-// Rebuild the whole list from `columns`. Cheap (plain DOM, no terminals), so we
-// just call it on every structural change (add/remove/reorder/respawn).
-function renderColNav() {
-  if (!navListEl) return;
-  navItems.clear();
-  navListEl.innerHTML = '';
-  columns.forEach((col, i) => {
-    const item = document.createElement('div');
-    item.className = 'colnav-item';
-    item.dataset.colId = col.id;
-    const dot = document.createElement('span'); dot.className = 'cn-dot';
-    const text = document.createElement('span'); text.className = 'cn-text';
-    const label = document.createElement('span'); label.className = 'cn-label';
-    label.textContent = columnLabel(col); label.title = '双击重命名';
-    // Live activity line: the column's last terminal line, mission-control style.
-    const sub = document.createElement('span'); sub.className = 'cn-sub';
-    text.append(label, sub);
-    // Right slot: the Cmd+number hint for the first 9 columns, swapped for a
-    // delete ✕ on hover.
-    const right = document.createElement('span'); right.className = 'cn-right';
-    const idx = document.createElement('span'); idx.className = 'cn-index';
-    idx.textContent = i < 9 ? String(i + 1) : '';
-    const del = document.createElement('button');
-    del.className = 'cn-del'; del.innerHTML = ICONS.close; del.title = '删除该列';
-    del.addEventListener('mousedown', (e) => e.stopPropagation()); // don't start a drag
-    del.addEventListener('click', (e) => { e.stopPropagation(); removeCol(col); });
-    right.append(idx, del);
-    item.append(dot, text, right);
-    // Drag reorders (deck follows); a plain click jumps; double click renames.
-    attachNavReorder(item, col);
-    attachNavRename(label, col);
-    navListEl.appendChild(item);
-    navItems.set(col.id, { el: item, dot, label, sub });
-  });
-  const countEl = document.getElementById('navCount');
-  if (countEl) countEl.textContent = String(columns.length);
-  syncNav();
-}
+// The sidebar (folders, sessions, archive) lives in sidebar.js. Cheap plain
+// DOM, so it is simply rebuilt on every structural change.
+function renderColNav() { Sidebar.render(); }
 
 // Mirror each entry's status dot and mark the focused column as active — both
 // in the sidebar and on the deck column itself (accent bar via .focused).
+// A collapsed folder shows the most urgent state of what's inside it.
+const NAV_RANK = { input: 3, working: 2, done: 1 };
 function syncNav() {
+  const folderState = new Map();
+  document.querySelectorAll('.nav-folder-head.has-focus').forEach((h) => h.classList.remove('has-focus'));
   navItems.forEach((nav, id) => {
     const entry = terms.get(id);
     const state = (entry && entry.state) || 'plain';
+    if (!nav.el) {
+      if (!nav.folderHead) return;
+      if ((NAV_RANK[state] || 0) > (NAV_RANK[folderState.get(nav.folderHead)] || 0)) folderState.set(nav.folderHead, state);
+      if (id === focusedId) nav.folderHead.classList.add('has-focus');
+      return;
+    }
     nav.dot.className = 'cn-dot ' + state;
     nav.dot.title = DOT_TIP[state] || '';
     nav.el.classList.toggle('active', id === focusedId);
+    nav.el.classList.toggle('live', state === 'working' || state === 'input');
   });
+  document.querySelectorAll('.nav-folder-head').forEach((h) => { h.dataset.state = folderState.get(h) || ''; });
   terms.forEach((t, id) => { if (t.wrap) t.wrap.classList.toggle('focused', id === focusedId); });
   SidePane.onFocusChange();
 }
@@ -2085,6 +2241,7 @@ function jumpToColumn(col) {
     selectBoardNode(col.id, true);
     return;
   }
+  Pages.hide(); // a Schedule/Artifacts page would cover the column
   // While zoomed, jumping re-zooms onto the target instead of focusing a hidden column.
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   // Explicit navigation must bypass the IME drift guard. Focus only after
@@ -2118,81 +2275,6 @@ window.deck.onFocusColumn((id) => {
   };
   jump();
 });
-
-// Drag a sidebar entry to reorder; the deck columns reflow to match live (no
-// reload). Below the move threshold it's a plain click → jump to that column.
-function attachNavReorder(item, col) {
-  item.addEventListener('mousedown', (e) => {
-    if (e.button !== 0) return;
-    const label = item.querySelector('.cn-label');
-    if (label && label.isContentEditable) return; // renaming, not dragging
-    e.preventDefault(); // don't text-select the label while pressing
-    const srcId = col.id;
-    const startX = e.clientX, startY = e.clientY;
-    let dragging = false;
-    const onMove = (ev) => {
-      if (!dragging) {
-        if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
-        dragging = true;
-        document.body.classList.add('reordering');
-      }
-      const overEl = document.elementFromPoint(ev.clientX, ev.clientY);
-      const overItem = overEl && overEl.closest('.colnav-item');
-      const overId = overItem && overItem.dataset.colId;
-      if (!overId || overId === srcId) return;
-      const from = columns.findIndex((c) => c.id === srcId);
-      const to = columns.findIndex((c) => c.id === overId);
-      if (from < 0 || to < 0 || from === to) return;
-      const [moved] = columns.splice(from, 1);
-      columns.splice(to, 0, moved);
-      // Reflow the deck to match the array — appendChild moves live nodes.
-      columns.forEach((c) => { const w = terms.get(c.id) && terms.get(c.id).wrap; if (w) deckEl.appendChild(w); });
-      updateColumnStyles();
-      renderColNav(); // rebuild the sidebar in the new order (replaces nodes)
-      const fresh = navItems.get(srcId); // re-mark the moved entry as dragging
-      if (fresh) fresh.el.classList.add('cn-dragging');
-    };
-    const onUp = () => {
-      document.removeEventListener('mousemove', onMove);
-      document.removeEventListener('mouseup', onUp);
-      document.body.classList.remove('reordering');
-      if (dragging) {
-        const fresh = navItems.get(srcId);
-        if (fresh) fresh.el.classList.remove('cn-dragging');
-        saveConfig();
-      } else {
-        jumpToColumn(col); // it was a click, not a drag
-      }
-    };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-  });
-}
-
-// Inline rename on the sidebar entry, mirrored back to the column header.
-function attachNavRename(labelEl, col) {
-  labelEl.addEventListener('dblclick', (e) => {
-    e.preventDefault(); e.stopPropagation();
-    labelEl.contentEditable = 'true'; labelEl.spellcheck = false; labelEl.focus();
-    const range = document.createRange(); range.selectNodeContents(labelEl);
-    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
-    let cancelled = false;
-    const onKey = (ev) => {
-      ev.stopPropagation();
-      if (ev.key === 'Enter') { ev.preventDefault(); labelEl.blur(); }
-      else if (ev.key === 'Escape') { ev.preventDefault(); cancelled = true; labelEl.blur(); }
-    };
-    labelEl.addEventListener('keydown', onKey);
-    labelEl.addEventListener('blur', () => {
-      labelEl.removeEventListener('keydown', onKey);
-      labelEl.contentEditable = 'false';
-      window.getSelection().removeAllRanges();
-      const v = labelEl.textContent.trim();
-      if (!cancelled && v) setColumnDisplayTitle(col, v);
-      else labelEl.textContent = columnLabel(col);
-    }, { once: true });
-  });
-}
 
 // ---- Help dialog (shortcuts & tips) ----
 const helpDlg = document.getElementById('helpDialog');
@@ -2629,6 +2711,13 @@ window.deck.onBoardCommand((message) => {
     }
   }
   const caller = columns.find((col) => col.id === message.callerId);
+  // 队长's commands: only its own column may use them.
+  if (String(message.action || '').startsWith('main-')) {
+    Promise.resolve().then(() => MainSession.handle(message, caller)).then(
+      (response) => respondBoard(message.id, response),
+      (error) => respondBoard(message.id, { done: true, error: error.message }));
+    return;
+  }
   if (!caller || caller.role === 'manual') {
     respondBoard(message.id, { done: true, error: 'Managed caller terminal no longer exists.' });
     return;
@@ -2746,24 +2835,41 @@ document.getElementById('searchNext').innerHTML = ICONS.down;
 document.getElementById('searchClose').innerHTML = ICONS.close;
 document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
-buildRail();
-setNavCollapsed(config.navCollapsed); // sets class + width + collapse-button icon
+buildChrome();
+setNavCollapsed(config.navCollapsed); // sets class + width
 attachNavResize(document.getElementById('navResizer'));
 applyTheme(config.theme);
 const deckHost = {
   columns: () => columns, terms, config, saveConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName,
-  shellQuote, showToast, jumpToColumn, setNavCollapsed,
+  shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
   focusedId: () => focusedId,
   setFocused: (id) => { focusedId = id; syncNav(); },
-  layout: () => { updateColumnStyles(); fitAll(); },
+  layout: () => { updateColumnStyles(); fitAll(); syncChromeState(); },
   activeView: () => activeView,
   isNavCollapsed: () => config.navCollapsed,
   isChatMode: (id) => ChatUI.isChatMode(id),
   setMode: (id, mode) => ChatUI.setMode(id, mode),
+  // sidebar
+  folders: () => config.folders,
+  archived: () => config.archived || [],
+  addAndFocusColumn, removeCol, archiveColumn, restoreArchived, deleteArchived, moveSession, removeFolder,
+  renameSession: (col, title) => setColumnDisplayTitle(col, title),
+  lastTurnTs: (id) => ChatUI.lastTurnTs(id),
+  togglePage: (name) => { if (activeView === 'board') showView('terminals'); Pages.toggle(name); },
+  showSideTerminal: () => SidePane.show('terminal', true),
+  // Schedule
+  createSession, sendWhenReady,
+  sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
+  // 队长
+  createMain, respawnColumn, agentInForeground,
 };
 SidePane.init(deckHost);
+Sidebar.init(deckHost);
+MainSession.init(deckHost);
 ChatUI.init(deckHost);
+Pages.init(deckHost);
 render();
+syncChromeState();
 window.addEventListener('resize', () => {
   if (activeView === 'board') renderBoardGraph();
   else { updateColumnStyles(); fitAll(); }
@@ -2841,6 +2947,7 @@ setInterval(() => {
       const nl = text.indexOf('\n', sep);
       text = nl >= 0 ? text.slice(nl + 1) : '';
     }
+    entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
     // Skip the full disk write when nothing changed on screen — with several
     // idle columns that was multiple synchronous writes/sec. But watch-ai
     // treats a spool file older than 8s as a dead column, so the mtime must
@@ -2902,6 +3009,7 @@ setInterval(() => {
     }
 
     ChatUI.onTick(id, entry, text);
+    MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);
@@ -2911,6 +3019,7 @@ setInterval(() => {
     }
   });
   syncNav(); // mirror status dots + active highlight into the sidebar
+  Sidebar.refreshTimes();
   syncBoardState();
 
   // Dock badge: how many agents are blocked waiting on the human.
@@ -2931,6 +3040,7 @@ function focusColumnByIndex(idx) {
   }
   const t = terms.get(col.id);
   if (!t) return;
+  Pages.hide();
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   focusColumnInput(col.id); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav();
 }

@@ -40,13 +40,35 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Do not log prompts, tokens or terminal contents. Do not commit local settings,
   session output, screenshots containing user data, keys, or installed bundles.
 - Managed terminal tokens provide app-level routing, not an OS sandbox against
-  programs running as the same user. Never inherit tokens into manual columns.
+  programs running as the same user. Never inherit tokens into manual columns
+  (the one exception is the 队长 column, which the user creates explicitly).
 - Chat view: the xterm of a chat-mode column stays mounted (hidden, never
   `display:none`) so PTY size, status dots and notifications keep working. Bubbles
   hold only the user prompt and the agent's final reply. Left/right swipe between
   columns is the core interaction; do not change the deck wheel or scroll code.
 - Saved conversations live in `userData/chats` (private, never committed, never
   pushed to this public repo). Any cloud sync must target a separate private repo.
+  Folders, archived sessions and schedules are in the local `config.json` too.
+- Deck order always equals sidebar order (folders first, then loose sessions;
+  `SidebarCore.orderedColumns`). Reorder by moving live column nodes, never by
+  rebuilding terminals. Archive kills the PTY with `keepReplay` so restore can
+  replay the saved output; the startup prune must keep archived ids.
+- Schedule runs only while the app is open, never fires overdue runs late at
+  launch (reported as missed), and sends through the same path as the composer.
+- Automatic sends go through `sendWhenReady`/`agentInForeground`: never type
+  prose into a column whose foreground process is a shell (unless it is a plain
+  shell column a Schedule targets on purpose). Prompts are never truncated; long
+  ones go out as a file via `prompt:save-long`.
+- The status lines under a chat composer are read from the rows below the TUI's
+  input box; `extractReply` must keep cutting that box and everything below it.
+- 队长 (main session, `main-session.js`/`main-core.js`): exactly one column with
+  `isMain`, always first in the deck, never in the session list. Its terminal is
+  the only manual column spawned with a control token; `main-*` board actions are
+  accepted only from that column. Columns it drives never get a token. Nothing new
+  is exposed to the page: the existing board request channel carries it.
+- Receipts come from the worker's own 【回执】/【提问】 block in its final reply; full
+  output, logs and file bodies never go into the 队长's context. Tests must drive
+  workers with the stand-in agent (`--command`), never a real agent CLI.
 - The side pane browser is a sandboxed `WebContentsView` with its own partition,
   http(s) only, permissions and downloads denied. Previews are read in the main
   process with size caps; the page never gets a raw path it did not click on.

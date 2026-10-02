@@ -53,9 +53,15 @@ contextBridge.exposeInMainWorld('deck', {
   ptySpawn: (id, cwd, cols, rows, managed) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
-  ptyKill: (id) => ipcRenderer.send('pty:kill', { id }),
+  // keepReplay: save the output first (archiving), so restoring can replay it.
+  ptyKill: (id, keepReplay) => ipcRenderer.send('pty:kill', { id, keepReplay: !!keepReplay }),
+  // Composer "+" button: pick files to mention; returns their paths.
+  pickFiles: () => ipcRenderer.invoke('pick-files', {}),
+  // A prompt too long for the terminal is saved as a private .txt; returns its path.
+  saveLongPrompt: (text) => ipcRenderer.invoke('prompt:save-long', { text }),
   // Hot-reload support: check if a pty survived a renderer reload, replay its buffer.
   ptyIsAlive: (id) => ipcRenderer.invoke('pty:is-alive', { id }),
+  ptyForeground: (id) => ipcRenderer.invoke('pty:foreground', { id }),
   ptyReplay: (id) => ipcRenderer.invoke('pty:replay', { id }),
   reloadRenderer: () => ipcRenderer.send('reload-renderer'),
 

@@ -82,7 +82,14 @@ function usage() {
     '  send --task <task-id> --message "Follow-up or answer"\n' +
     '  progress --message "Current progress"\n' +
     '  complete --result "Useful final result"\n' +
-    '  status\n'
+    '  status\n\n' +
+    'Captain only (队长, the main session):\n' +
+    '  ledger                                   every session: id, title, state, last receipt\n' +
+    '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|grok | --command "launch"]\n' +
+    '  tell --to <session-id> --message "Instruction"\n' +
+    '  read --id <session-id> [--turns 3]       saved prompts and final replies, cut short\n' +
+    '  receipts                                 receipts not yet seen\n' +
+    '  answer --to <session-id> --key y|n|1-9|enter|esc   answer a confirmation prompt\n'
   );
 }
 
@@ -143,6 +150,49 @@ async function main() {
     if (!result) fail('complete requires --result.');
     await request({ action, result }, false);
     process.stdout.write('Result delivered to the parent task.\n');
+    return;
+  }
+
+  // ---- main session ----
+  if (action === 'ledger' || action === 'receipts') {
+    const response = await request({ action: 'main-' + action }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
+  if (action === 'new') {
+    const title = String(args.title || '').trim();
+    const task = String(args.task || args._.slice(1).join(' ')).trim();
+    if (!title || !task) fail('new requires --title and --task.');
+    const response = await request({
+      action: 'main-new', title, task,
+      agent: typeof args.agent === 'string' ? args.agent : '',
+      command: typeof args.command === 'string' ? args.command : '',
+      cwd: typeof args.cwd === 'string' ? args.cwd : '',
+    }, false);
+    process.stdout.write(`${response.result}\n`);
+    return;
+  }
+  if (action === 'tell') {
+    const to = String(args.to || '').trim();
+    const message = String(args.message || args._.slice(1).join(' ')).trim();
+    if (!to || !message) fail('tell requires --to and --message.');
+    const response = await request({ action: 'main-tell', to, message }, false);
+    process.stdout.write(`${response.result}\n`);
+    return;
+  }
+  if (action === 'answer') {
+    const to = String(args.to || '').trim();
+    const key = String(args.key || args._[1] || '').trim();
+    if (!to || !key) fail('answer requires --to and --key.');
+    const response = await request({ action: 'main-answer', to, key }, false);
+    process.stdout.write(`${response.result}\n`);
+    return;
+  }
+  if (action === 'read') {
+    const id = String(args.id || args._[1] || '').trim();
+    if (!id) fail('read requires --id.');
+    const response = await request({ action: 'main-read', to: id, turns: Number(args.turns) || 3 }, false);
+    process.stdout.write(`${response.result}\n`);
     return;
   }
 

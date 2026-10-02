@@ -39,6 +39,17 @@
     if (Number.isFinite(saved.width)) side.width = Math.max(300, Math.min(900, saved.width));
     side.open = !!saved.open;
 
+    const tabIcons = { preview: 'eye', terminal: 'terminal', browser: 'globe' };
+    tabsEl.querySelectorAll('.side-tab').forEach((t) => {
+      const ico = el('span', 'ico');
+      ico.innerHTML = host.ICONS[tabIcons[t.dataset.tab]] || '';
+      t.prepend(ico);
+    });
+    $('sideClose').innerHTML = host.ICONS.panelRight;
+    $('sideClose').title = '收起右侧栏 (⌘\\)';
+    sbBack.innerHTML = host.ICONS.left;
+    sbFwd.innerHTML = host.ICONS.right;
+
     tabsEl.addEventListener('click', (e) => {
       const tab = e.target.closest('.side-tab');
       if (tab) show(tab.dataset.tab, true);
@@ -192,7 +203,7 @@
     const r = preview;
     if (!r) { pvBody.appendChild(el('div', 'pv-empty', '点聊天里的文件路径或链接，会在这里预览。')); return; }
     const title = el('div', 'pv-title');
-    title.append(el('strong', null, r.name || r.path), el('span', 'pv-path', r.path));
+    title.append(el('strong', null, r.name || r.path), el('span', 'pv-path', '\u200e' + r.path + '\u200e'));
     title.title = r.path;
     pvHead.appendChild(title);
     const actions = el('div', 'pv-actions');

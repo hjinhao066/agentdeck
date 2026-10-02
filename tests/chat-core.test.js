@@ -133,3 +133,58 @@ test('code highlighting escapes everything and skips plain text', () => {
   assert.ok(out.includes('tok-c'));
   assert.ok(out.includes('tok-s'));
 });
+
+test('artifacts collect files and links from replies, newest mention wins', () => {
+  const findLinks = (line) => {
+    const out = [];
+    for (const m of line.matchAll(/https?:\/\/\S+|\/\S+\/\S+/g)) out.push({ kind: m[0].startsWith('http') ? 'url' : 'file', text: m[0] });
+    return out;
+  };
+  const chats = [
+    { colId: 'a', title: 'A', turns: [{ id: 't1', ts: 1, user: 'q', reply: 'see /tmp/x/report.md and https://example.com/docs/' }] },
+    { colId: 'b', title: 'B', archived: true, turns: [{ id: 't2', ts: 5, user: 'q', reply: 'updated /tmp/x/report.md' }, { id: 't3', ts: 6, user: 'q', reply: '' }] },
+  ];
+  const list = C.collectArtifacts(chats, findLinks);
+  assert.equal(list.length, 2);
+  assert.deepEqual(list[0], { kind: 'file', text: '/tmp/x/report.md', name: 'report.md', type: 'markdown', colId: 'b', title: 'B', archived: true, turnId: 't2', ts: 5 });
+  assert.equal(list[1].name, 'example.com · docs');
+  assert.equal(list[1].type, 'web');
+});
+
+test('reply markdown keeps terminal line breaks and stays escaped', () => {
+  const html = C.renderMarkdown('## 结果\n第一行\n第二行 <b>x</b>\n\n- a\n- b', { breaks: true });
+  assert.match(html, /<h2>结果<\/h2>/);
+  assert.match(html, /第一行<br>第二行 &lt;b&gt;x&lt;\/b&gt;/);
+  assert.match(html, /<ul><li[^>]*>a<\/li><li[^>]*>b<\/li><\/ul>/);
+});
+
+test('the status lines under the input box never end up in the reply', () => {
+  const screen = [
+    '> 总结一下',
+    '',
+    '⏺ 已经写好了 /tmp/x/report.md',
+    '',
+    '────────────────────────────────────────',
+    '> ',
+    '────────────────────────────────────────',
+    '  Context: [████░░░░] 235k/1000k (23%) | Session: 26.0% | Cost: $3.62',
+    '  Model: Opus 5.5 | Reset: 3hr 37m | Weekly Reset: 16hr 17m',
+    '  Thinking: xhigh',
+    '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
+    ...Array(30).fill(''),            // the rest of a tall screen is blank
+  ];
+  assert.equal(C.extractReply(screen, '总结一下', 80), '已经写好了 /tmp/x/report.md');
+  // a lone rule inside the answer is left alone
+  assert.deepEqual(C.cutInputBox(['a', '──────────', 'b']), ['a', '──────────', 'b']);
+});
+
+test('a multi-line prompt echoed line by line is not part of the reply', () => {
+  const contract = '\n---\n（约定）做完时在最后写：\n【回执】\n摘要：一到三句\n回执里不要贴文件正文。';
+  const screen = [
+    'please write the report', '---', '（约定）做完时在最后写：', '【回执】', '摘要：一到三句', '回执里不要贴文件正文。',
+    '⏺ GOT please write the report', '  【回执】', '  摘要：done', '',
+  ];
+  const reply = C.extractReply(screen, 'please write the report' + contract, 80);
+  assert.ok(reply.startsWith('GOT please write the report'), reply);
+  assert.ok(!reply.includes('约定'));
+});

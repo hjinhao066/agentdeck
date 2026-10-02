@@ -4,12 +4,74 @@ A Windows/macOS multi-column terminal app for running AI agents side by side.
 Each column has its own shell, output history and input. The Conductor Board
 adds explicit task relationships without taking control of manual terminals.
 
+## Layout
+
+The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
+the middle:
+
+- **Left sidebar** (collapsible, resizable): 新对话, 搜索, Schedule, Artifacts, then
+  folders, loose sessions and 已归档. Every session is a live terminal column.
+  Drag a session to reorder it, into a folder, out of one, or onto 已归档.
+  Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
+  sessions in exactly the sidebar order (folders first), so swiping walks the list.
+- **Center**: the deck. Two-finger swipe left/right pages between sessions; the
+  top bar picks 自由 (per-column widths) or 2–5 equal columns.
+- **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
+- **Archive** stops the session's terminal but keeps its conversation and last
+  output; restoring replays that output and relaunches the agent (Claude resumes
+  with `--continue`). Delete removes the session and its conversation.
+- **Schedule** sends a prompt to a session (or a fresh one) once, on chosen
+  weekdays at a time, or every N minutes/hours. It runs only while AgentDeck is
+  open; a run that was due while it was closed is shown as missed, not fired
+  late. A busy session is retried for up to 30 minutes.
+- **Artifacts** lists files and links that agents mentioned in their replies.
+
+## 队长 (Captain)
+
+One standing column, opened from the sidebar entry 队长 (creating it the first
+time, with the agent you pick; afterwards it only returns to it). You tell it what
+you want; it hands the work to other columns and brings back short receipts. It
+does not do the work in its own column.
+
+- It controls every session (ones it opened, ones you opened, terminals you started
+  yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
+  receipts | answer`, run in its own terminal. Only the 队长's terminal holds the
+  capability token those commands need; the columns it drives get none.
+- New sessions it opens use the same launch command as the 队长 (Claude: bypass
+  permissions), appear in the sidebar and the deck, and get the task as their first
+  message. The app appends a contract: finish without waiting on the user, ask the
+  队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
+  failure reason; never file bodies).
+- When a worker's turn ends, its receipt or question is read from its final reply,
+  shown as a card in the 队长 column (click the title to jump there), stored as the
+  column's last receipt, and delivered to the 队长's agent by itself when it is idle
+  (or with your next message). A worker stopped at a confirmation prompt is handed
+  to the 队长 with only the prompt's last lines; it answers with `answer` when sure
+  and asks you otherwise. A quiet screen without a receipt is shown as 已停下, not
+  as success.
+- The heartbeat is the app's status loop: it checks each dispatched column's state
+  every 1.5 s and never copies a column's full output into the 队长.
+- 清空上下文 (only in the 队长 header) restarts the 队长's own column and clears its
+  bubbles and pending receipts. Other columns, their files and running work stay.
+
 ## Chat view and side pane
 
-Columns that start an agent (or have a role) open as a chat page. The bubbles show
-only your prompt and the agent's final reply, not commands or tool output. The
-real terminal is still running underneath: use the 终端/对话 toggle in a column
-header to switch. Swiping left and right between columns works as before.
+Columns that start an agent (or have a role) open as a chat page. Each turn shows
+your prompt (pinned while you read its answer) and the agent's final reply,
+rendered as Markdown, not commands or tool output. The real terminal is still
+running underneath: use the 终端/对话 toggle in a column header to switch.
+
+- The composer takes pasted screenshots, dropped files and files picked with +
+  as attachments; they are sent as paths ahead of the text.
+- Prompts have no length limit. One longer than 8000 characters is saved as a
+  private `.txt` in userData/`long-prompts` (pruned after 60 days) and the agent
+  gets its opening plus "read this file first"; the bubble shows the file.
+- Automatic sends (Schedule, 队长) never type into a bare shell, which would run
+  each line as a command: on macOS/Linux they wait until something other than the
+  shell is in the column's foreground; on Windows until the agent's screen shows.
+- Under the composer, the agent's own status lines (model, context, session,
+  cost, resets, permission mode) are copied live from the terminal with their
+  colors. They are found as the rows below the TUI's input box.
 
 - Clicking a link or file path in a bubble opens it in the right side pane, with
   tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens
@@ -18,7 +80,8 @@ header to switch. Swiping left and right between columns works as before.
 - The left sidebar searches every conversation, titles and full text of prompts and
   replies only. Shortcuts: ⌘/Ctrl+K search, ⌘/Ctrl+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
-  and are not committed. Turning a reply into a bubble is heuristic, so a TUI
+  and are not committed. Folders, archived sessions and schedules live in the
+  local `config.json` in the same folder. Turning a reply into a bubble is heuristic, so a TUI
   that redraws unusually may produce an imperfect bubble; the terminal view
   always has the full output. Syncing to a private GitHub repo is planned.
 

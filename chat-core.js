@@ -44,15 +44,24 @@
 
   // Index of the last row of the echoed prompt, or -1 if it can't be found.
   function findPromptEcho(lines, userText) {
-    const first = (String(userText).split('\n')[0] || '').replace(/\s+/g, ' ').trim();
-    const needle = first.slice(0, 18);
+    const sent = String(userText).split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const needle = (sent[0] || '').slice(0, 18);
     if (needle.length < 2) return -1;
+    const flat = (l) => promptGlyphs(l).replace(/\s+/g, ' ');
     for (let i = 0; i < Math.min(lines.length, 12); i++) {
-      const flat = promptGlyphs(lines[i]).replace(/\s+/g, ' ');
-      if (!flat.includes(needle)) continue;
+      if (!flat(lines[i]).includes(needle)) continue;
       let end = i;
       // the TUI wraps a long prompt onto indented continuation rows
       while (end + 1 < lines.length && end - i < 10 && /^ {2,}\S/.test(lines[end + 1]) && !BULLET.test(lines[end + 1])) end++;
+      // a multi-line prompt echoes every line: run to the echo of its last one
+      if (sent.length > 1) {
+        const tail = sent[sent.length - 1].slice(0, 18);
+        const limit = Math.min(lines.length, i + sent.length * 3 + 10);
+        for (let j = i + 1; j < limit; j++) {
+          if (BULLET.test(lines[j])) break;          // the reply has started
+          if (tail.length >= 2 && flat(lines[j]).includes(tail)) end = Math.max(end, j);
+        }
+      }
       return end;
     }
     return -1;
@@ -99,10 +108,32 @@
     return out;
   }
 
+  // Agent TUIs draw their input box at the bottom (a rule, the prompt row, a
+  // rule) with status lines under it: model, context, cost, limits. None of
+  // that is the reply, so cut from the box's top rule down.
+  const RULE = /^[╭╰┌└]?[─━]{6,}[╮╯┐┘]?$/;
+  const PROMPT_ROW = /^[\s│┃|]*[>❯›](\s|$)/;
+  function cutInputBox(lines) {
+    // the screen below the box is usually blank rows; look near the last text
+    let end = lines.length - 1;
+    while (end >= 0 && !lines[end].trim()) end--;
+    const floor = Math.max(0, end - 24);
+    for (let i = end; i > floor; i--) {
+      if (!RULE.test(lines[i].trim())) continue;
+      for (let j = i - 1; j >= Math.max(floor, i - 10); j--) {
+        if (!RULE.test(lines[j].trim())) continue;
+        if (lines.slice(j + 1, i).some((l) => PROMPT_ROW.test(l))) return lines.slice(0, j);
+        break;
+      }
+    }
+    return lines;
+  }
+
   function extractReply(screenLines, userText, cols) {
     let lines = screenLines.map(rtrim);
     const echo = findPromptEcho(lines, userText);
     if (echo >= 0) lines = lines.slice(echo + 1);
+    lines = cutInputBox(lines);
     lines = lines.filter((l) => !isChrome(l));
     // a bare shell prompt left on the last row is not output
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
@@ -141,9 +172,22 @@
         user: t.user.slice(0, MAX_TEXT),
         reply: typeof t.reply === 'string' ? t.reply.slice(0, MAX_TEXT) : '',
         done: !!t.done,
+        // files and pasted images sent with the prompt (paths)
+        atts: Array.isArray(t.atts) ? t.atts.filter((a) => typeof a === 'string' && a.length <= 2000).slice(0, 20) : [],
+        ...(t.kind === 'task' && t.task && typeof t.task === 'object' ? { kind: 'task', task: normalizeTask(t.task) } : {}),
       });
     }
     return chat;
+  }
+  // A 主会话 card: work handed to another column and its short receipt.
+  function normalizeTask(t) {
+    const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
+    const r = t.receipt && typeof t.receipt === 'object' ? t.receipt : null;
+    const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').map((x) => x.slice(0, 500)).slice(0, 10) : []);
+    return {
+      colId: str(t.colId, 160), title: str(t.title, 120), status: str(t.status, 20),
+      receipt: r ? { summary: str(r.summary, 400), failed: str(r.failed, 240), question: str(r.question, 400), files: list(r.files), images: list(r.images), explicit: !!r.explicit } : null,
+    };
   }
   function addTurn(chat, turn) {
     chat.turns.push(turn);
@@ -249,7 +293,10 @@
     s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
     return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
   }
-  function renderMarkdown(src) {
+  // breaks: keep single newlines inside a paragraph (agent replies come from a
+  // terminal, where a line break is usually meant).
+  function renderMarkdown(src, opts) {
+    const breaks = !!(opts && opts.breaks);
     const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
     const html = [];
     let i = 0;
@@ -301,13 +348,50 @@
       const para = [];
       while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*(```|~~~)|\s*>|\s*([-*+]|\d+[.)])\s)/.test(lines[i])) para.push(lines[i++].trim());
       if (!para.length) { para.push(lines[i++]); }
-      html.push(`<p>${inline(para.join(' '))}</p>`);
+      html.push(`<p>${breaks ? para.map(inline).join('<br>') : inline(para.join(' '))}</p>`);
     }
     return html.join('\n');
   }
 
+  // ---- artifacts: files and links the agents mentioned in their replies ----
+  // chats: [{ colId, title, archived, turns }]; findLinks(line) -> [{ kind, text }]
+  function artifactName(kind, text) {
+    if (kind === 'url') {
+      const m = /^https?:\/\/([^/?#]+)([^?#]*)/i.exec(text);
+      if (!m) return text;
+      const tail = m[2].replace(/\/+$/, '').split('/').pop();
+      return tail ? m[1] + ' · ' + decodeSafe(tail) : m[1];
+    }
+    const bare = text.replace(/^file:\/\//, '').replace(/:\d+(?::\d+)?$/, '').replace(/[\\/]+$/, '');
+    return bare.split(/[\\/]/).pop() || bare;
+  }
+  function decodeSafe(s) { try { return decodeURIComponent(s); } catch (_) { return s; } }
+  function collectArtifacts(chats, findLinks, limit = 500) {
+    const seen = new Map();
+    for (const chat of chats) {
+      for (const turn of chat.turns || []) {
+        if (!turn.reply) continue;
+        for (const line of turn.reply.split('\n')) {
+          for (const found of findLinks(line)) {
+            const m = { kind: found.kind, text: String(found.text).trim() };
+            if (!m.text) continue;
+            const key = m.kind + '\u0000' + m.text;
+            const prev = seen.get(key);
+            if (prev && prev.ts >= (turn.ts || 0)) continue;
+            seen.set(key, {
+              kind: m.kind, text: m.text, name: artifactName(m.kind, m.text),
+              type: m.kind === 'url' ? 'web' : fileKind(artifactName('file', m.text)),
+              colId: chat.colId, title: chat.title, archived: !!chat.archived, turnId: turn.id, ts: turn.ts || 0,
+            });
+          }
+        }
+      }
+    }
+    return [...seen.values()].sort((a, b) => b.ts - a.ts).slice(0, limit);
+  }
+
   return {
-    MAX_TURNS, visibleWidth, extractReply, isPromptAnswer, isChrome, reflow,
+    MAX_TURNS, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
   };

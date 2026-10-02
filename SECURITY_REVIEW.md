@@ -41,6 +41,24 @@ and regression pass, not a penetration-test certification.
 - macOS CI artifacts are unsigned/unnotarized without the owner's certificate.
   Local Windows tests cannot prove behavior on the owner's physical Mac.
 
+## 队长 (main session) and Schedule (0.9.0)
+
+- 队长 can type into every column, including manual ones. That power sits only in
+  the column the user created from the sidebar: its terminal is the one manual
+  column spawned with an in-memory board token, `main-*` actions are rejected for
+  any other caller, and the columns it drives never receive a token. No new IPC
+  channel or Node capability reaches the page.
+- `answer` sends only y, n, 1-9, Enter or Esc, and only to a column that is
+  currently at a confirmation prompt; `tell` refuses such a column. The 队长 is
+  instructed to escalate irreversible decisions to the user, but it is an agent
+  following instructions, not an enforced policy.
+- Workers it opens use the same launch command as the 队长 (Claude: bypass
+  permissions, by user request). They run unattended with that agent's own power.
+- Receipts are short fields parsed from the worker's final reply and capped in
+  length; no full output, log or file body is copied into the 队长's context.
+- Schedule types prompts only into sessions the user picked, only while the app
+  runs, and never fires runs that were due while it was closed.
+
 ## Validation
 
 - Unit tests: board ownership/CLI plus notification timing, repeated turns,
