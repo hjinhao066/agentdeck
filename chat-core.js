@@ -26,7 +26,7 @@
   // after dropping ESC[. Only scrub runs of reports, so a quoted single
   // sequence in an actual prompt remains intact.
   const legacyMouseReport = /<\d{1,3};\d{1,5};\d{1,5}[Mm]/g;
-  const legacyMouseRun = /(?:<\d{1,3};\d{1,5};\d{1,5}[Mm]){2,}/;
+  const legacyMouseRun = /(?:<\d{1,3};\d{1,5};\d{1,5}[Mm]){4,}/;
   function stripLegacyMouseReports(text) {
     return legacyMouseRun.test(text) ? text.replace(legacyMouseReport, '') : text;
   }

@@ -91,7 +91,7 @@ test('chats are normalised and keep every turn, never evicting old ones', () => 
 });
 
 test('old SGR mouse reports are removed without losing real Chinese prompts or replies', () => {
-  const mouse = '<35;18;11M<0;21;31m';
+  const mouse = '<35;18;11M<0;21;31m<35;18;11M<0;21;31m';
   const saved = C.normalizeChat({ turns: [
     { user: mouse + '请检查中文显示', reply: '回答：正常' + mouse, done: true },
     { user: mouse, reply: '', done: true },

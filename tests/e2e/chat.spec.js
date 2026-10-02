@@ -8,7 +8,7 @@ const path = require('path');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const OLD_TURNS = 450;                    // more than the 400 the chat file used to keep
 const oldPrompt = (i) => `oldprompt-${String(i).padStart(4, '0')}`;
-const MOUSE = '<35;18;11M<0;21;31m';
+const MOUSE = '<35;18;11M<0;21;31m<35;18;11M<0;21;31m';
 let application, page, profile, demoFile;
 test.describe.configure({ mode: 'serial' });
 
