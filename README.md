@@ -18,7 +18,8 @@ the middle:
   The 队长 row is pinned: clicking it selects the Captain and shows its saved
   conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
-  top bar picks 自由 (per-column widths) or 2–5 equal columns.
+  top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
+  stays within its assigned column width, including when switching views or zooming.
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
   output; restoring replays that output and relaunches the agent (Claude resumes

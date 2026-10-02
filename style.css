@@ -342,6 +342,8 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
   position: relative;
   display: flex; flex-direction: column; height: 100%;
   flex: 0 0 auto;
+  /* xterm's canvas must not set a flex column's minimum width during fitting. */
+  min-width: 0;
   background: var(--card);
   border-right: 1px solid var(--hairline);
 }
@@ -941,7 +943,6 @@ body.linking-board .board-port.out::before {
    The real xterm stays mounted and laid out underneath, only hidden, so the
    pty keeps its size and status detection keeps reading the screen. */
 .column .chat { display: none; }
-.column.chat-mode { min-width: 0; }
 .column.chat-mode .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .column.chat-mode > .term {
   position: absolute; left: 0; right: 0; top: 40px; bottom: 0;
