@@ -9,6 +9,7 @@ const path = require('path');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const CLI = process.platform === 'win32' ? '$env:AGENTDECK_BOARD_CLI' : '$AGENTDECK_BOARD_CLI';
 let application, page, profile, demoFile, mainId;
+test.describe.configure({ mode: 'serial' });
 
 const screen = (id) => page.evaluate((i) => dumpScreen(terms.get(i).term).replace(/\n/g, ''), id);
 async function run(id, command) {
@@ -129,7 +130,8 @@ test('receipts and questions reach an idle Captain agent by themselves, never a 
   // with an agent (the stand-in) in front, delivery happens by itself
   await run(mainId, `clear; ${FAKE}`);
   if (process.platform === 'win32') {
-    await expect.poll(() => page.evaluate((i) => /Claude Code/.test(terms.get(i)?.lastScreen || '')), { timeout: 15000 }).toBe(true);
+    // Automatic receipts can already have scrolled the welcome banner away.
+    await expect.poll(() => page.evaluate((i) => agentInForeground(columns.find((c) => c.id === i), false), mainId), { timeout: 15000 }).toBe(true);
   } else {
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), mainId), { timeout: 15000 }).toBe('node');
   }

@@ -8,6 +8,7 @@ const path = require('path');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const WELCOME = 'Welcome to Claude Code (test stand-in)';
 let application, page, profile;
+test.describe.configure({ mode: 'serial' });
 
 async function launch() {
   const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'report.md') };

@@ -84,7 +84,7 @@ test('pasted images stay as attachments when the text is deleted, and go out as 
   await expect(col.locator('.cp-atts')).toBeHidden();
   await expect(col.locator('.msg.user .bubble-atts .att-thumb')).toHaveCount(1);
   await expect(col.locator('.msg.user .bubble').last()).toHaveText('what is in the picture');
-  await expect.poll(() => page.evaluate(() => window.deck.ptyReplay('ws-b')), { timeout: 15000 }).toContain('shot.png what is in the picture');
+  await expect.poll(() => page.evaluate(() => window.deck.ptyReplay('ws-b')), { timeout: 15000 }).toMatch(/shot\.png['"]? what is in the picture/);
 });
 
 test('a very long prompt is not cut: it goes to the agent as a file', async () => {
