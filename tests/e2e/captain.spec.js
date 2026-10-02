@@ -27,7 +27,7 @@ async function waitForShell(id) {
 }
 
 async function launch() {
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile };
+  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'received-prompts.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -136,7 +136,12 @@ test('receipts and questions reach an idle Captain agent by themselves, never a 
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), mainId), { timeout: 15000 }).toBe('node');
   }
   await expect.poll(() => page.evaluate(() => config.mainSession.pending.length), { timeout: 15000 }).toBe(0);
-  await expect.poll(() => page.evaluate((i) => window.deck.ptyReplay(i), mainId), { timeout: 15000 }).toContain('向你提问：用 SQLite 可以吗');
+  // ConPTY may wrap or redraw Chinese text in the replay. Check what the
+  // stand-in actually received, rather than the terminal's rendering of it.
+  await expect.poll(() => {
+    const file = path.join(profile, 'received-prompts.jsonl');
+    return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)).join('\n') : '';
+  }, { timeout: 15000 }).toContain('向你提问：用 SQLite 可以吗');
   // no prompt bubble of yours for an automatic delivery
   const turns = await page.evaluate((i) => ChatUI.turnsOf(i).filter((t) => t.kind !== 'task').map((t) => t.user), mainId);
   expect(turns[turns.length - 1]).toBe('');

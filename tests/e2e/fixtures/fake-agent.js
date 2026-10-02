@@ -18,6 +18,8 @@ let timer = null;
 function answer() {
   const text = lines.join('\n');
   lines = [];
+  // Test-only capture verifies delivery before ConPTY wraps/redraws the screen.
+  if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
   if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
   let out = '\n⏺ GOT ' + first.slice(-40) + '\n  wrote ' + process.env.AGENTDECK_DEMO_FILE + '\n';
