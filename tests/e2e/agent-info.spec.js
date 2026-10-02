@@ -13,12 +13,23 @@ test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-badge-test-'));
   fs.mkdirSync(path.join(profile, 'sessions'), { recursive: true });
+  fs.mkdirSync(path.join(profile, 'chats'), { recursive: true });
   fs.writeFileSync(path.join(profile, 'sessions', 'col-replay.txt'), [
     '>_ OpenAI Codex (v0.160.0)',
     'permissions: YOLO mode',
     'GPT-6-Luna xhigh · ~',
     '← for agents · ? for shortcuts',
   ].join('\r\n'));
+  fs.writeFileSync(path.join(profile, 'sessions', 'col-history.txt'), 'jinhao@MacBook ~ % ');
+  fs.writeFileSync(path.join(profile, 'chats', 'col-history.json'), JSON.stringify({
+    v: 1,
+    id: 'col-history',
+    turns: [
+      { id: 'turn-1', ts: 1, user: 'hello', reply: '>_ OpenAI Codex (v0.160.0)\nModel changed to gpt-6-luna high\nGPT-6-Luna high · ~', done: true, atts: [] },
+      { id: 'turn-2', ts: 2, user: 'hi', reply: '>_ OpenAI Codex (v0.160.0)\nGPT-6-Luna xhigh · ~', done: true, atts: [] },
+      { id: 'turn-3', ts: 3, user: '/model', reply: '>_ OpenAI Codex (v0.160.0)\nSelect Model and Effort', done: true, atts: [] },
+    ],
+  }));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [
@@ -27,6 +38,7 @@ test.beforeAll(async () => {
       { id: 'col-shell', taskId: 'task-3', title: 'Shell Col', cmd: '', cwd: profile, width: 460, role: 'manual' },
       { id: 'col-cached', taskId: 'task-4', title: 'Restored Codex', cmd: '', cwd: profile, width: 460, role: 'manual', agentProvider: 'Codex', agentModel: 'gpt-6-luna', agentEffort: 'high' },
       { id: 'col-replay', taskId: 'task-5', title: 'Uncached Codex', cmd: '', cwd: profile, width: 460, role: 'manual' },
+      { id: 'col-history', taskId: 'task-6', title: 'Codex from chat history', cmd: '', cwd: profile, width: 460, role: 'manual' },
     ],
   }));
   const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'), AGENTDECK_TEST_LONG_STATUS: '1' };
@@ -37,8 +49,8 @@ test.beforeAll(async () => {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  await expect(page.locator('.column')).toHaveCount(5);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length), { timeout: 20000 }).toBe(5);
+  await expect(page.locator('.column')).toHaveCount(6);
+  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length), { timeout: 20000 }).toBe(6);
 });
 
 test.afterAll(async () => {
@@ -105,6 +117,27 @@ test('uncached Codex identity is recovered from terminal replay after restart', 
     const column = config.columns.find((item) => item.id === 'col-replay');
     return column && `${column.agentProvider}:${column.agentModel}:${column.agentEffort}`;
   }).toBe('Codex:GPT-6-Luna xhigh:xhigh');
+});
+
+test('saved chat history restores the badge after the terminal restarts as a shell', async () => {
+  const col = page.locator('.column[data-col-id="col-history"]');
+  const badge = col.locator('.col-badge');
+  await expect.poll(() => badge.locator('.agent-model-label').textContent(), { timeout: 15000 }).toBe('GPT-6 Luna');
+  await expect(badge).toHaveClass(/provider-codex/);
+  await expect(badge).toHaveAttribute('title', 'Codex · GPT-6 Luna (xhigh)');
+
+  const navBadge = page.locator('.colnav-item[data-col-id="col-history"] .cn-badge');
+  await expect(navBadge).toHaveClass(/provider-codex/);
+  await expect(navBadge.locator('.agent-model-label')).toHaveText('GPT-6 Luna');
+  await expect.poll(() => {
+    const config = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
+    const column = config.columns.find((item) => item.id === 'col-history');
+    return column && `${column.agentProvider}:${column.agentModel}:${column.agentEffort}`;
+  }).toBe('Codex:GPT-6-Luna xhigh:xhigh');
+
+  const savedChat = JSON.parse(fs.readFileSync(path.join(profile, 'chats', 'col-history.json'), 'utf8'));
+  expect(savedChat.turns).toHaveLength(3);
+  expect(savedChat.turns[1].reply).toContain('GPT-6-Luna xhigh');
 });
 
 test('Cursor provider is preserved across model switches and updates header + sidebar', async () => {

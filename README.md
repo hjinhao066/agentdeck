@@ -159,11 +159,11 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   when switching models inside the CLI while preserving the tool provider (for
   instance, Cursor remains Cursor even when running Claude or Gemini models).
   The last confirmed provider, model and effort are saved with the session and
-  restored after relaunch; the prior terminal output is also checked when
-  recovering older sessions. Model families such as Grok, GPT-6 Luna and Meta
-  Muse Spark appear in the label even when Cursor is the launching tool. Full
-  provider, model and effort appear in the tooltip; plain shells display no fake
-  model.
+  restored after relaunch; saved chat replies and prior terminal output are
+  checked when recovering older sessions. Model families such as Grok, GPT-6
+  Luna and Meta Muse Spark appear in the label even when Cursor is the launching
+  tool. Full provider, model and effort appear in the tooltip; plain shells
+  display no fake model.
 - Under the composer, the agent's own status lines (model, context, session,
   cost, resets, permission mode) are copied live from the terminal with their
   colors, extending to the right edge of allocated content and cleanly

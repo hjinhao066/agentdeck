@@ -104,11 +104,13 @@
     for (let i = lines.length - 1; i >= 0; i--) {
       const live = lines[i].match(/(?:^|[|│])\s*(?:Thinking|Effort):\s*(xhigh|high|max|medium|low)\b/i);
       if (live) return live[1].toLowerCase();
-      const changed = lines[i].match(/^\s*[•*]?\s*Model changed to\s+[a-zA-Z0-9_.-]+\s+(xhigh|high|max|medium|low)\b/i);
-      if (changed) return changed[1].toLowerCase();
     }
     const model = String(rawModel || '').match(/(?:[-(\s])(xhigh|high|max|medium|low)(?=$|[)\s-])/i);
     if (model) return model[1].toLowerCase();
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const changed = lines[i].match(/^\s*[•*]?\s*Model changed to\s+[a-zA-Z0-9_.-]+\s+(xhigh|high|max|medium|low)\b/i);
+      if (changed) return changed[1].toLowerCase();
+    }
     const cmd = String(command || '').match(/--effort\s+(xhigh|high|max|medium|low)\b/i);
     return cmd ? cmd[1].toLowerCase() : null;
   }
@@ -200,19 +202,35 @@
     return effort ? `${provider} (${effort})` : provider;
   }
 
-  function resolveAgentInfo(col, entry, screenText, footerRows) {
+  function resolveAgentInfo(col, entry, screenText, footerRows, historyReplies) {
     const cmd = (col && col.cmd) || '';
     const screen = screenText || (entry && entry.lastScreen) || '';
     const footers = footerRows || (entry && entry.footerLines ? entry.footerLines.map((line) => line.map((s) => s.text).join('')) : null);
 
     // Provider inference: command is authoritative, screen is fallback for manual agent
     let provider = inferProvider(cmd, screen);
-    if (!provider && entry && entry.detectedProvider) {
-      provider = entry.detectedProvider;
+
+    // Saved replies retain explicit model footers when a restored shell ends
+    // on a prompt or a transient picker menu instead of the agent's statusline.
+    let historyProvider = null;
+    let historyModel = null;
+    let historyEffort = null;
+    if (Array.isArray(historyReplies)) {
+      for (let i = historyReplies.length - 1; i >= 0; i--) {
+        const reply = String(historyReplies[i] || '');
+        if (!reply) continue;
+        const replyProvider = inferProvider(cmd, reply);
+        if (!historyProvider && replyProvider) historyProvider = replyProvider;
+        const targetProvider = provider || historyProvider;
+        const replyModel = extractModel(reply, '', null);
+        if (!historyModel && replyModel && (!replyProvider || !targetProvider || replyProvider === targetProvider)) {
+          historyModel = replyModel;
+          historyEffort = extractEffort(replyModel, cmd, reply);
+        }
+        if (historyProvider && historyModel) break;
+      }
     }
-    if (!provider && col && col.agentProvider) {
-      provider = col.agentProvider;
-    }
+    if (!provider) provider = historyProvider || (entry && entry.detectedProvider) || (col && col.agentProvider) || null;
 
     if (provider && entry && !entry.detectedProvider) {
       entry.detectedProvider = provider;
@@ -234,9 +252,9 @@
 
     // Model extraction
     const liveModel = extractModel(screen, '', footers);
-    const rawModel = liveModel || (col && col.agentModel) || extractModel('', cmd, null);
+    const rawModel = liveModel || historyModel || (col && col.agentModel) || extractModel('', cmd, null);
     const shortModel = shortModelName(rawModel);
-    const effort = extractEffort(rawModel, cmd, screen) || (col && col.agentEffort) || null;
+    const effort = extractEffort(rawModel, cmd, screen) || (historyModel && rawModel === historyModel ? historyEffort : null) || (col && col.agentEffort) || null;
     const tooltip = formatTooltip(provider, rawModel, effort);
     const key = `${provider}:${rawModel || ''}:${effort || ''}`;
 

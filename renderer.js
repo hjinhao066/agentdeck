@@ -2982,7 +2982,14 @@ function updateAgentIdentityBadge(id, entry, screenText) {
     try { footer = ChatUI.readFooter(entry.term); } catch (_) { footer = null; }
   }
   entry.footerLines = footer;
-  const info = window.AgentInfo.resolveAgentInfo(col, entry, screenText);
+  const history = ChatUI.turnsOf(id);
+  const lastTurn = history && history.length ? history[history.length - 1] : null;
+  const historyKey = lastTurn ? `${history.length}:${lastTurn.id}:${(lastTurn.reply || '').length}:${lastTurn.done ? 1 : 0}` : '';
+  const replies = historyKey && historyKey !== entry.identityHistoryKey && (!col.agentProvider || !col.agentModel)
+    ? history.map((turn) => turn.reply || '')
+    : null;
+  if (replies) entry.identityHistoryKey = historyKey;
+  const info = window.AgentInfo.resolveAgentInfo(col, entry, screenText, footer, replies);
   if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
   const nav = navItems.get(id);
   if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar');

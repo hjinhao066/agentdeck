@@ -57,6 +57,19 @@ test('Codex model is recovered from the restored terminal footer without footer 
   assert.equal(info.effort, 'xhigh');
 });
 
+test('saved chat replies recover the last model when restored terminal is a shell', () => {
+  const history = [
+    '>_ OpenAI Codex (v0.160.0)\nModel changed to gpt-6-luna high\nGPT-6-Luna high · ~',
+    '>_ OpenAI Codex (v0.160.0)\nGPT-6-Luna xhigh · ~',
+    '>_ OpenAI Codex (v0.160.0)\nSelect Model and Effort',
+  ];
+  const info = AgentInfo.resolveAgentInfo({ cmd: '' }, null, 'jinhao@MacBook ~ %', null, history);
+  assert.equal(info.provider, 'Codex');
+  assert.equal(info.rawModel, 'GPT-6-Luna xhigh');
+  assert.equal(info.shortModel, 'GPT-6 Luna');
+  assert.equal(info.effort, 'xhigh');
+});
+
 test('restored provider/model identity is a fallback, live model status wins', () => {
   const col = { cmd: '', agentProvider: 'Codex', agentModel: 'gpt-6-luna', agentEffort: 'high' };
   const restored = AgentInfo.resolveAgentInfo(col, null, 'jinhao@MacBook ~ %');
