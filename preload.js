@@ -38,6 +38,18 @@ contextBridge.exposeInMainWorld('deck', {
   // Auto column naming: compress a submitted prompt into a ≤10-char label.
   summarizeTitle: (text) => ipcRenderer.invoke('title:summarize', { text }),
 
+  // Saved conversations (prompts + final replies), kept in userData/chats.
+  chatLoadAll: () => ipcRenderer.invoke('chat:load-all', {}),
+  chatSave: (id, chat) => ipcRenderer.send('chat:save', { id, chat }),
+  chatDelete: (id) => ipcRenderer.send('chat:delete', { id }),
+  // Right-hand pane: file preview, embedded browser.
+  previewRead: (raw, id, cont) => ipcRenderer.invoke('preview:read', { raw, id, cont }),
+  sideBrowserOpen: (url) => ipcRenderer.send('side:browser-open', { url }),
+  sideBrowserPdf: (raw, id, cont) => ipcRenderer.send('side:browser-pdf', { raw, id, cont }),
+  sideBrowserBounds: (b) => ipcRenderer.send('side:browser-bounds', b),
+  sideBrowserAction: (action) => ipcRenderer.send('side:browser-action', { action }),
+  onBrowserState: (cb) => ipcRenderer.on('side:browser-state', (_e, m) => cb(m)),
+
   ptySpawn: (id, cwd, cols, rows, managed) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),

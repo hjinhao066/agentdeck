@@ -4,6 +4,24 @@ A Windows/macOS multi-column terminal app for running AI agents side by side.
 Each column has its own shell, output history and input. The Conductor Board
 adds explicit task relationships without taking control of manual terminals.
 
+## Chat view and side pane
+
+Columns that start an agent (or have a role) open as a chat page. The bubbles show
+only your prompt and the agent's final reply, not commands or tool output. The
+real terminal is still running underneath: use the 终端/对话 toggle in a column
+header to switch. Swiping left and right between columns works as before.
+
+- Clicking a link or file path in a bubble opens it in the right side pane, with
+  tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens
+  there too). Cmd/Ctrl-click uses the system browser or file manager, Option-click
+  the editor.
+- The left sidebar searches every conversation, titles and full text of prompts and
+  replies only. Shortcuts: ⌘/Ctrl+K search, ⌘/Ctrl+\ toggle the side pane.
+- Conversations are saved locally in the app's userData folder under `chats`
+  and are not committed. Turning a reply into a bubble is heuristic, so a TUI
+  that redraws unusually may produce an imperfect bubble; the terminal view
+  always has the full output. Syncing to a private GitHub repo is planned.
+
 ## Desktop notifications
 
 Notifications are built into the app on both platforms. No PowerShell popup

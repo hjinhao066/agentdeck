@@ -25,6 +25,7 @@ const ICONS = {
   up:    S('<polyline points="18 15 12 9 6 15"/>'),
   down:  S('<polyline points="6 9 12 15 18 9"/>'),
   help:  S('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
+  side:  S('<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/>'),
   board: S('<rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M6 9v3h12V9M12 12v3"/>'),
 };
 
@@ -88,6 +89,7 @@ if (saved) {
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (saved.activeView === 'board') config.activeView = 'board';
+  if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
   if (saved.boardResponses && typeof saved.boardResponses === 'object' && !Array.isArray(saved.boardResponses)) {
     config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).slice(-200));
@@ -117,6 +119,7 @@ if (saved) {
       initialPromptSent: c.initialPromptSent,
       agentType: c.agentType,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
+      view: c.view === 'chat' || c.view === 'term' ? c.view : undefined,
     }));
   }
 }
@@ -201,7 +204,7 @@ function makePromptTracker(col) {
       }
       if (ch === '\r' || ch === '\n') {
         if (inPaste) buf += ' ';
-        else { const line = buf.trim(); buf = ''; maybeAutoName(col, line); }
+        else { const line = buf.trim(); buf = ''; maybeAutoName(col, line); ChatUI.onSubmitted(col, line); }
         i++;
         continue;
       }
@@ -220,6 +223,13 @@ const terms = new Map(); // id -> { term, fit, el, wrap, titleEl, dot, alive }
 let focusedId = null;    // id of the column whose terminal last had focus
 let zoomedId = null;     // column temporarily maximized to fill the deck (Cmd+Enter / double-click header)
 
+// Chat-mode columns take typing in their composer; terminal-mode ones in xterm.
+function focusColumnInput(id) {
+  const t = terms.get(id);
+  if (!t) return;
+  if (!ChatUI.focusInput(id)) t.term.focus();
+}
+
 // Zoom in/out of one column. Focus follows the zoom so typing lands where
 // you're looking; while zoomed, moving focus (Cmd+←→/1-9/J) re-zooms onto the
 // newly focused column instead of typing into a hidden one.
@@ -229,7 +239,7 @@ function toggleZoom(id) {
   updateColumnStyles();
   fitAll();
   const t = terms.get(id);
-  if (t) { t.term.focus(); focusedId = id; syncNav(); }
+  if (t) { focusColumnInput(id); focusedId = id; syncNav(); }
 }
 
 window.deck.onPtyData((id, data) => {
@@ -245,6 +255,7 @@ window.deck.onPtyExit((id) => {
     if (t.workStart) { t.workedMs = Date.now() - t.workStart; t.workStart = 0; t.doneAt = Date.now(); }
     t.term.write('\r\n\x1b[2m[已退出 / process exited]\x1b[0m\r\n');
     setDot(t, 'exited'); syncNav(); syncBoardState();
+    ChatUI.onExit(id);
   }
 });
 
@@ -383,6 +394,7 @@ function buildRail() {
   themeBtn.id = 'themeBtn';
   bottom.appendChild(themeBtn);
 
+  bottom.appendChild(railBtn(ICONS.side, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle()));
   bottom.appendChild(railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()));
 
   bottom.appendChild(railBtn(ICONS.reset, '恢复默认布局', () => {
@@ -390,6 +402,7 @@ function buildRail() {
     columns.forEach((c) => {
       cancelManagedRequests(c, 'Layout reset by the user.');
       window.deck.ptyKill(c.id);
+      ChatUI.onColumnRemoved(c.id);
     });
     columns = defaultColumns();
     config.links = [];
@@ -515,6 +528,7 @@ function selectBoardNode(columnId, focusTerminal) {
 function showView(view) {
   activeView = view === 'board' ? 'board' : 'terminals';
   config.activeView = activeView;
+  SidePane.onViewChange();
   deckEl.hidden = activeView === 'board';
   boardViewEl.hidden = activeView !== 'board';
   const button = document.getElementById('boardViewBtn');
@@ -1078,6 +1092,7 @@ function queueInitialPrompt(col, delay) {
     // multi-line instructions arrive as one prompt instead of separate shell commands.
     entry.term.paste(managedTaskPrompt(col));
     setTimeout(() => window.deck.ptyInput(id, '\r'), 40);
+    ChatUI.noteSent(col, col.taskTitle || col.taskPrompt);
     col.initialPromptSent = true;
     col.progress = 'Task assigned';
     saveConfig();
@@ -1177,6 +1192,8 @@ deckEl.addEventListener('scroll', () => {
 });
 
 function render() {
+  SidePane.restoreTerminal();
+  ChatUI.onRender();
   restoreBoardTerminal();
   boardTerminalHostEl.innerHTML = '';
   // tear down existing terminals; pty processes keep running until killed.
@@ -1322,6 +1339,7 @@ function buildColumn(col, isFresh) {
   attachResize(resizer, wrap, col);
 
   wrap.append(head, termEl, resizer);
+  ChatUI.mountColumn(col, wrap, head, termEl);
 
   // Create the terminal once the element is in the DOM (next frame).
   requestAnimationFrame(() => {
@@ -1550,7 +1568,7 @@ function buildColumn(col, isFresh) {
       }
     });
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
-    if (deckEl.firstElementChild === wrap) { term.focus(); focusedId = col.id; } // focus leftmost on boot
+    if (deckEl.firstElementChild === wrap) { if (!ChatUI.focusInput(col.id)) term.focus(); focusedId = col.id; } // focus leftmost on boot
 
     // Re-fit on any size change of this column (drag-resize, window resize, fit toggle).
     let raf;
@@ -1571,7 +1589,7 @@ function buildColumn(col, isFresh) {
     // Buttons/grip/inline-rename keep their own behavior.
     wrap.addEventListener('mousedown', (e) => {
       if (e.target.closest('.icon-btn') || e.target.closest('.grip') || e.target.closest('[contenteditable="true"]')) return;
-      term.focus(); focusedId = col.id; syncNav();
+      if (!ChatUI.onColumnMouseDown(col, e)) { term.focus(); focusedId = col.id; syncNav(); }
     });
 
     // Paste an IMAGE (e.g. a fresh screenshot on the clipboard) → main saves
@@ -1741,20 +1759,9 @@ function findLinks(text) {
   return out;
 }
 function openLink(m, event, colId, cont) {
-  if (m.kind === 'url') {
-    // Cmd+click opens in browser (like native Terminal.app);
-    // plain click also opens URLs for convenience.
-    window.deck.openExternal(m.text);
-    return;
-  }
-  // Option+click opens the file in the editor (VS Code/Cursor) at its :line.
-  if (event && event.altKey) { window.deck.openInEditor(m.text, colId, cont); return; }
-  // Plain click reveals in Finder. Normalization (file:// prefix, ~ expansion,
-  // unescaping "\ ", trimming trailing prose, stripping :line suffixes, and
-  // anchoring relative paths to the column's shell cwd) is done in the main
-  // process, which resolves the longest path that actually exists — so deep
-  // paths with spaces land on the real file instead of a shallow parent.
-  window.deck.revealPath(m.text, colId, cont);
+  // Plain click previews in the right pane; Cmd/Ctrl click opens the system
+  // browser or Finder, Option click the editor (see side-pane.js).
+  SidePane.openLink(m, event, colId, cont);
 }
 
 // Quote a path for the shell: leave simple paths bare, single-quote anything
@@ -1897,10 +1904,12 @@ function removeCol(col) {
     restoreBoardTerminal();
     selectedBoardId = null;
   }
+  if (SidePane.holdsTerminalOf(col.id)) SidePane.restoreTerminal();
   if (t) {
     (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
     t.term.dispose(); t.wrap.remove(); terms.delete(col.id);
   }
+  ChatUI.onColumnRemoved(col.id);
   window.deck.ptyKill(col.id);
   columns.splice(idx, 1);
   config.links = (config.links || []).filter((link) => link.fromTaskId !== col.taskId && link.toTaskId !== col.taskId);
@@ -1979,12 +1988,14 @@ function respawnColumn(col) {
   const wasBoardSelected = selectedBoardId === col.id;
   if (wasBoardSelected) restoreBoardTerminal();
   window.deck.ptyKill(col.id);
+  if (SidePane.holdsTerminalOf(col.id)) SidePane.restoreTerminal();
   if (t) {
     (t.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
     t.term.dispose(); terms.delete(col.id);
   }
   const oldId = col.id;
   col.id = newId();
+  ChatUI.onColumnIdChanged(oldId, col.id);
   if (focusedId === oldId) focusedId = col.id;
   if (zoomedId === oldId) zoomedId = col.id; // stay zoomed across a respawn
   if (wasBoardSelected) selectedBoardId = col.id;
@@ -2064,6 +2075,7 @@ function syncNav() {
     nav.el.classList.toggle('active', id === focusedId);
   });
   terms.forEach((t, id) => { if (t.wrap) t.wrap.classList.toggle('focused', id === focusedId); });
+  SidePane.onFocusChange();
 }
 
 function jumpToColumn(col) {
@@ -2081,7 +2093,7 @@ function jumpToColumn(col) {
   clearTimeout(userScrollTimeout);
   t.wrap.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
   lastValidDeckScrollLeft = deckEl.scrollLeft;
-  t.term.focus(); focusedId = col.id;
+  focusColumnInput(col.id); focusedId = col.id;
   userScrollTimeout = setTimeout(() => { isUserScrollingDeck = false; }, 350);
   syncNav();
 }
@@ -2320,6 +2332,7 @@ function sendExplicitBoardMessage(target, message, delay) {
     }
     entry.term.paste(text);
     setTimeout(() => window.deck.ptyInput(target.id, '\r'), 40);
+    ChatUI.noteSent(target, text);
   }, 'Waiting to deliver relationship message', delay || 0);
 }
 
@@ -2737,6 +2750,19 @@ buildRail();
 setNavCollapsed(config.navCollapsed); // sets class + width + collapse-button icon
 attachNavResize(document.getElementById('navResizer'));
 applyTheme(config.theme);
+const deckHost = {
+  columns: () => columns, terms, config, saveConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName,
+  shellQuote, showToast, jumpToColumn, setNavCollapsed,
+  focusedId: () => focusedId,
+  setFocused: (id) => { focusedId = id; syncNav(); },
+  layout: () => { updateColumnStyles(); fitAll(); },
+  activeView: () => activeView,
+  isNavCollapsed: () => config.navCollapsed,
+  isChatMode: (id) => ChatUI.isChatMode(id),
+  setMode: (id, mode) => ChatUI.setMode(id, mode),
+};
+SidePane.init(deckHost);
+ChatUI.init(deckHost);
 render();
 window.addEventListener('resize', () => {
   if (activeView === 'board') renderBoardGraph();
@@ -2875,6 +2901,8 @@ setInterval(() => {
       }
     }
 
+    ChatUI.onTick(id, entry, text);
+
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);
     if (nav && nav.sub && !config.navCollapsed) {
@@ -2904,7 +2932,7 @@ function focusColumnByIndex(idx) {
   const t = terms.get(col.id);
   if (!t) return;
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
-  t.term.focus(); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav();
+  focusColumnInput(col.id); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav();
 }
 document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos
@@ -2916,7 +2944,7 @@ document.addEventListener('keydown', (e) => {
     const idx = columns.findIndex((c) => c.id === focusedId);
     if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(idx); }
   } else if (k === 'f' || k === 'F') {
-    openSearch();
+    if (ChatUI.isChatMode(focusedId)) ChatUI.focusSearch(); else openSearch();
   } else if (e.shiftKey && (k === 'b' || k === 'B')) {
     showView(activeView === 'board' ? 'terminals' : 'board');
   } else if (k === 'b' || k === 'B') {
@@ -2980,8 +3008,7 @@ function toggleBroadcast() {
 }
 function closeBroadcast() {
   bcastBar.hidden = true;
-  const t = terms.get(focusedId);
-  if (t) t.term.focus();
+  focusColumnInput(focusedId);
 }
 function sendBroadcast() {
   const text = bcastInput.value;
@@ -2991,6 +3018,7 @@ function sendBroadcast() {
   // the input box instead of submitting.
   terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, text); });
   setTimeout(() => { terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, '\r'); }); }, 60);
+  columns.forEach((col) => { const t = terms.get(col.id); if (t && t.alive) ChatUI.noteSent(col, text); });
   bcastInput.value = '';
 }
 bcastInput.addEventListener('keydown', (e) => {

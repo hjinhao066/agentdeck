@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, clipboard, screen, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, ipcMain, shell, dialog, clipboard, screen, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -6,8 +6,10 @@ const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
 const { createNotifications } = require('./notifications');
+const { registerSideIpc } = require('./side-main');
 let mainWindow = null;
 let notifications = null;
+let sidePane = null;
 let pendingFocusColumn = null;
 
 // Every privileged channel belongs exclusively to the local deck main frame.
@@ -524,6 +526,7 @@ function createWindow() {
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
   win.on('closed', () => {
+    if (sidePane) sidePane.dispose();
     if (mainWindow === win) mainWindow = null;
     if (!isMac) app.quit();
   });
@@ -555,6 +558,7 @@ function focusColumn(id) {
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 SESS_DIR = path.join(app.getPath('userData'), 'sessions');
+const CHAT_DIR = path.join(app.getPath('userData'), 'chats');
 
 // Two instances sharing one userData dir fight over the GPU disk cache and one
 // dies with 0xc0000409 (seen on Windows, 2026-07-17). Focus the existing window
@@ -576,6 +580,10 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   setupBoardControl();
+  sidePane = registerSideIpc({
+    onMain, handleMain, send, session, WebContentsView,
+    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR,
+  });
   const configPath = path.join(app.getPath('userData'), 'config.json');
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }

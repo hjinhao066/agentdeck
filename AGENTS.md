@@ -33,10 +33,20 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Never expose Node or arbitrary IPC to the page. Validate the originating main
   frame and payloads. Notification windows have their own minimal bridge.
 - Notification arrival does not steal focus. A click restores the main window,
-  reveals the exact column and focuses its xterm textarea. Stale IDs never fall
+  reveals the exact column and focuses its input: the composer in chat mode,
+  the xterm textarea in terminal mode. Stale IDs never fall
   back to another terminal. Retract obsolete notifications and deduplicate turns.
 - Screen-based completion is a quiet-output heuristic, not proof of task success.
 - Do not log prompts, tokens or terminal contents. Do not commit local settings,
   session output, screenshots containing user data, keys, or installed bundles.
 - Managed terminal tokens provide app-level routing, not an OS sandbox against
   programs running as the same user. Never inherit tokens into manual columns.
+- Chat view: the xterm of a chat-mode column stays mounted (hidden, never
+  `display:none`) so PTY size, status dots and notifications keep working. Bubbles
+  hold only the user prompt and the agent's final reply. Left/right swipe between
+  columns is the core interaction; do not change the deck wheel or scroll code.
+- Saved conversations live in `userData/chats` (private, never committed, never
+  pushed to this public repo). Any cloud sync must target a separate private repo.
+- The side pane browser is a sandboxed `WebContentsView` with its own partition,
+  http(s) only, permissions and downloads denied. Previews are read in the main
+  process with size caps; the page never gets a raw path it did not click on.

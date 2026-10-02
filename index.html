@@ -75,6 +75,35 @@
     </footer>
   </section>
 
+  <aside id="sidePane" hidden aria-label="侧边栏">
+    <div id="sideResizer" title="拖动调整宽度"></div>
+    <header id="sideTabs">
+      <button class="side-tab" data-tab="preview" type="button">预览</button>
+      <button class="side-tab" data-tab="terminal" type="button">终端</button>
+      <button class="side-tab" data-tab="browser" type="button">浏览器</button>
+      <span class="side-spacer"></span>
+      <button id="sideClose" class="side-x" type="button" title="关闭侧边栏 (⌘\)">✕</button>
+    </header>
+    <div id="sidePreview" class="side-page" hidden>
+      <div id="pvHead"></div>
+      <div id="pvBody"></div>
+    </div>
+    <div id="sideTerminal" class="side-page" hidden>
+      <div id="stTitle"></div>
+      <div id="stBody"></div>
+    </div>
+    <div id="sideBrowser" class="side-page" hidden>
+      <div id="sbBar">
+        <button id="sbBack" class="sb-btn" type="button" title="后退" disabled>‹</button>
+        <button id="sbFwd" class="sb-btn" type="button" title="前进" disabled>›</button>
+        <button id="sbReload" class="sb-btn" type="button" title="刷新">⟳</button>
+        <input id="sbUrl" type="text" placeholder="输入网址或搜索词，Enter 打开" autocomplete="off" spellcheck="false" />
+        <button id="sbExternal" class="sb-btn" type="button" title="用系统浏览器打开">↗</button>
+      </div>
+      <div id="sbView"><div id="sbEmpty">点聊天里的链接，会在这里打开。也可以直接在上面输入网址。</div></div>
+    </div>
+  </aside>
+
   <dialog id="boardLinkDialog" class="link-dialog">
     <h3 id="boardLinkDialogTitle">Connect terminals</h3>
     <p class="link-endpoints"><strong id="linkSourceLabel"></strong><span>→</span><strong id="linkTargetLabel"></strong></p>
@@ -153,6 +182,8 @@
       <span><kbd>⌘ ←</kbd> <kbd>⌘ →</kbd></span><span>左右切换聚焦列</span>
       <span><kbd>⌘ J</kbd></span><span>跳到等你回复的列（红点），多列循环</span>
       <span><kbd>⌘ ⏎</kbd></span><span>放大 / 还原当前列（双击列头空白处同效）</span>
+      <span><kbd>⌘ \</kbd></span><span>打开 / 关闭右侧栏（预览、终端、浏览器）</span>
+      <span>列头「终端 / 对话」</span><span>切换这一列的显示：对话气泡，或原始终端。agent 列默认是对话</span>
       <span><kbd>⌘/Ctrl +</kbd> <kbd>−</kbd></span><span>终端字体加减，<kbd>0</kbd> 复位（全列生效，会记住）</span>
       <span>双击列名</span><span>重命名（Enter 确认，Esc 取消）</span>
       <span>自动命名</span><span>给 agent 发任务后，列名自动变成任务摘要；手动改过名的列不再自动变</span>
@@ -165,8 +196,10 @@
       <span><kbd>⌘ B</kbd></span><span>广播：同一条输入发给所有列</span>
       <span><kbd>⌘ V</kbd></span><span>粘贴截图 → 自动存成 PNG 并输入其路径</span>
       <span>拖文件进列</span><span>自动输入该文件的路径</span>
-      <span><kbd>⌘ 点击</kbd> URL</span><span>用浏览器打开</span>
-      <span>点击路径</span><span>在访达中显示</span>
+      <span><kbd>⌘ F</kbd> 在对话列</span><span>搜索所有对话（只搜你发的和 agent 的最终回复）</span>
+      <span><kbd>⌘ K</kbd></span><span>搜索所有对话</span>
+      <span>点击 URL / 路径</span><span>在右侧栏预览（网页、代码、Markdown、图片、PDF）</span>
+      <span><kbd>⌘ 点击</kbd></span><span>URL 用系统浏览器打开，路径在访达中显示</span>
       <span><kbd>⌥ 点击</kbd> 路径</span><span>用编辑器打开并跳到 :行号</span>
     </div>
     <div class="help-section">状态灯</div>
@@ -213,6 +246,9 @@
   <script src="vendor/addon-search.js"></script>
   <script src="vendor/addon-canvas.js"></script>
   <script src="board-core.js"></script>
+  <script src="chat-core.js"></script>
+  <script src="side-pane.js"></script>
+  <script src="chat-ui.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
