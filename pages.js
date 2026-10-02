@@ -51,6 +51,7 @@
   function render() {
     if (current === 'schedule') renderSchedule();
     else if (current === 'artifacts') renderArtifacts();
+    else if (current === 'skills') window.SkillsPage.render(frame, host);
   }
   function frame(title, subtitle, actions) {
     view.textContent = '';
@@ -73,7 +74,7 @@
 
   // ---- Schedule ----
   function targetLabel(s) {
-    if (s.target === 'new') return '新对话 · ' + ({ claude: 'Claude', agy: 'Antigravity', grok: 'Grok', shell: '普通终端' }[s.agent] || 'Claude');
+    if (s.target === 'new') return '新对话 · ' + ({ claude: 'Claude', agy: 'Antigravity', cursor: 'Cursor CLI', grok: 'Grok', shell: '普通终端' }[s.agent] || 'Claude');
     const col = host.columns().find((c) => c.id === s.target);
     if (col) return host.columnLabel(col);
     const arch = host.archived().find((a) => a.id === s.target);

@@ -151,6 +151,7 @@
     <select id="taskAgentInput">
       <option value="claude">Claude</option>
       <option value="agy">Antigravity</option>
+      <option value="cursor">Cursor CLI</option>
       <option value="grok">Grok</option>
     </select>
     <label for="taskCwdInput">Working directory (optional)</label>
@@ -171,9 +172,10 @@
     <label>启动命令（可选，开列/重开时自动运行）</label>
     <input id="cmdInput" placeholder="例如：claude --dangerously-skip-permissions" autocomplete="off" spellcheck="false" />
     <div class="presets">
-      <button type="button" class="preset" data-cmd="claude --dangerously-skip-permissions">Claude（跳权限）</button>
-      <button type="button" class="preset" data-cmd="agy">Antigravity</button>
+      <button type="button" class="preset" data-cmd="claude --dangerously-skip-permissions --effort high">Claude（跳权限）</button>
+      <button type="button" class="preset" data-cmd="agy --model gemini-3.8-flash-high --effort high">Antigravity</button>
       <button type="button" class="preset" data-cmd="grok">Grok</button>
+      <button type="button" class="preset" data-cmd="cursor-agent --model claude-opus-5-5-high">Cursor CLI</button>
     </div>
     <p class="hint">设了启动命令后，每次开 app 这一列会自动跑它，省得手敲。留空 = 干净终端。每列独立，互不影响。</p>
     <div class="row">
@@ -189,9 +191,10 @@
     <label for="mdCmd">用哪个 agent 当队长（启动命令）</label>
     <input id="mdCmd" autocomplete="off" spellcheck="false" />
     <div class="presets">
-      <button type="button" class="preset" data-cmd="claude --dangerously-skip-permissions">Claude（跳权限）</button>
-      <button type="button" class="preset" data-cmd="agy">Antigravity</button>
+      <button type="button" class="preset" data-cmd="claude --dangerously-skip-permissions --effort high">Claude（跳权限）</button>
+      <button type="button" class="preset" data-cmd="agy --model gemini-3.8-flash-high --effort high">Antigravity</button>
       <button type="button" class="preset" data-cmd="grok">Grok</button>
+      <button type="button" class="preset" data-cmd="cursor-agent --model claude-opus-5-5-high">Cursor CLI</button>
     </div>
     <label for="mdCwd">工作目录（可选）</label>
     <input id="mdCwd" placeholder="默认主目录" autocomplete="off" spellcheck="false" />
@@ -218,6 +221,7 @@
         <select id="sdAgent">
           <option value="claude">Claude</option>
           <option value="agy">Antigravity</option>
+          <option value="cursor">Cursor CLI</option>
           <option value="grok">Grok</option>
           <option value="shell">普通终端</option>
         </select>
@@ -347,6 +351,7 @@
   <script src="side-pane.js"></script>
   <script src="chat-ui.js"></script>
   <script src="sidebar.js"></script>
+  <script src="skills-ui.js"></script>
   <script src="pages.js"></script>
   <script src="main-core.js"></script>
   <script src="main-session.js"></script>

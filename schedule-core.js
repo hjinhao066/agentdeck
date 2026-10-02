@@ -16,7 +16,7 @@
   const STARTUP_GRACE = 2 * 60_000;  // a run due this long before launch still fires
   const BUSY_LIMIT = 30 * 60_000;    // give up on a run whose session stays busy this long
   const KINDS = ['once', 'daily', 'interval'];
-  const AGENTS = ['claude', 'agy', 'grok', 'shell'];
+  const AGENTS = ['claude', 'agy', 'cursor', 'grok', 'shell'];
   const ID_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,159}$/;
   const DAY = ['日', '一', '二', '三', '四', '五', '六'];
 

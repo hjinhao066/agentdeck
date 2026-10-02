@@ -35,8 +35,38 @@
     '回执里不要贴文件正文。',
   ].join('\n');
 
-  function instructions() {
-    const cli = 'node "$AGENTDECK_BOARD_CLI"';
+  // Only models each CLI listed on the owner's accounts; launch commands match
+  // BoardCore's presets.
+  const PROVIDERS = [
+    'Antigravity：agy --model gemini-3.8-flash-high --effort high　其他模型：gemini-3.1-pro-high、claude-sonnet-4-6、claude-opus-4-6-thinking；--effort 可选 low|medium|high|max',
+    'Cursor CLI：cursor-agent --model claude-opus-5-5-high　其他模型：claude-sonnet-5-5-high、grok-4.7-high-fast、gemini-3.8-flash-high',
+    'Claude Code：claude --dangerously-skip-permissions --effort high',
+    '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
+  ];
+  const ROUTING = [
+    '量大的普通活（检索、整理、汇总、批量改写）：优先 Antigravity 的 gemini-3.8-flash-high。',
+    '写代码和重要的活：优先 Cursor 的 claude-opus-5-5-high，其次 Cursor 的 claude-sonnet-5-5-high，Claude Code 也可以；这些都用不了时才用 Cursor 的 grok-4.7-high-fast。档位按下面的规则换。',
+    '你看不到各家的实时额度。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
+  ];
+  // Effort tiers, lowest first. Cursor takes the tier as the model id's suffix
+  // and lists exactly these ids for Opus and Sonnet.
+  const EFFORT = Object.freeze([
+    { tier: 'medium', when: '简单的活（查找、小改动、整理）' },
+    { tier: 'high', when: '一般的写代码（默认）' },
+    { tier: 'xhigh', when: '复杂的活，或者同一件事已经失败过' },
+    { tier: 'max', when: '最关键、最难的活' },
+  ].map(Object.freeze));
+  const CURSOR_MODELS = Object.freeze(['claude-opus-5-5', 'claude-sonnet-5-5']
+    .flatMap((m) => EFFORT.map((e) => `${m}-${e.tier}`)));
+
+  // The board CLI path is an environment variable: PowerShell (Windows columns)
+  // reads it as $env:NAME, POSIX shells as $NAME.
+  function boardCli(platform) {
+    return platform === 'win32' ? 'node "$env:AGENTDECK_BOARD_CLI"' : 'node "$AGENTDECK_BOARD_CLI"';
+  }
+
+  function instructions(platform) {
+    const cli = boardCli(platform);
     return [
       '你是 AgentDeck 的「队长」：常驻的总负责人。你听懂用户要什么，把活派给各个会话（deck 里的列，也就是你的队员），再把简短回执告诉用户。',
       '',
@@ -44,7 +74,7 @@
       '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。',
       '2. 只用下面这些终端命令和别的会话打交道：',
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
-      `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|grok]   新开一个会话并把任务作为它的第一条消息；不写 --agent 就用和你一样的 agent`,
+      `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令"   把指令发进已有的会话`,
       `   ${cli} read --id 会话id [--turns 3]       读某个会话已保存的对话，只在用户追问细节时用`,
       `   ${cli} receipts                        取回还没看过的回执`,
@@ -55,6 +85,17 @@
       '6. 派完马上用一两句话告诉用户交给了哪个会话，不要等结果；用户可以接着派活。',
       '7. 队员的回执和提问会自动发给你（以【AgentDeck 新回执】开头）。看完用一两句话告诉用户结果；需要接着做的，直接派下去。回答用几句话，不要把别的会话的全文、长日志或文件正文搬进来。',
       '8. 队员向你提问、或停在确认/权限提示时，你来拿主意：有把握就用 tell 或 answer 回复它，让它接着干；没把握，或者涉及删除数据、花钱、对外发布这类不可逆的事，再请用户决定，并说清要用户决定什么。',
+      '',
+      '可用的 agent。每件活可以选不同的 provider 和模型：用 new --command 写下面的完整启动命令，要换模型就改 --model 后面的名字。',
+      ...PROVIDERS.map((p) => `   ${p}`),
+      '',
+      '派给谁（偏好，用户点名了 agent 或模型就照用户说的）：',
+      ...ROUTING.map((r) => `   - ${r}`),
+      '',
+      '用多大的档位（effort）：',
+      ...EFFORT.map((e) => `   - ${e.when}：${e.tier}`),
+      `   Cursor 把档位写在模型名最后，只用这些名字：${CURSOR_MODELS.join('、')}。`,
+      '   Antigravity 和 Claude Code 用 --effort 写档位（Antigravity 没有 xhigh）。',
       '',
       '现在只回复一句「队长已就绪」，然后等用户的指令。',
     ].join('\n');
@@ -135,6 +176,18 @@
     return !base || SHELL_NAMES.test(base);
   }
 
+  // ConPTY has no foreground-process name. Ignore old agent chrome above the
+  // latest PowerShell prompt, including prompts wrapped across terminal rows.
+  function windowsAgentOutput(screen) {
+    const lines = String(screen || '').split('\n');
+    let prompt = -1;
+    lines.forEach((line, i) => { if (/^\s*PS /i.test(line)) prompt = i; });
+    return lines.slice(prompt + 1).join('\n');
+  }
+  function isWindowsShellPrompt(screen) {
+    return /(?:^|\n)\s*PS [^>]*>\s*$/i.test(String(screen || '').trimEnd());
+  }
+
   // One compact line per session for `ledger`.
   function ledgerText(rows) {
     if (!rows.length) return '还没有别的会话。';
@@ -155,5 +208,5 @@
     return picked.map((t) => `用户：${oneLine(t.user, 600)}\n回复：${oneLine(t.reply, 800) || '（没有文字回复）'}`).join('\n\n');
   }
 
-  return { RECEIPT_CONTRACT, STATUS, isShellProcess, instructions, parseReceipt, receiptsForModel, statusLabel, ledgerText, readText, MAX_SUMMARY };
+  return { RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, receiptsForModel, statusLabel, ledgerText, readText, MAX_SUMMARY };
 });

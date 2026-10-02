@@ -66,6 +66,7 @@
       slot,
       navRow('schedule', 'clock', 'Schedule', '', () => host.togglePage('schedule')),
       navRow('artifacts', 'artifacts', 'Artifacts', '', () => host.togglePage('artifacts')),
+      navRow('skills', 'skills', 'Skills', '', () => host.togglePage('skills')),
     );
   }
   function markPage(name) {

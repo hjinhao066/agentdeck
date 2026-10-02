@@ -59,6 +59,26 @@ and regression pass, not a penetration-test certification.
 - Schedule types prompts only into sessions the user picked, only while the app
   runs, and never fires runs that were due while it was closed.
 
+## Skills page
+
+- The page lists, reads and saves skills over three handle channels behind the
+  same main-frame check. It never sends a path: it gets opaque keys from the
+  listing, and the main process re-resolves the real path on every read and
+  write, requires it to be an existing regular `SKILL.md` up to 1 MB inside the
+  skill root it was listed under, and rejects it if a link or the root moved.
+- Links out of the skill roots are listed as blocked, not crawled, read or
+  written. Plugin install paths outside the tool's plugin folder are skipped.
+- Writes go to a temporary file in the same folder and are renamed over the real
+  file, keeping its mode; symlinks pointing at it are left alone. A content hash
+  from the read must still match, otherwise the save is refused as a conflict.
+  The main process refuses binary, non-UTF-8 and hard-linked files itself, not
+  just the page. After the temp file is written and the hash checked again, the
+  path, root and link count are re-checked right before the rename.
+- A `--test-user-data` profile scans `<profile>/skills-home`, never the real
+  home folder.
+- Skill text is rendered with the same sanitizing Markdown renderer as chat
+  bubbles and is never typed into a terminal.
+
 ## Validation
 
 - Unit tests: board ownership/CLI plus notification timing, repeated turns,

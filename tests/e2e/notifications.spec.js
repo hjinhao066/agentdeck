@@ -46,7 +46,7 @@ test('background popup, fifth column reveal, focus and actual keyboard input', a
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   await application.evaluate(({ BrowserWindow }) => {
-    const other = new BrowserWindow({ title: 'Background focus test', width: 450, height: 300 });
+    const other = new BrowserWindow({ title: 'Background focus test', width: 450, height: 300, focusable: false });
     other.loadURL('data:text/html,<h1>Other app stand-in</h1>');
     other.focus();
   });
@@ -126,5 +126,47 @@ test('sandboxed notification frame cannot access the terminal bridge; navigation
   const url = page.url();
   await page.evaluate(() => { const link = document.createElement('a'); link.href = 'https://example.com'; document.body.append(link); link.click(); link.remove(); });
   expect(page.url()).toBe(url);
+  await popup.locator('.close').click();
+});
+
+test('notification window size, bottom-right 12px anchor and card layout', async () => {
+  const popup = await popupFor('test-0', 'done', 'A very long title that should be truncated with ellipsis without breaking card layout');
+  const winBounds = await application.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck notifications');
+    return win ? win.getBounds() : null;
+  });
+  expect(winBounds).not.toBeNull();
+  expect(winBounds.width).toBe(191);
+  expect(winBounds.height).toBe(54);
+
+  const displayInfo = await application.evaluate(({ screen, BrowserWindow }) => {
+    const main = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck');
+    const display = main && !main.isDestroyed() ? screen.getDisplayMatching(main.getBounds()) : screen.getPrimaryDisplay();
+    const area = display.workArea;
+    return { areaX: area.x, areaY: area.y, areaW: area.width, areaH: area.height };
+  });
+  expect(winBounds.x + winBounds.width).toBe(displayInfo.areaX + displayInfo.areaW - 12);
+  expect(winBounds.y + winBounds.height).toBe(displayInfo.areaY + displayInfo.areaH - 12);
+
+  const cardBounds = await popup.locator('article').first().boundingBox();
+  expect(Math.round(cardBounds.height)).toBe(46);
+  expect(Math.round(cardBounds.width)).toBe(191 - 8);
+
+  const overflow = await popup.evaluate(() => {
+    const card = document.querySelector('article');
+    const open = card.querySelector('.open');
+    const strong = card.querySelector('strong');
+    return {
+      cardScrollHeight: card.scrollHeight,
+      cardClientHeight: card.clientHeight,
+      openScrollHeight: open.scrollHeight,
+      openClientHeight: open.clientHeight,
+      strongEllipsis: getComputedStyle(strong).textOverflow,
+    };
+  });
+  expect(overflow.cardScrollHeight).toBeLessThanOrEqual(overflow.cardClientHeight);
+  expect(overflow.openScrollHeight).toBeLessThanOrEqual(overflow.openClientHeight);
+  expect(overflow.strongEllipsis).toBe('ellipsis');
+
   await popup.locator('.close').click();
 });

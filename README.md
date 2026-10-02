@@ -9,7 +9,7 @@ adds explicit task relationships without taking control of manual terminals.
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
-- **Left sidebar** (collapsible, resizable): 新对话, 搜索, Schedule, Artifacts, then
+- **Left sidebar** (collapsible, resizable): 新对话, 搜索, Schedule, Artifacts, Skills, then
   folders, loose sessions and 已归档. Every session is a live terminal column.
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
@@ -25,21 +25,62 @@ the middle:
   open; a run that was due while it was closed is shown as missed, not fired
   late. A busy session is retried for up to 30 minutes.
 - **Artifacts** lists files and links that agents mentioned in their replies.
+- **Skills** lists every `SKILL.md` the agent CLIs on this machine can see, so
+  you can read one rendered or edit its full Markdown and save it (⌘S). See below.
+
+## Skills
+
+The Skills page scans the shared originals in `~/.agents/skills` and each tool's
+own folder: `~/.claude/skills`, `~/.codex/skills`, `~/.gemini/skills`,
+Antigravity's `~/.gemini/antigravity/global_skills` and `builtin/skills`,
+`~/.cursor/skills` and `skills-cursor`, `~/.grok/skills` and `bundled/skills`,
+plus skills inside installed plugins (Claude's `installed_plugins.json`, the
+Codex/Cursor/Grok plugin caches, Gemini extensions). Nested skills (for example
+examples or agents inside a skill) are found too; `node_modules` and `.git` are
+skipped.
+
+- Copies are grouped by their real file. A skill under `~/.agents/skills` is
+  shown once as 共享正本, with the tools that link to it; tabs per tool show only
+  that tool's own skills. Two real copies with the same name stay separate.
+- Saving a shared skill writes only the original file. Tool links are never
+  replaced by copies, so every tool linked to it sees the change.
+- Saves are atomic and keep the file mode. If the file changed after you opened
+  it, nothing is written and the page says so; reload to pick up the change.
+- Binary, non-UTF-8 and hard-linked files can be read but are never saved.
+- Only existing `SKILL.md` files up to 1 MB are opened. A link pointing outside
+  the skill folders is listed but never read or written. Plugin and built-in
+  skills can be overwritten by the tool's next update.
+- Nothing on this page creates, deletes, installs or syncs skills, and a skill's
+  text is only shown, never sent to an agent.
 
 ## 队长 (Captain)
 
 One standing column, opened from the sidebar entry 队长 (creating it the first
 time, with the agent you pick; afterwards it only returns to it). You tell it what
 you want; it hands the work to other columns and brings back short receipts. It
-does not do the work in its own column.
+does not do the work in its own column. On restart, an existing Captain is briefed
+again with the current provider, model and effort instructions.
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
-  receipts | answer`, run in its own terminal. Only the 队长's terminal holds the
+  receipts | answer` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
+  columns), run in its own terminal. Only the 队长's terminal holds the
   capability token those commands need; the columns it drives get none.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
-  permissions), appear in the sidebar and the deck, and get the task as their first
-  message. The app appends a contract: finish without waiting on the user, ask the
+  permissions) unless it picks another with `--agent claude|agy|cursor|grok` or a full
+  `--command`. Its instructions list the providers and the models their CLIs report
+  on this account, with a routing preference: bulk ordinary work to Antigravity
+  `gemini-3.8-flash-high`; code and important work to Cursor CLI
+  `claude-opus-5-5-high`, then `claude-sonnet-5-5-high` (or Claude Code), and Cursor's
+  `grok-4.7-high-fast` only when those are unavailable. The standalone `grok` CLI is
+  not used unless you name it. It also picks an effort tier per task: `medium` for
+  simple work, `high` for ordinary code, `xhigh` for complex work or a task that
+  already failed, `max` for the most critical. Cursor takes the tier as the model
+  id's suffix (`claude-opus-5-5-medium|high|xhigh|max`, same for
+  `claude-sonnet-5-5-`); Antigravity and Claude Code take `--effort`.
+  AgentDeck cannot read live quotas; the 队长 switches
+  provider when a worker reports a limit. New sessions appear in the sidebar and the
+  deck, and get the task as their first message. The app appends a contract: finish without waiting on the user, ask the
   队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
   failure reason; never file bodies).
 - When a worker's turn ends, its receipt or question is read from its final reply,
@@ -61,6 +102,20 @@ your prompt (pinned while you read its answer) and the agent's final reply,
 rendered as Markdown, not commands or tool output. The real terminal is still
 running underneath: use the 终端/对话 toggle in a column header to switch.
 
+- A new blank session (no launch command, nothing said yet) offers Claude,
+  Antigravity, Grok and Cursor CLI buttons. A click types that agent's launch
+  command into the session's own shell; the terminal and its history stay. Only once
+  the agent really is the foreground process is the command saved for the session,
+  so reopening AgentDeck starts it again. A CLI that is not installed is reported
+  under the buttons and the session stays blank. Windows cannot report the
+  foreground process: there an agent whose screen is not recognized within 15
+  seconds is reported as unconfirmed, nothing is saved, and the buttons stay. A
+  launch is sent only from a recognized PowerShell prompt. A half-typed line is cleared first with editing keys only (^U; Ctrl+End, Ctrl+Home
+  in PowerShell), never ^C. The buttons also disappear when you
+  start an agent in the terminal yourself. Defaults: `claude
+  --dangerously-skip-permissions --effort high`, `agy --model gemini-3.8-flash-high
+  --effort high`, `grok`, `cursor-agent --model claude-opus-5-5-high` (`cursor-agent`,
+  never `agent`, which other tools also install).
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -95,8 +150,9 @@ script, watch-ai daemon, or OS notification permission is needed.
 - Works for Claude, Codex, Grok, Antigravity and manually launched agents. Screen
   detection is heuristic: a silent tool can look idle, and unknown prompt formats
   may be missed. The popup intentionally says output stopped, not task succeeded.
-- Popups stay above ordinary windows without stealing the keyboard. Multiple
-  columns share a scrollable stack; close a card to dismiss it.
+- Popups stay above ordinary windows without stealing the keyboard. Cards are
+  compact (~191×54 px per card, halved again for minimal footprint), stacked in
+  the bottom-right corner with 12px margin; close a card to dismiss it.
 - Click a card to restore AgentDeck, leave Board view, scroll/re-zoom to that
   exact terminal, and focus its input. A deleted terminal never redirects to an
   unrelated column. Resumed work retracts its obsolete popup.
@@ -136,7 +192,9 @@ local installation. Windows CI produces an NSIS installer.
 
 Test a packaged app with `AGENTDECK_TEST_EXECUTABLE` set to its executable before
 running `npm run test:e2e`. Tests use temporary userData and empty shell columns,
-never the real layout or live agent sessions.
+never the real layout or live agent sessions. With `--test-user-data=<dir>` the
+Skills page scans `<dir>/skills-home` instead of the real home folder, so tests
+never list or edit the user's own skills.
 
 Security boundaries: the renderer is sandboxed with a restrictive CSP and no
 Node integration. Main IPC accepts only the deck's local main frame. Session

@@ -31,6 +31,7 @@ const ICONS = {
   search: S('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
   clock: S('<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>'),
   artifacts: S('<path d="M12 2 2 7l10 5 10-5-10-5Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>'),
+  skills: S('<path d="M2 4h6a4 4 0 0 1 4 4v13a3 3 0 0 0-3-3H2Z"/><path d="M22 4h-6a4 4 0 0 0-4 4v13a3 3 0 0 1 3-3h7Z"/>'),
   folder: S('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>'),
   folderOpen: S('<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>'),
   folderPlus: S('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/>'),
@@ -2072,7 +2073,7 @@ function removeFolder(folderId) {
 async function agentInForeground(col, allowShell) {
   if (allowShell && !col.cmd) return true;
   const entry = terms.get(col.id);
-  if (env.platform === 'win32') return !!entry && AGENT_IDLE_RE.test(entry.lastScreen || '');
+  if (env.platform === 'win32') return !!entry && AGENT_IDLE_RE.test(MainCore.windowsAgentOutput(entry.lastScreen));
   try {
     return !MainCore.isShellProcess(await window.deck.ptyForeground(col.id));
   } catch (_) { return false; }
@@ -2856,6 +2857,7 @@ applyTheme(config.theme);
 const deckHost = {
   columns: () => columns, terms, config, saveConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName,
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
+  platform: env.platform,
   focusedId: () => focusedId,
   setFocused: (id) => { focusedId = id; syncNav(); },
   layout: () => { updateColumnStyles(); fitAll(); syncChromeState(); },

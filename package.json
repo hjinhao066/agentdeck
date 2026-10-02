@@ -47,6 +47,8 @@
       "main-session.js",
       "side-pane.js",
       "side-main.js",
+      "skills-core.js",
+      "skills-ui.js",
       "style.css",
       "vendor/**",
       "security.js",

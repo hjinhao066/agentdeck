@@ -3,22 +3,23 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// Agent columns open as chat. The stand-in "agent" is a Node one-liner that
-// echoes stdin, which works the same in PowerShell and zsh.
-const ECHO = 'node -e "process.stdin.pipe(process.stdout)"';
-let application, page, profile;
+// Agent columns open as chat. Columns run the stand-in agent fixture and wait
+// for its welcome box before typing prompts.
+const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
+let application, page, profile, demoFile;
 
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-chat-'));
-  fs.writeFileSync(path.join(profile, 'note.md'), '# Note title\n\nhello from the preview pane\n');
+  demoFile = path.join(profile, 'note.md');
+  fs.writeFileSync(demoFile, '# Note title\n\nhello from the preview pane\n');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,
     columns: Array.from({ length: 4 }, (_, index) => ({
       id: `chat-${index}`, taskId: `task-${index}`, title: `Agent ${index + 1}`,
-      cmd: ECHO, cwd: profile, width: 460, role: 'manual',
+      cmd: FAKE, cwd: profile, width: 460, role: 'manual',
     })),
   }));
-  const env = { ...process.env };
+  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -27,7 +28,7 @@ test.beforeAll(async () => {
   });
   page = await application.firstWindow();
   await expect(page.locator('.column.chat-mode')).toHaveCount(4);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length)).toBe(4);
+  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(4);
 });
 test.afterAll(async () => {
   if (application) await application.close();

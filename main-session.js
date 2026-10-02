@@ -53,7 +53,7 @@
   }
   function openDialog() {
     const d = $('mainDialog');
-    $('mdCmd').value = 'claude --dangerously-skip-permissions';
+    $('mdCmd').value = window.BoardCore.commandForAgent('claude');
     $('mdCwd').value = '';
     d.showModal();
     setTimeout(() => $('mdCmd').focus(), 50);
@@ -70,7 +70,7 @@
   // The instructions go straight into the terminal; they are not a user bubble.
   function brief(col) {
     if (!col.cmd) return;   // a bare shell would run them as commands
-    host.sendWhenReady(col, M.instructions(), { silent: true });
+    host.sendWhenReady(col, M.instructions(host.platform), { silent: true });
   }
   function initDialog() {
     document.querySelectorAll('#mainDialog .preset').forEach((b) => {
@@ -302,7 +302,7 @@
         if (existing) return { done: true, result: `已开新会话 ${existing.id}「${host.columnLabel(existing)}」。` };
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
-        if (agent && !['claude', 'agy', 'antigravity', 'grok', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、grok，或用 --command 写完整启动命令。`);
+        if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok，或用 --command 写完整启动命令。`);
         const custom = window.BoardCore.cleanText(message.command, 1000);
         const cmd = custom || (agent ? window.BoardCore.commandForAgent(agent) : s.cmd);
         const col = host.createSession({ title, cmd, cwd: window.BoardCore.cleanText(message.cwd, 1000), createdByRequestId: message.id, displayTitle: title, manualTitle: true }, true);
@@ -375,6 +375,7 @@
     host = h;
     normalize();
     initDialog();
+    if (mainCol()) brief(mainCol());
   }
 
   window.MainSession = {

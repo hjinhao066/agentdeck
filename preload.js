@@ -49,6 +49,10 @@ contextBridge.exposeInMainWorld('deck', {
   sideBrowserBounds: (b) => ipcRenderer.send('side:browser-bounds', b),
   sideBrowserAction: (action) => ipcRenderer.send('side:browser-action', { action }),
   onBrowserState: (cb) => ipcRenderer.on('side:browser-state', (_e, m) => cb(m)),
+  // Skills page: keys come from the listing; main re-checks every path.
+  skillsList: () => ipcRenderer.invoke('skills:list', {}),
+  skillsRead: (key) => ipcRenderer.invoke('skills:read', { key }),
+  skillsSave: (key, text, hash) => ipcRenderer.invoke('skills:save', { key, text, hash }),
 
   ptySpawn: (id, cwd, cols, rows, managed) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),

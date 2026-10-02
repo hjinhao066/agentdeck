@@ -86,7 +86,8 @@
     const attach = svgButton('cp-icon attach', 'plus', '添加文件（会插入路径）');
     const agent = el('span', 'cp-agent');
     const agentDot = el('i', 'cp-agent-dot');
-    agent.append(agentDot, el('span', null, agentName(col)));
+    const agentLabel = el('span', null, agentName(col));
+    agent.append(agentDot, agentLabel);
     agent.title = col.cmd ? '这个对话里运行的是：' + col.cmd : '普通终端';
     const spacer = el('span', 'cp-spacer');
     const stop = svgButton('cp-btn stop', 'stop', '中断（发送 Esc）');
@@ -109,7 +110,7 @@
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, attn, ta, stop, send, toggle, footer, agentDot, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null };
+    const v = { id: col.id, wrap, chat, scroll, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null };
     views.set(col.id, v);
     applyMode(col);
 
@@ -349,9 +350,114 @@
       v.scroll.appendChild(empty);
       return;
     }
+    if (needsLauncher(col) && !v.agentUp) {
+      empty.append(el('strong', null, '用哪个 agent？'),
+        el('span', null, '点一个，就在这个对话里启动它，然后在下面发消息。也可以在下面直接输入终端命令。'),
+        launcherRow(v, col));
+      v.scroll.appendChild(empty);
+      return;
+    }
     empty.append(el('strong', null, '要做点什么？'),
       el('span', null, '在下面发消息给 ' + agentName(col) + '。最终回复会出现在这里，过程在右侧栏的「终端」里。'));
     v.scroll.appendChild(empty);
+  }
+
+  // ---- starting an agent in a blank session ----
+  // A session without a launch command is a bare shell. Its empty page offers
+  // the agents: a click types the launch command into this same shell (its
+  // history stays) and, once the agent really is in the foreground, saves it as
+  // the session's command so a restart runs it again. The buttons go away as
+  // soon as any agent runs there, including one started by hand in the terminal.
+  const launching = new Set();
+  const needsLauncher = (col) => !!col && !col.cmd && !col.isMain && col.role === 'manual' && !chatFor(col.id).turns.length;
+  function launcherRow(v, col) {
+    const row = el('div', 'launcher');
+    const busy = launching.has(col.id);
+    window.BoardCore.LAUNCHERS.forEach((l) => {
+      const b = el('button', 'launch-btn', l.label);
+      b.type = 'button';
+      b.dataset.agent = l.key;
+      b.dataset.cmd = l.cmd;
+      b.title = l.cmd;
+      b.disabled = busy;
+      b.addEventListener('click', () => launch(col, b.dataset.cmd, l.label));
+      row.appendChild(b);
+    });
+    v.launchNote = el('div', 'launch-note');
+    v.launchNote.hidden = true;
+    row.appendChild(v.launchNote);
+    return row;
+  }
+  function launchNote(id, text, failed) {
+    const v = views.get(id);
+    if (!v || !v.launchNote || !v.launchNote.isConnected) return;
+    v.launchNote.textContent = text;
+    v.launchNote.hidden = !text;
+    v.launchNote.classList.toggle('failed', !!failed);
+    v.scroll.querySelectorAll('.launch-btn').forEach((b) => { b.disabled = launching.has(id); });
+  }
+  function refreshAgent(col) {
+    const v = views.get(col.id);
+    if (!v) return;
+    v.agentLabel.textContent = agentName(col);
+    v.agent.title = col.cmd ? '这个对话里运行的是：' + col.cmd : '普通终端';
+    v.ta.placeholder = '发消息给 ' + agentName(col) + '…  Enter 发送，Shift+Enter 换行';
+  }
+  async function launch(col, cmd, label) {
+    const id = col.id;
+    const entry = host.terms.get(id);
+    cmd = String(cmd || '').trim();
+    if (!cmd || col.cmd || launching.has(id)) return;
+    if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return; }
+    launching.add(id);
+    // something already runs in front of the shell: never start a second agent
+    if (await host.agentInForeground(col, false)) {
+      launching.delete(id);
+      const v = views.get(id);
+      if (v) { v.agentUp = true; renderChat(id); }
+      host.showToast('这个对话里已经有程序在运行，没有再启动');
+      return;
+    }
+    if (host.platform === 'win32' && !window.MainCore.isWindowsShellPrompt(entry.lastScreen)) {
+      launching.delete(id);
+      host.showToast('还没确认终端回到 PowerShell 提示符，先去「终端」里检查。');
+      return;
+    }
+    launchNote(id, `正在启动 ${label}…`, false);
+    const before = window.BoardCore.launchErrors(entry.lastScreen, cmd);
+    window.deck.ptyInput(id, window.BoardCore.launchInput(cmd, host.platform));
+    const started = Date.now();
+    const finish = (ok, note) => {
+      launching.delete(id);
+      if (ok) {
+        col.cmd = cmd;
+        host.saveConfig();
+        refreshAgent(col);
+        const v = views.get(id);
+        if (v) v.agentUp = true;
+        renderChat(id);
+        if (host.focusedId() === id) focusInput(id);
+      } else {
+        launchNote(id, note, true);
+      }
+    };
+    const check = async () => {
+      if (!host.columns().includes(col) || col.id !== id) { launching.delete(id); return; }
+      const now = host.terms.get(id);
+      const alive = !!now && now.alive;
+      const missing = alive && window.BoardCore.launchErrors(now.lastScreen, cmd) > before;
+      const up = alive && !missing && await host.agentInForeground(col, false);
+      const verdict = window.BoardCore.launchVerdict({ alive, missing, up, waited: Date.now() - started, platform: host.platform });
+      if (verdict === 'waiting') { setTimeout(check, 500); return; }
+      if (verdict === 'up') { finish(true); return; }
+      finish(false, {
+        exited: '终端已经退出，没有启动起来。',
+        missing: `没找到 ${cmd.split(/\s+/)[0]}：它没有安装，或者不在终端的 PATH 里。装好后再点一次。`,
+        unknown: `没认出 ${label} 有没有起来（Windows 上看不到前台程序）。去「终端」里看看：没起来就再点一次；已经起来了就别再点，直接在下面发消息。`,
+        failed: `${label} 没有启动起来，去「终端」里看看输出。`,
+      }[verdict]);
+    };
+    setTimeout(check, 500);
   }
   function renderChat(id) {
     const v = views.get(id);
@@ -529,6 +635,16 @@
     v.agentDot.className = 'cp-agent-dot ' + (entry.alive ? entry.state || 'plain' : 'exited');
     renderFooter(v, entry);
     setAttention(v, id, entry.state === 'input' ? text : null);
+    const col = columnById(id);
+    if (needsLauncher(col) && entry.alive && !launching.has(id) && !v.checkingAgent) {
+      v.checkingAgent = true;
+      host.agentInForeground(col, false).then((up) => {
+        v.checkingAgent = false;
+        if (up === !!v.agentUp || views.get(id) !== v) return;
+        v.agentUp = up;
+        if (needsLauncher(col)) renderChat(id);
+      }, () => { v.checkingAgent = false; });
+    }
     const open = pending.get(id);
     if (!open) return;
     if (v.live) v.live.textContent = entry.state === 'working' ? host.lastActivityLine(text) : '';
@@ -573,6 +689,8 @@
     const v = views.get(col.id);
     const text = v.ta.value.replace(/\s+$/, '');
     if (!text.trim() && !v.atts.length) return;
+    // until the agent is up the shell is in front and would run the message as commands
+    if (launching.has(col.id)) { host.showToast('agent 还在启动，等它起来再发'); return; }
     const prefix = window.MainSession ? window.MainSession.outgoingPrefix(col) : '';
     const atts = v.atts.slice();
     // a long prompt resolves once its file is written; keep the text until then

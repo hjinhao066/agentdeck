@@ -16,7 +16,7 @@ test('infers known agents and resolves commands', () => {
   assert.equal(BoardCore.inferAgentType('claude --continue'), 'Claude');
   assert.equal(BoardCore.inferAgentType('agy'), 'Antigravity');
   assert.equal(BoardCore.inferAgentType('grok -i'), 'Grok');
-  assert.equal(BoardCore.commandForAgent('claude'), 'claude --dangerously-skip-permissions');
+  assert.equal(BoardCore.commandForAgent('claude'), 'claude --dangerously-skip-permissions --effort high');
   assert.equal(BoardCore.commandForAgent('grok', 'custom-agent'), 'custom-agent');
 });
 

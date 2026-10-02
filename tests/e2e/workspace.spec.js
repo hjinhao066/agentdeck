@@ -75,7 +75,7 @@ test('pasted images stay as attachments when the text is deleted, and go out as 
   const ta = col.locator('.composer textarea');
   await ta.click();
   await page.keyboard.type('look at this');
-  await page.keyboard.press('Meta+A');
+  await page.keyboard.press('ControlOrMeta+A');
   await page.keyboard.press('Backspace');
   await expect(ta).toHaveValue('');
   await expect(col.locator('.cp-atts .att-thumb img')).toHaveAttribute('src', /^data:image\/png/);
@@ -250,16 +250,42 @@ test('Schedule sends a prompt on time, and runs due while closed are reported as
 });
 
 test('a schedule can open a fresh session and deliver once the agent is ready', async () => {
-  const before = await page.evaluate(() => columns.length);
+  const beforeIds = await page.evaluate(() => columns.map((c) => c.id));
+  await page.evaluate(({ cwd, cmd }) => {
+    const orig = BoardCore.commandForAgent;
+    try {
+      BoardCore.commandForAgent = () => cmd;
+      config.schedules.push(ScheduleCore.arm(ScheduleCore.normalizeSchedule({
+        id: 'fresh', prompt: 'please write the report', target: 'new', cwd, kind: 'interval', every: 60, createdAt: Date.now(),
+      }), Date.now()));
+      config.schedules[config.schedules.length - 1].nextAt = Date.now() - 500;
+      Pages.tick(false);
+    } finally {
+      BoardCore.commandForAgent = orig;
+    }
+  }, { cwd: profile, cmd: FAKE });
+  await expect.poll(() => page.evaluate(() => columns.length)).toBe(beforeIds.length + 1);
+  const id = await page.evaluate((old) => columns.find((c) => !old.includes(c.id))?.id, beforeIds);
+  expect(id).toBeTruthy();
+  // once the stand-in agent is ready, the prompt is delivered and answered
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.alive, id), { timeout: 15000 }).toBe(true);
+  await expect.poll(() => page.evaluate((i) => window.deck.ptyReplay(i), id), { timeout: 20000 }).toContain('please write the report');
+  await expect(page.locator(`.column[data-col-id="${id}"] .reply`).last()).toContainText('GOT please write the report', { timeout: 20000 });
+});
+
+test('a schedule can open a fresh bare shell session and execute', async () => {
+  const beforeIds = await page.evaluate(() => columns.map((c) => c.id));
   await page.evaluate((cwd) => {
     config.schedules.push(ScheduleCore.arm(ScheduleCore.normalizeSchedule({
-      id: 'fresh', prompt: 'echo fresh-session-$((40+2))', target: 'new', agent: 'shell', cwd, kind: 'interval', every: 60, createdAt: Date.now(),
+      id: 'fresh-shell', prompt: 'node -e "console.log(\'fresh-session-\'+(40+2))"', target: 'new', agent: 'shell', cwd, kind: 'interval', every: 60, createdAt: Date.now(),
     }), Date.now()));
     config.schedules[config.schedules.length - 1].nextAt = Date.now() - 500;
     Pages.tick(false);
   }, profile);
-  await expect.poll(() => page.evaluate(() => columns.length)).toBe(before + 1);
-  const id = await page.evaluate(() => columns[columns.length - 1].id);
+  await expect.poll(() => page.evaluate(() => columns.length)).toBe(beforeIds.length + 1);
+  const id = await page.evaluate((old) => columns.find((c) => !old.includes(c.id))?.id, beforeIds);
+  expect(id).toBeTruthy();
   // a plain shell ran it: the output only exists if the line was delivered and executed
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.alive, id), { timeout: 15000 }).toBe(true);
   await expect.poll(() => page.evaluate((i) => dumpScreen(terms.get(i).term).replace(/\n/g, ''), id), { timeout: 15000 }).toContain('fresh-session-42');
 });

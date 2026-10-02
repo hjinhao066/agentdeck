@@ -5,13 +5,28 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
+  const CLAUDE = 'claude --dangerously-skip-permissions --effort high';
+  const AGY = 'agy --model gemini-3.8-flash-high --effort high';
+  // `cursor-agent`, never `agent`: that name collides with other tools' binaries.
+  const CURSOR = 'cursor-agent --model claude-opus-5-5-high';
   const AGENT_COMMANDS = Object.freeze({
-    claude: 'claude --dangerously-skip-permissions',
-    antigravity: 'agy',
-    agy: 'agy',
+    claude: CLAUDE,
+    antigravity: AGY,
+    agy: AGY,
     grok: 'grok',
+    cursor: CURSOR,
+    'cursor-agent': CURSOR,
     shell: '',
   });
+  // What a blank session offers to start, in this order.
+  const LAUNCHERS = Object.freeze([
+    { key: 'claude', label: 'Claude', cmd: CLAUDE },
+    { key: 'agy', label: 'Antigravity', cmd: AGY },
+    { key: 'grok', label: 'Grok', cmd: 'grok' },
+    { key: 'cursor', label: 'Cursor CLI', cmd: CURSOR },
+  ].map(Object.freeze));
+  // zsh, bash, fish, PowerShell and cmd wording for a program that isn't there
+  const NOT_FOUND_RE = /command not found|unknown command|is not recognized|no such file or directory|未找到命令|找不到命令/gi;
 
   const STATE_LABELS = Object.freeze({
     plain: 'Not started',
@@ -68,7 +83,44 @@
     if (/^\s*claude(?:\s|$)/.test(cmd)) return 'Claude';
     if (/^\s*(?:agy|antigravity)(?:\s|$)/.test(cmd)) return 'Antigravity';
     if (/^\s*grok(?:\s|$)/.test(cmd)) return 'Grok';
+    if (/^\s*cursor-agent(?:\s|$)/.test(cmd)) return 'Cursor';
     return cmd ? 'Custom agent' : 'Shell';
+  }
+
+  // How often the screen says the command's program doesn't exist. Counted, so
+  // an old error already on screen is not mistaken for a new one. Rows are
+  // joined first: a narrow column soft-wraps the message mid-word.
+  function launchErrors(screen, command) {
+    const bin = cleanText(command, 1000).split(/\s+/)[0].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '');
+    if (!bin) return 0;
+    const flat = String(screen || '').replace(/\r?\n/g, '');
+    let n = 0;
+    for (const m of flat.matchAll(NOT_FOUND_RE)) {
+      if (flat.slice(Math.max(0, m.index - 80), m.index + m[0].length + 80).includes(bin)) n++;
+    }
+    return n;
+  }
+
+  // What a launcher button types into the session's shell. A half-typed line is
+  // dropped first with editing keys only, never ^C, which would interrupt a
+  // program running there: ^U on Unix shells; on Windows Ctrl+End then Ctrl+Home
+  // (delete to end, delete to start) in both PSReadLine and the console's own
+  // line editor, where ^U means nothing.
+  function launchInput(command, platform) {
+    const clear = platform === 'win32' ? '\x1b[1;5F\x1b[1;5H' : '\x15';
+    return clear + cleanText(String(command == null ? '' : command).replace(/[\u0000-\u001f\u007f]+/g, ' '), 1000) + '\r';
+  }
+
+  // Where a launch from those buttons stands. Only an agent identified in the
+  // foreground counts as started. Windows can't report the foreground process,
+  // so there a timeout without a recognized agent screen is 'unknown', never 'up'.
+  const LAUNCH_TIMEOUT = 15000;
+  function launchVerdict({ alive, missing, up, waited, platform }) {
+    if (!alive) return 'exited';
+    if (missing) return 'missing';
+    if (up) return 'up';
+    if (waited > LAUNCH_TIMEOUT) return platform === 'win32' ? 'unknown' : 'failed';
+    return 'waiting';
   }
 
   function commandForAgent(agent, customCommand) {
@@ -314,12 +366,16 @@
 
   return {
     AGENT_COMMANDS,
+    LAUNCHERS,
     STATE_LABELS,
     cleanText,
     normalizeRole,
     normalizeColumn,
     inferAgentType,
     commandForAgent,
+    launchErrors,
+    launchInput,
+    launchVerdict,
     stateLabel,
     LINK_TYPES,
     normalizeLink,

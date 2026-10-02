@@ -50,10 +50,9 @@ test('the model only gets short receipt lines and a compact ledger', () => {
   assert.ok(read.length < 1600);
 });
 
-test('队长 instructions name the commands but never a model', () => {
+test('队长 instructions name the commands', () => {
   const text = M.instructions();
   for (const cmd of ['ledger', 'new --title', 'tell --to', 'read --id', 'receipts']) assert.ok(text.includes(cmd), cmd);
-  assert.ok(!/opus|sonnet|haiku|gpt|gemini|grok-\d|model/i.test(text));
   assert.match(M.RECEIPT_CONTRACT, /【回执】/);
 });
 
@@ -81,4 +80,14 @@ test('a worker question is read out and handed to 队长, not the user', () => {
 test('shells are recognized by name or full path; agents are not shells', () => {
   for (const n of ['zsh', '-zsh', '/bin/zsh', '/opt/homebrew/bin/fish', 'C:\\\\Windows\\\\System32\\\\cmd.exe', 'pwsh.exe', '']) assert.equal(M.isShellProcess(n), true, n);
   for (const n of ['node', 'claude', '/usr/local/bin/agy', 'grok', 'python3']) assert.equal(M.isShellProcess(n), false, n);
+});
+
+
+test('Windows agent detection discards stale chrome and recognizes wrapped shell prompts', () => {
+  const chrome = 'Welcome to Claude Code\n> \nContext: 23%\nModel: Fake\nbypass permissions on';
+  assert.equal(M.windowsAgentOutput(chrome + '\nPS C:\\work> '), '');
+  assert.equal(M.isWindowsShellPrompt(chrome + '\nPS C:\\long-path\n\\work> '), true);
+  assert.equal(M.isWindowsShellPrompt('PS C:\\work> node fake-agent.js\n' + chrome), false);
+  assert.equal(M.windowsAgentOutput('AgentDeck shortcuts: Antigravity\nPS C:\\work> '), '');
+  assert.equal(M.windowsAgentOutput('PS C:\\work> node fake-agent.js\n' + chrome), chrome);
 });

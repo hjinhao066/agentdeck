@@ -76,8 +76,8 @@ async function request(command, waitForCompletion) {
 function usage() {
   process.stdout.write(
     'AgentDeck managed-terminal bridge\n\n' +
-    '  create-child --title "Task" --task "Instructions" [--agent claude|agy|grok] [--cwd path]\n' +
-    '  spawn-child --title "Task" --task "Instructions" [--agent claude|agy|grok]\n' +
+    '  create-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok] [--cwd path]\n' +
+    '  spawn-child --title "Task" --task "Instructions" [--agent claude|agy|cursor|grok]\n' +
     '  wait --task <task-id>\n' +
     '  send --task <task-id> --message "Follow-up or answer"\n' +
     '  progress --message "Current progress"\n' +
@@ -85,7 +85,7 @@ function usage() {
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
-    '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|grok | --command "launch"]\n' +
+    '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|cursor|grok | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction"\n' +
     '  read --id <session-id> [--turns 3]       saved prompts and final replies, cut short\n' +
     '  receipts                                 receipts not yet seen\n' +

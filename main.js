@@ -7,10 +7,17 @@ const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
 const { createNotifications } = require('./notifications');
 const { registerSideIpc } = require('./side-main');
+const { registerSkillsIpc } = require('./skills-core');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
 let pendingFocusColumn = null;
+
+// Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
+// its own userData (own config/sessions AND own single-instance lock), so an
+// end-to-end test deck can run alongside the real one without touching it.
+const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
+if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 
 // Every privileged channel belongs exclusively to the local deck main frame.
 // Notification windows expose a separate, minimal bridge.
@@ -516,6 +523,7 @@ function createWindow() {
     minWidth: 640,
     minHeight: 480,
     title: 'AgentDeck',
+    focusable: !tudArg,
     backgroundColor: '#000000',
     titleBarStyle: isMac ? 'hiddenInset' : 'default',
     trafficLightPosition: isMac ? { x: 16, y: 13 } : undefined,
@@ -547,22 +555,21 @@ function focusColumn(id) {
   if (!mainWindow || mainWindow.isDestroyed()) createWindow();
   const win = mainWindow;
   if (win.isMinimized()) win.restore();
-  win.setAlwaysOnTop(true);
-  win.show();
-  app.focus({ steal: true });
-  win.focus();
-  win.setAlwaysOnTop(false);
+  if (!tudArg) {
+    win.setAlwaysOnTop(true);
+    win.show();
+    app.focus({ steal: true });
+    win.focus();
+    win.setAlwaysOnTop(false);
+  } else {
+    win.showInactive();
+  }
   if (boardRendererReady) {
     send('focus-column', { id });
     pendingFocusColumn = null;
   }
 }
 
-// Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
-// its own userData (own config/sessions AND own single-instance lock), so an
-// end-to-end test deck can run alongside the real one without touching it.
-const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
-if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 SESS_DIR = path.join(app.getPath('userData'), 'sessions');
 const CHAT_DIR = path.join(app.getPath('userData'), 'chats');
 
@@ -590,6 +597,8 @@ app.whenReady().then(() => {
     onMain, handleMain, send, session, WebContentsView,
     getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR,
   });
+  // A test profile must never list or edit the real user's skills.
+  registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
   const configPath = path.join(app.getPath('userData'), 'config.json');
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
@@ -785,6 +794,7 @@ app.whenReady().then(() => {
   handleMain('title:summarize', async (_e, { text }) => {
     const t = Array.from(stripBadChars(text || '')).slice(0, 400).join('').trim();
     if (!t) return null;
+    if (tudArg) return titleHeuristic(t);
     if (titleCache.has(t)) return titleCache.get(t);
     if (pendingTitles >= 4) return titleHeuristic(t);
     // Prompts may contain secrets. Never record them in diagnostic logs.
