@@ -393,7 +393,8 @@ test('work for a session stopped on a startup dialog (Cursor: trust this workspa
   await page.evaluate((i) => { config.mainSession.pending = config.mainSession.pending.filter((p) => p.colId !== i); config.mainSession.inflight = config.mainSession.inflight.filter((p) => p.colId !== i); archiveColumn(columns.find((c) => c.id === i)); }, child);
 });
 
-test('receipts and questions reach an idle Captain agent by themselves, never a bare shell', async () => {
+test('legacy injection opt-in: receipts and questions reach an idle Captain, never a bare shell', async () => {
+  await page.evaluate(() => { config.mainSession.legacyReceiptInjection = true; });
   // the Captain column is configured for an agent, but only its shell is in front:
   // nothing may be typed there, it would run each line as a command
   const queued = await page.evaluate(() => {

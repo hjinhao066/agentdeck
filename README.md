@@ -136,8 +136,15 @@ again with the current provider, model and effort instructions.
 - When a worker's turn ends with a receipt, a question or a failure, it is read
   from its final reply,
   shown as a card in the 队长 column (click the title to jump there), stored as the
-  column's last receipt, and delivered to the 队长's agent by itself when it is idle
-  (or with your next message). An instruction added to a session that is still busy
+  column's last receipt, and read through the Captain's background channel.
+  With Claude Code, the Captain runs `receipts --wait --timeout 300` using Bash
+  `run_in_background: true`. The command blocks until unread receipts, questions
+  or confirmation notices arrive, prints their summaries and exits. Bash's task
+  completion notification wakes the model; after processing it the Captain starts
+  another listener, keeping exactly one active. A timeout prints nothing and exits
+  successfully; omit `--timeout` to wait indefinitely. The timeout is in seconds
+  (other legacy CLI commands retain their existing timeout units).
+  An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
   Additions waiting for the same session are combined in order into one prompt,
   with one receipt contract; their cards point to the last card for the result.
@@ -147,16 +154,17 @@ again with the current provider, model and effort instructions.
   instruction. Both keep the user-input guard. Claude usage-limit waits show
   额度用尽/等待 in the dot tooltip, sidebar, task card and ledger; they keep their
   slot and do not complete the task or receive pending additions until resumed.
-  **Delivery never touches what you are typing.** Receipts (and work handed to a
-  session) are typed into the agent's input box and sent with Enter, so they wait
-  while that box holds anything you have not sent: text the key tracker rebuilt,
-  a history recall it cannot follow, a key pressed in the last 5 seconds, or text
-  visible in the agent's input box on screen (an empty box on screen clears a
-  "cannot tell"). Your own Enter sends your words alone; the receipts follow as a
-  separate message once the box is empty and quiet, or ride along with a message
-  sent from the chat composer. While AgentDeck types a receipt (about half a
-  second) your keys are held and replayed right after its Enter. After 20 seconds
-  of waiting a toast says why. A worker stopped at a confirmation prompt is handed
+  **Receipts never pass through the Captain's input box.** They also stay out
+  of your next chat message. The background command uses the same Captain-only
+  capability token as `receipts`; workers and independent terminals cannot read
+  it. A cancelled listener leaves no long-lived request to consume later receipts.
+  Agents without background completion notifications can read `receipts` manually.
+  The legacy input injection path is an explicit fallback: with AgentDeck closed,
+  set `mainSession.legacyReceiptInjection` to `true` in its userData `config.json`;
+  absent/false is the default background mode. Set it back to `false` to disable
+  both idle injection and inclusion in your next chat message. Legacy injection
+  and work handed to sessions still wait for an empty, quiet input box and protect
+  your keys during paste/Enter. A worker stopped at a confirmation prompt is handed
   to the 队长 with only the prompt's last lines; it answers with `answer` when sure
   and asks you otherwise. A pause between tool calls, between two instructions or a silent
   start (Cursor can print nothing for a minute or two) is not a stop: a turn that

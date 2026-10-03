@@ -62,6 +62,7 @@
     s.pending = [...s.inflight, ...s.pending].slice(-50);
     s.inflight = [];
     s.fresh = !!s.fresh;
+    s.legacyReceiptInjection = s.legacyReceiptInjection === true;
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
     // the column was closed while the app was down
@@ -99,8 +100,8 @@
     const id = col.id;
     briefing = id;
     const done = () => { if (briefing === id) briefing = ''; };
-    host.sendWhenReady(col, M.instructions(host.platform, note), {
-      silent: true, onSent: done,
+    host.sendWhenReady(col, M.instructions(host.platform, note, state()?.legacyReceiptInjection === true), {
+      silent: true, onSent: done, guardUserInput: true,
       onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
     });
   }
@@ -329,7 +330,7 @@
       : { summary: receipt.summary, files: receipt.files, failed: receipt.failed });
     update(task);
   }
-  // Queue something for 队长's model; it goes out on the next quiet moment.
+  // Queue something for 队长's background reader (or the legacy quiet-moment injection).
   function push(task, item) {
     const s = state();
     if (!s || task.gen !== s.gen) return;
@@ -347,7 +348,7 @@
     save();
     return text;
   }
-  // Receipts and questions reach 队长 by themselves: when its agent is idle,
+  // Opt-in legacy delivery: receipts and questions reach 队长 when its agent is idle,
   // they are typed in as one message (no user bubble) and its answer shows up
   // as a normal reply. Your own next message carries them too, if sooner.
   let delivering = false;
@@ -357,7 +358,7 @@
     const col = mainCol();
     const id = col && col.id;
     closeOrphans();
-    if (!s || !s.pending.length) { blockedSince = 0; return; }
+    if (!s || s.legacyReceiptInjection !== true || !s.pending.length) { blockedSince = 0; return; }
     if (delivering || !col || !col.cmd || !entry.alive || entry.sendingPrompt || briefing === col.id) return;
     if (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input' || M.terminalActivity(entry.lastScreen)) return;
     if (Date.now() - (entry.lastOutputAt || 0) < 1500) return;   // let it settle first
@@ -367,7 +368,7 @@
     delivering = true;
     host.agentInForeground(col, false).then((ok) => {
       delivering = false;
-      if (!ok || !s.pending.length || mainCol() !== col || col.id !== id || briefing === id || entry.sendingPrompt) return;
+      if (!ok || s.legacyReceiptInjection !== true || !s.pending.length || mainCol() !== col || col.id !== id || briefing === id || entry.sendingPrompt) return;
       if (host.userComposing(id)) { holdBack(); return; }   // started typing while the check ran
       blockedSince = 0;
       const batch = 'b' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
@@ -509,10 +510,10 @@
     return String(text).split('\n').flatMap((line) => host.findLinks(line)).filter((m) => m.kind === 'file').map((m) => m.text.trim());
   }
 
-  // New receipts ride along with your next message to the main session.
+  // Only the opt-in legacy mode adds receipts to the user's next message.
   function outgoingPrefix(col) {
     const s = state();
-    if (!s || !isMain(col) || !s.pending.length) return '';
+    if (!s || s.legacyReceiptInjection !== true || !isMain(col) || !s.pending.length) return '';
     return takePending(true);
   }
   // A cleared 队长 starts a new model context, including after a cold restart.
@@ -575,6 +576,10 @@
           + (waiting ? `\n排队等空位：${waiting}` : '') + (history ? '\n' + history : '') };
       }
       case 'main-receipts': {
+        // A short read belonging to a timed watcher must not consume anything
+        // if it was queued while the renderer was unavailable and has expired.
+        if (message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt)) return { done: true, result: '' };
+        if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
         const text = takePending().trim();
         return { done: true, result: text || '没有新的回执。' };
       }
