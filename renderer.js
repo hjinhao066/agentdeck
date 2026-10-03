@@ -119,6 +119,7 @@ if (saved) {
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
+  config.crewMap = CrewMapCore.normalizeSaved(saved.crewMap);
   if (saved.boardResponses && typeof saved.boardResponses === 'object' && !Array.isArray(saved.boardResponses)) {
     config.boardResponses = Object.fromEntries(Object.entries(saved.boardResponses).slice(-200));
   }

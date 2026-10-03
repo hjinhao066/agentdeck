@@ -57,9 +57,14 @@ test('the board opens on the map: 队长 on top, a line to each session, review 
   await expect(page.locator('.board-workspace')).toBeHidden();
   await expect(page.locator('.cm-node.kind-captain')).toHaveCount(1);
   await expect(page.locator('.cm-node.kind-worker')).toHaveCount(4);
-  await expect(page.locator('.cm-edge.dispatch')).toHaveCount(4);
-  await expect(page.locator('.cm-edge.review')).toHaveCount(2);
-  await expect(page.locator('.cm-node[data-node-id="c2003"] .cm-role.review')).toHaveText('审查');
+  await expect(page.locator('.cm-edges .cm-edge.dispatch')).toHaveCount(4);
+  await expect(page.locator('.cm-edges .cm-edge.review')).toHaveCount(2);
+  // what came back to 队长: the question and the failure (the reviewed result goes through its review)
+  await expect(page.locator('.cm-edges .cm-edge.return')).toHaveCount(2);
+  await expect(page.locator('.cm-edges .cm-edge.return.question')).toHaveAttribute('data-from', 'c2002');
+  await expect(page.locator('.cm-node[data-node-id="c2003"]')).toHaveClass(/review/);
+  // no relationship labels on the cards: the lines say it
+  await expect(page.locator('.cm-role, .cm-review-chip')).toHaveCount(0);
   expect(await status('c2001')).toBe('done');
   expect(await status('c2002')).toBe('input');
   expect(await status('c2003')).toBe('working');
@@ -71,13 +76,40 @@ test('the board opens on the map: 队长 on top, a line to each session, review 
   await expect(page.locator('.cm-node[data-node-id="c1999"]')).toHaveCount(0);
   await page.locator('.cm-fold').click();
   await expect(page.locator('.cm-node.archived[data-node-id="c1999"]')).toBeVisible();
-  await page.locator('#crewMapArchived').click();
+  await page.locator('[data-cm="archived"]').click();
   await expect(page.locator('.cm-node[data-node-id="c1999"]')).toHaveCount(0);
 });
 
 test('state changes show up on the next status tick', async () => {
   await page.evaluate(() => { MainSession.state().tasks.find((t) => t.id === 'k3').status = 'done'; });
   await expect.poll(() => status('c2003'), { timeout: 5000 }).toBe('done');
+});
+
+test('a canvas: cards drag and stay put, the view pans and zooms, all kept in config', async () => {
+  const card = page.locator('.cm-node[data-node-id="c2004"]');
+  const before = await card.evaluate((n) => [n.offsetLeft, n.offsetTop]);
+  const box = await card.boundingBox();
+  await page.mouse.move(box.x + 30, box.y + 30);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 130, box.y + 90, { steps: 6 });
+  await page.mouse.up();
+  const after = await card.evaluate((n) => [n.offsetLeft, n.offsetTop]);
+  expect(after[0]).toBeGreaterThan(before[0] + 50);
+  // dragging is not a click: the board stays open
+  expect(await page.evaluate(() => activeView)).toBe('board');
+  expect(await page.evaluate(() => config.crewMap.positions.c2004)).toEqual({ x: after[0], y: after[1] });
+  const v0 = await page.evaluate(() => CrewMap.view());
+  await page.locator('[data-cm="in"]').click();
+  expect((await page.evaluate(() => CrewMap.view())).scale).toBeGreaterThan(v0.scale);
+  const vp = await page.locator('.cm-viewport').boundingBox();
+  await page.mouse.move(vp.x + 20, vp.y + vp.height - 20);
+  await page.mouse.down();
+  await page.mouse.move(vp.x + 120, vp.y + vp.height - 60, { steps: 5 });
+  await page.mouse.up();
+  const v1 = await page.evaluate(() => CrewMap.view());
+  expect(await page.evaluate(() => config.crewMap.view)).toEqual(v1);
+  await page.locator('[data-cm="relayout"]').click();
+  expect(await page.evaluate(() => config.crewMap.positions)).toEqual({});
 });
 
 test('a node opens its real column; the old canvas stays one click away', async () => {

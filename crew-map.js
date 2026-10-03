@@ -1,19 +1,25 @@
-// 终端架构图 (crew map): the default face of the board view. 队长 sits on top
-// with a line down to every session it handed work to; review sessions hang
-// below what they review. A projection only: drawing it never touches a
-// terminal, clicking a node opens that real column. CrewMapCore does the math.
+// 终端架构图 (crew map): the default face of the board view. A canvas: drag
+// the background to pan, Cmd/Ctrl+wheel (or pinch) to zoom, drag a card to
+// move it; positions and the view are kept in config.crewMap. 队长 sends work
+// down (派出), reviews run down from what they review (审查), results run
+// back around into 队长's side (收回). A projection only: drawing it never
+// touches a terminal; clicking a card opens that real column.
 (function () {
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 232, nodeH: 122, captainW: 300, gapX: 28, gapY: 62, pad: 32 };
-  const MIN_SCALE = 0.62;
+  const NODE = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, zoneGap: 88, fanY: 100, gapY: 80, pad: 40 };
+  const DRAG_PX = 4;
+  const FIT_MIN = 0.72;
   let host = null;
-  let rootEl, canvasEl, edgesEl, nodesEl, emptyEl, archBtn, viewEl;
+  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, nodesEl, emptyEl, zoomLabel, archBtn;
   let mode = 'crew';
   let showArchived = false;
   let lastSig = '';
   let lastMap = null;
+  let lay = null;
+  let view = null;          // { x, y, scale }
+  let drag = null;          // a card or the canvas being dragged
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -21,6 +27,7 @@
     if (text != null) n.textContent = text;
     return n;
   };
+  const saved = () => host.config.crewMap;
 
   function ago(ts) {
     if (!ts) return '';
@@ -67,7 +74,7 @@
 
   function badge(node) {
     const b = el('span', 'cm-agent');
-    if (!node.provider && !node.model) { b.textContent = 'shell'; return b; }
+    if (!node.provider && !node.model) return b;
     const col = host.findColumn(node.id);
     if (col) {
       const inner = el('span');
@@ -83,39 +90,31 @@
     n.type = 'button';
     n.dataset.nodeId = node.id;
     n.dataset.status = node.status;
-    Object.assign(n.style, { left: box.x + 'px', top: box.y + 'px', width: box.w + 'px', height: box.h + 'px' });
+    place(n, box);
     const top = el('div', 'cm-top');
     const st = el('span', 'cm-status');
     st.append(el('i', 'cm-dot'), el('span', 'cm-status-text', node.statusLabel + (node.detail ? ' · ' + node.detail : '')));
-    top.append(st);
-    if (node.kind === 'captain') top.prepend(el('span', 'cm-role', '队长'));
-    if (node.review) top.append(el('span', 'cm-role review', '审查'));
-    if (node.archived) top.append(el('span', 'cm-role', '已归档'));
-    top.append(badge(node));
+    top.append(st, badge(node));
     const title = el('div', 'cm-title', node.title);
-    const line = el('div', 'cm-line', node.line || (node.kind === 'waiting' ? '同时干活的会话满了，有空位就自动开' : node.status === 'working' ? '干活中，还没有回执' : '还没有回执'));
+    const line = el('div', 'cm-line', node.line || (node.kind === 'waiting' ? '同时干活的会话满了，有空位就自动开' : node.status === 'working' ? '干活中，还没有回执' : node.kind === 'captain' ? '' : '还没有回执'));
     line.classList.toggle('empty', !node.line);
     const liveLine = el('div', 'cm-live', node.live ? '▸ ' + node.live : '');
     liveLine.hidden = !node.live;
-    const foot = el('div', 'cm-foot', node.kind === 'captain' ? '点击打开队长' : node.kind === 'waiting' ? '等空位' : [node.taskCount > 1 ? `派过 ${node.taskCount} 次活` : '', ago(node.ts)].filter(Boolean).join(' · '));
+    const foot = el('div', 'cm-foot', node.kind === 'captain' || node.kind === 'waiting' ? '' : ago(node.ts));
     n.append(top, title, line, liveLine, foot);
     n.title = node.kind === 'waiting' ? node.title
-      : `${node.title}\n${node.line || ''}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}`.trim();
-    n.disabled = node.kind === 'waiting';
-    n.addEventListener('click', () => host.open(node));
+      : `${node.title}\n${node.line || ''}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`.trim();
+    n.addEventListener('pointerdown', (e) => startCardDrag(e, n, node, box));
+    n.addEventListener('click', (e) => {
+      if (n.dataset.dragged) { delete n.dataset.dragged; e.preventDefault(); return; }
+      if (node.kind !== 'waiting') host.open(node);
+    });
     return n;
   }
+  function place(n, box) { Object.assign(n.style, { left: box.x + 'px', top: box.y + 'px', width: box.w + 'px', height: box.h + 'px' }); }
 
-  function path(cls, d, marker) {
-    const p = document.createElementNS(SVG, 'path');
-    p.setAttribute('class', cls);
-    p.setAttribute('d', d);
-    if (marker) p.setAttribute('marker-end', `url(#${marker})`);
-    edgesEl.appendChild(p);
-    return p;
-  }
-  // Orthogonal route with rounded corners through the given points.
-  function rounded(points, r = 12) {
+  // ---- lines ----
+  function rounded(points, r = 10) {
     let d = `M ${points[0][0]} ${points[0][1]}`;
     for (let i = 1; i < points.length - 1; i++) {
       const [px, py] = points[i - 1], [x, y] = points[i], [nx, ny] = points[i + 1];
@@ -127,106 +126,161 @@
     const last = points[points.length - 1];
     return d + ` L ${last[0]} ${last[1]}`;
   }
+  function svg(tag, attrs, parent) {
+    const n = document.createElementNS(SVG, tag);
+    Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, v));
+    (parent || edgesEl).appendChild(n);
+    return n;
+  }
+  // Direction marks along a long line: a small chevron mid-way on each long stretch.
+  function chevrons(points, cls) {
+    for (let i = 1; i < points.length; i++) {
+      const [x1, y1] = points[i - 1], [x2, y2] = points[i];
+      if (Math.hypot(x2 - x1, y2 - y1) < 140) continue;
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+      const ang = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+      svg('path', { class: 'cm-chevron ' + cls, d: 'M -5 -5 L 2 0 L -5 5', transform: `translate(${mx} ${my}) rotate(${ang})` });
+    }
+  }
+  const MARK = { dispatch: 'cmArrowOut', review: 'cmArrowReview', ok: 'cmArrowBack', question: 'cmArrowBackBad', failed: 'cmArrowBackBad' };
+  function drawEdges() {
+    edgesEl.innerHTML = '<defs>' + Object.values(MARK).filter((v, i, a) => a.indexOf(v) === i).map((id) =>
+      `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>`).join('') + '</defs>';
+    const list = C.routes(lastMap, lay, NODE);
+    // returns underneath, then reviews, dispatch on top
+    ['return', 'review', 'dispatch'].forEach((type) => list.filter((r) => r.type === type).forEach((r) => {
+      svg('path', { class: 'cm-edge ' + r.cls, d: rounded(r.points), 'marker-end': `url(#${MARK[type === 'return' ? r.kind : type]})`, 'data-from': r.from, 'data-to': r.to });
+      if (type === 'return') chevrons(r.points, r.cls);
+    }));
+    // finished work sits on its own, on a quiet panel
+    zonesEl.innerHTML = '';
+    const done = [...lay.nodes.values()].filter((b) => b.zone === 2).concat(lay.fold ? [lay.fold] : []);
+    if (done.length && done.length < lay.nodes.size + (lay.fold ? 1 : 0)) {
+      const x0 = Math.min(...done.map((b) => b.x)) - 18, y0 = Math.min(...done.map((b) => b.y)) - 18;
+      const x1 = Math.max(...done.map((b) => b.x + b.w)) + 18, y1 = Math.max(...done.map((b) => b.y + b.h)) + 18;
+      const z = el('div', 'cm-zone-done');
+      Object.assign(z.style, { left: x0 + 'px', top: y0 + 'px', width: (x1 - x0) + 'px', height: (y1 - y0) + 'px' });
+      zonesEl.appendChild(z);
+    }
+  }
 
-  const nearest = (list, x) => list.reduce((best, g) => (Math.abs(g - x) < Math.abs(best - x) ? g : best), list[0]);
+  // ---- canvas view ----
+  function applyView() {
+    canvasEl.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+    zoomLabel.textContent = Math.round(view.scale * 100) + '%';
+  }
+  function saveView() { saved().view = { ...view }; host.save(); }
+  // Fit the open work (排队 / 待补充 / 干活中) into view; finished work, set
+  // apart on the right, is a pan away when there is no room for it.
+  function fit() {
+    if (!lay) return;
+    const w = vpEl.clientWidth, h = vpEl.clientHeight;
+    const span = lay.openSpan && lay.width * Math.max(FIT_MIN, Math.min(1, (w - 32) / lay.width)) > w
+      ? [Math.min(lay.openSpan[0], lay.captain.x) - 24, Math.max(lay.openSpan[1], lay.captain.x + lay.captain.w) + 24]
+      : [0, lay.width];
+    const sw = span[1] - span[0];
+    // never so small the cards stop being readable: wider maps pan instead
+    const scale = Math.max(FIT_MIN, Math.min(1, (w - 32) / sw, (h - 24) / lay.height));
+    const x = sw * scale <= w ? (w - sw * scale) / 2 - span[0] * scale : -span[0] * scale;
+    view = { scale, x: Math.round(x), y: 12 };
+    applyView();
+    saveView();
+  }
+  function zoomAt(cx, cy, factor) {
+    const scale = Math.min(C.MAX_SCALE, Math.max(C.MIN_SCALE, view.scale * factor));
+    const k = scale / view.scale;
+    view = { scale, x: cx - (cx - view.x) * k, y: cy - (cy - view.y) * k };
+    applyView();
+    saveView();
+  }
+  function zoomCenter(factor) { zoomAt(vpEl.clientWidth / 2, vpEl.clientHeight / 2, factor); }
 
-  function drawEdges(map, lay) {
-    edgesEl.innerHTML = '<defs>' +
-      '<marker id="cmArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
-      '<marker id="cmArrowReview" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>' +
-      '</defs>';
-    const cap = lay.captain;
-    if (!cap) return;
-    const status = new Map(map.nodes.map((n) => [n.id, n.status]));
-    const dispatch = map.edges.filter((e) => e.type === 'dispatch' && lay.nodes.has(e.to));
-    // row 1 fans out along the bottom of the 队长 card; later rows run down a gap
-    const row1 = dispatch.filter((e) => lay.nodes.get(e.to).row === 1);
-    const fanW = Math.min(cap.w - 60, row1.length * 22);
-    dispatch.forEach((e) => {
-      const b = lay.nodes.get(e.to);
-      const cls = `cm-edge dispatch st-${status.get(e.to)}`;
-      const tx = b.x + b.w / 2, ty = b.y - 2;
-      const k = row1.indexOf(e);
-      const sx = cap.x + cap.w / 2 + (k >= 0 && row1.length > 1 ? (k / (row1.length - 1) - 0.5) * fanW : 0);
-      const sy = cap.y + cap.h;
-      if (k >= 0) {
-        const my = (sy + ty) / 2;
-        path(cls, `M ${sx} ${sy} C ${sx} ${my} ${tx} ${my} ${tx} ${ty}`, 'cmArrow');
-        return;
-      }
-      const gx = nearest(lay.gaps, tx);
-      const lane = lay.laneY(b.row);
-      path(cls + ' routed', rounded([[sx, sy], [sx, lay.laneY(1)], [gx, lay.laneY(1)], [gx, lane], [tx, lane], [tx, ty]]), 'cmArrow');
-    });
-    // review: from each reviewed card into the reviewer, one chip per reviewer
-    const byReviewer = new Map();
-    map.edges.filter((e) => e.type === 'review').forEach((e) => {
-      const a = lay.nodes.get(e.from), b = lay.nodes.get(e.to);
-      if (!a || !b) return;
-      const sx = a.x + a.w / 2, sy = a.y + a.h, tx = b.x + b.w / 2, ty = b.y - 2;
-      if (b.row === a.row + 1) {
-        const my = sy + Math.max(24, (ty - sy) * 0.55);
-        path('cm-edge review', `M ${sx} ${sy} C ${sx} ${my} ${tx} ${sy + 8} ${tx} ${ty}`, 'cmArrowReview');
-      } else {
-        const gx = nearest(lay.gaps, sx) + 6;
-        const out = lay.laneY(a.row + 1) + 8, into = lay.laneY(b.row) + 8;
-        path('cm-edge review', rounded([[sx, sy], [sx, out], [gx, out], [gx, into], [tx, into], [tx, ty]]), 'cmArrowReview');
-      }
-      byReviewer.set(e.to, (byReviewer.get(e.to) || 0) + 1);
-    });
-    byReviewer.forEach((count, id) => {
-      const b = lay.nodes.get(id);
-      const chip = el('span', 'cm-review-chip', `审查 ${count} 个会话的产出`);
-      chip.style.left = (b.x + b.w / 2) + 'px';
-      chip.style.top = (b.y - 12) + 'px';
-      nodesEl.appendChild(chip);
-    });
+  function startCardDrag(e, n, node, box) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    drag = { kind: 'card', n, node, box, sx: e.clientX, sy: e.clientY, x0: box.x, y0: box.y, moved: false, id: e.pointerId };
+    n.setPointerCapture(e.pointerId);
+  }
+  function startPan(e) {
+    if (e.button !== 0 || e.target.closest('.cm-node, .cm-fold, .cm-controls')) return;
+    drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, x0: view.x, y0: view.y, moved: false, id: e.pointerId };
+    vpEl.setPointerCapture(e.pointerId);
+    vpEl.classList.add('panning');
+  }
+  function onMove(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    const dx = e.clientX - drag.sx, dy = e.clientY - drag.sy;
+    if (!drag.moved && Math.hypot(dx, dy) < DRAG_PX) return;
+    drag.moved = true;
+    if (drag.kind === 'pan') {
+      view = { ...view, x: drag.x0 + dx, y: drag.y0 + dy };
+      applyView();
+      return;
+    }
+    drag.n.classList.add('dragging');
+    drag.box.x = Math.round(drag.x0 + dx / view.scale);
+    drag.box.y = Math.round(drag.y0 + dy / view.scale);
+    place(drag.n, drag.box);
+    drawEdges();
+  }
+  function onUp(e) {
+    if (!drag || e.pointerId !== drag.id) return;
+    const d = drag;
+    drag = null;
+    vpEl.classList.remove('panning');
+    if (!d.moved) return;
+    if (d.kind === 'pan') { saveView(); return; }
+    d.n.classList.remove('dragging');
+    d.n.dataset.dragged = '1';   // the click that ends a drag does not open the column
+    setTimeout(() => { delete d.n.dataset.dragged; }, 0);
+    saved().positions[d.node.id] = { x: d.box.x, y: d.box.y };
+    host.save();
+  }
+  function onWheel(e) {
+    if (mode !== 'crew' || !view) return;
+    e.preventDefault();
+    const r = vpEl.getBoundingClientRect();
+    // a pinch on a trackpad arrives as ctrl+wheel
+    if (e.ctrlKey || e.metaKey) zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
+    else {
+      view = { ...view, x: view.x - e.deltaX, y: view.y - e.deltaY };
+      applyView();
+      clearTimeout(onWheel.t);
+      onWheel.t = setTimeout(saveView, 250);
+    }
   }
 
   function render() {
-    if (!rootEl || mode !== 'crew' || !host.visible()) return;
+    if (!rootEl || mode !== 'crew' || !host.visible() || drag) return;
     const map = collect();
     lastMap = map;
     lastSig = C.signature(map) + '|' + showArchived;
     archBtn.hidden = !map.archivedCount;
-    archBtn.textContent = showArchived ? `收起已归档（${map.archivedCount}）` : `显示已归档（${map.archivedCount}）`;
+    archBtn.classList.toggle('on', showArchived);
+    archBtn.title = showArchived ? `收起已归档（${map.archivedCount}）` : `显示已归档（${map.archivedCount}）`;
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
-    const stage = canvasEl.parentElement;
-    if (!map.captain) {
-      stage.style.width = stage.style.height = '';
-      edgesEl.innerHTML = '';
-      return;
-    }
-    const avail = Math.max(320, rootEl.querySelector('.cm-scroller').clientWidth - 8);
-    const perRow = Math.max(2, Math.floor((avail - 2 * NODE.pad + NODE.gapX) / (NODE.nodeW + NODE.gapX)));
-    const lay = C.layout(map, { ...NODE, perRow, fold: map.hiddenArchived > 0 });
-    // only a window too narrow for two cards shrinks the map
-    const scale = Math.max(MIN_SCALE, Math.min(1, avail / lay.width));
+    if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; lay = null; return; }
+    lay = C.applyPositions(C.layout(map, { ...NODE, fold: map.hiddenArchived > 0 }), saved().positions, map.captain.id);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';
-    canvasEl.style.transform = scale < 1 ? `scale(${scale})` : '';
-    stage.style.width = Math.ceil(lay.width * scale) + 'px';
-    stage.style.height = Math.ceil(lay.height * scale) + 'px';
-    edgesEl.setAttribute('width', lay.width);
-    edgesEl.setAttribute('height', lay.height);
-    edgesEl.setAttribute('viewBox', `0 0 ${lay.width} ${lay.height}`);
-    drawEdges(map, lay);
+    drawEdges();
     nodesEl.appendChild(card(map.captain, lay.captain));
     map.nodes.forEach((n) => nodesEl.appendChild(card(n, lay.nodes.get(n.id))));
     if (lay.fold) {
       const fold = el('button', 'cm-fold', `+ ${map.hiddenArchived} 个已归档`);
       fold.type = 'button';
       fold.title = '已归档的会话默认折起来；点开淡显出来';
-      Object.assign(fold.style, { left: lay.fold.x + 'px', top: (lay.fold.y + lay.fold.h / 2 - 16) + 'px' });
+      place(fold, lay.fold);
       fold.addEventListener('click', () => setShowArchived(true));
       nodesEl.appendChild(fold);
     }
+    if (!view) { if (saved().view) { view = { ...saved().view }; applyView(); } else fit(); }
   }
 
   // Every status tick: a structural change rebuilds, the rest updates text in place.
   function refresh() {
-    if (!rootEl || mode !== 'crew' || !host.visible()) return;
+    if (!rootEl || mode !== 'crew' || !host.visible() || drag) return;
     const map = collect();
     if (C.signature(map) + '|' + showArchived !== lastSig) { render(); return; }
     lastMap = map;
@@ -241,10 +295,11 @@
   }
 
   function setShowArchived(v) { showArchived = !!v; render(); }
+  function relayout() { saved().positions = {}; host.save(); render(); fit(); }
 
   function setMode(next) {
     mode = next === 'canvas' ? 'canvas' : 'crew';
-    host.config.boardMode = mode;
+    saved().mode = mode;
     viewEl.dataset.mode = mode;
     viewEl.querySelectorAll('.board-mode button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
     viewEl.querySelector('.board-kicker').textContent = mode === 'crew' ? '队长 · 实时' : 'Live orchestration';
@@ -255,20 +310,32 @@
 
   function init(h) {
     host = h;
+    host.config.crewMap = C.normalizeSaved(host.config.crewMap);
     viewEl = document.getElementById('boardView');
     rootEl = document.getElementById('crewMap');
+    vpEl = rootEl.querySelector('.cm-viewport');
     canvasEl = rootEl.querySelector('.cm-canvas');
+    zonesEl = rootEl.querySelector('.cm-zones');
     edgesEl = rootEl.querySelector('.cm-edges');
     nodesEl = rootEl.querySelector('.cm-nodes');
     emptyEl = rootEl.querySelector('.cm-empty');
-    archBtn = document.getElementById('crewMapArchived');
-    archBtn.addEventListener('click', () => setShowArchived(!showArchived));
+    zoomLabel = rootEl.querySelector('[data-cm="zoom"]');
+    archBtn = rootEl.querySelector('[data-cm="archived"]');
+    const on = (name, fn) => rootEl.querySelector(`[data-cm="${name}"]`).addEventListener('click', fn);
+    on('archived', () => setShowArchived(!showArchived));
+    on('out', () => view && zoomCenter(1 / 1.2));
+    on('in', () => view && zoomCenter(1.2));
+    on('zoom', () => view && zoomCenter(1 / view.scale));
+    on('fit', fit);
+    on('relayout', relayout);
+    vpEl.addEventListener('pointerdown', (e) => { if (view) startPan(e); });
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    vpEl.addEventListener('wheel', onWheel, { passive: false });
     viewEl.querySelectorAll('.board-mode button').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
-    mode = host.config.boardMode === 'canvas' ? 'canvas' : 'crew';
-    viewEl.dataset.mode = mode;
-    setMode(mode);
-    window.addEventListener('resize', () => { if (mode === 'crew' && host.visible()) render(); });
+    setMode(host.config.crewMap.mode);
   }
 
-  window.CrewMap = { init, render, refresh, mode: () => mode, setMode, setShowArchived, lastMap: () => lastMap };
+  window.CrewMap = { init, render, refresh, fit, relayout, mode: () => mode, setMode, setShowArchived, lastMap: () => lastMap, view: () => view && { ...view }, layout: () => lay };
 })();
