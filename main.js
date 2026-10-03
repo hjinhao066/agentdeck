@@ -328,7 +328,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status',
-        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-receipts', 'main-answer'].includes(action)) {
+        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -648,10 +648,11 @@ app.whenReady().then(() => {
   onMain('pty:kill', (_e, { id, keepReplay }) => killPty(id, !!keepReplay));
 
   onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
+    const peek = pendingBoardCommands.get(requestId)?.command.action === 'main-peek';
     pendingBoardCommands.delete(requestId);
     writeBoardResponse(requestId, {
       done: !!done,
-      result: typeof result === 'string' ? result.slice(0, 12000) : '',
+      result: typeof result === 'string' ? result.slice(0, peek ? 2_100_000 : 12000) : '',
       error: typeof error === 'string' ? error.slice(0, 2000) : '',
       childId: typeof childId === 'string' ? childId : '',
       snapshot: snapshot && typeof snapshot === 'object' ? snapshot : undefined,

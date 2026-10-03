@@ -34,6 +34,9 @@ the middle:
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
   top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
   stays within its assigned column width, including when switching views or zooming.
+  Scroll up in a terminal or conversation to pause following output. New output
+  preserves your reading position and shows 有新内容 ↓ at the bottom; click it
+  or scroll to the bottom to resume following.
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
   output; restoring replays that output and relaunches the agent. New Claude and
@@ -84,7 +87,7 @@ again with the current provider, model and effort instructions.
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
-  receipts | answer` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
+  receipts | answer | peek` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
   capability token those commands need; the columns it drives get none.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
@@ -151,6 +154,11 @@ again with the current provider, model and effort instructions.
   Receipt file fields accept absolute local paths only; CLI update notices and
   other footer text are ignored. Prompt submission waits for the paste redraw
   to settle before pressing Enter once, including in background sessions.
+- `peek --id <session-id> [--lines 40]` reads live terminal output, with ANSI
+  styling removed (1–1000 terminal rows). It reads the active screen and recent
+  scrollback, even while someone is reading older output. It sends no input,
+  changes no focus or scroll position, and never restores an archived session.
+  Unlike `read`, it does not read saved chat replies.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
 - 清空上下文 (only in the 队长 header) clears only the 队长's model context. Its

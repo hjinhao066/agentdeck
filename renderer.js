@@ -1523,7 +1523,7 @@ function buildColumn(col, isFresh) {
       theme: TERM_THEME[config.theme], allowProposedApi: true,
       // Option+click is our "open in editor" gesture on links; don't let xterm
       // also interpret it as click-to-move-cursor (sends arrow keys to the TUI).
-      altClickMovesCursor: false,
+      altClickMovesCursor: false, scrollOnUserInput: false,
     });
     const fit = new FitAddonNS.FitAddon();
     term.loadAddon(fit);
@@ -1615,6 +1615,20 @@ function buildColumn(col, isFresh) {
       // gray "idle since launch"; idleTicks debounces working→done (~3s);
       // workStart/workedMs drive the header timer; lastDump skips redundant IPC.
       hasWorked: false, idleTicks: 0, workStart: 0, workedMs: 0, doneAt: 0, lastDump: '',
+    });
+
+    const newOutput = document.createElement('button');
+    newOutput.className = 'new-content terminal-new-content';
+    newOutput.type = 'button';
+    newOutput.textContent = '有新内容 ↓';
+    newOutput.hidden = true;
+    termEl.appendChild(newOutput);
+    newOutput.addEventListener('click', () => { term.scrollToBottom(); newOutput.hidden = true; });
+    term.onScroll(() => {
+      if (term.buffer.active.viewportY >= term.buffer.active.baseY) newOutput.hidden = true;
+    });
+    term.onWriteParsed(() => {
+      if (term.buffer.active.viewportY < term.buffer.active.baseY) newOutput.hidden = false;
     });
 
     // Cmd+C copies the selection (paste is handled natively by xterm).
@@ -2885,8 +2899,16 @@ window.deck.onBoardCommand((message) => {
   // 队长's commands: only its own column may use them.
   if (String(message.action || '').startsWith('main-')) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
-      (response) => respondBoard(message.id, response),
-      (error) => respondBoard(message.id, { done: true, error: error.message }));
+      (response) => {
+        // A peek is ephemeral: never save live terminal contents in config.
+        if (message.action === 'main-peek') window.deck.boardRespond({ requestId: message.id, ...response });
+        else respondBoard(message.id, response);
+      },
+      (error) => {
+        const response = { done: true, error: error.message };
+        if (message.action === 'main-peek') window.deck.boardRespond({ requestId: message.id, ...response });
+        else respondBoard(message.id, response);
+      });
     return;
   }
   if (!caller || caller.role === 'manual') {
@@ -3034,7 +3056,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, agentInForeground, isBackstage, userComposing,
+  createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
@@ -3054,19 +3076,19 @@ window.addEventListener('drop', (e) => e.preventDefault());
 
 // Periodically mirror each column's rendered screen to the watch-ai daemon so
 // it can notify when an agent running inside AgentDeck goes idle.
-function dumpScreen(term) {
+function dumpScreen(term, count = 40) {
   const buf = term.buffer.active;
   // Fresh/tall terminals have many blank rows below the cursor. Starting at
   // buffer.length used to discard all actual output in the first few rows.
   let end = buf.length;
-  const floor = Math.max(0, end - Math.max(term.rows, 40));
+  const floor = Math.max(0, end - Math.max(term.rows, count));
   while (end > floor) {
     const line = buf.getLine(end - 1);
     if (line && line.translateToString(true).trim()) break;
     end--;
   }
   const lines = [];
-  for (let i = Math.max(0, end - 40); i < end; i++) {
+  for (let i = Math.max(0, end - count); i < end; i++) {
     const ln = buf.getLine(i);
     lines.push(ln ? ln.translateToString(true) : '');
   }

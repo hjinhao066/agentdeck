@@ -63,3 +63,46 @@ test('managed CLI writes an authenticated request and consumes its response', as
   assert.equal(fs.existsSync(path.join(responseDir, `${request.id}.json`)), false);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('peek rejects missing ids and invalid row counts before creating a request', async () => {
+  for (const args of [[], ['--id'], ['--id', 'x', '--lines'], ['--id', 'x', '--lines', '0'], ['--id', 'x', '--lines', '1.5'], ['--id', 'x', '--lines', '1001'], ['--id', 'x', '--lines', 'no']]) {
+    const result = await runCli(['peek', ...args], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /peek (requires --id|--lines must be an integer)/);
+  }
+});
+
+test('peek requires the same capability token as other Captain commands', async () => {
+  const result = await runCli(['peek', '--id', 'worker'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /Only conductor-managed terminals/);
+});
+
+test('peek sends the id and default or requested row count and prints only live output', async () => {
+  for (const lines of [undefined, 2]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-peek-cli-'));
+    fs.mkdirSync(path.join(dir, 'requests'));
+    fs.mkdirSync(path.join(dir, 'responses'));
+    try {
+      const running = runCli(['peek', '--id', 'worker', ...(lines ? ['--lines', String(lines)] : [])], {
+        AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token',
+      });
+      let request;
+      const deadline = Date.now() + 3000;
+      while (!request && Date.now() < deadline) {
+        const [file] = fs.readdirSync(path.join(dir, 'requests'));
+        if (file) request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+        else await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      assert.ok(request);
+      assert.equal(request.action, 'main-peek');
+      assert.equal(request.to, 'worker');
+      assert.equal(request.lines, lines || 40);
+      assert.equal(request.token, 'test-token');
+      fs.writeFileSync(path.join(dir, 'responses', request.id + '.json'), JSON.stringify({ done: true, result: 'live first\nlive second' }));
+      const result = await running;
+      assert.equal(result.code, 0);
+      assert.equal(result.stdout, 'live first\nlive second\n');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});
