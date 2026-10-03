@@ -52,6 +52,8 @@
       "pages.js",
       "main-core.js",
       "main-session.js",
+      "crew-map-core.js",
+      "crew-map.js",
       "side-pane.js",
       "side-main.js",
       "skills-core.js",

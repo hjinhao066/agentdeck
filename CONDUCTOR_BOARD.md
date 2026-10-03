@@ -5,6 +5,38 @@ existing column and `node-pty` session model. Board nodes are not mocks. The
 selected node moves its existing xterm element into the board inspector, so the
 graph and the full interactive terminal stay visible together.
 
+## 终端架构图 (default tab)
+
+The board button (Cmd+Shift+B) opens on the **架构图** tab; the free canvas
+described below is the second tab (**自由画布**). The map is a read-only
+projection of 队长's ledger sources: `config.mainSession.tasks`, the live columns
+and `config.archived` (`crew-map-core.js` builds, lays out and routes it,
+`crew-map.js` draws it; no new IPC). Its own state is `config.crewMap`
+(`mode`, dragged card `positions`, and the pan/zoom `view`), checked on load.
+
+- It is a canvas: drag empty space to pan, Cmd/Ctrl+wheel or pinch to zoom,
+  drag a card to move it. The corner controls zoom, fit, re-run the automatic
+  layout (clearing dragged positions) and show/hide archived sessions.
+- Three kinds of line, each with its own port and arrow direction:
+  **派出** (accent) leaves the bottom of 队长 and enters a session's top, or a
+  review session's left side down the gap beside what it reviews; **审查**
+  (violet, dashed) runs down from each reviewed session into its review;
+  **收回** (green, red for a question or a failure) leaves a session's
+  bottom-right, runs under everything and up the right edge into 队长's right
+  side. A reviewed session's result goes back through its review. Lines nest
+  so no two share a stretch (unit-tested).
+- Layout by state, left to right: 排队 / 待补充, then 干活中, then finished work
+  on a quiet panel. Sessions linked by reviews stay together; a review sits one
+  row below what it reviews. Fit shows the open work; finished work is a pan away
+  when there is no room.
+- A session reads as a **review** when its title or the prompts it was given
+  match 审查/审核/复核/评审/验收/review/audit and name other, earlier sessions by
+  id, by title or by a file from their receipt.
+- Cards show title, agent/model, state and the newest receipt, refreshed on the
+  status tick; no relationship labels (the lines carry that). Clicking a card
+  opens its real column (an archived one is restored first). Archived sessions
+  fold into a `+ N 个已归档` pill, except one a live review still links to.
+
 ## Terminal roles
 
 - **Conductor**: owns a top-level task and may create managed child terminals.
