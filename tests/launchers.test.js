@@ -194,11 +194,14 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(text, /看不到各家的实时额度/);
   assert.ok(!/(?:查看|读取|查询|检查)[^\n。]{0,6}额度|剩余额度|quota/i.test(text), 'never promises to read quotas');
   // progress boards, concurrency, scraping fallbacks and stuck-session patience
-  assert.match(text, /11\. 开工先跑 ledger，再看 ~\/\.agents\/boards\/ 里进行中的看板[^\n]*顺手把对应看板里那几行改掉/);
-  assert.match(text, /12\. [^\n]*sysctl vm\.swapusage[^\n]*free 剩不到 1GB 就少开/);
+  assert.match(text, /13\. 开工先跑 ledger，再看 ~\/\.agents\/boards\/ 里进行中的看板[^\n]*顺手把对应看板里那几行改掉/);
+  assert.match(text, /14\. [^\n]*sysctl vm\.swapusage[^\n]*free 剩不到 1GB 就少开/);
   assert.match(text, /GitHub 现成工具、OpenCLI、agent-reach[^\n]*Muse\.ai 或 ChatGPT 浏览器/);
-  assert.match(text, /3\. 派活单步原则：一个会话一次只派一件活/);
-  assert.match(text, /8\. 判断会话卡没卡先用 peek，至少等 5 分钟/);
+  assert.match(text, /3\. 先弄懂再派活：[^\n]*表述不清、模棱两可、你没完全理解，先问清楚[^\n]*更好的办法[^\n]*有把握把活做好，才把任务拆开派下去[^\n]*自己决定，不拿去问用户/);
+  assert.match(text, /4\. 派活单步原则：一个会话一次只派一件活/);
+  assert.match(text, /5\. 界面类的活要写明图标规则：[^\n]*任务正文里必须写明[^\n]*复制=两个重叠方框、删除=垃圾桶、编辑=铅笔[^\n]*tooltip[^\n]*无障碍名称[^\n]*不用「复制」这类文字按钮/);
+  assert.ok(text.indexOf('3. 先弄懂再派活') < text.indexOf('4. 派活单步原则'), 'clarify rule comes before the dispatch rules');
+  assert.match(text, /10\. 判断会话卡没卡先用 peek，至少等 5 分钟/);
   assert.match(text, /「待补充」[^\n]*自动执行/);
   assert.ok(text.length < 8000, 'goes out as a prompt, not a file');
 });
@@ -241,7 +244,7 @@ test('队长 instructions call the board CLI the way the column\'s shell reads e
   }
   // Terminal commands use PowerShell; the background Bash tool uses POSIX
   // syntax on Windows too. Only its explicitly labelled rule may contain it.
-  const bashRule = win.split('\n').find((line) => line.startsWith('6. '));
+  const bashRule = win.split('\n').find((line) => line.startsWith('8. '));
   assert.match(bashRule, /Bash 工具.*node "\$AGENTDECK_BOARD_CLI" receipts --wait/);
   assert.ok(!/"\$AGENTDECK_BOARD_CLI"/.test(win.split('\n').filter((line) => line !== bashRule).join('\n')));
   assert.ok(!/\$env:/.test(mac));
