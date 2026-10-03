@@ -158,7 +158,11 @@ test('a launch only counts as started once the agent is identified; a Windows ti
 
 test('队长 knows the providers, only verified models, and the routing preferences', () => {
   const text = M.instructions();
-  for (const key of ['agy', 'cursor', 'claude', 'codex']) assert.ok(text.includes(B.commandForAgent(key)), key);
+  for (const key of ['agy', 'claude']) assert.ok(text.includes(B.commandForAgent(key)), key);
+  assert.ok(text.includes('cursor-agent --force --model grok-4.7-high-fast'));
+  // Codex: --agent codex (default GPT-6.1 Sol) or the Luna command; the bypass flag is named only to forbid writing it
+  assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*不要手动拼接 --dangerously-bypass-approvals-and-sandbox/);
+  assert.ok(!text.includes(B.commandForAgent('codex')), 'no ready-made codex command with the flag to copy');
   assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex \| --command/);
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
@@ -166,23 +170,36 @@ test('队长 knows the providers, only verified models, and the routing preferen
     'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
     'claude-opus-5-5-xhigh', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-max',
     'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
-    'gemini-3.1-pro-high', 'gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'grok-4.7-high-fast',
+    'gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'grok-4.7-high-fast',
   ]);
   // the old Claude models are named only to forbid them
   assert.match(text, /不要用 Claude 4\.x 和 Haiku[^\n]*new 会直接拒绝/);
   // Antigravity has no 5.5 models
   const agyLine = text.split('\n').find((l) => l.includes('Antigravity：'));
   assert.ok(!/5-5|5\.5/.test(agyLine));
-  // Routine execution uses Flash/Grok; architecture, review and UI prefer Claude 5.5.
-  assert.match(text, /杂活和常规执行[^\n]*测试、部署、数据迁移[^\n]*gemini-3\.8-flash-high[^\n]*grok-4\.7-high-fast/);
-  const code = text.split('\n').find((l) => l.includes('架构、关键判断、代码审查和 UI 设计'));
-  const at = (s) => code.indexOf(s);
-  assert.ok(at('claude-opus-5-5-high') >= 0 && at('claude-opus-5-5-high') < at('claude-sonnet-5-5-high'));
-  assert.ok(at('claude-sonnet-5-5-high') < at('grok-4.7-high-fast'));
+  assert.match(agyLine, /只用 Gemini 3\.8 Flash，绝不用 Gemini 3\.1 Pro/);
+  assert.ok(!text.includes('gemini-3.1-pro-high'));
+  // who gets what
+  const route = (needle) => text.split('\n').find((l) => l.startsWith('   - ') && l.includes(needle)) || '';
+  assert.match(route('UI 设计'), /Opus 5\.5[^\n]*最关键核心代码[^\n]*最终审核/);
+  assert.match(route('重要代码'), /Sonnet 5\.5[^\n]*核心改动/);
+  assert.match(route('批量写代码'), /GPT-6\.1 Sol[^\n]*写测试[^\n]*CI/);
+  assert.match(route('简单的轻量代码'), /GPT-6 Luna/);
+  assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*放开用/);
+  assert.match(route('脏活'), /Cursor Grok 4\.7[^\n]*抓数据/);
+  assert.match(text, /Claude Code：[^\n]*默认模型是 Opus 5\.5，留给 UI、最关键的代码和终审[^\n]*--model claude-sonnet-5-5/);
+  assert.match(text, /Cursor CLI：[^\n]*1–2 分钟可能没有任何输出[^\n]*别急着判定卡死/);
   // the standalone Grok subscription is gone; quotas are not visible
   assert.match(text, /独立的 Grok CLI[^\n]*不要用它派活/);
   assert.match(text, /看不到各家的实时额度/);
   assert.ok(!/(?:查看|读取|查询|检查)[^\n。]{0,6}额度|剩余额度|quota/i.test(text), 'never promises to read quotas');
+  // progress boards, concurrency, scraping fallbacks and stuck-session patience
+  assert.match(text, /11\. 开工先跑 ledger，再看 ~\/\.agents\/boards\/ 里进行中的看板[^\n]*顺手把对应看板里那几行改掉/);
+  assert.match(text, /12\. [^\n]*sysctl vm\.swapusage[^\n]*free 剩不到 1GB 就少开/);
+  assert.match(text, /GitHub 现成工具、OpenCLI、agent-reach[^\n]*Muse\.ai 或 ChatGPT 浏览器/);
+  assert.match(text, /3\. 派活单步原则：一个会话一次只派一件活/);
+  assert.match(text, /8\. 判断会话卡没卡先用 peek，至少等 5 分钟/);
+  assert.match(text, /「待补充」[^\n]*自动执行/);
   assert.ok(text.length < 8000, 'goes out as a prompt, not a file');
 });
 
