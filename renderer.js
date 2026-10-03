@@ -404,13 +404,13 @@ window.deck.onPtyExit((id) => {
 // prompt), so each column remembers hasWorked; idleTicks debounces the working→done
 // flip (~3s) so the dot doesn't flash green in the gaps between tool calls.
 // Regexes largely borrowed from watch-ai's battle-tested ACTIVE_PATTERNS/idle sets.
-const WORKING_RE = /esc to interrupt|Running(?:\.\.\.|…)|⎿\s+Running|\(\d+s\s*·|…\s*\(\d+s|[↑↓]\s*[\d.]+k?\s+tokens|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]/;
+const WORKING_RE = /esc to interrupt|ctrl\+c to stop|\bWorking\b|Running(?:\.\.\.|…)|⎿\s+Running|\(\d+s\s*·|…\s*\(\d+s|[↑↓]\s*[\d.]+k?\s+tokens|[\u2800-\u28FF]/;
 // Only structurally dialog-shaped patterns: prose like "Would you like me to
 // also…?" at the end of a normal reply must NOT hold a column red forever.
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
 const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|waiting for (?:your |user )?(?:input|confirmation|approval|permission)/im;
-const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
+const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Plan, search, build anything|Add a follow-up|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 const DOT_TIP = { plain: '未开始', working: '干活中…', input: '等你回复！', done: '已完成', exited: '已退出' };
 function classify(text, entry) {
   const lines = text.split('\n');
@@ -2229,8 +2229,13 @@ function sendWhenReady(col, text, opts) {
     if (entry && entry.alive) {
       const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working';
       const quiet = Date.now() - (entry.lastOutputAt || 0);
-      // unknown agents never show a recognizable idle footer: settle for quiet output
-      const ready = !col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000);
+      const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
+      // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)
+      // once interactive. Never inject before bracketedPasteMode is enabled on the terminal,
+      // and do not fall back to quiet inference for known Cursor CLI.
+      const cursorReady = isCursor && AGENT_IDLE_RE.test(entry.lastScreen || '') && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
+      // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
+      const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000));
       if (idle && ready && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         const sent = await ChatUI.sendPrompt(col, text, null, o);   // a long prompt goes out as a file
         if (sent && o.onSent) o.onSent(sent === true ? null : sent);

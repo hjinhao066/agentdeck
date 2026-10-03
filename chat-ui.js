@@ -812,11 +812,22 @@
       // 60ms later can be swallowed by their paste detector. Wait for the paste
       // redraw to settle, then submit once; never retry into a changed terminal.
       const pastedAt = Date.now();
+      const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
+      const minWait = isCursor ? 700 : (bracketed ? 500 : 80);
       do {
         await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
         if (host.terms.get(col.id) !== entry || !entry.alive) return false;
-      } while (bracketed && (Date.now() - pastedAt < 500 || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
+      } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
       window.deck.ptyInput(col.id, '\r');
+      if (isCursor) {
+        // Double-check Cursor submission: if initial Enter hit an input debounce/aggregation
+        // window and the session hasn't started working after 600ms, deliver a follow-up Enter.
+        setTimeout(() => {
+          if (host.terms.get(col.id) === entry && entry.alive && entry.state !== 'working' && entry.state !== 'input') {
+            window.deck.ptyInput(col.id, '\r');
+          }
+        }, 600);
+      }
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();
       entry.notificationState = { state: 'working', notified: null, since: null };
