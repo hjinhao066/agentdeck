@@ -19,6 +19,8 @@
   const STOP_QUIET = 3 * 60_000;
   const SCREEN_QUIET = 4_000;      // a receipt on the screen counts once the column has stopped printing
   const dispatches = new Map();  // one delivery loop per session; additions merge until submission
+  let tokenSaving = null;
+  let tokenSaverPaused = false;  // cancel/failure: no retry until usage falls below the threshold
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -106,6 +108,19 @@
     });
   }
   function initDialog() {
+    const settings = $('captainSettings');
+    $('csClose').innerHTML = host.ICONS.close;
+    $('csClose').onclick = () => settings.close();
+    $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
+    $('csSave').onclick = () => {
+      if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
+      host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
+      cancelTokenSaving();
+      tokenSaverPaused = false;
+      save();
+      settings.close();
+    };
+    settings.addEventListener('keydown', (e) => e.stopPropagation());
     document.querySelectorAll('#mainDialog .preset').forEach((b) => {
       b.addEventListener('click', () => { $('mdCmd').value = b.dataset.cmd; $('mdCmd').focus(); });
     });
@@ -120,7 +135,106 @@
     });
   }
 
-  // ---- clear context: only 队长's model context starts over ----
+  // ---- automatic board checkpoint and in-process Claude /clear ----
+  function openSettings() {
+    const settings = M.tokenSaverSettings(host.config.captainTokenSaver);
+    $('csEnabled').checked = settings.enabled;
+    $('csThreshold').value = settings.threshold / 1000;
+    $('csThreshold').disabled = !settings.enabled;
+    $('captainSettings').showModal();
+  }
+
+  function saverBanner(text) {
+    const wrap = host.terms.get(state()?.colId)?.wrap;
+    if (!wrap) return;
+    let banner = wrap.querySelector('.captain-token-saving');
+    if (!text) { banner?.remove(); return; }
+    if (!banner) {
+      banner = el('div', 'captain-token-saving');
+      const label = el('span');
+      label.setAttribute('role', 'status');
+      const cancel = el('button', 'icon-btn');
+      cancel.type = 'button'; cancel.innerHTML = host.ICONS.close;
+      cancel.title = '取消后续自动步骤（已发送的命令无法撤回）';
+      cancel.setAttribute('aria-label', '取消自动存档与清空');
+      cancel.onclick = cancelTokenSaving;
+      banner.append(label, cancel);
+      wrap.querySelector('.col-head').after(banner);
+    }
+    banner.querySelector('span').textContent = text;
+  }
+  function cancelTokenSaving() {
+    tokenSaving = null;
+    tokenSaverPaused = true;
+    saverBanner('');
+  }
+  function saverFailed(message) {
+    cancelTokenSaving();
+    host.showToast(message + '；自动清理已暂停');
+  }
+  function saverSend(op, text, phase, silent, onSent) {
+    op.phase = phase;
+    op.since = Date.now();
+    const col = mainCol();
+    host.sendWhenReady(col, text, {
+      silent, guardUserInput: true, requireIdle: true, timeout: 5 * 60_000,
+      // A paste/Enter already in progress stays atomic; cancelling stops the
+      // next step and never leaves AgentDeck's own paste stranded in the box.
+      cancelled: () => tokenSaving !== op && !host.terms.get(op.colId)?.injecting,
+      onSent: (turn) => {
+        if (text === '/clear' && mainCol() === col && host.terms.get(col.id) === op.entry) {
+          // /clear can create a new CLI session; never resume the pre-clear ID
+          // on a later app launch, including when cancelled just after Enter.
+          delete col.modelSessionId;
+          col.cmd = M.freshCommand(col.cmd);
+          state().cmd = col.cmd;
+          state().fresh = true;
+          save();
+        }
+        if (tokenSaving === op) { op.since = Date.now(); onSent(turn); }
+      },
+      onGiveUp: () => { if (tokenSaving === op) saverFailed('队长一直没准备好'); },
+    });
+  }
+  function tokenSaverTick(entry) {
+    const col = mainCol();
+    const settings = M.tokenSaverSettings(host.config.captainTokenSaver);
+    if (!settings.enabled || !entry.alive || (tokenSaving && (tokenSaving.colId !== col.id || tokenSaving.entry !== entry))) {
+      if (tokenSaving) cancelTokenSaving();
+      return;
+    }
+    // Read the actual footer, including soft-wrapped rows, in either view.
+    const footer = window.ChatUI.readFooter(entry.term);
+    const used = M.contextTokens((footer || []).map((row) => row.map((s) => s.text).join('')).join('\n'));
+    const idle = !briefing && !delivering && !entry.sendingPrompt && entry.state === 'done' && !M.terminalActivity(entry.lastScreen) &&
+      Date.now() - (entry.lastOutputAt || 0) >= 3000 && !host.userComposing(col.id) &&
+      !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
+    if (!tokenSaving) {
+      if (used !== null && used <= settings.threshold) tokenSaverPaused = false;
+      if (tokenSaverPaused || used === null || used <= settings.threshold || !idle || window.AgentInfo.inferProvider(col.cmd, entry.lastScreen) !== 'Claude') return;
+      tokenSaving = { colId: col.id, entry, used, phase: 'queued', since: Date.now() };
+      saverBanner(`上下文 ${(used / 1000).toFixed(0)}k：准备存看板 → 清空 → 读看板继续`);
+      return;
+    }
+    const op = tokenSaving;
+    if (Date.now() - op.since > 5 * 60_000) { saverFailed(op.phase === 'cleared' ? '/clear 后未确认上下文下降，请手动检查队长' : '未收到存档确认或队长一直忙碌'); return; }
+    if (!idle) return;
+    if (op.phase === 'queued' && Date.now() - op.since >= 3000) {
+      saverBanner('正在存进度看板，等待「已存档」');
+      saverSend(op, M.ARCHIVE_PROMPT, 'archiving', false, (turn) => { op.turnId = turn?.id; });
+    } else if (op.phase === 'archived') {
+      saverBanner('看板已存档，正在发送 /clear');
+      saverSend(op, '/clear', 'clearing', true, () => { op.phase = 'cleared'; });
+    } else if (op.phase === 'cleared' && used !== null && used < op.used / 2) {
+      saverBanner('上下文已清空，正在重发队长提示词');
+      saverSend(op, M.instructions(host.platform, '读看板继续', state()?.legacyReceiptInjection === true), 'briefing', true, () => {
+        cancelTokenSaving();
+        host.showToast('队长已存看板并清空上下文，正在读看板继续');
+      });
+    }
+  }
+
+  // ---- manual clear: only 队长's model context starts over ----
   // Its agent restarts fresh and is briefed again. Work out in other columns,
   // unread receipts and questions carry over to the new context; the old
   // conversation stays saved under the old column id for `read --id`.
@@ -134,6 +248,7 @@
     if (!confirm(busy
       ? '队长现在正在回复（或停在确认提示上）。清空会打断它这一轮，这一轮没说完的不会再有。\n确定现在清空队长的模型上下文吗？' + kept
       : '只清空队长的模型上下文：队长重新启动，重新读一遍默认说明。' + kept)) return;
+    cancelTokenSaving();
     // receipts typed in but not answered yet go to the new context again
     const requeue = s.inflight;
     s.inflight = [];
@@ -413,7 +528,7 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
-    if (id === s.colId) { deliver(entry); pump(); return; }
+    if (id === s.colId) { tokenSaverTick(entry); if (!tokenSaving) deliver(entry); pump(); return; }
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
@@ -482,6 +597,7 @@
   function onTurnStarted(colId, turn) {
     const s = state();
     if (!s || colId !== s.colId) return;
+    if (tokenSaving && !(tokenSaving.phase === 'archiving' && turn.user === M.ARCHIVE_PROMPT)) cancelTokenSaving();
     s.inflight.forEach((p) => { if (!p.deliveryTurnId) p.deliveryTurnId = turn.id; });
     save();
   }
@@ -489,6 +605,10 @@
     const s = state();
     if (!s) return;
     if (colId === s.colId) {
+      if (tokenSaving?.phase === 'archiving' && turn.id === tokenSaving.turnId) {
+        if (!turn.interrupted && String(turn.reply || '').trim() === '已存档') { tokenSaving.phase = 'archived'; tokenSaving.since = Date.now(); }
+        else saverFailed('队长没有只回复「已存档」，未清空上下文');
+      }
       if (s.inflight.length || s.fresh) {
         s.inflight = s.inflight.filter((p) => p.deliveryTurnId !== turn.id);
         s.fresh = false;
@@ -716,7 +836,7 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, handle, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, handle, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),

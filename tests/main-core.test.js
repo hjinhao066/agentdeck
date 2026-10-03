@@ -4,6 +4,35 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const M = require('../main-core');
 
+test('context tokens come from an explicit used/total status, not percentages or session quotas', () => {
+  for (const [footer, used] of [
+    ['Context: 29% · 290k/1000k | Session: 8%', 290000],
+    ['Context: 150.5K / 1M', 150500], ['Context: 290,123/1,000,000', 290123],
+    ['Context: 0/1000k', 0], ['Context: 23% | Session: 290k/1000k', null],
+    ['Context: 23% │ Session: 290k/1000k', null], ['Context: 23% Session: 290k/1000k', null],
+    ['Context: 23%', null], ['Session: 290k/1000k', null], ['Context: 2M/1M', null],
+  ]) assert.equal(M.contextTokens(footer), used, footer);
+  assert.deepEqual(M.tokenSaverSettings(), { enabled: true, threshold: 150000 });
+  assert.deepEqual(M.tokenSaverSettings({ enabled: false, threshold: 250000 }), { enabled: false, threshold: 250000 });
+  for (const threshold of [0, -1, NaN, Infinity, '200000']) assert.equal(M.tokenSaverSettings({ threshold }).threshold, 150000);
+});
+
+test('model receipts and ledger cap each summary at 300 Unicode characters and five paths, preserving source receipts', () => {
+  const receipt = { summary: '结果😀'.repeat(150), files: Array.from({ length: 8 }, (_, i) => `/tmp/report-${i}.md`) };
+  const copy = structuredClone(receipt);
+  for (const text of [M.receiptsForModel([{ ...receipt, colId: 'c1', title: '报告' }]),
+    M.ledgerText([{ id: 'c1', title: '报告', state: 'done', receipt }])]) {
+    assert.ok(text.includes(Array.from(receipt.summary).slice(0, 300).join('')));
+    assert.ok(!text.includes(Array.from(receipt.summary).slice(0, 301).join('')));
+    assert.match(text, /其余见 read/);
+    assert.match(text, /report-4.md/);
+    assert.ok(!text.includes('report-5.md'));
+  }
+  assert.deepEqual(receipt, copy);
+  assert.ok(!M.receiptsForModel([{ summary: '字'.repeat(300), files: copy.files.slice(0, 5) }]).includes('其余见 read'));
+  assert.match(M.instructions(), /不读大文件正文，只看报告的结论段；查进度优先 peek/);
+});
+
 test('a written receipt is read back: summary, files, images, failure', () => {
   const reply = [
     '我改了登录接口。',

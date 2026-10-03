@@ -21,11 +21,13 @@ if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
 process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 let model = 'Fake';
+let contextUsed = 23000;
 function box() {
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
   process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
   const extra = process.env.AGENTDECK_TEST_LONG_STATUS ? ' | Total: 211.5M | Cost: $35.33 | Weekly: 13.0% | LastField: complete' : '';
-  process.stdout.write('\x1b[33mContext: 23%\x1b[0m | \x1b[31mSession: 26.0%\x1b[0m' + extra + '\n');
+  const context = process.argv.includes('--token-saver') ? `${contextUsed / 1000}k/1000k` : '23%';
+  process.stdout.write('\x1b[33mContext: ' + context + '\x1b[0m | \x1b[31mSession: 26.0%\x1b[0m' + extra + '\n');
   process.stdout.write('\x1b[36mModel: ' + model + ' | Weekly Reset: 16hr\x1b[0m\n');
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
   // Keep a recognizable provider footer after replies, like a real TUI. Narrow
@@ -41,11 +43,19 @@ function answer() {
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
   if (first.startsWith('/model ')) model = first.slice(7).trim();
+  if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
+  if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
   if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
   process.stdout.write('\x1b[2J\x1b[H');
   process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
   if (process.argv.includes('--interruptible') && /keep working|wait for quota/.test(first)) {
     process.stdout.write(first.includes('quota') ? "You've hit your limit · resets 5pm (America/Los_Angeles)\n" : '✻ Doing…\nPress up to edit queued messages\n');
+    box();
+    return;
+  }
+  if (process.argv.includes('--token-saver') && first.startsWith('把当前进度写进')) {
+    if (process.env.AGENTDECK_TEST_BOARD_FILE && !process.argv.includes('--archive-fail')) require('fs').writeFileSync(process.env.AGENTDECK_TEST_BOARD_FILE, '# Test board\nProgress archived\n');
+    process.stdout.write('\n⏺ ' + (process.argv.includes('--archive-fail') ? '存档失败' : '已存档') + '\n');
     box();
     return;
   }

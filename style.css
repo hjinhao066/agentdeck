@@ -347,6 +347,14 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
   background: var(--card);
   border-right: 1px solid var(--hairline);
 }
+.captain-token-saving {
+  display: flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  padding: 4px 8px 4px 14px; border-bottom: 1px solid var(--hairline);
+  background: var(--accent-soft); color: var(--text); font-size: 12px;
+}
+.captain-token-saving > span { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.captain-token-saving .icon-btn, #csClose { width: 32px; height: 32px; flex-shrink: 0; }
+.captain-token-saving .icon-btn:focus-visible, #csClose:focus-visible, #settingsBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .col-head {
   display: flex; align-items: center; gap: 2px;
   height: 40px; flex: 0 0 40px; padding: 0 6px 0 14px;

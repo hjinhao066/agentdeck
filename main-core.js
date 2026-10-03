@@ -17,6 +17,24 @@
   const MAX_FAILURE = 240;
   const MAX_FILES = 10;
   const MAX_PATH = 500;
+  const TOKEN_SAVER_DEFAULT = 150_000;
+  const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档';
+  function tokenSaverSettings(value) {
+    return { enabled: value?.enabled !== false, threshold: Number.isInteger(value?.threshold) && value.threshold > 0 ? value.threshold : TOKEN_SAVER_DEFAULT };
+  }
+  // Only pass the TUI footer here: conversation text can quote a status line.
+  function contextTokens(footer) {
+    const match = /\bContext\s*:[^\n|│:]*?([\d,]+(?:\.\d+)?)\s*([km]?)\s*\/\s*([\d,]+(?:\.\d+)?)\s*([km]?)(?![\w.])/i.exec(String(footer || ''));
+    if (!match) return null;
+    const amount = (n, unit) => Number(n.replace(/,/g, '')) * ({ k: 1000, m: 1000000 }[unit.toLowerCase()] || 1);
+    const used = amount(match[1], match[2]), total = amount(match[3], match[4]);
+    return total > 0 && used <= total ? Math.round(used) : null;
+  }
+  function modelReceipt(receipt) {
+    const summary = String(receipt.failed ? '没做成，' + receipt.failed : receipt.summary || '已停下，没有写回执').replace(/\s+/g, ' ').trim();
+    const chars = Array.from(summary), files = receipt.files || [];
+    return { summary: chars.slice(0, 300).join(''), files: files.slice(0, 5), more: chars.length > 300 || files.length > 5 };
+  }
   const STATUS = { plain: '未开始', working: '干活中', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
@@ -110,6 +128,7 @@
       `12. 做完的会话没有新指令 ${ARCHIVE_AFTER / 60_000} 分钟后会自动归档（终端关掉，对话保留）；以后用 tell 发给它会自动恢复。`,
       '13. 开工先跑 ledger，再看 ~/.agents/boards/ 里进行中的看板（每个项目一份 <项目名>.md：在做什么、谁在做、卡在哪、等用户拍板什么、最后更新时间）。以 ledger 和看板为准，不要凭记忆猜进度。派活、收回执、项目有进展或卡住时，顺手把对应看板里那几行改掉，并在「更新记录」加一行；还没有看板的新项目，按 ~/.agents/boards/README.md 的格式建一份。看板只写事实和文件路径，不写密钥、不贴长日志。',
       `14. 并发上限 ${MAX_ACTIVE}，按 swap 把控：一次要开好几个会话之前，在终端跑 sysctl vm.swapusage（Mac），free 剩不到 1GB 就少开，等有会话收工再开；上限始终是 ${MAX_ACTIVE} 个并发。Windows 没有这个命令，就按 ledger 里干活的会话数把控，宁可少开，绝不把宿主机内存跑崩。`,
+      '15. 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。回执超出摘要 300 字或 5 个文件路径的部分用 read 按需查，不要整段重读旧对话。',
       '',
       '可用的 agent。每件活可以选不同的 provider 和模型：用 new --command 写下面的完整启动命令，要换模型就改 --model 后面的名字。',
       ...PROVIDERS.map((p) => `   ${p}`),
@@ -384,8 +403,10 @@
     const lines = items.map((r) => {
       if (r.question) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 向你提问：${r.question}`;
       if (r.waiting) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 停在确认提示上：\n${r.waiting.split('\n').map((l) => '    ' + l).join('\n')}`;
-      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${r.failed ? '没做成，' + r.failed : r.summary || '已停下，没有写回执'}`];
-      if (r.files && r.files.length) parts.push(`  文件：${r.files.join('；')}`);
+      const compact = modelReceipt(r);
+      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${compact.summary}`];
+      if (compact.files.length) parts.push(`  文件：${compact.files.join('；')}`);
+      if (compact.more) parts.push('  其余见 read');
       return parts.join('\n');
     });
     return '【AgentDeck 新回执】\n' + lines.join('\n') + '\n\n';
@@ -474,8 +495,10 @@
     return rows.map((r) => {
       let line = `${r.id}  「${oneLine(r.title, 60)}」  ${statusLabel(r.state)}`;
       if (r.folder) line += `  文件夹:${oneLine(r.folder, 30)}`;
-      if (r.receipt) line += `\n    回执：${r.receipt.failed ? '没做成，' + r.receipt.failed : r.receipt.summary || '已停下，没有写回执'}` +
-        (r.receipt.files && r.receipt.files.length ? `\n    文件：${r.receipt.files.join('；')}` : '');
+      if (r.receipt) {
+        const compact = modelReceipt(r.receipt);
+        line += `\n    回执：${compact.summary}` + (compact.files.length ? `\n    文件：${compact.files.join('；')}` : '') + (compact.more ? '\n    其余见 read' : '');
+      }
       return line;
     }).join('\n');
   }
@@ -495,7 +518,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

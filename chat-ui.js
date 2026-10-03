@@ -1213,6 +1213,7 @@
     init, mountColumn, isChatMode, focusInput, setMode, toggleGlobalMode, onSubmitted, noteSent, sendPrompt,
     onTick, onExit, onColumnMouseDown, onColumnRemoved, onColumnArchived, deleteArchivedChat, onColumnIdChanged, onRender,
     focusSearch, reveal, lastTurnTs, artifactSources, readFooter,
+    hasDraft: (id) => { const v = views.get(id); return !!v && (!!v.ta.value || v.atts.length > 0); },
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
     addCard, updateCard, retireChat, turnsOf, captainArchives,

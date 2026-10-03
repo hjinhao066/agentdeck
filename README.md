@@ -176,6 +176,10 @@ again with the current provider, model and effort instructions.
   Receipt file fields accept absolute local paths only; CLI update notices and
   other footer text are ignored. Prompt submission waits for the paste redraw
   to settle before pressing Enter once, including in background sessions.
+  Every receipt sent to the Captain (background channel, legacy injection and
+  ledger) has at most **300 characters of summary and 5 file paths**. Overflow
+  says `其余见 read`; the worker's saved reply and local task card keep the source
+  receipt. Questions and confirmation prompts keep their existing formats.
 - `peek --id <session-id> [--lines 40]` reads live terminal output, with ANSI
   styling removed (1–1000 terminal rows). It reads the active screen and recent
   scrollback, even while someone is reading older output. It sends no input,
@@ -183,6 +187,37 @@ again with the current provider, model and effort instructions.
   Unlike `read`, it does not read saved chat replies.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
+
+### Automatic context saving (Claude Code Captain)
+
+Enabled by default at **150k tokens**. Open the sidebar's **settings icon** to
+change the threshold in k tokens or turn it off. The setting is saved locally.
+AgentDeck reads the live TUI status rows below the input box, such as
+`Context: … 290k/1000k`, including wrapped rows. A percentage alone, a missing
+status or a quoted line in a reply does not trigger it. Other agent providers
+are not sent Claude's `/clear` command.
+
+When usage is strictly above the threshold, the Captain is idle with quiet output,
+and both its chat composer (including attachments) and terminal input are empty:
+
+1. The Captain column's top line announces the process, with a cancellation icon.
+2. AgentDeck sends `把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档`.
+3. Only that turn's final reply `已存档` permits `/clear`. Failed or missing
+   acknowledgements leave the context intact; a stage times out after 5 minutes.
+4. Once the live usage drops below half the previous usage and the Captain is
+   idle again, AgentDeck resends its instructions with `读看板继续`.
+
+No terminal is restarted. The column, local conversation, workers, task cards and
+unread receipts stay in place. Every send rechecks the idle and user-input guards.
+New user messages cancel the remaining steps. The cancellation icon also stops
+the next steps, but cannot undo a command already being submitted. Cancellation
+or failure pauses automatic retries until usage falls back to the threshold
+(or the user saves new settings). If `/clear` does not reduce the reported usage,
+rebriefing waits and then pauses with a notice. This relies on Claude's status
+and acknowledgement; AgentDeck does not inspect or independently verify the board.
+
+The Captain's instructions also require: `不读大文件正文，只看报告的结论段；查进度优先 peek`.
+Use `read` only for details needed from a saved worker reply.
 
 The queue verification and command semantics are documented in
 [Captain control report](docs/captain-control-report.md).
