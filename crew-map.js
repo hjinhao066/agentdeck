@@ -8,7 +8,7 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, zoneGap: 88, fanY: 100, gapY: 80, pad: 40 };
+  const NODE = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40 };
   const DRAG_PX = 4;
   const FIT_MIN = 0.72;
   let host = null;
@@ -50,26 +50,21 @@
       return {
         id: c.id, title: host.columnLabel(c), alive: !!(entry && entry.alive), state: entry ? entry.state || 'plain' : 'plain',
         live: entry && entry.lastScreen ? host.activityLine(entry.lastScreen) : '',
-        provider: i.provider || '', model: i.shortModel || '', lastReceipt: c.lastReceipt || null, captainCrew: !!c.captainCrew,
+        provider: i.provider || '', model: i.shortModel || '', lastReceipt: c.lastReceipt || null, captainCrew: !!c.captainCrew, project: c.project, reviews: c.reviews,
       };
     });
     const archived = (host.config.archived || []).map((a) => {
       const i = info(a);
-      return { id: a.id, title: host.columnLabel(a), provider: i.provider || '', model: i.shortModel || '', lastReceipt: a.lastReceipt || null, captainCrew: !!a.captainCrew, archivedAt: a.archivedAt || 0 };
+      return { id: a.id, title: host.columnLabel(a), provider: i.provider || '', model: i.shortModel || '', lastReceipt: a.lastReceipt || null, captainCrew: !!a.captainCrew, project: a.project, reviews: a.reviews, archivedAt: a.archivedAt || 0 };
     });
     const tasks = (s && s.tasks) || [];
-    // what each session was told, for spotting review work (its own prompts only)
-    const prompts = {};
-    new Set(tasks.map((t) => t.colId).filter(Boolean)).forEach((id) => {
-      prompts[id] = host.turnsOf(id).filter((t) => t.kind !== 'task').map((t) => t.user || '').join('\n').slice(0, 40000);
-    });
     let captain = null;
     if (main) {
       const entry = terms.get(main.id);
       const i = info(main);
       captain = { id: main.id, title: host.columnLabel(main), alive: !!(entry && entry.alive), state: entry ? entry.state : 'plain', provider: i.provider || '', model: i.shortModel || '' };
     }
-    return C.buildCrewMap({ captain, columns, archived, tasks, prompts, showArchived });
+    return C.buildCrewMap({ captain, columns, archived, tasks, showArchived });
   }
 
   function badge(node) {
@@ -152,16 +147,29 @@
       svg('path', { class: 'cm-edge ' + r.cls, d: rounded(r.points), 'marker-end': `url(#${MARK[type === 'return' ? r.kind : type]})`, 'data-from': r.from, 'data-to': r.to });
       if (type === 'return') chevrons(r.points, r.cls);
     }));
-    // finished work sits on its own, on a quiet panel
     zonesEl.innerHTML = '';
-    const done = [...lay.nodes.values()].filter((b) => b.zone === 2).concat(lay.fold ? [lay.fold] : []);
-    if (done.length && done.length < lay.nodes.size + (lay.fold ? 1 : 0)) {
-      const x0 = Math.min(...done.map((b) => b.x)) - 18, y0 = Math.min(...done.map((b) => b.y)) - 18;
-      const x1 = Math.max(...done.map((b) => b.x + b.w)) + 18, y1 = Math.max(...done.map((b) => b.y + b.h)) + 18;
-      const z = el('div', 'cm-zone-done');
-      Object.assign(z.style, { left: x0 + 'px', top: y0 + 'px', width: (x1 - x0) + 'px', height: (y1 - y0) + 'px' });
-      zonesEl.appendChild(z);
-    }
+    lay.groups.forEach((g) => {
+      const group = el('section', 'cm-project' + (g.collapsed ? ' collapsed' : ''));
+      group.dataset.project = g.key;
+      group.setAttribute('aria-label', g.name);
+      place(group, g);
+      const head = el('div', 'cm-project-head');
+      const toggle = el('button', 'cm-project-toggle');
+      toggle.type = 'button';
+      const action = g.collapsed ? '展开' : '折叠';
+      toggle.title = `${action}项目：${g.name}`;
+      toggle.setAttribute('aria-label', toggle.title);
+      toggle.setAttribute('aria-expanded', String(!g.collapsed));
+      toggle.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="${g.collapsed ? 'm9 5 7 7-7 7' : 'm5 9 7 7 7-7'}"/></svg>`;
+      toggle.addEventListener('click', () => {
+        saved().collapsedProjects = { ...saved().collapsedProjects, [g.key]: !g.collapsed };
+        host.save();
+        render();
+      });
+      head.append(toggle, el('span', 'cm-project-name', g.name), el('span', 'cm-project-summary', C.summaryLine(g.counts)));
+      group.appendChild(head);
+      zonesEl.appendChild(group);
+    });
   }
 
   // ---- canvas view ----
@@ -170,14 +178,11 @@
     zoomLabel.textContent = Math.round(view.scale * 100) + '%';
   }
   function saveView() { saved().view = { ...view }; host.save(); }
-  // Fit the open work (排队 / 待补充 / 干活中) into view; finished work, set
-  // apart on the right, is a pan away when there is no room for it.
+  // Fit the project groups; wider maps still pan so cards remain readable.
   function fit() {
     if (!lay) return;
     const w = vpEl.clientWidth, h = vpEl.clientHeight;
-    const span = lay.openSpan && lay.width * Math.max(FIT_MIN, Math.min(1, (w - 32) / lay.width)) > w
-      ? [Math.min(lay.openSpan[0], lay.captain.x) - 24, Math.max(lay.openSpan[1], lay.captain.x + lay.captain.w) + 24]
-      : [0, lay.width];
+    const span = [0, lay.width];
     const sw = span[1] - span[0];
     // never so small the cards stop being readable: wider maps pan instead
     const scale = Math.max(FIT_MIN, Math.min(1, (w - 32) / sw, (h - 24) / lay.height));
@@ -202,7 +207,7 @@
     n.setPointerCapture(e.pointerId);
   }
   function startPan(e) {
-    if (e.button !== 0 || e.target.closest('.cm-node, .cm-fold, .cm-controls')) return;
+    if (e.button !== 0 || e.target.closest('.cm-node, .cm-fold, .cm-controls, .cm-project-toggle')) return;
     drag = { kind: 'pan', sx: e.clientX, sy: e.clientY, x0: view.x, y0: view.y, moved: false, id: e.pointerId };
     vpEl.setPointerCapture(e.pointerId);
     vpEl.classList.add('panning');
@@ -218,8 +223,7 @@
       return;
     }
     drag.n.classList.add('dragging');
-    drag.box.x = Math.round(drag.x0 + dx / view.scale);
-    drag.box.y = Math.round(drag.y0 + dy / view.scale);
+    Object.assign(drag.box, C.constrainPosition(lay, drag.box, { x: Math.round(drag.x0 + dx / view.scale), y: Math.round(drag.y0 + dy / view.scale) }));
     place(drag.n, drag.box);
     drawEdges();
   }
@@ -261,12 +265,12 @@
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; lay = null; return; }
-    lay = C.applyPositions(C.layout(map, { ...NODE, fold: map.hiddenArchived > 0 }), saved().positions, map.captain.id);
+    lay = C.applyPositions(C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects }), saved().positions, map.captain.id);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';
     drawEdges();
     nodesEl.appendChild(card(map.captain, lay.captain));
-    map.nodes.forEach((n) => nodesEl.appendChild(card(n, lay.nodes.get(n.id))));
+    map.nodes.forEach((n) => { if (lay.nodes.has(n.id)) nodesEl.appendChild(card(n, lay.nodes.get(n.id))); });
     if (lay.fold) {
       const fold = el('button', 'cm-fold', `+ ${map.hiddenArchived} 个已归档`);
       fold.type = 'button';

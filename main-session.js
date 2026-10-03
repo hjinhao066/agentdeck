@@ -187,6 +187,7 @@
       id: 'k' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36),
       colId: col ? col.id : '', title: String(title || host.columnLabel(col)).slice(0, 120), gen: s.gen,
       status: col ? 'queued' : 'waiting', sentAt: Date.now(), turnId: '', receipt: null,
+      project: col ? col.project || '' : '', reviews: col ? col.reviews || [] : [],
     };
     s.tasks.push(task);
     if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length - MAX_TASKS);
@@ -260,13 +261,13 @@
   // ---- background sessions: at most M.MAX_ACTIVE at work, the rest wait ----
   const crewIds = () => new Set(host.columns().filter((c) => c.captainCrew && !c.isMain).map((c) => c.id));
   const freeSlots = () => M.MAX_ACTIVE - M.activeCrew(state().tasks, crewIds()).size;
-  function openSession(title, cmd, cwd, requestId, text, waiting) {
-    const col = host.createSession({ title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
+  function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
+    const col = host.createSession({ title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true, ...metadata }, true);
     dispatch(col, text, title, waiting);
     return col;
   }
   // A queued request keeps its text in config.json; a long one goes to a file first.
-  async function enqueue(title, cmd, cwd, requestId, text) {
+  async function enqueue(title, cmd, cwd, requestId, text, metadata) {
     const s = state();
     let body = text;
     if (body.length > 8000) {
@@ -276,7 +277,8 @@
       if (state() !== s) throw new Error('队长已经关掉了，这件活没有排上队。');   // closed while the file was written
     }
     const task = addTask(null, title);
-    s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body });
+    Object.assign(task, metadata);
+    s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, ...metadata });
     save();
   }
   // Start waiting work as slots free up, oldest first.
@@ -287,7 +289,7 @@
     while (free-- > 0 && s.waitlist.length) {
       const w = s.waitlist.shift();
       const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
-      if (task) openSession(w.title, w.cmd, w.cwd, w.requestId, w.task, task);
+      if (task) openSession(w.title, w.cmd, w.cwd, w.requestId, w.task, task, { project: w.project || '', reviews: w.reviews || [] });
     }
     save();
   }
@@ -530,6 +532,7 @@
       return {
         id: c.id, title: host.columnLabel(c), state: entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain',
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
+        project: c.project || '', reviews: c.reviews || [],
       };
     });
   }
@@ -615,6 +618,14 @@
         if (!title || !task) throw new Error('new 需要 --title 和 --task。');
         const existing = host.columns().find((c) => c.createdByRequestId === message.id);
         if (existing) return { done: true, result: `已开新会话 ${existing.id}「${host.columnLabel(existing)}」。` };
+        const project = window.BoardCore.cleanText(message.project, 120).replace(/\s+/g, ' ');
+        if (message.reviews !== undefined && (!Array.isArray(message.reviews) || !message.reviews.every((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(id)))) throw new Error('--reviews 需要会话 id 列表。');
+        const reviews = [...new Set(message.reviews || [])];
+        const sessions = [...host.columns(), ...(host.config.archived || [])];
+        for (const id of reviews) {
+          if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
+        }
+        const metadata = { project, reviews };
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
@@ -626,10 +637,10 @@
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
         // past the limit (or behind work already waiting): queue it, oldest first
         if (s.waitlist.length || freeSlots() <= 0) {
-          await enqueue(title, cmd, cwd, message.id, task);
+          await enqueue(title, cmd, cwd, message.id, task, metadata);
           return { done: true, result: `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。` };
         }
-        const col = openSession(title, cmd, cwd, message.id, task);
+        const col = openSession(title, cmd, cwd, message.id, task, undefined, metadata);
         return { done: true, result: `已开新会话 ${col.id}「${title}」，任务会在它准备好后发过去。` };
       }
       case 'main-tell': {

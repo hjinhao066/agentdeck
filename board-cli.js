@@ -91,7 +91,7 @@ function usage() {
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
-    '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|cursor|grok | --command "launch"]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--cwd path] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
     '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
@@ -197,8 +197,12 @@ async function main() {
     const title = String(args.title || '').trim();
     const task = String(args.task || args._.slice(1).join(' ')).trim();
     if (!title || !task) fail('new requires --title and --task.');
+    if (args.project !== undefined && (typeof args.project !== 'string' || !args.project.trim())) fail('new --project requires a project name.');
+    if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
     const response = await request({
       action: 'main-new', title, task,
+      project: typeof args.project === 'string' ? args.project.trim() : '',
+      reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],
       agent: typeof args.agent === 'string' ? args.agent : '',
       command: typeof args.command === 'string' ? args.command : '',
       cwd: typeof args.cwd === 'string' ? args.cwd : '',

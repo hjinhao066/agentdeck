@@ -18,7 +18,7 @@ test.beforeAll(async () => {
     theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [
       { id: 'cap', title: '队长', cmd: FAKE, cwd: profile, width: 460, role: 'manual', isMain: true },
-      col('c2001', '实现登录接口'), col('c2002', '写注册接口'), col('c2003', '代码审查'), col('c2004', '迁移数据'),
+      col('c2001', '实现登录接口'), col('c2002', '写注册接口'), col('c2003', '代码审查', { reviews: ['c2001', 'c2002'] }), col('c2004', '迁移数据'),
     ],
     archived: [{ ...col('c1999', '旧活'), archivedAt: now - 3600_000 }],
     mainSession: {

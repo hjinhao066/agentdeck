@@ -368,3 +368,15 @@ test('quota wait and Claude queued-message chrome are not completion', () => {
   assert.equal(M.activeCrew(tasks, new Set(['a'])).size, 1);
   assert.equal(M.archivable({ tasks }, 'a', 0, Date.now()), false);
 });
+
+test('Captain explains one-level projects, declared review targets and provider sub-agent defaults', () => {
+  const text = M.instructions();
+  assert.match(text, /同一个 --project/);
+  assert.match(text, /--reviews 会话id\[,会话id\]/);
+  assert.match(text, /不层层外包/);
+  assert.match(text, /Claude 会话默认不要自己开 Claude 子 agent/);
+  assert.match(text, /Codex\/Gemini 会话可以开子 agent/);
+  const ledger = M.ledgerText([{ id: 'r', title: 'Review', state: 'done', project: '网站', reviews: ['a', 'b'] }]);
+  assert.match(ledger, /项目:网站/);
+  assert.match(ledger, /审查:a,b/);
+});

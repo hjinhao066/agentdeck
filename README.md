@@ -90,6 +90,11 @@ again with the current provider, model and effort instructions.
   receipts | answer | peek | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
   capability token those commands need; the columns it drives get none.
+- Use `new --project "项目名"` to group sessions on the terminal architecture
+  map and `--reviews id1,id2` to declare exactly which sessions a reviewer checks.
+  One Captain directly assigns work, workers sit above reviewers, and completed
+  projects fold into a summary. Project chevrons save your fold/expand choice.
+  These remain real sessions that you can open and speak to directly.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
   permissions) unless it picks another with `--agent claude|agy|cursor|grok|codex` or a full
   `--command`. Its instructions list the providers and the models their CLIs report
