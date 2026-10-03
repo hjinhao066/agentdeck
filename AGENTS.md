@@ -68,7 +68,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   replay the saved output; the startup prune must keep archived ids.
 - Archiving ends a terminal, so a session that is working, waiting on an answer or
   printing output is never archived, automatically or by click, and never asks first
-  (`archiveColumn` shows a notice and stops). Work that cannot go in because the
+  (`archiveColumn` shows a notice and stops). The Captain's explicit capability-checked
+  `archive --id` command can end and archive a busy worker without confirmation;
+  `stop --id` only sends Esc and cancels unsent supplements. Quota waits stay open,
+  hold their slot and block automatic delivery. Work that cannot go in because the
   session sits on a startup dialog is reported to the 队长 once, never typed into it.
 - Schedule runs only while the app is open, never fires overdue runs late at
   launch (reported as missed), and sends through the same path as the composer.

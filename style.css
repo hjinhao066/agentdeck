@@ -402,6 +402,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .dot.plain,   .cn-dot.plain,   .cp-agent-dot.plain   { background: var(--st-plain); }
 .dot.working, .cn-dot.working, .cp-agent-dot.working { background: var(--st-working); }
 .dot.input,   .cn-dot.input,   .cp-agent-dot.input   { background: var(--st-input); }
+.dot.quota, .cn-dot.quota, .cp-agent-dot.quota { background: var(--st-input); }
 .dot.done,    .cn-dot.done,    .cp-agent-dot.done    { background: var(--st-done); }
 .dot.exited,  .cn-dot.exited,  .cp-agent-dot.exited  { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-exited); }
 /* The pulse lives on a ::after halo animating transform/opacity only, so it
@@ -1445,7 +1446,7 @@ body.linking-board .board-port.out::before {
 }
 .task-card.st-working, .task-card.st-queued { border-left-color: var(--st-working); }
 .task-card.st-waiting { border-left-color: var(--st-plain); }
-.task-card.st-input { border-left-color: var(--st-input); }
+.task-card.st-input, .task-card.st-quota { border-left-color: var(--st-input); }
 .task-card.st-done { border-left-color: var(--st-done); }
 .task-card.st-failed { border-left-color: var(--st-input); }
 .task-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -1457,7 +1458,7 @@ body.linking-board .board-port.out::before {
 .task-title:hover:not(:disabled) { color: var(--accent); }
 .task-title:disabled { cursor: default; color: var(--muted); }
 .task-status { flex: 0 0 auto; font-size: 11.5px; color: var(--muted); }
-.st-input .task-status, .st-failed .task-status { color: var(--st-input); }
+.st-input .task-status, .st-quota .task-status, .st-failed .task-status { color: var(--st-input); }
 .st-done .task-status { color: var(--st-done); }
 .st-working .task-status, .st-queued .task-status { color: #d9a400; }
 .task-summary { color: var(--text); white-space: pre-wrap; word-break: break-word; }

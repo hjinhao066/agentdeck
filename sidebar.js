@@ -232,19 +232,20 @@
   // 「3 干活中 · 1 停在确认 · 2 完成 · 1 排队」, from the 1.5s status loop.
   function refreshCrew() {
     if (!crewHead) return;
-    const n = { working: 0, input: 0, done: 0 };
+    const n = { working: 0, quota: 0, input: 0, done: 0 };
     crewHead.ids.forEach((id) => {
       const st = host.terms.get(id)?.state;
       if (n[st] !== undefined) n[st]++;
     });
     const waiting = waitlist().length;
+    const supplement = (window.MainSession.state()?.tasks || []).filter((t) => t.status === 'queued' && crewHead.ids.includes(t.colId)).length;
     // an unfolded list follows the work: re-sort when something starts or finishes
     // (not in the middle of a drag or a rename)
     if (crewHead.open && !document.body.classList.contains('reordering') && !listEl.querySelector('[contenteditable="true"]')) {
       const cols = crewHead.ids.map((id) => host.columns().find((c) => c.id === id)).filter(Boolean);
       if (orderKey(crewOrder(cols)) !== crewHead.shown) { render(); return; }
     }
-    const text = [n.working && `${n.working} 干活中`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, waiting && `${waiting} 排队`]
+    const text = [n.working && `${n.working} 干活中`, n.quota && `${n.quota} 额度用尽/等待`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, supplement && `${supplement} 待补充`, waiting && `${waiting} 排队`]
       .filter(Boolean).join(' · ') || `${crewHead.ids.length} 个`;
     if (crewHead.counts.textContent !== text) crewHead.counts.textContent = text;
   }

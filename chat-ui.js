@@ -705,6 +705,7 @@
     if (chatMode) {
       v.stop.hidden = entry.state !== 'working';
       v.agentDot.className = 'cp-agent-dot ' + (entry.alive ? entry.state || 'plain' : 'exited');
+      v.agentDot.title = window.MainCore.statusLabel(entry.alive ? entry.state : 'exited');
       renderFooter(v, entry);
       setAttention(v, id, entry.state === 'input' ? text : null);
       const col = columnById(id);
@@ -722,7 +723,7 @@
     if (!open) return;
     if (v.live && chatMode) v.live.textContent = entry.state === 'working' ? host.lastActivityLine(text) : '';
     if (!entry.alive) { finalizeTurn(id); return; }
-    if (entry.state === 'working' || entry.state === 'input') return;
+    if (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(text)) return;
     const quiet = Date.now() - (entry.lastOutputAt || 0);
     const sawOutput = (entry.lastOutputAt || 0) - open.startedAt > 600;
     if ((entry.state === 'done' && quiet >= 2000 && sawOutput) || quiet >= 6000) finalizeTurn(id);
@@ -785,8 +786,10 @@
   const LONG_PROMPT = 8000;
   async function sendPrompt(col, prompt, atts, opts) {
     const o = opts || {};
+    if (o.cancelled && o.cancelled()) return false;
     const entry = host.terms.get(col.id);
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
+    if (o.requireIdle && (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen))) return false;
     if (prompt && prompt.length > LONG_PROMPT) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
     // guardUserInput (receipts, 队长's work for others): never into an input box
@@ -814,9 +817,10 @@
       const pastedAt = Date.now();
       do {
         await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
-        if (host.terms.get(col.id) !== entry || !entry.alive) return false;
+        if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
       } while (bracketed && (Date.now() - pastedAt < 500 || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
       window.deck.ptyInput(col.id, '\r');
+      entry.state = 'working';
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();
       entry.notificationState = { state: 'working', notified: null, since: null };
