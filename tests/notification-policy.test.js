@@ -36,3 +36,9 @@ test('input notifies immediately, replaces done, and retracts when work resumes'
   assert.equal(advance(result.next, { state: 'working', hasWorked: true, now: 3000 }).action, 'cancel');
   assert.equal(advance(result.next, { state: 'exited', now: 3000 }).action, 'cancel');
 });
+
+test('quota waiting cancels completion and never announces a stop', () => {
+  const waiting = advance({ state: 'done', notified: 'done' }, { state: 'quota', hasWorked: true, now: 0 });
+  assert.equal(waiting.action, 'cancel');
+  assert.equal(advance(waiting.next, { state: 'quota', hasWorked: true, now: 600000 }).action, null);
+});

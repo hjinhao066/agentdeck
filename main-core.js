@@ -17,7 +17,7 @@
   const MAX_FAILURE = 240;
   const MAX_FILES = 10;
   const MAX_PATH = 500;
-  const STATUS = { plain: '未开始', working: '干活中', input: '等你回复', done: '已完成', exited: '已退出' };
+  const STATUS = { plain: '未开始', working: '干活中', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
   const oneLine = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max);
@@ -82,7 +82,9 @@
       '2. 只用下面这些终端命令和别的会话打交道：',
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
-      `   ${cli} tell --to 会话id --message "指令"   把指令发进已有的会话`,
+      `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   --replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
+      `   ${cli} stop --id 会话id                 发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
+      `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
       `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话，只在用户追问细节时用；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
       `   ${cli} read --id captain-history --find "关键词" [--turns 3]   跨全部清空前的队长记录搜索，按需读取简短结果`,
       `   ${cli} receipts                        取回还没看过的回执`,
@@ -125,7 +127,7 @@
     }
     return lines.join('\n');
   }
-  const TASK_STATUS = { waiting: '排队等空位', queued: '待补充', working: '干活中', input: '停在确认', asking: '在问你' };
+  const TASK_STATUS = { waiting: '排队等空位', queued: '待补充', working: '干活中', quota: '额度用尽/等待', input: '停在确认', asking: '在问你' };
 
   // A launch command's words, quotes kept; the program's bare name.
   const WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
@@ -223,7 +225,7 @@
 
   // Background sessions with work still out: the latest card for the column
   // is not finished (a question waits on 队长 too). Each holds a slot.
-  const OPEN = ['queued', 'working', 'input', 'asking'];
+  const OPEN = ['queued', 'working', 'quota', 'input', 'asking'];
   function latestTasks(tasks) {
     const latest = new Map();
     (Array.isArray(tasks) ? tasks : []).forEach((t) => { if (t && t.colId) latest.set(t.colId, t); });
@@ -239,7 +241,7 @@
   // items: [{ id, state (terminal), lastActive (last turn time) }]
   function crewOrder(items, tasks) {
     const latest = latestTasks(tasks);
-    const busy = (it) => it.state === 'working' || it.state === 'input' || OPEN.includes(latest.get(it.id)?.status);
+    const busy = (it) => it.state === 'working' || it.state === 'input' || it.state === 'quota' || OPEN.includes(latest.get(it.id)?.status);
     const sent = (it) => latest.get(it.id)?.sentAt || 0;
     const finished = (it) => Math.max(latest.get(it.id)?.doneAt || 0, it.lastActive || 0);
     return {
@@ -288,16 +290,31 @@
   function parseReceipt(reply, findFiles) {
     // a reply is reflowed for the bubble, which can glue 摘要 and 文件 onto
     // one line: put every field label back at the start of its own line
-    const text = String(reply || '').replace(/\r\n?/g, '\n')
-      .replace(/([^\n])\s*(摘要|文件|失败)\s*[:：]/g, '$1\n$2：');
-    const at = Math.max(text.lastIndexOf('【回执】'), text.lastIndexOf('[回执]'));
-    const out = { summary: '', files: [], images: [], failed: '', question: '', explicit: at >= 0 };
-    // 【提问】 after the last 【回执】 (or with none): the worker is waiting on 队长
-    const ask = Math.max(text.lastIndexOf('【提问】'), text.lastIndexOf('[提问]'));
-    if (ask > at) {
-      const q = /(?:问题|question)\s*[:：]\s*([\s\S]*)$/i.exec(text.slice(ask));
-      out.question = oneLine(q ? q[1] : text.slice(ask + 4), MAX_SUMMARY);
-      out.explicit = true;
+    const text = afterContract(reply).replace(/\r\n?/g, '\n')
+      .replace(/([^\n])\s*(摘要|文件|失败|问题)\s*[:：]/g, '$1\n$2：');
+    // Only a block starting on its own line outside a fenced example can be
+    // the final receipt. Inline mentions and the contract's placeholders aren't.
+    let marker = null;
+    let fenced = false;
+    let offset = 0;
+    for (const line of text.split('\n')) {
+      if (/^\s*(```|~~~)/.test(line)) fenced = !fenced;
+      const m = !fenced && /^\s*(?:⏺\s*)?(【(回执|提问)】|\[(回执|提问)\])\s*$/.exec(line);
+      if (m) marker = { at: offset, kind: m[2] || m[3] };
+      offset += line.length + 1;
+    }
+    const at = marker && marker.kind === '回执' ? marker.at : -1;
+    const out = { summary: '', files: [], images: [], failed: '', question: '', explicit: false };
+    if (marker && marker.kind === '提问') {
+      const q = /^\s*(?:问题|question)\s*[:：]\s*([\s\S]*)$/i.exec(text.slice(marker.at).split('\n').slice(1).join('\n'));
+      const body = q ? q[1].trim() : '';
+      const compact = body.replace(/\s/g, '');
+      const finalQuestion = body.split('\n').slice(1).every((line) => /^[ \t]+\S/.test(line));
+      if (body && finalQuestion && !compact.startsWith('一两句话') && !/[【\[](?:回执|提问)[】\]]|```|~~~/.test(body)) {
+        out.question = oneLine(body, MAX_SUMMARY);
+        out.explicit = true;
+      }
+      return out;
     }
     const addFile = (p) => {
       const f = String(p || '').trim().replace(/^[`'"]+|[`'"，。,;；]+$/g, '').slice(0, MAX_PATH);
@@ -306,6 +323,7 @@
       if (!/^(?:\/(?!\/)|~[\\/]|[A-Za-z]:[\\/]|\\\\)/.test(f) || out.files.includes(f) || out.files.length >= MAX_FILES) return;
       out.files.push(f);
     };
+    let finalBlock = true;
     if (at >= 0) {
       let field = '';
       for (const raw of text.slice(at).split('\n').slice(1)) {
@@ -318,7 +336,11 @@
           else out[field] = (out[field] ? out[field] + ' ' : '') + m[2];
           continue;
         }
-        if (field === 'files') addFile(line.replace(/^[-*•]\s*/, ''));
+        if (field === 'files') {
+          const path = line.replace(/^[-*•]\s*/, '');
+          if (!/^(?:[`'"]?(?:~?[\\/]|[A-Za-z]:[\\/])|无$|没有文件$|Update available|Run npm install|[✻✽]|https?:\/\/)/i.test(path)) finalBlock = false;
+          addFile(path);
+        }
         else if (field) out[field] += ' ' + line;
       }
     } else {
@@ -328,10 +350,11 @@
     }
     out.summary = oneLine(out.summary, MAX_SUMMARY);
     out.failed = oneLine(out.failed, MAX_FAILURE);
-    // the contract's own placeholder lines, if the prompt echo slipped through
-    if (out.summary === '一到三句话说清结果') { out.summary = ''; out.explicit = false; }
-    if (out.question === '一两句话说清要队长决定什么') out.question = '';
-    if (/^没做成时写/.test(out.failed)) out.failed = '';
+    // Truncated/reflowed copies of the template must not become real receipts.
+    const placeholder = /^一到三句话|^没做成时写/.test(out.summary.replace(/\s/g, '')) || /^没做成时写/.test(out.failed.replace(/\s/g, ''));
+    out.explicit = at >= 0 && !!out.summary && !placeholder && finalBlock && !/```|~~~/.test(text.slice(at));
+    if (at >= 0 && !out.explicit) out.failed = '';
+    if (placeholder) { out.summary = ''; out.failed = ''; out.files = []; }
     out.images = out.files.filter((f) => IMAGE.test(f.replace(/:\d+(?::\d+)?$/, '')));
     return out;
   }
@@ -384,7 +407,24 @@
     const text = String(screen || '');
     let from = 0;
     for (let m; (m = CONTRACT_END.exec(text.slice(from)));) from += m.index + m[0].length;
-    return from ? text.slice(from) : text;
+    const rest = from ? text.slice(from) : text;
+    // The end may have scrolled/wrapped out of the captured screen: an
+    // unfinished contract echo has no final answer below it yet.
+    return /AgentDeck\s*约定/.test(rest) ? '' : rest;
+  }
+
+  function terminalActivity(screen) {
+    const lines = String(screen || '').split('\n').slice(-20);
+    let quota = -1, resumed = -1, working = -1, queued = false;
+    lines.forEach((line, i) => {
+      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
+      if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
+      if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
+      if (/press up to edit queued messages/i.test(line)) queued = true;
+    });
+    if (quota > resumed && quota > working) return 'quota';
+    if (working >= 0 || queued) return 'working';
+    return '';
   }
 
   function statusLabel(state) { return STATUS[state] || STATUS.plain; }
@@ -436,7 +476,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract,
+    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

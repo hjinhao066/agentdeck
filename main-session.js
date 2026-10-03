@@ -18,6 +18,7 @@
   // a task at once; without one the column must stay quiet this long first.
   const STOP_QUIET = 3 * 60_000;
   const SCREEN_QUIET = 4_000;      // a receipt on the screen counts once the column has stopped printing
+  const dispatches = new Map();  // one delivery loop per session; additions merge until submission
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -198,18 +199,49 @@
       Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
       update(task);
     }
-    host.sendWhenReady(col, text, {
-      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, timeout: 30 * 60_000,
+    let batch = dispatches.get(col.id);
+    if (batch && batch.items.every((i) => i.task.status !== 'queued')) { dispatches.delete(col.id); batch = null; }
+    if (batch && !batch.sending) { batch.items.push({ task, text }); return task; }
+    batch = { items: [{ task, text }], sending: false, cancelled: false };
+    dispatches.set(col.id, batch);
+    let sentItems = [];
+    host.sendWhenReady(col, () => {
+      batch.sending = true;
+      sentItems = batch.items.filter((i) => i.task.status === 'queued');
+      return sentItems.map((i) => i.text).join('\n\n');
+    }, {
+      cancelled: () => batch.cancelled || batch.items.every((i) => i.task.status === 'stopped' || i.task.status === 'failed'),
+      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000,
       onSent: (turn) => {
-        supersede(task);
-        task.status = 'working';
-        task.turnId = turn ? turn.id : '';
-        task.startedAt = Date.now();
-        update(task);
+        if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
+        if (batch.cancelled || sentItems.every((i) => i.task.status === 'stopped' || i.task.status === 'failed')) return;
+        const last = sentItems.at(-1)?.task;
+        if (!last) return;
+        supersede(last);
+        sentItems.forEach(({ task: t }) => {
+          t.status = t === last ? 'working' : 'done';
+          if (t === last) { t.turnId = turn ? turn.id : ''; t.startedAt = Date.now(); }
+          else { t.doneAt = Date.now(); t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], images: [], failed: '', explicit: true }; }
+          update(t);
+        });
       },
-      onGiveUp: () => settle(task, { summary: '', files: [], images: [], failed: '30 分钟内一直发不出去：那一列的 agent 一直在忙或没有运行', explicit: true }),
+      onGiveUp: () => {
+        if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
+        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: '30 分钟内一直发不出去：那一列的 agent 一直在忙或没有运行', explicit: true }));
+      },
+      onDeferred: () => { batch.sending = false; },
     });
     return task;
+  }
+  function cancelSupplement(colId) {
+    const batch = dispatches.get(colId);
+    if (batch) { batch.cancelled = true; dispatches.delete(colId); }
+    state().tasks.forEach((t) => {
+      if (t.colId !== colId || t.status !== 'queued') return;
+      t.status = 'stopped'; t.doneAt = Date.now();
+      t.receipt = { summary: '队长已取消这条尚未送达的补充指令。', files: [], images: [], failed: '', explicit: true };
+      update(t);
+    });
   }
   // A new instruction reached a column whose earlier card never got a receipt
   // (it carried on into the new work): close that card quietly. A receipt now
@@ -217,7 +249,7 @@
   function supersede(task) {
     const s = state();
     s.tasks.forEach((t) => {
-      if (t === task || t.colId !== task.colId || !['working', 'input'].includes(t.status)) return;
+      if (t === task || t.colId !== task.colId || !['working', 'quota', 'input'].includes(t.status)) return;
       t.receipt = { summary: '后来又给这个会话发了新指令，结果看后面的卡片。', files: [], images: [], failed: '', explicit: true };
       t.status = 'done';
       t.doneAt = Date.now();
@@ -263,7 +295,7 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (entry && entry.alive && (entry.state === 'working' || entry.state === 'input')) return;
+    if (entry && entry.alive && (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input')) return;
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER)) host.archiveColumn(col, { quiet: true });
@@ -327,7 +359,7 @@
     closeOrphans();
     if (!s || !s.pending.length) { blockedSince = 0; return; }
     if (delivering || !col || !col.cmd || !entry.alive || entry.sendingPrompt || briefing === col.id) return;
-    if (entry.state === 'working' || entry.state === 'input') return;
+    if (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input' || M.terminalActivity(entry.lastScreen)) return;
     if (Date.now() - (entry.lastOutputAt || 0) < 1500) return;   // let it settle first
     // Never through a box the user is typing in: Enter would send their half-written message too
     if (host.userComposing(id)) { holdBack(); return; }
@@ -384,7 +416,7 @@
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
-      if (task.colId !== id || !['queued', 'working', 'input'].includes(task.status)) continue;
+      if (task.colId !== id || !['queued', 'working', 'quota', 'input'].includes(task.status)) continue;
       if (!entry.alive) { settle(task, { summary: '', files: [], images: [], failed: '这个会话的终端已经退出', explicit: true }); continue; }
       if (task.status === 'queued') {
         // Not delivered yet and the session is stopped on a dialog (Cursor asks "Do you
@@ -397,6 +429,13 @@
         } else if (entry.state !== 'input' && task.blockedAsked) task.blockedAsked = false;
         continue;
       }
+      const activity = M.terminalActivity(entry.lastScreen);
+      if (entry.state === 'quota' || activity === 'quota') {
+        if (task.status !== 'quota') { task.status = 'quota'; update(task); }
+        task.idleSince = 0;
+        continue;
+      }
+      if (task.status === 'quota') { task.status = 'working'; update(task); }
       if (entry.state === 'input') {
         // just answered: the old prompt can still be on screen for a moment
         if (task.status === 'input' || (task.answeredAt && Date.now() - task.answeredAt < 5000)) continue;
@@ -408,7 +447,7 @@
       }
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
-      if (entry.state === 'working') { task.idleSince = 0; continue; }
+      if (entry.state === 'working' || activity === 'working') { task.idleSince = 0; continue; }
       // The reply normally arrives through the chat turn (onTurnDone). That
       // turn can end early (a pause, a slow start) and the receipt then appears
       // on the screen only. If the app restarted mid-task, or no turn was
@@ -420,7 +459,8 @@
         const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
         if (turn && !turn.done) continue;
         const quiet = Date.now() - Math.max(task.idleSince, entry.lastOutputAt || 0);
-        const fromScreen = M.parseReceipt(M.afterContract(entry.lastScreen), filePaths);
+        const finalReply = C.extractReply(M.afterContract(entry.lastScreen).split('\n'), '', entry.term?.cols);
+        const fromScreen = M.parseReceipt(finalReply, filePaths);
         const prev = col && col.lastReceipt;
         const stale = !!prev && prev.summary === fromScreen.summary && prev.failed === fromScreen.failed;   // the last task's receipt, still on screen
         if (fromScreen.explicit && !stale && quiet >= SCREEN_QUIET) { settle(task, fromScreen); continue; }
@@ -457,6 +497,8 @@
     }
     const task = s.tasks.find((t) => t.colId === colId && t.turnId === turn.id);
     if (!task) return;
+    const entry = host.terms.get(colId);
+    if (entry && (entry.state === 'working' || entry.state === 'quota' || M.terminalActivity(entry.lastScreen))) return;
     // A turn also "ends" on a pause between tool calls or a silent start. Only
     // a receipt, a question or a failure closes the task here; otherwise onTick
     // waits for the column to stay quiet before calling it stopped.
@@ -495,6 +537,35 @@
     const s = state();
     if (!s || !caller || !isMain(caller)) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
+      case 'main-stop':
+      case 'main-archive': {
+        const id = String(message.to || '').trim();
+        const col = host.columns().find((c) => c.id === id && !c.isMain);
+        if (!col) {
+          if (message.action === 'main-archive' && (host.config.archived || []).some((c) => c.id === id && !c.isMain)) return { done: true, result: `会话 ${id} 已归档。` };
+          throw new Error(`找不到可操作的会话：${id.slice(0, 80)}。先用 ledger 看 id；不能中断或归档队长。`);
+        }
+        const archive = message.action === 'main-archive';
+        const entry = host.terms.get(id);
+        if (!archive && (!entry || !entry.alive)) throw new Error('这个会话的终端已经退出。');
+        if (!message.keepQueued) cancelSupplement(id);
+        // Close cards before Esc/PTY exit so no delayed dispatch or receipt can
+        // revive work that the Captain explicitly cancelled.
+        s.tasks.forEach((t) => {
+          if (t.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(t.status) || (message.keepQueued && t.status === 'queued')) return;
+          t.status = 'stopped';
+          t.doneAt = Date.now();
+          t.receipt = { summary: archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。', files: [], images: [], failed: '', explicit: true };
+          update(t);
+        });
+        // Old confirmation/question notices are obsolete after interruption;
+        // completed receipts still belong to the Captain, including on archive.
+        s.pending = s.pending.filter((p) => p.colId !== id || (!p.waiting && !p.question));
+        if (archive) host.archiveColumn(col, { captain: true, quiet: true });
+        else window.deck.ptyInput(id, '\x1b');
+        save();
+        return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
+      }
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
         const history = M.historyText(host.config.captainHistory);
@@ -563,14 +634,18 @@
         }
         if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         const entry = host.terms.get(col.id);
-        if (entry && entry.state === 'input') throw new Error(`「${host.columnLabel(col)}」停在确认提示上：有把握就用 answer 回答它，没把握就请用户去那一列处理。`);
+        if (entry && entry.state === 'input' && !message.now) throw new Error(`「${host.columnLabel(col)}」停在确认提示上：有把握就用 answer 回答它，没把握就请用户去那一列处理。`);
         // a bare shell with no agent to start would run the text as commands
         if (!col.cmd && !(await host.agentInForeground(col, false))) {
           throw new Error(`「${host.columnLabel(col)}」里只有 shell，没有在运行的 agent，不能把活发进去。请用 new 开一个新会话来做。`);
         }
-        const busy = entry && entry.state === 'working';
+        const busy = entry && (entry.state === 'working' || entry.state === 'quota');
+        if (message.replace) cancelSupplement(col.id);
+        if (message.now) {
+          await handle({ action: 'main-stop', to: col.id, keepQueued: true }, caller);
+        }
         dispatch(col, text, host.columnLabel(col));
-        return { done: true, result: busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下就发。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
+        return { done: true, result: message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
       }
       case 'main-answer': {
         const col = findTarget(message.to);
@@ -591,7 +666,7 @@
   }
 
   // ---- task cards in the main session's chat ----
-  const STATUS_TEXT = { waiting: '等空位', queued: '待补充', working: '干活中', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
+  const STATUS_TEXT = { waiting: '等空位', queued: '待补充', working: '干活中', quota: '额度用尽/等待', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
   function renderCard(task, colId) {
     const card = el('div', 'task-card st-' + task.status);
     const head = el('div', 'task-head');

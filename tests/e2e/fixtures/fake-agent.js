@@ -38,13 +38,36 @@ function answer() {
   if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
   process.stdout.write('\x1b[2J\x1b[H');
   process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
+  if (process.argv.includes('--interruptible') && /keep working|wait for quota/.test(first)) {
+    process.stdout.write(first.includes('quota') ? "You've hit your limit · resets 5pm (America/Los_Angeles)\n" : '✻ Doing…\nPress up to edit queued messages\n');
+    box();
+    return;
+  }
   let out = '\n⏺ GOT ' + first.slice(-40) + '\n  wrote ' + process.env.AGENTDECK_DEMO_FILE + '\n';
   if (text.includes('AgentDeck 约定')) out += '\n  【回执】\n  摘要：stand-in finished ' + first.slice(0, 30) + '\n  文件：' + process.env.AGENTDECK_DEMO_FILE + '\n';
   process.stdout.write(out);
   box();
 }
 function listen() {
-  if (process.argv.includes('--slow-paste')) {
+  if (process.argv.includes('--interruptible')) {
+    process.stdin.setRawMode(true);
+    let incoming = '';
+    process.stdin.on('data', (data) => {
+      for (const ch of data.toString()) {
+        if (ch === '\x15') {
+          incoming = ''; lines = []; clearTimeout(timer);
+        } else if (ch === '\x1b') {
+          incoming = ''; lines = []; clearTimeout(timer);
+          process.stdout.write('\x1b[2J\x1b[HInterrupted by Esc\n');
+          box();
+        } else if (ch === '\r' || ch === '\n') {
+          if (!incoming && !lines.length) continue;
+          lines.push(incoming); incoming = '';
+          clearTimeout(timer); timer = setTimeout(answer, 250);
+        } else incoming += ch;
+      }
+    });
+  } else if (process.argv.includes('--slow-paste')) {
     // Emulate Cursor's async paste handling: an early Enter is consumed by the
     // paste detector. No reply is emitted until a later Enter submits the buffer.
     process.stdout.write('\x1b[?2004h');
@@ -54,6 +77,7 @@ function listen() {
     let ready = false;
     process.stdin.on('data', (data) => {
       incoming += data.toString();
+      if (incoming.includes('\x15')) { incoming = ''; pasted = ''; ready = false; return; }
       const end = incoming.indexOf('\x1b[201~');
       if (end >= 0) {
         pasted = incoming.slice(incoming.indexOf('\x1b[200~') + 6, end);

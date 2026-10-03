@@ -16,7 +16,7 @@
       action = 'cancel';
     }
     next.lastActivity = lastActivity;
-    if (state === 'working' || state === 'plain' || state === 'exited') {
+    if (state === 'working' || state === 'quota' || state === 'plain' || state === 'exited') {
       if (next.notified) action = 'cancel';
       next.notified = null;
       next.since = null;

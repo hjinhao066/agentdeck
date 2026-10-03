@@ -84,7 +84,7 @@ again with the current provider, model and effort instructions.
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
-  receipts | answer` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
+  receipts | answer | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
   capability token those commands need; the columns it drives get none.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
@@ -117,7 +117,10 @@ again with the current provider, model and effort instructions.
   Archiving ends the terminal, so a session that is working, waiting on an
   answer or has printed anything in the last minute is never archived, by the
   app or by a click, and nothing asks about it (a click on a busy one only
-  shows a short notice).
+  shows a short notice). The Captain can explicitly interrupt it with
+  `stop --id <session-id>` (Esc, keeps the terminal, cancels unsent supplements),
+  or end and archive it with `archive --id <session-id>` even while busy, without
+  a confirmation dialog. Both commands protect the Captain's own session.
   If a new session stops on a startup dialog before the task can go in (Cursor
   asks "Do you trust this workspace?" in a folder it has not seen), nothing is
   typed into the dialog; the 队长 is sent its text once and answers with
@@ -133,6 +136,14 @@ again with the current provider, model and effort instructions.
   column's last receipt, and delivered to the 队长's agent by itself when it is idle
   (or with your next message). An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
+  Additions waiting for the same session are combined in order into one prompt,
+  with one receipt contract; their cards point to the last card for the result.
+  `tell --to <session-id> --message "…" --replace` cancels all unsent additions
+  and keeps this one. `--now` first sends Esc and then sends the additions as
+  soon as the input is ready; combine `--replace --now` to send just the new
+  instruction. Both keep the user-input guard. Claude usage-limit waits show
+  额度用尽/等待 in the dot tooltip, sidebar, task card and ledger; they keep their
+  slot and do not complete the task or receive pending additions until resumed.
   **Delivery never touches what you are typing.** Receipts (and work handed to a
   session) are typed into the agent's input box and sent with Enter, so they wait
   while that box holds anything you have not sent: text the key tracker rebuilt,
@@ -148,11 +159,17 @@ again with the current provider, model and effort instructions.
   start (Cursor can print nothing for a minute or two) is not a stop: a turn that
   ended without a receipt waits for the receipt to show up on screen, and only a
   screen quiet for 3 minutes is shown as 已停下, never as success.
+  `Doing…` and `Press up to edit queued messages` keep the session working even
+  through silent periods. Only a final receipt/question block counts: inline
+  mentions, fenced examples and echoed contract placeholders are ignored.
   Receipt file fields accept absolute local paths only; CLI update notices and
   other footer text are ignored. Prompt submission waits for the paste redraw
   to settle before pressing Enter once, including in background sessions.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
+
+The queue verification and command semantics are documented in
+[Captain control report](docs/captain-control-report.md).
 - 清空上下文 (only in the 队长 header) clears only the 队长's model context. Its
   column restarts as a fresh agent process (resume flags such as `--continue` are
   dropped from its launch command, and it is not resumed on the next app start until

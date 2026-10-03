@@ -306,3 +306,38 @@ test('work added to a busy session is 待补充; only a full house is 排队', (
   assert.match(text, /「a」\(c1\)：待补充/);
   assert.match(text, /「b」\(c2\)：排队等空位/);
 });
+
+test('only a real final receipt/question counts, never a contract or code example', () => {
+  for (const text of [M.RECEIPT_CONTRACT, '【提问】\n问题：一两句话说清要队长决定什么',
+    '【提问】\n问题：一两句话…', '【提问】\n问题：一 两 句 话说清要队长决定什么\n还在工作',
+    '【回执】\n摘要：一到三句话说清结果\n文件：每行一个落盘文件的完整路径',
+    '格式使用【提问】\n问题：用哪个库？', '```text\n【提问】\n问题：用哪个库？\n```\n我继续实现。',
+    '【提问】\n问题：用哪个库？\n接下来继续实现。', '【回执】\n摘要：样例\n文件：无\n接下来继续实现。',
+    '（AgentDeck 约定）\n【提问】\n问题：用哪个库？']) {
+    const r = M.parseReceipt(text);
+    assert.equal(r.explicit, false, text);
+    assert.equal(r.question, '', text);
+    assert.equal(r.failed, '', text);
+  }
+  const r = M.parseReceipt(`${M.RECEIPT_CONTRACT}\n⏺ 最终结果\n【提问】\n问题：保留哪个分支？`);
+  assert.equal(r.explicit, true);
+  assert.equal(r.question, '保留哪个分支？');
+  const final = M.parseReceipt('【回执】\n摘要：上次完成\n【提问】\n问题：还需发布吗？');
+  assert.equal(final.question, '还需发布吗？');
+  assert.equal(final.summary, '');
+});
+
+test('quota wait and Claude queued-message chrome are not completion', () => {
+  for (const screen of ["You've hit your limit · resets 5pm\nEsc to interrupt\nClaude Code", 'Usage limit reached\nChoose /rate-limit-options', 'You’re out of extra usage']) {
+    assert.equal(M.terminalActivity(screen), 'quota', screen);
+  }
+  for (const screen of ['✻ Doing…\nClaude Code', 'Doing...\nClaude Code', 'Press up to edit queued messages\nClaude Code']) assert.equal(M.terminalActivity(screen), 'working');
+  assert.equal(M.terminalActivity('我已经处理了 usage limit reached 的错误。\nClaude Code'), '');
+  assert.equal(M.terminalActivity('Usage limit reached · limit resets 5pm\nContinuing at 5pm · esc to cancel\nPress up to edit queued messages'), 'quota');
+  assert.equal(M.terminalActivity('Usage limit reached\nUsage limit reset · continuing automatically\n✻ Doing…'), 'working');
+  assert.equal(M.terminalActivity('Usage limit reached\nAutomatic continue cancelled\nClaude Code'), '');
+  assert.equal(M.statusLabel('quota'), '额度用尽/等待');
+  const tasks = [{ colId: 'a', status: 'quota' }];
+  assert.equal(M.activeCrew(tasks, new Set(['a'])).size, 1);
+  assert.equal(M.archivable({ tasks }, 'a', 0, Date.now()), false);
+});
