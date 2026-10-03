@@ -49,6 +49,7 @@ const ICONS = {
   check: S('<polyline points="20 6 9 17 4 12"/>'),
   globe: S('<circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>'),
   image: S('<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'),
+  chat: S('<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5Z"/>'),
   terminal: S('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
   file: S('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'),
   eraser: S('<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'),
@@ -97,12 +98,13 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {}, boardPositions: {},
+  boardResponses: {}, boardPositions: {}, globalViewMode: 'chat',
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
 };
 const saved = window.deck.loadConfig();
 if (saved) {
+  config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
@@ -152,8 +154,8 @@ if (saved) {
       agentEffort: c.agentEffort,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
-      // every launch opens on the chat view; 终端/对话 in the header switches for this run
-      view: undefined,
+      // Relaunch follows the saved global choice; local overrides last this run.
+      view: config.globalViewMode,
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       captainCrew: !!c.captainCrew,
@@ -516,6 +518,9 @@ function buildChrome() {
     item.onclick = () => { config.fitCols = n; config.fitWindow = true; applyFit(); };
     tbSplit.appendChild(item);
   });
+  const globalViewBtn = railBtn('', '', () => ChatUI.toggleGlobalMode());
+  globalViewBtn.id = 'globalViewToggle';
+  tbSplit.after(globalViewBtn);
   applyFit();
 
   const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
@@ -553,6 +558,14 @@ function applyFit() {
   saveConfig(); updateColumnStyles(); fitAll();
 }
 function syncChromeState() {
+  const viewBtn = document.getElementById('globalViewToggle');
+  if (viewBtn) {
+    const terminal = config.globalViewMode === 'term';
+    viewBtn.innerHTML = terminal ? ICONS.chat : ICONS.terminal;
+    viewBtn.title = terminal ? '全部切到对话' : '全部切到终端';
+    viewBtn.setAttribute('aria-label', viewBtn.title);
+    viewBtn.setAttribute('aria-pressed', String(terminal));
+  }
   const side = document.getElementById('sideToggleBtn');
   if (side) side.classList.toggle('on', SidePane.isOpen() && activeView !== 'board');
   const board = document.getElementById('boardViewBtn');
@@ -2285,7 +2298,7 @@ function sendWhenReady(col, text, opts) {
 function addColumn(c) {
   const col = BoardCore.normalizeColumn({
     id: newId(), taskId: newTaskId(), width: defaultColWidth(), cwd: '',
-    role: 'manual', relationship: 'Independent manual terminal', ...c,
+    role: 'manual', relationship: 'Independent manual terminal', view: config.globalViewMode, ...c,
   });
   insertColumn(col, true); // brand-new column: never auto-resume
   return col;
@@ -2312,11 +2325,11 @@ function createSession(c, background) {
   if (!background) whenMounted(col, () => jumpToColumn(col));
   return col;
 }
-// 队长: always the first column, always a chat page.
+// 队长: always the first column; its view follows the global choice.
 function createMain(c) {
   if (zoomedId) { zoomedId = null; updateColumnStyles(); }
   Pages.hide();
-  const col = addColumn({ title: '队长', displayTitle: '队长', manualTitle: true, cmd: c.cmd || '', cwd: c.cwd || '', role: 'manual', isMain: true, view: 'chat' });
+  const col = addColumn({ title: '队长', displayTitle: '队长', manualTitle: true, cmd: c.cmd || '', cwd: c.cwd || '', role: 'manual', isMain: true });
   whenMounted(col, () => jumpToColumn(col));
   return col;
 }
