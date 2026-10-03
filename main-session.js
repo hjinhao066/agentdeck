@@ -308,7 +308,7 @@
     delivering = true;
     host.agentInForeground(col, false).then((ok) => {
       delivering = false;
-      if (!ok || !s.pending.length || mainCol() !== col || col.id !== id || briefing === id) return;
+      if (!ok || !s.pending.length || mainCol() !== col || col.id !== id || briefing === id || entry.sendingPrompt) return;
       const text = takePending(true);
       window.ChatUI.sendPrompt(col, '', null, { prefix: text.trim(), force: true });
     }, () => { delivering = false; });

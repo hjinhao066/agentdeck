@@ -283,6 +283,21 @@ test('receipts and questions reach an idle Captain agent by themselves, never a 
   } else {
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), mainId), { timeout: 15000 }).toBe('node');
   }
+  // A user can start submitting while the async foreground check is in flight.
+  // That check must not drain new receipts when sendPrompt would refuse them.
+  const concurrent = await page.evaluate(async (i) => {
+    const entry = terms.get(i);
+    config.mainSession.pending.push({ colId: 'cap-y', title: 'Worker y', summary: 'queued during submission', files: [] });
+    const before = config.mainSession.pending.length;
+    entry.state = 'plain'; entry.lastOutputAt = 0;
+    MainSession.onTick(i, entry);
+    entry.sendingPrompt = true;
+    try {
+      await window.deck.ptyForeground(i);    // let the earlier async check finish
+      return { before, after: config.mainSession.pending.length };
+    } finally { entry.sendingPrompt = false; entry.lastOutputAt = Date.now(); }
+  }, mainId);
+  expect(concurrent.after).toBe(concurrent.before);
   await expect.poll(() => page.evaluate(() => config.mainSession.pending.length), { timeout: 15000 }).toBe(0);
   // ConPTY may wrap or redraw Chinese text in the replay. Check what the
   // stand-in actually received, rather than the terminal's rendering of it.
