@@ -481,6 +481,7 @@ body.reordering, body.reordering * { cursor: grabbing !important; }
 
 /* ===== Terminal body ===== */
 .term {
+  position: relative;
   flex: 1; width: 100%; min-height: 0;
   background: var(--term-bg);
   padding: 8px 6px 8px 12px;
@@ -961,6 +962,13 @@ body.linking-board .board-port.out::before {
   transition: background .12s ease, color .12s ease;
 }
 .col-head .view-toggle:hover { background: var(--icon-hover-bg); color: var(--text); }
+
+.new-content {
+  z-index: 5; align-self: center; padding: 5px 12px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--term-bg); color: var(--text); cursor: pointer;
+}
+.terminal-new-content { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); }
+.chat-new-content { margin: 4px 0; }
 
 .chat-scroll {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;

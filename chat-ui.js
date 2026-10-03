@@ -104,14 +104,26 @@
     // the agent's own status lines, read from the hidden terminal
     const footer = el('div', 'tui-footer');
     footer.hidden = true;
-    chat.append(scroll, attn, form, footer);
+    const newContent = el('button', 'new-content chat-new-content', '有新内容 ↓');
+    newContent.type = 'button';
+    newContent.hidden = true;
+    chat.append(scroll, newContent, attn, form, footer);
     wrap.insertBefore(chat, termEl);
 
     const toggle = el('button', 'view-toggle');
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
+    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
+    scroll.addEventListener('scroll', () => {
+      v.following = nearBottom(scroll);
+      if (v.following) newContent.hidden = true;
+    });
+    newContent.addEventListener('click', () => {
+      v.following = true;
+      scroll.scrollTop = scroll.scrollHeight;
+      newContent.hidden = true;
+    });
     views.set(col.id, v);
     applyMode(col);
 
@@ -349,7 +361,7 @@
     if (!readOnly) v.rows.set(turn.id, { user, asst, turn });
     return wrap;
   }
-  const nearBottom = (s) => s.scrollHeight - s.scrollTop - s.clientHeight < 90;
+  const nearBottom = (s) => s.scrollHeight - s.scrollTop - s.clientHeight <= 2;
 
   function emptyState(v, col) {
     const empty = el('div', 'chat-empty');
@@ -488,6 +500,7 @@
   function renderChat(id, keepPosition) {
     const v = views.get(id);
     if (!v) return;
+    const top = v.scroll.scrollTop;
     v.scroll.textContent = '';
     v.rows.clear();
     v.live = null;
@@ -501,7 +514,10 @@
       v.scroll.appendChild(earlierButton(from, () => keepScroll(v.scroll, () => { v.shown += C.RENDER_STEP; renderChat(id, true); })));
     }
     turns.slice(from).forEach((t) => v.scroll.appendChild(turnRows(v, t)));
-    if (!keepPosition) requestAnimationFrame(() => { v.scroll.scrollTop = v.scroll.scrollHeight; });
+    if (!keepPosition) {
+      v.scroll.scrollTop = v.following ? v.scroll.scrollHeight : top;
+      requestAnimationFrame(() => { if (v.following) v.scroll.scrollTop = v.scroll.scrollHeight; });
+    }
   }
   // 队长's conversations from before each context clear, read-only, from the
   // chats already loaded (nothing new is read from disk, no terminal restarts).
@@ -541,17 +557,20 @@
     v.shown++;
     v.scroll.querySelector('.chat-empty')?.remove();
     v.scroll.appendChild(turnRows(v, turn));
-    v.scroll.scrollTop = v.scroll.scrollHeight;
+    followOutput(v);
+  }
+  function followOutput(v) {
+    if (v.following) v.scroll.scrollTop = v.scroll.scrollHeight;
+    else v.newContent.hidden = false;
   }
   function refreshTurn(id, turn) {
     const v = views.get(id);
     const row = v && v.rows.get(turn.id);
     if (!row) return;
-    const stick = nearBottom(v.scroll);
     const fresh = renderReply(v, turn);
     row.asst.replaceChild(fresh, row.asst.querySelector('.reply'));
     if (turn.done) v.live = null;
-    if (stick) v.scroll.scrollTop = v.scroll.scrollHeight;
+    followOutput(v);
   }
 
   // ---- the agent's status lines under the composer ----
@@ -720,7 +739,10 @@
     }
     const open = pending.get(id);
     if (!open) return;
-    if (v.live && chatMode) v.live.textContent = entry.state === 'working' ? host.lastActivityLine(text) : '';
+    if (v.live && chatMode) {
+      const line = entry.state === 'working' ? host.lastActivityLine(text) : '';
+      if (v.live.textContent !== line) { v.live.textContent = line; followOutput(v); }
+    }
     if (!entry.alive) { finalizeTurn(id); return; }
     if (entry.state === 'working' || entry.state === 'input') return;
     const quiet = Date.now() - (entry.lastOutputAt || 0);
@@ -979,10 +1001,9 @@
     const v = views.get(id);
     const row = v && v.rows.get(task.id);
     if (row) {
-      const stick = nearBottom(v.scroll);
       const fresh = turnRows(v, chat.turns[at]);
       row.user.replaceWith(fresh);
-      if (stick) v.scroll.scrollTop = v.scroll.scrollHeight;
+      followOutput(v);
     }
     scheduleSave(id);
     if (window.Pages) window.Pages.refresh();

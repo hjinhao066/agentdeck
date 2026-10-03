@@ -509,6 +509,15 @@
         const text = takePending().trim();
         return { done: true, result: text || '没有新的回执。' };
       }
+      case 'main-peek': {
+        const col = host.columns().find((c) => c.id === message.to);
+        if (!col) throw new Error('找不到运行中的会话；先用 ledger 看 id。peek 不会恢复已归档的会话。');
+        const entry = host.terms.get(col.id);
+        if (!entry || !entry.alive) throw new Error('这个会话的终端已退出，没有实时输出。');
+        const lines = message.lines === undefined ? 40 : message.lines;
+        if (!Number.isInteger(lines) || lines < 1 || lines > 1000) throw new Error('peek --lines 必须是 1–1000 的整数。');
+        return { done: true, result: host.dumpScreen(entry.term, lines) };
+      }
       case 'main-read': {
         const find = window.BoardCore.cleanText(message.find, 200);
         if (message.to === 'captain-history') {

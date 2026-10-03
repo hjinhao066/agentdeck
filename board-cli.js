@@ -90,6 +90,7 @@ function usage() {
     '  read --id <session-id> [--turns 3] [--find "words"]   saved prompts and final replies, cut short;\n' +
     '                                           also a 队长 conversation from before a clear (ids in ledger)\n' +
     '  read --id captain-history --find "words"   search across all old 队长 conversations\n' +
+    '  peek --id <session-id> [--lines 40]       live terminal output, plain text (1–1000 rows)\n' +
     '  receipts                                 receipts not yet seen\n' +
     '  answer --to <session-id> --key y|n|1-9|enter|esc   answer a confirmation prompt\n'
   );
@@ -188,6 +189,15 @@ async function main() {
     if (!to || !key) fail('answer requires --to and --key.');
     const response = await request({ action: 'main-answer', to, key }, false);
     process.stdout.write(`${response.result}\n`);
+    return;
+  }
+  if (action === 'peek') {
+    const id = typeof args.id === 'string' ? args.id.trim() : '';
+    if (!id) fail('peek requires --id.');
+    const lines = args.lines === undefined ? 40 : (typeof args.lines === 'string' ? Number(args.lines) : NaN);
+    if (!Number.isInteger(lines) || lines < 1 || lines > 1000) fail('peek --lines must be an integer from 1 to 1000.');
+    const response = await request({ action: 'main-peek', to: id, lines }, false);
+    process.stdout.write(`${response.result || ''}\n`);
     return;
   }
   if (action === 'read') {
