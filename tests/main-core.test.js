@@ -199,3 +199,55 @@ test('sessions 队长 opened before they were marked are found from its first ca
   assert.deepEqual([...M.openedByCaptain(columns, tasks)], ['c1790997115851448']);
   assert.deepEqual([...M.openedByCaptain(columns, undefined)], []);
 });
+
+test('background sessions with work still out hold a slot; finished ones free it', () => {
+  const crew = new Set(['a', 'b', 'c', 'd']);
+  const tasks = [
+    { colId: 'a', status: 'done' }, { colId: 'a', status: 'working' },   // latest card counts
+    { colId: 'b', status: 'working' }, { colId: 'b', status: 'done' },
+    { colId: 'c', status: 'asking' },                                      // waits on 队长: still busy
+    { colId: 'd', status: 'input' },
+    { colId: 'x', status: 'working' },                                     // not 队长's background session
+    { colId: '', status: 'waiting' },                                      // queued, no column yet
+  ];
+  assert.deepEqual([...M.activeCrew(tasks, crew)].sort(), ['a', 'c', 'd']);
+  assert.equal(M.MAX_ACTIVE, 6);
+});
+
+test('a finished background session is archived only after 10 quiet minutes with its receipt read', () => {
+  const now = 10_000_000;
+  const min = 60_000;
+  const s = { tasks: [{ colId: 'a', status: 'done', sentAt: now - 30 * min, doneAt: now - 11 * min }], pending: [], inflight: [] };
+  assert.equal(M.ARCHIVE_AFTER, 10 * min);
+  assert.equal(M.archivable(s, 'a', now - 20 * min, now), true);
+  assert.equal(M.archivable(s, 'a', now - 9 * min, now), false, 'something happened in it since');
+  assert.equal(M.archivable({ ...s, pending: [{ colId: 'a' }] }, 'a', 0, now), false, '队长 has not seen the receipt');
+  assert.equal(M.archivable({ ...s, inflight: [{ colId: 'a' }] }, 'a', 0, now), false);
+  for (const status of ['queued', 'working', 'input', 'asking']) {
+    assert.equal(M.archivable({ ...s, tasks: [...s.tasks, { colId: 'a', status, sentAt: 0 }] }, 'a', 0, now), false, status);
+  }
+  assert.equal(M.archivable(s, 'nobody', 0, now), false, 'never one 队长 gave no work');
+  assert.equal(M.archivable(s, 'a', 0, now - 9 * min + 11 * min, 0), true, 'the wait can be shortened');
+});
+
+test('队长 is told about background work, the limit and automatic archiving', () => {
+  const text = M.instructions();
+  assert.match(text, /后台跑[^\n]*最多 6 个会话在干活[^\n]*自动排队/);
+  assert.match(text, /10 分钟后会自动归档[^\n]*tell 发给它会自动恢复/);
+});
+
+test('the 后台 list puts work in progress on top, then finished ones, newest first', () => {
+  const tasks = [
+    { colId: 'old', status: 'done', sentAt: 1, doneAt: 10 },
+    { colId: 'ask', status: 'asking', sentAt: 5, doneAt: 6 },          // waits on 队长: in progress
+    { colId: 'new', status: 'done', sentAt: 2, doneAt: 50 },
+    { colId: 'run', status: 'working', sentAt: 3 },
+    { colId: 'run2', status: 'done', sentAt: 1, doneAt: 4 },          // its card is done but the terminal works again
+  ];
+  const items = [
+    { id: 'old', state: 'done', lastActive: 10 }, { id: 'new', state: 'done', lastActive: 0 },
+    { id: 'run', state: 'working' }, { id: 'ask', state: 'done' }, { id: 'run2', state: 'working' },
+    { id: 'none', state: 'plain', lastActive: 20 },                     // never given work: finished at its last turn
+  ];
+  assert.deepEqual(M.crewOrder(items, tasks), { running: ['run2', 'run', 'ask'], finished: ['new', 'none', 'old'] });
+});

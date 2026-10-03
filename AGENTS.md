@@ -56,8 +56,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   reply captured so far and is marked `interrupted`, never shown as complete.
   A chat too large to write is refused with a toast, never trimmed. Column ids
   (and so chat files) survive archive, restore and relaunch.
-- Deck order always equals sidebar order (folders first, then loose sessions;
-  `SidebarCore.orderedColumns`). Reorder by moving live column nodes, never by
+- Deck order always equals sidebar order (队长, its background sessions, folders,
+  then loose sessions; `SidebarCore.orderedColumns`). Background sessions
+  (`captainCrew` while a 队长 exists) are `.backstage`: built and sized off-deck,
+  skipped by navigation and popups, shown after 队长 only while opened (`peekId`). Reorder by moving live column nodes, never by
   rebuilding terminals. Archive kills the PTY with `keepReplay` so restore can
   replay the saved output; the startup prune must keep archived ids.
 - Schedule runs only while the app is open, never fires overdue runs late at

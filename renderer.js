@@ -287,6 +287,20 @@ function makePromptTracker(col) {
 // ---- Terminals ----
 const terms = new Map(); // id -> { term, fit, el, wrap, titleEl, dot, alive }
 let focusedId = null;    // id of the column whose terminal last had focus
+// Sessions 队长 opened run in the background ("backstage"): their columns stay
+// built and sized (PTY, status, receipts) but sit outside the deck. Opening one
+// (sidebar, task card, notification) shows it after 队长 until focus moves on.
+let peekId = null;
+function isBackstage(col) {
+  return !!col && !!col.captainCrew && !col.isMain && col.id !== peekId && columns.some((c) => c.isMain);
+}
+function peekColumn(col) {
+  if (!isBackstage(col)) return;
+  peekId = col.id;
+  updateColumnStyles();
+}
+// The columns you can see and walk through, in deck order.
+function deckColumns() { return columns.filter((c) => !isBackstage(c)); }
 let zoomedId = null;     // column temporarily maximized to fill the deck (Cmd+Enter / double-click header)
 
 // Chat-mode columns take typing in their composer; terminal-mode ones in xterm.
@@ -1292,8 +1306,18 @@ function defaultColWidth() {
 }
 
 function updateColumnStyles() {
-  const colEls = deckEl.querySelectorAll('.column');
-  const n = columns.length;
+  const all = [...deckEl.querySelectorAll('.column')];
+  const byId = new Map(columns.map((c) => [c.id, c]));
+  // backstage columns keep one equal slice of width, so their PTY stays a
+  // normal size for when they are opened
+  const slice = Math.max(MIN_WIDTH, Math.floor((deckEl.clientWidth || DEFAULT_WIDTH * fitCols()) / fitCols()));
+  const colEls = all.filter((wrap) => {
+    const back = isBackstage(byId.get(wrap.dataset.colId));
+    wrap.classList.toggle('backstage', back);
+    if (back) { wrap.style.flex = '0 0 auto'; wrap.style.width = slice + 'px'; }
+    return !back;
+  });
+  const n = colEls.length;
 
   // Zoom mode: one column fills the whole deck, the rest are hidden. Transient
   // (never persisted) — a restart always comes back unzoomed.
@@ -1327,8 +1351,8 @@ function updateColumnStyles() {
   }
 
   // Normal mode: fixed per-column widths, horizontal scroll.
-  colEls.forEach((wrap, i) => {
-    const col = columns[i]; if (!col) return;
+  colEls.forEach((wrap) => {
+    const col = byId.get(wrap.dataset.colId); if (!col) return;
     wrap.style.flex = '0 0 auto';
     wrap.style.width = col.width + 'px';
   });
@@ -2025,7 +2049,7 @@ function detachColumn(col, keepReplay) {
 
 // Archive: the terminal stops, the conversation and last output are kept, and
 // the session waits in the sidebar's 已归档 section until restored.
-function archiveColumn(col) {
+function archiveColumn(col, opts) {
   if (!columns.includes(col)) return;
   if (col.isMain) { showToast('队长不能归档；不想要了可以关掉它'); return; }
   const descendants = managedSubtree(col, false);
@@ -2043,19 +2067,22 @@ function archiveColumn(col) {
   saveConfig();
   renderColNav();
   renderBoardGraph();
-  showToast(`已归档「${columnLabel(col)}」，在左侧「已归档」里可以恢复`);
+  if (!(opts && opts.quiet)) showToast(`已归档「${columnLabel(col)}」，在左侧「已归档」里可以恢复`);
 }
-function restoreArchived(id, focus) {
+// quiet: 队长 bringing back a background session; your view stays as it is.
+function restoreArchived(id, focus, quiet) {
   const a = (config.archived || []).find((x) => x.id === id);
   if (!a) return null;
   config.archived = config.archived.filter((x) => x !== a);
   const { archivedAt, ...rest } = a;
   const col = BoardCore.normalizeColumn({ ...rest, role: 'manual', relationship: 'Independent manual terminal' });
   if (col.folderId && !config.folders.some((f) => f.id === col.folderId)) col.folderId = null;
-  if (zoomedId) { zoomedId = null; updateColumnStyles(); }
-  Pages.hide();
+  if (!quiet) {
+    if (zoomedId) { zoomedId = null; updateColumnStyles(); }
+    Pages.hide();
+  }
   insertColumn(col, false); // not fresh: replays its saved output and resumes Claude
-  showToast(`已恢复「${columnLabel(col)}」`);
+  if (!quiet) showToast(`已恢复「${columnLabel(col)}」`);
   if (focus) whenMounted(col, () => jumpToColumn(col));
   return col;
 }
@@ -2273,6 +2300,10 @@ function renderColNav() { Sidebar.render(); }
 // A collapsed folder shows the most urgent state of what's inside it.
 const NAV_RANK = { input: 3, working: 2, done: 1 };
 function syncNav() {
+  if (peekId && focusedId && focusedId !== peekId && columns.some((c) => c.id === focusedId)) {
+    peekId = null;
+    updateColumnStyles();
+  }
   const folderState = new Map();
   document.querySelectorAll('.nav-folder-head.has-focus').forEach((h) => h.classList.remove('has-focus'));
   navItems.forEach((nav, id) => {
@@ -2291,6 +2322,7 @@ function syncNav() {
   });
   document.querySelectorAll('.nav-folder-head').forEach((h) => { h.dataset.state = folderState.get(h) || ''; });
   terms.forEach((t, id) => { if (t.wrap) t.wrap.classList.toggle('focused', id === focusedId); });
+  Sidebar.refreshCrew();
   SidePane.onFocusChange();
 }
 
@@ -2302,6 +2334,7 @@ function jumpToColumn(col) {
     return;
   }
   Pages.hide(); // a Schedule/Artifacts page would cover the column
+  peekColumn(col);
   // While zoomed, jumping re-zooms onto the target instead of focusing a hidden column.
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   // Explicit navigation must bypass the IME drift guard. Focus only after
@@ -2929,7 +2962,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, agentInForeground,
+  createMain, respawnColumn, agentInForeground, isBackstage,
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
@@ -3027,7 +3060,8 @@ function maybeNotifyState(id, entry, st) {
   if (result.action === 'cancel') window.deck.notifyCancel({ id });
   else if (result.action) {
     const col = columns.find((candidate) => candidate.id === id);
-    if (col) window.deck.notifyState({ id, title: columnLabel(col), state: result.action });
+    // background sessions report to 队长, who tells you
+    if (col && !isBackstage(col)) window.deck.notifyState({ id, title: columnLabel(col), state: result.action });
   }
 }
 let lastAttnCount = -1;
@@ -3136,7 +3170,8 @@ setInterval(() => {
 // ---- Keyboard shortcuts ----
 // Focus the column at index, scrolling it into view. Captured before xterm.
 function focusColumnByIndex(idx) {
-  const col = columns[Math.max(0, Math.min(idx, columns.length - 1))];
+  const shown = deckColumns();
+  const col = shown[Math.max(0, Math.min(idx, shown.length - 1))];
   if (!col) return;
   if (activeView === 'board') {
     selectBoardNode(col.id, true);
@@ -3181,7 +3216,7 @@ document.addEventListener('keydown', (e) => {
   } else if (/^[1-9]$/.test(k)) {
     focusColumnByIndex(Number(k) - 1);
   } else if (k === 'ArrowLeft' || k === 'ArrowRight') {
-    const cur = columns.findIndex((c) => c.id === focusedId);
+    const cur = deckColumns().findIndex((c) => c.id === focusedId);
     focusColumnByIndex((cur < 0 ? 0 : cur) + (k === 'ArrowRight' ? 1 : -1));
   } else {
     handled = false;

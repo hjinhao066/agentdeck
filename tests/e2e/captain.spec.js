@@ -109,10 +109,12 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await run(mainId, `node "${CLI}" new --title "写周报" --task "please write the report" --command "${FAKE.replace(/"/g, '')}"`);
   await expect.poll(() => page.evaluate(() => columns.some((c) => c.displayTitle === '写周报'))).toBe(true);
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
-  await expect(page.locator(`.colnav-item[data-col-id="${child}"]`)).toContainText('写周报');
-  // listed under the Captain's row, and next to it in the deck
-  await expect(page.locator(`.colnav-item.captain-item + .nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(1);
-  expect(await page.evaluate(() => [...deckEl.querySelectorAll('.column')].slice(0, 2).map((c) => c.dataset.colId))).toEqual([mainId, child]);
+  // it runs in the background: a folded 后台 row under the Captain, not a deck column
+  const head = page.locator('.colnav-item.captain-item + .nav-crew .crew-head');
+  await expect(head).toContainText('后台');
+  await expect(page.locator(`.nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(0);
+  await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
+  expect(await page.evaluate((i) => deckColumns().some((c) => c.id === i), child)).toBe(false);
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`).first();
   await expect(card).toContainText('写周报');
   // the task is the child's first user message; the receipt contract rides along unseen
@@ -121,9 +123,15 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await expect(card.locator('.task-summary')).toContainText('stand-in finished please write the report');
   await expect(card.locator('.att')).toHaveAttribute('title', demoFile);
   expect(await page.evaluate((i) => columns.find((c) => c.id === i).lastReceipt.files, child)).toEqual([demoFile]);
-  // clicking the card's title jumps to that column
+  await expect(head).toContainText('1 完成');
+  // clicking the card's title opens it right after the Captain
   await card.locator('.task-title').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(child);
+  await expect(page.locator(`.column[data-col-id="${child}"]`)).not.toHaveClass(/backstage/);
+  expect(await page.evaluate(() => deckColumns().slice(0, 2).map((c) => c.id))).toEqual([mainId, child]);
+  // and it goes back once you move on
+  await page.locator('.colnav-item[data-col-id="cap-y"]').click();
+  await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
 });
 
 test('tell, ledger and read from the Captain terminal; a worker stuck on a confirmation goes to the Captain', async () => {
@@ -153,6 +161,9 @@ test('tell, ledger and read from the Captain terminal; a worker stuck on a confi
 test('a session the Captain only told something keeps its place; its own sessions leave and come back by drag', async () => {
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
   const crew = (id) => page.locator(`.nav-crew .colnav-item[data-col-id="${id}"]`);
+  // unfolding 后台 lists them
+  await page.locator('.nav-crew .crew-head').click();
+  await expect(crew(child)).toHaveCount(1);
   await expect(crew('cap-x')).toHaveCount(0);
   await expect(page.locator('.nav-group:not(.nav-crew) .colnav-item[data-col-id="cap-x"]')).toHaveCount(1);
   const drag = async (from, to) => {
@@ -165,10 +176,14 @@ test('a session the Captain only told something keeps its place; its own session
   };
   await drag(crew(child), page.locator('.nav-section[data-section="loose"]'));
   await expect(crew(child)).toHaveCount(0);
-  expect(await page.evaluate((i) => [columns.find((c) => c.id === i).captainCrew, columns[1].id === i], child)).toEqual([false, false]);
+  // out of the background: an ordinary session with its own deck column
+  expect(await page.evaluate((i) => [columns.find((c) => c.id === i).captainCrew, deckColumns().some((c) => c.id === i)], child)).toEqual([false, true]);
+  await page.locator('.colnav-item[data-col-id="cap-y"]').click();
+  await expect(page.locator(`.column[data-col-id="${child}"]`)).not.toHaveClass(/backstage/);
   await drag(page.locator(`.colnav-item[data-col-id="${child}"]`), page.locator('.colnav-item.captain-item'));
   await expect(crew(child)).toHaveCount(1);
   expect(await page.evaluate(() => [...deckEl.querySelectorAll('.column')][1].dataset.colId)).toBe(child);
+  await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
 });
 
 test('new refuses Claude 4.x and Haiku before any session starts, and says what to use', async () => {
@@ -177,6 +192,63 @@ test('new refuses Claude 4.x and Haiku before any session starts, and says what 
   await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('用户不用 claude-sonnet-4-6');
   await expect.poll(() => screen(mainId)).toContain('gemini-3.8-flash-high');
   expect(await page.evaluate(() => columns.length)).toBe(before);
+});
+
+test('past the limit new work waits for a slot; finished background sessions are archived and tell brings them back', async () => {
+  const STAND_IN = FAKE.replace(/"/g, '');
+  const col = (title) => page.evaluate((t) => columns.find((c) => c.displayTitle === t)?.id || null, title);
+  const card = (title) => page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: title }).last();
+  await page.evaluate(() => { MainCore.MAX_ACTIVE = 1; });
+  try {
+    // one at work (stopped on a question), so the next one waits
+    await run(mainId, `clear; node "${CLI}" new --title "甲" --task "ask me first" --command "${STAND_IN}"`);
+    await expect(card('甲')).toHaveClass(/st-input/, { timeout: 30000 });
+    await run(mainId, `clear; node "${CLI}" new --title "乙" --task "second job" --command "${STAND_IN}"`);
+    await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('已排队');
+    await expect(card('乙')).toHaveClass(/st-waiting/);
+    await expect(card('乙')).toContainText('等空位');
+    expect(await col('乙')).toBe(null);
+    await expect(page.locator('.nav-crew .crew-head')).toContainText('1 排队');
+    // unfolded: work in progress on top, then what waits for a slot, finished ones below
+    const a0 = await col('甲');
+    const keep0 = await col('写周报');
+    if (!(await page.evaluate(() => !!config.crewOpen))) await page.locator('.nav-crew .crew-head').click();
+    await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.nav-crew > .colnav-item')]
+      .map((r) => r.dataset.colId || 'waiting:' + r.querySelector('.cn-label').textContent)))
+      .toEqual([a0, 'waiting:乙', keep0]);
+    // the slot frees up: the waiting work gets its session and its receipt
+    const a = await col('甲');
+    await page.evaluate((i) => archiveColumn(columns.find((c) => c.id === i)), a);
+    await expect(card('乙')).toHaveClass(/st-done/, { timeout: 30000 });
+    const b = await col('乙');
+    expect(await page.evaluate((i) => columns.find((c) => c.id === i).captainCrew, b)).toBe(true);
+    expect(await page.evaluate(() => config.mainSession.waitlist.length)).toBe(0);
+  } finally {
+    await page.evaluate(() => { MainCore.MAX_ACTIVE = 6; });
+  }
+  // finished and quiet: archived by itself, conversation kept (one you are looking at stays)
+  const b = await col('乙');
+  const keep = await col('写周报');
+  await page.evaluate((i) => jumpToColumn(columns.find((c) => c.id === i)), keep);
+  // a receipt 队长 has not read yet keeps it (this 队长 is a bare shell that never reads them)
+  await page.evaluate(() => { MainCore.ARCHIVE_AFTER = 0; });
+  await page.waitForTimeout(3500);
+  expect(await page.evaluate((i) => columns.some((c) => c.id === i), b)).toBe(true);
+  await page.evaluate(() => { config.mainSession.pending = []; config.mainSession.inflight = []; });
+  try {
+    await expect.poll(() => page.evaluate((i) => (config.archived || []).some((x) => x.id === i && x.captainCrew), b), { timeout: 15000 }).toBe(true);
+  } finally {
+    await page.evaluate(() => { MainCore.ARCHIVE_AFTER = 10 * 60_000; });
+  }
+  expect(await col('写周报')).toBe(keep);
+  await run(mainId, `clear; node "${CLI}" ledger`);
+  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('已归档的队员');
+  // tell brings it back and the work goes in
+  await run(mainId, `clear; node "${CLI}" tell --to ${b} --message "one more thing"`);
+  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('已恢复');
+  await expect.poll(() => col('乙'), { timeout: 15000 }).toBe(b);
+  await expect(card('乙')).toHaveClass(/st-done/, { timeout: 30000 });
+  await expect(card('乙').locator('.task-summary')).toContainText('stand-in finished one more thing');
 });
 
 test('receipts and questions reach an idle Captain agent by themselves, never a bare shell', async () => {
@@ -394,9 +466,10 @@ test('after a restart the Captain row is still pinned and shows its saved conver
   await expect(row).toHaveCount(1);
   await expect(row).toHaveAttribute('data-col-id', id);
   expect(await page.evaluate(() => [columns.filter((c) => c.isMain).length, deckEl.querySelector('.column').dataset.colId])).toEqual([1, id]);
-  // the sessions it opened are still listed under it
+  // the sessions it opened are still in its background
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
-  await expect(page.locator(`.colnav-item.captain-item + .nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(1);
+  await expect(page.locator('.colnav-item.captain-item + .nav-crew .crew-head')).toHaveCount(1);
+  await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await page.evaluate((i) => ChatUI.setMode(i, 'term'), id);
   await row.click();

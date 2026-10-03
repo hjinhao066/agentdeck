@@ -10,19 +10,27 @@ The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
 - **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
-  then the 队长 row (once the Captain exists) with the sessions it opened listed
-  under it, folders, loose sessions and 已归档.
+  then the 队长 row (once the Captain exists) with a folded 后台 row for the
+  sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
-  sessions in exactly the sidebar order (队长 first, then the sessions it opened,
-  then folders), so swiping walks the list.
+  sessions in exactly the sidebar order (队长 first, then folders, then loose
+  sessions), so swiping walks the list; the 队长's background sessions are not
+  deck columns until you open one.
   The 队长 row is pinned: clicking it selects the Captain and shows its saved
   conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
-  A session the 队长 opens with `new` stays under its row (an indented tree) until
-  you drag it into a folder or 对话, or pick another place in its menu; dropping a
-  session on the 队长 row (or 放在队长下面 in its menu) puts it back there. Sessions
-  the 队长 only `tell`s something keep their place.
+  Sessions the 队长 opens with `new` run in the background: one 后台 row under
+  it shows live counts (干活中 / 停在确认 / 完成 / 排队) and unfolds into the list:
+  work in progress on top (in the order it was handed out), then work waiting
+  for a slot, then finished sessions, most recently finished first; it re-sorts
+  as work starts and finishes.
+  Their columns keep running at a normal size but sit outside the deck, and their
+  popups are left to the 队长. Opening one (from that list, a task card or a
+  notification) shows it right after the 队长 until you move on to another
+  column. 拉到前台 in its menu, or dragging it into a folder or 对话, makes it an
+  ordinary session; dropping a session on the 队长 or 后台 row (or 交给队长后台)
+  hands it back. Sessions the 队长 only `tell`s something keep their place.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
   top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
   stays within its assigned column width, including when switching views or zooming.
@@ -97,7 +105,11 @@ again with the current provider, model and effort instructions.
   Flash; Claude 4.x and Haiku models are refused with a message telling the 队长
   what to use instead.
   AgentDeck cannot read live quotas; the 队长 switches
-  provider when a worker reports a limit. New sessions appear in the sidebar and the
+  provider when a worker reports a limit. At most 6 background sessions work at
+  once: a further `new` waits (its card says 等空位) and starts by itself, oldest
+  first, when one finishes. A finished background session is archived after 10
+  minutes with nothing new once the 队长 has its receipt (never one you have
+  open); `tell` to it restores it first, and `ledger` lists those and the waiting work. New sessions appear in the sidebar and the
   deck, and get the task as their first message. The app appends a contract: finish without waiting on the user, ask the
   队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
   failure reason; never file bodies).

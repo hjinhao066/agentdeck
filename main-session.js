@@ -20,10 +20,12 @@
     return n;
   }
 
-  // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], tasks: [task], fresh, crewMarked }
+  // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], tasks: [task], fresh, crewMarked, waitlist }
   // inflight: receipts already typed to 队长 whose turn has not finished yet.
   // fresh: the context was cleared and 队长 has not finished a turn since.
   // crewMarked: sessions opened before captainCrew existed were marked once.
+  // waitlist: `new` requests waiting for a free slot (M.MAX_ACTIVE), oldest first;
+  // each has a 'waiting' card with no column yet.
   // config.captainHistory: conversations from before a clear (MainCore.normalizeHistory).
   function state() {
     const s = host.config.mainSession;
@@ -53,6 +55,7 @@
     s.inflight = [];
     s.fresh = !!s.fresh;
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
+    s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
     // the column was closed while the app was down
     if (!host.columns().some((c) => c.id === s.colId && c.isMain)) host.config.mainSession = null;
   }
@@ -73,7 +76,7 @@
   function create(cmd, cwd) {
     if (mainCol()) { open(); return mainCol(); }
     const col = host.createMain({ cmd, cwd });
-    host.config.mainSession = { colId: col.id, cmd, gen: 1, pending: [], inflight: [], tasks: [], fresh: false, crewMarked: true };
+    host.config.mainSession = { colId: col.id, cmd, gen: 1, pending: [], inflight: [], tasks: [], fresh: false, crewMarked: true, waitlist: [] };
     save();
     window.Sidebar.render();
     brief(col);
@@ -168,12 +171,13 @@
     const byTitle = cols.filter((c) => host.columnLabel(c) === key);
     return byTitle.length === 1 ? byTitle[0] : null;
   }
+  // col null: a 'waiting' card for work queued until a slot frees up.
   function addTask(col, title) {
     const s = state();
     const task = {
       id: 'k' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36),
-      colId: col.id, title: String(title || host.columnLabel(col)).slice(0, 120), gen: s.gen,
-      status: 'queued', sentAt: Date.now(), turnId: '', receipt: null,
+      colId: col ? col.id : '', title: String(title || host.columnLabel(col)).slice(0, 120), gen: s.gen,
+      status: col ? 'queued' : 'waiting', sentAt: Date.now(), turnId: '', receipt: null,
     };
     s.tasks.push(task);
     if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length - MAX_TASKS);
@@ -181,8 +185,12 @@
     save();
     return task;
   }
-  function dispatch(col, text, title) {
-    const task = addTask(col, title);
+  function dispatch(col, text, title, waiting) {
+    const task = waiting || addTask(col, title);
+    if (waiting) {
+      Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
+      update(task);
+    }
     host.sendWhenReady(col, text, {
       suffix: M.RECEIPT_CONTRACT, force: true, timeout: 30 * 60_000,
       onSent: (turn) => {
@@ -195,6 +203,58 @@
     });
     return task;
   }
+  // ---- background sessions: at most M.MAX_ACTIVE at work, the rest wait ----
+  const crewIds = () => new Set(host.columns().filter((c) => c.captainCrew && !c.isMain).map((c) => c.id));
+  const freeSlots = () => M.MAX_ACTIVE - M.activeCrew(state().tasks, crewIds()).size;
+  function openSession(title, cmd, cwd, requestId, text, waiting) {
+    const col = host.createSession({ title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
+    dispatch(col, text, title, waiting);
+    return col;
+  }
+  // A queued request keeps its text in config.json; a long one goes to a file first.
+  async function enqueue(title, cmd, cwd, requestId, text) {
+    const s = state();
+    let body = text;
+    if (body.length > 8000) {
+      const file = await window.deck.saveLongPrompt(body).catch(() => '');
+      if (!file) throw new Error('任务太长，存文件失败，没有排上队。');
+      body = `${body.slice(0, 300).replace(/\s+/g, ' ').trim()}…\n（这件活共 ${text.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
+      if (state() !== s) throw new Error('队长已经关掉了，这件活没有排上队。');   // closed while the file was written
+    }
+    const task = addTask(null, title);
+    s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body });
+    save();
+  }
+  // Start waiting work as slots free up, oldest first.
+  function pump() {
+    const s = state();
+    if (!s || !s.waitlist.length) return;
+    let free = freeSlots();
+    while (free-- > 0 && s.waitlist.length) {
+      const w = s.waitlist.shift();
+      const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
+      if (task) openSession(w.title, w.cmd, w.cwd, w.requestId, w.task, task);
+    }
+    save();
+  }
+  // A finished background session is archived once 队长 has its receipt and
+  // nothing happened for M.ARCHIVE_AFTER; never one you are looking at.
+  function maybeArchive(col, entry) {
+    const s = state();
+    if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
+    if (entry && entry.alive && (entry.state === 'working' || entry.state === 'input')) return;
+    if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER)) host.archiveColumn(col, { quiet: true });
+  }
+  // `tell` to a background session that was archived brings it back first.
+  function archivedCrew(ref) {
+    const key = String(ref || '').trim();
+    const list = (host.config.archived || []).filter((a) => a.captainCrew);
+    const byId = list.find((a) => a.id === key);
+    if (byId) return byId;
+    const byTitle = list.filter((a) => host.columnLabel(a) === key);
+    return byTitle.length === 1 ? byTitle[0] : null;
+  }
+
   function update(task) {
     const s = state();
     if (s && task.gen === s.gen) window.ChatUI.updateCard(s.colId, task);
@@ -259,7 +319,7 @@
     if (!s) return;
     const ids = new Set(host.columns().map((c) => c.id));
     s.tasks.forEach((t) => {
-      if (!CLOSED.includes(t.status) && !ids.has(t.colId)) {
+      if (!CLOSED.includes(t.status) && t.status !== 'waiting' && !ids.has(t.colId)) {
         settle(t, { summary: '', files: [], images: [], failed: '这个会话已经关掉、归档或重启了', explicit: true });
       }
     });
@@ -273,7 +333,9 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
-    if (id === s.colId) { deliver(entry); return; }
+    if (id === s.colId) { deliver(entry); pump(); return; }
+    const col = host.columns().find((c) => c.id === id);
+    if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
       if (task.colId !== id || !['queued', 'working', 'input'].includes(task.status)) continue;
       if (!entry.alive) { settle(task, { summary: '', files: [], images: [], failed: '这个会话的终端已经退出', explicit: true }); continue; }
@@ -365,7 +427,12 @@
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
         const history = M.historyText(host.config.captainHistory);
-        return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '') + (history ? '\n' + history : '') };
+        const waiting = s.waitlist.map((w) => `「${w.title}」`).join('、');
+        const crew = (host.config.archived || []).filter((a) => a.captainCrew).slice(0, 10)
+          .map((a) => `${a.id}「${host.columnLabel(a)}」`).join('、');
+        return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
+          + (crew ? `\n已归档的队员（tell 会先自动恢复）：${crew}` : '')
+          + (waiting ? `\n排队等空位：${waiting}` : '') + (history ? '\n' + history : '') };
       }
       case 'main-receipts': {
         const text = takePending().trim();
@@ -384,6 +451,7 @@
         // a 队长 conversation from before a clear: only ids listed in captainHistory
         const key = String(message.to || '').trim();
         const old = (host.config.captainHistory || []).find((h) => h.id === key) || window.ChatUI.captainArchives().find((chat) => chat.id === key);
+        if (!old && archivedCrew(key)) throw new Error(`「${host.columnLabel(archivedCrew(key))}」已归档。要接着用它就 tell 它（会自动恢复）；只是查结果，看它的回执就够了。`);
         if (!old) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         return { done: true, result: M.readText('清空前的队长对话', window.ChatUI.turnsOf(old.id), message.turns, find) };
       }
@@ -400,15 +468,29 @@
         const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : s.cmd));
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;
-        const col = host.createSession({ title, cmd, cwd: window.BoardCore.cleanText(message.cwd, 1000), createdByRequestId: message.id, displayTitle: title, manualTitle: true, captainCrew: true }, true);
-        dispatch(col, task, title);
+        const cwd = window.BoardCore.cleanText(message.cwd, 1000);
+        if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
+        // past the limit (or behind work already waiting): queue it, oldest first
+        if (s.waitlist.length || freeSlots() <= 0) {
+          await enqueue(title, cmd, cwd, message.id, task);
+          return { done: true, result: `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。` };
+        }
+        const col = openSession(title, cmd, cwd, message.id, task);
         return { done: true, result: `已开新会话 ${col.id}「${title}」，任务会在它准备好后发过去。` };
       }
       case 'main-tell': {
-        const col = findTarget(message.to);
-        if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         const text = window.BoardCore.cleanText(message.message, 2_000_000);
         if (!text) throw new Error('tell 需要 --message。');
+        let col = findTarget(message.to);
+        if (!col) {
+          const old = archivedCrew(message.to);
+          if (old) {
+            col = host.restoreArchived(old.id, false, true);
+            dispatch(col, text, host.columnLabel(col));
+            return { done: true, result: `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。` };
+          }
+        }
+        if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         const entry = host.terms.get(col.id);
         if (entry && entry.state === 'input') throw new Error(`「${host.columnLabel(col)}」停在确认提示上：有把握就用 answer 回答它，没把握就请用户去那一列处理。`);
         // a bare shell with no agent to start would run the text as commands
@@ -438,19 +520,20 @@
   }
 
   // ---- task cards in the main session's chat ----
-  const STATUS_TEXT = { queued: '排队中', working: '干活中', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
+  const STATUS_TEXT = { waiting: '等空位', queued: '排队中', working: '干活中', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
   function renderCard(task, colId) {
     const card = el('div', 'task-card st-' + task.status);
     const head = el('div', 'task-head');
     const target = host.columns().find((c) => c.id === task.colId);
     const name = el('button', 'task-title', task.title);
     name.type = 'button';
-    name.title = target ? '跳到这个会话' : '这个会话已经不在了';
+    name.title = target ? '打开这个会话' : task.status === 'waiting' ? `同时最多 ${M.MAX_ACTIVE} 个会话干活，有空位就自动开` : '这个会话已经不在了';
     name.disabled = !target;
     name.addEventListener('click', () => { if (target) host.jumpToColumn(target); });
     head.append(el('span', 'task-arrow', '→'), name, el('span', 'task-status', STATUS_TEXT[task.status] || ''));
     card.appendChild(head);
     if (task.status === 'input') card.appendChild(el('div', 'task-note', '停在确认提示上，已交给队长判断；队长拿不准会来问你。'));
+    if (task.status === 'waiting') card.appendChild(el('div', 'task-note', `同时最多 ${M.MAX_ACTIVE} 个会话干活，前面有空位就自动开会话开始做。`));
     const r = task.receipt;
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));
     else if (r) {

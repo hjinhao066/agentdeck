@@ -324,7 +324,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 #pageView::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; }
 
 #deck {
-  flex: 1; height: 100%; min-width: 0;
+  flex: 1; height: 100%; min-width: 0; position: relative;
   display: flex; overflow-x: auto; overflow-y: hidden;
   background: var(--app-bg);
 }
@@ -1403,13 +1403,27 @@ body.linking-board .board-port.out::before {
 .colnav-item.captain-item .cn-crown { color: #e0a91c; width: 14px; height: 14px; flex: 0 0 auto; display: inline-flex; }
 .colnav-item.captain-item .cn-crown svg { width: 14px; height: 14px; }
 .colnav-item.captain-item:hover .cn-meta { display: inline; }
+/* a session 队长 runs in the background: still built and sized (PTY, status),
+   but outside the deck until opened; left overflow never scrolls */
+.column.backstage {
+  position: absolute !important; left: -100000px; top: 0; height: 100%;
+  visibility: hidden; pointer-events: none;
+}
 /* the sessions 队长 opened, listed under its row like a tree */
 .nav-crew { position: relative; padding-bottom: 4px; }
 .nav-crew::before {
   content: ''; position: absolute; left: 18px; top: 0; bottom: 10px; width: 1px;
   background: color-mix(in srgb, #e0a91c 45%, transparent); pointer-events: none;
 }
-.nav-crew .colnav-item { padding-left: 28px; }
+.nav-crew .crew-head { padding-left: 26px; }
+.nav-crew .crew-head .nav-folder-name { flex: 0 0 auto; }
+.crew-counts {
+  flex: 1; min-width: 0; text-align: right; font-size: 11px; color: var(--muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
+}
+.nav-crew .colnav-item { padding-left: 40px; }
+.colnav-item.crew-waiting { cursor: default; color: var(--muted); }
+.colnav-item.crew-waiting:hover .cn-meta { display: inline; }
 /* chat history: older turns load on request; a cut-off turn says so */
 .chat-earlier {
   align-self: center; flex: 0 0 auto; padding: 4px 12px; border-radius: 999px;
@@ -1430,6 +1444,7 @@ body.linking-board .board-port.out::before {
   border-radius: 10px; background: var(--elev); font-size: 13px; line-height: 1.55;
 }
 .task-card.st-working, .task-card.st-queued { border-left-color: var(--st-working); }
+.task-card.st-waiting { border-left-color: var(--st-plain); }
 .task-card.st-input { border-left-color: var(--st-input); }
 .task-card.st-done { border-left-color: var(--st-done); }
 .task-card.st-failed { border-left-color: var(--st-input); }

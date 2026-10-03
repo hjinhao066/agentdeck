@@ -9,6 +9,10 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
+  // Sessions 队长 lets work at once (owner's choice); more `new` calls wait.
+  const MAX_ACTIVE = 6;
+  // A finished background session is archived after this long with nothing new.
+  const ARCHIVE_AFTER = 10 * 60_000;
   const MAX_SUMMARY = 400;
   const MAX_FAILURE = 240;
   const MAX_FILES = 10;
@@ -89,6 +93,8 @@
       '6. 派完马上用一两句话告诉用户交给了哪个会话，不要等结果；用户可以接着派活。',
       '7. 队员的回执和提问会自动发给你（以【AgentDeck 新回执】开头）。看完用一两句话告诉用户结果；需要接着做的，直接派下去。回答用几句话，不要把别的会话的全文、长日志或文件正文搬进来。',
       '8. 队员向你提问、或停在确认/权限提示时，你来拿主意：有把握就用 tell 或 answer 回复它，让它接着干；没把握，或者涉及删除数据、花钱、对外发布这类不可逆的事，再请用户决定，并说清要用户决定什么。',
+      `9. 你开的会话在后台跑，用户平时看不到它们，靠你的汇报了解进度。同一时间最多 ${MAX_ACTIVE} 个会话在干活：再 new 会自动排队，有空位时 AgentDeck 自动开新会话并把任务发过去，不用你重派。同一件事的补充和修改用 tell 发给原来的会话，不要另开。`,
+      `10. 做完的会话没有新指令 ${ARCHIVE_AFTER / 60_000} 分钟后会自动归档（终端关掉，对话保留）；以后用 tell 发给它会自动恢复。`,
       '',
       '可用的 agent。每件活可以选不同的 provider 和模型：用 new --command 写下面的完整启动命令，要换模型就改 --model 后面的名字。',
       ...PROVIDERS.map((p) => `   ${p}`),
@@ -119,7 +125,7 @@
     }
     return lines.join('\n');
   }
-  const TASK_STATUS = { queued: '排队中', working: '干活中', input: '停在确认', asking: '在问你' };
+  const TASK_STATUS = { waiting: '排队等空位', queued: '排队中', working: '干活中', input: '停在确认', asking: '在问你' };
 
   // A launch command's words, quotes kept; the program's bare name.
   const WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
@@ -213,6 +219,42 @@
       if (lag >= 0 && lag < 10_000 && columns.some((c) => c.id === t.colId && !c.isMain)) ids.add(t.colId);
     }
     return ids;
+  }
+
+  // Background sessions with work still out: the latest card for the column
+  // is not finished (a question waits on 队长 too). Each holds a slot.
+  const OPEN = ['queued', 'working', 'input', 'asking'];
+  function latestTasks(tasks) {
+    const latest = new Map();
+    (Array.isArray(tasks) ? tasks : []).forEach((t) => { if (t && t.colId) latest.set(t.colId, t); });
+    return latest;
+  }
+  function activeCrew(tasks, crewIds) {
+    const ids = new Set();
+    latestTasks(tasks).forEach((t, colId) => { if (crewIds.has(colId) && OPEN.includes(t.status)) ids.add(colId); });
+    return ids;
+  }
+  // The 后台 list: sessions at work first (in the order they were sent work),
+  // then finished ones, most recently finished first.
+  // items: [{ id, state (terminal), lastActive (last turn time) }]
+  function crewOrder(items, tasks) {
+    const latest = latestTasks(tasks);
+    const busy = (it) => it.state === 'working' || it.state === 'input' || OPEN.includes(latest.get(it.id)?.status);
+    const sent = (it) => latest.get(it.id)?.sentAt || 0;
+    const finished = (it) => Math.max(latest.get(it.id)?.doneAt || 0, it.lastActive || 0);
+    return {
+      running: items.filter(busy).sort((a, b) => sent(a) - sent(b)).map((it) => it.id),
+      finished: items.filter((it) => !busy(it)).sort((a, b) => finished(b) - finished(a)).map((it) => it.id),
+    };
+  }
+  // Whether a finished background session can be archived now: its last card
+  // is closed, 队长 has its receipt, nothing ran for ARCHIVE_AFTER.
+  // s: { tasks, pending, inflight }; lastActive: its last turn's time.
+  function archivable(s, colId, lastActive, now, after = ARCHIVE_AFTER) {
+    const last = latestTasks(s.tasks).get(colId);
+    if (!last || OPEN.includes(last.status)) return false;
+    if ([...(s.pending || []), ...(s.inflight || [])].some((p) => p.colId === colId)) return false;
+    return now - Math.max(last.doneAt || 0, last.sentAt || 0, lastActive || 0) >= after;
   }
 
   // Earlier 队长 conversations (config.captainHistory). Only this metadata is
@@ -354,7 +396,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt,
+    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });
