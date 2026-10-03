@@ -2124,7 +2124,12 @@ function archiveColumn(col, opts) {
     const entry = terms.get(candidate.id);
     return entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
   });
-  if (busy && !confirm(`「${columnLabel(col)}」还在干活。归档会结束它的终端（对话记录保留，随时可以恢复）。继续吗？`)) return;
+  // Archiving ends the terminal, so a session that is working or waiting on an
+  // answer is never archived, by anyone, and never asks: say so and stop.
+  if (busy) {
+    if (!(opts && opts.quiet)) showToast(`「${columnLabel(col)}」还在干活，先不归档；做完再归档`);
+    return;
+  }
   if (descendants.length) releaseManagedSubtree(col, false, `Parent task "${columnLabel(col)}" was archived.`);
   cancelManagedRequests(col, `Task "${columnLabel(col)}" was archived.`);
   ChatUI.onColumnArchived(col.id);

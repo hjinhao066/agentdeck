@@ -6,6 +6,7 @@
 (function () {
   'use strict';
   const M = window.MainCore;
+  const ACTIVE_OUTPUT_MS = 60_000;   // output this recent: not finished, whatever the status dot says
   const C = window.ChatCore;
   let host = null;
   const startedAt = Date.now();
@@ -263,6 +264,8 @@
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
     if (entry && entry.alive && (entry.state === 'working' || entry.state === 'input')) return;
+    // a dot that reads idle is only a guess: any recent output also means it is not finished
+    if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER)) host.archiveColumn(col, { quiet: true });
   }
   // `tell` to a background session that was archived brings it back first.
@@ -383,7 +386,17 @@
     for (const task of s.tasks) {
       if (task.colId !== id || !['queued', 'working', 'input'].includes(task.status)) continue;
       if (!entry.alive) { settle(task, { summary: '', files: [], images: [], failed: '这个会话的终端已经退出', explicit: true }); continue; }
-      if (task.status === 'queued') continue;
+      if (task.status === 'queued') {
+        // Not delivered yet and the session is stopped on a dialog (Cursor asks "Do you
+        // trust this workspace?" in a folder it has not seen): the work cannot go in until
+        // someone answers, so tell 队长 once. It answers with `answer --key enter`.
+        if (entry.state === 'input' && !task.blockedAsked) {
+          task.blockedAsked = true;
+          push(task, { waiting: confirmationExcerpt(entry) });
+          update(task);
+        } else if (entry.state !== 'input' && task.blockedAsked) task.blockedAsked = false;
+        continue;
+      }
       if (entry.state === 'input') {
         // just answered: the old prompt can still be on screen for a moment
         if (task.status === 'input' || (task.answeredAt && Date.now() - task.answeredAt < 5000)) continue;

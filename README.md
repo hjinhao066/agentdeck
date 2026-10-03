@@ -114,6 +114,14 @@ again with the current provider, model and effort instructions.
   first, when one finishes. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have
   open); `tell` to it restores it first, and `ledger` lists those and the waiting work.
+  Archiving ends the terminal, so a session that is working, waiting on an
+  answer or has printed anything in the last minute is never archived, by the
+  app or by a click, and nothing asks about it (a click on a busy one only
+  shows a short notice).
+  If a new session stops on a startup dialog before the task can go in (Cursor
+  asks "Do you trust this workspace?" in a folder it has not seen), nothing is
+  typed into the dialog; the 队长 is sent its text once and answers with
+  `answer --key enter`, after which the task goes in.
   New sessions appear under the Captain's folded 后台 row and get the task as
   their first message; opening one reveals its column temporarily. The app
   appends a contract: finish without waiting on the user, ask the

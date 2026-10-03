@@ -216,9 +216,18 @@ test('past the limit new work waits for a slot; finished background sessions are
     await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.nav-crew > .colnav-item')]
       .map((r) => r.dataset.colId || 'waiting:' + r.querySelector('.cn-label').textContent)))
       .toEqual([a0, 'waiting:乙', keep0]);
-    // the slot frees up: the waiting work gets its session and its receipt
+    // a session that is working (here: stopped on a question) is never archived, and never asks
     const a = await col('甲');
+    const asked = [];
+    const spy = (d) => asked.push(d.message());
+    page.on('dialog', spy);
     await page.evaluate((i) => archiveColumn(columns.find((c) => c.id === i)), a);
+    await page.evaluate((i) => archiveColumn(columns.find((c) => c.id === i), { quiet: true }), a);
+    page.off('dialog', spy);
+    expect(asked).toEqual([]);
+    expect(await page.evaluate((i) => columns.some((c) => c.id === i) && !(config.archived || []).some((x) => x.id === i), a)).toBe(true);
+    // the slot frees up when it is closed: the waiting work gets its session and its receipt
+    await page.evaluate((i) => removeCol(columns.find((c) => c.id === i)), a);
     await expect(card('乙')).toHaveClass(/st-done/, { timeout: 30000 });
     const b = await col('乙');
     expect(await page.evaluate((i) => columns.find((c) => c.id === i).captainCrew, b)).toBe(true);
@@ -262,6 +271,24 @@ test('a dispatched paste waits for the TUI before Enter and reaches the worker e
   expect(capturedPrompts().filter((p) => p.startsWith('delayed paste task'))).toHaveLength(1);
   await expect(card.locator('.task-summary')).toContainText('stand-in finished delayed paste task');
   await page.evaluate((i) => archiveColumn(columns.find((c) => c.id === i)), child);
+});
+
+test('work for a session stopped on a startup dialog (Cursor: trust this workspace) is not lost: the Captain is told and answers', async () => {
+  const STAND_IN = FAKE.replace(/"/g, '');
+  await run(mainId, `clear; node "${CLI}" new --title "要信任" --task "work after the trust dialog" --command "${STAND_IN} --trust-dialog"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '要信任')?.id), { timeout: 15000 }).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '要信任').id);
+  // the dialog is not an idle prompt: nothing is typed into it, and 队长 hears about it once
+  await expect.poll(() => page.evaluate(() => config.mainSession.pending.map((p) => p.waiting || '').join('\n')), { timeout: 30000 }).toContain('Trust this workspace');
+  await page.waitForTimeout(4000);
+  expect(capturedPrompts().filter((p) => p.startsWith('work after the trust dialog'))).toHaveLength(0);
+  expect(await page.evaluate((i) => config.mainSession.pending.filter((p) => p.colId === i && p.waiting).length, child)).toBe(1);
+  // answered with Enter: the dialog goes away and the task goes in
+  await run(mainId, `clear; node "${CLI}" answer --to ${child} --key enter`);
+  const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '要信任' });
+  await expect(card).toHaveClass(/st-done/, { timeout: 40000 });
+  expect(capturedPrompts().filter((p) => p.startsWith('work after the trust dialog'))).toHaveLength(1);
+  await page.evaluate((i) => { config.mainSession.pending = config.mainSession.pending.filter((p) => p.colId !== i); config.mainSession.inflight = config.mainSession.inflight.filter((p) => p.colId !== i); archiveColumn(columns.find((c) => c.id === i)); }, child);
 });
 
 test('receipts and questions reach an idle Captain agent by themselves, never a bare shell', async () => {

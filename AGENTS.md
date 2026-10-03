@@ -66,6 +66,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   skipped by navigation and popups, shown after 队长 only while opened (`peekId`). Reorder by moving live column nodes, never by
   rebuilding terminals. Archive kills the PTY with `keepReplay` so restore can
   replay the saved output; the startup prune must keep archived ids.
+- Archiving ends a terminal, so a session that is working, waiting on an answer or
+  printing output is never archived, automatically or by click, and never asks first
+  (`archiveColumn` shows a notice and stops). Work that cannot go in because the
+  session sits on a startup dialog is reported to the 队长 once, never typed into it.
 - Schedule runs only while the app is open, never fires overdue runs late at
   launch (reported as missed), and sends through the same path as the composer.
 - Automatic sends go through `sendWhenReady`/`agentInForeground`: never type

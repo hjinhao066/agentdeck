@@ -26,8 +26,6 @@ function box() {
   // ConPTY columns can wrap the longer permission line across several rows.
   process.stdout.write('Claude Code\n');
 }
-console.log('Welcome to Claude Code (test stand-in)');
-box();
 let lines = [];
 let timer = null;
 function answer() {
@@ -45,39 +43,53 @@ function answer() {
   process.stdout.write(out);
   box();
 }
-if (process.argv.includes('--slow-paste')) {
-  // Emulate Cursor's async paste handling: an early Enter is consumed by the
-  // paste detector. No reply is emitted until a later Enter submits the buffer.
-  process.stdout.write('\x1b[?2004h');
-  process.stdin.setRawMode(true);
-  let incoming = '';
-  let pasted = '';
-  let ready = false;
-  process.stdin.on('data', (data) => {
-    incoming += data.toString();
-    const end = incoming.indexOf('\x1b[201~');
-    if (end >= 0) {
-      pasted = incoming.slice(incoming.indexOf('\x1b[200~') + 6, end);
-      incoming = incoming.slice(end + 6);
-      ready = false;
-      setTimeout(() => {
-        ready = true;
-        process.stdout.write('\nPaste ready\n');
-      }, 450);
-    }
-    if (incoming.includes('\r')) {
-      incoming = '';
-      if (!ready) { process.stdout.write('\nEnter consumed by paste detector\n'); return; }
-      lines = pasted.split('\n');
-      pasted = '';
-      ready = false;
-      answer();
-    }
-    if (incoming.includes('\x03')) process.exit(0);
+function listen() {
+  if (process.argv.includes('--slow-paste')) {
+    // Emulate Cursor's async paste handling: an early Enter is consumed by the
+    // paste detector. No reply is emitted until a later Enter submits the buffer.
+    process.stdout.write('\x1b[?2004h');
+    process.stdin.setRawMode(true);
+    let incoming = '';
+    let pasted = '';
+    let ready = false;
+    process.stdin.on('data', (data) => {
+      incoming += data.toString();
+      const end = incoming.indexOf('\x1b[201~');
+      if (end >= 0) {
+        pasted = incoming.slice(incoming.indexOf('\x1b[200~') + 6, end);
+        incoming = incoming.slice(end + 6);
+        ready = false;
+        setTimeout(() => {
+          ready = true;
+          process.stdout.write('\nPaste ready\n');
+        }, 450);
+      }
+      if (incoming.includes('\r')) {
+        incoming = '';
+        if (!ready) { process.stdout.write('\nEnter consumed by paste detector\n'); return; }
+        lines = pasted.split('\n');
+        pasted = '';
+        ready = false;
+        answer();
+      }
+      if (incoming.includes('\x03')) process.exit(0);
+    });
+  } else readline.createInterface({ input: process.stdin }).on('line', (line) => {
+    if (!line.trim() && !lines.length) return;
+    lines.push(line);
+    clearTimeout(timer);
+    timer = setTimeout(answer, 250);
   });
-} else readline.createInterface({ input: process.stdin }).on('line', (line) => {
-  if (!line.trim() && !lines.length) return;
-  lines.push(line);
-  clearTimeout(timer);
-  timer = setTimeout(answer, 250);
-});
+}
+function start() {
+  console.log('Welcome to Claude Code (test stand-in)');
+  box();
+  listen();
+}
+// --trust-dialog: like Cursor in a folder it has not seen, a dialog comes first and
+// nothing is accepted until Enter picks "Trust this workspace".
+if (process.argv.includes('--trust-dialog')) {
+  process.stdout.write('Do you trust the contents of this directory?\n  ▶ [a] Trust this workspace\n    [q] Quit\n  Use arrow keys to navigate, Enter to select\n');
+  process.stdin.setRawMode(true);
+  process.stdin.once('data', () => { process.stdin.setRawMode(false); process.stdin.removeAllListeners('data'); process.stdin.pause(); process.stdout.write('\x1b[2J\x1b[H'); start(); });
+} else start();
