@@ -106,3 +106,32 @@ test('peek sends the id and default or requested row count and prints only live 
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   }
 });
+
+test('Captain stop/archive and tell flags use the authenticated request channel', async () => {
+  for (const [args, expected] of [
+    [['stop', '--id', 'worker'], { action: 'main-stop', to: 'worker' }],
+    [['archive', '--id', 'worker'], { action: 'main-archive', to: 'worker' }],
+    [['tell', '--to', 'worker', '--message', 'new plan', '--replace', '--now'], { action: 'main-tell', to: 'worker', message: 'new plan', replace: true, now: true }],
+  ]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-captain-cli-'));
+    fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+    const running = runCli(args, { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' });
+    let request;
+    for (const deadline = Date.now() + 3000; !request && Date.now() < deadline;) {
+      const file = fs.readdirSync(path.join(dir, 'requests')).find((f) => f.endsWith('.json'));
+      if (file) request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      else await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(request);
+    assert.equal(request.token, 'test-token');
+    for (const [key, value] of Object.entries(expected)) assert.equal(request[key], value);
+    fs.writeFileSync(path.join(dir, 'responses', `${request.id}.json`), JSON.stringify({ done: true, result: 'done' }));
+    assert.equal((await running).code, 0);
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+  for (const action of ['stop', 'archive']) {
+    const r = await runCli([action, '--id'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.notEqual(r.code, 0);
+    assert.match(r.stderr, /requires --id/);
+  }
+});

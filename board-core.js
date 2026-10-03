@@ -62,6 +62,7 @@
   const STATE_LABELS = Object.freeze({
     plain: 'Not started',
     working: 'Working',
+    quota: '额度用尽/等待',
     input: 'Waiting for input',
     done: 'Completed',
     exited: 'Exited',

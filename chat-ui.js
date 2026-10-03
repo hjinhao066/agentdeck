@@ -724,6 +724,7 @@
     if (chatMode) {
       v.stop.hidden = entry.state !== 'working';
       v.agentDot.className = 'cp-agent-dot ' + (entry.alive ? entry.state || 'plain' : 'exited');
+      v.agentDot.title = window.MainCore.statusLabel(entry.alive ? entry.state : 'exited');
       renderFooter(v, entry);
       setAttention(v, id, entry.state === 'input' ? text : null);
       const col = columnById(id);
@@ -744,7 +745,7 @@
       if (v.live.textContent !== line) { v.live.textContent = line; followOutput(v); }
     }
     if (!entry.alive) { finalizeTurn(id); return; }
-    if (entry.state === 'working' || entry.state === 'input') return;
+    if (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(text)) return;
     const quiet = Date.now() - (entry.lastOutputAt || 0);
     const sawOutput = (entry.lastOutputAt || 0) - open.startedAt > 600;
     if ((entry.state === 'done' && quiet >= 2000 && sawOutput) || quiet >= 6000) finalizeTurn(id);
@@ -807,8 +808,10 @@
   const LONG_PROMPT = 8000;
   async function sendPrompt(col, prompt, atts, opts) {
     const o = opts || {};
+    if (o.cancelled && o.cancelled()) return false;
     const entry = host.terms.get(col.id);
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
+    if (o.requireIdle && (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen))) return false;
     if (prompt && prompt.length > LONG_PROMPT) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
     // guardUserInput (receipts, 队长's work for others): never into an input box
@@ -838,20 +841,22 @@
       const minWait = isCursor ? 700 : (bracketed ? 500 : 80);
       do {
         await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
-        if (host.terms.get(col.id) !== entry || !entry.alive) return false;
+        if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
       } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
       window.deck.ptyInput(col.id, '\r');
+      entry.state = 'working';
+      entry.hasWorked = true;
+      entry.lastOutputAt = Date.now();
       if (isCursor) {
-        // Double-check Cursor submission: if initial Enter hit an input debounce/aggregation
-        // window and the session hasn't started working after 600ms, deliver a follow-up Enter.
+        // Double-check Cursor submission: if the first Enter hit an input debounce/aggregation
+        // window, the terminal shows no reaction at all after 600ms, so deliver a follow-up Enter.
+        const submittedAt = entry.lastOutputAt;
         setTimeout(() => {
-          if (host.terms.get(col.id) === entry && entry.alive && entry.state !== 'working' && entry.state !== 'input') {
+          if (host.terms.get(col.id) === entry && entry.alive && entry.state !== 'input' && entry.lastOutputAt === submittedAt) {
             window.deck.ptyInput(col.id, '\r');
           }
         }, 600);
       }
-      entry.hasWorked = true;
-      entry.lastOutputAt = Date.now();
       entry.notificationState = { state: 'working', notified: null, since: null };
       window.deck.notifyCancel({ id: col.id });
       const nameFrom = o.display || prompt;

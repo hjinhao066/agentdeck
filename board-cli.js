@@ -86,7 +86,9 @@ function usage() {
     'Captain only (队长, the main session):\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
     '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|cursor|grok | --command "launch"]\n' +
-    '  tell --to <session-id> --message "Instruction"\n' +
+    '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
+    '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
+    '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
     '  read --id <session-id> [--turns 3] [--find "words"]   saved prompts and final replies, cut short;\n' +
     '                                           also a 队长 conversation from before a clear (ids in ledger)\n' +
     '  read --id captain-history --find "words"   search across all old 队长 conversations\n' +
@@ -157,6 +159,13 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'stop' || action === 'archive') {
+    const id = typeof args.id === 'string' ? args.id.trim() : '';
+    if (!id) fail(`${action} requires --id.`);
+    const response = await request({ action: 'main-' + action, to: id }, false);
+    process.stdout.write(`${response.result}\n`);
+    return;
+  }
   if (action === 'ledger' || action === 'receipts') {
     const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);
@@ -179,7 +188,7 @@ async function main() {
     const to = String(args.to || '').trim();
     const message = String(args.message || args._.slice(1).join(' ')).trim();
     if (!to || !message) fail('tell requires --to and --message.');
-    const response = await request({ action: 'main-tell', to, message }, false);
+    const response = await request({ action: 'main-tell', to, message, replace: args.replace === true, now: args.now === true }, false);
     process.stdout.write(`${response.result}\n`);
     return;
   }

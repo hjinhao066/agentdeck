@@ -260,6 +260,108 @@ test('past the limit new work waits for a slot; finished background sessions are
   await expect(card('乙').locator('.task-summary')).toContainText('stand-in finished one more thing');
 });
 
+test('Captain stop interrupts a busy worker, cancels supplements; archive ends it without a dialog and keeps history', async () => {
+  let dialogs = 0;
+  const countDialog = () => { dialogs++; };
+  page.on('dialog', countDialog);
+  await run(mainId, `clear; node "${CLI}" new --title "中断归档" --task "keep working stop probe" --command "${FAKE.replace(/"/g, '')} --interruptible"`);
+  const childOf = () => page.evaluate(() => columns.find((c) => c.displayTitle === '中断归档')?.id);
+  await expect.poll(childOf).toBeTruthy();
+  const child = await childOf();
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "cancel this supplement"`);
+  await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
+  await expect(page.locator('.nav-crew .crew-head')).toContainText('1 待补充');
+  await run(mainId, `clear; node "${CLI}" stop --id ${child}`);
+  await expect.poll(() => screen(child)).toContain('Interrupted by Esc');
+  expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
+  await page.waitForTimeout(2000);
+  expect(capturedPrompts().some((p) => p.startsWith('cancel this supplement'))).toBe(false);
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "keep working archive probe"`);
+  await expect.poll(() => screen(child)).toContain('Doing…');
+  await run(mainId, `clear; node "${CLI}" archive --id ${child}`);
+  await expect.poll(() => childOf()).toBeFalsy();
+  expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(false);
+  expect(await page.evaluate((i) => config.archived.some((c) => c.id === i), child)).toBe(true);
+  expect(await page.evaluate((i) => ChatUI.turnsOf(i).some((t) => t.user.includes('keep working')), child)).toBe(true);
+  expect(dialogs).toBe(0);
+  page.off('dialog', countDialog);
+  for (const action of ['main-stop', 'main-archive']) {
+    const errors = await page.evaluate(async ([action, captain]) => {
+      const invoke = async (caller, to) => { try { await MainSession.handle({ action, to }, caller); return ''; } catch (e) { return e.message; } };
+      return [await invoke(columns.find((c) => c.id === 'cap-x'), 'cap-y'), await invoke(MainSession.mainCol(), captain), await invoke(MainSession.mainCol(), 'missing-id')];
+    }, [action, mainId]);
+    expect(errors[0]).toContain('只有队长'); expect(errors[1]).toContain('不能中断或归档队长'); expect(errors[2]).toContain('找不到');
+  }
+});
+
+test('tell batches supplements once; replace drops older queued work; now interrupts then sends', async () => {
+  await run(mainId, `clear; node "${CLI}" new --title "合并指令" --task "keep working merge probe" --command "${FAKE.replace(/"/g, '')} --interruptible"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令')?.id)).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令').id);
+  await expect.poll(() => screen(child)).toContain('Doing…');
+  for (const message of ['merge alpha', 'merge beta', 'merge gamma']) {
+    await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
+    await expect.poll(() => screen(mainId)).toContain('待补充');
+  }
+  // The stand-in finishes its current operation; the three additions arrive as one prompt.
+  await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('merge alpha')).length).toBe(1);
+  const merged = capturedPrompts().find((p) => p.startsWith('merge alpha'));
+  expect(merged).toContain('merge alpha\n\nmerge beta\n\nmerge gamma');
+  expect(merged.split('（AgentDeck 约定）')).toHaveLength(2);
+  expect(capturedPrompts().some((p) => p.startsWith('merge beta') || p.startsWith('merge gamma'))).toBe(false);
+  await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i).at(-1)?.status, child), { timeout: 30000 }).toBe('done');
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --now --message "keep working replace probe"`);
+  await expect.poll(() => screen(child)).toContain('keep working replace probe');
+  for (const message of ['discard alpha', 'discard beta']) {
+    await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
+    await expect.poll(() => screen(mainId)).toContain('待补充');
+  }
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --message "replacement only"`);
+  await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
+  await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
+  await expect.poll(() => capturedPrompts().some((p) => p.startsWith('replacement only'))).toBe(true);
+  expect(capturedPrompts().some((p) => /^(discard alpha|discard beta)/.test(p))).toBe(false);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('done');
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "keep working now probe"`);
+  await expect.poll(() => screen(child)).toContain('keep working now probe');
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "discard with now"`);
+  await expect.poll(() => screen(mainId)).toContain('待补充');
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --now --message "urgent replacement"`);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('urgent replacement')).length).toBe(1);
+  expect(capturedPrompts().some((p) => p.startsWith('discard with now'))).toBe(false);
+  expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
+  await run(mainId, `clear; node "${CLI}" archive --id ${child}`);
+  await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
+});
+
+test('quota wait stays waiting, not working/completed; queued work waits and resumes after the wait clears', async () => {
+  await run(mainId, `clear; node "${CLI}" new --title "额度等待" --task "wait for quota probe" --command "${FAKE.replace(/"/g, '')} --interruptible"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '额度等待')?.id)).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '额度等待').id);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('quota');
+  const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '额度等待' }).last();
+  await expect(card.locator('.task-status')).toHaveText('额度用尽/等待');
+  await expect(page.locator('.nav-crew .crew-head')).toContainText('额度用尽/等待');
+  await run(mainId, `clear; node "${CLI}" ledger`);
+  await expect.poll(() => screen(mainId)).toContain('额度用尽/等待');
+  await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "after quota"`);
+  await expect.poll(() => screen(mainId)).toContain('待补充');
+  const status = await page.evaluate((i) => {
+    const entry = terms.get(i); const t = config.mainSession.tasks.find((t) => t.colId === i && t.status === 'quota');
+    t.idleSince = Date.now() - 600000;
+    MainSession.onTick(i, { ...entry, lastOutputAt: Date.now() - 600000 });
+    return t.status;
+  }, child);
+  expect(status).toBe('quota');
+  expect(capturedPrompts().some((p) => p.startsWith('after quota'))).toBe(false);
+  await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('after quota')).length).toBe(1);
+  await run(mainId, `clear; node "${CLI}" archive --id ${child}`);
+  await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
+});
+
 test('a dispatched paste waits for the TUI before Enter and reaches the worker exactly once', async () => {
   await run(mainId, `clear; node "${CLI}" new --title "慢粘贴" --task "delayed paste task" --command "${FAKE.replace(/"/g, '')} --slow-paste"`);
   await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '慢粘贴')?.id), { timeout: 15000 }).toBeTruthy();
@@ -457,6 +559,13 @@ test('a pause or a silent start is not a stop: only a receipt, a question, a fai
     e.idleSince = Date.now() - 10 * 60_000;
     MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 30_000 }));
     out.stillPrinting = e.status;
+    const f = mk('probe-f', 'tf');
+    f.idleSince = Date.now() - 10 * 60_000;
+    MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 10 * 60_000, lastScreen: '✻ Doing…\nPress up to edit queued messages\nClaude Code' }));
+    out.stillDoing = f.status;
+    const g = mk('probe-g', 'tg');
+    MainSession.onTurnDone('probe-col', { id: 'tg', reply: '【提问】\n问题：一两句话说清要队长决定什么' });
+    out.contractQuestion = g.status;
     return out;
   });
   expect(probe.afterEarlyTurnEnd).toBe('working');
@@ -466,13 +575,15 @@ test('a pause or a silent start is not a stop: only a receipt, a question, a fai
   expect(probe.failure).toBe('failed');
   expect(probe.longQuiet).toEqual(['stopped', false]);
   expect(probe.stillPrinting).toBe('working');
+  expect(probe.stillDoing).toBe('working');
+  expect(probe.contractQuestion).toBe('working');
   // the false "已停下，没有写回执" never reached 队长 for the pause
   const texts = await page.evaluate(() => config.mainSession.pending.map((p) => p.summary || p.question || p.failed || ''));
   expect(texts.join('\n')).not.toContain('先看了一下目录');
   await page.evaluate(() => {
     const s = config.mainSession;
     s.tasks = s.tasks.filter((t) => !t.id.startsWith('probe-'));
-    s.pending = s.pending.filter((p) => !['probe-a', 'probe-b', 'probe-c', 'probe-d', 'probe-e'].includes(p.taskId));
+    s.pending = s.pending.filter((p) => !p.taskId?.startsWith('probe-'));
   });
   expect(await page.evaluate(() => ({ pending: config.mainSession.pending.length, tasks: config.mainSession.tasks.length }))).toEqual(before);
 });

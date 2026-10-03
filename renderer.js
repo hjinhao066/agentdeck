@@ -412,10 +412,13 @@ const WORKING_RE = /esc to interrupt|ctrl\+c to stop|\bWorking\b|Running(?:\.\.\
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
 const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|waiting for (?:your |user )?(?:input|confirmation|approval|permission)/im;
 const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Plan, search, build anything|Add a follow-up|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
-const DOT_TIP = { plain: '未开始', working: '干活中…', input: '等你回复！', done: '已完成', exited: '已退出' };
+const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
 function classify(text, entry) {
+  const activity = MainCore.terminalActivity(text);
+  if (activity === 'quota') return activity;
   const lines = text.split('\n');
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+  if (activity === 'working') return activity;
   if (WORKING_RE.test(lines.slice(-15).join('\n'))) return 'working';
   if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
@@ -2138,11 +2141,12 @@ function archiveColumn(col, opts) {
   const descendants = managedSubtree(col, false);
   const busy = [col, ...descendants].some((candidate) => {
     const entry = terms.get(candidate.id);
-    return entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
+    return entry && entry.alive && (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input');
   });
   // Archiving ends the terminal, so a session that is working or waiting on an
-  // answer is never archived, by anyone, and never asks: say so and stop.
-  if (busy) {
+  // answer is protected from click/automatic archive; the Captain's explicit
+  // archive command ends it without confirmation.
+  if (busy && !(opts && opts.captain)) {
     if (!(opts && opts.quiet)) showToast(`「${columnLabel(col)}」还在干活，先不归档；做完再归档`);
     return;
   }
@@ -2240,10 +2244,11 @@ function sendWhenReady(col, text, opts) {
   const started = Date.now();
   const id = col.id;
   const check = async () => {
+    if (o.cancelled && o.cancelled()) return;
     if (!columns.includes(col) || col.id !== id) return;
     const entry = terms.get(col.id);
     if (entry && entry.alive) {
-      const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working';
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working' && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen);
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)
@@ -2253,9 +2258,12 @@ function sendWhenReady(col, text, opts) {
       // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
       const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000));
       if (idle && ready && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
-        const sent = await ChatUI.sendPrompt(col, text, null, o);   // a long prompt goes out as a file
+        if (o.cancelled && o.cancelled()) return;
+        if (o.guardUserInput && userComposing(col.id)) { setTimeout(check, 500); return; }
+        const sent = await ChatUI.sendPrompt(col, typeof text === 'function' ? text() : text, null, o);   // a long prompt goes out as a file
         if (sent && o.onSent) o.onSent(sent === true ? null : sent);
         if (sent) return;
+        if (o.onDeferred) o.onDeferred();
       }
     }
     if (Date.now() - started > (o.timeout || 120_000)) {
@@ -2391,7 +2399,7 @@ function renderColNav() { Sidebar.render(); }
 // Mirror each entry's status dot and mark the focused column as active — both
 // in the sidebar and on the deck column itself (accent bar via .focused).
 // A collapsed folder shows the most urgent state of what's inside it.
-const NAV_RANK = { input: 3, working: 2, done: 1 };
+const NAV_RANK = { input: 3, quota: 3, working: 2, done: 1 };
 function syncNav() {
   if (peekId && focusedId && focusedId !== peekId && columns.some((c) => c.id === focusedId)) {
     peekId = null;
@@ -3196,10 +3204,11 @@ setInterval(() => {
 
     if (entry.alive) {
       let st = classify(text, entry);
-      if (st === 'working' || st === 'input') {
+      if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
-        if (!entry.workStart) { entry.workStart = Date.now(); entry.workedMs = 0; }
+        if (st === 'quota') entry.workStart = 0;
+        else if (!entry.workStart) { entry.workStart = Date.now(); entry.workedMs = 0; }
       } else if (st === 'done') {
         // Debounce: hold yellow through the short gaps between tool calls so
         // the dot never flickers green mid-task (~3s ≈ watch-ai's stability window).
@@ -3254,7 +3263,7 @@ setInterval(() => {
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);
     if (nav && nav.sub && !config.navCollapsed) {
-      const line = entry.alive ? lastActivityLine(text) : '已退出';
+      const line = entry.alive ? (entry.state === 'quota' ? '额度用尽/等待' : lastActivityLine(text)) : '已退出';
       if (nav.sub.textContent !== line) nav.sub.textContent = line;
     }
   });
