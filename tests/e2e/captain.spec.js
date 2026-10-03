@@ -311,17 +311,21 @@ test('receipts and questions reach an idle Captain agent by themselves, never a 
 });
 
 test('a receipt never goes through an input box the user is typing in, and arrives once it is empty', async () => {
-  const half = '我正在写的这半句话';
+  // ASCII, so what the stand-in captured compares the same on every platform
+  const half = 'my half written sentence';
   const first = capturedPrompts().length;
   const receipt = 'receipt that waits for the user';
-  await page.evaluate(() => { MainSession.mainCol().cmd = 'stand-in'; });
+  // nothing else may be waiting: the receipt left from the previous test would be delivered while the box is still empty
+  await page.evaluate(() => { config.mainSession.pending = []; MainSession.mainCol().cmd = 'stand-in'; });
   await run(mainId, `clear; ${FAKE}`);
   if (process.platform === 'win32') {
     await expect.poll(() => page.evaluate((i) => agentInForeground(columns.find((c) => c.id === i), false), mainId), { timeout: 15000 }).toBe(true);
   } else {
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), mainId), { timeout: 15000 }).toBe('node');
   }
-  // typing in the terminal view, like a person: half a message, no Enter
+  // typing in the terminal view, like a person: half a message, no Enter. ConPTY
+  // drops keys typed in the first moments after a console program starts reading.
+  await page.waitForTimeout(2500);
   await page.evaluate((i) => { ChatUI.setMode(i, 'term'); focusColumnInput(i); }, mainId);
   await page.keyboard.type(half);
   await expect.poll(() => page.evaluate((i) => terms.get(i).typing.draft, mainId)).toBe(half);
