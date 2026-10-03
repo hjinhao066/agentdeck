@@ -33,6 +33,11 @@
         <h1>Conductor Board</h1>
       </div>
       <div class="board-toolbar-actions">
+        <div class="board-mode" role="group" aria-label="视图">
+          <button type="button" data-mode="crew" title="队长和它派出的会话、审查关系，实时">架构图</button>
+          <button type="button" data-mode="canvas" title="旧版自由画布：手动拖拽、连线">自由画布</button>
+        </div>
+        <button class="btn crew-only" id="crewMapArchived" hidden></button>
         <span class="board-gesture-hint">Drag cards to place · drag a blue port to link</span>
         <button class="btn" id="boardAutoArrange" title="Arrange the task DAG into clean lanes">Auto arrange</button>
         <button class="btn" id="boardToTerminals">Terminal deck</button>
@@ -40,6 +45,30 @@
         <button class="btn primary" id="boardNewTask">Assign conductor task</button>
       </div>
     </header>
+    <div id="crewMap" aria-label="终端架构图">
+      <div class="cm-scroller">
+        <div class="cm-stage">
+          <div class="cm-canvas">
+            <svg class="cm-edges" aria-hidden="true"></svg>
+            <div class="cm-nodes"></div>
+          </div>
+        </div>
+        <div class="cm-empty" hidden>
+          <strong>还没有队长</strong>
+          <span>在左侧点「队长」创建它；它派出去的会话会按派活关系画在这里，点任一节点就打开那一列。</span>
+        </div>
+      </div>
+      <footer class="cm-legend">
+        <span><i class="cm-key st-working"></i>干活中</span>
+        <span><i class="cm-key st-input"></i>待补充</span>
+        <span><i class="cm-key st-queued"></i>排队</span>
+        <span><i class="cm-key st-done"></i>已完成</span>
+        <span><i class="cm-key st-failed"></i>失败</span>
+        <span class="cm-key-line dispatch"></span><span>派活</span>
+        <span class="cm-key-line review"></span><span>审查</span>
+        <span class="cm-legend-note">点节点打开对应终端 · 已归档的默认折起</span>
+      </footer>
+    </div>
     <div id="boardConnectNotice" hidden>
       <span id="boardConnectNoticeText"></span>
       <button id="boardConnectCancel">Cancel connect</button>
@@ -315,7 +344,7 @@
     </div>
     <div class="help-section">其他</div>
     <div class="help-grid">
-      <span><kbd>⌘ ⇧ B</kbd></span><span>打开 / 关闭 Conductor Board</span>
+      <span><kbd>⌘ ⇧ B</kbd></span><span>打开 / 关闭终端架构图</span>
       <span>Assign conductor task</span><span>创建顶层任务和真实 conductor 终端；它可以生成 worker 与下游 worker</span>
       <span>Inspect here</span><span>在 Board 右侧直接操作同一个真实 xterm/node-pty 终端；图和终端同时可见</span>
       <span>Connect</span><span>显式创建 delegation / dependency / handoff 关系；点击连线标签可修改或删除</span>
@@ -360,6 +389,8 @@
   <script src="pages.js"></script>
   <script src="main-core.js"></script>
   <script src="main-session.js"></script>
+  <script src="crew-map-core.js"></script>
+  <script src="crew-map.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

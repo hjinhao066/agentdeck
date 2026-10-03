@@ -452,7 +452,7 @@ function buildChrome() {
   });
   applyFit();
 
-  const boardBtn = railBtn(ICONS.board, 'Conductor Board (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
+  const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
   boardBtn.id = 'boardViewBtn';
   const sideBtn = railBtn(ICONS.panelRight, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle());
   sideBtn.id = 'sideToggleBtn';
@@ -618,6 +618,7 @@ function showView(view) {
     closeSearch();
     closeBroadcast();
     renderBoardGraph();
+    CrewMap.render();
   } else {
     restoreBoardTerminal();
     requestAnimationFrame(() => { updateColumnStyles(); fitAll(); });
@@ -1082,7 +1083,7 @@ function renderBoardGraph() {
   updateBoardSurfaceSize();
   updateRenderedBoardLinks();
   syncBoardState();
-  if (activeView === 'board' && columns.length) {
+  if (activeView === 'board' && boardCanvasMode() && columns.length) {
     const selected = columns.find((col) => col.id === selectedBoardId) ||
       columns.find((col) => col.role === 'conductor') || columns[0];
     setTimeout(() => selectBoardNode(selected.id, false), 0);
@@ -2332,10 +2333,11 @@ function syncNav() {
 function jumpToColumn(col) {
   const t = terms.get(col.id);
   if (!t) return;
-  if (activeView === 'board') {
+  if (activeView === 'board' && boardCanvasMode()) {
     selectBoardNode(col.id, true);
     return;
   }
+  if (activeView === 'board') showView('terminals');
   Pages.hide(); // a Schedule/Artifacts page would cover the column
   peekColumn(col);
   // While zoomed, jumping re-zooms onto the target instead of focusing a hidden column.
@@ -3162,6 +3164,7 @@ setInterval(() => {
   syncNav(); // mirror status dots + active highlight into the sidebar
   Sidebar.refreshTimes();
   syncBoardState();
+  CrewMap.refresh();
 
   // Dock badge: how many agents are blocked waiting on the human.
   if (attn !== lastAttnCount) {
@@ -3343,6 +3346,31 @@ document.getElementById('searchNext').onclick = () => doSearch(1);
 document.getElementById('searchPrev').onclick = () => doSearch(-1);
 document.getElementById('searchClose').onclick = () => closeSearch();
 
+// The board view opens on the 终端架构图; the old free canvas is its second tab.
+function boardCanvasMode() { return CrewMap.mode() === 'canvas'; }
+CrewMap.init({
+  config, terms, columnLabel, findColumn: (id) => columns.find((c) => c.id === id) || (config.archived || []).find((a) => a.id === id),
+  columns: () => columns,
+  mainCol: () => MainSession.mainCol(),
+  mainState: () => MainSession.state(),
+  turnsOf: (id) => ChatUI.turnsOf(id) || [],
+  activityLine: lastActivityLine,
+  agentInfo: (col, entry) => window.AgentInfo.resolveAgentInfo(col, entry || null, null),
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar'),
+  visible: () => activeView === 'board',
+  save: saveConfig,
+  enterCanvas: () => { if (activeView === 'board') renderBoardGraph(); },
+  leaveCanvas: () => restoreBoardTerminal(),
+  // a node opens its real column; an archived one is restored first
+  open: (node) => {
+    if (node.kind === 'waiting') return;
+    let col = columns.find((c) => c.id === node.id);
+    if (!col && node.archived) col = restoreArchived(node.id, false);
+    if (!col) return;
+    showView('terminals');
+    whenMounted(col, () => setTimeout(() => jumpToColumn(col), 40));
+  },
+});
 // View restoration comes last because showView() closes the search/broadcast
 // overlays, whose DOM bindings are initialized just above.
 showView(config.activeView);

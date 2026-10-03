@@ -5,6 +5,26 @@ existing column and `node-pty` session model. Board nodes are not mocks. The
 selected node moves its existing xterm element into the board inspector, so the
 graph and the full interactive terminal stay visible together.
 
+## 终端架构图 (default tab)
+
+The board button (Cmd+Shift+B) opens on the **架构图** tab; the free canvas
+described below is the second tab (**自由画布**, remembered in `config.boardMode`).
+The map is a read-only projection of 队长's ledger sources: `config.mainSession.tasks`,
+the live columns and `config.archived` (`crew-map-core.js` builds it, `crew-map.js`
+draws it; no new IPC, nothing reads terminal output beyond the activity line).
+
+- 队长 sits on top with a line to every session it handed work to (oldest first,
+  wrapping onto a shared grid; lines to later rows run down the gaps).
+- Each node shows title, agent/model badge, state (干活中 / 待补充 / 排队 /
+  已完成 / 失败, plus 已停下 for a reply without receipt) and the newest receipt
+  line; it refreshes on the 1.5 s status tick.
+- A session reads as a **review** when its title or the prompts it was given
+  match 审查/审核/复核/评审/验收/review/audit, and those prompts name other,
+  earlier sessions by id, by title or by a file from their receipt. It is drawn
+  one row below them with violet dashed review links.
+- Clicking a node opens its real column (an archived one is restored first).
+  Archived sessions are folded into a `+ N 个已归档` pill until shown.
+
 ## Terminal roles
 
 - **Conductor**: owns a top-level task and may create managed child terminals.
