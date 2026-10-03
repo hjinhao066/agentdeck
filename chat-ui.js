@@ -45,9 +45,9 @@
   }
 
   // ---- view mode ----
-  // Every column opens as a chat page; the header toggle shows the raw terminal.
+  // New columns follow the global choice; their own toggle stays independent.
   function modeOf(col) {
-    return col.view === 'term' ? 'term' : 'chat';
+    return C.normalizeViewMode(col.view || host.config.globalViewMode);
   }
   const isChatMode = (id) => { const col = columnById(id); return !!col && modeOf(col) === 'chat' && views.has(id); };
 
@@ -70,6 +70,20 @@
     host.layout();
     if (mode === 'chat') { renderChat(id); focusInput(id); window.SidePane.syncTerminal(); }
     else { const t = host.terms.get(id); if (t) t.term.focus(); }
+  }
+
+  function toggleGlobalMode() {
+    window.SidePane.restoreTerminal();
+    C.toggleGlobalView(host.config, host.columns());
+    host.columns().forEach((col) => {
+      applyMode(col);
+      if (modeOf(col) === 'chat' && views.has(col.id)) renderChat(col.id);
+    });
+    host.saveConfig();
+    host.layout();
+    const id = host.focusedId();
+    if (id && !focusInput(id)) host.terms.get(id)?.term.focus();
+    window.SidePane.syncTerminal();
   }
 
   // ---- building a column's chat ----
@@ -1196,7 +1210,7 @@
   }
 
   window.ChatUI = {
-    init, mountColumn, isChatMode, focusInput, setMode, onSubmitted, noteSent, sendPrompt,
+    init, mountColumn, isChatMode, focusInput, setMode, toggleGlobalMode, onSubmitted, noteSent, sendPrompt,
     onTick, onExit, onColumnMouseDown, onColumnRemoved, onColumnArchived, deleteArchivedChat, onColumnIdChanged, onRender,
     focusSearch, reveal, lastTurnTs, artifactSources, readFooter,
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },

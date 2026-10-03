@@ -13,6 +13,15 @@
   const RENDER_STEP = 150;
   const MAX_TEXT = 20000;
 
+  // The global choice stays independent of per-column overrides.
+  function normalizeViewMode(mode) { return mode === 'term' ? 'term' : 'chat'; }
+  function toggleGlobalView(config, columns) {
+    const mode = normalizeViewMode(config.globalViewMode) === 'chat' ? 'term' : 'chat';
+    config.globalViewMode = mode;
+    columns.forEach((col) => { col.view = mode; });
+    return mode;
+  }
+
   // ---- text helpers ----
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   const isWide = (ch) => /[ᄀ-ᅟ⺀-鿿가-힣豈-﫿＀-｠￠-￦]/.test(ch);
@@ -445,7 +454,7 @@
   }
 
   return {
-    RENDER_STEP, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
   };

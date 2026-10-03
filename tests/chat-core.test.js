@@ -256,3 +256,34 @@ test('blank redraw padding before the echo does not hide it', () => {
   const screen = [...Array(20).fill(''), '> please summarize', 'line two', '', '⏺ Summary here', ''];
   assert.equal(C.extractReply(screen, 'please summarize\nline two', 80), 'Summary here');
 });
+
+test('view preference defaults legacy or invalid values to chat', () => {
+  for (const value of [undefined, null, '', 'terminal', 'board', false, {}]) {
+    assert.equal(C.normalizeViewMode(value), 'chat');
+  }
+  assert.equal(C.normalizeViewMode('term'), 'term');
+  assert.equal(C.normalizeViewMode('chat'), 'chat');
+});
+
+test('global view flips its saved choice despite independent column overrides', () => {
+  const config = { globalViewMode: 'chat', theme: 'dark' };
+  const columns = [{ id: 'captain', isMain: true, view: 'term' },
+    { id: 'background', captainCrew: true, view: 'chat' }, { id: 'new' }];
+  assert.equal(C.toggleGlobalView(config, columns), 'term');
+  assert.deepEqual(columns.map((c) => c.view), ['term', 'term', 'term']);
+  columns[1].view = 'chat';
+  assert.equal(config.globalViewMode, 'term');
+  assert.equal(C.toggleGlobalView(config, columns), 'chat');
+  assert.deepEqual(columns.map((c) => c.view), ['chat', 'chat', 'chat']);
+  assert.deepEqual(config, { globalViewMode: 'chat', theme: 'dark' });
+  assert.equal(columns[0].isMain, true);
+  assert.equal(columns[1].captainCrew, true);
+});
+
+test('the global choice toggles without columns and survives a config round trip', () => {
+  const config = {};
+  C.toggleGlobalView(config, []);
+  const saved = JSON.parse(JSON.stringify(config));
+  assert.equal(C.normalizeViewMode(saved.globalViewMode), 'term');
+  assert.equal(C.toggleGlobalView(saved, [{ id: 'later', view: 'chat' }]), 'chat');
+});
