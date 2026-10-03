@@ -50,9 +50,9 @@ async function request(command, waitForCompletion) {
   atomicJson(requestFile, { id, token, createdAt: Date.now(), ...command });
 
   const timeoutMs = Math.max(5000, Number(command.timeoutMs) || (waitForCompletion ? 6 * 60 * 60 * 1000 : 30000));
-  const deadline = Date.now() + timeoutMs;
+  const deadline = command.expiresAt === undefined ? Date.now() + timeoutMs : Math.min(Date.now() + timeoutMs, command.expiresAt);
   let announcedChild = false;
-  while (Date.now() < deadline) {
+  while (true) {
     try {
       const response = JSON.parse(fs.readFileSync(responseFile, 'utf8'));
       if (response.error) {
@@ -68,7 +68,13 @@ async function request(command, waitForCompletion) {
         return response;
       }
     } catch (_) {}
+    if (Date.now() >= deadline) break;
     await sleep(250);
+  }
+  if (command.expiresAt !== undefined && Date.now() >= command.expiresAt) {
+    try { fs.unlinkSync(requestFile); } catch (_) {}
+    try { fs.unlinkSync(responseFile); } catch (_) {}
+    return { done: true, result: '' };
   }
   fail(`Timed out waiting for board request ${id}.`, 2);
 }
@@ -94,6 +100,7 @@ function usage() {
     '  read --id captain-history --find "words"   search across all old 队长 conversations\n' +
     '  peek --id <session-id> [--lines 40]       live terminal output, plain text (1–1000 rows)\n' +
     '  receipts                                 receipts not yet seen\n' +
+    '  receipts --wait [--timeout seconds]       block for unread receipts/questions; empty on timeout\n' +
     '  answer --to <session-id> --key y|n|1-9|enter|esc   answer a confirmation prompt\n'
   );
 }
@@ -167,6 +174,21 @@ async function main() {
     return;
   }
   if (action === 'ledger' || action === 'receipts') {
+    if (action === 'receipts' && args.wait === true) {
+      const seconds = args.timeout === undefined ? undefined : (typeof args.timeout === 'string' && args.timeout.trim() ? Number(args.timeout) : NaN);
+      if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0 || seconds > Number.MAX_SAFE_INTEGER / 1000)) fail('receipts --timeout must be a non-negative number of seconds.');
+      const expiresAt = seconds === undefined ? undefined : Date.now() + seconds * 1000;
+      // One background CLI process, short authenticated reads: a cancelled
+      // watcher leaves no long-lived request that could eat a later receipt.
+      do {
+        const pollExpiresAt = Math.min(Date.now() + 5000, expiresAt === undefined ? Infinity : expiresAt);
+        const response = await request({ action: 'main-receipts', wait: true, expiresAt: pollExpiresAt }, false);
+        if (response.result) { process.stdout.write(`${response.result}\n`); return; }
+        if (expiresAt !== undefined && Date.now() >= expiresAt) return;
+        await sleep(Math.min(1000, expiresAt === undefined ? 1000 : Math.max(0, expiresAt - Date.now())));
+      } while (expiresAt === undefined || Date.now() < expiresAt);
+      return;
+    }
     const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);
     return;

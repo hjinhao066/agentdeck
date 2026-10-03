@@ -2923,8 +2923,9 @@ window.deck.onBoardCommand((message) => {
   if (String(message.action || '').startsWith('main-')) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
-        // A peek is ephemeral: never save live terminal contents in config.
-        if (message.action === 'main-peek') window.deck.boardRespond({ requestId: message.id, ...response });
+        // A peek is ephemeral; empty watcher polls have no side effects and
+        // must not rewrite config or evict cached task responses every second.
+        if (message.action === 'main-peek' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       },
       (error) => {

@@ -4,6 +4,12 @@
 // carrying the AgentDeck receipt contract gets a 【回执】 block back; "ask me"
 // makes it stop at a y/n question like a permission prompt.
 const readline = require('readline');
+if (process.env.AGENTDECK_TEST_CONTROL_ENV_FILE && process.env.AGENTDECK_CONTROL_TOKEN) {
+  require('fs').writeFileSync(process.env.AGENTDECK_TEST_CONTROL_ENV_FILE, JSON.stringify({
+    AGENTDECK_CONTROL_DIR: process.env.AGENTDECK_CONTROL_DIR,
+    AGENTDECK_CONTROL_TOKEN: process.env.AGENTDECK_CONTROL_TOKEN,
+  }));
+}
 if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
   require('fs').writeFileSync(process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE, JSON.stringify({
     child: Object.hasOwn(process.env, 'CLAUDE_CODE_CHILD_SESSION'),

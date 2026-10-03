@@ -66,6 +66,23 @@ test('队长 instructions name the commands', () => {
   assert.match(M.RECEIPT_CONTRACT, /【回执】/);
 });
 
+test('Captain maintains one Bash background receipt listener, including timeout and reset', () => {
+  for (const platform of ['darwin', 'win32']) {
+    const text = M.instructions(platform);
+    assert.ok(text.includes('node "$AGENTDECK_BOARD_CLI" receipts --wait --timeout 300'));
+    assert.ok(!text.includes('node "$env:AGENTDECK_BOARD_CLI" receipts --wait'));
+    assert.match(text, /run_in_background: true/);
+    assert.match(text, /恰好一个后台监听/);
+    assert.match(text, /处理完立即再/);
+    assert.match(text, /超时空输出也立即重挂/);
+    assert.match(text, /不附在用户消息里/);
+  }
+  const legacy = M.instructions('darwin', undefined, true);
+  assert.match(legacy, /已显式开启旧回执注入回退/);
+  assert.match(legacy, /不要再挂 receipts --wait 后台监听/);
+  assert.ok(!legacy.includes('run_in_background: true'));
+});
+
 test('a cleared 队长 is relaunched fresh: resume flags are dropped, everything else kept', () => {
   assert.equal(M.freshCommand('claude --continue --dangerously-skip-permissions --effort high'), 'claude --dangerously-skip-permissions --effort high');
   assert.equal(M.freshCommand('claude -c --effort high'), 'claude --effort high');

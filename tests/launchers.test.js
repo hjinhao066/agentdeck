@@ -239,8 +239,11 @@ test('队长 instructions call the board CLI the way the column\'s shell reads e
     assert.ok(win.includes(`node "$env:AGENTDECK_BOARD_CLI" ${cmd}`), `win ${cmd}`);
     assert.ok(mac.includes(`node "$AGENTDECK_BOARD_CLI" ${cmd}`), `mac ${cmd}`);
   }
-  // a bare $AGENTDECK_BOARD_CLI is an empty, undefined variable in PowerShell
-  assert.ok(!/"\$AGENTDECK_BOARD_CLI"/.test(win));
+  // Terminal commands use PowerShell; the background Bash tool uses POSIX
+  // syntax on Windows too. Only its explicitly labelled rule may contain it.
+  const bashRule = win.split('\n').find((line) => line.startsWith('6. '));
+  assert.match(bashRule, /Bash 工具.*node "\$AGENTDECK_BOARD_CLI" receipts --wait/);
+  assert.ok(!/"\$AGENTDECK_BOARD_CLI"/.test(win.split('\n').filter((line) => line !== bashRule).join('\n')));
   assert.ok(!/\$env:/.test(mac));
   assert.equal(M.instructions('linux'), mac);
   assert.equal(M.instructions(), mac);
