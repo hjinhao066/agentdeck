@@ -1,7 +1,7 @@
 // Pure helpers behind the left sidebar: folders, the order sessions appear in,
 // and archived sessions. The deck always shows sessions in the same order as
-// the sidebar (folders top to bottom, then loose sessions), so swiping left and
-// right walks the list you see. No DOM, no Electron: runs in the page and tests.
+// the sidebar (队长 and the sessions it opened, folders top to bottom, then
+// loose sessions), so swiping left and right walks the list you see. No DOM, no Electron: runs in the page and tests.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -38,49 +38,68 @@
     return id && folders.some((f) => f.id === id) ? id : null;
   }
 
-  // Folders in their order, each with its sessions in deck order, then loose
-  // sessions. 队长 (the main session) is not part of any group: the sidebar
-  // pins it as its own protected row above the folders (captainOf).
+  // Sessions 队长 opened (captainCrew) sit right under it until the user files
+  // them elsewhere; with no 队长 they are ordinary sessions again.
+  const CREW = '\u0000crew';
+  function groupKey(col, folders, hasMain) {
+    if (hasMain && col.captainCrew) return CREW;
+    return folderOf(col, folders) || '';
+  }
+
+  // 队长's sessions, folders in their order (each with its sessions in deck
+  // order), then loose sessions. 队长 (the main session) is not part of any
+  // group: the sidebar pins it as its own protected row above the folders
+  // (captainOf), with its sessions listed under it.
   function groupSessions(columns, folders) {
+    const hasMain = columns.some((c) => c.isMain);
     const groups = folders.map((folder) => ({ folder, items: [] }));
     const byId = new Map(groups.map((g) => [g.folder.id, g]));
+    const crew = [];
     const loose = [];
     for (const col of columns) {
       if (col.isMain) continue;
-      const fid = folderOf(col, folders);
-      if (fid) byId.get(fid).items.push(col); else loose.push(col);
+      const key = groupKey(col, folders, hasMain);
+      if (key === CREW) crew.push(col);
+      else if (key) byId.get(key).items.push(col);
+      else loose.push(col);
     }
-    return { groups, loose };
+    return { crew, groups, loose };
   }
 
-  // 队长 is always the first column of the deck, and the first sidebar row.
+  // 队长 is always the first column of the deck, and the first sidebar row;
+  // the sessions it opened follow it.
   function orderedColumns(columns, folders) {
-    const { groups, loose } = groupSessions(columns, folders);
-    return [...columns.filter((c) => c.isMain), ...groups.flatMap((g) => g.items), ...loose];
+    const { crew, groups, loose } = groupSessions(columns, folders);
+    return [...columns.filter((c) => c.isMain), ...crew, ...groups.flatMap((g) => g.items), ...loose];
   }
   function captainOf(columns) {
     return columns.find((c) => c.isMain) || null;
   }
 
-  // Move a session into a folder (null = loose), optionally before another
-  // session of that group. Returns the new deck order. 队长 never moves.
+  // Move a session under 队长 (target.crew), into a folder, or loose (no
+  // folderId), optionally before another session of that group. Returns the
+  // new deck order. 队长 never moves.
   function moveColumn(columns, folders, id, target) {
     const col = columns.find((c) => c.id === id);
     if (!col) return columns.slice();
     if (col.isMain) return orderedColumns(columns, folders);
-    const folderId = target && target.folderId && folders.some((f) => f.id === target.folderId) ? target.folderId : null;
+    const hasMain = columns.some((c) => c.isMain);
+    const crew = !!(target && target.crew) && hasMain;
+    const folderId = !crew && target && target.folderId && folders.some((f) => f.id === target.folderId) ? target.folderId : null;
+    col.captainCrew = crew;
     col.folderId = folderId;
+    const key = groupKey(col, folders, hasMain);
     const rest = columns.filter((c) => c !== col);
     const beforeId = target && target.beforeId;
     let at = -1;
     if (beforeId && beforeId !== id) {
-      const before = rest.findIndex((c) => c.id === beforeId && folderOf(c, folders) === folderId);
+      const before = rest.findIndex((c) => c.id === beforeId && !c.isMain && groupKey(c, folders, hasMain) === key);
       if (before >= 0) at = before;
     }
     if (at < 0) {
       // end of its group
       let last = -1;
-      rest.forEach((c, i) => { if (folderOf(c, folders) === folderId) last = i; });
+      rest.forEach((c, i) => { if (!c.isMain && groupKey(c, folders, hasMain) === key) last = i; });
       at = last + 1;
       if (last < 0) at = rest.length;
     }

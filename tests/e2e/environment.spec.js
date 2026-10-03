@@ -28,3 +28,29 @@ test('independent PTYs keep CLI history and let statusline output reach the foot
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });
+
+test('a test instance renders normally but stays invisible and click-through on the desktop', async () => {
+  const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-env-'));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns: [] }));
+  const env = { ...process.env };
+  delete env.ELECTRON_RUN_AS_NODE;
+  let application;
+  try {
+    application = await electron.launch({
+      executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+      args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`],
+      env,
+    });
+    const page = await application.firstWindow();
+    await expect.poll(() => application.evaluate(({ BrowserWindow }) => {
+      const w = BrowserWindow.getAllWindows()[0];
+      return w ? [w.isVisible(), w.getOpacity(), w.isFocusable(), w.isFocused()] : null;
+    })).toEqual([true, 0, false, false]);
+    // still a live page: visible to itself, animation frames run, layout is real
+    expect(await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => done(document.visibilityState))))).toBe('visible');
+    expect(await page.evaluate(() => innerWidth)).toBeGreaterThan(600);
+  } finally {
+    if (application) await application.close();
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});

@@ -52,7 +52,7 @@ test.afterAll(async () => {
 test('only a blank session offers the agents, with their real launch commands', async () => {
   await expect(launcher('ln-blank')).toHaveText(['Claude', 'Antigravity', 'Grok', 'Cursor CLI', 'Codex (ChatGPT)']);
   await expect(launcher('ln-blank').nth(0)).toHaveAttribute('data-cmd', 'claude --dangerously-skip-permissions --effort high');
-  await expect(launcher('ln-blank').nth(1)).toHaveAttribute('data-cmd', 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  await expect(launcher('ln-blank').nth(1)).toHaveAttribute('data-cmd', 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   await expect(launcher('ln-blank').nth(2)).toHaveAttribute('data-cmd', 'grok --permission-mode bypassPermissions');
   await expect(launcher('ln-blank').nth(3)).toHaveAttribute('data-cmd', 'cursor-agent --force --model claude-opus-5-5-high');
   await expect(launcher('ln-blank').nth(4)).toHaveAttribute('data-cmd', 'codex --dangerously-bypass-approvals-and-sandbox');
@@ -152,8 +152,8 @@ test('saved default migration upgrades legacy commands while preserving custom c
       blankShell: B.upgradeLegacyCommand(''),
     };
   });
-  expect(result.legacyAgy).toBe('agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
-  expect(result.plainAgy).toBe('agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  expect(result.legacyAgy).toBe('agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
+  expect(result.plainAgy).toBe('agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   expect(result.plainGrok).toBe('grok --permission-mode bypassPermissions');
   expect(result.legacyCursor).toBe('cursor-agent --force --model claude-opus-5-5-high');
   expect(result.plainCursor).toBe('cursor-agent --force --model claude-opus-5-5-high');

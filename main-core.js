@@ -38,9 +38,10 @@
   // Only models each CLI listed on the owner's accounts; launch commands match
   // BoardCore's presets.
   const PROVIDERS = [
-    'Antigravity：agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high　其他模型：gemini-3.1-pro-high、claude-sonnet-4-6、claude-opus-4-6-thinking；--effort 可选 low|medium|high|max',
+    'Antigravity：agy --dangerously-skip-permissions --model gemini-3.8-flash-high　档位写在模型名最后：gemini-3.8-flash-low、gemini-3.8-flash-medium、gemini-3.8-flash-high；其他模型：gemini-3.1-pro-high。不要加 --effort：Antigravity 看到 --effort 会悄悄换成别的模型',
     'Cursor CLI：cursor-agent --force --model claude-opus-5-5-high　其他模型：claude-sonnet-5-5-high、grok-4.7-high-fast、gemini-3.8-flash-high',
-    'Claude Code：claude --dangerously-skip-permissions --effort high',
+    'Claude Code：claude --dangerously-skip-permissions --effort high　默认模型是 Opus 5.5；要 Sonnet 就加 --model claude-sonnet-5-5',
+    '不要用 Claude 4.x 和 Haiku 这些旧模型（包括 Antigravity 里的 Claude Sonnet 4.6、Claude Opus 4.6）：用户不要，new 会直接拒绝。',
     'Codex (ChatGPT)：codex --dangerously-bypass-approvals-and-sandbox',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
@@ -98,7 +99,7 @@
       '用多大的档位（effort）：',
       ...EFFORT.map((e) => `   - ${e.when}：${e.tier}`),
       `   Cursor 把档位写在模型名最后，只用这些名字：${CURSOR_MODELS.join('、')}。`,
-      '   Antigravity 和 Claude Code 用 --effort 写档位（Antigravity 没有 xhigh）。',
+      '   Claude Code 用 --effort 写档位。Antigravity 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max），不能加 --effort。',
       '',
       ...(note ? [note, ''] : []),
       '现在只回复一句「队长已就绪」，然后等用户的指令。',
@@ -120,13 +121,18 @@
   }
   const TASK_STATUS = { queued: '排队中', working: '干活中', input: '停在确认', asking: '在问你' };
 
+  // A launch command's words, quotes kept; the program's bare name.
+  const WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
+  const unquote = (w) => String(w).replace(/^["']|["']$/g, '');
+  const programName = (w) => unquote(w).replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+
   // A relaunch after a reset must start the agent fresh, never pick up the
   // cleared conversation again: drop resume flags from the launch command.
   function freshCommand(cmd) {
     const source = String(cmd || '');
-    const words = source.match(/(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g) || [];
+    const words = source.match(WORDS) || [];
     if (!words.length) return '';
-    const name = words[0].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+    const name = programName(words[0]);
     if (!['claude', 'cursor-agent', 'agy', 'gemini', 'grok', 'codex'].includes(name)) return source;
     const claude = name === 'claude';
     const out = [words[0]];
@@ -146,6 +152,67 @@
       out.push(w);
     }
     return out.length === words.length ? source : out.join(' ');
+  }
+
+  // Models the owner never wants work handed to, in any CLI: Claude 4.x and
+  // older, and Haiku (Antigravity lists claude-sonnet-4-6, claude-opus-4-6-thinking).
+  const OLD_MODEL = /^(?:claude-)?haiku|^(?:claude-)?(?:sonnet|opus)-[0-4](?!\d)|^claude-[0-4](?!\d)/i;
+  // Antigravity's effort is the model id's suffix; xhigh and max do not exist.
+  const AGY_TIER = { low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high' };
+  const AGY_MODEL = 'gemini-3.8-flash-high';
+
+  // Checks a launch command 队长 picked before a session runs it: { cmd } or
+  // { error } for 队长. Antigravity given --effort next to a model id that has
+  // its own tier silently runs a different model (it fell back to Claude
+  // Sonnet 4.6), and without --model it runs whatever was used last; so the
+  // flag goes, its tier moves into the id, and a missing model gets Flash.
+  function checkCommand(cmd) {
+    const source = String(cmd || '').trim();
+    const words = source.match(WORDS) || [];
+    if (!words.length) return { cmd: source };
+    for (let i = 1; i < words.length; i++) {
+      const m = /^--model(=.*)?$/.exec(words[i]);
+      const id = m ? unquote(m[1] ? m[1].slice(1) : words[i + 1] || '') : '';
+      if (OLD_MODEL.test(id)) {
+        return { error: `用户不用 ${id.slice(0, 60)}（Claude 4.x 和 Haiku 都不用）。量大的普通活用 Antigravity 的 gemini-3.8-flash-high（或 -medium、-low）；写代码和重要的活用 Cursor 的 claude-opus-5-5-high 或 claude-sonnet-5-5-high，或者 Claude Code（默认 Opus 5.5，要 Sonnet 加 --model claude-sonnet-5-5）。` };
+      }
+    }
+    if (programName(words[0]) !== 'agy') return { cmd: source };
+    const out = [words[0]];
+    let effort = '';
+    let model = -1;
+    for (let i = 1; i < words.length; i++) {
+      const e = /^--effort(?:=(.*))?$/.exec(words[i]);
+      if (e) { effort = unquote(e[1] !== undefined ? e[1] : words[++i] || '').toLowerCase(); continue; }
+      out.push(words[i]);
+      if (/^--model=/.test(words[i])) model = out.length - 1;
+      else if (words[i] === '--model' && i + 1 < words.length) { out.push(words[++i]); model = out.length - 1; }
+    }
+    // right after the program: Go flags stop at the first plain argument
+    if (model < 0) { out.splice(1, 0, '--model', AGY_MODEL); model = 2; }
+    const eq = /^--model=/.test(out[model]);
+    const id = unquote(eq ? out[model].slice(8) : out[model]);
+    const family = /^(gemini-[\d.]+-(?:flash|pro))-(?:low|medium|high)$/.exec(id);
+    let tier = AGY_TIER[effort];
+    if (family && tier) {
+      if (/-pro$/.test(family[1]) && tier === 'medium') tier = 'high';   // Pro has only high and low
+      out[model] = (eq ? '--model=' : '') + `${family[1]}-${tier}`;
+    }
+    return { cmd: out.join(' ') === words.join(' ') ? source : out.join(' ') };
+  }
+
+  // Sessions 队长 opened before they were marked captainCrew: its first card
+  // for that column went out right as the column was created. A column id
+  // starts with its creation time in ms (renderer newId); a session 队长 only
+  // told something to was created long before.
+  function openedByCaptain(columns, tasks) {
+    const ids = new Set();
+    for (const t of Array.isArray(tasks) ? tasks : []) {
+      const born = /^c(\d{13})/.exec(t && t.colId);
+      const lag = born ? t.sentAt - Number(born[1]) : NaN;
+      if (lag >= 0 && lag < 10_000 && columns.some((c) => c.id === t.colId && !c.isMain)) ids.add(t.colId);
+    }
+    return ids;
   }
 
   // Earlier 队长 conversations (config.captainHistory). Only this metadata is
@@ -288,6 +355,6 @@
 
   return {
     RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt,
-    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

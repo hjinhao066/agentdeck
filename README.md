@@ -10,13 +10,19 @@ The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
 - **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
-  then the 队长 row (once the Captain exists), folders, loose sessions and 已归档.
+  then the 队长 row (once the Captain exists) with the sessions it opened listed
+  under it, folders, loose sessions and 已归档.
   Every session is a live terminal column.
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
-  sessions in exactly the sidebar order (队长 first, then folders), so swiping walks the list.
+  sessions in exactly the sidebar order (队长 first, then the sessions it opened,
+  then folders), so swiping walks the list.
   The 队长 row is pinned: clicking it selects the Captain and shows its saved
   conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
+  A session the 队长 opens with `new` stays under its row (an indented tree) until
+  you drag it into a folder or 对话, or pick another place in its menu; dropping a
+  session on the 队长 row (or 放在队长下面 in its menu) puts it back there. Sessions
+  the 队长 only `tell`s something keep their place.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
   top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
   stays within its assigned column width, including when switching views or zooming.
@@ -84,7 +90,12 @@ again with the current provider, model and effort instructions.
   simple work, `high` for ordinary code, `xhigh` for complex work or a task that
   already failed, `max` for the most critical. Cursor takes the tier as the model
   id's suffix (`claude-opus-5-5-medium|high|xhigh|max`, same for
-  `claude-sonnet-5-5-`); Antigravity and Claude Code take `--effort`.
+  `claude-sonnet-5-5-`); so does Antigravity (`gemini-3.8-flash-low|medium|high`,
+  no xhigh/max), Claude Code takes `--effort`. Before a session starts, `new`
+  checks the command: an Antigravity `--effort` is folded into the model id (agy
+  otherwise silently switches to another model) and a missing `--model` gets
+  Flash; Claude 4.x and Haiku models are refused with a message telling the 队长
+  what to use instead.
   AgentDeck cannot read live quotas; the 队长 switches
   provider when a worker reports a limit. New sessions appear in the sidebar and the
   deck, and get the task as their first message. The app appends a contract: finish without waiting on the user, ask the
@@ -142,8 +153,9 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   launch is sent only from a recognized PowerShell prompt. A half-typed line is cleared first with editing keys only (^U; Ctrl+End, Ctrl+Home
   in PowerShell), never ^C. The buttons also disappear when you
   start an agent in the terminal yourself. Defaults: `claude
-  --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high
-  --effort high`, `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
+  --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`
+  (Antigravity's effort is the model id's suffix, `-low|-medium|-high`; given
+  `--effort` beside such an id it silently runs a different model), `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
   never `agent`, which other tools also install), `codex --dangerously-bypass-approvals-and-sandbox`.
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.

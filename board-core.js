@@ -6,7 +6,9 @@
   'use strict';
 
   const CLAUDE = 'claude --dangerously-skip-permissions --effort high';
-  const AGY = 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high';
+  // Antigravity's effort is the model id's suffix: --effort beside a model id
+  // makes it fall back to another model, so the preset never passes it.
+  const AGY = 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high';
   // `cursor-agent`, never `agent`: that name collides with other tools' binaries.
   const CURSOR = 'cursor-agent --force --model claude-opus-5-5-high';
   const GROK = 'grok --permission-mode bypassPermissions';
@@ -36,6 +38,7 @@
   const LEGACY_COMMANDS = Object.freeze({
     agy: AGY,
     'agy --model gemini-3.8-flash-high --effort high': AGY,
+    'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high': AGY,
     grok: GROK,
     cursor: CURSOR,
     'cursor-agent': CURSOR,

@@ -155,11 +155,19 @@ if (saved) {
       view: undefined,
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
+      captainCrew: !!c.captainCrew,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
   }
 }
-// The deck always shows sessions in sidebar order: folders first, then loose ones.
+// Once: sessions 队长 opened before they were marked go under it too.
+if (config.mainSession && !config.mainSession.crewMarked) {
+  const opened = MainCore.openedByCaptain(config.columns, config.mainSession.tasks);
+  config.columns.forEach((c) => { if (opened.has(c.id) && !c.folderId) c.captainCrew = true; });
+  config.mainSession.crewMarked = true;
+}
+// The deck always shows sessions in sidebar order: 队长 and its sessions,
+// folders, then loose ones.
 config.columns = SidebarCore.orderedColumns(config.columns, config.folders);
 let columns = config.columns;
 let activeView = config.activeView;
@@ -358,12 +366,18 @@ function applyTheme(theme) {
   saveConfig();
 }
 
-// ---- Terminal font size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
+// ---- Terminal and chat font size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
 const FONT_MIN = 8, FONT_MAX = 32, FONT_DEFAULT = 13;
+// The chat view follows the same size: it scales with the terminal font.
+function applyChatZoom() {
+  document.documentElement.style.setProperty('--chat-zoom', String(config.fontSize / FONT_DEFAULT));
+}
+applyChatZoom();
 function setFontSize(size) {
   size = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
   if (size === config.fontSize) return;
   config.fontSize = size;
+  applyChatZoom();
   terms.forEach(({ term }) => { term.options.fontSize = size; });
   fitAll();
   saveConfig();

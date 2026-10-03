@@ -64,6 +64,33 @@ test('a prompt typed in the composer reaches the terminal and comes back as a re
   await expect(column.locator('.reply.pending')).toHaveCount(0);
 });
 
+test('⌘−/⌘= (Ctrl on Windows) shrink and grow the chat text with the terminal font; ⌘0 resets both', async () => {
+  const column = page.locator('.column').first();
+  const reply = column.locator('.msg.assistant .reply').first();
+  const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
+  const size = () => page.evaluate(() => {
+    const r = document.querySelector('.column.chat-mode .msg.assistant .reply').getBoundingClientRect();
+    return { font: config.fontSize, term: terms.get(columns[0].id).term.options.fontSize, chatH: r.height, chatW: document.querySelector('.column.chat-mode .chat').getBoundingClientRect().width };
+  });
+  await column.locator('.composer textarea').click();
+  await expect(reply).toBeVisible();
+  const base = await size();
+  expect(base.font).toBe(13);
+  for (let i = 0; i < 3; i++) await page.keyboard.press(`${mod}+Minus`);
+  const small = await size();
+  expect(small.font).toBe(10);
+  expect(small.term).toBe(10);
+  expect(small.chatH).toBeLessThan(base.chatH * 0.85);
+  // the chat still fills its column: only its contents get smaller
+  expect(Math.abs(small.chatW - base.chatW)).toBeLessThan(2);
+  await page.keyboard.press(`${mod}+Equal`);
+  expect((await size()).font).toBe(11);
+  await page.keyboard.press(`${mod}+0`);
+  const reset = await size();
+  expect(reset.font).toBe(13);
+  expect(Math.abs(reset.chatH - base.chatH)).toBeLessThan(2);
+});
+
 test('swiping sideways still pages through the columns', async () => {
   const box = await page.locator('.column').first().locator('.chat-scroll').boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);

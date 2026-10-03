@@ -549,7 +549,10 @@ function createWindow() {
     },
   });
   mainWindow = win;
-  if (tudArg) win.once('ready-to-show', () => win.showInactive());
+  // Tests drive the page over the DevTools protocol, not the screen: the window
+  // keeps rendering but is transparent and click-through, so a test run never
+  // covers the user's apps or catches their clicks.
+  if (tudArg) win.once('ready-to-show', () => { hideTestWindow(win); win.showInactive(); });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
@@ -561,6 +564,11 @@ function createWindow() {
   win.webContents.on('did-start-loading', () => { boardRendererReady = false; });
   win.webContents.on('destroyed', () => { boardRendererReady = false; });
   win.loadFile(mainPage);
+}
+
+function hideTestWindow(win) {
+  win.setOpacity(0);
+  win.setIgnoreMouseEvents(true);
 }
 
 function focusColumn(id) {
@@ -875,7 +883,7 @@ app.whenReady().then(() => {
   });
 
   notifications = createNotifications({ BrowserWindow, ipcMain, screen, focusColumn,
-    getMainWindow: () => mainWindow });
+    getMainWindow: () => mainWindow, onCreate: tudArg ? hideTestWindow : null });
   onMain('notify-state', (_event, payload) => {
     if (payload && ptys.has(payload.id)) notifications.show(payload);
   });

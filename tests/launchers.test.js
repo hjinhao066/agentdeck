@@ -11,7 +11,7 @@ const S = require('../schedule-core');
 test('a blank session offers Claude, Antigravity, Grok, Cursor CLI and Codex (ChatGPT), in that order', () => {
   assert.deepEqual(B.LAUNCHERS.map((l) => l.label), ['Claude', 'Antigravity', 'Grok', 'Cursor CLI', 'Codex (ChatGPT)']);
   for (const l of B.LAUNCHERS) assert.equal(B.commandForAgent(l.key), l.cmd, l.key);
-  assert.equal(B.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  assert.equal(B.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   assert.equal(B.commandForAgent('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(B.commandForAgent('cursor-agent'), B.commandForAgent('cursor'));
   assert.equal(B.commandForAgent('grok'), 'grok --permission-mode bypassPermissions');
@@ -71,8 +71,10 @@ test('agent names resolve to their launch commands; a custom command wins; unkno
   // every launcher is recognized back from its command
   const types = { claude: 'Claude', agy: 'Antigravity', grok: 'Grok', cursor: 'Cursor', codex: 'Codex' };
   for (const l of B.LAUNCHERS) assert.equal(B.inferAgentType(l.cmd), types[l.key], l.key);
-  // the defaults run at the "ordinary code" tier
-  for (const key of ['claude', 'agy']) assert.match(B.commandForAgent(key), /--effort high$/);
+  // the defaults run at the "ordinary code" tier; Antigravity's is in the model id
+  assert.match(B.commandForAgent('claude'), /--effort high$/);
+  assert.match(B.commandForAgent('agy'), /--model gemini-3\.8-flash-high$/);
+  assert.ok(!/--effort/.test(B.commandForAgent('agy')), 'agy switches models when given --effort');
   assert.match(B.commandForAgent('cursor'), /--model claude-opus-5-5-high$/);
   assert.match(B.commandForAgent('cursor'), /^cursor-agent --force/);
 });
@@ -136,11 +138,13 @@ test('队长 knows the providers, only verified models, and the routing preferen
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [
-    'claude-opus-4-6-thinking', 'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
-    'claude-opus-5-5-xhigh', 'claude-sonnet-4-6', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-max',
+    'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
+    'claude-opus-5-5-xhigh', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-max',
     'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
-    'gemini-3.1-pro-high', 'gemini-3.8-flash-high', 'grok-4.7-high-fast',
+    'gemini-3.1-pro-high', 'gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'grok-4.7-high-fast',
   ]);
+  // the old Claude models are named only to forbid them
+  assert.match(text, /不要用 Claude 4\.x 和 Haiku[^\n]*new 会直接拒绝/);
   // Antigravity has no 5.5 models
   const agyLine = text.split('\n').find((l) => l.includes('Antigravity：'));
   assert.ok(!/5-5|5\.5/.test(agyLine));
@@ -177,10 +181,11 @@ test('队长 picks the effort: simple medium, ordinary code high, complex or fai
   const cursor = lines.find((l) => l.includes('Cursor 把档位写在模型名最后'));
   for (const id of M.CURSOR_MODELS) assert.ok(cursor.includes(id), id);
   assert.ok(!/claude-(?:opus|sonnet)-5-5-(?!medium|high|xhigh|max)/.test(M.instructions()));
-  // Antigravity's --effort has no xhigh
+  // Antigravity's tier is the model id's suffix, never --effort (it would switch models)
   const agy = lines.find((l) => l.includes('Antigravity：'));
-  assert.match(agy, /--effort 可选 low\|medium\|high\|max/);
-  assert.match(M.instructions(), /Antigravity 没有 xhigh/);
+  assert.match(agy, /gemini-3\.8-flash-low、gemini-3\.8-flash-medium、gemini-3\.8-flash-high/);
+  assert.match(agy, /不要加 --effort/);
+  assert.match(M.instructions(), /Antigravity 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max），不能加 --effort/);
 });
 
 test('队长 instructions call the board CLI the way the column\'s shell reads env vars', () => {

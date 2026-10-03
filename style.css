@@ -948,7 +948,8 @@ body.linking-board .board-port.out::before {
    The real xterm stays mounted and laid out underneath, only hidden, so the
    pty keeps its size and status detection keeps reading the screen. */
 .column .chat { display: none; }
-.column.chat-mode .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+/* ⌘−/⌘= scale the chat view with the terminal font (renderer sets --chat-zoom) */
+.column.chat-mode .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; zoom: var(--chat-zoom, 1); }
 .column.chat-mode > .term {
   position: absolute; left: 0; right: 0; top: 40px; bottom: 0;
   visibility: hidden; pointer-events: none;
@@ -1402,6 +1403,13 @@ body.linking-board .board-port.out::before {
 .colnav-item.captain-item .cn-crown { color: #e0a91c; width: 14px; height: 14px; flex: 0 0 auto; display: inline-flex; }
 .colnav-item.captain-item .cn-crown svg { width: 14px; height: 14px; }
 .colnav-item.captain-item:hover .cn-meta { display: inline; }
+/* the sessions 队长 opened, listed under its row like a tree */
+.nav-crew { position: relative; padding-bottom: 4px; }
+.nav-crew::before {
+  content: ''; position: absolute; left: 18px; top: 0; bottom: 10px; width: 1px;
+  background: color-mix(in srgb, #e0a91c 45%, transparent); pointer-events: none;
+}
+.nav-crew .colnav-item { padding-left: 28px; }
 /* chat history: older turns load on request; a cut-off turn says so */
 .chat-earlier {
   align-self: center; flex: 0 0 auto; padding: 4px 12px; border-radius: 999px;

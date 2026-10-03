@@ -20,7 +20,7 @@ test('infers known agents and resolves commands', () => {
   assert.equal(BoardCore.inferAgentType('codex --dangerously-bypass-approvals-and-sandbox'), 'Codex');
   assert.equal(BoardCore.inferAgentType('gemini --yolo'), 'Antigravity');
   assert.equal(BoardCore.commandForAgent('claude'), 'claude --dangerously-skip-permissions --effort high');
-  assert.equal(BoardCore.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  assert.equal(BoardCore.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   assert.equal(BoardCore.commandForAgent('grok'), 'grok --permission-mode bypassPermissions');
   assert.equal(BoardCore.commandForAgent('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(BoardCore.commandForAgent('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
@@ -32,7 +32,12 @@ test('upgrades legacy default commands while preserving custom commands and conf
   // exact legacy presets
   assert.equal(
     BoardCore.upgradeLegacyCommand('agy --model gemini-3.8-flash-high --effort high'),
-    'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high'
+    'agy --dangerously-skip-permissions --model gemini-3.8-flash-high'
+  );
+  // the old Antigravity preset passed --effort, which makes agy switch models
+  assert.equal(
+    BoardCore.upgradeLegacyCommand('agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high'),
+    'agy --dangerously-skip-permissions --model gemini-3.8-flash-high'
   );
   assert.equal(
     BoardCore.upgradeLegacyCommand('cursor-agent --model claude-opus-5-5-high'),
@@ -43,7 +48,7 @@ test('upgrades legacy default commands while preserving custom commands and conf
     'claude --dangerously-skip-permissions --effort high'
   );
   // plain legacy aliases
-  assert.equal(BoardCore.upgradeLegacyCommand('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high');
+  assert.equal(BoardCore.upgradeLegacyCommand('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   assert.equal(BoardCore.upgradeLegacyCommand('grok'), 'grok --permission-mode bypassPermissions');
   assert.equal(BoardCore.upgradeLegacyCommand('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(BoardCore.upgradeLegacyCommand('cursor-agent'), 'cursor-agent --force --model claude-opus-5-5-high');

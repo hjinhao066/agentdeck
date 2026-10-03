@@ -110,6 +110,9 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await expect.poll(() => page.evaluate(() => columns.some((c) => c.displayTitle === '写周报'))).toBe(true);
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
   await expect(page.locator(`.colnav-item[data-col-id="${child}"]`)).toContainText('写周报');
+  // listed under the Captain's row, and next to it in the deck
+  await expect(page.locator(`.colnav-item.captain-item + .nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(1);
+  expect(await page.evaluate(() => [...deckEl.querySelectorAll('.column')].slice(0, 2).map((c) => c.dataset.colId))).toEqual([mainId, child]);
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`).first();
   await expect(card).toContainText('写周报');
   // the task is the child's first user message; the receipt contract rides along unseen
@@ -145,6 +148,35 @@ test('tell, ledger and read from the Captain terminal; a worker stuck on a confi
   await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('按了 y');
   await expect.poll(() => screen('cap-x'), { timeout: 15000 }).toContain('GOT y');
   await expect(card).not.toHaveClass(/st-input/, { timeout: 15000 });
+});
+
+test('a session the Captain only told something keeps its place; its own sessions leave and come back by drag', async () => {
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
+  const crew = (id) => page.locator(`.nav-crew .colnav-item[data-col-id="${id}"]`);
+  await expect(crew('cap-x')).toHaveCount(0);
+  await expect(page.locator('.nav-group:not(.nav-crew) .colnav-item[data-col-id="cap-x"]')).toHaveCount(1);
+  const drag = async (from, to) => {
+    const a = await from.boundingBox();
+    const b = await to.boundingBox();
+    await page.mouse.move(a.x + 30, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + 30, b.y + b.height / 2, { steps: 6 });
+    await page.mouse.up();
+  };
+  await drag(crew(child), page.locator('.nav-section[data-section="loose"]'));
+  await expect(crew(child)).toHaveCount(0);
+  expect(await page.evaluate((i) => [columns.find((c) => c.id === i).captainCrew, columns[1].id === i], child)).toEqual([false, false]);
+  await drag(page.locator(`.colnav-item[data-col-id="${child}"]`), page.locator('.colnav-item.captain-item'));
+  await expect(crew(child)).toHaveCount(1);
+  expect(await page.evaluate(() => [...deckEl.querySelectorAll('.column')][1].dataset.colId)).toBe(child);
+});
+
+test('new refuses Claude 4.x and Haiku before any session starts, and says what to use', async () => {
+  const before = await page.evaluate(() => columns.length);
+  await run(mainId, `clear; node "${CLI}" new --title "旧模型" --task "x" --command "agy --model claude-sonnet-4-6"`);
+  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('用户不用 claude-sonnet-4-6');
+  await expect.poll(() => screen(mainId)).toContain('gemini-3.8-flash-high');
+  expect(await page.evaluate(() => columns.length)).toBe(before);
 });
 
 test('receipts and questions reach an idle Captain agent by themselves, never a bare shell', async () => {
@@ -362,6 +394,9 @@ test('after a restart the Captain row is still pinned and shows its saved conver
   await expect(row).toHaveCount(1);
   await expect(row).toHaveAttribute('data-col-id', id);
   expect(await page.evaluate(() => [columns.filter((c) => c.isMain).length, deckEl.querySelector('.column').dataset.colId])).toEqual([1, id]);
+  // the sessions it opened are still listed under it
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
+  await expect(page.locator(`.colnav-item.captain-item + .nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(1);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await page.evaluate((i) => ChatUI.setMode(i, 'term'), id);
   await row.click();

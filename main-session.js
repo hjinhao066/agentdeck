@@ -20,9 +20,10 @@
     return n;
   }
 
-  // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], tasks: [task], fresh }
+  // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], tasks: [task], fresh, crewMarked }
   // inflight: receipts already typed to 队长 whose turn has not finished yet.
   // fresh: the context was cleared and 队长 has not finished a turn since.
+  // crewMarked: sessions opened before captainCrew existed were marked once.
   // config.captainHistory: conversations from before a clear (MainCore.normalizeHistory).
   function state() {
     const s = host.config.mainSession;
@@ -72,7 +73,7 @@
   function create(cmd, cwd) {
     if (mainCol()) { open(); return mainCol(); }
     const col = host.createMain({ cmd, cwd });
-    host.config.mainSession = { colId: col.id, cmd, gen: 1, pending: [], inflight: [], tasks: [], fresh: false };
+    host.config.mainSession = { colId: col.id, cmd, gen: 1, pending: [], inflight: [], tasks: [], fresh: false, crewMarked: true };
     save();
     window.Sidebar.render();
     brief(col);
@@ -396,8 +397,10 @@
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
         const custom = window.BoardCore.cleanText(message.command, 1000);
-        const cmd = custom || (agent ? window.BoardCore.commandForAgent(agent) : s.cmd);
-        const col = host.createSession({ title, cmd, cwd: window.BoardCore.cleanText(message.cwd, 1000), createdByRequestId: message.id, displayTitle: title, manualTitle: true }, true);
+        const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : s.cmd));
+        if (checked.error) throw new Error(checked.error);
+        const cmd = checked.cmd;
+        const col = host.createSession({ title, cmd, cwd: window.BoardCore.cleanText(message.cwd, 1000), createdByRequestId: message.id, displayTitle: title, manualTitle: true, captainCrew: true }, true);
         dispatch(col, task, title);
         return { done: true, result: `已开新会话 ${col.id}「${title}」，任务会在它准备好后发过去。` };
       }

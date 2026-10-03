@@ -1,6 +1,6 @@
 // Left sidebar, Cursor style: New chat / Search / Schedule / Artifacts on top,
-// then the pinned 队长 row (once it exists), folders, loose sessions and the
-// archive. Every session is a live
+// then the pinned 队长 row (once it exists) with the sessions it opened under
+// it, folders, loose sessions and the archive. Every session is a live
 // terminal column; the deck shows them in exactly this order, so dragging a
 // session into a folder also moves its column. Plain script; everything it
 // needs from the deck comes in through init().
@@ -99,10 +99,20 @@
     captainMirror.disconnect();
     const main = window.MainSession && window.MainSession.mainCol();
     captainRow.dot.hidden = !main;
-    if (main) listEl.appendChild(captainListRow(main));
     const folders = host.folders();
     const cols = host.columns();
-    const { groups, loose } = SC.groupSessions(cols, folders);
+    const { crew, groups, loose } = SC.groupSessions(cols, folders);
+    if (main) {
+      listEl.appendChild(captainListRow(main));
+      // the sessions 队长 handed work to, right under it
+      if (crew.length) {
+        const crewBox = el('div', 'nav-group nav-crew');
+        crewBox.dataset.group = '';
+        crewBox.dataset.crew = '1';
+        crew.forEach((col) => crewBox.appendChild(sessionRow(col)));
+        listEl.appendChild(crewBox);
+      }
+    }
 
     listEl.appendChild(sectionHead('folders', '文件夹', null, [iconButton('folderPlus', '新建文件夹', () => createFolder(true))]));
     groups.forEach((g) => listEl.appendChild(folderBlock(g)));
@@ -344,14 +354,17 @@
   }
   function sessionMenu(col, label, anchor) {
     const folders = host.folders();
-    const current = SC.folderOf(col, folders);
+    const crew = !!col.captainCrew && !!(window.MainSession && window.MainSession.mainCol());
+    const current = crew ? null : SC.folderOf(col, folders);
     const items = [
       { label: '重命名', run: () => inlineEdit(label, host.columnLabel(col), (v) => host.renameSession(col, v)) },
       { label: '打开终端', run: () => { host.jumpToColumn(col); host.showSideTerminal(); } },
       '-',
       { header: '移到文件夹' },
+      ...(window.MainSession && window.MainSession.mainCol()
+        ? [{ label: '放在队长下面', checked: crew, run: () => host.moveSession(col.id, { crew: true }) }] : []),
       ...folders.map((f) => ({ label: f.name, checked: f.id === current, run: () => host.moveSession(col.id, { folderId: f.id }) })),
-      { label: '不放文件夹', checked: !current, run: () => host.moveSession(col.id, { folderId: null }) },
+      { label: '不放文件夹', checked: !crew && !current, run: () => host.moveSession(col.id, { folderId: null }) },
       { label: '新建文件夹并移入', run: () => createFolder(true, col) },
       '-',
       { label: '归档', run: () => host.archiveColumn(col) },
@@ -411,9 +424,12 @@
     if (!over || !listEl.contains(over)) return null;
     const row = over.closest('.colnav-item');
     if (row) {
-      if (row.dataset.colId === srcId || row.dataset.captain) return { kind: 'noop' };
+      if (row.dataset.colId === srcId) return { kind: 'noop' };
+      // dropped on 队长's row: goes to the end of 队长's sessions
+      if (row.dataset.captain) return { kind: 'move', crew: true, beforeId: null, el: row, cls: 'drop-into' };
       const group = row.closest('[data-group]');
-      const folderId = group ? group.dataset.group || null : null;
+      const crew = !!(group && group.dataset.crew);
+      const folderId = group && !crew ? group.dataset.group || null : null;
       const r = row.getBoundingClientRect();
       const after = y > r.top + r.height / 2;
       let beforeId = row.dataset.colId;
@@ -423,7 +439,7 @@
         beforeId = next ? next.dataset.colId : null;
       }
       if (beforeId === srcId) return { kind: 'noop' };
-      return { kind: 'move', folderId, beforeId, el: row, cls: after ? 'drop-after' : 'drop-before' };
+      return { kind: 'move', crew, folderId, beforeId, el: row, cls: after ? 'drop-after' : 'drop-before' };
     }
     const fhead = over.closest('.nav-folder-head');
     if (fhead) return { kind: 'move', folderId: fhead.dataset.folderId, beforeId: null, el: fhead, cls: 'drop-into' };
@@ -432,8 +448,9 @@
     if (section && section.dataset.section === 'loose') return { kind: 'move', folderId: null, beforeId: null, el: section, cls: 'drop-into' };
     const group = over.closest('[data-group]');
     if (group) {
+      const crew = !!group.dataset.crew;
       const target = group.dataset.group ? group.querySelector('.nav-folder-head') : group;
-      return { kind: 'move', folderId: group.dataset.group || null, beforeId: null, el: target, cls: 'drop-into' };
+      return { kind: 'move', crew, folderId: crew ? null : group.dataset.group || null, beforeId: null, el: target, cls: 'drop-into' };
     }
     return null;
   }
@@ -475,7 +492,7 @@
         setTimeout(() => listEl.removeEventListener('click', swallow, { capture: true }), 0);
         if (!drop || drop.kind === 'noop') return;
         if (drop.kind === 'archive') host.archiveColumn(col);
-        else host.moveSession(col.id, { folderId: drop.folderId, beforeId: drop.beforeId });
+        else host.moveSession(col.id, { crew: drop.crew, folderId: drop.folderId, beforeId: drop.beforeId });
       };
       document.addEventListener('mousemove', onMove);
       document.addEventListener('mouseup', onUp);

@@ -70,3 +70,43 @@ test('队长 cannot be dragged into a folder or reordered', () => {
   assert.deepEqual(after.map((c) => c.id), ['m', 'b', 'a']);
   assert.equal(list[0].folderId, null);
 });
+
+test('sessions 队长 opened sit right under it, in the sidebar and the deck', () => {
+  const folders = [{ id: 'f1', name: 'Work' }];
+  const list = [{ id: 'a' }, { id: 'w1', captainCrew: true }, { id: 'b', folderId: 'f1' }, { id: 'm', isMain: true }, { id: 'w2', captainCrew: true }];
+  assert.deepEqual(S.orderedColumns(list, folders).map((c) => c.id), ['m', 'w1', 'w2', 'b', 'a']);
+  const { crew, groups, loose } = S.groupSessions(list, folders);
+  assert.deepEqual(crew.map((c) => c.id), ['w1', 'w2']);
+  assert.deepEqual(groups[0].items.map((c) => c.id), ['b']);
+  assert.deepEqual(loose.map((c) => c.id), ['a']);
+  // with no 队长 they are ordinary loose sessions
+  const orphans = list.filter((c) => !c.isMain);
+  assert.deepEqual(S.groupSessions(orphans, folders).crew, []);
+  assert.deepEqual(S.orderedColumns(orphans, folders).map((c) => c.id), ['b', 'a', 'w1', 'w2']);
+});
+
+test('a session leaves 队长 when filed elsewhere, and can be put back or reordered there', () => {
+  const folders = [{ id: 'f1', name: 'Work' }];
+  let list = [{ id: 'm', isMain: true }, { id: 'w1', captainCrew: true }, { id: 'w2', captainCrew: true }, { id: 'a' }];
+  list = S.moveColumn(list, folders, 'w1', { folderId: 'f1' });
+  assert.deepEqual(list.map((c) => c.id), ['m', 'w2', 'w1', 'a']);
+  assert.equal(list.find((c) => c.id === 'w1').captainCrew, false);
+  list = S.moveColumn(list, folders, 'w2', { folderId: null });
+  assert.deepEqual(list.map((c) => c.id), ['m', 'w1', 'a', 'w2']);
+  assert.equal(list.find((c) => c.id === 'w2').captainCrew, false);
+  // back under 队长: to the end, or before one of its sessions
+  list = S.moveColumn(list, folders, 'a', { crew: true });
+  assert.deepEqual(list.map((c) => c.id), ['m', 'a', 'w1', 'w2']);
+  list = S.moveColumn(list, folders, 'w2', { crew: true, folderId: 'f1' });
+  assert.deepEqual(list.map((c) => c.id), ['m', 'a', 'w2', 'w1']);
+  assert.equal(list.find((c) => c.id === 'w2').folderId, null, 'under 队长 means in no folder');
+  list = S.moveColumn(list, folders, 'w2', { crew: true, beforeId: 'a' });
+  assert.deepEqual(list.map((c) => c.id), ['m', 'w2', 'a', 'w1']);
+  // a beforeId outside the target group goes to the end of the group instead
+  list = S.moveColumn(list, folders, 'w1', { crew: true, beforeId: 'm' });
+  assert.deepEqual(list.map((c) => c.id), ['m', 'w2', 'a', 'w1']);
+  // without a 队长 there is nothing to go under
+  const solo = [{ id: 'a' }, { id: 'b' }];
+  S.moveColumn(solo, folders, 'b', { crew: true });
+  assert.equal(solo[1].captainCrew, false);
+});

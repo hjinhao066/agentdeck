@@ -153,3 +153,49 @@ test('Windows agent detection discards stale chrome and recognizes wrapped shell
   assert.equal(M.windowsAgentOutput(codexChrome + '\nPS C:\\work> '), '');
   assert.equal(M.windowsAgentOutput('PS C:\\work> codex --dangerously-bypass-approvals-and-sandbox\n' + codexChrome), codexChrome);
 });
+
+test('队长\'s Antigravity commands carry the effort in the model id, never --effort', () => {
+  const C = (cmd) => M.checkCommand(cmd).cmd;
+  // what happened: --effort medium beside flash-high made agy run Claude Sonnet 4.6
+  assert.equal(C('agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort medium'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-medium');
+  assert.equal(C('agy --dangerously-skip-permissions --model gemini-3.8-flash-high --effort high'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
+  assert.equal(C('agy --model=gemini-3.8-flash-high --effort=low'), 'agy --model=gemini-3.8-flash-low');
+  // no xhigh/max in Antigravity; Pro has only high and low
+  assert.equal(C('agy --effort xhigh --model gemini-3.8-flash-low'), 'agy --model gemini-3.8-flash-high');
+  assert.equal(C('agy --model gemini-3.1-pro-high --effort medium'), 'agy --model gemini-3.1-pro-high');
+  // no model: Flash, not whatever agy ran last
+  assert.equal(C('agy --dangerously-skip-permissions'), 'agy --model gemini-3.8-flash-high --dangerously-skip-permissions');
+  assert.equal(C('/opt/bin/agy --effort medium'), '/opt/bin/agy --model gemini-3.8-flash-medium');
+  // already right, or not Antigravity: untouched
+  for (const cmd of ['agy --dangerously-skip-permissions --model gemini-3.8-flash-medium', 'claude --dangerously-skip-permissions --effort high',
+    'cursor-agent --force --model claude-sonnet-5-5-high', 'codex --dangerously-bypass-approvals-and-sandbox', '']) {
+    assert.equal(C(cmd), cmd, cmd);
+  }
+});
+
+test('队长 cannot hand work to Claude 4.x or Haiku in any CLI', () => {
+  for (const cmd of ['agy --dangerously-skip-permissions --model claude-sonnet-4-6', 'agy --model claude-opus-4-6-thinking',
+    'claude --model haiku', 'claude --model=claude-haiku-4-5', 'claude --model claude-sonnet-4-5-20250929',
+    'cursor-agent --force --model sonnet-4.6-thinking', 'claude --model "claude-3-5-sonnet"']) {
+    const r = M.checkCommand(cmd);
+    assert.ok(r.error && !r.cmd, cmd);
+    assert.match(r.error, /gemini-3\.8-flash-high[\s\S]*claude-opus-5-5-high/, 'says what to use instead');
+  }
+  for (const cmd of ['claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high', 'claude --model opus',
+    'cursor-agent --force --model claude-opus-5-5-max', 'cursor-agent --force --model grok-4.7-high-fast']) {
+    assert.equal(M.checkCommand(cmd).cmd, cmd, cmd);
+  }
+});
+
+test('sessions 队长 opened before they were marked are found from its first card', () => {
+  const columns = [{ id: 'c1790997115851448' }, { id: 'c1780813940263781' }, { id: 'c179099695406244', isMain: true }, { id: 'odd' }];
+  const tasks = [
+    { colId: 'c1790997115851448', sentAt: 1790997115860 },   // opened by `new`: card right at creation
+    { colId: 'c1780813940263781', sentAt: 1790997200000 },   // an old session 队长 only told something
+    { colId: 'c179099695406244', sentAt: 1790996954100 },    // 队长 itself never
+    { colId: 'c1790990000000000', sentAt: 1790990000100 },   // closed since
+    { colId: 'odd', sentAt: 1 }, null,
+  ];
+  assert.deepEqual([...M.openedByCaptain(columns, tasks)], ['c1790997115851448']);
+  assert.deepEqual([...M.openedByCaptain(columns, undefined)], []);
+});

@@ -4,7 +4,8 @@ const { trustedSender, validId } = require('./security');
 
 // A single sandboxed, non-activating window holds the notification queue.
 // No shell scripts, per-terminal processes, or notification permissions needed.
-function createNotifications({ BrowserWindow, ipcMain, screen, focusColumn, getMainWindow }) {
+// onCreate: called with each new popup window (tests make it invisible).
+function createNotifications({ BrowserWindow, ipcMain, screen, focusColumn, getMainWindow, onCreate }) {
   const items = new Map();
   const file = path.join(__dirname, 'notification.html');
   let win = null;
@@ -40,6 +41,7 @@ function createNotifications({ BrowserWindow, ipcMain, screen, focusColumn, getM
           contextIsolation: true, nodeIntegration: false, sandbox: true },
       });
       win.setAlwaysOnTop(true, 'screen-saver');
+      if (onCreate) onCreate(win);
       if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       win.webContents.on('will-navigate', (event) => event.preventDefault());
