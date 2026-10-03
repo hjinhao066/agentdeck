@@ -141,7 +141,15 @@
   // line editor, where ^U means nothing.
   function launchInput(command, platform) {
     const clear = platform === 'win32' ? '\x1b[1;5F\x1b[1;5H' : '\x15';
-    return clear + cleanText(String(command == null ? '' : command).replace(/[\u0000-\u001f\u007f]+/g, ' '), 1000) + '\r';
+    return clear + shellLaunchCommand(cleanText(String(command == null ? '' : command).replace(/[\u0000-\u001f\u007f]+/g, ' '), 1000), platform) + '\r';
+  }
+
+  // A user's codex() wrapper may already add --yolo (the bypass flag's alias).
+  // Invoke the binary directly for app launches, without changing saved commands.
+  // Quoting the name also prevents shell alias expansion.
+  function shellLaunchCommand(command, platform) {
+    return platform !== 'win32' && /^codex(?=\s|$)/.test(command)
+      ? command.replace(/^codex/, 'command "codex"') : command;
   }
 
   // Where a launch from those buttons stands. Only an agent identified in the
@@ -410,6 +418,7 @@
     commandForAgent,
     launchErrors,
     launchInput,
+    shellLaunchCommand,
     launchVerdict,
     stateLabel,
     LINK_TYPES,

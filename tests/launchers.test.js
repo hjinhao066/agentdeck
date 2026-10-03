@@ -113,6 +113,31 @@ test('a launcher clears a half-typed line with editing keys only, per platform',
   assert.equal(B.launchInput('grok\x03\r\nrm -rf ~', 'darwin'), '\x15grok rm -rf ~\r');
 });
 
+test('Codex app launches bypass shell wrappers without duplicating their --yolo flag', () => {
+  const cmd = B.commandForAgent('codex');
+  assert.equal(B.shellLaunchCommand(cmd, 'darwin'), 'command "codex" --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(B.launchInput(cmd, 'linux'), '\x15command "codex" --dangerously-bypass-approvals-and-sandbox\r');
+  assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" resume --last --yolo');
+  assert.equal(B.shellLaunchCommand(cmd, 'win32'), cmd);
+  for (const custom of ['node fake-agent.js', '/opt/bin/codex --yolo', 'command "codex" --yolo', './codex-wrapper.sh']) {
+    assert.equal(B.shellLaunchCommand(custom, 'darwin'), custom);
+  }
+});
+
+test('Codex launch bytes bypass a real shell function that injects --yolo', { skip: process.platform === 'win32' }, () => {
+  const os = require('os');
+  const { execFileSync } = require('child_process');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-codex-'));
+  try {
+    // Argument-printing stand-in only; no real CLI, settings or account touched.
+    fs.writeFileSync(path.join(dir, 'codex'), '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 });
+    const wrap = 'codex() { command codex --yolo "$@"; }\n';
+    const command = B.shellLaunchCommand(B.commandForAgent('codex'), process.platform);
+    const output = execFileSync('/bin/sh', ['-c', wrap + command], { env: { ...process.env, PATH: dir + path.delimiter + process.env.PATH }, encoding: 'utf8' });
+    assert.equal(output, '--dangerously-bypass-approvals-and-sandbox\n');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('a launch only counts as started once the agent is identified; a Windows timeout is unknown, not success', () => {
   const v = (o) => B.launchVerdict({ alive: true, missing: false, up: false, waited: 1000, platform: 'win32', ...o });
   assert.equal(v({}), 'waiting');
@@ -148,9 +173,9 @@ test('队长 knows the providers, only verified models, and the routing preferen
   // Antigravity has no 5.5 models
   const agyLine = text.split('\n').find((l) => l.includes('Antigravity：'));
   assert.ok(!/5-5|5\.5/.test(agyLine));
-  // heavy ordinary work → Antigravity Gemini; code → Cursor Opus, then Sonnet, Grok only last
-  assert.match(text, /量大的普通活[^\n]*Antigravity 的 gemini-3\.8-flash-high/);
-  const code = text.split('\n').find((l) => l.includes('写代码和重要的活'));
+  // Routine execution uses Flash/Grok; architecture, review and UI prefer Claude 5.5.
+  assert.match(text, /杂活和常规执行[^\n]*测试、部署、数据迁移[^\n]*gemini-3\.8-flash-high[^\n]*grok-4\.7-high-fast/);
+  const code = text.split('\n').find((l) => l.includes('架构、关键判断、代码审查和 UI 设计'));
   const at = (s) => code.indexOf(s);
   assert.ok(at('claude-opus-5-5-high') >= 0 && at('claude-opus-5-5-high') < at('claude-sonnet-5-5-high'));
   assert.ok(at('claude-sonnet-5-5-high') < at('grok-4.7-high-fast'));

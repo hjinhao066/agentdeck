@@ -33,6 +33,16 @@ test('no receipt: the last lines and any paths, marked as not explicit, always s
   assert.deepEqual(r.files, ['/tmp/a/b.md']);
 });
 
+test('receipt files exclude CLI footers while keeping POSIX, Windows and UNC paths', () => {
+  const r = M.parseReceipt(['【回执】', '摘要：done', '文件：/tmp/My Report.md',
+    '- `C:\\work\\report.md`', '\\\\server\\share\\shot.png', '~/notes/result.txt',
+    'Update available! 2.1.0 → 2.2.0', 'Run npm install -g @anthropic-ai/claude-code',
+    '✻ Baked for 24s', 'https://example.com/update', '没有文件'].join('\n'));
+  assert.deepEqual(r.files, ['/tmp/My Report.md', 'C:\\work\\report.md', '\\\\server\\share\\shot.png', '~/notes/result.txt']);
+  assert.deepEqual(r.images, ['\\\\server\\share\\shot.png']);
+  assert.deepEqual(M.parseReceipt('【回执】\n摘要：done\n文件：无\nUpdate available!').files, []);
+});
+
 test('the model only gets short receipt lines and a compact ledger', () => {
   const text = M.receiptsForModel([
     { title: '写报告', colId: 'c1', summary: '写好了', files: ['/tmp/r.md'], failed: '' },

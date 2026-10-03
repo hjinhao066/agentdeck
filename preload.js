@@ -71,6 +71,7 @@ contextBridge.exposeInMainWorld('deck', {
 
   // Transient feedback messages (e.g. clicked path doesn't exist).
   onToast: (cb) => ipcRenderer.on('toast', (_e, m) => cb(m.text)),
+  onFontSize: (cb) => ipcRenderer.on('font-size', (_e, m) => cb(m.delta)),
   // External "jump to this column" request (popup-notification click).
   onFocusColumn: (cb) => ipcRenderer.on('focus-column', (_e, m) => cb(m.id)),
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data)),

@@ -45,7 +45,37 @@ function answer() {
   process.stdout.write(out);
   box();
 }
-readline.createInterface({ input: process.stdin }).on('line', (line) => {
+if (process.argv.includes('--slow-paste')) {
+  // Emulate Cursor's async paste handling: an early Enter is consumed by the
+  // paste detector. No reply is emitted until a later Enter submits the buffer.
+  process.stdout.write('\x1b[?2004h');
+  process.stdin.setRawMode(true);
+  let incoming = '';
+  let pasted = '';
+  let ready = false;
+  process.stdin.on('data', (data) => {
+    incoming += data.toString();
+    const end = incoming.indexOf('\x1b[201~');
+    if (end >= 0) {
+      pasted = incoming.slice(incoming.indexOf('\x1b[200~') + 6, end);
+      incoming = incoming.slice(end + 6);
+      ready = false;
+      setTimeout(() => {
+        ready = true;
+        process.stdout.write('\nPaste ready\n');
+      }, 450);
+    }
+    if (incoming.includes('\r')) {
+      incoming = '';
+      if (!ready) { process.stdout.write('\nEnter consumed by paste detector\n'); return; }
+      lines = pasted.split('\n');
+      pasted = '';
+      ready = false;
+      answer();
+    }
+    if (incoming.includes('\x03')) process.exit(0);
+  });
+} else readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (!line.trim() && !lines.length) return;
   lines.push(line);
   clearTimeout(timer);

@@ -764,6 +764,7 @@
     if (!text.trim() && !v.atts.length) return;
     // until the agent is up the shell is in front and would run the message as commands
     if (launching.has(col.id)) { host.showToast('agent 还在启动，等它起来再发'); return; }
+    if (host.terms.get(col.id)?.sendingPrompt) return;
     const prefix = window.MainSession ? window.MainSession.outgoingPrefix(col) : '';
     const atts = v.atts.slice();
     // a long prompt resolves once its file is written; keep the text until then
@@ -782,28 +783,40 @@
   // No length limit: a prompt longer than this is saved as a .txt file and the
   // agent gets its opening plus "read this file first".
   const LONG_PROMPT = 8000;
-  function sendPrompt(col, prompt, atts, opts) {
+  async function sendPrompt(col, prompt, atts, opts) {
     const o = opts || {};
     const entry = host.terms.get(col.id);
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
     if (prompt && prompt.length > LONG_PROMPT) return sendLong(col, prompt, atts, o);
-    const paths = (atts || []).map(host.shellQuote).join(' ');
-    const body = paths ? paths + (prompt ? ' ' + prompt : '') : prompt;
-    const text = (o.prefix || '') + body + (o.suffix || '');
-    // display/displayAtts: what the bubble shows when it differs from what is typed
-    const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text);
-    // bracketed paste keeps multi-line text one prompt; the CR goes separately so
-    // Ink-based TUIs submit instead of inserting a newline
-    const bracketed = entry.term.modes && entry.term.modes.bracketedPasteMode;
-    window.deck.ptyInput(col.id, bracketed ? '\x1b[200~' + text + '\x1b[201~' : text.replace(/\r?\n/g, '\r'));
-    setTimeout(() => { if (host.terms.has(col.id)) window.deck.ptyInput(col.id, '\r'); }, 60);
-    entry.hasWorked = true;
-    entry.lastOutputAt = Date.now();
-    entry.notificationState = { state: 'working', notified: null, since: null };
-    window.deck.notifyCancel({ id: col.id });
-    const nameFrom = o.display || prompt;
-    if (nameFrom && !o.silent) host.maybeAutoName(col, nameFrom.split('\n')[0].trim());
-    return turn || true;
+    if (entry.sendingPrompt) return false;
+    entry.sendingPrompt = true;
+    try {
+      const paths = (atts || []).map(host.shellQuote).join(' ');
+      const body = paths ? paths + (prompt ? ' ' + prompt : '') : prompt;
+      const text = (o.prefix || '') + body + (o.suffix || '');
+      // display/displayAtts: what the bubble shows when it differs from what is typed
+      const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text);
+      // bracketed paste keeps multi-line text one prompt; the CR goes separately so
+      // Ink-based TUIs submit instead of inserting a newline
+      const bracketed = entry.term.modes && entry.term.modes.bracketedPasteMode;
+      window.deck.ptyInput(col.id, bracketed ? '\x1b[200~' + text + '\x1b[201~' : text.replace(/\r?\n/g, '\r'));
+      // Cursor and other TUIs buffer paste input asynchronously. An Enter only
+      // 60ms later can be swallowed by their paste detector. Wait for the paste
+      // redraw to settle, then submit once; never retry into a changed terminal.
+      const pastedAt = Date.now();
+      do {
+        await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
+        if (host.terms.get(col.id) !== entry || !entry.alive) return false;
+      } while (bracketed && (Date.now() - pastedAt < 500 || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
+      window.deck.ptyInput(col.id, '\r');
+      entry.hasWorked = true;
+      entry.lastOutputAt = Date.now();
+      entry.notificationState = { state: 'working', notified: null, since: null };
+      window.deck.notifyCancel({ id: col.id });
+      const nameFrom = o.display || prompt;
+      if (nameFrom && !o.silent) host.maybeAutoName(col, nameFrom.split('\n')[0].trim());
+      return turn || true;
+    } finally { entry.sendingPrompt = false; }
   }
 
   // Resolves to the turn (or true) once the file is written and the pointer sent.

@@ -50,8 +50,8 @@
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
   const ROUTING = [
-    '量大的普通活（检索、整理、汇总、批量改写）：优先 Antigravity 的 gemini-3.8-flash-high。',
-    '写代码和重要的活：优先 Cursor 的 claude-opus-5-5-high，其次 Cursor 的 claude-sonnet-5-5-high，Claude Code 也可以；这些都用不了时才用 Cursor 的 grok-4.7-high-fast。档位按下面的规则换。',
+    '杂活和常规执行（检索、整理、汇总、批量改写、导入、常规后端、测试、部署、数据迁移）：优先 Antigravity 的 gemini-3.8-flash-high 或 Cursor 的 grok-4.7-high-fast。这类工作不要消耗 Claude 额度。',
+    '架构、关键判断、代码审查和 UI 设计：优先 Cursor 的 claude-opus-5-5-high，其次 Cursor 的 claude-sonnet-5-5-high，Claude Code 也可以；这些都用不了时用 Gemini Pro 或 Cursor 的 grok-4.7-high-fast。档位按下面的规则换。',
     '你看不到各家的实时额度。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
   ];
   // Effort tiers, lowest first. Cursor takes the tier as the model id's suffix
@@ -301,7 +301,9 @@
     }
     const addFile = (p) => {
       const f = String(p || '').trim().replace(/^[`'"]+|[`'"，。,;；]+$/g, '').slice(0, MAX_PATH);
-      if (!f || f === '无' || /^(none|n\/a|-)$/i.test(f) || out.files.includes(f) || out.files.length >= MAX_FILES) return;
+      // The contract requires absolute on-disk paths. TUI footers (for example
+      // "Update available!") can follow the final files field in an extracted reply.
+      if (!/^(?:\/(?!\/)|~[\\/]|[A-Za-z]:[\\/]|\\\\)/.test(f) || out.files.includes(f) || out.files.length >= MAX_FILES) return;
       out.files.push(f);
     };
     if (at >= 0) {

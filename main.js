@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, ipcMain, shell, dialog, clipboard, screen, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, screen, session } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -959,6 +959,20 @@ app.whenReady().then(() => {
       else shell.showItemInFolder(r.target);
     } catch (_) {}
   });
+
+  // Electron's default View accelerators zoom the entire page before the
+  // renderer can handle them. Route only those three items to the shared text
+  // size control, preserving the other native menu items.
+  const textZoom = { resetzoom: 0, zoomin: 1, zoomout: -1 };
+  const fontMenu = (menu) => menu.items.map((item) => {
+    if (Object.hasOwn(textZoom, item.role)) return {
+      id: `text-${item.role}`, label: item.label, accelerator: item.accelerator,
+      click: () => send('font-size', { delta: textZoom[item.role] }),
+    };
+    return item.submenu ? { label: item.label, role: item.role, submenu: fontMenu(item.submenu) } : item;
+  });
+  const nativeMenu = Menu.getApplicationMenu();
+  if (nativeMenu) Menu.setApplicationMenu(Menu.buildFromTemplate(fontMenu(nativeMenu)));
 
   createWindow();
   const initialFocus = process.argv.find((arg) => arg.startsWith('--focus-column='));

@@ -91,6 +91,25 @@ test('⌘−/⌘= (Ctrl on Windows) shrink and grow the chat text with the termi
   expect(Math.abs(reset.chatH - base.chatH)).toBeLessThan(2);
 });
 
+test('native View zoom uses the same terminal/chat font size without scaling the page', async () => {
+  const invoke = (role) => application.evaluate(({ Menu, BrowserWindow }, r) => {
+    const items = (m) => m.items.flatMap((i) => [i, ...(i.submenu ? items(i.submenu) : [])]);
+    const item = items(Menu.getApplicationMenu()).find((i) => i.id === `text-${r}`);
+    if (!item) throw new Error(`Missing font menu item: ${r}`);
+    const win = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().endsWith('index.html'));
+    item.click(undefined, win, win.webContents);
+    return win.webContents.getZoomLevel();
+  }, role);
+  expect(await invoke('zoomout')).toBe(0);
+  await expect.poll(() => page.evaluate(() => config.fontSize)).toBe(12);
+  expect(await page.evaluate(() => terms.get('chat-0').term.options.fontSize)).toBe(12);
+  expect(await invoke('zoomin')).toBe(0);
+  await expect.poll(() => page.evaluate(() => config.fontSize)).toBe(13);
+  await invoke('zoomout');
+  expect(await invoke('resetzoom')).toBe(0);
+  await expect.poll(() => page.evaluate(() => config.fontSize)).toBe(13);
+});
+
 test('swiping sideways still pages through the columns', async () => {
   const box = await page.locator('.column').first().locator('.chat-scroll').boundingBox();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);

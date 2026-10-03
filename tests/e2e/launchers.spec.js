@@ -131,7 +131,7 @@ test('all five launchers use canonical bypass commands and generate safe launch 
   expect(launchers.map((l) => l.label)).toEqual(['Claude', 'Antigravity', 'Grok', 'Cursor CLI', 'Codex (ChatGPT)']);
   for (const l of launchers) {
     expect(l.cmd).toBe(l.canonical);
-    expect(l.unixInput).toBe('\x15' + l.cmd + '\r');
+    expect(l.unixInput).toBe('\x15' + (l.key === 'codex' ? l.cmd.replace(/^codex/, 'command "codex"') : l.cmd) + '\r');
     expect(l.winInput).toBe('\x1b[1;5F\x1b[1;5H' + l.cmd + '\r');
     expect(l.winInput).not.toContain('\x03');
   }

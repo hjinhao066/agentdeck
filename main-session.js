@@ -301,7 +301,7 @@
     const col = mainCol();
     const id = col && col.id;
     closeOrphans();
-    if (delivering || !s || !col || !col.cmd || !s.pending.length || !entry.alive || briefing === col.id) return;
+    if (delivering || !s || !col || !col.cmd || !s.pending.length || !entry.alive || entry.sendingPrompt || briefing === col.id) return;
     if (entry.state === 'working' || entry.state === 'input') return;
     if (Date.now() - (entry.lastOutputAt || 0) < 1500) return;   // let it settle first
     // only into 队长's agent, never into a shell it may have dropped back to

@@ -90,8 +90,10 @@ again with the current provider, model and effort instructions.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
   permissions) unless it picks another with `--agent claude|agy|cursor|grok|codex` or a full
   `--command`. Its instructions list the providers and the models their CLIs report
-  on this account, with a routing preference: bulk ordinary work to Antigravity
-  `gemini-3.8-flash-high`; code and important work to Cursor CLI
+  on this account, with a routing preference: ordinary execution (bulk work,
+  imports, routine backend changes, tests, deployments and migrations) to Antigravity
+  `gemini-3.8-flash-high` or Cursor `grok-4.7-high-fast`; architecture, key decisions,
+  reviews and UI design to Cursor CLI
   `claude-opus-5-5-high`, then `claude-sonnet-5-5-high` (or Claude Code), and Cursor's
   `grok-4.7-high-fast` only when those are unavailable. The standalone `grok` CLI is
   not used unless you name it. It also picks an effort tier per task: `medium` for
@@ -104,13 +106,17 @@ again with the current provider, model and effort instructions.
   otherwise silently switches to another model) and a missing `--model` gets
   Flash; Claude 4.x and Haiku models are refused with a message telling the 队长
   what to use instead.
+  On macOS/Linux, app launches invoke the Codex binary directly so a shell
+  function that adds `--yolo` cannot duplicate the explicit bypass flag.
   AgentDeck cannot read live quotas; the 队长 switches
   provider when a worker reports a limit. At most 6 background sessions work at
   once: a further `new` waits (its card says 等空位) and starts by itself, oldest
   first, when one finishes. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have
-  open); `tell` to it restores it first, and `ledger` lists those and the waiting work. New sessions appear in the sidebar and the
-  deck, and get the task as their first message. The app appends a contract: finish without waiting on the user, ask the
+  open); `tell` to it restores it first, and `ledger` lists those and the waiting work.
+  New sessions appear under the Captain's folded 后台 row and get the task as
+  their first message; opening one reveals its column temporarily. The app
+  appends a contract: finish without waiting on the user, ask the
   队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
   failure reason; never file bodies).
 - When a worker's turn ends, its receipt or question is read from its final reply,
@@ -120,6 +126,9 @@ again with the current provider, model and effort instructions.
   to the 队长 with only the prompt's last lines; it answers with `answer` when sure
   and asks you otherwise. A quiet screen without a receipt is shown as 已停下, not
   as success.
+  Receipt file fields accept absolute local paths only; CLI update notices and
+  other footer text are ignored. Prompt submission waits for the paste redraw
+  to settle before pressing Enter once, including in background sessions.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
 - 清空上下文 (only in the 队长 header) clears only the 队长's model context. Its
@@ -201,6 +210,9 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   tabs for 预览 (code, Markdown, images, directories), 终端 and 浏览器 (PDF opens
   there too). Cmd/Ctrl-click uses the system browser or file manager, Option-click
   the editor.
+- Cmd/Ctrl minus, plus and zero adjust the terminal and chat text together (8–32,
+  default 13). The native View menu uses the same control; it does not zoom the
+  page, so the sidebar and column geometry stay stable.
 - The left sidebar searches every conversation, titles and full text of prompts and
   replies only. Shortcuts: ⌘/Ctrl+K search, ⌘/Ctrl+\ toggle the side pane.
 - Conversations are saved locally in the app's userData folder under `chats`
@@ -267,6 +279,8 @@ toolchain for ordinary installs. `npm run rebuild` is an explicit source-rebuild
 fallback and requires the appropriate compiler toolchain.
 The install check also restores executable permissions on the macOS PTY helper;
 the upstream npm tarball otherwise installs that file without execute bits.
+The build downloader is pinned to `@electron/get` 5.1.0 so electron-builder's
+older downloader does not pull in the vulnerable HTTP cache dependency chain.
 
 ```sh
 npm test

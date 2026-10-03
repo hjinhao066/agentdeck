@@ -251,6 +251,19 @@ test('past the limit new work waits for a slot; finished background sessions are
   await expect(card('乙').locator('.task-summary')).toContainText('stand-in finished one more thing');
 });
 
+test('a dispatched paste waits for the TUI before Enter and reaches the worker exactly once', async () => {
+  await run(mainId, `clear; node "${CLI}" new --title "慢粘贴" --task "delayed paste task" --command "${FAKE.replace(/"/g, '')} --slow-paste"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '慢粘贴')?.id), { timeout: 15000 }).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '慢粘贴').id);
+  const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '慢粘贴' });
+  await expect(card).toHaveClass(/st-done/, { timeout: 30000 });
+  const replay = await page.evaluate((i) => window.deck.ptyReplay(i), child);
+  expect(replay).not.toContain('Enter consumed by paste detector');
+  expect(capturedPrompts().filter((p) => p.startsWith('delayed paste task'))).toHaveLength(1);
+  await expect(card.locator('.task-summary')).toContainText('stand-in finished delayed paste task');
+  await page.evaluate((i) => archiveColumn(columns.find((c) => c.id === i)), child);
+});
+
 test('receipts and questions reach an idle Captain agent by themselves, never a bare shell', async () => {
   // the Captain column is configured for an agent, but only its shell is in front:
   // nothing may be typed there, it would run each line as a command

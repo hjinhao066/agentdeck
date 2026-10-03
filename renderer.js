@@ -407,6 +407,9 @@ function fontSizeDelta(e) {
   if (k === '0') return 0;
   return null;
 }
+window.deck.onFontSize((delta) => {
+  if (delta === -1 || delta === 0 || delta === 1) setFontSize(delta === 0 ? FONT_DEFAULT : config.fontSize + delta);
+});
 
 // ---- Window chrome: sidebar head, top bar over the deck, sidebar footer ----
 function railBtn(svg, tip, onClick, accent) {
@@ -1659,7 +1662,7 @@ function buildColumn(col, isFresh) {
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
           const spawnId = col.id;
-          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, launch + '\r'); }, 700);
+          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.shellLaunchCommand(launch, env.platform) + '\r'); }, 700);
         }
         if (!isFresh && col.role !== 'manual' && !col.taskCompleted) {
           // A cold restart killed the old CLI caller. Re-deliver managed
@@ -2155,7 +2158,7 @@ function sendWhenReady(col, text, opts) {
     if (!columns.includes(col) || col.id !== id) return;
     const entry = terms.get(col.id);
     if (entry && entry.alive) {
-      const idle = entry.state !== 'input' && entry.state !== 'working';
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working';
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       // unknown agents never show a recognizable idle footer: settle for quiet output
       const ready = !col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000);
