@@ -10,7 +10,7 @@
   'use strict';
 
   // Sessions 队长 lets work at once (owner's choice); more `new` calls wait.
-  const MAX_ACTIVE = 6;
+  const MAX_ACTIVE = 15;
   // A finished background session is archived after this long with nothing new.
   const ARCHIVE_AFTER = 10 * 60_000;
   const MAX_SUMMARY = 400;
@@ -125,7 +125,7 @@
     }
     return lines.join('\n');
   }
-  const TASK_STATUS = { waiting: '排队等空位', queued: '排队中', working: '干活中', input: '停在确认', asking: '在问你' };
+  const TASK_STATUS = { waiting: '排队等空位', queued: '待补充', working: '干活中', input: '停在确认', asking: '在问你' };
 
   // A launch command's words, quotes kept; the program's bare name.
   const WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
@@ -349,6 +349,44 @@
     return '【AgentDeck 新回执】\n' + lines.join('\n') + '\n\n';
   }
 
+  // ---- text the user is typing in the Captain's own input box ----
+  // Receipts are typed into that box and sent with Enter, so they must never
+  // go in while the box holds something the user has not sent yet.
+  // typing: { draft (what the key tracker rebuilt), unknown (history recall or
+  // another edit it cannot follow), lastKeyAt }.
+  function draftBlocks(typing, now, quietMs) {
+    if (!typing) return false;
+    return !!typing.draft || !!typing.unknown || now - (typing.lastKeyAt || 0) < quietMs;
+  }
+  // The agent's input box on screen, read the way the user sees it. plain and
+  // masked are the same rows; masked has dim, inverse and coloured cells
+  // (placeholder text, the caret) replaced by \u0000, so what is left is text
+  // someone typed. null when no box is recognised (no rule lines around a
+  // prompt row): the key tracker is then the only evidence.
+  const RULE = /^[\s╭╰]*[─━═]{8,}[\s╮╯]*$/;
+  const PROMPT_ROW = /^[\s│┃]*[>❯›]\s?/;
+  function inputBoxText(plain, masked) {
+    const rules = [];
+    plain.forEach((line, i) => { if (RULE.test(line)) rules.push(i); });
+    if (rules.length < 2) return null;
+    const top = rules[rules.length - 2];
+    const bottom = rules[rules.length - 1];
+    if (bottom - top < 2 || bottom - top > 12) return null;
+    const head = PROMPT_ROW.exec(plain[top + 1]);
+    if (!head) return null;
+    const rows = [masked[top + 1].slice(head[0].length), ...masked.slice(top + 2, bottom)];
+    return rows.map((r) => r.replace(/\u0000/g, '').replace(/[│┃]\s*$/, '').trim()).filter(Boolean).join('\n');
+  }
+  // The task contract is echoed above whatever the worker answers; a receipt
+  // only counts below it (the echo has the receipt's own field names in it).
+  const CONTRACT_END = new RegExp('回执里不要贴文件正文'.split('').join('\\s*') + '\\s*。?');
+  function afterContract(screen) {
+    const text = String(screen || '');
+    let from = 0;
+    for (let m; (m = CONTRACT_END.exec(text.slice(from)));) from += m.index + m[0].length;
+    return from ? text.slice(from) : text;
+  }
+
   function statusLabel(state) { return STATUS[state] || STATUS.plain; }
 
   // node-pty reports the foreground process as a bare name ("zsh", "-zsh")
@@ -398,7 +436,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt,
+    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

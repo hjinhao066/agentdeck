@@ -224,7 +224,7 @@ test('past the limit new work waits for a slot; finished background sessions are
     expect(await page.evaluate((i) => columns.find((c) => c.id === i).captainCrew, b)).toBe(true);
     expect(await page.evaluate(() => config.mainSession.waitlist.length)).toBe(0);
   } finally {
-    await page.evaluate(() => { MainCore.MAX_ACTIVE = 6; });
+    await page.evaluate(() => { MainCore.MAX_ACTIVE = 15; });
   }
   // finished and quiet: archived by itself, conversation kept (one you are looking at stays)
   const b = await col('乙');
@@ -308,6 +308,142 @@ test('receipts and questions reach an idle Captain agent by themselves, never a 
   await page.evaluate((i) => window.deck.ptyInput(i, '\x03'), mainId);   // back to the shell for the next tests
   await waitForShell(mainId);
   await page.evaluate(() => { MainSession.mainCol().cmd = ''; config.mainSession.pending.push({ colId: 'cap-y', title: 'Worker y', summary: 'kept for your next message', files: [] }); });
+});
+
+test('a receipt never goes through an input box the user is typing in, and arrives once it is empty', async () => {
+  const half = '我正在写的这半句话';
+  const first = capturedPrompts().length;
+  const receipt = 'receipt that waits for the user';
+  await page.evaluate(() => { MainSession.mainCol().cmd = 'stand-in'; });
+  await run(mainId, `clear; ${FAKE}`);
+  if (process.platform === 'win32') {
+    await expect.poll(() => page.evaluate((i) => agentInForeground(columns.find((c) => c.id === i), false), mainId), { timeout: 15000 }).toBe(true);
+  } else {
+    await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), mainId), { timeout: 15000 }).toBe('node');
+  }
+  // typing in the terminal view, like a person: half a message, no Enter
+  await page.evaluate((i) => { ChatUI.setMode(i, 'term'); focusColumnInput(i); }, mainId);
+  await page.keyboard.type(half);
+  await expect.poll(() => page.evaluate((i) => terms.get(i).typing.draft, mainId)).toBe(half);
+  await page.evaluate((text) => {
+    config.mainSession.pending.push({ colId: 'cap-y', title: 'Worker y', summary: text, files: [] });
+  }, receipt);
+  // well past the quiet period and several status ticks: nothing was typed or sent
+  await page.waitForTimeout(8000);
+  expect(await page.evaluate(() => config.mainSession.pending.some((p) => p.summary === 'receipt that waits for the user'))).toBe(true);
+  expect(await page.evaluate(() => config.mainSession.inflight.length)).toBe(0);
+  expect(capturedPrompts().slice(first)).toEqual([]);
+  // still hers/his after a long wait too: the draft alone blocks, not only recent keys
+  await page.evaluate((i) => { terms.get(i).typing.lastKeyAt = 0; }, mainId);
+  await page.waitForTimeout(4000);
+  expect(capturedPrompts().slice(first)).toEqual([]);
+  // the user's own Enter sends the user's words alone, no receipt rides on it
+  await page.keyboard.press('Enter');
+  await expect.poll(() => capturedPrompts().slice(first).join('\n'), { timeout: 15000 }).toContain(half);
+  expect(capturedPrompts().slice(first).join('\n')).not.toContain(receipt);
+  // box empty and quiet: now the receipt is delivered, as its own message
+  await expect.poll(() => capturedPrompts().slice(first).some((p) => p.includes(receipt)), { timeout: 30000 }).toBe(true);
+  const sent = capturedPrompts().slice(first);
+  expect(sent.find((p) => p.includes(receipt))).not.toContain(half);
+  expect(await page.evaluate(() => config.mainSession.pending.length)).toBe(0);
+  // Ctrl+U clears the draft, so that blocks nothing either
+  await page.keyboard.type('another unfinished thought');
+  await page.keyboard.press('Control+u');
+  expect(await page.evaluate((i) => terms.get(i).typing.draft, mainId)).toBe('');
+  await page.evaluate((i) => { ChatUI.setMode(i, 'chat'); }, mainId);
+  await page.evaluate((i) => window.deck.ptyInput(i, '\x03'), mainId);   // back to the shell for the next tests
+  await waitForShell(mainId);
+  await page.evaluate(() => { MainSession.mainCol().cmd = ''; config.mainSession.pending.push({ colId: 'cap-y', title: 'Worker y', summary: 'kept for your next message', files: [] }); });
+});
+
+test('keys typed while a receipt is being entered are held and follow it; the box on screen counts too', async () => {
+  const state = await page.evaluate(() => {
+    const entry = terms.get('cap-y');
+    entry.injecting = true;
+    entry.term.input('held', true);
+    const during = entry.typing.draft;
+    entry.injecting = false;
+    entry.flushHeld();
+    const after = entry.typing.draft;
+    entry.term.input('\x15', true);
+    return { during, after, cleared: entry.typing.draft };
+  });
+  expect(state).toEqual({ during: '', after: 'held', cleared: '' });
+  // a box with text on screen blocks even when the tracker saw nothing (the agent restored it itself)
+  const read = (screenText) => page.evaluate(async (text) => {
+    const entry = terms.get('cap-y');
+    entry.typing.lastKeyAt = 0; entry.typing.unknown = false; entry.typing.draft = '';
+    entry.term.reset();
+    await new Promise((resolve) => entry.term.write(text, resolve));
+    return userComposing('cap-y');
+  }, screenText);
+  const rule = '─'.repeat(30);
+  expect(await read(`⏺ done\r\n${rule}\r\n> half a sentence\r\n${rule}\r\n`)).toBe(true);
+  expect(await read(`⏺ done\r\n${rule}\r\n> \x1b[2mTry "fix the bug"\x1b[0m\r\n${rule}\r\n`)).toBe(false);
+  expect(await read(`⏺ done\r\n${rule}\r\n> \r\n${rule}\r\n`)).toBe(false);
+  // a history recall (Up arrow) cannot be followed by the tracker; an empty box on screen settles it
+  expect(await page.evaluate(() => {
+    const entry = terms.get('cap-y');
+    entry.term.input('\x1b[A', true);
+    return entry.typing.unknown;
+  })).toBe(true);
+  await page.evaluate(() => { terms.get('cap-y').typing.lastKeyAt = 0; });
+  expect(await page.evaluate(() => userComposing('cap-y'))).toBe(false);
+  await page.evaluate(() => terms.get('cap-y').term.reset());
+});
+
+test('a pause or a silent start is not a stop: only a receipt, a question, a failure or a long quiet ends a task', async () => {
+  const before = await page.evaluate(() => ({ pending: config.mainSession.pending.length, tasks: config.mainSession.tasks.length }));
+  const probe = await page.evaluate(() => {
+    const s = config.mainSession;
+    const mk = (id, turn) => { const t = { id, colId: 'probe-col', title: 'Probe', gen: s.gen, status: 'working', sentAt: Date.now(), startedAt: Date.now(), turnId: turn, receipt: null }; s.tasks.push(t); return t; };
+    const out = {};
+    const quiet = (extra) => ({ alive: true, state: 'done', lastOutputAt: Date.now(), lastScreen: '', ...extra });
+    // the turn ended between two instructions: no receipt in the reply
+    const a = mk('probe-a', 'ta');
+    MainSession.onTurnDone('probe-col', { id: 'ta', reply: '先看了一下目录，接着改。' });
+    out.afterEarlyTurnEnd = a.status;
+    MainSession.onTick('probe-col', quiet({}));
+    out.afterShortQuiet = a.status;
+    // the receipt comes later, on the screen only (the column has been quiet for 10s)
+    a.idleSince = Date.now() - 10_000;
+    MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 10_000, lastScreen: `${'─'.repeat(20)}\n  【回执】\n  摘要：后来才做完\n  文件：无\n` }));
+    out.screenReceipt = [a.status, a.receipt && a.receipt.summary, a.receipt && a.receipt.explicit];
+    // a question and a failure still end it at once
+    const b = mk('probe-b', 'tb');
+    MainSession.onTurnDone('probe-col', { id: 'tb', reply: '【提问】\n问题：用哪个库？' });
+    out.question = b.status;
+    const c = mk('probe-c', 'tc');
+    MainSession.onTurnDone('probe-col', { id: 'tc', reply: '【回执】\n摘要：没成\n文件：无\n失败：没有权限' });
+    out.failure = c.status;
+    // a screen quiet for minutes with nothing written is a real stop
+    const d = mk('probe-d', 'td');
+    d.idleSince = Date.now() - 10 * 60_000;
+    MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 10 * 60_000 }));
+    out.longQuiet = [d.status, d.receipt && d.receipt.explicit];
+    // still printing: never
+    const e = mk('probe-e', 'te');
+    e.idleSince = Date.now() - 10 * 60_000;
+    MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 30_000 }));
+    out.stillPrinting = e.status;
+    return out;
+  });
+  expect(probe.afterEarlyTurnEnd).toBe('working');
+  expect(probe.afterShortQuiet).toBe('working');
+  expect(probe.screenReceipt).toEqual(['done', '后来才做完', true]);
+  expect(probe.question).toBe('asking');
+  expect(probe.failure).toBe('failed');
+  expect(probe.longQuiet).toEqual(['stopped', false]);
+  expect(probe.stillPrinting).toBe('working');
+  // the false "已停下，没有写回执" never reached 队长 for the pause
+  const texts = await page.evaluate(() => config.mainSession.pending.map((p) => p.summary || p.question || p.failed || ''));
+  expect(texts.join('\n')).not.toContain('先看了一下目录');
+  await page.evaluate(() => {
+    const s = config.mainSession;
+    s.tasks = s.tasks.filter((t) => !t.id.startsWith('probe-'));
+    s.pending = s.pending.filter((p) => !['probe-a', 'probe-b', 'probe-c', 'probe-d', 'probe-e'].includes(p.taskId));
+  });
+  expect(await page.evaluate(() => ({ pending: config.mainSession.pending.length, tasks: config.mainSession.tasks.length }))).toEqual(before);
 });
 
 test('receipts ride along with the next message to the Captain, not in its bubble', async () => {

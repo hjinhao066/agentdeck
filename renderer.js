@@ -253,7 +253,13 @@ function maybeAutoName(col, line) {
 // skipped; inside a bracketed paste a newline is literal content, not "send".
 function makePromptTracker(col) {
   let buf = '', inPaste = false, escape = '', x10Bytes = 0;
-  return (d) => {
+  // What the 队长 delivery needs to know: is something typed and not sent yet?
+  // draft: the rebuilt line. unknown: a key that can put text in the box
+  // without us seeing it (history recall, Tab), until Enter or ^C/^U.
+  // lastKeyAt: the user's last real key, never xterm's automatic replies.
+  const typing = { draft: '', unknown: false, lastKeyAt: 0 };
+  const RECALL = '\t\x07\x10\x0e\x12\x16\x19';
+  const track = (d) => {
     for (let i = 0; i < d.length; ) {
       const ch = d[i];
       if (x10Bytes) { x10Bytes--; i++; continue; }
@@ -261,27 +267,76 @@ function makePromptTracker(col) {
         escape += ch; i++;
         if (escape === '\x1b[' || escape === '\x1bO') continue;
         if (escape.startsWith('\x1b[') && !/[@-~]/.test(ch) && escape.length < 64) continue;
-        if (escape === '\x1b[200~') inPaste = true;
+        if (escape === '\x1b[200~') { inPaste = true; typing.lastKeyAt = Date.now(); }
         else if (escape === '\x1b[201~') inPaste = false;
         else if (escape === '\x1b[M') x10Bytes = 3;
+        else if (/^\x1b(?:\[|O)(?:[\d;]*)([A-DHF~])$/.test(escape)) {
+          // cursor and editing keys (not focus, mouse or query replies)
+          typing.lastKeyAt = Date.now();
+          if (/[AB]$/.test(escape)) typing.unknown = true;   // Up/Down recall history
+        } else if (/^\x1b[^\[O\]]$/.test(escape)) { typing.lastKeyAt = Date.now(); typing.unknown = true; }   // Alt/Meta combos
         escape = '';
         continue;
       }
       if (ch === '\x1b') { escape = ch; i++; continue; }
+      typing.lastKeyAt = Date.now();
       if (ch === '\r' || ch === '\n') {
         if (inPaste) buf += ' ';
-        else { const line = buf.trim(); buf = ''; maybeAutoName(col, line); ChatUI.onSubmitted(col, line); }
+        else { const line = buf.trim(); buf = ''; typing.unknown = false; maybeAutoName(col, line); ChatUI.onSubmitted(col, line); }
         i++;
         continue;
       }
       if (ch === '\x7f' || ch === '\b') { buf = buf.slice(0, -1); i++; continue; }
-      if (ch === '\x03' || ch === '\x15') { buf = ''; i++; continue; }  // ^C / ^U clear the line
-      if (ch < ' ') { i++; continue; }
+      if (ch === '\x03' || ch === '\x15') { buf = ''; typing.unknown = false; i++; continue; }  // ^C / ^U clear the line
+      if (ch < ' ') { if (RECALL.includes(ch)) typing.unknown = true; i++; continue; }
       buf += ch;
       if (buf.length > 2000) buf = buf.slice(-2000);
       i++;
     }
+    typing.draft = buf.trim();
   };
+  track.typing = typing;
+  return track;
+}
+
+// Is the user in the middle of a message in this column's terminal input box?
+// Automatic sends (队长's receipts, work it hands out) type into that box and
+// press Enter, which would send the half-written words too. True while the
+// key tracker holds unsent text (or cannot tell, after a history recall) or
+// the user pressed a key within INPUT_QUIET; also when the agent's box on
+// screen shows text that someone typed (restored by the agent after an
+// interrupt, for instance). A recognised empty box clears a "cannot tell".
+const INPUT_QUIET = 5000;
+const MASK = '\u0000';
+function visibleInputBox(entry) {
+  try {
+    const b = entry.term.buffer.active;
+    const end = b.baseY + entry.term.rows;
+    const plain = [], masked = [];
+    for (let y = b.baseY; y < end; y++) {   // the whole visible screen: a young session leaves rows empty below its box
+      const line = b.getLine(y);
+      let p = '', m = '';
+      for (let x = 0; line && x < line.length; x++) {
+        const cell = line.getCell(x);
+        if (!cell || cell.getWidth() === 0) continue;
+        const ch = cell.getChars() || ' ';
+        p += ch;
+        m += cell.isDim() || cell.isInverse() || !cell.isFgDefault() ? MASK.repeat(ch.length) : ch;
+      }
+      plain.push(p); masked.push(m);
+    }
+    return MainCore.inputBoxText(plain, masked);
+  } catch (_) { return null; }
+}
+function userComposing(id) {
+  const entry = terms.get(id);
+  if (!entry || !entry.typing) return false;
+  const t = entry.typing;
+  if (Date.now() - t.lastKeyAt < INPUT_QUIET || t.draft) return true;
+  const box = visibleInputBox(entry);
+  if (box) return true;
+  if (box === '') t.unknown = false;
+  return t.unknown;
 }
 
 // ---- Terminals ----
@@ -1680,7 +1735,7 @@ function buildColumn(col, isFresh) {
     };
     reconnect();
     const trackPrompt = makePromptTracker(col);
-    term.onData((d) => {
+    const forwardInput = (d) => {
       if (!replayMuted) {
         window.deck.ptyInput(col.id, d); trackPrompt(d);
         // Includes agents launched manually in a blank terminal. Auto-replies
@@ -1695,7 +1750,16 @@ function buildColumn(col, isFresh) {
           }
         }
       }
-    });
+    };
+    {
+      const entry = terms.get(col.id);
+      const held = [];
+      entry.typing = trackPrompt.typing;
+      entry.flushHeld = () => held.splice(0).forEach(forwardInput);
+      // While AgentDeck types a receipt or a task into this box (about half a
+      // second), your keys wait and follow right after its Enter.
+      term.onData((d) => { if (entry.injecting) held.push(d); else forwardInput(d); });
+    }
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
     if (deckEl.firstElementChild === wrap) { if (!ChatUI.focusInput(col.id)) term.focus(); focusedId = col.id; } // focus leftmost on boot
 
@@ -2965,7 +3029,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, agentInForeground, isBackstage,
+  createMain, respawnColumn, agentInForeground, isBackstage, userComposing,
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);

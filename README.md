@@ -109,8 +109,8 @@ again with the current provider, model and effort instructions.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   AgentDeck cannot read live quotas; the 队长 switches
-  provider when a worker reports a limit. At most 6 background sessions work at
-  once: a further `new` waits (its card says 等空位) and starts by itself, oldest
+  provider when a worker reports a limit. At most 15 background sessions work at
+  once: a further `new` waits (its card says 等空位, the only thing called 排队) and starts by itself, oldest
   first, when one finishes. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have
   open); `tell` to it restores it first, and `ledger` lists those and the waiting work.
@@ -119,13 +119,27 @@ again with the current provider, model and effort instructions.
   appends a contract: finish without waiting on the user, ask the
   队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
   failure reason; never file bodies).
-- When a worker's turn ends, its receipt or question is read from its final reply,
+- When a worker's turn ends with a receipt, a question or a failure, it is read
+  from its final reply,
   shown as a card in the 队长 column (click the title to jump there), stored as the
   column's last receipt, and delivered to the 队长's agent by itself when it is idle
-  (or with your next message). A worker stopped at a confirmation prompt is handed
+  (or with your next message). An instruction added to a session that is still busy
+  shows as 待补充 and goes in when the session frees up.
+  **Delivery never touches what you are typing.** Receipts (and work handed to a
+  session) are typed into the agent's input box and sent with Enter, so they wait
+  while that box holds anything you have not sent: text the key tracker rebuilt,
+  a history recall it cannot follow, a key pressed in the last 5 seconds, or text
+  visible in the agent's input box on screen (an empty box on screen clears a
+  "cannot tell"). Your own Enter sends your words alone; the receipts follow as a
+  separate message once the box is empty and quiet, or ride along with a message
+  sent from the chat composer. While AgentDeck types a receipt (about half a
+  second) your keys are held and replayed right after its Enter. After 20 seconds
+  of waiting a toast says why. A worker stopped at a confirmation prompt is handed
   to the 队长 with only the prompt's last lines; it answers with `answer` when sure
-  and asks you otherwise. A quiet screen without a receipt is shown as 已停下, not
-  as success.
+  and asks you otherwise. A pause between tool calls, between two instructions or a silent
+  start (Cursor can print nothing for a minute or two) is not a stop: a turn that
+  ended without a receipt waits for the receipt to show up on screen, and only a
+  screen quiet for 3 minutes is shown as 已停下, never as success.
   Receipt file fields accept absolute local paths only; CLI update notices and
   other footer text are ignored. Prompt submission waits for the paste redraw
   to settle before pressing Enter once, including in background sessions.

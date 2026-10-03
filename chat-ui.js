@@ -789,6 +789,14 @@
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
     if (prompt && prompt.length > LONG_PROMPT) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
+    // guardUserInput (receipts, 队长's work for others): never into an input box
+    // the user is typing in, because the Enter below would send their words
+    // too. The check and the lock are in the same tick; keys the user presses
+    // until the Enter is out are held and replayed after it (see renderer).
+    if (o.guardUserInput) {
+      if (host.userComposing(col.id)) return false;
+      entry.injecting = true;
+    }
     entry.sendingPrompt = true;
     try {
       const paths = (atts || []).map(host.shellQuote).join(' ');
@@ -816,7 +824,10 @@
       const nameFrom = o.display || prompt;
       if (nameFrom && !o.silent) host.maybeAutoName(col, nameFrom.split('\n')[0].trim());
       return turn || true;
-    } finally { entry.sendingPrompt = false; }
+    } finally {
+      entry.sendingPrompt = false;
+      if (entry.injecting) { entry.injecting = false; if (entry.flushHeld) entry.flushHeld(); }
+    }
   }
 
   // Resolves to the turn (or true) once the file is written and the pointer sent.

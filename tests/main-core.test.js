@@ -221,7 +221,7 @@ test('background sessions with work still out hold a slot; finished ones free it
     { colId: '', status: 'waiting' },                                      // queued, no column yet
   ];
   assert.deepEqual([...M.activeCrew(tasks, crew)].sort(), ['a', 'c', 'd']);
-  assert.equal(M.MAX_ACTIVE, 6);
+  assert.equal(M.MAX_ACTIVE, 15);
 });
 
 test('a finished background session is archived only after 10 quiet minutes with its receipt read', () => {
@@ -242,7 +242,7 @@ test('a finished background session is archived only after 10 quiet minutes with
 
 test('队长 is told about background work, the limit and automatic archiving', () => {
   const text = M.instructions();
-  assert.match(text, /后台跑[^\n]*最多 6 个会话在干活[^\n]*自动排队/);
+  assert.match(text, /后台跑[^\n]*最多 15 个会话在干活[^\n]*自动排队/);
   assert.match(text, /10 分钟后会自动归档[^\n]*tell 发给它会自动恢复/);
 });
 
@@ -260,4 +260,49 @@ test('the 后台 list puts work in progress on top, then finished ones, newest f
     { id: 'none', state: 'plain', lastActive: 20 },                     // never given work: finished at its last turn
   ];
   assert.deepEqual(M.crewOrder(items, tasks), { running: ['run2', 'run', 'ask'], finished: ['new', 'none', 'old'] });
+});
+
+test('receipts wait while the user has text in the input box, and ignore key-free quiet only after 5s', () => {
+  const now = 100_000;
+  assert.equal(M.draftBlocks(null, now, 5000), false);
+  assert.equal(M.draftBlocks({ draft: '', unknown: false, lastKeyAt: 0 }, now, 5000), false);
+  assert.equal(M.draftBlocks({ draft: '我写到一半', unknown: false, lastKeyAt: 0 }, now, 5000), true, 'unsent text, however old');
+  assert.equal(M.draftBlocks({ draft: '', unknown: true, lastKeyAt: 0 }, now, 5000), true, 'history recall: cannot tell');
+  assert.equal(M.draftBlocks({ draft: '', unknown: false, lastKeyAt: now - 1000 }, now, 5000), true, 'still typing');
+  assert.equal(M.draftBlocks({ draft: '', unknown: false, lastKeyAt: now - 6000 }, now, 5000), false);
+});
+
+test('the agent\'s input box on screen: typed text counts, placeholder and caret do not', () => {
+  const rule = '─'.repeat(40);
+  const rows = (prompt) => ['⏺ done', '', rule, prompt, rule, 'Context: 20%'];
+  const read = (plainPrompt, maskedPrompt) => M.inputBoxText(rows(plainPrompt), rows(maskedPrompt));
+  assert.equal(read('> ', '> '), '');
+  assert.equal(read('> half a sentence', '> half a sentence'), 'half a sentence');
+  // dim placeholder text arrives masked (\u0000), as does the inverse caret
+  assert.equal(read('> Try "fix the bug"', '> \u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000\u0000'), '');
+  assert.equal(read('❯ 你好 ', '❯ 你好\u0000'), '你好');
+  assert.equal(read('│ > boxed text │', '│ > boxed text │'), 'boxed text');
+  // an earlier "> message" in the transcript is not the box
+  assert.equal(M.inputBoxText(['> old message', '', rule, '> ', rule], ['> old message', '', rule, '> ', rule]), '');
+  // no recognisable box: no opinion
+  assert.equal(M.inputBoxText(['$ ls', 'file'], ['$ ls', 'file']), null);
+  assert.equal(M.inputBoxText([rule, 'text', rule], [rule, 'text', rule]), null);
+});
+
+test('a receipt only counts below the task contract echoed on screen', () => {
+  const echo = `${M.RECEIPT_CONTRACT}\n`;
+  assert.equal(M.parseReceipt(M.afterContract(`> do it\n${echo}`)).explicit, false, 'the echo\'s own field names are not a receipt');
+  const wrapped = echo.replace('回执里不要贴文件正文。', '回执里不要贴\n文件正文。');
+  assert.equal(M.parseReceipt(M.afterContract(`${wrapped}⏺ working`)).explicit, false);
+  const done = `${echo}⏺ ok\n【回执】\n摘要：做完了\n文件：无\n`;
+  const r = M.parseReceipt(M.afterContract(done));
+  assert.equal(r.explicit, true);
+  assert.equal(r.summary, '做完了');
+  assert.equal(M.afterContract('no contract here'), 'no contract here');
+});
+
+test('work added to a busy session is 待补充; only a full house is 排队', () => {
+  const text = M.resetNote('', [{ title: 'a', colId: 'c1', status: 'queued' }, { title: 'b', colId: 'c2', status: 'waiting' }]);
+  assert.match(text, /「a」\(c1\)：待补充/);
+  assert.match(text, /「b」\(c2\)：排队等空位/);
 });

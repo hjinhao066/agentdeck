@@ -10,7 +10,13 @@
   let host = null;
   const startedAt = Date.now();
   const MAX_TASKS = 120;            // cards kept in config.json; older ones drop off
-  const FALLBACK_AFTER = 30_000;   // a finished column with no extracted turn gets a screen-based receipt
+  const FALLBACK_AFTER = 30_000;   // after an app restart: a column with no extracted turn gets a screen-based receipt
+  // A column that looks idle is not necessarily done: it pauses between tool
+  // calls, between two instructions, and Cursor can stay silent for a minute or
+  // two after it starts. Only a written receipt, a question or a failure ends
+  // a task at once; without one the column must stay quiet this long first.
+  const STOP_QUIET = 3 * 60_000;
+  const SCREEN_QUIET = 4_000;      // a receipt on the screen counts once the column has stopped printing
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -192,8 +198,9 @@
       update(task);
     }
     host.sendWhenReady(col, text, {
-      suffix: M.RECEIPT_CONTRACT, force: true, timeout: 30 * 60_000,
+      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, timeout: 30 * 60_000,
       onSent: (turn) => {
+        supersede(task);
         task.status = 'working';
         task.turnId = turn ? turn.id : '';
         task.startedAt = Date.now();
@@ -202,6 +209,19 @@
       onGiveUp: () => settle(task, { summary: '', files: [], images: [], failed: '30 分钟内一直发不出去：那一列的 agent 一直在忙或没有运行', explicit: true }),
     });
     return task;
+  }
+  // A new instruction reached a column whose earlier card never got a receipt
+  // (it carried on into the new work): close that card quietly. A receipt now
+  // would be a false "stopped" for work that is still going.
+  function supersede(task) {
+    const s = state();
+    s.tasks.forEach((t) => {
+      if (t === task || t.colId !== task.colId || !['working', 'input'].includes(t.status)) return;
+      t.receipt = { summary: '后来又给这个会话发了新指令，结果看后面的卡片。', files: [], images: [], failed: '', explicit: true };
+      t.status = 'done';
+      t.doneAt = Date.now();
+      update(t);
+    });
   }
   // ---- background sessions: at most M.MAX_ACTIVE at work, the rest wait ----
   const crewIds = () => new Set(host.columns().filter((c) => c.captainCrew && !c.isMain).map((c) => c.id));
@@ -283,11 +303,11 @@
   }
   // Hand every pending receipt to 队长's model as text; they count as in
   // flight until its turn ends.
-  function takePending(nextTurn = false) {
+  function takePending(nextTurn = false, batch) {
     const s = state();
     const text = M.receiptsForModel(s.pending);
     const turnId = nextTurn ? '' : (window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '');
-    s.inflight = [...s.inflight, ...s.pending.map((p) => ({ ...p, deliveryTurnId: turnId }))].slice(-50);
+    s.inflight = [...s.inflight, ...s.pending.map((p) => ({ ...p, deliveryTurnId: turnId, ...(batch ? { batch } : {}) }))].slice(-50);
     s.pending = [];
     save();
     return text;
@@ -296,22 +316,46 @@
   // they are typed in as one message (no user bubble) and its answer shows up
   // as a normal reply. Your own next message carries them too, if sooner.
   let delivering = false;
+  let blockedSince = 0;   // receipts waiting because the user has half a message in 队长's input box
   function deliver(entry) {
     const s = state();
     const col = mainCol();
     const id = col && col.id;
     closeOrphans();
-    if (delivering || !s || !col || !col.cmd || !s.pending.length || !entry.alive || entry.sendingPrompt || briefing === col.id) return;
+    if (!s || !s.pending.length) { blockedSince = 0; return; }
+    if (delivering || !col || !col.cmd || !entry.alive || entry.sendingPrompt || briefing === col.id) return;
     if (entry.state === 'working' || entry.state === 'input') return;
     if (Date.now() - (entry.lastOutputAt || 0) < 1500) return;   // let it settle first
+    // Never through a box the user is typing in: Enter would send their half-written message too
+    if (host.userComposing(id)) { holdBack(); return; }
     // only into 队长's agent, never into a shell it may have dropped back to
     delivering = true;
     host.agentInForeground(col, false).then((ok) => {
       delivering = false;
       if (!ok || !s.pending.length || mainCol() !== col || col.id !== id || briefing === id || entry.sendingPrompt) return;
-      const text = takePending(true);
-      window.ChatUI.sendPrompt(col, '', null, { prefix: text.trim(), force: true });
+      if (host.userComposing(id)) { holdBack(); return; }   // started typing while the check ran
+      blockedSince = 0;
+      const batch = 'b' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+      const text = takePending(true, batch);
+      // guardUserInput: sendPrompt looks at the box once more in the same tick it
+      // types, and holds the user's keys until its own Enter is out
+      Promise.resolve(window.ChatUI.sendPrompt(col, '', null, { prefix: text.trim(), force: true, guardUserInput: true })).then((sent) => {
+        if (sent) return;
+        // not typed after all: the receipts go back to waiting
+        const back = s.inflight.filter((p) => p.batch === batch).map(({ batch: b, deliveryTurnId, ...item }) => item);
+        s.inflight = s.inflight.filter((p) => p.batch !== batch);
+        s.pending = [...back, ...s.pending].slice(-50);
+        save();
+      });
     }, () => { delivering = false; });
+  }
+  // Tell the user once if receipts have been waiting for a while.
+  function holdBack() {
+    if (!blockedSince) blockedSince = Date.now();
+    else if (blockedSince > 0 && Date.now() - blockedSince > 20_000) {
+      blockedSince = -1;
+      host.showToast('队员的回执在等：队长输入框里可能还有没发的话。你发出或清空后，回执会自动送过去。');
+    }
   }
   // Work handed to a column that was closed, archived or restarted since.
   function closeOrphans() {
@@ -352,19 +396,28 @@
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
       if (entry.state === 'working') { task.idleSince = 0; continue; }
-      // The reply normally arrives through the chat turn (onTurnDone). If the
-      // app restarted mid-task, or no turn was recorded, don't wait forever.
+      // The reply normally arrives through the chat turn (onTurnDone). That
+      // turn can end early (a pause, a slow start) and the receipt then appears
+      // on the screen only. If the app restarted mid-task, or no turn was
+      // recorded, don't wait forever either — but a quiet screen alone is not
+      // an ending until it has stayed quiet for STOP_QUIET.
       if (entry.state === 'done' || entry.state === 'plain') {
         task.idleSince = task.idleSince || Date.now();
-        if (Date.now() - task.idleSince < FALLBACK_AFTER) continue;
-        // 1) a reply already saved for this turn; 2) a 【回执】 still on screen
-        // (after a hot reload the terminal kept running); 3) say what happened
+        // its chat turn is still open: that turn's reply (unwrapped) is the better source
+        const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
+        if (turn && !turn.done) continue;
+        const quiet = Date.now() - Math.max(task.idleSince, entry.lastOutputAt || 0);
+        const fromScreen = M.parseReceipt(M.afterContract(entry.lastScreen), filePaths);
+        const prev = col && col.lastReceipt;
+        const stale = !!prev && prev.summary === fromScreen.summary && prev.failed === fromScreen.failed;   // the last task's receipt, still on screen
+        if (fromScreen.explicit && !stale && quiet >= SCREEN_QUIET) { settle(task, fromScreen); continue; }
+        const restarted = (task.startedAt || task.sentAt) < startedAt;
+        if (quiet < (restarted ? FALLBACK_AFTER : STOP_QUIET)) continue;
+        // 1) a reply already saved for this turn; 2) say what happened
         // a reply cut off when the app closed is not that turn's final reply
         const saved = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId && t.reply && !t.interrupted);
-        const fromScreen = M.parseReceipt(entry.lastScreen || '', filePaths);
         if (saved) settle(task, M.parseReceipt(saved.reply, filePaths));
-        else if (fromScreen.explicit) settle(task, fromScreen);
-        else if ((task.startedAt || task.sentAt) < startedAt) {
+        else if (restarted) {
           settle(task, { summary: 'AgentDeck 重启过，没收到这件活的回执，去那一列看结果。', files: [], images: [], failed: '', explicit: false });
         } else settle(task, fromScreen);
       } else {
@@ -390,7 +443,12 @@
       return;
     }
     const task = s.tasks.find((t) => t.colId === colId && t.turnId === turn.id);
-    if (task) settle(task, M.parseReceipt(turn.reply, filePaths));
+    if (!task) return;
+    // A turn also "ends" on a pause between tool calls or a silent start. Only
+    // a receipt, a question or a failure closes the task here; otherwise onTick
+    // waits for the column to stay quiet before calling it stopped.
+    const r = M.parseReceipt(turn.reply, filePaths);
+    if (r.explicit || r.question || r.failed) settle(task, r);
   }
   function filePaths(text) {
     return String(text).split('\n').flatMap((line) => host.findLinks(line)).filter((m) => m.kind === 'file').map((m) => m.text.trim());
@@ -499,7 +557,7 @@
         }
         const busy = entry && entry.state === 'working';
         dispatch(col, text, host.columnLabel(col));
-        return { done: true, result: busy ? `「${host.columnLabel(col)}」正在干活，指令已排队，等它停下就发。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
+        return { done: true, result: busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下就发。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
       }
       case 'main-answer': {
         const col = findTarget(message.to);
@@ -520,7 +578,7 @@
   }
 
   // ---- task cards in the main session's chat ----
-  const STATUS_TEXT = { waiting: '等空位', queued: '排队中', working: '干活中', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
+  const STATUS_TEXT = { waiting: '等空位', queued: '待补充', working: '干活中', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
   function renderCard(task, colId) {
     const card = el('div', 'task-card st-' + task.status);
     const head = el('div', 'task-head');
@@ -533,6 +591,7 @@
     head.append(el('span', 'task-arrow', '→'), name, el('span', 'task-status', STATUS_TEXT[task.status] || ''));
     card.appendChild(head);
     if (task.status === 'input') card.appendChild(el('div', 'task-note', '停在确认提示上，已交给队长判断；队长拿不准会来问你。'));
+    if (task.status === 'queued') card.appendChild(el('div', 'task-note', '追加给还在忙的会话，等它空下来就发过去。'));
     if (task.status === 'waiting') card.appendChild(el('div', 'task-note', `同时最多 ${M.MAX_ACTIVE} 个会话干活，前面有空位就自动开会话开始做。`));
     const r = task.receipt;
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));

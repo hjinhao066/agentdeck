@@ -36,6 +36,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   reveals the exact column and focuses its input: the composer in chat mode,
   the xterm textarea in terminal mode. Stale IDs never fall
   back to another terminal. Retract obsolete notifications and deduplicate turns.
+- Automatic input (队长 receipts, work handed to a session) must never go through
+  an input box holding text the user has not sent: gate on `userComposing` and pass
+  `guardUserInput` to `ChatUI.sendPrompt`. Never press Enter on the user's behalf
+  for text that is not AgentDeck's own.
 - Screen-based completion is a quiet-output heuristic, not proof of task success.
 - Do not log prompts, tokens or terminal contents. Do not commit local settings,
   session output, screenshots containing user data, keys, or installed bundles.
