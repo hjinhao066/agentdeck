@@ -188,6 +188,22 @@ test('terminal mouse reports are skipped across chunks before a Chinese prompt i
   expect(submitted).toEqual(['请正常显示中文']);
 });
 
+test('terminal colour-query replies (OSC/DCS) are not counted as typing, split across chunks or not', async () => {
+  const result = await page.evaluate(() => {
+    const track = makePromptTracker({ manualTitle: true });
+    track('\x1b]11;rgb:1414/1414/1414\x07');
+    track('\x1b]10;rgb:e4e4/e4e4'); track('/e4e4\x1b\\');
+    track('\x1bP>|xterm.js(5.5.0)\x1b\\');
+    const afterReplies = { ...track.typing };
+    track('hi');
+    return { afterReplies, draft: track.typing.draft };
+  });
+  expect(result.afterReplies.draft).toBe('');
+  expect(result.afterReplies.unknown).toBe(false);
+  expect(result.afterReplies.lastKeyAt).toBe(0);
+  expect(result.draft).toBe('hi');
+});
+
 test('chat mode shows and copies the Chinese raw-terminal prompt and its final reply', async () => {
   const id = 'chat-2';
   const column = page.locator(`.column[data-col-id="${id}"]`);

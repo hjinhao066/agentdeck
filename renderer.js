@@ -251,7 +251,8 @@ function maybeAutoName(col, line) {
 // Rebuild the line being typed from raw pty input so the submitted prompt can
 // be caught. Printables append, backspace deletes, Enter submits. Escape
 // sequences (arrow keys, and xterm's auto-replies to terminal queries) are
-// skipped; inside a bracketed paste a newline is literal content, not "send".
+// skipped (OSC/DCS replies such as colour queries too); inside a bracketed paste
+// a newline is literal content, not "send".
 function makePromptTracker(col) {
   let buf = '', inPaste = false, escape = '', x10Bytes = 0;
   // What the 队长 delivery needs to know: is something typed and not sent yet?
@@ -266,6 +267,12 @@ function makePromptTracker(col) {
       if (x10Bytes) { x10Bytes--; i++; continue; }
       if (escape) {
         escape += ch; i++;
+        if (/^\x1b[\]P]/.test(escape)) {
+          // OSC/DCS replies (Cursor's TUI asks for the background colour on start):
+          // skipped up to BEL or ST, never counted as typed text
+          if (ch === '\x07' || escape.endsWith('\x1b\\') || escape.length >= 256) escape = '';
+          continue;
+        }
         if (escape === '\x1b[' || escape === '\x1bO') continue;
         if (escape.startsWith('\x1b[') && !/[@-~]/.test(ch) && escape.length < 64) continue;
         if (escape === '\x1b[200~') { inPaste = true; typing.lastKeyAt = Date.now(); }
