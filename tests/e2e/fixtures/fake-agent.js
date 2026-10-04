@@ -119,6 +119,11 @@ function answer() {
   }
   process.stdout.write('\x1b[2J\x1b[H');
   process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
+  // --quota-wall-cn: the CN seat's account is out of quota, the US seat answers normally.
+  if (process.argv.includes('--quota-wall-cn') && !/\.claude-us/.test(process.env.CLAUDE_CONFIG_DIR || '')) {
+    process.stdout.write('Usage limit reached · continuing automatically at 5:50pm\n');
+    box(); return;
+  }
   if (first === 'empty reply regression') { box(); return; }
   if ((process.argv.includes('--interruptible') || process.argv.includes('--quota-probe')) && /keep working|wait for quota/.test(first)) {
     process.stdout.write(first.includes('quota') ? "You've hit your limit · resets 5pm (America/Los_Angeles)\n" : '✻ Doing…\nPress up to edit queued messages\n');

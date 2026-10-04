@@ -598,6 +598,7 @@
   }
   function dispatch(col, text, title, waiting) {
     const task = waiting || addTask(col, title);
+    task.prompt = String(text).slice(0, 20000);
     if (waiting) {
       Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
       update(task);
@@ -705,6 +706,72 @@
     if (commandQuota(cmd)?.out) task.waitReason = '额度用尽，稍后自动开';
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
     save();
+    return task;
+  }
+  // ---- quota wall: a Claude worker carries on in another seat ----
+  // The seat's remaining five-hour room is only worth something if the work
+  // moves: the worker opens a new session on a seat that still has quota, in the
+  // same directory, bound to the same board card; the old session is archived.
+  // With every seat out, the work waits for whichever recovers first.
+  const continuing = new Set(), continueFailed = new Set();
+  const seatPlan = (cmd, currentSeatId, hops) => M.continuePlan({ seats: window.QuotaCore.claudeSeats(host.config.claudeSeats), currentSeatId, hops,
+    quotaOf: (id) => { const q = window.QuotaCore.commandQuota(host.config.quotas, cmd, host.config.claudeSeats, id); return q && { out: q.out, recoveryAt: q.recoveryAt, shortRemaining: q.shortRemaining }; } });
+  const clock = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  // true: the quota wall is handled here (no failure receipt); false: normal path.
+  function continueElsewhere(col, entry) {
+    const s = state();
+    if (!s || !col || col.isMain || !col.captainCrew || col.dispatcherCardId || continueFailed.has(col.id)) return false;
+    if (continuing.has(col.id)) return true;
+    if (window.BoardCore.inferAgentType(col.cmd) !== 'Claude') return false;
+    const receipt = M.resourceReceipt(entry.lastScreen, col.cmd);
+    if (!receipt || M.resourceFailure(receipt.failed, 'quota') !== 'quota') return false;
+    const mine = s.tasks.filter((t) => t.colId === col.id);
+    if (mine.some((t) => ['input', 'asking'].includes(t.status))) return false;
+    const open = mine.filter((t) => ['queued', 'working', 'quota'].includes(t.status));
+    const main = open.findLast((t) => t.status !== 'queued') || open.at(-1);
+    if (!main || open.some((t) => !t.prompt)) return false;
+    const plan = seatPlan(col.cmd, col.claudeSeatId, main.hops || 0);
+    if (plan.kind === 'none') return false;
+    continuing.add(col.id);
+    runContinue(col, main, open, plan, receipt.failed).catch((error) => {
+      continueFailed.add(col.id);
+      host.showToast('自动换席位续跑没成：' + error.message);
+    }).finally(() => continuing.delete(col.id));
+    return true;
+  }
+  async function runContinue(col, main, open, plan, reason) {
+    const s = state(), label = host.columnLabel(col);
+    const from = window.QuotaCore.claudeSeats(host.config.claudeSeats).find((x) => x.id === col.claudeSeatId);
+    const requestId = 'cont-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const text = M.continuationPrompt(open.map((t) => t.prompt).join('\n\n'), from?.name);
+    const cmd = M.freshCommand(col.cmd), hops = (main.hops || 0) + 1;
+    const metadata = { project: col.project || '', reviews: col.reviews || [], boardId: col.boardId || '' };
+    // The card's old attempt ends as a quota stop: that never counts toward the
+    // two-failure hold, and it frees the card for the new session to bind.
+    if (main.boardId) await boardEvent(main, 'failed', reason, 'quota');
+    let note;
+    if (plan.kind === 'switch') {
+      const fresh = await openSession(label, cmd, col.cwd, requestId, text, null, { ...metadata, claudeSeatId: plan.seatId });
+      const task = s.tasks.findLast((t) => t.colId === fresh.id);
+      if (task) task.hops = hops;
+      note = `已自动在 ${plan.seatName} 席位开新会话 ${fresh.id} 续跑`;
+    } else {
+      const waiting = await enqueue(label, cmd, col.cwd, requestId, text, { ...metadata, continuation: true, hops });
+      if (waiting) { waiting.hops = hops; waiting.waitReason = `所有席位额度都用尽，${plan.recoveryAt ? '约 ' + clock(plan.recoveryAt) + ' 最早恢复，' : ''}恢复后自动续跑`; update(waiting); }
+      note = `所有席位额度都用尽，已排队等${plan.recoveryAt ? '约 ' + clock(plan.recoveryAt) + ' 最早恢复的' : '最先恢复的'}席位自动续跑`;
+    }
+    // Only now is the old session ended: it would otherwise resume by itself at
+    // its own reset and do the same work a second time.
+    cancelSupplement(col.id);
+    open.forEach((t) => {
+      t.status = 'stopped'; t.doneAt = Date.now();
+      t.receipt = { summary: '额度用尽，这件活已自动接力到另一个席位。', files: [], images: [], failed: '', explicit: true };
+      update(t);
+    });
+    s.pending = s.pending.filter((p) => p.colId !== col.id);
+    host.archiveColumn(col, { captain: true, quiet: true });
+    boardNotice(`队员「${label}」(${col.id}) 撞到${from ? ' ' + from.name : ''} 席位额度，${note}${main.boardId ? `，同一张看板卡 ${main.boardId}` : ''}；旧会话已归档。这件活不用重派。`);
+    save();
   }
   // Start waiting work as slots free up, oldest first. Critical memory pressure waits.
   let pumping = false;
@@ -723,7 +790,13 @@
         cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
         take: () => {
           if (state() !== s) return null;
-          const index = s.waitlist.findIndex((w) => !commandQuota(w.cmd)?.out);
+          const index = s.waitlist.findIndex((w) => {
+            if (!w.metadata?.continuation) return !commandQuota(w.cmd)?.out;
+            const plan = seatPlan(w.cmd, null, 0);
+            if (plan.kind !== 'switch') return false;
+            w.metadata.claudeSeatId = plan.seatId;
+            return true;
+          });
           return index < 0 ? null : s.waitlist.splice(index, 1)[0];
         },
         open: async (w) => {
@@ -932,6 +1005,7 @@
       if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen, col?.cmd) }); continue; }
       const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
       if (entry.state === 'quota' || activity === 'quota') {
+        if (continueElsewhere(col, entry)) continue;
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
         if (task.status === 'queued' && col?.lastReceipt?.source === 'quota') continue;

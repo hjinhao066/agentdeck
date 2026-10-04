@@ -54,7 +54,7 @@
   const RESET = String.raw`(?:limit |your (?:limit|quota) (?:will )?)?resets?(?:[\s,]+${WHEN})*(?:\s+[\x21-\x7e]+)?[.!]?`; // one unreadable trailing token is still the CLI's reset value
   const LOGIN = String.raw`(?:please )?run ['"\x60]?(?:\/login|[\w-]+ login)['"\x60]?`;
   const REST = String.raw`[\x20-\x7e’…]*`; // the CLI's own sentence is plain ASCII; narration in another script is not
-  const SEP = String.raw`(?:\s*[·∙•]\s*(?:${RESET}|${LOGIN}[.!]?|(?:please )?(?:log|sign) in(?: again)?[.!]?|(?:please )?try again(?:[\s,]+${WHEN})*[.!]?|\/[a-z-]+(?: to [a-z' \/-]+)?[.!]?))+`;
+  const SEP = String.raw`(?:\s*[·∙•]\s*(?:${RESET}|${LOGIN}[.!]?|(?:please )?(?:log|sign) in(?: again)?[.!]?|(?:please )?try again(?:[\s,]+${WHEN})*[.!]?|continuing automatically(?:[\s,]+${WHEN})*[.!]?|\/[a-z-]+(?: to [a-z' \/-]+)?[.!]?))+`;
   const tail = (hints) => String.raw`(?:[.!]?|${SEP}|\s*[.!,:;—–-]\s*['"\x60]?(?:${RESET}|(?:${hints})(?!\w)${REST}))`;
   const QUOTA_HINT = String.raw`(?:please )?try again|(?:please )?wait|to continue|to get more|upgrade (?:to|your)|visit https?:\/\/\S+|purchase|switch to|contact|\/[a-z-]+`;
   const RATE_HINT = QUOTA_HINT + '|retry(?:ing)?';

@@ -29,7 +29,13 @@ async function waitForShell(id) {
 }
 
 async function launch() {
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'received-prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received-columns.jsonl') };
+  // A `claude` stand-in on PATH (POSIX only): it runs the fake agent.
+  const bin = path.join(profile, 'bin');
+  if (process.platform !== 'win32') {
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'claude'), `#!/bin/sh\nexec node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" "$@"\n`, { mode: 0o755 });
+  }
+  const env = { ...process.env, PATH: bin + path.delimiter + process.env.PATH, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'received-prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received-columns.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -409,6 +415,26 @@ test('quota generates a failure receipt; queued work still waits for the quota s
   expect(capturedPrompts().some((p) => p.startsWith('after quota'))).toBe(false);
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
   await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('after quota')).length).toBe(1);
+  await run(mainId, `clear; node "${CLI}" archive --id ${child}`);
+  await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
+});
+
+test('a Claude worker at the CN quota wall carries on in the US seat: same folder and card, old session archived, no failure receipt', { skip: process.platform === 'win32' }, async () => {
+  await run(mainId, `clear; node "${CLI}" new --title "续跑" --task "finish the login fix" --command "claude --model claude-opus-5-5 --effort low --quota-wall-cn"`);
+  await expect.poll(() => page.evaluate(() => columns.some((c) => c.displayTitle === '续跑' && c.claudeSeatId === 'us')), { timeout: 40000 }).toBe(true);
+  const result = await page.evaluate(() => ({
+    live: columns.filter((c) => c.displayTitle === '续跑').map((c) => ({ seat: c.claudeSeatId, cwd: c.cwd })),
+    old: (config.archived || []).filter((c) => c.displayTitle === '续跑').map((c) => ({ seat: c.claudeSeatId, cwd: c.cwd })),
+    statuses: config.mainSession.tasks.filter((t) => t.title === '续跑').map((t) => t.status),
+    failed: config.mainSession.pending.concat(config.mainSession.inflight || []).some((p) => p.failed && p.title === '续跑'),
+  }));
+  expect(result.live).toEqual([{ seat: 'us', cwd: profile }]);
+  expect(result.old).toEqual([{ seat: 'cn', cwd: profile }]);
+  expect(result.statuses).not.toContain('failed');
+  expect(result.failed).toBe(false);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('【自动续跑】')).length, { timeout: 30000 }).toBe(1);
+  expect(capturedPrompts().find((p) => p.startsWith('【自动续跑】'))).toContain('finish the login fix');
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '续跑').id);
   await run(mainId, `clear; node "${CLI}" archive --id ${child}`);
   await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
 });

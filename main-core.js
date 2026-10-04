@@ -169,7 +169,7 @@
     'Gemini 3.8 Flash：检索、整理、中文写作、简单到中等代码（Antigravity，不消耗 Claude 额度；不用 Gemini 3.1 Pro）。Gemini 周额度用尽时，agy GPT-OSS 120B Medium 做批量代码与测试；Sonnet 4.6 做日常代码；Opus 4.6 Thinking 做架构、复杂推理与审查。agy 第三方模型的剩余额度目前无法读取，遇到限流就换另一个已实测模型。',
     'Cursor Grok 4.7：脏活、抓数据、外部信息采集（cursor-agent --force --model grok-4.7-high-fast）。',
     '数据抓取兜底：网上的数据抓不到时，不要盲目手写无头爬虫死磕，先找 GitHub 现成工具、OpenCLI、agent-reach 技能；若仍抓不到再考虑调度 Muse.ai 或 ChatGPT 浏览器（computer use）。',
-    '额度轮换：quota 只读本机会话/缓存的被动观测，注意采样时间和可信度，未知不代表可用。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
+    '额度轮换：quota 只读本机会话/缓存的被动观测，注意采样时间和可信度，未知不代表可用。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。例外：Claude 队员撞到额度用尽时程序已自动在另一个有额度的席位开新会话续跑（同目录、同看板卡，旧会话已归档），收到「已自动…续跑」提示就不要重派；两个席位都用尽时程序会排队等最先恢复的席位。',
   ];
   // Effort tiers, lowest first. Cursor takes the tier as the model id's suffix
   // and lists exactly these ids for Opus and Sonnet.
@@ -392,6 +392,29 @@
     const ids = new Set();
     latestTasks(tasks).forEach((t, colId) => { if (crewIds.has(colId) && OPEN.includes(t.status)) ids.add(colId); });
     return ids;
+  }
+  // A Claude worker hit its seat's quota wall. Choose where its work goes on:
+  // another seat that still has quota (the most room first), else wait for
+  // whichever seat recovers first. `seats`: [{ id, name }]; `quotaOf(id)`:
+  // { out, recoveryAt, shortRemaining }. currentSeatId null = every seat is a
+  // candidate (a queued continuation looking for a free seat). Hops are capped
+  // so a seat with a wrong "not out" reading cannot bounce work forever.
+  const MAX_CONTINUE_HOPS = 3;
+  function continuePlan({ seats, currentSeatId, quotaOf, hops = 0 }) {
+    const list = (Array.isArray(seats) ? seats : []).filter((s) => s && s.id !== 'default');
+    if (hops >= MAX_CONTINUE_HOPS || !list.some((s) => s.id !== currentSeatId) || (currentSeatId && !list.some((s) => s.id === currentSeatId))) return { kind: 'none' };
+    const rows = list.map((seat) => ({ seat, q: quotaOf(seat.id) || {} }));
+    const usable = rows.filter((r) => r.seat.id !== currentSeatId && !r.q.out)
+      .sort((a, b) => (Number.isFinite(b.q.shortRemaining) ? b.q.shortRemaining : -1) - (Number.isFinite(a.q.shortRemaining) ? a.q.shortRemaining : -1));
+    if (usable.length) return { kind: 'switch', seatId: usable[0].seat.id, seatName: usable[0].seat.name };
+    const times = rows.map((r) => r.q.recoveryAt).filter((t) => Number.isFinite(t) && t > 0);
+    return { kind: 'wait', recoveryAt: times.length ? Math.min(...times) : null };
+  }
+  // The new session starts with an empty context in the same directory: it must
+  // read the working tree first and carry on, never redo or discard it.
+  function continuationPrompt(text, fromName) {
+    return `【自动续跑】上一个会话在「${fromName || '原'}」席位撞到额度用尽被中断，你接着它在同一个目录继续做同一件事。` +
+      '先运行 git status 和 git diff 看已有的改动和进度，在此基础上往下做；不要重做已完成的部分，不要回滚、丢弃或重置已有的未提交改动。原任务如下：\n\n' + String(text || '');
   }
   // The 后台 list: sessions at work first (in the order they were sent work),
   // then finished ones, most recently finished first.
@@ -724,7 +747,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, MAX_CONTINUE_HOPS, continuePlan, continuationPrompt, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });
