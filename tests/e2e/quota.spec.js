@@ -108,7 +108,11 @@ test('Captain quota CLI returns four lines and changes no tasks, receipts or cac
   await page.locator('#mdCwd').fill(profile);
   await page.locator('#mdCreate').click();
   const id = await page.evaluate(() => config.mainSession.colId);
-  await expect.poll(() => page.evaluate((id) => window.deck.ptyForeground(id), id)).toMatch(/^(?:zsh|bash|sh|powershell|pwsh|cmd)$/i);
+  if (process.platform === 'win32') {
+    await expect.poll(() => page.evaluate((id) => MainCore.isWindowsShellPrompt(dumpScreen(terms.get(id).term)), id), { timeout: 15000 }).toBe(true);
+  } else {
+    await expect.poll(() => page.evaluate((id) => window.deck.ptyForeground(id), id), { timeout: 15000 }).toMatch(/^(?:zsh|bash|sh)$/i);
+  }
   const before = await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]));
   const output = path.join(profile, 'quota.txt');
   // Node writes UTF-8 on both platforms; PowerShell 5 redirection writes UTF-16.
