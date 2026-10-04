@@ -189,6 +189,26 @@ test('unowned cache numbers and an unknown reset do not send a warmup request', 
   await expect(page.locator('.column.chat-mode')).toHaveCount(1);
 });
 
+test('official quota fields warm the matching seat without native cache or account-bound payload extensions', async () => {
+  await keepWorking(WORKER);
+  await page.evaluate(async () => {
+    const info = (await window.deck.claudeSeats()).find((seat) => seat.id === 'us');
+    config.quotas['Claude:us'] = { sample: {
+      provider: 'Claude', scope: 'claude', official: true, seatId: info.id,
+      configDir: info.configDir, credentialKey: info.credentialKey, at: Date.now() - 120000,
+      windows: [{ key: 'fiveHour', used: 100, remaining: 0, exhausted: true, resetAt: Date.now() - 90000 }],
+    } };
+    flushConfig();
+  });
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).quotas['Claude:us']?.sample?.official).toBe(true);
+  const nextReset = Date.now() + 5 * 3600000;
+  await tick([{ ok: true, provenNative: true, resetAt: nextReset }]);
+  expect((await runs()).map((run) => run.seatId)).toEqual(['us']);
+  await refresh();
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('title', /已预热 · 下次重置/);
+  await workerPreserved(1);
+});
+
 test('two failed requests abandon the same reset window, including across isolated restart', async () => {
   test.setTimeout(90000);
   cache('cn');

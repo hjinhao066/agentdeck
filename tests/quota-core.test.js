@@ -217,3 +217,21 @@ test('explicit recovery survives retaining the older fresh numeric sample', () =
   Q.observe(store, { provider: 'Claude', scope: 'claude', ...owner, identityOnly: true, at: now + 3, accountKey: 'other-account' }, now + 3);
   assert.equal(store['Claude:cn'].resumed, undefined);
 });
+
+test('official slot samples survive first identity observation but older samples are rejected after a saved identity change', () => {
+  const seat = { id: 'cn', configDir: '/home/test/.claude' }, store = {};
+  const sample = { provider: 'Claude', scope: 'claude', seatId: seat.id, configDir: seat.configDir,
+    at: now, official: true, credentialKey: 'cn-slot',
+    windows: [{ key: 'fiveHour', label: '5 小时', used: 20, remaining: 80, resetAt: now + 3600000 }] };
+  Q.observe(store, sample, now);
+  Q.observe(store, { ...sample, identityOnly: true, official: false, at: now + 1, accountKey: 'first-account' }, now + 1);
+  assert.equal(Q.summary(store, 'Claude', now + 1, seat).label, '80%');
+  assert.equal(store['Claude:cn'].officialNotBefore, undefined);
+  Q.observe(store, { ...sample, identityOnly: true, official: false, at: now + 2, accountKey: 'second-account' }, now + 2);
+  const restored = JSON.parse(JSON.stringify(store));
+  assert.equal(restored['Claude:cn'].officialNotBefore, now + 2);
+  assert.equal(Q.observe(restored, sample, now + 2), false);
+  assert.equal(Q.summary(restored, 'Claude', now + 2, seat).label, '未知');
+  Q.observe(restored, { ...sample, at: now + 3 }, now + 3);
+  assert.equal(Q.summary(restored, 'Claude', now + 3, seat).label, '80%');
+});

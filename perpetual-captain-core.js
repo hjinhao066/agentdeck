@@ -116,7 +116,10 @@
       (block.official !== true || (time(block.at) && now - block.at <= FRESH_MS))) ||
       (bound(sample, info) && (sample.official !== true || fresh) && sample.at >= block.at && (sample.windows || []).some((window) => window.exhausted)));
     const blocked = block && time(block.at) && block.at <= now + 60_000 && (!time(block.resetAt) || block.resetAt > now) && (errorBound || numericBound);
-    const recovery = saved.resumed || (fresh && sample.resumed ? sample : null);
+    const officialRecovery = fresh && sample.official === true && bound(sample, info) && sample.windows?.length &&
+      sample.windows.every((window) => percent(window.remaining) !== null && window.remaining > 0 &&
+        !window.exhausted && time(window.resetAt) && window.resetAt > now);
+    const recovery = saved.resumed || (fresh && (sample.resumed || officialRecovery) ? sample : null);
     const resumed = recovery && time(recovery.at) && recovery.at <= now + 60_000 && recovery.at > (block?.at || 0) &&
       (bound(recovery, info) || (recovery.sourceColumnId && sameDir(recovery.configDir, info) &&
         (!recovery.accountKey || (!!info.accountKey && recovery.accountKey === info.accountKey))));

@@ -92,11 +92,49 @@ test('disabling during the last asynchronous idle scan prevents the first reques
   assert.equal((await f.service.snapshot())[0].attempts, 0);
 });
 test('warmup consumes the existing seat quota structure without a private API reader or native cache', async (t) => {
-  const sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', accountBound: true,
-    accountKey: 'own-account', configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
+  const sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', credentialKey: 'cn-slot',
+    configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
     official: true, windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }] };
-  const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', configDir: '/home/test/.claude', quota: { sample } }) });
+  const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: '/home/test/.claude', quota: { sample } }) });
   await f.service.tick(); assert.equal(f.calls.length, 1);
+});
+test('official reset ownership survives restart and rejects the previous account sample until a new observation arrives', async (t) => {
+  let accountKey = 'first-account';
+  let sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'cn-slot',
+    configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
+    windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }] };
+  const f = fixture(t, { readSeat: async () => ({ accountKey, credentialKey: 'cn-slot', configDir: sample.configDir, quota: { sample } }) });
+  await f.service.snapshot();
+  accountKey = 'second-account';
+  assert.equal((await f.service.snapshot())[0].resetAt, undefined);
+  f.service.dispose();
+  const reopened = createWarmupService(f.options);
+  t.after(() => reopened.dispose());
+  await reopened.tick(); assert.equal(f.calls.length, 0);
+  const owner = JSON.parse(fs.readFileSync(f.stateFile)).owners.cn;
+  assert.equal(owner.accountKey, accountKey);
+  assert.equal(owner.officialNotBefore, Date.parse('2026-10-03T12:01:01Z'));
+  sample = { ...sample, at: owner.officialNotBefore };
+  await reopened.tick(); assert.equal(f.calls.length, 1);
+});
+test('the existing quota identity cutoff invalidates an already remembered official window', async (t) => {
+  let officialNotBefore = 0;
+  const sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'cn-slot',
+    configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
+    windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }] };
+  const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: sample.configDir,
+    quota: { sample, officialNotBefore } }) });
+  assert.ok((await f.service.snapshot())[0].resetAt);
+  officialNotBefore = Date.parse('2026-10-03T12:01:01Z');
+  await f.service.tick(); assert.equal(f.calls.length, 0);
+  assert.equal((await f.service.snapshot())[0].resetAt, undefined);
+});
+test('official records for another storage slot cannot start preheating', async (t) => {
+  const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: '/home/test/.claude',
+    quota: { sample: { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'us-slot',
+      configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
+      windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }] } } }) });
+  await f.service.tick(); assert.equal(f.calls.length, 0);
 });
 test('another seat in the existing quota structure cannot preheat this seat', async (t) => {
   const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', configDir: '/home/test/.claude',

@@ -219,9 +219,9 @@
     const now = Date.now(), settings = P.normalizeSettings(host.config.perpetualCaptain);
     const candidates = seats.map((info) => {
       const configured = host.config.claudeSeats.find((s) => s.id === info.id);
-      const q = P.seatQuota(host.config.quotas[window.QuotaCore.seatKey(info.id)], { ...info, configuredDir: configured?.configDir,
-        officialNotBefore: host.config.perpetualCaptainState?.seats?.[info.id]?.officialNotBefore }, now);
       let state = P.observe(host.config.perpetualCaptainState, { seatId: info.id, accountKey: info.accountKey, configDir: configured?.configDir }, now);
+      const q = P.seatQuota(host.config.quotas[window.QuotaCore.seatKey(info.id)], { ...info, configuredDir: configured?.configDir,
+        officialNotBefore: state.seats[info.id]?.officialNotBefore }, now);
       if (q.exhausted) state = P.observe(state, { seatId: info.id, at: q.exhaustedAt, exhausted: true, resetAt: q.exhaustedResetAt }, now);
       if (q.trusted) state = P.observe(state, { seatId: info.id, at: q.remainingAt, remainingAt: q.remainingAt, remaining: q.remaining, trusted: true, resetAt: q.resetAt, threshold: settings.threshold }, now);
       if (q.resumedAt) state = P.observe(state, { seatId: info.id, at: q.resumedAt, resumed: true }, now);

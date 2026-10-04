@@ -29,7 +29,8 @@ function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSe
       try { info = await readSeat(seat); } catch (_) { continue; }
       const owner = state.owners?.[seat.id];
       const changed = owner && (owner.accountKey !== info?.accountKey || dirKey(owner.configDir) !== dirKey(info?.configDir));
-      const officialNotBefore = changed ? now() : owner?.officialNotBefore;
+      const officialNotBefore = Math.max(owner?.officialNotBefore || 0, info?.quota?.officialNotBefore || 0, changed ? now() : 0);
+      if (officialNotBefore > (owner?.officialNotBefore || 0)) delete state.seats[seat.id];
       if (info?.accountKey && info?.configDir) {
         state.owners ||= {};
         state.owners[seat.id] = { accountKey: info.accountKey, configDir: info.configDir,
@@ -91,6 +92,7 @@ function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSe
     cancel: (seatId) => inflight.get(seatId)?.abort(),
     snapshot: async () => {
       const seats = await sample();
+      persist();
       return seats.map((s) => ({ seatId: s.id, ...state.seats[s.id] }));
     },
     dispose: () => { stopped = true; for (const controller of inflight.values()) controller.abort(); },

@@ -229,6 +229,21 @@ test('known account or directory changes invalidate older official samples but f
   assert.deepEqual(P.normalizeState(JSON.parse(JSON.stringify(state))), P.normalizeState(state));
   assert.equal(P.seatQuota({ sample: sample(), officialNotBefore: NOW + 2 }, current, NOW + 2).trusted, true);
 });
+test('a newer official available sample clears an earlier indefinite rate-limit observation, but not an exhausted weekly window', () => {
+  const current = { ...info, credentialKey: 'cn-current-slot' };
+  const official = { provider: 'Claude', scope: 'claude', official: true, seatId: 'cn', configDir: info.configuredDir,
+    credentialKey: current.credentialKey, at: NOW + 1,
+    windows: [{ key: 'fiveHour', remaining: 80, resetAt: NOW + 3600_000 },
+      { key: 'weekly', remaining: 70, resetAt: NOW + 7 * 86400_000 }] };
+  let state = P.observe({}, { seatId: 'cn', at: NOW, exhausted: true }, NOW);
+  const q = P.seatQuota({ sample: official }, current, NOW + 1);
+  assert.equal(q.resumedAt, NOW + 1);
+  state = P.observe(state, { seatId: 'cn', at: q.resumedAt, resumed: true }, NOW + 1);
+  assert.equal(state.seats.cn.exhaustedAt, undefined);
+  assert.equal(P.seatQuota({ sample: { ...official, windows: [official.windows[0],
+    { ...official.windows[1], remaining: 0, exhausted: true }] } }, current, NOW + 1).resumedAt, null);
+  assert.equal(P.seatQuota({ sample: official, blocked: { at: NOW + 2, sourceColumnId: 'cn-native', configDir: info.configuredDir } }, current, NOW + 2).resumedAt, null);
+});
 test('expired, reset, future or invalid numeric observations become unknown', () => {
   for (const extra of [{ at: NOW - P.FRESH_MS - 1 }, { at: NOW + 60_001 }, { windows: [{ label: '5 小时', remaining: -1 }] },
     { windows: [{ label: '5 小时', remaining: 0, resetAt: NOW }] }]) {

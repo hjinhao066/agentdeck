@@ -107,6 +107,10 @@ skipped.
 一分钟后，CN/US 没有 Claude 会话占用时，后台用 Sonnet 5.5 / low 发送一个字母请求。
 每个窗口成功一次，失败最多重试一次；未知重置时间不发送。请求不创建可见列或队员，
 额度详情显示已预热及 CLI 原生返回的下次重置时间。席位开始普通会话会取消预热子进程。
+永动机和预热直接消费官方额度分支保存的 `config.quotas['Claude:<seatId>'].sample`，
+复用 `fiveHour` 的剩余百分比、绝对重置时间及成功采样时间；不另行查询额度。
+官方采样核对席位、配置目录和凭据槽位指纹；账号或目录变化后，旧采样不能触发自动操作，
+该限制保存到磁盘并跨重启保留。新官方采样确认所有窗口可用后，可解除旧的无期限限流记录。
 
 One standing column, opened from the sidebar entry 队长 (creating it the first
 time, with the agent you pick; afterwards it only returns to it). Once created it

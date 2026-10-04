@@ -172,8 +172,10 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
     const now = Date.now();
     const entry = config.quotas['Claude:cn'];
     for (const window of entry.sample.windows) window.resetAt = now - 1000;
+    entry.blocked.resetAt = now - 1000;
     const cn = config.perpetualCaptainState.seats.cn;
     cn.lowAt = now - 2000; cn.lowResetAt = now - 1000;
+    cn.exhaustedAt = now - 2000; cn.resetAt = now - 1000;
     cn.enteredAt = now - 11 * 60000; cn.leftAt = now - 11 * 60000;
     config.perpetualCaptainState.lastSwitch.at = now - 11 * 60000;
     flushConfig();
@@ -236,4 +238,33 @@ test('icon switch and threshold settings persist and control automatic rotation'
   await page.locator('#claudeSeatSettings').getByRole('button', { name: '保存设置' }).click();
   await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 5 });
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');
+});
+
+test('official low quotas do not fall back to Codex, and changed identities reject the old slot sample before rotation', async () => {
+  const outcome = await page.evaluate(async () => {
+    const infos = await ClaudeSeats.refresh();
+    const now = Date.now();
+    config.perpetualCaptainState = {};
+    for (const info of infos) {
+      config.quotas['Claude:' + info.id] = { sample: {
+        provider: 'Claude', scope: 'claude', official: true, seatId: info.id,
+        configDir: info.configDir, credentialKey: info.credentialKey, at: now - 1000,
+        windows: [{ key: 'fiveHour', used: 98, remaining: 2, exhausted: false, resetAt: now + 3600000 }],
+      } };
+    }
+    const entry = terms.get(config.mainSession.colId);
+    ClaudeSeats.onTick(config.mainSession.colId, entry, '');
+    const doubleLow = config.mainSession.relayTargetId;
+    const cn = infos.find((seat) => seat.id === 'cn');
+    config.perpetualCaptainState = { seats: { cn: { accountKey: 'previous-account', configDir: cn.configDir } } };
+    config.quotas['Claude:us'].sample.windows[0].remaining = 80;
+    ClaudeSeats.onTick(config.mainSession.colId, entry, '');
+    return { doubleLow, changedTarget: config.mainSession.relayTargetId,
+      state: config.perpetualCaptainState.seats.cn };
+  });
+  expect(outcome.doubleLow).not.toBe('chatgpt');
+  expect(outcome.changedTarget).not.toBe('us');
+  expect(outcome.state.officialNotBefore).toBeGreaterThan(0);
+  expect(outcome.state.lowAt).toBeUndefined();
+  expect(await captainId()).toBe(CN);
 });
