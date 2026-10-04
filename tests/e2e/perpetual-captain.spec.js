@@ -93,7 +93,7 @@ test.beforeEach(async () => {
     child.stderr.on('data', (chunk) => fs.appendFileSync(path.join(process.env.AGENTDECK_TEST_ELECTRON_LOGS, `${child.pid}.log`), chunk));
   }
   page = await application.firstWindow();
-  await expect(page.locator('.column.chat-mode')).toHaveCount(2);
+  await expect(page.locator('.column')).toHaveCount(2);
   await expect.poll(() => promptsFor(CN).some((p) => p.startsWith('你是 AgentDeck')), { timeout: 20000 }).toBe(true);
   await idle(CN);
   await expect.poll(() => records('seat-env.jsonl').some((r) => r.colId === WORKER), { timeout: 20000 }).toBe(true);
@@ -223,6 +223,7 @@ test('automatic rotation waits for a completed turn and preserves an unsent draf
   expect(await captainId()).toBe(CN);
   expect(await application.evaluate(({ app }) => app.testRelayAlerts.length)).toBe(0);
   const composer = page.locator(`.column[data-col-id="${CN}"] .composer textarea`);
+  await page.evaluate((id) => ChatUI.setMode(id, 'chat'), CN);
   await composer.fill('尚未发出的指令');
   await page.evaluate((id) => window.deck.ptyInput(id, '\x1b'), CN);
   await idle(CN);

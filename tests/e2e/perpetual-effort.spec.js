@@ -55,7 +55,7 @@ test.beforeEach(async () => {
     env: cleanEnv({ AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') }),
   });
   page = await application.firstWindow();
-  await expect(page.locator('.column.chat-mode')).toHaveCount(2);
+  await expect(page.locator('.column')).toHaveCount(2);
   await expect.poll(() => page.evaluate((id) => {
     const entry = terms.get(id);
     return entry?.state === 'done' && !entry.sendingPrompt && !entry.injecting && MainSession.relayIdle();

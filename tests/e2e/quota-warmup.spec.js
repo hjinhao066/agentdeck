@@ -44,7 +44,7 @@ async function launch() {
     child.stderr.on('data', (chunk) => fs.appendFileSync(path.join(process.env.AGENTDECK_TEST_ELECTRON_LOGS, `${child.pid}.log`), chunk));
   }
   page = await application.firstWindow();
-  await expect(page.locator('.column.chat-mode')).toHaveCount(1);
+  await expect(page.locator('.column')).toHaveCount(1);
   await expect.poll(() => records('seat-env.jsonl').some((r) => r.colId === WORKER), { timeout: 20000 }).toBe(true);
   await expect.poll(() => page.evaluate((id) => {
     const entry = terms.get(id);
@@ -78,7 +78,7 @@ async function keepWorking(id) {
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, id)).toBe('working');
 }
 async function workerPreserved(expectedColumns) {
-  await expect(page.locator('.column.chat-mode')).toHaveCount(expectedColumns);
+  await expect(page.locator('.column')).toHaveCount(expectedColumns);
   expect(await page.evaluate((id) => terms.get(id)?.state, WORKER)).toBe('working');
   expect(await page.evaluate((id) => window.deck.ptyIsAlive(id), WORKER)).toBe(true);
   expect(records('seat-env.jsonl').filter((r) => r.colId === WORKER)).toHaveLength(1);
@@ -209,7 +209,7 @@ test('unowned cache numbers and an unknown reset do not send a warmup request', 
   expect(await runs()).toHaveLength(0);
   expect(records('quota-warmup.log')).toHaveLength(0);
   expect((await snapshot()).every((s) => !s.resetAt && !s.warmAt)).toBe(true);
-  await expect(page.locator('.column.chat-mode')).toHaveCount(1);
+  await expect(page.locator('.column')).toHaveCount(1);
 });
 
 test('official quota fields warm the matching seat without native cache or account-bound payload extensions', async () => {
@@ -267,5 +267,5 @@ test('two failed requests abandon the same reset window, including across isolat
   expect(records('quota-warmup.log').map((r) => [r.attempt, r.outcome])).toEqual([[1, 'failed'], [2, 'failed']]);
   await refresh();
   await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('title', /预热失败 · 本窗口已放弃/);
-  await expect(page.locator('.column.chat-mode')).toHaveCount(1);
+  await expect(page.locator('.column')).toHaveCount(1);
 });
