@@ -119,7 +119,8 @@
     const officialRecovery = fresh && sample.official === true && bound(sample, info) && sample.windows?.length &&
       sample.windows.every((window) => percent(window.remaining) !== null && window.remaining > 0 &&
         !window.exhausted && time(window.resetAt) && window.resetAt > now);
-    const recovery = saved.resumed || (fresh && (sample.resumed || officialRecovery) ? sample : null);
+    const recovery = [saved.resumed, fresh && (sample.resumed || officialRecovery) ? sample : null]
+      .filter(Boolean).sort((a, b) => (time(b.at) || 0) - (time(a.at) || 0))[0];
     const resumed = recovery && time(recovery.at) && recovery.at <= now + 60_000 && recovery.at > (block?.at || 0) &&
       (bound(recovery, info) || (recovery.sourceColumnId && sameDir(recovery.configDir, info) &&
         (!recovery.accountKey || (!!info.accountKey && recovery.accountKey === info.accountKey))));

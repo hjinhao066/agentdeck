@@ -238,6 +238,7 @@ test('a newer official available sample clears an earlier indefinite rate-limit 
   let state = P.observe({}, { seatId: 'cn', at: NOW, exhausted: true }, NOW);
   const q = P.seatQuota({ sample: official }, current, NOW + 1);
   assert.equal(q.resumedAt, NOW + 1);
+  assert.equal(P.seatQuota({ sample: official, resumed: { at: NOW - 1, sourceColumnId: 'cn-native', configDir: info.configuredDir } }, current, NOW + 1).resumedAt, NOW + 1);
   state = P.observe(state, { seatId: 'cn', at: q.resumedAt, resumed: true }, NOW + 1);
   assert.equal(state.seats.cn.exhaustedAt, undefined);
   assert.equal(P.seatQuota({ sample: { ...official, windows: [official.windows[0],
