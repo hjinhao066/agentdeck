@@ -20,7 +20,11 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => {
   if (app) {
-    for (const window of app.windows()) await window.close();
+    // Quit outside the inspector evaluation so Electron can finish shutdown
+    // after a renderer reload without leaving Playwright's close call pending.
+    const closed = app.waitForEvent('close');
+    await app.evaluate(({ app }) => { setImmediate(() => app.quit()); });
+    await closed;
     await app.close();
   }
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
