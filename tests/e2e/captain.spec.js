@@ -641,7 +641,9 @@ test('only the Captain holds control: other columns get no token and are refused
   // Finish the stand-in's delayed reply before interrupting it.
   await expect.poll(() => screen('cap-y'), { timeout: 15000 }).toContain('GOT ask nothing');
   await page.evaluate(() => window.deck.ptyInput('cap-y', '\x03'));    // leave the stand-in
-  await waitForShell('cap-y');
+  // ConPTY can retain wrapped launch-command rows after the TUI exits. The
+  // probe's output file below proves that PowerShell executed the command.
+  if (process.platform !== 'win32') await waitForShell('cap-y');
   const probe = path.join(profile, 'worker-token.js');
   const result = path.join(profile, 'worker-token.txt');
   fs.writeFileSync(probe, `const value = 'TOKEN=' + (process.env.AGENTDECK_CONTROL_TOKEN || 'none'); require('fs').writeFileSync(process.argv[2], value); console.log(value);`);
