@@ -257,3 +257,42 @@ test('briefing sends a read-only Captain request and prints the full static inst
     assert.equal(requests.length, 1);
   } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('notify-user validates arguments and requires the Captain capability', async () => {
+  for (const args of [[], ['--message'], ['--message='], ['--message', 'a'.repeat(4001)],
+    ['--message', 'hi', '--urgent=false'], ['--test=false'], ['--test', '--message', 'hi'], ['--test', '--urgent']]) {
+    const r = await runCli(['notify-user', ...args], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(r.code, 1); assert.match(r.stderr, /notify-user requires/);
+  }
+  for (const args of [['--test'], ['--message', 'hello'], ['--message', 'hello', '--urgent']]) {
+    const r = await runCli(['notify-user', ...args], {
+      AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '', AGENTDECK_RECEIPT_TOKEN: 'worker-test',
+    });
+    assert.equal(r.code, 1); assert.match(r.stderr, /Only conductor-managed terminals/);
+  }
+});
+
+test('notify-user routes local, urgent and fixed test requests without key data', async () => {
+  for (const [args, expected] of [
+    [['--message', 'hello'], { message: 'hello', urgent: false, test: false }],
+    [['--message', 'hello', '--urgent'], { message: 'hello', urgent: true, test: false }],
+    [['--test'], { message: '【测试】AgentDeck Bark 通知（critical，音量 3）。', urgent: true, test: true }],
+  ]) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-notify-cli-'));
+    fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+    const requests = [];
+    const server = setInterval(() => {
+      for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+        const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+        fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
+        fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: 'sent' }));
+      }
+    }, 20);
+    try {
+      const r = await runCli(['notify-user', ...args], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
+      assert.equal(r.code, 0); assert.equal(r.stdout, 'sent\n'); assert.equal(requests.length, 1);
+      const { id, token, createdAt, ...payload } = requests[0];
+      assert.equal(token, 'captain-test'); assert.deepEqual(payload, { action: 'main-notify-user', ...expected });
+    } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+  }
+});

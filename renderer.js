@@ -554,6 +554,7 @@ function openNotificationSettings() {
   document.getElementById('captainSoundEnabled').checked = settings.sound;
   document.getElementById('captainSoundTone').value = settings.tone;
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
+  document.getElementById('barkKeyFile').value = config.barkKeyFile;
   MainSession.openSettings();
   dialog.showModal();
 }
@@ -563,6 +564,7 @@ function saveNotificationSettings() {
     sound: document.getElementById('captainSoundEnabled').checked,
     tone: document.getElementById('captainSoundTone').value,
   });
+  config.barkKeyFile = document.getElementById('barkKeyFile').value.trim();
   saveConfig();
 }
 function buildChrome() {
@@ -2880,6 +2882,8 @@ function respondBoard(requestId, payload, verbatim = false) {
     result: verbatim && typeof payload.result === 'string' ? payload.result : BoardCore.cleanText(payload.result, 12000),
     error: BoardCore.cleanText(payload.error, 2000),
     childId: BoardCore.cleanText(payload.childId, 160),
+    visible: typeof payload.visible === 'boolean' ? payload.visible : undefined,
+    turnId: typeof payload.turnId === 'string' ? payload.turnId.slice(0, 120) : undefined,
     snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : undefined,
     updatedAt: Date.now(),
   };
@@ -3154,7 +3158,7 @@ document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
-['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone'].forEach((id) => {
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile'].forEach((id) => {
   document.getElementById(id).addEventListener('change', saveNotificationSettings);
 });
 buildChrome();
@@ -3187,7 +3191,7 @@ const deckHost = {
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
-  captainTurnStarted, captainTurnDone,
+  captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };
 SidePane.init(deckHost);

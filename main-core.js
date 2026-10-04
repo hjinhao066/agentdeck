@@ -159,6 +159,7 @@
       '规则：',
       '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。只有两件事你自己做：读写进度看板（见第 13 条），以及只读的 sysctl vm.swapusage（见第 14 条）。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
+      `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 额外发 Bark。仅必须用户亲自登录/授权或确认付款时使用；测试用 notify-user --test（【测试】，critical，音量 3）。`,
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task archive --done [--project "项目"]`,
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,

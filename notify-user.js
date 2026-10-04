@@ -12,11 +12,14 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch }) {
       throw new Error('只有队长可以用这个命令。');
     }
     if (typeof command.message !== 'string' || !command.message.trim() || command.message.length > 4000 ||
-        typeof command.urgent !== 'boolean') throw new Error('notify-user requires --message (1–4000 characters) and optional --urgent.');
+        typeof command.urgent !== 'boolean' || (command.test !== undefined && typeof command.test !== 'boolean') ||
+        (command.test && !command.urgent)) throw new Error('notify-user requires --message (1–4000 characters) and optional --urgent.');
     notifications.show({ id: command.callerId, turnId, state: 'input', reply: command.message, visible });
     const local = '已处理本机提醒（遵循通知/声音设置、前台静音及30秒间隔）。';
     if (!command.urgent) return local;
-    const result = await sendBark({ message: command.message });
+    const result = await sendBark(command.test
+      ? { message: '【测试】AgentDeck Bark 通知（critical，音量 3）。', title: '【测试】队长', volume: 3 }
+      : { message: command.message });
     return local + '\n' + result.message;
   };
 }

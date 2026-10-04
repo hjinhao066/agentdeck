@@ -6,7 +6,7 @@ const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
 const { createNotifications } = require('./notifications');
-const { createBarkSender } = require('./notify-user');
+const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createQuotaLowBark } = require('./quota-low-bark');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
@@ -19,6 +19,7 @@ const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 let mainWindow = null;
 let notifications = null;
+let notifyUser = null;
 let sidePane = null;
 let pendingFocusColumn = null;
 
@@ -372,7 +373,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -756,8 +757,15 @@ app.whenReady().then(() => {
   });
   onMain('pty:kill', (_e, { id, keepReplay }) => killPty(id, !!keepReplay));
 
-  onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
-    const action = pendingBoardCommands.get(requestId)?.command.action;
+  onMain('board:response', async (_e, { requestId, done, result, error, childId, snapshot, visible, turnId }) => {
+    const pending = pendingBoardCommands.get(requestId);
+    const action = pending?.command.action;
+    if (action === 'main-notify-user' && !error) {
+      // Duplicate renderer acknowledgements share a single local/Bark delivery.
+      pending.notifyPromise ||= notifyUser(pending.command, visible === true, turnId);
+      try { result = await pending.notifyPromise; }
+      catch (err) { error = err.message; }
+    }
     const verbatim = action === 'main-briefing' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-task';
     pendingBoardCommands.delete(requestId);
     if (action === 'session-exit') return; // internal one-way exit notification
@@ -1012,6 +1020,13 @@ app.whenReady().then(() => {
       execFile('/usr/bin/afplay', ['-v', '0.35', '-t', '1', `/System/Library/Sounds/${tone}.aiff`],
         { timeout: 2000 }, () => {});
     } });
+  notifyUser = createNotifyUser({ getConfig: () => notificationConfig, notifications,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      // Test profiles never contact Bark or retain the stand-in key.
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testCaptainAlerts.push({ type: 'bark', ...payload });
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
   onMain('notify-state', (_event, payload) => {
     if (payload && ptys.has(payload.id)) notifications.show(payload);
   });
