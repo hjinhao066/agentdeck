@@ -65,9 +65,17 @@ the middle:
   seat marked. No configuration shows one `~/.claude` item; missing seat usage
   says 未登录/无数据. Remaining ≤20% is
   amber and ≤10% is red. AgentDeck passively reads live TUI screens first, then
-  known local quota caches every 30 seconds. Codex additionally uses the official
+  known local quota caches every 30 seconds. While the app is open, each Claude
+  seat also refreshes independently at launch and every 15 minutes using the
+  native CLI's read-only OAuth usage endpoint, without model messages. Both
+  Claude items show sample times; failed reads show unknown and the query time.
+  Credentials stay in the main process and authenticate only to Anthropic's
+  fixed HTTPS origin; no token logging, redirects, login or token renewal.
+  Codex additionally uses the official
   read-only account/rateLimits/read RPC once per minute without model turns.
-  It sends no slash commands. Missing/15-minute-old data is unknown, never an invented percentage.
+  It sends no slash commands. Missing data is unknown; passive observations expire
+  after 15 minutes and Claude server samples after 30 minutes. A failed Claude
+  refresh invalidates its old numbers immediately, never inventing a percentage.
   See [quota sources and limits](QUOTA_SOURCES.md).
   Claude 5-hour remaining ≤2% also sends a Bark phone alert (`critical`, volume 3),
   naming the CN/US seat and reset time when available. It uses the existing

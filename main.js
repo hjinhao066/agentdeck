@@ -17,10 +17,12 @@ const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
+const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
 let sidePane = null;
+let claudeQuotaRefresh = null, claudeQuotaTimer = null;
 let pendingFocusColumn = null;
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
@@ -687,6 +689,13 @@ app.whenReady().then(() => {
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId });
+  if (!tudArg) {
+    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
+    const refresh = () => claudeQuotaRefresh.tick().catch(() => {});
+    refresh();
+    claudeQuotaTimer = setInterval(refresh, 30000);
+    claudeQuotaTimer.unref();
+  }
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
@@ -741,8 +750,9 @@ app.whenReady().then(() => {
 
   // Test profiles never read the user's quota caches or conversation logs.
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
-  handleMain('quota:local', () => {
+  handleMain('quota:local', async () => {
     if (tudArg) return [];
+    await claudeQuotaRefresh?.tick();
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
@@ -754,7 +764,7 @@ app.whenReady().then(() => {
       quotaRead = Promise.all([readLocalQuota(os.homedir(), process.env.CODEX_HOME, Date.now(), quotaSeatConfig), codexQuotaRead])
         .then(([local, codex]) => codex ? [...local, codex] : local).catch(() => []);
     }
-    return quotaRead;
+    return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || [])]);
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId }) => spawnPty(id, cwd, cols, rows, !!managed, seatId));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
@@ -1121,6 +1131,8 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  clearInterval(claudeQuotaTimer);
+  claudeQuotaRefresh?.dispose();
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it

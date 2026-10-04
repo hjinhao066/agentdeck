@@ -52,8 +52,9 @@ function sanitizeUsage(value) {
   if (!value || !Number.isFinite(value.at) || !Array.isArray(value.windows)) throw new Error('无效用量记录');
   const windows = value.windows.filter((w) => ['fiveHour', 'weekly'].includes(w?.key) && Number.isFinite(w.remaining) && w.remaining >= 0 && w.remaining <= 100)
     .slice(0, 2).map((w) => ({ key: w.key, remaining: w.remaining, resetText: String(w.resetText || '').slice(0, 100) }));
-  if (!windows.length) throw new Error('没有实际用量数据');
-  return { at: value.at, source: 'Claude /usage', windows };
+  const source = value.source === 'Claude OAuth usage' ? value.source : 'Claude /usage';
+  if (!windows.length && source !== 'Claude OAuth usage') throw new Error('没有实际用量数据');
+  return { at: value.at, source, windows };
 }
 function writeUsage(seat, home, value) {
   const file = credentialLocation(seat, home).usagePath;

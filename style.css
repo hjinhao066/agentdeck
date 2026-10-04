@@ -305,6 +305,8 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 #quotaBar { display: flex; gap: 3px; flex-shrink: 0; -webkit-app-region: no-drag; }
 .quota-item { position: relative; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 5px; border-radius: 5px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .quota-icon { display: flex; }
+.quota-sampled { color: var(--muted); font-size: 10px; }
+.quota-sampled:empty { display: none; }
 .quota-item[data-state="normal"] { color: var(--text); }
 .quota-item[data-state="warning"] { color: #d99426; }
 .quota-item[data-state="danger"], .quota-item[data-state="exhausted"] { color: #e46464; }
