@@ -1,0 +1,107 @@
+# AgentDeck 三端入口：一个站点，按路径分流。适用于 Caddy 2.6.x（指令名是 basicauth，不是 basic_auth）。
+#
+#   /            静态总台（/srv/agentdeck-hub，无数据、无密钥）
+#   /machines.json 同上
+#   /mac/*       127.0.0.1:43122（Mac 的 SSH 反向隧道）
+#   /win/*       127.0.0.1:43123（Windows 的 SSH 反向隧道）
+#
+# 本文件只含这一个站点段落，由 install-caddy-site.sh 放进 /etc/caddy/Caddyfile，
+# 只替换 BEGIN/END 标记之间的内容，不动其他站点。口令哈希不在这里：
+# 由下面 import 的 /etc/caddy/agentdeck-basicauth.caddy 提供（脚本从现有站点段落里原样取出，不打印）。
+#
+# 路径前缀不剥掉（用 handle，不是 handle_path）：AgentDeck 自己校验并去掉前缀。
+
+# BEGIN agentdeck-three-ends (managed by deploy/vps; do not edit between markers)
+agentdeck.18-139-28-180.sslip.io {
+	# 第一层：全站 basicauth，覆盖静态总台、/mac/*、/win/*，也覆盖 404 路径。
+	import /etc/caddy/agentdeck-basicauth.caddy
+
+	# 访问日志不记 URI、请求头、响应头、登录用户名。
+	log {
+		output file /var/log/caddy/agentdeck-access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+				resp_headers delete
+				user_id delete
+			}
+		}
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Cache-Control no-store
+	}
+
+	route {
+		# route 保证下面严格按书写顺序执行（裸 handle 会按匹配器特异度重排，守卫会跑到代理后面）。
+		# 含 ./、../ 或 // 的路径一律 404（用 expression 匹配原始路径；path_regexp 看到的是清理后的路径，拦不住）。Caddy 按"清理后"的路径选后端，却把原始路径转给后端，
+		# 两者不一致会让后端看到 /mac/../win/... 这种含糊路径；浏览器本来就不会发这种路径。
+		@ambiguous expression {http.request.orig_uri.path}.matches('//|(^|/)\\.\\.?(/|$)')
+		respond @ambiguous 404
+
+		# 代理段：去掉 Authorization，覆盖 Host / X-Forwarded-*，X-Forwarded-For 只放连接 IP。
+		# 目标不可达时（隧道断开）3 秒内失败，由 handle_errors 统一返回 502 {"offline":true}。
+		handle /mac/* {
+			reverse_proxy 127.0.0.1:43122 {
+				header_up -Authorization
+				header_up -Forwarded
+				header_up -X-Real-IP
+				header_up Host agentdeck.18-139-28-180.sslip.io
+				header_up X-Forwarded-Proto https
+				header_up X-Forwarded-For {remote_host}
+				transport http {
+					dial_timeout 3s
+				}
+			}
+		}
+
+		handle /win/* {
+			reverse_proxy 127.0.0.1:43123 {
+				header_up -Authorization
+				header_up -Forwarded
+				header_up -X-Real-IP
+				header_up Host agentdeck.18-139-28-180.sslip.io
+				header_up X-Forwarded-Proto https
+				header_up X-Forwarded-For {remote_host}
+				transport http {
+					dial_timeout 3s
+				}
+			}
+		}
+
+		# 其余一律是静态总台。安全头在这里加，总台不用内联脚本和样式。
+		handle {
+			root * /srv/agentdeck-hub
+			header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+			file_server {
+				hide .*
+			}
+		}
+	}
+
+	# Caddy 自己产生的错误：隧道不可达统一给手机一个 502 {"offline":true}；
+	# 其余（401 要求登录、静态 404）保持原状态码和空响应体，只补齐安全头。
+	# 后端自己返回的 4xx/5xx（含 AgentDeck 的 JSON 401）不经过这里，原样透传。
+	handle_errors {
+		header -Server
+		header Cache-Control no-store
+		header X-Content-Type-Options nosniff
+		@offline expression {http.error.status_code} in [502, 503, 504]
+		handle @offline {
+			header Content-Type application/json
+			respond `{"offline":true}` 502
+		}
+		handle {
+			respond "" {http.error.status_code}
+		}
+	}
+}
+# END agentdeck-three-ends
