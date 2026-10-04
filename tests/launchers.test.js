@@ -15,7 +15,7 @@ test('a blank session offers Claude, Antigravity, Grok, Cursor CLI and Codex (Ch
   assert.equal(B.commandForAgent('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(B.commandForAgent('cursor-agent'), B.commandForAgent('cursor'));
   assert.equal(B.commandForAgent('grok'), 'grok --permission-mode bypassPermissions');
-  assert.equal(B.commandForAgent('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(B.commandForAgent('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
   assert.match(B.commandForAgent('claude'), /^claude --dangerously-skip-permissions/);
   // `agent` collides with another tool's binary on the owner's machine
   assert.ok(B.LAUNCHERS.every((l) => !/^agent(\s|$)/.test(l.cmd)));
@@ -115,11 +115,11 @@ test('a launcher clears a half-typed line with editing keys only, per platform',
 
 test('Codex app launches bypass shell wrappers without duplicating their --yolo flag', () => {
   const cmd = B.commandForAgent('codex');
-  assert.equal(B.shellLaunchCommand(cmd, 'darwin'), 'command "codex" --dangerously-bypass-approvals-and-sandbox');
-  assert.equal(B.launchInput(cmd, 'linux'), '\x15command "codex" --dangerously-bypass-approvals-and-sandbox\r');
-  assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" resume --last --yolo');
+  assert.equal(B.shellLaunchCommand(cmd, 'darwin'), 'command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(B.launchInput(cmd, 'linux'), '\x15command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox\r');
+  assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" --no-daemon resume --last --yolo');
   assert.equal(B.shellLaunchCommand(cmd, 'win32'), cmd);
-  for (const custom of ['node fake-agent.js', '/opt/bin/codex --yolo', 'command "codex" --yolo', './codex-wrapper.sh']) {
+  for (const custom of ['node fake-agent.js', './codex-wrapper.sh']) {
     assert.equal(B.shellLaunchCommand(custom, 'darwin'), custom);
   }
 });
@@ -134,8 +134,20 @@ test('Codex launch bytes bypass a real shell function that injects --yolo', { sk
     const wrap = 'codex() { command codex --yolo "$@"; }\n';
     const command = B.shellLaunchCommand(B.commandForAgent('codex'), process.platform);
     const output = execFileSync('/bin/sh', ['-c', wrap + command], { env: { ...process.env, PATH: dir + path.delimiter + process.env.PATH }, encoding: 'utf8' });
-    assert.equal(output, '--dangerously-bypass-approvals-and-sandbox\n');
+    assert.equal(output, '--no-daemon\n--dangerously-bypass-approvals-and-sandbox\n');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('custom and restored Codex commands use their own server on both platforms without duplicate flags', () => {
+  for (const platform of ['darwin', 'win32']) {
+    for (const cmd of ['codex -m gpt-6-luna', 'codex resume --last --yolo', '/opt/bin/codex --yolo',
+      '"C:\\Program Files\\codex.exe" resume chat-1', 'command "codex" --yolo']) {
+      const launch = B.shellLaunchCommand(cmd, platform);
+      assert.equal(launch.match(/--no-daemon/g).length, 1, launch);
+      assert.equal(B.shellLaunchCommand(launch, platform), launch);
+    }
+    assert.equal(B.shellLaunchCommand('agy --model gemini-3.8-flash-high', platform), 'agy --model gemini-3.8-flash-high');
+  }
 });
 
 test('a launch only counts as started once the agent is identified; a Windows timeout is unknown, not success', () => {

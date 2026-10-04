@@ -1734,3 +1734,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .notify-setting select { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 #notificationSettings .rail-btn { min-width: 36px; min-height: 36px; }
 #notificationSettings :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.perpetual-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }
+#perpetualEnabled[aria-pressed="true"] { color: var(--accent); background: var(--icon-hover-bg); }
+.captain-relay-notice { margin: 12px 8px; padding: 10px 12px; border-left: 2px solid var(--accent); color: var(--muted); font-size: 12px; line-height: 1.6; }
+.perpetual-relay-banner { white-space: normal; line-height: 1.5; }

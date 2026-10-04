@@ -26,6 +26,8 @@ test('seat config has one source for names and survives normalization', () => {
   assert.deepEqual(S.normalize().map((s) => s.icon), ['🇨🇳', '🇺🇸']);
   assert.match(S.CODEX_COMMAND, /--model gpt-6\.1-sol/);
   assert.match(S.CODEX_COMMAND, /--dangerously-bypass-approvals-and-sandbox/);
+  assert.match(S.CODEX_COMMAND, /--no-daemon -c model_reasoning_effort=high/);
+  assert.match(S.codexCommand('xhigh'), /model_reasoning_effort=xhigh/);
   assert.match(S.CLAUDE_COMMAND, /--model claude-opus-5-5/);
 });
 test('us setup shares brain files, never credentials/account/caches; repeat is safe', (t) => {
@@ -94,6 +96,7 @@ test('metadata yields only a masked email and no credential material', async (t)
   const keychain = async (service) => { queried.push(service); return service === 'Claude Code-credentials'; };
   const a = await M.seatInfo(cn, home, 'darwin', keychain), b = await M.seatInfo(us, home, 'darwin', keychain);
   assert.equal(a.maskedEmail, 'c***@example.test'); assert.equal(a.loggedIn, true); assert.equal(b.loggedIn, false);
+  assert.match(a.accountKey, /^[a-f0-9]{16}$/);
   assert.equal(S.maskEmail('broken'), '');
   assert.ok(!JSON.stringify(a).includes('cn@example.test'));
   assert.equal(queried.length, 2);
@@ -114,6 +117,8 @@ test('launch reasserts the seat after shell overrides and handles spaces/quotes'
 });
 test('quota files are independent and contain only real native usage observations', (t) => {
   const home = fixture(t); setup(home);
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' } }));
+  fs.writeFileSync(path.join(home, '.claude-us/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test' } }));
   assert.equal(S.usage('Context: 23% | Session: 26% | Weekly: 13%'), null);
   const a = S.usage('Current session\n  30% used\n  Resets 5pm\nCurrent week (all models)\n  80% used\n  Resets Oct 8\n', 1234);
   assert.deepEqual(a.windows.map((w) => w.remaining), [70, 20]);
@@ -132,4 +137,48 @@ test('durable checkpoint saves full interrupted history and compact board before
   assert.match(fs.readFileSync(file, 'utf8'), /read --id captain-old/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'chats', 'captain-old.json'))).turns[0].interrupted, true);
   assert.throws(() => M.checkpoint(home, userData, { colId: '../unsafe', chat, tasks: [] }), /无效/);
+});
+
+
+test('existing sessions keep their launch directory through Relay and seat edits; new sessions use the new seat', (t) => {
+  const home = fixture(t), config = { claudeSeats: S.normalize(), activeClaudeSeatId: 'cn' };
+  const worker = {}, original = S.bindColumn(worker, config);
+  const envBefore = M.seatEnvironment({}, original, home);
+  config.activeClaudeSeatId = 'us';
+  config.claudeSeats[0].configDir = '~/.claude-reconfigured';
+  assert.equal(S.bindColumn(worker, config).configDir, '~/.claude');
+  assert.deepEqual(M.seatEnvironment({}, S.bindColumn(worker, config), home), envBefore);
+  assert.equal(S.launchCommand('claude', S.bindColumn(worker, config), home, 'darwin').includes('.claude-reconfigured'), false);
+  assert.equal(S.bindColumn({}, config).id, 'us');
+  assert.equal(S.bindColumn({}, config).configDir, '~/.claude-us');
+  config.claudeSeats = config.claudeSeats.filter(s => s.id !== 'cn');
+  assert.equal(S.bindColumn(worker, config).configDir, '~/.claude');
+  assert.equal(S.bindColumn({ claudeSeatId: 'removed' }, config).configDir, '');
+});
+
+test('usage IPC refuses to attribute an old session to a reconfigured seat', (t) => {
+  const home = fixture(t), handlers = {};
+  M.registerSeatsIpc({ handleMain: (name, handler) => { handlers[name] = handler; }, home, getSeats: () => [{ id: 'cn', configDir: '~/.claude-new' }] });
+  assert.throws(() => handlers['seats:record-usage'](null, { seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 53 }] } }), /目录已变更/);
+  assert.equal(fs.existsSync(path.join(home, '.claude-new')), false);
+});
+
+test('usage IPC binds native panel observations to the saved source column and seat snapshot', (t) => {
+  const home = fixture(t), handlers = {}, seat = S.normalize()[0], colId = 'captain-cn';
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'cn-fixture-account' } }));
+  const column = { id: colId, claudeSeatId: 'cn', claudeConfigDir: '~/.claude' };
+  M.registerSeatsIpc({ handleMain: (name, handler) => { handlers[name] = handler; }, home,
+    getSeats: () => [seat], getColumn: (id) => id === column.id ? column : null });
+  const payload = { colId, seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 2 }] } };
+  assert.throws(() => handlers['seats:record-usage'](null, { ...payload, colId: 'missing-column' }), /来源会话/);
+  assert.throws(() => handlers['seats:record-usage'](null, { ...payload, colId: undefined }), /来源会话/);
+  assert.equal(handlers['seats:record-usage'](null, payload), true);
+  const value = handlers['seats:usage'](null, { seatId: 'cn' });
+  assert.equal(value.accountBound, true);
+  assert.match(value.accountKey, /^[a-f0-9]{16}$/);
+  assert.equal(value.sourceColumnId, colId);
+  assert.equal(value.configDir, seat.configDir);
+  assert.equal(value.windows[0].remaining, 2);
+  column.claudeConfigDir = '~/.claude-other';
+  assert.throws(() => handlers['seats:record-usage'](null, payload), /快照不匹配/);
 });

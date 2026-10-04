@@ -10,13 +10,14 @@
   ],
   "activeClaudeSeatId": "cn",
   "captainRelayLabel": "Relay",
-  "captainRelayCodex": { "name": "ChatGPT", "command": "codex --model gpt-6.1-sol --dangerously-bypass-approvals-and-sandbox" }
+  "perpetualCaptain": { "enabled": true, "threshold": 3 },
+  "captainRelayCodex": { "name": "ChatGPT", "command": "codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox" }
 }
 ```
 
 CN是中国 Google 邮箱的 Claude 订阅，US是美国 Google 邮箱的订阅。
 只在本机读取账号元数据，界面只接收打码邮箱，不接收凭据。本机已用真实 CLI 只读核对，CN 和 US 都已登录 Pro；账号元数据和凭据位置独立。
-没有配置时按上述默认值迁移；每列的 `claudeSeatId` 持久保存。
+没有配置时按上述默认值迁移；每列的 `claudeSeatId` 和 `claudeConfigDir` 快照持久保存。改设置只影响新会话，已有队员不会换登录目录。
 
 ## 首次准备（macOS）
 
@@ -65,7 +66,7 @@ Claude 队长行右侧的Relay图标打开席位选择，标注当前席位。�
 Relay 只重开队长列，不重启 AgentDeck。
 
 ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能力与 provider 无关。
-启动 Codex 时绕过 shell 的 codex() 函数，避免重复追加 bypass 参数。`ledger/new/tell/receipts`
+启动 Codex 使用 `--no-daemon` 保留本列环境，丢失环境时只从本列私有能力文件恢复控制通道；绕过 shell 的 codex() 函数，避免重复追加 bypass 参数。`ledger/new/tell/receipts`
 从 Codex 队长的 PTY 子进程执行时有效；独立终端没有能力 token，仍被拒绝。
 切到 ChatGPT 后 activeClaudeSeatId 保留上次 Claude 席位，显式新开 Claude 队员时用它；
 未指定 agent 的队员沿用 Codex。返回 Claude 时复用之前的 Claude 命令（没有则显式 Opus 5.5）。
@@ -80,6 +81,33 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 五分钟超时都保留原队长。忙碌、额度耗尽、已退出或 Codex 队长直接使用本地
 持久存档；每条路径都先保存完整对话和本地接续看板，再允许重开 PTY。
 
+## 永动机自动轮换
+
+默认开启，侧边栏齿轮 → 席位设置中用电源图标开关，5 小时剩余阈值默认
+3%，可改为 0–100%。开关有 tooltip、无障碍名称、键盘焦点和按下状态。
+Bark 密钥文件路径复用 `barkKeyFile`，只保存路径；每次切换发送普通 `active`
+提醒，不带 critical 或音量。未配置/发送失败不撤销已完成的 Relay，界面告知原因。
+
+- 当前 Claude 席位的**可信 5 小时**剩余 ≤ 阈值，或收到本席位真实用尽/限流报错，
+  等队长回合结束、进入静默的 quota 等待后切到另一个已登录 Claude 席位。
+  目标须可信剩余 > 阈值，或未知且没有用尽/低额度标记。
+- 两个 Claude 都无可用席位时切到 Codex GPT-6.1 Sol，通常 `high`。
+  当前未处理失败回执，或同名未完任务有过失败时用 `xhigh`；旧的无关失败不升级。
+  自动 Relay 固定这个模型和档位，手动 Relay 保留配置命令。
+- 用尽/低额度的重置时间过去，或看到绑定本账号的恢复证据后，下一次队长空闲
+  优先回到 Claude；工作中、确认提示上、发送中、有未发草稿或附件时不自动切。
+- 每个目标席位/提供方 10 分钟内不重复进入，但首次 CN → US → Codex 可以连续推进。
+  轮换记录及冷却时间存本机配置，重载不清掉防抖。手动选择仍可明确覆盖自动策略。
+
+自动切换使用 Relay 本地持久存档，不再要求额度临界的模型多跑一次存档回合：
+完整旧对话保存成功后，写 `agentdeck-captain-handoff.md` 的队长交接、最近指令、
+任务和短回执，再重开**仅队长**的 PTY。重开前再次检查空闲与草稿。
+新队长自动收到当前提示词及读取 `briefing`、看板交接、`ledger` 的接续指令，
+并被要求先确认旧监听已退出，再重挂恰好一个后台 `receipts --wait --timeout 300`。
+旧令牌撤销，新队长拿新控制令牌；队员及未读回执、提问、排队任务保持原样。
+每次切换留下带目标、原因和时间的横幅与持久对话记录。
+存档失败保留原队长，一分钟后才重试，不会每个 heartbeat 弹提示。
+
 ## 与 feat/quota-bar 的数据约定
 
 读取同一个 `config.claudeSeats`，勿按显示名称索引账号。主进程可使用
@@ -87,7 +115,7 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存不能归属于两个席位。
 
 每席位本地缓存为 `<configDir>/agentdeck-usage.json`，不建符号链接。被动捕获 Claude
-原生 `/usage` 面板中的 5 小时/每周剩余与重置文本，记录产生它的列的席位。
+原生 `/usage` 面板中的 5 小时/每周剩余与重置文本，记录产生它的列 id、固定目录及账号指纹。数字必须与缓存自身记录的账号和目录一致；当前登录元数据不能给旧缓存补归属。
 上下文百分比、费用、共享 statusline 的百分比都不会写为额度。没有实际数据时
 返回 null，顶栏应显示未知；不能据此推断账号尚有额度或账号用尽。
 
@@ -95,6 +123,9 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存不能
 {
   "at": 1791000000000,
   "source": "Claude /usage",
+  "accountKey": "opaque-account-fingerprint",
+  "configDir": "/absolute/path/to/claude-seat",
+  "sourceColumnId": "producing-column-id",
   "windows": [
     { "key": "fiveHour", "remaining": 70, "resetText": "5pm (America/Los_Angeles)" },
     { "key": "weekly", "remaining": 20, "resetText": "Oct 8" }
@@ -104,7 +135,7 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存不能
 
 主进程 `readUsage(seat, home)` 或页面的受限
 `deck.claudeSeatUsage(seatId)` 返回经过白名单过滤的用量。
-`deck.claudeSeats()` 返回配置目录、打码邮箱、登录凭据存在状态及 usagePath，
+`deck.claudeSeats()` 返回配置目录、打码邮箱、不可逆账号指纹、登录凭据存在状态及 usagePath，
 不返回账号原始邮箱或凭据。`claude-seat-changed` 事件的 detail 是 `{seatId}`，
 供顶栏立即刷新。1.0.0 的 quota-bar 已合入，同一配置的 CN/US 各显示独立顶栏项目；无真实数据时显示未知。Relay 不主动发送用量查询。
 

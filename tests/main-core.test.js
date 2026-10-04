@@ -410,3 +410,9 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /截图真的落盘/);
   assert.match(text, /最多返工 2 轮/);
 });
+
+test('native rate limit waits are quota state and a newer working line wins', () => {
+  assert.equal(M.terminalActivity('API Error: 429 rate_limit_error: Too many requests'), 'quota');
+  assert.equal(M.terminalActivity('Rate limit reached.\n✻ Doing…'), 'working');
+  assert.equal(M.terminalActivity('The report mentions rate_limit errors.'), '');
+});

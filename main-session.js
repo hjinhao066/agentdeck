@@ -167,13 +167,13 @@
     saverBanner('');
   }
 
-  async function checkpointForSeatSwitch(snapshot) {
+  async function checkpointForSeatSwitch(snapshot, options = {}) {
     cancelTokenSaving();
     const col = mainCol(), entry = host.terms.get(col?.id);
     const idle = entry?.alive && entry.state === 'done' && !briefing && !delivering &&
       !entry.sendingPrompt && !entry.injecting && !host.userComposing(col.id) &&
       !M.terminalActivity(entry.lastScreen) && !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
-    if (idle && state().relayTargetId !== 'chatgpt' && window.AgentInfo.resolveAgentInfo(col, entry).provider === 'Claude') {
+    if (!options.local && idle && state().relayTargetId !== 'chatgpt' && window.AgentInfo.resolveAgentInfo(col, entry).provider === 'Claude') {
       await new Promise((resolve, reject) => {
         const op = { colId: col.id, entry, relay: true, resolve, reject };
         tokenSaving = op;
@@ -297,6 +297,7 @@
     col.cmd = M.freshCommand(rotation && options.command ? options.command : col.cmd);
     if (rotation) {
       col.claudeSeatId = options.seatId;
+      delete col.claudeConfigDir; // Only the replacement Captain adopts the new seat.
       host.config.activeClaudeSeatId = options.seatId;
       s.seatCheckpoint = options.checkpointPath;
       s.relayTargetId = options.relayTargetId || options.seatId;
@@ -311,9 +312,26 @@
     save();
     window.Sidebar.render();
     brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status)))
-      + (rotation ? `\n读看板继续：${options.checkpointPath}` : ''));
+      + (rotation ? `\n${options.relayMessage || ''}\n先运行 ${M.boardCli(host.platform)} briefing，再读看板继续：${options.checkpointPath}。先确认旧监听已退出，然后重挂恰好一个后台 receipts --wait --timeout 300 监听。` : ''));
     host.showToast(rotation ? `已${host.config.captainRelayLabel || 'Relay'}；进度看板、队员和回执已保留` : '队长的模型上下文已清空；派出去的活、回执和之前的对话都还在');
     return fresh;
+  }
+
+  // Rotation waits for a finished turn or a quiet quota wait. The quota turn
+  // stays open so Relay can preserve its interrupted output in the old chat.
+  function relayIdle() {
+    const col = mainCol(), entry = host.terms.get(col?.id);
+    if (!col || !entry?.alive || briefing || delivering || tokenSaving || entry.sendingPrompt || entry.injecting ||
+      host.userComposing(col.id) || window.ChatUI.hasDraft(col.id) ||
+      !['done', 'quota'].includes(entry.state) || Date.now() - (entry.lastOutputAt || 0) < 3000) return false;
+    const activity = M.terminalActivity(entry.lastScreen);
+    if (activity === 'working' || (activity === 'quota' && entry.state !== 'quota')) return false;
+    return entry.state === 'quota' || !window.ChatUI.turnsOf(col.id).some((t) => !t.done);
+  }
+  function relayEffort() {
+    const s = state();
+    const activeTitles = new Set((s?.tasks || []).filter((t) => !CLOSED.includes(t.status)).map((t) => t.title));
+    return s?.pending.some((r) => r.failed) || s?.tasks.some((t) => t.receipt?.failed && activeTitles.has(t.title)) ? 'xhigh' : 'high';
   }
 
   // ---- handing out work ----
@@ -739,6 +757,7 @@
         save();
         return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }
+      case 'main-briefing': return { done: true, result: M.instructions(host.platform, '', s.legacyReceiptInjection === true) };
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
         const history = M.historyText(host.config.captainHistory);
@@ -891,7 +910,7 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),

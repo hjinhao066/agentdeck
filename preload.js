@@ -54,12 +54,13 @@ contextBridge.exposeInMainWorld('deck', {
   skillsRead: (key) => ipcRenderer.invoke('skills:read', { key }),
   skillsSave: (key, text, hash) => ipcRenderer.invoke('skills:save', { key, text, hash }),
 
-  ptySpawn: (id, cwd, cols, rows, managed, seatId) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId }),
+  ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir }),
   claudeSeats: () => ipcRenderer.invoke('seats:list'),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   claudeSeatUsage: (seatId) => ipcRenderer.invoke('seats:usage', { seatId }),
-  recordClaudeSeatUsage: (seatId, usage) => ipcRenderer.invoke('seats:record-usage', { seatId, usage }),
+  recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
+  captainRelayNotify: (colId, message) => ipcRenderer.invoke('captain:relay-notify', { colId, message }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   // keepReplay: save the output first (archiving), so restoring can replay it.

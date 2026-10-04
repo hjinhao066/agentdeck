@@ -117,6 +117,7 @@
       '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。只有两件事你自己做：读写进度看板（见第 13 条），以及只读的 sysctl vm.swapusage（见第 14 条）。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
+      `   ${cli} briefing                        只读当前队长说明；Relay 后先读 briefing 和看板交接，再重挂后台回执监听`,
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
       `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
@@ -475,6 +476,7 @@
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
     lines.forEach((line, i) => {
+      if (/^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?(?:429\b[^\n]*(?:rate[_ -]?limit|too many requests)|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b)/i.test(line)) quota = i;
       if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:error:\s*)?(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:you have )?(?:exceeded your usage limit|quota exhausted)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|(?:error:?\s*)?(?:usage limit|quota|resource_exhausted)(?:\s|:|\b).*?(?:exceeded|exhausted|reached)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;

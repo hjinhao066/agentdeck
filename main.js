@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
 const { createNotifications } = require('./notifications');
+const { createBarkSender } = require('./notify-user');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
@@ -184,6 +185,7 @@ function shellArgs() {
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
+const { clearCredentials, removeCredentials, writeCredentials } = require('./board-credentials');
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -200,7 +202,7 @@ function bufferAppend(id, data) {
   boundedAppend(buf, data, PTY_BUFFER_MAX);
 }
 
-function spawnPty(id, cwd, cols, rows, managed, seatId) {
+function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   if (!validId(id) || ptys.size >= 100) return;
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
@@ -218,7 +220,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
       let cfg = {};
       try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
       catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const seat = ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
+      const seat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
       if (!seat) throw new Error('席位不存在');
       terminalEnv = seatEnvironment(terminalEnv, seat, tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME);
     } catch (_) {
@@ -243,6 +245,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
   }
   let p;
   try {
+    writeCredentials(boardControlDir, id, receiptToken, token);
     p = pty.spawn(shellFile(), shellArgs(), {
       name: 'xterm-256color',
       cols: cols || 80,
@@ -256,6 +259,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
   } catch (err) {
     managedSessions.delete(id);
     receiptSessions.delete(id);
+    removeCredentials(boardControlDir, id);
     // Spawn can fail (fd exhaustion, bad shell). Surface it in the column
     // instead of throwing inside the IPC handler and crashing the main process.
     send('pty:data', { id, data: `\r\n[AgentDeck] shell 启动失败: ${err.message}\r\n` });
@@ -271,6 +275,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
       ptys.delete(id);
       managedSessions.delete(id);
       receiptSessions.delete(id);
+      removeCredentials(boardControlDir, id);
       if (notifications) notifications.cancel(id);
       // Keep the frozen buffer until the column is explicitly removed. It lets
       // a renderer reload still show an exited terminal's useful final output.
@@ -294,6 +299,7 @@ function killPty(id, keepReplay) {
   ptyBuffers.delete(id);
   managedSessions.delete(id);
   receiptSessions.delete(id);
+  removeCredentials(boardControlDir, id);
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
 }
 
@@ -359,7 +365,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -401,6 +407,8 @@ function setupBoardControl() {
         try { fs.unlinkSync(path.join(dir, file)); } catch (_) {}
       }
     }
+    clearCredentials(boardControlDir);
+    for (const file of ['board-credentials.js', 'security.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
   } catch (err) {
@@ -658,10 +666,23 @@ app.whenReady().then(() => {
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
-    getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId });
+    getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
+    getColumn: (id) => seatConfig().columns?.find((c) => c.id === id) });
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
+  if (tudArg) app.testRelayAlerts = [];
+  const sendRelayBark = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testRelayAlerts.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  handleMain('captain:relay-notify', (_e, { colId, message }) => {
+    if (colId !== notificationConfig.mainSession?.colId || !notificationConfig.columns?.some((c) => c.id === colId && c.isMain) ||
+      typeof message !== 'string' || !message.trim() || message.length > 1000) throw new Error('无效队长轮换提醒');
+    return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
+  });
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
@@ -684,7 +705,7 @@ app.whenReady().then(() => {
   // Test profiles never read the user's quota caches or conversation logs.
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   handleMain('quota:local', () => {
-    if (tudArg) return [];
+    if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
@@ -698,7 +719,7 @@ app.whenReady().then(() => {
     }
     return quotaRead;
   });
-  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId }) => spawnPty(id, cwd, cols, rows, !!managed, seatId));
+  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
   onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);
@@ -1056,6 +1077,7 @@ app.on('before-quit', () => {
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);
   for (const [id, p] of ptys) {
     try { p.kill(); } catch (_) {}
+    removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }
 });

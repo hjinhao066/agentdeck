@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const S = require('./claude-seats-core');
 const { validId } = require('./security');
 const { saveChat } = require('./side-main');
+const { accountIdentity } = require('./quota-codex');
 
 function directory(seat, home) {
   const raw = seat.configDir.replace(/^~(?=$|[\\/])/, home);
@@ -41,12 +42,13 @@ function hasKeychain(service) {
 }
 async function seatInfo(seat, home, platform = process.platform, keychain = hasKeychain) {
   const loc = credentialLocation(seat, home);
-  let email = '';
+  let email = '', accountKey = '';
   try {
     if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) email = S.maskEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
+    accountKey = usageAccountKey(loc) || '';
   } catch (_) {}
   const present = !!email && (fs.existsSync(loc.credentialsPath) || (platform === 'darwin' && await keychain(loc.keychainService)));
-  return { ...seat, configDir: loc.dir, maskedEmail: email, loggedIn: !!email && !!present, usagePath: loc.usagePath };
+  return { ...seat, configDir: loc.dir, maskedEmail: email, accountKey, loggedIn: !!email && !!present, usagePath: loc.usagePath };
 }
 function sanitizeUsage(value) {
   if (!value || !Number.isFinite(value.at) || !Array.isArray(value.windows)) throw new Error('无效用量记录');
@@ -55,14 +57,30 @@ function sanitizeUsage(value) {
   if (!windows.length) throw new Error('没有实际用量数据');
   return { at: value.at, source: 'Claude /usage', windows };
 }
-function writeUsage(seat, home, value) {
-  const file = credentialLocation(seat, home).usagePath;
-  const safe = sanitizeUsage(value);
+function usageAccountKey(loc) {
+  if (fs.statSync(loc.metadataPath).size > 2 * 1024 * 1024) throw new Error('账号元数据过大');
+  const account = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount;
+  return typeof account?.accountUuid === 'string' && account.accountUuid
+    ? crypto.createHash('sha256').update(account.accountUuid).digest('hex').slice(0, 16)
+    : accountIdentity(account?.emailAddress).accountKey;
+}
+function writeUsage(seat, home, value, sourceColumnId) {
+  const loc = credentialLocation(seat, home), file = loc.usagePath;
+  const accountKey = usageAccountKey(loc);
+  if (!accountKey) throw new Error('无法确认用量所属账号');
+  if (sourceColumnId !== undefined && !validId(sourceColumnId)) throw new Error('无效用量来源会话');
+  const safe = { ...sanitizeUsage(value), accountKey, configDir: loc.dir };
+  if (sourceColumnId) safe.sourceColumnId = sourceColumnId;
   fs.writeFileSync(file + '.tmp', JSON.stringify(safe), { mode: 0o600 });
   fs.renameSync(file + '.tmp', file);
 }
 function readUsage(seat, home) {
-  try { return sanitizeUsage(JSON.parse(fs.readFileSync(credentialLocation(seat, home).usagePath, 'utf8'))); }
+  try {
+    const loc = credentialLocation(seat, home), value = JSON.parse(fs.readFileSync(loc.usagePath, 'utf8'));
+    if (!value.accountKey || value.accountKey !== usageAccountKey(loc) || value.configDir !== loc.dir) return null;
+    return { ...sanitizeUsage(value), accountBound: true, accountKey: value.accountKey, configDir: seat.configDir,
+      ...(validId(value.sourceColumnId) ? { sourceColumnId: value.sourceColumnId } : {}) };
+  }
   catch (_) { return null; }
 }
 function checkpoint(home, userData, payload) {
@@ -74,9 +92,11 @@ function checkpoint(home, userData, payload) {
   const board = path.join(home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
   fs.mkdirSync(path.dirname(board), { recursive: true, mode: 0o700 });
   const line = (x) => String(x || '').replace(/[\r\n|]/g, ' ').slice(0, 600);
+  const latest = payload.chat.turns?.findLast((t) => t.kind !== 'task' && t.kind !== 'notice' && t.user);
   const text = '# AgentDeck 队长Relay接续\n\n## 在做什么\n席位Relay；先读本看板，再按需读取上一任队长的完整对话。\n\n'
     + `上任会话：${payload.colId}\n完整对话：${path.join(userData, 'chats', payload.colId + '.json')}\n`
     + `使用 board-cli read --id ${payload.colId} 可读取之前的队长对话。\n\n`
+    + `## 队长交接\n${line(payload.relayMessage || '手动 Relay')}\n最近指令：${line(latest?.user)}\n先读 briefing 和本交接，检查 ledger；旧监听失效后重挂恰好一个后台 receipts --wait --timeout 300。\n\n`
     + '## 谁在做\n| 会话 | 事项 | 状态 | 回执/提问 |\n| --- | --- | --- | --- |\n'
     + payload.tasks.map((t) => `| ${line(t.colId)} | ${line(t.title)} | ${line(t.status)} | ${line(t.receipt?.question || t.receipt?.failed || t.receipt?.summary)} |`).join('\n')
     + '\n\n## 卡在哪\n未处理回执和提问在 AgentDeck 中保留；额度用尽的会话保持原席位。\n\n## 等用户拍板什么\n见任务表中的提问及队长待处理回执。\n\n## 下一步\n读看板继续；先运行 ledger 和 receipts，核对正在跑的队员，不重复派活。\n\n'
@@ -85,7 +105,7 @@ function checkpoint(home, userData, payload) {
   fs.renameSync(board + '.tmp', board);
   return board;
 }
-function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId }) {
+function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, getColumn }) {
   const find = (id) => { const seat = S.normalize(getSeats()).find((s) => s.id === id); if (!seat) throw new Error('席位不存在'); return seat; };
   handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home))));
   handleMain('seats:validate', (_e, { seats }) => {
@@ -100,6 +120,12 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId }
     return checkpoint(home, userData, payload);
   });
   handleMain('seats:usage', (_e, { seatId }) => readUsage(find(seatId), home));
-  handleMain('seats:record-usage', (_e, { seatId, usage }) => { writeUsage(find(seatId), home, usage); return true; });
+  handleMain('seats:record-usage', (_e, { colId, seatId, configDir, usage }) => {
+    const seat = find(seatId);
+    if (configDir !== seat.configDir) throw new Error('会话席位目录已变更，不能归入新目录');
+    const column = validId(colId) && getColumn?.(colId);
+    if (!column || column.claudeSeatId !== seatId || column.claudeConfigDir !== configDir) throw new Error('用量来源会话与席位快照不匹配');
+    writeUsage({ ...seat, configDir: column.claudeConfigDir }, home, usage, colId); return true;
+  });
 }
 module.exports = { directory, credentialLocation, seatEnvironment, seatInfo, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };

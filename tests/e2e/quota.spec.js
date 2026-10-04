@@ -3,11 +3,16 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '../..');
+const M = require('../../claude-seats-main');
 const FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
 let application, page, profile;
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-e2e-'));
+  const home = path.join(profile, 'seats-home');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' } }));
+  M.writeUsage({ id: 'cn', configDir: '~/.claude' }, home, { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 19, resetText: 'in 1h' }, { key: 'weekly', remaining: 91, resetText: 'in 4d' }] });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,
     columns: ['Claude', 'Codex', 'Cursor', 'Antigravity'].map((p) => ({ id: `quota-${p}`, taskId: `task-${p}`, title: `${p} stand-in`, cmd: `node "${FAKE}" ${p}`, cwd: profile, width: 600, role: 'manual' })),
@@ -28,22 +33,22 @@ const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"
 
 test('passive live screens show remaining quota, provider icons and accessible details', async () => {
   await expect(badge('Claude').locator('.quota-label')).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
-  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未登录/无数据');
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未知');
   await expect(badge('Codex').locator('.quota-label')).toHaveText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider).locator('.quota-label')).toHaveText('正常');
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
   await expect(badge('Claude')).toHaveAttribute('aria-label', /5 小时剩余 19%；重置/);
-  await expect(badge('Claude')).toHaveAttribute('title', /来源：会话屏幕/);
+  await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位本地用量缓存/);
   await expect(badge('Claude').locator('svg')).toBeVisible();
   await badge('Claude').focus();
   await expect(badge('Claude').getByRole('tooltip')).toBeVisible();
   await expect(badge('Claude').getByRole('tooltip')).toContainText('每周剩余 91%');
   await expect(badge('Cursor').locator('.quota-name')).toHaveText('Grok 4.7');
   await expect(badge('Antigravity').locator('.quota-name')).toHaveText('Gemini');
-  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：未识别/);
+  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：c\*\*\*@example.test/);
   // The isolated profile is barred from reading the user's real quota caches.
-  expect(await page.evaluate(() => window.deck.quotaLocal())).toEqual([]);
+  expect((await page.evaluate(() => window.deck.quotaLocal())).filter(q => q.windows).map(q => q.seatId)).toEqual(['cn']);
 });
 
 test('Claude-model limits never exhaust Gemini or Grok 4.7; screenshots use simulated data', async () => {
@@ -110,14 +115,25 @@ test('Captain quota CLI returns both Claude seats and changes no tasks, receipts
   await page.locator('#mdCreate').click();
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyForeground(id), id)).toMatch(/^(?:zsh|bash|sh|powershell|pwsh|cmd)$/i);
-  const before = await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]));
+  await page.evaluate(() => {
+    window.quotaRequestIds = [];
+    window.deck.onBoardCommand((m) => { if (m.action === 'main-quota') window.quotaRequestIds.push(m.id); });
+  });
+  const before = await page.evaluate(() => JSON.parse(JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses])));
   const output = path.join(profile, 'quota.txt');
   // Node writes UTF-8 on both platforms; PowerShell 5 redirection writes UTF-16.
   const command = `node -e "require('fs').writeFileSync(process.argv[1],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}))" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
-  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未登录\/无数据[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
+  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未知[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
   expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(5);
-  expect(await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]))).toBe(before);
+  const after = await page.evaluate(() => [config.mainSession.tasks, config.mainSession.pending, config.boardResponses]);
+  expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
+  // Other startup/exit acknowledgements may arrive concurrently. The quota
+  // request itself never adds a cache entry or changes an existing response.
+  for (const [key, value] of Object.entries(before[2])) expect(after[2][key]).toEqual(value);
+  const quotaIds = await page.evaluate(() => window.quotaRequestIds);
+  expect(quotaIds).toHaveLength(1);
+  for (const requestId of quotaIds) expect(after[2]).not.toHaveProperty(requestId);
   // A worker doesn't have the Captain capability, even for this read-only command.
   const rejected = await page.evaluate(async () => {
     try { await MainSession.handle({ action: 'main-quota' }, columns.find((c) => c.id === 'quota-Cursor')); return ''; }

@@ -12,7 +12,7 @@ const cli = path.join(__dirname, '..', 'board-cli.js');
 function runCli(args, env) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cli, ...args], {
-      env: { ...process.env, ...env },
+      env: { ...process.env, AGENTDECK_RECEIPT_TOKEN: '', AGENTDECK_TERMINAL_ID: '', ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -30,6 +30,34 @@ test('manual terminal cannot access the control channel', async () => {
   });
   assert.notEqual(result.code, 0);
   assert.match(result.stderr, /Only conductor-managed terminals/);
+});
+
+test('briefing sends a read-only Captain request and prints the full instructions and handoff', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-briefing-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const briefing = require('../main-core').instructions(process.platform) + '\n队长交接：继续当前任务，重挂回执监听。';
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file));
+      requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: briefing }));
+    }
+  }, 20);
+  try {
+    const result = await runCli(['briefing'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, briefing + '\n');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].action, 'main-briefing');
+    assert.equal(requests[0].token, 'test-token');
+    assert.equal(requests[0].message, undefined);
+    assert.equal(requests[0].task, undefined);
+    const denied = await runCli(['briefing'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(denied.code, 1);
+    assert.match(denied.stderr, /Only conductor-managed terminals/);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('quota uses one read-only Captain request and prints the four provider lines', async () => {

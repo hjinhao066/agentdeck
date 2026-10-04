@@ -77,7 +77,7 @@ test('launch exit reporting captures the actual exit code even when the shell su
       assert.deepEqual(JSON.parse(output), ['session-exit', '--code', String(code)]);
     }
     assert.ok(B.reportAgentExit('agy', 'win32').includes('session-exit --code "$LASTEXITCODE"'));
-    assert.ok(B.launchInput('codex', 'darwin', true).includes('command "codex"; node'));
+    assert.ok(B.launchInput('codex', 'darwin', true).includes('command "codex" --no-daemon; node'));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

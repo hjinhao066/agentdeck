@@ -53,6 +53,7 @@ test.beforeEach(async () => {
   fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"}}');
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"}}');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     columns: [
       { id: cn, title: '队长', cmd: FAKE, cwd: profile, isMain: true, claudeSeatId: 'cn' },

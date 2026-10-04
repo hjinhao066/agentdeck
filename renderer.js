@@ -104,6 +104,7 @@ let config = {
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
+  perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
   captainTokenSaver: MainCore.tokenSaverSettings(),
@@ -113,11 +114,14 @@ const saved = window.deck.loadConfig();
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
+  config.perpetualCaptain = PerpetualCaptainCore.normalizeSettings(saved.perpetualCaptain);
+  config.perpetualCaptainState = PerpetualCaptainCore.normalizeState(saved.perpetualCaptainState);
+  if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
   config.captainRelayLabel = typeof saved.captainRelayLabel === 'string' ? saved.captainRelayLabel.slice(0, 80) : 'Relay';
   config.activeClaudeSeatId = ClaudeSeatsCore.active({ ...saved, claudeSeats: config.claudeSeats }).id;
   if (saved.captainRelayCodex && typeof saved.captainRelayCodex === 'object') config.captainRelayCodex = {
     name: typeof saved.captainRelayCodex.name === 'string' ? saved.captainRelayCodex.name.slice(0, 80) : 'ChatGPT',
-    command: typeof saved.captainRelayCodex.command === 'string' ? saved.captainRelayCodex.command : ClaudeSeatsCore.CODEX_COMMAND,
+    command: typeof saved.captainRelayCodex.command === 'string' ? BoardCore.upgradeLegacyCommand(saved.captainRelayCodex.command) : ClaudeSeatsCore.CODEX_COMMAND,
   };
   if (typeof saved.captainRelayClaudeCommand === 'string') config.captainRelayClaudeCommand = saved.captainRelayClaudeCommand;
   config.captainNotifications = NotificationPolicy.normalizeSettings(saved.captainNotifications);
@@ -129,7 +133,7 @@ if (saved) {
   if (saved.navWidth) config.navWidth = saved.navWidth < NAV_MIN_W ? NAV_DEFAULT_W : Math.min(NAV_MAX_W, saved.navWidth);
   config.folders = SidebarCore.normalizeFolders(saved.folders);
   config.archived = SidebarCore.normalizeArchived(saved.archived).map((c) => ({ ...c,
-    claudeSeatId: config.claudeSeats.some((s) => s.id === c.claudeSeatId) ? c.claudeSeatId : config.activeClaudeSeatId,
+    claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
   }));
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
@@ -172,7 +176,6 @@ if (saved) {
       agentProvider: c.agentProvider,
       agentModel: c.agentModel,
       agentEffort: c.agentEffort,
-      claudeSeatId: c.claudeSeatId,
       claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
@@ -181,13 +184,14 @@ if (saved) {
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       captainCrew: !!c.captainCrew,
-      claudeSeatId: config.claudeSeats.some((s) => s.id === c.claudeSeatId) ? c.claudeSeatId : config.activeClaudeSeatId,
+      claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
   }
 }
 function seatLaunchCommand(col, command) {
-  const seat = config.claudeSeats.find((s) => s.id === col.claudeSeatId) || ClaudeSeatsCore.active(config);
+  const seat = ClaudeSeatsCore.bindColumn(col, config);
+  if (!seat.configDir) return ''; // A removed, unbound seat must not launch under another login.
   return ClaudeSeatsCore.launchCommand(command, seat, env.home, env.platform);
 }
 // Once: sessions 队长 opened before they were marked go under it too.
@@ -200,6 +204,8 @@ if (config.mainSession && !config.mainSession.crewMarked) {
 // folders, then loose ones.
 config.columns = SidebarCore.orderedColumns(config.columns, config.folders);
 let columns = config.columns;
+columns.forEach((col) => ClaudeSeatsCore.bindColumn(col, config));
+config.archived.forEach((col) => ClaudeSeatsCore.bindColumn(col, config));
 let activeView = config.activeView;
 // Changes arriving together (a drag, 队长 task updates) are written once:
 // the main process writes config.json synchronously, so bursts would stall
@@ -1798,7 +1804,8 @@ function buildColumn(col, isFresh) {
           });
         }
         // 队长 gets a control token too; the columns it drives never do.
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, col.claudeSeatId || config.activeClaudeSeatId);
+        const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
 
         if (launch) {
           // Capture the id: if the user edits the column within 700ms,
@@ -3405,7 +3412,6 @@ setInterval(() => {
 
     ChatUI.onTick(id, entry, text);
     MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
-    ClaudeSeats.onTick(id, entry, text);
 
     // A restarted terminal replays the PREVIOUS run's output above a
     // separator. It is excluded from status classification, but remains the
@@ -3420,7 +3426,7 @@ setInterval(() => {
       let sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt, model);
       if (sample && provider === 'Claude') {
         const seat = QuotaCore.seatForColumn(col, QuotaCore.claudeSeats(config.claudeSeats));
-        sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir } : null;
+        sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir, sourceColumnId: id } : null;
       }
       const signature = sample && JSON.stringify([provider, sample.seatId, sample.model, sample.windows.map((w) => [w.label, w.remaining, w.resetText]), sample.exhausted, sample.resumed, sample.resetText]);
       // Redrawing unrelated text must not move a relative reset forward or
@@ -3430,6 +3436,8 @@ setInterval(() => {
         if (QuotaCore.observe(config.quotas, sample)) saveConfig();
       }
     }
+
+    ClaudeSeats.onTick(id, entry, text);
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);

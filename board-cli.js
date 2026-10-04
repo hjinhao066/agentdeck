@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { readCredentials } = require('./board-credentials');
 
 function fail(message, code = 1) {
   process.stderr.write(`[AgentDeck Board] ${message}\n`);
@@ -39,9 +40,16 @@ function sleep(ms) {
 }
 
 async function request(command, waitForCompletion) {
-  const controlDir = process.env.AGENTDECK_CONTROL_DIR;
+  // The standalone copy knows its profile directory even when a shell policy
+  // removes CONTROL_DIR. Never discover another profile or terminal's file.
+  const controlDir = process.env.AGENTDECK_CONTROL_DIR ||
+    (path.basename(__filename) === 'agentdeck-board.js' && path.basename(__dirname) === 'tools' ? path.dirname(__dirname) : '');
   const submission = ['complete', 'ask', 'progress', 'session-exit'].includes(command.action);
-  const token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN;
+  let token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN;
+  if (!token) {
+    const credentials = readCredentials(controlDir, process.env.AGENTDECK_TERMINAL_ID);
+    if (credentials) token = (submission && credentials.receiptToken) || credentials.controlToken;
+  }
   if (!controlDir || !token) {
     fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
   }
@@ -96,6 +104,7 @@ function usage() {
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
+    '  briefing                                 static Captain instructions and Relay handoff\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
     '  quota                                    passive subscription status, one provider per line\n' +
     '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|cursor|grok | --command "launch"]\n' +
@@ -267,8 +276,8 @@ async function main() {
     return;
   }
 
-  if (action === 'quota') {
-    const response = await request({ action: 'main-quota' }, false);
+  if (action === 'quota' || action === 'briefing') {
+    const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);
     return;
   }
