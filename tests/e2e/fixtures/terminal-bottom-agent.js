@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 
-let previousSize, activeOutput;
+let previousSize, activeOutput, enteredAlternate = false;
 function size() {
   if (process.platform !== 'win32') return process.stdout;
   // Open the active buffer once after entering the alternate screen. Keep the
@@ -16,7 +16,11 @@ function draw(current = size()) {
   const rows = current.rows, cols = current.columns;
   previousSize = { rows, columns: cols };
   fs.writeFileSync(path.join(process.cwd(), `${process.env.AGENTDECK_COL_ID}.size.json`), JSON.stringify({ rows, cols }));
-  let screen = '\x1b[?1049h\x1b[2J\x1b[HClaude Code (terminal geometry stand-in)';
+  // Windows replaces the alternate buffer on every 1049h; enter it once,
+  // then repaint it without invalidating the active console handle.
+  let screen = (process.platform === 'win32' && enteredAlternate ? '' : '\x1b[?1049h')
+    + '\x1b[2J\x1b[HClaude Code (terminal geometry stand-in)';
+  enteredAlternate = true;
   const lines = ['─'.repeat(Math.min(cols, 65)), '❯ ', '─'.repeat(Math.min(cols, 65)),
     'Opus 5.5 · high · think · 5h 90% · 7d 90%', '16% 156k/1M',
     '⏵⏵ bypass permissions on (shift+tab to cycle)'];
