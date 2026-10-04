@@ -544,7 +544,7 @@ body.reordering, body.reordering * { cursor: grabbing !important; }
   padding: 8px 6px 8px 12px;
   overflow: hidden;
 }
-.term .xterm { height: 100%; }
+.term .term-content, .term .xterm { height: 100%; }
 /* IME / voice input: keep xterm's hidden textarea and its composition preview
    fully NATIVE. Overriding their geometry (forcing a fixed/1px textarea, or
    restyling the composition-view) breaks Chinese composition — you could only
