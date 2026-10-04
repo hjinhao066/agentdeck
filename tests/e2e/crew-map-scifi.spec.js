@@ -78,7 +78,7 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   await expect(page.locator('.cm-edges .cm-edge.dispatch')).toHaveCount(crew.length);
   await expect(page.locator('.cm-edges .cm-edge.review')).toHaveCount(2);
   for (const st of ['working', 'done', 'failed']) expect(await page.locator(`.cm-node[data-status="${st}"]`).count()).toBeGreaterThan(0);
-  await shot(process.env.ARCH_SCIFI_SHOT_PREFIX ? process.env.ARCH_SCIFI_SHOT_PREFIX + '-dark-1920' : 'dark-1920');
+  if (process.env.ARCH_SCIFI_BEFORE) await shot((process.env.ARCH_SCIFI_SHOT_PREFIX || 'before') + '-dark-1920');
   if (process.env.ARCH_SCIFI_BEFORE) {
     await open(1920, 1080, 'light');
     await shot((process.env.ARCH_SCIFI_SHOT_PREFIX || 'before') + '-light-1920');
@@ -118,15 +118,45 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   }));
   for (const c of controls) { expect(c.label).toBeTruthy(); expect(c.title).toBeTruthy(); expect(c.svg).toBe(true); expect(c.text).toBe(''); expect(Math.min(c.w, c.h)).toBeGreaterThanOrEqual(32); }
 
-  await shot('after-dark-1920');
+  // 队长's tally is alive: an icon per status, large coloured numbers, and 干活中 keeps turning.
+  const captain = page.locator('.cm-node.kind-captain');
+  await expect(captain.locator('.cm-crest')).toHaveCount(1);
+  await expect(captain.locator('.cm-line')).toHaveText('7 干活中 · 2 排队 · 2 失败 · 4 已完成');
+  await expect(captain.locator('.cm-count .cm-ico svg')).toHaveCount(4);
+  const tally = await captain.evaluate((n) => {
+    const css = (sel, pseudo) => getComputedStyle(n.querySelector(sel), pseudo), line = n.querySelector('.cm-line');
+    const inside = [...n.querySelectorAll('.cm-count, .cm-title, .cm-top, .cm-crest')].every((c) => { const a = c.getBoundingClientRect(), b = n.getBoundingClientRect(); return a.left >= b.left && a.right <= b.right && a.top >= b.top && a.bottom <= b.bottom; });
+    return { size: parseFloat(css('.cm-count.st-working b').fontSize), working: css('.cm-count.st-working b').color, queued: css('.cm-count.st-queued b').color, done: css('.cm-count.st-done b').color,
+      spin: css('.cm-count.st-working .cm-ico svg').animationName, still: css('.cm-count.st-done .cm-ico svg').animationName,
+      title: parseFloat(getComputedStyle(document.querySelector('.cm-node:not(.kind-captain) .cm-title')).fontSize), fits: line.scrollWidth <= line.clientWidth, inside };
+  });
+  expect(tally.size).toBeGreaterThanOrEqual(20);
+  expect(tally.size).toBeGreaterThan(tally.title);
+  expect(tally.fits).toBe(true);
+  expect(tally.inside).toBe(true);
+  expect(new Set([tally.working, tally.queued, tally.done]).size).toBe(3);
+  expect(tally.spin).toBe('cm-spin');
+  expect(tally.still).toBe('none');
+  // Cards and project heads carry the same status icons; a working card's icon spins too.
+  await expect(page.locator('.cm-node:not(.kind-captain) .cm-status .cm-ico')).toHaveCount(crew.length);
+  expect(await page.locator('.cm-node.st-working:not(.kind-captain) .cm-status .cm-ico svg').first().evaluate((n) => getComputedStyle(n).animationName)).toBe('cm-spin');
+  await expect(page.locator('.cm-project[data-project="agentdeck"] .cm-project-summary')).toHaveText('3 干活中 · 1 失败 · 2 已完成');
+  await expect(page.locator('.cm-legend .cm-ico')).toHaveCount(5);
+  // Finished cards step back without going transparent: their text stays readable.
+  expect(await page.locator('.cm-node.st-done').first().evaluate((n) => getComputedStyle(n).opacity)).toBe('1');
+
+  await shot('final-dark-1920');
   await open(1440, 900, 'dark');
-  await shot('after-dark-1440');
+  await shot('final-dark-1440');
+  await open(1440, 900, 'light');
+  await shot('final-light-1440');
   await open(1920, 1080, 'light');
-  await shot('after-light-1920');
+  await shot('final-light-1920');
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await open(1920, 1080, 'dark');
   expect((await style('.cm-pulse')).anim).toBe('none');
   expect(await page.locator('.cm-node.st-working').first().evaluate((n) => getComputedStyle(n, '::after').animationName)).toBe('none');
+  expect(await page.locator('.cm-count.st-working .cm-ico svg').first().evaluate((n) => getComputedStyle(n).animationName)).toBe('none');
   expect(errors).toEqual([]);
 });
