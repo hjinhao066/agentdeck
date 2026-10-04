@@ -328,7 +328,7 @@ function tunnelFixture(t) {
   stub('useradd', `echo "useradd $*" >> "${log}"; touch "${d}/.user"`);
   stub('usermod', `echo "usermod $*" >> "${log}"`);
   stub('userdel', `echo "userdel $*" >> "${log}"; rm -f "${d}/.user"`);
-  stub('chown', `echo "chown $*" >> "${log}"`);
+  stub('chown', `echo "chown $*" >> "${log}"; [ -z "$STUB_CHOWN_FAIL" ]`);
   stub('systemctl', `echo "systemctl $*" >> "${log}"`);
   stub('pkill', `echo "pkill $*" >> "${log}"`);
   // `sshd -T` answers per user like the real thing: the Mac account is limited to 43122, Windows to 43123, root to nothing.
@@ -438,7 +438,7 @@ test('tunnel-account.sh create：生效设置不符或 root 的设置变了，�
   let r = create({ STUB_WIN_NO_OPEN: '1' });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /permitopen is not none/);
-  assert.match(r.stderr, /previous drop-in put back/);
+  assert.match(r.stderr, /rolled back: sshd drop-in is back to what it was/);
   assert.ok(!fs.existsSync(conf));
   assert.ok(!/systemctl reload/.test(f.logText()));
   // a previous drop-in exists: it comes back byte for byte (the old code deleted it)
@@ -464,6 +464,129 @@ test('tunnel-account.sh create：生效设置不符或 root 的设置变了，�
   assert.equal(fs.readdirSync(path.join(root, 'var/backups/agentdeck-three-ends')).length, 5, 'five runs, five distinct backup dirs even within one second (a reused dir would restore a stale drop-in)');
   assert.ok(/systemctl reload/.test(f.logText()));
   assert.match(read(conf), /^\tPermitOpen none$/m);
+});
+
+const HOME_REL = 'var/lib/agentdeck-tunnel-win/.ssh/authorized_keys';
+const CONF_REL = 'etc/ssh/sshd_config.d/agentdeck-tunnel-win.conf';
+
+test('tunnel-account.sh create 中途失败：撤回片段、authorized_keys 和这次新建的账号', (t) => {
+  const f = tunnelFixture(t); const root = f.env.AGENTDECK_ROOT; const key = f.key('k');
+  const create = (env) => run(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub'], { ...f.env, ...env });
+  const account = () => fs.existsSync(path.join(f.d, '.user'));
+  const cleanTree = () => assert.ok(!fs.existsSync(path.join(root, HOME_REL)) && !fs.existsSync(path.join(root, CONF_REL)));
+  const noReload = () => assert.ok(!/systemctl reload/.test(f.logText()), 'never reloaded');
+
+  // A new account and every kind of failure after the first change: all of it is taken away again.
+  for (const [name, env, message] of [
+    ['sshd -t fails', { STUB_SSHD_FAIL: '1' }, /sshd -t failed/],
+    ['effective settings wrong', { STUB_WIN_NO_OPEN: '1' }, /effective settings wrong/],
+    ['root settings changed', { STUB_ROOT_LEAK: '1' }, /effective sshd settings of user root/],
+    ['a command fails under set -e (chown)', { STUB_CHOWN_FAIL: '1' }, /create failed/],
+    ['ssh reload fails', { RELOAD_SSH: 'false' }, /ssh reload failed/],
+  ]) {
+    fs.writeFileSync(f.log, '');
+    const r = create(env);
+    assert.notEqual(r.status, 0, name);
+    assert.match(r.stderr, message, name);
+    assert.match(r.stderr, /rolled back: account agentdeck-tunnel-win, created by this run, removed/, name);
+    assert.equal(account(), false, `${name}: the account this run created is gone`);
+    assert.ok(f.logText().includes('userdel -r agentdeck-tunnel-win'), name);
+    cleanTree(); noReload();
+  }
+
+  // An account that existed before: it stays, and its authorized_keys comes back byte for byte.
+  fs.writeFileSync(path.join(f.d, '.user'), '');
+  const keys = path.join(root, HOME_REL);
+  fs.mkdirSync(path.dirname(keys), { recursive: true });
+  fs.writeFileSync(keys, 'restrict,port-forwarding,permitlisten="127.0.0.1:43123" ssh-ed25519 AAAAOLD old-key\n', { mode: 0o600 });
+  const before = read(keys);
+  fs.writeFileSync(f.log, '');
+  let r = create({ STUB_WIN_NO_OPEN: '1' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /rolled back: authorized_keys of the existing account/);
+  assert.equal(account(), true, 'an existing account is never removed');
+  assert.ok(!f.logText().includes('userdel'), 'no userdel for an account this run did not create');
+  assert.equal(read(keys), before);
+  assert.ok(!fs.existsSync(path.join(root, CONF_REL)));
+  // ... and the same when it had no authorized_keys yet: the one this run wrote is removed.
+  fs.rmSync(keys);
+  r = create({ STUB_WIN_NO_OPEN: '1' });
+  assert.notEqual(r.status, 0);
+  assert.equal(account(), true);
+  assert.ok(!fs.existsSync(keys));
+  noReload();
+
+  // Nothing is undone when the run succeeds.
+  fs.writeFileSync(f.log, '');
+  r = create({});
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(fs.existsSync(keys) && fs.existsSync(path.join(root, CONF_REL)) && account());
+  assert.ok(!/rolled back|userdel/.test(r.stderr + f.logText()));
+  assert.ok(/systemctl reload/.test(f.logText()));
+});
+
+test('tunnel-account.sh create：被中断（SIGTERM）时也撤回', async (t) => {
+  const f = tunnelFixture(t); const root = f.env.AGENTDECK_ROOT; const key = f.key('k');
+  // sshd -t takes a while, so the signal arrives after the account and authorized_keys exist.
+  fs.writeFileSync(path.join(f.d, 'bin', 'sshd'), fs.readFileSync(path.join(f.d, 'bin', 'sshd'), 'utf8').replace('-t) [ -z "$STUB_SSHD_FAIL" ] ;;', '-t) sleep 2 ;;'));
+  const { spawn } = require('node:child_process');
+  const child = spawn(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub'], { env: { ...process.env, ...f.env }, stdio: ['ignore', 'pipe', 'pipe'] });
+  let err = ''; child.stderr.on('data', (c) => { err += c; });
+  const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+  const until = Date.now() + 8000;
+  while (!fs.existsSync(path.join(root, CONF_REL)) && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+  assert.ok(fs.existsSync(path.join(root, CONF_REL)), 'the drop-in was written, so we are in the middle of create');
+  child.kill('SIGTERM');
+  const result = await exited;
+  assert.ok(result.code !== 0 || result.signal, 'interrupted');
+  assert.match(err, /rolled back: account agentdeck-tunnel-win, created by this run, removed/);
+  assert.ok(!fs.existsSync(path.join(f.d, '.user')));
+  assert.ok(!fs.existsSync(path.join(root, HOME_REL)) && !fs.existsSync(path.join(root, CONF_REL)));
+  assert.ok(!/systemctl reload/.test(f.logText()));
+});
+
+test('tunnel-account.sh verify：只读；Mac 账号被放宽或 Windows 片段没生效就失败，上线后可反复复核', (t) => {
+  const f = tunnelFixture(t); const root = f.env.AGENTDECK_ROOT; const key = f.key('k');
+  const script = path.join(VPS, 'tunnel-account.sh');
+  const verify = (env = {}) => run(script, ['verify'], { ...f.env, ...env });
+  // Before go-live: the Mac check runs, the drop-in is not there yet, nothing is written.
+  let r = verify();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /Mac account agentdeck-tunnel is limited to 127\.0\.0\.1:43122/);
+  assert.match(r.stdout, /Windows drop-in not installed/);
+  assert.ok(f.logText().split('\n').filter(Boolean).every((c) => c.startsWith('sshd -T ')), 'only sshd -T ran');
+  assert.ok(!fs.existsSync(path.join(root, 'var')) && !fs.existsSync(path.join(root, CONF_REL)));
+  for (const value of ['any', '127.0.0.1:43123', '127.0.0.1:43122 127.0.0.1:43123']) {
+    r = verify({ STUB_MAC_PERMITLISTEN: value });
+    assert.notEqual(r.status, 0, value);
+    assert.match(r.stderr, /not limited to 127\.0\.0\.1:43122/);
+  }
+  // After create: verify passes; later someone loosens the Mac account (or the drop-in stops applying): verify fails.
+  assert.equal(run(script, ['create', '--pubkey', key + '.pub'], f.env).status, 0);
+  fs.writeFileSync(f.log, '');
+  r = verify();
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /effective sshd settings for agentdeck-tunnel-win verified/);
+  assert.match(r.stdout, /verify ok/);
+  assert.ok(f.logText().split('\n').filter(Boolean).every((c) => c.startsWith('sshd -T ')), 'verify only reads');
+  r = verify({ STUB_MAC_PERMITLISTEN: 'any' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /Mac tunnel account agentdeck-tunnel is not limited/);
+  r = verify({ STUB_WIN_NO_OPEN: '1' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /permitopen is not none/);
+  assert.match(r.stderr, /does not apply it as intended/);
+  assert.ok(fs.existsSync(path.join(root, CONF_REL)), 'verify never removes or rewrites anything');
+});
+
+test('README：上线清单有 verify 和改 sshd 后复核；Set-Cookie 夹带的影响按事实写，不说“不会踢下线”', () => {
+  const readme = read(path.join(VPS, 'README.md'));
+  assert.match(readme, /tunnel-account\.sh verify/);
+  assert.match(readme, /改动.*sshd.*(再跑|复核)/s);
+  assert.doesNotMatch(readme, /不会把用户踢下线/);
+  const limit = readme.split('\n').find((l) => l.startsWith('- **Set-Cookie 匹配的限度'));
+  assert.ok(limit, 'the limit paragraph exists');
+  for (const fact of [/同名同 Path/, /覆盖/, /431/, /仅限可用性|只影响可用性/, /清.*cookie/, /已被攻陷/, /正在它上面登录或登出/]) assert.match(limit, fact);
 });
 
 test('tunnel-account.sh remove：删片段和账号，sshd -t 后 reload，不碰 Mac 账号', (t) => {

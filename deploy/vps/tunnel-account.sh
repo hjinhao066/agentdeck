@@ -3,6 +3,7 @@
 #
 #   tunnel-account.sh create --pubkey FILE [--dry-run]   FILE = the Windows PUBLIC key (one ed25519 line)
 #   tunnel-account.sh remove [--dry-run]
+#   tunnel-account.sh verify                             read-only: re-check what sshd really applies
 #
 # create: first refuses unless the Mac tunnel account (agentdeck-tunnel) is itself limited by sshd to
 #   127.0.0.1:43122 (`sshd -T`), otherwise a compromised Mac could grab 43123 and pose as Windows.
@@ -10,6 +11,10 @@
 #   restrict,port-forwarding,permitlisten="127.0.0.1:43123", sshd drop-in, `sshd -t`, a before/after
 #   `sshd -T` comparison for root (the drop-in must not leak outside its Match), then reload ssh.
 #   Existing SSH sessions survive a reload. The Mac account/config is never touched.
+#   If anything fails after the first change (a check, a command, Ctrl-C, the reload), everything this run
+#   changed is put back: the drop-in, authorized_keys, and an account that this run created.
+# verify: read-only. Fails unless sshd limits the Mac account to 127.0.0.1:43122 and, once the drop-in is
+#   installed, applies the restricted settings to the Windows account. Run it after any sshd change.
 # remove: delete the drop-in, end the account's sessions, delete the account, `sshd -t`, reload.
 # Private keys are refused. Nothing secret is printed.
 set -euo pipefail
@@ -44,7 +49,7 @@ new_backup_dir() { # $1 = BASE; prints the directory
   done
   printf '%s' "$d"
 }
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; }
 
 ACTION="${1:-}"; [ $# -gt 0 ] && shift
 PUBKEY=""; DRY=0
@@ -56,7 +61,7 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument: $1" ;;
   esac
 done
-[ "$ACTION" = create ] || [ "$ACTION" = remove ] || { usage; exit 1; }
+[ "$ACTION" = create ] || [ "$ACTION" = remove ] || [ "$ACTION" = verify ] || { usage; exit 1; }
 if [ "$DRY" = 0 ] && [ -z "$ROOT" ] && [ "$(id -u)" != 0 ]; then die "run as root (sudo)"; fi
 
 run() { if [ "$DRY" = 1 ]; then say "[dry-run] $*"; else "$@"; fi; }
@@ -102,6 +107,41 @@ restore_conf() { # $1 = backup dir
   if [ -e "$1/agentdeck-tunnel-win.conf.previous" ]; then cp -p "$1/agentdeck-tunnel-win.conf.previous" "$CONF"; fi
 }
 
+# ---- create is all-or-nothing -------------------------------------------------------------------------
+# Armed once the first change is about to be made, disarmed after a successful reload. Any exit in between
+# (die, a failing command under set -e, Ctrl-C) undoes what this run changed.
+CREATE_ARMED=0; CREATE_BDIR=""; CREATE_ACCOUNT_NEW=0
+
+undo_create() {
+  restore_conf "$CREATE_BDIR"
+  say "rolled back: sshd drop-in is back to what it was before this run" >&2
+  if [ "$CREATE_ACCOUNT_NEW" = 1 ]; then
+    # The account was created by this run: take it away again (door first, then any session, then the account).
+    rm -f "$HOME_DIR/.ssh/authorized_keys"
+    if command -v pkill >/dev/null 2>&1; then pkill -KILL -u "$ACCOUNT" || true; fi
+    if id "$ACCOUNT" >/dev/null 2>&1; then
+      userdel -r "$ACCOUNT" || say "userdel reported a problem: remove $ACCOUNT and $HOME_DIR by hand" >&2
+    fi
+    say "rolled back: account $ACCOUNT, created by this run, removed" >&2
+  else
+    if [ -e "$CREATE_BDIR/authorized_keys.previous" ]; then cp -p "$CREATE_BDIR/authorized_keys.previous" "$HOME_DIR/.ssh/authorized_keys"
+    else rm -f "$HOME_DIR/.ssh/authorized_keys"; fi
+    say "rolled back: authorized_keys of the existing account $ACCOUNT is back to what it was" >&2
+  fi
+}
+
+on_create_exit() {
+  local rc=$?
+  trap - EXIT
+  set +e
+  if [ "$CREATE_ARMED" = 1 ] && [ "$rc" -ne 0 ]; then
+    CREATE_ARMED=0
+    say "create failed (exit $rc); undoing what this run changed" >&2
+    undo_create
+  fi
+  exit "$rc"
+}
+
 validate_pubkey() {
   [ -n "$PUBKEY" ] || die "--pubkey FILE is required"
   [ -f "$PUBKEY" ] || die "no such file: $PUBKEY"
@@ -132,9 +172,16 @@ create() {
   if [ "$DRY" = 0 ]; then
     bdir="$(new_backup_dir "$bdir")"
     if [ -e "$CONF" ]; then cp -p "$CONF" "$bdir/agentdeck-tunnel-win.conf.previous"; fi
+    if [ -e "$HOME_DIR/.ssh/authorized_keys" ]; then ( umask 077; cp -p "$HOME_DIR/.ssh/authorized_keys" "$bdir/authorized_keys.previous" ); fi
+    CREATE_BDIR="$bdir"
+    trap on_create_exit EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM HUP
+    CREATE_ARMED=1
   fi
 
   if ! id "$ACCOUNT" >/dev/null 2>&1; then
+    [ "$DRY" = 1 ] || CREATE_ACCOUNT_NEW=1
     run useradd --system --home-dir "${HOME_DIR#"$ROOT"}" --create-home --shell /usr/sbin/nologin "$ACCOUNT"
     # '*' (not '!'): the account stays without any password but is not "locked", so sshd accepts its key.
     run usermod -p '*' "$ACCOUNT"
@@ -155,20 +202,26 @@ create() {
   chmod 0755 "$HOME_DIR"
 
   cp "$CONF_SRC" "$CONF"; chmod 0644 "$CONF"
-  if ! check_sshd; then
-    say "sshd -t FAILED; putting the previous drop-in back" >&2
-    restore_conf "$bdir"
-    die "sshd config invalid; nothing reloaded"
-  fi
+  check_sshd || die "sshd config invalid (sshd -t failed); nothing reloaded"
   # The Match block must stay limited to this account: root's effective settings may not change at all.
-  if [ "$(effective_for root)" != "$root_before" ]; then
-    restore_conf "$bdir"
-    die "installing the drop-in changed the effective sshd settings of user root (Match scope leaked?); previous drop-in put back, nothing reloaded"
-  fi
-  verify_effective || { restore_conf "$bdir"; die "effective settings wrong; previous drop-in put back, nothing reloaded"; }
-  reload_ssh
+  [ "$(effective_for root)" = "$root_before" ] || die "installing the drop-in changed the effective sshd settings of user root (Match scope leaked?); nothing reloaded"
+  verify_effective || die "effective settings wrong; nothing reloaded"
+  reload_ssh || die "ssh reload failed"
+  CREATE_ARMED=0
   say "ssh reloaded. Test from Windows: ssh -N -R 127.0.0.1:$PORT:127.0.0.1:43121 $ACCOUNT@<vps> (see README)"
   say "undo: tunnel-account.sh remove"
+}
+
+# Read-only. Meant for the go-live checklist and for every time sshd configuration changes afterwards:
+# the Mac account's limit is not managed here, so someone loosening it later would otherwise go unnoticed.
+verify() {
+  verify_mac_account
+  if [ -e "$CONF" ]; then
+    verify_effective || die "the Windows drop-in is installed but sshd does not apply it as intended"
+  else
+    say "Windows drop-in not installed ($CONF): nothing more to verify yet"
+  fi
+  say "verify ok (read-only, nothing was changed)"
 }
 
 remove() {

@@ -11,7 +11,7 @@
 | `install-caddy-site.sh` | 备份 → 取口令 → 换段落 → `caddy validate` → reload。`--check` 只校验 |
 | `rollback-caddy-site.sh` | 只还原这一段，其他站点的后续改动保留 |
 | `sshd_agentdeck-tunnel-win.conf` | Windows 隧道账号的 sshd 受限片段 |
-| `tunnel-account.sh` | 建/删账号 `agentdeck-tunnel-win`，写受限 authorized_keys，`sshd -t` 后才 reload |
+| `tunnel-account.sh` | 建/删账号 `agentdeck-tunnel-win`，写受限 authorized_keys，`sshd -t` 后才 reload；`verify` 只读复核 sshd 实际生效的限制 |
 | `deploy-hub.sh` | 总台静态文件的原子发布 / 回滚 / 列表 |
 | `lib.sh` | 脚本公用函数 |
 
@@ -32,23 +32,25 @@ CADDY_BIN=$PWD/caddy node --test --test-concurrency=1 tests/vps-caddy.test.js te
 
 - `vps-caddy`：本机起临时 Caddy（`admin off`，只监听回环）+ 两个假后端。验证无口令全 401；`/` 返回总台和 CSP 等安全头；`/mac/*`、`/win/*` 各转各的、前缀和查询串原样；Host / X-Forwarded-* 被覆盖、Authorization 被去掉；含糊路径（`..`、`//`）404；一台后端停掉或挂起时另一台和总台不受影响，停掉的返回 `502 {"offline":true}`；访问日志没有 URI、请求头、口令、cookie；用真 Chromium 验证两台的 `__Secure-agentdeck_mac`（Path=/mac/）和 `__Secure-agentdeck_win`（Path=/win/）只发给各自的前缀。另外：`GET /mac/api/info` 和 `GET /win/api/info`（免机器登录的探测，仍要入口口令）原样转发；前缀上每个响应的 CSP 被盖成 `default-src 'none'; sandbox`，并带 `nosniff`；HTML / JS / SVG / 没有 Content-Type / 给另一台种 cookie 的响应换成 `403 {"error":"blocked"}`；假后端在 `/win/` 下返回带脚本的 HTML 时，Chromium 里这份文档读不到 `/mac/api/snapshot`。再加：假后端在一个前缀下返回 3xx（301/302/303/307/308，带 `Location: /另一台/…`，JSON、HTML、无 Content-Type 都试）或 304 时，浏览器和总台的 `fetch`（默认跟随跳转）拿到 `403 {"error":"blocked"}`，没有 `Location`/`Refresh`，另一台后端一个请求都收不到；JSON 响应里的 `Location`、`Refresh`、`Clear-Site-Data`、`Content-Disposition`、`Link`、CORS 头、`Service-Worker-Allowed` 被删；`Set-Cookie` 只在 `POST <前缀>/login`、`POST <前缀>/logout` 放行且必须是本机 cookie 名，其他路径、其他方法、别台的 cookie 名、炸弹 cookie 都换成 blocked；登录/`api/info`/后端自己的 401 照常。
 - `vps-sshd`：本机起真 OpenSSH（非特权），装上本包的片段和 authorized_keys 选项：Windows 密钥能占自己的端口并真能通流量；占不了 Mac 的端口；非回环、本地转发、执行命令、未登记密钥都被拒。片段和密钥选项两层各自单独也挡得住。
-- `vps-scripts`：真脚本 + 真 `caddy validate` + 假系统命令，覆盖备份、只换一段、重复运行（含同一秒内连装连回滚：备份目录不复用、重复安装不产生托管段落的“备份”、默认回滚只选原始段落备份、遇到托管段落拒绝）、回滚（含期间别的站点被改）、校验失败/reload 失败自动还原、公钥校验、Mac 账号端口核验、sshd 核验失败恢复旧片段、root 生效设置前后对比、remove 先结束会话再删账号、总台发布与回滚（含远端登录 shell 不是 bash）。
+- `vps-scripts`：真脚本 + 真 `caddy validate` + 假系统命令，覆盖备份、只换一段、重复运行（含同一秒内连装连回滚：备份目录不复用、重复安装不产生托管段落的“备份”、默认回滚只选原始段落备份、遇到托管段落拒绝）、回滚（含期间别的站点被改）、校验失败/reload 失败自动还原、公钥校验、Mac 账号端口核验、create 中途失败（含 SIGTERM）撤回片段/authorized_keys/新建账号、`verify` 只读复核（Mac 账号被放宽或 Windows 片段没生效就失败）、root 生效设置前后对比、remove 先结束会话再删账号、总台发布与回滚（含远端登录 shell 不是 bash）。
 
 ## 上线步骤（块 E，需批准；在 VPS 上以 root 运行）
 
 前置：Windows 公钥 `tunnel_ed25519.pub` 由块 C 产生，**只传 `.pub`**（脚本会拒绝私钥）。`scp` 到 VPS 的临时位置，用后删除。
 
-0. **先核对 Mac 隧道账号的端口限制**（这个包不管理它，所以要先看实际生效的设置）
+0. **先核对 Mac 隧道账号的端口限制**（这个包不管理它，所以要先看实际生效的设置；只读，不改任何东西）
    ```bash
-   sshd -T -C user=agentdeck-tunnel,host=localhost,addr=127.0.0.1 | grep '^permitlisten '   # 必须正好是：permitlisten 127.0.0.1:43122
+   ./tunnel-account.sh verify
+   # 等价的手工检查：sshd -T -C user=agentdeck-tunnel,host=localhost,addr=127.0.0.1 | grep '^permitlisten '   # 必须正好是：permitlisten 127.0.0.1:43122
    ```
-   不是这一行（比如 `permitlisten any`）就**先不要上线**：被攻陷的 Mac 可以在 Windows 掉线时抢占 43123，冒充 Windows，收走 `__Secure-agentdeck_win` cookie。先给 Mac 账号补上 sshd 层的限制（`Match User agentdeck-tunnel` 下加 `PermitListen 127.0.0.1:43122`，按现役配置补全，改完 `sshd -t` 再 reload），再继续。下面的 `tunnel-account.sh create` 会自己再核一遍，不符就拒绝、什么都不建。
+   **以后每次改动 sshd 配置（包括 Mac 账号的片段、`Include`、系统或 OpenSSH 升级之后）都再跑一次 `verify`**：有人放宽 Mac 账号的限制不会自己报警，只有 `verify` 会发现。`verify` 在 Windows 片段装好后还会核对它实际生效（`PermitListen`、`PermitOpen none` 等），失败时退出码非 0。
+   `verify` 报错（比如 `permitlisten any`）就**先不要上线**：被攻陷的 Mac 可以在 Windows 掉线时抢占 43123，冒充 Windows，收走 `__Secure-agentdeck_win` cookie。先给 Mac 账号补上 sshd 层的限制（`Match User agentdeck-tunnel` 下加 `PermitListen 127.0.0.1:43122`，按现役配置补全，改完 `sshd -t` 再 reload），再继续。下面的 `tunnel-account.sh create` 会自己再核一遍，不符就拒绝、什么都不建。
 1. **Windows 隧道账号**（不影响现有 Mac 隧道）
    ```bash
    ./tunnel-account.sh create --pubkey /root/win_tunnel.pub --dry-run   # 先看计划
    ./tunnel-account.sh create --pubkey /root/win_tunnel.pub
    ```
-   脚本先核对 Mac 账号的端口限制（见第 0 步），再备份；装上片段后 `sshd -t` 通过、核对实际生效设置（`sshd -T -C user=agentdeck-tunnel-win`，含 `PermitOpen none`），并对比安装前后 `sshd -T -C user=root` 完全一致（片段的 `Match` 不能外溢到别的用户；VPS 的 OpenSSH 版本和开发机不同，所以要实测）后才 reload；任何一步不过都恢复旧片段、不 reload。reload 不会断开现有 SSH 会话。
+   脚本先核对 Mac 账号的端口限制（见第 0 步），再备份；装上片段后 `sshd -t` 通过、核对实际生效设置（`sshd -T -C user=agentdeck-tunnel-win`，含 `PermitOpen none`），并对比安装前后 `sshd -T -C user=root` 完全一致（片段的 `Match` 不能外溢到别的用户；VPS 的 OpenSSH 版本和开发机不同，所以要实测）后才 reload；任何一步不过都不 reload，并把这次运行改过的东西全部撤回：旧片段、`authorized_keys`（原来有就原样还原，没有就删掉）、以及这次新建的账号（原来就有的账号不会被删）。运行中途失败（命令出错、reload 失败、Ctrl-C/SIGTERM）同样撤回。reload 不会断开现有 SSH 会话。
 2. **总台静态文件先上**（Caddy 切换后 `/` 就不再指向 Mac，总台要先就位）
    ```bash
    # 在 Mac 上，用你自己的管理员 SSH；TARGET 的父目录必须已存在
@@ -89,7 +91,7 @@ CADDY_BIN=$PWD/caddy node --test --test-concurrency=1 tests/vps-caddy.test.js te
 - **为什么要拦 3xx**：不限状态码的话，`/win/` 返回 `302/307 Location: /mac/…` 会原样到浏览器；总台的 `fetch` 默认跟随同源跳转，会带着 Mac 的 cookie 去读 Mac，307/308 还会把 POST 连同 Mac 的 CSRF token 重发到 Mac 接口，等于绕过跨机隔离。现在 3xx 一律 403；同时从响应里删掉 `Location`、`Refresh`、`Clear-Site-Data`（能清空整个源的 cookie）、`Content-Disposition`、`Link`、`Access-Control-Allow-Origin`、`Access-Control-Allow-Credentials`、`Service-Worker-Allowed`。总台（块 B）的 `fetch` 另外用 `redirect: 'error'`，两层各自挡。
 - **304、101、SSE 会变成 403**：304 没有 Content-Type，101（WebSocket 升级）不是 JSON，`text/event-stream` 也不是；它们都不在放行范围里，一律 403。块 A/B 不要依赖条件请求（ETag/If-None-Match）、WebSocket 或 SSE，只用普通 JSON 的 GET/POST。
 - **Set-Cookie 只在登录/登出放行**：每个前缀有两个 `reverse_proxy`：`POST <前缀>/login`、`POST <前缀>/logout` 一个，允许 `Set-Cookie`，且必须以本机 cookie 名开头（`__Secure-agentdeck_mac` / `__Secure-agentdeck_win`）；其余路径一个，响应里只要有 `Set-Cookie` 就 403。这样后端不能在 `api/snapshot` 之类的路径上夹带 cookie（例如 `__Secure-agentdeck_mac=junk; Path=/mac/api/` 让另一台的用户重名 cookie 被踢下线，或 4KB 的 `Path=/` 炸弹 cookie 让后端因请求头过长返回 431）。
-- **Set-Cookie 匹配的限度**：Caddy 2.6 的响应头匹配是「这个头的任一值命中即可」，没法逐条核对。所以登录/登出那一个响应里如果既有本机 cookie、又夹带另一条 `Set-Cookie`，夹带的那条挡不住。块 A 对重名 cookie 的处理是“恰有一个合法就接受”，夹带的垃圾 cookie 不会把用户踢下线；服务端只认已登记的哈希，夹带的 cookie 登不上。
+- **Set-Cookie 匹配的限度（夹带仍可能发生，影响仅限可用性）**：Caddy 2.6 的响应头匹配是「这个头的任一值命中即可」，没法逐条核对。所以登录/登出那一个响应里如果既有本机 cookie、又夹带别的 `Set-Cookie`，夹带的那些挡不住。前提：某台机器已被攻陷，而且用户正在它上面登录或登出（其他路径带 `Set-Cookie` 一律 403）。能造成的后果只有可用性：同名同 Path 的 cookie（例如 `__Secure-agentdeck_mac=junk; Path=/mac/`）会直接覆盖真 cookie，用户被登出，要重新登录；多条 4KB 的 `Path=/` 炸弹 cookie 能让请求头超长，两台机器的前缀都返回 431，直到清掉该站点的 cookie。拿不到、也伪造不了另一台的有效 cookie：cookie 是 HttpOnly，服务端只认已登记的哈希，CSRF 绑定在凭据上。块 A 的「恰有一个合法就接受」只解决同名但 Path 不同、与真 cookie 并存的垃圾 cookie（不会因此被踢），解决不了覆盖和炸弹；那两种情形清除该站点的 cookie、重新登录即可恢复。
 - **Caddy 自己的错误页**：401（要求入口口令）、404、502 没有 sandbox CSP，但响应体固定为空或 `{"offline":true}`，没有可执行内容。
 - **含糊路径一律 404**：Caddy 按"清理后"的路径选后端，却把原始路径转给后端；`/mac/../win/…` 会因此被送到 Windows 那台。所以 Caddyfile 在 `route` 里先拦含 `./`、`../`、`//` 的路径（要用 `expression` 匹配原始路径，`path_regexp` 拦不住）。浏览器本来不会发这种路径。
 - **大小写与编码**：Caddy 的路径匹配不区分大小写，`/MAC/…`、`/%6dac/…` 会原样转给 Mac；由 AgentDeck 自己的前缀校验（区分大小写、校验原始路径）拒绝。块 A 的校验必须基于原始路径。
