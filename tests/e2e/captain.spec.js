@@ -127,6 +127,8 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await expect(card.locator('.att')).toHaveAttribute('title', demoFile);
   expect(await page.evaluate((i) => columns.find((c) => c.id === i).lastReceipt.files, child)).toEqual([demoFile]);
   await expect(head).toContainText('1 完成');
+  // The terminal is the default view; open chat explicitly to use its card.
+  await page.evaluate((id) => ChatUI.setMode(id, 'chat'), mainId);
   // clicking the card's title opens it right after the Captain
   await card.locator('.task-title').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(child);
