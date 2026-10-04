@@ -1,6 +1,6 @@
 # HANDOFF — 对话页重设计（feat/chat-redesign）
 
-基于 origin/main 76a20a5，worktree `~/agentdeck-chat-redesign`（node_modules 是指向 `~/agentdeck/node_modules` 的符号链接，不要提交）。
+已 rebase 到 origin/main `2d58205`（v1.1.3）。worktree `~/agentdeck-chat-redesign`（node_modules 是指向 `~/agentdeck/node_modules` 的符号链接，不要提交）。
 设计说明：`/Users/jinhao/reports/agentdeck-chat-redesign/DESIGN.md`。参考截图列表：同目录 `reference-screenshots.txt`。
 
 ## 做到哪
@@ -43,10 +43,10 @@ chmod +x /tmp/clean.sh
 AGENTDECK_CHAT_SHOTS=/Users/jinhao/reports/agentdeck-chat-redesign \
   /tmp/clean.sh npx playwright test tests/e2e/chat-redesign.spec.js --workers=1   # 结果：6/6 通过，并生成截图
 ```
-截图（深浅色各两张）：`/Users/jinhao/reports/agentdeck-chat-redesign/chat-redesign-{dark,light}.png` 和 `-expanded.png`。
+截图：改后 `/Users/jinhao/reports/agentdeck-chat-redesign/chat-redesign-{dark,light}.png` 和 `-expanded.png`；改前（origin/main 同一段对话）`chat-before-{dark,light}.png`。
 
-## 下一步 / 未完成
-1. **与 draft-sync 的合并验证还没收尾**：试合并（main 线 + origin/fix/draft-sync）后，单测 464 项全过。但先跑完 chat-redesign.spec 再跑 `draft-sync.spec.js`（同一个 worker）时，draft-sync 的 3 项失败了。draft-sync 在它自己的分支上单独跑是 3/3 通过。还没确认：在合并后的代码上**单独**跑 draft-sync.spec 会不会失败，也就是说，问题出在两个 spec 先后跑互相干扰，还是合并后真的出了问题。复现方法：`git worktree add --detach /tmp/mt feat/chat-redesign && cd /tmp/mt && git merge origin/fix/draft-sync`，然后单独跑 draft-sync.spec。
-2. 按队长要求，原有的 `tests/e2e/chat.spec.js`、`workspace.spec.js` 没有跑。原来的选择器都保留了（`.msg.user .bubble`、`.user-tools .msg-tool`×2、第一个 `.msg.assistant .msg-tool` 是复制、`.bubble-atts .att-thumb`），合并前建议跑一遍。
-3. 用户消息不再固定在顶部（原来是 sticky），这是照 ChatGPT 改的。AGENTS.md 里「Bubbles hold only the user prompt and the agent's final reply」这条不变量最好补一句：过程默认折叠，只露最终回复。
-4. 还没合并、没打包、没安装。
+## 收尾（2026-10-04）
+- rebase 到 origin/main `2d58205` 无冲突。`tests/chat-core.test.js` 34/34。`chat-redesign.spec.js` 6/6，`chat.spec.js` 15/15，`workspace.spec.js` 11/11，单 worker。
+- 对话页变重之后，`app.exit(0)` 在 `will-quit` 里会返回但进程不结束，Playwright 等不到退出。`main.js` 在它后面补了 `process.exit(0)`。
+- 与 `origin/fix/draft-sync` 的试合并能自动合上，没有改坏草稿同步。之前那 3 项失败不是两个 spec 互相污染：在合并后的代码上单独跑也是同样 2 项失败（第三项「发出去就清空」通过）。原因是 v1.1.3 每次启动都在终端，而 draft-sync 的 spec 仍假设一打开就是对话。在试合并目录里让 spec 先 `ChatUI.setMode(..., 'chat')` 之后，单独跑 3/3，接着跑 chat-redesign 再跑 draft-sync 也是 3/3。该 spec 属于 draft-sync，没有并进这个分支。试合并目录没有带上上面的 `process.exit`，所以那边 chat-redesign 的 afterAll 仍会卡在退出。
+- 还没合并进 main，没打包，没安装，没重启现役。

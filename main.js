@@ -1333,6 +1333,11 @@ app.on('before-quit', () => {
   ptys.clear();
 });
 // before-quit already removed credentials and closed PTY masters. Exit
-// immediately so inspector sockets cannot keep quit waiting.
-app.on('will-quit', () => { app.exit(0); });
+// immediately so inspector sockets cannot keep quit waiting. app.exit()
+// returns without ending the process once the chat page is still tearing
+// down, so follow it with process.exit.
+app.on('will-quit', () => {
+  app.exit(0);
+  process.exit(0);
+});
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });
