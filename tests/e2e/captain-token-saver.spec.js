@@ -39,6 +39,7 @@ async function launch(flags = '', settings) {
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await application.firstWindow();
+  await page.waitForFunction(() => typeof ChatUI !== 'undefined' && typeof terms !== 'undefined' && terms.get('saver-captain')?.wrap?.isConnected);
   await page.evaluate(() => ChatUI.setMode('saver-captain', 'chat'));
   await expect(page.locator('.column.is-main .tui-footer')).toContainText('23k/1000k', { timeout: 20000 });
   await expect.poll(() => page.evaluate(() => terms.get('saver-captain')?.state), { timeout: 20000 }).toBe('done');
