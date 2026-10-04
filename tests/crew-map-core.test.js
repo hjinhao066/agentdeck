@@ -222,6 +222,7 @@ test('saved positions win over the layout; saved state is checked on load', () =
   assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false });
 });
 
+const onSpine = (s) => (s.v ? Math.abs(s.c - s.r.hub[0]) < 0.5 && s.b <= s.r.hub[1] + 0.5 : Math.abs(s.c - s.r.hub[1]) < 0.5);
 // '' when no straight stretch of one line lies on a stretch of another line
 // (same direction, same coordinate within 2px, overlapping by more than 2px).
 function noSharedStretch(routes) {
@@ -234,6 +235,9 @@ function noSharedStretch(routes) {
   }));
   for (const s of segs) for (const t of segs) {
     if (s.i >= t.i || s.v !== t.v || Math.abs(s.c - t.c) > 2) continue;
+    // dispatch lines are one bundled tree: they share the trunk and main bus,
+    // and lines into one project share that project's bus; nothing else
+    if (s.r.type === 'dispatch' && t.r.type === 'dispatch' && (s.r.project === t.r.project || onSpine(s) || onSpine(t))) continue;
     // lines leaving the same port share their first few pixels by design
     if (Math.min(s.b, t.b) - Math.max(s.a, t.a) > 2) return `${s.r.type} ${s.r.from}>${s.r.to} overlaps ${t.r.type} ${t.r.from}>${t.r.to}`;
   }
@@ -328,4 +332,41 @@ test('project wrapping uses the tallest previous shelf and moves cards with thei
   assert.deepEqual(saved.projectPositions, { B: { x: 80, y: 30 } });
   const restored = C.applyPositions(C.layout(map, { maxWidth: 400 }), {}, 'cap', saved.projectPositions);
   assert.deepEqual(restored.nodes.get('b'), lay.nodes.get('b'));
+});
+
+test('dispatch is one bundled tree: one port, a bus per project, lower projects go round the ones above', () => {
+  const spec = { A: 4, B: 1, C: 1, D: 2 };
+  const columns = Object.entries(spec).flatMap(([p, n]) => Array.from({ length: n }, (_, i) => col(p + i, p + ' ' + i, { project: p, state: i ? 'done' : 'working' })));
+  const map = C.buildCrewMap({ captain, columns, tasks: [] });
+  // A and B on the first shelf, C and D wrapped below A
+  const lay = C.layout(map, { nodeW: 240, nodeH: 176, captainW: 340, captainH: 140, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, maxWidth: 1500, columnsPerProject: 4 });
+  const [a, , c, d] = lay.groups;
+  assert.ok(c.y > a.y + a.h && d.y > a.y + a.h, 'C and D sit on a lower shelf');
+  const routes = C.routes(map, lay, { clusterGap: 52 });
+  const dispatch = routes.filter((r) => r.type === 'dispatch');
+  assert.equal(new Set(dispatch.map((r) => r.points[0].join())).size, 1);
+  assert.deepEqual(dispatch[0].points[0], [lay.captain.x + lay.captain.w / 2, lay.captain.y + lay.captain.h]);
+  // one feeder per project
+  ['A', 'B', 'C', 'D'].forEach((p) => assert.equal(new Set(dispatch.filter((r) => r.project === p).map((r) => r.feederX)).size, 1));
+  // no dispatch line enters a project box other than its own
+  dispatch.forEach((r) => r.points.slice(1).forEach(([x2, y2], k) => {
+    const [x1, y1] = r.points[k];
+    lay.groups.filter((g) => g.key !== r.project).forEach((g) => assert.ok(
+      !(Math.max(x1, x2) > g.x + 1 && Math.min(x1, x2) < g.x + g.w - 1 && Math.max(y1, y2) > g.y + 1 && Math.min(y1, y2) < g.y + g.h - 1),
+      `${r.to} crosses ${g.key}`));
+  }));
+  assert.equal(noSharedStretch(routes), '');
+  // the branch drawn per line ends where the full line ends
+  dispatch.forEach((r) => assert.deepEqual(r.branch.at(-1), r.points.at(-1)));
+  const s = C.spine(routes);
+  assert.deepEqual(s.trunk, [dispatch[0].points[0], s.hub]);
+  assert.equal(s.active, true);
+  const xs = dispatch.map((r) => r.feederX);
+  if (Math.min(...xs) < s.hub[0]) assert.equal(s.left.points[1][0], Math.min(...xs));
+  if (Math.max(...xs) > s.hub[0]) assert.equal(s.right.points[1][0], Math.max(...xs));
+  assert.equal(C.spine([]), null);
+});
+
+test('tidy drops repeats and straight-run midpoints only', () => {
+  assert.deepEqual(C.tidy([[0, 0], [0, 0], [0, 5], [0, 10], [4, 10], [4, 10]]), [[0, 0], [0, 10], [4, 10]]);
 });

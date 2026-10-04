@@ -8,7 +8,7 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 240, nodeH: 176, captainW: 340, captainH: 140, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, pad: 40 };
+  const NODE = { nodeW: 240, nodeH: 176, captainW: 420, captainH: 104, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, pad: 40 };
   const DRAG_PX = 4;
   let host = null;
   let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn;
@@ -18,6 +18,7 @@
   let lastSig = '';
   let lastMap = null;
   let lay = null;
+  let dims = NODE;          // NODE with 队长's width for the current tally
   let view = null;          // { x, y, scale }
   let drag = null;          // a card or the canvas being dragged
 
@@ -88,7 +89,7 @@
     place(n, box);
     const top = el('div', 'cm-top');
     const st = el('span', 'cm-status');
-    st.append(el('i', 'cm-dot'), el('span', 'cm-status-text', node.statusLabel + (node.detail ? ' · ' + node.detail : '')));
+    st.append(icon(node.status, 'cm-dot'), el('span', 'cm-status-text', node.statusLabel + (node.detail ? ' · ' + node.detail : '')));
     top.append(st, badge(node));
     const title = el('div', 'cm-title', node.title);
     const line = el('div', 'cm-line', node.line || (node.kind === 'waiting' ? '同时干活的会话满了，有空位就自动开' : node.status === 'working' ? '干活中，还没有回执' : node.kind === 'captain' ? '' : '还没有回执'));
@@ -103,6 +104,13 @@
       foot.appendChild(returned);
     }
     n.append(top, title, line, liveLine, foot);
+    if (node.kind === 'captain') {
+      tally(line, node.line);
+      const crest = el('i', 'cm-crest');
+      crest.setAttribute('aria-hidden', 'true');
+      crest.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m3.5 8 4.2 3.6L12 5l4.3 6.6L20.5 8l-1.7 9.5H5.2z"/><path d="M6 20.5h12"/></svg>';
+      n.prepend(crest);
+    }
     n.title = node.kind === 'waiting' ? node.title
       : `${node.title}\n${node.line || ''}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`.trim();
     n.addEventListener('pointerdown', (e) => startCardDrag(e, n, node, box));
@@ -111,6 +119,45 @@
       if (node.kind !== 'waiting') host.open(node);
     });
     return n;
+  }
+  // One icon per status, used on cards, in 队长's tally, the project counts and the legend.
+  // 干活中 is a spinner: it turns for as long as the work runs.
+  const ICON = {
+    working: '<circle cx="8" cy="8" r="5.6" opacity=".25"/><path d="M8 2.4a5.6 5.6 0 0 1 5.6 5.6"/>',
+    input: '<path d="M8 2.2 14.2 13H1.8z"/><path d="M8 6.6v3M8 11.2v.1"/>',
+    queued: '<circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.2 1.4"/>',
+    done: '<circle cx="8" cy="8" r="5.6"/><path d="m5.4 8.2 1.8 1.8 3.4-3.6"/>',
+    failed: '<circle cx="8" cy="8" r="5.6"/><path d="m6 6 4 4m0-4-4 4"/>',
+    stopped: '<circle cx="8" cy="8" r="5.6"/><path d="M6.4 6v4M9.6 6v4"/>',
+    idle: '<circle cx="8" cy="8" r="5.6" opacity=".35"/><circle cx="8" cy="8" r="2.2" fill="currentColor" stroke="none"/>',
+  };
+  function icon(status, cls) {
+    const i = el('i', `cm-ico st-${status}${cls ? ' ' + cls : ''}`);
+    i.setAttribute('aria-hidden', 'true');
+    i.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICON[status] || ICON.idle}</svg>`;
+    return i;
+  }
+  // 「7 干活中 · 2 排队」 as icon + number + label chips. The text stays exactly C.summaryLine's.
+  const STATUS_OF = Object.fromEntries(Object.entries(C.STATUS_LABEL).map(([k, v]) => [v, k]));
+  const tallyParts = (text) => { const parts = String(text || '').split(' · ').map((p) => /^(\d+) (.+)$/.exec(p)); return parts.every((m) => m && STATUS_OF[m[2]]) ? parts : null; };
+  function tally(host, text) {
+    const parts = tallyParts(text);
+    if (!parts) return;
+    host.textContent = '';
+    host.classList.add('cm-tally');
+    parts.forEach((m, i) => {
+      if (i) host.append(el('span', 'cm-count-sep', ' · '));
+      const st = STATUS_OF[m[2]], item = el('span', 'cm-count st-' + st);
+      item.title = m[0];
+      item.append(icon(st), el('b', '', m[1]), el('span', 'cm-count-label', ' ' + m[2]));
+      host.append(item);
+    });
+  }
+  // 队长 grows with its tally, so every count keeps its label.
+  function captainWidth(map) {
+    const parts = map.captain && tallyParts(map.captain.line);
+    if (!parts) return NODE.captainW;
+    return Math.max(NODE.captainW, 104 + parts.reduce((w, m) => w + 62 + m[1].length * 13 + m[2].length * 13.5, 0) + (parts.length - 1) * 8);
   }
   function place(n, box) { Object.assign(n.style, { left: box.x + 'px', top: box.y + 'px', width: box.w + 'px', height: box.h + 'px' }); }
 
@@ -134,27 +181,58 @@
     return n;
   }
   // Direction marks along a long line: a small chevron mid-way on each long stretch.
-  function chevrons(points, cls) {
+  function chevrons(points, cls, parent) {
     for (let i = 1; i < points.length; i++) {
       const [x1, y1] = points[i - 1], [x2, y2] = points[i];
       if (Math.hypot(x2 - x1, y2 - y1) < 140) continue;
       const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
       const ang = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-      svg('path', { class: 'cm-chevron ' + cls, d: 'M -5 -5 L 2 0 L -5 5', transform: `translate(${mx} ${my}) rotate(${ang})` });
+      svg('path', { class: 'cm-chevron ' + cls, d: 'M -5 -5 L 2 0 L -5 5', transform: `translate(${mx} ${my}) rotate(${ang})` }, parent);
     }
   }
-  const MARK = { dispatch: 'cmArrowOut', review: 'cmArrowReview', ok: 'cmArrowBack', question: 'cmArrowBackBad', failed: 'cmArrowBackBad' };
+  const MARK = { review: 'cmArrowReview', ok: 'cmArrowBack', question: 'cmArrowBackBad', failed: 'cmArrowBackBad' };
+  // finished lines underneath, live ones on top: a shared bus shows its busiest state
+  const RANK = { done: 0, stopped: 0, failed: 0, idle: 0, queued: 1, input: 2, working: 3 };
+  const stOf = (r) => (/\bst-(\w+)/.exec(r.cls) || [])[1] || 'idle';
   function setShowReturn(v) { showReturn = !!v; saved().showReturn = showReturn; returnBtn.setAttribute('aria-pressed', String(showReturn)); returnBtn.classList.toggle('on', showReturn); host.save(); redrawEdges(); fit(); }
   function drawEdges() {
     edgesEl.innerHTML = '<defs>' + Object.values(MARK).filter((v, i, a) => a.indexOf(v) === i).map((id) =>
       `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>`).join('') + '</defs>';
-    const list = C.routes(lastMap, lay, NODE);
-    // returns underneath, then reviews, dispatch on top
-    ['return', 'review', 'dispatch'].forEach((type) => list.filter((r) => r.type === type).forEach((r) => {
-      const cl = 'cm-edge ' + r.cls + (type === 'return' && showReturn ? ' show' : '');
-      svg('path', { class: cl, d: rounded(r.points), 'marker-end': `url(#${MARK[type === 'return' ? r.kind : type]})`, 'data-from': r.from, 'data-to': r.to });
-      if (type === 'return' && showReturn) chevrons(r.points, r.cls);
-    }));
+    const list = C.routes(lastMap, lay, dims);
+    const layer = (cls) => svg('g', { class: cls });
+    const returns = layer('cm-returns'), reviews = layer('cm-reviews');
+    const halos = layer('cm-halos'), lines = layer('cm-lines'), pulses = layer('cm-pulses'), core = layer('cm-spine'), dots = layer('cm-dots');
+    list.filter((r) => r.type === 'return').forEach((r) => {
+      svg('path', { class: 'cm-edge ' + r.cls + (showReturn ? ' show' : ''), d: rounded(r.points), 'marker-end': `url(#${MARK[r.kind]})`, 'data-from': r.from, 'data-to': r.to }, returns);
+      if (showReturn) chevrons(r.points, r.cls, returns);
+    });
+    list.filter((r) => r.type === 'review').forEach((r) => {
+      svg('path', { class: 'cm-edge ' + r.cls, d: rounded(r.points), 'marker-end': `url(#${MARK.review})`, 'data-from': r.from, 'data-to': r.to }, reviews);
+    });
+    list.filter((r) => r.type === 'dispatch').sort((a, b) => RANK[stOf(a)] - RANK[stOf(b)]).forEach((r) => {
+      const d = rounded(r.branch), style = `--project-hue: ${C.projectHue(r.project)}`;
+      const live = stOf(r) === 'working' && !/\barchived\b/.test(r.cls);
+      if (live) svg('path', { class: 'cm-halo', d, style }, halos);
+      svg('path', { class: 'cm-edge ' + r.cls, d, style, 'data-from': r.from, 'data-to': r.to }, lines);
+      if (live) svg('path', { class: 'cm-pulse', d, style }, pulses);
+      const [x, y] = r.points[r.points.length - 1];
+      svg('circle', { class: 'cm-socket ' + r.cls, cx: x, cy: y, r: 3, style }, dots);
+    });
+    // trunk and main bus once, in the core colour, over the bundled lines
+    const sp = C.spine(list);
+    if (!sp) return;
+    const bus = (pts, cls, active) => {
+      const d = rounded(pts);
+      if (active) svg('path', { class: 'cm-halo core', d }, halos);
+      svg('path', { class: `cm-bus ${cls}${active ? ' active' : ''}`, d }, core);
+      if (active) svg('path', { class: 'cm-pulse core', d }, core);
+    };
+    bus(sp.trunk, 'trunk', sp.active);
+    if (sp.left) bus(sp.left.points, 'arm', sp.left.active);
+    if (sp.right) bus(sp.right.points, 'arm', sp.right.active);
+    sp.takeoffs.forEach(([x, y]) => svg('circle', { class: 'cm-joint', cx: x, cy: y, r: 2.6 }, dots));
+    svg('circle', { class: 'cm-hub-ring' + (sp.active ? ' active' : ''), cx: sp.hub[0], cy: sp.hub[1], r: 9 }, dots);
+    svg('circle', { class: 'cm-hub' + (sp.active ? ' active' : ''), cx: sp.hub[0], cy: sp.hub[1], r: 4.5 }, dots);
   }
   function redrawEdges() { if (lay) drawEdges(); }
   function drawGroups() {
@@ -178,7 +256,10 @@
         host.save();
         render();
       });
-      head.append(toggle, el('span', 'cm-project-name', g.name), el('span', 'cm-project-summary', C.summaryLine(g.counts)));
+      const summary = el('span', 'cm-project-summary', C.summaryLine(g.counts));
+      summary.title = summary.textContent;
+      tally(summary, summary.textContent);
+      head.append(toggle, el('span', 'cm-project-name', g.name), summary);
       head.title = '拖动：移动项目和其中的卡片';
       group.addEventListener('pointerdown', (e) => startProjectDrag(e, group, g));
       group.appendChild(head);
@@ -192,11 +273,11 @@
     zoomLabel.textContent = Math.round(view.scale * 100) + '%';
   }
   function saveView() { saved().view = { ...view }; host.save(); }
-  // Fit actual bounds, including manual moves and optional return cables.
+  // Fit actual bounds, including manual moves, gap-routed lines and optional return cables.
   function fit() {
     if (!lay) return;
     const boxes = [lay.captain, ...lay.groups, ...lay.nodes.values(), lay.fold].filter(Boolean);
-    const points = showReturn ? C.routes(lastMap, lay, NODE).flatMap((r) => r.points) : [];
+    const points = C.routes(lastMap, lay, dims).filter((r) => r.type !== 'return' || showReturn).flatMap((r) => r.points);
     const left = Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 24;
     const top = Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 24;
     const right = Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 24;
@@ -214,7 +295,7 @@
     let best, score = -1;
     const count = Math.max(1, ...map.projects.map((p) => p.nodes.length));
     for (let cols = 1; cols <= count; cols++) for (const targetScale of [1, 0.85, 0.7, 0.55]) {
-      const candidate = C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, columnsPerProject: cols, maxWidth: (vpEl.clientWidth - 48) / targetScale });
+      const candidate = C.layout(map, { ...dims, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, columnsPerProject: cols, maxWidth: (vpEl.clientWidth - 48) / targetScale });
       const scale = Math.min(1, vpEl.clientWidth / candidate.width, (vpEl.clientHeight - 60) / candidate.height);
       const quality = scale - candidate.width * candidate.height * 1e-10;
       if (quality > score) { score = quality; best = candidate; }
@@ -321,6 +402,7 @@
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; lay = null; return; }
+    dims = { ...NODE, captainW: Math.round(captainWidth(map)) };
     lay = C.applyPositions(autoLayout(map), saved().positions, map.captain.id, saved().projectPositions);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';
@@ -394,6 +476,7 @@
     on('relayout', relayout);
     on('return', () => setShowReturn(!showReturn));
     returnBtn.classList.toggle('on', showReturn);
+    rootEl.querySelectorAll('.cm-legend .cm-key').forEach((k) => k.replaceWith(icon((/st-(\w+)/.exec(k.className) || [])[1])));
     vpEl.addEventListener('pointerdown', (e) => { if (view) startPan(e); });
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
