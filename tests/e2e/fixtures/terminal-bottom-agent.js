@@ -2,15 +2,15 @@
 const fs = require('fs');
 const path = require('path');
 
-let previousSize;
+let previousSize, activeOutput;
 function size() {
   if (process.platform !== 'win32') return process.stdout;
-  // stdout can still reference the inactive console buffer after 1049h. A
-  // fresh CONOUT$ handle measures the active ConPTY buffer, including shrink.
-  const stream = new (require('tty').WriteStream)(fs.openSync('\\\\.\\CONOUT$', 'r+'));
-  const current = { rows: stream.rows, columns: stream.columns };
-  stream.destroy();
-  return current;
+  // Open the active buffer once after entering the alternate screen. Keep the
+  // handle alive; repeatedly closing tty streams can crash Windows conhost.
+  if (!previousSize) return process.stdout;
+  activeOutput ||= new (require('tty').WriteStream)(fs.openSync('\\\\.\\CONOUT$', 'r+'));
+  activeOutput._refreshSize();
+  return activeOutput;
 }
 function draw(current = size()) {
   const rows = current.rows, cols = current.columns;
