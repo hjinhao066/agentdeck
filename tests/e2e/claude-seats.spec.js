@@ -218,6 +218,7 @@ test('settings rename all placeholders in one config and survive renderer reload
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：甲席');
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toContainText('乙席');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
+  await page.evaluate((id) => ChatUI.setMode(id, 'chat'), cn);
   await page.locator(`.column[data-col-id="${cn}"] .composer textarea`).fill('keep draft');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
   await expect(page.locator('#toast')).toContainText('再交班');

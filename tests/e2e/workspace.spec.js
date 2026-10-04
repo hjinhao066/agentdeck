@@ -77,6 +77,7 @@ test('status lines under the composer, a clean reply, and an artifact from it', 
 });
 
 test('pasted images stay as attachments when the text is deleted, and go out as paths', async () => {
+  await page.evaluate((id) => { jumpToColumn(columns.find((c) => c.id === id)); ChatUI.setMode(id, 'chat'); }, 'ws-b');
   const col = page.locator('.column[data-col-id="ws-b"]');
   const shot = path.join(profile, 'shot.png');
   await page.evaluate((p) => ChatUI.attach('ws-b', p), shot);
@@ -204,6 +205,7 @@ test('dragging a session into a folder moves its column, and the order persists'
 });
 
 test('archive keeps the conversation; restore brings the session back with it', { tag: '@smoke' }, async () => {
+  await page.evaluate((id) => { jumpToColumn(columns.find((c) => c.id === id)); ChatUI.setMode(id, 'chat'); }, 'ws-a');
   const col = page.locator('.column[data-col-id="ws-a"]');
   await col.locator('.composer textarea').click();
   await col.locator('.composer textarea').fill('remember the archive drill');

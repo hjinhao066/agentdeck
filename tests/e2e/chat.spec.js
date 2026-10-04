@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -27,6 +28,9 @@ async function launch(columnCount) {
   await expect(page.locator('.column.chat-mode')).toHaveCount(columnCount);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(columnCount);
 }
+async function focusChat(id) {
+  await page.evaluate((id) => { jumpToColumn(columns.find((c) => c.id === id)); ChatUI.setMode(id, 'chat'); }, id);
+}
 const turns = (id) => page.evaluate((i) => ChatUI.turnsOf(i).map((t) => ({ id: t.id, user: t.user, reply: t.reply, done: t.done, interrupted: !!t.interrupted })), id);
 const savedChat = (id) => JSON.parse(fs.readFileSync(path.join(profile, 'chats', `${id}.json`), 'utf8'));
 
@@ -51,7 +55,7 @@ test.beforeAll(async () => {
   await launch(4);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -152,6 +156,7 @@ test('the header toggle flips a column back to the raw terminal', async () => {
 });
 
 test('your own message can be copied and put back into the composer to edit', async () => {
+  await focusChat('chat-0');
   const column = page.locator('.column').first();
   const mine = column.locator('.msg.user', { hasText: 'hello chat view' }).first();
   await mine.hover();
@@ -256,6 +261,7 @@ test('saved mouse-report fragments are absent from history bubbles and both copi
 });
 
 test('a long saved conversation keeps every turn; the view loads older ones on request', async () => {
+  await focusChat('chat-3');
   expect((await turns('chat-3')).length).toBe(OLD_TURNS);
   const column = page.locator('.column[data-col-id="chat-3"]');
   const step = await page.evaluate(() => ChatCore.RENDER_STEP);
@@ -272,12 +278,14 @@ test('a long saved conversation keeps every turn; the view loads older ones on r
 
 test('history survives quitting and relaunching: an unfinished turn, a raw terminal turn, all old turns, an archived chat', async () => {
   // a new turn on the long chat
+  await focusChat('chat-3');
   const long = page.locator('.column[data-col-id="chat-3"]');
   await long.locator('.composer textarea').click();
   await page.keyboard.type('one more after the old ones');
   await page.keyboard.press('Enter');
   await expect.poll(async () => (await turns('chat-3')).at(-1).done, { timeout: 20000 }).toBe(true);
   // a turn still open when the app closes (the stand-in stops at a y/n question)
+  await focusChat('chat-1');
   const open = page.locator('.column[data-col-id="chat-1"]');
   await open.locator('.composer textarea').click();
   await page.keyboard.type('ask me before quitting');
@@ -291,7 +299,7 @@ test('history survives quitting and relaunching: an unfinished turn, a raw termi
   await expect(page.locator('.column[data-col-id="chat-0"]')).toHaveCount(0);
   const before2 = await turns('chat-2');
 
-  await application.close();
+  await closeElectron(application);
   application = null;
   // on disk: whole, private, the open turn kept with what it had and marked
   const long3 = savedChat('chat-3');
