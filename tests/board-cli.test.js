@@ -32,6 +32,32 @@ test('manual terminal cannot access the control channel', async () => {
   assert.match(result.stderr, /Only conductor-managed terminals/);
 });
 
+test('quota uses one read-only Captain request and prints the four provider lines', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const lines = 'Claude：19%\nCodex：8%\nCursor：正常\nAntigravity：已用尽';
+  let requests = 0;
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file));
+      requests++;
+      assert.equal(request.action, 'main-quota');
+      assert.equal(request.message, undefined);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: lines }));
+    }
+  }, 20);
+  try {
+    const result = await runCli(['quota'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, lines + '\n');
+    assert.equal(requests, 1);
+    const denied = await runCli(['quota'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(denied.code, 1);
+    assert.match(denied.stderr, /Only conductor-managed terminals/);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('receipts --wait validates seconds and still requires the Captain capability', async () => {
   for (const value of ['no', '-1', 'Infinity', '']) {
     const result = await runCli(['receipts', '--wait', `--timeout=${value}`], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });

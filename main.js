@@ -9,6 +9,8 @@ const { createNotifications } = require('./notifications');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
+const { readLocal: readLocalQuota } = require('./quota-local');
+const { readCodex: readCodexQuota } = require('./quota-codex');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
@@ -328,7 +330,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status',
-        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -623,11 +625,13 @@ app.whenReady().then(() => {
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
   const configPath = path.join(app.getPath('userData'), 'config.json');
+  let quotaSeatConfig;
   onMain('load-config-sync', (e) => {
-    try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
+    try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
+    quotaSeatConfig = cfg?.claudeSeats;
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
@@ -639,6 +643,23 @@ app.whenReady().then(() => {
     platform: process.platform, home: HOME, legacyWatch: process.env.AGENTDECK_LEGACY_WATCH === '1',
   }; });
 
+  // Test profiles never read the user's quota caches or conversation logs.
+  let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
+  handleMain('quota:local', () => {
+    if (tudArg) return [];
+    const seatsKey = JSON.stringify(quotaSeatConfig || null);
+    if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
+      quotaSeatsKey = seatsKey;
+      quotaReadAt = Date.now();
+      if (!codexQuotaRead || Date.now() - codexQuotaAt >= 60000) {
+        codexQuotaAt = Date.now();
+        codexQuotaRead = readCodexQuota(ENV);
+      }
+      quotaRead = Promise.all([readLocalQuota(os.homedir(), process.env.CODEX_HOME, Date.now(), quotaSeatConfig), codexQuotaRead])
+        .then(([local, codex]) => codex ? [...local, codex] : local).catch(() => []);
+    }
+    return quotaRead;
+  });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed }) => spawnPty(id, cwd, cols, rows, !!managed));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
   onMain('pty:resize', (_e, { id, cols, rows }) => {

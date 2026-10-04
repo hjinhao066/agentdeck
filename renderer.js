@@ -103,6 +103,10 @@ let config = {
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
 };
 const saved = window.deck.loadConfig();
+// Persist only parsed observations, never terminal text or credentials.
+config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
+if (Array.isArray(saved?.claudeSeats)) config.claudeSeats = QuotaCore.claudeSeats(saved.claudeSeats);
+if (saved?.activeClaudeSeatId) config.activeClaudeSeatId = saved.activeClaudeSeatId;
 if (saved) {
   config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
   if (saved.theme) config.theme = saved.theme;
@@ -152,6 +156,8 @@ if (saved) {
       agentProvider: c.agentProvider,
       agentModel: c.agentModel,
       agentEffort: c.agentEffort,
+      claudeSeatId: c.claudeSeatId,
+      claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       // Relaunch follows the saved global choice; local overrides last this run.
@@ -2938,12 +2944,12 @@ window.deck.onBoardCommand((message) => {
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-peek') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;
@@ -3094,6 +3100,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
+  quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
@@ -3101,6 +3108,16 @@ MainSession.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
+renderQuotaBar();
+async function readQuotaCache() {
+  const samples = await window.deck.quotaLocal();
+  let changed = false;
+  for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
+  if (changed) saveConfig();
+  renderQuotaBar();
+}
+readQuotaCache().catch(() => {});
+setInterval(() => readQuotaCache().catch(() => {}), 30000);
 syncChromeState();
 window.addEventListener('resize', () => {
   if (activeView === 'board') renderBoardGraph();
@@ -3196,6 +3213,42 @@ function maybeNotifyState(id, entry, st) {
   }
 }
 let lastAttnCount = -1;
+function claudeCaptainSeatId() {
+  const captain = columns.find((c) => c.id === config.mainSession?.colId);
+  if (!captain || (captain.agentProvider !== 'Claude' && !/\bclaude\b/i.test(captain.cmd || ''))) return null;
+  return QuotaCore.seatForColumn(captain, QuotaCore.claudeSeats(config.claudeSeats))?.id || null;
+}
+function renderQuotaBar() {
+  const bar = document.getElementById('quotaBar');
+  const items = QuotaCore.items(config.claudeSeats);
+  for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
+  for (const [index, { provider, seat, key }] of items.entries()) {
+    let item = bar.querySelector(`[data-quota-key="${key}"]`);
+    if (!item) {
+      item = document.createElement('span');
+      item.className = 'quota-item'; item.dataset.provider = provider;
+      item.dataset.quotaKey = key;
+      if (seat) item.dataset.seatId = seat.id;
+      item.setAttribute('role', 'group');
+      item.tabIndex = 0; // keyboard users can inspect the same tooltip
+      const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider];
+      const label = document.createElement('span'); label.className = 'quota-label';
+      const name = document.createElement('span'); name.className = 'quota-name';
+      const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
+      item.setAttribute('aria-describedby', tip.id);
+      item.append(icon, name, label, tip); bar.append(item);
+    }
+    const q = QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId());
+    item.dataset.state = q.state;
+    item.setAttribute('aria-label', q.detail);
+    item.title = q.detail;
+    item.querySelector('.quota-label').textContent = q.displayLabel;
+    item.querySelector('.quota-name').textContent = q.name;
+    item.querySelector('.quota-tooltip').textContent = q.detail;
+    if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
+  }
+}
 setInterval(() => {
   let attn = 0;
   terms.forEach((entry, id) => {
@@ -3280,6 +3333,25 @@ setInterval(() => {
     // separator. It is excluded from status classification, but remains the
     // best source for recovering the last provider/model before a fresh shell.
     updateAgentIdentityBadge(id, entry, identityText);
+    if (entry.alive && entry.lastOutputAt && text !== entry.lastQuotaScreen) {
+      entry.lastQuotaScreen = text;
+      const col = columns.find((c) => c.id === id);
+      const provider = AgentInfo.inferProvider(col?.cmd, text) || entry.detectedProvider;
+      const footer = (entry.footerLines || []).map((line) => line.map((s) => s.text).join(''));
+      const model = AgentInfo.extractModel(MainCore.afterContract(text), '', footer) || col?.agentModel || AgentInfo.extractModel('', col?.cmd);
+      let sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt, model);
+      if (sample && provider === 'Claude') {
+        const seat = QuotaCore.seatForColumn(col, QuotaCore.claudeSeats(config.claudeSeats));
+        sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir } : null;
+      }
+      const signature = sample && JSON.stringify([provider, sample.seatId, sample.model, sample.windows.map((w) => [w.label, w.remaining, w.resetText]), sample.exhausted, sample.resumed, sample.resetText]);
+      // Redrawing unrelated text must not move a relative reset forward or
+      // make an unchanged percentage appear freshly sampled.
+      if (signature !== entry.lastQuotaObservation) {
+        entry.lastQuotaObservation = signature;
+        if (QuotaCore.observe(config.quotas, sample)) saveConfig();
+      }
+    }
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);
@@ -3289,6 +3361,7 @@ setInterval(() => {
     }
   });
   syncNav(); // mirror status dots + active highlight into the sidebar
+  renderQuotaBar();
   Sidebar.refreshTimes();
   syncBoardState();
   CrewMap.refresh();
