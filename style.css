@@ -1457,6 +1457,7 @@ body.linking-board .board-port.out::before {
   display: grid; grid-template-columns: 7px minmax(0, 1fr) auto;
   column-gap: 8px; row-gap: 4px; padding-top: 6px; padding-bottom: 6px;
 }
+.colnav-item.captain-item, .nav-crew { flex-shrink: 0; }
 .colnav-item.captain-item { grid-template-columns: 24px 14px 7px minmax(0, 1fr) auto; }
 .captain-item .cn-text, .nav-crew .colnav-item .cn-text { display: contents; }
 .captain-item .cn-crown { grid-column: 2; grid-row: 1; }
@@ -1467,6 +1468,11 @@ body.linking-board .board-port.out::before {
   overflow: visible; overflow-wrap: anywhere; line-height: 1.45;
 }
 .captain-item .cn-label { grid-column: 4 / -1; }
+.nav-crew .colnav-item .cn-label {
+  font-size: 12.5px; display: -webkit-box; -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2; overflow: hidden;
+}
+.nav-crew .cn-label[contenteditable="true"] { display: block; overflow: visible; }
 .captain-item .cn-badge, .nav-crew .cn-badge {
   grid-column: 2; grid-row: 2; justify-self: start; min-width: 0;
   max-width: 100%; margin-right: 0;

@@ -44,6 +44,7 @@ function box() {
   // Keep a recognizable provider footer after replies, like a real TUI. Narrow
   // ConPTY columns can wrap the longer permission line across several rows.
   process.stdout.write('Claude Code\n');
+  if (process.argv.includes('--sidebar-controls')) process.stdout.write('← for agents · ? for shortcuts ⚠…\nThinking: xhigh\n');
 }
 let lines = [];
 let timer = null;

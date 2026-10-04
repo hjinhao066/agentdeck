@@ -3195,15 +3195,8 @@ function fmtElapsed(ms) {
 }
 const DONE_TIMER_LINGER = 5 * 60_000; // keep "✓ 2m 14s" visible this long after finishing
 
-// A screen line that's just chrome (prompt, separators, spinner) isn't "activity".
-const SUB_NOISE_RE = /^[❯>\s│⎿─╌═\-—·.]*$|^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]\s*$/;
 function lastActivityLine(text) {
-  const lines = text.split('\n');
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const t = lines[i].trim();
-    if (t && !SUB_NOISE_RE.test(t)) return t.length > 60 ? t.slice(0, 59) + '…' : t;
-  }
-  return '';
+  return SidebarCore.activityLine(ChatCore.cutInputBox(text.split('\n')));
 }
 
 function updateAgentIdentityBadge(id, entry, screenText) {
