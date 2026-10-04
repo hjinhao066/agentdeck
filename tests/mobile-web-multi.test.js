@@ -541,7 +541,7 @@ test('backslashes and dot segments are normalized before the prefix check, so th
   }
 });
 
-test('a duplicated device cookie under a prefix is rejected, as is a duplicated bearer or an ambiguous pair', async (t) => {
+test('a duplicated device cookie under a prefix is rejected when it is ambiguous, but junk planted next to one valid cookie does not log the user out', async (t) => {
   const m = await start(t, '/win/', 'Windows');
   const { cookie } = await login(m);
   const second = await login(m);
@@ -550,8 +550,28 @@ test('a duplicated device cookie under a prefix is rejected, as is a duplicated 
   assert.equal(await status(`${cookie}; ${cookie}`), 401, 'the same cookie twice');
   assert.equal(await status(`${cookie}; ${second.cookie}`), 401, 'two valid cookies of the same name');
   assert.equal(await status(`${second.cookie};${cookie}`), 401);
-  assert.equal(await status(`${cookie}; __Secure-agentdeck_win=${'0'.repeat(64)}`), 401, 'a valid cookie plus an injected same-name one');
-  assert.equal(await status(`__Secure-agentdeck_win=${'0'.repeat(64)}; ${cookie}`), 401);
+  assert.equal(await status(`${cookie}; __Secure-agentdeck_win=${'0'.repeat(64)}`), 200, 'a valid cookie plus an injected same-name one that no device owns');
+  assert.equal(await status(`__Secure-agentdeck_win=${'0'.repeat(64)}; ${cookie}`), 200);
+  // Whatever is planted next to the one valid cookie (a Set-Cookie smuggled through the proxy), in either order and any number.
+  const junk = ['junk', '', 'x'.repeat(4000), 'A'.repeat(64), 'a'.repeat(63), 'a'.repeat(65), `${'a'.repeat(64)}x`, `"${'a'.repeat(64)}"`, '0'.repeat(64)];
+  for (const value of junk) {
+    const planted = `__Secure-agentdeck_win=${value}`;
+    assert.equal(await status(`${cookie}; ${planted}`), 200, `valid + ${value.slice(0, 12)}`);
+    assert.equal(await status(`${planted}; ${cookie}`), 200, `${value.slice(0, 12)} + valid`);
+    assert.equal(await status(`${planted}; ${cookie}; ${planted}; ${planted}`), 200, 'several junk copies around it');
+    assert.equal(await status(planted), 401, 'junk alone is still no credential');
+    assert.equal(await status(`${planted}; ${planted}`), 401, 'junk twice is still no credential');
+  }
+  // None of that relaxes the other checks: more than one valid cookie is ambiguous, a logged-out one is not valid
+  // (so it counts as junk beside a live one and as nothing on its own), and the junk never borrows another machine's,
+  // a legacy or a longer-named cookie.
+  const gone = await login(m);
+  assert.equal((await post(m, 'logout', {}, { Cookie: gone.cookie, 'X-CSRF-Token': gone.csrf })).status, 200);
+  assert.equal(await status(gone.cookie), 401);
+  assert.equal(await status(`${gone.cookie}; __Secure-agentdeck_win=junk`), 401, 'a revoked cookie plus junk is still nothing');
+  assert.equal(await status(`${gone.cookie}; ${cookie}`), 200, 'a revoked cookie beside one live cookie');
+  assert.equal(await status(`${cookie}; ${second.cookie}; __Secure-agentdeck_win=junk`), 401, 'two valid ones plus junk');
+  assert.equal(await status(`__Secure-agentdeck_win=junk; __Secure-agentdeck_win2=${cookie.split('=')[1]}`), 401);
   assert.equal(await status(`${cookie}; agentdeck_mobile=${'0'.repeat(64)}; __Host-agentdeck_mobile=${'0'.repeat(64)}`), 200, 'legacy cookie names are not this machine\'s cookie');
 });
 

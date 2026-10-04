@@ -201,12 +201,14 @@ class MobileWebServer {
       return match && matches(match[1], this.settings.token) ? { hash: hash(this.settings.token), bearer: true } : null;
     }
     const name = this.cookieName(prefixed);
-    const cookies = String(req.headers.cookie || '').split(';').map((s) => s.trim()).filter((s) => s.startsWith(name + '='));
-    if (cookies.length !== 1) return null;
-    const value = cookies[0].slice(name.length + 1);
-    if (!/^[a-f0-9]{64}$/.test(value)) return null;
-    const digest = hash(value);
-    return this.settings.devices.find((device) => device.expiresAt > this.now() && matches(digest, device.hash)) || null;
+    // Extra cookies of the same name can be planted next to the real one (for example through a Set-Cookie
+    // smuggled past the entry proxy), so a request is not refused just for carrying them. It is accepted only
+    // when exactly one of them is a registered, unexpired device cookie; none, or more than one, is no credential.
+    const registered = String(req.headers.cookie || '').split(';').map((s) => s.trim()).filter((s) => s.startsWith(name + '='))
+      .map((s) => s.slice(name.length + 1)).filter((value) => /^[a-f0-9]{64}$/.test(value))
+      .map((value) => { const digest = hash(value); return this.settings.devices.find((device) => device.expiresAt > this.now() && matches(digest, device.hash)); })
+      .filter(Boolean);
+    return registered.length === 1 ? registered[0] : null;
   }
   csrfToken(credential) {
     return crypto.createHmac('sha256', this.csrfSecret).update(`${credential.bearer ? 'bearer' : 'device'}:${credential.hash}`).digest('hex');

@@ -119,7 +119,8 @@ aria-label、键盘焦点、44px 点击面积；复制成功短暂变勾。深�
   单个 X-Forwarded-For 校验全部保留。
 - 公网设备 cookie 改为 `__Secure-agentdeck_<前缀名>`（如 `__Secure-agentdeck_win`，Path=`/win/`），HttpOnly、Secure、
   SameSite=Strict、无 Domain。用 `__Secure-` 而不是 `__Host-`，因为后者要求 Path=/，无法按机器隔离。
-  服务端只认已登记哈希，别的子域注入同名 cookie 只会让认证失败。本机直连仍用旧 cookie。
+  服务端只认已登记哈希，注入的同名 cookie 登不上。请求里带了多个同名 cookie 时，**恰有一个**是已登记且未过期的设备
+  cookie 才接受（夹带的垃圾 cookie 不会把用户踢下线）；一个都没有、或有多个合法的（有歧义）一律按未登录处理。本机直连仍用旧 cookie。
 - 未登录访问前缀下任何路径（包括 `/win/`）都返回 JSON 401，不返回内嵌登录页，也不提供旧的内置页面和静态资源
   （旧页面使用绝对路径，只适用于本机直连）。登录用 `POST /win/login`。
 - 吊销（设置页垃圾桶）和手机退出只影响这一台。
