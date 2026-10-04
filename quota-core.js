@@ -44,22 +44,30 @@
   }
   // Native resource errors of every CLI are recognized here and nowhere else.
   // A line counts only when it starts with the CLI's own phrase and the phrase
-  // ends there: end of line, a TUI separator (· ∙ •), or punctuation followed
-  // by the CLI's own reset/retry/login hint. A topic prefix such as "Rate limit
-  // handling test fails", code, or grep output in a worker reply stays ordinary.
-  const SEP = String.raw`\s*[·∙•]\s*[^\n]*`;
-  const tail = (hints) => String.raw`(?:[.!]?|${SEP}|\s*[.!,:;—–-]\s*['"\x60]?(?:${hints})(?!\w)[^\n]*)`;
-  const QUOTA_HINT = String.raw`resets?|limit resets?|your (?:limit|quota) (?:will )?resets?|try again|please|to continue|to get more|upgrade|visit|wait|purchase|switch to|contact|\/[a-z-]+`;
+  // ends there: end of line, a TUI separator (· ∙ •) followed by the CLI's own
+  // reset time / login / slash-command segment, or punctuation followed by the
+  // CLI's own reset/retry/login sentence. A topic prefix such as "Rate limit
+  // handling test fails", code, grep output, or a reply that quotes the full
+  // message and then keeps talking ("… · limit resets 3:10pm 的识别已补测试")
+  // stays ordinary.
+  const WHEN = String.raw`(?:at|in|on|after|about|tomorrow|today|later|(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|utc|gmt|[ecmp][sd]t|\d{1,4}(?:[:\/-]\d{1,2}){0,2}(?:st|nd|rd|th)?\s?(?:[ap]\.?m\.?)?|\d+(?:\.\d+)?\s?(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)|\([a-z_\/+:\d -]*\)?)`;
+  const RESET = String.raw`(?:limit |your (?:limit|quota) (?:will )?)?resets?(?:[\s,]+${WHEN})*(?:\s+[\x21-\x7e]+)?[.!]?`; // one unreadable trailing token is still the CLI's reset value
+  const LOGIN = String.raw`(?:please )?run ['"\x60]?(?:\/login|[\w-]+ login)['"\x60]?`;
+  const REST = String.raw`[\x20-\x7e’…]*`; // the CLI's own sentence is plain ASCII; narration in another script is not
+  const SEP = String.raw`(?:\s*[·∙•]\s*(?:${RESET}|${LOGIN}[.!]?|(?:please )?(?:log|sign) in(?: again)?[.!]?|(?:please )?try again(?:[\s,]+${WHEN})*[.!]?|\/[a-z-]+(?: to [a-z' \/-]+)?[.!]?))+`;
+  const tail = (hints) => String.raw`(?:[.!]?|${SEP}|\s*[.!,:;—–-]\s*['"\x60]?(?:${RESET}|(?:${hints})(?!\w)${REST}))`;
+  const QUOTA_HINT = String.raw`(?:please )?try again|(?:please )?wait|to continue|to get more|upgrade (?:to|your)|visit https?:\/\/\S+|purchase|switch to|contact|\/[a-z-]+`;
   const RATE_HINT = QUOTA_HINT + '|retry(?:ing)?';
-  const AUTH_HINT = String.raw`please|run [^\n]*log\s?in|(?:log|sign) in|to continue|visit|\/login`;
-  // Second-person messages are unambiguous, so any sentence ending or "for/on/to …" may follow.
-  const QUOTA_OWN = String.raw`(?:you['’]?(?:ve| have) (?:hit|reached|exceeded|exhausted|used up) your (?:[\w-]+ ){0,3}(?:limit|quota|capacity|usage)|you['’]?(?:re| are) out of (?:extra )?(?:usage|credits)|(?:your )?credit balance is too low)(?:[.!]?|\s*[.!,:;·∙•|—–-][^\n]*|\s+(?:for|on|to)\s[^\n]*)`;
+  const AUTH_HINT = String.raw`${LOGIN}(?=$|[.!,]| first| again| to )|please (?:log|sign) in|(?:log|sign) in (?:again|to|with)|to continue|visit https?:\/\/\S+|\/login`;
+  // Second-person messages are unambiguous; "for/on <model>" may sit before the ending.
+  const QUOTA_OWN = String.raw`(?:you['’]?(?:ve| have) (?:hit|reached|exceeded|exhausted|used up) your (?:[\w-]+ ){0,3}(?:limit|quota|capacity|usage)|you['’]?(?:re| are) out of (?:extra )?(?:usage|credits)|(?:your )?credit balance is too low)(?:\s+(?:for|on)\s[\w .()-]{1,40}?)?(?:${tail(QUOTA_HINT)}|\|\d{9,})`;
   const QUOTA_TOPIC = String.raw`(?:request failed[^\n]*?[:：]\s*)?(?:(?:claude (?:ai )?)?(?:usage|weekly|session|daily|monthly|5[- ]hour|opus|sonnet)(?: weekly)? limit (?:reached|exceeded)|usage limit exceeded|exceeded your usage limit|individual quota reached|quota (?:exhausted|exceeded))(?:${tail(QUOTA_HINT)}|\|\d{9,}|\s+for (?:quota )?(?:metric|model)\b[^\n]*)`;
   const EXHAUSTED = new RegExp(String.raw`^(?:${QUOTA_OWN}|${QUOTA_TOPIC}|RESOURCE_EXHAUSTED(?:\s*:\s*[^\n]+|[.!]?)|429\s+\{[^\n]*"status"\s*:\s*"RESOURCE_EXHAUSTED"[^\n]*\}|continuing (?:automatically at|at|shortly)[^\n]*esc to cancel|额度用尽|配额(?:用尽|耗尽))$`, 'i');
   const RATE_LIMITED = new RegExp(String.raw`^(?:(?:429\s+)?rate_limit_error(?:\s*:\s*[^\n]+|[.!]?)|429\s+\{[^\n]*"type"\s*:\s*"rate_limit_error"[^\n]*\}|(?:429\s+)?too many requests(?:\s*:\s*[^\n]+|${tail(RATE_HINT)})|rate[ -]limit(?: reached| exceeded|ed)${tail(RATE_HINT)}|(?:stream error:\s*)?exceeded retry limit, last status: 429[^\n]*|请求被限流|被限流)$`, 'i');
-  const AUTH = new RegExp(String.raw`^(?:401\s+Unauthorized(?:[.!]?|\s*:\s*[^\n]+)|401\s+\{[^\n]*"type"\s*:\s*"authentication_error"[^\n]*\}|authentication_error(?:\s*:\s*[^\n]+|[.!]?)|(?:(?:you['’]?(?:re| are) )?not (?:logged|signed) in|authentication required|login required)${tail(AUTH_HINT)}|authentication failed(?:\s*:\s*[^\n]+|${tail(AUTH_HINT)})|(?:invalid api key|oauth token (?:has )?(?:been )?(?:expired|revoked))(?:${SEP}|\s*[.!,:;—–-]\s*(?:${AUTH_HINT})(?!\w)[^\n]*)|please (?:(?:log|sign) in|login)(?:[.!]?|\s*[.!,:;·∙•—–-][^\n]*|\s+(?:to|again|with|using|first|by|via)\s[^\n]*)|please run [^\n]*log\s?in(?!\w)[^\n]*|未登录|尚未登录|请先登录)$`, 'i');
+  const AUTH = new RegExp(String.raw`^(?:401\s+Unauthorized(?:[.!]?|\s*:\s*[^\n]+)|401\s+\{[^\n]*"type"\s*:\s*"authentication_error"[^\n]*\}|authentication_error(?:\s*:\s*[^\n]+|[.!]?)|(?:(?:you['’]?(?:re| are) )?not (?:logged|signed) in|authentication required|login required)${tail(AUTH_HINT)}|authentication failed(?:\s*:\s*${REST}|${tail(AUTH_HINT)})|(?:invalid api key|oauth token (?:has )?(?:been )?(?:expired|revoked))(?:${SEP}|\s*[.!,:;—–-]\s*(?:${AUTH_HINT})(?!\w)${REST})|please (?:(?:log|sign) in|login)(?:[.!]?|${SEP}|\s*[.!,:;—–-]\s*(?:${AUTH_HINT})(?!\w)${REST}|\s+(?:to|again|with|using|first|by|via)\s${REST})|${LOGIN}(?=$|[.!,]| first| again| to )${REST}|未登录|尚未登录|请先登录)$`, 'i');
   function resourceError(raw) {
-    const line = String(raw || '').trim().replace(/^[│┃⏺⎿✻✽●■✗✖✕×▲!⚠>\s]+/, '').replace(/\s*[│┃]$/, '')
+    // Leading glyphs of each TUI: Claude ⏺ ⎿ ✻ ✽ ✳ ✶ ✢ ✺, Codex • ■ ⚠ ✗ ✘, Cursor ● ◦ ◆ ⬢, agy/Gemini ✦ ✕ ✖ ℹ.
+    const line = String(raw || '').trim().replace(/^[│┃⏺⎿✻✽✳✶✢✺●•◦◆▪⬢✦■✗✘✖✕×▲!⚠ℹ️>\s]+/, '').replace(/\s*[│┃]$/, '')
       .replace(/^\[?(?:API |request )?error:\s*/i, '').replace(/\]$/, '');
     if (EXHAUSTED.test(line)) return 'quota';
     if (RATE_LIMITED.test(line)) return 'rate_limit';
