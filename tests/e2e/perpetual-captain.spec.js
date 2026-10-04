@@ -99,12 +99,23 @@ test.beforeEach(async () => {
   await expect.poll(() => records('seat-env.jsonl').some((r) => r.colId === WORKER), { timeout: 20000 }).toBe(true);
 });
 test.afterEach(async () => {
-  if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
   if (application) {
-    const child = application.process(); let force;
-    try { await Promise.race([application.close(), new Promise((resolve) => {
-      force = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 10000);
-    })]); } finally { clearTimeout(force); }
+    const child = application.process(), force = setTimeout(() => {
+      // Playwright launches this Electron in its own process group. Close its
+      // helpers too, so inherited stdio cannot keep the test worker alive.
+      try {
+        if (process.platform === 'win32') {
+          if (child.exitCode === null && child.signalCode === null) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true });
+        } else process.kill(-child.pid, 'SIGKILL');
+      } catch (_) {}
+    }, 10000);
+    try {
+      if (page && !page.isClosed()) await page.evaluate(() => {
+        document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+        columns.forEach((c) => window.deck.ptyKill(c.id));
+      });
+      await application.close();
+    } finally { clearTimeout(force); }
   }
   application = null; page = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
