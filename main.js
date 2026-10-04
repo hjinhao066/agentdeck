@@ -18,12 +18,24 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const { MobileWebServer } = require('./mobile-web');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
 let sidePane = null;
 let claudeQuotaRefresh = null, claudeQuotaTimer = null;
 let pendingFocusColumn = null;
+let mobileWeb = null;
+const mobileRequests = new Map();
+function requestMobile(op, input) {
+  if (!mainWindow || mainWindow.isDestroyed() || !boardRendererReady) return Promise.reject(new Error('AgentDeck 尚未准备好，请稍后刷新。'));
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    const timer = setTimeout(() => { mobileRequests.delete(id); reject(new Error('AgentDeck 响应超时，请稍后重试。')); }, 5000);
+    mobileRequests.set(id, { resolve, reject, timer });
+    send('mobile-web:request', { id, op, input });
+  });
+}
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
 // its own userData (own config/sessions AND own single-instance lock), so an
@@ -672,7 +684,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (isWin) app.setAppUserModelId('com.jinhao.agentdeck');
   if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -701,6 +713,73 @@ app.whenReady().then(() => {
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
+  let mobileSettings = notificationConfig.mobileWeb || { enabled: false };
+  // The tunnel installer supplies only the public origin, never login secrets.
+  if (!tudArg && !mobileSettings.publicOrigin) {
+    try {
+      const endpoint = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json'), 'utf8'));
+      if (typeof endpoint.publicOrigin === 'string') mobileSettings.publicOrigin = endpoint.publicOrigin;
+    } catch (_) {}
+  }
+  let mobileInitializing = true;
+  let mobileStartupError = '';
+  mobileWeb = new MobileWebServer({
+    getSessions: () => requestMobile('sessions'),
+    getTasks: () => taskStore.list(),
+    getOutput: (id) => requestMobile('output', { id }),
+    getCaptain: () => requestMobile('captain-history'),
+    sendCaptain: (message) => requestMobile('captain', { message }),
+    saveSettings: (settings) => {
+      mobileSettings = settings;
+      if (mobileInitializing && !settings.enabled) return;
+      notificationConfig = { ...seatConfig(), mobileWeb: settings };
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(notificationConfig, null, 2), { mode: 0o600 });
+      fs.chmodSync(configPath + '.tmp', 0o600);
+      fs.renameSync(configPath + '.tmp', configPath);
+      // Restore the private web service after a Mac login. Isolated tests must
+      // never change the real app's login item.
+      if (!tudArg && app.isPackaged && process.platform === 'darwin' && settings.enabled && settings.publicOrigin) {
+        try { app.setLoginItemSettings({ openAtLogin: true }); mobileStartupError = ''; }
+        catch (_) { mobileStartupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+      }
+    },
+  });
+  await mobileWeb.configure(mobileSettings);
+  mobileInitializing = false;
+  // Only the trusted desktop settings page can enable the listener. The web
+  // page has fixed read/send operations and never sees an Electron IPC bridge.
+  handleMain('mobile-web:settings', async (_event, input) => {
+    if (input !== undefined) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid mobile web setting.');
+      if (typeof input.enabled === 'boolean') await mobileWeb.configure({ ...mobileSettings, enabled: input.enabled });
+      else if (typeof input.publicOrigin === 'string') await mobileWeb.configure({ ...mobileSettings, publicOrigin: input.publicOrigin });
+      else if (input.revoke === true) await mobileWeb.revokeDevices();
+      else throw new Error('Invalid mobile web setting.');
+    }
+    const status = mobileWeb.status();
+    status.startupError = mobileStartupError;
+    if (!tudArg && app.isPackaged && process.platform === 'darwin' && status.enabled && status.publicOrigin) {
+      try {
+        const login = app.getLoginItemSettings();
+        if (!login.openAtLogin || login.status === 'requires-approval') status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。';
+      } catch (_) { status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+    }
+    if (!tudArg && status.publicOrigin) {
+      try {
+        const access = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'vps-access.json'), 'utf8'));
+        status.gatewayUser = typeof access.username === 'string' ? access.username : '';
+        status.gatewayPassword = typeof access.password === 'string' ? access.password : '';
+      } catch (_) {}
+    }
+    return status;
+  });
+  onMain('mobile-web:response', (_event, payload) => {
+    const pending = mobileRequests.get(payload?.requestId);
+    if (!pending) return;
+    mobileRequests.delete(payload.requestId); clearTimeout(pending.timer);
+    if (typeof payload.error === 'string' && payload.error) pending.reject(new Error(payload.error));
+    else pending.resolve(payload.result);
+  });
   const quotaAlertPath = path.join(app.getPath('userData'), 'quota-bark-state.json');
   let quotaAlertState = {};
   try {
@@ -735,13 +814,15 @@ app.whenReady().then(() => {
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
+    cfg.mobileWeb = mobileSettings;
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
-      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), 'utf-8');
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      fs.chmodSync(configPath + '.tmp', 0o600);
       fs.renameSync(configPath + '.tmp', configPath);
     } catch (_) {}
     checkQuotaBark();
@@ -1134,6 +1215,9 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
+  if (mobileWeb) mobileWeb.close();
+  for (const pending of mobileRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error('AgentDeck 已关闭。')); }
+  mobileRequests.clear();
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it

@@ -563,8 +563,45 @@ function openNotificationSettings() {
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
   document.getElementById('barkKeyFile').value = config.barkKeyFile;
   MainSession.openSettings();
+  updateMobileWebSettings();
   dialog.showModal();
 }
+async function updateMobileWebSettings(input) {
+  const toggle = document.getElementById('mobileWebEnabled');
+  toggle.disabled = true;
+  try {
+    const status = await window.deck.mobileWebSettings(input);
+    toggle.checked = status.enabled;
+    document.querySelector('.mobile-web-access').hidden = !status.enabled;
+    document.getElementById('mobileWebUrl').value = status.url || '';
+    document.getElementById('mobileWebOrigin').value = status.publicOrigin || '';
+    document.getElementById('mobileWebPublicUrl').value = status.publicUrl || '';
+    document.getElementById('mobileWebGateway').hidden = !status.gatewayPassword;
+    document.getElementById('mobileWebGatewayUser').value = status.gatewayUser || '';
+    document.getElementById('mobileWebGatewayPassword').value = status.gatewayPassword || '';
+    document.getElementById('mobileWebDevices').textContent = `已记住 ${status.deviceCount || 0} 台设备；吊销后所有设备需重新登录。`;
+    document.getElementById('mobileWebToken').value = status.token || '';
+    document.getElementById('mobileWebStatus').textContent = status.error || status.startupError || (status.enabled ? '已开启，仅监听 127.0.0.1' : '未开启');
+  } catch (error) { document.getElementById('mobileWebStatus').textContent = error.message; }
+  finally { toggle.disabled = false; }
+}
+document.getElementById('mobileWebEnabled').addEventListener('change', (event) => updateMobileWebSettings({ enabled: event.target.checked }));
+document.getElementById('mobileWebSaveOrigin').addEventListener('click', () => updateMobileWebSettings({ publicOrigin: document.getElementById('mobileWebOrigin').value.trim() }));
+document.getElementById('mobileWebRevoke').addEventListener('click', () => {
+  if (confirm('吊销所有设备并更换登录 token？已登录的手机需要重新登录，旧 token 将立即失效。')) updateMobileWebSettings({ revoke: true });
+});
+document.getElementById('mobileWebCopyToken').addEventListener('click', (event) => {
+  window.deck.clipboardWrite(document.getElementById('mobileWebToken').value);
+  const button = event.currentTarget, original = button.innerHTML;
+  button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
+  setTimeout(() => { button.innerHTML = original; button.title = '复制登录 token'; button.setAttribute('aria-label', '复制登录 token'); }, 1400);
+});
+document.getElementById('mobileWebCopyGateway').addEventListener('click', (event) => {
+  window.deck.clipboardWrite(document.getElementById('mobileWebGatewayPassword').value);
+  const button = event.currentTarget, original = button.innerHTML;
+  button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
+  setTimeout(() => { button.innerHTML = original; button.title = '复制入口口令'; button.setAttribute('aria-label', '复制入口口令'); }, 1400);
+});
 function saveNotificationSettings() {
   config.captainNotifications = NotificationPolicy.normalizeSettings({
     enabled: document.getElementById('captainNotifyEnabled').checked,
@@ -3068,6 +3105,41 @@ function createManagedChild(message, caller) {
   }
   return child;
 }
+
+window.deck.onMobileRequest(async ({ id, op, input }) => {
+  try {
+    let result;
+    if (op === 'sessions') {
+      result = columns.map((col) => {
+        const entry = terms.get(col.id), info = AgentInfo.resolveAgentInfo(col, entry);
+        const task = [...(MainSession.state()?.tasks || [])].reverse().find((t) => t.colId === col.id);
+        const active = entry?.alive && (entry.state === 'working' || entry.sendingPrompt || task?.status === 'working');
+        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed || entry && !entry.alive);
+        const status = entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
+          : active ? 'working' : failed ? 'failed'
+          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : 'idle';
+        return { id: col.id, title: columnLabel(col), model: info.model || info.provider || '未知模型',
+          status, isMain: !!col.isMain,
+          receipt: String(col.lastReceipt?.summary || col.lastReceipt?.failed || '').slice(0, 1000) };
+      });
+    } else if (op === 'output') {
+      const col = columns.find((c) => c.id === input?.id && !c.isMain);
+      const entry = col && terms.get(col.id);
+      result = col ? { id: col.id, title: columnLabel(col), text: entry?.term ? dumpScreen(entry.term, 100).slice(-16000) : '' } : null;
+    } else if (op === 'captain-history') {
+      const col = columns.find((c) => c.isMain);
+      const entry = col && terms.get(col.id);
+      result = col ? { id: col.id, title: columnLabel(col), status: entry?.state || 'idle',
+        turns: ChatUI.turnsOf(col.id).slice(-20).map((turn) => ({ id: turn.id, ts: turn.ts,
+          user: String(turn.user || '').slice(-8000), reply: String(turn.reply || '').slice(-16000),
+          done: !!turn.done, interrupted: !!turn.interrupted })) } : { turns: [], status: 'unavailable' };
+    } else if (op === 'captain') {
+      MainSession.sendMessage(input?.message);
+      result = { queued: true };
+    } else throw new Error('未知网页操作。');
+    window.deck.mobileRespond({ requestId: id, result });
+  } catch (error) { window.deck.mobileRespond({ requestId: id, error: error.message }); }
+});
 
 window.deck.onBoardCommand(async (message) => {
   const cached = config.boardResponses[message.id];

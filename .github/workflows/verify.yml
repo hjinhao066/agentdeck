@@ -22,6 +22,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm audit --audit-level=high
+      - run: npx playwright install chromium
       - run: npm run test:e2e
       - name: Package Windows
         if: runner.os == 'Windows'

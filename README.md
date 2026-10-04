@@ -103,6 +103,11 @@ the middle:
 - **Skills** lists every `SKILL.md` the agent CLIs on this machine can see, so
   you can read one rendered or edit its full Markdown and save it (⌘S). See below.
 
+私人手机网页端：设置齿轮 →「手机网页端」开启，仅监听 `127.0.0.1`。
+可通过 VPS HTTPS + 自动恢复的 SSH 隧道在外访问，手机无需 VPN；入口口令、
+设备 token 登录及 CSRF 保护。查看队长对话、会话、只读看板与队员输出，并给队长派活。
+部署、首次登录、吊销和回滚见 [手机网页端说明](docs/mobile-web.md)。
+
 ## Skills
 
 The Skills page scans the shared originals in `~/.agents/skills` and each tool's

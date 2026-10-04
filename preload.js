@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
   saveConfig: (cfg) => ipcRenderer.send('save-config', cfg),
+  mobileWebSettings: (input) => ipcRenderer.invoke('mobile-web:settings', input),
+  onMobileRequest: (cb) => ipcRenderer.on('mobile-web:request', (_e, m) => cb(m)),
+  mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
   clipboardWrite: (t) => clipboard.writeText(t),
