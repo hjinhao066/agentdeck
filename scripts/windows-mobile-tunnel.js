@@ -418,7 +418,6 @@ function createWindowsPlan(input) {
     '-o', 'StrictHostKeyChecking=yes',
     '-o', 'UserKnownHostsFile=' + quoteOpenSshConfigPath(config.knownHostsFile),
     '-o', 'ExitOnForwardFailure=yes',
-    '-o', 'ClearAllForwardings=yes',
     '-o', 'ConnectTimeout=10',
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',

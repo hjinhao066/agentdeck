@@ -77,7 +77,8 @@ test('the Windows plan forwards only 43123 and pins the host key', () => {
   assert.ok(plan.sshArgs.includes('ExitOnForwardFailure=yes'));
   assert.ok(plan.sshArgs.includes('IdentitiesOnly=yes'));
   assert.ok(plan.sshArgs.includes('BatchMode=yes'));
-  assert.ok(plan.sshArgs.includes('ClearAllForwardings=yes'));
+  // ClearAllForwardings=yes also drops the -R given on the command line (OpenSSH clears every forward), so it must never come back.
+  assert.ok(!plan.sshArgs.some((arg) => /ClearAllForwardings/i.test(arg)));
   assert.ok(plan.sshArgs.includes('PreferredAuthentications=publickey'));
   const forward = plan.sshArgs[plan.sshArgs.indexOf('-R') + 1];
   assert.equal(forward, '127.0.0.1:43123:127.0.0.1:43121');
@@ -86,6 +87,17 @@ test('the Windows plan forwards only 43123 and pins the host key', () => {
   assert.equal(plan.argumentString.includes('43122'), false);
   assert.deepEqual(plan.endpoint, { publicOrigin: origin, basePath: '/win/', label: 'Windows' });
   assert.deepEqual(Object.keys(plan.endpoint), ['publicOrigin', 'basePath', 'label']);
+});
+
+test('a real OpenSSH client keeps the 43123 remote forward from the plan arguments', (t) => {
+  const sshBin = process.platform === 'win32' ? '' : '/usr/bin/ssh';
+  if (!sshBin || !fs.existsSync(sshBin)) return t.skip('no POSIX OpenSSH client here');
+  const plan = win.createWindowsPlan(config());
+  // -G only prints the resolved options; it never connects. -F none keeps the developer's own ssh config out of it.
+  const res = spawnSync(sshBin, ['-G', '-F', 'none', ...plan.sshArgs.filter((arg) => arg !== '-NT')], { encoding: 'utf8', input: '' });
+  assert.equal(res.status, 0, res.stderr);
+  assert.match(res.stdout, /^remoteforward \[?127\.0\.0\.1\]?:43123 \[?127\.0\.0\.1\]?:43121$/m);
+  assert.match(res.stdout, /^clearallforwardings no$/m);
 });
 
 test('omitted Windows fields default to the dedicated account, ports, and label', () => {

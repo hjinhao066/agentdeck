@@ -109,8 +109,10 @@ node .\scripts\install-mobile-tunnel.js
 `IgnoreNew`（不叠第二条隧道）、`WakeToRun` 为 false、`StartWhenAvailable` 为 false。
 不改电源计划，也不阻止睡眠。监督进程自己崩溃时，任务按 1 分钟间隔重试。
 
-另外加了 `ClearAllForwardings=yes` 和 `PreferredAuthentications=publickey`，避免
-用户的 ssh 配置再转发到 43122，或弹出密码框。
+另外加了 `PreferredAuthentications=publickey`，避免弹出密码框。不要加
+`ClearAllForwardings=yes`：OpenSSH 会连命令行上的 `-R` 一起清掉，ssh 照样连上 VPS，
+却不会监听 43123。用户 ssh 配置里如果多出转发到 43122，VPS 的 `PermitListen` 会拒绝，
+`ExitOnForwardFailure=yes` 让这次连接直接退出。
 
 ## 卸载
 
