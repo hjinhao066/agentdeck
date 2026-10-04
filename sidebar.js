@@ -1,5 +1,5 @@
-// Left sidebar, Cursor style: New chat / Search / Schedule / Artifacts on top,
-// then the pinned 队长 row (once it exists) with a folding arrow and counts for the
+// Left sidebar, Cursor style: New chat / 队长 / 任务看板 / Search / Schedule /
+// Artifacts on top, then the pinned 队长 row (once it exists) with a folding arrow and counts for the
 // sessions it runs in the background, folders, loose sessions and the archive. Every session is a live
 // terminal column; the deck shows them in exactly this order, so dragging a
 // session into a folder also moves its column. Plain script; everything it
@@ -62,9 +62,12 @@
     const dot = el('span', 'cn-dot');
     captain.insertBefore(dot, captain.querySelector('.nav-row-label').nextSibling);
     captainRow = { el: captain, dot };
+    const tasks = navRow('tasks', 'tasks', '任务看板', '', () => host.toggleTaskBoard());
+    tasks.title = '任务看板：全部任务，按项目和状态排开';
     topEl.append(
       navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
       captain,
+      tasks,
       slot,
       navRow('schedule', 'clock', 'Schedule', '', () => host.togglePage('schedule')),
       navRow('artifacts', 'artifacts', 'Artifacts', '', () => host.togglePage('artifacts')),

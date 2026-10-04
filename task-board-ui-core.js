@@ -1,7 +1,8 @@
-// Pure helpers behind the 任务看板 view: which column a card sits in, project
-// filter, the two sort orders, dependency/parallel marks and the archive call.
-// Cards come from TaskBoard.list (docs/task-board-api.md). No DOM: runs in the
-// page and in tests.
+// Pure helpers behind the 任务看板 view: project swimlanes (one per project,
+// case-insensitive) crossed with the five status columns, project filter, the
+// two sort orders, dependency/parallel marks and the archive call. Cards come
+// from TaskBoard.list (docs/task-board-api.md). No DOM: runs in the page and
+// in tests.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
@@ -9,39 +10,54 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  // The data layer's five statuses, plus 失败 for cards flagged failed (a failed
-  // card stays doing/review in the file; the board pulls it out so it is seen).
+  // The data layer's five statuses. A failed card stays in its own status
+  // column (the file keeps doing/review); the card itself is marked 失败.
   const COLUMNS = [
     { key: 'todo', label: '待办' },
     { key: 'doing', label: '进行中' },
     { key: 'review', label: '待验收' },
-    { key: 'needs_user', label: '等用户' },
-    { key: 'done', label: '已完成' },
-    { key: 'failed', label: '失败' },
+    { key: 'needs_user', label: '需要你' },
+    { key: 'done', label: '完成' },
   ];
   const SORTS = ['updated', 'order'];
   const ALL = '';
 
   const time = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? t : 0; };
 
+  // 「AgentDeck」和「agentdeck」是同一个项目: one lane, one colour.
+  function projectKey(name) {
+    return String(name == null ? '' : name).trim().toLowerCase();
+  }
+
   function columnOf(card) {
-    if (card.flag === 'failed') return 'failed';
     return COLUMNS.some((c) => c.key === card.status) ? card.status : 'todo';
   }
 
-  // Projects that have at least one visible card, in name order.
+  // Projects that have at least one visible card, in name order. The shown
+  // name is the spelling most cards use (ties: the first in name order).
   function projects(cards) {
-    return [...new Set(cards.filter((c) => !c.archived).map((c) => c.project))].sort((a, b) => a.localeCompare(b));
+    const seen = new Map();
+    cards.filter((c) => !c.archived).forEach((c) => {
+      const key = projectKey(c.project);
+      if (!seen.has(key)) seen.set(key, new Map());
+      const names = seen.get(key);
+      names.set(c.project, (names.get(c.project) || 0) + 1);
+    });
+    return [...seen].map(([key, names]) => {
+      const name = [...names].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0][0];
+      return { key, name: name || '其他' };
+    }).sort((a, b) => a.name.localeCompare(b.name));
   }
 
   function filterProject(cards, project) {
-    return project ? cards.filter((c) => c.project === project) : cards.slice();
+    const key = projectKey(project);
+    return key ? cards.filter((c) => projectKey(c.project) === key) : cards.slice();
   }
 
   // 'order' is the data layer's task order (project/order/id); 'updated' is
   // newest first, ties falling back to task order.
   function byOrder(a, b) {
-    return a.project.localeCompare(b.project) || (a.order || 0) - (b.order || 0) || String(a.id).localeCompare(String(b.id));
+    return projectKey(a.project).localeCompare(projectKey(b.project)) || (a.order || 0) - (b.order || 0) || String(a.id).localeCompare(String(b.id));
   }
   function sortCards(cards, sort) {
     const list = cards.slice();
@@ -72,25 +88,41 @@
   }
 
   // The whole board for one render: visible (non-archived) cards of the chosen
-  // project, split into the columns above, each sorted, each card decorated.
+  // project as one lane per project, each lane split into the five columns,
+  // each cell sorted, each card decorated. `columns` carries the totals.
   function buildBoard(allCards, opts = {}) {
     const sort = SORTS.includes(opts.sort) ? opts.sort : 'updated';
     const index = new Map(allCards.map((c) => [c.id, c]));
     const live = allCards.filter((c) => !c.archived);
     const shown = sortCards(filterProject(live, opts.project || ALL), sort);
-    const columns = COLUMNS.map((c) => ({ ...c, cards: [] }));
-    const byKey = new Map(columns.map((c) => [c.key, c]));
+    const all = projects(allCards);
+    const names = new Map(all.map((p) => [p.key, p.name]));
+    const lanes = new Map();
     shown.forEach((card) => {
+      const key = projectKey(card.project);
+      if (!lanes.has(key)) lanes.set(key, { key, name: names.get(key) || card.project || '其他', total: 0, columns: COLUMNS.map((c) => ({ ...c, cards: [] })) });
+      const lane = lanes.get(key);
       const waits = waitsOn(card, index);
-      byKey.get(columnOf(card)).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits) });
+      lane.columns.find((c) => c.key === columnOf(card)).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits) });
+      lane.total++;
     });
-    return { columns, projects: projects(allCards), total: shown.length };
+    const laneList = [...lanes.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const columns = COLUMNS.map((c) => ({ ...c, count: laneList.reduce((n, l) => n + l.columns.find((x) => x.key === c.key).cards.length, 0) }));
+    return { columns, lanes: laneList, projects: all, total: shown.length };
   }
 
-  // 「已完成」一键归档: the data layer's archiveDone, scoped to the filtered
-  // project (all projects when the filter is 全部). Never writes files itself.
-  function archiveDone(api, project) {
-    return project ? api.archiveDone(project) : api.archiveDone();
+  // 「完成」一键归档: the data layer's archiveDone for every spelling of the
+  // filtered project (all projects when the filter is 全部). Never writes files
+  // itself.
+  function archiveDone(api, project, cards = []) {
+    const key = projectKey(project);
+    if (!key) return api.archiveDone();
+    const spellings = [...new Set(cards.filter((c) => !c.archived && projectKey(c.project) === key).map((c) => c.project))];
+    if (!spellings.length) spellings.push(project);
+    return Promise.all(spellings.map((p) => api.archiveDone(p))).then((results) => ({
+      cards: results.flatMap((r) => (r && Array.isArray(r.cards) ? r.cards : [])),
+      notices: results.flatMap((r) => (r && Array.isArray(r.notices) ? r.notices : [])),
+    }));
   }
 
   function formatUpdated(iso, now = Date.now()) {
@@ -107,12 +139,18 @@
   }
 
   // Who works the card: the bound session's column label when the page still
-  // has it, else the assignee agent, else 未派活.
+  // has it, else the assignee agent, else 会话已关闭 / 未派活.
   function ownerLabel(card, sessionLabel) {
-    if (card.session_id) return (sessionLabel && sessionLabel(card.session_id)) || '会话 ' + card.session_id;
-    if (card.assignee && card.assignee.agent) return card.assignee.agent + (card.assignee.model && card.assignee.model !== 'default' ? ' · ' + card.assignee.model : '');
-    return '未派活';
+    const label = card.session_id && sessionLabel && sessionLabel(card.session_id);
+    if (label) return label;
+    if (card.assignee && card.assignee.agent) return card.assignee.agent;
+    return card.session_id ? '会话已关闭' : '未派活';
+  }
+  // The model the card records ('' when unknown or still 'default').
+  function modelLabel(card) {
+    const m = card.assignee && card.assignee.model;
+    return m && m !== 'default' ? String(m) : '';
   }
 
-  return { COLUMNS, SORTS, ALL, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, archiveDone, formatUpdated, ownerLabel };
+  return { COLUMNS, SORTS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, archiveDone, formatUpdated, ownerLabel, modelLabel };
 });

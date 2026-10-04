@@ -8,26 +8,47 @@ const CrewMapCore = require('../crew-map-core');
 const card = (id, extra) => ({ id, project: 'agentdeck', title: id, status: 'todo', flag: null, order: 0, depends_on: [],
   assignee: null, session_id: null, updated: '2026-10-01T00:00:00.000Z', archived: false, ...extra });
 const ids = (col) => col.cards.map((c) => c.card.id);
-const column = (board, key) => board.columns.find((c) => c.key === key);
+const lane = (board, key) => board.lanes.find((l) => l.key === key);
+// one column across every lane, for single-project checks
+const column = (board, key) => ({ cards: board.lanes.flatMap((l) => l.columns.find((c) => c.key === key).cards) });
 
-test('cards group by data-layer status, failed flag pulled into its own column', () => {
+test('cards sit in their data-layer status column; failed cards stay there marked, archived ones are hidden', () => {
   const board = U.buildBoard([
     card('a'), card('b', { status: 'doing' }), card('c', { status: 'review' }), card('d', { status: 'needs_user' }),
     card('e', { status: 'done' }), card('f', { status: 'doing', flag: 'failed' }), card('g', { status: 'done', archived: true }),
   ]);
-  assert.deepEqual(board.columns.map((c) => c.key), ['todo', 'doing', 'review', 'needs_user', 'done', 'failed']);
-  assert.deepEqual(board.columns.map((c) => c.label), ['待办', '进行中', '待验收', '等用户', '已完成', '失败']);
-  assert.deepEqual(board.columns.map(ids), [['a'], ['b'], ['c'], ['d'], ['e'], ['f']]);
+  assert.deepEqual(board.columns.map((c) => c.key), ['todo', 'doing', 'review', 'needs_user', 'done']);
+  assert.deepEqual(board.columns.map((c) => c.label), ['待办', '进行中', '待验收', '需要你', '完成']);
+  assert.deepEqual(board.columns.map((c) => c.count), [1, 2, 1, 1, 1]);
+  assert.deepEqual(board.lanes[0].columns.map(ids), [['a'], ['b', 'f'], ['c'], ['d'], ['e']]);
+  assert.equal(board.lanes[0].columns[1].cards[1].card.flag, 'failed');
   assert.equal(board.total, 6, 'archived cards are not shown');
 });
 
-test('project filter keeps one project; 全部 keeps all; project list is sorted and skips archived-only projects', () => {
+test('one lane per project, project names compared case-insensitively', () => {
+  const cards = [
+    card('a', { project: 'AgentDeck' }), card('b', { project: 'agentdeck', status: 'doing' }), card('c', { project: 'agentdeck ' }),
+    card('d', { project: 'zeta' }), card('e', { project: '阿尔法', status: 'done' }),
+  ];
+  const board = U.buildBoard(cards);
+  assert.deepEqual(board.lanes.map((l) => l.key), ['agentdeck', 'zeta', '阿尔法'].sort((x, y) => x.localeCompare(y)));
+  const deck = lane(board, 'agentdeck');
+  assert.equal(deck.name, 'agentdeck', 'the spelling most cards use is shown');
+  assert.equal(deck.total, 3);
+  assert.deepEqual(ids(deck.columns[0]).sort(), ['a', 'c']);
+  assert.deepEqual(ids(deck.columns[1]), ['b']);
+  assert.equal(U.projectKey(' AgentDeck '), 'agentdeck');
+  assert.equal(U.projects(cards).length, 3);
+});
+
+test('project filter keeps one project (any spelling); 全部 keeps all; archived-only projects are skipped', () => {
   const cards = [card('a', { project: 'zeta' }), card('b', { project: '阿尔法' }), card('c', { project: 'agentdeck' }),
-    card('d', { project: 'old', archived: true, status: 'done' })];
-  assert.deepEqual(U.buildBoard(cards, { project: 'zeta' }).columns[0].cards.map((c) => c.card.id), ['a']);
-  assert.equal(U.buildBoard(cards, { project: U.ALL }).total, 3);
-  assert.deepEqual(U.buildBoard(cards).projects, ['agentdeck', 'zeta', '阿尔法'].sort((a, b) => a.localeCompare(b)));
-  assert.ok(!U.projects(cards).includes('old'));
+    card('c2', { project: 'AgentDeck' }), card('d', { project: 'old', archived: true, status: 'done' })];
+  assert.deepEqual(U.buildBoard(cards, { project: 'zeta' }).lanes.map((l) => l.key), ['zeta']);
+  assert.deepEqual(ids(U.buildBoard(cards, { project: 'AGENTDECK' }).lanes[0].columns[0]).sort(), ['c', 'c2']);
+  assert.equal(U.buildBoard(cards, { project: U.ALL }).total, 4);
+  assert.deepEqual(U.buildBoard(cards).projects.map((p) => p.key), ['agentdeck', 'zeta', '阿尔法'].sort((a, b) => a.localeCompare(b)));
+  assert.ok(!U.projects(cards).some((p) => p.key === 'old'));
 });
 
 test('sort by updated is newest first; sort by order follows project/order/id', () => {
@@ -66,12 +87,15 @@ test('dependencies: unfinished prerequisites read 等 X 完成, met ones are par
   assert.equal(doing.parallel, false, 'only todo cards are marked parallel');
 });
 
-test('archive goes through the data layer archiveDone, scoped to the filtered project', async () => {
+test('archive goes through the data layer archiveDone, once per spelling of the filtered project', async () => {
   const calls = [];
-  const api = { archiveDone: (...args) => { calls.push(args); return Promise.resolve({ cards: [], notices: [] }); } };
-  await U.archiveDone(api, 'agentdeck');
-  await U.archiveDone(api, U.ALL);
-  assert.deepEqual(calls, [['agentdeck'], []]);
+  const api = { archiveDone: (...args) => { calls.push(args); return Promise.resolve({ cards: [{ id: String(calls.length) }], notices: [] }); } };
+  const cards = [card('a', { project: 'AgentDeck' }), card('b', { project: 'agentdeck' }), card('c', { project: 'zeta' })];
+  const res = await U.archiveDone(api, 'agentdeck', cards);
+  assert.equal(res.cards.length, 2);
+  await U.archiveDone(api, U.ALL, cards);
+  await U.archiveDone(api, 'gone', cards);
+  assert.deepEqual(calls, [['AgentDeck'], ['agentdeck'], [], ['gone']]);
 });
 
 test('owner and updated labels', () => {
@@ -84,10 +108,14 @@ test('owner and updated labels', () => {
   assert.equal(U.formatUpdated('', now), '');
   const label = (id) => (id === 'col-1' ? 'Codex 修复' : null);
   assert.equal(U.ownerLabel(card('a', { session_id: 'col-1' }), label), 'Codex 修复');
-  assert.equal(U.ownerLabel(card('a', { session_id: 'gone' }), label), '会话 gone');
+  assert.equal(U.ownerLabel(card('a', { session_id: 'gone' }), label), '会话已关闭');
+  assert.equal(U.ownerLabel(card('a', { session_id: 'gone', assignee: { agent: 'codex', model: 'default' } }), label), 'codex');
   assert.equal(U.ownerLabel(card('a', { assignee: { agent: 'codex', model: 'default' } }), label), 'codex');
-  assert.equal(U.ownerLabel(card('a', { assignee: { agent: 'claude', model: 'opus' } }), label), 'claude · opus');
+  assert.equal(U.ownerLabel(card('a', { assignee: { agent: 'claude', model: 'opus' } }), label), 'claude');
   assert.equal(U.ownerLabel(card('a'), label), '未派活');
+  assert.equal(U.modelLabel(card('a', { assignee: { agent: 'claude', model: 'opus' } })), 'opus');
+  assert.equal(U.modelLabel(card('a', { assignee: { agent: 'codex', model: 'default' } })), '');
+  assert.equal(U.modelLabel(card('a')), '');
 });
 
 test('project hue is keyed by name, so both views agree on a project colour', () => {
@@ -95,6 +123,7 @@ test('project hue is keyed by name, so both views agree on a project colour', ()
   assert.equal(CrewMapCore.projectHue('agentdeck'), CrewMapCore.projectHue('agentdeck'));
   assert.notEqual(CrewMapCore.projectHue('agentdeck'), CrewMapCore.projectHue('阿尔法'));
   assert.notEqual(CrewMapCore.projectHue('agentdeck'), CrewMapCore.projectHue('mobile'));
+  assert.equal(CrewMapCore.projectHue('AgentDeck '), CrewMapCore.projectHue('agentdeck'), 'case does not split a project colour');
   for (const p of ['a', 'agentdeck', '阿尔法', 'x'.repeat(200)]) {
     const h = CrewMapCore.projectHue(p);
     assert.ok(h >= 0 && h < 360, p);
