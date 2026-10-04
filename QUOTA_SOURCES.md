@@ -52,7 +52,7 @@ were left running. Quota probes made no inference requests.
   `oauthAccount.emailAddress`, except the default directory uses the CLI's
   existing `~/.claude.json`. Only a masked label and comparison hash leave
   the reader; no credential/keychain read is needed for this feature. An
-  absent quota is labelled with the combined “未登录/无数据” without guessing
+  absent quota is labelled “未知” without guessing
   whether the account is signed in.
 
 ## Research and integration decisions
