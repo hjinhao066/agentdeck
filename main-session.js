@@ -94,15 +94,17 @@
     const id = col.id;
     briefing = id;
     const done = () => { if (briefing === id) briefing = ''; };
+    const sent = () => {
+      done();
+      if (note) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
+    };
     host.sendWhenReady(col, M.instructions(host.platform, note, state()?.legacyReceiptInjection === true), {
-      silent: true, onSent: done, guardUserInput: true,
+      silent: true, onSent: sent, guardUserInput: true,
       onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
     });
   }
   function initDialog() {
-    const settings = $('captainSettings');
-    $('csClose').innerHTML = host.ICONS.close;
-    $('csClose').onclick = () => settings.close();
+    const settings = $('notificationSettings');
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
@@ -133,7 +135,6 @@
     $('csEnabled').checked = settings.enabled;
     $('csThreshold').value = settings.threshold / 1000;
     $('csThreshold').disabled = !settings.enabled;
-    $('captainSettings').showModal();
   }
 
   function saverBanner(text) {

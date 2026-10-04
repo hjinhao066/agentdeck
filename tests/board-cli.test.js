@@ -77,7 +77,7 @@ test('receipts --wait remains silent on empty reads, prints a later question onc
     fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
     let reads = 0;
     const server = setInterval(() => {
-      for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+      for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
         const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
         fs.unlinkSync(path.join(dir, 'requests', file));
         assert.equal(request.action, 'main-receipts');
@@ -178,7 +178,7 @@ test('peek sends the id and default or requested row count and prints only live 
       let request;
       const deadline = Date.now() + 3000;
       while (!request && Date.now() < deadline) {
-        const [file] = fs.readdirSync(path.join(dir, 'requests'));
+        const file = fs.readdirSync(path.join(dir, 'requests')).find((name) => name.endsWith('.json'));
         if (file) request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
         else await new Promise((resolve) => setTimeout(resolve, 25));
       }

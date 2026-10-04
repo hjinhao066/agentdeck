@@ -397,3 +397,16 @@ test('quota wait and Claude queued-message chrome are not completion', () => {
   assert.equal(M.activeCrew(tasks, new Set(['a'])).size, 1);
   assert.equal(M.archivable({ tasks }, 'a', 0, Date.now()), false);
 });
+
+
+test('Captain briefing stays static and includes explicit models, boards and two-round acceptance', () => {
+  assert.equal(M.instructions('darwin', 'time and board A'), M.instructions('darwin', 'time and board B'));
+  const text = M.instructions('darwin');
+  assert.match(text, /--model claude-opus-5-5 --effort high/);
+  assert.ok(!text.includes('默认模型是 Opus'));
+  assert.match(text, /开工后用 peek 看状态行确认模型/);
+  assert.match(text, /用户交代的任务默认先记进/);
+  assert.match(text, /鸡毛蒜皮/);
+  assert.match(text, /截图真的落盘/);
+  assert.match(text, /最多返工 2 轮/);
+});

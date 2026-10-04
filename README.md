@@ -204,8 +204,9 @@ again with the current provider, model and effort instructions.
   as submissions. A late command replaces the fallback notice. Prompt submission
   waits for the paste redraw
   to settle before pressing Enter once, including in background sessions.
-  Every receipt sent to the Captain (background channel, legacy injection and
-  ledger) has at most **300 characters of summary and 5 file paths**. Overflow
+  Legacy receipts and ledger summaries have at most **300 characters of summary
+  and 5 file paths**. Command-submitted receipts remain complete in the receipts
+  channel. Overflow
   says `其余见 read`; the worker's saved reply and local task card keep the source
   receipt. Questions and confirmation prompts keep their existing formats.
 - `peek --id <session-id> [--lines 40]` reads live terminal output, with ANSI
@@ -446,3 +447,5 @@ AI contributors must follow [AGENTS.md](AGENTS.md), including immediate commit
 and GitHub synchronization after every completed change.
 
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
+
+The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.

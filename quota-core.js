@@ -207,7 +207,7 @@
     if (!zeros.length && next.windows?.length && out.blocked?.numeric && next.at > out.blocked.at) delete out.blocked;
     const old = previous.sample;
     const hasNumbers = next.windows?.length > 0;
-    if (!old || (next.at >= old.at && (hasNumbers || !old.windows?.length)) ||
+    if (!old || (hasNumbers && !old.windows?.length) || (next.at >= old.at && (hasNumbers || !old.windows?.length)) ||
       (hasNumbers && next.source === '会话屏幕' && now - old.at < FRESH_MS && old.source !== '会话屏幕') || now - old.at > FRESH_MS) {
       // A fresh screen with numbers wins over a fallback cache until stale.
       if (!(old?.source === '会话屏幕' && old.windows?.length && now - old.at < FRESH_MS && next.source !== '会话屏幕')) out.sample = next;

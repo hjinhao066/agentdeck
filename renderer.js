@@ -508,6 +508,7 @@ function openNotificationSettings() {
   document.getElementById('captainSoundEnabled').checked = settings.sound;
   document.getElementById('captainSoundTone').value = settings.tone;
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
+  MainSession.openSettings();
   dialog.showModal();
 }
 function saveNotificationSettings() {

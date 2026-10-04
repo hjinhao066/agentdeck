@@ -147,3 +147,14 @@ test('Claude seats isolate percentages and exhaustion; missing/stale windows sta
   assert.equal(Q.seatForColumn({ cmd: 'CLAUDE_CONFIG_DIR="~/.claude-west" claude' }, seats).id, 'west');
   assert.equal(Q.seatForColumn({ claudeSeatId: 'unknown' }, seats), null);
 });
+
+
+test('a fresh numeric cache replaces a newer screen without quota numbers', () => {
+  const store = {};
+  Q.observe(store, Q.screen('Claude', 'Claude Code', [], now), now);
+  Q.observe(store, Q.cacheClaude({ sessionUsage: 46, weeklyUsage: 5 }, now - 60000), now);
+  assert.equal(Q.summary(store, 'Claude', now).displayLabel, '5h 54% · 7d 95%');
+  // A subsequent redraw without numbers must keep the known fresh windows.
+  Q.observe(store, Q.screen('Claude', 'Claude Code', [], now + 1000), now + 1000);
+  assert.equal(Q.summary(store, 'Claude', now + 1000).displayLabel, '5h 54% · 7d 95%');
+});

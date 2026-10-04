@@ -50,7 +50,7 @@ test('submission CLI uses its receipt token and transports exact text, files and
       const closed = new Promise((resolve) => child.on('close', resolve));
       let request;
       for (let tries = 0; !request && tries < 200; tries++) {
-        const file = fs.readdirSync(path.join(dir, 'requests'))[0];
+        const file = fs.readdirSync(path.join(dir, 'requests')).find((name) => name.endsWith('.json'));
         if (file) {
           request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
           fs.unlinkSync(path.join(dir, 'requests', file));

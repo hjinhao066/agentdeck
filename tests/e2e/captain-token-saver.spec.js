@@ -60,12 +60,13 @@ test('archives progress, waits for acknowledgement, sends /clear, rebriefs witho
   await page.evaluate(() => ChatUI.setMode('saver-captain', 'term')); // footer detection works in either view
   await expect.poll(() => prompts().includes('/clear'), { timeout: 25000 }).toBe(true);
   expect(fs.readFileSync(boardFile, 'utf8')).toContain('Progress archived');
-  await expect.poll(() => prompts().some((p) => p.includes('读看板继续')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => prompts().filter((p) => p.startsWith('你是 AgentDeck')).length, { timeout: 20000 }).toBe(2);
   const sent = prompts();
   const archive = sent.findIndex((p) => p.startsWith('把当前进度写进'));
   const clear = sent.indexOf('/clear');
-  const brief = sent.findIndex((p) => p.includes('读看板继续'));
+  const brief = sent.findIndex((p, i) => i > clear && p.startsWith('你是 AgentDeck'));
   expect(archive).toBeLessThan(clear); expect(clear).toBeLessThan(brief);
+  expect(sent[brief]).toBe(sent.find((p) => p.startsWith('你是 AgentDeck')));
   expect(sent[brief]).toContain('不读大文件正文，只看报告的结论段；查进度优先 peek');
   expect(archivePrompts()).toHaveLength(1);
   expect(await page.evaluate(() => columns.map((c) => c.id))).toEqual(before);
@@ -139,7 +140,7 @@ test('unchanged context after /clear does not rebrief and times out without cons
   await expect(banner()).toContainText('/clear');
   await expect.poll(() => page.evaluate(() => terms.get('saver-captain').state), { timeout: 15000 }).toBe('done');
   await tick();
-  expect(prompts().some((p) => p.includes('读看板继续'))).toBe(false);
+  expect(prompts().filter((p) => p.startsWith('你是 AgentDeck'))).toHaveLength(1);
   const pending = await page.evaluate(() => {
     MainSession.state().pending.push({ colId: 'saver-worker', title: '报告', summary: '未读回执', files: [] });
     const realNow = Date.now;
@@ -150,7 +151,7 @@ test('unchanged context after /clear does not rebrief and times out without cons
   });
   await expect(banner()).toHaveCount(0);
   expect(pending.at(-1).summary).toBe('未读回执');
-  expect(prompts().some((p) => p.includes('读看板继续'))).toBe(false);
+  expect(prompts().filter((p) => p.startsWith('你是 AgentDeck'))).toHaveLength(1);
 });
 
 test('a new user message cancels remaining steps; non-Claude captains never receive /clear', async () => {
