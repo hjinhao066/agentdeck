@@ -134,27 +134,57 @@
     return n;
   }
   // Direction marks along a long line: a small chevron mid-way on each long stretch.
-  function chevrons(points, cls) {
+  function chevrons(points, cls, parent) {
     for (let i = 1; i < points.length; i++) {
       const [x1, y1] = points[i - 1], [x2, y2] = points[i];
       if (Math.hypot(x2 - x1, y2 - y1) < 140) continue;
       const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
       const ang = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
-      svg('path', { class: 'cm-chevron ' + cls, d: 'M -5 -5 L 2 0 L -5 5', transform: `translate(${mx} ${my}) rotate(${ang})` });
+      svg('path', { class: 'cm-chevron ' + cls, d: 'M -5 -5 L 2 0 L -5 5', transform: `translate(${mx} ${my}) rotate(${ang})` }, parent);
     }
   }
-  const MARK = { dispatch: 'cmArrowOut', review: 'cmArrowReview', ok: 'cmArrowBack', question: 'cmArrowBackBad', failed: 'cmArrowBackBad' };
+  const MARK = { review: 'cmArrowReview', ok: 'cmArrowBack', question: 'cmArrowBackBad', failed: 'cmArrowBackBad' };
+  // finished lines underneath, live ones on top: a shared bus shows its busiest state
+  const RANK = { done: 0, stopped: 0, failed: 0, idle: 0, queued: 1, input: 2, working: 3 };
+  const stOf = (r) => (/\bst-(\w+)/.exec(r.cls) || [])[1] || 'idle';
   function setShowReturn(v) { showReturn = !!v; saved().showReturn = showReturn; returnBtn.setAttribute('aria-pressed', String(showReturn)); returnBtn.classList.toggle('on', showReturn); host.save(); redrawEdges(); fit(); }
   function drawEdges() {
     edgesEl.innerHTML = '<defs>' + Object.values(MARK).filter((v, i, a) => a.indexOf(v) === i).map((id) =>
       `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>`).join('') + '</defs>';
     const list = C.routes(lastMap, lay, NODE);
-    // returns underneath, then reviews, dispatch on top
-    ['return', 'review', 'dispatch'].forEach((type) => list.filter((r) => r.type === type).forEach((r) => {
-      const cl = 'cm-edge ' + r.cls + (type === 'return' && showReturn ? ' show' : '');
-      svg('path', { class: cl, d: rounded(r.points), 'marker-end': `url(#${MARK[type === 'return' ? r.kind : type]})`, 'data-from': r.from, 'data-to': r.to });
-      if (type === 'return' && showReturn) chevrons(r.points, r.cls);
-    }));
+    const layer = (cls) => svg('g', { class: cls });
+    const returns = layer('cm-returns'), reviews = layer('cm-reviews');
+    const halos = layer('cm-halos'), lines = layer('cm-lines'), pulses = layer('cm-pulses'), core = layer('cm-spine'), dots = layer('cm-dots');
+    list.filter((r) => r.type === 'return').forEach((r) => {
+      svg('path', { class: 'cm-edge ' + r.cls + (showReturn ? ' show' : ''), d: rounded(r.points), 'marker-end': `url(#${MARK[r.kind]})`, 'data-from': r.from, 'data-to': r.to }, returns);
+      if (showReturn) chevrons(r.points, r.cls, returns);
+    });
+    list.filter((r) => r.type === 'review').forEach((r) => {
+      svg('path', { class: 'cm-edge ' + r.cls, d: rounded(r.points), 'marker-end': `url(#${MARK.review})`, 'data-from': r.from, 'data-to': r.to }, reviews);
+    });
+    list.filter((r) => r.type === 'dispatch').sort((a, b) => RANK[stOf(a)] - RANK[stOf(b)]).forEach((r) => {
+      const d = rounded(r.branch), style = `--project-hue: ${C.projectHue(r.project)}`;
+      const live = stOf(r) === 'working' && !/\barchived\b/.test(r.cls);
+      if (live) svg('path', { class: 'cm-halo', d, style }, halos);
+      svg('path', { class: 'cm-edge ' + r.cls, d, style, 'data-from': r.from, 'data-to': r.to }, lines);
+      if (live) svg('path', { class: 'cm-pulse', d, style }, pulses);
+      const [x, y] = r.points[r.points.length - 1];
+      svg('circle', { class: 'cm-socket ' + r.cls, cx: x, cy: y, r: 2.6, style }, dots);
+    });
+    // trunk and main bus once, in the core colour, over the bundled lines
+    const sp = C.spine(list);
+    if (!sp) return;
+    const bus = (pts, cls, active) => {
+      const d = rounded(pts);
+      if (active) svg('path', { class: 'cm-halo core', d }, halos);
+      svg('path', { class: `cm-bus ${cls}${active ? ' active' : ''}`, d }, core);
+      if (active) svg('path', { class: 'cm-pulse core', d }, core);
+    };
+    bus(sp.trunk, 'trunk', sp.active);
+    if (sp.left) bus(sp.left.points, 'arm', sp.left.active);
+    if (sp.right) bus(sp.right.points, 'arm', sp.right.active);
+    sp.takeoffs.forEach(([x, y]) => svg('circle', { class: 'cm-joint', cx: x, cy: y, r: 2.6 }, dots));
+    svg('circle', { class: 'cm-hub' + (sp.active ? ' active' : ''), cx: sp.hub[0], cy: sp.hub[1], r: 4 }, dots);
   }
   function redrawEdges() { if (lay) drawEdges(); }
   function drawGroups() {
@@ -192,11 +222,11 @@
     zoomLabel.textContent = Math.round(view.scale * 100) + '%';
   }
   function saveView() { saved().view = { ...view }; host.save(); }
-  // Fit actual bounds, including manual moves and optional return cables.
+  // Fit actual bounds, including manual moves, gap-routed lines and optional return cables.
   function fit() {
     if (!lay) return;
     const boxes = [lay.captain, ...lay.groups, ...lay.nodes.values(), lay.fold].filter(Boolean);
-    const points = showReturn ? C.routes(lastMap, lay, NODE).flatMap((r) => r.points) : [];
+    const points = C.routes(lastMap, lay, NODE).filter((r) => r.type !== 'return' || showReturn).flatMap((r) => r.points);
     const left = Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 24;
     const top = Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 24;
     const right = Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 24;

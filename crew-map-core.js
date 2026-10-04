@@ -275,6 +275,38 @@
   }
   const spread = (center, n, k, width) => (n > 1 ? center + (k / (n - 1) - 0.5) * width : center);
 
+  // Drop repeated points and the middle of straight runs (rounded corners need real turns).
+  function tidy(points) {
+    const out = [];
+    points.forEach((p) => {
+      const a = out[out.length - 1];
+      if (a && Math.abs(a[0] - p[0]) < 0.5 && Math.abs(a[1] - p[1]) < 0.5) return;
+      const b = out[out.length - 2];
+      if (a && b && ((Math.abs(b[0] - a[0]) < 0.5 && Math.abs(a[0] - p[0]) < 0.5) || (Math.abs(b[1] - a[1]) < 0.5 && Math.abs(a[1] - p[1]) < 0.5))) out.pop();
+      out.push(p);
+    });
+    return out;
+  }
+
+  // The shared part of the dispatch tree, drawn once: the trunk out of 队长,
+  // and the main bus to each side of the hub up to where the outermost
+  // feeder turns down. takeoffs: feeders that branch off mid-bus.
+  function spine(list) {
+    const d = list.filter((r) => r.type === 'dispatch' && r.hub);
+    if (!d.length) return null;
+    const [cx, sy] = d[0].points[0], [, y] = d[0].hub;
+    const xs = [...new Set(d.map((r) => r.feederX))];
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const work = (pick) => d.some((r) => pick(r.feederX) && /\bst-working\b/.test(r.cls) && !/\barchived\b/.test(r.cls));
+    const arm = (x) => [[cx, y], [x, y], [x, y + Math.min(10, Math.abs(x - cx) / 2)]];
+    return {
+      hub: [cx, y], trunk: [[cx, sy], [cx, y]], active: work(() => true),
+      left: minX < cx - 0.5 ? { points: arm(minX), active: work((x) => x < cx - 0.5) } : null,
+      right: maxX > cx + 0.5 ? { points: arm(maxX), active: work((x) => x > cx + 0.5) } : null,
+      takeoffs: xs.filter((x) => x > minX + 0.5 && x < maxX - 0.5 && Math.abs(x - cx) > 0.5).map((x) => [x, y]),
+    };
+  }
+
   // Every line as orthogonal points. 派出 (dispatch) leaves the bottom of 队长
   // and enters a session's top (a review session's left side); 审查 runs from
   // the bottom of a reviewed session down into its review; 收回 (return)
@@ -294,39 +326,78 @@
     });
     const all = [...lay.nodes.values()];
     // ---- 派出 ----
-    const dispatch = map.edges.filter((e) => e.type === 'dispatch' && box(e.to)).map((e) => {
-      const b = box(e.to);
-      const side = status.get(e.to).review || b.row > 1;
-      // a review session is entered from the left, down the gap left of what it reviews
-      const targets = status.get(e.to).review ? (reviewOf.get(e.to) || []).map(box) : [];
-      const lx = side ? Math.min(b.x, ...targets.map((t) => t.x)) - (status.get(e.to).review ? o.clusterGap : o.gapX) / 2 : 0;
-      return { e, b, side, lx, hx: side ? lx : b.x + b.w / 2 };
-    }).sort((a, b) => a.hx - b.hx);
-    const fanW = Math.min(cap.w - 48, Math.max(0, dispatch.length - 1) * 18);
-    const sy = cap.y + cap.h;
-    dispatch.forEach((d, k) => { d.sx = spread(cap.x + cap.w / 2, dispatch.length, k, fanW); });
-    const top = Math.min(...dispatch.map((d) => (d.side ? Infinity : d.b.y)), ...all.map((b) => b.y));
-    const dn = nestRanks(dispatch);
-    const band = Math.max(16, top - sy);
-    const stepD = Math.min(o.lane + 3, (band - 24) / Math.max(1, dn.levels - 1));
-    // lanes down a gap: one per review session sharing it
+    // One tree, like a circuit board: a trunk from 队长's bottom centre to a
+    // hub on the main bus, one feeder per project dropping from the bus to
+    // that project's own bus just above its box (through a gap between other
+    // projects when one is in the way), and each card hanging off its
+    // project's bus. Lines of a tree share their trunk and buses on purpose.
     const laneUse = new Map();
-    dispatch.forEach((d, k) => {
-      const y = sy + 12 + dn.ranks[k] * stepD;
-      const n = status.get(d.e.to);
-      const cls = `dispatch st-${n.status}${n.archived ? ' archived' : ''}`;
-      if (!d.side) {
-        const tx = d.b.x + d.b.w / 2;
-        const pts = Math.abs(tx - d.sx) < 1 ? [[d.sx, sy], [tx, d.b.y - 2]] : [[d.sx, sy], [d.sx, y], [tx, y], [tx, d.b.y - 2]];
-        out.push({ type: 'dispatch', from: d.e.from, to: d.e.to, cls, points: pts });
-        return;
+    const items = map.edges.filter((e) => e.type === 'dispatch' && box(e.to)).map((e) => {
+      const b = box(e.to);
+      const n = status.get(e.to);
+      const side = n.review || b.row > 1;
+      // a review session is entered from the left, down the gap left of what it reviews
+      const targets = n.review ? (reviewOf.get(e.to) || []).map(box) : [];
+      let lx = side ? Math.min(b.x, ...targets.map((t) => t.x)) - (n.review ? o.clusterGap : o.gapX) / 2 : 0;
+      if (side) {
+        // lanes down a gap: one per session entered from it
+        const used = laneUse.get(Math.round(lx)) || 0;
+        laneUse.set(Math.round(lx), used + 1);
+        lx -= used * o.lane;
       }
-      const used = laneUse.get(Math.round(d.lx)) || 0;
-      laneUse.set(Math.round(d.lx), used + 1);
-      const lx = d.lx - used * o.lane;
-      const ry = d.b.y + d.b.h / 2 - 14;
-      out.push({ type: 'dispatch', from: d.e.from, to: d.e.to, cls, points: [[d.sx, sy], [d.sx, y], [lx, y], [lx, ry], [d.b.x - 2, ry]] });
+      return { e, b, n, side, lx, hx: side ? lx : b.x + b.w / 2 };
     });
+    const cx = cap.x + cap.w / 2, sy = cap.y + cap.h;
+    const projects = new Map();
+    items.forEach((d) => {
+      if (!projects.has(d.b.project)) projects.set(d.b.project, { key: d.b.project, g: lay.groups.find((g) => g.key === d.b.project), items: [] });
+      projects.get(d.b.project).items.push(d);
+    });
+    const tops = [...projects.values()].map((p) => (p.g ? p.g.y : Math.min(...p.items.map((d) => d.b.y))));
+    const yMain = Math.round(sy + Math.max(8, Math.min(22, (Math.min(...tops) - sy) / 3)));
+    const half = o.clusterGap / 2;
+    const blocked = (x, y1, y2, own) => lay.groups.some((g) => g !== own && x > g.x - 6 && x < g.x + g.w + 6 && y2 > g.y && y1 < g.y + g.h);
+    const gutters = new Map();
+    projects.forEach((p) => {
+      const xs = p.items.map((d) => d.hx);
+      p.yL = Math.max(yMain + 20, (p.g ? p.g.y : Math.min(...p.items.map((d) => d.b.y))) - 16);
+      p.ideal = Math.min(Math.max(...xs), Math.max(Math.min(...xs), cx));
+      p.fx = p.ideal;
+      if (!blocked(p.ideal, yMain, p.yL, p.g)) return;
+      // the nearest gap beside a project in the way
+      const between = lay.groups.filter((g) => g !== p.g && g.y < p.yL && g.y + g.h > yMain);
+      const gaps = between.flatMap((g) => [g.x - half, g.x + g.w + half]).filter((x) => x >= 0 && !blocked(x, yMain, p.yL, p.g));
+      if (!gaps.length) return;
+      const gx = gaps.reduce((a, b) => (Math.abs(b - p.ideal) < Math.abs(a - p.ideal) ? b : a));
+      const dir = p.ideal >= gx ? 1 : -1;
+      const key = Math.round(gx) + ':' + dir;
+      if (!gutters.has(key)) gutters.set(key, []);
+      gutters.get(key).push(p);
+      p.gx = gx; p.dir = dir;
+    });
+    // projects sharing a gap: the nearest takes the gap's middle, farther ones
+    // step inward and higher so no feeder crosses another
+    gutters.forEach((list) => list.sort((a, b) => Math.abs(a.ideal - a.gx) - Math.abs(b.ideal - b.gx)).forEach((p, k) => {
+      p.fx = p.gx + p.dir * k * o.lane;
+      p.yL -= k * o.lane;
+    }));
+    const feeders = [...projects.values()].map((p) => p.fx);
+    const minX = Math.min(cx, ...feeders), maxX = Math.max(cx, ...feeders);
+    const R = 10;
+    projects.forEach((p) => p.items.forEach((d) => {
+      const tail = d.side
+        ? [[d.lx, p.yL], [d.lx, d.b.y + d.b.h / 2 - 14], [d.b.x - 2, d.b.y + d.b.h / 2 - 14]]
+        : [[d.hx, p.yL], [d.hx, d.b.y - 2]];
+      // the outermost feeders turn off the end of the main bus; others branch off it
+      const end = Math.abs(p.fx - cx) > 0.5 && (Math.abs(p.fx - minX) < 0.5 || Math.abs(p.fx - maxX) < 0.5);
+      const cls = `dispatch st-${d.n.status}${d.n.archived ? ' archived' : ''}`;
+      out.push({
+        type: 'dispatch', from: d.e.from, to: d.e.to, cls, project: p.key,
+        hub: [cx, yMain], feederX: p.fx,
+        points: tidy([[cx, sy], [cx, yMain], [p.fx, yMain], [p.fx, p.yL], ...tail]),
+        branch: tidy([[p.fx, yMain + (end ? Math.min(R, Math.abs(p.fx - cx) / 2) : 0)], [p.fx, p.yL], ...tail]),
+      });
+    }));
     // ---- 审查 ----
     let ri = 0;
     reviewOf.forEach((targets, id) => {
@@ -406,5 +477,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });
