@@ -104,10 +104,10 @@
   // Only models each CLI listed on the owner's accounts; launch commands match
   // BoardCore's presets.
   const PROVIDERS = [
-    'Antigravity：agy --dangerously-skip-permissions --model gemini-3.8-flash-high　Antigravity 只用 Gemini 3.8 Flash，绝不用 Gemini 3.1 Pro，其他模型（包括 Claude）一律不用。档位写在模型名最后：gemini-3.8-flash-low、gemini-3.8-flash-medium、gemini-3.8-flash-high。绝对不要加 --effort：Antigravity 看到 --effort 会悄悄换成 Claude 模型！',
+    'Antigravity：agy --dangerously-skip-permissions --model gemini-3.8-flash-high。agy models 当前还列出并已实测可生成：claude-sonnet-4-6（Claude Sonnet 4.6 Thinking）、claude-opus-4-6-thinking（Claude Opus 4.6 Thinking）、gpt-oss-120b-medium（GPT-OSS 120B Medium）。Gemini 有额度时优先 Flash；Gemini 周额度用尽后，普通代码、批量实现和测试用 GPT-OSS，日常代码用 Sonnet 4.6，复杂推理、架构和审查用 Opus 4.6。只对 Gemini Flash 写档位后缀：gemini-3.8-flash-low、gemini-3.8-flash-medium、gemini-3.8-flash-high；其余模型必须使用上面列出的完整 ID。绝对不要给 agy 加 --effort：它会悄悄换成另一个模型。',
     'Cursor CLI：cursor-agent --force --model grok-4.7-high-fast　主要用 Grok 4.7 跑脏活和数据抓取。Cursor 会话刚开的头 1–2 分钟可能没有任何输出，属于正常初始化，别急着判定卡死。',
     'Claude Code：claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high　每次开 Claude 小弟必须显式写 --model claude-opus-5-5 或 --model claude-sonnet-5-5，并显式写 --effort；本机默认模型不是 Opus，不写可能跑成别的模型。开工后用 peek 看状态行确认模型，不符就修正命令重新派活。Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。',
-    '不要用 Claude 4.x 和 Haiku 这些旧模型（包括 Antigravity 里的 Claude Sonnet 4.6、Claude Opus 4.6）：用户不要，new 会直接拒绝。',
+    'Claude Code、Cursor、Codex 命令仍禁止 Claude 4.x 和 Haiku。只有 agy 可用上面列出的两个 Claude 4.6 模型；其他旧模型仍禁止。',
     'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数 AgentDeck 会自动补齐，不要手动拼接 --dangerously-bypass-approvals-and-sandbox，避免参数重复导致启动失败。',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
@@ -116,7 +116,7 @@
     'Sonnet 5.5：重要代码与核心改动（Claude Code 加 --model claude-sonnet-5-5，或 Cursor claude-sonnet-5-5-high）。',
     'Codex GPT-6.1 Sol：批量写代码、写测试、CI/CD 修复（直接用 --agent codex）。',
     'Codex GPT-6 Luna：简单的轻量代码与杂项活（--command "codex -m gpt-6-luna"）。',
-    'Gemini 3.8 Flash：检索、整理、中文写作、简单到中等代码（Antigravity，放开用，不消耗 Claude 额度；不用 Gemini 3.1 Pro）。',
+    'Gemini 3.8 Flash：检索、整理、中文写作、简单到中等代码（Antigravity，不消耗 Claude 额度；不用 Gemini 3.1 Pro）。Gemini 周额度用尽时，agy GPT-OSS 120B Medium 做批量代码与测试；Sonnet 4.6 做日常代码；Opus 4.6 Thinking 做架构、复杂推理与审查。agy 第三方模型的剩余额度目前无法读取，遇到限流就换另一个已实测模型。',
     'Cursor Grok 4.7：脏活、抓数据、外部信息采集（cursor-agent --force --model grok-4.7-high-fast）。',
     '数据抓取兜底：网上的数据抓不到时，不要盲目手写无头爬虫死磕，先找 GitHub 现成工具、OpenCLI、agent-reach 技能；若仍抓不到再考虑调度 Muse.ai 或 ChatGPT 浏览器（computer use）。',
     '额度轮换：quota 只读本机会话/缓存的被动观测，注意采样时间和可信度，未知不代表可用。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
@@ -202,7 +202,7 @@
       '用多大的档位（effort）：',
       ...EFFORT.map((e) => `   - ${e.when}：${e.tier}`),
       `   Cursor 把档位写在模型名最后，只用这些名字：${CURSOR_MODELS.join('、')}。`,
-      '   Claude Code 用 --effort 写档位。Antigravity 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max），不能加 --effort。',
+      '   Claude Code 用 --effort 写档位。Antigravity 的 Gemini Flash 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max）；Claude 4.6 与 GPT-OSS 使用完整模型 ID，不追加档位。agy 绝不能加 --effort。',
       '',
       '现在只回复一句「队长已就绪」，然后等用户的指令。',
     ].join('\n');
@@ -256,9 +256,10 @@
     return out.length === words.length ? source : out.join(' ');
   }
 
-  // Models the owner never wants work handed to, in any CLI: Claude 4.x and
-  // older, and Haiku (Antigravity lists claude-sonnet-4-6, claude-opus-4-6-thinking).
+  // Claude 4.x and older, and Haiku are rejected everywhere except the
+  // Antigravity models explicitly verified on this account.
   const OLD_MODEL = /^(?:claude-)?haiku|^(?:claude-)?(?:sonnet|opus)-[0-4](?!\d)|^claude-[0-4](?!\d)/i;
+  const AGY_LEGACY_MODELS = new Set(['claude-sonnet-4-6', 'claude-opus-4-6-thinking']);
   // Antigravity's effort is the model id's suffix; xhigh and max do not exist.
   const AGY_TIER = { low: 'low', medium: 'medium', high: 'high', xhigh: 'high', max: 'high' };
   const AGY_MODEL = 'gemini-3.8-flash-high';
@@ -272,10 +273,11 @@
     const source = String(cmd || '').trim();
     const words = source.match(WORDS) || [];
     if (!words.length) return { cmd: source };
+    const isAgy = programName(words[0]) === 'agy';
     for (let i = 1; i < words.length; i++) {
       const m = /^--model(=.*)?$/.exec(words[i]);
       const id = m ? unquote(m[1] ? m[1].slice(1) : words[i + 1] || '') : '';
-      if (OLD_MODEL.test(id)) {
+      if (OLD_MODEL.test(id) && !(isAgy && AGY_LEGACY_MODELS.has(id))) {
         return { error: `用户不用 ${id.slice(0, 60)}（Claude 4.x 和 Haiku 都不用）。量大的普通活用 Antigravity 的 gemini-3.8-flash-high（或 -medium、-low）；写代码和重要的活用 Cursor 的 claude-opus-5-5-high 或 claude-sonnet-5-5-high，或者 Claude Code（默认 Opus 5.5，要 Sonnet 加 --model claude-sonnet-5-5）。` };
       }
     }
@@ -285,7 +287,7 @@
       const bypass = words.some((w) => /^(?:--yolo|--dangerously-bypass-approvals-and-sandbox)$/.test(w));
       return { cmd: bypass ? source : [words[0], '--dangerously-bypass-approvals-and-sandbox', ...words.slice(1)].join(' ') };
     }
-    if (programName(words[0]) !== 'agy') return { cmd: source };
+    if (!isAgy) return { cmd: source };
     const out = [words[0]];
     let effort = '';
     let model = -1;
