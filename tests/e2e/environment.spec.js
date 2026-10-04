@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -24,7 +25,7 @@ test('independent PTYs keep CLI history and let statusline output reach the foot
     await expect.poll(() => fs.existsSync(flagsFile)).toBe(true);
     expect(JSON.parse(fs.readFileSync(flagsFile, 'utf8'))).toEqual({ child: false, skip: false, statusWidth: '4096' });
   } finally {
-    if (application) await application.close();
+    if (application) await closeElectron(application);
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -50,7 +51,7 @@ test('a test instance renders normally but stays invisible and click-through on 
     expect(await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => done(document.visibilityState))))).toBe('visible');
     expect(await page.evaluate(() => innerWidth)).toBeGreaterThan(600);
   } finally {
-    if (application) await application.close();
+    if (application) await closeElectron(application);
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });

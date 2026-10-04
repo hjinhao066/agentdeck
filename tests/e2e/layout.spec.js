@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -41,7 +42,7 @@ async function launchWithCols(colCount, fitCols = 3) {
 
 async function closeApp() {
   if (application) {
-    try { await application.close(); } catch (_) {}
+    try { await closeElectron(application); } catch (_) {}
     application = null;
   }
   if (profile) {
