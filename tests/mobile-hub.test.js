@@ -98,3 +98,16 @@ test('the hub has no inline script or style, so it runs under the strict static 
   const html = fs.readFileSync(path.join(__dirname, '..', 'mobile-web', 'hub', 'index.html'), 'utf8');
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>|<style|\sstyle=|\son[a-z]+=/i);
 });
+
+test('every fetch in the hub refuses redirects, so a machine cannot send the hub to the other computer', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'mobile-web', 'hub', 'app.js'), 'utf8');
+  const calls = [...source.matchAll(/\bfetch\(/g)];
+  assert.ok(calls.length >= 2, 'the hub fetches machines.json and every machine request');
+  for (const call of calls) {
+    // The options object of each call (up to the closing of the call on that statement) must carry redirect: 'error'.
+    const statement = source.slice(call.index, source.indexOf(';', call.index));
+    assert.match(statement, /redirect:\s*'error'/, `fetch without redirect: 'error': ${statement.slice(0, 80)}`);
+  }
+  // The machine request must not let a caller's options turn redirects back on.
+  assert.match(source, /\.\.\.options,\s*redirect: 'error'/);
+});

@@ -104,7 +104,8 @@
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), Core.TIMEOUT);
     try {
-      const response = await fetch(m.basePath + path, { credentials: 'same-origin', cache: 'no-store', ...options, signal: controller.signal });
+      // redirect 'error': a machine's answer must never send this request (and its cookie or POST body) anywhere else, e.g. to the other computer.
+      const response = await fetch(m.basePath + path, { credentials: 'same-origin', cache: 'no-store', ...options, redirect: 'error', signal: controller.signal });
       let body = null;
       try { body = await response.json(); } catch (_) { /* Non-JSON answers are classified by status. */ }
       return { status: response.status, body, retryAfter: Number(response.headers.get('Retry-After')) || 0 };
@@ -538,7 +539,7 @@
 
   async function start() {
     let list = [];
-    try { list = Core.machineList(await (await fetch('machines.json', { cache: 'no-store' })).json()); } catch (_) { /* Reported below. */ }
+    try { list = Core.machineList(await (await fetch('machines.json', { cache: 'no-store', redirect: 'error' })).json()); } catch (_) { /* Reported below. */ }
     if (!list.length) { notice('没有读到电脑列表（machines.json）。请刷新重试。', true); return; }
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }

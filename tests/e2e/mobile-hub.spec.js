@@ -248,6 +248,35 @@ test('work goes only to the chosen computer and never falls over to the other on
   expect(mac.messages).toEqual([]); expect(mac.posts('api/captain')).toHaveLength(0);
 });
 
+test('a computer that answers with a redirect toward the other one is never followed, for polls and for sends', async ({ browser }) => {
+  await open(browser);
+  const { mac, win } = hub.machines;
+  await expect(segment('全部')).toContainText('2/2 在线');
+  await nav('队长');
+  const box = page.getByLabel('给队长的消息'), send = page.locator('#send');
+  // Windows turns hostile: every answer is a 307 to a path on the Mac. Followed, the hub's request would carry the
+  // Mac cookie to the Mac, and a 307 would replay a POST (with the Mac CSRF token the hub holds) against it.
+  win.redirectTo = '/mac/api/canary';
+  win.setMode('redirect');
+  const canary = () => mac.requests.filter((request) => request.url.startsWith('/mac/api/canary'));
+  await box.fill('这条消息不能被 Windows 的跳转转到 Mac。');
+  await sendTo('Windows').click();
+  await expect(send).toBeEnabled();      // Windows still looks online until the next poll
+  await send.click();
+  await expect(page.locator('.bubble.failed')).toContainText('手机连不上入口，消息没有发出');
+  expect(win.posts('api/captain')).toHaveLength(1);
+  expect(mac.posts('api/captain')).toHaveLength(0);
+  expect(canary()).toEqual([]);
+  // The poll treats it as a broken connection, never as data, and still never reaches the Mac.
+  await refresh();
+  await nav('总览');
+  await expect(machineCard('Windows')).toContainText('连接异常');
+  await expect(machineCard('Windows')).not.toContainText('Windows 测试回执');
+  await expect(machineCard('Mac')).toContainText('在线');
+  expect(canary()).toEqual([]);
+  expect(mac.messages).toEqual([]);
+});
+
 test('a computer that is not logged in or has no captain cannot be sent to', async ({ browser }) => {
   await open(browser, { login: ['mac'] });
   hub.machines.mac.captain = null;

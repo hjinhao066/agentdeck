@@ -28,7 +28,8 @@ function readJson(req) {
 
 // mode: 'online' | 'down' (proxy answers 502 {"offline":true}) | 'hang' (never
 // answers, like a half-open tunnel) | 'legacy' (an old build: no api/info, and
-// every prefixed path answers 401 because it does not know the prefix).
+// every prefixed path answers 401 because it does not know the prefix) | 'redirect'
+// (a hostile machine: every answer is a 307 to machine.redirectTo, e.g. a path on the other machine).
 async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true }) {
   const base = `/${id}/`, cookieName = `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
@@ -48,6 +49,7 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
   const server = http.createServer(async (req, res) => {
     machine.requests.push({ method: req.method, url: req.url });
     if (machine.mode === 'hang') return;
+    if (machine.mode === 'redirect') { res.writeHead(307, { Location: machine.redirectTo }); return res.end(); }
     // A machine only answers under its own prefix, whatever the proxy sends it.
     if (!req.url.startsWith(base)) return json(res, 404, { error: 'Not found.' });
     const url = new URL(req.url.slice(base.length - 1), 'http://machine');
