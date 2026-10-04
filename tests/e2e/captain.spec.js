@@ -638,8 +638,7 @@ test('receipts ride along with the next message to the Captain, not in its bubbl
 
 test('only the Captain holds control: other columns get no token and are refused', async () => {
   await run('cap-y', 'ask nothing');   // wakes the stand-in; harmless
-  // Earlier screen probes reset xterm without resetting ConPTY. Let the real
-  // stand-in redraw before exiting, so its shell prompt uses the same cursor.
+  // Finish the stand-in's delayed reply before interrupting it.
   await expect.poll(() => screen('cap-y'), { timeout: 15000 }).toContain('GOT ask nothing');
   await page.evaluate(() => window.deck.ptyInput('cap-y', '\x03'));    // leave the stand-in
   await waitForShell('cap-y');
