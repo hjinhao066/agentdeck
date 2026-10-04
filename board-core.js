@@ -140,9 +140,16 @@
   // program running there: ^U on Unix shells; on Windows Ctrl+End then Ctrl+Home
   // (delete to end, delete to start) in both PSReadLine and the console's own
   // line editor, where ^U means nothing.
-  function launchInput(command, platform) {
+  function launchInput(command, platform, reportExit = false) {
     const clear = platform === 'win32' ? '\x1b[1;5F\x1b[1;5H' : '\x15';
-    return clear + shellLaunchCommand(cleanText(String(command == null ? '' : command).replace(/[\u0000-\u001f\u007f]+/g, ' '), 1000), platform) + '\r';
+    const launch = shellLaunchCommand(cleanText(String(command == null ? '' : command).replace(/[\u0000-\u001f\u007f]+/g, ' '), 1000), platform);
+    return clear + (reportExit ? reportAgentExit(launch, platform) : launch) + '\r';
+  }
+
+  function reportAgentExit(command, platform) {
+    return platform === 'win32'
+      ? `${command}; node "$env:AGENTDECK_BOARD_CLI" session-exit --code "$LASTEXITCODE"`
+      : `${command}; node "$AGENTDECK_BOARD_CLI" session-exit --code "$?"`;
   }
 
   // A user's codex() wrapper may already add --yolo (the bypass flag's alias).
@@ -420,6 +427,7 @@
     launchErrors,
     launchInput,
     shellLaunchCommand,
+    reportAgentExit,
     launchVerdict,
     stateLabel,
     LINK_TYPES,

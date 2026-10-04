@@ -400,10 +400,11 @@ window.deck.onPtyData((id, data) => {
   const t = terms.get(id);
   if (t) { t.lastOutputAt = Date.now(); t.term.write(data); }
 });
-window.deck.onPtyExit((id) => {
+window.deck.onPtyExit((id, reason) => {
   const t = terms.get(id);
   if (t) {
     t.alive = false; t.state = 'exited';
+    t.exitReason = reason || '终端进程已退出';
     // Finalize a running timer so the exited column shows "✓ total", not a
     // frozen mid-count.
     if (t.workStart) { t.workedMs = Date.now() - t.workStart; t.workStart = 0; t.doneAt = Date.now(); }
@@ -435,8 +436,8 @@ function classify(text, entry) {
   const activity = MainCore.terminalActivity(text);
   if (activity === 'quota') return activity;
   const lines = text.split('\n');
-  if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   if (activity === 'working') return activity;
+  if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   if (WORKING_RE.test(lines.slice(-15).join('\n'))) return 'working';
   if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
@@ -1784,7 +1785,7 @@ function buildColumn(col, isFresh) {
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
           const spawnId = col.id;
-          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.shellLaunchCommand(launch, env.platform) + '\r'); }, 700);
+          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(BoardCore.shellLaunchCommand(launch, env.platform), env.platform) + '\r'); }, 700);
         }
         if (!isFresh && col.role !== 'manual' && !col.taskCompleted) {
           // A cold restart killed the old CLI caller. Re-deliver managed
@@ -2818,12 +2819,12 @@ boardInspectorSendTaskEl.onclick = () => {
 const MAX_MANAGED_TASKS = 48;
 const MAX_TASK_DEPTH = 8;
 
-function respondBoard(requestId, payload) {
+function respondBoard(requestId, payload, verbatim = false) {
   const id = BoardCore.cleanText(requestId, 200);
   if (!id) return;
   const response = {
     done: !!payload.done,
-    result: BoardCore.cleanText(payload.result, 12000),
+    result: verbatim && typeof payload.result === 'string' ? payload.result : BoardCore.cleanText(payload.result, 12000),
     error: BoardCore.cleanText(payload.error, 2000),
     childId: BoardCore.cleanText(payload.childId, 160),
     snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : undefined,
@@ -2958,6 +2959,13 @@ window.deck.onBoardCommand((message) => {
     }
   }
   const caller = columns.find((col) => col.id === message.callerId);
+  if (['complete', 'ask', 'progress', 'session-exit'].includes(message.action) && caller) {
+    try {
+      const response = MainSession.submit(message, caller);
+      if (response) { respondBoard(message.id, response); return; }
+      if (message.action === 'session-exit') { respondBoard(message.id, { done: true }); return; }
+    } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
+  }
   // 队长's commands: only its own column may use them.
   if (String(message.action || '').startsWith('main-')) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
@@ -2965,7 +2973,7 @@ window.deck.onBoardCommand((message) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
         if (message.action === 'main-peek' || message.action === 'main-quota' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response);
+        else respondBoard(message.id, response, message.action === 'main-receipts');
       },
       (error) => {
         const response = { done: true, error: error.message };
@@ -2974,7 +2982,7 @@ window.deck.onBoardCommand((message) => {
       });
     return;
   }
-  if (!caller || caller.role === 'manual') {
+  if (!caller || caller.role === 'manual' || (message.submitOnly && !['complete', 'ask', 'progress'].includes(message.action))) {
     respondBoard(message.id, { done: true, error: 'Managed caller terminal no longer exists.' });
     return;
   }

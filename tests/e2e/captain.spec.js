@@ -5,7 +5,7 @@ const path = require('path');
 
 // 队长 (Captain, the main session). Its column runs a plain shell here, and the
 // test types the real control commands into it, the same ones the agent would
-// run. The columns it drives run a stand-in agent that writes receipts.
+// run. The columns it drives run a stand-in agent that submits command receipts.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const CLI = process.platform === 'win32' ? '$env:AGENTDECK_BOARD_CLI' : '$AGENTDECK_BOARD_CLI';
 let application, page, profile, demoFile, mainId;
@@ -360,25 +360,26 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
 });
 
-test('quota wait stays waiting, not working/completed; queued work waits and resumes after the wait clears', async () => {
+test('quota generates a failure receipt; queued work still waits for the quota screen to clear', async () => {
   await run(mainId, `clear; node "${CLI}" new --title "额度等待" --task "wait for quota probe" --command "${FAKE.replace(/"/g, '')} --interruptible"`);
   await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '额度等待')?.id)).toBeTruthy();
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '额度等待').id);
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('quota');
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '额度等待' }).last();
-  await expect(card.locator('.task-status')).toHaveText('额度用尽/等待');
+  await expect(card.locator('.task-status')).toHaveText('没做成');
+  await expect(card.locator('.task-failed')).toContainText("You've hit your limit");
   await expect(page.locator('.captain-item .crew-counts')).toContainText('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" ledger`);
   await expect.poll(() => screen(mainId)).toContain('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "after quota"`);
   await expect.poll(() => screen(mainId)).toContain('待补充');
   const status = await page.evaluate((i) => {
-    const entry = terms.get(i); const t = config.mainSession.tasks.find((t) => t.colId === i && t.status === 'quota');
+    const entry = terms.get(i); const t = config.mainSession.tasks.find((t) => t.colId === i && t.status === 'failed');
     t.idleSince = Date.now() - 600000;
     MainSession.onTick(i, { ...entry, lastOutputAt: Date.now() - 600000 });
     return t.status;
   }, child);
-  expect(status).toBe('quota');
+  expect(status).toBe('failed');
   expect(capturedPrompts().some((p) => p.startsWith('after quota'))).toBe(false);
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
   await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('after quota')).length).toBe(1);
@@ -550,7 +551,7 @@ test('keys typed while a receipt is being entered are held and follow it; the bo
   await page.evaluate(() => terms.get('cap-y').term.reset());
 });
 
-test('a pause or a silent start is not a stop: only a receipt, a question, a failure or a long quiet ends a task', async () => {
+test('screen receipts and questions never settle tasks; only ended turns get a three-minute fallback', async () => {
   const before = await page.evaluate(() => ({ pending: config.mainSession.pending.length, tasks: config.mainSession.tasks.length }));
   const probe = await page.evaluate(() => {
     const s = config.mainSession;
@@ -563,20 +564,20 @@ test('a pause or a silent start is not a stop: only a receipt, a question, a fai
     out.afterEarlyTurnEnd = a.status;
     MainSession.onTick('probe-col', quiet({}));
     out.afterShortQuiet = a.status;
-    // the receipt comes later, on the screen only (the column has been quiet for 10s)
+    // A later screen-only receipt is still ignored, even after 10 seconds quiet.
     a.idleSince = Date.now() - 10_000;
     MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 10_000, lastScreen: `${'─'.repeat(20)}\n  【回执】\n  摘要：后来才做完\n  文件：无\n` }));
     out.screenReceipt = [a.status, a.receipt && a.receipt.summary, a.receipt && a.receipt.explicit];
-    // a question and a failure still end it at once
+    // Screen-only questions and failures cannot end it either.
     const b = mk('probe-b', 'tb');
     MainSession.onTurnDone('probe-col', { id: 'tb', reply: '【提问】\n问题：用哪个库？' });
     out.question = b.status;
     const c = mk('probe-c', 'tc');
     MainSession.onTurnDone('probe-col', { id: 'tc', reply: '【回执】\n摘要：没成\n文件：无\n失败：没有权限' });
     out.failure = c.status;
-    // a screen quiet for minutes with nothing written is a real stop
+    // An ended turn with no command receipt gets only the no-receipt notice.
     const d = mk('probe-d', 'td');
-    d.idleSince = Date.now() - 10 * 60_000;
+    d.endedAt = Date.now() - 10 * 60_000;
     MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 10 * 60_000 }));
     out.longQuiet = [d.status, d.receipt && d.receipt.explicit];
     // still printing: never
@@ -595,9 +596,9 @@ test('a pause or a silent start is not a stop: only a receipt, a question, a fai
   });
   expect(probe.afterEarlyTurnEnd).toBe('working');
   expect(probe.afterShortQuiet).toBe('working');
-  expect(probe.screenReceipt).toEqual(['done', '后来才做完', true]);
-  expect(probe.question).toBe('asking');
-  expect(probe.failure).toBe('failed');
+  expect(probe.screenReceipt).toEqual(['working', null, null]);
+  expect(probe.question).toBe('working');
+  expect(probe.failure).toBe('working');
   expect(probe.longQuiet).toEqual(['stopped', false]);
   expect(probe.stillPrinting).toBe('working');
   expect(probe.stillDoing).toBe('working');

@@ -106,7 +106,9 @@ again with the current provider, model and effort instructions.
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
   receipts | answer | peek | quota | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
-  capability token those commands need; the columns it drives get none.
+  control capability token those commands need. Every column has a separate
+  submission-only token, so a worker can report its own task without controlling
+  any session.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
   permissions) unless it picks another with `--agent claude|agy|cursor|grok|codex` or a full
   `--command`. Its instructions list the providers and the models their CLIs report
@@ -147,11 +149,18 @@ again with the current provider, model and effort instructions.
   `answer --key enter`, after which the task goes in.
   New sessions appear under the Captain's folding arrow and get the task as
   their first message; opening one reveals its column temporarily. The app
-  appends a contract: finish without waiting on the user, ask the
-  队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
-  failure reason; never file bodies).
-- When a worker's turn ends with a receipt, a question or a failure, it is read
-  from its final reply,
+  appends a contract: finish without waiting on the user, then submit through
+  the agent's shell tool:
+  `node "$AGENTDECK_BOARD_CLI" complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"]`.
+  Use `ask --question "Decision needed"` to ask the Captain, and
+  `progress --message "Current progress"` for long work. PowerShell uses
+  `$env:AGENTDECK_BOARD_CLI`; Bash uses `$AGENTDECK_BOARD_CLI` on either platform.
+  Files are absolute paths, separated by commas. Do not include file bodies.
+  The CLI, private control directory and submission token are inherited by
+  Claude, Codex, Antigravity and Cursor, including manually opened sessions.
+- Command submissions are authoritative and preserve the original Unicode,
+  whitespace, result, question, failure and file paths without terminal reflow
+  or truncation. A submission is
   shown as a card in the 队长 column (click the title to jump there), stored as the
   column's last receipt, and read through the Captain's background channel.
   With Claude Code, the Captain runs `receipts --wait --timeout 300` using Bash
@@ -168,9 +177,12 @@ again with the current provider, model and effort instructions.
   `tell --to <session-id> --message "…" --replace` cancels all unsent additions
   and keeps this one. `--now` first sends Esc and then sends the additions as
   soon as the input is ready; combine `--replace --now` to send just the new
-  instruction. Both keep the user-input guard. Claude usage-limit waits show
-  额度用尽/等待 in the dot tooltip, sidebar, task card and ledger; they keep their
-  slot and do not complete the task or receive pending additions until resumed.
+  instruction. Both keep the user-input guard. Quota exhaustion automatically
+  creates a failed task receipt with the
+  provider's reason. The terminal stays open with 额度用尽/等待 in the dot/sidebar;
+  pending additions cannot be delivered until the quota screen clears. Agent
+  launch wrappers report nonzero exit codes as failures even when the parent
+  shell stays alive; PTY exits include their exit code/signal or spawn error.
   **Receipts never pass through the Captain's input box.** They also stay out
   of your next chat message. The background command uses the same Captain-only
   capability token as `receipts`; workers and independent terminals cannot read
@@ -185,13 +197,12 @@ again with the current provider, model and effort instructions.
   to the 队长 with only the prompt's last lines; it answers with `answer` when sure
   and asks you otherwise. A pause between tool calls, between two instructions or a silent
   start (Cursor can print nothing for a minute or two) is not a stop: a turn that
-  ended without a receipt waits for the receipt to show up on screen, and only a
-  screen quiet for 3 minutes is shown as 已停下, never as success.
-  `Doing…` and `Press up to edit queued messages` keep the session working even
-  through silent periods. Only a final receipt/question block counts: inline
-  mentions, fenced examples and echoed contract placeholders are ignored.
-  Receipt file fields accept absolute local paths only; CLI update notices and
-  other footer text are ignored. Prompt submission waits for the paste redraw
+  ended without a command receipt gets a three-minute grace period. Only a
+  finished, uninterrupted turn or a reported normal agent exit can trigger the
+  fallback: “已结束，未提交回执”, with no screen content or inferred files.
+  Screen 【回执】/【提问】 blocks, examples, contract echoes and Doing… never count
+  as submissions. A late command replaces the fallback notice. Prompt submission
+  waits for the paste redraw
   to settle before pressing Enter once, including in background sessions.
 - `peek --id <session-id> [--lines 40]` reads live terminal output, with ANSI
   styling removed (1–1000 terminal rows). It reads the active screen and recent

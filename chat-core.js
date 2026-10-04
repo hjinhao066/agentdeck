@@ -226,10 +226,11 @@
   function normalizeTask(t) {
     const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
     const r = t.receipt && typeof t.receipt === 'object' ? t.receipt : null;
-    const list = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string').map((x) => x.slice(0, 500)).slice(0, 10) : []);
+    const command = r && r.source === 'command';
+    const list = (v) => (Array.isArray(v) ? (command ? v.filter((x) => typeof x === 'string') : v.filter((x) => typeof x === 'string').map((x) => x.slice(0, 500)).slice(0, 10)) : []);
     return {
-      colId: str(t.colId, 160), title: str(t.title, 120), status: str(t.status, 20),
-      receipt: r ? { summary: str(r.summary, 400), failed: str(r.failed, 240), question: str(r.question, 400), files: list(r.files), images: list(r.images), explicit: !!r.explicit } : null,
+      colId: str(t.colId, 160), title: str(t.title, 120), status: str(t.status, 20), ...(typeof t.progress === 'string' ? { progress: t.progress } : {}),
+      receipt: r ? { summary: str(r.summary, command ? Infinity : 400), failed: str(r.failed, command ? Infinity : 240), question: str(r.question, command ? Infinity : 400), files: list(r.files), images: list(r.images), explicit: !!r.explicit, ...(command ? { source: 'command' } : {}) } : null,
     };
   }
   function addTurn(chat, turn) {
