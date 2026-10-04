@@ -4,169 +4,139 @@ const os = require('os');
 const path = require('path');
 
 let application, page, profile;
+const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
+const alerts = () => application.evaluate(({ app }) => app.testCaptainAlerts);
+test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
-  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-e2e-'));
+  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-notify-'));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
-    theme: 'dark', fitWindow: true, fitCols: 3, columns: Array.from({ length: 5 }, (_, index) => ({
-      id: `test-${index}`, taskId: `task-${index}`, title: `Terminal ${index + 1}`,
-      cmd: '', cwd: profile, width: 460, role: 'manual',
-    })),
+    theme: 'dark', fitWindow: true, fitCols: 2,
+    mainSession: { colId: 'captain', cmd: '', crewMarked: true },
+    columns: [
+      { id: 'captain', title: '队长', isMain: true, cmd: '', cwd: profile, width: 460 },
+      { id: 'crew', title: '后台测试队员', captainCrew: true, cmd: '', cwd: profile, width: 460 },
+      { id: 'manual', title: '普通会话', cmd: '', cwd: profile, width: 460 },
+    ],
   }));
-  const env = { ...process.env };
+  const env = { ...process.env, AGENTDECK_LEGACY_WATCH: '1', AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]),
-      `--test-user-data=${profile}`], env,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  await expect(page.locator('.xterm')).toHaveCount(5);
-  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length)).toBe(5);
-  // Ensure the renderer has completed its asynchronous PTY spawn handshake.
-  await expect.poll(() => page.evaluate(() => window.deck.ptyIsAlive('test-4'))).toBe(true);
-  await expect.poll(() => page.evaluate(() => window.deck.ptyReplay('test-4')), { timeout: 20000 }).toMatch(/PS |[$%>] /);
+  await expect(page.locator('.xterm')).toHaveCount(3);
+  await expect.poll(() => page.evaluate(() => [...terms.values()].filter((e) => e.alive).length)).toBe(3);
+  await page.evaluate((cmd) => window.deck.ptyInput('captain', cmd + '\r'), FAKE);
+  await expect.poll(() => page.evaluate(() => dumpScreen(terms.get('captain').term)), { timeout: 20000 }).toContain('Claude Code');
 });
 test.afterAll(async () => {
   if (application) await application.close();
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
-async function popupFor(id, state = 'done', title = '测试终端') {
-  await page.evaluate((payload) => window.deck.notifyState(payload), { id, state, title });
-  let popup;
-  await expect.poll(() => {
-    popup = application.windows().find((w) => w.url().endsWith('/notification.html'));
-    return !!popup;
-  }).toBe(true);
-  await expect(popup.locator(`[data-column-id="${id}"]`)).toBeVisible();
-  return popup;
-}
-
-test('background popup, fifth column reveal, focus and actual keyboard input', async () => {
-  const errors = [];
-  page.on('pageerror', (error) => errors.push(error.message));
-  await application.evaluate(({ BrowserWindow }) => {
-    const other = new BrowserWindow({ title: 'Background focus test', width: 450, height: 300, focusable: false });
-    other.loadURL('data:text/html,<h1>Other app stand-in</h1>');
-    other.focus();
+test('completed Captain reply flows from real PTY/chat to a native alert, with one gentle sound', async () => {
+  await page.evaluate(() => ChatUI.sendPrompt(columns.find((c) => c.id === 'captain'), 'notify regression'));
+  await expect.poll(async () => (await alerts()).filter((e) => e.type === 'notification').length, { timeout: 30000 }).toBe(1);
+  const events = await alerts();
+  expect(events[0]).toMatchObject({ type: 'notification', title: '队长', body: 'GOT notify regression' });
+  if (process.platform === 'darwin') expect(events.filter((e) => e.type === 'sound')).toEqual([{ type: 'sound', tone: 'Glass' }]);
+  expect(application.windows()).toHaveLength(1);
+  await page.evaluate(() => {
+    const turn = ChatUI.turnsOf('captain').at(-1);
+    window.deck.notifyState({ id: 'captain', turnId: turn.id, state: 'input', reply: '重复提示。' });
   });
-  const popup = await popupFor('test-4');
-  const focusedTitle = await application.evaluate(({ BrowserWindow }) => BrowserWindow.getFocusedWindow()?.getTitle());
-  expect(focusedTitle).not.toBe('AgentDeck notifications');
-  await popup.locator('[data-column-id="test-4"] .open').click();
-  await expect.poll(() => page.evaluate(() => focusedId)).toBe('test-4');
-  // chat view (the default): the composer gets the keyboard
-  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('test-4').wrap.querySelector('.composer textarea'))).toBe(true);
-  expect(await page.evaluate(() => {
-    const bounds = terms.get('test-4').wrap.getBoundingClientRect();
-    return bounds.left >= deckEl.getBoundingClientRect().left - 1 && bounds.right <= innerWidth + 1;
-  })).toBe(true);
-  await page.keyboard.type('echo AGENTDECK_FOCUS_OK');
-  await page.keyboard.press('Enter');
-  await expect.poll(() => page.evaluate(() => window.deck.ptyReplay('test-4')), { timeout: 15000 }).toContain('AGENTDECK_FOCUS_OK');
-  await expect.poll(() => page.evaluate(() => dumpScreen(terms.get('test-4').term))).toContain('AGENTDECK_FOCUS_OK');
-  expect(errors).toEqual([]);
+  await expect.poll(async () => (await alerts()).filter((e) => e.type === 'notification').length).toBe(1);
 });
 
-test('minimized/zoomed/board view notifications restore the exact input target', async () => {
-  // terminal view: the xterm itself gets the keyboard
-  await page.evaluate(() => { ChatUI.setMode('test-3', 'term'); ChatUI.setMode('test-2', 'term'); });
-  await page.evaluate(() => toggleZoom('test-0'));
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck').minimize());
-  let popup = await popupFor('test-3', 'input');
-  await popup.locator('[data-column-id="test-3"] .open').click();
-  await expect.poll(() => page.evaluate(() => zoomedId)).toBe('test-3');
-  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('test-3').term.textarea)).toBe(true);
-  await page.evaluate(() => showView('board'));
-  popup = await popupFor('test-2');
-  await popup.locator('[data-column-id="test-2"] .open').click();
+test('native click restores exact Captain from board/zoom/minimized views without stale fallback', async () => {
+  await page.evaluate(() => { toggleZoom('manual'); showView('board'); });
+  await application.evaluate(({ BrowserWindow, app }) => {
+    BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck').minimize();
+    app.testCaptainNotification.emit('click');
+  });
+  await expect.poll(() => page.evaluate(() => focusedId)).toBe('captain');
   await expect.poll(() => page.evaluate(() => activeView)).toBe('terminals');
-  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('test-2').term.textarea)).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('captain').wrap.querySelector('.composer textarea'))).toBe(true);
+  await page.evaluate(() => jumpToColumn(columns.find((c) => c.id === 'manual')));
+  await application.evaluate(({ app }) => app.testCaptainNotification.emit('click'));
+  expect(await page.evaluate(() => focusedId)).toBe('manual');
+  await page.evaluate(() => { if (zoomedId) toggleZoom(zoomedId); });
 });
 
-test('stacking, text injection, cancellation and stale targets', async () => {
-  const popup = await popupFor('test-0', 'done', '<img src=x onerror=alert(1)>');
-  await popupFor('test-1', 'input');
-  await expect(popup.locator('article')).toHaveCount(2);
-  await expect(popup.locator('img')).toHaveCount(0);
-  await page.evaluate(() => window.deck.notifyCancel({ id: 'test-0' }));
-  await expect(popup.locator('article')).toHaveCount(1);
-  await popup.locator('.close').click();
-  const before = await page.evaluate(() => focusedId);
-  await application.evaluate(({ BrowserWindow }) => {
-    BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck').webContents.send('focus-column', { id: 'removed-terminal' });
-  });
-  expect(await page.evaluate(() => focusedId)).toBe(before);
-});
-
-test('all-agent state flow waits for quiet and retracts resumed work', async () => {
+test('background, peeked, foreground workers and ordinary sessions never popup or sound', async () => {
+  const before = (await alerts()).filter((e) => ['notification', 'sound'].includes(e.type)).length;
+  await page.evaluate((cmd) => window.deck.ptyInput('crew', cmd + '\r'), FAKE);
+  await expect.poll(() => page.evaluate(() => dumpScreen(terms.get('crew').term)), { timeout: 15000 }).toContain('Claude Code');
+  await page.evaluate(() => ChatUI.sendPrompt(columns.find((c) => c.id === 'crew'), 'worker done silently'));
+  await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('crew').at(-1)?.done), { timeout: 15000 }).toBe(true);
   await page.evaluate(() => {
-    const entry = terms.get('test-1');
-    entry.hasWorked = true;
-    entry.notificationState = { state: 'working' };
-    maybeNotifyState('test-1', entry, 'done');
+    const crew = columns.find((c) => c.id === 'crew');
+    for (const foreground of [false, true]) {
+      if (foreground) { jumpToColumn(crew); crew.captainCrew = false; updateColumnStyles(); }
+      for (const id of ['crew', 'manual']) {
+        const entry = terms.get(id);
+        entry.hasWorked = true;
+        entry.lastOutputAt = Date.now() - 60000;
+        maybeNotifyState(id, entry, 'input');
+        maybeNotifyState(id, entry, 'done');
+        // Main-process filtering remains effective even if an old renderer sends.
+        window.deck.notifyState({ id, turnId: 'worker-complete', state: 'done', reply: '队员完成。' });
+      }
+    }
   });
-  const popup = application.windows().find((w) => w.url().endsWith('/notification.html'));
-  await expect(popup.locator('article')).toHaveCount(0);
-  await page.evaluate(() => {
-    const entry = terms.get('test-1');
-    entry.notificationState.since = Date.now() - 13000;
-    entry.lastOutputAt = Date.now() - 13000;
-    maybeNotifyState('test-1', entry, 'done');
-  });
-  await expect(popup.locator('[data-column-id="test-1"]')).toBeVisible();
-  await page.evaluate(() => maybeNotifyState('test-1', terms.get('test-1'), 'working'));
-  await expect(popup.locator('article')).toHaveCount(0);
+  // IPC round-trip flushes earlier sends.
+  await page.evaluate(() => window.deck.ptyIsAlive('crew'));
+  expect((await alerts()).filter((e) => ['notification', 'sound'].includes(e.type)).length).toBe(before);
+  expect(application.windows()).toHaveLength(1);
+  await page.evaluate(() => new Promise((resolve) => terms.get('crew').term.write('\x07', resolve)));
+  expect((await alerts()).filter((e) => ['notification', 'sound'].includes(e.type)).length).toBe(before);
 });
 
-test('sandboxed notification frame cannot access the terminal bridge; navigation is denied', async () => {
-  const popup = await popupFor('test-0');
-  expect(await popup.evaluate(() => typeof window.deck)).toBe('undefined');
-  expect(await popup.evaluate(() => typeof require)).toBe('undefined');
-  const url = page.url();
-  await page.evaluate(() => { const link = document.createElement('a'); link.href = 'https://example.com'; document.body.append(link); link.click(); link.remove(); });
-  expect(page.url()).toBe(url);
-  await popup.locator('.close').click();
+test('permission prompt alerts immediately; completion and quick next reply never repeat the sound', async () => {
+  const before = (await alerts()).filter((e) => e.type === 'notification').length;
+  await page.evaluate(() => ChatUI.sendPrompt(columns.find((c) => c.id === 'captain'), 'ask me'));
+  await expect.poll(async () => (await alerts()).filter((e) => e.type === 'notification').length, { timeout: 15000 }).toBe(before + 1);
+  const events = await alerts();
+  expect(events.filter((e) => e.type === 'notification').at(-1).body).toContain('Proceed with the change?');
+  if (process.platform === 'darwin') expect(events.filter((e) => e.type === 'sound')).toHaveLength(1);
 });
 
-test('notification window size, bottom-right 12px anchor and card layout', async () => {
-  const popup = await popupFor('test-0', 'done', 'A very long title that should be truncated with ellipsis without breaking card layout');
-  const winBounds = await application.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck notifications');
-    return win ? win.getBounds() : null;
-  });
-  expect(winBounds).not.toBeNull();
-  expect(winBounds.width).toBe(191);
-  expect(winBounds.height).toBe(54);
+test('visibility gate covers visible deck, horizontally hidden Captain, zoom, board and pages', async () => {
+  expect(await page.evaluate(() => {
+    jumpToColumn(columns.find((c) => c.id === 'captain'));
+    return captainColumnVisible('captain');
+  })).toBe(true);
+  expect(await page.evaluate(() => { toggleZoom('manual'); return captainColumnVisible('captain'); })).toBe(false);
+  expect(await page.evaluate(() => { toggleZoom('manual'); showView('board'); return captainColumnVisible('captain'); })).toBe(false);
+  expect(await page.evaluate(() => { showView('terminals'); Pages.toggle('artifacts'); return captainColumnVisible('captain'); })).toBe(false);
+  await page.evaluate(() => Pages.hide());
+});
 
-  const displayInfo = await application.evaluate(({ screen, BrowserWindow }) => {
-    const main = BrowserWindow.getAllWindows().find((w) => w.getTitle() === 'AgentDeck');
-    const display = main && !main.isDestroyed() ? screen.getDisplayMatching(main.getBounds()) : screen.getPrimaryDisplay();
-    const area = display.workArea;
-    return { areaX: area.x, areaY: area.y, areaW: area.width, areaH: area.height };
-  });
-  expect(winBounds.x + winBounds.width).toBe(displayInfo.areaX + displayInfo.areaW - 12);
-  expect(winBounds.y + winBounds.height).toBe(displayInfo.areaY + displayInfo.areaH - 12);
-
-  const cardBounds = await popup.locator('article').first().boundingBox();
-  expect(Math.round(cardBounds.height)).toBe(46);
-  expect(Math.round(cardBounds.width)).toBe(191 - 8);
-
-  const overflow = await popup.evaluate(() => {
-    const card = document.querySelector('article');
-    const open = card.querySelector('.open');
-    const strong = card.querySelector('strong');
-    return {
-      cardScrollHeight: card.scrollHeight,
-      cardClientHeight: card.clientHeight,
-      openScrollHeight: open.scrollHeight,
-      openClientHeight: open.clientHeight,
-      strongEllipsis: getComputedStyle(strong).textOverflow,
-    };
-  });
-  expect(overflow.cardScrollHeight).toBeLessThanOrEqual(overflow.cardClientHeight);
-  expect(overflow.openScrollHeight).toBeLessThanOrEqual(overflow.openClientHeight);
-  expect(overflow.strongEllipsis).toBe('ellipsis');
-
-  await popup.locator('.close').click();
+test('settings use accessible icon/switch controls and persist both toggles and tone', async () => {
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const dialog = page.locator('#notificationSettings');
+  await expect(dialog).toBeVisible();
+  await expect(page.locator('#settingsBtn svg')).toHaveCount(1);
+  await page.getByRole('switch', { name: '系统通知', exact: true }).uncheck();
+  await page.getByRole('switch', { name: '提示音', exact: true }).uncheck();
+  if (process.platform === 'darwin') await page.getByLabel('选择提示音').selectOption('Tink');
+  const shotDir = process.env.AGENTDECK_NOTIFY_SCREENSHOTS;
+  if (shotDir) {
+    fs.mkdirSync(shotDir, { recursive: true });
+    await dialog.screenshot({ path: path.join(shotDir, 'settings-dark.png') });
+    await page.evaluate(() => applyTheme('light'));
+    await dialog.screenshot({ path: path.join(shotDir, 'settings-light.png') });
+  }
+  await page.getByRole('button', { name: '关闭设置' }).click();
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).captainNotifications).toMatchObject({ enabled: false, sound: false });
+  const before = (await alerts()).filter((e) => ['notification', 'sound'].includes(e.type)).length;
+  await page.evaluate(() => window.deck.notifyState({ id: 'captain', turnId: 'disabled-turn', state: 'input', reply: '关闭后不提醒。' }));
+  await page.evaluate(() => window.deck.ptyIsAlive('captain'));
+  expect((await alerts()).filter((e) => ['notification', 'sound'].includes(e.type)).length).toBe(before);
+  await page.reload();
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.getByRole('switch', { name: '系统通知', exact: true })).not.toBeChecked();
+  await expect(page.getByRole('switch', { name: '提示音', exact: true })).not.toBeChecked();
+  if (process.platform === 'darwin') await expect(page.getByLabel('选择提示音')).toHaveValue('Tink');
 });

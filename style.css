@@ -1690,3 +1690,18 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-key-head.review { fill: var(--cm-review); }
 .cm-key-head.back { fill: var(--cm-back); }
 .cm-legend-note { margin-left: auto; }
+
+/* Captain notification preferences: native switches/selects, icon-only actions. */
+#notificationSettings { width: min(420px, calc(100vw - 48px)); padding: 24px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+.notify-settings-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.notify-settings-head h2 { margin: 0; font-size: 18px; }
+#notificationSettings p { font-size: 13px; line-height: 1.6; opacity: .7; }
+.notify-setting { display: flex; align-items: center; justify-content: space-between; min-height: 48px; gap: 16px; font-size: 14px; }
+.notify-setting span { flex-shrink: 0; }
+.notify-setting input { appearance: none; position: relative; flex: 0 0 36px; width: 36px; height: 22px; border-radius: 12px; background: var(--muted); cursor: pointer; }
+.notify-setting input::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; transition: transform .15s; }
+.notify-setting input:checked { background: var(--accent); }
+.notify-setting input:checked::before { transform: translateX(14px); }
+.notify-setting select { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+#notificationSettings .rail-btn { min-width: 36px; min-height: 36px; }
+#notificationSettings :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }

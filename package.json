@@ -65,9 +65,7 @@
       "vendor/**",
       "security.js",
       "notifications.js",
-      "notification*.js",
-      "notification.html",
-      "notification.css"
+      "notification-policy.js"
     ],
     "mac": {
       "target": "dmg",

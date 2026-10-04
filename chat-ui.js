@@ -871,7 +871,6 @@
           }
         }, 600);
       }
-      entry.notificationState = { state: 'working', notified: null, since: null };
       window.deck.notifyCancel({ id: col.id });
       const nameFrom = o.display || prompt;
       if (nameFrom && !o.silent) host.maybeAutoName(col, nameFrom.split('\n')[0].trim());

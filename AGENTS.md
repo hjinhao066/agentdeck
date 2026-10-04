@@ -31,11 +31,14 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Use xterm Canvas, never WebGL (multi-column GPU context eviction corrupts text).
 - Orange scrollbars are intentional. Preserve Chinese IME and voice input.
 - Never expose Node or arbitrary IPC to the page. Validate the originating main
-  frame and payloads. Notification windows have their own minimal bridge.
+  frame and payloads. System notifications are created only in the main process.
 - Notification arrival does not steal focus. A click restores the main window,
   reveals the exact column and focuses its input: the composer in chat mode,
   the xterm textarea in terminal mode. Stale IDs never fall
   back to another terminal. Retract obsolete notifications and deduplicate turns.
+  Only the Captain notifies; all workers (including peeked/foreground sessions)
+  are silent. Mute sound when the focused window shows the Captain, with at least
+  30 seconds between sounds. Never re-enable legacy watch-ai spools.
 - Automatic input (队长 receipts, work handed to a session) must never go through
   an input box holding text the user has not sent: gate on `userComposing` and pass
   `guardUserInput` to `ChatUI.sendPrompt`. Never press Enter on the user's behalf

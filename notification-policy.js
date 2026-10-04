@@ -5,39 +5,17 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const QUIET_MS = 12000;
-  // One notification per turn. Continued output resets the quiet deadline,
-  // even when a streaming agent has no recognizable spinner on screen.
-  function advance(previous, { state, hasWorked, lastActivity = 0, now = Date.now() }) {
-    const next = { ...previous, state };
-    let action = null;
-    if (state === 'done' && previous.notified === 'done' && lastActivity > (previous.lastActivity || 0)) {
-      next.notified = null;
-      next.since = now;
-      action = 'cancel';
-    }
-    next.lastActivity = lastActivity;
-    if (state === 'working' || state === 'quota' || state === 'plain' || state === 'exited') {
-      if (next.notified) action = 'cancel';
-      next.notified = null;
-      next.since = null;
-    } else if (state === 'input') {
-      next.since = null;
-      if (previous.state !== undefined && previous.state !== 'input') {
-        next.notified = 'input';
-        action = 'input';
-      }
-    } else if (state === 'done') {
-      if (previous.state !== 'done') {
-        next.since = now;
-        if (previous.state === undefined) next.notified = 'done';
-      }
-      if (hasWorked && next.notified !== 'done' &&
-          now - Math.max(next.since ?? now, lastActivity) >= QUIET_MS) {
-        next.notified = 'done';
-        action = 'done';
-      }
-    }
-    return { next, action };
+  const SOUND_COOLDOWN_MS = 30000;
+  function normalizeSettings(value) {
+    const s = value || {};
+    return { enabled: s.enabled !== false, sound: s.sound !== false,
+      tone: ['Glass', 'Tink'].includes(s.tone) ? s.tone : 'Glass' };
   }
-  return { advance, QUIET_MS };
+  function firstSentence(value) {
+    if (typeof value !== 'string') return '';
+    const text = value.trim().replace(/^[#>*\-•⏺\s]+/, '').replace(/[ \t]+/g, ' ');
+    const sentence = text.match(/^.*?(?:[。！？!?]|\.(?=\s|$)|\n|$)/u)?.[0] || '';
+    return Array.from(sentence.trim()).slice(0, 60).join('');
+  }
+  return { QUIET_MS, SOUND_COOLDOWN_MS, normalizeSettings, firstSentence };
 });
