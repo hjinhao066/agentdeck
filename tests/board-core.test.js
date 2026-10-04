@@ -19,6 +19,11 @@ test('infers known agents and resolves commands', () => {
   assert.equal(BoardCore.inferAgentType('cursor-agent --force'), 'Cursor');
   assert.equal(BoardCore.inferAgentType('codex --dangerously-bypass-approvals-and-sandbox'), 'Codex');
   assert.equal(BoardCore.inferAgentType('gemini --yolo'), 'Antigravity');
+  assert.equal(BoardCore.inferAgentType('env CLAUDE_CONFIG_DIR=/Users/jinhao/.claude-us claude --model claude-sonnet-5-5'), 'Claude');
+  assert.equal(BoardCore.inferAgentType('FOO=value cursor-agent --model claude-opus-5-5'), 'Cursor');
+  assert.equal(BoardCore.inferAgentType('env -u TOKEN FOO=value command codex --model gpt-6.1-sol'), 'Codex');
+  assert.equal(BoardCore.inferAgentType('env FOO=bar /opt/bin/my-agent --model vendor/x'), 'my-agent');
+  assert.equal(BoardCore.inferAgentType('env FOO=bar bash'), 'Shell');
   assert.equal(BoardCore.commandForAgent('claude'), 'claude --dangerously-skip-permissions --effort high');
   assert.equal(BoardCore.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   assert.equal(BoardCore.commandForAgent('grok'), 'grok --permission-mode bypassPermissions');

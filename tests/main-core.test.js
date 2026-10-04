@@ -148,6 +148,10 @@ test('a cleared 队长 is relaunched fresh: resume flags are dropped, everything
   assert.equal(M.freshCommand('node "resume --continue.js"'), 'node "resume --continue.js"');
   assert.equal(M.freshCommand('"C:\\Program Files\\Claude\\claude.exe" --resume "chat id" --model "model  with spaces"'), '"C:\\Program Files\\Claude\\claude.exe" --model "model  with spaces"');
   assert.equal(M.freshCommand(''), '');
+  assert.equal(M.freshCommand('env CLAUDE_CONFIG_DIR=/tmp/.claude-us claude --resume abc --effort high'), 'env CLAUDE_CONFIG_DIR=/tmp/.claude-us claude --effort high');
+  assert.equal(M.checkCommand('env FOO=bar codex').cmd, 'env FOO=bar codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+  assert.match(M.instructions(), /--seat us\|cn/);
+  assert.match(M.instructions(), /CLAUDE_CONFIG_DIR/);
 });
 
 test('the reset note gives ids and open work, never the old conversation', () => {

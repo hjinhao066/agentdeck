@@ -343,3 +343,40 @@ test('Claude sidebar identity carries the pinned seat; Cursor Opus remains Curso
   assert.equal(AgentInfo.iconProviderFor('Flash 3.8', 'Cursor'), 'Antigravity');
   assert.equal(AgentInfo.iconProviderFor('Fake', 'Claude'), 'Claude');
 });
+
+test('environment launch prefixes identify providers and preserve complete model versions', () => {
+  for (const [program, provider, model, label] of [
+    ['claude', 'Claude', 'claude-sonnet-5-5', 'Sonnet 5.5'],
+    ['cursor-agent', 'Cursor', 'claude-opus-5-5', 'Opus 5.5'],
+    ['agy', 'Antigravity', 'gemini-3.8-flash-high', 'Flash 3.8'],
+    ['codex', 'Codex', 'gpt-6.1-sol', 'GPT-6.1 Sol'],
+  ]) {
+    for (const prefix of ['env FOO="two words" ', 'FOO=value ', 'env -u TOKEN FOO=value command ']) {
+      const info = AgentInfo.resolveAgentInfo({ cmd: `${prefix}${program} --model=${model}` }, null);
+      assert.equal(info.provider, provider);
+      assert.equal(info.shortModel, label);
+    }
+  }
+});
+
+test('family-only live and cached Claude labels retain the launch version', () => {
+  const col = { cmd: 'env CLAUDE_CONFIG_DIR=/Users/jinhao/.claude-us claude --model claude-sonnet-5-5',
+    agentProvider: 'Claude', agentModel: 'Sonnet', claudeSeatId: 'cn', claudeConfigDir: '~/.claude' };
+  const info = AgentInfo.resolveAgentInfo(col, null, 'Claude Code\nModel: Sonnet', ['Model: Sonnet']);
+  assert.equal(info.shortModel, 'Sonnet 5.5');
+  assert.deepEqual(info.seat, { id: 'us', configDir: '/Users/jinhao/.claude-us' });
+  assert.equal(AgentInfo.resolveAgentInfo(col, null).shortModel, 'Sonnet 5.5');
+  assert.equal(AgentInfo.resolveAgentInfo(col, null, '', ['Model: Sonnet 4.6']).shortModel, 'Sonnet 4.6');
+});
+
+test('unrecognized launch displays the program and exact model rather than a shell badge', () => {
+  const info = AgentInfo.resolveAgentInfo({ cmd: 'env FOO=bar /opt/bin/my-agent --model vendor/very-long-model-v7' }, null);
+  assert.equal(info.provider, 'my-agent');
+  assert.equal(info.shortModel, 'vendor/very-long-model-v7');
+  assert.equal(info.isShell, false);
+});
+
+test('Claude resume flags are placed after the executable with an environment prefix', () => {
+  assert.equal(AgentInfo.prepareAgentCommand('env CLAUDE_CONFIG_DIR="/tmp/us seat" claude --model claude-opus-5-5', 'Claude', 'uuid', true),
+    'env CLAUDE_CONFIG_DIR="/tmp/us seat" claude --resume uuid --model claude-opus-5-5');
+});

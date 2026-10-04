@@ -152,6 +152,7 @@ test('custom and restored Codex commands use their own server on both platforms 
     }
     assert.equal(B.shellLaunchCommand('agy --model gemini-3.8-flash-high', platform), 'agy --model gemini-3.8-flash-high');
   }
+  assert.equal(B.shellLaunchCommand('env FOO=codex codex --yolo', 'darwin'), 'env FOO=codex command "codex" --no-daemon --yolo');
 });
 
 test('a launch only counts as started once the agent is identified; a Windows timeout is unknown, not success', () => {

@@ -216,7 +216,7 @@
       `   ${cli} briefing                        只读当前队长说明；Relay 后先读 briefing 和看板交接，再重挂后台回执监听`,
 
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
-      `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--task-id 卡片id] [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
+      `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--task-id 卡片id] [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"] [--seat us|cn]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent。Claude 要换账号就加 --seat us 或 --seat cn，程序会改用对应的 CLAUDE_CONFIG_DIR，不必手写 env 前缀`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
       `   ${cli} stop --id 会话id                 发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
       `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
@@ -280,6 +280,28 @@
   const WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
   const unquote = (w) => String(w).replace(/^["']|["']$/g, '');
   const programName = (w) => unquote(w).replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+  const isAssignmentWord = (w) => /^[A-Za-z_][A-Za-z0-9_]*=/.test(unquote(w));
+  // Index of the real program after env, NAME=value, and the command builtin.
+  function launchIndex(words) {
+    let i = 0;
+    const skipAssign = () => { while (i < words.length && isAssignmentWord(words[i])) i++; };
+    skipAssign();
+    if (unquote(words[i] || '') === 'env') {
+      i++;
+      while (i < words.length) {
+        const word = unquote(words[i] || '');
+        if (word === '--') { i++; break; }
+        if (isAssignmentWord(words[i] || '')) { i++; continue; }
+        if (word === '-u' || word === '--unset' || word === '-C' || word === '--chdir' || word === '-S' || word === '--split-string') { i += 2; continue; }
+        if (/^--(?:unset|chdir|split-string)=/.test(word)) { i++; continue; }
+        if (word === '-i' || word === '-0' || word === '-v' || word === '--ignore-environment' || word === '-') { i++; continue; }
+        break;
+      }
+      skipAssign();
+    }
+    if (unquote(words[i] || '') === 'command') i++;
+    return i;
+  }
 
   // A relaunch after a reset must start the agent fresh, never pick up the
   // cleared conversation again: drop resume flags from the launch command.
@@ -287,13 +309,14 @@
     const source = String(cmd || '');
     const words = source.match(WORDS) || [];
     if (!words.length) return '';
-    const name = programName(words[0]);
+    const at = launchIndex(words);
+    const name = programName(words[at] || '');
     if (!['claude', 'cursor-agent', 'agy', 'gemini', 'grok', 'codex'].includes(name)) return source;
     const claude = name === 'claude';
-    const out = [words[0]];
-    for (let i = 1; i < words.length; i++) {
+    const out = words.slice(0, at + 1);
+    for (let i = at + 1; i < words.length; i++) {
       const w = words[i];
-      if (['cursor-agent', 'codex'].includes(name) && i === 1 && /^resume$/i.test(w)) {
+      if (['cursor-agent', 'codex'].includes(name) && i === at + 1 && /^resume$/i.test(w)) {
         if (words[i + 1] && !words[i + 1].startsWith('-')) i++;
         continue;
       }
@@ -326,7 +349,9 @@
     const source = String(cmd || '').trim();
     const words = source.match(WORDS) || [];
     if (!words.length) return { cmd: source };
-    const isAgy = programName(words[0]) === 'agy';
+    const at = launchIndex(words);
+    const launched = programName(words[at] || '');
+    const isAgy = launched === 'agy';
     for (let i = 1; i < words.length; i++) {
       const m = /^--model(=.*)?$/.exec(words[i]);
       const id = m ? unquote(m[1] ? m[1].slice(1) : words[i + 1] || '') : '';
@@ -336,17 +361,20 @@
     }
     // Codex hands out autonomous work like every other agent: no confirmation prompts.
     // Added unless a bypass flag (or its --yolo alias) is already there, since a duplicate fails to start.
-    if (programName(words[0]) === 'codex') {
+    if (launched === 'codex') {
       const extra = [];
       if (!words.includes('--no-daemon')) extra.push('--no-daemon');
       if (!words.some((w) => /^(?:--yolo|--dangerously-bypass-approvals-and-sandbox)$/.test(w))) extra.push('--dangerously-bypass-approvals-and-sandbox');
-      return { cmd: extra.length ? [words[0], ...extra, ...words.slice(1)].join(' ') : source };
+      if (!extra.length) return { cmd: source };
+      const out = words.slice();
+      out.splice(at + 1, 0, ...extra);
+      return { cmd: out.join(' ') };
     }
     if (!isAgy) return { cmd: source };
-    const out = [words[0]];
+    const out = words.slice(0, at + 1);
     let effort = '';
     let model = -1;
-    for (let i = 1; i < words.length; i++) {
+    for (let i = at + 1; i < words.length; i++) {
       const e = /^--effort(?:=(.*))?$/.exec(words[i]);
       if (e) { effort = unquote(e[1] !== undefined ? e[1] : words[++i] || '').toLowerCase(); continue; }
       out.push(words[i]);
@@ -354,7 +382,7 @@
       else if (words[i] === '--model' && i + 1 < words.length) { out.push(words[++i]); model = out.length - 1; }
     }
     // right after the program: Go flags stop at the first plain argument
-    if (model < 0) { out.splice(1, 0, '--model', AGY_MODEL); model = 2; }
+    if (model < 0) { out.splice(at + 1, 0, '--model', AGY_MODEL); model = at + 2; }
     const eq = /^--model=/.test(out[model]);
     const id = unquote(eq ? out[model].slice(8) : out[model]);
     const family = /^(gemini-[\d.]+-(?:flash|pro))-(?:low|medium|high)$/.exec(id);

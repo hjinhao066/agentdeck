@@ -147,7 +147,7 @@
     const map = new Map();
     for (const raw of Array.isArray(members) ? members : []) {
       if (!raw || raw.id == null) continue;
-      const label = String(raw.label || '').trim() || '未识别';
+      const label = String(raw.label || '').trim() || '终端';
       const seat = raw.seat === 'us' || raw.seat === 'cn' ? raw.seat : '';
       const key = label + '\u001f' + seat;
       let group = map.get(key);

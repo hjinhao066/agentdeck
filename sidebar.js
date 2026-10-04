@@ -244,9 +244,12 @@
   function memberIdentity(col) {
     const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
     const info = window.AgentInfo && window.AgentInfo.resolveAgentInfo(col, entry, entry && entry.lastScreen);
+    const known = info && ['Claude', 'Cursor', 'Antigravity', 'Grok', 'Codex'].includes(info.provider);
     const shell = !info || info.isShell || !info.provider;
-    const label = shell ? '' : (info.shortModel || info.model || '');
-    const seat = !shell && info.seat && (info.seat.id === 'us' || info.seat.id === 'cn') ? info.seat.id : '';
+    const label = shell ? '' : known
+      ? (info.shortModel || info.model || info.provider)
+      : [info.provider, info.shortModel || info.model].filter(Boolean).join(' · ');
+    const seat = !shell && known && info.seat && (info.seat.id === 'us' || info.seat.id === 'cn') ? info.seat.id : '';
     return {
       id: col.id,
       label,

@@ -113,22 +113,67 @@
     };
   }
 
+  function commandWords(command) {
+    return String(command || '').match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
+  }
+  function unquoteWord(word) {
+    const text = String(word || '');
+    if (text.length >= 2 && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))) return text.slice(1, -1);
+    return text;
+  }
+  function assignmentWord(word) {
+    return /^[A-Za-z_][A-Za-z0-9_]*=/.test(unquoteWord(word));
+  }
+  // The program after env / NAME=value / command, not the first shell word.
+  function tokenOffset(command, index) {
+    const re = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g;
+    let n = 0;
+    let match;
+    while ((match = re.exec(String(command || '')))) {
+      if (n === index) return { start: match.index, end: match.index + match[0].length };
+      n++;
+    }
+    return null;
+  }
+  function programToken(command) {
+    const words = commandWords(command);
+    let i = 0;
+    const skipAssign = () => { while (i < words.length && assignmentWord(words[i])) i++; };
+    skipAssign();
+    if (unquoteWord(words[i]) === 'env') {
+      i++;
+      while (i < words.length) {
+        const word = unquoteWord(words[i]);
+        if (word === '--') { i++; break; }
+        if (assignmentWord(words[i])) { i++; continue; }
+        if (word === '-u' || word === '--unset' || word === '-C' || word === '--chdir' || word === '-S' || word === '--split-string') { i += 2; continue; }
+        if (/^--(?:unset|chdir|split-string)=/.test(word)) { i++; continue; }
+        if (word === '-i' || word === '-0' || word === '-v' || word === '--ignore-environment' || word === '-') { i++; continue; }
+        break;
+      }
+      skipAssign();
+    }
+    if (unquoteWord(words[i]) === 'command') i++;
+    const token = words[i] || '';
+    const raw = unquoteWord(token);
+    const base = raw.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '');
+    return { words, at: i, token, base, name: base.toLowerCase(), precededByCommand: unquoteWord(words[i - 1]) === 'command' };
+  }
+
   function inferAgentType(command) {
-    const cmd = cleanText(command, 500).toLowerCase();
-    if (/^\s*claude(?:\s|$)/.test(cmd)) return 'Claude';
-    if (/^\s*(?:agy|antigravity)(?:\s|$)/.test(cmd)) return 'Antigravity';
-    if (/^\s*grok(?:\s|$)/.test(cmd)) return 'Grok';
-    if (/^\s*cursor-agent(?:\s|$)/.test(cmd)) return 'Cursor';
-    if (/^\s*codex(?:\s|$)/.test(cmd)) return 'Codex';
-    if (/^\s*gemini(?:\s|$)/.test(cmd)) return 'Antigravity';
-    return cmd ? 'Custom agent' : 'Shell';
+    const prog = programToken(cleanText(command, 1000));
+    const providers = { 'cursor-agent': 'Cursor', claude: 'Claude', agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Antigravity', grok: 'Grok', codex: 'Codex', chatgpt: 'Codex' };
+    if (providers[prog.name]) return providers[prog.name];
+    if (!prog.name || /^(?:bash|zsh|sh|fish|dash|ksh|tcsh|csh|nu|pwsh|powershell|cmd|login)$/.test(prog.name)) return 'Shell';
+    if (/^(?:node|nodejs|python|python3|ruby|perl|deno|bun)$/.test(prog.name)) return 'Custom agent';
+    return prog.base;
   }
 
   // How often the screen says the command's program doesn't exist. Counted, so
   // an old error already on screen is not mistaken for a new one. Rows are
   // joined first: a narrow column soft-wraps the message mid-word.
   function launchErrors(screen, command) {
-    const bin = cleanText(command, 1000).split(/\s+/)[0].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '');
+    const bin = programToken(cleanText(command, 1000)).base;
     if (!bin) return 0;
     const flat = String(screen || '').replace(/\r?\n/g, '');
     let n = 0;
@@ -162,17 +207,19 @@
     // A shared Codex server retains its own launch environment, not this PTY's
     // per-column capabilities. Use an embedded server for new and resumed runs.
 
-    const words = String(command).match(/(?:[^\s"']|"[^"]*"|'[^']*')+/g) || [];
-    const program = (words[0] === 'command' ? words[1] : words[0]) || '';
-    const name = program.replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '');
-    if (name.toLowerCase() === 'codex' && !words.includes('--no-daemon')) {
-      command = command.replace(program, program + ' --no-daemon');
+    const prog = programToken(command);
+    if (prog.name !== 'codex' || !prog.token) return command;
+    const located = tokenOffset(command, prog.at);
+    if (!located) return command;
+    const at = located.start;
+    const end = located.end;
+    let launch = command;
+    if (!prog.words.includes('--no-daemon')) launch = launch.slice(0, end) + ' --no-daemon' + launch.slice(end);
+    if (platform !== 'win32' && !/[\\/]/.test(unquoteWord(prog.token)) && !prog.precededByCommand) {
+      const quoted = /^["']/.test(prog.token) ? prog.token : `"${prog.token}"`;
+      launch = launch.slice(0, at) + 'command ' + quoted + launch.slice(end);
     }
-    if (platform !== 'win32' && name.toLowerCase() === 'codex' && !/[\\/]/.test(program) && words[0] !== 'command') {
-      const direct = /^["']/.test(program) ? program : `"${program}"`;
-      return command.replace(program, 'command ' + direct);
-    }
-    return command;
+    return launch;
 
   }
 

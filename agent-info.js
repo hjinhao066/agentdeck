@@ -24,11 +24,91 @@
       .replace(/\x1b\].*?(?:\x07|\x1b\\)/g, '');
   }
 
+  function commandTokens(command) {
+    const text = String(command || '');
+    const re = /(?:[^\s"']+|"[^"]*"|'[^']*')+/g;
+    const tokens = [];
+    let match;
+    while ((match = re.exec(text))) tokens.push({ text: match[0], start: match.index, end: match.index + match[0].length });
+    return tokens;
+  }
+
+  function unquoteToken(token) {
+    const text = token && token.text != null ? token.text : String(token || '');
+    if (text.length >= 2 && ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith("'") && text.endsWith("'")))) return text.slice(1, -1);
+    return text;
+  }
+
+  function isAssignment(token) {
+    return /^[A-Za-z_][A-Za-z0-9_]*=/.test(unquoteToken(token));
+  }
+
+  const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash', 'ksh', 'tcsh', 'csh', 'nu', 'pwsh', 'powershell', 'cmd', 'login']);
+  const INTERPRETERS = new Set(['node', 'nodejs', 'python', 'python3', 'ruby', 'perl', 'deno', 'bun']);
+  const PROVIDER_BY_BIN = { 'cursor-agent': 'Cursor', claude: 'Claude', agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Antigravity', grok: 'Grok', codex: 'Codex', chatgpt: 'Codex' };
+
+  // Skip `env`, its flags, NAME=value assignments, and the `command` builtin
+  // so `env CLAUDE_CONFIG_DIR=~/.claude-us claude --model …` is still Claude.
+  function programAt(command) {
+    const tokens = commandTokens(command);
+    let i = 0;
+    const skipAssign = () => { while (i < tokens.length && isAssignment(tokens[i])) i++; };
+    skipAssign();
+    if (unquoteToken(tokens[i]) === 'env') {
+      i++;
+      while (i < tokens.length) {
+        const word = unquoteToken(tokens[i]);
+        if (word === '--') { i++; break; }
+        if (isAssignment(tokens[i])) { i++; continue; }
+        if (word === '-u' || word === '--unset' || word === '-C' || word === '--chdir' || word === '-S' || word === '--split-string') { i += 2; continue; }
+        if (/^--(?:unset|chdir|split-string)=/.test(word)) { i++; continue; }
+        if (word === '-i' || word === '-0' || word === '-v' || word === '--ignore-environment' || word === '-') { i++; continue; }
+        break;
+      }
+      skipAssign();
+    }
+    if (unquoteToken(tokens[i]) === 'command') i++;
+    const token = tokens[i] || null;
+    const raw = token ? unquoteToken(token) : '';
+    const name = raw.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '');
+    return { token, name, lower: name.toLowerCase() };
+  }
+
+  function seatFromCommand(command) {
+    for (const token of commandTokens(command)) {
+      const raw = unquoteToken(token);
+      const match = /^(?:export\s+)?CLAUDE_CONFIG_DIR=(.*)$/.exec(raw);
+      if (!match) continue;
+      let dir = match[1];
+      if (dir.length >= 2 && ((dir.startsWith('"') && dir.endsWith('"')) || (dir.startsWith("'") && dir.endsWith("'")))) dir = dir.slice(1, -1);
+      const base = dir.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop();
+      if (base === '.claude-us') return { id: 'us', configDir: dir };
+      if (base === '.claude') return { id: 'cn', configDir: dir };
+    }
+    return null;
+  }
+
+  // A status line that only says "Sonnet" has no version. The launch id does.
+  function bareFamily(model) {
+    const short = shortModelName(model) || '';
+    if (/\d/.test(short)) return '';
+    const word = short.split(/\s+/)[0];
+    return /^(?:opus|sonnet|haiku|flash|pro|gemini|grok)$/i.test(word) ? word.toLowerCase() : '';
+  }
+
+  function preferVersioned(observed, launch) {
+    if (!observed) return launch || null;
+    if (!launch) return observed;
+    const family = bareFamily(observed);
+    if (!family) return observed;
+    const launchShort = shortModelName(launch) || '';
+    if (launchShort.split(/\s+/)[0].toLowerCase() === family && /\d/.test(launchShort)) return launch;
+    return observed;
+  }
+
   function inferProvider(command, screenText) {
-    const first = String(command || '').trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
-    const bin = first ? (first[1] || first[2] || first[3]).replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase() : '';
-    const providers = { 'cursor-agent': 'Cursor', claude: 'Claude', agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Antigravity', grok: 'Grok', codex: 'Codex', chatgpt: 'Codex' };
-    if (providers[bin]) return providers[bin];
+    const known = PROVIDER_BY_BIN[programAt(command).lower];
+    if (known) return known;
 
     // 2. Fallback to observed live provider heading when launch command is empty or generic
     if (screenText) {
@@ -256,14 +336,33 @@
         if (historyProvider && historyModel) break;
       }
     }
-    if (!provider) provider = historyProvider || (entry && entry.detectedProvider) || (col && col.agentProvider) || null;
+    const knownProvider = new Set(Object.values(PROVIDER_BY_BIN));
+    const savedProvider = (entry && entry.detectedProvider) || (col && col.agentProvider) || '';
+    // A program name we stored ourselves (my-agent) is not a provider. Trusting
+    // it would let a short status word replace the launch --model.
+    if (!provider) provider = historyProvider || (knownProvider.has(savedProvider) ? savedProvider : null);
 
-    if (provider && entry && !entry.detectedProvider) {
+    if (provider && entry && !entry.detectedProvider && Object.values(PROVIDER_BY_BIN).includes(provider)) {
       entry.detectedProvider = provider;
     }
 
-    // Plain shell
+    // Plain shell, or a program we can name but do not recognize as an agent.
     if (!provider) {
+      const prog = programAt(cmd);
+      const flagged = extractModel('', cmd, null, null);
+      if (prog.name && !SHELLS.has(prog.lower) && !(INTERPRETERS.has(prog.lower) && !flagged)) {
+        return {
+          provider: prog.name,
+          model: flagged,
+          rawModel: flagged,
+          shortModel: flagged,
+          seat: null,
+          effort: null,
+          tooltip: flagged ? `${prog.name} · ${flagged}` : prog.name,
+          isShell: false,
+          key: `${prog.name}:${flagged || ''}`,
+        };
+      }
       return {
         provider: null,
         model: null,
@@ -276,16 +375,20 @@
       };
     }
 
-    // Model extraction
+    // Model extraction. A footer that only names the family ("Sonnet") keeps
+    // the version from the launch command; a versioned footer still wins.
     const liveModel = extractModel(screen, '', footers, provider);
     const cachedModel = col && (!col.agentProvider || col.agentProvider === provider) && modelMatchesProvider(col.agentModel, provider) ? col.agentModel : null;
-    const rawModel = liveModel || historyModel || cachedModel || extractModel('', cmd, null, provider);
+    const commandModel = extractModel('', cmd, null, provider);
+    const rawModel = preferVersioned(liveModel || historyModel || cachedModel, commandModel) || commandModel;
     const shortModel = shortModelName(rawModel);
     const liveStatus = liveModel ? (footers && footers.length ? footers.join('\n') : screen) : '';
     const effort = extractEffort(rawModel, cmd, liveStatus) || (historyModel && rawModel === historyModel ? historyEffort : null) || (cachedModel && rawModel === cachedModel ? col.agentEffort : null) || null;
     const tooltip = formatTooltip(provider, rawModel, effort);
-    const seat = provider === 'Claude' && col?.claudeSeatId && col?.claudeConfigDir
+    const commandSeat = provider === 'Claude' ? seatFromCommand(cmd) : null;
+    const storedSeat = provider === 'Claude' && col?.claudeSeatId && col?.claudeConfigDir
       ? { id: col.claudeSeatId, configDir: col.claudeConfigDir } : null;
+    const seat = commandSeat || storedSeat;
     const key = `${provider}:${rawModel || ''}:${effort || ''}:${seat?.id || ''}:${seat?.configDir || ''}`;
 
     return {
@@ -342,7 +445,7 @@
       label.textContent = labelText;
       badgeEl.appendChild(label);
     }
-    if (context === 'sidebar' && info.seat) {
+    if (info.seat) {
       const flag = { cn: '🇨🇳', us: '🇺🇸' }[info.seat.id];
       if (flag) {
         const label = document.createElement('span');
@@ -362,10 +465,10 @@
     if (provider !== 'Claude' && provider !== 'Grok') return cmd;
     if (/(^|\s)(--session-id|-s|--continue|-c|--resume|-r)(\s|=|$)/.test(t)) return cmd;
     if (inferProvider(t, null) !== provider) return cmd;
-    const executable = t.match(/^(?:"[^"]+"|'[^']+'|\S+)/);
-    if (!executable) return cmd;
+    const prog = programAt(t);
+    if (!prog.token) return cmd;
     const flag = provider === 'Claude' ? (isResume ? '--resume' : '--session-id') : (isResume ? '-r' : '-s');
-    return `${executable[0]} ${flag} ${uuid}${t.slice(executable[0].length)}`;
+    return `${t.slice(0, prog.token.end)} ${flag} ${uuid}${t.slice(prog.token.end)}`;
   }
 
   function planAgentLaunch(cmd, storedId, isFresh, skipResume, newId) {

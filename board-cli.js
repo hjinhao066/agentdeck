@@ -110,7 +110,7 @@ function usage() {
     '  ledger                                   every session: id, title, state, last receipt\n' +
     '  quota                                    passive subscription status, one provider per line\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--agent claude|agy|cursor|grok|codex | --command "launch"] [--seat us|cn]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
     '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
@@ -285,12 +285,14 @@ async function main() {
     if (!title || !task) fail('new requires --title and --task.');
     for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
+    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id such as us or cn.');
     const response = await request({
       action: 'main-new', title, task,
       project: typeof args.project === 'string' ? args.project.trim() : '',
       reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],
       agent: typeof args.agent === 'string' ? args.agent : '',
       command: typeof args.command === 'string' ? args.command : '',
+      seat: typeof args.seat === 'string' ? args.seat : '',
       cwd: typeof args.cwd === 'string' ? args.cwd : '',
       boardId: typeof args['task-id'] === 'string' ? args['task-id'] : '',
     }, false);

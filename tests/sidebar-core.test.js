@@ -143,7 +143,7 @@ test('crew members group by model, busiest group first, recent activity inside t
     ['Opus 5.5', 'us', '🇺🇸', 2, ['b', 'g', 'a']],
     ['Grok 4.7', '', '', 2, ['e', 'd']],
     ['Opus 5.5', 'cn', '🇨🇳', 1, ['c']],
-    ['未识别', '', '', 0, ['f']],
+    ['终端', '', '', 0, ['f']],
   ]);
   assert.equal(S.normalizeCollapsedModels([' Opus 5.5\u001fus ', ' Opus 5.5\u001fus ', '', 3, 'x'.repeat(200)]).length, 1);
 });

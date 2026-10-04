@@ -5,6 +5,8 @@
 // makes it stop at a y/n question like a permission prompt.
 const readline = require('readline');
 const provider = process.argv.includes('--provider=codex') ? 'Codex CLI' : 'Claude Code';
+const labelArg = process.argv.find((arg) => arg.startsWith('--model-label='));
+const hideProvider = process.argv.includes('--hide-provider');
 if (process.env.AGENTDECK_TEST_SEATS_ENV_FILE) {
   require('fs').appendFileSync(process.env.AGENTDECK_TEST_SEATS_ENV_FILE, JSON.stringify({
     colId: process.env.AGENTDECK_COL_ID, configDir: process.env.CLAUDE_CONFIG_DIR || null,
@@ -38,7 +40,7 @@ const delayedStart = process.argv.includes('--delayed-start');
 if (!delayedStart) process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 const captainStatusline = process.argv.includes('--captain-statusline');
-let model = captainStatusline ? 'Opus 5.5' : 'Fake';
+let model = labelArg ? labelArg.slice('--model-label='.length) : captainStatusline ? 'Opus 5.5' : 'Fake';
 let contextUsed = 23000;
 const codex = process.argv.includes('--codex-reset');
 let resetMenu = false;
@@ -64,7 +66,7 @@ function box() {
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
   // Keep a recognizable provider footer after replies, like a real TUI. Narrow
   // ConPTY columns can wrap the longer permission line across several rows.
-  process.stdout.write(provider + '\n');
+  if (!hideProvider) process.stdout.write(provider + '\n');
   if (process.argv.includes('--sidebar-controls')) process.stdout.write('← for agents · ? for shortcuts ⚠…\nThinking: xhigh\n');
 }
 let lines = [];
@@ -218,7 +220,7 @@ function listen() {
 }
 function start() {
   if (delayedStart) process.stdout.write('\x1b[?1049h');
-  console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
+  console.log(hideProvider ? 'Ready' : 'Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
   listen();

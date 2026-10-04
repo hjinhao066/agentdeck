@@ -1200,6 +1200,12 @@
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
+        const seat = String(message.seat || '').trim().toLowerCase();
+        if (seat) {
+          const known = window.ClaudeSeatsCore.normalize(host.config.claudeSeats);
+          if (!known.some((item) => item.id === seat)) throw new Error(`不认识的席位：${seat.slice(0, 40)}。可用 ${known.map((item) => item.id).join('、')}。`);
+          metadata.claudeSeatId = seat;
+        }
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
