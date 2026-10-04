@@ -556,6 +556,9 @@
     updateSend();
     if (follow) toBottom(conversation);
   }
+  // Tapping remove or retry must not take focus from the message box: losing
+  // it closes the keyboard and moves the thumbnails under the finger mid-tap.
+  $('attachments').addEventListener('mousedown', (event) => event.preventDefault());
   $('attach').addEventListener('click', () => $('image-input').click());
   $('image-input').addEventListener('change', () => { addImages($('image-input').files); $('image-input').value = ''; });
   $('message').addEventListener('paste', (event) => {

@@ -129,9 +129,11 @@ h1, h2, h3, h4, p { margin: 0; }
 .send-status { font-size: 12px; color: var(--muted); padding: 0 8px 6px; overflow-wrap: anywhere; }
 .send-status:empty { display: none; }
 /* Padding leaves room for the remove buttons and their focus rings. */
-.attachments { --thumb: 72px; display: flex; gap: 8px; padding: 14px 14px 8px 4px; overflow-x: auto; scrollbar-width: none; }
-/* Keyboard up: smaller thumbnails keep the conversation readable. */
-.keyboard-open .attachments { --thumb: 48px; gap: 14px; }
+.attachments { --thumb: 72px; display: flex; align-items: flex-end; gap: 8px; padding: 20px 14px 8px 4px; overflow-x: auto; scrollbar-width: none; }
+/* Keyboard up: smaller thumbnails keep the conversation readable. A failed
+   one stays full size, because it has to fit two separate touch targets. */
+.keyboard-open .attachments { gap: 14px; }
+.keyboard-open .attachment:not([data-state="failed"]) { --thumb: 48px; }
 .attachments::-webkit-scrollbar { display: none; }
 .attachment { position: relative; flex: none; width: var(--thumb); height: var(--thumb); }
 .attachment img { display: block; width: var(--thumb); height: var(--thumb); object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: var(--soft); }
@@ -139,12 +141,14 @@ h1, h2, h3, h4, p { margin: 0; }
 .attachment[data-state="failed"] img { opacity: .35; border-color: var(--red); }
 .upload-track { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--text) 25%, transparent); overflow: hidden; }
 .upload-bar { display: block; height: 100%; border-radius: 2px; background: var(--orange); transition: width .15s linear; }
-/* 44px touch targets; the visible disc is smaller and sits on the corner. */
-.attachment-remove { position: absolute; top: -10px; right: -10px; color: var(--bg); }
+/* 44px touch targets; the visible disc is smaller and sits on the corner.
+   Remove ends 28px below the top edge and retry fills the 44px below that,
+   so the two never share a point. */
+.attachment-remove { position: absolute; top: -16px; right: -10px; color: var(--bg); }
 .attachment-remove::before { content: ""; position: absolute; inset: 11px; border-radius: 50%; background: var(--text); }
 .attachment-remove svg { position: relative; width: 12px; height: 12px; stroke-width: 2.6; }
 .attachment-remove:hover:not(:disabled) { background: transparent; color: var(--bg); }
-.attachment-retry { position: absolute; top: calc((var(--thumb) - 44px) / 2); left: calc((var(--thumb) - 44px) / 2); color: var(--red); }
+.attachment-retry { position: absolute; left: 0; bottom: 0; width: 100%; height: 44px; border-radius: 0 0 14px 14px; color: var(--red); }
 .attachment-retry:hover:not(:disabled) { background: transparent; color: var(--red); }
 .composer-box { display: flex; align-items: flex-end; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 24px; background: var(--raised); }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--orange) 55%, var(--line)); }

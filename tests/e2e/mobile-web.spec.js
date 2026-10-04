@@ -559,9 +559,40 @@ test('images picked or pasted on the phone upload, send with the text and reach 
   }
   await mobile.getByLabel('给队长的消息').fill('看下这三张截图');
   await screenshot('images-thumbs');
+  // Remove and retry never share a point, keyboard down or up, and each keeps
+  // a 44px target; the retry icon's centre belongs to retry.
+  const targets = () => mobile.locator('.attachment').evaluateAll((chips) => chips.flatMap((chip) => [...chip.querySelectorAll('.icon-button')].map((button) => {
+    const box = button.getBoundingClientRect(), icon = button.querySelector('svg').getBoundingClientRect();
+    const x = icon.left + icon.width / 2, y = icon.top + icon.height / 2;
+    return { label: button.getAttribute('aria-label'), left: box.left, top: box.top, right: box.right, bottom: box.bottom, x, y, hit: document.elementFromPoint(x, y)?.closest('button') === button };
+  })));
+  const separate = async () => {
+    const boxes = await targets();
+    expect(boxes.map((box) => box.label)).toEqual(['移除图片', '移除图片', '重试上传', '移除图片']);
+    for (const box of boxes) {
+      expect(box.right - box.left).toBeGreaterThanOrEqual(44); expect(box.bottom - box.top).toBeGreaterThanOrEqual(44);
+      expect(box.hit).toBe(true);
+      for (const other of boxes) if (other !== box) expect(box.left < other.right && other.left < box.right && box.top < other.bottom && other.top < box.bottom).toBe(false);
+    }
+    return boxes.find((box) => box.label === '重试上传');
+  };
+  await separate();
+  await mobile.setViewportSize({ width: 390, height: 420 });
+  await expect(mobile.locator('#tabbar')).toBeHidden();
+  await expect.poll(() => mobile.locator('.attachment[data-state="done"]').first().evaluate((chip) => chip.getBoundingClientRect().width)).toBe(48);
+  expect(await mobile.locator('.attachments').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const retry = await separate();
+  await screenshot('images-failed-keyboard');
+  // Keyboard up: a tap on the centre of the retry icon retries; it must not remove.
   await mobile.unroute('**/api/upload');
-  await mobile.getByRole('button', { name: '重试上传', exact: true }).click();
+  await mobile.touchscreen.tap(retry.x, retry.y);
   await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(3);
+  await expect(mobile.locator('.attachment')).toHaveCount(3);
+  // The tap left the message box focused, so nothing moved under the finger.
+  await expect(mobile.getByLabel('给队长的消息')).toBeFocused();
+  await expect(mobile.locator('#tabbar')).toBeHidden();
+  await mobile.setViewportSize({ width: 390, height: 844 });
+  await expect(mobile.locator('#tabbar')).toBeVisible();
   expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   const ids = stored();
   expect(ids.length).toBe(4);   // three attached, one removed before sending
