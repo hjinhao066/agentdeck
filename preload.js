@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('deck', {
   mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
+  quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
+  onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
   clipboardWrite: (t) => clipboard.writeText(t),
   clipboardRead: () => clipboard.readText(),
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
@@ -72,7 +74,7 @@ contextBridge.exposeInMainWorld('deck', {
   // A prompt too long for the terminal is saved as a private .txt; returns its path.
   saveLongPrompt: (text) => ipcRenderer.invoke('prompt:save-long', { text }),
   // Hot-reload support: check if a pty survived a renderer reload, replay its buffer.
-  ptyIsAlive: (id) => ipcRenderer.invoke('pty:is-alive', { id }),
+  ptyIsAlive: (id, seatId) => ipcRenderer.invoke('pty:is-alive', { id, seatId }),
   ptyForeground: (id) => ipcRenderer.invoke('pty:foreground', { id }),
   ptyReplay: (id) => ipcRenderer.invoke('pty:replay', { id }),
   reloadRenderer: () => ipcRenderer.send('reload-renderer'),

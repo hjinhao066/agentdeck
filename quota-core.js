@@ -53,6 +53,14 @@
       for (const m of s.matchAll(/(\d+(?:\.\d+)?)\s*(d\w*|h\w*|m\w*|s\w*)/gi)) ms += Number(m[1]) * ({ d: 86400000, h: 3600000, m: 60000, s: 1000 }[m[2][0].toLowerCase()]);
       return now + ms;
     }
+    const dateClock = s.match(/^(\d{2})-(\d{2})\s+(\d{2}):(\d{2})$/);
+    if (dateClock) {
+      const [, month, day, hour, minute] = dateClock.map(Number);
+      const d = new Date(now); d.setMonth(month - 1, 1); d.setDate(day); d.setHours(hour, minute, 0, 0);
+      if (month < 1 || month > 12 || d.getMonth() !== month - 1 || d.getDate() !== day || hour > 23 || minute > 59) return null;
+      if (d.getTime() <= now) d.setFullYear(d.getFullYear() + 1);
+      return d.getTime();
+    }
     const clock = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?(?:\s*\(([A-Za-z_\/]+)\))?$/i);
     if (clock) {
       let h = Number(clock[1]); const min = Number(clock[2] || 0);
@@ -86,7 +94,7 @@
   }
   function windowValue(label, used, reset, at) {
     if (percent(used) === null) return null;
-    return { label, remaining: Math.round((100 - used) * 10) / 10, exhausted: used === 100, resetAt: resetTime(reset, at), resetText: typeof reset === 'string' ? reset.slice(0, 100) : '' };
+    return { key: label === '5 小时' ? 'fiveHour' : label === '每周' ? 'weekly' : label, label, used, remaining: Math.round((100 - used) * 10) / 10, exhausted: used === 100, resetAt: resetTime(reset, at), resetText: typeof reset === 'string' ? reset.slice(0, 100) : '' };
   }
   function screen(provider, text, footerRows, at = Date.now(), model = '') {
     if (!PROVIDERS.includes(provider)) return null;
@@ -120,8 +128,10 @@
         if (w) windows.push(w);
       }
       for (const [label, name] of [['5 小时', '5h'], ['每周', '7d']]) {
-        const m = footer.match(new RegExp('(?:^|\\s|[|│·])' + name + '\\s+(\\d+(?:\\.\\d+)?)%', 'i'));
-        if (m && !windows.some((w) => w.label === label)) windows.push(windowValue(label, Number(m[1]), null, at));
+        const m = footer.match(new RegExp('(?:^|\\s|[|│·])' + name + '\\s*(?:(剩余|剩|remaining|left|used|已用)\\s*)?(\\d+(?:\\.\\d+)?)%(?:\\s*(remaining|left|used|已用))?(?:\\s*↻\\s*([^|│·\\n]+))?', 'i'));
+        if (!m || /used|已用/i.test(m[1] || m[3] || '') || windows.some((w) => w.label === label)) continue;
+        const w = windowValue(label, 100 - Number(m[2]), m[4]?.trim(), at);
+        if (w) windows.push(w);
       }
       // Native /usage displays a heading, percentage used, and reset on rows.
       for (const [label, heading] of [['5 小时', 'Current session'], ['每周', 'Current week(?: \\(all models\\))?']]) {
@@ -154,7 +164,7 @@
     const windows = Array.isArray(data.windows) ? data.windows.slice(0, 2).map((w) => ['fiveHour', 'weekly'].includes(w?.key) && percent(w.remaining) !== null ? windowValue(w.key === 'fiveHour' ? '5 小时' : '每周', 100 - w.remaining, w.resetText, at) : null).filter(Boolean)
       : [windowValue('5 小时', data.sessionUsage ?? native.five_hour?.utilization ?? native.five_hour?.used_percentage, data.sessionResetAt ?? native.five_hour?.resets_at, at), windowValue('每周', data.weeklyUsage ?? native.seven_day?.utilization ?? native.seven_day?.used_percentage, data.weeklyResetAt ?? native.seven_day?.resets_at, at)].filter(Boolean);
     const oauth = data.source === CLAUDE_OAUTH_SOURCE;
-    return windows.length || oauth ? { provider: 'Claude', scope: 'claude', at, source: oauth ? CLAUDE_OAUTH_SOURCE : 'ccstatusline 本地缓存', confidence: oauth ? windows.length ? '高（服务端采样）' : '未知（刷新未取得数据）' : '中（第三方缓存）', windows } : null;
+    return windows.length || oauth ? { provider: 'Claude', scope: 'claude', at, official: oauth, source: oauth ? CLAUDE_OAUTH_SOURCE : 'ccstatusline 本地缓存', confidence: oauth ? windows.length ? '高（服务端采样）' : '未知（刷新未取得数据）' : '中（第三方缓存）', windows } : null;
   }
   function cacheCodex(event) {
     if (event?.type !== 'event_msg' || event.payload?.type !== 'token_count') return null;
@@ -189,7 +199,7 @@
     return windows.length ? { provider: 'Antigravity', scope: 'gemini', model: modelScope('Antigravity', model) ? modelName(model) : 'Gemini（共享分组）', at, source: 'agy 本地状态行快照', confidence: '中（可选 CLI 调试快照）', windows } : null;
   }
   function observe(store, next, now = Date.now()) {
-    if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || now - next.at > freshMs(next)) return false;
+    if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || (!next.official && !next.failureOnly && now - next.at > freshMs(next))) return false;
     if (next.scope !== SCOPES[next.provider]) return false;
     if (next.provider === 'Claude' && next.source === CLAUDE_OAUTH_SOURCE &&
       (!next.accountBound || !next.accountKey || !next.configDir || !next.windows?.length)) return false;
@@ -214,6 +224,29 @@
       store[key] = out;
       return before !== JSON.stringify(out);
     }
+    if (next.failureOnly) {
+      out.officialStatus = { failures: next.failures, checkedAt: next.checkedAt, failure: next.failure };
+      store[key] = out;
+      return before !== JSON.stringify(out);
+    }
+    if (next.official) {
+      out.officialStatus = { failures: 0, checkedAt: next.at };
+      if (out.blocked && !out.blocked.resetAt) {
+        const resets = next.windows.filter((w) => w.resetAt > now && (w.exhausted || w.key === 'fiveHour')).map((w) => w.resetAt);
+        if (resets.length) out.blocked = { ...out.blocked, resetAt: Math.max(...resets) };
+      }
+    }
+    // Failed queries never grant screen/cache numbers authority over the last
+    // successful official sample. Still retain genuine CLI exhaustion errors.
+    if (previous.sample?.official && !next.official) {
+      if (next.exhausted) {
+        const resets = previous.sample.windows.filter((w) => w.resetAt > now && (w.exhausted || w.key === 'fiveHour')).map((w) => w.resetAt);
+        out.blocked = { at: next.at, resetAt: next.resetAt || (resets.length ? Math.max(...resets) : null), resetText: next.resetText, source: next.source, sourceColumnId: next.sourceColumnId };
+      }
+      if (next.resumed && next.at > (out.blocked?.at || 0)) delete out.blocked;
+      store[key] = out;
+      return before !== JSON.stringify(out);
+    }
     // Bound server observations cannot clear a CLI exhaustion latch. Older
     // observations cannot override a newer server sample or quota error.
     if (next.provider === 'Claude' && next.source === CLAUDE_OAUTH_SOURCE &&
@@ -231,10 +264,10 @@
     if (!zeros.length && next.windows?.length && out.blocked?.numeric && next.at > out.blocked.at) delete out.blocked;
     const old = previous.sample;
     const hasNumbers = next.windows?.length > 0;
-    if (!old || (hasNumbers && !old.windows?.length) || (next.at >= old.at && (hasNumbers || !old.windows?.length)) ||
+    if (next.official || !old || (hasNumbers && !old.windows?.length) || (next.at >= old.at && (hasNumbers || !old.windows?.length)) ||
       (hasNumbers && next.source === '会话屏幕' && now - old.at < FRESH_MS && old.source !== '会话屏幕') || now - old.at > FRESH_MS) {
       // A fresh screen with numbers wins over a fallback cache until stale.
-      if (!(old?.source === '会话屏幕' && old.windows?.length && now - old.at < FRESH_MS && next.source !== '会话屏幕')) out.sample = next;
+      if (next.official || !(old?.source === '会话屏幕' && old.windows?.length && now - old.at < FRESH_MS && next.source !== '会话屏幕')) out.sample = next;
     }
     store[key] = out;
     return before !== JSON.stringify(out);
@@ -244,31 +277,43 @@
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
     const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir);
     const fresh = sample && trusted && now - sample.at <= freshMs(sample);
-    const windows = fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
+    const retained = trusted && !!sample?.official;
+    const stale = retained && (!fresh || entry.officialStatus?.failures >= 3 || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
+    const windows = retained ? sample.windows || [] : fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
     const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
     const remaining = windows.length ? Math.min(...windows.map((w) => w.remaining)) : null;
-    const exhausted = !!blocked || windows.some((w) => w.exhausted);
+    const exhausted = !!blocked || windows.some((w) => w.exhausted && (!w.resetAt || w.resetAt > now));
     const state = exhausted ? 'exhausted' : remaining !== null ? (remaining <= 10 ? 'danger' : remaining <= 20 ? 'warning' : 'normal') : provider !== 'Claude' && fresh && !sample.windows?.length && !entry.blocked ? 'normal' : 'unknown';
     const label = exhausted ? '已用尽' : remaining !== null ? (remaining === 0 ? '<0.1%' : `${remaining}%`) : provider === 'Claude' ? '未知' : state === 'normal' ? '正常' : '未知';
-    const details = windows.map((w) => `${w.label}剩余 ${w.remaining === 0 && !w.exhausted ? '<0.1' : w.remaining}%；重置 ${w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText || '未知'}`);
+    const clock = (t, weekly = false) => {
+      const d = new Date(t), pad = (v) => String(v).padStart(2, '0');
+      return `${weekly ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    };
+    const recovery = blocked?.resetAt || Math.max(0, ...windows.filter((w) => w.exhausted && w.resetAt > now).map((w) => w.resetAt));
+    const claudeWindow = (w, showBlock = true) => {
+      const isWeekly = w.label === '每周';
+      const isBlocked = showBlock && (w.exhausted && w.resetAt > now || !isWeekly && !!blocked && !windows.some((v) => v.exhausted && v.label === '每周'));
+      const reset = showBlock && !isWeekly && blocked ? recovery || w.resetAt : w.resetAt;
+      return `${isWeekly ? '7d' : '5h'} ${isBlocked ? '已用尽' : w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%`} ↻${reset ? clock(reset, isWeekly) : w.resetText || '未知'}`;
+    };
+    const details = windows.map((w) => provider === 'Claude' ? claudeWindow(w) : `${w.label}剩余 ${w.remaining === 0 && !w.exhausted ? '<0.1' : w.remaining}%；重置 ${w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText || '未知'}`);
     details.unshift(`模型：${entry.model || ({ Claude: 'Claude（账号共享额度）', Codex: 'Codex（账号共享额度）', Cursor: 'Grok 4.7', Antigravity: 'Gemini（共享分组）' }[provider])}；账号：${entry.account || (seat ? '未识别（此席位）' : '未识别（本机当前登录）')}`);
     if (seat) details.unshift(`席位：${seat.name}（${seat.id}）${seat.id === captainSeatId ? '；当前队长使用此席位' : ''}；配置目录：${seat.configDir}`);
-    if (provider === 'Claude') for (const name of ['5 小时', '每周']) if (!windows.some((w) => w.label === name)) details.push(`${name}：未知；重置 未知`);
+    if (provider === 'Claude') for (const [name, short] of [['5 小时', '5h'], ['每周', '7d']]) if (!windows.some((w) => w.label === name)) details.push(`${short} 无数据 ↻未知`);
     if (provider === 'Cursor') details.push('仅统计 Grok 4.7；Cursor Models 池百分比暂不可可靠取得');
     if (provider === 'Antigravity') details.push('仅统计 Gemini 分组；不含 agy Claude / 第三方额度');
     if (sample?.note) details.push(sample.note);
     if (provider === 'Codex' && !windows.some((w) => w.label === '5 小时') && !sample?.note) details.push('5 小时：无新鲜数字');
-    if (blocked) details.push(`已用尽；恢复 ${blocked.resetAt ? new Date(blocked.resetAt).toLocaleString() : blocked.resetText || '时间未知'}`);
+    if (blocked) details.push(provider === 'Claude' ? `已用尽 ↻${recovery ? clock(recovery, recovery - now > 86400000) : blocked.resetText || '未知'}` : `已用尽；恢复 ${blocked.resetAt ? new Date(blocked.resetAt).toLocaleString() : blocked.resetText || '时间未知'}`);
+    if (provider === 'Claude' && blocked && windows.length) details.push(`上次采样：${windows.map((w) => claudeWindow(w, false)).join(' · ')}；采样 ${new Date(sample.at).toLocaleString()}`);
     if (blocked?.sourceColumnId) details.push(`报错会话：${blocked.sourceColumnId}`);
-    if (blocked && windows.length) details.push(`额度数字来源：${sample.source}；采样 ${new Date(sample.at).toLocaleString()}`);
     if (!windows.length && !blocked) details.push(state === 'normal' ? '未观察到额度用尽；无法取得数字' : '无新鲜额度信息；等待会话/缓存更新');
-    const evidence = blocked || sample;
-    if (evidence) details.push(`来源：${evidence.source}；${blocked ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；${evidence.source === CLAUDE_OAUTH_SOURCE && !evidence.windows?.length ? '查询' : '采样'} ${new Date(evidence.at).toLocaleString()}${!fresh && !blocked ? '（已过期）' : ''}`);
-    const displayLabel = provider === 'Claude' && windows.length ? (exhausted ? '已用尽 · ' : '') + ['5 小时', '每周'].map((name, i) => {
-      const w = windows.find((w) => w.label === name);
-      return `${i ? '7d' : '5h'} ${w ? w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%` : '无数据'}`;
-    }).join(' · ') : label;
-    const sampleLabel = provider === 'Claude' && fresh ? `${sample.windows?.length ? '采样' : '查询'} ${new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}` : '';
+    if (entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；连续 ${entry.officialStatus.failures} 次${entry.officialStatus.failures >= 3 ? '，保留上次成功采样（数据已旧）' : '，保留上次数字'}`);
+    if (retained && windows.some((w) => w.resetAt <= now)) details.push('窗口重置时间已过，等待新采样（显示上次数字）');
+    const evidence = retained ? sample : blocked || sample;
+    if (evidence) details.push(`来源：${evidence.source}；${blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；采样 ${new Date(evidence.at).toLocaleString()}${stale ? '（数据已旧）' : !fresh && (!blocked || retained) ? '（已过期）' : ''}`);
+    const displayLabel = provider === 'Claude' && windows.length ? (blocked && !windows.some((w) => w.label === '5 小时') ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'} · ` : '') + windows.map((w) => claudeWindow(w)).join(' · ') : provider === 'Claude' && blocked ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'}` : label;
+    const sampleLabel = provider === 'Claude' && (fresh || retained) ? `采样 ${stale ? new Date(sample.at).toLocaleString() : new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}${stale ? '（数据已旧）' : ''}` : '';
     return { provider, state, label, displayLabel, sampleLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }

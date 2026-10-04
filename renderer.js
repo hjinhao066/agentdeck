@@ -1950,6 +1950,7 @@ function buildColumn(col, isFresh) {
         }
         // 队长 gets a control token too; the columns it drives never do.
         const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
+        flushConfig();
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
 
         if (launch) {
@@ -3371,13 +3372,23 @@ ChatUI.init(deckHost);
 Pages.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
 renderQuotaBar();
-async function readQuotaCache() {
-  const samples = await window.deck.quotaLocal();
+function applyQuotaSamples(samples) {
   let changed = false;
   for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
   if (changed) saveConfig();
   renderQuotaBar();
 }
+async function readQuotaCache() { applyQuotaSamples(await window.deck.quotaLocal()); }
+async function refreshQuota(seatId) { applyQuotaSamples(await window.deck.quotaRefresh(seatId)); }
+window.deck.onQuotaUpdated(applyQuotaSamples);
+window.addEventListener('claude-seat-changed', (e) => {
+  if (e.detail?.seatId !== 'chatgpt') refreshQuota(e.detail?.seatId).catch(() => {});
+});
+document.getElementById('quotaRefresh').addEventListener('click', async (e) => {
+  const button = e.currentTarget; button.disabled = true;
+  try { await refreshQuota(); } catch (_) { showToast('额度查询暂不可用，保留上次采样'); }
+  finally { button.disabled = false; }
+});
 window.addEventListener('claude-seat-usage', () => readQuotaCache().catch(() => {}));
 readQuotaCache().catch(() => {});
 setInterval(() => readQuotaCache().catch(() => {}), 30000);
@@ -3681,6 +3692,7 @@ setInterval(() => {
       if (signature !== entry.lastQuotaObservation) {
         entry.lastQuotaObservation = signature;
         if (QuotaCore.observe(config.quotas, sample)) saveConfig();
+        if (sample?.provider === 'Claude' && sample.exhausted) refreshQuota(sample.seatId).catch(() => {});
       }
     }
 

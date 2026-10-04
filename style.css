@@ -314,7 +314,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-icon { display: flex; flex: 0 0 auto; }
 .quota-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
 .quota-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.quota-item[data-state="normal"] .quota-label { color: var(--text); }
+.quota-item[data-state="normal"] { color: var(--text); }
 .quota-item[data-state="warning"], .quota-item[data-state="warning"] .quota-label { color: #d99426; }
 .quota-item[data-state="danger"], .quota-item[data-state="exhausted"],
 .quota-item[data-state="danger"] .quota-label, .quota-item[data-state="exhausted"] .quota-label { color: #e46464; }
@@ -1943,3 +1943,16 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .mobile-web-access label { display: block; margin: 10px 0 6px; font-size: 12px; }
 .mobile-web-access input { box-sizing: border-box; width: 100%; padding: 9px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; font-family: monospace; }
 #notificationSettings .mobile-web-access .rail-btn { width: 44px; height: 44px; min-width: 44px; min-height: 44px; margin-top: 6px; }
+
+#quotaRefresh { display: grid; place-items: center; width: 32px; height: 32px; background: transparent; border: 0; border-radius: 5px; color: inherit; cursor: pointer; }
+#quotaRefresh svg { width: 16px; height: 16px; }
+#quotaRefresh:hover, #quotaRefresh:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
+:root[data-theme="dark"] .quota-item[data-state="warning"] { color: #f4cc77; }
+:root[data-theme="dark"] .quota-item[data-state="danger"], :root[data-theme="dark"] .quota-item[data-state="exhausted"] { color: #ffb4aa; }
+:root[data-theme="light"] .quota-item[data-state="warning"] { color: #765000; }
+:root[data-theme="light"] .quota-item[data-state="danger"], :root[data-theme="light"] .quota-item[data-state="exhausted"] { color: #a02020; }
+
+.quota-heading { display: flex; align-items: center; justify-content: space-between; }
+#navQuota .quota-item, #quotaPopList .quota-item { flex-wrap: wrap; }
+#navQuota .quota-label, #quotaPopList .quota-label { flex-basis: 100%; white-space: normal; line-height: 1.6; }
+:root .quota-item .quota-label { color: inherit; }

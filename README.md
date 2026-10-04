@@ -595,3 +595,7 @@ and GitHub synchronization after every completed change.
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
 
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
+
+Claude's macOS quota reader and seat-isolated Relay are described in
+[Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and
+`board-cli quota` are remaining; `↻` identifies each window's next reset.

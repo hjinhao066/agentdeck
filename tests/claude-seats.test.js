@@ -205,3 +205,32 @@ test('recording owned usage invalidates quota cache only after a successful writ
   assert.throws(() => handlers['seats:record-usage'](null, { ...input, configDir: '~/.wrong' }));
   assert.equal(invalidated, 1);
 });
+
+test('valid keychain credentials do not require profile email; failures name the exact seat', async (t) => {
+  const home = fixture(t), us = S.normalize()[1];
+  const valid = await M.seatInfo(us, home, 'darwin', async () => ({ present: true, loginReason: '' }));
+  assert.equal(valid.loggedIn, true);
+  assert.equal(valid.maskedEmail, '');
+  const unavailable = await M.seatInfo(us, home, 'darwin', async () => ({ present: false, authReason: '无法核实钥匙串' }));
+  assert.equal(unavailable.loginReason, '');
+  assert.equal(unavailable.authReason, 'US（us）：无法核实钥匙串');
+  const expired = await M.seatInfo(us, home, 'darwin', async () => ({ present: false, loginReason: '访问令牌已过期且没有刷新令牌' }));
+  assert.equal(expired.id, 'us');
+  assert.match(expired.loginReason, /US（us）.*没有刷新令牌/);
+});
+test('credential checks allow Claude to refresh expired access; no login prompt for access denial', async () => {
+  const read = (oauth, error) => M.credentialStatus('seat-service', (file, args, options, cb) => {
+    assert.equal(file, 'security');
+    assert.deepEqual(args, ['find-generic-password', '-s', 'seat-service', '-w']);
+    cb(error, JSON.stringify({ claudeAiOauth: oauth }));
+  });
+  const refreshed = await read({ accessToken: 'fake-access', expiresAt: Date.now() - 1, refreshToken: 'fake-refresh' });
+  assert.equal(refreshed.present, true);
+  assert.equal(refreshed.loginReason, '');
+  const expired = await read({ accessToken: 'fake-access', expiresAt: Date.now() - 1 });
+  assert.equal(expired.present, false); assert.match(expired.loginReason, /过期/);
+  const locked = await read({}, { code: 1 });
+  assert.equal(locked.loginReason, ''); assert.match(locked.authReason, /钥匙串访问权限/);
+  assert.match((await read({}, { code: 44 })).loginReason, /没有登录凭据/);
+  assert.doesNotMatch(JSON.stringify(refreshed), /fake-access|fake-refresh/);
+});
