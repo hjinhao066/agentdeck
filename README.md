@@ -246,6 +246,13 @@ again with the current provider, model and effort instructions.
   another listener, keeping exactly one active. A timeout prints nothing and exits
   successfully; omit `--timeout` to wait indefinitely. The timeout is in seconds
   (other legacy CLI commands retain their existing timeout units).
+  Codex execution session IDs do not by themselves wake an idle model. An
+  opt-in [native Codex Captain host](docs/native-codex-captain.md) owns a private
+  app-server and uses native tool-output turns for 60-second whole-board checks.
+  It confirms stable receipt IDs only after successful turns; it does not inject
+  receipt text into terminal input. Existing Codex columns need an intentional
+  Captain command switch after runtime integration; installing the script alone
+  does not connect them. Claude's existing listener channel is unchanged.
   An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
   Additions waiting for the same session are combined in order into one prompt,

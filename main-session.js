@@ -6,6 +6,7 @@
 (function () {
   'use strict';
   const M = window.MainCore;
+  const nativeCaptain = (cmd) => /codex-captain-host\.js["']?(?:\s|$)/.test(cmd || '');
   const ACTIVE_OUTPUT_MS = 60_000;   // output this recent: not finished, whatever the status dot says
   let host = null;
   const MAX_TASKS = 120;            // cards kept in config.json; older ones drop off
@@ -156,14 +157,14 @@
     s.cmd = typeof s.cmd === 'string' ? window.BoardCore.upgradeLegacyCommand(s.cmd) : '';
     const col = host.columns().find((c) => c.id === s.colId && c.isMain);
     if (col && col.cmd) s.cmd = col.cmd;
-    s.pending = Array.isArray(s.pending) ? s.pending.slice(-50) : [];
-    s.inflight = Array.isArray(s.inflight) ? s.inflight.slice(-50) : [];
+    s.pending = Array.isArray(s.pending) ? s.pending : [];
+    s.inflight = Array.isArray(s.inflight) ? s.inflight : [];
     // A turn open at shutdown cannot acknowledge these items after relaunch.
-    s.pending = [...s.inflight, ...s.pending].slice(-50);
+    s.pending = [...s.inflight, ...s.pending];
     s.inflight = [];
     s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((text) => typeof text === 'string' && text.trim() && text.length <= 8000) : [];
     s.fresh = !!s.fresh;
-    s.legacyReceiptInjection = s.legacyReceiptInjection === true;
+    s.legacyReceiptInjection = s.legacyReceiptInjection === true && !nativeCaptain(s.cmd);
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
     s.tasks.forEach((t) => { delete t.boardRetrying; });
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
@@ -386,7 +387,7 @@
     const retired = window.ChatUI.archiveCaptainSnapshot(col.id, snapshot);
     if (retired) host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { ...retired, clearedAt: Date.now() }]);
     const s = state();
-    s.pending = [...s.inflight, ...s.pending].slice(-50);
+    s.pending = [...s.inflight, ...s.pending];
     s.inflight = [];
     delete col.modelSessionId;
     col.cmd = M.freshCommand(col.cmd);
@@ -454,7 +455,7 @@
     const entry = host.terms.get(col.id);
     const busy = !!entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
     const kept = '\n\n派出去的活不会中断；没处理的回执和提问留给清空后的队长；之前的对话存在本机，不会删除，队长需要时按需读取。';
-    if (!rotation && !confirm(busy
+    if (!rotation && !options?.fromEdit && !confirm(busy
       ? '队长现在正在回复（或停在确认提示上）。清空会打断它这一轮，这一轮没说完的不会再有。\n确定现在清空队长的模型上下文吗？' + kept
       : '只清空队长的模型上下文：队长重新启动，重新读一遍默认说明。' + kept)) return;
     contextReset = null;
@@ -467,7 +468,7 @@
     if (retired) {
       host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { id: oldId, ...retired, clearedAt: Date.now() }]);
     }
-    s.pending = [...requeue, ...s.pending].slice(-50);
+    s.pending = [...requeue, ...s.pending];
     s.gen += 1;
     const waiting = new Set(s.pending.map((p) => p.taskId).filter(Boolean));
     const latest = new Map(s.tasks.map((t) => [t.colId, t]));
@@ -482,7 +483,8 @@
         push(t, { question: t.receipt.question });
       }
     });
-    col.cmd = M.freshCommand(rotation && options.command ? options.command : col.cmd);
+    col.cmd = M.freshCommand(options?.command || col.cmd);
+    if (nativeCaptain(col.cmd)) s.legacyReceiptInjection = false;
     if (rotation) {
       col.claudeSeatId = options.seatId;
       delete col.claudeConfigDir; // Only the replacement Captain adopts the new seat.
@@ -743,7 +745,6 @@
     const s = state();
     if (!s || task.gen !== s.gen) return;
     s.pending.push({ taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
-    if (s.pending.length > 50) s.pending.splice(0, s.pending.length - 50);
   }
   // Hand every pending receipt to 队长's model as text; they count as in
   // flight until its turn ends.
@@ -751,7 +752,7 @@
     const s = state();
     const text = M.receiptsForModel(s.pending);
     const turnId = nextTurn ? '' : (window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '');
-    s.inflight = [...s.inflight, ...s.pending.map((p) => ({ ...p, deliveryTurnId: turnId, ...(batch ? { batch } : {}) }))].slice(-50);
+    s.inflight = [...s.inflight, ...s.pending.map((p) => ({ ...p, deliveryTurnId: turnId, ...(batch ? { batch } : {}) }))];
     s.pending = [];
     save();
     return text;
@@ -788,7 +789,7 @@
         // not typed after all: the receipts go back to waiting
         const back = s.inflight.filter((p) => p.batch === batch).map(({ batch: b, deliveryTurnId, ...item }) => item);
         s.inflight = s.inflight.filter((p) => p.batch !== batch);
-        s.pending = [...back, ...s.pending].slice(-50);
+        s.pending = [...back, ...s.pending];
         save();
       });
     }, () => { delivering = false; });
@@ -1058,7 +1059,28 @@
           + (crew ? `\n已归档的队员（tell 会先自动恢复）：${crew}` : '')
           + (waiting ? `\n排队等空位：${waiting}` : '') + (history ? '\n' + history : '') };
       }
+      case 'main-receipts-snapshot': {
+        for (const item of s.pending) {
+          if (!item.receiptId) {
+            s.receiptSeq = (Number.isSafeInteger(s.receiptSeq) ? s.receiptSeq : 0) + 1;
+            item.receiptId = 'r-' + Date.now().toString(36) + '-' + s.receiptSeq.toString(36);
+          }
+        }
+        save();
+        host.flushConfig?.();
+        return { done: true, result: JSON.stringify({ receipts: s.pending.slice(0, 50) }) };
+      }
+      case 'main-receipts-ack': {
+        if (!Array.isArray(message.receiptIds) || message.receiptIds.length > 50 || message.receiptIds.some((id) => typeof id !== 'string' || !/^[a-z0-9-]{1,100}$/.test(id))) throw new Error('Invalid receipt ids.');
+        const ids = new Set(message.receiptIds);
+        const count = s.pending.length;
+        s.pending = s.pending.filter((p) => !ids.has(p.receiptId));
+        save();
+        host.flushConfig?.();
+        return { done: true, result: JSON.stringify({ acknowledged: count - s.pending.length }) };
+      }
       case 'main-receipts': {
+        if (nativeCaptain(mainCol()?.cmd)) throw new Error('Native Captain host owns receipt delivery; use snapshot/ack, not a consuming receipts listener.');
         // A short read belonging to a timed watcher must not consume anything
         // if it was queued while the renderer was unavailable and has expired.
         if (message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt)) return { done: true, result: '' };
@@ -1110,7 +1132,7 @@
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
         const custom = window.BoardCore.cleanText(message.command, 1000);
-        const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : s.cmd));
+        const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : nativeCaptain(s.cmd) ? window.BoardCore.commandForAgent('codex') : s.cmd));
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;
         const cwd = window.BoardCore.cleanText(message.cwd, 1000);
