@@ -81,6 +81,10 @@ test.afterEach(async () => {
   if (application) await closeApplication();
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
+test('fresh Captain receives its complete multiline briefing after input is ready', async () => {
+  const expected = await page.evaluate(() => MainCore.instructions(env.platform));
+  expect(promptsFor(cn)).toContain(expected);
+});
 test('rotation exposes current seat and masked emails; an unlogged seat cannot replace Captain', async () => {
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：CN');
