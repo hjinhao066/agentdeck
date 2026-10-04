@@ -88,7 +88,11 @@ test('background receipts leave a half-written terminal sentence and chat messag
     expect(denied).toContain('只有队长');
   } finally {
     if (listener && listener.exitCode === null) listener.kill();
-    if (app) await app.close();
+    if (app) {
+      const proc = app.process();
+      await Promise.race([app.close(), new Promise((r) => setTimeout(r, 3000))]);
+      if (proc.exitCode === null) try { process.kill(proc.pid, 'SIGKILL'); } catch (_) {}
+    }
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });

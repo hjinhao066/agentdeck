@@ -53,7 +53,7 @@ test('native snapshot survives reload and ack removes only delivered ids, withou
     expect((await cli(['receipts', '--ack', '{}'], control)).code).toBe(1);
     expect((await cli(['receipts', '--snapshot', '--wait'], control)).code).toBe(1);
   } finally {
-    if (app) { const proc = app.process(); await Promise.race([app.close(), new Promise((r) => setTimeout(r, 3000))]); if (proc.exitCode === null) try { process.kill(proc.pid); } catch (_) {} }
+    if (app) { const proc = app.process(); await Promise.race([app.close(), new Promise((r) => setTimeout(r, 3000))]); if (proc.exitCode === null) try { process.kill(proc.pid, 'SIGKILL'); } catch (_) {} }
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -121,7 +121,7 @@ test('real native Codex wakes after worker complete, verifies the board and disp
     for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]; Object.assign(process.env, original);
     const out = process.env.AGENTDECK_NATIVE_EVIDENCE;
     if (out) fs.writeFileSync(out, JSON.stringify(evidence, null, 2));
-    if (app) { const proc = app.process(); await Promise.race([app.close(), new Promise((r) => setTimeout(r, 3000))]); if (proc.exitCode === null) try { process.kill(proc.pid); } catch (_) {} }
+    if (app) { const proc = app.process(); await Promise.race([app.close(), new Promise((r) => setTimeout(r, 3000))]); if (proc.exitCode === null) try { process.kill(proc.pid, 'SIGKILL'); } catch (_) {} }
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });
@@ -179,7 +179,7 @@ test('Captain edit launches the shipped native host and retains worker routing',
     const result = { nativeHostInCaptainColumn: true, commandEditedThroughPencil: true, mainSessionIdentityUpdated: true, workerRetained: true, automaticallyHandledReceipt: true, inputInjection: false, intervalMs: 60000, proof: 'ENTRY_HANDLED' };
     if (process.env.AGENTDECK_NATIVE_ENTRY_EVIDENCE) fs.writeFileSync(process.env.AGENTDECK_NATIVE_ENTRY_EVIDENCE, JSON.stringify(result, null, 2));
   } finally {
-    if (app) { const proc = app.process(); await Promise.race([app.close(), new Promise((r) => setTimeout(r, 3000))]); if (proc.exitCode === null) try { process.kill(proc.pid); } catch (_) {} }
+    if (app) { const proc = app.process(); await Promise.race([app.close(), new Promise((r) => setTimeout(r, 3000))]); if (proc.exitCode === null) try { process.kill(proc.pid, 'SIGKILL'); } catch (_) {} }
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });

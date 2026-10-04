@@ -18,7 +18,8 @@ injected to deliver receipts or initiate periodic checks.
 
 ## Deploy to an existing Captain
 
-1. Integrate this branch into the complete 1.1.2 runtime. It needs the native
+1. Integrate this branch into a new complete application runtime. The installed
+   1.1.2 runtime does not contain this adapter. It needs the native
    host/driver, authenticated `receipts --snapshot/--ack` bridge, and Captain
    command-edit identity fix. Copying only the script into an older running
    AgentDeck is insufficient. A new installed application runtime requires the
@@ -51,8 +52,8 @@ injected to deliver receipts or initiate periodic checks.
 
 **Relay is not required.** The existing default ChatGPT Relay command still
 launches the ordinary Codex TUI; selecting it alone does not enable this host.
-After 1.1.2 is installed, this switch needs only a Captain restart, not an app
-restart. This is a minimal plain-text native host, not the full Codex TUI; it
+After the host-enabled runtime is installed, this switch needs only a Captain
+restart, not an app restart. This is a minimal plain-text native host, not the full Codex TUI; it
 supports ordinary prompts and `/clear` or `/new`. Codex TUI-specific menus and
 its quota/context footer are not supplied. Default worker launches use ordinary
 Codex, never another Captain host; explicit `--agent` continues to work.
@@ -95,9 +96,12 @@ workers that submit authenticated `complete` commands:
 
 ```sh
 npm test
-npm run test:e2e
+npx playwright test background-receipts.spec.js native-receipts.spec.js --workers=1
 AGENTDECK_NATIVE_CODEX_SMOKE=1 npx playwright test native-receipts.spec.js
 ```
+
+In a managed terminal, clear inherited `AGENTDECK_*` only in the test child
+process, then set the test flags there. Keep the parent receipt environment.
 
 The native integration test proves complete → native turn → board verification
 → a proof artifact and exactly one follow-up dispatch → successful-turn receipt
