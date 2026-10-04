@@ -35,6 +35,7 @@ async function launch() {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
+  await expect(page.locator('.column')).not.toHaveCount(0);
   await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   page.on('dialog', (d) => d.accept());
 }

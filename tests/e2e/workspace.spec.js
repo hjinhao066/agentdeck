@@ -36,6 +36,7 @@ test.beforeAll(async () => {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
+  await expect(page.locator('.column')).toHaveCount(4);
   await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   await expect(page.locator('.column.chat-mode')).toHaveCount(4);
   // the stand-in has printed its box: the session is ready for prompts
