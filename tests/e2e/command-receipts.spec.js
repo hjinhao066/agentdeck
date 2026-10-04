@@ -155,6 +155,23 @@ test('quota exhausted at startup fails the unsent task instead of leaving it que
 
 const filteredEnv = (env) => ({ ...env, AGENTDECK_RECEIPT_TOKEN: '', AGENTDECK_CONTROL_TOKEN: '', AGENTDECK_CONTROL_DIR: '' });
 
+test('a PTY child with all AgentDeck variables filtered completes through its managed bridge', async () => {
+  test.skip(process.platform === 'win32', 'ConPTY has no POSIX controlling tty fallback');
+  const title = 'Filtered PTY receipt';
+  const command = fake.replace(' --screen-only', ' --provider=codex --filtered-receipt-env');
+  await page.evaluate(([command, cwd, title]) => MainSession.handle({
+    action: 'main-new', title, task: 'filtered PTY completion', command, cwd,
+  }, MainSession.mainCol()), [command, profile, title]);
+  await expect.poll(() => page.evaluate((title) => config.mainSession.tasks.find((t) => t.title === title)?.status, title),
+    { timeout: 30000 }).toBe('done');
+  const task = await page.evaluate((title) => config.mainSession.tasks.find((t) => t.title === title), title);
+  expect(task.receipt.summary).toBe('stand-in finished filtered PTY completion');
+  expect(await page.evaluate((id) => columns.find((c) => c.id === id).lastReceipt.summary, task.colId)).toBe(task.receipt.summary);
+  const read = await cli(['receipts'], JSON.parse(fs.readFileSync(controlFile, 'utf8')));
+  expect(read.code).toBe(0);
+  expect(read.stdout).toContain(task.receipt.summary);
+});
+
 test('a terminal id cannot select private credentials; this column tty is the only file key', async () => {
   const env = filteredEnv(workerEnv());
   const cred = JSON.parse(fs.readFileSync(path.join(profile, 'board-control', 'credentials', 'submit-worker.json'), 'utf8'));
