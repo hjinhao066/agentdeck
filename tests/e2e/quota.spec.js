@@ -42,7 +42,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
   await expect(badge('Claude')).toHaveAttribute('aria-label', /5h 19% ↻/);
-  await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位用量（\/usage）；高（按账号 ID 归属）/);
+  await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位本地用量缓存；高（原生用量及账号归属已验证）/);
 
   await expect(badge('Claude').locator('svg')).toBeVisible();
   await badge('Claude').focus();
@@ -50,7 +50,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude').getByRole('tooltip')).toContainText('7d 91% ↻');
   await expect(badge('Cursor').locator('.quota-name')).toHaveText('Grok 4.7');
   await expect(badge('Antigravity').locator('.quota-name')).toHaveText('Gemini');
-  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：cn\*\*\*@example.test/);
+  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：c\*\*\*@example.test/);
   // The isolated profile is barred from reading the user's real quota caches.
   expect((await page.evaluate(() => window.deck.quotaLocal())).filter(q => q.windows).map(q => q.seatId)).toEqual(['cn']);
   // Quota tracks Grok on Cursor, while model badges already choose that family.

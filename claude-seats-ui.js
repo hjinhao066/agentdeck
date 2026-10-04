@@ -264,6 +264,7 @@
       const key = JSON.stringify([col.id, col.claudeConfigDir, usage.windows]);
       if (recorded.get(seatId) !== key) {
         recorded.set(seatId, key);
+        host.flushConfig();
         window.deck.recordClaudeSeatUsage(col.id, seatId, col.claudeConfigDir, usage).then(() => window.deck.claudeSeatUsage(col.claudeSeatId)).then((bound) => { if (bound) acceptUsage(col.claudeSeatId, bound); window.dispatchEvent(new CustomEvent('claude-seat-usage')); }).catch(() => { recorded.delete(seatId); });
       }
     }
@@ -274,6 +275,7 @@
       const key = col.claudeSeatId + ':' + JSON.stringify(footer.windows);
       if (recorded.get(col.id) !== key) {
         recorded.set(col.id, key);
+        host.flushConfig();
         window.deck.recordClaudeSeatUsage(col.id, col.claudeSeatId, col.claudeConfigDir, footer).then(() => window.deck.claudeSeatUsage(col.claudeSeatId)).then((bound) => { if (bound) acceptUsage(col.claudeSeatId, bound); window.dispatchEvent(new CustomEvent('claude-seat-usage')); }).catch(() => { recorded.delete(col.id); });
 
       }
