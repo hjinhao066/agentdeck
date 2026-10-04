@@ -7,7 +7,7 @@ function size() {
   if (process.platform !== 'win32') return process.stdout;
   // stdout can still reference the inactive console buffer after 1049h. A
   // fresh CONOUT$ handle measures the active ConPTY buffer, including shrink.
-  const stream = new (require('tty').WriteStream)(fs.openSync('CONOUT$', 'r+'));
+  const stream = new (require('tty').WriteStream)(fs.openSync('\\\\.\\CONOUT$', 'r+'));
   const current = { rows: stream.rows, columns: stream.columns };
   stream.destroy();
   return current;
@@ -24,8 +24,8 @@ function draw(current = size()) {
   process.stdout.write(screen);
 }
 process.stdout.on('resize', () => draw());
-// Node on Windows does not receive SIGWINCH; refresh the actual ConPTY size
-// so the existing resize event redraws the stand-in after a native resize.
+// Poll the active ConPTY screen buffer on Windows; Node does not receive
+// SIGWINCH there and stdout can retain the inactive buffer dimensions.
 if (process.platform === 'win32') setInterval(() => {
   const current = size();
   if (current.rows !== previousSize.rows || current.columns !== previousSize.columns) draw(current);
