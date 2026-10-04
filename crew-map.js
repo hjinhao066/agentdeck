@@ -273,9 +273,22 @@
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; lay = null; return; }
-    const vpWidth = vpEl.clientWidth;
-    const maxW = vpWidth > 800 ? vpWidth * 0.95 : 0;
-    lay = C.applyPositions(C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: maxW }), saved().positions, map.captain.id);
+    const vpWidth = vpEl.clientWidth, vpHeight = vpEl.clientHeight;
+    const w = vpWidth - 32, h = vpHeight - 24;
+    // Smart layout: iterate to find maxWidth that fits at FIT_MIN scale
+    let maxW = vpWidth > 800 ? vpWidth * 0.95 : 0;
+    let attempt = 0;
+    while (attempt < 5) {
+      lay = C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: maxW });
+      // Check if it fits at minimum scale
+      const canFitWidth = (lay.width - 0) * C.MIN_SCALE <= w;
+      const canFitHeight = lay.height * C.MIN_SCALE <= h;
+      if (canFitWidth && canFitHeight) break;
+      // If too wide, try narrower maxWidth to force wrapping
+      maxW = Math.max(NODE.nodeW + NODE.gapX + 88, maxW * 0.8);
+      attempt++;
+    }
+    lay = C.applyPositions(lay, saved().positions, map.captain.id);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';
     drawEdges();
