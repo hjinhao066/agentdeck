@@ -152,3 +152,18 @@ installation or restart has started at this checkpoint. Once accepted, merge
 the delivered mobile tip, validate it, then build and verify the signed DMG.
 Release-branch CI has no runs; this checkpoint is local macOS verification,
 not Windows verification.
+
+## Accepted mobile chat and release source
+
+Integrated the Opus-reviewed `origin/feat/mobile-chat-ui` at `5b95e51` with no
+merge conflicts. The server is unchanged. Unit tests **508/508**, mobile-web
+E2E initially **4 passed, 1 failed**, then **5/5** after replacing transient
+manually assigned status with real stand-in permission/quota output and waiting
+for the desktop status tick. Runtime UI files remain as accepted by Opus.
+Final source release smoke **8/8**; npm audit **zero vulnerabilities**.
+Mobile synthetic dark/light portrait screenshots are in `mobile-final/` under
+the report root and were reviewed. All E2E ran sequentially with one worker.
+The packaging hold is lifted; build a local AgentDeck Dev-signed arm64 DMG,
+compare packaged runtime files against this release commit, and run relevant
+packaged E2E in isolated profiles. Installation and active-app restart remain
+for the Captain to arrange. No tag or merge to main is included in this task.
