@@ -96,7 +96,12 @@ function answer() {
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
   if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
-  if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
+  if (/ask me/.test(text)) {
+    // Redraw the confirmation like the other TUI replies. Raw input has no
+    // console echo to separate this turn from the previous input box/footer.
+    process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n\nProceed with the change? (y/n) ');
+    return;
+  }
   if (first === 'gemini confirmation regression') {
     process.stdout.write('\x1b[2J\x1b[HThinking: waiting for confirmation\n⠋ Working\nAntigravity\n');
     setTimeout(() => {
