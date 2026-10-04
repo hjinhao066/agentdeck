@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createWarmupService } = require('../quota-warmup-service');
+const weekly = { key: 'weekly', remaining: 60, resetAt: Date.parse('2026-10-10T12:00:00Z') };
 
 function fixture(t, overrides = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-warmup-service-'));
@@ -12,7 +13,7 @@ function fixture(t, overrides = {}) {
   let now = Date.parse('2026-10-03T12:01:01Z'), accountKey = 'own-account', busy = new Set();
   const seat = { id: 'cn', name: 'CN', configDir: '/home/test/.claude' }, calls = [];
   let usage = { accountBound: true, accountKey, configDir: seat.configDir, at: now - 3600_000,
-    windows: [{ key: 'fiveHour', remaining: 0, resetText: '2026-10-03T12:00:00Z' }] };
+    windows: [{ key: 'fiveHour', remaining: 0, resetText: '2026-10-03T12:00:00Z' }, weekly] };
   const settings = { enabled: true };
   const options = { stateFile, logFile, getSettings: () => settings, getSeats: () => [seat],
     readSeat: async () => ({ accountKey, configDir: seat.configDir, usage }),
@@ -46,7 +47,7 @@ test('service claims before a headless request, logs only metadata, and persists
 test('unknown or another account reset cannot cause a real request', async (t) => {
   const f = fixture(t);
   f.setUsage({ accountBound: true, accountKey: 'other-account', configDir: f.seat.configDir, at: Date.now(),
-    windows: [{ key: 'fiveHour', resetText: '2026-10-03T12:00:00Z' }] });
+    windows: [{ key: 'fiveHour', resetText: '2026-10-03T12:00:00Z' }, weekly] });
   await f.service.tick(); assert.equal(f.calls.length, 0);
   f.setUsage(null); await f.service.tick(); assert.equal(f.calls.length, 0);
 });
@@ -94,7 +95,7 @@ test('disabling during the last asynchronous idle scan prevents the first reques
 test('warmup consumes the existing seat quota structure without a private API reader or native cache', async (t) => {
   const sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', credentialKey: 'cn-slot',
     configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
-    official: true, windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }] };
+    official: true, windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }, weekly] };
   const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: '/home/test/.claude', quota: { sample } }) });
   await f.service.tick(); assert.equal(f.calls.length, 1);
 });
@@ -102,7 +103,7 @@ test('official reset ownership survives restart and rejects the previous account
   let accountKey = 'first-account';
   let sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'cn-slot',
     configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
-    windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }] };
+    windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }, weekly] };
   const f = fixture(t, { readSeat: async () => ({ accountKey, credentialKey: 'cn-slot', configDir: sample.configDir, quota: { sample } }) });
   await f.service.snapshot();
   accountKey = 'second-account';
@@ -121,7 +122,7 @@ test('the existing quota identity cutoff invalidates an already remembered offic
   let officialNotBefore = 0;
   const sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'cn-slot',
     configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
-    windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }] };
+    windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }, weekly] };
   const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: sample.configDir,
     quota: { sample, officialNotBefore } }) });
   assert.ok((await f.service.snapshot())[0].resetAt);
@@ -133,27 +134,55 @@ test('official records for another storage slot cannot start preheating', async 
   const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: '/home/test/.claude',
     quota: { sample: { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'us-slot',
       configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
-      windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }] } } }) });
+      windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }, weekly] } } }) });
   await f.service.tick(); assert.equal(f.calls.length, 0);
 });
 test('another seat in the existing quota structure cannot preheat this seat', async (t) => {
   const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', configDir: '/home/test/.claude',
     quota: { sample: { seatId: 'us', accountBound: true, accountKey: 'own-account', configDir: '/home/test/.claude',
-      at: Date.parse('2026-10-03T11:55:00Z'), windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }] } } }) });
+      at: Date.parse('2026-10-03T11:55:00Z'), windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }, weekly] } } }) });
   await f.service.tick(); assert.equal(f.calls.length, 0);
 });
 test('a later trusted quota sample supplies the next reset after a successful request had no reset metadata', async (t) => {
   let calls = 0;
   let sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', accountBound: true,
     accountKey: 'own-account', configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z'),
-    windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }] };
+    windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }, weekly] };
   const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', configDir: '/home/test/.claude', quota: { sample } }),
     run: async () => { calls++; return { ok: true, provenNative: false, resetAt: null }; } });
   await f.service.tick();
   assert.equal((await f.service.snapshot())[0].newResetAt, undefined);
   sample = { ...sample, at: Date.parse('2026-10-03T12:01:02Z'),
-    windows: [{ key: 'fiveHour', remaining: 99, resetAt: Date.parse('2026-10-03T17:00:00Z') }] };
+    windows: [{ key: 'fiveHour', remaining: 99, resetAt: Date.parse('2026-10-03T17:00:00Z') }, weekly] };
   const status = (await f.service.snapshot())[0];
   assert.equal(status.newResetAt, Date.parse('2026-10-03T17:00:00Z'));
   assert.ok(status.warmAt); await f.service.tick(); assert.equal(calls, 1);
+});
+
+test('weekly exhausted, low, unknown or expired quota skips preheat; it becomes eligible after a usable weekly sample', async (t) => {
+  let week = weekly;
+  const sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'cn-slot',
+    configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z') };
+  const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: sample.configDir,
+    quota: { sample: { ...sample, windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }, week].filter(Boolean) } } }) });
+  for (const value of [{ ...weekly, remaining: 0 }, { ...weekly, remaining: 3 }, null, { ...weekly, resetAt: Date.parse('2026-10-03T11:00:00Z') }]) {
+    week = value; await f.service.tick(); assert.equal(f.calls.length, 0);
+  }
+  week = { ...weekly, remaining: 4 }; await f.service.tick(); assert.equal(f.calls.length, 1);
+});
+test('a just-reset window is warmed before a fresh counting window can prefer the other seat', async (t) => {
+  const P = require('../perpetual-captain-core');
+  const now = Date.parse('2026-10-03T12:01:01Z');
+  const cn = { id: 'cn', accountKey: 'own-account', credentialKey: 'cn-slot', configDir: '/home/test/.claude', loggedIn: true };
+  let sample = { provider: 'Claude', scope: 'claude', official: true, seatId: cn.id, configDir: cn.configDir,
+    credentialKey: cn.credentialKey, at: now, windows: [{ key: 'fiveHour', remaining: 80, resetAt: now - 61000 }, weekly] };
+  const us = { id: 'us', loggedIn: true, trusted: true, remaining: 60, remainingAt: now, resetAt: now + 3600000, weeklyTrusted: true, weeklyRemaining: 60 };
+  const decide = () => P.decide({ currentId: 'cn', seats: [{ ...cn, ...P.seatQuota({ sample }, cn, now) }, us], now });
+  assert.equal(decide(), null);
+  const f = fixture(t, { readSeat: async () => ({ ...cn, quota: { sample } }), run: async () => {
+    f.calls.push('warmup'); sample = { ...sample, windows: [{ key: 'fiveHour', remaining: 100, resetAt: now + 5 * 3600000 }, weekly] };
+    return { ok: true, provenNative: true, resetAt: now + 5 * 3600000 };
+  } });
+  await f.service.tick(); assert.equal(f.calls.length, 1);
+  assert.equal(decide().targetId, 'us'); assert.equal(decide().reason, 'earlier-reset');
 });

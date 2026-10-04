@@ -87,6 +87,11 @@ test.beforeEach(async () => {
       AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'prompt-columns.jsonl'),
       AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') }),
   });
+  if (process.env.AGENTDECK_TEST_ELECTRON_LOGS) {
+    const child = application.process();
+    fs.mkdirSync(process.env.AGENTDECK_TEST_ELECTRON_LOGS, { recursive: true });
+    child.stderr.on('data', (chunk) => fs.appendFileSync(path.join(process.env.AGENTDECK_TEST_ELECTRON_LOGS, `${child.pid}.log`), chunk));
+  }
   page = await application.firstWindow();
   await expect(page.locator('.column.chat-mode')).toHaveCount(2);
   await expect.poll(() => promptsFor(CN).some((p) => p.startsWith('你是 AgentDeck')), { timeout: 20000 }).toBe(true);
@@ -95,14 +100,19 @@ test.beforeEach(async () => {
 });
 test.afterEach(async () => {
   if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
-  if (application) await application.close();
+  if (application) {
+    const child = application.process(); let force;
+    try { await Promise.race([application.close(), new Promise((resolve) => {
+      force = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 10000);
+    })]); } finally { clearTimeout(force); }
+  }
   application = null; page = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
 test('automatic CN → US → Codex preserves worker and handoff, then returns to restored Claude while idle', async () => {
   test.setTimeout(150000);
-  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 3 });
+  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 3, preferEarlier: true });
   await page.evaluate((id) => {
     config.mainSession.tasks = [{ id: 'keep-task', colId: id, title: '继续跑的任务', status: 'working', gen: 1, startedAt: Date.now() }];
     sendWhenReady(columns.find((c) => c.id === id), 'keep working', { guardUserInput: true });
@@ -221,13 +231,21 @@ test('icon switch and threshold settings persist and control automatic rotation'
   await expect(enabled).toHaveAttribute('aria-pressed', 'true');
   await expect(enabled).toHaveAttribute('title', /永动机/);
   await expect(enabled.locator('svg')).toHaveCount(1);
+  const priority = page.locator('#preferEarlierSeat');
+  await expect(priority).toHaveAttribute('aria-pressed', 'true');
+  await expect(priority).toHaveAttribute('title', '优先用快到期的席位');
+  await expect(priority).toHaveAttribute('aria-label', '优先用快到期的席位');
+  await expect(priority.locator('svg')).toHaveCount(1);
+  expect(await priority.evaluate((b) => getComputedStyle(b).color)).toBe(await enabled.evaluate((b) => getComputedStyle(b).color));
+  await priority.focus(); await expect(priority).toBeFocused();
+  await priority.click();
   await threshold.fill('5');
   await enabled.click();
   await page.locator('#claudeSeatSettings').getByRole('button', { name: '保存设置' }).click();
-  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5 });
+  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5, preferEarlier: false });
   await page.reload();
   await expect(page.locator('.claude-seat-rotate')).toBeEnabled({ timeout: 20000 });
-  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5 });
+  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5, preferEarlier: false });
   await idle(CN);
   await nativeUsage(CN, 4);
   await page.waitForTimeout(4500);
@@ -235,9 +253,50 @@ test('icon switch and threshold settings persist and control automatic rotation'
   await page.locator('#settingsBtn').click();
   await page.locator('#claudeSeatsSettings').click();
   await enabled.click();
+  await priority.click();
   await page.locator('#claudeSeatSettings').getByRole('button', { name: '保存设置' }).click();
-  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 5 });
+  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 5, preferEarlier: true });
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');
+});
+
+test('the idle current Captain renews its expired window before switching to the earlier usable seat', async () => {
+  await page.evaluate((id) => window.deck.ptyKill(id), WORKER); // only this stand-in worker, to leave CN otherwise unused
+  await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), WORKER)).toBe(false);
+  const nextReset = Date.now() + 5 * 3600000;
+  await page.evaluate(async () => {
+    const infos = await ClaudeSeats.refresh(), now = Date.now();
+    columns.find((c) => c.isMain).agentProvider = 'Claude';
+    config.perpetualCaptainState = {};
+    for (const info of infos) {
+      const dir = config.claudeSeats.find((s) => s.id === info.id).configDir;
+      config.quotas['Claude:' + info.id] = { scope: 'claude', configDir: dir, credentialKey: info.credentialKey, accountKey: info.accountKey,
+        sample: { provider: 'Claude', scope: 'claude', official: true, seatId: info.id, configDir: dir,
+          credentialKey: info.credentialKey, at: now,
+          windows: [{ key: 'fiveHour', remaining: 80, resetAt: info.id === 'cn' ? now - 61000 : now + 3600000 },
+            { key: 'weekly', remaining: 60, resetAt: now + 7 * 86400000 }] } };
+    }
+    flushConfig();
+  });
+  await application.evaluate(async ({ app }, [id, resetAt]) => {
+    app.testWarmupResults.push({ ok: true, provenNative: true, resetAt });
+  }, [CN, nextReset]);
+  await page.evaluate((id) => window.deck.claudeWarmupIdle(id, false), CN);
+  await application.evaluate(async ({ app }) => app.testQuotaWarmup.tick());
+  expect(await application.evaluate(({ app }) => app.testWarmupRuns)).toHaveLength(0);
+  await page.evaluate((id) => window.deck.claudeWarmupIdle(id, true), CN);
+  await application.evaluate(async ({ app }) => app.testQuotaWarmup.tick());
+  await expect.poll(async () => (await application.evaluate(({ app }) => app.testWarmupRuns)).map((r) => r.seatId)).toEqual(['cn']);
+  expect(await captainId()).toBe(CN);
+  await page.evaluate((resetAt) => {
+    config.quotas['Claude:cn'].sample.at = Date.now();
+    config.quotas['Claude:cn'].sample.windows[0] = { key: 'fiveHour', remaining: 100, resetAt };
+    flushConfig();
+  }, nextReset);
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');
+  const id = await captainId();
+  await expect(page.locator(`.column[data-col-id="${id}"] .perpetual-relay-banner`)).toContainText('快到期');
+  await page.evaluate(async () => { await ClaudeSeats.refresh(); renderQuotaBar(); });
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('title', /正在用.*US/);
 });
 
 test('official low quotas do not fall back to Codex, and changed identities reject the old slot sample before rotation', async () => {

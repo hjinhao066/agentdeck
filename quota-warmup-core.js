@@ -68,7 +68,7 @@
     if (!normalizeSettings(settings).enabled) return null;
     const state = normalizeState(value);
     for (const seat of seats) {
-      if (!seat || !seatId(seat.id) || seat.occupied !== false) continue;
+      if (!seat || !seatId(seat.id) || seat.occupied !== false || seat.warmupEligible === false) continue;
       const saved = state.seats[seat.id];
       if (!matches(saved, seat) || !due(saved, now)) continue;
       return { seatId: seat.id, accountKey: saved.accountKey, configDir: saved.configDir, resetAt: saved.resetAt, attempt: saved.attempts + 1, at: now };

@@ -98,12 +98,13 @@ async function metadataPid(dir, filename, byPid) {
   } finally { if (handle) await handle.close(); }
 }
 
-async function occupied({ seats, columns, ptys, home = os.homedir() }, scan = scanProcesses) {
+async function occupied({ seats, columns, ptys, home = os.homedir(), idleCaptainId = '' }, scan = scanProcesses) {
   const all = () => new Set(seats.map((seat) => seat.id));
   const busy = new Set();
   const generations = new Map(Array.from(ptys, ([id, pty]) => [id, pty.pid]));
   if (Array.from(ptys.keys()).some((id) => !columns.some((column) => column.id === id))) return all();
   const live = columns.filter((column) => ptys.has(column.id));
+  const idleCaptain = live.find((column) => column.id === idleCaptainId && column.isMain);
   const matchSeat = (column) => {
     const dir = directory(column.claudeConfigDir, home);
     // A frozen launch directory outranks an editable seat id. Without the
@@ -112,6 +113,7 @@ async function occupied({ seats, columns, ptys, home = os.homedir() }, scan = sc
       : seats.filter((seat) => seat.id === column.claudeSeatId);
   };
   for (const column of live.filter((col) => provider(col) === 'Claude')) {
+    if (column === idleCaptain) continue;
     const matches = matchSeat(column);
     if (!matches.length) return all();
     matches.forEach((seat) => busy.add(seat.id));
@@ -151,6 +153,7 @@ async function occupied({ seats, columns, ptys, home = os.homedir() }, scan = sc
     }
     if (!owner && pid && visited.has(pid)) return all();
     if (owner) {
+      if (owner === idleCaptain) continue;
       const matches = matchSeat(owner);
       if (!matches.length) return all();
       matches.forEach((seat) => busy.add(seat.id));

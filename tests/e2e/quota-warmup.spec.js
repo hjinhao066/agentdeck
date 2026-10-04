@@ -26,7 +26,8 @@ function cache(id, extra = {}) {
   const configDir = path.join(home, id === 'cn' ? '.claude' : '.claude-us');
   fs.writeFileSync(path.join(configDir, 'agentdeck-usage.json'), JSON.stringify({
     at: Date.now() - 120_000, accountKey: accountKey(id), configDir,
-    windows: [{ key: 'fiveHour', remaining: 80, resetText: new Date(Date.now() - 90_000).toISOString() }], ...extra,
+    windows: [{ key: 'fiveHour', remaining: 80, resetText: new Date(Date.now() - 90_000).toISOString() },
+      { key: 'weekly', remaining: 60, resetText: new Date(Date.now() + 7 * 86400000).toISOString() }], ...extra,
   }));
 }
 async function launch() {
@@ -36,6 +37,11 @@ async function launch() {
     env: isolatedEnv({ AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'),
       AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') }),
   });
+  if (process.env.AGENTDECK_TEST_ELECTRON_LOGS) {
+    const child = application.process();
+    fs.mkdirSync(process.env.AGENTDECK_TEST_ELECTRON_LOGS, { recursive: true });
+    child.stderr.on('data', (chunk) => fs.appendFileSync(path.join(process.env.AGENTDECK_TEST_ELECTRON_LOGS, `${child.pid}.log`), chunk));
+  }
   page = await application.firstWindow();
   await expect(page.locator('.column.chat-mode')).toHaveCount(1);
   await expect.poll(() => records('seat-env.jsonl').some((r) => r.colId === WORKER), { timeout: 20000 }).toBe(true);
@@ -95,7 +101,12 @@ test.beforeEach(async () => {
 });
 test.afterEach(async () => {
   if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
-  if (application) await application.close();
+  if (application) {
+    const child = application.process(); let force;
+    try { await Promise.race([application.close(), new Promise((resolve) => {
+      force = setTimeout(() => { child.kill('SIGKILL'); resolve(); }, 10000);
+    })]); } finally { clearTimeout(force); }
+  }
   application = null; page = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
@@ -196,7 +207,8 @@ test('official quota fields warm the matching seat without native cache or accou
     config.quotas['Claude:us'] = { sample: {
       provider: 'Claude', scope: 'claude', official: true, seatId: info.id,
       configDir: info.configDir, credentialKey: info.credentialKey, at: Date.now() - 120000,
-      windows: [{ key: 'fiveHour', used: 100, remaining: 0, exhausted: true, resetAt: Date.now() - 90000 }],
+      windows: [{ key: 'fiveHour', used: 100, remaining: 0, exhausted: true, resetAt: Date.now() - 90000 },
+        { key: 'weekly', remaining: 60, resetAt: Date.now() + 7 * 86400000 }],
     } };
     flushConfig();
   });
@@ -207,6 +219,16 @@ test('official quota fields warm the matching seat without native cache or accou
   await refresh();
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('title', /已预热 · 下次重置/);
   await workerPreserved(1);
+});
+
+test('weekly exhausted and threshold quotas prevent preheat without consuming the window', async () => {
+  for (const remaining of [0, 3]) {
+    cache('us', { windows: [{ key: 'fiveHour', remaining: 80, resetText: new Date(Date.now() - 90000).toISOString() },
+      { key: 'weekly', remaining, resetText: new Date(Date.now() + 7 * 86400000).toISOString() }] });
+    await tick(); expect(await runs()).toHaveLength(0);
+    expect((await snapshot()).find((s) => s.seatId === 'us').attempts).toBe(0);
+  }
+  expect(records('quota-warmup.log')).toHaveLength(0);
 });
 
 test('two failed requests abandon the same reset window, including across isolated restart', async () => {

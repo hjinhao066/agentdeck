@@ -121,6 +121,13 @@
     threshold.input.id = 'perpetualThreshold'; threshold.input.type = 'number'; threshold.input.min = '0';
     threshold.input.max = '100'; threshold.input.step = '0.1'; threshold.input.required = true; threshold.input.disabled = !enabled;
     d.append(threshold.l, node('p', 'seat-help', '仅在队长空闲时轮换；两个 Claude 席位都用尽时交给 Codex，重置后优先回 Claude。同一席位 10 分钟内不回切。'));
+    let preferEarlier = settings.preferEarlier;
+    const priorityRow = node('div', 'perpetual-toggle-row');
+    const priorityToggle = button(POWER, '优先用快到期的席位', () => {
+      preferEarlier = !preferEarlier; priorityToggle.setAttribute('aria-pressed', String(preferEarlier));
+    });
+    priorityToggle.id = 'preferEarlierSeat'; priorityToggle.setAttribute('aria-pressed', String(preferEarlier));
+    priorityRow.append(node('span', '', '优先用快到期的席位'), priorityToggle); d.append(priorityRow);
     let warmupEnabled = window.QuotaWarmupCore.normalizeSettings(host.config.quotaWarmup).enabled;
     const warmupRow = node('div', 'perpetual-toggle-row');
     const warmupToggle = button(POWER, '额度窗口预热', () => {
@@ -128,7 +135,7 @@
     });
     warmupToggle.id = 'quotaWarmupEnabled'; warmupToggle.setAttribute('aria-pressed', String(warmupEnabled));
     warmupRow.append(node('span', '', '额度窗口预热'), warmupToggle); d.append(warmupRow);
-    d.append(node('p', 'seat-help', '已知 5 小时窗口重置约 1 分钟后，仅在席位没有 Claude 会话使用时后台发一个字母请求；每窗一次，失败仅重试一次。'));
+    d.append(node('p', 'seat-help', '已知 5 小时窗口重置约 1 分钟后，空闲席位后台发一个字母请求；正在用的队长空闲时也可补一次。每周额度不足或未知不预热，每窗一次，失败仅重试一次。'));
     const bark = field('Bark 密钥文件路径', host.config.barkKeyFile || '');
     bark.input.id = 'perpetualBarkKeyFile'; d.append(bark.l);
     const fields = host.config.claudeSeats.map((s) => {
@@ -149,7 +156,7 @@
       try {
         const updated = await window.deck.validateClaudeSeats(fields.map((f) => ({ id: f.id, name: f.name.value.trim(), icon: f.icon.value.trim(), configDir: f.dir.value.trim() })));
         host.config.claudeSeats = updated;
-        host.config.perpetualCaptain = P.normalizeSettings({ enabled, threshold: Number(threshold.input.value) });
+        host.config.perpetualCaptain = P.normalizeSettings({ enabled, threshold: Number(threshold.input.value), preferEarlier });
         host.config.quotaWarmup = window.QuotaWarmupCore.normalizeSettings({ enabled: warmupEnabled });
         host.config.barkKeyFile = bark.input.value.trim();
         retryAt = 0;
@@ -233,7 +240,9 @@
   }
   function rotationMessage(from, to, decision, at, automatic) {
     const reasons = { 'threshold': `5 小时剩余 ${decision?.remaining}% ≤ ${host.config.perpetualCaptain.threshold}%`,
-      'quota-exhausted': '当前席位额度用尽或限流', 'claude-unavailable': '两个 Claude 席位额度都已用尽或限流', 'claude-recovered': 'Claude 席位额度已恢复' };
+      'weekly-threshold': `每周剩余 ${decision?.remaining}% ≤ ${host.config.perpetualCaptain.threshold}%`,
+      'quota-exhausted': '当前席位额度用尽或限流', 'claude-unavailable': '两个 Claude 席位额度都已用尽或限流', 'claude-recovered': 'Claude 席位额度已恢复',
+      'earlier-reset': '优先用还有余额、快到期的席位' };
     return `${automatic ? '永动机自动轮换' : label()}：${from} → ${to}；${reasons[decision?.reason] || '手动切换'}；${new Date(at).toLocaleString()}`;
   }
   function showRotationBanner(entry) {
@@ -262,8 +271,9 @@
     }
     if (!col.isMain || !entry.wrap) return;
     showRotationBanner(entry);
-    const provider = window.AgentInfo.resolveAgentInfo(col, entry).provider;
+    const provider = window.MainSession.state()?.relayTargetId === 'chatgpt' ? 'Codex' : window.AgentInfo.resolveAgentInfo(col, entry).provider;
     if (!['Claude', 'Codex'].includes(provider)) return;
+    if (provider === 'Claude') window.deck.claudeWarmupIdle(col.id, !switching && window.MainSession.relayIdle()).catch(() => {});
     let banner = entry.wrap.querySelector('.seat-quota-banner:not(.perpetual-relay-banner)');
     if (entry.state !== 'quota') banner?.remove();
     else if (!banner) {
@@ -290,11 +300,13 @@
   }
   function warmupDetail(seatId) {
     const entry = warmups.find((s) => s.seatId === seatId);
-    if (entry?.status === 'abandoned') return '\n预热失败 · 本窗口已放弃';
-    if (entry?.status === 'retry') return '\n预热失败 · 等待仅一次重试';
-    if (!entry?.warmAt) return '';
-    const reset = entry.newResetAt > Date.now() ? new Date(entry.newResetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '未知';
-    return `\n已预热 · 下次重置 ${reset}`;
+    let detail = entry?.status === 'abandoned' ? '\n预热失败 · 本窗口已放弃' : entry?.status === 'retry' ? '\n预热失败 · 等待仅一次重试' : '';
+    const reset = entry?.newResetAt > Date.now() ? new Date(entry.newResetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '未知';
+    if (!detail && entry?.warmAt) detail = `\n已预热 · 下次重置 ${reset}`;
+    const now = Date.now();
+    const candidates = seats.map((info) => ({ ...info, ...P.seatQuota(host.config.quotas?.[window.QuotaCore.seatKey(info.id)],
+      { ...info, configuredDir: host.config.claudeSeats.find((s) => s.id === info.id)?.configDir }, now) }));
+    return detail + '\n' + P.strategyText({ settings: host.config.perpetualCaptain, currentId: current().id, seats: candidates, warmups, now });
   }
   window.ClaudeSeats = { init, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail };
 })();

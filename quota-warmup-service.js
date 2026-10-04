@@ -5,7 +5,7 @@ const W = require('./quota-warmup-core');
 const Q = require('./quota-core');
 const P = require('./perpetual-captain-core');
 
-function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSeat, occupied, run, now = Date.now }) {
+function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSeat, occupied, run, getThreshold = () => 3, now = Date.now }) {
   let state;
   try { state = W.normalizeState(JSON.parse(fs.readFileSync(stateFile, 'utf8'))); }
   catch (_) { state = W.normalizeState(); }
@@ -44,12 +44,17 @@ function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSe
       const samples = records.map((record) => {
         const w = record.windows?.find((w) => w.key === 'fiveHour' || w.label === '5 小时');
         const resetAt = Number.isFinite(w?.resetAt) && w.resetAt > 0 ? w.resetAt : w ? Q.resetTime(w.resetText, record.at) : null;
-        return { at: record.at, resetAt };
+        const weekly = record.windows?.find((w) => w.key === 'weekly' || w.label === '每周');
+        const weeklyReset = Number.isFinite(weekly?.resetAt) ? weekly.resetAt : weekly ? Q.resetTime(weekly.resetText, record.at) : null;
+        return { at: record.at, resetAt, weeklyRemaining: weekly?.remaining,
+          weeklyReset };
       }).filter((s) => s.resetAt).sort((a, b) => b.at - a.at);
       const sample = samples[0];
       state = W.observe(state, { seatId: seat.id, accountKey: info?.accountKey, configDir: info?.configDir,
         resetAt: sample?.resetAt, at: sample?.at, proven: !!sample }, now());
-      if (info?.accountKey && info?.configDir) result.push({ ...seat, ...info });
+      const warmupEligible = info?.loggedIn !== false && Number.isFinite(sample?.weeklyRemaining) &&
+        sample.weeklyRemaining > P.normalizeSettings({ threshold: getThreshold() }).threshold && sample.weeklyReset > now();
+      if (info?.accountKey && info?.configDir) result.push({ ...seat, ...info, warmupEligible });
     }
     return result;
   }
@@ -64,7 +69,8 @@ function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSe
       if (!d || stopped || !W.normalizeSettings(getSettings()).enabled) { persist(); return; }
       const seat = getSeats().find((s) => s.id === d.seatId);
       const fresh = seat && await readSeat(seat);
-      if (!seat || !identityMatches(fresh, d) || (await occupied(seats)).has(d.seatId)) return;
+      const latest = (await sample()).find((s) => s.id === d.seatId);
+      if (!seat || !identityMatches(fresh, d) || !identityMatches(latest, d) || latest?.warmupEligible !== true || state.seats[d.seatId]?.resetAt !== d.resetAt || (await occupied(seats)).has(d.seatId)) return;
       if (stopped || !W.normalizeSettings(getSettings()).enabled) return;
       // Claim durably before spawning: crashes cannot turn a window into
       // unlimited attempts. A new normal session can abort only this child.
@@ -93,7 +99,7 @@ function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSe
     snapshot: async () => {
       const seats = await sample();
       persist();
-      return seats.map((s) => ({ seatId: s.id, ...state.seats[s.id] }));
+      return seats.map((s) => ({ seatId: s.id, warmupEligible: s.warmupEligible, ...state.seats[s.id] }));
     },
     dispose: () => { stopped = true; for (const controller of inflight.values()) controller.abort(); },
   };

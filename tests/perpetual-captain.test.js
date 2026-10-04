@@ -16,9 +16,9 @@ function exhausted(state, id, at = NOW, resetAt = NOW + 3600_000) {
 }
 
 test('perpetual defaults enabled at 3 percent and normalizes invalid settings', () => {
-  assert.deepEqual(P.normalizeSettings(), { enabled: true, threshold: 3 });
-  assert.deepEqual(P.normalizeSettings(null), { enabled: true, threshold: 3 });
-  assert.deepEqual(P.normalizeSettings({ enabled: false, threshold: 7.5 }), { enabled: false, threshold: 7.5 });
+  assert.deepEqual(P.normalizeSettings(), { enabled: true, threshold: 3, preferEarlier: true });
+  assert.deepEqual(P.normalizeSettings(null), { enabled: true, threshold: 3, preferEarlier: true });
+  assert.deepEqual(P.normalizeSettings({ enabled: false, threshold: 7.5, preferEarlier: true }), { enabled: false, threshold: 7.5, preferEarlier: true });
   assert.equal(P.normalizeSettings({ threshold: -1 }).threshold, 3);
   assert.equal(P.normalizeSettings({ threshold: '3' }).threshold, 3);
   assert.equal(P.normalizeSettings({ threshold: 101 }).threshold, 3);
@@ -303,5 +303,41 @@ test('state and switch history survive JSON persistence and pure calls do not mu
     { seats: { cn: { enteredAt: NOW } }, lastSwitch: null });
   assert.equal(P.recordSwitch(state, { fromId: 'cn', targetId: 'cn', at: NOW }).lastSwitch, null);
   for (const malformed of [undefined, null, 3, 'invalid']) assert.deepEqual(P.normalizeState(malformed), { seats: {}, lastSwitch: null });
-  assert.deepEqual(P.seatQuota(null, null, NOW), { remaining: null, remainingAt: null, resetAt: null, trusted: false, exhausted: false, exhaustedAt: null, exhaustedResetAt: null, resumedAt: null });
+  assert.deepEqual(P.seatQuota(null, null, NOW), { remaining: null, remainingAt: null, resetAt: null, trusted: false, weeklyRemaining: null, weeklyTrusted: false, exhausted: false, exhaustedAt: null, exhaustedResetAt: null, resumedAt: null });
+});
+
+test('healthy counting windows prefer the earlier reset, with weekly availability, unknown data and the icon setting respected', () => {
+  const available = (id, resetAt, extra = {}) => quota(id, 80, { resetAt, weeklyTrusted: true, weeklyRemaining: 60, ...extra });
+  const cn = available('cn', NOW + 5 * 3600000), us = available('us', NOW + 3600000);
+  assert.equal(choose({ seats: [cn, us] }).reason, 'earlier-reset');
+  assert.equal(choose({ seats: [cn, us] }).targetId, 'us');
+  assert.equal(choose({ settings: { preferEarlier: false }, seats: [cn, us] }), null);
+  for (const extra of [{ remaining: 0 }, { remaining: 3 }, { weeklyRemaining: 0 }, { weeklyRemaining: 3 },
+    { weeklyTrusted: false }, { trusted: false }, { resetAt: null }, { resetAt: NOW - 1 }]) {
+    assert.equal(choose({ seats: [cn, { ...us, ...extra }] }), null, JSON.stringify(extra));
+  }
+  for (const extra of [{ trusted: false }, { weeklyTrusted: false }, { resetAt: null }, { resetAt: NOW - 1 }]) {
+    assert.equal(choose({ seats: [{ ...cn, ...extra }, us] }), null, JSON.stringify(extra));
+  }
+  assert.equal(choose({ seats: [cn, { ...us, resetAt: cn.resetAt }] }), null);
+  assert.equal(choose({ seats: [cn, us], busy: true }), null);
+});
+test('earlier-reset rotations keep the ten-minute return cooldown', () => {
+  const seats = [quota('cn', 80, { resetAt: NOW + 5 * 3600000, weeklyTrusted: true, weeklyRemaining: 60 }),
+    quota('us', 60, { resetAt: NOW + 3600000, weeklyTrusted: true, weeklyRemaining: 60 })];
+  const first = choose({ seats });
+  const state = P.recordSwitch({}, { fromId: 'cn', ...first });
+  const reversed = [{ ...seats[0], resetAt: NOW + 1800000 }, { ...seats[1], resetAt: NOW + 5 * 3600000 }];
+  assert.equal(choose({ state, currentId: 'us', seats: reversed, now: NOW + 1000 }), null);
+  assert.equal(choose({ state, currentId: 'us', seats: reversed, now: NOW + P.COOLDOWN_MS }).targetId, 'cn');
+});
+test('weekly low quota is never a Relay destination, including the old low-five-hour fallback', () => {
+  assert.equal(choose({ seats: [quota('cn', 2), quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 3 })] }), null);
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 0 })] }).targetId, P.CODEX_ID);
+});
+test('strategy details use plain language and show the reset, threshold and weekly guard', () => {
+  const seats = [{ id: 'cn', name: 'CN' }, { id: 'us', name: 'US', weeklyTrusted: true, weeklyRemaining: 60 }];
+  const text = P.strategyText({ currentId: 'cn', seats, warmups: [{ seatId: 'us', resetAt: NOW + 3600000, status: 'pending' }], now: NOW });
+  assert.match(text, /正在用 CN/); assert.match(text, /US .*重置后自动预热/); assert.match(text, /CN 剩 3% 时切到 US/);
+  assert.match(P.strategyText({ currentId: 'cn', seats: [seats[0], { ...seats[1], weeklyRemaining: 0 }] }), /每周额度不足，不切换也不预热/);
 });

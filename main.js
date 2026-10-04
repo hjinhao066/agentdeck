@@ -12,6 +12,7 @@ const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
+const PerpetualCaptainCore = require('./perpetual-captain-core');
 const { seatEnvironment, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
@@ -671,6 +672,9 @@ app.whenReady().then(() => {
   const configPath = path.join(app.getPath('userData'), 'config.json');
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  let warmupCaptain = { id: '', idle: false, at: 0 };
+  const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
+    warmupCaptain.id === seatConfig().mainSession?.colId ? warmupCaptain.id : '';
   registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
     getColumn: (id) => seatConfig().columns?.find((c) => c.id === id) });
@@ -680,10 +684,11 @@ app.whenReady().then(() => {
     stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
     logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
     getSettings: () => seatConfig().quotaWarmup,
+    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
     getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
     readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome),
       quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
-    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome },
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
       tudArg ? async () => [] : undefined),
     run: tudArg ? async (seat) => {
       // Isolated UI tests can supply deterministic results from the Electron
@@ -693,6 +698,15 @@ app.whenReady().then(() => {
     } : (seat, options) => quotaWarmupRunner.run(seat, options),
   });
   handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
+  handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
+    const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === colId);
+    if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
+    const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
+    warmupCaptain = { id: colId, idle, at: Date.now() };
+    if (!idle) quotaWarmup.cancel(col.claudeSeatId || cfg.activeClaudeSeatId);
+    else if (changed) quotaWarmup.tick().catch(() => {});
+    return true;
+  });
   if (tudArg) app.testQuotaWarmup = quotaWarmup;
   quotaWarmupTimer = setInterval(() => quotaWarmup.tick().catch(() => {}), 30_000);
   quotaWarmupTimer.unref();
@@ -749,7 +763,14 @@ app.whenReady().then(() => {
     return quotaRead;
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
-  onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
+  onMain('pty:input', (_e, { id, data }) => {
+    if (id === warmupCaptain.id) {
+      warmupCaptain.idle = false;
+      const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === id);
+      quotaWarmup.cancel(col?.claudeSeatId || cfg.activeClaudeSeatId);
+    }
+    const p = ptys.get(id); if (p) p.write(data);
+  });
   onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }

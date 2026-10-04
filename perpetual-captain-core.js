@@ -13,7 +13,7 @@
   function normalizeSettings(value = {}) {
     if (!value || typeof value !== 'object') value = {};
     const threshold = percent(value.threshold);
-    return { enabled: value.enabled !== false, threshold: threshold === null ? 3 : threshold };
+    return { enabled: value.enabled !== false, threshold: threshold === null ? 3 : threshold, preferEarlier: value.preferEarlier !== false };
   }
   function normalizeState(value = {}) {
     if (!value || typeof value !== 'object') value = {};
@@ -107,6 +107,8 @@
     const fresh = sample && time(sample.at) && sample.at <= now + 60_000 && now - sample.at <= FRESH_MS;
     const fiveHour = fresh && bound(sample, info) && (sample.windows || []).find((window) =>
       (window.key === 'fiveHour' || window.label === '5 小时') && percent(window.remaining) !== null && (!time(window.resetAt) || window.resetAt > now));
+    const weekly = fresh && bound(sample, info) && (sample.windows || []).find((window) =>
+      (window.key === 'weekly' || window.label === '每周') && percent(window.remaining) !== null && (!time(window.resetAt) || window.resetAt > now));
     const block = saved.blocked;
     // Native errors carry their source column and seat directory. Cached
     // percentages additionally need the account fingerprint from that sample.
@@ -129,6 +131,8 @@
       remainingAt: fiveHour ? sample.at : null,
       resetAt: fiveHour ? time(fiveHour.resetAt) : null,
       trusted: !!fiveHour,
+      weeklyRemaining: weekly ? weekly.remaining : null,
+      weeklyTrusted: !!weekly,
       exhausted: !!blocked,
       exhaustedAt: blocked ? block.at : null,
       exhaustedResetAt: blocked ? time(block.resetAt) : null,
@@ -139,11 +143,12 @@
     const state = recover({ ...saved }, now);
     const at = time(seat.remainingAt);
     const trusted = seat.trusted === true && percent(seat.remaining) !== null && at && at <= now + 60_000 && now - at <= FRESH_MS && (!time(seat.resetAt) || seat.resetAt > now);
-    const low = trusted ? seat.remaining <= threshold : !!state.lowAt && state.lowRemaining <= threshold;
+    const weeklyLow = seat.weeklyTrusted === true && percent(seat.weeklyRemaining) !== null && seat.weeklyRemaining <= threshold;
+    const low = (trusted ? seat.remaining <= threshold : !!state.lowAt && state.lowRemaining <= threshold) || weeklyLow;
     const numericExhausted = trusted ? seat.remaining === 0 : !!state.lowAt && state.lowRemaining === 0;
-    const exhausted = !!state.exhaustedAt || numericExhausted || (seat.exhausted === true && (!time(seat.exhaustedResetAt) || seat.exhaustedResetAt > now));
+    const exhausted = !!state.exhaustedAt || numericExhausted || (weeklyLow && seat.weeklyRemaining === 0) || (seat.exhausted === true && (!time(seat.exhaustedResetAt) || seat.exhaustedResetAt > now));
     const lastMove = Math.max(state.enteredAt || 0, state.leftAt || 0);
-    return { state, trusted, low, exhausted, available: seat.loggedIn === true && !low && !exhausted,
+    return { state, trusted, low, weeklyLow, exhausted, available: seat.loggedIn === true && !low && !exhausted,
       cooling: !!lastMove && now - lastMove < COOLDOWN_MS };
   }
   function decide({ settings, state: value, currentId, seats = [], busy = false, draft = false, briefing = false, switching = false, now = Date.now() } = {}) {
@@ -160,9 +165,19 @@
         (saved.recoveredAt && saved.recoveredAt > enteredCodexAt) || (trusted && seat.remaining > config.threshold && seat.remainingAt > enteredCodexAt));
       return target ? { targetId: target.seat.id, reason: 'claude-recovered', at: now } : null;
     }
-    if (!current || (!current.exhausted && !current.low)) return null;
-    const reason = current.exhausted ? 'quota-exhausted' : 'threshold';
-    if (candidates.length) return { targetId: candidates[0].seat.id, reason, remaining: current.trusted ? current.seat.remaining : null, at: now };
+    if (!current) return null;
+    if (!current.exhausted && !current.low) {
+      // A future reset from a fresh quota sample proves that the new window
+      // is already counting. A past reset stays unknown until warmup + sampling.
+      if (!config.preferEarlier || !current.trusted || !time(current.seat.resetAt) ||
+        current.seat.weeklyTrusted !== true) return null;
+      const earlier = candidates.filter(({ seat, trusted }) => trusted && seat.weeklyTrusted === true &&
+        time(seat.resetAt) && seat.resetAt > now && seat.resetAt < current.seat.resetAt)
+        .sort((a, b) => a.seat.resetAt - b.seat.resetAt)[0];
+      return earlier ? { targetId: earlier.seat.id, reason: 'earlier-reset', at: now } : null;
+    }
+    const reason = current.exhausted ? 'quota-exhausted' : current.weeklyLow ? 'weekly-threshold' : 'threshold';
+    if (candidates.length) return { targetId: candidates[0].seat.id, reason, remaining: current.weeklyLow ? current.seat.weeklyRemaining : current.trusted ? current.seat.remaining : null, at: now };
     // A healthy seat in its cooldown is temporarily unavailable, not exhausted.
     // Stay put until it can be used rather than hopping through Codex.
     if (claude.some(({ available }) => available)) return null;
@@ -183,5 +198,19 @@
     state.lastSwitch = { fromId: event.fromId, targetId: event.targetId, reason: String(event.reason || ''), at: event.at };
     return state;
   }
-  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, normalizeSettings, normalizeState, observe, bound, seatQuota, decide, recordSwitch };
+  function strategyText({ settings, currentId, seats = [], warmups = [], now = Date.now() }) {
+    const config = normalizeSettings(settings), current = seats.find((s) => s.id === currentId);
+    const name = (s) => s?.name || s?.id || 'ChatGPT';
+    const other = seats.find((s) => s.id !== currentId);
+    const parts = [`正在用 ${current ? name(current) : 'ChatGPT'}`];
+    if (!config.enabled) return parts.concat('自动轮换已关闭').join(' · ');
+    for (const w of warmups) if (w.warmupEligible !== false && w.status === 'pending' && w.resetAt > now) {
+      parts.push(`${name(seats.find((s) => s.id === w.seatId))} ${new Date(w.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })} 重置后自动预热`);
+    }
+    if (other?.weeklyTrusted && other.weeklyRemaining <= config.threshold) parts.push(`${name(other)} 每周额度不足，不切换也不预热`);
+    else if (other) parts.push(`${name(current)} 剩 ${config.threshold}% 时切到 ${name(other)}`);
+    if (config.preferEarlier) parts.push('有可用额度时优先用快到期的席位');
+    return parts.join(' · ');
+  }
+  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, normalizeSettings, normalizeState, observe, bound, seatQuota, decide, recordSwitch, strategyText };
 });

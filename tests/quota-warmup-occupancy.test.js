@@ -48,6 +48,14 @@ test('known Codex columns do not reserve their inherited Claude seat', async () 
   assert.deepEqual(await check([column('quoted', 'cn', 'command "/opt/bin/claude" -p')]), new Set(['cn']));
 });
 
+test('only the explicitly idle current Captain may share its seat with a renewal request; workers still reserve it', async () => {
+  const cap = { ...column('cap', 'cn'), isMain: true }, crew = column('crew', 'cn');
+  const rows = [row(100, 1, '/bin/zsh'), row(201, 100, 'claude')];
+  assert.deepEqual(await occupied({ seats, columns: [cap], ptys: new Map([['cap', { pid: 100 }]]), idleCaptainId: 'cap' }, async () => rows), new Set());
+  assert.deepEqual(await occupied({ seats, columns: [cap, crew], ptys: new Map([['cap', { pid: 100 }], ['crew', { pid: 101 }]]), idleCaptainId: 'cap' }, async () => rows), new Set(['cn']));
+  assert.deepEqual(await occupied({ seats, columns: [cap], ptys: new Map([['cap', { pid: 100 }]]), idleCaptainId: 'other' }, async () => rows), new Set(['cn']));
+});
+
 test('Claude descendants of an owned shell are attributed through intermediate processes', async () => {
   const cols = [column('shell', 'us', ''), column('codex', 'cn', 'codex')];
   const rows = [row(100, 1, '/bin/zsh'), row(200, 100, '/bin/sh'), row(300, 200, '/opt/homebrew/Caskroom/claude-code@latest/2.1.288/claude'),
