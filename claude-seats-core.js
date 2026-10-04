@@ -10,6 +10,8 @@
   ];
   const CODEX_COMMAND = 'codex --model gpt-6.1-sol --dangerously-bypass-approvals-and-sandbox';
   const CLAUDE_COMMAND = 'claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions';
+  const SONNET_COMMAND = 'claude --model claude-sonnet-5-5 --effort high --dangerously-skip-permissions';
+  const MODEL_IDS = { opus: 'claude-opus-5-5', sonnet: 'claude-sonnet-5-5' };
   function normalize(value) {
     const ids = new Set();
     const seats = (Array.isArray(value) ? value : DEFAULTS).slice(0, 8).filter((s) => {
@@ -80,5 +82,34 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, CODEX_COMMAND, CLAUDE_COMMAND };
+  // Opus and Sonnet on one Claude seat share that seat's subscription quota.
+  // Picking Sonnet does not restore a used-up seat; callers that hop after
+  // exhaustion must keep the user's model and move to another seat, then Codex.
+  function relayModelCommand(model, baseCommand) {
+    const id = MODEL_IDS[model] || MODEL_IDS.opus;
+    const canonical = model === 'sonnet' ? SONNET_COMMAND : CLAUDE_COMMAND;
+    const base = String(baseCommand || '').trim();
+    if (!base) return canonical;
+    if (/--model(?:\s+|=)\S+/.test(base)) return base.replace(/--model(?:\s+|=)\S+/, (flag) => flag.includes('=') ? `--model=${id}` : `--model ${id}`);
+    if (/^(?:command\s+)?(?:"[^"]*claude"|'[^']*claude'|[^\s"']*claude)\b/.test(base)) {
+      return base.replace(/^(?:command\s+)?(?:"[^"]*claude"|'[^']*claude'|[^\s"']*claude)\b/, (program) => program + ` --model ${id}`);
+    }
+    // Isolated tests launch a stand-in. Keep that executable and record the model.
+    return base + ` --model ${id}`;
+  }
+  function nextRelayTarget({ seats, codexName, currentId, model, exhaustedIds } = {}) {
+    const wanted = model === 'sonnet' ? 'sonnet' : 'opus';
+    const exhausted = new Set(Array.isArray(exhaustedIds) ? exhaustedIds : []);
+    const claude = (Array.isArray(seats) ? seats : []).filter((seat) => seat && seat.id && seat.id !== 'chatgpt' && seat.loggedIn);
+    const choice = (seat) => ({ id: seat.id, name: seat.name, icon: seat.icon || '', kind: 'claude', model: wanted });
+    if (currentId === 'chatgpt') {
+      const seat = claude.find((item) => !exhausted.has(item.id));
+      return seat ? choice(seat) : null;
+    }
+    const other = claude.find((item) => item.id !== currentId && !exhausted.has(item.id));
+    if (other) return choice(other);
+    if (!exhausted.has('chatgpt')) return { id: 'chatgpt', name: codexName || 'ChatGPT', icon: '', kind: 'codex', model: null };
+    return null;
+  }
+  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, relayModelCommand, nextRelayTarget, CODEX_COMMAND, CLAUDE_COMMAND, SONNET_COMMAND };
 });

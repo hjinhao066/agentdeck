@@ -54,9 +54,9 @@ AgentDeck 把路径展开成固定绝对路径；默认CN保持 `CLAUDE_CONFIG_D
 
 ## Relay行为
 
-Claude 队长行右侧的Relay图标打开席位选择，标注当前席位。未登录席位禁用；
-也可选 ChatGPT（Codex GPT-6.1 Sol）接力当队长；Codex 队长可以再交回 CN/US。额度用尽时队长列顶部出现提示和
-直接换到另一席的图标。输入框还有草稿时先保留草稿并拒绝切换。
+Claude 队长行右侧的Relay图标打开席位选择，标注当前席位和模型。每个已登录席位有 Opus 5.5 与 Sonnet 5.5 两行，未登录则两行都禁用；
+也可选 ChatGPT（Codex GPT-6.1 Sol）接力当队长；Codex 队长可以再交回 CN/US。选 Sonnet 时用该席位以 `claude-sonnet-5-5` 启动，仍走同一套存档交接。同席位 Opus 与 Sonnet 共用订阅额度，换模型不会恢复额度。
+额度用尽时队长列顶部的横幅随状态更新：按钮写明下一跳（另一已登录 Claude 席位，仍用当前模型，然后才是 Codex，例如「切到 🇺🇸 US」），点一下才换，不会自动换。全部用尽时显示「队长额度都用尽了」，不再提供切换。输入框还有草稿时先保留草稿并拒绝切换。
 
 顺序是：保存原队长完整对话与进度看板 → 原队长对话转为历史 → 新 id/新 PTY
 用所选席位启动 → 重发队长提示词和「读看板继续」。未完成回复记为 interrupted；
@@ -68,7 +68,7 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 启动 Codex 时绕过 shell 的 codex() 函数，避免重复追加 bypass 参数。`ledger/new/tell/receipts`
 从 Codex 队长的 PTY 子进程执行时有效；独立终端没有能力 token，仍被拒绝。
 切到 ChatGPT 后 activeClaudeSeatId 保留上次 Claude 席位，显式新开 Claude 队员时用它；
-未指定 agent 的队员沿用 Codex。返回 Claude 时复用之前的 Claude 命令（没有则显式 Opus 5.5）。
+未指定 agent 的队员沿用 Codex。返回 Claude 时，菜单里点的 Opus 或 Sonnet 会换成对应模型命令；没有指定模型的旧调用仍复用之前的 Claude 命令（没有则显式 Opus 5.5）。
 
 默认接续看板是 `~/.agents/boards/agentdeck-captain-handoff.md`，不覆盖项目看板。
 包含会话 id、任务状态和短回执，并指向私有 userData/chats 下完整对话。

@@ -1783,7 +1783,10 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .seat-field { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .seat-field input { width: 100%; box-sizing: border-box; }
 .seat-help { font-size: 12px; line-height: 1.6; color: var(--muted); }
-.seat-quota-banner { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; flex-shrink: 0; color: #d98645; background: rgba(217,134,69,.1); font-size: 12px; }
+.seat-quota-banner { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 10px; flex-shrink: 0; color: #d98645; background: rgba(217,134,69,.1); font-size: 12px; }
+.seat-quota-switch { min-height: 32px; margin: 0; padding: 4px 10px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; font: inherit; font-size: 12px; line-height: 1.2; white-space: nowrap; cursor: pointer; }
+.seat-quota-switch:hover { background: rgba(217,134,69,.16); }
+.seat-quota-switch:focus-visible { outline: 2px solid #d98645; outline-offset: 2px; }
 
 /* Captain notification preferences: native switches/selects, icon-only actions. */
 #notificationSettings { width: min(420px, calc(100vw - 48px)); padding: 24px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }

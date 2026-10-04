@@ -27,6 +27,30 @@ test('seat config has one source for names and survives normalization', () => {
   assert.match(S.CODEX_COMMAND, /--model gpt-6\.1-sol/);
   assert.match(S.CODEX_COMMAND, /--dangerously-bypass-approvals-and-sandbox/);
   assert.match(S.CLAUDE_COMMAND, /--model claude-opus-5-5/);
+  assert.match(S.SONNET_COMMAND, /--model claude-sonnet-5-5/);
+  assert.match(S.SONNET_COMMAND, /--effort high/);
+  assert.equal(S.relayModelCommand('sonnet', 'claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions'), 'claude --model claude-sonnet-5-5 --effort high --dangerously-skip-permissions');
+  assert.equal(S.relayModelCommand('opus', 'claude --model claude-sonnet-5-5 --effort high --dangerously-skip-permissions'), 'claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions');
+  assert.equal(S.relayModelCommand('sonnet', 'claude --model=claude-opus-5-5'), 'claude --model=claude-sonnet-5-5');
+  assert.equal(S.relayModelCommand('sonnet', 'node fake-agent.js --quota-probe'), 'node fake-agent.js --quota-probe --model claude-sonnet-5-5');
+  assert.equal(S.relayModelCommand('opus', ''), S.CLAUDE_COMMAND);
+});
+test('quota hop keeps the current model, skips the used-up seat, then Codex', () => {
+  const seats = [
+    { id: 'cn', name: 'CN', icon: '🇨🇳', loggedIn: true },
+    { id: 'us', name: 'US', icon: '🇺🇸', loggedIn: true },
+  ];
+  // Same-seat Sonnet shares the CN quota, so it is not the next captain.
+  const sonnet = S.nextRelayTarget({ seats, codexName: 'ChatGPT', currentId: 'cn', model: 'sonnet', exhaustedIds: ['cn'] });
+  assert.deepEqual(sonnet, { id: 'us', name: 'US', icon: '🇺🇸', kind: 'claude', model: 'sonnet' });
+  seats[1].loggedIn = false;
+  assert.equal(S.nextRelayTarget({ seats, codexName: 'ChatGPT', currentId: 'cn', model: 'opus', exhaustedIds: ['cn'] }).id, 'chatgpt');
+  seats[1].loggedIn = true;
+  assert.equal(S.nextRelayTarget({ seats, codexName: 'ChatGPT', currentId: 'cn', model: 'opus', exhaustedIds: ['cn', 'us'] }).id, 'chatgpt');
+  assert.equal(S.nextRelayTarget({ seats, codexName: 'ChatGPT', currentId: 'cn', model: 'opus', exhaustedIds: ['cn', 'us', 'chatgpt'] }), null);
+  assert.equal(S.nextRelayTarget({ seats, codexName: 'ChatGPT', currentId: 'chatgpt', model: 'sonnet', exhaustedIds: ['chatgpt'] }).id, 'cn');
+  assert.equal(S.nextRelayTarget({ seats, codexName: 'ChatGPT', currentId: 'chatgpt', model: 'sonnet', exhaustedIds: ['chatgpt', 'cn'] }).model, 'sonnet');
+  assert.equal(S.nextRelayTarget({ seats, currentId: 'chatgpt', model: 'opus', exhaustedIds: ['chatgpt', 'cn', 'us'] }), null);
 });
 test('us setup shares brain files, never credentials/account/caches; repeat is safe', (t) => {
   const home = fixture(t), cn = path.join(home, '.claude');

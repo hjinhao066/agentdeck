@@ -30,6 +30,25 @@
     if (col.isMain && window.MainSession.state()?.relayTargetId === 'chatgpt') return false;
     return window.AgentInfo.resolveAgentInfo(col, host.terms.get(col.id)).provider === 'Claude';
   }
+  function currentClaudeModel(col) {
+    const cmd = current().id === 'chatgpt' ? host.config.captainRelayClaudeCommand : col?.cmd;
+    if (/claude-sonnet-5-5/.test(String(cmd || ''))) return 'sonnet';
+    return 'opus';
+  }
+  function relaySeats() {
+    // Before the first login refresh, keep offering configured seats. After it,
+    // a seat that is not logged in is not a quota hop.
+    if (!seats.length) return host.config.claudeSeats.map((seat) => ({ id: seat.id, name: seat.name, icon: seat.icon, loggedIn: true }));
+    return host.config.claudeSeats.map((seat) => {
+      const info = seats.find((item) => item.id === seat.id);
+      return { id: seat.id, name: seat.name, icon: seat.icon, loggedIn: !!info?.loggedIn };
+    });
+  }
+  function sameTarget(id, model, col) {
+    if (id !== current().id) return false;
+    if (!model || id === 'chatgpt') return true;
+    return model === currentClaudeModel(col);
+  }
   function hasDraft(col) {
     const wrap = host.terms.get(col.id)?.wrap;
     return host.userComposing(col.id) || !!wrap?.querySelector('.composer textarea')?.value.trim() || !!wrap?.querySelector('.cp-atts')?.children.length;
@@ -70,21 +89,41 @@
     if (switching) return;
     try { await refresh(); } catch (_) { host.showToast('席位配置读取失败，请检查设置'); return; }
     const d = dialog('claudeSeatMenu', label());
-    d.append(node('p', 'seat-current', `当前：${current().name}`));
-    const choices = [...seats, { id: 'chatgpt', name: host.config.captainRelayCodex.name, icon: '', loggedIn: true }];
-    for (const seat of choices) {
-      const selected = seat.id === current().id;
-      const b = node('button', 'seat-choice');
-      const icon = node('span', 'seat-account-icon', seat.icon);
-      if (seat.id === 'chatgpt') icon.innerHTML = window.AgentInfo.PROVIDER_ICONS.Codex;
-      b.append(icon, node('span', '', `${seat.name}${selected ? ' · 当前' : seat.loggedIn ? '' : ' · 未登录'}`));
-      b.type = 'button'; b.dataset.seatId = seat.id;
-      b.setAttribute('aria-pressed', String(selected));
-      b.title = seat.id === 'chatgpt' ? `${seat.name} · Codex GPT-6.1 Sol` : `${seat.name} · ${seat.maskedEmail || '尚未登录'}`;
-      b.disabled = !seat.loggedIn || selected;
-      b.addEventListener('click', async () => { d.close(); await switchSeat(seat.id); });
-      d.append(b);
+    const here = current();
+    const modelNow = here.id === 'chatgpt' ? '' : currentClaudeModel(window.MainSession.mainCol());
+    d.append(node('p', 'seat-current', `当前：${here.name}${modelNow ? ' · ' + (modelNow === 'sonnet' ? 'Sonnet 5.5' : 'Opus 5.5') : ''}`));
+    for (const seat of seats) {
+      for (const model of ['opus', 'sonnet']) {
+        const selected = seat.id === here.id && model === modelNow;
+        const modelName = model === 'sonnet' ? 'Sonnet 5.5' : 'Opus 5.5';
+        const b = node('button', 'seat-choice');
+        b.append(node('span', 'seat-account-icon', seat.icon), node('span', '', `${seat.name} · ${modelName}${selected ? ' · 当前' : seat.loggedIn ? '' : ' · 未登录'}`));
+        b.type = 'button';
+        b.dataset.relayModel = model;
+        if (model === 'sonnet') b.dataset.relaySeat = seat.id;
+        else b.dataset.seatId = seat.id;
+        b.setAttribute('aria-pressed', String(selected));
+        b.title = model === 'sonnet'
+          ? `${seat.name} · Sonnet 5.5 · ${seat.maskedEmail || '尚未登录'}`
+          : `${seat.name} · ${seat.maskedEmail || '尚未登录'}`;
+        b.disabled = !seat.loggedIn || selected;
+        b.addEventListener('click', async () => { d.close(); await switchSeat(seat.id, { model }); });
+        d.append(b);
+      }
     }
+    const codex = { id: 'chatgpt', name: host.config.captainRelayCodex.name, loggedIn: true };
+    const codexSelected = here.id === 'chatgpt';
+    const codexButton = node('button', 'seat-choice');
+    const codexIcon = node('span', 'seat-account-icon', '');
+    codexIcon.innerHTML = window.AgentInfo.PROVIDER_ICONS.Codex;
+    codexButton.append(codexIcon, node('span', '', `${codex.name}${codexSelected ? ' · 当前' : ''}`));
+    codexButton.type = 'button';
+    codexButton.dataset.seatId = 'chatgpt';
+    codexButton.setAttribute('aria-pressed', String(codexSelected));
+    codexButton.title = `${codex.name} · Codex GPT-6.1 Sol`;
+    codexButton.disabled = codexSelected;
+    codexButton.addEventListener('click', async () => { d.close(); await switchSeat('chatgpt'); });
+    d.append(codexButton);
     const actions = node('div', 'seat-dialog-actions');
     actions.append(button(GEAR, '席位设置', () => { d.close(); openSettings(); }));
     d.append(actions);
@@ -121,10 +160,11 @@
     });
     actions.append(save); d.append(actions); d.showModal();
   }
-  async function switchSeat(id) {
+  async function switchSeat(id, options = {}) {
     if (switching) return false;
     const col = window.MainSession.mainCol();
-    if (!col || id === current().id) return false;
+    const model = options.model === 'sonnet' || options.model === 'opus' ? options.model : '';
+    if (!col || sameTarget(id, model, col)) return false;
     if (hasDraft(col)) { host.showToast(`队长输入框里有未发送内容，发送或清空后再${label()}`); return false; }
     switching = true;
     window.MainSession.pauseForSeatSwitch(true);
@@ -132,7 +172,7 @@
       await refresh();
       const target = id === 'chatgpt' ? { id, loggedIn: true } : seats.find((s) => s.id === id);
       if (!target?.loggedIn) { host.showToast('这个席位尚未登录，请先在普通终端登录一次'); return false; }
-      if (window.MainSession.mainCol() !== col || hasDraft(col)) return false;
+      if (window.MainSession.mainCol() !== col || hasDraft(col) || sameTarget(id, model, col)) return false;
       // Token-saver integration point. The sibling branch can plug in its
       // confirmed board archive; quota exhaustion uses the durable local fallback.
       const snapshot = { colId: col.id, chat: window.ChatUI.snapshotForHandoff(col.id), tasks: window.MainSession.state().tasks };
@@ -141,9 +181,11 @@
         : await window.deck.captainCheckpoint(snapshot);
       if (typeof board !== 'string' || !board || window.MainSession.mainCol() !== col || hasDraft(col)) return false;
       const wasClaude = isClaude(col);
-      if (wasClaude) host.config.captainRelayClaudeCommand = col.cmd;
-      const command = id === 'chatgpt' ? host.config.captainRelayCodex.command
-        : wasClaude ? col.cmd : host.config.captainRelayClaudeCommand || S.CLAUDE_COMMAND;
+      const base = wasClaude ? col.cmd : host.config.captainRelayClaudeCommand || S.CLAUDE_COMMAND;
+      const command = id === 'chatgpt' ? host.config.captainRelayCodex.command : model ? S.relayModelCommand(model, base) : base;
+      if (id === 'chatgpt') { if (wasClaude) host.config.captainRelayClaudeCommand = col.cmd; }
+      else if (model) host.config.captainRelayClaudeCommand = command;
+      else if (wasClaude) host.config.captainRelayClaudeCommand = col.cmd;
       window.MainSession.clearContext({ seatId: id === 'chatgpt' ? col.claudeSeatId || S.active(host.config).id : id, checkpointPath: board, command, relayTargetId: id });
       host.flushConfig();
       window.dispatchEvent(new CustomEvent('claude-seat-changed', { detail: { seatId: id } }));
@@ -180,18 +222,51 @@
     if (!col.isMain || !entry.wrap) return;
     let banner = entry.wrap.querySelector('.seat-quota-banner');
     if (entry.state !== 'quota') { if (banner) banner.remove(); return; }
-    if (banner) return;
-    banner = node('div', 'seat-quota-banner'); banner.setAttribute('role', 'status');
     const provider = window.AgentInfo.resolveAgentInfo(col, entry).provider;
-    if (!['Claude', 'Codex'].includes(provider)) return;
-    banner.append(node('span', '', `${current().name}额度用尽，可${label()}`));
-    const other = host.config.claudeSeats.find((s) => s.id !== current().id);
-    if (other) {
-      const change = button(ROTATE, `${label()}到${other.name}`, () => switchSeat(other.id));
-      change.title = `${label()}到${other.name} · 先存看板，再接着干`;
-      banner.append(change);
+    if (!['Claude', 'Codex'].includes(provider)) { if (banner) banner.remove(); return; }
+    // Manual only. Quota exhaustion does not switch by itself; the button
+    // offers the next logged-in captain (other Claude seat, then Codex).
+    paintQuotaBanner(entry, quotaBannerView(col, provider));
+  }
+  function quotaBannerView(col, provider) {
+    const onCodex = provider === 'Codex' || current().id === 'chatgpt';
+    const currentId = onCodex ? 'chatgpt' : (col.claudeSeatId || current().id);
+    const exhausted = new Set([currentId]);
+    const now = Date.now();
+    for (const seat of host.config.claudeSeats) {
+      if (window.QuotaCore.summary(host.config.quotas, 'Claude', now, seat).state === 'exhausted') exhausted.add(seat.id);
     }
-    entry.wrap.querySelector('.col-head').after(banner);
+    if (window.QuotaCore.summary(host.config.quotas, 'Codex', now).state === 'exhausted') exhausted.add('chatgpt');
+    const next = S.nextRelayTarget({ seats: relaySeats(), codexName: host.config.captainRelayCodex.name, currentId, model: currentClaudeModel(col), exhaustedIds: [...exhausted] });
+    if (!next) return { message: '队长额度都用尽了', action: null };
+    const who = [next.icon, next.name].filter(Boolean).join(' ');
+    const text = `切到 ${who}`;
+    return {
+      message: `${current().name}额度用尽`,
+      action: { key: next.kind === 'codex' ? 'chatgpt' : `${next.id}:${next.model}`, label: text, run: () => switchSeat(next.id, next.model ? { model: next.model } : {}) },
+    };
+  }
+  function paintQuotaBanner(entry, view) {
+    let banner = entry.wrap.querySelector('.seat-quota-banner');
+    if (!banner) {
+      banner = node('div', 'seat-quota-banner');
+      banner.setAttribute('role', 'status');
+      entry.wrap.querySelector('.col-head').after(banner);
+    }
+    let span = banner.querySelector('.seat-quota-text');
+    if (!span) banner.prepend(span = node('span', 'seat-quota-text'));
+    if (span.textContent !== view.message) span.textContent = view.message;
+    const button = banner.querySelector('.seat-quota-switch');
+    if (!view.action) { button?.remove(); return; }
+    if (button && button.dataset.target === view.action.key && button.textContent === view.action.label) return;
+    button?.remove();
+    const change = node('button', 'seat-quota-switch', view.action.label);
+    change.type = 'button';
+    change.dataset.target = view.action.key;
+    change.title = view.action.label;
+    change.setAttribute('aria-label', view.action.label);
+    change.addEventListener('click', (e) => { e.stopPropagation(); view.action.run(); });
+    banner.append(change);
   }
   function init(h) {
     host = h;

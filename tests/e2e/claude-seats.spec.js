@@ -174,7 +174,7 @@ test('quota banner switches once and preserves the interrupted Captain turn', as
   const banner = page.locator(`.column[data-col-id="${cn}"] .seat-quota-banner`);
   await expect(banner).toContainText('CN额度用尽', { timeout: 20000 });
   await screenshot('quota-relay');
-  await banner.locator('button[aria-label="Relay到US"]').click();
+  await banner.getByRole('button', { name: '切到 🇺🇸 US' }).click();
   await expect.poll(() => page.evaluate(() => config.activeClaudeSeatId)).toBe('us');
   const retired = JSON.parse(fs.readFileSync(path.join(profile, 'chats', cn + '.json')));
   expect(retired.captainArchive).toBe(true);
