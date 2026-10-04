@@ -28,7 +28,7 @@
   // inflight: receipts already typed to 队长 whose turn has not finished yet.
   // fresh: the context was cleared and 队长 has not finished a turn since.
   // crewMarked: sessions opened before captainCrew existed were marked once.
-  // waitlist: `new` requests waiting for a free slot (M.MAX_ACTIVE), oldest first;
+  // waitlist: `new` requests waiting for a free slot (settings cap, live on M.MAX_ACTIVE), oldest first;
   // each has a 'waiting' card with no column yet.
   // config.captainHistory: conversations from before a clear (MainCore.normalizeHistory).
   function state() {
@@ -198,6 +198,9 @@
   // brief has not gone out yet.
   let briefing = '';
   let seatChanging = false;
+  function briefingText(note) {
+    return M.instructions(host.platform, note, state()?.legacyReceiptInjection === true, host.config.concurrencyCap);
+  }
   function brief(col, note) {
     if (!col.cmd) return;   // a bare shell would run them as commands
     const id = col.id;
@@ -207,7 +210,7 @@
       done();
       if (note) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
     };
-    host.sendWhenReady(col, M.instructions(host.platform, note, state()?.legacyReceiptInjection === true), {
+    host.sendWhenReady(col, briefingText(note), {
       silent: true, onSent: sent, guardUserInput: true,
       onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
     });
@@ -217,7 +220,9 @@
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
+      if (!$('concurrencyCap').reportValidity()) return;
       host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
+      applyConcurrencyCap($('concurrencyCap').value);
       cancelTokenSaving();
       tokenSaverPaused = false;
       save();
@@ -244,6 +249,14 @@
     $('csEnabled').checked = settings.enabled;
     $('csThreshold').value = settings.threshold / 1000;
     $('csThreshold').disabled = !settings.enabled;
+    $('concurrencyCap').value = M.concurrencyCap(host.config.concurrencyCap);
+  }
+  function applyConcurrencyCap(raw) {
+    const cap = M.concurrencyCap(raw);
+    host.config.concurrencyCap = cap;
+    M.MAX_ACTIVE = cap;
+    refreshWaitingNotes();
+    pump();
   }
 
   function saverBanner(text) {
@@ -358,7 +371,7 @@
     } else if (op.phase === 'cleared' && used !== null && used < op.used / 2) {
       archiveSnapshot(col, op.snapshot);
       saverBanner('上下文已清空，正在重发队长提示词');
-      saverSend(op, M.instructions(host.platform, undefined, state()?.legacyReceiptInjection === true) + '\n\n读看板继续。' + M.REBRIEF_NOTE, 'briefing', true, () => {
+      saverSend(op, briefingText() + '\n\n读看板继续。' + M.REBRIEF_NOTE, 'briefing', true, () => {
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
       });
@@ -421,7 +434,7 @@
     if (op.sending || briefing || delivering || entry.sendingPrompt || entry.state !== 'done' || M.terminalActivity(entry.lastScreen) ||
       Date.now() - (entry.lastOutputAt || 0) < 3000 || host.userComposing(op.col.id)) return;
     op.sending = true;
-    host.sendWhenReady(op.col, M.instructions(host.platform, undefined, state()?.legacyReceiptInjection === true) + '\n\n' + M.REBRIEF_NOTE, {
+    host.sendWhenReady(op.col, briefingText() + '\n\n' + M.REBRIEF_NOTE, {
       silent: true, guardUserInput: true, requireIdle: true,
       cancelled: () => contextReset !== op && !entry.injecting,
       onSent: () => { if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
@@ -582,9 +595,25 @@
       update(t);
     });
   }
-  // ---- background sessions: at most M.MAX_ACTIVE at work, the rest wait ----
+  // ---- background sessions: at most the settings cap at work, the rest wait ----
   const crewIds = () => new Set(host.columns().filter((c) => c.captainCrew && !c.isMain).map((c) => c.id));
   const freeSlots = () => M.MAX_ACTIVE - M.activeCrew(state().tasks, crewIds()).size;
+  let memoryHold = false;
+  async function readMemoryPressure() {
+    try {
+      const value = await window.deck.memoryPressure();
+      const level = value && (value.level === 1 || value.level === 2 || value.level === 4) ? value.level : null;
+      return { level, critical: level === 4 };
+    } catch (_) {
+      return { level: null, critical: false };
+    }
+  }
+  function refreshWaitingNotes() {
+    const s = state();
+    if (!s) return;
+    s.tasks.forEach((t) => { if (t.status === 'waiting') update(t); });
+    window.Sidebar?.render?.();
+  }
   async function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     if (metadata.boardId) {
@@ -611,24 +640,36 @@
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
     save();
   }
-  // Start waiting work as slots free up, oldest first.
+  // Start waiting work as slots free up, oldest first. Critical memory pressure waits.
   let pumping = false;
+  let pumpAgain = false;
   async function pump() {
     const s = state();
-    if (!s || !s.waitlist.length || pumping) return;
+    if (!s || !s.waitlist.length) return;
+    if (pumping) { pumpAgain = true; return; }
     pumping = true;
     try {
-      let free = freeSlots();
-      while (free-- > 0 && s.waitlist.length) {
-        const w = s.waitlist.shift();
-        const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
-        if (task) {
+      const pressure = await readMemoryPressure();
+      if (state() !== s || !s.waitlist.length) return;
+      const wasHold = memoryHold;
+      const active = M.activeCrew(s.tasks, crewIds()).size;
+      await M.fillQueue({
+        cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
+        take: () => (state() === s ? s.waitlist.shift() : null),
+        open: async (w) => {
+          const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
+          if (!task || state() !== s) return;
           try { await openSession(w.title, w.cmd, w.cwd, w.requestId, w.task, task, w.metadata || { project: w.project || '', reviews: w.reviews || [] }); }
           catch (error) { settle(task, { failed: error.message, summary: '', files: [], explicit: true }); }
-        }
-      }
+        },
+      });
+      memoryHold = pressure.level === 4 && s.waitlist.length > 0;
+      if (wasHold !== memoryHold) refreshWaitingNotes();
       save();
-    } finally { pumping = false; }
+    } finally {
+      pumping = false;
+      if (pumpAgain) { pumpAgain = false; pump(); }
+    }
   }
   // A finished background session is archived once 队长 has its receipt and
   // nothing happened for M.ARCHIVE_AFTER; never one you are looking at.
@@ -955,7 +996,7 @@
         return { done: true, visible: host.captainColumnVisible(caller.id),
           turnId: message.test ? message.id : host.terms.get(caller.id)?.captainTurnId || message.id };
       case 'main-briefing':
-        return { done: true, result: M.instructions(host.platform, undefined, s.legacyReceiptInjection === true) };
+        return { done: true, result: briefingText() };
       case 'main-quota':
         return { done: true, result: host.quotaText() };
       case 'main-task': {
@@ -1065,11 +1106,19 @@
           if (card.archived || card.flag === 'held' || card.flag === 'blocked' || card.status === 'done') throw new Error('卡片尚不可开始，请检查前置任务或显式移回待办。');
         }
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
-        // past the limit (or behind work already waiting): queue it, oldest first
-        if (s.waitlist.length || freeSlots() <= 0) {
+        // Past the limit, behind work already waiting, or critical memory: queue it.
+        const pressure = await readMemoryPressure();
+        const wasHold = memoryHold;
+        memoryHold = pressure.critical;
+        if (pressure.critical || s.waitlist.length || freeSlots() <= 0) {
           await enqueue(title, cmd, cwd, message.id, task, metadata);
-          return { done: true, result: `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。` };
+          if (wasHold !== memoryHold) refreshWaitingNotes();
+          const result = pressure.critical
+            ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
+            : `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。`;
+          return { done: true, result };
         }
+        if (wasHold !== memoryHold) refreshWaitingNotes();
         const col = await openSession(title, cmd, cwd, message.id, task, null, metadata);
         return { done: true, result: `已开新会话 ${col.id}「${title}」，任务会在它准备好后发过去。` };
       }
@@ -1134,14 +1183,14 @@
     const target = host.columns().find((c) => c.id === task.colId);
     const name = el('button', 'task-title', task.title);
     name.type = 'button';
-    name.title = target ? '打开这个会话' : task.status === 'waiting' ? `同时最多 ${M.MAX_ACTIVE} 个会话干活，有空位就自动开` : '这个会话已经不在了';
+    name.title = target ? '打开这个会话' : task.status === 'waiting' ? M.queueTitle(M.MAX_ACTIVE, memoryHold) : '这个会话已经不在了';
     name.disabled = !target;
     name.addEventListener('click', () => { if (target) host.jumpToColumn(target); });
     head.append(el('span', 'task-arrow', '→'), name, el('span', 'task-status', STATUS_TEXT[task.status] || ''));
     card.appendChild(head);
     if (task.status === 'input') card.appendChild(el('div', 'task-note', '停在确认提示上，已交给队长判断；队长拿不准会来问你。'));
     if (task.status === 'queued') card.appendChild(el('div', 'task-note', '追加给还在忙的会话，等它空下来就发过去。'));
-    if (task.status === 'waiting') card.appendChild(el('div', 'task-note', `同时最多 ${M.MAX_ACTIVE} 个会话干活，前面有空位就自动开会话开始做。`));
+    if (task.status === 'waiting') card.appendChild(el('div', 'task-note', M.queueNote(M.MAX_ACTIVE, memoryHold)));
     if (task.progress && !task.receipt) card.appendChild(el('div', 'task-summary', task.progress));
     const r = task.receipt;
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));
@@ -1169,6 +1218,9 @@
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state, sendMessage,
     history: () => host.config.captainHistory || [],
+    queueNote: () => M.queueNote(M.MAX_ACTIVE, memoryHold),
+    queueTitle: () => M.queueTitle(M.MAX_ACTIVE, memoryHold),
+    memoryHeld: () => memoryHold,
     exists: () => !!mainCol(),
     pauseForSeatSwitch: (value) => { seatChanging = !!value; },
   };

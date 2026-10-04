@@ -291,7 +291,7 @@ test('background sessions with work still out hold a slot; finished ones free it
     { colId: '', status: 'waiting' },                                      // queued, no column yet
   ];
   assert.deepEqual([...M.activeCrew(tasks, crew)].sort(), ['a', 'c', 'd']);
-  assert.equal(M.MAX_ACTIVE, 15);
+  assert.equal(M.MAX_ACTIVE, 30);
 });
 
 test('a finished background session is archived only after 10 quiet minutes with its receipt read', () => {
@@ -312,7 +312,7 @@ test('a finished background session is archived only after 10 quiet minutes with
 
 test('队长 is told about background work, the limit and automatic archiving', () => {
   const text = M.instructions();
-  assert.match(text, /后台跑[^\n]*最多 15 个会话在干活[^\n]*自动排队/);
+  assert.match(text, /后台跑[^\n]*最多 30 个会话在干活[^\n]*自动排队/);
   assert.match(text, /10 分钟后会自动归档[^\n]*tell 发给它会自动恢复/);
 });
 

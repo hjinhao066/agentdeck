@@ -111,6 +111,7 @@ let config = {
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
   captainTokenSaver: MainCore.tokenSaverSettings(),
+  concurrencyCap: MainCore.concurrencyCap(),
 };
 const saved = window.deck.loadConfig();
 config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
@@ -147,6 +148,7 @@ if (saved) {
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
+  config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher)) config.taskBoard = { dispatcher: saved.taskBoard.dispatcher };
@@ -202,6 +204,7 @@ if (saved) {
     }));
   }
 }
+MainCore.MAX_ACTIVE = config.concurrencyCap;
 function seatLaunchCommand(col, command) {
   const seat = ClaudeSeatsCore.bindColumn(col, config);
   if (!seat.configDir) return ''; // A removed, unbound seat must not launch under another login.

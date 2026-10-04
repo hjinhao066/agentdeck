@@ -221,7 +221,7 @@
       // work 队长 handed out that waits for a free slot (no session yet)
       waitlist().forEach((w) => {
         const item = el('div', 'colnav-item crew-waiting');
-        item.title = '同时干活的会话满了，有空位就自动开';
+        item.title = window.MainSession.queueTitle();
         item.append(el('span', 'cn-dot plain'), el('span', 'cn-text', null), el('span', 'cn-meta', '等空位'));
         item.querySelector('.cn-text').appendChild(sessionLabel(w.title));
         box.appendChild(item);
@@ -239,7 +239,7 @@
     const items = crew.map((c) => ({ id: c.id, state: host.terms.get(c.id)?.state, lastActive: host.lastTurnTs(c.id) }));
     return window.MainCore.crewOrder(items, window.MainSession.state()?.tasks);
   }
-  const orderKey = (order) => [...order.running, '|' + waitlist().length, ...order.finished].join(',');
+  const orderKey = (order) => [...order.running, '|' + waitlist().length + (window.MainSession.memoryHeld() ? ':mem' : ''), ...order.finished].join(',');
   // 「3 干活中 · 1 停在确认 · 2 完成 · 1 排队」, from the 1.5s status loop.
   function refreshCrew() {
     if (!crewHead) return;

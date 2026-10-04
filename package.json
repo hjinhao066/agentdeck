@@ -39,6 +39,7 @@
     "productName": "AgentDeck",
     "files": [
       "main.js",
+      "memory-pressure.js",
       "preload.js",
       "index.html",
       "renderer.js",
