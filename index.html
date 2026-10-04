@@ -9,6 +9,17 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
+  <dialog id="notificationSettings" aria-labelledby="notificationSettingsTitle">
+    <div class="notify-settings-head">
+      <h2 id="notificationSettingsTitle">设置 · 队长提醒</h2>
+      <button type="button" class="rail-btn" id="notificationSettingsClose" title="关闭设置" aria-label="关闭设置"></button>
+    </div>
+    <p>队长回复结束或需要你确认时提醒，队员安静地在后台工作。</p>
+    <label class="notify-setting"><span>系统通知</span><input type="checkbox" role="switch" id="captainNotifyEnabled" aria-label="系统通知" /></label>
+    <label class="notify-setting"><span>提示音</span><input type="checkbox" role="switch" id="captainSoundEnabled" aria-label="提示音" /></label>
+    <label class="notify-setting"><span>选择提示音</span><select id="captainSoundTone" aria-label="选择提示音"><option value="Glass">Glass</option><option value="Tink">Tink</option></select></label>
+    <p class="notify-settings-note">正在前台看队长时静音；30 秒内不重复响铃。Windows 使用系统默认提示音。</p>
+  </dialog>
   <nav id="colNav" aria-label="对话列表">
     <div id="navHead"></div>
     <div id="navTop"></div>

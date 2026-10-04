@@ -300,8 +300,12 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令')?.id)).toBeTruthy();
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令').id);
   await expect.poll(() => screen(child)).toContain('Doing…');
+  const queuedCount = () => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child);
+  let queued = 0;
   for (const message of ['merge alpha', 'merge beta', 'merge gamma']) {
     await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
+    await expect.poll(queuedCount).toBe(++queued);
+    await waitForShell(mainId);
     await expect.poll(() => screen(mainId)).toContain('待补充');
   }
   // The stand-in finishes its current operation; the three additions arrive as one prompt.
@@ -314,19 +318,35 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i).at(-1)?.status, child), { timeout: 30000 }).toBe('done');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --now --message "keep working replace probe"`);
   await expect.poll(() => screen(child)).toContain('keep working replace probe');
+  // A prompt can appear before the status loop has observed the busy screen.
+  await expect.poll(() => page.evaluate((i) => {
+    const entry = terms.get(i);
+    return entry?.state === 'working' && MainCore.terminalActivity(entry.lastScreen) === 'working';
+  }, child), { timeout: 15000 }).toBe(true);
+  queued = 0;
   for (const message of ['discard alpha', 'discard beta']) {
     await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
+    await expect.poll(queuedCount).toBe(++queued);
+    await waitForShell(mainId);
     await expect.poll(() => screen(mainId)).toContain('待补充');
   }
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --message "replacement only"`);
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
+  await waitForShell(mainId);
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
   await expect.poll(() => capturedPrompts().some((p) => p.startsWith('replacement only'))).toBe(true);
   expect(capturedPrompts().some((p) => /^(discard alpha|discard beta)/.test(p))).toBe(false);
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('done');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "keep working now probe"`);
   await expect.poll(() => screen(child)).toContain('keep working now probe');
+  // A prompt can appear before the status loop has observed the busy screen.
+  await expect.poll(() => page.evaluate((i) => {
+    const entry = terms.get(i);
+    return entry?.state === 'working' && MainCore.terminalActivity(entry.lastScreen) === 'working';
+  }, child), { timeout: 15000 }).toBe(true);
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "discard with now"`);
+  await expect.poll(queuedCount).toBe(1);
+  await waitForShell(mainId);
   await expect.poll(() => screen(mainId)).toContain('待补充');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --now --message "urgent replacement"`);
   await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('urgent replacement')).length).toBe(1);

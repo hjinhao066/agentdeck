@@ -482,6 +482,7 @@
   function onTurnStarted(colId, turn) {
     const s = state();
     if (!s || colId !== s.colId) return;
+    host.captainTurnStarted(colId, turn);
     s.inflight.forEach((p) => { if (!p.deliveryTurnId) p.deliveryTurnId = turn.id; });
     save();
   }
@@ -489,6 +490,7 @@
     const s = state();
     if (!s) return;
     if (colId === s.colId) {
+      host.captainTurnDone(colId, turn);
       if (s.inflight.length || s.fresh) {
         s.inflight = s.inflight.filter((p) => p.deliveryTurnId !== turn.id);
         s.fresh = false;

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, screen, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -21,7 +21,7 @@ const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('-
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 
 // Every privileged channel belongs exclusively to the local deck main frame.
-// Notification windows expose a separate, minimal bridge.
+// Native notifications are created here, never in a page.
 const mainPage = path.join(__dirname, 'index.html');
 function validMessage(payload) {
   if (payload && typeof payload === 'object') {
@@ -68,8 +68,7 @@ const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
 const HOME = os.homedir();
 
-// Spool dir the watch-ai daemon reads to "see" inside AgentDeck columns (it
-// can't via AppleScript/tmux). Each column's rendered screen is dumped here.
+// Retired watch-ai spool directory, kept only to remove old column dumps.
 const WATCH_SPOOL = path.join(HOME, '.local', 'share', 'watch-ai', 'agentdeck');
 const spoolPath = (id) => privateFile(WATCH_SPOOL, id);
 
@@ -198,11 +197,9 @@ function bufferAppend(id, data) {
 
 function spawnPty(id, cwd, cols, rows, managed) {
   if (!validId(id) || ptys.size >= 100) return;
-  // Internal notifications replace watch-ai spools by default, avoiding double
+  // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
-  if (process.env.AGENTDECK_LEGACY_WATCH !== '1') {
-    try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
-  }
+  try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
@@ -612,6 +609,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(() => {
+  if (isWin) app.setAppUserModelId('com.jinhao.agentdeck');
   if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -623,11 +621,15 @@ app.whenReady().then(() => {
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
   const configPath = path.join(app.getPath('userData'), 'config.json');
+  let notificationConfig = {};
+  try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
+    notificationConfig = cfg;
+    if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
@@ -636,7 +638,7 @@ app.whenReady().then(() => {
     } catch (_) {}
   });
   onMain('env-info-sync', (e) => { e.returnValue = {
-    platform: process.platform, home: HOME, legacyWatch: process.env.AGENTDECK_LEGACY_WATCH === '1',
+    platform: process.platform, home: HOME,
   }; });
 
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed }) => spawnPty(id, cwd, cols, rows, !!managed));
@@ -883,8 +885,24 @@ app.whenReady().then(() => {
     return r.canceled ? [] : r.filePaths.slice(0, 50);
   });
 
-  notifications = createNotifications({ BrowserWindow, ipcMain, screen, focusColumn,
-    getMainWindow: () => mainWindow, onCreate: tudArg ? hideTestWindow : null });
+  // Test profiles record native delivery and playback without desktop side effects.
+  let NativeNotification = Notification;
+  if (tudArg) {
+    app.testCaptainAlerts = [];
+    NativeNotification = class extends require('events').EventEmitter {
+      static isSupported() { return true; }
+      constructor(options) { super(); this.options = options; }
+      show() { app.testCaptainAlerts.push({ type: 'notification', ...this.options }); app.testCaptainNotification = this; }
+      close() { app.testCaptainAlerts.push({ type: 'cancel' }); }
+    };
+  }
+  notifications = createNotifications({ Notification: NativeNotification, focusColumn,
+    getMainWindow: () => mainWindow, getConfig: () => notificationConfig,
+    playSound: (tone) => {
+      if (tudArg) { app.testCaptainAlerts.push({ type: 'sound', tone }); return; }
+      execFile('/usr/bin/afplay', ['-v', '0.35', '-t', '1', `/System/Library/Sounds/${tone}.aiff`],
+        { timeout: 2000 }, () => {});
+    } });
   onMain('notify-state', (_event, payload) => {
     if (payload && ptys.has(payload.id)) notifications.show(payload);
   });
@@ -906,19 +924,9 @@ app.whenReady().then(() => {
     if (w && !w.isDestroyed()) w.webContents.reload();
   });
 
-  // Renderer pushes each column's rendered screen; mirror it to the watch-ai
-  // spool so the daemon can detect idle agents running inside AgentDeck.
-  onMain('agentdeck:dump', (_e, { id, text }) => {
-    if (process.env.AGENTDECK_LEGACY_WATCH !== '1') return;
-    try { fs.mkdirSync(WATCH_SPOOL, { recursive: true }); fs.writeFileSync(spoolPath(id), text || '', 'utf-8'); }
-    catch (_) {}
-  });
-  // Metadata-only keepalive for an unchanged screen (see preload agentdeckTouch).
-  onMain('agentdeck:touch', (_e, { id }) => {
-    if (process.env.AGENTDECK_LEGACY_WATCH !== '1') return;
-    const now = new Date();
-    try { fs.utimesSync(spoolPath(id), now, now); } catch (_) {}
-  });
+  // Legacy watch-ai spools must never bypass Captain-only alerts.
+  onMain('agentdeck:dump', (_e, { id }) => { try { fs.unlinkSync(spoolPath(id)); } catch (_) {} });
+  onMain('agentdeck:touch', (_e, { id }) => { try { fs.unlinkSync(spoolPath(id)); } catch (_) {} });
 
   // Open URLs in the browser / reveal local paths in Finder (clicked links).
   onMain('open-external', (_e, url) => {

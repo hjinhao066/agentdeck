@@ -26,8 +26,7 @@ the middle:
   for a slot, then finished sessions, most recently finished first; it re-sorts
   as work starts and finishes.
   Their columns keep running at a normal size but sit outside the deck, and their
-  popups are left to the 队长. Opening one (from that list, a task card or a
-  notification) shows it right after the 队长 until you move on to another
+  popups are left to the 队长. Opening one (from that list or a task card) shows it right after the 队长 until you move on to another
   column. 拉到前台 in its menu, or dragging it into a folder or 对话, makes it an
   ordinary session; dropping a session on the 队长 or 后台 row (or 交给队长后台)
   hands it back. Sessions the 队长 only `tell`s something keep their place.
@@ -307,29 +306,32 @@ new terminal, so an agent launching the app cannot disable independent CLI histo
 
 ## Desktop notifications
 
-Notifications are built into the app on both platforms. No PowerShell popup
-script, watch-ai daemon, or OS notification permission is needed.
+Only the Captain alerts the user: when a reply finishes and stays quiet for 12
+seconds, or when its terminal stops at a confirmation/input prompt. Completion
+is still a screen/quiet-output heuristic; a silent tool can look idle. Workers
+never create notifications, popups, sounds or Dock badges, including while peeked
+or moved to the foreground. Worker questions and receipts go to the Captain.
 
-- A permission/input prompt shows a persistent popup. Completed output shows a
-  popup after at least 12 seconds of stable idle state and no further PTY output.
-- Works for Claude, Codex, Grok, Antigravity and manually launched agents. Screen
-  detection is heuristic: a silent tool can look idle, and unknown prompt formats
-  may be missed. The popup intentionally says output stopped, not task succeeded.
-- Popups stay above ordinary windows without stealing the keyboard. Cards are
-  compact (~191×54 px per card, halved again for minimal footprint), stacked in
-  the bottom-right corner with 12px margin; close a card to dismiss it.
-- Click a card to restore AgentDeck, leave Board view, scroll/re-zoom to that
-  exact terminal, and focus its input. A deleted terminal never redirects to an
-  unrelated column. Resumed work retracts its obsolete popup.
-- The app must be running. macOS Spaces/fullscreen visibility is requested; OS
-  secure desktops and other OS restrictions can still cover ordinary app windows.
+- Uses native macOS Notification Center / Windows system notifications, with
+  title 「队长」 and the reply's first sentence (at most 60 Unicode characters).
+  Clicking restores the exact Captain column without redirecting a stale ID.
+- Settings (gear icon) independently toggle system notifications and sound.
+  macOS offers Glass or Tink, played for at most one second at 35% playback volume.
+  Windows uses its default notification sound; unavailable native notifications
+  are gracefully skipped.
+- Sound is muted when AgentDeck is focused and the Captain column is visible.
+  Each turn alerts once (including input followed by completion); sounds from
+  consecutive turns are at least 30 seconds apart. Resumed work retracts an old
+  notification. Settings persist in the local profile.
+- macOS requires notification permission and a signed application. OS Focus /
+  Do Not Disturb can suppress banners. See the [Electron native notification API](https://www.electronjs.org/docs/latest/api/notification).
 
-Legacy watch-ai screen dumps are off by default (also avoids plaintext screen
-copies). Set `AGENTDECK_LEGACY_WATCH=1` only when deliberately using that bridge.
-If an existing Claude hook independently displays popups, skip that hook's popup
-when `AGENTDECK_NATIVE_NOTIFICATIONS=1`; leave hooks in other terminals unchanged.
-For the known Windows `~/.claude/hooks/claude-popup.ps1`, run
-`node scripts/migrate-popup-hook.js` once. It backs up and adds only this guard.
+The legacy watch-ai bridge is disabled, including with `AGENTDECK_LEGACY_WATCH=1`,
+to avoid bypassing this policy. Child terminals export
+`AGENTDECK_NATIVE_NOTIFICATIONS=1`; external hooks must honor that guard. For the
+known Windows `~/.claude/hooks/claude-popup.ps1`, `node scripts/migrate-popup-hook.js`
+backs up and adds the guard without affecting terminals outside AgentDeck.
+The bundled xterm does not play audio for terminal BEL.
 
 ## Development and builds
 
