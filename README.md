@@ -368,11 +368,13 @@ The queue verification and command semantics are documented in
 
 ## Chat view and side pane
 
-Columns open in the saved global view (chat by default). The icon button to the
-right of 自由 / 2–5 switches every column to terminal, then back to chat. Its
-icon and tooltip show the next action. New columns follow that global choice,
-including after relaunch. A column’s own 终端/对话 toggle overrides only that
-column for the current run; the next global click unifies all columns again.
+Sessions open in terminal view on startup, when selected after another session
+or page, and when created or restored. The icon button to the right of 自由 / 2–5
+switches every current column to terminal, then back to chat. Its icon and
+tooltip show the next action. A column’s own 终端/对话 toggle switches only
+that column; it stays in that view until you leave for another session or page.
+The next global click unifies all current columns again. The global choice resets
+to terminal on the next app launch.
 Each turn in chat shows
 your prompt (pinned while you read its answer) and the agent's final reply,
 rendered as Markdown, not commands or tool output. The real terminal is still

@@ -3,8 +3,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// Agent columns open as chat. Columns run the stand-in agent fixture and wait
-// for its welcome box before typing prompts.
+// These cases explicitly opt into chat because they exercise the composer and
+// chat history; the app's default view is covered separately.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const OLD_TURNS = 450;                    // more than the 400 the chat file used to keep
 const oldPrompt = (i) => `oldprompt-${String(i).padStart(4, '0')}`;
@@ -22,6 +22,7 @@ async function launch(columnCount) {
   });
   page = await application.firstWindow();
   page.on('dialog', (d) => d.accept());
+  await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   await expect(page.locator('.column.chat-mode')).toHaveCount(columnCount);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(columnCount);
 }
@@ -313,6 +314,9 @@ test('history survives quitting and relaunching: an unfinished turn, a raw termi
   // restoring the archived session brings back the same conversation, same ids
   expect(await page.evaluate(() => config.archived.map((a) => a.id))).toContain('chat-0');
   await page.evaluate(() => restoreArchived('chat-0', true));
-  await expect(page.locator('.column[data-col-id="chat-0"] .msg.user .bubble').first()).toHaveText('hello chat view');
+  const restored = page.locator('.column[data-col-id="chat-0"]');
+  await expect(restored).not.toHaveClass(/chat-mode/);
+  await restored.locator('.view-toggle').click();
+  await expect(restored.locator('.msg.user .bubble').first()).toHaveText('hello chat view');
   expect((await turns('chat-0')).map((t) => t.id)).toEqual(before0.map((t) => t.id));
 });

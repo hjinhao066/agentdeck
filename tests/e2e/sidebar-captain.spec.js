@@ -122,7 +122,7 @@ test('Captain arrow folds without selecting it; live counts stay visible, its ro
   await page.evaluate(() => ChatUI.setMode('captain', 'term'));
   await row.locator('.cn-label').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('captain');
-  await expect(page.locator('.column[data-col-id="captain"]')).toHaveClass(/chat-mode/);
+  await expect(page.locator('.column[data-col-id="captain"]')).not.toHaveClass(/chat-mode/);
   await expect(fold).toHaveAttribute('aria-expanded', 'true');
   await page.evaluate(() => {
     MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'working';
