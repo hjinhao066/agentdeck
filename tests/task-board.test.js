@@ -20,7 +20,7 @@ function fixture(t) {
 test('portable project JSON has all card fields, deterministic order, filters and archive', (t) => {
   const { store, add, root } = fixture(t);
   const one = add(), two = add({ project: 'other' });
-  for (const field of ['id', 'project', 'title', 'detail', 'status', 'flag', 'order', 'depends_on', 'assignee', 'session_id', 'latest_receipt', 'verify', 'rework_count', 'created', 'updated', 'archived']) assert.ok(field in one);
+  for (const field of ['id', 'project', 'title', 'detail', 'status', 'flag', 'order', 'depends_on', 'assignee', 'session_id', 'latest_receipt', 'user_question', 'needs_captain', 'verify', 'rework_count', 'created', 'updated', 'archived']) assert.ok(field in one);
   assert.equal(store.list({ project: 'other' })[0].id, two.id);
   store.move({ id: one.id, status: 'done' });
   assert.equal(store.list({ status: 'done' }).length, 1);
@@ -47,7 +47,10 @@ test('execution, question, completion and successful verification flow without A
   const { store, add, bind, event } = fixture(t);
   const card = add({ verify: true }); bind(card.id);
   assert.equal(event(card.id, 'started').card.status, 'doing');
-  assert.equal(event(card.id, 'ask', '选哪种格式？\n第二行').card.status, 'needs_user');
+  const asked = event(card.id, 'ask', '选哪种格式？\n第二行');
+  assert.equal(asked.card.status, 'needs_user');
+  assert.equal(asked.card.user_question, '选哪种格式？');
+  assert.equal(asked.card.needs_captain, false);
   assert.equal(event(card.id, 'complete', '修好了🙂。 第二句完整存在会话里。').card.status, 'review');
   assert.equal(store.list()[0].latest_receipt, '修好了🙂。');
   bind(card.id, 'review1', 'reviewer');
@@ -88,8 +91,14 @@ test('Captain rejection, process failure and quota failure deduplicate attempts 
 });
 test('fallback never declares success and an authoritative late completion wins', (t) => {
   const { add, bind, event } = fixture(t); const c = add(); bind(c.id);
-  assert.equal(event(c.id, 'fallback').card.status, 'needs_user');
-  assert.equal(event(c.id, 'complete', 'actual result').card.status, 'done');
+  const missed = event(c.id, 'fallback');
+  assert.equal(missed.card.status, 'doing');
+  assert.equal(missed.card.needs_captain, true);
+  assert.equal(missed.card.user_question, '');
+  assert.match(missed.notices[0], /需要队长看/);
+  const done = event(c.id, 'complete', 'actual result');
+  assert.equal(done.card.status, 'done');
+  assert.equal(done.card.needs_captain, false);
 });
 test('runtime model identity fills default models without allowing a stale session to change the reviewer', (t) => {
   const { store, add, bind, event } = fixture(t); const c = add({ verify: true }); bind(c.id);
@@ -181,7 +190,9 @@ test('dispatcher uses Captain model routing, portable CLI and important/unclear 
 test('dispatcher question/crash update the card; a delegated worker is never changed by its dispatcher receipt', (t) => {
   const { store, add, bind } = fixture(t); const c = add();
   store.dispatch({ id: c.id, session_id: 'dispatcher-1' });
-  assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-1', question: 'Needs clarification?' }).card.status, 'needs_user');
+  const asked = store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-1', question: 'Needs clarification?' });
+  assert.equal(asked.card.status, 'needs_user');
+  assert.equal(asked.card.user_question, 'Needs clarification?');
   store.dispatch({ id: c.id, session_id: 'dispatcher-2' });
   const failed = store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-2', failed: 'quota exhausted' });
   assert.equal(failed.card.flag, null);
@@ -195,6 +206,14 @@ test('dispatcher question/crash update the card; a delegated worker is never cha
   store.dispatch({ id: c.id, session_id: 'dispatcher-3' }); bind(c.id);
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-3', failed: 'old dispatcher quit' }).ignored, true);
   assert.equal(store.list()[0].session_id, 'worker');
+  const quiet = add();
+  store.claim({ id: quiet.id });
+  store.dispatch({ id: quiet.id, session_id: 'dispatcher-5' });
+  const ended = store.dispatcherReceipt({ id: quiet.id, session_id: 'dispatcher-5' });
+  assert.equal(ended.card.status, 'doing');
+  assert.equal(ended.card.needs_captain, true);
+  assert.equal(ended.card.user_question, '');
+  assert.match(ended.notices[0], /请队长安排/);
 });
 test('moving a finished or held card back to doing keeps the worker and does not dispatch', (t) => {
   const { store, add, bind, event } = fixture(t);

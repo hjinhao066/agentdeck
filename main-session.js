@@ -60,7 +60,9 @@
     const input = { id: task.boardId, session_id: task.colId, attempt_id: task.boardAttempt, type, message, source };
     const write = boardWrites.catch(() => {}).then(() => window.deck.taskBoard('event', input)).then((result) => {
       // The normal receipt already carries the complete failure reason. Only
-      // the extra no-retry decision needs a separate board notice.
+      // the extra no-retry decision needs a separate board notice. A session
+      // that ended without a receipt tells 队长 directly; it is not a user question.
+      if (type === 'fallback' && !result.ignored) for (const notice of result.notices || []) boardNotice(notice);
       if (result.card?.flag === 'held' && !result.ignored) boardNotice(`卡片 ${task.boardId} 连续失败 2 次，已挂起，不再自动重试。`);
       return result;
     });
@@ -656,7 +658,7 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (entry && entry.alive && (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input')) return;
+    if (entry && entry.alive && (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input' || M.terminalActivity(entry.lastScreen) === 'working')) return;
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER)) host.archiveColumn(col, { quiet: true });

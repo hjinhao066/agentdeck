@@ -28,7 +28,7 @@ function newCard(input, now = new Date().toISOString()) {
   return { id: input.id ? idValue(input.id) : 't-' + crypto.randomUUID(), project,
     title: text(input.title, 'title', true), detail: text(input.detail || '', 'detail'), status: 'todo', flag: null,
     order: 0, depends_on: [...new Set(depends.map(idValue))], assignee: null, session_id: null,
-    latest_receipt: '', verify: !!input.verify, rework_count: 0, created: now, updated: now, archived: false,
+    latest_receipt: '', user_question: '', needs_captain: false, verify: !!input.verify, rework_count: 0, created: now, updated: now, archived: false,
     consecutive_failures: 0, important: input.important === true };
 }
 
@@ -189,6 +189,8 @@ class TaskStore {
         card.session_id = null; card.attempt_id = null; card.dispatch_session_id = null;
       }
       card.archived = false;
+      card.needs_captain = false;
+      if (input.status !== 'needs_user') card.user_question = '';
       if (input.status !== 'doing') card.dispatch_claim = null;
       touch(card);
       return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
@@ -244,20 +246,35 @@ class TaskStore {
       const authoritative = input.type === 'complete' && input.source === 'command' && /:failed:(?:quota|process|automatic):/.test(card.last_event || '');
       if (card.flag === 'held' && !authoritative) return { card, ignored: true, notices: [] };
       const notices = [];
-      if (input.type === 'started') { card.status = card.review_session ? 'review' : 'doing'; card.flag = null; }
-      if (input.type === 'ask') { card.status = 'needs_user'; card.latest_receipt = sentence(text(input.message, 'question', true)); }
-      if (input.type === 'fallback') { card.status = 'needs_user'; card.latest_receipt = '已结束，未提交回执'; }
+      if (input.type === 'started') { card.status = card.review_session ? 'review' : 'doing'; card.flag = null; card.needs_captain = false; card.user_question = ''; }
+      if (input.type === 'ask') {
+        const question = sentence(text(input.message, 'question', true));
+        card.status = 'needs_user';
+        card.user_question = question;
+        card.needs_captain = false;
+        card.latest_receipt = question;
+      }
+      if (input.type === 'fallback') {
+        // Ending without a receipt is for the captain. Only an explicit question
+        // belongs in 需要你, where the user would otherwise see this sentence.
+        if (card.status === 'done') return { card, ignored: true, notices: [] };
+        if (card.status !== 'review') card.status = 'doing';
+        card.user_question = '';
+        card.needs_captain = true;
+        card.latest_receipt = '已结束，未提交回执';
+        notices.push(`卡片 ${card.id} 的会话已结束，未提交回执，需要队长看；卡片仍在进行中。`);
+      }
       if (input.type === 'complete') {
         card.latest_receipt = sentence(text(input.message, 'result', true));
         card.status = card.review_session || !card.verify ? 'done' : 'review';
-        card.flag = null; card.attempt_closed = true;
+        card.flag = null; card.attempt_closed = true; card.needs_captain = false; card.user_question = '';
         // Passing execution is not a passed verification; retain review failures.
         if (card.status === 'done') card.consecutive_failures = 0;
       }
       if (input.type === 'failed') {
         const reason = text(input.message, 'failure', true);
         this.failure(card, input.attempt_id, reason, card.review_session === true);
-        card.attempt_closed = true;
+        card.attempt_closed = true; card.needs_captain = false; card.user_question = '';
         notices.push(`卡片 ${card.id} 失败：${reason}${card.flag === 'held' ? '；连续失败 2 次，已挂起，不再自动重试。' : ''}`);
       }
       card.last_event = eventKey; touch(card);
@@ -303,10 +320,18 @@ class TaskStore {
         // it held cards whose real session was still running.
         card.latest_receipt = sentence(text(input.failed, 'dispatcher failure', true));
         notices.push(`卡片 ${card.id} 调度失败：${input.failed}；未计入连续失败，卡片不挂起。`);
-      } else {
+      } else if (String(input.question || '').trim()) {
+        const question = sentence(input.question);
         card.status = 'needs_user';
-        card.latest_receipt = sentence(input.question || '调度已结束，尚未派出执行会话');
-        if (!input.question) notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
+        card.user_question = question;
+        card.needs_captain = false;
+        card.latest_receipt = question;
+      } else {
+        if (card.status === 'needs_user') card.status = 'doing';
+        card.user_question = '';
+        card.needs_captain = true;
+        card.latest_receipt = '调度已结束，尚未派出执行会话';
+        notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
       }
       card.dispatch_session_id = null; touch(card); return { card, notices };
     });

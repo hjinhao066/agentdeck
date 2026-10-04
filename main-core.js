@@ -562,6 +562,10 @@
       if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|(?:error:?\s*)?(?:usage limit|quota|resource_exhausted)(?:\s|:|\b).*?(?:exceeded|exhausted|reached)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
+      // Cursor prints "Thinking/Running" plus a token count, not an ellipsis.
+      // Codex sits on this line while a background command is still running.
+      if (/^\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800-\u28FF]+\s*)?(?:Thinking|Running|Responding|Generating|思考中|正在思考)\s+\d+(?:\.\d+)?k?\s+tokens\b/i.test(line)) working = i;
+      if (/^\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800-\u28FF]+\s*)?Waiting for background terminal\b/i.test(line)) working = i;
       if (/press up to edit queued messages/i.test(line)) queued = true;
     });
     if (quota > resumed && quota > working) return 'quota';

@@ -318,6 +318,13 @@ test('a finished background session is archived only after 10 quiet minutes with
   }
   assert.equal(M.archivable(s, 'nobody', 0, now), false, 'never one 队长 gave no work');
   assert.equal(M.archivable(s, 'a', 0, now - 9 * min + 11 * min, 0), true, 'the wait can be shortened');
+  // The sidebar label is not an input. An open task keeps its slot and cannot
+  // be archived just because a terminal classifier said 已完成.
+  assert.equal(M.activeCrew([{ colId: 'a', status: 'working' }], new Set(['a'])).size, 1);
+  assert.equal(M.archivable({ tasks: [{ colId: 'a', status: 'working', sentAt: 0 }] }, 'a', now - 30 * min, now), false);
+  assert.equal(M.terminalActivity('  ⠰⠳ Thinking  64.14k tokens\nAdd a follow-up'), 'working');
+  assert.equal(M.terminalActivity('◦ Waiting for background terminal\nOpenAI Codex'), 'working');
+  assert.equal(M.terminalActivity('Thinking: xhigh\nAdd a follow-up'), '');
 });
 
 test('队长 is told about background work, the limit and automatic archiving', () => {

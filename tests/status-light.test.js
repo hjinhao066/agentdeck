@@ -18,6 +18,9 @@ const busy = [
   '⠋ Reading files...',
   'ctrl+c to stop',
   'Responding…',
+  '  ⠰⠳ Thinking  64.14k tokens',
+  '  ⠠⠜ Running  45.56k tokens',
+  '◦ Waiting for background terminal',
 ];
 function terminal(lines, baseY = 0, rows = lines.length - baseY) {
   return { rows, buffer: { active: { baseY, viewportY: 0, getLine: (y) => {

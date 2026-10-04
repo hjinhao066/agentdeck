@@ -25,6 +25,8 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | assignee | `null` 或 `{agent, model}`；未显式指定模型时先为 `default`，识别到本会话实际模型后更新，不猜账号配置 |
 | session_id | 当前执行或审查会话 ID，未派活为 `null` |
 | latest_receipt | 命令结果或失败原因的第一句/第一行，不按字符数截断；完整原文仍在会话和队长回执通道 |
+| user_question | 只有明确向用户提问时才写入的那一句问题。界面在「需要你」列读这个字段。没有提问时为空字符串 |
+| needs_captain | boolean。会话没交回执就结束，或调度结束却没有派出执行会话时为 true。卡片留在进行中，通知队长，不进「需要你」 |
 | verify | boolean，执行完成后是否进入待验收 |
 | rework_count | 累计验收驳回次数 |
 | created / updated | ISO 日期；updated 可作为编辑的乐观并发版本 |
@@ -149,7 +151,7 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 | --- | --- |
 | 指令真正送到执行会话 | doing；排队不会假装已开工 |
 | 执行 complete | verify=true → review，否则 done；记录第一句结果 |
-| ask | needs_user；写第一句问题，完整问题仍给队长 |
+| ask | needs_user，并把那一句问题写入 `user_question`；完整问题仍给队长 |
 | complete --failed / 崩溃 / 额度用尽 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
 | 所有前置 done | 后续 todo 的 blocked 自动清除，可开始（不会偷偷启动） |
 | review 卡片 new --task-id | 绑定审查会话；审查期间仍 review |
@@ -157,7 +159,7 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 | 审查 complete --failed / 队长从 review move 回 doing | rework_count+1，doing + failed；队长用 new 或原会话 tell 返工 |
 | 连续失败达到两次 | doing + held，通知队长，不派活、不重试 |
 | held 后队长明确 move 到 todo/doing | 解挂，清零连续失败次数，保留累计 rework_count |
-| 已结束却三分钟无命令回执 | needs_user，只有「已结束，未提交回执」，不把屏幕当成功结果 |
+| 已结束却三分钟无命令回执 | 仍是 doing，`needs_captain=true`，通知队长；不进 needs_user，不把屏幕当成功结果 |
 
 验收失败后的执行完成不会清除验收失败计数，两轮验收都失败仍会挂起。
 执行/验收会话的选择由队长或调度员安排；这些状态和阈值不由 AI 判断。
