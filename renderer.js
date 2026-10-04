@@ -453,8 +453,9 @@ window.deck.onPtyExit((id, reason) => {
 // "done" vs "plain" can't be told apart from screen text alone (both are an idle
 // prompt), so each column remembers hasWorked; idleTicks debounces the working→done
 // flip (~3s) so the dot doesn't flash green in the gaps between tool calls.
-// Regexes largely borrowed from watch-ai's battle-tested ACTIVE_PATTERNS/idle sets.
-const WORKING_RE = /esc to interrupt|ctrl\+c to stop|\bWorking\b|Running(?:\.\.\.|…)|⎿\s+Running|\(\d+s\s*·|…\s*\(\d+s|[↑↓]\s*[\d.]+k?\s+tokens|[\u2800-\u28FF]/;
+// Live TUI indicators, not words quoted in an answer or an idle model's
+// Thinking: high setting. Gemini/agy uses timed 'esc to cancel' spinners.
+const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800-\u28FF]\s*)?(?:Doing(?:…|\.\.\.)|Working(?:\s*\(|\s*(?:…|\.\.\.)|\s*$)|Running(?:…|\.\.\.|\s*$)|(?:Thinking|Responding|Generating|思考中|正在思考)(?:…|\.\.\.|\s*\(|\s*$)|esc to interrupt\b|ctrl\+c to stop\b|[↑↓]\s*[\d.]+k?\s+tokens)|^\s*[✻✽✳✶✢✺∴*·\u2800-\u28FF]\s+\S[^\n]*(?:…|\.\.\.|esc to interrupt)|^\s*[^\n]*…\s*\([^\n]*esc to cancel\)|^\s*⎿\s+Running\b/im;
 // Only structurally dialog-shaped patterns: prose like "Would you like me to
 // also…?" at the end of a normal reply must NOT hold a column red forever.
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
@@ -467,8 +468,8 @@ function classify(text, entry) {
   if (activity === 'quota') return activity;
   const lines = text.split('\n');
   if (activity === 'working') return activity;
+  if (WORKING_RE.test(text)) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
-  if (WORKING_RE.test(lines.slice(-15).join('\n'))) return 'working';
   if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
 }
@@ -3240,6 +3241,26 @@ function dumpScreen(term, count = 40) {
   }
   return lines.join('\n');
 }
+// Status must inspect the entire live screen, independent of viewport/focus.
+// dumpScreen's bounded tail is for reply/history extraction: it can miss a busy
+// row above a tall input/footer, or retain an obsolete spinner in scrollback.
+function statusScreen(term) {
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
+    const line = buf.getLine(y);
+    const text = line ? line.translateToString(false) : '';
+    if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
+  }
+  let text = lines.map((line) => line.trimEnd()).join('\n');
+  const sep = Math.max(text.lastIndexOf('以上为上次会话的输出'), text.lastIndexOf('上次输出回放'));
+  if (sep >= 0) {
+    const nl = text.indexOf('\n', sep);
+    text = nl >= 0 ? text.slice(nl + 1) : '';
+  }
+  return text.trimEnd();
+}
 // Format elapsed ms compactly: 42s → 3m 12s → 1h 05m.
 function fmtElapsed(ms) {
   const s = Math.floor(ms / 1000);
@@ -3405,7 +3426,7 @@ setInterval(() => {
     }
     entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
     if (entry.alive) {
-      let st = classify(text, entry);
+      let st = classify(statusScreen(entry.term), entry);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
