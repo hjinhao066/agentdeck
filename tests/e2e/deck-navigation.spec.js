@@ -20,6 +20,10 @@ test('column navigation preserves native center and nearest scrolling, including
     });
     const page = await app.firstWindow();
     await expect(page.locator('.column')).toHaveCount(3);
+    // Columns enter the DOM before their terminals mount on the next frame.
+    await expect.poll(() => page.evaluate(() =>
+      ['before', 'target', 'after'].every((id) => terms.get(id)?.wrap?.isConnected)
+    )).toBe(true);
     const cases = await page.evaluate(() => {
       isUserScrollingDeck = true;
       const target = terms.get('target').wrap;

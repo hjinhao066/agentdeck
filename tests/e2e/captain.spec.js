@@ -733,6 +733,13 @@ test('clearing the Captain resets only its model context: work, receipts and que
   const text = received();
   expect(text.indexOf('claude-opus-5-5-max')).toBeLessThan(text.indexOf('向你提问：用 SQLite 可以吗'));
 
+  // The carried confirmation excerpt makes the stand-in ask for permission
+  // too. Answer it like a user; receipts must wait while this prompt is live.
+  await expect.poll(() => page.evaluate((i) => terms.get(i).state, fresh), { timeout: 15000 }).toBe('input');
+  await run(fresh, 'y');
+  await expect.poll(() => screen(fresh), { timeout: 15000 }).toContain('GOT y');
+  await expect.poll(() => page.evaluate((i) => terms.get(i).state, fresh), { timeout: 15000 }).toBe('done');
+
   // the task queued before the clear finishes now, and its receipt reaches the new Captain
   await run('cap-y', `clear; ${FAKE}`);
   const doneCard = page.locator(`.column[data-col-id="${fresh}"] .task-card`, { hasText: 'Worker y' });

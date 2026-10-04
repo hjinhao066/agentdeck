@@ -28,7 +28,7 @@ test.beforeAll(async () => {
       id: `ws-${k}`, taskId: `task-${k}`, title: `Session ${k}`, cmd: FAKE, cwd: profile, width: 460, role: 'manual',
     })),
   }));
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'delivered-prompts.jsonl') };
+  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'delivered-prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'delivered-columns.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -101,7 +101,12 @@ test('a very long prompt is not cut: it goes to the agent as a file', async () =
   await expect(bubble.locator('.bubble-atts .att-file')).toContainText('.txt');
   const file = await bubble.locator('.bubble-atts .att').getAttribute('title');
   expect(fs.readFileSync(file, 'utf8')).toBe(long);
-  await expect.poll(() => page.evaluate(() => window.deck.ptyReplay('ws-c')), { timeout: 15000 }).toContain('请先完整读取再照做');
+  // A raw TUI redraws a shortened reply; verify the agent's received wrapper.
+  const received = () => {
+    const records = path.join(profile, 'delivered-columns.jsonl');
+    return fs.existsSync(records) ? fs.readFileSync(records, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter((p) => p.colId === 'ws-c').map((p) => p.text).join('\n') : '';
+  };
+  await expect.poll(received, { timeout: 15000 }).toContain(`${long.slice(0, 300)}…\n（这条消息共 ${long.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`);
   await expect(col.locator('.composer textarea')).toHaveValue('');
 });
 
