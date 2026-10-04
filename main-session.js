@@ -99,21 +99,24 @@
     }
   }
   const startingCards = new Map();
-  async function startCard(id, heartbeat) {
+  // `notice(card)`: the words for 队长 when the user asked for the start on the
+  // task board itself; such a start never opens a dispatcher session.
+  async function startCard(id, heartbeat, notice) {
     if (startingCards.has(id)) return startingCards.get(id);
-    const start = startCardOnce(id, heartbeat);
+    const start = startCardOnce(id, heartbeat, notice);
     startingCards.set(id, start);
     try { return await start; } finally { startingCards.delete(id); }
   }
-  async function startCardOnce(id, heartbeat) {
+  async function startCardOnce(id, heartbeat, notice) {
     if (!mainCol()) throw new Error('请先创建队长，再开始卡片。');
     const claimed = heartbeat
       ? { card: (await window.TaskBoard.list()).find((c) => c.id === id) }
-      : await boardRequest('claim', { id });
+      : await boardRequest('claim', { id, ...(notice ? { newEntry: true } : {}) });
     if (claimed.ignored) return { card: claimed.card, ignored: true };
     if (!claimed.card || !claimed.card.dispatch_claim || claimed.card.dispatch_claim.delivered || heartbeat && claimed.card.dispatch_claim.key !== heartbeat.key) return { ignored: true };
     const key = claimed.card.dispatch_claim.key;
     const { card, captain } = await boardRequest('dispatch', { id });
+    if (notice) { boardNotice(notice(card)); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
     if (window.TaskBoard.settings().dispatcher !== 'gemini' || captain) {
       boardNotice(`用户要开始卡片 ${card.id}「${card.title}」${captain ? '（需要队长判断）' : ''}。项目：${card.project}。`);
       await boardRequest('dispatched', { id, key });
@@ -129,6 +132,29 @@
     await boardRequest('dispatched', { id, key });
     return { card, dispatcher: 'gemini', session_id: col.id };
   }
+  // The user's answer to a 需要你 card goes to 队长 as an instruction naming the
+  // card, and the card returns to 进行中: a session still bound to it keeps its
+  // binding (队长 passes the answer on); otherwise the start is claimed for 队长
+  // so the heartbeat does not hand the card to a dispatcher as well.
+  async function answer(id, reply) {
+    const text = String(reply || '').trim();
+    if (!text) throw new Error('请先写下你的答案。');
+    if (!mainCol()) throw new Error('请先创建队长，再回答卡片。');
+    const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === id);
+    if (!card) throw new Error('这张卡片已经不在看板上了。');
+    const question = window.TaskBoardUICore.userQuestion(card);
+    const words = (c) => `用户在任务看板回答了卡片 ${c.id}「${c.title}」（项目：${c.project}）。${question ? '问题：' + question + '\n' : ''}用户的答案：${text}\n请按这个答案继续推进这张卡片。`;
+    if (card.status !== 'needs_user') { boardNotice(words(card)); return { card }; }
+    if (card.session_id && !card.attempt_closed) {
+      boardNotice(words(card));
+      return boardRequest('event', { id, session_id: card.session_id, attempt_id: card.attempt_id, type: 'started', source: 'answer-' + Date.now() });
+    }
+    try {
+      const started = await startCard(id, undefined, words);
+      if (started.ignored) boardNotice(words(card));
+      return started;
+    } catch (error) { boardNotice(words(card)); return { card, stayed: error.message }; }
+  }
   window.TaskBoard = {
     onChange: (callback) => window.deck.onTasksChanged(callback),
     list: (filter = {}) => window.deck.taskBoard('list', filter),
@@ -137,6 +163,11 @@
     move: (id, status, updated) => boardRequest('move', { id, status, updated }),
     archiveDone: (project) => boardRequest('archive', { done: true, ...(project ? { project } : {}) }),
     startCard,
+    reorder: (id, anchor = {}) => boardRequest('reorder', { id, ...anchor }),
+    // The user dragged a card into 进行中: claim it and tell 队长 which card to
+    // hand out. No session is opened here.
+    requestStart: (id) => startCard(id, undefined, (card) => `用户在任务看板把卡片 ${card.id}「${card.title}」拖到了「进行中」，请安排队员开始做这件事。项目：${card.project}。`),
+    answer,
     settings: (dispatcher) => {
       if (dispatcher !== undefined) {
         if (!['captain', 'gemini'].includes(dispatcher)) throw new Error('dispatcher must be captain or gemini.');

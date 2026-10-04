@@ -276,6 +276,21 @@ test('a long saved conversation keeps every turn; the view loads older ones on r
   await page.locator('#navSearch').fill('');
 });
 
+test('Ctrl+V pastes through the shared synchronous clipboard bridge', async () => {
+  await focusChat('chat-2');
+  await page.evaluate(() => {
+    window.deck.clipboardWrite('shared clipboard paste');
+    ChatUI.setMode('chat-2', 'term');
+    terms.get('chat-2').term.focus();
+  });
+  await page.keyboard.press('Control+v');
+  await page.keyboard.press('Enter');
+  await page.evaluate(() => ChatUI.setMode('chat-2', 'chat'));
+  const col = page.locator('.column[data-col-id="chat-2"]');
+  await expect(col.locator('.msg.user .bubble').last()).toHaveText('shared clipboard paste');
+  await expect(col.locator('.reply').last()).toContainText('GOT shared clipboard paste', { timeout: 20000 });
+});
+
 test('history survives quitting and relaunching: an unfinished turn, a raw terminal turn, all old turns, an archived chat', async () => {
   test.setTimeout(120000);
   // a new turn on the long chat

@@ -162,6 +162,14 @@ if (saved) {
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher)) config.taskBoard = { dispatcher: saved.taskBoard.dispatcher };
+  if (saved.taskBoardView && typeof saved.taskBoardView === 'object') {
+    const v = saved.taskBoardView;
+    config.taskBoardView = {
+      laneOrder: (Array.isArray(v.laneOrder) ? v.laneOrder : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500),
+      collapsed: Object.fromEntries(Object.entries(v.collapsed && typeof v.collapsed === 'object' ? v.collapsed : {}).filter(([k, on]) => k.length <= 120 && on === true).slice(0, 500)),
+      doneOpen: v.doneOpen === true,
+    };
+  }
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
@@ -3818,6 +3826,7 @@ function focusColumnByIndex(idx) {
 }
 document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos
+  if (e.target.closest && e.target.closest('.tbv-answer')) return; // 需要你 answer box: Cmd+Enter sends the answer
   const k = e.key;
   let handled = true;
   if (k === 'n' || k === 'N') {
@@ -4012,10 +4021,14 @@ TaskBoardUI.init({
   showToast,
   session: (id) => {
     const col = columns.find((c) => c.id === id);
-    if (col) return { label: columnLabel(col), col };
+    const files = (c) => (c.lastReceipt && Array.isArray(c.lastReceipt.files) ? c.lastReceipt.files : []);
+    if (col) return { label: columnLabel(col), col, state: (terms.get(id) || {}).state || '', files: files(col) };
     const archived = (config.archived || []).find((a) => a.id === id);
-    return archived ? { label: columnLabel(archived), col: null } : null;
+    return archived ? { label: columnLabel(archived), col: null, state: '', files: files(archived) } : null;
   },
+  prefs: () => config.taskBoardView,
+  savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
+  copy: (text) => window.deck.clipboardWrite(text),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar'),
   openSession: openTaskSession,
   showBoard: (mode) => {

@@ -59,7 +59,10 @@ await TaskBoard.update(card.id, { title: '新标题', order: 1.5 }, card.updated
 // update 只允许 title/detail/order/depends_on/verify/important，必须提供旧 updated。
 await TaskBoard.move(card.id, 'doing', card.updated); // 进入开始，由心跳发现
 await TaskBoard.archiveDone('agentdeck');
-await TaskBoard.startCard(card.id); // 拖到开始优先用这个接口，即时认领、调度
+await TaskBoard.startCard(card.id); // 显式开始，按 dispatcher 设置调度
+await TaskBoard.requestStart(card.id); // 拖到进行中：认领后通知队长安排，不开调度会话
+await TaskBoard.reorder(card.id, { before: otherCard.id }); // 同项目排序，也可 after；无锚点放末尾
+await TaskBoard.answer(card.id, '用户的答案'); // 回答需要你，交给队长继续推进
 TaskBoard.settings();              // {dispatcher:'gemini'}
 TaskBoard.settings('captain');     // 持久化到本机 config.json
 const unsubscribe = TaskBoard.onChange(() => refreshFromTaskBoard());
@@ -74,6 +77,9 @@ unsubscribe();
 | `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；清除旧会话绑定，移入 doing 时检查前置 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
 | `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
+| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | `Promise<{card, dispatcher:'captain'} \| {ignored: true, card?}>`；只通知队长，不开调度会话 |
+| `reorder(id, anchor = {})` | 可选 before 或 after 卡片 ID，只接受同项目锚点，两者不可同时提供；无锚点放项目末尾 | `Promise<{card, notices}>`；只改 order，必要时重排项目内序号 |
+| `answer(id, reply)` | 非空答案，必须已有队长 | 通知队长；需要你的卡回到 doing，活跃会话保留绑定，无绑定时认领并通知队长 |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
 | `onChange(callback)` | 文件变化通知；回调不接收卡片正文 | 同步返回取消订阅函数 |
 
@@ -107,19 +113,25 @@ ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题�
 任务看板列出全部任务。纯逻辑在 `task-board-ui-core.js`（有单元测试），界面在
 `task-board-ui.js`。
 
-- 布局：每个项目一条泳道，横向五列 待办 / 进行中 / 待验收 / 需要你 / 完成，列头
+- 布局：每个项目一条紧凑泳道，横向五列 待办 / 进行中 / 待验收 / 需要你 / 完成，完成默认收起，列头
   显示总数并在滚动时固定。项目名不分大小写（`AgentDeck` 与 `agentdeck` 同一条
   泳道，显示多数卡片用的写法）；颜色用 `CrewMapCore.projectHue(项目名)`，同样不分
   大小写，与架构图一致。窗口窄于五列最小宽度时横向滚动，卡片不挤压、不重叠。
 - 卡片：标题（最多两行）、负责会话的模型徽标和会话名（会话不在时显示 assignee 或
   「会话已关闭」，未派活显示「未派活」）、最近回执摘要（最多两行）、标签（失败、
   等「X」完成、可并行、挂起、返工次数）和更新时间。失败卡留在原状态列，左侧红条。
-- 点有会话的卡片（或键盘 Enter）关闭看板并跳到那一列；已归档的会话先恢复。
-- 筛选项目、按最近更新 / 任务顺序排序、刷新图标；只读视图不拖拽、不建卡、不编辑、
-  不归档，不写任务数据。
-- 打开时订阅 `onChange`，关闭时取消订阅。打开后焦点进入项目筛选框，Esc 或关闭
+- 点卡片（或键盘 Enter）打开详情抽屉，显示完整说明、负责会话和相关文件；通过会话入口
+  跳到对应终端，已归档的会话先恢复。「需要你」把问题放在答案框上方，发送后交给队长继续推进。
+- 项目筛选、项目折叠和拖动排序、完成列开关保存在本机 config.json；卡片列内拖动排序通过
+  `reorder` 保存到任务正本，跨列拖动遵守原流转校验。拖到进行中调用 `requestStart`，只通知队长。
+  Alt+方向键提供卡片排序/状态移动；无操作时只读任务数据，刷新不改卡片。
+- 打开时订阅 `onChange`，关闭时取消订阅。打开后焦点进入项目筛选入口，Esc 或关闭
   图标关闭并返回侧边栏入口；键盘切换终端列也关闭看板。当前筛选项目没有可见卡片时，
   同一次刷新自动切回全部项目。
+
+复制路径和编号统一使用 `deck.clipboardWrite(text)`，同步读取使用 `deck.clipboardRead()`；
+两者都走 release 的 `clipboard:write-sync` / `clipboard:read-sync` 主进程通道。
+隔离测试 profile 使用私有剪贴板，复制失败不会显示成功。
 
 ## 命令
 

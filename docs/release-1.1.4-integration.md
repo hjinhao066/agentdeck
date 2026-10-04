@@ -24,7 +24,7 @@ terminal without a command receipt, and the full `→ … ctrl+c to stop` input 
 means busy for every provider. The full unit suite covers these cases and the
 individual feature suites.
 
-The four pending deliveries (`fix/task-move-quota-dispatch`,
+At the initial eight-branch checkpoint, the four pending deliveries (`fix/task-move-quota-dispatch`,
 `fix/cursor-claude-ready`, `feat/quota-panel`, task board v2) were not integrated.
 No `feat/three-ends-*` delivery was integrated.
 The revised cursor-claude-ready tip `7629479` supersedes `33cd755`, but remains
@@ -95,3 +95,18 @@ workflow packages apps, so it was not dispatched under the no-packaging rule.
 Windows physical-device verification and full/packaged E2E remain unperformed.
 No version bump, tag, package, merge to main, installation or restart of the
 active AgentDeck was performed.
+
+## Follow-up: task board v2
+
+Integrated `origin/feat/task-board-v2-1.1.3` at `58c5e4b` after acceptance.
+The only merge conflicts were main.js/preload.js clipboard IPC. Keep release's
+`clipboard:write-sync` / `clipboard:read-sync` and synchronous public API;
+discard `clipboard-write-sync` / `clipboard-read`. Task board copy uses the
+existing `deck.clipboardWrite`, and terminal Ctrl+V keeps synchronous reading.
+A real Ctrl+V E2E regression case covers this integration boundary.
+
+Validation: unit **498/498**, task-board-ui **6/6**, mobile-web **5/5**,
+chat plus chat-redesign **22/22**, all E2E sequential with one worker.
+Task board synthetic dark/light screenshots are in `task-board-v2/` under the
+existing local report directory. The compact board and answer drawer were
+visually reviewed. README and the task board API now describe v2's write actions.

@@ -1,20 +1,43 @@
-// 任务看板 view (read-only): every shared task card from window.TaskBoard,
-// one swimlane per project (case-insensitive) across the five status columns,
-// filtered by project and sorted by update time or task order. A card with a
-// session opens that session; there are no task write operations. It covers
-// the deck and the board view like the
-// Schedule/Artifacts pages; closing it leaves everything underneath as it was.
-// Project colours come from the crew map's palette (CrewMapCore.projectHue).
+// 任务看板 view: every shared task card from window.TaskBoard, one compact
+// swimlane per project (case-insensitive, in the user's own order) across the
+// five status columns. Built to be read at a glance: one-line cards, the 完成
+// column folded to a count, long cells folded to 还有 N 张, lanes that fold and
+// remember it, and a project overview strip on top. Cards drag (or Alt+arrows)
+// inside a column to reorder and across columns to change status; a card
+// dragged into 进行中 is announced to 队长, never started behind his back. A
+// card opens a detail drawer; a 需要你 card shows its question there with an
+// answer box whose text goes to 队长. It covers the deck and the board view like
+// the Schedule/Artifacts pages; closing it leaves everything underneath as it
+// was. Project colours come from the crew map's palette (CrewMapCore.projectHue).
 (function () {
   'use strict';
   const U = window.TaskBoardUICore;
+  const CELL_LIMIT = 6;       // cards a cell shows before folding the rest
+  const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const ICON = {
+    chevron: svg('<path d="m6 9 6 6 6-6"/>'),
+    close: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
+    terminal: svg('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
+    copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
+    check: svg('<path d="m5 12 5 5 9-10"/>'),
+  };
   let host = null;
-  let viewEl, projectSel, sortGroup, headsEl, lanesEl, statusEl, summaryEl, emptyEl, refreshBtn;
+  let viewEl, projectsEl, gridEl, headsEl, lanesEl, scrollEl, statusEl, summaryEl, emptyEl, refreshBtn, detailEl, liveEl;
   let open = false;
   let cards = [];
-  let filter = { project: U.ALL, sort: 'updated' };
+  let board = null;
+  let filter = { project: U.ALL };
+  let prefs = { laneOrder: [], collapsed: {}, doneOpen: false };
+  const expanded = new Set(); // "lane/status" cells showing every card
+  let detailId = null;
+  let detailKey = '';
+  const drafts = new Map();   // unsent answers by card id
+  let drag = null;            // the drag in progress (card or lane)
+  let renderQueued = false;
+  let suppressClick = false;
+  let focusAfter = null;      // selector to focus after the next render
   let unsubscribe = null;
-  let seq = 0;              // only the newest list() result is drawn
+  let seq = 0;                // only the newest list() result is drawn
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -22,10 +45,29 @@
     if (text != null) n.textContent = text;
     return n;
   };
+  // Tool actions are icon buttons: tooltip, accessible name, 32px target.
+  const iconButton = (cls, icon, label) => {
+    const b = el('button', 'tbv-icon ' + cls);
+    b.type = 'button'; b.innerHTML = icon; b.title = label; b.setAttribute('aria-label', label);
+    return b;
+  };
   const api = () => window.TaskBoard;
   const hue = (project) => String(window.CrewMapCore.projectHue(project));
+  const escapeId = (id) => (window.CSS && CSS.escape ? CSS.escape(id) : id);
+  const cardNode = (id) => lanesEl.querySelector(`.tbv-card[data-card-id="${escapeId(id)}"]`);
 
   function setStatus(text) { statusEl.textContent = text || ''; statusEl.hidden = !text; }
+  function announce(text) { liveEl.textContent = ''; liveEl.textContent = text; }
+  function savePrefs() { host.savePrefs({ laneOrder: prefs.laneOrder.slice(), collapsed: { ...prefs.collapsed }, doneOpen: !!prefs.doneOpen }); }
+  function friendly(error) {
+    const m = String((error && error.message) || error || '');
+    if (/Predecessor cards/.test(m)) return '它前面的任务还没做完';
+    if (/changed since it was read/.test(m)) return '卡片刚刚被更新了，请再试一次';
+    if (/archived, held or done/.test(m)) return '这张卡已挂起或已完成，要先由队长放行';
+    if (/already being executed|already has an active/.test(m)) return '这张卡已经有队员在做';
+    if (/being written by another/.test(m)) return '看板正在被写入，请稍后再试';
+    return m;
+  }
 
   async function refresh() {
     if (!open) return;
@@ -46,120 +88,497 @@
     render();
   }
 
-  function renderProjects(projects) {
-    projectSel.innerHTML = '';
-    const all = el('option', null, '全部项目'); all.value = U.ALL;
-    projectSel.append(all, ...projects.map((p) => { const o = el('option', null, p.name); o.value = p.key; return o; }));
-    projectSel.value = filter.project;
-    projectSel.classList.toggle('tbv-tinted', !!filter.project);
-    if (filter.project) projectSel.style.setProperty('--project-hue', hue(filter.project)); else projectSel.style.removeProperty('--project-hue');
+  // ---- overview strip ----
+  function renderProjects() {
+    projectsEl.innerHTML = '';
+    const chip = (key, name, title) => {
+      const b = el('button', 'tbv-chip');
+      b.type = 'button'; b.dataset.project = key; b.title = title;
+      const on = filter.project === key;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', String(on));
+      if (key) { b.style.setProperty('--project-hue', hue(key)); b.append(el('span', 'tbv-dot')); }
+      b.append(el('span', 'tbv-chip-name', name));
+      b.onclick = () => { filter.project = on ? U.ALL : key; focusAfter = `.tbv-chip[data-project="${escapeId(filter.project)}"]`; render(); };
+      return b;
+    };
+    projectsEl.append(chip(U.ALL, '全部', '看全部项目'));
+    board.projects.forEach((p) => {
+      const b = chip(p.key, p.name, `只看 ${p.name}：进行中 ${p.counts.doing}，需要你 ${p.counts.needs_user}，还有 ${p.open} 件没做完`);
+      if (p.counts.doing) { const n = el('span', 'tbv-chip-n doing', String(p.counts.doing)); n.title = `进行中 ${p.counts.doing}`; b.append(n); }
+      if (p.counts.needs_user) { const n = el('span', 'tbv-chip-n needs', String(p.counts.needs_user)); n.title = `需要你 ${p.counts.needs_user}`; b.append(n); }
+      if (!p.open) b.classList.add('quiet');
+      projectsEl.append(b);
+    });
   }
 
-  // Who runs the card and on which model: the live session's agent badge (the
-  // same one the sidebar and crew map show), else the recorded assignee.
-  function ownerRow(c) {
-    const row = el('div', 'tbv-owner');
+  function renderHeads() {
+    headsEl.innerHTML = '';
+    board.columns.forEach((col) => {
+      const done = col.key === 'done';
+      const head = el(done ? 'button' : 'div', 'tbv-head');
+      head.dataset.status = col.key;
+      head.setAttribute('role', 'columnheader');
+      head.append(el('span', 'tbv-head-dot'), el('span', 'tbv-head-label', col.label), el('span', 'tbv-count', String(col.count)));
+      if (done) {
+        head.type = 'button';
+        const label = prefs.doneOpen ? '收起完成列，只显示数量' : '展开完成列';
+        head.title = label; head.setAttribute('aria-label', `完成 ${col.count} 张，${label}`);
+        head.setAttribute('aria-expanded', String(!!prefs.doneOpen));
+        const chev = el('span', 'tbv-chev'); chev.innerHTML = ICON.chevron; head.append(chev);
+        head.onclick = toggleDone;
+      }
+      if (col.key === 'needs_user' && col.count) head.classList.add('alert');
+      headsEl.append(head);
+    });
+  }
+  function toggleDone() { prefs.doneOpen = !prefs.doneOpen; savePrefs(); focusAfter = '.tbv-head[data-status="done"]'; render(); }
+
+  // An empty column keeps a slim drop target; the folded 完成 column only a count.
+  function gridTemplate() {
+    return board.columns.map((c) => c.key === 'done' && !prefs.doneOpen ? '88px' : c.count ? 'minmax(140px, 1fr)' : 'minmax(78px, .45fr)').join(' ');
+  }
+
+  // ---- cards ----
+  function dotState(c) {
+    if (c.flag === 'failed') return ['failed', '失败'];
+    if (c.flag === 'held') return ['held', '已挂起，等队长放行'];
     const session = c.session_id ? host.session(c.session_id) : null;
-    let hasModel = false;
-    if (session && session.col) {
-      const badge = el('span');
-      host.renderBadge(badge, session.col);
-      if (!badge.hidden) { row.append(badge); hasModel = true; }
+    if (c.status === 'doing') {
+      if (session && session.state === 'working') return ['working', '队员正在干活'];
+      if (session && session.col) return ['live', '已派给队员'];
+      return ['open', '还没有队员在做'];
     }
-    const model = U.modelLabel(c);
-    if (!hasModel && model) row.append(el('span', 'tbv-model', model));
-    const name = el('span', 'tbv-owner-name', session ? session.label : U.ownerLabel(c, null));
-    if (!session && !(c.assignee && c.assignee.agent)) name.classList.add('none');
-    row.append(name);
-    return row;
+    return [c.status, U.labelOf(c.status)];
   }
 
-  function renderCard(item) {
+  function renderCard(item, lane) {
     const c = item.card;
     const node = el('article', 'tbv-card');
     node.dataset.cardId = c.id;
     node.dataset.status = c.status;
     if (c.flag) node.dataset.flag = c.flag;
-    node.append(el('h3', 'tbv-title', c.title));
-    node.append(ownerRow(c));
-    if (c.latest_receipt) {
-      const r = el('p', 'tbv-receipt', c.latest_receipt);
-      r.title = c.latest_receipt;
-      node.append(r);
+    node.tabIndex = 0;
+    node.setAttribute('role', 'button');
+    node.setAttribute('aria-keyshortcuts', 'Enter Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown');
+    const row = el('div', 'tbv-row');
+    const [state, stateLabel] = dotState(c);
+    const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel;
+    row.append(dot, el('h3', 'tbv-title', c.title));
+    if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
+    if (c.flag === 'held') row.append(el('span', 'tbv-tag held', '挂起'));
+    if (item.waitLabel) { const w = el('span', 'tbv-tag wait', '等前置'); w.title = item.waitLabel; row.append(w); }
+    const when = el('time', 'tbv-time', U.formatUpdated(c.updated).replace(/\s|钟?前$/g, ''));
+    if (c.updated) when.dateTime = c.updated;
+    row.append(when);
+    node.append(row);
+    if (c.status === 'needs_user') {
+      const q = el('p', 'tbv-question', item.question || '队长还没把问题整理出来');
+      if (!item.question) q.classList.add('none');
+      node.append(q);
     }
-    const foot = el('div', 'tbv-foot');
-    const tags = el('div', 'tbv-tags');
-    if (c.flag === 'failed') tags.append(el('span', 'tbv-tag failed', '失败'));
-    if (item.waitLabel) { const w = el('span', 'tbv-tag wait', item.waitLabel); w.title = item.waitLabel; tags.append(w); }
-    if (item.parallel) tags.append(el('span', 'tbv-tag parallel', '可并行'));
-    if (c.flag === 'held') tags.append(el('span', 'tbv-tag held', '挂起'));
-    if (c.rework_count > 0) tags.append(el('span', 'tbv-tag', `返工 ${c.rework_count}`));
-    foot.append(tags);
-    const when = el('time', 'tbv-time', U.formatUpdated(c.updated));
-    if (c.updated) { when.dateTime = c.updated; when.title = '更新于 ' + new Date(c.updated).toLocaleString(); }
-    foot.append(when);
-    node.append(foot);
-    const session = c.session_id && host.session(c.session_id);
-    if (session) {
-      node.classList.add('linked');
-      node.tabIndex = 0;
-      node.setAttribute('role', 'button');
-      node.setAttribute('aria-label', `${c.title}，打开会话「${session.label}」`);
-      node.title = `打开会话「${session.label}」`;
-      const go = () => host.openSession(c.session_id);
-      node.addEventListener('click', go);
-      node.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
-    } else {
-      node.title = c.session_id ? '对应会话已不存在' : '还没有派给会话';
-    }
+    const session = c.session_id ? host.session(c.session_id) : null;
+    const who = session ? session.label : U.ownerLabel(c, null);
+    node.title = [c.title, item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
+    node.setAttribute('aria-label', `${c.title}，${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
+    node.addEventListener('click', () => { if (suppressClick) return; openDetail(c.id); });
+    node.addEventListener('keydown', (e) => cardKey(e, item, lane));
+    node.addEventListener('pointerdown', (e) => startCardDrag(e, node, item, lane));
     return node;
   }
 
-  function renderHeads(columns) {
-    headsEl.innerHTML = '';
-    columns.forEach((col) => {
-      const head = el('div', 'tbv-head');
-      head.dataset.status = col.key;
-      head.setAttribute('role', 'columnheader');
-      head.append(el('span', 'tbv-head-dot'), el('span', 'tbv-head-label', col.label), el('span', 'tbv-count', String(col.count)));
-      headsEl.append(head);
-    });
+  function renderCell(lane, col) {
+    const cell = el('div', 'tbv-cell');
+    cell.dataset.status = col.key;
+    cell.dataset.lane = lane.key;
+    cell.setAttribute('aria-label', `${lane.name} · ${col.label}，${col.cards.length} 张`);
+    if (col.key === 'done' && !prefs.doneOpen) {
+      cell.classList.add('folded');
+      if (col.cards.length) {
+        const b = el('button', 'tbv-done-count', String(col.cards.length));
+        b.type = 'button'; b.title = `${lane.name} 已完成 ${col.cards.length} 张，点开看`; b.setAttribute('aria-label', b.title);
+        b.onclick = toggleDone;
+        cell.append(b);
+      }
+      return cell;
+    }
+    const key = lane.key + '/' + col.key;
+    const all = filter.project || expanded.has(key) || col.cards.length <= CELL_LIMIT;
+    (all ? col.cards : col.cards.slice(0, CELL_LIMIT)).forEach((item) => cell.append(renderCard(item, lane)));
+    if (!filter.project && col.cards.length > CELL_LIMIT) {
+      const more = el('button', 'tbv-more');
+      more.type = 'button'; more.dataset.cell = key;
+      more.setAttribute('aria-expanded', String(all));
+      const chev = el('span', 'tbv-chev'); chev.innerHTML = ICON.chevron;
+      if (all) { more.title = '收起'; more.setAttribute('aria-label', `收起 ${lane.name} · ${col.label}`); more.classList.add('open'); more.append(chev); }
+      else more.append(el('span', null, `还有 ${col.cards.length - CELL_LIMIT} 张`), chev);
+      more.onclick = () => { if (all) expanded.delete(key); else expanded.add(key); focusAfter = `.tbv-more[data-cell="${escapeId(key)}"]`; render(); };
+      cell.append(more);
+    }
+    return cell;
+  }
+
+  function renderLane(lane) {
+    const collapsed = !filter.project && !!prefs.collapsed[lane.key];
+    const section = el('section', 'tbv-lane' + (collapsed ? ' collapsed' : ''));
+    section.dataset.project = lane.key;
+    section.style.setProperty('--project-hue', hue(lane.key));
+    section.setAttribute('aria-label', `${lane.name}，${lane.total} 项`);
+    const head = el('header', 'tbv-lane-head');
+    const toggle = iconButton('tbv-lane-toggle', ICON.chevron, `${collapsed ? '展开' : '收起'} ${lane.name}（Alt+↑/↓ 调整项目先后）`);
+    toggle.setAttribute('aria-expanded', String(!collapsed));
+    toggle.disabled = !!filter.project;
+    toggle.onclick = () => { prefs.collapsed[lane.key] = !collapsed; if (!prefs.collapsed[lane.key]) delete prefs.collapsed[lane.key]; savePrefs(); focusAfter = `.tbv-lane[data-project="${escapeId(lane.key)}"] .tbv-lane-toggle`; render(); };
+    toggle.addEventListener('keydown', (e) => laneKey(e, lane));
+    const counts = el('div', 'tbv-lane-counts');
+    if (collapsed) {
+      U.COLUMNS.filter((c) => lane.counts[c.key]).forEach((c) => { const n = el('span', 'tbv-lane-n', `${c.label} ${lane.counts[c.key]}`); n.dataset.status = c.key; counts.append(n); });
+    } else counts.append(el('span', 'tbv-lane-n', lane.open ? `${lane.open} 件没做完` : '都做完了'));
+    head.append(toggle, el('span', 'tbv-dot'), el('h2', 'tbv-lane-name', lane.name), counts);
+    head.title = filter.project ? lane.name : `${lane.name}：拖动可调整项目先后`;
+    head.addEventListener('pointerdown', (e) => startLaneDrag(e, section, lane));
+    section.append(head);
+    if (!collapsed) {
+      const cells = el('div', 'tbv-cells');
+      lane.columns.forEach((col) => cells.append(renderCell(lane, col)));
+      section.append(cells);
+    }
+    return section;
   }
 
   function render() {
     if (!open) return;
-    const board = U.buildBoard(cards, filter);
+    if (drag) { renderQueued = true; return; }
+    const active = document.activeElement;
+    const keepCard = !focusAfter && active && active.classList && active.classList.contains('tbv-card') ? active.dataset.cardId : null;
+    board = U.buildBoard(cards, { project: filter.project, laneOrder: prefs.laneOrder });
     filter.project = board.project;
-    renderProjects(board.projects);
-    sortGroup.querySelectorAll('button').forEach((b) => {
-      const on = b.dataset.sort === filter.sort;
-      b.classList.toggle('active', on);
-      b.setAttribute('aria-pressed', String(on));
-    });
-    renderHeads(board.columns);
+    renderProjects();
+    renderHeads();
+    gridEl.style.setProperty('--tbv-cols', gridTemplate());
     lanesEl.innerHTML = '';
-    board.lanes.forEach((lane) => {
-      const section = el('section', 'tbv-lane');
-      section.dataset.project = lane.key;
-      section.style.setProperty('--project-hue', hue(lane.key));
-      section.setAttribute('aria-label', `${lane.name}，${lane.total} 项`);
-      const head = el('header', 'tbv-lane-head');
-      head.append(el('span', 'tbv-dot'), el('h2', 'tbv-lane-name', lane.name), el('span', 'tbv-lane-count', `${lane.total} 项`));
-      const cells = el('div', 'tbv-cells');
-      lane.columns.forEach((col) => {
-        const cell = el('div', 'tbv-cell');
-        cell.dataset.status = col.key;
-        cell.setAttribute('aria-label', `${lane.name} · ${col.label}，${col.cards.length} 张`);
-        col.cards.forEach((item) => cell.append(renderCard(item)));
-        cells.append(cell);
-      });
-      section.append(head, cells);
-      lanesEl.append(section);
-    });
-    const projectCount = board.lanes.length;
-    summaryEl.textContent = board.total ? `${board.total} 项 · ${projectCount} 个项目` : '';
+    board.lanes.forEach((lane) => lanesEl.append(renderLane(lane)));
+    const needs = board.columns.find((c) => c.key === 'needs_user').count;
+    summaryEl.textContent = board.total ? `${board.open} 件没做完${needs ? ` · ${needs} 件需要你` : ''}` : '';
     emptyEl.hidden = board.total > 0;
-    headsEl.parentElement.hidden = board.total === 0;
+    gridEl.hidden = board.total === 0;
+    renderDetail();
+    const target = focusAfter ? viewEl.querySelector(focusAfter) : keepCard ? cardNode(keepCard) : null;
+    focusAfter = null;
+    if (target) target.focus({ preventScroll: true });
+  }
+
+  // ---- moving cards ----
+  function find(id) {
+    for (const lane of board ? board.lanes : []) for (const col of lane.columns) {
+      const item = col.cards.find((x) => x.card.id === id);
+      if (item) return { item, lane, col };
+    }
+    return null;
+  }
+  // One move = an optional status change through the data layer's own
+  // transitions, then an optional reorder. A start is only announced to 队长.
+  async function applyMove(card, status, anchor) {
+    card = cards.find((c) => c.id === card.id) || card; // the newest copy, so its `updated` is current
+    try {
+      if (status !== card.status) {
+        if (status === 'doing' && (card.status === 'todo' || card.status === 'needs_user')) {
+          const result = await api().requestStart(card.id);
+          host.showToast(result && result.ignored ? '这张卡已经在派活或有队员在做了' : `已通知队长安排「${card.title}」`);
+        } else await api().move(card.id, status, card.updated);
+        announce(`「${card.title}」已移到${U.labelOf(status)}`);
+      }
+      if (anchor) { await api().reorder(card.id, anchor); if (status === card.status) announce(`「${card.title}」已调整先后`); }
+    } catch (error) {
+      host.showToast('没移成：' + friendly(error));
+    }
+    await refresh();
+  }
+  function cardKey(e, item, lane) {
+    const c = item.card;
+    if (e.target !== e.currentTarget) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(c.id); return; }
+    if (!e.altKey || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation();
+    focusAfter = `.tbv-card[data-card-id="${escapeId(c.id)}"]`;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      const status = U.stepStatus(c.status, e.key === 'ArrowLeft' ? -1 : 1);
+      if (!status) { focusAfter = null; return; }
+      if (status === 'done' && !prefs.doneOpen) { prefs.doneOpen = true; savePrefs(); }
+      applyMove(c, status, null);
+      return;
+    }
+    const ids = lane.columns.find((col) => col.key === c.status).cards.map((x) => x.card.id);
+    const at = ids.indexOf(c.id) + (e.key === 'ArrowUp' ? -1 : 1);
+    if (at < 0 || at >= ids.length) { focusAfter = null; return; }
+    if (at >= CELL_LIMIT) expanded.add(lane.key + '/' + c.status);
+    applyMove(c, c.status, e.key === 'ArrowUp' ? { before: ids[at] } : { after: ids[at] });
+  }
+  function laneKey(e, lane) {
+    if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || filter.project) return;
+    e.preventDefault(); e.stopPropagation();
+    const keys = board.projects.map((p) => p.key);
+    const at = keys.indexOf(lane.key), to = at + (e.key === 'ArrowUp' ? -1 : 1);
+    if (to < 0 || to >= keys.length) return;
+    keys.splice(at, 1); keys.splice(to, 0, lane.key);
+    prefs.laneOrder = keys; savePrefs();
+    focusAfter = `.tbv-lane[data-project="${escapeId(lane.key)}"] .tbv-lane-toggle`;
+    announce(`${lane.name} 已移到第 ${to + 1} 个`);
+    render();
+  }
+
+  // ---- pointer drag (cards and lanes) ----
+  // Pointer events rather than HTML5 drag: the ghost, the drop line and the
+  // scroll-at-the-edge behave the same on macOS and Windows.
+  function trackDrag(e, begin, move, finish) {
+    if (e.button !== 0 || drag) return;
+    const sx = e.clientX, sy = e.clientY;
+    let started = false;
+    const onMove = (ev) => {
+      if (!started) {
+        if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 6) return;
+        // the board may have been redrawn since the press: begin() looks the node up again
+        if (begin(ev) === false) { end(false); return; }
+        started = true;
+        viewEl.classList.add('tbv-dragging');
+      }
+      ev.preventDefault();
+      const r = scrollEl.getBoundingClientRect();
+      if (ev.clientY < r.top + 44) scrollEl.scrollTop -= 14; else if (ev.clientY > r.bottom - 44) scrollEl.scrollTop += 14;
+      move(ev);
+    };
+    const end = (commit) => {
+      window.removeEventListener('pointermove', onMove, true);
+      window.removeEventListener('pointerup', onUp, true);
+      window.removeEventListener('pointercancel', onCancel, true);
+      window.removeEventListener('keydown', onKey, true);
+      if (!started) return;
+      viewEl.classList.remove('tbv-dragging');
+      suppressClick = true; setTimeout(() => { suppressClick = false; }, 0);
+      const d = drag; drag = null;
+      viewEl.querySelectorAll('.tbv-ghost, .tbv-drop, .tbv-lane-drop').forEach((n) => n.remove());
+      viewEl.querySelectorAll('.dragging, .drop-target, .drag-lane').forEach((n) => n.classList.remove('dragging', 'drop-target', 'drag-lane'));
+      const again = renderQueued; renderQueued = false;
+      if (commit && d) finish(d);
+      if (again && !(d && d.acted)) render();
+    };
+    const onUp = () => end(true);
+    const onCancel = () => end(false);
+    const onKey = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); end(false); } };
+    window.addEventListener('pointermove', onMove, true);
+    window.addEventListener('pointerup', onUp, true);
+    window.addEventListener('pointercancel', onCancel, true);
+    window.addEventListener('keydown', onKey, true);
+  }
+  function ghostOf(node, e) {
+    const r = node.getBoundingClientRect();
+    const ghost = node.cloneNode(true);
+    ghost.classList.add('tbv-ghost');
+    ghost.removeAttribute('tabindex');
+    Object.assign(ghost.style, { width: r.width + 'px', left: r.left + 'px', top: r.top + 'px' });
+    ghost.style.setProperty('--project-hue', hue(node.closest('.tbv-lane').dataset.project));
+    viewEl.append(ghost);
+    return { ghost, dx: e.clientX - r.left, dy: e.clientY - r.top };
+  }
+
+  function startCardDrag(e, node, item, lane) {
+    trackDrag(e, (ev) => {
+      const live = cardNode(item.card.id);
+      if (!live) return false;
+      const section = live.closest('.tbv-lane');
+      drag = { kind: 'card', item, lane, section, target: null, ...ghostOf(live, ev) };
+      live.classList.add('dragging');
+      section.classList.add('drag-lane');
+    }, (ev) => {
+      const d = drag;
+      d.ghost.style.left = ev.clientX - d.dx + 'px'; d.ghost.style.top = ev.clientY - d.dy + 'px';
+      viewEl.querySelectorAll('.tbv-drop').forEach((n) => n.remove());
+      viewEl.querySelectorAll('.drop-target').forEach((n) => n.classList.remove('drop-target'));
+      d.target = null;
+      // A card stays in its project: only its own lane's cells take it.
+      const lr = d.section.getBoundingClientRect();
+      if (ev.clientY < lr.top - 24 || ev.clientY > lr.bottom + 24) return;
+      const cell = [...d.section.querySelectorAll('.tbv-cell')].find((c) => { const r = c.getBoundingClientRect(); return ev.clientX >= r.left - 5 && ev.clientX <= r.right + 5; });
+      if (!cell) return;
+      const others = [...cell.querySelectorAll('.tbv-card:not(.dragging)')];
+      const index = others.filter((n) => { const r = n.getBoundingClientRect(); return ev.clientY > r.top + r.height / 2; }).length;
+      cell.classList.add('drop-target');
+      if (!cell.classList.contains('folded')) {
+        const line = el('div', 'tbv-drop');
+        if (others[index]) cell.insertBefore(line, others[index]); else if (others.length) others[others.length - 1].after(line); else cell.prepend(line);
+      }
+      d.target = { status: cell.dataset.status, index, ids: [...cell.querySelectorAll('.tbv-card')].map((n) => n.dataset.cardId) };
+    }, (d) => {
+      if (!d.target) return;
+      const c = d.item.card;
+      const anchor = U.dropAnchor(d.target.ids, c.id, d.target.index);
+      if (d.target.status === c.status && !anchor) return;
+      d.acted = true;
+      focusAfter = `.tbv-card[data-card-id="${escapeId(c.id)}"]`;
+      applyMove(c, d.target.status, anchor);
+    });
+  }
+
+  function startLaneDrag(e, section, lane) {
+    if (filter.project || e.target.closest('button')) return;
+    trackDrag(e, (ev) => {
+      const live = lanesEl.querySelector(`.tbv-lane[data-project="${escapeId(lane.key)}"]`);
+      if (!live) return false;
+      drag = { kind: 'lane', lane, before: undefined, ...ghostOf(live.querySelector('.tbv-lane-head'), ev) };
+      live.classList.add('dragging');
+    }, (ev) => {
+      const d = drag;
+      d.ghost.style.left = ev.clientX - d.dx + 'px'; d.ghost.style.top = ev.clientY - d.dy + 'px';
+      viewEl.querySelectorAll('.tbv-lane-drop').forEach((n) => n.remove());
+      const lanes = [...lanesEl.querySelectorAll('.tbv-lane')];
+      const next = lanes.find((n) => { const r = n.getBoundingClientRect(); return ev.clientY < r.top + r.height / 2; });
+      d.before = next ? next.dataset.project : null;
+      const line = el('div', 'tbv-lane-drop');
+      if (next) lanesEl.insertBefore(line, next); else lanesEl.append(line);
+    }, (d) => {
+      if (d.before === undefined || d.before === lane.key) return;
+      const keys = board.projects.map((p) => p.key);
+      const order = U.moveLane(keys, lane.key, d.before);
+      if (order.join('\n') === keys.join('\n')) return;
+      d.acted = true;
+      prefs.laneOrder = order; savePrefs();
+      announce(`${lane.name} 已移到第 ${order.indexOf(lane.key) + 1} 个`);
+      render();
+    });
+  }
+
+  // ---- detail drawer ----
+  function openDetail(id) { detailId = id; detailKey = ''; renderDetail(); const first = detailEl.querySelector('textarea') || detailEl.querySelector('.tbv-d-close'); if (first) first.focus({ preventScroll: true }); }
+  function closeDetail(refocus) {
+    const id = detailId;
+    detailId = null; detailKey = '';
+    detailEl.hidden = true; detailEl.innerHTML = '';
+    viewEl.classList.remove('has-detail');
+    lanesEl.querySelectorAll('.tbv-card.selected').forEach((n) => n.classList.remove('selected'));
+    if (refocus && id) { const n = cardNode(id); if (n) n.focus({ preventScroll: true }); }
+  }
+  function section(title, ...children) {
+    const s = el('section', 'tbv-d-section');
+    s.append(el('h3', 'tbv-d-label', title), ...children);
+    return s;
+  }
+  function copyButton(text, label) {
+    const b = iconButton('tbv-copy', ICON.copy, label);
+    b.onclick = () => {
+      host.copy(text);
+      b.innerHTML = ICON.check; b.classList.add('ok');
+      setTimeout(() => { b.innerHTML = ICON.copy; b.classList.remove('ok'); }, 1200);
+    };
+    return b;
+  }
+  async function sendAnswer(card, box, button) {
+    const text = box.value.trim();
+    if (!text) { box.focus(); return; }
+    button.disabled = true;
+    try {
+      const result = await api().answer(card.id, text);
+      drafts.delete(card.id);
+      host.showToast(result && result.stayed ? '答案已发给队长；卡片暂时留在原处：' + friendly(result.stayed) : '答案已发给队长');
+      announce(`答案已发给队长，「${card.title}」回到进行中`);
+      detailKey = '';
+    } catch (error) {
+      button.disabled = false;
+      host.showToast('没发出去：' + friendly(error));
+      return;
+    }
+    await refresh();
+  }
+
+  function renderDetail() {
+    lanesEl.querySelectorAll('.tbv-card.selected').forEach((n) => n.classList.remove('selected'));
+    if (!detailId) return;
+    const found = find(detailId) || (() => { const card = cards.find((c) => c.id === detailId && !c.archived); return card ? { item: { card, waits: [], waitLabel: '', question: U.userQuestion(card) }, lane: { key: U.projectKey(card.project), name: card.project } } : null; })();
+    if (!found) { closeDetail(false); return; }
+    const { item, lane } = found;
+    const c = item.card;
+    const node = cardNode(c.id); if (node) node.classList.add('selected');
+    const session = c.session_id ? host.session(c.session_id) : null;
+    const key = JSON.stringify([c, session && session.label, session && !!session.col, session && session.files, item.waitLabel]);
+    if (key === detailKey) return;
+    const hadFocus = detailEl.contains(document.activeElement) && document.activeElement.tagName === 'TEXTAREA';
+    detailKey = key;
+    detailEl.innerHTML = '';
+    detailEl.hidden = false;
+    viewEl.classList.add('has-detail');
+    detailEl.style.setProperty('--project-hue', hue(lane.key));
+    detailEl.dataset.cardId = c.id;
+    detailEl.dataset.status = c.status;
+
+    const top = el('header', 'tbv-d-top');
+    const crumb = el('div', 'tbv-d-crumb');
+    crumb.append(el('span', 'tbv-dot'), el('span', 'tbv-d-project', lane.name), el('span', 'tbv-d-status', U.labelOf(c.status)));
+    if (c.flag === 'failed') crumb.append(el('span', 'tbv-tag failed', '失败'));
+    if (c.flag === 'held') crumb.append(el('span', 'tbv-tag held', '挂起'));
+    const close = iconButton('tbv-d-close', ICON.close, '关闭详情 (Esc)');
+    close.onclick = () => closeDetail(true);
+    top.append(crumb, close);
+    const body = el('div', 'tbv-d-body');
+    body.append(el('h2', 'tbv-d-title', c.title));
+
+    if (c.status === 'needs_user') {
+      const ask = el('section', 'tbv-ask');
+      ask.append(el('h3', 'tbv-ask-label', '需要你决定'));
+      if (item.question) ask.append(el('p', 'tbv-ask-question', item.question));
+      else ask.append(el('p', 'tbv-ask-question none', '队长还没把问题整理出来'), el('p', 'tbv-ask-hint', '你可以直接在下面告诉队长这件事怎么办，或者让他先把问题说清楚。'));
+      const box = el('textarea', 'tbv-answer');
+      box.rows = 3; box.placeholder = '写下你的答案…'; box.setAttribute('aria-label', '你的答案');
+      box.value = drafts.get(c.id) || '';
+      const send = el('button', 'tbv-send', '发送答案');
+      send.type = 'button'; send.title = '把答案发给队长 (⌘/Ctrl+Enter)';
+      box.oninput = () => { drafts.set(c.id, box.value); };
+      box.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendAnswer(c, box, send); } });
+      send.onclick = () => sendAnswer(c, box, send);
+      const foot = el('div', 'tbv-ask-foot');
+      foot.append(el('span', 'tbv-ask-tip', '答案会发给队长，卡片回到进行中'), send);
+      ask.append(box, foot);
+      body.append(ask);
+    }
+
+    const who = el('div', 'tbv-d-who');
+    if (session && session.col) { const badge = el('span'); host.renderBadge(badge, session.col); if (!badge.hidden) who.append(badge); }
+    else if (U.modelLabel(c)) who.append(el('span', 'tbv-model', U.modelLabel(c)));
+    who.append(el('span', 'tbv-d-who-name', session ? session.label : U.ownerLabel(c, null)));
+    if (session) {
+      const go = iconButton('tbv-d-open', ICON.terminal, `打开「${session.label}」的终端`);
+      go.onclick = () => host.openSession(c.session_id);
+      who.append(go);
+    }
+    body.append(section('谁在做', who));
+
+    const receipt = U.receiptText(c);
+    if (receipt && receipt !== item.question) body.append(section('最近回执', el('p', 'tbv-d-text', receipt)));
+    else if (c.status !== 'needs_user') body.append(section('最近回执', el('p', 'tbv-d-text none', '还没有回执')));
+    if (item.waitLabel) body.append(section('在等', el('p', 'tbv-d-text', item.waitLabel)));
+    body.append(section('说明', el('p', 'tbv-d-text' + (c.detail.trim() ? '' : ' none'), c.detail.trim() || '没有写说明')));
+
+    const files = U.filePaths((session && session.files) || [], c.latest_receipt, c.detail);
+    if (files.length) {
+      const list = el('ul', 'tbv-d-files');
+      files.forEach((p) => { const li = el('li'); const name = el('span', 'tbv-d-file', p); name.title = p; li.append(name, copyButton(p, '复制路径')); list.append(li); });
+      body.append(section('相关文件', list));
+    }
+
+    const moves = el('div', 'tbv-d-moves'); moves.setAttribute('role', 'group'); moves.setAttribute('aria-label', '移到');
+    U.COLUMNS.forEach((col) => {
+      const b = el('button', null, col.label);
+      b.type = 'button'; b.dataset.status = col.key;
+      const on = col.key === c.status;
+      b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on));
+      b.onclick = () => { if (!on) applyMove(c, col.key, null); };
+      moves.append(b);
+    });
+    body.append(section('移到', moves));
+
+    const meta = el('div', 'tbv-d-meta');
+    meta.append(el('span', null, [c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', c.rework_count > 0 ? `返工 ${c.rework_count} 次` : '', '编号 ' + c.id].filter(Boolean).join(' · ')), copyButton(c.id, '复制卡片编号'));
+    body.append(meta);
+    detailEl.append(top, body);
+    if (hadFocus) { const box = detailEl.querySelector('textarea'); if (box) box.focus({ preventScroll: true }); }
   }
 
   function setOpen(next) {
@@ -167,6 +586,8 @@
     open = next;
     viewEl.hidden = !open;
     if (open) {
+      const saved = host.prefs() || {};
+      prefs = { laneOrder: Array.isArray(saved.laneOrder) ? saved.laneOrder.slice() : [], collapsed: { ...(saved.collapsed || {}) }, doneOpen: !!saved.doneOpen };
       // subscribe first, then list (docs/task-board-api.md)
       if (api() && api().onChange) unsubscribe = api().onChange(() => refresh());
       render();
@@ -175,32 +596,38 @@
       if (unsubscribe) { try { unsubscribe(); } catch (_) {} }
       unsubscribe = null;
       seq++;
+      closeDetail(false);
       refreshBtn.classList.remove('busy');
     }
     host.onToggle(open);
-    if (open) projectSel.focus({ preventScroll: true });
+    if (open) viewEl.focus({ preventScroll: true });
   }
 
   function init(h) {
     host = h;
     viewEl = document.getElementById('taskBoardView');
-    projectSel = viewEl.querySelector('#tbvProject');
-    sortGroup = viewEl.querySelector('.tbv-sort');
+    projectsEl = viewEl.querySelector('.tbv-projects');
+    gridEl = viewEl.querySelector('.tbv-grid');
     headsEl = viewEl.querySelector('.tbv-heads');
     lanesEl = viewEl.querySelector('.tbv-lanes');
+    scrollEl = viewEl.querySelector('.tbv-scroll');
     statusEl = viewEl.querySelector('.tbv-status');
     summaryEl = viewEl.querySelector('.tbv-summary');
     emptyEl = viewEl.querySelector('.tbv-empty-board');
     refreshBtn = viewEl.querySelector('.tbv-refresh');
-    projectSel.onchange = () => { filter.project = projectSel.value; render(); };
-    sortGroup.querySelectorAll('button').forEach((b) => { b.onclick = () => { filter.sort = b.dataset.sort; render(); }; });
+    detailEl = viewEl.querySelector('.tbv-detail');
+    liveEl = viewEl.querySelector('.tbv-live');
     refreshBtn.onclick = () => refresh();
     viewEl.querySelector('.tbv-close').onclick = () => { setOpen(false); host.focusToggle(); };
     // 架构图 / 自由画布 leave the board for the board view in that mode.
     viewEl.querySelectorAll('.board-mode button[data-view]').forEach((b) => {
       if (b.dataset.view !== 'tasks') b.onclick = () => host.showBoard(b.dataset.view);
     });
-    viewEl.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setOpen(false); host.focusToggle(); } });
+    viewEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault(); e.stopPropagation();
+      if (detailId) closeDetail(true); else { setOpen(false); host.focusToggle(); }
+    });
   }
 
   window.TaskBoardUI = {
