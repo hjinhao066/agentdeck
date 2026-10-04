@@ -6,6 +6,7 @@ const { execFile } = require('child_process');
 const S = require('./claude-seats-core');
 const { validId } = require('./security');
 const { saveChat } = require('./side-main');
+const { accountIdentity } = require('./quota-codex');
 
 function directory(seat, home) {
   const raw = seat.configDir.replace(/^~(?=$|[\\/])/, home);
@@ -55,14 +56,27 @@ function sanitizeUsage(value) {
   if (!windows.length) throw new Error('没有实际用量数据');
   return { at: value.at, source: 'Claude /usage', windows };
 }
+function usageAccountKey(loc) {
+  if (fs.statSync(loc.metadataPath).size > 2 * 1024 * 1024) throw new Error('账号元数据过大');
+  const account = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount;
+  return typeof account?.accountUuid === 'string' && account.accountUuid
+    ? crypto.createHash('sha256').update(account.accountUuid).digest('hex').slice(0, 16)
+    : accountIdentity(account?.emailAddress).accountKey;
+}
 function writeUsage(seat, home, value) {
-  const file = credentialLocation(seat, home).usagePath;
-  const safe = sanitizeUsage(value);
+  const loc = credentialLocation(seat, home), file = loc.usagePath;
+  const accountKey = usageAccountKey(loc);
+  if (!accountKey) throw new Error('无法确认用量所属账号');
+  const safe = { ...sanitizeUsage(value), accountKey, configDir: loc.dir };
   fs.writeFileSync(file + '.tmp', JSON.stringify(safe), { mode: 0o600 });
   fs.renameSync(file + '.tmp', file);
 }
 function readUsage(seat, home) {
-  try { return sanitizeUsage(JSON.parse(fs.readFileSync(credentialLocation(seat, home).usagePath, 'utf8'))); }
+  try {
+    const loc = credentialLocation(seat, home), value = JSON.parse(fs.readFileSync(loc.usagePath, 'utf8'));
+    if (!value.accountKey || value.accountKey !== usageAccountKey(loc) || value.configDir !== loc.dir) return null;
+    return sanitizeUsage(value);
+  }
   catch (_) { return null; }
 }
 function checkpoint(home, userData, payload) {
@@ -100,6 +114,10 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId }
     return checkpoint(home, userData, payload);
   });
   handleMain('seats:usage', (_e, { seatId }) => readUsage(find(seatId), home));
-  handleMain('seats:record-usage', (_e, { seatId, usage }) => { writeUsage(find(seatId), home, usage); return true; });
+  handleMain('seats:record-usage', (_e, { seatId, configDir, usage }) => {
+    const seat = find(seatId);
+    if (configDir !== seat.configDir) throw new Error('会话席位目录已变更，不能归入新目录');
+    writeUsage(seat, home, usage); return true;
+  });
 }
 module.exports = { directory, credentialLocation, seatEnvironment, seatInfo, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };

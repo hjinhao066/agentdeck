@@ -24,7 +24,7 @@
   function seatKey(id) { return id && id !== 'default' ? `Claude:${id}` : 'Claude'; }
   function seatForColumn(column, seats) {
     if (!column) return null;
-    if (column.claudeSeatId) return seats.find((s) => s.id === column.claudeSeatId) || null;
+    if (column.claudeSeatId) return seats.find((s) => s.id === column.claudeSeatId && (!column.claudeConfigDir || s.configDir === column.claudeConfigDir)) || null;
     const dir = column.claudeConfigDir || String(column.cmd || '').match(/CLAUDE_CONFIG_DIR\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s;]+))/)?.slice(1).find(Boolean);
     if (dir) return seats.find((s) => s.configDir === dir) || null;
     return seats.find((s) => s.configDir === '~/.claude') || null;
@@ -188,11 +188,16 @@
   function observe(store, next, now = Date.now()) {
     if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || now - next.at > FRESH_MS) return false;
     if (next.scope !== SCOPES[next.provider]) return false;
+    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && !next.accountBound) next = { ...next, windows: [] };
     const key = next.provider === 'Claude' ? seatKey(next.seatId) : next.provider;
     const before = JSON.stringify(store[key] || {});
     let previous = store[key] || {};
     // Drop the old provider-wide latches: their model/account was not recorded.
-    if (previous.scope !== next.scope || (next.accountKey && previous.accountKey && next.accountKey !== previous.accountKey) || (next.configDir && previous.configDir && next.configDir !== previous.configDir)) previous = {};
+    if (previous.scope !== next.scope || (next.accountKey && previous.accountKey && next.accountKey !== previous.accountKey && next.legacyAccountKey !== previous.accountKey) || (next.configDir && previous.configDir && next.configDir !== previous.configDir)) previous = {};
+    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && previous.sample && !previous.sample.accountBound) {
+      previous = { ...previous, sample: { ...previous.sample, windows: [] } };
+      if (previous.blocked?.numeric) delete previous.blocked;
+    }
     const out = { ...previous };
     out.scope = next.scope;
     for (const key of ['account', 'accountKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
@@ -201,7 +206,7 @@
       return before !== JSON.stringify(out);
     }
     // A quota error latches across redraws, session deletion and app restart.
-    if (next.exhausted && (!previous.blocked || next.at > previous.blocked.at)) out.blocked = { at: next.at, resetAt: next.resetAt, resetText: next.resetText, source: next.source };
+    if (next.exhausted && (!previous.blocked || next.at > previous.blocked.at)) out.blocked = { at: next.at, resetAt: next.resetAt, resetText: next.resetText, source: next.source, sourceColumnId: next.sourceColumnId };
     if (next.resumed && next.at > (out.blocked?.at || 0)) delete out.blocked;
     const zeros = (next.windows || []).filter((w) => w.exhausted);
     if (zeros.length && !out.blocked) out.blocked = {
@@ -222,22 +227,25 @@
   function summary(store, provider, now = Date.now(), seat = null, captainSeatId = null) {
     const saved = store[seat ? seatKey(seat.id) : provider] || {};
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
-    const fresh = sample && now - sample.at <= FRESH_MS;
+    const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir);
+    const fresh = sample && trusted && now - sample.at <= FRESH_MS;
     const windows = fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
-    const blocked = entry.blocked && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
+    const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
     const remaining = windows.length ? Math.min(...windows.map((w) => w.remaining)) : null;
     const exhausted = !!blocked || windows.some((w) => w.exhausted);
     const state = exhausted ? 'exhausted' : remaining !== null ? (remaining <= 10 ? 'danger' : remaining <= 20 ? 'warning' : 'normal') : provider !== 'Claude' && fresh && !sample.windows?.length && !entry.blocked ? 'normal' : 'unknown';
-    const label = exhausted ? '已用尽' : remaining !== null ? (remaining === 0 ? '<0.1%' : `${remaining}%`) : provider === 'Claude' ? '未登录/无数据' : state === 'normal' ? '正常' : '未知';
+    const label = exhausted ? '已用尽' : remaining !== null ? (remaining === 0 ? '<0.1%' : `${remaining}%`) : provider === 'Claude' ? '未知' : state === 'normal' ? '正常' : '未知';
     const details = windows.map((w) => `${w.label}剩余 ${w.remaining === 0 && !w.exhausted ? '<0.1' : w.remaining}%；重置 ${w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText || '未知'}`);
     details.unshift(`模型：${entry.model || ({ Claude: 'Claude（账号共享额度）', Codex: 'Codex（账号共享额度）', Cursor: 'Grok 4.7', Antigravity: 'Gemini（共享分组）' }[provider])}；账号：${entry.account || (seat ? '未识别（此席位）' : '未识别（本机当前登录）')}`);
     if (seat) details.unshift(`席位：${seat.name}（${seat.id}）${seat.id === captainSeatId ? '；当前队长使用此席位' : ''}；配置目录：${seat.configDir}`);
-    if (provider === 'Claude') for (const name of ['5 小时', '每周']) if (!windows.some((w) => w.label === name)) details.push(`${name}：未登录/无数据；重置 未知`);
+    if (provider === 'Claude') for (const name of ['5 小时', '每周']) if (!windows.some((w) => w.label === name)) details.push(`${name}：未知；重置 未知`);
     if (provider === 'Cursor') details.push('仅统计 Grok 4.7；Cursor Models 池百分比暂不可可靠取得');
     if (provider === 'Antigravity') details.push('仅统计 Gemini 分组；不含 agy Claude / 第三方额度');
     if (sample?.note) details.push(sample.note);
     if (provider === 'Codex' && !windows.some((w) => w.label === '5 小时') && !sample?.note) details.push('5 小时：无新鲜数字');
     if (blocked) details.push(`已用尽；恢复 ${blocked.resetAt ? new Date(blocked.resetAt).toLocaleString() : blocked.resetText || '时间未知'}`);
+    if (blocked?.sourceColumnId) details.push(`报错会话：${blocked.sourceColumnId}`);
+    if (blocked && windows.length) details.push(`额度数字来源：${sample.source}；采样 ${new Date(sample.at).toLocaleString()}`);
     if (!windows.length && !blocked) details.push(state === 'normal' ? '未观察到额度用尽；无法取得数字' : '无新鲜额度信息；等待会话/缓存更新');
     const evidence = blocked || sample;
     if (evidence) details.push(`来源：${evidence.source}；${blocked ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；采样 ${new Date(evidence.at).toLocaleString()}${!fresh && !blocked ? '（已过期）' : ''}`);

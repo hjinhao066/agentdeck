@@ -164,7 +164,7 @@
       const key = JSON.stringify(usage.windows);
       if (recorded.get(seatId) !== key) {
         recorded.set(seatId, key);
-        window.deck.recordClaudeSeatUsage(seatId, usage).catch(() => { recorded.delete(seatId); });
+        window.deck.recordClaudeSeatUsage(seatId, usage, col.claudeConfigDir).catch(() => { recorded.delete(seatId); });
       }
     }
     if (!col.isMain || !entry.wrap) return;

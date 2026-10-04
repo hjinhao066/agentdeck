@@ -114,6 +114,8 @@ test('launch reasserts the seat after shell overrides and handles spaces/quotes'
 });
 test('quota files are independent and contain only real native usage observations', (t) => {
   const home = fixture(t); setup(home);
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' } }));
+  fs.writeFileSync(path.join(home, '.claude-us/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test' } }));
   assert.equal(S.usage('Context: 23% | Session: 26% | Weekly: 13%'), null);
   const a = S.usage('Current session\n  30% used\n  Resets 5pm\nCurrent week (all models)\n  80% used\n  Resets Oct 8\n', 1234);
   assert.deepEqual(a.windows.map((w) => w.remaining), [70, 20]);
@@ -132,4 +134,28 @@ test('durable checkpoint saves full interrupted history and compact board before
   assert.match(fs.readFileSync(file, 'utf8'), /read --id captain-old/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'chats', 'captain-old.json'))).turns[0].interrupted, true);
   assert.throws(() => M.checkpoint(home, userData, { colId: '../unsafe', chat, tasks: [] }), /无效/);
+});
+
+
+test('existing sessions keep their launch directory through Relay and seat edits; new sessions use the new seat', (t) => {
+  const home = fixture(t), config = { claudeSeats: S.normalize(), activeClaudeSeatId: 'cn' };
+  const worker = {}, original = S.bindColumn(worker, config);
+  const envBefore = M.seatEnvironment({}, original, home);
+  config.activeClaudeSeatId = 'us';
+  config.claudeSeats[0].configDir = '~/.claude-reconfigured';
+  assert.equal(S.bindColumn(worker, config).configDir, '~/.claude');
+  assert.deepEqual(M.seatEnvironment({}, S.bindColumn(worker, config), home), envBefore);
+  assert.equal(S.launchCommand('claude', S.bindColumn(worker, config), home, 'darwin').includes('.claude-reconfigured'), false);
+  assert.equal(S.bindColumn({}, config).id, 'us');
+  assert.equal(S.bindColumn({}, config).configDir, '~/.claude-us');
+  config.claudeSeats = config.claudeSeats.filter(s => s.id !== 'cn');
+  assert.equal(S.bindColumn(worker, config).configDir, '~/.claude');
+  assert.equal(S.bindColumn({ claudeSeatId: 'removed' }, config).configDir, '');
+});
+
+test('usage IPC refuses to attribute an old session to a reconfigured seat', (t) => {
+  const home = fixture(t), handlers = {};
+  M.registerSeatsIpc({ handleMain: (name, handler) => { handlers[name] = handler; }, home, getSeats: () => [{ id: 'cn', configDir: '~/.claude-new' }] });
+  assert.throws(() => handlers['seats:record-usage'](null, { seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 53 }] } }), /目录已变更/);
+  assert.equal(fs.existsSync(path.join(home, '.claude-new')), false);
 });

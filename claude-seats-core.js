@@ -22,6 +22,12 @@
     const seats = normalize(config.claudeSeats);
     return seats.find((s) => s.id === config.activeClaudeSeatId) || seats[0];
   }
+  function bindColumn(column, config) {
+    const seat = normalize(config.claudeSeats).find((s) => s.id === (column.claudeSeatId || active(config).id));
+    column.claudeSeatId ||= seat?.id;
+    column.claudeConfigDir ||= seat?.configDir;
+    return { ...seat, id: column.claudeSeatId, configDir: column.claudeConfigDir || '' };
+  }
   function maskEmail(email) {
     if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+$/.test(email)) return '';
     const [name, domain] = email.split('@');
@@ -62,5 +68,5 @@
     }
     return result.windows.length ? result : null;
   }
-  return { normalize, active, maskEmail, configDir, launchCommand, usage, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, CODEX_COMMAND, CLAUDE_COMMAND };
 });

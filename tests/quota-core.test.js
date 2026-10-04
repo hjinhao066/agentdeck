@@ -47,7 +47,7 @@ test('zero remains exhausted beyond sample freshness until reset; fresh positive
   const store = {};
   Q.observe(store, Q.cacheClaude({ sessionUsage: 100, sessionResetAt: new Date(now + 3600000).toISOString() }, now), now);
   assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 1).label, '已用尽');
-  assert.equal(Q.summary(store, 'Claude', now + 3600001).label, '未登录/无数据');
+  assert.equal(Q.summary(store, 'Claude', now + 3600001).label, '未知');
   Q.observe(store, Q.cacheClaude({ sessionUsage: 10 }, now + Q.FRESH_MS + 2), now + Q.FRESH_MS + 2);
   assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 2).label, '90%');
   Q.observe(store, Q.cacheClaude({ sessionUsage: 99.99 }, now + Q.FRESH_MS + 3), now + Q.FRESH_MS + 3);
@@ -62,7 +62,7 @@ test('every provider exhaustion latches until reset, not cleared by another norm
     assert.ok(store[provider].blocked.resetAt > now, provider);
     Q.observe(store, Q.screen(provider, 'Welcome', [], now + 1, provider === 'Cursor' ? 'grok-4.7-high-fast' : 'gemini-3.8-flash-high'), now + 1);
     assert.equal(Q.summary(store, provider, now + 1).label, '已用尽');
-    assert.equal(Q.summary(JSON.parse(JSON.stringify(store)), provider, now + 3 * 3600000).label, provider === 'Claude' ? '未登录/无数据' : '未知');
+    assert.equal(Q.summary(JSON.parse(JSON.stringify(store)), provider, now + 3 * 3600000).label, provider === 'Claude' ? '未知' : '未知');
   }
 });
 
@@ -87,11 +87,11 @@ test('fresh screen numbers win; stale samples and reset windows become unknown w
   Q.observe(store, Q.cacheClaude({ sessionUsage: 10 }, now + 1), now + 1);
   assert.equal(Q.summary(store, 'Claude', now + 1).label, '19%');
   assert.equal(Q.summary(store, 'Claude', now).state, 'warning');
-  assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 1).label, '未登录/无数据');
+  assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 1).label, '未知');
   assert.equal(Q.observe(store, Q.cacheClaude({ sessionUsage: 1 }, now), now + Q.FRESH_MS + 1), false);
   Q.observe(store, Q.cacheClaude({ sessionUsage: 95, sessionResetAt: new Date(now + Q.FRESH_MS + 100).toISOString() }, now + Q.FRESH_MS + 2), now + Q.FRESH_MS + 2);
   assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 2).state, 'danger');
-  assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 101).label, '未登录/无数据');
+  assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 101).label, '未知');
   assert.equal(Q.text(store, now).split('\n').length, 4);
 });
 
@@ -132,14 +132,14 @@ test('old error above a model switch does not exhaust the newly selected pool', 
 test('Claude seats isolate percentages and exhaustion; missing/stale windows stay explicitly unavailable', () => {
   const seats = Q.claudeSeats([{ id: 'east', name: '东席', configDir: '~/.claude' }, { id: 'west', name: '西席', configDir: '~/.claude-west' }]);
   const store = {};
-  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20, weeklyUsage: 30 }, now), seatId: 'east', configDir: '~/.claude' }, now);
-  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 100, sessionResetAt: new Date(now + 3600000).toISOString() }, now), seatId: 'west', configDir: '~/.claude-west' }, now);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20, weeklyUsage: 30 }, now), seatId: 'east', configDir: '~/.claude', accountBound: true, accountKey: 'east-account' }, now);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 100, sessionResetAt: new Date(now + 3600000).toISOString() }, now), seatId: 'west', configDir: '~/.claude-west', accountBound: true, accountKey: 'west-account' }, now);
   assert.equal(Q.summary(store, 'Claude', now, seats[0], 'east').displayLabel, '5h 80% · 7d 70%');
   assert.match(Q.summary(store, 'Claude', now, seats[0], 'east').detail, /当前队长使用此席位/);
   assert.equal(Q.summary(store, 'Claude', now, seats[1]).label, '已用尽');
-  assert.match(Q.summary(store, 'Claude', now, seats[1]).detail, /每周：未登录\/无数据/);
-  assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 1, seats[0]).label, '未登录/无数据');
-  assert.equal(Q.summary(store, 'Claude', now, { ...seats[0], configDir: '~/.different' }).label, '未登录/无数据');
+  assert.match(Q.summary(store, 'Claude', now, seats[1]).detail, /每周：未知/);
+  assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 1, seats[0]).label, '未知');
+  assert.equal(Q.summary(store, 'Claude', now, { ...seats[0], configDir: '~/.different' }).label, '未知');
   assert.equal(Q.text(store, now, seats).split('\n').length, 5);
   assert.equal(Q.claudeSeats()[0].configDir, '~/.claude');
   assert.equal(Q.claudeSeats().length, 1);
@@ -158,4 +158,36 @@ test('a fresh numeric cache replaces a newer screen without quota numbers', () =
   // A subsequent redraw without numbers must keep the known fresh windows.
   Q.observe(store, Q.screen('Claude', 'Claude Code', [], now + 1000), now + 1000);
   assert.equal(Q.summary(store, 'Claude', now + 1000).displayLabel, '5h 54% · 7d 95%');
+});
+
+
+test('configured Claude seats discard shared screen numbers and persisted unbound samples in all summaries', () => {
+  const seats = Q.claudeSeats([{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }]), store = {};
+  const shared = Q.screen('Claude', 'Claude Code', ['Session: 47% | Weekly: 45%'], now);
+  for (const seat of seats) Q.observe(store, { ...shared, seatId: seat.id, configDir: seat.configDir }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seats[0]).label, '未知');
+  // Migration must reject data written by an older AgentDeck as well.
+  store['Claude:cn'].sample = { ...shared, windows: [{ label: '5 小时', remaining: 53 }], configDir: '~/.claude', at: now };
+  assert.doesNotMatch(Q.text(store, now, seats), /剩余 53/);
+  Q.observe(store, { ...shared, seatId: 'cn', configDir: '~/.claude', exhausted: true, resetText: '9:20 PM', resetAt: now + 3600000, sourceColumnId: 'cn-captain' }, now);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 47, weeklyUsage: 45 }, now - 1000), seatId: 'us', configDir: '~/.claude-us', accountBound: true, accountKey: 'us-account' }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 53% · 7d 55%');
+  const cn = Q.summary(store, 'Claude', now, seats[0]);
+  assert.equal(cn.label, '已用尽');
+  assert.match(cn.detail, /恢复/);
+  assert.match(cn.detail, /报错会话：cn-captain/);
+  assert.doesNotMatch(cn.detail, /剩余 53|剩余 55/);
+  assert.match(Q.text(store, now, seats), /Claude \/ 🇨🇳 CN：已用尽/);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20 }, now), seatId: 'cn', configDir: '~/.claude', accountBound: true, accountKey: 'cn-account' }, now);
+  assert.match(Q.summary(store, 'Claude', now, seats[0]).detail, /5 小时剩余 80/);
+});
+
+
+test('account ID migration retains genuine exhaustion but never promotes legacy numbers', () => {
+  const seat = { id: 'cn', configDir: '~/.claude' }, store = { 'Claude:cn': { scope: 'claude', configDir: seat.configDir, accountKey: 'old-email-key', blocked: { at: now, resetAt: now + 3600000, source: '会话屏幕' }, sample: { at: now, windows: [{ label: '5 小时', remaining: 53 }] } } };
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', configDir: seat.configDir, identityOnly: true, at: now, accountKey: 'account-id-key', legacyAccountKey: 'old-email-key' }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seat).label, '已用尽');
+  assert.doesNotMatch(Q.summary(store, 'Claude', now, seat).detail, /剩余 53/);
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', configDir: seat.configDir, identityOnly: true, at: now, accountKey: 'other-account-id', legacyAccountKey: 'old-email-key' }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seat).label, '未知');
 });

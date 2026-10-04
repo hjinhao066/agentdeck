@@ -5,6 +5,8 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { readLocal } = require('../quota-local');
+const M = require('../claude-seats-main');
+const { accountIdentity } = require('../quota-codex');
 test('bounded local reads return only quota fields, skip partial records and tolerate missing/malformed caches', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-local-'));
   const now = Date.now();
@@ -58,7 +60,8 @@ test('configured seats read only their own cache, never the shared cache or a cr
   try {
     for (const dir of ['.claude', '.claude-west', '.cache/ccstatusline']) fs.mkdirSync(path.join(home, dir), { recursive: true });
     fs.writeFileSync(path.join(home, '.cache/ccstatusline/usage.json'), JSON.stringify({ sessionUsage: 100 }));
-    fs.writeFileSync(path.join(home, '.claude/usage-cache.json'), JSON.stringify({ five_hour: { utilization: 25, resets_at: new Date(now + 3600000).toISOString() }, seven_day: { utilization: 30 }, secret: 'NEVER-RETURN' }));
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'east@example.com' } }));
+    fs.writeFileSync(path.join(home, '.claude/usage-cache.json'), JSON.stringify({ accountKey: accountIdentity('east@example.com').accountKey, configDir: path.join(home, '.claude'), five_hour: { utilization: 25, resets_at: new Date(now + 3600000).toISOString() }, seven_day: { utilization: 30 }, secret: 'NEVER-RETURN' }));
     fs.writeFileSync(path.join(home, '.claude-west/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'west@example.com' } }));
     let data = await readLocal(home, undefined, now, seats);
     let numbers = data.filter(q => q.windows?.length);
@@ -69,7 +72,7 @@ test('configured seats read only their own cache, never the shared cache or a cr
     data = await readLocal(home, undefined, now, seats);
     assert.equal(data.filter(q => q.windows?.length).length, 1);
     fs.unlinkSync(path.join(home, '.claude-west/usage-cache.json'));
-    fs.writeFileSync(path.join(home, '.claude-west/usage-cache.json'), JSON.stringify({ sessionUsage: 40, weeklyUsage: 80 }));
+    fs.writeFileSync(path.join(home, '.claude-west/usage-cache.json'), JSON.stringify({ accountKey: accountIdentity('west@example.com').accountKey, configDir: path.join(home, '.claude-west'), sessionUsage: 40, weeklyUsage: 80 }));
     data = await readLocal(home, undefined, now, seats);
     numbers = data.filter(q => q.windows?.length);
     assert.deepEqual(numbers.map(q => [q.seatId, q.windows[0].remaining]), [['east', 75], ['west', 60]]);
@@ -85,12 +88,46 @@ test('feat/claude-seats agentdeck-usage cache preserves observation time and rel
     fs.mkdirSync(path.join(home, '.claude-west'));
     const file = path.join(home, '.claude-west/agentdeck-usage.json');
     const data = { at, source: 'Claude /usage', windows: [{ key: 'fiveHour', remaining: 65, resetText: 'in 1h' }, { key: 'weekly', remaining: 30, resetText: 'in 4d' }] };
-    fs.writeFileSync(file, JSON.stringify(data));
+    fs.writeFileSync(path.join(home, '.claude-west/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'west@example.com' } }));
+    M.writeUsage({ id: 'west', configDir: '~/.claude-west' }, home, data);
     const seats = [{ id: 'west', name: '西席', configDir: '~/.claude-west' }];
-    const result = await readLocal(home, undefined, now, seats);
+    const result = (await readLocal(home, undefined, now, seats)).filter(q => q.windows);
     assert.equal(result[0].at, at);
     assert.deepEqual(result[0].windows.map(w => [w.remaining, w.resetAt]), [[65, at + 3600000], [30, at + 4 * 86400000]]);
     fs.writeFileSync(file, JSON.stringify({ ...data, at: now - 3600000 }));
-    assert.deepEqual(await readLocal(home, undefined, now, seats), []);
+    assert.equal((await readLocal(home, undefined, now, seats)).filter(q => q.windows).length, 0);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+
+test('relogin metadata cannot reassign an old cache; copied and unbound caches are unknown without touching credentials', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-account-binding-')), now = Date.now();
+  const seats = [{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }];
+  try {
+    for (const seat of seats) fs.mkdirSync(path.join(home, seat.configDir.slice(2)));
+    const profile = path.join(home, '.claude.json');
+    fs.writeFileSync(profile, JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test' } }));
+    fs.writeFileSync(path.join(home, '.claude-us/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test' } }));
+    const creds = path.join(home, '.claude/.credentials.json');
+    fs.writeFileSync(creds, 'credential-fixture-must-remain-unchanged');
+    for (const seat of seats) M.writeUsage(seat, home, { at: now, windows: [{ key: 'fiveHour', remaining: 53 }, { key: 'weekly', remaining: 55 }] });
+    fs.writeFileSync(profile, JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' } }));
+    assert.equal(M.readUsage(seats[0], home), null);
+    let data = await readLocal(home, undefined, now, seats);
+    assert.deepEqual(data.filter(q => q.windows).map(q => q.seatId), ['us']);
+    fs.copyFileSync(path.join(home, '.claude-us/agentdeck-usage.json'), path.join(home, '.claude/agentdeck-usage.json'));
+    data = await readLocal(home, undefined, now, seats);
+    assert.deepEqual(data.filter(q => q.windows).map(q => q.seatId), ['us']);
+    fs.writeFileSync(path.join(home, '.claude/agentdeck-usage.json'), JSON.stringify({ at: now, windows: [{ key: 'fiveHour', remaining: 53 }] }));
+    assert.deepEqual((await readLocal(home, undefined, now, seats)).filter(q => q.windows).map(q => q.seatId), ['us']);
+    assert.equal(fs.readFileSync(creds, 'utf8'), 'credential-fixture-must-remain-unchanged');
+    M.writeUsage(seats[0], home, { at: now, windows: [{ key: 'fiveHour', remaining: 70 }] });
+    assert.deepEqual((await readLocal(home, undefined, now, seats)).filter(q => q.windows).map(q => q.windows[0].remaining), [70, 53]);
+    // The same email can no longer conceal a changed account ID.
+    fs.writeFileSync(profile, JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'account-cn-original' } }));
+    M.writeUsage(seats[0], home, { at: now, windows: [{ key: 'fiveHour', remaining: 70 }] });
+    fs.writeFileSync(profile, JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'account-cn-replaced' } }));
+    assert.equal(M.readUsage(seats[0], home), null);
+    assert.deepEqual((await readLocal(home, undefined, now, seats)).filter(q => q.windows).map(q => q.seatId), ['us']);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

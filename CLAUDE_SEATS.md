@@ -16,7 +16,7 @@
 
 CN是中国 Google 邮箱的 Claude 订阅，US是美国 Google 邮箱的订阅。
 只在本机读取账号元数据，界面只接收打码邮箱，不接收凭据。本机已用真实 CLI 只读核对，CN 和 US 都已登录 Pro；账号元数据和凭据位置独立。
-没有配置时按上述默认值迁移；每列的 `claudeSeatId` 持久保存。
+没有配置时按上述默认值迁移；每列的 `claudeSeatId` 与 `claudeConfigDir` 在首次启动时绑定并持久保存。以后改活动席位或席位设置只影响新会话；原队员、恢复会话和重开会话仍用原目录。Relay 只为替换后的队长重新绑定目录，不写登录凭据。
 
 ## 首次准备（macOS）
 
@@ -62,7 +62,7 @@ Claude 队长行右侧的Relay图标打开席位选择，标注当前席位。�
 用所选席位启动 → 重发队长提示词和「读看板继续」。未完成回复记为 interrupted；
 回执、提问、等待队列和正在跑的队员都保留。任何存档错误都保留原队长。
 新会话默认当前席位；已有会话（包括归档后恢复）继续使用原席位。
-Relay 只重开队长列，不重启 AgentDeck。
+Relay 只重开队长列，不重启 AgentDeck。侧边栏 Claude 模型标签右侧的旗帜表示该会话实际绑定的 CN/US 席位，悬停或聚焦可查看账号名与目录；其他 provider 不显示 Claude 旗帜。
 
 ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能力与 provider 无关。
 启动 Codex 时绕过 shell 的 codex() 函数，避免重复追加 bypass 参数。`ledger/new/tell/receipts`
@@ -84,17 +84,19 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 
 读取同一个 `config.claudeSeats`，勿按显示名称索引账号。主进程可使用
 `credentialLocation(seat, home)` 取得 metadataPath、credentialsPath、keychainService、
-usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存不能归属于两个席位。
+usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第三方会话状态行不能归属于两个席位，屏幕百分比不进入配置席位的额度摘要；用尽报错和恢复时间仍按报错会话的绑定席位保留，并记录 `sourceColumnId` 供浮层和 quota 命令追溯。
 
 每席位本地缓存为 `<configDir>/agentdeck-usage.json`，不建符号链接。被动捕获 Claude
 原生 `/usage` 面板中的 5 小时/每周剩余与重置文本，记录产生它的列的席位。
 上下文百分比、费用、共享 statusline 的百分比都不会写为额度。没有实际数据时
-返回 null，顶栏应显示未知；不能据此推断账号尚有额度或账号用尽。
+返回 null，额度摘要显示未知；不能据此推断未登录、账号尚有额度或账号用尽。缓存还必须携带 `accountKey`（账号 ID 的 SHA256 前 16 位；旧元数据无 ID 时使用邮箱指纹）和展开后的 `configDir`，与本席位当前元数据和目录一致才可使用。旧缓存缺少归属或账号已变更时不复制、不补猜归属，只等待本席位新数据；顶栏、悬停浮层和 `board-cli quota` 使用同一校验后的摘要。
 
 ```json
 {
   "at": 1791000000000,
   "source": "Claude /usage",
+  "accountKey": "<账号 ID 的 SHA256 前 16 位；旧元数据无 ID 时使用邮箱指纹>",
+  "configDir": "/Users/example/.claude-us",
   "windows": [
     { "key": "fiveHour", "remaining": 70, "resetText": "5pm (America/Los_Angeles)" },
     { "key": "weekly", "remaining": 20, "resetText": "Oct 8" }
