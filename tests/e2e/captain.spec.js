@@ -238,13 +238,13 @@ test('past the limit new work waits for a slot; finished background sessions are
     await expect(card('乙')).toContainText('等空位');
     expect(await col('乙')).toBe(null);
     await expect(page.locator('.captain-item .crew-counts')).toHaveAttribute('title', /1 排队/);
-    // unfolded: work in progress on top, then what waits for a slot, finished ones below
+    // unfolded: same model shares one group, most recently active first; queued work is its own group after that
     const a0 = await col('甲');
     const keep0 = await col('写周报');
     if (!(await page.evaluate(() => !!config.crewOpen))) await page.locator('.captain-item .captain-fold').click();
-    await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.nav-crew > .colnav-item')]
+    await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.nav-crew .colnav-item')]
       .map((r) => r.dataset.colId || 'waiting:' + r.querySelector('.cn-label').textContent)))
-      .toEqual([a0, 'waiting:乙', keep0]);
+      .toEqual([a0, keep0, 'waiting:乙']);
     // a session that is working (here: stopped on a question) is never archived, and never asks
     const a = await col('甲');
     const asked = [];

@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -55,13 +56,14 @@ test.beforeAll(async () => {
     config.crewOpen = true;
     Sidebar.render();
   });
-  await expect(page.locator('.nav-crew [data-col-id="worker-2"] .agent-model-label')).toHaveText('Flash 3.8', { timeout: 15000 });
+  await expect(page.locator('.nav-crew .crew-model .agent-model-label', { hasText: 'Flash 3.8' })).toHaveCount(1, { timeout: 15000 });
+  await expect(page.locator('.nav-crew [data-col-id="worker-2"] .agent-model-label')).toHaveCount(0);
   await page.evaluate(() => [0, 1, 2].forEach((i) => window.deck.ptyInput(`worker-${i}`, 'keep working\r')));
   await expect(page.locator('.nav-crew [data-col-id="worker-2"] .cn-sub')).toHaveText('✻ Doing…', { timeout: 10000 });
 });
 
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -114,18 +116,22 @@ test('a long session title stays one line, truncates, and keeps the full title o
         const rowRight = longRow.getBoundingClientRect().right;
         return {
           short, sample, long, rowRight,
-          modelOneLine: oneLine(longRow.querySelector('.agent-model-label')),
+          modelOneLine: oneLine(document.querySelector('.nav-crew .crew-model .agent-model-label')),
           timeOneLine: oneLine(longRow.querySelector('.cn-meta')),
-          outputOneLine: oneLine(longRow.querySelector('.cn-sub')),
+          outputHidden: getComputedStyle(longRow.querySelector('.cn-sub')).display === 'none',
           outputText: longRow.querySelector('.cn-sub').textContent,
+          tip: longRow.getAttribute('title') || '',
+          rowHeight: longRow.getBoundingClientRect().height,
         };
       });
 
       expect(layout.long.text, `theme=${theme} width=${width}`).toBe(longTitle);
-      expect(layout.long.title).toBe(longTitle);
+      expect(layout.long.title.startsWith(longTitle), `theme=${theme} width=${width}`).toBe(true);
+      expect(layout.long.title).toContain('✻ Doing…');
       expect(layout.long.aria).toBe(longTitle);
       expect(layout.sample.text).toBe(sampleTitle);
-      expect(layout.sample.title).toBe(sampleTitle);
+      expect(layout.sample.title.startsWith(sampleTitle), `theme=${theme} width=${width}`).toBe(true);
+      expect(layout.sample.title).toContain('✻ Doing…');
       expect(layout.sample.aria).toBe(sampleTitle);
       expect(layout.long.whiteSpace).toBe('nowrap');
       expect(layout.long.overflow).toBe('hidden');
@@ -137,11 +143,14 @@ test('a long session title stays one line, truncates, and keeps the full title o
       expect(Math.abs(layout.long.height - layout.long.lineHeight)).toBeLessThanOrEqual(1);
       expect(layout.modelOneLine, `model row theme=${theme} width=${width}`).toBe(true);
       expect(layout.timeOneLine, `time row theme=${theme} width=${width}`).toBe(true);
-      expect(layout.outputOneLine, `output row theme=${theme} width=${width}`).toBe(true);
+      expect(layout.outputHidden, `output stays in the tooltip theme=${theme} width=${width}`).toBe(true);
       expect(layout.outputText).toBe('✻ Doing…');
+      expect(layout.tip).toContain(longTitle);
+      expect(layout.tip).toContain('✻ Doing…');
+      expect(layout.rowHeight, `theme=${theme} width=${width}`).toBeLessThanOrEqual(36);
       if (width <= 252) expect(layout.sample.scrollWidth).toBeGreaterThan(layout.sample.clientWidth + 1);
 
-      await expect(label('worker-2')).toHaveAttribute('title', longTitle);
+      await expect(label('worker-2')).toHaveAttribute('title', new RegExp('^' + longTitle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
       await expect(label('worker-2')).toHaveAttribute('aria-label', longTitle);
       const shotName = width === 252 ? `sidebar-after-${theme}.png` : `sidebar-after-${theme}-${width}.png`;
       await page.locator('#colNav').screenshot({ path: path.join(shotDir, shotName) });
