@@ -88,6 +88,50 @@ aria-label、键盘焦点、44px 点击面积；复制成功短暂变勾。深�
 | GET | `/api/output?id=…` | `{id,title,text}` 队员最近输出 |
 | POST | `/api/captain` | `{message}` + CSRF，接受后 `{queued:true}` |
 
+设置了前缀时，以上路径都相对于前缀（`/win/login`、`/win/api/auth` 等），内置页面和资源除外。
+
+## 多台电脑（路径前缀）
+
+一个手机入口可以同时接 Mac 和 Windows：VPS 的 Caddy 按路径把 `/mac/*`、`/win/*`
+**不剥前缀**地转到各自隧道，AgentDeck 自己校验并去掉前缀。每台电脑独立保存 token、
+设备 cookie、CSRF 密钥和登录封禁计数，互相不知道对方的凭据。
+
+每台的 `~/.config/agentdeck-remote/endpoint.json`（隧道安装器写入，不含密钥）可带两项：
+
+```json
+{ "publicOrigin": "https://your-private-entry.example", "basePath": "/win/", "label": "Windows" }
+```
+
+- `basePath`：一段小写字母/数字/连字符，前后各一个 `/`，例如 `/mac/`、`/win/`。空或不写＝旧行为，逐字节不变。
+  每次在设置页开关网页服务时重新读取，不需要重启应用；它不写进 `config.json`，回滚只需改回空再关开一次。
+  格式不合法时服务拒绝启动并在设置中提示，不会悄悄退回无前缀。
+- `label`：手机总台里显示的名称（最长 32 字符，无控制字符和 `<>`），必须与 `basePath` 一起设置；不写则按平台显示 Mac / Windows。
+- 桌面设置页只读显示「手机入口中的名称：Windows · /win/」。
+
+配置了 `basePath` 后：
+
+- 来自公网 Host 的请求路径必须以前缀开头，否则 404（在任何鉴权之前，含带有效 Bearer 或 cookie 的请求）。
+  本机 `127.0.0.1` 直连仍走无前缀的旧路径，前缀路径在直连上是 404。原有 Host、Origin、Fetch Metadata、
+  单个 X-Forwarded-For 校验全部保留。
+- 公网设备 cookie 改为 `__Secure-agentdeck_<前缀名>`（如 `__Secure-agentdeck_win`，Path=`/win/`），HttpOnly、Secure、
+  SameSite=Strict、无 Domain。用 `__Secure-` 而不是 `__Host-`，因为后者要求 Path=/，无法按机器隔离。
+  服务端只认已登记哈希，别的子域注入同名 cookie 只会让认证失败。本机直连仍用旧 cookie。
+- 未登录访问前缀下任何路径（包括 `/win/`）都返回 JSON 401，不返回内嵌登录页，也不提供旧的内置页面和静态资源
+  （旧页面使用绝对路径，只适用于本机直连）。登录用 `POST /win/login`。
+- 吊销（设置页垃圾桶）和手机退出只影响这一台。
+
+新增接口（相对于前缀，例如 `/win/api/snapshot`；无前缀的直连也可用）：
+
+| 方法 | 路径 | 行为 |
+| --- | --- | --- |
+| GET | `api/snapshot` | `{apiVersion:2, machine:{id,label,platform,hostname,appVersion}, now, csrfToken, captain:{id,title,status,turns}, sessions, boardVersion}`；一次返回手机总台每 5 秒需要的数据 |
+
+`machine.id` 是前缀名（`win`），无前缀时为 `local`。`boardVersion` 是看板文件名、大小、mtime 的 16 位哈希，
+不含任何卡片内容，只在看板文件变化时改变，读取失败时为空字符串。`csrfToken` 与 `GET api/auth` 相同。
+
+开启带私人 origin 的安装版 AgentDeck 会在 macOS 和 Windows 上注册登录项（Electron `openAtLogin`），
+Windows 若被系统「启动」应用设置禁用，设置页会提示。测试用 `--test-user-data` 实例从不改登录项，也不读取 endpoint.json。
+
 ## 验证与回滚
 
 `npm test`；`npm run test:e2e -- tests/e2e/mobile-web.spec.js`（仅相关测试）。

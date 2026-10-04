@@ -26,7 +26,7 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
-const { MobileWebServer } = require('./mobile-web');
+const { MobileWebServer, boardVersionOf, supportsLoginItem } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
 let mainWindow = null;
 let notifications = null;
@@ -741,13 +741,25 @@ app.whenReady().then(async () => {
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
   let mobileSettings = notificationConfig.mobileWeb || { enabled: false };
-  // The tunnel installer supplies only the public origin, never login secrets.
-  if (!tudArg && !mobileSettings.publicOrigin) {
-    try {
-      const endpoint = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json'), 'utf8'));
-      if (typeof endpoint.publicOrigin === 'string') mobileSettings.publicOrigin = endpoint.publicOrigin;
-    } catch (_) {}
-  }
+  // The tunnel installer supplies only the public origin and this machine's
+  // phone-entry name and path prefix, never login secrets. The prefix and name
+  // come from endpoint.json on every (re)configure and are never kept in
+  // config.json, so a rollback is one edit to endpoint.json. A malformed prefix
+  // is passed on as-is so the service refuses to start rather than ignoring it.
+  const readEndpoint = () => {
+    try { return JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json'), 'utf8')); } catch (_) { return {}; }
+  };
+  const withEndpoint = (settings) => {
+    const { basePath, label, ...rest } = settings;
+    if (tudArg) return settings;
+    const endpoint = readEndpoint();
+    if (!rest.publicOrigin && typeof endpoint.publicOrigin === 'string') rest.publicOrigin = endpoint.publicOrigin;
+    if (endpoint.basePath !== undefined) rest.basePath = endpoint.basePath;
+    if (endpoint.label !== undefined) rest.label = endpoint.label;
+    return rest;
+  };
+  mobileSettings = withEndpoint(mobileSettings);
+  const loginItemMessage = process.platform === 'win32' ? '请在 Windows 设置的「启动」应用中允许 AgentDeck 自动启动。' : '请在 macOS 登录项中允许 AgentDeck 自动启动。';
   let mobileInitializing = true;
   let mobileStartupError = '';
   mobileWeb = new MobileWebServer({
@@ -756,18 +768,21 @@ app.whenReady().then(async () => {
     getOutput: (id) => requestMobile('output', { id }),
     getCaptain: () => requestMobile('captain-history'),
     sendCaptain: (message) => requestMobile('captain', { message }),
+    getBoardVersion: () => boardVersionOf(taskStore.dir),
+    machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() },
     saveSettings: (settings) => {
       mobileSettings = settings;
       if (mobileInitializing && !settings.enabled) return;
-      notificationConfig = { ...seatConfig(), mobileWeb: settings };
+      const { basePath, label, ...persisted } = settings;
+      notificationConfig = { ...seatConfig(), mobileWeb: persisted };
       fs.writeFileSync(configPath + '.tmp', JSON.stringify(notificationConfig, null, 2), { mode: 0o600 });
       fs.chmodSync(configPath + '.tmp', 0o600);
       fs.renameSync(configPath + '.tmp', configPath);
-      // Restore the private web service after a Mac login. Isolated tests must
-      // never change the real app's login item.
-      if (!tudArg && app.isPackaged && process.platform === 'darwin' && settings.enabled && settings.publicOrigin) {
+      // Restore the private web service after a Mac or Windows login. Isolated
+      // tests must never change the real app's login item.
+      if (!tudArg && app.isPackaged && supportsLoginItem(process.platform) && settings.enabled && settings.publicOrigin) {
         try { app.setLoginItemSettings({ openAtLogin: true }); mobileStartupError = ''; }
-        catch (_) { mobileStartupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+        catch (_) { mobileStartupError = loginItemMessage; }
       }
     },
   });
@@ -778,18 +793,18 @@ app.whenReady().then(async () => {
   handleMain('mobile-web:settings', async (_event, input) => {
     if (input !== undefined) {
       if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid mobile web setting.');
-      if (typeof input.enabled === 'boolean') await mobileWeb.configure({ ...mobileSettings, enabled: input.enabled });
-      else if (typeof input.publicOrigin === 'string') await mobileWeb.configure({ ...mobileSettings, publicOrigin: input.publicOrigin });
+      if (typeof input.enabled === 'boolean') await mobileWeb.configure(withEndpoint({ ...mobileSettings, enabled: input.enabled }));
+      else if (typeof input.publicOrigin === 'string') await mobileWeb.configure(withEndpoint({ ...mobileSettings, publicOrigin: input.publicOrigin }));
       else if (input.revoke === true) await mobileWeb.revokeDevices();
       else throw new Error('Invalid mobile web setting.');
     }
     const status = mobileWeb.status();
     status.startupError = mobileStartupError;
-    if (!tudArg && app.isPackaged && process.platform === 'darwin' && status.enabled && status.publicOrigin) {
+    if (!tudArg && app.isPackaged && supportsLoginItem(process.platform) && status.enabled && status.publicOrigin) {
       try {
         const login = app.getLoginItemSettings();
-        if (!login.openAtLogin || login.status === 'requires-approval') status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。';
-      } catch (_) { status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+        if (!login.openAtLogin || login.status === 'requires-approval') status.startupError = loginItemMessage;
+      } catch (_) { status.startupError = loginItemMessage; }
     }
     if (!tudArg && status.publicOrigin) {
       try {
@@ -889,7 +904,7 @@ app.whenReady().then(async () => {
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
-    cfg.mobileWeb = mobileSettings;
+    { const { basePath, label, ...persisted } = mobileSettings; cfg.mobileWeb = persisted; }
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
     if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);

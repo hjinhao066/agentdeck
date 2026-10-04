@@ -591,6 +591,8 @@ async function updateMobileWebSettings(input) {
     document.getElementById('mobileWebUrl').value = status.url || '';
     document.getElementById('mobileWebOrigin').value = status.publicOrigin || '';
     document.getElementById('mobileWebPublicUrl').value = status.publicUrl || '';
+    document.getElementById('mobileWebMachine').hidden = !status.basePath;
+    document.getElementById('mobileWebMachineName').value = status.basePath ? `${status.label || ''} · ${status.basePath}` : '';
     document.getElementById('mobileWebGateway').hidden = !status.gatewayPassword;
     document.getElementById('mobileWebGatewayUser').value = status.gatewayUser || '';
     document.getElementById('mobileWebGatewayPassword').value = status.gatewayPassword || '';
