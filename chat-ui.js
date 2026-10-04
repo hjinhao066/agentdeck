@@ -766,7 +766,7 @@
       if (v.live.textContent !== line) { v.live.textContent = line; followOutput(v); }
     }
     if (!entry.alive) { finalizeTurn(id); return; }
-    if (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(text)) return;
+    if (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(text, columnById(id)?.cmd)) return;
     const quiet = Date.now() - (entry.lastOutputAt || 0);
     const sawOutput = (entry.lastOutputAt || 0) - open.startedAt > 600;
     if ((entry.state === 'done' && quiet >= 2000 && sawOutput) || quiet >= 6000) finalizeTurn(id);
@@ -832,7 +832,7 @@
     if (o.cancelled && o.cancelled()) return false;
     const entry = host.terms.get(col.id);
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
-    if (o.requireIdle && (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen))) return false;
+    if (o.requireIdle && (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen, col.cmd))) return false;
     if (prompt && prompt.length > LONG_PROMPT) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
     // guardUserInput (receipts, 队长's work for others): never into an input box

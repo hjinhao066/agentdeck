@@ -273,6 +273,7 @@ test('past the limit new work waits for a slot; finished background sessions are
   await page.waitForTimeout(3500);
   expect(await page.evaluate((i) => columns.some((c) => c.id === i), b)).toBe(true);
   await page.evaluate(() => { config.mainSession.pending = []; config.mainSession.inflight = []; });
+  await page.evaluate((i) => { terms.get(i).lastOutputAt = Date.now() - 60_000; }, b);
   try {
     await expect.poll(() => page.evaluate((i) => (config.archived || []).some((x) => x.id === i && x.captainCrew), b), { timeout: 15000 }).toBe(true);
   } finally {

@@ -294,7 +294,7 @@
     const col = mainCol(), entry = host.terms.get(col?.id);
     const idle = entry?.alive && entry.state === 'done' && !briefing && !delivering &&
       !entry.sendingPrompt && !entry.injecting && !host.userComposing(col.id) &&
-      !M.terminalActivity(entry.lastScreen) && !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
+      !M.terminalActivity(entry.lastScreen, col?.cmd) && !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
     if (!options.local && idle && state().relayTargetId !== 'chatgpt' && window.AgentInfo.resolveAgentInfo(col, entry).provider === 'Claude') {
       await new Promise((resolve, reject) => {
         const op = { colId: col.id, entry, relay: true, resolve, reject };
@@ -350,7 +350,7 @@
     // Read the actual footer, including soft-wrapped rows, in either view.
     const footer = window.ChatUI.readFooter(entry.term);
     const used = M.contextTokens((footer || []).map((row) => row.map((s) => s.text).join('')).join('\n'));
-    const idle = !briefing && !delivering && !entry.sendingPrompt && entry.state === 'done' && !M.terminalActivity(entry.lastScreen) &&
+    const idle = !briefing && !delivering && !entry.sendingPrompt && entry.state === 'done' && !M.terminalActivity(entry.lastScreen, col?.cmd) &&
       Date.now() - (entry.lastOutputAt || 0) >= 3000 && !host.userComposing(col.id) &&
       !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
     if (!tokenSaving) {
@@ -400,7 +400,7 @@
   function onContextCommand(col, text, submitted = true) {
     if (!isMain(col) || !col.cmd) return;
     const entry = host.terms.get(col.id);
-    if (!entry?.alive || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || M.terminalActivity(entry.lastScreen)) return;
+    if (!entry?.alive || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || M.terminalActivity(entry.lastScreen, col?.cmd)) return;
     const provider = window.AgentInfo.inferProvider(col.cmd, entry.lastScreen);
     if (!M.contextResetCommand(provider, text)) {
       if (contextReset && !contextReset.confirmed) contextReset = null;
@@ -432,7 +432,7 @@
         archiveSnapshot(op.col, op.snapshot);
       } else return;
     }
-    if (op.sending || briefing || delivering || entry.sendingPrompt || entry.state !== 'done' || M.terminalActivity(entry.lastScreen) ||
+    if (op.sending || briefing || delivering || entry.sendingPrompt || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, op.col.cmd) ||
       Date.now() - (entry.lastOutputAt || 0) < 3000 || host.userComposing(op.col.id)) return;
     op.sending = true;
     host.sendWhenReady(op.col, briefingText() + '\n\n' + M.REBRIEF_NOTE, {
@@ -514,7 +514,7 @@
     if (!col || !entry?.alive || briefing || delivering || tokenSaving || entry.sendingPrompt || entry.injecting ||
       host.userComposing(col.id) || window.ChatUI.hasDraft(col.id) ||
       !['done', 'quota'].includes(entry.state) || Date.now() - (entry.lastOutputAt || 0) < 3000) return false;
-    const activity = M.terminalActivity(entry.lastScreen);
+    const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
     if (activity === 'working' || (activity === 'quota' && entry.state !== 'quota')) return false;
     return entry.state === 'quota' || !window.ChatUI.turnsOf(col.id).some((t) => !t.done);
   }
@@ -695,7 +695,7 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (entry && entry.alive && (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input')) return;
+    if (entry && entry.alive && (entry.state !== 'done' || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd))) return;
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER)) host.archiveColumn(col, { quiet: true });
@@ -769,7 +769,7 @@
     closeOrphans();
     if (!s || s.legacyReceiptInjection !== true || !s.pending.length) { blockedSince = 0; return; }
     if (delivering || !col || !col.cmd || !entry.alive || entry.sendingPrompt || briefing === col.id) return;
-    if (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input' || M.terminalActivity(entry.lastScreen)) return;
+    if (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input' || M.terminalActivity(entry.lastScreen, col?.cmd)) return;
     if (Date.now() - (entry.lastOutputAt || 0) < 1500) return;   // let it settle first
     // Never through a box the user is typing in: Enter would send their half-written message too
     if (host.userComposing(id)) { holdBack(); return; }
@@ -868,7 +868,7 @@
     for (const task of s.tasks) {
       if (task.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(task.status)) continue;
       if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process' }); continue; }
-      const activity = M.terminalActivity(entry.lastScreen);
+      const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
       if (entry.state === 'quota' || activity === 'quota') {
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
@@ -944,7 +944,8 @@
     const task = s.tasks.find((t) => t.colId === colId && t.turnId === turn.id);
     if (!task || CLOSED.includes(task.status) || turn.interrupted) return;
     const entry = host.terms.get(colId);
-    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen)) return;
+    const col = host.columns().find((c) => c.id === colId);
+    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, col?.cmd)) return;
     task.endedAt = Date.now();
   }
 
@@ -995,10 +996,16 @@
   }
   function ledgerRows() {
     const folders = new Map((host.config.folders || []).map((f) => [f.id, f.name]));
+    const latest = new Map((state()?.tasks || []).map((t) => [t.colId, t]));
     return host.columns().filter((c) => !c.isMain).map((c) => {
       const entry = host.terms.get(c.id);
+      const terminalState = entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain';
+      const task = latest.get(c.id);
+      // A command receipt completes the assignment, even while the agent is
+      // finishing its response. Keep terminal activity visible separately.
+      const completed = task?.status === 'done' && task.receipt?.source === 'command';
       return {
-        id: c.id, title: host.columnLabel(c), state: entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain',
+        id: c.id, title: host.columnLabel(c), state: completed ? 'done' : terminalState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };
