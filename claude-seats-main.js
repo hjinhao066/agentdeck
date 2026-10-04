@@ -102,7 +102,7 @@ function checkpoint(home, userData, payload) {
   fs.renameSync(board + '.tmp', board);
   return board;
 }
-function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId }) {
+function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, onUsageRecorded = () => {} }) {
   const find = (id) => { const seat = S.normalize(getSeats()).find((s) => s.id === id); if (!seat) throw new Error('席位不存在'); return seat; };
   handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home))));
   handleMain('seats:validate', (_e, { seats }) => {
@@ -120,7 +120,7 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId }
   handleMain('seats:record-usage', (_e, { seatId, configDir, usage }) => {
     const seat = find(seatId);
     if (configDir !== seat.configDir) throw new Error('会话席位目录已变更，不能归入新目录');
-    writeUsage(seat, home, usage); return true;
+    writeUsage(seat, home, usage); onUsageRecorded(); return true;
   });
 }
 module.exports = { directory, credentialLocation, seatEnvironment, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };

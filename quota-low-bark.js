@@ -18,7 +18,10 @@ function createQuotaLowBark({ state = {}, saveState, sendBark }) {
     for (const seat of Q.claudeSeats(config.claudeSeats)) {
       const entry = config.quotas?.[Q.seatKey(seat.id)], sample = entry?.sample;
       if (entry?.scope !== 'claude' || (entry.configDir && entry.configDir !== seat.configDir) ||
-          !sample || !Number.isFinite(sample.at) || sample.at > now + 60000 || now - sample.at > Q.FRESH_MS) continue;
+          !sample || !Number.isFinite(sample.at) || sample.at > now + 60000 || now - sample.at > Q.freshMs(sample)) continue;
+      // Match the quota summary's trust rule before numbers can trigger Bark.
+      if (seat.id !== 'default' && (!sample.accountBound || !sample.accountKey ||
+          sample.accountKey !== entry.accountKey || sample.configDir !== seat.configDir)) continue;
       const w = sample.windows?.find((w) => w.label === '5 小时');
       if (!w || Q.percent(w.remaining) === null || (w.resetAt && w.resetAt <= now)) continue;
       const fallback = `seat:${seat.configDir}`, key = entry.accountKey ? `account:${entry.accountKey}` : fallback;

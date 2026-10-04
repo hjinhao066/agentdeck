@@ -3281,6 +3281,7 @@ async function readQuotaCache() {
   if (changed) saveConfig();
   renderQuotaBar();
 }
+window.addEventListener('claude-seat-usage', () => readQuotaCache().catch(() => {}));
 readQuotaCache().catch(() => {});
 setInterval(() => readQuotaCache().catch(() => {}), 30000);
 syncChromeState();

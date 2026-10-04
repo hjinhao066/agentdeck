@@ -191,3 +191,17 @@ test('the seat flag follows a Captain Relay immediately while workers keep their
   assert.deepEqual(AgentInfo.resolveAgentInfo(captain, null).seat, { id: 'us', configDir: '~/.claude-us' });
   assert.deepEqual(AgentInfo.resolveAgentInfo(worker, null).seat, { id: 'cn', configDir: '~/.claude' });
 });
+
+
+test('recording owned usage invalidates quota cache only after a successful write', (t) => {
+  const home = fixture(t); setup(home);
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'offline-cn' } }));
+  const handlers = {}; let invalidated = 0;
+  M.registerSeatsIpc({ handleMain: (name, handler) => { handlers[name] = handler; }, home,
+    getSeats: () => S.normalize(), onUsageRecorded: () => { invalidated++; } });
+  const input = { seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 2 }] } };
+  assert.equal(handlers['seats:record-usage'](null, input), true);
+  assert.equal(invalidated, 1);
+  assert.throws(() => handlers['seats:record-usage'](null, { ...input, configDir: '~/.wrong' }));
+  assert.equal(invalidated, 1);
+});

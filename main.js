@@ -687,8 +687,10 @@ app.whenReady().then(() => {
   const configPath = path.join(app.getPath('userData'), 'config.json');
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
-    getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId });
+    getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
+    onUsageRecorded: () => { quotaRead = null; } });
   if (!tudArg) {
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
     const refresh = () => claudeQuotaRefresh.tick().catch(() => {});
@@ -749,7 +751,6 @@ app.whenReady().then(() => {
   }; });
 
   // Test profiles never read the user's quota caches or conversation logs.
-  let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   handleMain('quota:local', async () => {
     if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
     await claudeQuotaRefresh?.tick();

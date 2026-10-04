@@ -164,7 +164,7 @@
       const key = JSON.stringify(usage.windows);
       if (recorded.get(seatId) !== key) {
         recorded.set(seatId, key);
-        window.deck.recordClaudeSeatUsage(seatId, usage, col.claudeConfigDir).catch(() => { recorded.delete(seatId); });
+        window.deck.recordClaudeSeatUsage(seatId, usage, col.claudeConfigDir).then(() => window.dispatchEvent(new CustomEvent('claude-seat-usage'))).catch(() => { recorded.delete(seatId); });
       }
     }
     // Keyed per column: an idle session's unchanged statusline is never
@@ -174,7 +174,7 @@
       const key = col.claudeSeatId + ':' + JSON.stringify(footer.windows);
       if (recorded.get(col.id) !== key) {
         recorded.set(col.id, key);
-        window.deck.recordClaudeSeatUsage(col.claudeSeatId, footer, col.claudeConfigDir).catch(() => { recorded.delete(col.id); });
+        window.deck.recordClaudeSeatUsage(col.claudeSeatId, footer, col.claudeConfigDir).then(() => window.dispatchEvent(new CustomEvent('claude-seat-usage'))).catch(() => { recorded.delete(col.id); });
       }
     }
     if (!col.isMain || !entry.wrap) return;
