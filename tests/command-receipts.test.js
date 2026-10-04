@@ -126,7 +126,8 @@ test('ordinary leading resource words do not create quota state or automatic fai
   const Q = require('../quota-core');
   for (const line of ['Rate limit handling test fails in api.js', 'Unauthorized access test still failing',
     'Limit reached check broken', 'Usage limit reached check broken', 'Quota exhausted handling test fails',
-    'Rate limit reached check is broken', '401 Unauthorized access test still failing', '429 Too many requests test fails']) {
+    'Rate limit reached check is broken', '401 Unauthorized access test still failing', '429 Too many requests test fails',
+    'RATE_LIMITED\\|function resourceError', 'grep -n "RATE_LIMITED\\|function resourceError" quota-core.js']) {
     for (const decorated of [line, '⏺ ' + line, '│ ' + line]) {
       assert.equal(M.terminalActivity(decorated), '', decorated);
       assert.equal(M.resourceReceipt(decorated), null, decorated);
@@ -144,6 +145,10 @@ test('native error codes, reset suffixes and login instructions retain automatic
     ['API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}', 'auth'],
     ['429 {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded"}}', 'quota'],
     ['Not logged in. Please run /login', 'auth'], ['API Error: 401 Unauthorized', 'auth'],
+    ['Not logged in · Please run /login', 'auth'], ["Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY.", 'auth'],
+    ["You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:10 PM.", 'quota'],
+    ["You've hit your usage limit. To get more access now, send a request to your admin or try again at 5pm.", 'quota'],
+    ["You've hit your session limit · resets 9:20pm", 'quota'], ['Usage limit reached · limit resets 3:10pm', 'quota'],
   ]) {
     assert.equal(M.resourceFailure(line, 'automatic'), kind, line);
     assert.equal(M.terminalActivity(line), 'quota', line);

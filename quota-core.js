@@ -42,19 +42,28 @@
   function modelName(value) {
     return typeof value === 'string' && /^(?:gemini|grok|gpt|claude|opus|sonnet)[- .\d\w()]{0,80}$/i.test(value) ? value : '';
   }
-  // Complete native messages or a native reset/retry suffix, never a topic prefix
-  // such as "Rate limit handling test fails" in an ordinary worker reply.
-  const EXHAUSTED = /^(?:(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage|weekly|session) limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:request failed[^\n]*?[:：]\s*)?(?:you have )?(?:exceeded your usage limit|usage limit exceeded|quota (?:exhausted|exceeded)))(?:[.!]?|\s*[.·,:;-]\s*(?:resets?|limit resets?|try again|please|to continue|upgrade)\b[^\n]*)|continuing (?:automatically at|at|shortly)[^\n]*esc to cancel|额度用尽|配额(?:用尽|耗尽))$/i;
-  const RATE_LIMITED = /^(?:(?:429\s+)?(?:rate_limit_error)(?:\s*:\s*[^\n]+|[.!]?)|(?:429\s+)?too many requests(?:[.!]?|\s*:\s*[^\n]+)|rate[ -]limit(?: reached| exceeded|ed)(?:[.!]?|\s*[.·,:;-]\s*(?:resets?|try again|please)\b[^\n]*)|请求被限流|被限流)$/i;
+  // Native resource errors of every CLI are recognized here and nowhere else.
+  // A line counts only when it starts with the CLI's own phrase and the phrase
+  // ends there: end of line, a TUI separator (· ∙ •), or punctuation followed
+  // by the CLI's own reset/retry/login hint. A topic prefix such as "Rate limit
+  // handling test fails", code, or grep output in a worker reply stays ordinary.
+  const SEP = String.raw`\s*[·∙•]\s*[^\n]*`;
+  const tail = (hints) => String.raw`(?:[.!]?|${SEP}|\s*[.!,:;—–-]\s*['"\x60]?(?:${hints})(?!\w)[^\n]*)`;
+  const QUOTA_HINT = String.raw`resets?|limit resets?|your (?:limit|quota) (?:will )?resets?|try again|please|to continue|to get more|upgrade|visit|wait|purchase|switch to|contact|\/[a-z-]+`;
+  const RATE_HINT = QUOTA_HINT + '|retry(?:ing)?';
+  const AUTH_HINT = String.raw`please|run [^\n]*log\s?in|(?:log|sign) in|to continue|visit|\/login`;
+  // Second-person messages are unambiguous, so any sentence ending or "for/on/to …" may follow.
+  const QUOTA_OWN = String.raw`(?:you['’]?(?:ve| have) (?:hit|reached|exceeded|exhausted|used up) your (?:[\w-]+ ){0,3}(?:limit|quota|capacity|usage)|you['’]?(?:re| are) out of (?:extra )?(?:usage|credits)|(?:your )?credit balance is too low)(?:[.!]?|\s*[.!,:;·∙•|—–-][^\n]*|\s+(?:for|on|to)\s[^\n]*)`;
+  const QUOTA_TOPIC = String.raw`(?:request failed[^\n]*?[:：]\s*)?(?:(?:claude (?:ai )?)?(?:usage|weekly|session|daily|monthly|5[- ]hour|opus|sonnet)(?: weekly)? limit (?:reached|exceeded)|usage limit exceeded|exceeded your usage limit|individual quota reached|quota (?:exhausted|exceeded))(?:${tail(QUOTA_HINT)}|\|\d{9,}|\s+for (?:quota )?(?:metric|model)\b[^\n]*)`;
+  const EXHAUSTED = new RegExp(String.raw`^(?:${QUOTA_OWN}|${QUOTA_TOPIC}|RESOURCE_EXHAUSTED(?:\s*:\s*[^\n]+|[.!]?)|429\s+\{[^\n]*"status"\s*:\s*"RESOURCE_EXHAUSTED"[^\n]*\}|continuing (?:automatically at|at|shortly)[^\n]*esc to cancel|额度用尽|配额(?:用尽|耗尽))$`, 'i');
+  const RATE_LIMITED = new RegExp(String.raw`^(?:(?:429\s+)?rate_limit_error(?:\s*:\s*[^\n]+|[.!]?)|429\s+\{[^\n]*"type"\s*:\s*"rate_limit_error"[^\n]*\}|(?:429\s+)?too many requests(?:\s*:\s*[^\n]+|${tail(RATE_HINT)})|rate[ -]limit(?: reached| exceeded|ed)${tail(RATE_HINT)}|(?:stream error:\s*)?exceeded retry limit, last status: 429[^\n]*|请求被限流|被限流)$`, 'i');
+  const AUTH = new RegExp(String.raw`^(?:401\s+Unauthorized(?:[.!]?|\s*:\s*[^\n]+)|401\s+\{[^\n]*"type"\s*:\s*"authentication_error"[^\n]*\}|authentication_error(?:\s*:\s*[^\n]+|[.!]?)|(?:(?:you['’]?(?:re| are) )?not (?:logged|signed) in|authentication required|login required)${tail(AUTH_HINT)}|authentication failed(?:\s*:\s*[^\n]+|${tail(AUTH_HINT)})|(?:invalid api key|oauth token (?:has )?(?:been )?(?:expired|revoked))(?:${SEP}|\s*[.!,:;—–-]\s*(?:${AUTH_HINT})(?!\w)[^\n]*)|please (?:(?:log|sign) in|login)(?:[.!]?|\s*[.!,:;·∙•—–-][^\n]*|\s+(?:to|again|with|using|first|by|via)\s[^\n]*)|please run [^\n]*log\s?in(?!\w)[^\n]*|未登录|尚未登录|请先登录)$`, 'i');
   function resourceError(raw) {
-    const line = String(raw || '').trim().replace(/^[│⏺⎿✻✽●!⚠>\s]+/, '').replace(/\s*[│┃]$/, '')
-      .replace(/^(?:API |request )?error:\s*/i, '');
-    if (EXHAUSTED.test(line) || /^RESOURCE_EXHAUSTED(?:\s*:\s*[^\n]+|[.!]?)$/i.test(line)) return 'quota';
-    if (/^429\s+\{[^\n]*"status"\s*:\s*"RESOURCE_EXHAUSTED"[^\n]*\}$/i.test(line)) return 'quota';
-    if (/^429\s+\{[^\n]*"type"\s*:\s*"rate_limit_error"[^\n]*\}$/i.test(line)) return 'rate_limit';
+    const line = String(raw || '').trim().replace(/^[│┃⏺⎿✻✽●■✗✖✕×▲!⚠>\s]+/, '').replace(/\s*[│┃]$/, '')
+      .replace(/^\[?(?:API |request )?error:\s*/i, '').replace(/\]$/, '');
+    if (EXHAUSTED.test(line)) return 'quota';
     if (RATE_LIMITED.test(line)) return 'rate_limit';
-    if (/^401\s+\{[^\n]*"type"\s*:\s*"authentication_error"[^\n]*\}$/i.test(line)) return 'auth';
-    if (/^(?:401\s+Unauthorized(?:[.!]?|\s*:\s*[^\n]+)|authentication_error(?:\s*:\s*[^\n]+|[.!]?)|(?:you['’]?(?:re| are) )?not (?:logged|signed) in(?:[.!]?|[.!]\s*(?:please (?:(?:log|sign) in|run \/login)|run \/login)\b[^\n]*)|authentication (?:required|failed)[.!]?|login required[.!]?|please (?:(?:log|sign) in|run \/login)\b[^\n]*|未登录|尚未登录|请先登录)$/i.test(line)) return 'auth';
+    if (AUTH.test(line)) return 'auth';
     return '';
   }
   function percent(n) { return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null; }
