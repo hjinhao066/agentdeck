@@ -26,7 +26,23 @@
   function svgButton(cls, iconName, title) {
     const b = el('button', cls);
     b.type = 'button'; b.title = title; b.innerHTML = host.ICONS[iconName] || '';
+    b.setAttribute('aria-label', title);
     return b;
+  }
+  // Copy buttons turn into a check for a moment once the text is on the clipboard.
+  function copyButton(title, text, cls) {
+    const b = svgButton(cls || 'msg-tool', 'copy', title);
+    b.addEventListener('click', () => {
+      host.clipboardWrite(typeof text === 'function' ? text() : text);
+      flashCheck(b, 'copy');
+    });
+    return b;
+  }
+  function flashCheck(b, icon) {
+    b.innerHTML = host.ICONS.check;
+    b.classList.add('done');
+    clearTimeout(b.checkTimer);
+    b.checkTimer = setTimeout(() => { b.innerHTML = host.ICONS[icon]; b.classList.remove('done'); }, 1200);
   }
   const columnById = (id) => host.columns().find((c) => c.id === id);
   function chatFor(id) {
@@ -128,7 +144,7 @@
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
+    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false, openProc: new Set(), allSteps: new Set(), openEdits: new Set() };
     scroll.addEventListener('scroll', () => {
       v.following = nearBottom(scroll);
       if (v.following) newContent.hidden = true;
@@ -301,6 +317,7 @@
       box.classList.add('md');
       box.innerHTML = C.renderMarkdown(turn.reply, { breaks: true });
       linkifyTree(box, v.id);
+      decorateCode(box);
     } else if (!turn.interrupted) {
       box.classList.add('quiet');
       box.textContent = '这一轮没有文字回复，过程在终端里。';
@@ -313,6 +330,224 @@
     }
     return box;
   }
+  // Code blocks get a bar with their language and a copy icon.
+  function decorateCode(box) {
+    box.querySelectorAll('pre.md-code').forEach((pre) => {
+      const code = pre.querySelector('code');
+      const block = el('div', 'code-block');
+      const bar = el('div', 'code-bar');
+      const lang = el('span', 'code-lang');
+      lang.innerHTML = host.ICONS.terminal;
+      lang.append((code && code.dataset.lang) || '文本');
+      bar.append(lang, copyButton('复制代码', () => (code ? code.textContent : ''), 'icon-btn code-copy'));
+      pre.replaceWith(block);
+      block.append(bar, pre);
+    });
+  }
+
+  // ---- the work before a reply: "处理了 18分43秒 ›", folded by default ----
+  const PROC_TAIL = 8;
+  function processRow(v, turn) {
+    const open = pending.get(v.id);
+    if (!turn.done) {
+      const live = el('div', 'proc live');
+      const label = el('span', 'proc-label');
+      v.liveElapsed = label;
+      label.textContent = '处理中 ' + C.fmtDuration(Date.now() - ((open && open.turn === turn && open.startedAt) || turn.ts));
+      live.appendChild(label);
+      return live;
+    }
+    const steps = turn.steps || [];
+    const proc = el('div', 'proc');
+    const toggle = el('button', 'proc-toggle');
+    toggle.type = 'button';
+    const label = turn.end && turn.ts ? '处理了 ' + C.fmtDuration(turn.end - turn.ts)
+      : steps.length ? steps.length + ' 条过程消息' : '过程';
+    const chev = el('span', 'ico proc-chev');
+    chev.innerHTML = host.ICONS.chevRight;
+    toggle.append(el('span', 'proc-label', label), chev);
+    const body = el('div', 'proc-body');
+    const expanded = v.openProc.has(turn.id);
+    toggle.setAttribute('aria-expanded', String(expanded));
+    toggle.title = expanded ? '收起过程' : '展开过程（工具调用、命令）';
+    proc.classList.toggle('open', expanded);
+    body.hidden = !expanded;
+    if (expanded) fillProcess(v, turn, body);
+    toggle.addEventListener('click', () => {
+      const now = !v.openProc.has(turn.id);
+      if (now) v.openProc.add(turn.id); else v.openProc.delete(turn.id);
+      toggle.setAttribute('aria-expanded', String(now));
+      toggle.title = now ? '收起过程' : '展开过程（工具调用、命令）';
+      proc.classList.toggle('open', now);
+      body.hidden = !now;
+      if (now) fillProcess(v, turn, body);
+    });
+    proc.append(toggle, body);
+    return proc;
+  }
+  function fillProcess(v, turn, body) {
+    body.textContent = '';
+    const steps = turn.steps || [];
+    if (!steps.length) {
+      const note = el('div', 'proc-empty', turn.end ? '这一轮没有记下工具调用。' : '这一轮的过程没有保存（更早的记录）。');
+      const term = svgButton('icon-btn', 'terminal', '在终端里查看');
+      term.addEventListener('click', () => openTerminal(v.id));
+      note.appendChild(term);
+      body.appendChild(note);
+      return;
+    }
+    const all = v.allSteps.has(turn.id) || steps.length <= PROC_TAIL;
+    if (!all) {
+      const more = el('button', 'proc-more');
+      more.type = 'button';
+      const chev = el('span', 'ico proc-chev');
+      chev.innerHTML = host.ICONS.chevRight;
+      more.append(`前面 ${steps.length - PROC_TAIL} 条消息`, chev);
+      more.title = '展开更早的过程';
+      more.addEventListener('click', () => { v.allSteps.add(turn.id); fillProcess(v, turn, body); });
+      body.appendChild(more);
+    }
+    (all ? steps : steps.slice(-PROC_TAIL)).forEach((step) => {
+      const tool = C.isToolStep(step);
+      const row = el('div', tool ? 'step tool' : 'step note');
+      if (tool) {
+        const ico = el('span', 'ico');
+        ico.innerHTML = host.ICONS.terminal;
+        row.appendChild(ico);
+      }
+      const text = el('span', 'step-text');
+      linkify(text, step, v.id);
+      row.appendChild(text);
+      body.appendChild(row);
+    });
+  }
+  function openTerminal(id) {
+    host.setFocused(id);
+    window.SidePane.show('terminal', true);
+  }
+
+  // ---- cards under a reply: web pages it mentions, files it changed ----
+  function webCards(v, turn) {
+    const seen = new Set();
+    const urls = [];
+    for (const line of (turn.reply || '').split('\n')) {
+      for (const m of host.findLinks(line)) {
+        if (m.kind === 'url' && !seen.has(m.text) && urls.length < 3) { seen.add(m.text); urls.push(m.text); }
+      }
+    }
+    return urls.map((url) => webCard(v, url));
+  }
+  function webCard(v, url) {
+    const m = /^https?:\/\/([^/?#]+)([^?#]*)/i.exec(url) || [];
+    const card = el('div', 'link-card');
+    const main = el('button', 'lc-main');
+    main.type = 'button';
+    main.title = '在侧栏打开 ' + url;
+    const ico = el('span', 'lc-icon');
+    ico.innerHTML = host.ICONS.globe;
+    const text = el('span', 'lc-text');
+    const path = (m[2] || '').replace(/\/+$/, '');
+    text.append(el('span', 'lc-title', m[1] || url), el('span', 'lc-sub', path ? decodeURI(path).slice(0, 80) : '网页预览'));
+    main.append(ico, text);
+    main.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'url', text: url }, e, v.id));
+    const pick = el('button', 'lc-open');
+    pick.type = 'button';
+    pick.setAttribute('aria-haspopup', 'menu');
+    pick.setAttribute('aria-expanded', 'false');
+    const chev = el('span', 'ico');
+    chev.innerHTML = host.ICONS.chevDown;
+    pick.append('打开方式', chev);
+    pick.addEventListener('click', (e) => { e.stopPropagation(); openMenu(pick, [
+      ['侧栏打开', 'side', () => window.SidePane.openLink({ kind: 'url', text: url }, null, v.id)],
+      ['系统浏览器打开', 'globe', () => window.deck.openExternal(url)],
+      ['复制链接', 'copy', () => host.clipboardWrite(url)],
+    ]); });
+    card.append(main, pick);
+    return card;
+  }
+  let menu = null;
+  function closeMenu() {
+    if (!menu) return;
+    menu.anchor.setAttribute('aria-expanded', 'false');
+    menu.node.remove();
+    document.removeEventListener('mousedown', menu.away, true);
+    menu = null;
+  }
+  function openMenu(anchor, items) {
+    const again = menu && menu.anchor === anchor;
+    closeMenu();
+    if (again) return;
+    const node = el('div', 'lc-menu');
+    node.setAttribute('role', 'menu');
+    items.forEach(([label, icon, run]) => {
+      const it = el('button', 'lc-item');
+      it.type = 'button';
+      it.setAttribute('role', 'menuitem');
+      const ico = el('span', 'ico');
+      ico.innerHTML = host.ICONS[icon] || '';
+      it.append(ico, label);
+      it.addEventListener('click', () => { closeMenu(); run(); anchor.focus(); });
+      node.appendChild(it);
+    });
+    node.addEventListener('keydown', (e) => {
+      const list = [...node.querySelectorAll('.lc-item')];
+      const at = list.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); closeMenu(); anchor.focus(); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); list[(at + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length].focus(); }
+    });
+    anchor.parentNode.appendChild(node);
+    const away = (e) => { if (!node.contains(e.target) && e.target !== anchor && !anchor.contains(e.target)) closeMenu(); };
+    document.addEventListener('mousedown', away, true);
+    menu = { node, anchor, away };
+    anchor.setAttribute('aria-expanded', 'true');
+    node.querySelector('.lc-item').focus();
+  }
+  function editCard(v, turn) {
+    const files = C.editsFromSteps(turn.steps);
+    if (!files.length) return null;
+    const card = el('div', 'edit-card');
+    const head = el('button', 'ec-head');
+    head.type = 'button';
+    const ico = el('span', 'lc-icon');
+    ico.innerHTML = host.ICONS.diff;
+    const add = files.reduce((n, f) => n + f.add, 0), del = files.reduce((n, f) => n + f.del, 0);
+    const text = el('span', 'lc-text');
+    const counts = el('span', 'ec-counts');
+    counts.append(el('span', 'ec-add', '+' + add), el('span', 'ec-del', '−' + del));
+    text.append(el('span', 'lc-title', `改了 ${files.length} 个文件`), counts);
+    const chev = el('span', 'ico proc-chev');
+    chev.innerHTML = host.ICONS.chevRight;
+    head.append(ico, text, chev);
+    const list = el('div', 'ec-list');
+    const open = v.openEdits.has(turn.id);
+    list.hidden = !open;
+    card.classList.toggle('open', open);
+    head.setAttribute('aria-expanded', String(open));
+    head.title = '展开 / 收起改动的文件';
+    head.addEventListener('click', () => {
+      const now = !v.openEdits.has(turn.id);
+      if (now) v.openEdits.add(turn.id); else v.openEdits.delete(turn.id);
+      list.hidden = !now;
+      card.classList.toggle('open', now);
+      head.setAttribute('aria-expanded', String(now));
+    });
+    files.forEach((f) => {
+      const row = el('button', 'ec-file');
+      row.type = 'button';
+      row.title = '在侧栏预览 ' + f.path;
+      const cut = Math.max(f.path.lastIndexOf('/'), f.path.lastIndexOf('\\')) + 1;
+      const name = el('span', 'ec-name');
+      name.append(el('span', 'ec-dir', f.path.slice(0, cut)), f.path.slice(cut));
+      const n = el('span', 'ec-counts');
+      n.append(el('span', 'ec-add', '+' + f.add), el('span', 'ec-del', '−' + f.del));
+      row.append(name, n);
+      row.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'file', text: f.path }, e, v.id));
+      list.appendChild(row);
+    });
+    card.append(head, list);
+    return card;
+  }
+
   // readOnly: a turn from a retired 队长 conversation; it is not tracked in
   // v.rows, so live updates of the current chat never touch it.
   function turnRows(v, turn, readOnly) {
@@ -329,6 +564,7 @@
       return wrap;
     }
     const wrap = el('div', 'turn');
+    // you on the right in a bubble, the agent on the left as plain text
     const user = el('div', 'msg user');
     user.dataset.turn = turn.id;
     const bubble = el('div', 'bubble');
@@ -341,14 +577,14 @@
     bubble.hidden = !turn.user;
     // 队长's automatic receipt deliveries have no prompt of yours to show
     user.hidden = !turn.user && !(turn.atts && turn.atts.length);
+    if (!user.hidden && turn.ts) wrap.appendChild(el('div', 'turn-time', C.turnTimeLabel(turn.ts)));
+    bubble.title = '点击展开 / 收起';
+    // long prompts are clipped; a click (not a text selection) expands them
+    bubble.addEventListener('click', () => { if (!String(window.getSelection())) user.classList.toggle('expanded'); });
+    user.appendChild(bubble);
     // your own message: copy it, or put it (and its attachments) back to edit
     const mine = el('div', 'msg-tools user-tools');
-    const copyMine = svgButton('msg-tool', 'copy', '复制这条消息');
-    copyMine.addEventListener('click', () => {
-      host.clipboardWrite(turn.user || '');
-      copyMine.innerHTML = host.ICONS.check;
-      setTimeout(() => { copyMine.innerHTML = host.ICONS.copy; }, 1200);
-    });
+    const copyMine = copyButton('复制这条消息', () => turn.user || '');
     const editMine = svgButton('msg-tool', 'edit', '编辑：放回输入框，改完再发');
     editMine.addEventListener('click', () => {
       v.ta.value = turn.user || '';
@@ -359,26 +595,33 @@
     });
     mine.append(copyMine, editMine);
     user.appendChild(mine);
-    bubble.title = '点击展开 / 收起';
-    // long prompts are clipped; a click (not a text selection) expands them
-    bubble.addEventListener('click', () => { if (!String(window.getSelection())) user.classList.toggle('expanded'); });
-    user.appendChild(bubble);
 
-    const asst = el('div', 'msg assistant');
-    asst.dataset.turn = turn.id;
-    const body = renderReply(v, turn);
-    const tools = el('div', 'msg-tools');
-    const copy = svgButton('msg-tool', 'copy', '复制回复');
-    copy.addEventListener('click', () => {
-      host.clipboardWrite(turn.reply || '');
-      copy.innerHTML = host.ICONS.check;
-      setTimeout(() => { copy.innerHTML = host.ICONS.copy; }, 1200);
-    });
-    tools.append(copy, el('span', 'msg-time', fmtTime(turn.ts)));
-    asst.append(body, tools);
+    const asst = assistantRow(v, turn);
     wrap.append(user, asst);
     if (!readOnly) v.rows.set(turn.id, { user, asst, turn });
     return wrap;
+  }
+  function assistantRow(v, turn) {
+    const asst = el('div', 'msg assistant');
+    asst.dataset.turn = turn.id;
+    asst.appendChild(processRow(v, turn));
+    asst.appendChild(renderReply(v, turn));
+    if (!turn.done) return asst;
+    webCards(v, turn).forEach((card) => asst.appendChild(card));
+    const edits = editCard(v, turn);
+    if (edits) asst.appendChild(edits);
+    const tools = el('div', 'msg-tools');
+    const copy = copyButton('复制回复', () => turn.reply || '');
+    const share = svgButton('msg-tool', 'share', '分享：把这一轮的问与答复制成 Markdown');
+    share.addEventListener('click', () => {
+      host.clipboardWrite(`**我：**\n\n${turn.user || ''}\n\n**回复：**\n\n${turn.reply || ''}\n`);
+      flashCheck(share, 'share');
+    });
+    const term = svgButton('msg-tool', 'terminal', '在终端里查看');
+    term.addEventListener('click', () => openTerminal(v.id));
+    tools.append(copy, share, term);
+    asst.appendChild(tools);
+    return asst;
   }
   const nearBottom = (s) => s.scrollHeight - s.scrollTop - s.clientHeight <= 2;
 
@@ -524,6 +767,7 @@
     v.scroll.textContent = '';
     v.rows.clear();
     v.live = null;
+    v.liveElapsed = null;
     const col = columnById(id) || {};
     const retired = col.isMain ? retiredHistory(v) : null;
     if (retired) v.scroll.appendChild(retired);
@@ -587,9 +831,10 @@
     const v = views.get(id);
     const row = v && v.rows.get(turn.id);
     if (!row) return;
-    const fresh = renderReply(v, turn);
-    row.asst.replaceChild(fresh, row.asst.querySelector('.reply'));
-    if (turn.done) v.live = null;
+    const fresh = assistantRow(v, turn);
+    row.asst.replaceWith(fresh);
+    row.asst = fresh;
+    if (turn.done) { v.live = null; v.liveElapsed = null; }
     followOutput(v);
   }
 
@@ -723,10 +968,14 @@
     pending.delete(id);
     const entry = host.terms.get(id);
     if (entry) {
-      try { open.turn.reply = C.extractReply(readLines(entry.term, open.marker), open.sent, entry.term.cols); } catch (_) { open.turn.reply = ''; }
+      let lines = [];
+      try { lines = readLines(entry.term, open.marker); } catch (_) {}
+      try { open.turn.reply = C.extractReply(lines, open.sent, entry.term.cols); } catch (_) { open.turn.reply = ''; }
+      keepSteps(open.turn, lines, open.sent);
     }
     try { if (open.marker) open.marker.dispose(); } catch (_) {}
     open.turn.done = true;
+    open.turn.end = Date.now();
     delete open.turn.interrupted;
     refreshTurn(id, open.turn);
     scheduleSave(id);
@@ -734,6 +983,13 @@
     host.manualTurnDone(id, open.turn);
     if (nav && nav.input.value.trim()) runSearch();
     if (window.Pages) window.Pages.refresh();
+  }
+
+  // The work before the reply, saved with the turn (bounded by ChatCore).
+  function keepSteps(turn, lines, sent) {
+    let steps = [];
+    try { steps = C.extractSteps(lines, sent); } catch (_) {}
+    if (steps.length) turn.steps = steps; else delete turn.steps;
   }
 
   // Called from the 1.5s status loop with the column's screen text.
@@ -761,6 +1017,7 @@
     }
     const open = pending.get(id);
     if (!open) return;
+    if (v.liveElapsed && chatMode && v.liveElapsed.isConnected) v.liveElapsed.textContent = '处理中 ' + C.fmtDuration(Date.now() - open.startedAt);
     if (v.live && chatMode) {
       const line = entry.state === 'working' ? host.lastActivityLine(text) : '';
       if (v.live.textContent !== line) { v.live.textContent = line; followOutput(v); }
@@ -969,8 +1226,10 @@
       const entry = host.terms.get(id);
       if (entry) {
         try {
-          const seen = C.extractReply(readLines(entry.term, open.marker), open.sent, entry.term.cols);
+          const lines = readLines(entry.term, open.marker);
+          const seen = C.extractReply(lines, open.sent, entry.term.cols);
           if (seen) open.turn.reply = seen;
+          keepSteps(open.turn, lines, open.sent);
         } catch (_) {}
       }
       open.turn.interrupted = true;

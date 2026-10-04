@@ -125,6 +125,15 @@ function answer() {
     box();
     return;
   }
+  if (first.startsWith('work with tools')) {
+    // Claude Code shape: tool calls and a note before the final markdown reply.
+    const doc = process.env.AGENTDECK_DEMO_FILE || '/tmp/note.md';
+    process.stdout.write('\n⏺ Reading the plan first.\n⏺ Update(notes/plan.md)\n  ⎿  Added 12 lines, removed 3 lines\n' +
+      '⏺ Write(' + doc + ')\n  ⎿  Wrote 140 lines to ' + doc + '\n⏺ Bash(npm test)\n  ⎿  254 passing\n' +
+      '⏺ **Done with tools.** Preview at https://example.com/docs/page and the notes in ' + doc + '\n\n  > quoted line\n\n  ```js\n  const answer = 42;\n  ```\n');
+    box();
+    return;
+  }
   let out = '\n⏺ GOT ' + first.slice(-40) + '\n  wrote ' + process.env.AGENTDECK_DEMO_FILE + '\n';
   if (text.includes('AgentDeck 约定') && !process.argv.includes('--screen-only')) {
     const args = [process.env.AGENTDECK_BOARD_CLI, 'complete', '--result', 'stand-in finished ' + first.slice(0, 30)];
