@@ -42,9 +42,9 @@ test('each seat reads its own credential store; expired/missing/symlinked auth c
   assert.equal(await C.readCredentials(us, home, 'win32'), null);
   fs.unlinkSync(file);
   fs.symlinkSync(M.credentialLocation(cn, home).credentialsPath, file);
-  assert.equal(await C.readSeat(us, home), null);
+  assert.equal(await C.readSeat(us, home, (seat, root) => C.readCredentials(seat, root, 'win32')), null);
   fs.unlinkSync(file);
-  assert.equal(await C.readSeat(us, home), null);
+  assert.equal(await C.readSeat(us, home, (seat, root) => C.readCredentials(seat, root, 'win32')), null);
 });
 function transport(status, body, calls, { hang = false, error = false } = {}) {
   return (url, options, callback) => {
