@@ -5,6 +5,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const COOLDOWN_MS = 10 * 60_000;
+  const RESET_ADVANCE_MS = 10 * 60_000;
   const FRESH_MS = 15 * 60_000;
   const CODEX_ID = 'chatgpt';
   const validId = (id) => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,40}$/.test(id);
@@ -172,7 +173,8 @@
       if (!config.preferEarlier || !current.trusted || !time(current.seat.resetAt) ||
         current.seat.weeklyTrusted !== true) return null;
       const earlier = candidates.filter(({ seat, trusted }) => trusted && seat.weeklyTrusted === true &&
-        time(seat.resetAt) && seat.resetAt > now && seat.resetAt < current.seat.resetAt)
+        // Tiny differences around the same reset boundary are sampling jitter.
+        time(seat.resetAt) && seat.resetAt > now && current.seat.resetAt - seat.resetAt >= RESET_ADVANCE_MS)
         .sort((a, b) => a.seat.resetAt - b.seat.resetAt)[0];
       return earlier ? { targetId: earlier.seat.id, reason: 'earlier-reset', at: now } : null;
     }
