@@ -8,7 +8,8 @@
     moon: '<path d="M20.8 13a9 9 0 0 1-9.8-9.8A9 9 0 1 0 20.8 13Z"/>',
     copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
-    send: '<path d="m5 11 7-7 7 7M12 4v16"/>',
+    send: '<path d="m21 3-6.5 18-4-7.5L3 9.5 21 3Z"/><path d="m10.5 13.5 5-5"/>',
+    logout: '<path d="M9 4H4v16h5M14 8l4 4-4 4M8 12h12"/>',
     back: '<path d="m14 6-6 6 6 6M8 12h12"/>',
     chevron: '<path d="m9 5 7 7-7 7"/>',
     sessions: '<rect x="3" y="4" width="7" height="16" rx="2"/><rect x="14" y="4" width="7" height="16" rx="2"/>',
@@ -16,10 +17,11 @@
     captain: '<path d="M5 6h14v11H9l-4 4V6Z"/><path d="M9 10h6m-6 3h4"/>',
   };
   const svg = (name) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + icons[name] + '</svg>';
-  const statusNames = { working: '干活中', idle: '空闲', failed: '失败' };
+  const statusNames = { working: '干活中', idle: '空闲', failed: '失败', input: '停在确认', quota: '额度用尽/等待', queued: '待补充', waiting: '排队', asking: '在问你', done: '完成' };
   const taskStatuses = [['todo', '待办'], ['doing', '进行中'], ['review', '待验收'], ['needs_user', '等用户'], ['done', '完成']];
   const flagNames = { failed: '失败', blocked: '前置未完成', held: '挂起' };
-  let sessions = [], cards = [], view = 'sessions', selected = null, refreshing = false, sending = false, loaded = false;
+  let sessions = [], cards = [], captainData = { turns: [] }, view = 'captain', selected = null, refreshing = false, sending = false, loaded = false, csrfToken = '';
+  let sessionsSignature, boardSignature, turnsSignature;
   let outputRequest = 0, copyTimer;
   const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
   let savedTheme;
@@ -37,7 +39,7 @@
     applyTheme(savedTheme);
     try { localStorage.setItem('agentdeck-mobile-theme', savedTheme); } catch (_) { /* Keep the choice for this page. */ }
   });
-  ['refresh', 'copy', 'send', 'back'].forEach((name) => { $(name).innerHTML = svg(name); });
+  ['refresh', 'copy', 'send', 'back', 'logout'].forEach((name) => { $(name).innerHTML = svg(name); });
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.querySelector('.nav-icon').innerHTML = svg(button.dataset.view);
     button.addEventListener('click', () => showView(button.dataset.view));
@@ -54,6 +56,7 @@
     $('notice').classList.toggle('error', error);
   }
   async function api(url, options) {
+    if (options?.method === 'POST') options = { ...options, headers: { ...options.headers, 'X-CSRF-Token': csrfToken } };
     const response = await fetch(url, { credentials: 'same-origin', ...options });
     if (response.status === 401) { window.location.reload(); throw new Error('登录已过期。'); }
     const result = await response.json();
@@ -67,9 +70,12 @@
   }
   function empty(message) { return node('p', 'empty', message); }
   function renderSessions() {
+    const signature = JSON.stringify(sessions);
+    if (signature === sessionsSignature) return;
+    sessionsSignature = signature;
     const list = $('sessions'); list.replaceChildren();
     if (!sessions.length) { list.append(empty('暂无会话。先在桌面端创建队长或队员。')); return; }
-    const ordered = [...sessions.filter((s) => s.isMain), ...sessions.filter((s) => !s.isMain)];
+    const ordered = [...sessions.filter((s) => s.isMain), ...sessions.filter((s) => !s.isMain && s.status === 'working'), ...sessions.filter((s) => !s.isMain && s.status !== 'working')];
     for (const session of ordered) {
       const button = node('button', 'session-card' + (session.isMain ? ' is-captain' : ''));
       button.type = 'button'; button.dataset.sessionId = session.id;
@@ -88,6 +94,9 @@
     }
   }
   function renderBoard() {
+    const signature = JSON.stringify(cards);
+    if (signature === boardSignature) return;
+    boardSignature = signature;
     const projects = $('projects'); projects.replaceChildren();
     const grouped = new Map();
     for (const card of cards.filter((c) => !c.archived)) {
@@ -128,6 +137,31 @@
       const heading = node('div', 'captain-top'); heading.append(node('span', 'session-role', '队长'), statusBadge(captain.status));
       target.append(heading, node('h2', '', captain.title), node('p', 'session-model', captain.model || '模型未识别'));
     } else target.append(empty('尚未创建队长。先在桌面端创建队长。'));
+    const conversation = $('captain-turns');
+    const signature = JSON.stringify(captainData.turns);
+    if (signature !== turnsSignature) {
+      const follow = turnsSignature === undefined || conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 48;
+      const scrollTop = conversation.scrollTop;
+      turnsSignature = signature;
+      conversation.replaceChildren();
+      if (!captainData.turns.length) conversation.append(empty('还没有对话。发一条指令，让队长开始安排。'));
+      for (const turn of captainData.turns) {
+        const row = node('article', 'captain-turn');
+        if (turn.id) row.dataset.turnId = turn.id;
+        if (turn.user) {
+          const prompt = node('div', 'chat-message user-message');
+          prompt.append(node('span', 'chat-label', '你'), node('p', 'chat-text', turn.user));
+          row.append(prompt);
+        }
+        const reply = node('div', 'chat-message captain-message');
+        reply.append(node('span', 'chat-label', '队长'), node('p', 'chat-text', turn.reply || (turn.interrupted ? '回复已中断。' : turn.done ? '本次处理已结束。' : '队长正在处理…')));
+        if (turn.interrupted) reply.append(node('span', 'turn-state', '已中断'));
+        else if (!turn.done) reply.append(node('span', 'turn-state', '处理中'));
+        row.append(reply);
+        conversation.append(row);
+      }
+      conversation.scrollTop = follow ? conversation.scrollHeight : scrollTop;
+    }
     $('message').disabled = !captain || sending;
     updateSend();
   }
@@ -147,10 +181,10 @@
     $('back').hidden = view !== 'output';
     updateHeading(); window.scrollTo(0, 0);
   }
-  async function loadOutput() {
+  async function loadOutput(silent = false) {
     if (!selected) return;
     const request = ++outputRequest;
-    $('copy').disabled = true; $('outputText').textContent = '正在读取输出…';
+    if (!silent) { $('copy').disabled = true; $('outputText').textContent = '正在读取输出…'; }
     try {
       const result = await api('/api/output?id=' + encodeURIComponent(selected.id));
       if (request !== outputRequest || view !== 'output') return;
@@ -170,14 +204,14 @@
     refreshing = true; $('refresh').disabled = true; $('refresh').classList.add('refreshing');
     if (!loaded) notice('正在读取会话和看板…');
     try {
-      const [sessionData, taskData] = await Promise.all([api('/api/sessions'), api('/api/tasks')]);
-      sessions = sessionData.sessions; cards = taskData.cards; loaded = true;
+      const [sessionData, taskData, captain, auth] = await Promise.all([api('/api/sessions'), api('/api/tasks'), api('/api/captain'), api('/api/auth')]);
+      sessions = sessionData.sessions; cards = taskData.cards; captainData = captain; csrfToken = auth.csrfToken; loaded = true;
       renderSessions(); renderBoard(); renderCaptain(); updateHeading(); notice('');
-      if (view === 'output') await loadOutput();
+      if (view === 'output') await loadOutput(true);
     } catch (err) { notice(err.message + ' 点击右上角刷新重试。', true); }
     finally { refreshing = false; $('refresh').disabled = false; $('refresh').classList.remove('refreshing'); }
   }
-  function updateSend() { $('send').disabled = sending || !sessions.some((s) => s.isMain) || !$('message').value.trim(); }
+  function updateSend() { $('send').disabled = sending || !csrfToken || !sessions.some((s) => s.isMain) || !$('message').value.trim(); }
   $('message').addEventListener('input', () => { $('send-status').textContent = ''; updateSend(); });
   $('message-form').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -188,6 +222,7 @@
       const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
       if (!result.queued) throw new Error('消息未加入队列，请重试。');
       $('message').value = ''; $('send-status').textContent = '已排队，等待队长处理。';
+      refresh();
     } catch (err) { $('send-status').textContent = err.message + ' 消息已保留，可重试。'; }
     finally { sending = false; renderCaptain(); }
   });
@@ -201,5 +236,12 @@
   });
   $('refresh').addEventListener('click', refresh);
   $('back').addEventListener('click', () => showView('sessions'));
+  $('logout').addEventListener('click', async () => {
+    $('logout').disabled = true;
+    try { await api('/logout', { method: 'POST' }); window.location.reload(); }
+    catch (err) { notice(err.message, true); $('logout').disabled = false; }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
+  setInterval(() => { if (!document.hidden) refresh(); }, 5000);
   refresh();
 })();

@@ -26,7 +26,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .app { max-width: 680px; min-height: 100dvh; margin: 0 auto; }
 .app-header { position: sticky; z-index: 2; top: 0; display: flex; align-items: center; gap: 4px; padding: max(8px, env(safe-area-inset-top)) 12px 8px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
-.brand strong { font-size: 17px; letter-spacing: -.6px; }
+.brand strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; letter-spacing: -.6px; }
 .brand-mark { width: 16px; height: 20px; border: 2px solid var(--orange); border-radius: 3px; position: relative; }
 .brand-mark::after { content: ""; position: absolute; top: 3px; bottom: 3px; left: 5px; border-left: 2px solid var(--orange); }
 .brand-caption { font-size: 11px; color: var(--muted); padding-left: 5px; border-left: 1px solid var(--line); white-space: nowrap; }
@@ -34,7 +34,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 9px; color: var(--secondary); background: transparent; flex-shrink: 0; }
 .icon-button:hover { color: var(--text); background: var(--soft); }
 .refreshing svg { animation: rotate 1s linear infinite; }
-main { padding: 26px 16px calc(104px + env(safe-area-inset-bottom)); }
+main { padding: 20px 16px calc(104px + env(safe-area-inset-bottom)); }
 .view-heading { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 22px; }
 .eyebrow { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
 h1 { font-size: 25px; line-height: 1.25; font-weight: 650; letter-spacing: -.8px; overflow-wrap: anywhere; }
@@ -51,6 +51,7 @@ h1 { font-size: 25px; line-height: 1.25; font-weight: 650; letter-spacing: -.8px
 .status { display: inline-flex; gap: 6px; align-items: center; color: var(--secondary); font-size: 11px; }
 .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--green); }
 .working .status-dot { background: var(--working); }
+.input .status-dot, .quota .status-dot, .asking .status-dot, .queued .status-dot, .waiting .status-dot { background: var(--working); }
 .failed .status-dot { background: var(--red); }
 .failed { color: var(--red); }
 .session-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
@@ -82,10 +83,22 @@ h1 { font-size: 25px; line-height: 1.25; font-weight: 650; letter-spacing: -.8px
 .output-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 4px; margin-bottom: 8px; }
 .readonly-label { font-size: 12px; color: var(--muted); }
 .output { margin: 0; padding: 18px 15px; min-height: 330px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font: 12px/1.85 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.captain-target { padding: 16px; border: 1px solid var(--line); border-left: 3px solid var(--orange); border-radius: 10px; background: var(--surface); margin-bottom: 24px; }
+.captain-target { padding: 12px 15px; border: 1px solid var(--line); border-left: 3px solid var(--orange); border-radius: 10px; background: var(--surface); margin-bottom: 18px; }
 .captain-target .empty { border: 0; padding: 0; }
+.captain-target .captain-top { margin-bottom: 4px; }
+.conversation-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.conversation-heading h2 { font-size: 13px; font-weight: 550; }
+.conversation-heading > span { color: var(--muted); font-size: 11px; }
+.captain-turns { min-height: 120px; max-height: 26dvh; overflow-y: auto; overscroll-behavior: contain; padding: 3px 3px 3px 0; margin-bottom: 18px; scrollbar-color: var(--orange) var(--soft); scrollbar-width: thin; }
+.captain-turn + .captain-turn { margin-top: 16px; }
+.chat-message { padding: 12px 14px; border-radius: 10px; background: var(--surface); border: 1px solid var(--line); }
+.user-message { margin-left: 26px; background: var(--orange-soft); border-color: transparent; }
+.captain-message { margin-right: 14px; margin-top: 8px; }
+.chat-label { display: block; font-size: 10px; color: var(--muted); margin-bottom: 5px; }
+.chat-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.75; }
+.turn-state { display: block; margin-top: 8px; font-size: 10px; color: var(--muted); }
 .message-form label { display: block; font-size: 13px; font-weight: 550; margin-bottom: 10px; }
-textarea { width: 100%; resize: vertical; min-height: 190px; padding: 15px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font-size: 16px; line-height: 1.7; }
+textarea { width: 100%; resize: vertical; min-height: 104px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--text); font-size: 16px; line-height: 1.7; }
 textarea::placeholder { color: var(--muted); }
 .composer-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 10px; }
 .composer-footer p { color: var(--muted); font-size: 11px; }

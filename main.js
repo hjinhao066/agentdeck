@@ -695,11 +695,20 @@ app.whenReady().then(async () => {
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
   let mobileSettings = notificationConfig.mobileWeb || { enabled: false };
+  // The tunnel installer supplies only the public origin, never login secrets.
+  if (!tudArg && !mobileSettings.publicOrigin) {
+    try {
+      const endpoint = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json'), 'utf8'));
+      if (typeof endpoint.publicOrigin === 'string') mobileSettings.publicOrigin = endpoint.publicOrigin;
+    } catch (_) {}
+  }
   let mobileInitializing = true;
+  let mobileStartupError = '';
   mobileWeb = new MobileWebServer({
     getSessions: () => requestMobile('sessions'),
     getTasks: () => taskStore.list(),
     getOutput: (id) => requestMobile('output', { id }),
+    getCaptain: () => requestMobile('captain-history'),
     sendCaptain: (message) => requestMobile('captain', { message }),
     saveSettings: (settings) => {
       mobileSettings = settings;
@@ -708,18 +717,42 @@ app.whenReady().then(async () => {
       fs.writeFileSync(configPath + '.tmp', JSON.stringify(notificationConfig, null, 2), { mode: 0o600 });
       fs.chmodSync(configPath + '.tmp', 0o600);
       fs.renameSync(configPath + '.tmp', configPath);
+      // Restore the private web service after a Mac login. Isolated tests must
+      // never change the real app's login item.
+      if (!tudArg && app.isPackaged && process.platform === 'darwin' && settings.enabled && settings.publicOrigin) {
+        try { app.setLoginItemSettings({ openAtLogin: true }); mobileStartupError = ''; }
+        catch (_) { mobileStartupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+      }
     },
   });
   await mobileWeb.configure(mobileSettings);
   mobileInitializing = false;
   // Only the trusted desktop settings page can enable the listener. The web
-  // page has four fixed operations and never sees an Electron IPC bridge.
+  // page has fixed read/send operations and never sees an Electron IPC bridge.
   handleMain('mobile-web:settings', async (_event, input) => {
     if (input !== undefined) {
-      if (!input || typeof input.enabled !== 'boolean' || Object.keys(input).some((key) => key !== 'enabled')) throw new Error('Invalid mobile web setting.');
-      await mobileWeb.configure({ ...mobileSettings, enabled: input.enabled });
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid mobile web setting.');
+      if (typeof input.enabled === 'boolean') await mobileWeb.configure({ ...mobileSettings, enabled: input.enabled });
+      else if (typeof input.publicOrigin === 'string') await mobileWeb.configure({ ...mobileSettings, publicOrigin: input.publicOrigin });
+      else if (input.revoke === true) await mobileWeb.revokeDevices();
+      else throw new Error('Invalid mobile web setting.');
     }
-    return mobileWeb.status();
+    const status = mobileWeb.status();
+    status.startupError = mobileStartupError;
+    if (!tudArg && app.isPackaged && process.platform === 'darwin' && status.enabled && status.publicOrigin) {
+      try {
+        const login = app.getLoginItemSettings();
+        if (!login.openAtLogin || login.status === 'requires-approval') status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。';
+      } catch (_) { status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+    }
+    if (!tudArg && status.publicOrigin) {
+      try {
+        const access = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'vps-access.json'), 'utf8'));
+        status.gatewayUser = typeof access.username === 'string' ? access.username : '';
+        status.gatewayPassword = typeof access.password === 'string' ? access.password : '';
+      } catch (_) {}
+    }
+    return status;
   });
   onMain('mobile-web:response', (_event, payload) => {
     const pending = mobileRequests.get(payload?.requestId);

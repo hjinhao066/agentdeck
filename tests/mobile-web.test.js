@@ -3,30 +3,37 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
-const { MobileWebServer, DEFAULT_PORT } = require('../mobile-web');
+const crypto = require('node:crypto');
+const { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS } = require('../mobile-web');
+const PUBLIC_ORIGIN = 'https://agentdeck.18-139-28-180.sslip.io';
 
-function fixture() {
+function fixture(options = {}) {
   const sessions = [{ id: 'captain', title: '队长', model: 'Codex', status: 'idle', isMain: true, receipt: '' },
     { id: 'worker', title: '手机页面', model: 'Codex', status: 'working', isMain: false, receipt: '完成服务接口' }];
   const cards = [{ id: 't-mobile', project: 'AgentDeck', title: '手机页面', status: 'doing', latest_receipt: '服务已就绪' }];
+  const captain = { id: 'captain', title: '队长', status: 'idle', turns: [{ id: 'turn-1', user: '最近指令', reply: '最近回复', done: true }] };
   const messages = [], saved = [];
   const server = new MobileWebServer({ getSessions: () => sessions, getTasks: () => cards,
+    getCaptain: () => captain,
     getOutput: (id) => id === 'worker' ? { id, title: '手机页面', text: '<script>plain text</script>\n最新输出' } : null,
-    sendCaptain: (message) => messages.push(message), saveSettings: (settings) => saved.push(settings) });
-  return { server, sessions, cards, messages, saved };
+    sendCaptain: (message) => messages.push(message), saveSettings: (settings) => saved.push(settings), ...options });
+  return { server, sessions, cards, captain, messages, saved };
 }
-async function start(t) {
-  const f = fixture();
+async function start(t, settings = {}, options = {}) {
+  const f = fixture(options);
   t.after(() => f.server.close());
-  const status = await f.server.configure({ enabled: true, port: 0 });
+  const status = await f.server.configure({ enabled: true, port: 0, ...settings });
   assert.equal(status.enabled, true);
   f.status = status;
+  status.origin = settings.publicOrigin || status.url;
+  if (settings.publicOrigin) status.proxyHeaders = { Host: new URL(settings.publicOrigin).host, 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '203.0.113.7' };
   f.auth = { Authorization: `Bearer ${status.token}` };
+  f.auth['X-CSRF-Token'] = JSON.parse((await request(status, '/api/auth', { headers: f.auth })).text).csrfToken;
   return f;
 }
 function request(status, route, { method = 'GET', headers = {}, body } = {}) {
   return new Promise((resolve, reject) => {
-    const req = http.request(status.url + route, { method, headers }, (res) => {
+    const req = http.request(status.url + route, { method, headers: { ...status.proxyHeaders, ...headers } }, (res) => {
       const chunks = [];
       res.on('data', (chunk) => chunks.push(chunk));
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, text: Buffer.concat(chunks).toString('utf8') }));
@@ -36,23 +43,40 @@ function request(status, route, { method = 'GET', headers = {}, body } = {}) {
   });
 }
 function post(status, route, body, headers = {}) {
-  return request(status, route, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
+  return request(status, route, { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: status.origin || status.url, ...headers }, body: JSON.stringify(body) });
+}
+function delayedPost(server, status, route, body, headers) {
+  const data = Buffer.from(JSON.stringify(body));
+  const arrived = new Promise((resolve) => server.server.once('request', resolve));
+  let req;
+  const response = new Promise((resolve, reject) => {
+    req = http.request(status.url + route, { method: 'POST', headers: { ...status.proxyHeaders,
+      'Content-Type': 'application/json', 'Content-Length': data.length, Origin: status.origin || status.url, ...headers } }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', reject);
+    req.write(data.subarray(0, 1));
+  });
+  response.catch(() => {});
+  return { arrived, response, complete: () => req.end(data.subarray(1)) };
 }
 
 test('mobile web is disabled by default and never opens a listener or generates a token', async () => {
   const { server, saved } = fixture();
-  assert.deepEqual(server.status(), { enabled: false, url: '', token: '', port: DEFAULT_PORT, error: '' });
+  assert.deepEqual(server.status(), { enabled: false, url: '', publicUrl: '', publicOrigin: '', token: '', port: DEFAULT_PORT, deviceCount: 0, error: '' });
   assert.equal(server.server, null);
   await server.configure({ enabled: false });
   assert.equal(server.server, null);
-  assert.deepEqual(saved, [{ enabled: false, token: '', port: DEFAULT_PORT }]);
+  assert.deepEqual(saved, [{ enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] }]);
   await server.close();
 });
 
 test('first enable generates and persists a random token, binds only loopback, and closes', async (t) => {
   const { server, status, saved } = await start(t);
   assert.match(status.token, /^[a-f0-9]{64}$/);
-  assert.deepEqual(saved, [{ enabled: true, port: 0, token: status.token }]);
+  assert.deepEqual(saved, [{ enabled: true, port: 0, token: status.token, publicOrigin: '', devices: [] }]);
   assert.equal(server.server.address().address, '127.0.0.1');
   await server.configure({ enabled: true, token: status.token, port: 0 });
   assert.equal(saved.length, 2);
@@ -72,9 +96,9 @@ test('unauthenticated root is a 401 login shell, all app assets and APIs reject 
   assert.match(root.headers['content-security-policy'], /nonce-/);
   for (const route of ['/app.js', '/style.css', '/api/sessions', '/api/tasks', '/api/output?id=worker', '/other']) {
     assert.equal((await request(status, route)).status, 401, route);
-    assert.equal((await request(status, route, { headers: { Authorization: 'Bearer incorrect' } })).status, 401, route);
+    assert.ok([401, 429].includes((await request(status, route, { headers: { Authorization: 'Bearer incorrect' } })).status), route);
   }
-  assert.equal((await request(status, '/?token=' + status.token)).status, 401);
+  assert.equal((await request(status, '/?token=' + status.token)).status, 400);
   assert.equal((await request(status, '/api/sessions', { headers: auth })).status, 200);
 });
 
@@ -96,15 +120,16 @@ test('login remembers the device with HttpOnly strict cookies and refuses wrong 
   assert.equal((await post(status, '/login', { token: 'wrong' }, { Cookie: cookie })).status, 401);
   assert.equal((await request(status, '/api/sessions', { headers: { Cookie: 'agentdeck_mobile=' + status.token } })).status, 401);
   await server.configure({ enabled: false });
-  assert.deepEqual(saved.at(-1), { enabled: false, token: status.token, port: 0 });
+  assert.deepEqual(saved.at(-1), { enabled: false, token: status.token, port: 0, publicOrigin: '', devices: saved.at(-2).devices });
   const restarted = await server.configure({ enabled: true });
   assert.equal((await request(restarted, '/api/sessions', { headers: { Cookie: cookie } })).status, 200);
 });
 
-test('read APIs return sessions, task-board cards and plain output; the sole write route queues the captain', async (t) => {
-  const { status, auth, sessions, cards, messages } = await start(t);
+test('read APIs return sessions, task-board cards, captain conversation and plain output; writes queue the captain', async (t) => {
+  const { status, auth, sessions, cards, captain, messages } = await start(t);
   assert.deepEqual(JSON.parse((await request(status, '/api/sessions', { headers: auth })).text), { sessions });
   assert.deepEqual(JSON.parse((await request(status, '/api/tasks', { headers: auth })).text), { cards });
+  assert.deepEqual(JSON.parse((await request(status, '/api/captain', { headers: auth })).text), captain);
   const output = await request(status, '/api/output?id=worker', { headers: auth });
   assert.deepEqual(JSON.parse(output.text), { id: 'worker', title: '手机页面', text: '<script>plain text</script>\n最新输出' });
   assert.equal(output.headers['cache-control'], 'no-store');
@@ -139,8 +164,8 @@ test('malformed, oversized and empty writes are refused before calling the capta
   for (const body of [{}, { message: '' }, { message: '  ' }, { message: 7 }, { message: '\0' }, { message: 'x'.repeat(8001) }, null, []]) {
     assert.equal((await post(status, '/api/captain', body, auth)).status, 400);
   }
-  assert.equal((await request(status, '/api/captain', { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: '{invalid' })).status, 400);
-  assert.equal((await request(status, '/api/captain', { method: 'POST', headers: auth, body: 'message=send' })).status, 415);
+  assert.equal((await request(status, '/api/captain', { method: 'POST', headers: { ...auth, Origin: status.url, 'Content-Type': 'application/json' }, body: '{invalid' })).status, 400);
+  assert.equal((await request(status, '/api/captain', { method: 'POST', headers: { ...auth, Origin: status.url }, body: 'message=send' })).status, 415);
   assert.equal((await post(status, '/api/captain', { message: 'x'.repeat(70_000) }, auth)).status, 413);
   assert.equal((await post(status, '/login', { token: 7 })).status, 401);
   assert.deepEqual(messages, []);
@@ -199,4 +224,248 @@ test('callback errors become generic responses and output is bounded without int
   const failure = await post(status, '/api/captain', { message: 'send' }, auth);
   assert.equal(failure.status, 500);
   assert.deepEqual(JSON.parse(failure.text), { error: 'Local service unavailable.' });
+});
+
+test('remote requests require the configured HTTPS host and loopback proxy contract', async (t) => {
+  const local = await start(t);
+  const proxy = { Host: new URL(PUBLIC_ORIGIN).host, 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '203.0.113.7' };
+  assert.equal((await request(local.status, '/', { headers: proxy })).status, 403);
+  const { server, status, auth } = await start(t, { publicOrigin: PUBLIC_ORIGIN });
+  assert.equal(status.publicUrl, PUBLIC_ORIGIN);
+  assert.equal(server.server.address().address, '127.0.0.1');
+  assert.equal((await request(status, '/api/sessions', { headers: auth })).status, 200);
+  for (const headers of [
+    { 'X-Forwarded-Proto': '' }, { 'X-Forwarded-Proto': 'http' },
+    { 'X-Forwarded-For': '' }, { 'X-Forwarded-For': '203.0.113.7, 198.51.100.4' },
+    { 'X-Forwarded-For': 'private-user.example' }, { Host: 'other.example' },
+    { Origin: 'http://' + new URL(PUBLIC_ORIGIN).host }, { 'Sec-Fetch-Site': 'same-site' }
+  ]) assert.equal((await request(status, '/api/sessions', { headers: { ...auth, ...headers } })).status, 403, JSON.stringify(headers));
+  assert.equal(server.requestContext({ rawHeaders: [], headers: proxy, socket: { remoteAddress: '192.168.1.9' } }), null);
+  assert.equal(server.requestContext({ rawHeaders: ['Host', proxy.Host, 'Host', proxy.Host], headers: proxy, socket: { remoteAddress: '127.0.0.1' } }), null);
+  assert.equal((await post(status, '/login', { token: status.token }, { Origin: status.url })).status, 403);
+});
+
+test('login and every authenticated POST require an exact Origin, and writes also require per-device CSRF', async (t) => {
+  const { status, messages } = await start(t, { publicOrigin: PUBLIC_ORIGIN });
+  const noOrigin = { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: status.token }) };
+  assert.equal((await request(status, '/login', noOrigin)).status, 403);
+  assert.equal((await post(status, '/login', { token: status.token }, { Origin: 'https://evil.example' })).status, 403);
+  const first = await post(status, '/login', { token: status.token });
+  const second = await post(status, '/login', { token: status.token });
+  const firstCookie = first.headers['set-cookie'][0].split(';')[0];
+  const secondCookie = second.headers['set-cookie'][0].split(';')[0];
+  const firstAuth = JSON.parse((await request(status, '/api/auth', { headers: { Cookie: firstCookie } })).text);
+  const secondAuth = JSON.parse((await request(status, '/api/auth', { headers: { Cookie: secondCookie } })).text);
+  assert.match(firstAuth.csrfToken, /^[a-f0-9]{64}$/);
+  assert.notEqual(firstAuth.csrfToken, secondAuth.csrfToken);
+  const headers = { Cookie: secondCookie };
+  for (const route of ['/api/captain', '/logout', '/unknown']) {
+    assert.equal((await post(status, route, { message: 'send' }, headers)).status, 403);
+    assert.equal((await post(status, route, { message: 'send' }, { ...headers, 'X-CSRF-Token': firstAuth.csrfToken })).status, 403);
+  }
+  const valid = { ...headers, 'X-CSRF-Token': secondAuth.csrfToken };
+  assert.equal((await request(status, '/api/captain', { method: 'POST', headers: { ...valid, 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'send' }) })).status, 403);
+  assert.equal((await post(status, '/api/captain', { message: 'send' }, valid)).status, 200);
+  assert.deepEqual(messages, ['send']);
+});
+
+test('remote device cookies are independent, Secure, host-only, and persist only as hashes across restarts', async (t) => {
+  const { status, server, saved } = await start(t, { publicOrigin: PUBLIC_ORIGIN });
+  const first = await post(status, '/login', { token: status.token });
+  const second = await post(status, '/login', { token: status.token });
+  const a = first.headers['set-cookie'][0], b = second.headers['set-cookie'][0];
+  assert.match(a, /^__Host-agentdeck_mobile=[a-f0-9]{64};/);
+  assert.match(a, /; Secure;/);
+  assert.match(a, /; HttpOnly;/);
+  assert.match(a, /; SameSite=Strict;/);
+  assert.match(a, /; Path=\//);
+  assert.ok(!a.includes('Domain='));
+  assert.notEqual(a, b);
+  const value = a.split(';')[0].split('=')[1];
+  assert.notEqual(value, status.token);
+  const stored = saved.at(-1);
+  assert.equal(stored.devices.length, 2);
+  assert.ok(stored.devices.some((device) => device.hash === crypto.createHash('sha256').update(value).digest('hex')));
+  assert.ok(!JSON.stringify(stored.devices).includes(value));
+  assert.equal(server.status().deviceCount, 2);
+  await server.close();
+  const restarted = fixture();
+  t.after(() => restarted.server.close());
+  const restoredStatus = await restarted.server.configure(stored);
+  restoredStatus.proxyHeaders = status.proxyHeaders;
+  assert.equal((await request(restoredStatus, '/api/sessions', { headers: { Cookie: a.split(';')[0] } })).status, 200);
+  assert.equal((await request(restoredStatus, '/api/sessions', { headers: { Cookie: '__Host-agentdeck_mobile=' + stored.devices[0].hash } })).status, 401);
+  assert.equal((await request(restoredStatus, '/api/sessions', { headers: { Cookie: 'agentdeck_mobile=' + value } })).status, 401);
+  assert.equal((await request(restoredStatus, '/api/sessions', { headers: { Cookie: a.split(';')[0] + '; ' + a.split(';')[0] } })).status, 401);
+});
+
+test('logout revokes one device durably and desktop revocation rotates token and all devices without changing the listener', async (t) => {
+  const { status, server, saved } = await start(t);
+  const loginA = await post(status, '/login', { token: status.token });
+  const loginB = await post(status, '/login', { token: status.token });
+  const a = loginA.headers['set-cookie'][0].split(';')[0], b = loginB.headers['set-cookie'][0].split(';')[0];
+  const auth = JSON.parse((await request(status, '/api/auth', { headers: { Cookie: a } })).text);
+  const logout = await post(status, '/logout', {}, { Cookie: a, 'X-CSRF-Token': auth.csrfToken });
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers['set-cookie'][0], /Max-Age=0/);
+  assert.equal((await request(status, '/api/sessions', { headers: { Cookie: a } })).status, 401);
+  assert.equal((await request(status, '/api/sessions', { headers: { Cookie: b } })).status, 200);
+  assert.equal(saved.at(-1).devices.length, 1);
+  const revoked = await server.revokeDevices();
+  assert.equal(revoked.url, status.url);
+  assert.notEqual(revoked.token, status.token);
+  assert.equal(revoked.deviceCount, 0);
+  assert.deepEqual(saved.at(-1).devices, []);
+  assert.equal(saved.at(-1).token, revoked.token);
+  assert.equal((await request(status, '/api/sessions', { headers: { Cookie: b } })).status, 401);
+  assert.equal((await request(status, '/api/sessions', { headers: { Authorization: `Bearer ${status.token}` } })).status, 401);
+  assert.equal((await post(status, '/login', { token: status.token })).status, 401);
+  assert.equal((await post(status, '/login', { token: revoked.token })).status, 200);
+});
+
+test('expired devices cannot authenticate or mint CSRF tokens', async (t) => {
+  let now = 1_000_000;
+  const { status, server } = await start(t, {}, { now: () => now });
+  const login = await post(status, '/login', { token: status.token });
+  const cookie = login.headers['set-cookie'][0].split(';')[0];
+  now += 30 * 24 * 60 * 60 * 1000;
+  assert.equal(server.status().deviceCount, 0);
+  assert.equal((await request(status, '/api/auth', { headers: { Cookie: cookie } })).status, 401);
+});
+
+test('login failure bans use overwritten proxy IPs, stop correct-token attempts while banned, and expire', async (t) => {
+  let now = 1_000_000;
+  const { status } = await start(t, { publicOrigin: PUBLIC_ORIGIN }, { now: () => now });
+  for (let i = 1; i <= LOGIN_LIMITS.perIp; i++) {
+    const result = await post(status, '/login', { token: 'incorrect' });
+    assert.equal(result.status, i === LOGIN_LIMITS.perIp ? 429 : 401);
+    if (result.status === 429) assert.equal(Number(result.headers['retry-after']), LOGIN_LIMITS.banMs / 1000);
+  }
+  assert.equal((await post(status, '/login', { token: status.token })).status, 429);
+  assert.equal((await post(status, '/login', { token: status.token }, { 'X-Forwarded-For': '198.51.100.9' })).status, 200);
+  now += LOGIN_LIMITS.banMs;
+  assert.equal((await post(status, '/login', { token: status.token })).status, 200);
+});
+
+test('local clients cannot evade rate limits by spoofing forwarded client IPs', async (t) => {
+  const { status } = await start(t);
+  for (let i = 1; i <= LOGIN_LIMITS.perIp; i++) {
+    assert.equal((await post(status, '/login', { token: 'incorrect' }, { 'X-Forwarded-For': `203.0.113.${i}`, 'X-Forwarded-Proto': 'https' })).status, i === LOGIN_LIMITS.perIp ? 429 : 401);
+  }
+  assert.equal((await post(status, '/login', { token: status.token }, { 'X-Forwarded-For': '198.51.100.99' })).status, 429);
+});
+
+test('distributed failures hit a global ceiling while remembered devices stay usable', async (t) => {
+  const { status } = await start(t, { publicOrigin: PUBLIC_ORIGIN });
+  const login = await post(status, '/login', { token: status.token });
+  const cookie = login.headers['set-cookie'][0].split(';')[0];
+  for (let i = 1; i <= LOGIN_LIMITS.global; i++) {
+    assert.equal((await post(status, '/login', { token: 'incorrect' }, { 'X-Forwarded-For': `198.51.100.${i}` })).status, i === LOGIN_LIMITS.global ? 429 : 401);
+  }
+  assert.equal((await post(status, '/login', { token: status.token }, { 'X-Forwarded-For': '203.0.113.99' })).status, 429);
+  assert.equal((await request(status, '/api/sessions', { headers: { Cookie: cookie } })).status, 200);
+});
+
+test('URL credentials are rejected without reflecting them and explicit bad headers never fall back to a remembered device', async (t) => {
+  const { status } = await start(t, { publicOrigin: PUBLIC_ORIGIN });
+  const login = await post(status, '/login', { token: status.token });
+  const cookie = login.headers['set-cookie'][0].split(';')[0];
+  for (const key of ['token', 'TOKEN', 'access_token', 'password']) {
+    const response = await request(status, `/api/sessions?${key}=${status.token}`, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 400);
+    assert.ok(!response.text.includes(status.token));
+  }
+  assert.equal((await request(status, '/api/sessions', { headers: { Cookie: cookie, Authorization: 'Bearer incorrect' } })).status, 401);
+  assert.equal((await post(status, '/login', { token: 'incorrect' }, { Cookie: cookie })).status, 401);
+});
+
+test('failed device persistence issues no cookie, and failed revocation disables the service', async (t) => {
+  const { server, status } = await start(t);
+  server.sources.saveSettings = () => { throw new Error('private credential storage'); };
+  const response = await post(status, '/login', { token: status.token });
+  assert.equal(response.status, 500);
+  assert.equal(response.headers['set-cookie'], undefined);
+  assert.equal(server.status().deviceCount, 0);
+  assert.ok(!response.text.includes('private'));
+  const revoked = await server.revokeDevices();
+  assert.equal(revoked.enabled, false);
+  assert.equal(revoked.error, 'Could not save device revocation.');
+});
+
+test('configuration accepts only a pathless HTTPS public origin and a long random-format token', async (t) => {
+  const { server, saved } = fixture();
+  t.after(() => server.close());
+  for (const origin of ['http://public.example', 'https://public.example/mobile', 'https://user:pass@public.example', 'https://public.example/?token=value', 'not a url']) {
+    const result = await server.configure({ enabled: true, port: 0, publicOrigin: origin });
+    assert.equal(result.enabled, false);
+    assert.match(result.error, /HTTPS origin/);
+  }
+  assert.equal(saved.length, 0);
+  assert.equal((await server.configure({ enabled: true, port: 0, publicOrigin: '', token: 'short-token' })).enabled, false);
+  assert.equal(saved.length, 0);
+});
+
+test('device and bearer uploads accepted before revocation cannot execute captain or logout writes after revocation', async (t) => {
+  for (const kind of ['cookie', 'bearer']) {
+    for (const route of ['/api/captain', '/logout']) {
+      const { server, status, auth, messages } = await start(t);
+      let headers = auth;
+      if (kind === 'cookie') {
+        const login = await post(status, '/login', { token: status.token });
+        const Cookie = login.headers['set-cookie'][0].split(';')[0];
+        const session = JSON.parse((await request(status, '/api/auth', { headers: { Cookie } })).text);
+        headers = { Cookie, 'X-CSRF-Token': session.csrfToken };
+      }
+      const held = delayedPost(server, status, route, route === '/logout' ? {} : { message: 'must not execute' }, headers);
+      await held.arrived;
+      await server.revokeDevices();
+      held.complete();
+      assert.equal((await held.response).status, 401, `${kind} ${route}`);
+      assert.deepEqual(messages, []);
+      assert.equal(server.status().deviceCount, 0);
+    }
+  }
+});
+
+test('device logout also blocks an already uploading command from the same device', async (t) => {
+  const { server, status, messages } = await start(t);
+  const login = await post(status, '/login', { token: status.token });
+  const Cookie = login.headers['set-cookie'][0].split(';')[0];
+  const session = JSON.parse((await request(status, '/api/auth', { headers: { Cookie } })).text);
+  const headers = { Cookie, 'X-CSRF-Token': session.csrfToken };
+  const held = delayedPost(server, status, '/api/captain', { message: 'must not execute' }, headers);
+  await held.arrived;
+  assert.equal((await request(status, '/logout', { method: 'POST', headers: { ...headers, Origin: status.url } })).status, 200);
+  held.complete();
+  assert.equal((await held.response).status, 401);
+  assert.deepEqual(messages, []);
+});
+
+test('a correct login upload started before an IP ban cannot clear or bypass the active ban', async (t) => {
+  const { server, status } = await start(t);
+  const held = delayedPost(server, status, '/login', { token: status.token });
+  await held.arrived;
+  for (let i = 1; i <= LOGIN_LIMITS.perIp; i++) {
+    assert.equal((await post(status, '/login', { token: 'incorrect' })).status, i === LOGIN_LIMITS.perIp ? 429 : 401);
+  }
+  held.complete();
+  assert.equal((await held.response).status, 429);
+  assert.equal(server.status().deviceCount, 0);
+  assert.equal((await post(status, '/login', { token: status.token })).status, 429);
+});
+
+test('logout persistence failure returns a generic 500 and closes the service with all current credentials invalidated', async (t) => {
+  const { server, status } = await start(t);
+  const login = await post(status, '/login', { token: status.token });
+  const Cookie = login.headers['set-cookie'][0].split(';')[0];
+  const session = JSON.parse((await request(status, '/api/auth', { headers: { Cookie } })).text);
+  const headers = { Cookie, 'X-CSRF-Token': session.csrfToken };
+  server.sources.saveSettings = () => { throw new Error('private credential store error'); };
+  const logout = await post(status, '/logout', {}, headers);
+  assert.equal(logout.status, 500);
+  assert.equal(server.status().enabled, false);
+  assert.equal(server.status().deviceCount, 0);
+  assert.equal(server.credential({ headers }), null);
+  assert.equal(server.credential({ headers: { authorization: `Bearer ${status.token}` } }), null);
+  assert.ok(!logout.text.includes('private'));
 });
