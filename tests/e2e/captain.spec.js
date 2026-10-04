@@ -182,6 +182,8 @@ test('a session the Captain only told something keeps its place; its own session
   expect(await page.evaluate((i) => [columns.find((c) => c.id === i).captainCrew, deckColumns().some((c) => c.id === i)], child)).toEqual([false, true]);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await expect(page.locator(`.column[data-col-id="${child}"]`)).not.toHaveClass(/backstage/);
+  // Column navigation must only scroll the deck, never move the sidebar off-screen.
+  expect(await page.locator('#colNav').evaluate((el) => el.getBoundingClientRect().left)).toBe(0);
   // With no crew, the disabled arrow must still let a drop reach the Captain row.
   await expect(page.locator('.captain-item .captain-fold')).toBeDisabled();
   await drag(page.locator(`.colnav-item[data-col-id="${child}"]`), page.locator('.colnav-item.captain-item'));
