@@ -609,7 +609,10 @@ Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
 `npx electron-builder --mac --config.mac.identity=null --publish never`.
 CI builds are unsigned and not notarized; they are not equivalent to a signed
-local installation. Windows CI produces an NSIS installer.
+local installation. Windows CI produces an NSIS installer. Its build step sets
+`ELECTRON_BUILDER_7Z_FILTER=BCJ`: the NSIS decoder cannot read the ARM64 filter
+that newer 7-Zip selects for bundled ARM64 PTY binaries. Use the same setting
+for local Windows packaging and compare the installed files with the CI payload.
 
 Test a packaged app with `AGENTDECK_TEST_EXECUTABLE` set to its executable before
 running `npm run test:e2e`. Tests use temporary userData and empty shell columns,
