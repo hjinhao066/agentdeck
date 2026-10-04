@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -41,7 +42,7 @@ async function launchWithCols(colCount, fitCols = 3) {
 
 async function closeApp() {
   if (application) {
-    try { await application.close(); } catch (_) {}
+    await closeElectron(application, { requireGraceful: false });
     application = null;
   }
   if (profile) {

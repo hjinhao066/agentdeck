@@ -10,7 +10,8 @@
     "postinstall": "node scripts/check-native.js",
     "dist:mac": "electron-builder --mac",
     "dist:win": "electron-builder --win --publish never",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:e2e:changed": "node scripts/e2e-changed.js"
   },
   "author": "jinhao",
   "engines": {

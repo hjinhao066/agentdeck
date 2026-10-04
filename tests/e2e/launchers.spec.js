@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -45,7 +46,7 @@ test.beforeAll(async () => {
   await launch();
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application, { requireGraceful: false });
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -110,7 +111,7 @@ test('an agent started by hand in the terminal hides the buttons; leaving it bri
 });
 
 test('the chosen agent comes back after a restart, with the conversation', async () => {
-  await application.close();
+  await closeElectron(application);
   application = null;
   await launch();
   expect(await colCmd('ln-blank')).toBe(FAKE);

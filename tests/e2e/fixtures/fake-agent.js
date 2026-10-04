@@ -142,6 +142,8 @@ function start() {
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
   listen();
+  // Published only after stdin handlers are installed (ConPTY startup race).
+  process.stdout.write('INPUT_READY\n');
 }
 // --trust-dialog: like Cursor in a folder it has not seen, a dialog comes first and
 // nothing is accepted until Enter picks "Trust this workspace".

@@ -7,6 +7,11 @@ const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
+function atomicJson(file, value) {
+  fs.writeFileSync(file + '.tmp', JSON.stringify(value));
+  fs.renameSync(file + '.tmp', file);
+}
+
 const cli = path.join(__dirname, '..', 'board-cli.js');
 
 function runCli(args, env) {
@@ -44,7 +49,7 @@ test('quota uses one read-only Captain request and prints the four provider line
       requests++;
       assert.equal(request.action, 'main-quota');
       assert.equal(request.message, undefined);
-      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: lines }));
+      atomicJson(path.join(dir, 'responses', file), { done: true, result: lines });
     }
   }, 20);
   try {
@@ -86,7 +91,7 @@ test('receipts --wait remains silent on empty reads, prints a later question onc
         assert.ok(request.expiresAt <= request.createdAt + 5000);
         if (timeout !== undefined) assert.ok(request.expiresAt <= request.createdAt + Number(timeout) * 1000);
         const result = ++reads >= 2 && timeout !== '0.4' ? '【AgentDeck 新回执】\n向你提问：which database?' : '';
-        fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result }));
+        atomicJson(path.join(dir, 'responses', file), { done: true, result });
       }
     }, 20);
     try {

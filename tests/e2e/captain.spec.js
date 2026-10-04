@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron, waitForTicks } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -51,7 +52,7 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(2);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application, { requireGraceful: false });
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -245,7 +246,7 @@ test('past the limit new work waits for a slot; finished background sessions are
   await page.evaluate((i) => jumpToColumn(columns.find((c) => c.id === i)), keep);
   // a receipt 队长 has not read yet keeps it (this 队长 is a bare shell that never reads them)
   await page.evaluate(() => { MainCore.ARCHIVE_AFTER = 0; });
-  await page.waitForTimeout(3500);
+  await waitForTicks(page, b, 2);
   expect(await page.evaluate((i) => columns.some((c) => c.id === i), b)).toBe(true);
   await page.evaluate(() => { config.mainSession.pending = []; config.mainSession.inflight = []; });
   try {
@@ -279,7 +280,7 @@ test('Captain stop interrupts a busy worker, cancels supplements; archive ends i
   await run(mainId, `clear; node "${CLI}" stop --id ${child}`);
   await expect.poll(() => screen(child)).toContain('Interrupted by Esc');
   expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
-  await page.waitForTimeout(2000);
+  await waitForTicks(page, child, 2);
   expect(capturedPrompts().some((p) => p.startsWith('cancel this supplement'))).toBe(false);
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "keep working archive probe"`);
   await expect.poll(() => screen(child)).toContain('Doing…');
@@ -407,7 +408,7 @@ test('work for a session stopped on a startup dialog (Cursor: trust this workspa
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '要信任').id);
   // the dialog is not an idle prompt: nothing is typed into it, and 队长 hears about it once
   await expect.poll(() => page.evaluate(() => config.mainSession.pending.map((p) => p.waiting || '').join('\n')), { timeout: 30000 }).toContain('Trust this workspace');
-  await page.waitForTimeout(4000);
+  await waitForTicks(page, child, 2);
   expect(capturedPrompts().filter((p) => p.startsWith('work after the trust dialog'))).toHaveLength(0);
   expect(await page.evaluate((i) => config.mainSession.pending.filter((p) => p.colId === i && p.waiting).length, child)).toBe(1);
   // answered with Enter: the dialog goes away and the task goes in
@@ -427,7 +428,7 @@ test('legacy injection opt-in: receipts and questions reach an idle Captain, nev
     config.mainSession.pending.push({ colId: 'cap-y', title: 'Worker y', question: '用 SQLite 可以吗' });
     return config.mainSession.pending.length;
   });
-  await page.waitForTimeout(4000);
+  await waitForTicks(page, mainId, 2);
   expect(await page.evaluate(() => config.mainSession.pending.length)).toBeGreaterThanOrEqual(queued);
   expect(await page.evaluate((i) => window.deck.ptyReplay(i), mainId)).not.toContain('用 SQLite 可以吗');
   // with an agent (the stand-in) in front, delivery happens by itself
@@ -479,8 +480,8 @@ test('a receipt never goes through an input box the user is typing in, and arriv
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), mainId), { timeout: 15000 }).toBe('node');
   }
   // typing in the terminal view, like a person: half a message, no Enter. ConPTY
-  // drops keys typed in the first moments after a console program starts reading.
-  await page.waitForTimeout(2500);
+  // drops keys typed before the program installs its stdin handlers.
+  await expect.poll(() => screen(mainId)).toContain('INPUT_READY');
   await page.evaluate((i) => { ChatUI.setMode(i, 'term'); focusColumnInput(i); }, mainId);
   await page.keyboard.type(half);
   await expect.poll(() => page.evaluate((i) => terms.get(i).typing.draft, mainId)).toBe(half);
@@ -488,13 +489,13 @@ test('a receipt never goes through an input box the user is typing in, and arriv
     config.mainSession.pending.push({ colId: 'cap-y', title: 'Worker y', summary: text, files: [] });
   }, receipt);
   // well past the quiet period and several status ticks: nothing was typed or sent
-  await page.waitForTimeout(8000);
+  await waitForTicks(page, mainId, 3, true);
   expect(await page.evaluate(() => config.mainSession.pending.some((p) => p.summary === 'receipt that waits for the user'))).toBe(true);
   expect(await page.evaluate(() => config.mainSession.inflight.length)).toBe(0);
   expect(capturedPrompts().slice(first)).toEqual([]);
   // still hers/his after a long wait too: the draft alone blocks, not only recent keys
   await page.evaluate((i) => { terms.get(i).typing.lastKeyAt = 0; }, mainId);
-  await page.waitForTimeout(4000);
+  await waitForTicks(page, mainId, 2, true);
   expect(capturedPrompts().slice(first)).toEqual([]);
   // the user's own Enter sends the user's words alone, no receipt rides on it
   await page.keyboard.press('Enter');
@@ -762,7 +763,7 @@ test('a restored Captain gets the current provider and effort instructions', asy
     config.mainSession.cmd = cmd;
     flushConfig();
   }, { id, cmd: FAKE });
-  await application.close();
+  await closeElectron(application);
   application = null;
   await launch();
   await expect.poll(() => capturedPrompts().slice(captureStart).join('\n'), { timeout: 30000 }).toContain('claude-opus-5-5-max');

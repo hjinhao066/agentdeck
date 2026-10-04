@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -45,7 +46,7 @@ async function launch(flags = '', settings) {
   await expect.poll(() => prompts().some((p) => p.startsWith('你是 AgentDeck'))).toBe(true);
 }
 test.afterEach(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application, { requireGraceful: false });
   application = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });

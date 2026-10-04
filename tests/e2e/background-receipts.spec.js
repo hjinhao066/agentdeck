@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron, waitForTicks } = require('./electron-helper');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -28,7 +29,7 @@ test('background receipts leave a half-written terminal sentence and chat messag
     const mainId = await page.evaluate(() => config.mainSession.colId);
     await expect.poll(() => captured().join('\n'), { timeout: 20000 }).toContain('run_in_background: true');
     await expect.poll(() => page.evaluate((id) => terms.get(id).sendingPrompt, mainId)).toBe(false);
-    await page.waitForTimeout(2500);
+    await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), mainId)).toContain('INPUT_READY');
     const before = captured().length;
     const half = 'my unfinished sentence';
     await page.evaluate((id) => { ChatUI.setMode(id, 'term'); focusColumnInput(id); }, mainId);
@@ -51,7 +52,7 @@ test('background receipts leave a half-written terminal sentence and chat messag
     expect(result.stderr).toBe('');
     expect(result.stdout).toContain('stand-in finished background proof');
     expect(result.stdout).toContain('【AgentDeck 新回执】');
-    await page.waitForTimeout(6000); // multiple status ticks and past the key quiet guard
+    await waitForTicks(page, mainId, 2, true); // heartbeat passes after the key quiet guard
     expect(captured().slice(before).some((p) => p.includes(half))).toBe(false);
     expect(captured().slice(before).some((p) => p.includes('【AgentDeck 新回执】'))).toBe(false);
     expect(await page.evaluate((id) => terms.get(id).typing.draft, mainId)).toBe(half);
@@ -67,7 +68,7 @@ test('background receipts leave a half-written terminal sentence and chat messag
     await box.fill('my next message');
     await box.press('Enter');
     await expect.poll(() => captured()).toContain('my next message');
-    await page.waitForTimeout(6000); // empty and quiet: default mode still never injects
+    await waitForTicks(page, mainId, 2, true); // empty and quiet: default mode still never injects
     expect(await page.evaluate(() => config.mainSession.pending.length)).toBe(1);
     expect(captured().slice(before).some((p) => p.includes('【AgentDeck 新回执】'))).toBe(false);
     const question = await startListener(10);
@@ -88,7 +89,7 @@ test('background receipts leave a half-written terminal sentence and chat messag
     expect(denied).toContain('只有队长');
   } finally {
     if (listener && listener.exitCode === null) listener.kill();
-    if (app) await app.close();
+    if (app) await closeElectron(app, { requireGraceful: false });
     fs.rmSync(profile, { recursive: true, force: true });
   }
 });

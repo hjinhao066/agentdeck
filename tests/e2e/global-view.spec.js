@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -42,7 +43,7 @@ test.beforeEach(async () => {
   await launch();
 });
 test.afterEach(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application, { requireGraceful: false });
   application = null;
   fs.rmSync(profile, { recursive: true, force: true });
 });
@@ -102,7 +103,7 @@ test('saved terminal and chat choices survive actual quit and relaunch', async (
   await globalButton().click();
   await expectGlobal('term');
   await column('view-0').locator('.view-toggle').click();
-  await application.close();
+  await closeElectron(application);
   application = null;
   await launch();
   await expectGlobal('term');
@@ -112,7 +113,7 @@ test('saved terminal and chat choices survive actual quit and relaunch', async (
   await page.evaluate((id) => removeCol(columns.find((c) => c.id === id)), id);
   await globalButton().click();
   await expectGlobal('chat');
-  await application.close();
+  await closeElectron(application);
   application = null;
   await launch();
   await expectGlobal('chat');

@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -29,7 +30,7 @@ test.beforeAll(async () => {
   await page.evaluate(([id, c]) => window.deck.ptyInput(id, c + '\r'), [captain, exportEnv]);
   await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterAll(async () => { if (app) await closeElectron(app, { requireGraceful: false }); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 
 function cli(args, env) {
   return new Promise((resolve) => {

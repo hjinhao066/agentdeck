@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron, waitForTicks } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -21,7 +22,7 @@ test.beforeAll(async () => {
   await expect(page.locator('.column')).toHaveCount(4);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application, { requireGraceful: false });
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"]`);
@@ -49,7 +50,7 @@ test('Claude-model limits never exhaust Gemini or Grok 4.7; screenshots use simu
   for (const p of ['Cursor', 'Antigravity']) {
     await page.evaluate((p) => window.deck.ptyInput(`quota-${p}`, 'claude-exhausted\r'), p);
     await expect.poll(() => page.evaluate((p) => terms.get(`quota-${p}`).lastScreen, p)).toContain('Model: claude-opus-5-5-high');
-    await page.waitForTimeout(1800);
+    await waitForTicks(page, `quota-${p}`, 1);
     await expect(badge(p).locator('.quota-label')).toHaveText('正常');
     await page.evaluate((p) => window.deck.ptyInput(`quota-${p}`, 'normal\r'), p);
     await expect.poll(() => page.evaluate((p) => terms.get(`quota-${p}`).lastScreen, p)).toContain(p === 'Cursor' ? 'Model: grok-4.7' : 'Model: gemini-3.8');
@@ -90,7 +91,7 @@ test('Cursor and agy errors latch provider-wide through normal redraw and reload
   const resetAt = await page.evaluate(() => config.quotas.Antigravity.blocked.resetAt);
   await page.evaluate(() => window.deck.ptyInput('quota-Antigravity', 'exhausted-redraw\r'));
   await expect.poll(() => page.evaluate(() => terms.get('quota-Antigravity').lastScreen)).toContain('unrelated redraw');
-  await page.waitForTimeout(1800);
+  await waitForTicks(page, 'quota-Antigravity', 1);
   expect(await page.evaluate(() => config.quotas.Antigravity.blocked.resetAt)).toBe(resetAt);
   await page.evaluate(() => window.deck.ptyInput('quota-Antigravity', 'normal\r'));
   await expect.poll(() => page.evaluate(() => terms.get('quota-Antigravity').lastScreen)).not.toContain('Individual quota reached');

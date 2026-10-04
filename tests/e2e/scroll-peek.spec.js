@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -52,7 +53,7 @@ test.beforeAll(async () => {
   expect(controlToken).toBeTruthy();
 });
 test.afterAll(async () => {
-  if (app) await app.close();
+  if (app) await closeElectron(app, { requireGraceful: false });
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -77,10 +78,10 @@ test('all raw terminals hold scrollback during output and input, then follow on 
     await expect(col(id).locator('.terminal-new-content')).toBeVisible();
     await col(id).locator('.terminal-new-content').click();
     await expect(col(id).locator('.terminal-new-content')).toBeHidden();
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
     await input(id, 'emit 5\r');
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), id)).toContain('LIVE_ROW_0115');
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
     await page.evaluate((id) => terms.get(id).term.scrollLines(-10), id);
     await input(id, 'emit 5\r');
     await expect(col(id).locator('.terminal-new-content')).toBeVisible();
@@ -88,7 +89,7 @@ test('all raw terminals hold scrollback during output and input, then follow on 
     await expect(col(id).locator('.terminal-new-content')).toBeHidden();
     await input(id, 'emit 5\r');
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), id)).toContain('LIVE_ROW_0125');
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
   }
 });
 
@@ -147,10 +148,10 @@ test('the copied peek CLI returns fresh ANSI-free rows without moving or writing
   expect(result.result).toContain('LIVE_ROW_0127');
   expect(await page.evaluate((id) => config.boardResponses[id], result.requestId)).toBeUndefined();
   await input(worker, 'alt\r');
-  await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker)).toBe('alternate');
+  await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker), { timeout: 15000 }).toBe('alternate');
   expect((await peek([])).stdout.trim()).toBe('ALTERNATE_LIVE_SCREEN');
   await input(worker, 'normal\r');
-  await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker)).toBe('normal');
+  await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker), { timeout: 15000 }).toBe('normal');
   await input(worker, 'emit 900\r');
   await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), worker)).toContain('LIVE_ROW_1027');
   const many = await peek(['--lines', '1000']);

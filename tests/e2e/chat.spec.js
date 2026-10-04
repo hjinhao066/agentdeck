@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -49,7 +50,7 @@ test.beforeAll(async () => {
   await launch(4);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application, { requireGraceful: false });
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -289,7 +290,7 @@ test('history survives quitting and relaunching: an unfinished turn, a raw termi
   await expect(page.locator('.column[data-col-id="chat-0"]')).toHaveCount(0);
   const before2 = await turns('chat-2');
 
-  await application.close();
+  await closeElectron(application);
   application = null;
   // on disk: whole, private, the open turn kept with what it had and marked
   const long3 = savedChat('chat-3');

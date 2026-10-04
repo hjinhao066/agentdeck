@@ -1,4 +1,5 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect } = require('@playwright/test');
+const { electron, closeElectron } = require('./electron-helper');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -31,7 +32,7 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate(() => dumpScreen(terms.get('captain').term)), { timeout: 20000 }).toContain('Claude Code');
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application, { requireGraceful: false });
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
