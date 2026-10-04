@@ -76,12 +76,12 @@ async function login() {
   await expect(mobile.getByRole('alert')).toContainText('token 不正确');
   await mobile.getByLabel('登录 token').fill(token);
   await mobile.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(mobile.getByRole('button', { name: '会话', exact: true })).toBeVisible();
+  await expect(mobile.getByRole('button', { name: '打开会话列表', exact: true })).toBeVisible();
   const cookies = await mobile.context().cookies();
   expect(cookies.find((c) => c.name === 'agentdeck_mobile')).toMatchObject({ httpOnly: true, sameSite: 'Strict' });
   await mobile.reload();
-  await expect(mobile.getByRole('button', { name: '会话', exact: true })).toBeVisible();
-  await expect(mobile.locator('[data-view="captain"]')).toHaveAttribute('aria-current', 'page');
+  await expect(mobile.getByRole('button', { name: '打开会话列表', exact: true })).toBeVisible();
+  await expect(mobile.locator('#captain-view')).toBeVisible();
   await expect(mobile.locator('#captain-turns')).toContainText('外出期间请检查队员的执行情况。');
 }
 async function post(route, data, headers = {}) {
@@ -128,6 +128,23 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     const result = await (await mobile.request.get(url + '/api/sessions')).json();
     expect(result.sessions.find((session) => session.id === 'mobile-worker').status).toBe(state);
   }
+  // A session waiting on the user shows as a compact chip, not a card. The
+  // desktop resets a stand-in's state quickly, so hold it on the page side.
+  await mobile.route('**/api/sessions', async (route) => {
+    const response = await route.fetch(); const body = await response.json();
+    body.sessions.find((session) => session.id === 'mobile-worker').status = 'input';
+    await route.fulfill({ response, json: body });
+  });
+  await mobile.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(mobile.locator('#attention .attention-chip')).toHaveText(['手机网页端 · 界面实现停在确认']);
+  expect((await mobile.locator('#attention').boundingBox()).height).toBeLessThanOrEqual(60);
+  await screenshot('attention');
+  await mobile.locator('#attention .attention-chip').click();
+  await expect(mobile.locator('#output-view')).toBeVisible();
+  await mobile.getByRole('button', { name: '返回队长对话', exact: true }).click();
+  await mobile.unroute('**/api/sessions');
+  await mobile.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(mobile.locator('#attention')).toBeHidden();
   await desktop.evaluate(() => { terms.get('mobile-worker').state = 'done'; });
   for (const theme of ['dark', 'light']) {
     await mobile.evaluate((value) => { localStorage.setItem('agentdeck-mobile-theme', value); }, theme);
@@ -137,22 +154,37 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     await expect(mobile.locator('html')).toHaveAttribute('data-theme', theme);
     await expect(mobile.locator('#captain-turns')).toContainText('队长测试回复：');
     expect(await mobile.evaluate(() => window.captainInjected)).toBeUndefined();
-    await mobile.getByLabel('给队长的消息').fill('请核对手机竖屏布局，并汇总测试结果。');
-    await mobile.evaluate(() => window.scrollTo(0, 0));
-    const sendBounds = await mobile.locator('#send').boundingBox();
-    const navBounds = await mobile.locator('.navigation').boundingBox();
-    expect(sendBounds.height).toBeGreaterThanOrEqual(44);
-    expect(sendBounds.y + sendBounds.height).toBeLessThanOrEqual(navBounds.y);
-    expect(await mobile.locator('#captain-turns').evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
-    await screenshot(`captain-${theme}`);
-    await mobile.getByRole('button', { name: '会话', exact: true }).click();
+    for (const [width, height] of [[390, 844], [430, 932]]) {
+      await mobile.setViewportSize({ width, height });
+      await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeGreaterThan(height - 80);
+      // Chat layout: the conversation fills the screen, the one-line composer
+      // sits at the bottom edge and grows with its text.
+      const conversation = await mobile.locator('#captain-turns').boundingBox();
+      expect(conversation.height).toBeGreaterThanOrEqual(height * 0.6);
+      const composer = await mobile.locator('#message').boundingBox();
+      expect(composer.height).toBeLessThanOrEqual(48);
+      const sendBounds = await mobile.locator('#send').boundingBox();
+      expect(sendBounds.height).toBeGreaterThanOrEqual(44);
+      expect(sendBounds.y + sendBounds.height).toBeLessThanOrEqual(height);
+      expect(sendBounds.y + sendBounds.height).toBeGreaterThan(height - 80);
+      expect((await mobile.locator('.app-header').boundingBox()).height).toBeLessThanOrEqual(60);
+      await mobile.getByLabel('给队长的消息').fill('请核对手机竖屏布局，\n并汇总测试结果，\n再附上截图。');
+      expect((await mobile.locator('#message').boundingBox()).height).toBeGreaterThan(composer.height + 20);
+      expect(await mobile.locator('#captain-turns').evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+      expect(await mobile.evaluate(() => document.documentElement.scrollHeight <= innerHeight)).toBe(true);
+      await screenshot(`captain-${width}-${theme}`);
+      await mobile.getByLabel('给队长的消息').fill('');
+    }
+    await mobile.setViewportSize({ width: 390, height: 844 });
+    await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
     await expect(mobile.getByText('会话与看板已完成，正在核对竖屏布局。')).toBeVisible();
     await screenshot(`sessions-${theme}`);
-    await mobile.getByRole('button', { name: '看板', exact: true }).click();
+    await mobile.locator('#open-board').click();
     await expect(mobile.getByText('核对深浅主题')).toBeVisible();
     await expect(mobile.getByText('资料整理', { exact: true })).toBeVisible();
     await screenshot(`board-${theme}`);
-    await mobile.getByRole('button', { name: '会话', exact: true }).click();
+    await mobile.getByRole('button', { name: '返回队长对话', exact: true }).click();
+    await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
     await mobile.getByRole('button', { name: '手机网页端 · 界面实现', exact: true }).click();
     await expect(mobile.locator('#outputText')).toContainText('window.mobileInjected');
     expect(await mobile.evaluate(() => window.mobileInjected)).toBeUndefined();
@@ -170,12 +202,16 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
       expect(button.label).toBeTruthy(); expect(button.title).toBeTruthy();
     }
     await mobile.setViewportSize({ width: 390, height: 844 });
+    await mobile.getByRole('button', { name: '返回队长对话', exact: true }).click();
+    await mobile.getByRole('button', { name: '复制队长回复', exact: true }).last().click();
+    await expect(mobile.getByRole('button', { name: '已复制', exact: true })).toHaveAttribute('title', '已复制');
+    expect(await mobile.evaluate(() => navigator.clipboard.readText())).toContain('竖屏布局测试回复');
   }
   const persisted = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8'));
   expect(persisted.mobileWeb.enabled).toBe(true); expect(persisted.mobileWeb.token === token).toBe(true);
   await restartDesktop();
   expect((await mobile.goto(url)).status()).toBe(200);
-  await mobile.getByRole('button', { name: '会话', exact: true }).click();
+  await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
   await expect(mobile.getByText('会话与看板已完成，正在核对竖屏布局。')).toBeVisible();
   await desktop.getByRole('button', { name: '设置', exact: true }).click();
   await desktop.locator('#mobileWebEnabled').uncheck();
@@ -219,7 +255,6 @@ test('mobile message waits for desktop draft, goes only to Captain; forbidden co
   await desktop.evaluate(() => ChatUI.setMode('mobile-captain', 'chat'));
   await composer.fill('桌面尚未发送的草稿');
   const message = '手机消息只给队长';
-  await mobile.locator('[data-view="captain"]').click();
   await mobile.getByLabel('给队长的消息').fill(message);
   await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
   await expect(mobile.locator('#send-status')).toContainText('已排队');
@@ -234,6 +269,16 @@ test('mobile message waits for desktop draft, goes only to Captain; forbidden co
   const delivered = fs.readFileSync(path.join(profile, 'columns.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse).filter((p) => p.text === message);
   expect(delivered).toEqual([{ colId: 'mobile-captain', text: message }]);
   await expect(mobile.locator('#captain-turns')).toContainText(message, { timeout: 15000 });
+  // Replying from a worker's page still goes only to the Captain, naming the worker.
+  await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
+  await mobile.getByRole('button', { name: '手机网页端 · 界面实现', exact: true }).click();
+  await mobile.getByLabel('给队长的消息').fill('可以继续');
+  await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
+  await expect(mobile.locator('#send-status')).toContainText('已转给队长');
+  const relayed = '关于队员「手机网页端 · 界面实现」：\n可以继续';
+  await expect.poll(() => captures().includes(relayed), { timeout: 25000 }).toBe(true);
+  expect(fs.readFileSync(path.join(profile, 'columns.jsonl'), 'utf8').split('\n').filter(Boolean).map(JSON.parse)
+    .filter((p) => p.text === relayed)).toEqual([{ colId: 'mobile-captain', text: relayed }]);
   expect((await post('/api/captain', { message, to: 'mobile-worker' })).status()).toBe(400);
   expect((await post('/api/tasks', { status: 'done' })).status()).toBe(404);
   expect((await mobile.request.get(url + '/api/output?id=mobile-captain')).status()).toBe(404);
@@ -281,6 +326,7 @@ test('accepted mobile messages survive a blocked delivery attempt and isolated a
 test('device logout and desktop revocation reject remembered devices and rotate the login token', async () => {
   await launch(); await login();
   expect((await mobile.request.post(url + '/logout', { headers: { Origin: url } })).status()).toBe(403);
+  await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
   await mobile.getByRole('button', { name: '退出此设备', exact: true }).click();
   await expect(mobile.getByLabel('登录 token')).toBeVisible();
   expect((await mobile.request.get(url + '/api/sessions')).status()).toBe(401);
