@@ -27,7 +27,8 @@ function readJson(req) {
 }
 
 // mode: 'online' | 'down' (proxy answers 502 {"offline":true}) | 'hang' (never
-// answers, like a half-open tunnel) | 'legacy' (no api/snapshot: 404).
+// answers, like a half-open tunnel) | 'legacy' (an old build: no api/info, and
+// every prefixed path answers 401 because it does not know the prefix).
 async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true }) {
   const base = `/${id}/`, cookieName = `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
@@ -50,7 +51,10 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     // A machine only answers under its own prefix, whatever the proxy sends it.
     if (!req.url.startsWith(base)) return json(res, 404, { error: 'Not found.' });
     const url = new URL(req.url.slice(base.length - 1), 'http://machine');
+    if (machine.mode === 'legacy') return json(res, 401, { error: 'Unauthorized.' });
     if (req.method === 'POST' && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Same origin required.' });
+    // Unauthenticated capability probe; fixed, non-sensitive fields only.
+    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'], machine: { id, label, platform }, appVersion });
     if (req.method === 'POST' && url.pathname === '/login') {
       const body = await readJson(req);
       const ban = Math.ceil((machine.bannedUntil - Date.now()) / 1000);
@@ -67,7 +71,6 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (!current) return json(res, 401, { error: 'Unauthorized.' });
     if (req.method === 'POST' && req.headers['x-csrf-token'] !== csrf(current)) return json(res, 403, { error: 'CSRF token required.' });
     if (req.method === 'GET' && url.pathname === '/api/snapshot') {
-      if (machine.mode === 'legacy') return json(res, 404, { error: 'Not found.' });
       return json(res, 200, { apiVersion: 2, machine: { id, label, platform, hostname, appVersion }, now: Date.now(), csrfToken: csrf(current),
         captain: machine.captain || { turns: [], status: 'unavailable' }, sessions: machine.sessions, boardVersion: machine.boardVersion });
     }

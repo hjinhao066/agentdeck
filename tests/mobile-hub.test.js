@@ -21,6 +21,22 @@ test('snapshot results map to the five machine states of the design table', () =
   assert.equal(Core.classify({ status: 200, body: { sessions: [] } }).state, 'upgrade');
 });
 
+test('api/info decides between a current build and one that needs an upgrade before any login', () => {
+  const info = { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'], machine: { id: 'win', label: 'Windows', platform: 'win32' }, appVersion: '1.2.0' };
+  assert.deepEqual(Core.classifyInfo({ status: 200, body: info }), { current: true });
+  // Old builds answer 401 (not logged in) or 404 (logged in) to the probe: never a login form.
+  assert.deepEqual(Core.classifyInfo({ status: 401, body: { error: 'Unauthorized.' } }), { state: 'upgrade' });
+  assert.deepEqual(Core.classifyInfo({ status: 404, body: { error: 'Not found.' } }), { state: 'upgrade' });
+  assert.equal(Core.classifyInfo({ status: 200, body: { ...info, apiVersion: 1 } }).state, 'upgrade');
+  assert.equal(Core.classifyInfo({ status: 200, body: { ...info, capabilities: ['basePath'] } }).state, 'upgrade');
+  assert.equal(Core.classifyInfo({ status: 200, body: { ...info, app: 'other' } }).state, 'upgrade');
+  assert.equal(Core.classifyInfo({ status: 200, body: null }).state, 'error');
+  assert.equal(Core.classifyInfo({ status: 502, body: { offline: true } }).state, 'offline');
+  assert.equal(Core.classifyInfo({ timedOut: true }).state, 'unresponsive');
+  assert.equal(Core.classifyInfo({ failed: true }).state, 'error');
+  assert.equal(Core.classifyInfo({ status: 500, body: {} }).state, 'error');
+});
+
 test('anything outside the contract is an error, never online or a guessed offline', () => {
   for (const result of [{ failed: true }, { status: 502, body: null }, { status: 502, body: { offline: false } }, { status: 500, body: {} }, { status: 200, body: null }, { status: 403, body: {} }]) {
     assert.equal(Core.classify(result).state, 'error');

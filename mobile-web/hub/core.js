@@ -42,6 +42,22 @@
     return { state: 'error', detail: `入口返回了 HTTP ${status}。` };
   }
 
+  // Unauthenticated capability probe (GET api/info), asked before the snapshot.
+  // Old builds answer 401 to every prefixed path (or 404 once logged in), so a
+  // 401 here means "upgrade", never "log in". Returns { current: true } for a
+  // build that has the snapshot API, otherwise the machine state to show.
+  function classifyInfo(result) {
+    if (!result || result.failed || result.timedOut) return classify(result);
+    const { status, body } = result;
+    if (status === 200) {
+      if (body && body.app === 'agentdeck' && body.apiVersion >= 2 && Array.isArray(body.capabilities) && body.capabilities.includes('snapshot')) return { current: true };
+      if (body && typeof body === 'object') return { state: 'upgrade' };
+      return { state: 'error', detail: '入口返回了看不懂的内容。' };
+    }
+    if (status === 401 || status === 404) return { state: 'upgrade' };
+    return classify(result);
+  }
+
   // Selected machines refresh fastest; anything that is not answering backs off.
   function pollInterval(state, selected) {
     if (state === 'online') return selected ? 5000 : 15000;
@@ -122,5 +138,5 @@
     return match ? match.label : String(owner).slice(0, 40);
   }
 
-  return { TIMEOUT, STATES, machineList, classify, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel };
+  return { TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel };
 });

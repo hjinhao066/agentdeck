@@ -115,8 +115,7 @@
   function saveMeta() {
     store(KEYS.meta, JSON.stringify(Object.fromEntries(machines.map((m) => [m.id, m.meta]))));
   }
-  function settle(m, result) {
-    const verdict = Core.classify(result);
+  function settle(m, result, verdict = Core.classify(result)) {
     m.state = verdict.state; m.detail = verdict.detail || '';
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
     if (m.state !== 'online') { m.snap = null; m.csrf = ''; }
@@ -128,8 +127,16 @@
     if (m.busy) { m.again = true; return; }
     m.busy = true; m.again = false;
     renderBusy();
-    const result = await request(m, 'api/snapshot');
-    if (settle(m, result).state === 'online') {
+    // Ask what the machine is before asking for data: only a build that answers
+    // api/info is ever shown a login form. Once it is online the probe is skipped
+    // until a snapshot fails again.
+    if (!m.current) {
+      const info = Core.classifyInfo(await request(m, 'api/info'));
+      if (info.current) m.current = true; else settle(m, null, info);
+    }
+    const result = m.current ? await request(m, 'api/snapshot') : null;
+    if (m.current && settle(m, result).state !== 'online') m.current = false;
+    if (m.current) {
       m.snap = result.body; m.csrf = String(result.body.csrfToken || '');
       m.hostname = String(result.body.machine.hostname || '');
       m.meta = Core.metaOf(result.body, Date.now()); saveMeta();
@@ -247,7 +254,7 @@
       login: '这部手机还没登录这台电脑，或登录已被吊销。',
       offline: `${lastSeen(m)}。可能在睡眠、关机、断网，或 AgentDeck 没有运行。`,
       unresponsive: `8 秒内没有回应，可能在睡眠。${lastSeen(m)}。`,
-      upgrade: '这台电脑的 AgentDeck 版本太旧，还没有总台接口。请在这台电脑上升级 AgentDeck。',
+      upgrade: '这台电脑的 AgentDeck 版本太旧，还没有总台接口。请在这台电脑上升级 AgentDeck，升级前不用在这里登录。',
       error: `${m.detail}${m.meta.lastOnline ? ' ' + lastSeen(m) + '。' : ''}`,
     }[m.state];
     card.append(node('p', 'machine-explain', explain));
@@ -277,7 +284,7 @@
     const result = await request(m, 'login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token }) });
     m.loginBusy = false;
     if (result.status === 200) { m.loginError = ''; m.banUntil = 0; signatures.delete(m.card); await poll(m); return; }
-    if (result.status === 401) m.loginError = 'token 不正确，请重试。确认没抄错的话，可能是这台电脑的 AgentDeck 还没升级。';
+    if (result.status === 401) m.loginError = 'token 不正确，请重试。';
     else if (result.status === 429) { m.banUntil = Date.now() + (result.retryAfter || 900) * 1000; m.loginError = ''; }
     else { settle(m, result); m.loginError = m.state === 'login' ? '暂时无法登录，请重试。' : ''; }
     render();
@@ -291,7 +298,7 @@
       m.logoutBusy = true; render();
       const result = await request(m, 'logout', { method: 'POST', headers: { 'X-CSRF-Token': m.csrf } });
       m.logoutBusy = false;
-      if (result.status === 200 || result.status === 401) { settle(m, { status: 401 }); m.nextAt = Date.now() + 15000; }
+      if (result.status === 200 || result.status === 401) { settle(m, { status: 401 }); m.current = false; m.nextAt = Date.now() + 15000; }
       else missed.push(m.label);
     }
     if (missed.length) notice(`${missed.join('、')} 没能退出（离线或没有回应）。等它上线后再退出一次，或在那台电脑的设置里吊销所有设备。`, true);
@@ -536,7 +543,7 @@
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
     machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '',
-      meta: Core.cleanMeta(meta[m.id]), nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
+      meta: Core.cleanMeta(meta[m.id]), current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
     machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);
     filter = byId(saved) ? saved : 'all';

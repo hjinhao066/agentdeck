@@ -69,6 +69,21 @@ for (const theme of ['dark', 'light']) {
     await expect(machineCard('Windows')).toContainText('需要登录');
     await expect(segment('全部')).toHaveAttribute('aria-pressed', 'true');
     await expect(segment('全部')).toContainText('0/2 在线');
+    // The probe is asked first, without a login, and each machine only at its own prefix.
+    expect(mac.requests[0]).toEqual({ method: 'GET', url: '/mac/api/info' });
+    expect(win.requests[0]).toEqual({ method: 'GET', url: '/win/api/info' });
+    // An old build on a phone that never logged in: "upgrade", and no login form to fail in.
+    win.setMode('legacy'); await refresh();
+    await expect(machineCard('Windows')).toContainText('需要升级 AgentDeck');
+    await expect(machineCard('Windows')).toContainText('升级前不用在这里登录');
+    await expect(machineCard('Windows').getByLabel('Windows 的登录 token')).toHaveCount(0);
+    await expect(machineCard('Windows').getByRole('button')).toHaveCount(0);
+    await expect(segment('Windows')).toHaveAttribute('aria-label', 'Windows，需要升级 AgentDeck');
+    await expect(machineCard('Mac').getByLabel('Mac 的登录 token')).toBeVisible();
+    await shot(`overview-needs-upgrade-not-logged-in-${theme}`);
+    expect(win.posts('login')).toHaveLength(0);
+    win.setMode('online'); await refresh();
+    await expect(machineCard('Windows').getByLabel('Windows 的登录 token')).toBeVisible();
     // Each computer has its own token: the Mac token is never offered to Windows.
     await signIn('mac', 'wrong-token');
     await expect(machineCard('Mac').getByRole('alert')).toContainText('token 不正确');
@@ -97,6 +112,7 @@ for (const theme of ['dark', 'light']) {
 
     win.setMode('legacy'); await refresh();
     await expect(machineCard('Windows')).toContainText('需要升级 AgentDeck');
+    await expect(machineCard('Windows').getByLabel('Windows 的登录 token')).toHaveCount(0);
     await shot(`overview-needs-upgrade-${theme}`);
 
     win.setMode('hang'); await refresh();
