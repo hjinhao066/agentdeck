@@ -16,15 +16,31 @@
     image: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="m4 17 5-4.5 3.5 3 3-2.5L21 17"/>',
     close: '<path d="M6 6l12 12M18 6 6 18"/>',
     board: '<path d="M4 4v16M12 4v16M20 4v16M4 8h4m4 5h4m4-5h2"/>',
+    sidebar: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/>',
+    crown: '<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>',
+    gauge: '<path d="M4 18a9 9 0 1 1 16 0"/><path d="m12 13 4-5"/><circle cx="12" cy="13" r="1.2"/>',
+    chevron: '<path d="m9 6 6 6-6 6"/>',
+  };
+  // The desktop's provider marks (agent-info.js PROVIDER_ICONS), so both ends show the same icons.
+  const providerIcons = {
+    Cursor: '<svg aria-hidden="true" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 3 10.5 21 13.5 13.5 21 10.5 3 3"/></svg>',
+    Claude: '<svg viewBox="0 0 100 100" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"/></svg>',
+    Antigravity: '<svg aria-hidden="true" viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2C12 7.5 7.5 12 2 12C7.5 12 12 16.5 12 22C12 16.5 16.5 12 22 12C16.5 12 12 7.5 12 2Z"/></svg>',
+    Grok: '<svg viewBox="36 36 440 440" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"/><path d="M183.042 337.641C136.519 291.294 144.54 219.567 184.236 178.203C213.59 147.59 261.683 135.096 303.666 153.464L348.755 131.75C340.632 125.627 330.221 119.042 318.275 114.414C264.277 91.2407 199.63 102.774 155.735 148.516C113.513 192.549 100.236 260.254 123.036 318.027C140.069 361.206 112.148 391.748 84.0229 422.575C74.0561 433.503 64.0553 444.431 56 456L183.007 337.677"/></svg>',
+    Codex: '<svg viewBox="134 213 293 293" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M249.176 323.434V298.276C249.176 296.158 249.971 294.569 251.825 293.509L302.406 264.381C309.29 260.409 317.5 258.555 325.973 258.555C357.75 258.555 377.877 283.185 377.877 309.399C377.877 311.253 377.877 313.371 377.611 315.49L325.178 284.771C322.001 282.919 318.822 282.919 315.645 284.771L249.176 323.434ZM367.283 421.415V361.301C367.283 357.592 365.694 354.945 362.516 353.092L296.048 314.43L317.763 301.982C319.617 300.925 321.206 300.925 323.058 301.982L373.639 331.112C388.205 339.586 398.003 357.592 398.003 375.069C398.003 395.195 386.087 413.733 367.283 421.412V421.415ZM233.553 368.452L211.838 355.742C209.986 354.684 209.19 353.095 209.19 350.975V292.718C209.19 264.383 230.905 242.932 260.301 242.932C271.423 242.932 281.748 246.641 290.49 253.26L238.321 283.449C235.146 285.303 233.555 287.951 233.555 291.659V368.455L233.553 368.452ZM280.292 395.462L249.176 377.985V340.913L280.292 323.436L311.407 340.913V377.985L280.292 395.462ZM300.286 475.968C289.163 475.968 278.837 472.259 270.097 465.64L322.264 435.449C325.441 433.597 327.03 430.949 327.03 427.239V350.445L349.011 363.155C350.865 364.213 351.66 365.802 351.66 367.922V426.179C351.66 454.514 329.679 475.965 300.286 475.965V475.968ZM237.525 416.915L186.944 387.785C172.378 379.31 162.582 361.305 162.582 343.827C162.582 323.436 174.763 305.164 193.563 297.485V357.861C193.563 361.571 195.154 364.217 198.33 366.071L264.535 404.467L242.82 416.915C240.967 417.972 239.377 417.972 237.525 416.915ZM234.614 460.343C204.689 460.343 182.71 437.833 182.71 410.028C182.71 407.91 182.976 405.792 183.238 403.672L235.405 433.863C238.582 435.715 241.763 435.715 244.938 433.863L311.407 395.466V420.622C311.407 422.742 310.612 424.331 308.758 425.389L258.179 454.519C251.293 458.491 243.083 460.343 234.611 460.343H234.614ZM300.286 491.854C332.329 491.854 359.073 469.082 365.167 438.892C394.825 431.211 413.892 403.406 413.892 375.073C413.892 356.535 405.948 338.529 391.648 325.552C392.972 319.991 393.766 314.43 393.766 308.87C393.766 271.003 363.048 242.666 327.562 242.666C320.413 242.666 313.528 243.723 306.644 246.109C294.725 234.457 278.307 227.042 260.301 227.042C228.258 227.042 201.513 249.815 195.42 280.004C165.761 287.685 146.694 315.49 146.694 343.824C146.694 362.362 154.638 380.368 168.938 393.344C167.613 398.906 166.819 404.467 166.819 410.027C166.819 447.894 197.538 476.231 233.024 476.231C240.172 476.231 247.058 475.173 253.943 472.788C265.859 484.441 282.278 491.854 300.286 491.854Z"/></svg>',
   };
   const svg = (name) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + icons[name] + '</svg>';
   const statusNames = { working: '干活中', idle: '空闲', failed: '失败', input: '停在确认', quota: '额度用尽/等待', queued: '待补充', waiting: '排队', asking: '在问你', done: '完成' };
   const needsUser = new Set(['input', 'asking']);
   const taskStatuses = [['todo', '待办'], ['doing', '进行中'], ['review', '待验收'], ['needs_user', '等用户'], ['done', '完成']];
   const flagNames = { failed: '失败', blocked: '前置未完成', held: '挂起' };
-  let sessions = [], cards = [], captainData = { turns: [] }, view = 'captain', outputFrom = 'sessions', selected = null, refreshing = false, sending = false, loaded = false, offline = false, csrfToken = '';
+  let sessions = [], cards = [], captainData = { turns: [] }, view = 'captain', outputFrom = 'captain', selected = null, refreshing = false, sending = false, loaded = false, offline = false, csrfToken = '';
   let sessionsSignature, boardSignature, turnsSignature, attentionSignature;
   let outputRequest = 0, statusTimer;
+  // Quota rows as the desktop sidebar shows them; quotaFailed means the last read did not arrive.
+  let quota = { rows: [], version: '' }, quotaLoaded = false, quotaFailed = false, quotaBusy = false, quotaSignature, chipSignature;
+  let drawerOpen = false, drawerOpener = null;
+  const expandedQuota = new Set();
   const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
   let savedTheme;
   try { savedTheme = localStorage.getItem('agentdeck-mobile-theme'); } catch (_) { /* Storage can be unavailable in private browsers. */ }
@@ -42,6 +58,12 @@
     try { localStorage.setItem('agentdeck-mobile-theme', savedTheme); } catch (_) { /* Keep the choice for this page. */ }
   });
   ['refresh', 'copy', 'send', 'back'].forEach((name) => { $(name).innerHTML = svg(name); });
+  $('menu').innerHTML = svg('sidebar');
+  $('drawer-close').innerHTML = svg('close');
+  $('quota-refresh').innerHTML = svg('refresh');
+  $('drawer-captain').querySelector('.row-icon').innerHTML = svg('crown');
+  $('quota-entry').querySelector('.row-icon').innerHTML = svg('gauge');
+  $('quota-entry').querySelector('.row-chevron').innerHTML = svg('chevron');
   $('attach').innerHTML = svg('image');
   $('theme').querySelector('.row-icon').innerHTML = svg('moon');
   $('logout').querySelector('.row-icon').innerHTML = svg('logout');
@@ -235,34 +257,241 @@
     return root;
   }
 
+  // The drawer mirrors the desktop sidebar: the Captain first, then its
+  // sessions grouped by project, each with a status dot.
   function renderSessions() {
+    const captain = sessions.find((s) => s.isMain);
     const workers = sessions.filter((s) => !s.isMain);
     const waiting = workers.filter((s) => needsUser.has(s.status)).length;
-    const signature = JSON.stringify([workers, loaded]);
+    const current = view === 'output' ? selected?.id : null;
+    const signature = JSON.stringify([sessions, loaded, view, current, offline]);
     if (signature === sessionsSignature) return;
     sessionsSignature = signature;
     // The tab badge counts the sessions that are waiting on the user.
     const badge = $('sessions-badge'), tab = badge.closest('.tab');
     badge.hidden = !waiting; badge.textContent = waiting > 9 ? '9+' : String(waiting);
     tab.setAttribute('aria-label', waiting ? '会话，' + waiting + ' 个等你处理' : '会话');
-    const list = $('sessions'); list.replaceChildren();
+    const row = $('drawer-captain');
+    row.querySelector('.row-title').textContent = captain?.title || '队长';
+    $('captain-dot').dataset.status = offline ? 'offline' : captain ? captain.status : 'none';
+    $('captain-state').textContent = offline ? '连接中断' : captain ? statusNames[captain.status] || '空闲' : loaded ? '尚未创建' : '';
+    row.classList.toggle('active', view === 'captain');
+    if (view === 'captain') row.setAttribute('aria-current', 'page'); else row.removeAttribute('aria-current');
+    const list = $('sessions');
+    const focused = list.contains(document.activeElement) ? document.activeElement.dataset.sessionId : null;
+    list.replaceChildren();
     if (!workers.length) { list.append(empty(loaded ? '暂无队员会话。队长派活后会显示在这里。' : '')); return; }
-    const rank = (s) => needsUser.has(s.status) ? 0 : s.status === 'working' ? 1 : 2;
-    for (const session of [...workers].sort((a, b) => rank(a) - rank(b))) {
-      const button = node('button', 'session-row');
-      button.type = 'button'; button.dataset.sessionId = session.id;
-      button.setAttribute('aria-label', session.title);
-      const main = node('span', 'row-main');
-      main.append(node('span', 'row-title', session.title), node('span', 'row-sub', session.receipt || session.model || '尚未提交回执'));
-      const tag = node('span', 'row-tag' + (needsUser.has(session.status) ? ' alert' : session.status === 'failed' ? ' failed' : ''), statusNames[session.status] || '空闲');
-      button.append(dot(session.status), main, tag);
-      button.addEventListener('click', () => openOutput(session));
-      list.append(button);
+    const groups = new Map();
+    for (const session of workers) {
+      const project = session.project || '';
+      if (!groups.has(project)) groups.set(project, []);
+      groups.get(project).push(session);
     }
+    const rank = (s) => needsUser.has(s.status) ? 0 : s.status === 'working' ? 1 : 2;
+    // Named projects first; sessions without a project close the list.
+    const names = [...groups.keys()].sort((a, b) => !a - !b);
+    for (const project of names) {
+      const members = groups.get(project).sort((a, b) => rank(a) - rank(b));
+      const label = project || (names.length > 1 ? '未分项目' : '会话');
+      const section = node('section', 'session-group'); section.setAttribute('aria-label', label);
+      const heading = node('h2', 'nav-section');
+      heading.append(node('span', 'nav-section-label', label), node('span', 'nav-section-count', String(members.length)));
+      section.append(heading);
+      for (const session of members) {
+        const button = node('button', 'session-row' + (session.id === current ? ' active' : ''));
+        button.type = 'button'; button.dataset.sessionId = session.id;
+        button.setAttribute('aria-label', session.title + '，' + (statusNames[session.status] || '空闲'));
+        if (session.id === current) button.setAttribute('aria-current', 'page');
+        const main = node('span', 'row-main');
+        main.append(node('span', 'row-title', session.title), node('span', 'row-sub', session.receipt || session.model || '尚未提交回执'));
+        const tag = node('span', 'row-tag' + (needsUser.has(session.status) ? ' alert' : session.status === 'failed' || session.status === 'quota' ? ' failed' : ''), statusNames[session.status] || '空闲');
+        button.append(dot(session.status), main, tag);
+        button.addEventListener('click', () => { closeDrawer(false); openOutput(session); $('back').focus({ preventScroll: true }); });
+        section.append(button);
+      }
+      list.append(section);
+    }
+    if (focused) list.querySelector('[data-session-id="' + CSS.escape(focused) + '"]')?.focus();
   }
+
+  // ---- quota ----
+  const pad = (value) => String(value).padStart(2, '0');
+  const hm = (t) => { const d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+  const monthDay = (t) => { const d = new Date(t); return pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+  const weekday = (t) => '周' + '日一二三四五六'[new Date(t).getDay()];
+  // Same wording as the desktop rows: a clock inside 24 hours, then the weekday, then the date.
+  function shortReset(t, now) { const gap = t - now; return gap <= 86400000 ? hm(t) : gap < 6 * 86400000 ? weekday(t) : monthDay(t); }
+  function longReset(t, now) {
+    const mins = Math.max(1, Math.round((t - now) / 60000));
+    const left = mins < 60 ? mins + ' 分钟' : mins < 1440 ? Math.floor(mins / 60) + ' 小时' + (mins % 60 ? ' ' + mins % 60 + ' 分' : '') : Math.floor(mins / 1440) + ' 天';
+    return (t - now <= 86400000 ? '' : monthDay(t) + ' ') + hm(t) + '（' + left + '后）';
+  }
+  function sampledText(row, now) { return row.sampledAt ? '采样 ' + (Math.abs(now - row.sampledAt) > 86400000 ? monthDay(row.sampledAt) + ' ' : '') + hm(row.sampledAt) : '暂无采样'; }
+  // Old, missing or unreadable numbers are grey: they never read as usable.
+  const dimmed = (row) => quotaFailed || ['stale', 'expired', 'unknown', 'nodigits'].includes(row.status);
+  const percentText = (cell) => cell.out ? '用尽' : cell.remaining < 1 ? '<1%' : Math.round(cell.remaining) + '%';
+  const cellLevel = (row, cell) => cell.out ? 'out' : dimmed(row) ? 'none' : cell.remaining <= 10 ? 'danger' : cell.remaining <= 20 ? 'low' : 'ok';
+  function meter(cell) {
+    const el = node('span', 'quota-meter'); el.setAttribute('aria-hidden', 'true');
+    el.style.setProperty('--pct', (cell.out ? 0 : Math.max(2, Math.min(100, cell.remaining))) + '%');
+    return el;
+  }
+  // One explicit line whenever a row is not plain live numbers.
+  function quotaNote(row, now) {
+    const parts = [];
+    if (row.status === 'out') parts.push('已用尽', row.recoveryAt > now ? longReset(row.recoveryAt, now) + '恢复' : '恢复时间未知');
+    if (row.failed) parts.push('查询失败');
+    if (row.status === 'stale' || row.status === 'expired') parts.push('数据已旧', sampledText(row, now));
+    else if (row.status === 'unknown') parts.push('未知', '暂无采样');
+    else if (row.status === 'nodigits') parts.push('未见用尽报错', '此来源不提供百分比');
+    else if (row.failed) parts.push(sampledText(row, now));
+    return parts.join(' · ');
+  }
+  function quotaLabel(row, now) {
+    const windows = row.cells.map((cell) => (cell.key === '5h' ? '5 小时' : '每周') + (cell.out ? '已用尽' : '剩余 ' + percentText(cell)) + (cell.resetAt > now ? '，' + longReset(cell.resetAt, now) + '重置' : ''));
+    return [row.name + (row.captain ? '（队长在用）' : ''), ...windows, quotaNote(row, now) || (row.cells.length ? '' : '未知')].filter(Boolean).join('；');
+  }
+  function renderQuota() {
+    const now = Date.now();
+    // Reset clocks change by the minute; nothing else needs a redraw.
+    const signature = JSON.stringify([quota, quotaLoaded, quotaFailed, [...expandedQuota], Math.floor(now / 60000)]);
+    if (signature !== quotaSignature) {
+      quotaSignature = signature;
+      const box = $('quota-rows');
+      const focused = box.contains(document.activeElement) ? document.activeElement.closest('.quota-item')?.dataset.quotaKey : null;
+      box.replaceChildren();
+      $('version').textContent = quota.version ? 'V' + quota.version : '';
+      $('quota-note').textContent = quotaFailed ? '未能更新' : '';
+      if (!quota.rows.length) box.append(node('p', 'quota-empty', quotaFailed ? '暂时读不到额度。' : quotaLoaded ? '桌面端还没有额度数据。' : ''));
+      quota.rows.forEach((row, index) => {
+        const item = node('div', 'quota-item'); item.setAttribute('role', 'listitem');
+        item.dataset.quotaKey = row.key; item.dataset.status = row.status; item.dataset.provider = row.provider;
+        if (dimmed(row)) item.dataset.dim = 'true';
+        if (row.captain) item.dataset.captain = 'true';
+        const open = expandedQuota.has(row.key), detailId = 'quota-detail-' + index;
+        const button = node('button', 'quota-row'); button.type = 'button';
+        button.setAttribute('aria-expanded', String(open)); button.setAttribute('aria-controls', detailId);
+        button.setAttribute('aria-label', quotaLabel(row, now)); button.title = open ? '收起详情' : '展开详情';
+        const icon = node('span', 'quota-icon'); icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = providerIcons[row.provider === 'Cursor' ? 'Grok' : row.provider] || '';
+        const name = node('span', 'quota-name');
+        name.append(node('span', 'quota-name-text', [row.flag, row.short].filter(Boolean).join(' ')));
+        if (row.captain) { const crown = node('span', 'quota-captain'); crown.title = '队长在用'; crown.innerHTML = svg('crown'); name.append(crown); }
+        const values = node('span', 'quota-values');
+        for (const cell of row.cells) {
+          const el = node('span', 'quota-cell'); el.dataset.window = cell.key; el.dataset.level = cellLevel(row, cell);
+          el.append(node('span', 'quota-key', cell.key), node('span', 'quota-pct', percentText(cell)));
+          if (cell.resetAt > now) el.append(node('span', 'quota-reset', shortReset(cell.resetAt, now)));
+          el.append(meter(cell)); values.append(el);
+        }
+        if (!row.cells.length) {
+          const status = node('span', 'quota-status', row.status === 'out' ? '已用尽' : row.status === 'nodigits' ? '未见用尽' : '未知');
+          status.dataset.level = row.status === 'out' ? 'out' : 'none'; values.append(status);
+        }
+        button.append(icon, name, values);
+        const note = quotaNote(row, now);
+        if (note) button.append(node('span', 'quota-row-note' + (row.status === 'out' ? ' out' : ''), note));
+        button.addEventListener('click', () => { if (open) expandedQuota.delete(row.key); else expandedQuota.add(row.key); renderQuota(); });
+        const detail = node('div', 'quota-detail'); detail.id = detailId; detail.hidden = !open;
+        const head = node('p', 'quota-detail-head', row.name);
+        if (row.captain) head.append(node('span', 'quota-detail-captain', '队长在用'));
+        detail.append(head);
+        for (const cell of row.cells) {
+          const line = node('p', 'quota-detail-line'); line.dataset.level = cellLevel(row, cell);
+          line.append(node('span', 'quota-detail-key', cell.key === '5h' ? '5 小时' : '每周'), node('span', 'quota-pct', cell.out ? '已用尽' : '剩余 ' + percentText(cell)),
+            node('span', 'quota-detail-reset', cell.resetAt > now ? longReset(cell.resetAt, now) + '重置' : '重置时间未知'));
+          detail.append(line);
+        }
+        if (!row.cells.length) detail.append(node('p', 'quota-detail-line', row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : '暂无额度数据，等待桌面端下次采样'));
+        detail.append(node('p', 'quota-detail-foot', [row.account, sampledText(row, now) + (row.status === 'stale' || row.status === 'expired' ? '（数据已旧）' : '')].filter(Boolean).join(' · ')));
+        item.append(button, detail); box.append(item);
+      });
+      if (focused) box.querySelector('[data-quota-key="' + CSS.escape(focused) + '"] .quota-row')?.focus();
+    }
+    renderSeat();
+  }
+  // The small indicator next to the title: the seat the Captain is on and
+  // its 5-hour remainder. It only opens the quota rows; it adds no height.
+  function renderSeat() {
+    const now = Date.now(), row = quota.rows.find((r) => r.captain);
+    const chip = $('seat-chip');
+    const signature = JSON.stringify([row, quotaFailed, view, Math.floor(now / 60000)]);
+    if (signature === chipSignature) return;
+    chipSignature = signature;
+    chip.hidden = !row || view !== 'captain';
+    const summary = $('quota-entry-text');
+    if (!row) { summary.textContent = quotaFailed ? '未能更新' : ''; return; }
+    const cell = row.cells.find((c) => c.key === '5h'), weekly = row.cells.find((c) => c.key === '7d');
+    const shown = cell || weekly;
+    const value = row.status === 'out' || shown?.out ? '用尽' : shown ? (cell ? '' : '周 ') + percentText(shown) : '—';
+    const level = value === '用尽' ? 'out' : !shown || dimmed(row) ? 'none' : shown.remaining < 10 ? 'low' : 'ok';
+    const label = [row.flag, row.short].filter(Boolean).join(' ');
+    $('seat-chip-text').textContent = row.short + ' ' + value;
+    chip.dataset.level = level;
+    const spoken = '当前席位 ' + row.name + '：' + (value === '用尽' ? '已用尽' : !shown ? '额度未知' : (cell ? '5 小时' : '每周') + '剩余 ' + percentText(shown)) + (level === 'none' && shown ? '（数据已旧）' : '') + '，查看额度';
+    chip.title = spoken; chip.setAttribute('aria-label', spoken);
+    summary.textContent = label + ' ' + value; summary.dataset.level = level;
+  }
+  async function loadQuota() {
+    try { const data = await api('/api/quota'); quota = { rows: Array.isArray(data.rows) ? data.rows : [], version: data.version || '' }; quotaLoaded = true; quotaFailed = false; }
+    catch (_) { quotaFailed = true; }
+  }
+  async function refreshQuota() {
+    if (quotaBusy) return;
+    quotaBusy = true; $('quota-refresh').disabled = true; $('quota-refresh').classList.add('refreshing');
+    await loadQuota(); renderQuota();
+    quotaBusy = false; $('quota-refresh').disabled = false; $('quota-refresh').classList.remove('refreshing');
+  }
+
+  // ---- drawer ----
+  // Open: everything behind is inert and focus moves inside. Closed: the
+  // drawer itself is inert, so it is out of the tab order and unreadable.
+  function setDrawer(open) {
+    drawerOpen = open;
+    $('app').classList.toggle('drawer-open', open);
+    for (const el of $('app').children) if (el.id !== 'drawer' && el.id !== 'scrim') el.inert = open;
+    $('drawer').inert = !open;
+    for (const id of ['menu', 'seat-chip', 'quota-entry']) $(id).setAttribute('aria-expanded', String(open));
+    document.querySelector('.tab[data-view="sessions"]').setAttribute('aria-expanded', String(open));
+  }
+  function openDrawer(target) {
+    if (!drawerOpen) { drawerOpener = document.activeElement; $('message').blur(); setDrawer(true); }
+    if (target === 'quota') { $('quota').scrollIntoView({ block: 'end' }); $('quota').focus({ preventScroll: true }); }
+    else $('drawer-close').focus({ preventScroll: true });
+  }
+  function closeDrawer(restore = true) {
+    if (!drawerOpen) return;
+    setDrawer(false);
+    if (restore && drawerOpener?.isConnected && !drawerOpener.hidden) drawerOpener.focus({ preventScroll: true });
+    drawerOpener = null;
+  }
+  $('menu').addEventListener('click', () => openDrawer());
+  $('seat-chip').addEventListener('click', () => openDrawer('quota'));
+  $('quota-entry').addEventListener('click', () => openDrawer('quota'));
+  $('drawer-close').addEventListener('click', () => closeDrawer());
+  $('scrim').addEventListener('click', () => closeDrawer());
+  $('drawer-captain').addEventListener('click', () => { closeDrawer(false); showView('captain'); $('menu').focus({ preventScroll: true }); });
+  $('quota-refresh').addEventListener('click', refreshQuota);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && drawerOpen) { event.preventDefault(); closeDrawer(); } });
+  // A right swipe that starts at the left edge opens the drawer; a left swipe
+  // on the open drawer or the scrim closes it. Mostly-vertical moves scroll.
+  let swipe = null;
+  document.addEventListener('touchstart', (event) => {
+    const touch = event.touches[0];
+    swipe = event.touches.length === 1 && (drawerOpen || touch.clientX <= 24) ? { x: touch.clientX, y: touch.clientY } : null;
+  }, { passive: true });
+  document.addEventListener('touchmove', (event) => {
+    if (!swipe) return;
+    const dx = event.touches[0].clientX - swipe.x, dy = event.touches[0].clientY - swipe.y;
+    if (Math.abs(dy) > 24 && Math.abs(dy) > Math.abs(dx)) { swipe = null; return; }
+    if (!drawerOpen && dx > 56) { swipe = null; openDrawer(); }
+    else if (drawerOpen && dx < -56) { swipe = null; closeDrawer(); }
+  }, { passive: true });
+  document.addEventListener('touchend', () => { swipe = null; }, { passive: true });
+
   function renderAttention() {
-    // The sessions page already lists them, and settings need no reminder.
-    const waiting = view === 'sessions' || view === 'more' ? [] : sessions.filter((s) => needsUser.has(s.status) && !(view === 'output' && s.id === selected?.id));
+    // Settings need no reminder.
+    const waiting = view === 'more' ? [] : sessions.filter((s) => needsUser.has(s.status) && !(view === 'output' && s.id === selected?.id));
     const signature = JSON.stringify(waiting.map((s) => [s.id, s.title, s.status]));
     if (signature === attentionSignature) return;
     attentionSignature = signature;
@@ -377,17 +606,14 @@
   function updateHeading() {
     const captain = sessions.find((s) => s.isMain);
     const current = view === 'output' ? sessions.find((s) => s.id === selected?.id) || selected : null;
-    const workers = sessions.filter((s) => !s.isMain);
-    const counts = [[workers.filter((s) => s.status === 'working').length, ' 个干活中'], [workers.filter((s) => needsUser.has(s.status)).length, ' 个等你处理']];
     const heading = {
       captain: [captain?.title || '队长', captain ? [statusNames[captain.status] || '空闲', captain.model].filter(Boolean).join(' · ') : loaded ? '尚未创建' : '', captain ? captain.status : 'none'],
       output: [selected?.title || '队员输出', '只读' + (current ? ' · ' + (statusNames[current.status] || '空闲') : ''), current?.status || 'none'],
-      sessions: ['会话', counts.filter(([count]) => count).map(([count, label]) => count + label).join(' · ') || (workers.length ? workers.length + ' 个会话' : ''), null],
       board: ['任务看板', '只读', null],
       more: ['更多', '', null],
     }[view];
     // Statuses are stale while the desktop is unreachable; say so instead.
-    if (offline && view !== 'more') { heading[1] = view === 'captain' || view === 'sessions' ? '连接中断' : '只读 · 连接中断'; heading[2] = 'offline'; }
+    if (offline && view !== 'more') { heading[1] = view === 'captain' ? '连接中断' : '只读 · 连接中断'; heading[2] = 'offline'; }
     $('view-title').textContent = heading[0];
     $('view-meta').textContent = heading[1];
     $('title-dot').hidden = !heading[2];
@@ -403,13 +629,14 @@
     if (view === 'output' && next !== 'output') outputRequest++;
     if (next === 'output' && view !== 'output') outputFrom = view;
     view = next;
-    ['board', 'captain', 'sessions', 'output', 'more'].forEach((name) => { $(name + '-view').hidden = name !== view; });
-    // A worker's output is a page inside the sessions tab.
+    ['board', 'captain', 'output', 'more'].forEach((name) => { $(name + '-view').hidden = name !== view; });
+    // A worker's output belongs to the sessions tab, which opens the drawer.
     tabs.forEach((tab) => { if (tab.dataset.view === (view === 'output' ? 'sessions' : view)) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current'); });
     $('back').hidden = view !== 'output';
+    $('menu').hidden = view === 'output';
     $('refresh').hidden = view === 'more';
     $('copy').hidden = view !== 'output';
-    updateHeading(); updateComposer(); renderAttention();
+    updateHeading(); updateComposer(); renderAttention(); renderSessions(); renderSeat();
     if (view === 'captain') toBottom($('captain-turns'));
   }
   async function loadOutput(silent = false) {
@@ -439,15 +666,17 @@
     refreshing = true; $('refresh').disabled = true; $('refresh').classList.add('refreshing');
     if (!loaded) notice('正在读取会话和看板…');
     try {
-      const [sessionData, taskData, captain, auth] = await Promise.all([api('/api/sessions'), api('/api/tasks'), api('/api/captain'), api('/api/auth')]);
+      // Quota follows the same polling; a failed quota read never blocks the rest.
+      const [sessionData, taskData, captain, auth] = await Promise.all([api('/api/sessions'), api('/api/tasks'), api('/api/captain'), api('/api/auth'), quotaBusy ? null : loadQuota()]);
       sessions = sessionData.sessions; cards = taskData.cards; captainData = captain; csrfToken = auth.csrfToken; loaded = true; offline = false;
-      renderSessions(); renderAttention(); renderBoard(); renderCaptain(); updateHeading(); notice('');
+      renderSessions(); renderAttention(); renderBoard(); renderCaptain(); renderQuota(); updateHeading(); notice('');
       if (view === 'output') await loadOutput(true);
     } catch (err) {
       // fetch rejects with a TypeError when the desktop or tunnel is unreachable.
       offline = true;
       notice(err instanceof TypeError ? '暂时连不上桌面端，正在自动重连…' : err.message + ' 正在自动重试…', true);
-      renderSessions(); renderCaptain(); updateHeading();
+      quotaFailed = true;
+      renderSessions(); renderCaptain(); renderQuota(); updateHeading();
     }
     finally { refreshing = false; $('refresh').disabled = false; $('refresh').classList.remove('refreshing'); }
   }
@@ -596,7 +825,7 @@
   $('copy').addEventListener('click', () => copyText($('copy'), $('outputText').textContent, '复制输出'));
   $('refresh').addEventListener('click', refresh);
   $('back').addEventListener('click', () => showView(outputFrom));
-  tabs.forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view)));
+  tabs.forEach((tab) => tab.addEventListener('click', () => tab.dataset.view === 'sessions' ? openDrawer() : showView(tab.dataset.view)));
   $('logout').addEventListener('click', async () => {
     $('logout').disabled = true;
     try { await api('/logout', { method: 'POST' }); window.location.reload(); }

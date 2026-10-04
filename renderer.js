@@ -3216,7 +3216,7 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
           : active ? 'working' : failed ? 'failed'
           : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : 'idle';
         return { id: col.id, title: columnLabel(col), model: info.model || info.provider || '未知模型',
-          status, isMain: !!col.isMain,
+          status, isMain: !!col.isMain, project: String(col.project || '').slice(0, 120),
           receipt: String(col.lastReceipt?.summary || col.lastReceipt?.failed || '').slice(0, 1000) };
       });
     } else if (op === 'output') {
@@ -3232,6 +3232,10 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
           // Only images the phone uploaded, by server id; other attachment paths stay private.
           images: (turn.atts || []).map((p) => /[\\/]mobile-uploads[\\/]([a-f0-9]{32}\.(?:jpg|png|gif|webp))$/.exec(p)?.[1]).filter(Boolean),
           done: !!turn.done, interrupted: !!turn.interrupted })) } : { turns: [], status: 'unavailable' };
+    } else if (op === 'quota') {
+      // The same store and summaries as the sidebar quota rows; nothing is sampled for the phone.
+      result = { version: env.version, rows: QuotaCore.mobile(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId(),
+        columns.find((c) => c.id === config.mainSession?.colId)?.agentProvider) };
     } else if (op === 'captain') {
       MainSession.sendMessage(input?.message, input?.images);
       result = { queued: true };

@@ -538,3 +538,40 @@ test('resourceError ignores resource words in ordinary replies, code and grep ou
     }
   }
 });
+
+test('phone rows carry display fields only: masked account, no config dir, and never show old or missing data as usable', () => {
+  const seats = Q.claudeSeats([{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }]), store = {};
+  const official = (seat, at, five, week, extra = {}) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: five, resetText: new Date(now + 2 * 3600000).toISOString() }, { key: 'weekly', remaining: week, resetText: new Date(now + 3 * 86400000).toISOString() }] }, at),
+    seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: `${seat.id}-account`, credentialKey: `${seat.id}-cred`, ...extra });
+  Q.observe(store, official(seats[0], now, 26, 61, { account: 'hjinhao@gmail.com' }), now);
+  Q.observe(store, official(seats[1], now, 0, 40, { account: 'us***@example.com' }), now);
+  Q.observe(store, { ...Q.screen('Codex', 'Weekly limit: 70% left (resets 10:00)', [], now), account: 'co***@example.com' }, now);
+  const rows = Q.mobile(store, now, seats, 'cn');
+  assert.deepEqual(rows.map((r) => [r.key, r.name, r.short, r.flag, r.captain, r.status]), [
+    ['Claude:cn', 'Claude 🇨🇳 CN', 'CN', '🇨🇳', true, 'normal'], ['Claude:us', 'Claude 🇺🇸 US', 'US', '🇺🇸', false, 'out'],
+    ['Codex', 'Codex', 'Codex', '', false, 'normal'], ['Cursor', 'Cursor Grok', 'Grok', '', false, 'unknown'], ['Antigravity', 'Gemini', 'Gemini', '', false, 'unknown']]);
+  assert.deepEqual(rows[0].cells.map((c) => [c.key, c.remaining, c.out]), [['5h', 26, false], ['7d', 61, false]]);
+  assert.deepEqual([rows[0].account, rows[1].account, rows[2].account, rows[3].account], ['h***@gmail.com', 'u***@example.com', 'c***@example.com', '']);
+  assert.equal(rows[1].cells[0].out, true);
+  assert.equal(rows[1].recoveryAt, now + 2 * 3600000);
+  assert.deepEqual(rows[2].cells.map((c) => c.key), ['7d']);
+  for (const row of rows) {
+    assert.deepEqual(Object.keys(row).sort(), ['account', 'captain', 'cells', 'failed', 'flag', 'key', 'name', 'provider', 'recoveryAt', 'sampledAt', 'short', 'status']);
+    assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|hjinhao|OAuth/);
+  }
+  // Past the freshness window an official sample keeps its numbers but is marked old; a screen sample loses them.
+  const later = Q.mobile(store, now + 31 * 60000, seats, 'cn');
+  assert.deepEqual([later[0].status, later[0].cells.length, later[0].sampledAt], ['stale', 2, now]);
+  assert.deepEqual([later[2].status, later[2].cells.length, later[2].sampledAt], ['expired', 0, now]);
+  // Failed refreshes are reported, and three in a row mark the kept numbers old.
+  for (const failures of [1, 3]) {
+    Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', at: now + 60000, failureOnly: true, failures, checkedAt: now + 60000, failure: '网络错误', configDir: '~/.claude', accountKey: 'cn-account' }, now + 60000);
+    const row = Q.mobile(store, now + 60000, seats, 'cn')[0];
+    assert.deepEqual([row.failed, row.status], [true, failures === 3 ? 'stale' : 'normal']);
+  }
+  // A Captain on another provider marks that provider's row.
+  assert.deepEqual(Q.mobile(store, now, seats, null, 'Codex').map((r) => r.captain), [false, false, true, false, false]);
+  assert.equal(Q.mobile({}, now)[0].name, 'Claude');
+  for (const [value, masked] of [['a@b.co', 'a***@b.co'], ['hj***@gmail.com', 'h***@gmail.com'], ['未识别', ''], ['a b@c.d', ''], [null, ''], ['x@y@z', '']]) assert.equal(Q.maskAccount(value), masked);
+});

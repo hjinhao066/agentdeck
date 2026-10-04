@@ -395,7 +395,7 @@
     const fiveHour = pick(/5 小时$/), weekly = pick(/每周$/);
     const shortRemaining = fiveHour ?? weekly;
     const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, cells, account: entry.account || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, account: entry.account || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
     const cmd = String(command || '').trim();
@@ -408,7 +408,29 @@
     const seat = provider === 'Claude' ? seatList.find((s) => s.id === activeSeatId) || seatForColumn({ cmd }, seatList) : null;
     return summary(store || {}, provider, now, seat);
   }
+  // The phone only ever shows h***@example.com, whatever a source stored.
+  function maskAccount(value) {
+    const m = typeof value === 'string' && value.length <= 200 ? value.match(/^([^\s@*])[^\s@]*@([^\s@*]+)$/) : null;
+    return m ? `${m[1]}***@${m[2]}` : '';
+  }
+  // Rows for the phone page: the same summaries as the desktop sidebar, cut down
+  // to display fields. No config directory, account key, source or raw detail.
+  function mobile(store, now = Date.now(), seats, captainSeatId = null, captainProvider = '') {
+    return items(seats).map(({ provider, seat, key }) => {
+      const q = summary(store || {}, provider, now, seat, captainSeatId);
+      const named = seat && seat.id !== 'default';
+      const flag = named ? seat.name.match(/\p{Regional_Indicator}{2}/u)?.[0] || '' : '';
+      const plain = named ? seat.name.replace(flag, '').trim() || seat.id.toUpperCase() : '';
+      const status = q.out ? 'out' : q.cells.length ? (q.stale ? 'stale' : q.state) : q.state === 'normal' ? 'nodigits' : q.sampledAt ? 'expired' : 'unknown';
+      return { key, provider,
+        name: seat ? (named ? `Claude ${seat.name}` : 'Claude') : { Codex: 'Codex', Cursor: 'Cursor Grok', Antigravity: 'Gemini' }[provider],
+        short: seat ? plain || 'Claude' : { Codex: 'Codex', Cursor: 'Grok', Antigravity: 'Gemini' }[provider], flag,
+        captain: seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider,
+        status, failed: q.failures > 0, cells: q.cells.map((c) => ({ key: c.key, remaining: c.remaining, out: !!c.out, resetAt: c.resetAt || null })),
+        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account) };
+    });
+  }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text, maskAccount, mobile };
 
 });

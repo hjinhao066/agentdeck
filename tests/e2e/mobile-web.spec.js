@@ -25,7 +25,7 @@ async function launch() {
     mainSession: { colId: 'mobile-captain', cmd: FAKE, gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] },
     columns: [
       { id: 'mobile-captain', title: '队长', isMain: true, cmd: FAKE, cwd: profile },
-      { id: 'mobile-worker', title: '手机网页端 · 界面实现', cmd: FAKE + ' --quota-probe', cwd: profile, captainCrew: true,
+      { id: 'mobile-worker', title: '手机网页端 · 界面实现', cmd: FAKE + ' --quota-probe', cwd: profile, captainCrew: true, project: 'AgentDeck',
         lastReceipt: { summary: '会话与看板已完成，正在核对竖屏布局。', files: [] } },
       { id: 'mobile-failed', title: '数据导入 · 等待重试', cmd: FAKE, cwd: profile, captainCrew: true,
         lastReceipt: { summary: '测试夹具：连接中断，待队长安排。', failed: '测试连接中断', files: [] } },
@@ -163,14 +163,15 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
   // Back returns to where the output was opened from.
   await mobile.getByRole('button', { name: '返回', exact: true }).click();
   await expect(mobile.locator('#captain-view')).toBeVisible();
+  // The sessions tab opens the sidebar; the waiting session is listed first there.
   await tab(/会话/).click();
-  await expect(mobile.locator('#attention')).toBeHidden();
-  await expect(mobile.locator('#view-meta')).toHaveText('1 个等你处理');
+  await expect(mobile.locator('#drawer')).toBeVisible();
   await expect(mobile.locator('#sessions .session-row').first()).toContainText('手机网页端 · 界面实现');
   await expect(mobile.locator('#sessions .session-row').first().locator('.row-tag')).toHaveText('停在确认');
   await expect(mobile.locator('#sessions .session-row')).toHaveCount(2);
   await screenshot('sessions-badge');
-  await tab('对话').click();
+  await mobile.getByRole('button', { name: '关闭侧边栏', exact: true }).click();
+  await expect(mobile.locator('#drawer')).toBeHidden();
   await mobile.unroute('**/api/sessions');
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(mobile.locator('#attention')).toBeHidden();
@@ -312,15 +313,17 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     await mobile.setViewportSize({ width: 390, height: 420 });
     await expect(mobile.locator('#tabbar')).toBeVisible();
     await mobile.setViewportSize({ width: 390, height: 844 });
-    // Tabs: one page each, the current one marked, no second navigation.
-    await expect(mobile.locator('#drawer, #menu')).toHaveCount(0);
+    // Tabs switch the pages; the sessions tab opens the sidebar, which holds
+    // the only session list, and leaves the current page marked.
     await tab(/会话/).click();
-    await expect(tab(/会话/)).toHaveAttribute('aria-current', 'page');
+    await expect(mobile.locator('#drawer')).toBeVisible();
+    await expect(tab('对话')).toHaveAttribute('aria-current', 'page');
     await expect(mobile.locator('#tabbar [aria-current="page"]')).toHaveCount(1);
-    await expect(mobile.locator('#view-title')).toHaveText('会话');
-    await expect(mobile.locator('#message-form')).toBeHidden();
-    await expect(mobile.getByText('会话与看板已完成，正在核对竖屏布局。')).toBeVisible();
+    await expect(mobile.locator('#sessions-view')).toHaveCount(0);
+    await expect(mobile.locator('#drawer').getByText('会话与看板已完成，正在核对竖屏布局。')).toBeVisible();
     await screenshot(`sessions-${theme}`);
+    await mobile.keyboard.press('Escape');
+    await expect(mobile.locator('#drawer')).toBeHidden();
     await tab('看板').click();
     await expect(tab('看板')).toHaveAttribute('aria-current', 'page');
     await expect(mobile.getByText('核对深浅主题')).toBeVisible();
@@ -331,7 +334,9 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     await expect(mobile.getByRole('button', { name: '退出此设备', exact: true })).toBeVisible();
     await screenshot(`more-${theme}`);
     await tab(/会话/).click();
-    await mobile.getByRole('button', { name: '手机网页端 · 界面实现', exact: true }).click();
+    await mobile.locator('#sessions [data-session-id="mobile-worker"]').click();
+    await expect(mobile.locator('#drawer')).toBeHidden();
+    await expect(tab(/会话/)).toHaveAttribute('aria-current', 'page');
     await expect(mobile.locator('#outputText')).toContainText('window.mobileInjected');
     expect(await mobile.evaluate(() => window.mobileInjected)).toBeUndefined();
     await screenshot(`output-${theme}`);
@@ -349,7 +354,7 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     }
     await mobile.setViewportSize({ width: 390, height: 844 });
     await mobile.getByRole('button', { name: '返回', exact: true }).click();
-    await expect(mobile.locator('#sessions-view')).toBeVisible();
+    await expect(mobile.locator('#more-view')).toBeVisible();
     await tab('对话').click();
     await mobile.getByRole('button', { name: '复制队长回复', exact: true }).last().click();
     await expect(mobile.getByRole('button', { name: '已复制', exact: true })).toHaveAttribute('title', '已复制');
@@ -366,6 +371,236 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
   await expect.poll(() => desktop.evaluate(() => deck.mobileWebSettings().then((s) => s.enabled))).toBe(false);
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mobileWeb.enabled).toBe(false);
   if (process.platform !== 'win32') expect(fs.statSync(path.join(profile, 'config.json')).mode & 0o777).toBe(0o600);
+});
+
+// Seeds the desktop's own quota store, so the phone reads what the sidebar shows.
+async function seedQuota(state) {
+  await desktop.evaluate((kind) => {
+    const now = Date.now(), old = now - 45 * 60000;
+    config.claudeSeats = [{ id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude' }, { id: 'us', name: '🇺🇸 US', configDir: '~/.claude-us' }];
+    columns.find((c) => c.isMain).agentProvider = 'Claude';
+    for (const key of Object.keys(config.quotas)) delete config.quotas[key];
+    const official = (id, dir, at, five, week, account) => QuotaCore.observe(config.quotas, { ...QuotaCore.cacheClaude({ source: QuotaCore.CLAUDE_OAUTH_SOURCE, windows: [
+      { key: 'fiveHour', remaining: five, resetText: new Date(now + 2 * 3600000 + 600000).toISOString() }, { key: 'weekly', remaining: week, resetText: new Date(now + 3 * 86400000).toISOString() }] }, at),
+      seatId: id, configDir: dir, accountBound: true, accountKey: id + '-account', credentialKey: id + '-cred', account }, now);
+    official('cn', '~/.claude', kind === 'stale' ? old : now, kind === 'low' ? 8 : kind === 'out' ? 0 : 26, 61, 'hjinhao@gmail.com');
+    official('us', '~/.claude-us', now, 0, 40, 'us***@example.com');
+    QuotaCore.observe(config.quotas, { ...QuotaCore.screen('Codex', 'Weekly limit: 8% left (resets 10:00)', [], now), account: 'co***@example.com' }, now);
+    // A screen sample from before the app was last closed: too old to trust its numbers.
+    config.quotas.Antigravity = { scope: 'gemini', sample: { provider: 'Antigravity', scope: 'gemini', at: old, source: 'agy 本地状态行快照', confidence: '中', windows: [{ key: 'Gemini 5 小时', label: 'Gemini 5 小时', used: 20, remaining: 80, exhausted: false, resetAt: null, resetText: '' }] } };
+    renderQuotaBar();
+  }, state);
+  // Read it now instead of waiting for the next poll: the drawer's refresh icon when open, the header's otherwise.
+  const open = await mobile.locator('#drawer').evaluate((el) => !el.inert);
+  await mobile.locator(open ? '#quota-refresh' : '#refresh').click();
+}
+test('sidebar: Captain, sessions by project and the desktop quota rows; exhausted, old and unknown are explicit', async () => {
+  await launch(); await login();
+  // No login, no quota: the endpoint answers 401 without a device cookie.
+  const stranger = await browser.newContext();
+  expect((await stranger.request.get(url + '/api/quota')).status()).toBe(401);
+  await stranger.close();
+  await seedQuota('normal');
+  const response = await mobile.request.get(url + '/api/quota');
+  expect(response.status()).toBe(200);
+  const text = await response.text();
+  expect(text).toContain('h***@gmail.com');
+  expect(text).not.toMatch(/hjinhao|\.claude|account"?:\s*"[^"*]*@|cn-account|cn-cred|configDir|token/);
+  expect(JSON.parse(text).rows.map((row) => [row.key, row.status, row.captain])).toEqual([
+    ['Claude:cn', 'normal', true], ['Claude:us', 'out', false], ['Codex', 'danger', false], ['Cursor', 'unknown', false], ['Antigravity', 'expired', false]]);
+  await mobile.getByRole('button', { name: '刷新', exact: true }).click();
+  // The seat indicator sits beside the title and adds no height to the header.
+  const chip = mobile.locator('#seat-chip');
+  await expect(chip).toHaveText('CN 26%');
+  await expect(chip).toHaveAttribute('data-level', 'ok');
+  await expect(chip).toHaveAttribute('aria-label', /当前席位 Claude 🇨🇳 CN：5 小时剩余 26%/);
+  expect((await mobile.locator('.app-header').boundingBox()).height).toBeLessThanOrEqual(60);
+  expect((await chip.boundingBox()).height).toBeGreaterThanOrEqual(44);
+  await screenshot('chip-normal');
+  // Closed: the drawer is inert and out of the tab order.
+  await expect(mobile.locator('#drawer')).toBeHidden();
+  expect(await mobile.locator('#drawer').evaluate((el) => el.inert)).toBe(true);
+  // The menu button opens it: focus moves inside, everything behind is inert.
+  await mobile.getByRole('button', { name: '打开侧边栏', exact: true }).click();
+  const drawer = mobile.locator('#drawer');
+  await expect(drawer).toBeVisible();
+  await expect(drawer).toHaveAttribute('aria-modal', 'true');
+  await expect(mobile.locator('#drawer-close')).toBeFocused();
+  expect(await mobile.locator('#app').evaluate((app) => [...app.children].filter((el) => el.id !== 'drawer' && el.id !== 'scrim').every((el) => el.inert))).toBe(true);
+  await expect(mobile.locator('#tabbar')).toBeVisible();
+  // Captain first, then sessions grouped by project with a status each.
+  await expect(drawer.locator('#drawer-captain')).toContainText('队长');
+  await expect(drawer.locator('#drawer-captain')).toHaveAttribute('aria-current', 'page');
+  await expect(drawer.locator('.session-group .nav-section-label')).toHaveText(['AgentDeck', '未分项目']);
+  await expect(drawer.locator('.session-group').first().locator('.session-row')).toHaveText(/手机网页端 · 界面实现/);
+  await expect(drawer.locator('[data-session-id="mobile-failed"] .row-tag')).toHaveText('失败');
+  await expect(drawer.locator('#version')).toHaveText(/^V\d+\.\d+\.\d+/);
+  // Quota: one row per account, in the desktop's order, the Captain's seat marked.
+  const rows = drawer.locator('.quota-item');
+  await expect(rows.locator('.quota-name-text')).toHaveText(['🇨🇳 CN', '🇺🇸 US', 'Codex', 'Grok', 'Gemini']);
+  await expect(drawer.locator('.quota-item[data-captain="true"]')).toHaveAttribute('data-quota-key', 'Claude:cn');
+  await expect(rows.nth(0).locator('.quota-captain')).toHaveAttribute('title', '队长在用');
+  await expect(rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('26%');
+  await expect(rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-reset')).toHaveText(/^\d\d:\d\d$/);
+  await expect(rows.nth(0).locator('.quota-cell[data-window="7d"] .quota-pct')).toHaveText('61%');
+  await expect(rows.nth(0).locator('.quota-cell[data-window="7d"] .quota-reset')).toHaveText(/^周[日一二三四五六]$/);
+  expect(await rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-meter').evaluate((el) => el.style.getPropertyValue('--pct'))).toBe('26%');
+  await expect(rows.nth(0).locator('.quota-row-note')).toHaveCount(0);
+  // Exhausted: red, with the time it comes back.
+  await expect(rows.nth(1)).toHaveAttribute('data-status', 'out');
+  await expect(rows.nth(1).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-level', 'out');
+  await expect(rows.nth(1).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('用尽');
+  await expect(rows.nth(1).locator('.quota-row-note')).toHaveText(/^已用尽 · \d\d:\d\d（2 小时 \d+ 分后）恢复$/);
+  const red = await rows.nth(1).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color);
+  expect(red).toBe(await rows.nth(1).locator('.quota-cell[data-window="5h"] .quota-pct').evaluate((el) => getComputedStyle(el).color));
+  expect(red).not.toBe(await rows.nth(0).locator('.quota-pct').first().evaluate((el) => getComputedStyle(el).color));
+  // A weekly-only account shows the weekly cell alone.
+  await expect(rows.nth(2).locator('.quota-cell')).toHaveCount(1);
+  await expect(rows.nth(2).locator('.quota-cell')).toHaveAttribute('data-level', 'danger');
+  await expect(rows.nth(2).locator('.quota-cell .quota-pct')).toHaveText('8%');
+  // Unknown and out-of-date rows say so in grey and never show a percentage as usable.
+  await expect(rows.nth(3)).toHaveAttribute('data-status', 'unknown');
+  await expect(rows.nth(3).locator('.quota-status')).toHaveText('未知');
+  await expect(rows.nth(3).locator('.quota-row-note')).toHaveText('未知 · 暂无采样');
+  await expect(rows.nth(4)).toHaveAttribute('data-status', 'expired');
+  await expect(rows.nth(4).locator('.quota-cell')).toHaveCount(0);
+  await expect(rows.nth(4).locator('.quota-status')).toHaveText('未知');
+  await expect(rows.nth(4).locator('.quota-row-note')).toHaveText(/^数据已旧 · 采样 \d\d:\d\d$/);
+  const grey = await rows.nth(4).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color);
+  expect(await rows.nth(4).locator('.quota-status').evaluate((el) => getComputedStyle(el).color)).toBe(grey);
+  // A row opens its details in place: full name, exact reset times, masked account.
+  await rows.nth(0).locator('.quota-row').click();
+  await expect(rows.nth(0).locator('.quota-row')).toHaveAttribute('aria-expanded', 'true');
+  await expect(rows.nth(0).locator('.quota-detail')).toContainText('Claude 🇨🇳 CN');
+  await expect(rows.nth(0).locator('.quota-detail')).toContainText('队长在用');
+  await expect(rows.nth(0).locator('.quota-detail')).toContainText(/5 小时剩余 26%\d\d:\d\d（2 小时 \d+ 分后）重置/);
+  await expect(rows.nth(0).locator('.quota-detail-foot')).toHaveText(/^h\*\*\*@gmail\.com · 采样 \d\d:\d\d$/);
+  await expect(drawer).not.toContainText('hjinhao');
+  // Everything stays inside the drawer; tools are 44px icon buttons with a name.
+  for (const [width, height] of [[390, 844], [430, 932]]) {
+    await mobile.setViewportSize({ width, height });
+    // The shell follows the visual viewport on its resize event.
+    await expect.poll(async () => Math.round((await drawer.boundingBox()).height)).toBe(height);
+    const box = await drawer.boundingBox(), quotaBox = await mobile.locator('#quota').boundingBox(), foot = await mobile.locator('.drawer-foot').boundingBox();
+    expect(box.x).toBe(0); expect(box.y).toBe(0); expect(box.width).toBeLessThan(width);
+    // Nothing stretches the shell, so focusing a row can never scroll the drawer away.
+    expect(await mobile.locator('#app').evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+    expect(quotaBox.y + quotaBox.height).toBeLessThanOrEqual(foot.y + 1);
+    expect(foot.y + foot.height).toBeLessThanOrEqual(height);
+    expect(await drawer.locator('.quota-row, .session-row, .nav-row').evaluateAll((els) => els.every((el) => el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().height >= 44))).toBe(true);
+    for (const button of await drawer.locator('.icon-button').evaluateAll((els) => els.map((el) => ({ ...el.getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label'), title: el.title, text: el.textContent.trim() })))) {
+      expect(button.width).toBeGreaterThanOrEqual(44); expect(button.height).toBeGreaterThanOrEqual(44);
+      expect(button.label).toBeTruthy(); expect(button.title).toBeTruthy(); expect(button.text).toBe('');
+    }
+    for (const theme of ['dark', 'light']) {
+      await mobile.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await screenshot(`sidebar-${width}-${theme}`);
+    }
+  }
+  await mobile.setViewportSize({ width: 390, height: 844 });
+  await rows.nth(0).locator('.quota-row').click();
+  await expect(rows.nth(0).locator('.quota-detail')).toBeHidden();
+  // Side by side with the desktop sidebar the rows were taken from.
+  if (process.env.AGENTDECK_MOBILE_SCREENSHOT_DIR) {
+    const dir = path.resolve(process.env.AGENTDECK_MOBILE_SCREENSHOT_DIR);
+    await desktop.keyboard.press('Escape');
+    for (const theme of ['dark', 'light']) {
+      await desktop.evaluate((value) => applyTheme(value), theme);
+      await mobile.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      const images = [await desktop.locator('#colNav').screenshot(), await drawer.screenshot()].map((data) => 'data:image/png;base64,' + data.toString('base64'));
+      const sheet = await browser.newPage({ viewport: { width: 760, height: 980 } });
+      await sheet.setContent(`<body style="margin:0;padding:24px;font:14px -apple-system,sans-serif;background:${theme === 'dark' ? '#0e0e0e;color:#ddd' : '#ececec;color:#222'}"><div style="display:flex;gap:32px;align-items:flex-start">
+        <figure style="margin:0"><figcaption style="margin-bottom:10px">桌面端侧边栏</figcaption><img src="${images[0]}" style="height:844px"></figure>
+        <figure style="margin:0"><figcaption style="margin-bottom:10px">手机端侧边栏（390×844）</figcaption><img src="${images[1]}" style="height:844px"></figure></div></body>`);
+      await sheet.screenshot({ path: path.join(dir, `compare-desktop-vs-mobile-${theme}.png`), fullPage: true });
+      await sheet.close();
+    }
+    await mobile.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  }
+  // The refresh icon reads the desktop again; a failed read keeps the rows and says so.
+  await mobile.route('**/api/quota', (route) => route.abort());
+  await drawer.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await expect(mobile.locator('#quota-note')).toHaveText('未能更新');
+  await expect(rows).toHaveCount(5);
+  await expect(rows.nth(0).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-level', 'none');
+  await mobile.unroute('**/api/quota');
+  await drawer.getByRole('button', { name: '刷新额度', exact: true }).click();
+  await expect(mobile.locator('#quota-note')).toHaveText('');
+  await expect(rows.nth(0).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-level', 'ok');
+  // Escape closes and hands focus back; the scrim closes too.
+  await mobile.keyboard.press('Escape');
+  await expect(drawer).toBeHidden();
+  await expect(mobile.locator('#menu')).toBeFocused();
+  expect(await mobile.locator('.app-header').evaluate((el) => el.inert)).toBe(false);
+  await mobile.locator('#menu').click();
+  await expect(drawer).toBeVisible();
+  await mobile.mouse.click(380, 400);
+  await expect(drawer).toBeHidden();
+  // A right swipe from the left edge opens it, a left swipe closes it; a swipe that starts elsewhere does nothing.
+  const swipe = (fromX, toX) => mobile.evaluate(([from, to]) => {
+    const touch = (x) => new Touch({ identifier: 1, target: document.body, clientX: x, clientY: 400 });
+    document.body.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [touch(from)] }));
+    document.body.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, touches: [touch(to)] }));
+    document.body.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] }));
+  }, [fromX, toX]);
+  await swipe(120, 260);
+  await expect(drawer).toBeHidden();
+  await swipe(8, 120);
+  await expect(drawer).toBeVisible();
+  await swipe(200, 100);
+  await expect(drawer).toBeHidden();
+  // The indicator opens the drawer at the quota rows.
+  await chip.click();
+  await expect(drawer).toBeVisible();
+  await expect(mobile.locator('#quota')).toBeFocused();
+  await expect(rows.last()).toBeInViewport();
+  // Picking a session closes the drawer and shows it; the Captain row returns to the conversation.
+  await drawer.locator('[data-session-id="mobile-worker"]').click();
+  await expect(drawer).toBeHidden();
+  await expect(mobile.locator('#output-view')).toBeVisible();
+  await expect(chip).toBeHidden();
+  await tab(/会话/).click();
+  await expect(drawer.locator('[data-session-id="mobile-worker"]')).toHaveAttribute('aria-current', 'page');
+  await drawer.locator('#drawer-captain').click();
+  await expect(mobile.locator('#captain-view')).toBeVisible();
+  await expect(chip).toBeVisible();
+  // Below 10% the indicator turns orange; exhausted is red; old data is grey, never a live number.
+  await seedQuota('low');
+  await expect(chip).toHaveText('CN 8%');
+  await expect(chip).toHaveAttribute('data-level', 'low');
+  await screenshot('chip-low');
+  await seedQuota('out');
+  await expect(chip).toHaveText('CN 用尽');
+  await expect(chip).toHaveAttribute('data-level', 'out');
+  await screenshot('chip-out');
+  await seedQuota('stale');
+  await expect(chip).toHaveText('CN 26%');
+  await expect(chip).toHaveAttribute('data-level', 'none');
+  await expect(chip).toHaveAttribute('aria-label', /（数据已旧）/);
+  await chip.click();
+  await expect(rows.nth(0)).toHaveAttribute('data-status', 'stale');
+  await expect(rows.nth(0).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-level', 'none');
+  await expect(rows.nth(0).locator('.quota-row-note')).toHaveText(/^数据已旧 · 采样 \d\d:\d\d$/);
+  // Same grey as the note in whichever theme is showing.
+  expect(await rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-pct').evaluate((el) => getComputedStyle(el).color))
+    .toBe(await rows.nth(0).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color));
+  for (const [width, height] of [[390, 844], [430, 932]]) {
+    await mobile.setViewportSize({ width, height });
+    for (const theme of ['dark', 'light']) {
+      await mobile.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await screenshot(`sidebar-stale-${width}-${theme}`);
+    }
+  }
+  await mobile.setViewportSize({ width: 390, height: 844 });
+  await mobile.keyboard.press('Escape');
+  // The More page keeps one entry that leads to the same rows.
+  await tab('更多').click();
+  await expect(mobile.locator('#more-view .quota-item')).toHaveCount(0);
+  await expect(mobile.locator('#quota-entry-text')).toHaveText('🇨🇳 CN 26%');
+  await mobile.locator('#quota-entry').click();
+  await expect(drawer).toBeVisible();
+  await expect(mobile.locator('#quota')).toBeFocused();
+  expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 
 test('desktop copy buttons put the login token and entry password on the clipboard', async () => {
@@ -419,7 +654,7 @@ test('mobile message waits for desktop draft, goes only to Captain; forbidden co
   await expect(mobile.locator('#captain-turns')).toContainText(message, { timeout: 15000 });
   // Replying from a worker's page still goes only to the Captain, naming the worker.
   await tab(/会话/).click();
-  await mobile.getByRole('button', { name: '手机网页端 · 界面实现', exact: true }).click();
+  await mobile.locator('#sessions [data-session-id="mobile-worker"]').click();
   await mobile.getByLabel('给队长的消息').fill('可以继续');
   await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
   await expect(mobile.locator('#send-status')).toContainText('已转给队长');

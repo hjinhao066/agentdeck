@@ -759,6 +759,7 @@ app.whenReady().then(async () => {
     getTasks: () => taskStore.list(),
     getOutput: (id) => requestMobile('output', { id }),
     getCaptain: () => requestMobile('captain-history'),
+    getQuota: () => requestMobile('quota'),
     sendCaptain: (message, images) => requestMobile('captain', { message, images }),
     // Like pasted screenshots, phone images reach the Captain as file paths.
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
