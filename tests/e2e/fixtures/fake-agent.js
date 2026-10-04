@@ -142,6 +142,9 @@ function answer() {
   if (text.includes('AgentDeck 约定') && process.argv.includes('--exit-after-task')) setTimeout(() => process.exit(7), 500);
 }
 function listen() {
+  // Set the console mode before any data listener starts reading. Switching a
+  // pending Windows cooked read to raw mode can discard already queued input.
+  process.stdin.setRawMode(true);
   if (process.env.AGENTDECK_TEST_RAW_INPUT_FILE) process.stdin.on('data', (data) => {
     require('fs').appendFileSync(process.env.AGENTDECK_TEST_RAW_INPUT_FILE,
       JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, data: Buffer.from(data).toString('base64') }) + '\n');
@@ -207,10 +210,10 @@ function listen() {
 }
 function start() {
   if (delayedStart) process.stdout.write('\x1b[?1049h');
+  listen();
   console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
-  listen();
 }
 // --trust-dialog: like Cursor in a folder it has not seen, a dialog comes first and
 // nothing is accepted until Enter picks "Trust this workspace".
