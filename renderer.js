@@ -2430,7 +2430,10 @@ function sendWhenReady(col, text, opts) {
       const cursorReady = isCursor && AGENT_IDLE_RE.test(entry.lastScreen || '') && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
       // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
       const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000));
-      if (idle && ready && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
+      // ConPTY can show a fresh TUI before its startup input has settled.
+      // Typing immediately can lose the prompt's leading bytes before the CLI reads them.
+      const settled = env.platform !== 'win32' || entry.hasWorked || quiet >= 500;
+      if (idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         if (o.guardUserInput && userComposing(col.id)) { setTimeout(check, 500); return; }
         const sent = await ChatUI.sendPrompt(col, typeof text === 'function' ? text() : text, null, o);   // a long prompt goes out as a file

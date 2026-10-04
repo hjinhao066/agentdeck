@@ -65,7 +65,7 @@ test.beforeEach(async ({}, testInfo) => {
   try {
     await launch();
   } catch (error) {
-    const state = await page.evaluate(() => [...terms].map(([id, e]) => ({
+    const state = await page.evaluate(() => typeof terms === 'undefined' ? [] : [...terms].map(([id, e]) => ({
       id, screen: dumpScreen(e.term), lastScreen: e.lastScreen, state: e.state,
       alive: e.alive, sending: e.sendingPrompt, injecting: e.injecting,
       typing: e.typing, inputBox: visibleInputBox(e), composing: userComposing(id),
