@@ -8,7 +8,11 @@ const FAKE = `node "${path.join(__dirname, 'fixtures', 'terminal-bottom-agent.js
 const FOOTER = '⏵⏵ bypass permissions on (shift+tab to cycle)';
 let application, page, profile;
 
-test.afterEach(async () => {
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus && page && !page.isClosed()) {
+    await testInfo.attach('terminal-screens.json', { body: JSON.stringify(await page.evaluate(() =>
+      [...terms].map(([id, { term }]) => ({ id, screen: dumpScreen(term) })))), contentType: 'application/json' });
+  }
   if (application) await application.close();
   application = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
