@@ -42,8 +42,38 @@
   function modelName(value) {
     return typeof value === 'string' && /^(?:gemini|grok|gpt|claude|opus|sonnet)[- .\d\w()]{0,80}$/i.test(value) ? value : '';
   }
-  const EXHAUSTED = /^(?:[│⏺⎿✻✽●!⚠>\s]*)(?:error:\s*)?(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:request failed[^\n]*?[:：]\s*)?(?:you have )?(?:exceeded your usage limit|usage limit exceeded|quota exhausted)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i;
-  const RATE_LIMITED = /^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?(?:429\b[^\n]*(?:rate[_ -]?limit|too many requests)|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b)/i;
+  // Native resource errors of every CLI are recognized here and nowhere else.
+  // A line counts only when it starts with the CLI's own phrase and the phrase
+  // ends there: end of line, a TUI separator (· ∙ •) followed by the CLI's own
+  // reset time / login / slash-command segment, or punctuation followed by the
+  // CLI's own reset/retry/login sentence. A topic prefix such as "Rate limit
+  // handling test fails", code, grep output, or a reply that quotes the full
+  // message and then keeps talking ("… · limit resets 3:10pm 的识别已补测试")
+  // stays ordinary.
+  const WHEN = String.raw`(?:at|in|on|after|about|tomorrow|today|later|(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*|(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*|utc|gmt|[ecmp][sd]t|\d{1,4}(?:[:\/-]\d{1,2}){0,2}(?:st|nd|rd|th)?\s?(?:[ap]\.?m\.?)?|\d+(?:\.\d+)?\s?(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)|\([a-z_\/+:\d -]*\)?)`;
+  const RESET = String.raw`(?:limit |your (?:limit|quota) (?:will )?)?resets?(?:[\s,]+${WHEN})*(?:\s+[\x21-\x7e]+)?[.!]?`; // one unreadable trailing token is still the CLI's reset value
+  const LOGIN = String.raw`(?:please )?run ['"\x60]?(?:\/login|[\w-]+ login)['"\x60]?`;
+  const REST = String.raw`[\x20-\x7e’…]*`; // the CLI's own sentence is plain ASCII; narration in another script is not
+  const SEP = String.raw`(?:\s*[·∙•]\s*(?:${RESET}|${LOGIN}[.!]?|(?:please )?(?:log|sign) in(?: again)?[.!]?|(?:please )?try again(?:[\s,]+${WHEN})*[.!]?|\/[a-z-]+(?: to [a-z' \/-]+)?[.!]?))+`;
+  const tail = (hints) => String.raw`(?:[.!]?|${SEP}|\s*[.!,:;—–-]\s*['"\x60]?(?:${RESET}|(?:${hints})(?!\w)${REST}))`;
+  const QUOTA_HINT = String.raw`(?:please )?try again|(?:please )?wait|to continue|to get more|upgrade (?:to|your)|visit https?:\/\/\S+|purchase|switch to|contact|\/[a-z-]+`;
+  const RATE_HINT = QUOTA_HINT + '|retry(?:ing)?';
+  const AUTH_HINT = String.raw`${LOGIN}(?=$|[.!,]| first| again| to )|please (?:log|sign) in|(?:log|sign) in (?:again|to|with)|to continue|visit https?:\/\/\S+|\/login`;
+  // Second-person messages are unambiguous; "for/on <model>" may sit before the ending.
+  const QUOTA_OWN = String.raw`(?:you['’]?(?:ve| have) (?:hit|reached|exceeded|exhausted|used up) your (?:[\w-]+ ){0,3}(?:limit|quota|capacity|usage)|you['’]?(?:re| are) out of (?:extra )?(?:usage|credits)|(?:your )?credit balance is too low)(?:\s+(?:for|on)\s[\w .()-]{1,40}?)?(?:${tail(QUOTA_HINT)}|\|\d{9,})`;
+  const QUOTA_TOPIC = String.raw`(?:request failed[^\n]*?[:：]\s*)?(?:(?:claude (?:ai )?)?(?:usage|weekly|session|daily|monthly|5[- ]hour|opus|sonnet)(?: weekly)? limit (?:reached|exceeded)|usage limit exceeded|exceeded your usage limit|individual quota reached|quota (?:exhausted|exceeded))(?:${tail(QUOTA_HINT)}|\|\d{9,}|\s+for (?:quota )?(?:metric|model)\b[^\n]*)`;
+  const EXHAUSTED = new RegExp(String.raw`^(?:${QUOTA_OWN}|${QUOTA_TOPIC}|RESOURCE_EXHAUSTED(?:\s*:\s*[^\n]+|[.!]?)|429\s+\{[^\n]*"status"\s*:\s*"RESOURCE_EXHAUSTED"[^\n]*\}|continuing (?:automatically at|at|shortly)[^\n]*esc to cancel|额度用尽|配额(?:用尽|耗尽))$`, 'i');
+  const RATE_LIMITED = new RegExp(String.raw`^(?:(?:429\s+)?rate_limit_error(?:\s*:\s*[^\n]+|[.!]?)|429\s+\{[^\n]*"type"\s*:\s*"rate_limit_error"[^\n]*\}|(?:429\s+)?too many requests(?:\s*:\s*[^\n]+|${tail(RATE_HINT)})|rate[ -]limit(?: reached| exceeded|ed)${tail(RATE_HINT)}|(?:stream error:\s*)?exceeded retry limit, last status: 429[^\n]*|请求被限流|被限流)$`, 'i');
+  const AUTH = new RegExp(String.raw`^(?:401\s+Unauthorized(?:[.!]?|\s*:\s*[^\n]+)|401\s+\{[^\n]*"type"\s*:\s*"authentication_error"[^\n]*\}|authentication_error(?:\s*:\s*[^\n]+|[.!]?)|(?:(?:you['’]?(?:re| are) )?not (?:logged|signed) in|authentication required|login required)${tail(AUTH_HINT)}|authentication failed(?:\s*:\s*${REST}|${tail(AUTH_HINT)})|(?:invalid api key|oauth token (?:has )?(?:been )?(?:expired|revoked))(?:${SEP}|\s*[.!,:;—–-]\s*(?:${AUTH_HINT})(?!\w)${REST})|please (?:(?:log|sign) in|login)(?:[.!]?|${SEP}|\s*[.!,:;—–-]\s*(?:${AUTH_HINT})(?!\w)${REST}|\s+(?:to|again|with|using|first|by|via)\s${REST})|${LOGIN}(?=$|[.!,]| first| again| to )${REST}|未登录|尚未登录|请先登录)$`, 'i');
+  function resourceError(raw) {
+    // Leading glyphs of each TUI: Claude ⏺ ⎿ ✻ ✽ ✳ ✶ ✢ ✺, Codex • ■ ⚠ ✗ ✘, Cursor ● ◦ ◆ ⬢, agy/Gemini ✦ ✕ ✖ ℹ.
+    const line = String(raw || '').trim().replace(/^[│┃⏺⎿✻✽✳✶✢✺●•◦◆▪⬢✦■✗✘✖✕×▲!⚠ℹ️>\s]+/, '').replace(/\s*[│┃]$/, '')
+      .replace(/^\[?(?:API |request )?error:\s*/i, '').replace(/\]$/, '');
+    if (EXHAUSTED.test(line)) return 'quota';
+    if (RATE_LIMITED.test(line)) return 'rate_limit';
+    if (AUTH.test(line)) return 'auth';
+    return '';
+  }
   function percent(n) { return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null; }
   function resetTime(value, now) {
     if (typeof value === 'number') return value > 1e9 && value < 1e11 ? value * 1000 : null;
@@ -107,7 +137,7 @@
     const lines = clean.split('\n');
     let error = -1, resumed = -1;
     lines.forEach((line, i) => {
-      if (EXHAUSTED.test(line) || RATE_LIMITED.test(line)) error = i;
+      if (['quota', 'rate_limit'].includes(resourceError(line))) error = i;
       if (/^[│⏺✻✽●\s]*(?:usage limit reset\b|quota reset\b)/i.test(line)) resumed = i;
       // A model switch below an old error means that error belongs to the
       // previous model, even if it remains visible in the screen history.
@@ -367,7 +397,18 @@
     const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
     return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, cells, account: entry.account || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
+  function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
+    const cmd = String(command || '').trim();
+    const bin = cmd.match(/^(claude|codex|cursor-agent|agy|antigravity|gemini)(?:\s|$)/i)?.[1]?.toLowerCase();
+    const provider = { claude: 'Claude', codex: 'Codex', 'cursor-agent': 'Cursor', agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Antigravity' }[bin];
+    if (!provider) return null;
+    const model = cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || '';
+    if (provider === 'Antigravity' && model && !modelScope(provider, model) || provider === 'Cursor' && !modelScope(provider, model)) return null;
+    const seatList = claudeSeats(seats);
+    const seat = provider === 'Claude' ? seatList.find((s) => s.id === activeSeatId) || seatForColumn({ cmd }, seatList) : null;
+    return summary(store || {}, provider, now, seat);
+  }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text };
 
 });

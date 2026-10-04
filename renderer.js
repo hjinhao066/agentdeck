@@ -502,10 +502,12 @@ function terminalIdle(col, entry) {
     const live = MainCore.cursorActivity(entry.lastScreen);
     return live === 'idle' || (live !== 'working' && !MainCore.cursorBusy(entry.lastScreen) && AGENT_IDLE_RE.test(entry.lastScreen || ''));
   }
-  return !WORKING_RE.test(entry.lastScreen || '') && AGENT_IDLE_RE.test(entry.lastScreen || '');
+  const screen = MainCore.codexStatusScreen(entry.lastScreen, col.cmd);
+  return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
 }
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
 function classify(text, entry, cmd) {
+  text = MainCore.codexStatusScreen(text, cmd);
   const activity = MainCore.terminalActivity(text, cmd);
   if (activity === 'quota') return activity;
   const lines = text.split('\n');

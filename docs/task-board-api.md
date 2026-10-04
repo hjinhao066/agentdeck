@@ -19,7 +19,7 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | project | 文件项目名；建卡后不可改 |
 | title / detail | 标题 / 完整任务说明 |
 | status | `todo` 待办、`doing` 进行中（也是「开始」入口）、`review` 待验收、`needs_user` 等用户、`done` 完成 |
-| flag | `null` 正常、`failed` 失败、`blocked` 前置未完成、`held` 挂起 |
+| flag | `null` 正常、`failed` 失败、`blocked` 前置未完成、`held` 挂起、`quota` 额度/登录/限流问题 |
 | order | 项目内非负数字，允许小数插入；界面按 project/order/id 排序 |
 | depends_on | 前置卡片 ID 数组，允许跨项目；不能缺失或成环 |
 | assignee | `null` 或 `{agent, model}`；未显式指定模型时先为 `default`，识别到本会话实际模型后更新，不猜账号配置 |
@@ -32,8 +32,9 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | important | 可选 boolean，默认 false；明确标为重要的卡片交队长调度，与 verify 独立 |
 
 程序还保存 `attempt_id`、`review_session`、`attempt_closed`、`last_event`、
-`last_failure_attempt`、`consecutive_failures`、`dispatch_session_id`、
-`dispatch_claim`、`start_previous_status`；迁移卡另有 `migration_source`。
+`last_failure_attempt`、`consecutive_failures`、`session_host`、`session_bound_at`、
+`dispatch_session_id`、`dispatch_host`、`dispatch_bound_at`、
+`dispatch_claim`、`dispatch_wait`（额度排队提示）、`resource_failure`（quota/auth/rate_limit）、`start_previous_status`；迁移卡另有 `migration_source`。
 客户端编辑时保留这些字段以及未知字段，不自行构造或删除流转标记。
 
 每次读写重读磁盘，无长期数据缓存；本机进程锁放系统临时目录，写入使用同目录
@@ -74,10 +75,10 @@ unsubscribe();
 | `list(filter = {})` | 可选 `project`、`status`、`archived`；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
 | `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
 | `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
-| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；清除旧会话绑定，移入 doing 时检查前置 |
+| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；移入 doing 时保留未归档会话作为占用标记并检查前置；其他移动清除绑定 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
 | `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
-| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | `Promise<{card, dispatcher:'captain'} \| {ignored: true, card?}>`；只通知队长，不开调度会话 |
+| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | `Promise<{card, dispatcher:'captain'} \| {ignored: true, card?, occupied?: true}>`；只通知队长，不开调度会话；occupied 表示未归档会话占用 |
 | `reorder(id, anchor = {})` | 可选 before 或 after 卡片 ID，只接受同项目锚点，两者不可同时提供；无锚点放项目末尾 | `Promise<{card, notices}>`；只改 order，必要时重排项目内序号 |
 | `answer(id, reply)` | 非空答案，必须已有队长 | 通知队长；需要你的卡回到 doing，活跃会话保留绑定，无绑定时认领并通知队长 |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
@@ -154,6 +155,9 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 不裁剪列表或说明。`--project` 无卡片时仅为会话项目元数据；有 `--task-id` 时必须
 匹配卡片项目，省略则从卡片继承。重复请求不会重新派活，旧会话/旧尝试的回执
 不会改当前卡。`new` 排队时保留关联，真正开会话时再次校验前置和 held 状态。
+队长的 `task move ... --status doing` 会消费自动开始边沿，不开调度员；队长随后
+`new --task-id` 或 `tell` 安排返工。`new` 拒绝仍活跃的执行/审查尝试；旧会话已归档
+或旧尝试已失败时允许替换，即使旧数据漏写 attempt_closed。
 
 ## 流转
 
@@ -162,7 +166,8 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 | 指令真正送到执行会话 | doing；排队不会假装已开工 |
 | 执行 complete | verify=true → review，否则 done；记录第一句结果 |
 | ask | needs_user；写第一句问题，完整问题仍给队长 |
-| complete --failed / 崩溃 / 额度用尽 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
+| 普通 complete --failed / 崩溃 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
+| quota/process/automatic 来源的额度用尽 / 未登录 / 限流（执行、审查或调度） | doing + quota，保留连续失败计数，不计返工、不触发 held；失败原因给队长。command 的失败文案不做资源分类，照常累计失败 |
 | 所有前置 done | 后续 todo 的 blocked 自动清除，可开始（不会偷偷启动） |
 | review 卡片 new --task-id | 绑定审查会话；审查期间仍 review |
 | 审查 complete | done，清除连续失败次数 |
@@ -186,12 +191,32 @@ important=true、空 detail、需要用户澄清、已有失败的卡片交队�
 说不清也用 ask 转交。并发满时交队长安排。dispatcher=captain 时只给后台回执
 通道发「用户要开始卡片 X」，不向输入框注入。
 
+自动调度和 `new` 开会话前读取本机被动额度观测，按命令所选 provider 和当前
+Claude 席位判断；已用尽时不开 PTY，显示「额度用尽，稍后自动开」。
+调度卡保留未送出的 dispatch_claim，队长列心跳/任务库巡检在额度恢复后重试；
+排队执行会话在额度恢复后开工，可用 provider 的其他排队任务仍能先执行。未知额度
+不等于可用，但也不伪造用尽状态；Cursor/Antigravity 只使用已支持的模型额度池。
+队长在等待期间手动 new 绑定或排队同一卡片，会消费认领，旧调度请求不再开会话。
+
 主进程监听 tasks 目录（含原子 rename），100ms 合并通知，另每 60 秒巡检。
 发现外部卡片新进入 doing 且没有执行/调度会话、没有 failed/held/blocked 时，
-先原子写入 `dispatch_claim`，再通知同一个 startCard 入口。普通内容更新、队员
+先原子写入 `dispatch_claim`，再通知同一个 startCard 入口。派出前重查认领键、
+执行/调度指针和本机未归档的卡片关联会话，刚开的执行或审查会话也阻止重复调度。
+未归档的已完成会话仍阻止自动调度，但允许队长显式 new 替换。普通内容更新、队员
 开工事件、重复文件通知均不启动调度。同一卡片同一次开始只认领一次；退出重开
 保留 delivered 标记，尚未送出的本机认领在有队长后接续。再次开始必须先回 todo，
 再通过 startCard 或移入 doing。历史迁移卡已标认领完成，避免重复派旧活。
+新执行/调度绑定由主进程记录本机 hostname，不接受调用方指定归属。已关闭的尝试若本机
+找不到旧会话，移回 doing 时清除旧绑定；未关闭的本机旧会话缺失时也可直接 new 重绑，
+无需先移动卡片。旧版本无 hostname 的绑定，用本机归档和 mainSession.tasks 的派活记录
+证明归属：曾在本机派活、当前列已消失的 id 视为关闭。明确属于另一台机器，或既无机器
+归属也无本机记录的未关闭绑定继续保护，不能仅凭本机 ledger 缺失就覆盖远端工作。
+新绑定尚未开工、配置尚未落盘的 15 秒内保留占用；已开工或有本机删除记录时无需等待。
+心跳单次扫描复用一份会话配置，下次扫描重新读取。
+拖到进行中遇到旧会话占用时，界面提示队长检查未归档会话，不再声称有队员正在做。
+终端状态与侧栏额度采样共用原生错误识别，只接受完整额度提示、原生重置/重试后缀、
+登录指引或明确的 API 错误码/错误类型；Rate limit、Unauthorized、Limit reached 等
+普通回复的主题前缀不再触发额度失败回执或额度缓存。
 日志通过已有主进程诊断日志（系统临时目录 `agentdeck-notify.log`）记录
 `task-board start claimed`、卡片 ID、项目和认领键，
 不记录卡片正文或能力 token；无变化不调用模型、不产生日志。

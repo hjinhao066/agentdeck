@@ -13,6 +13,7 @@ class TaskHeartbeat {
     try {
       this.store.reconcile();
       const cards = this.store.list();
+      const sessions = this.store.sessions();
       const fingerprint = JSON.stringify(cards);
       if (fingerprint !== this.fingerprint) { this.fingerprint = fingerprint; this.onChange(); }
       for (const card of cards) {
@@ -21,7 +22,7 @@ class TaskHeartbeat {
         if (card.status === 'doing' && !card.flag && !card.session_id && !card.dispatch_session_id) {
           if (card.dispatch_claim && !card.dispatch_claim.delivered && card.dispatch_claim.owner === os.hostname()) this.pending.set(card.id, card.dispatch_claim.key);
           else if (!card.dispatch_claim || entered && previous.claimKey === card.dispatch_claim.key) {
-            const result = this.store.claim({ id: card.id, updated: card.updated, newEntry: !!entered });
+            const result = this.store.claim({ id: card.id, updated: card.updated, newEntry: !!entered }, sessions);
             if (!result.ignored) {
               this.pending.set(card.id, result.card.dispatch_claim.key);
               this.log(`task-board start claimed id=${card.id} project=${card.project} key=${result.card.dispatch_claim.key}`);
@@ -32,9 +33,10 @@ class TaskHeartbeat {
       }
       const ids = new Set(cards.map((c) => c.id));
       for (const id of this.previous.keys()) if (!ids.has(id)) this.previous.delete(id);
+      const current = this.pending.size ? this.store.list() : cards;
       for (const [id, key] of this.pending) {
-        const card = cards.find((c) => c.id === id);
-        if (!card || card.dispatch_claim?.delivered || card.status !== 'doing') { this.pending.delete(id); continue; }
+        const card = current.find((c) => c.id === id);
+        if (!card || card.dispatch_claim?.key !== key || card.dispatch_claim.delivered || card.status !== 'doing' || card.flag || this.store.occupied(card, sessions)) { this.pending.delete(id); continue; }
         if (!this.delivering?.has(key)) {
           if (!this.delivering) this.delivering = new Set();
           this.delivering.add(key);
