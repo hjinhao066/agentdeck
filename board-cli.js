@@ -120,6 +120,8 @@ function usage() {
     '  peek --id <session-id> [--lines 40]       live terminal output, plain text (1–1000 rows)\n' +
     '  receipts                                 receipts not yet seen\n' +
     '  receipts --wait [--timeout seconds]       block for unread receipts/questions; empty on timeout\n' +
+    '  receipts --snapshot                      native host: non-consuming JSON batch with stable ids\n' +
+    '  receipts --ack \'["receipt-id"]\'           native host: acknowledge only successfully handled ids\n' +
     '  answer --to <session-id> --key y|n|1-9|enter|esc   answer a confirmation prompt\n'
   );
 }
@@ -247,6 +249,17 @@ async function main() {
     return;
   }
   if (action === 'ledger' || action === 'receipts') {
+    if (action === 'receipts' && (args.snapshot !== undefined || args.ack !== undefined)) {
+      if (args.wait !== undefined || args.timeout !== undefined || args.snapshot !== undefined && args.ack !== undefined) fail('Native receipt snapshot/ack cannot be combined with wait.');
+      let receiptIds;
+      if (args.ack !== undefined) {
+        try { receiptIds = JSON.parse(args.ack); } catch (_) { fail('receipts --ack requires a JSON array of receipt ids.'); }
+        if (!Array.isArray(receiptIds) || receiptIds.length > 50 || receiptIds.some((id) => typeof id !== 'string' || !/^[a-z0-9-]{1,100}$/.test(id))) fail('Invalid receipt ids.');
+      } else if (args.snapshot !== true) fail('receipts --snapshot takes no value.');
+      const response = await request({ action: receiptIds ? 'main-receipts-ack' : 'main-receipts-snapshot', receiptIds }, false);
+      process.stdout.write(`${response.result || ''}\n`);
+      return;
+    }
     if (action === 'receipts' && args.wait === true) {
       const seconds = args.timeout === undefined ? undefined : (typeof args.timeout === 'string' && args.timeout.trim() ? Number(args.timeout) : NaN);
       if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0 || seconds > Number.MAX_SAFE_INTEGER / 1000)) fail('receipts --timeout must be a non-negative number of seconds.');

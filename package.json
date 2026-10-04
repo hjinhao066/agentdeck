@@ -46,6 +46,8 @@
       "board-core.js",
       "board-cli.js",
       "board-credentials.js",
+      "codex-captain-driver.js",
+      "scripts/codex-captain-host.js",
       "chat-core.js",
       "agent-info.js",
       "quota-core.js",

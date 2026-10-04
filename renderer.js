@@ -2766,7 +2766,10 @@ document.getElementById('dlgSave').onclick = () => {
   if (needsRespawn) delete col.modelSessionId;
   if (titleChanged) setColumnDisplayTitle(col, title); // keep auto-title behavior when only cwd/cmd changed
   saveConfig();
-  if (needsRespawn) respawnColumn(col); // a cwd or startup-command change restarts the shell
+  if (needsRespawn) {
+    if (col.isMain) MainSession.clearContext({ command: cmd, fromEdit: true });
+    else respawnColumn(col); // a cwd or startup-command change restarts the shell
+  }
   dlg.close();
 };
 // Enter saves from any field of the dialog, not just the title.
@@ -3205,8 +3208,8 @@ window.deck.onBoardCommand(async (message) => {
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-task');
+        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task');
       },
       (error) => {
         const response = { done: true, error: error.message };
