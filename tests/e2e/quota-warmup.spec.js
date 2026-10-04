@@ -171,7 +171,7 @@ test('a proven reset warms once in the background and shows its log and next res
   await refresh();
   const seat = page.locator('#quotaBar [data-seat-id="cn"]');
   await expect(seat).toHaveAttribute('title', /已预热 · 下次重置 \d{2}:\d{2}/);
-  await expect(seat).toHaveAttribute('aria-label', /已预热 · 下次重置/);
+  await expect(seat).toHaveAttribute('aria-describedby', 'quota-tip-Claude-cn');
   await seat.focus();
   await expect(seat.getByRole('tooltip')).toBeVisible();
   await expect(seat.getByRole('tooltip')).toContainText('已预热 · 下次重置');

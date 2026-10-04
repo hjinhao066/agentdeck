@@ -44,7 +44,15 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
   await expect(badge('Claude')).toHaveAttribute('aria-label', /快用完，5 小时剩余 19%，每周剩余 91%/);
   await expect(badge('Claude')).toHaveAttribute('title', /^状态：快用完 · 采样 \d\d:\d\d\n/);
-  await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位用量（\/usage）；高（按账号 ID 归属）/);
+  await expect(badge('Claude')).toHaveAttribute('title', /来源：(Claude 席位用量（\/usage）；高（按账号 ID 归属）|Claude 席位本地用量缓存；高（原生用量及账号归属已验证）)/);
+
+  const binding = await page.evaluate(async () => {
+    const sample = config.quotas['Claude:cn'].sample;
+    return { bound: sample.accountBound, key: sample.accountKey, expected: (await window.deck.claudeSeatUsage('cn')).accountKey };
+  });
+  expect(binding.bound).toBe(true);
+  expect(binding.key).toBeTruthy();
+  expect(binding.key).toBe(binding.expected);
 
   // Every account stays on one compact row: no wrapping, no clipped name or value.
   for (const box of await page.locator('#quotaBar .quota-item').evaluateAll((els) => els.map((e) => [e.getBoundingClientRect().height, e.scrollWidth <= e.clientWidth]))) expect(box).toEqual([22, true]);
@@ -55,7 +63,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Cursor')).toHaveAttribute('aria-label', /^Grok 4\.7：/);
   await expect(badge('Antigravity')).toHaveAttribute('aria-label', /^Gemini：/);
   await expect(badge('Claude').locator('.quota-name')).toHaveText('🇨🇳');
-  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：cn\*\*\*@example.test/);
+  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：cn?\*\*\*@example.test/);
   // The isolated profile is barred from reading the user's real quota caches.
   expect((await page.evaluate(() => window.deck.quotaLocal())).filter(q => q.windows).map(q => q.seatId)).toEqual(['cn']);
   // Quota tracks Grok on Cursor, while model badges already choose that family.
