@@ -33,7 +33,8 @@ for (const provider of ['codex', 'claude', 'agy', 'cursor']) {
       // narrow Codex line wrapped by xterm. The real PTY receives this resize.
       terms.get('silent-worker').term.resize(45, 80);
     });
-    await page.evaluate((provider) => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: `busy ${provider}` }, MainSession.mainCol()), provider);
+    await expect.poll(() => page.evaluate(() => [terms.get('silent-worker').term.cols, terms.get('silent-worker').term.rows])).toEqual([45, 80]);
+    await page.evaluate((provider) => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: `busy ${provider} rows=80` }, MainSession.mainCol()), provider);
     await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 20000 }).toBe('working');
     await expect.poll(() => page.evaluate((provider) => {
       const entry = terms.get('silent-worker');

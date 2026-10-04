@@ -3,6 +3,8 @@
 A Windows/macOS multi-column terminal app for running AI agents side by side.
 Each column has its own shell, output history and input. The Conductor Board
 adds explicit task relationships without taking control of manual terminals.
+Toolbar controls wrap onto additional rows when the sidebar or right pane
+leaves too little room, keeping view controls and quota tooltips reachable.
 
 ## Layout
 

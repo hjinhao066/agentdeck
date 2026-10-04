@@ -119,12 +119,19 @@ test('saved terminal and chat choices survive actual quit and relaunch', async (
 });
 
 test('global changes preserve terminal objects, draft and side-pane terminal ownership', async () => {
+  // Keep toolbar controls reachable when the right pane leaves a narrow deck.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 760));
   await column('view-0').locator('.composer textarea').fill('unsent draft');
   await page.evaluate(() => {
     window.originalTerminals = [...terms.values()].map((t) => t.term);
     SidePane.show('terminal', true);
   });
   await expect(page.locator('.side-tab[data-tab="terminal"]')).toHaveClass(/active/);
+  await expect.poll(() => globalButton().evaluate((button) => {
+    const r = button.getBoundingClientRect(), bar = document.getElementById('topBar').getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return r.left >= bar.left && r.right <= bar.right && r.top >= bar.top && r.bottom <= bar.bottom && button.contains(hit);
+  })).toBe(true);
   await globalButton().click();
   await expectGlobal('term');
   for (const id of ['view-0', 'view-1', 'view-2']) await expect(column(id).locator('.term .xterm')).toHaveCount(1);
