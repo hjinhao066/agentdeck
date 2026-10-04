@@ -8,8 +8,18 @@
     { id: 'cn', name: 'CN', icon: '🇨🇳', configDir: '~/.claude' },
     { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us' },
   ];
-  const CODEX_COMMAND = 'codex --model gpt-6.1-sol --dangerously-bypass-approvals-and-sandbox';
+  function codexCommand(effort = 'high') {
+    return `codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=${effort === 'xhigh' ? 'xhigh' : 'high'} --dangerously-bypass-approvals-and-sandbox`;
+  }
+  const CODEX_COMMAND = codexCommand();
   const CLAUDE_COMMAND = 'claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions';
+  function relayCodexCommand(command, effort) {
+    const words = String(command).match(/(?:[^\s"']|"[^"]*"|'[^']*')+/g) || [];
+    const program = (words[0] === 'command' ? words[1] : words[0]) || '';
+    const name = program.replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '');
+    return name.toLowerCase() === 'codex'
+      ? (words[0] === 'command' ? 'command ' : '') + codexCommand(effort).replace(/^codex/, program) : command;
+  }
   function normalize(value) {
     const ids = new Set();
     const seats = (Array.isArray(value) ? value : DEFAULTS).slice(0, 8).filter((s) => {
@@ -80,5 +90,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+
 });

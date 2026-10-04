@@ -10,8 +10,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 2. Read this file, `README.md`, and the relevant implementation and tests. Both
    platforms share this repository; do not create divergent Windows/Mac copies.
 3. Implement the complete change and add regression tests for meaningful bugs.
-   Run `npm test`, `npm run test:e2e`, and `npm audit` before delivery. Run the
-   packaged E2E suite when runtime, preload, native modules or packaging changes.
+   Feature branches run `npm test` plus the E2E specs that cover the change.
+   A patch release runs `npm test` and `npm run test:smoke` (see README 发版流程).
+   Full `npm run test:e2e` runs overnight or on another machine. Run `npm audit`
+   before packaging. Run the packaged E2E suite when runtime, preload, native
+   modules or packaging changes.
 4. Update user/developer documentation when behavior or build steps change.
 5. Fetch again, integrate concurrent remote commits without losing either side,
    commit the task's source/tests/docs/lockfile, and **push to GitHub in the same

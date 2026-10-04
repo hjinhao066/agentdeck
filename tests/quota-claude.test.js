@@ -77,12 +77,15 @@ test('redirect/auth/rate limit/malformed/oversized/timeout/network responses fai
     assert.equal(calls.length, 1);
   }
   const partial = await C.requestUsage('fake', transport(200, JSON.stringify({ five_hour: { utilization: 50, resets_at: 'fake-secret' }, seven_day: { utilization: 120 } }), []));
-  assert.deepEqual(partial.windows, [{ key: 'fiveHour', remaining: 50, resetText: '' }]);
-  const tiny = await C.requestUsage('fake', transport(200, JSON.stringify({ five_hour: { utilization: 99.999, resets_at: 'in 1h' } }), []));
-  assert.equal(tiny.windows[0].resetText, '');
+  assert.equal(partial, null);
+  const reset = new Date(Date.now() + 3600000).toISOString();
+  const tiny = await C.requestUsage('fake', transport(200, JSON.stringify({ five_hour: { utilization: 99.999, resets_at: reset }, seven_day: { utilization: 5, resets_at: reset } }), []));
+  assert.equal(Math.round(tiny.windows[0].remaining * 10) / 10, 0);
   assert.equal(Q.cacheClaude(tiny, tiny.at).windows[0].exhausted, false);
+  // Rounding a non-exhausted value to zero must not invent exhaustion.
+  assert.equal(C.officialUsage({ five_hour: { utilization: 99.999, resets_at: reset }, seven_day: { utilization: 5, resets_at: reset } }, S.normalize()[0], 'service', Date.now()).windows[0].exhausted, false);
 });
-test('idle seats refresh independently every 15 minutes; failure emits no authority and persists no credentials', async (t) => {
+test('idle seats refresh independently every five minutes; failure retains samples and persists no credentials', async (t) => {
   const home = fixture(t), seats = S.normalize();
   let now = Date.now(), fail = false;
   const calls = [];
@@ -97,13 +100,13 @@ test('idle seats refresh independently every 15 minutes; failure emits no author
   now += C.INTERVAL_MS - 1; await poller.tick(); assert.equal(calls.length, 2);
   now++; fail = true; await poller.tick(); assert.deepEqual(calls, ['cn', 'us', 'cn', 'us']);
   const data = await readLocal(home, undefined, now, seats);
-  assert.deepEqual(poller.samples().map(q => [q.seatId, q.windows.length]), [['cn', 2]]);
+  assert.deepEqual(poller.samples().map(q => [q.seatId, q.windows?.length || 0]), [['cn', 2], ['us', 0]]);
   assert.ok(data.every(q => !q.windows?.length || q.accountBound));
   assert.ok(!JSON.stringify(data).includes('fake-'));
   for (const seat of seats) assert.ok(!fs.readFileSync(M.credentialLocation(seat, home).usagePath, 'utf8').includes('fake-'));
   const store = {};
   for (const sample of poller.samples()) Q.observe(store, sample, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[0]).displayLabel, '5h 25% · 7d 60%');
+  assert.equal(Q.summary(store, 'Claude', now, seats[0]).displayLabel, '5h 25% ↻未知 · 7d 60% ↻未知');
   assert.equal(Q.summary(store, 'Claude', now, seats[1]).state, 'unknown');
 });
 test('refresh coalesces concurrent ticks, does not apply removed seats, and tolerates cache-write failure', async (t) => {
@@ -139,7 +142,7 @@ test('bound server samples retain explicit screen exhaustion; empty and unbound 
   const sample = (at, windows) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows }, at), seatId: seat.id, configDir: seat.configDir, accountKey: 'fake-account', accountBound: true });
   Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: seat.id, at: now - 1000, source: '会话屏幕', exhausted: true, windows: [] }, now);
   Q.observe(store, sample(now, [{ key: 'weekly', remaining: 60 }]), now);
-  assert.equal(Q.summary(store, 'Claude', now, seat).displayLabel, '已用尽 · 5h 无数据 · 7d 60%');
+  assert.equal(Q.summary(store, 'Claude', now, seat).displayLabel, '5h 已用尽 ↻未知 · 7d 60% ↻未知');
   assert.equal(Q.summary(store, 'Claude', now + C.INTERVAL_MS + 1000, seat).state, 'exhausted');
   Q.observe(store, sample(now + 1, []), now + 1);
   assert.equal(Q.summary(store, 'Claude', now + 1, seat).state, 'exhausted');
@@ -149,19 +152,20 @@ test('bound server samples retain explicit screen exhaustion; empty and unbound 
   assert.equal(Q.summary(store, 'Claude', now + 3, seat).state, 'exhausted');
   assert.equal(Q.summary(store, 'Claude', now + 31 * 60000, seat).state, 'exhausted');
 });
-test('new live observations remain current between successful polls; rereading an older server sample does not clear a new quota error', () => {
+test('official numbers remain current between successful polls; rereading an older server sample does not clear a new quota error', () => {
   const store = {}, seat = S.normalize()[0], now = Date.now();
   const api = { ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [{ key: 'weekly', remaining: 70 }] }, now), seatId: seat.id, configDir: seat.configDir, accountKey: 'fake-account', accountBound: true };
   Q.observe(store, api, now);
-  Q.observe(store, { ...api, at: now + 1000, source: '会话屏幕', windows: [{ label: '每周', remaining: 55 }] }, now + 1000);
+  Q.observe(store, { ...api, at: now + 1000, official: false, source: '会话屏幕', windows: [{ label: '每周', remaining: 55 }] }, now + 1000);
   Q.observe(store, api, now + 1000);
-  assert.equal(Q.summary(store, 'Claude', now + 1000, seat).displayLabel, '5h 无数据 · 7d 55%');
-  Q.observe(store, { ...api, at: now + 2000, source: '会话屏幕', exhausted: true, windows: [] }, now + 2000);
+  assert.equal(Q.summary(store, 'Claude', now + 1000, seat).displayLabel, '7d 70% ↻未知');
+  Q.observe(store, { ...api, at: now + 2000, official: false, source: '会话屏幕', exhausted: true, windows: [] }, now + 2000);
   Q.observe(store, api, now + 2000);
   assert.equal(Q.summary(store, 'Claude', now + 2000, seat).state, 'exhausted');
+  // A newer weekly-only sample cannot prove the 5-hour window has room.
   Q.observe(store, { ...api, at: now + 3000 }, now + 3000);
   assert.equal(Q.summary(store, 'Claude', now + 3000, seat).state, 'exhausted');
-  Q.observe(store, { ...api, at: now + 4000, source: '会话屏幕', windows: [], resumed: true }, now + 4000);
+  Q.observe(store, { ...api, at: now + 4000, official: false, source: '会话屏幕', windows: [], resumed: true }, now + 4000);
   assert.equal(Q.summary(store, 'Claude', now + 4000, seat).state, 'normal');
 });
 test('OAuth reads bind a stable account and discard account changes during the request', async (t) => {
@@ -212,7 +216,8 @@ test('polling rechecks identity before exposing samples or persisting an in-flig
   fs.writeFileSync(loc.metadataPath, JSON.stringify({ oauthAccount: { accountUuid: 'changed-account' } }));
   release(value); await pending;
   assert.equal(writes, 0);
-  assert.deepEqual(poller.samples(), []);
+  assert.equal(poller.samples()[0].failureOnly, true);
+  assert.equal(poller.samples()[0].windows, undefined);
   const current = bound(seat, home, value);
   const cached = C.createRefresh({ home, getSeats: () => [seat], read: async () => current });
   t.after(() => cached.dispose());
@@ -231,7 +236,71 @@ test('OAuth zeros retain a numeric latch until reset and unbound or mismatched s
   assert.equal(Q.observe(store, { ...sample(now + 2, 70), accountKey: 'other-account' }, now + 2), false);
   assert.equal(Q.observe(store, { ...sample(now + 3, 70), configDir: '~/elsewhere' }, now + 3), false);
   assert.equal(Q.summary(store, 'Claude', now + 3, seat).state, 'exhausted');
-  assert.equal(Q.summary(store, 'Claude', now + 10000, seat).state, 'unknown');
+  assert.equal(Q.summary(store, 'Claude', now + 10000, seat).state, 'danger');
   Q.observe(store, { ...sample(now + 10000, 70), identityOnly: true }, now + 10000);
   assert.equal(store[Q.seatKey(seat.id)].blocked, undefined);
+});
+
+test('display after three consecutive failures retains last remaining percentages, resets and sample time across restart', async (t) => {
+  const home = fixture(t), seat = S.normalize()[0];
+  let time = Date.now(), failed = false;
+  const sampledAt = time, reset5h = new Date(time + 2 * 3600000).toISOString(), reset7d = new Date(time + 4 * 86400000).toISOString();
+  const api = { five_hour: { utilization: 9, resets_at: reset5h }, seven_day: { utilization: 10, resets_at: reset7d } };
+  const poller = C.createRefresh({ home, getSeats: () => [seat], now: () => time, read: async () => {
+    if (failed) throw new Error('fake-secret');
+    return bound(seat, home, { windows: C.officialUsage(api, seat, 'offline-service', time).windows });
+  } });
+  t.after(() => poller.dispose());
+  let store = {};
+  const read = async () => { await poller.tick(); for (const sample of poller.samples()) Q.observe(store, sample, time); };
+  await read();
+  const before = Q.summary(store, 'Claude', time, seat), windows = structuredClone(store[Q.seatKey(seat.id)].sample.windows);
+  assert.match(before.displayLabel, /5h 91% ↻.* · 7d 90% ↻/);
+  failed = true;
+  for (let failures = 1; failures <= 3; failures++) {
+    time += C.INTERVAL_MS; await read();
+    // The old statusline prints remaining, and cannot replace this official sample.
+    const footer = Q.screen('Claude', '', ['5h 91% ↻02:50 · 7d 90% ↻10-07 03:00'], time);
+    Q.observe(store, { ...footer, seatId: seat.id, configDir: seat.configDir }, time);
+    Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 80, weeklyUsage: 90 }, time), seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: store[Q.seatKey(seat.id)].accountKey }, time);
+    assert.equal(store[Q.seatKey(seat.id)].sample.at, sampledAt);
+    assert.deepEqual(store[Q.seatKey(seat.id)].sample.windows, windows);
+    assert.equal(Q.summary(store, 'Claude', time, seat).displayLabel, before.displayLabel);
+  }
+  store = JSON.parse(JSON.stringify(store));
+  for (const display of [Q.summary(store, 'Claude', time, seat), Q.summary(store, 'Claude', time + 3 * 86400000, seat)]) {
+    assert.equal(display.displayLabel, before.displayLabel);
+    assert.match(display.sampleLabel, /采样.*数据已旧/);
+    assert.match(display.detail, /连续 3 次.*保留上次成功采样（数据已旧）/);
+    assert.ok(display.detail.includes(new Date(sampledAt).toLocaleString()));
+  }
+  assert.match(Q.text(store, time, [seat]), /5h 91% ↻.*7d 90% ↻.*数据已旧/);
+  assert.doesNotMatch(Q.text(store, time, [seat]), /5h 9%|7d 10%|fake-secret/);
+  failed = false; time += C.INTERVAL_MS; await read();
+  assert.equal(store[Q.seatKey(seat.id)].officialStatus.failures, 0);
+  assert.equal(store[Q.seatKey(seat.id)].sample.at, time);
+  assert.doesNotMatch(Q.summary(store, 'Claude', time, seat).sampleLabel, /数据已旧/);
+});
+
+test('forced refresh targets one seat; normal polling includes CN and coalesces duplicate credential directories', async (t) => {
+  const home = fixture(t), seats = S.normalize(), calls = [];
+  let time = Date.now();
+  const poller = C.createRefresh({ home, getSeats: () => seats, now: () => time, read: async (seat) => {
+    calls.push(seat.id);
+    return bound(seat, home, { windows: [{ key: 'fiveHour', remaining: 53 }, { key: 'weekly', remaining: 87 }] });
+  } });
+  t.after(() => poller.dispose());
+  await Promise.all([poller.tick(), poller.tick()]);
+  assert.deepEqual(calls, ['cn', 'us']);
+  await poller.tick(); assert.equal(calls.length, 2);
+  time++;
+  await poller.tick({ force: true, seatId: 'cn' }); assert.deepEqual(calls, ['cn', 'us', 'cn']);
+  const duplicates = C.createRefresh({ home, getSeats: () => [seats[0], { ...seats[1], configDir: seats[0].configDir }], read: async (seat) => {
+    calls.push(seat.id);
+    return bound(seat, home, { windows: [{ key: 'fiveHour', remaining: 53 }] });
+  } });
+  t.after(() => duplicates.dispose());
+  await duplicates.tick();
+  assert.deepEqual(duplicates.samples().map(s => s.seatId), ['cn']);
+  assert.deepEqual(calls, ['cn', 'us', 'cn', 'cn']);
 });

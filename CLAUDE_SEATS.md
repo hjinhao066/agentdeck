@@ -10,13 +10,15 @@
   ],
   "activeClaudeSeatId": "cn",
   "captainRelayLabel": "Relay",
-  "captainRelayCodex": { "name": "ChatGPT", "command": "codex --model gpt-6.1-sol --dangerously-bypass-approvals-and-sandbox" }
+  "perpetualCaptain": { "enabled": true, "threshold": 3 },
+  "captainRelayCodex": { "name": "ChatGPT", "command": "codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox" }
 }
 ```
 
 CN是中国 Google 邮箱的 Claude 订阅，US是美国 Google 邮箱的订阅。
 只在本机读取账号元数据，界面只接收打码邮箱，不接收凭据。本机已用真实 CLI 只读核对，CN 和 US 都已登录 Pro；账号元数据和凭据位置独立。
 没有配置时按上述默认值迁移；每列的 `claudeSeatId` 与 `claudeConfigDir` 在首次启动时绑定并持久保存。以后改活动席位或席位设置只影响新会话；原队员、恢复会话和重开会话仍用原目录。Relay 只为替换后的队长重新绑定目录，不写登录凭据。
+
 
 ## 首次准备（macOS）
 
@@ -65,7 +67,7 @@ Claude 队长行右侧的Relay图标打开席位选择，标注当前席位。�
 Relay 只重开队长列，不重启 AgentDeck。侧边栏 Claude 模型标签右侧的旗帜表示该会话实际绑定的 CN/US 席位，悬停或聚焦可查看账号名与目录；其他 provider 不显示 Claude 旗帜。
 
 ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能力与 provider 无关。
-启动 Codex 时绕过 shell 的 codex() 函数，避免重复追加 bypass 参数。`ledger/new/tell/receipts`
+启动 Codex 使用 `--no-daemon` 保留本列环境，丢失环境时只从本列私有能力文件恢复控制通道；绕过 shell 的 codex() 函数，避免重复追加 bypass 参数。`ledger/new/tell/receipts`
 从 Codex 队长的 PTY 子进程执行时有效；独立终端没有能力 token，仍被拒绝。
 切到 ChatGPT 后 activeClaudeSeatId 保留上次 Claude 席位，显式新开 Claude 队员时用它；
 未指定 agent 的队员沿用 Codex。返回 Claude 时复用之前的 Claude 命令（没有则显式 Opus 5.5）。
@@ -80,6 +82,55 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 五分钟超时都保留原队长。忙碌、额度耗尽、已退出或 Codex 队长直接使用本地
 持久存档；每条路径都先保存完整对话和本地接续看板，再允许重开 PTY。
 
+## 永动机自动轮换
+
+默认开启，侧边栏齿轮 → 席位设置中用电源图标开关，5 小时剩余阈值默认
+3%，可改为 0–100%。开关有 tooltip、无障碍名称、键盘焦点和按下状态。
+Bark 密钥文件路径复用 `barkKeyFile`，只保存路径；每次切换发送普通 `active`
+提醒，不带 critical 或音量。未配置/发送失败不撤销已完成的 Relay，界面告知原因。
+
+- 当前 Claude 席位的**可信 5 小时**剩余 ≤ 阈值，或收到本席位真实用尽/限流报错，
+  等队长回合结束、进入静默的 quota 等待后切到另一个已登录 Claude 席位。
+  目标须可信剩余 > 阈值，或未知且没有用尽/低额度标记。
+- 两个 Claude 都有真实用尽/限流证据或可信剩余 0 时切到 Codex GPT-6.1 Sol，通常 `high`。
+  双低但仍有余额、未知或仅未登录，不直接视为“两席位用尽”。
+  当前未处理失败回执，或同名未完任务有过失败时用 `xhigh`；旧的无关失败不升级。
+  自动 Relay 固定这个模型和档位，手动 Relay 保留配置命令。
+- 用尽/低额度的重置时间过去，或看到绑定本账号的恢复证据后，下一次队长空闲
+  优先回到 Claude；工作中、确认提示上、发送中、有未发草稿或附件时不自动切。
+- 每个目标席位/提供方 10 分钟内不重复进入，但首次 CN → US → Codex 可以连续推进。
+  轮换记录及冷却时间存本机配置，重载不清掉防抖。手动选择仍可明确覆盖自动策略。
+
+自动切换使用 Relay 本地持久存档，不再要求额度临界的模型多跑一次存档回合：
+完整旧对话保存成功后，写 `agentdeck-captain-handoff.md` 的队长交接、最近指令、
+任务和短回执，再重开**仅队长**的 PTY。重开前再次检查空闲与草稿。
+新队长自动收到当前提示词及读取 `briefing`、看板交接、`ledger` 的接续指令，
+并被要求先确认旧监听已退出，再重挂恰好一个后台 `receipts --wait --timeout 300`。
+旧令牌撤销，新队长拿新控制令牌；队员及未读回执、提问、排队任务保持原样。
+每次切换留下带目标、原因和时间的横幅与持久对话记录。
+存档失败保留原队长，一分钟后才重试，不会每个 heartbeat 弹提示。
+
+## 额度窗口预热
+
+「设置 · 席位」提供默认开启的图标开关。主进程直接读取现有
+`config.quotas['Claude:<seatId>'].sample` 中已验证账号和目录的 5 小时重置时间，
+兼容已有的席位原生 `agentdeck-usage.json`；不另写 OAuth 查询器。
+采样须 `accountBound: true`、当前账号 `accountKey`、对应 `configDir` 和原始 `at`。
+重置后等待 60 秒，再每 30 秒检查。
+CN/US 有存活的 Claude 会话、发现归属不明的外部 Claude 进程或无法完成进程扫描时，
+都保守跳过。正常会话开始时只取消 AgentDeck 自己启动的预热进程。
+
+预热使用该席位环境中的 `claude --print --model claude-sonnet-5-5 --effort low`，
+关闭工具、自定义扩展、MCP 和会话持久化，独立临时工作目录，不创建列、不进入队员列表。
+不读取密码或 OAuth token，不执行登录、登出、安装或更新命令。
+每窗尝试状态在启动前原子写入用户数据目录 `quota-warmup-state.json`；成功封窗，
+失败等一分钟后仅重试一次，应用崩溃后的未完成请求也计入尝试次数。
+
+每次尝试在 `quota-warmup.log` 写席位、时间、结果和可信新重置时间。
+原生 `rate_limit_event` 的 5 小时窗口及现有可信额度采样能更新下次重置时间；模型输出、七天窗口和
+“现在加 5 小时”都不能作为依据。额度详情显示「已预热 · 下次重置 xx:xx」，
+CLI 没有返回时间时显示未知。账号或配置目录变更会隔离之前的预热记录。
+
 ## 与 feat/quota-bar 的数据约定
 
 读取同一个 `config.claudeSeats`，勿按显示名称索引账号。主进程可使用
@@ -87,7 +138,7 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第三方会话状态行不能归属于两个席位，屏幕百分比不进入配置席位的额度摘要。唯一例外是会话自己的状态行「5h剩余 X% · 7d剩余 Y%」：它由该 Claude 会话标准输入里的 `rate_limits` 计算，属于该会话登录的账号；AgentDeck 只在该列自己的状态行变化时，按该列绑定的席位目录写入 `agentdeck-usage.json`（来源「Claude 会话状态行」，带账号指纹和目录），状态行不含重置时间，所以重置显示未知；用尽报错和恢复时间仍按报错会话的绑定席位保留，并记录 `sourceColumnId` 供浮层和 quota 命令追溯；过了恢复时间自动清除。
 
 每席位本地缓存为 `<configDir>/agentdeck-usage.json`，不建符号链接。被动捕获 Claude
-原生 `/usage` 面板中的 5 小时/每周剩余与重置文本，记录产生它的列的席位。
+原生 `/usage` 面板中的 5 小时/每周剩余与重置文本，记录产生它的列 id、固定目录及账号指纹。数字必须与缓存自身记录的账号和目录一致；当前登录元数据不能给旧缓存补归属。
 上下文百分比、费用、共享 statusline 的百分比都不会写为额度。没有实际数据时
 返回 null，额度摘要显示未知；不能据此推断未登录、账号尚有额度或账号用尽。缓存还必须携带 `accountKey`（账号 ID 的 SHA256 前 16 位；旧元数据无 ID 时使用邮箱指纹）和展开后的 `configDir`，与本席位当前元数据和目录一致才可使用。旧缓存缺少归属或账号已变更时不复制、不补猜归属，只等待本席位新数据；侧边栏额度区、悬停浮层和 `board-cli quota` 使用同一校验后的摘要。
 
@@ -97,6 +148,8 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第
   "source": "Claude /usage",
   "accountKey": "<账号 ID 的 SHA256 前 16 位；旧元数据无 ID 时使用邮箱指纹>",
   "configDir": "/Users/example/.claude-us",
+  "sourceColumnId": "producing-column-id",
+
   "windows": [
     { "key": "fiveHour", "remaining": 70, "resetText": "5pm (America/Los_Angeles)" },
     { "key": "weekly", "remaining": 20, "resetText": "Oct 8" }
@@ -106,7 +159,7 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第
 
 主进程 `readUsage(seat, home)` 或页面的受限
 `deck.claudeSeatUsage(seatId)` 返回经过白名单过滤的用量。
-`deck.claudeSeats()` 返回配置目录、打码邮箱、登录凭据存在状态及 usagePath，
+`deck.claudeSeats()` 返回配置目录、打码邮箱、不可逆账号指纹、登录凭据存在状态及 usagePath，
 不返回账号原始邮箱或凭据。`claude-seat-changed` 事件的 detail 是 `{seatId}`，
 供额度区立即刷新。1.0.0 的 quota-bar 已合入，同一配置的 CN/US 各显示独立一行（1.1.x 起额度从顶栏移到侧边栏底部）；无真实数据时显示未知。Relay 不主动发送用量查询。
 

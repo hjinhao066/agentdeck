@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -36,12 +37,14 @@ test.beforeAll(async () => {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
+  await expect(page.locator('.column')).toHaveCount(4);
+  await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   await expect(page.locator('.column.chat-mode')).toHaveCount(4);
   // the stand-in has printed its box: the session is ready for prompts
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(4);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -110,9 +113,11 @@ test('a very long prompt is not cut: it goes to the agent as a file', async () =
   await expect(col.locator('.composer textarea')).toHaveValue('');
 });
 
-test('a new plain session opens as a chat page, and an agent started in it shows its status lines', async () => {
+test('a new plain session opens in terminal mode, and an agent shows its status lines in chat mode', async () => {
   const id = await page.evaluate(() => addAndFocusColumn().id);
   const col = page.locator(`.column[data-col-id="${id}"]`);
+  await expect(col).not.toHaveClass(/chat-mode/);
+  await col.locator('.view-toggle').click();
   await expect(col).toHaveClass(/chat-mode/);
   await expect.poll(() => page.evaluate((i) => window.deck.ptyIsAlive(i), id)).toBe(true);
   await page.evaluate(([i, cmd]) => window.deck.ptyInput(i, cmd + '\r'), [id, FAKE]);
@@ -197,7 +202,7 @@ test('dragging a session into a folder moves its column, and the order persists'
   expect(await alive('ws-d')).toBe(true);
 });
 
-test('archive keeps the conversation; restore brings the session back with it', async () => {
+test('archive keeps the conversation; restore brings the session back with it', { tag: '@smoke' }, async () => {
   const col = page.locator('.column[data-col-id="ws-a"]');
   await col.locator('.composer textarea').click();
   await page.keyboard.type('remember the archive drill');
@@ -220,6 +225,8 @@ test('archive keeps the conversation; restore brings the session back with it', 
   await page.locator('.nav-archived-item[data-archived-id="ws-a"]').click();
   const restored = page.locator('.column[data-col-id="ws-a"]');
   await expect(restored).toBeVisible();
+  await expect(restored).not.toHaveClass(/chat-mode/);
+  await restored.locator('.view-toggle').click();
   await expect(restored.locator('.msg.user .bubble').last()).toHaveText('remember the archive drill');
   await expect.poll(() => alive('ws-a'), { timeout: 15000 }).toBe(true);
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('ws-a');

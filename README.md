@@ -103,6 +103,11 @@ the middle:
 - **Skills** lists every `SKILL.md` the agent CLIs on this machine can see, so
   you can read one rendered or edit its full Markdown and save it (⌘S). See below.
 
+私人手机网页端：设置齿轮 →「手机网页端」开启，仅监听 `127.0.0.1`。
+可通过 VPS HTTPS + 自动恢复的 SSH 隧道在外访问，手机无需 VPN；入口口令、
+设备 token 登录及 CSRF 保护。查看队长对话、会话、只读看板与队员输出，并给队长派活。
+部署、首次登录、吊销和回滚见 [手机网页端说明](docs/mobile-web.md)。
+
 ## Skills
 
 The Skills page scans the shared originals in `~/.agents/skills` and each tool's
@@ -136,12 +141,35 @@ skipped.
 发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
 看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：按项目分泳道、
 按状态分五列，点卡片跳到对应会话；架构图只画正在跑的会话，看板列出全部任务。
+架构图标签右边的清单图标打开「当前版本进度」：取 agentdeck 项目里提到下一个版本号
+（比当前 App 版本新的最小版本，如 1.1.3）的卡片——标题或说明里写了版本号，或卡片有
+`version` 字段；已归档的完成卡也算。做完的打勾，顶部是整体进度条，看板文件变化时实时刷新。
+
+侧边栏队长行只占一行：皇冠、状态点、队长、小数字徽章（干活中的队员数）、模型胶囊和切换账号按钮；
+各状态计数、最近活动时间和当前状态行放在悬停提示里。
 
 队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸 两个独立 Claude 席位，
 或 ChatGPT（Codex GPT-6.1 Sol）：
 先存进度看板，再重开队长读看板继续，运行中的队员保持原席位。
-侧边栏底部齿轮统一配置席位名称、目录和Relay名称。
+侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。默认开启「永动机」：
+当前 Claude 的可信 5 小时剩余 ≤3% 或真实限流时，在队长空闲后自动接力
+另一个 Claude 席位；两个席位都用尽才交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。
+设置可关闭或改阈值。每次轮换留横幅、对话记录及普通 Bark 提醒，10 分钟内不回切同一目标。
+默认打开「优先用快到期的席位」图标开关：两边 5 小时余额、每周额度和重置时间都可信时，
+队长空闲后优先使用重置至少早 10 分钟、还有可用额度的席位；同边界抖动不切换，数据未知时只保留低额度切换。
+每周剩余 ≤ 阈值的席位不能接力，也不预热。额度详情有一行说明当前席位、预热和切换策略。
 首次第二账号登录、凭据隔离和 quota-bar 数据接口见 [CLAUDE_SEATS.md](CLAUDE_SEATS.md)。
+
+席位设置默认开启「额度窗口预热」：有账号及目录归属证明的 5 小时窗口重置约
+一分钟后，CN/US 没有 Claude 会话占用时，后台用 Sonnet 5.5 / low 发送一个字母请求。
+当前队长的窗口到点后也会在它空闲、同席位没有其他会话时补一次；普通输入恢复会取消补请求。
+新官方采样确认新窗口已开始计时后，再按上述规则去使用另一个更快到期的窗口。
+每个窗口成功一次，失败最多重试一次；未知重置时间不发送。请求不创建可见列或队员，
+额度详情显示已预热及 CLI 原生返回的下次重置时间。席位开始普通会话会取消预热子进程。
+永动机和预热直接消费官方额度分支保存的 `config.quotas['Claude:<seatId>'].sample`，
+复用 `fiveHour` 的剩余百分比、绝对重置时间及成功采样时间；不另行查询额度。
+官方采样核对席位、配置目录和凭据槽位指纹；账号或目录变化后，旧采样不能触发自动操作，
+该限制保存到磁盘并跨重启保留。新官方采样确认所有窗口可用后，可解除旧的无期限限流记录。
 
 One standing column, opened from the sidebar entry 队长 (creating it the first
 time, with the agent you pick; afterwards it only returns to it). Once created it
@@ -224,6 +252,13 @@ again with the current provider, model and effort instructions.
   another listener, keeping exactly one active. A timeout prints nothing and exits
   successfully; omit `--timeout` to wait indefinitely. The timeout is in seconds
   (other legacy CLI commands retain their existing timeout units).
+  Codex execution session IDs do not by themselves wake an idle model. An
+  opt-in [native Codex Captain host](docs/native-codex-captain.md) owns a private
+  app-server and uses native tool-output turns for 60-second whole-board checks.
+  It confirms stable receipt IDs only after successful turns; it does not inject
+  receipt text into terminal input. Existing Codex columns need an intentional
+  Captain command switch after runtime integration; installing the script alone
+  does not connect them. Claude's existing listener channel is unchanged.
   An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
   Additions waiting for the same session are combined in order into one prompt,
@@ -363,11 +398,13 @@ The queue verification and command semantics are documented in
 
 ## Chat view and side pane
 
-Columns open in the saved global view (chat by default). The icon button to the
-right of 自由 / 2–5 switches every column to terminal, then back to chat. Its
-icon and tooltip show the next action. New columns follow that global choice,
-including after relaunch. A column’s own 终端/对话 toggle overrides only that
-column for the current run; the next global click unifies all columns again.
+Sessions open in terminal view on startup, when selected after another session
+or page, and when created or restored. The icon button to the right of 自由 / 2–5
+switches every current column to terminal, then back to chat. Its icon and
+tooltip show the next action. A column’s own 终端/对话 toggle switches only
+that column; it stays in that view until you leave for another session or page.
+The next global click unifies all current columns again. The global choice resets
+to terminal on the next app launch.
 Each turn in chat shows
 your prompt (pinned while you read its answer) and the agent's final reply,
 rendered as Markdown, not commands or tool output. The real terminal is still
@@ -391,7 +428,9 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`
   (Antigravity's effort is the model id's suffix, `-low|-medium|-high`; given
   `--effort` beside such an id it silently runs a different model), `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
-  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`.
+  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`
+  (`--no-daemon` keeps each column off the shared Codex server, which otherwise
+  keeps a stale environment and cannot submit that column's receipt).
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -521,10 +560,14 @@ restored sessions. A shared Codex app server uses its own process environment
 and can lose the current terminal's receipt/control channel variables. Embedded
 servers inherit the column environment. This does not edit Codex user settings.
 
-The bridge still prefers environment credentials. If a shell policy filters the
-tokens, it reads `board-control/credentials/<terminal-id>.json` for the explicit
-`AGENTDECK_TERMINAL_ID` only. The standalone bridge can locate its own profile
-without `CONTROL_DIR`; it never searches other profiles or guesses an identity.
+The bridge prefers environment credentials when this process's controlling
+terminal has no private file. If a shell policy filters the tokens, the
+standalone bridge reads the credential file indexed by that tty
+(`board-control/credentials/by-tty/`), never by `AGENTDECK_TERMINAL_ID`: a
+shared Codex daemon keeps a stale terminal id and must not select another
+column. An empty `CONTROL_DIR` does not search the home profile. The managed
+copy can locate its own profile without `CONTROL_DIR`; it never searches other
+profiles.
 Files are private (0600, directory 0700 on POSIX), rotate when a PTY starts, and
 are removed on spawn failure, PTY exit, archive/kill, quit and the next app startup.
 Workers retain submission-only capabilities; only the Captain has control access.
@@ -544,12 +587,23 @@ older downloader does not pull in the vulnerable HTTP cache dependency chain.
 
 ```sh
 npm test
+npm run test:smoke
 npm run test:e2e
 npm audit
 npm start
 npm run dist:win
 npm run dist:mac
 ```
+
+### 发版流程
+
+全量 `npm run test:e2e` 大约 191 项，单线程要 30 分钟以上，本机内存紧时还会超时。小版本不要拿它当发版门禁。
+
+- **功能分支**：只跑 `npm test`，再加上和这次改动相关的 E2E spec。不要在功能分支上跑全量 E2E。
+- **发版**（小版本打包前）：跑 `npm test` 和 `npm run test:smoke`。冒烟复用现有用例，用 Playwright 标签 `@smoke` 标出，不另抄一份测试。命令是 `playwright test --grep @smoke --workers=1`，单 worker，目标 5 分钟内。覆盖：应用能启动并显示主界面；队长用 board-cli `new` / `tell` 派活且队员收到；队员回执回到队长；会话归档后能恢复；终端能显示输出；额度区能显示；任务看板能打开。
+- **全量**：`npm run test:e2e` 夜里跑，或换一台机器跑。冒烟通过不能代替全量。
+
+冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
 Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
@@ -573,6 +627,8 @@ alternate buffer separately. A ConPTY terminal name is not a foreground-process
 name, so shell readiness is verified by the command's output.
 The first automatic prompt in a Windows terminal waits for 500 ms of quiet TUI
 output, avoiding startup input loss. Later prompts keep the existing delivery checks.
+ConPTY reset evidence, replay filtering and deck navigation fixes apply only on
+Windows; macOS keeps its existing reset, status and navigation behavior.
 
 Security boundaries: the renderer is sandboxed with a restrictive CSP and no
 Node integration. Main IPC accepts only the deck's local main frame. Session
@@ -586,3 +642,7 @@ and GitHub synchronization after every completed change.
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
 
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
+
+Claude's macOS quota reader and seat-isolated Relay are described in
+[Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and
+`board-cli quota` are remaining; `↻` identifies each window's next reset.

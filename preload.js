@@ -3,8 +3,14 @@ const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
   saveConfig: (cfg) => ipcRenderer.send('save-config', cfg),
+  mobileWebSettings: (input) => ipcRenderer.invoke('mobile-web:settings', input),
+  onMobileRequest: (cb) => ipcRenderer.on('mobile-web:request', (_e, m) => cb(m)),
+  mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
+  memoryPressure: () => ipcRenderer.invoke('memory-pressure'),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
+  quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
+  onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
   clipboardWrite: (t) => clipboard.writeText(t),
   clipboardRead: () => clipboard.readText(),
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
@@ -59,7 +65,11 @@ contextBridge.exposeInMainWorld('deck', {
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   claudeSeatUsage: (seatId) => ipcRenderer.invoke('seats:usage', { seatId }),
-  recordClaudeSeatUsage: (seatId, usage, configDir) => ipcRenderer.invoke('seats:record-usage', { seatId, usage, configDir }),
+  claudeWarmupStatus: () => ipcRenderer.invoke('seats:warmup-status'),
+  claudeWarmupIdle: (colId, idle) => ipcRenderer.invoke('seats:warmup-idle', { colId, idle }),
+  recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
+  captainRelayNotify: (colId, message) => ipcRenderer.invoke('captain:relay-notify', { colId, message }),
+
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   // keepReplay: save the output first (archiving), so restoring can replay it.
@@ -69,7 +79,7 @@ contextBridge.exposeInMainWorld('deck', {
   // A prompt too long for the terminal is saved as a private .txt; returns its path.
   saveLongPrompt: (text) => ipcRenderer.invoke('prompt:save-long', { text }),
   // Hot-reload support: check if a pty survived a renderer reload, replay its buffer.
-  ptyIsAlive: (id) => ipcRenderer.invoke('pty:is-alive', { id }),
+  ptyIsAlive: (id, seatId) => ipcRenderer.invoke('pty:is-alive', { id, seatId }),
   ptyForeground: (id) => ipcRenderer.invoke('pty:foreground', { id }),
   ptyReplay: (id) => ipcRenderer.invoke('pty:replay', { id }),
   reloadRenderer: () => ipcRenderer.send('reload-renderer'),

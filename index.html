@@ -27,7 +27,30 @@
     <label for="csThreshold">上下文阈值（k tokens，默认 150）</label>
     <input id="csThreshold" type="number" min="1" step="1" required />
     <p class="hint">仅 Claude Code 队长空闲且输入框为空时执行：存看板 → 收到「已存档」→ /clear → 重发提示词并读看板继续。顶部可取消后续步骤。</p>
+    <h3>并发上限</h3>
+    <label for="concurrencyCap">同时干活的会话数（5–50，默认 30）</label>
+    <input id="concurrencyCap" type="number" min="5" max="50" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="concurrencyCapNote" />
+    <p id="concurrencyCapNote" class="hint">同时最多几个会话干活，超出的自动排队</p>
     <button id="csSave" class="btn primary" type="button">保存设置</button>
+    <h3>手机网页端</h3>
+    <label class="notify-setting"><span>本地网页服务</span><input type="checkbox" role="switch" id="mobileWebEnabled" aria-label="本地网页服务" /></label>
+    <p class="hint">服务只监听本机。远程访问需已配置的私人 HTTPS 隧道；开启后登录 Mac 会自动启动 AgentDeck。首次登录使用 token，随后记住设备。</p>
+    <label for="mobileWebOrigin">私人 HTTPS 地址</label><input id="mobileWebOrigin" type="url" placeholder="https://你的私人入口" />
+    <button id="mobileWebSaveOrigin" class="btn" type="button">保存访问地址</button>
+    <p id="mobileWebStatus" class="hint" role="status"></p>
+    <div class="mobile-web-access" hidden>
+      <label for="mobileWebUrl">本地地址</label><input id="mobileWebUrl" readonly />
+      <label for="mobileWebPublicUrl">手机访问地址</label><input id="mobileWebPublicUrl" readonly />
+      <div id="mobileWebGateway" hidden>
+        <label for="mobileWebGatewayUser">入口账号</label><input id="mobileWebGatewayUser" readonly />
+        <label for="mobileWebGatewayPassword">入口口令</label><input id="mobileWebGatewayPassword" type="password" readonly />
+        <button id="mobileWebCopyGateway" class="rail-btn" type="button" title="复制入口口令" aria-label="复制入口口令"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg></button>
+      </div>
+      <label for="mobileWebToken">登录 token</label><input id="mobileWebToken" type="password" readonly />
+      <button id="mobileWebCopyToken" class="rail-btn" type="button" title="复制登录 token" aria-label="复制登录 token"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/></svg></button>
+      <button id="mobileWebRevoke" class="rail-btn" type="button" title="吊销所有设备并更换登录 token" aria-label="吊销所有设备并更换登录 token"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
+      <p id="mobileWebDevices" class="hint"></p>
+    </div>
     <h3>Claude 席位与 Relay</h3>
     <button id="claudeSeatsSettings" class="seat-icon" type="button" title="席位设置" aria-label="席位设置"></button>
   </dialog>
@@ -36,7 +59,7 @@
     <div id="navTop"></div>
     <div id="navList"></div>
     <section id="navQuota" aria-labelledby="navQuotaTitle">
-      <div id="navQuotaTitle" class="nq-title">额度</div>
+      <div class="quota-heading"><span id="navQuotaTitle" class="nq-title">额度</span><button id="quotaRefresh" type="button" title="刷新额度" aria-label="刷新额度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7h-5V2M4 17h5v5"/><path d="M20 7a9 9 0 0 0-15-3M4 17a9 9 0 0 0 15 3"/></svg></button></div>
       <div id="quotaBar" role="group" aria-label="订阅剩余额度"></div>
     </section>
     <div id="navBottom"></div>
@@ -471,11 +494,15 @@
   <script src="main-core.js"></script>
   <script src="main-session.js"></script>
   <script src="claude-seats-core.js"></script>
+  <script src="perpetual-captain-core.js"></script>
+  <script src="quota-warmup-core.js"></script>
   <script src="claude-seats-ui.js"></script>
   <script src="crew-map-core.js"></script>
   <script src="crew-map.js"></script>
   <script src="task-board-ui-core.js"></script>
   <script src="task-board-ui.js"></script>
+  <script src="version-progress-core.js"></script>
+  <script src="version-progress.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

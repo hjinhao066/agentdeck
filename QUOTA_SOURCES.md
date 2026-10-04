@@ -6,7 +6,7 @@ were left running. Quota probes made no inference requests.
 
 | Item | What it displays | Account/model tooltip | Source and confidence |
 | --- | --- | --- | --- |
-| Claude seats | One item per configured seat: 5-hour + weekly remaining %, independent resets, actual running Captain seat; missing or unattributable data = 未知 | Observed model; masked email from that seat profile | Account-bound `agentdeck-usage.json` only (including an independent read-only OAuth usage GET every 15 minutes, checked against the same account fingerprint and directory before and after the request): an already visible `/usage`, or the session's own per-session statusline (`5h剩余 X% · 7d剩余 Y%`, computed from Claude Code's stdin `rate_limits`), recorded with the seat's account-ID fingerprint and directory. Shared ccstatusline (`Session:/Weekly:`) and legacy unbound caches are never used. |
+| Claude seats | One item per configured seat: 5-hour + weekly remaining %, independent resets, actual running Captain seat; missing or unattributable data = 未知 | Observed model; masked email from that seat profile | Account-bound `agentdeck-usage.json` only (including an independent read-only OAuth usage GET every five minutes, checked against the same account fingerprint and directory before and after the request): an already visible `/usage`, or the session's own per-session statusline (`5h剩余 X% · 7d剩余 Y%`, computed from Claude Code's stdin `rate_limits`), recorded with the seat's account-ID fingerprint and directory. Shared ccstatusline (`Session:/Weekly:`) and legacy unbound caches are never used. |
 | Codex / ChatGPT | Every server-reported 300-minute / 10080-minute window; no inferred 5-hour number | Observed model, account-shared Codex bucket; masked email from official `account/read` | Official read-only `account/rateLimits/read`, local JSONL `event_msg.token_count.rate_limits`, already visible `/status`. High for the server's sample. |
 | Cursor / **Grok 4.7** | Normal/exhausted/unknown from **Grok 4.7 sessions only**, with reset when shown. Percentage currently unavailable | Grok 4.7 (including effort/fast variant when observed); masked current CLI profile email | Selected-model screen. Normal is low confidence: only no error observed. Explicit exhaustion is high confidence for that session. Claude/other-model errors are ignored by this top-bar item. |
 | Antigravity / **Gemini** | `gemini-5h` and `gemini-weekly` remaining %, resets; selected Gemini screen status as fallback | Gemini model when observed, otherwise Gemini shared group; masked snapshot email | Optional `~/.gemini/antigravity-cli/agy_statusline_debug.json`. Medium: optional CLI debug snapshot, not a documented public contract. **Never consumes `3p-*` Claude quota.** |
@@ -24,11 +24,16 @@ were left running. Quota probes made no inference requests.
   the actual `mainSession.colId` column's `claudeSeatId`, not
   `activeClaudeSeatId` (the next-launch preference). Legacy untagged columns
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
-- Each item shows `5h …% · 7d …%` in the sidebar quota block, both reset timestamps in its
-  tooltip, model and masked account. Missing windows say `无数据`; if neither
+- Each item is one compact row in the sidebar quota block: provider icon, seat flag
+  (plus a crown on the seat the running Captain uses), and the right-aligned 5-hour
+  remaining %. An exhausted row shows a red dot and `↻HH:MM` recovery instead. The
+  weekly %, both resets, sample time, model and masked account live in the tooltip
+  and the row's aria-label. Missing windows say `无数据`; if neither
   window can be read, show `未知` (never 未登录: the masked account still shows). A welcome/model banner alone cannot
   prove Claude quota or login. An explicit exhausted error remains visible
-  even if an older numeric footer still shows a positive percentage.
+  even if an older numeric footer still shows a positive percentage, but a **newer**
+  official OAuth sample whose 5-hour window and every other window are above 0%
+  clears the older error (panel, perpetual Captain and `quota` CLI text alike).
 - Confirmed by inspecting the sibling branch's `claude-seats-main.js`:
   **`<configDir>/agentdeck-usage.json`** is its canonical snapshot:
   `{at, source: 'Claude /usage', windows: [{key: 'fiveHour'|'weekly',
@@ -69,10 +74,10 @@ were left running. Quota probes made no inference requests.
   `fetchUtilization` implementation performs `GET /api/oauth/usage`; `Hie.plain`
   selects that path and validates server utilization windows. Directly reading
   that endpoint is the smallest independent path: one metadata GET per seat
-  per 15 minutes, no CLI/model session. This is a private CLI endpoint, **not a
+  per five minutes, no CLI/model session. This is a private CLI endpoint, **not a
   documented public API**. [Official usage-failure behavior](https://code.claude.com/docs/en/costs#when-the-usage-request-fails)
   confirms that usage requests can be rate limited; this implementation makes
-  no immediate retries and explicitly shows unknown on failure.
+  no immediate retries and retains the last successful sample on failure.
 - Authentication is read in memory from each seat's existing dedicated
   Keychain service (with the current OS username, as Claude Code does) or credentials file using `credentialLocation`; inherited
   auth environment variables are not used. The token is sent only as the
@@ -81,14 +86,14 @@ were left running. Quota probes made no inference requests.
   Redirects are rejected. There is no credential renewal, login or model call.
 - Only `five_hour` and `seven_day.utilization` (0–100) and parseable absolute
   resets become canonical `{at, source: 'Claude OAuth usage', windows}` records.
-  Partial responses leave the missing window unknown. Failed reads persist
-  an empty-window marker and override old screen/cache numbers in memory even
-  if saving the marker fails. No denominator or post-reset percentage is inferred.
+  Incomplete or invalid responses fail the whole sample. Failed reads update only
+  safe failure metadata; the last successful windows, resets and sampling time
+  remain intact, marked 数据已旧 after three failures. No denominator or post-reset percentage is inferred.
 - A 30-second main-process heartbeat starts due reads independently of the
-  renderer and terminals. Each seat has its own 15-minute deadline/inflight
+  renderer and terminals. Each seat has its own five-minute deadline/inflight
   flag; failures are isolated. A new configuration directory invalidates the
   old sample and stale inflight completion. Server samples expire at 30 minutes
-  to allow the 15-minute schedule; passive sample expiry stays 15 minutes.
+  with explicit stale marking after three failed reads; passive sample expiry stays 15 minutes.
 - **Real Mac read-only result**: CN and US both returned the two requested
   windows and absolute resets. Only the whitelisted usage result was printed;
   no local usage cache or credential was changed by this probe. A separate

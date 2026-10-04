@@ -103,14 +103,18 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {}, boardPositions: {}, globalViewMode: 'chat',
+  boardResponses: {}, boardPositions: {}, globalViewMode: 'term',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
   claudeQuotaAlert: { thresholdPercent: 2, volume: 3 }, barkKeyFile: '',
+  perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
+  quotaWarmup: QuotaWarmupCore.normalizeSettings(),
+
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
   captainTokenSaver: MainCore.tokenSaverSettings(),
+  concurrencyCap: MainCore.concurrencyCap(),
 };
 const saved = window.deck.loadConfig();
 config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
@@ -122,15 +126,21 @@ if (saved) {
     config.claudeQuotaAlert = { ...config.claudeQuotaAlert, ...saved.claudeQuotaAlert };
   }
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
+  config.perpetualCaptain = PerpetualCaptainCore.normalizeSettings(saved.perpetualCaptain);
+  config.quotaWarmup = QuotaWarmupCore.normalizeSettings(saved.quotaWarmup);
+  config.perpetualCaptainState = PerpetualCaptainCore.normalizeState(saved.perpetualCaptainState);
+  if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
   config.captainRelayLabel = typeof saved.captainRelayLabel === 'string' ? saved.captainRelayLabel.slice(0, 80) : 'Relay';
   config.activeClaudeSeatId = ClaudeSeatsCore.active({ ...saved, claudeSeats: config.claudeSeats }).id;
   if (saved.captainRelayCodex && typeof saved.captainRelayCodex === 'object') config.captainRelayCodex = {
     name: typeof saved.captainRelayCodex.name === 'string' ? saved.captainRelayCodex.name.slice(0, 80) : 'ChatGPT',
-    command: typeof saved.captainRelayCodex.command === 'string' ? saved.captainRelayCodex.command : ClaudeSeatsCore.CODEX_COMMAND,
+    command: typeof saved.captainRelayCodex.command === 'string' ? BoardCore.upgradeLegacyCommand(saved.captainRelayCodex.command) : ClaudeSeatsCore.CODEX_COMMAND,
   };
   if (typeof saved.captainRelayClaudeCommand === 'string') config.captainRelayClaudeCommand = saved.captainRelayClaudeCommand;
   config.captainNotifications = NotificationPolicy.normalizeSettings(saved.captainNotifications);
-  config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
+  // The last global toggle applies only during this run. Every launch starts
+  // in the terminal, even when an older config saved chat mode.
+  config.globalViewMode = 'term';
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
@@ -145,6 +155,7 @@ if (saved) {
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
+  config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher)) config.taskBoard = { dispatcher: saved.taskBoard.dispatcher };
@@ -186,8 +197,8 @@ if (saved) {
       claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
-      // Relaunch follows the saved global choice; local overrides last this run.
-      view: config.globalViewMode,
+      // Relaunch always starts each session in the terminal.
+      view: 'term',
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       captainCrew: !!c.captainCrew,
@@ -195,11 +206,13 @@ if (saved) {
       boardId: typeof c.boardId === 'string' ? c.boardId : '',
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
       dispatcherCardId: typeof c.dispatcherCardId === 'string' ? c.dispatcherCardId : '',
+
       claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
   }
 }
+MainCore.MAX_ACTIVE = config.concurrencyCap;
 function seatLaunchCommand(col, command) {
   const seat = ClaudeSeatsCore.bindColumn(col, config);
   if (!seat.configDir) return ''; // A removed, unbound seat must not launch under another login.
@@ -258,7 +271,7 @@ function setColumnDisplayTitle(col, value) {
   const t = terms.get(col.id);
   if (t && t.titleEl) t.titleEl.textContent = label;
   const nav = navItems.get(col.id);
-  if (nav && nav.label) nav.label.textContent = label;
+  applyNavTitle(nav && nav.label, label);
   if (label !== requested) showToast(`Title already used. Renamed to “${label}”.`);
   saveConfig();
   renderBoardGraph();
@@ -417,6 +430,7 @@ let zoomedId = null;     // column temporarily maximized to fill the deck (Cmd+E
 function focusColumnInput(id) {
   const t = terms.get(id);
   if (!t) return;
+  if (focusedId !== id) ChatUI.setMode(id, 'term');
   if (!ChatUI.focusInput(id)) t.term.focus();
 }
 
@@ -555,6 +569,7 @@ function railBtn(svg, tip, onClick, accent) {
   return b;
 }
 function openNotificationSettings() {
+  if (focusedId) ChatUI.setMode(focusedId, 'term');
   const dialog = document.getElementById('notificationSettings');
   const settings = config.captainNotifications;
   document.getElementById('captainNotifyEnabled').checked = settings.enabled;
@@ -563,8 +578,45 @@ function openNotificationSettings() {
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
   document.getElementById('barkKeyFile').value = config.barkKeyFile;
   MainSession.openSettings();
+  updateMobileWebSettings();
   dialog.showModal();
 }
+async function updateMobileWebSettings(input) {
+  const toggle = document.getElementById('mobileWebEnabled');
+  toggle.disabled = true;
+  try {
+    const status = await window.deck.mobileWebSettings(input);
+    toggle.checked = status.enabled;
+    document.querySelector('.mobile-web-access').hidden = !status.enabled;
+    document.getElementById('mobileWebUrl').value = status.url || '';
+    document.getElementById('mobileWebOrigin').value = status.publicOrigin || '';
+    document.getElementById('mobileWebPublicUrl').value = status.publicUrl || '';
+    document.getElementById('mobileWebGateway').hidden = !status.gatewayPassword;
+    document.getElementById('mobileWebGatewayUser').value = status.gatewayUser || '';
+    document.getElementById('mobileWebGatewayPassword').value = status.gatewayPassword || '';
+    document.getElementById('mobileWebDevices').textContent = `已记住 ${status.deviceCount || 0} 台设备；吊销后所有设备需重新登录。`;
+    document.getElementById('mobileWebToken').value = status.token || '';
+    document.getElementById('mobileWebStatus').textContent = status.error || status.startupError || (status.enabled ? '已开启，仅监听 127.0.0.1' : '未开启');
+  } catch (error) { document.getElementById('mobileWebStatus').textContent = error.message; }
+  finally { toggle.disabled = false; }
+}
+document.getElementById('mobileWebEnabled').addEventListener('change', (event) => updateMobileWebSettings({ enabled: event.target.checked }));
+document.getElementById('mobileWebSaveOrigin').addEventListener('click', () => updateMobileWebSettings({ publicOrigin: document.getElementById('mobileWebOrigin').value.trim() }));
+document.getElementById('mobileWebRevoke').addEventListener('click', () => {
+  if (confirm('吊销所有设备并更换登录 token？已登录的手机需要重新登录，旧 token 将立即失效。')) updateMobileWebSettings({ revoke: true });
+});
+document.getElementById('mobileWebCopyToken').addEventListener('click', (event) => {
+  window.deck.clipboardWrite(document.getElementById('mobileWebToken').value);
+  const button = event.currentTarget, original = button.innerHTML;
+  button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
+  setTimeout(() => { button.innerHTML = original; button.title = '复制登录 token'; button.setAttribute('aria-label', '复制登录 token'); }, 1400);
+});
+document.getElementById('mobileWebCopyGateway').addEventListener('click', (event) => {
+  window.deck.clipboardWrite(document.getElementById('mobileWebGatewayPassword').value);
+  const button = event.currentTarget, original = button.innerHTML;
+  button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
+  setTimeout(() => { button.innerHTML = original; button.title = '复制入口口令'; button.setAttribute('aria-label', '复制入口口令'); }, 1400);
+});
 function saveNotificationSettings() {
   config.captainNotifications = NotificationPolicy.normalizeSettings({
     enabled: document.getElementById('captainNotifyEnabled').checked,
@@ -641,7 +693,10 @@ function buildChrome() {
 
   const brand = document.createElement('span');
   brand.className = 'nav-brand';
-  brand.textContent = 'AgentDeck';
+  brand.textContent = `V${env.version}`;
+  const versionDetails = [`AgentDeck v${env.version}`, env.build].filter(Boolean).join(' · ');
+  brand.title = versionDetails;
+  brand.setAttribute('aria-label', versionDetails);
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
   const settingsBtn = railBtn(ICONS.gear, '设置', openNotificationSettings);
@@ -840,6 +895,7 @@ function selectBoardNode(columnId, focusTerminal) {
 function showView(view) {
   TaskBoardUI.close();
   activeView = view === 'board' ? 'board' : 'terminals';
+  if (activeView === 'board' && focusedId) ChatUI.setMode(focusedId, 'term');
   config.activeView = activeView;
   SidePane.onViewChange();
   deckEl.hidden = activeView === 'board';
@@ -1707,7 +1763,12 @@ function buildColumn(col, isFresh) {
     term.loadAddon(fit);
     const search = new SearchAddonNS.SearchAddon();
     term.loadAddon(search);
-    term.open(termEl);
+    // FitAddon measures its immediate parent's height, without subtracting
+    // that parent's padding. Give it the actual content box inside .term.
+    const termContent = document.createElement('div');
+    termContent.className = 'term-content';
+    termEl.appendChild(termContent);
+    term.open(termContent);
     // Renderer: the Canvas addon (2D canvas), NOT WebGL. Each WebGL terminal
     // holds its own GPU context, and Chromium hard-caps live WebGL contexts
     // (~16) and silently EVICTS the oldest when a new one is created — including
@@ -1903,6 +1964,8 @@ function buildColumn(col, isFresh) {
         }
         // 队长 gets a control token too; the columns it drives never do.
         const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
+        flushConfig();
+
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
 
         if (launch) {
@@ -1974,6 +2037,7 @@ function buildColumn(col, isFresh) {
     // Buttons/grip/inline-rename keep their own behavior.
     wrap.addEventListener('mousedown', (e) => {
       if (e.target.closest('.icon-btn') || e.target.closest('.grip') || e.target.closest('[contenteditable="true"]')) return;
+      if (focusedId !== col.id && !e.target.closest('.view-toggle')) ChatUI.setMode(col.id, 'term');
       if (!ChatUI.onColumnMouseDown(col, e)) { term.focus(); focusedId = col.id; syncNav(); }
     });
 
@@ -2340,7 +2404,7 @@ function restoreArchived(id, focus, quiet) {
   if (!a) return null;
   config.archived = config.archived.filter((x) => x !== a);
   const { archivedAt, ...rest } = a;
-  const col = BoardCore.normalizeColumn({ ...rest, role: 'manual', relationship: 'Independent manual terminal' });
+  const col = BoardCore.normalizeColumn({ ...rest, role: 'manual', relationship: 'Independent manual terminal', view: 'term' });
   if (col.folderId && !config.folders.some((f) => f.id === col.folderId)) col.folderId = null;
   if (!quiet) {
     if (zoomedId) { zoomedId = null; updateColumnStyles(); }
@@ -2454,7 +2518,8 @@ function sendWhenReady(col, text, opts) {
 function addColumn(c) {
   const col = BoardCore.normalizeColumn({
     id: newId(), taskId: newTaskId(), width: defaultColWidth(), cwd: '',
-    role: 'manual', relationship: 'Independent manual terminal', view: config.globalViewMode, claudeSeatId: config.activeClaudeSeatId, ...c,
+    role: 'manual', relationship: 'Independent manual terminal', claudeSeatId: config.activeClaudeSeatId, ...c,
+    view: 'term',
   });
   insertColumn(col, true); // brand-new column: never auto-resume
   return col;
@@ -2481,7 +2546,7 @@ function createSession(c, background) {
   if (!background) whenMounted(col, () => jumpToColumn(col));
   return col;
 }
-// 队长: always the first column; its view follows the global choice.
+// 队长: always the first column; opens in terminal view.
 function createMain(c) {
   if (zoomedId) { zoomedId = null; updateColumnStyles(); }
   Pages.hide();
@@ -2554,13 +2619,20 @@ function respawnColumn(col, opts) {
 // ---- Column sidebar (list of columns: click to jump, double-click to rename) ----
 // One source of truth for a column's name so the header title and the sidebar
 // entry never drift: rename in either place flows through here.
+function applyNavTitle(labelEl, text) {
+  if (!labelEl) return;
+  if (labelEl.textContent !== text) labelEl.textContent = text;
+  if (labelEl.title !== text) labelEl.title = text;
+  if (labelEl.getAttribute('aria-label') !== text) labelEl.setAttribute('aria-label', text);
+}
+
 function setColumnTitle(col, title) {
   col.title = title;
   const t = terms.get(col.id);
   const label = columnLabel(col);
   if (t && t.titleEl && t.titleEl.textContent !== label) t.titleEl.textContent = label;
   const nav = navItems.get(col.id);
-  if (nav && nav.label && nav.label.textContent !== label) nav.label.textContent = label;
+  applyNavTitle(nav && nav.label, label);
   saveConfig();
   renderBoardGraph();
 }
@@ -2604,6 +2676,10 @@ function syncNav() {
 }
 
 function scrollColumnInDeck(wrap, center = false) {
+  if (env.platform !== 'win32') {
+    wrap.scrollIntoView(center ? { behavior: 'instant', inline: 'center', block: 'nearest' } : { inline: 'nearest', block: 'nearest' });
+    return;
+  }
   const deck = deckEl.getBoundingClientRect();
   const column = wrap.getBoundingClientRect();
   // scrollIntoView also scrolls hidden ancestors (including the document),
@@ -2631,6 +2707,7 @@ function jumpToColumn(col) {
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   // Explicit navigation must bypass the IME drift guard. Focus only after
   // scrolling, otherwise focusin arms that guard and snaps the deck back.
+  ChatUI.setMode(col.id, 'term');
   isUserScrollingDeck = true;
   clearTimeout(userScrollTimeout);
   scrollColumnInDeck(t.wrap, true);
@@ -2712,7 +2789,10 @@ document.getElementById('dlgSave').onclick = () => {
   if (needsRespawn) delete col.modelSessionId;
   if (titleChanged) setColumnDisplayTitle(col, title); // keep auto-title behavior when only cwd/cmd changed
   saveConfig();
-  if (needsRespawn) respawnColumn(col); // a cwd or startup-command change restarts the shell
+  if (needsRespawn) {
+    if (col.isMain) MainSession.clearContext({ command: cmd, fromEdit: true });
+    else respawnColumn(col); // a cwd or startup-command change restarts the shell
+  }
   dlg.close();
 };
 // Enter saves from any field of the dialog, not just the title.
@@ -3085,6 +3165,41 @@ function createManagedChild(message, caller) {
   return child;
 }
 
+window.deck.onMobileRequest(async ({ id, op, input }) => {
+  try {
+    let result;
+    if (op === 'sessions') {
+      result = columns.map((col) => {
+        const entry = terms.get(col.id), info = AgentInfo.resolveAgentInfo(col, entry);
+        const task = [...(MainSession.state()?.tasks || [])].reverse().find((t) => t.colId === col.id);
+        const active = entry?.alive && (entry.state === 'working' || entry.sendingPrompt || task?.status === 'working');
+        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed || entry && !entry.alive);
+        const status = entry?.alive && ['input', 'quota'].includes(entry.state) ? entry.state
+          : active ? 'working' : failed ? 'failed'
+          : ['queued', 'waiting', 'asking', 'done'].includes(task?.status) ? task.status : 'idle';
+        return { id: col.id, title: columnLabel(col), model: info.model || info.provider || '未知模型',
+          status, isMain: !!col.isMain,
+          receipt: String(col.lastReceipt?.summary || col.lastReceipt?.failed || '').slice(0, 1000) };
+      });
+    } else if (op === 'output') {
+      const col = columns.find((c) => c.id === input?.id && !c.isMain);
+      const entry = col && terms.get(col.id);
+      result = col ? { id: col.id, title: columnLabel(col), text: entry?.term ? dumpScreen(entry.term, 100).slice(-16000) : '' } : null;
+    } else if (op === 'captain-history') {
+      const col = columns.find((c) => c.isMain);
+      const entry = col && terms.get(col.id);
+      result = col ? { id: col.id, title: columnLabel(col), status: entry?.state || 'idle',
+        turns: ChatUI.turnsOf(col.id).slice(-20).map((turn) => ({ id: turn.id, ts: turn.ts,
+          user: String(turn.user || '').slice(-8000), reply: String(turn.reply || '').slice(-16000),
+          done: !!turn.done, interrupted: !!turn.interrupted })) } : { turns: [], status: 'unavailable' };
+    } else if (op === 'captain') {
+      MainSession.sendMessage(input?.message);
+      result = { queued: true };
+    } else throw new Error('未知网页操作。');
+    window.deck.mobileRespond({ requestId: id, result });
+  } catch (error) { window.deck.mobileRespond({ requestId: id, error: error.message }); }
+});
+
 window.deck.onBoardCommand(async (message) => {
   const cached = config.boardResponses[message.id];
   if (cached) {
@@ -3116,8 +3231,8 @@ window.deck.onBoardCommand(async (message) => {
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-task');
+        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task');
       },
       (error) => {
         const response = { done: true, error: error.message };
@@ -3270,7 +3385,12 @@ const deckHost = {
   addAndFocusColumn, removeCol, archiveColumn, restoreArchived, deleteArchived, moveSession, removeFolder,
   renameSession: (col, title) => setColumnDisplayTitle(col, title),
   lastTurnTs: (id) => ChatUI.lastTurnTs(id),
-  togglePage: (name) => { if (activeView === 'board') showView('terminals'); TaskBoardUI.close(); Pages.toggle(name); },
+  togglePage: (name) => {
+    if (activeView === 'board') showView('terminals');
+    TaskBoardUI.close();
+    if (focusedId) ChatUI.setMode(focusedId, 'term');
+    Pages.toggle(name);
+  },
   toggleTaskBoard: () => TaskBoardUI.toggle(),
   showSideTerminal: () => SidePane.show('terminal', true),
   // Schedule
@@ -3290,13 +3410,23 @@ ChatUI.init(deckHost);
 Pages.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
 renderQuotaBar();
-async function readQuotaCache() {
-  const samples = await window.deck.quotaLocal();
+function applyQuotaSamples(samples) {
   let changed = false;
   for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
   if (changed) saveConfig();
   renderQuotaBar();
 }
+async function readQuotaCache() { applyQuotaSamples(await window.deck.quotaLocal()); }
+async function refreshQuota(seatId) { applyQuotaSamples(await window.deck.quotaRefresh(seatId)); }
+window.deck.onQuotaUpdated(applyQuotaSamples);
+window.addEventListener('claude-seat-changed', (e) => {
+  if (e.detail?.seatId !== 'chatgpt') refreshQuota(e.detail?.seatId).catch(() => {});
+});
+document.getElementById('quotaRefresh').addEventListener('click', async (e) => {
+  const button = e.currentTarget; button.disabled = true; button.classList.add('spinning');
+  try { await refreshQuota(); } catch (_) { showToast('额度查询暂不可用，保留上次采样'); }
+  finally { button.disabled = false; button.classList.remove('spinning'); }
+});
 window.addEventListener('claude-seat-usage', () => readQuotaCache().catch(() => {}));
 readQuotaCache().catch(() => {});
 setInterval(() => readQuotaCache().catch(() => {}), 30000);
@@ -3471,7 +3601,14 @@ function claudeCaptainSeatId() {
 // collapsed sidebar, in the popover under the top-bar gauge (#quotaPopList).
 function renderQuotaBar() {
   const items = QuotaCore.items(config.claudeSeats);
-  const summaries = items.map(({ provider, seat }) => QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId()));
+  const captainSeatId = claudeCaptainSeatId();
+  const summaries = items.map(({ provider, seat }) => QuotaCore.summary(config.quotas, provider, Date.now(), seat, captainSeatId));
+  // HH:MM, with MM-DD when the time is not within the next/last 24 hours.
+  const clock = (t) => {
+    const d = new Date(t), pad = (v) => String(v).padStart(2, '0');
+    return `${Math.abs(t - Date.now()) > 86400000 ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const NAMES = { Claude: 'Claude', Codex: 'ChatGPT', Cursor: 'Grok 4.7', Antigravity: 'Gemini' };
   for (const [bar, prefix] of [[document.getElementById('quotaBar'), 'quota-tip'], [document.getElementById('quotaPopList'), 'quota-pop-tip']]) {
     for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
     for (const [index, { provider, seat, key }] of items.entries()) {
@@ -3485,27 +3622,49 @@ function renderQuotaBar() {
         item.tabIndex = 0; // keyboard users can inspect the same tooltip; a click focuses and so pins it
         const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
         icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
-        const label = document.createElement('span'); label.className = 'quota-label';
-        const name = document.createElement('span'); name.className = 'quota-name';
-        const sampled = document.createElement('span'); sampled.className = 'quota-sampled';
+        const name = document.createElement('span'); name.className = 'quota-name'; name.setAttribute('aria-hidden', 'true');
+        const values = document.createElement('span'); values.className = 'quota-values';
         const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `${prefix}-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
         item.setAttribute('aria-describedby', tip.id);
-        item.append(icon, name, label, sampled, tip); bar.append(item);
+        item.append(icon, name, values, tip); bar.append(item);
       }
       const q = summaries[index];
-      item.dataset.state = q.state;
-      item.setAttribute('aria-label', q.detail);
-      item.title = q.detail;
-      item.querySelector('.quota-label').textContent = q.displayLabel;
-      item.querySelector('.quota-name').textContent = q.name || (provider === 'Codex' ? 'ChatGPT' : provider);
-      item.querySelector('.quota-sampled').textContent = q.sampleLabel || '';
-      item.querySelector('.quota-tooltip').textContent = q.detail;
+      // Account = provider icon + flag only; the seat's full name stays in the tooltip.
+      const flag = seat && seat.id !== 'default' ? (seat.name.match(/\p{Regional_Indicator}{2}/u)?.[0] || seat.name.slice(0, 2)) : '';
+      const captain = seat && seat.id === captainSeatId;
+      const name = item.querySelector('.quota-name');
+      name.textContent = seat ? flag : NAMES[provider];
+      if (captain) name.insertAdjacentHTML('beforeend', `<span class="quota-captain">${ICONS.crown}</span>`);
+      // Right side: the 5-hour remaining %, or a status dot + recovery time while exhausted.
+      const values = item.querySelector('.quota-values');
+      const recovery = q.recoveryAt ? `↻${clock(q.recoveryAt)}` : '↻--:--';
+      if (q.out) {
+        const dot = document.createElement('span'); dot.className = 'quota-dot'; dot.setAttribute('aria-hidden', 'true');
+        const time = document.createElement('span'); time.className = 'quota-recovery'; time.textContent = recovery;
+        values.replaceChildren(dot, time);
+      } else {
+        const value = document.createElement('span');
+        const v = q.fiveHour;
+        value.className = `quota-value${v !== null && v <= 20 ? ' low' : ''}`;
+        // Whole percents keep the column aligned; the tooltip keeps the exact value.
+        value.textContent = v === null ? '—' : v < 1 ? '<1%' : `${Math.round(v)}%`;
+        values.replaceChildren(value);
+      }
+      const sampled = q.sampledAt ? `采样 ${clock(q.sampledAt)}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
+      const detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + (seat ? ClaudeSeats.warmupDetail(seat.id) : '');
+      const brief = [q.out && (q.recoveryAt ? `${clock(q.recoveryAt)} 恢复` : '恢复时间未知'),
+        q.fiveHour !== null && `5 小时剩余 ${q.fiveHour}%`, q.weekly !== null && `每周剩余 ${q.weekly}%`].filter(Boolean).join('，');
+      item.dataset.state = q.out ? 'exhausted' : q.state;
+      item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
+      item.title = detail;
+      item.querySelector('.quota-tooltip').textContent = detail;
       if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
     }
+
   }
   // The collapsed-sidebar gauge takes the colour of the provider closest to running out.
   const rank = { warning: 1, danger: 2, exhausted: 2 };
-  const worst = summaries.reduce((w, q) => (rank[q.state] || 0) > (rank[w] || 0) ? q.state : w, 'normal');
+  const worst = summaries.map((q) => q.out ? 'exhausted' : q.state).reduce((w, st) => (rank[st] || 0) > (rank[w] || 0) ? st : w, 'normal');
   const rail = document.getElementById('quotaRailBtn');
   if (rail) rail.dataset.state = worst;
 }
@@ -3519,10 +3678,10 @@ setInterval(() => {
     // below the separator is live, so classification must not
     // see the replayed part. Once real output scrolls the separator out of the
     // 40-line window this is a no-op.
-    text = MainCore.afterReplay(text);
+    text = MainCore.afterReplay(text, env.platform);
     entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
     if (entry.alive) {
-      let st = classify(MainCore.afterReplay(statusScreen(entry.term)), entry);
+      let st = classify(env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term), entry);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
@@ -3573,7 +3732,6 @@ setInterval(() => {
 
     ChatUI.onTick(id, entry, text);
     MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
-    ClaudeSeats.onTick(id, entry, text);
 
     // A restarted terminal replays the PREVIOUS run's output above a
     // separator. It is excluded from status classification, but remains the
@@ -3596,8 +3754,11 @@ setInterval(() => {
       if (signature !== entry.lastQuotaObservation) {
         entry.lastQuotaObservation = signature;
         if (QuotaCore.observe(config.quotas, sample)) saveConfig();
+        if (sample?.provider === 'Claude' && sample.exhausted) refreshQuota(sample.seatId).catch(() => {});
       }
     }
+
+    ClaudeSeats.onTick(id, entry, text);
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);

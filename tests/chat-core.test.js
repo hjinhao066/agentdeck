@@ -287,3 +287,10 @@ test('the global choice toggles without columns and survives a config round trip
   assert.equal(C.normalizeViewMode(saved.globalViewMode), 'term');
   assert.equal(C.toggleGlobalView(saved, [{ id: 'later', view: 'chat' }]), 'chat');
 });
+
+test('local rotation notices remain notices after durable chat normalization', () => {
+  const chat = C.normalizeChat({ turns: [{ kind: 'notice', id: 'relay', user: '永动机', reply: 'CN → US；额度低；2026-10-03', done: true, ts: 123 }] }, 'captain');
+  assert.equal(chat.turns[0].kind, 'notice');
+  assert.equal(chat.turns[0].reply, 'CN → US；额度低；2026-10-03');
+  assert.equal(chat.turns[0].done, true);
+});

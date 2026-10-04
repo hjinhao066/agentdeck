@@ -5,25 +5,48 @@ const os = require('os');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
+const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = require('./board-credentials');
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createQuotaLowBark } = require('./quota-low-bark');
+
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
-const { seatEnvironment, registerSeatsIpc } = require('./claude-seats-main');
+const QuotaCore = require('./quota-core');
+const PerpetualCaptainCore = require('./perpetual-captain-core');
+const { seatEnvironment, credentialLocation, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { createWarmupService } = require('./quota-warmup-service');
+const { createQuotaWarmupRunner } = require('./quota-warmup-main');
+const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
+
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const { MobileWebServer } = require('./mobile-web');
+const { createMemoryPressure } = require('./memory-pressure');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
 let sidePane = null;
 let claudeQuotaRefresh = null, claudeQuotaTimer = null;
+let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
+
 let pendingFocusColumn = null;
+let mobileWeb = null;
+const mobileRequests = new Map();
+function requestMobile(op, input) {
+  if (!mainWindow || mainWindow.isDestroyed() || !boardRendererReady) return Promise.reject(new Error('AgentDeck 尚未准备好，请稍后刷新。'));
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    const timer = setTimeout(() => { mobileRequests.delete(id); reject(new Error('AgentDeck 响应超时，请稍后重试。')); }, 5000);
+    mobileRequests.set(id, { resolve, reject, timer });
+    send('mobile-web:request', { id, op, input });
+  });
+}
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
 // its own userData (own config/sessions AND own single-instance lock), so an
@@ -64,6 +87,8 @@ function handleMain(channel, handler) {
     return handler(event, payload);
   });
 }
+const memoryPressure = createMemoryPressure({ platform: process.platform, execFile });
+handleMain('memory-pressure', () => memoryPressure.read());
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -194,10 +219,10 @@ function shellArgs() {
   return ['-NoLogo', '-NoExit', '-EncodedCommand', b64];
 }
 
+const ptySeats = new Map();
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
-const { clearCredentials, removeCredentials, writeCredentials } = require('./board-credentials');
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -219,7 +244,25 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
-  if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
+  const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  let selectedSeat, binding;
+  try {
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; }
+    selectedSeat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === (seatId || cfg.activeClaudeSeatId || 'cn'));
+    if (!selectedSeat) throw new Error('席位不存在');
+    binding = credentialLocation(selectedSeat, seatHome).keychainService;
+  } catch (_) {
+    send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
+    send('pty:exit', { id }); return;
+  }
+  if (ptys.has(id)) {
+    if (ptySeats.get(id) === binding) return;
+    killPty(id, true);
+  }
+  if (selectedSeat) quotaWarmup?.cancel(selectedSeat.id);
+
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   const receiptToken = crypto.randomBytes(24).toString('hex');
@@ -227,22 +270,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
   let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
-  if (seatId) {
-    try {
-      let cfg = {};
-      try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
-      catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const seat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
-      if (!seat) throw new Error('席位不存在');
-      terminalEnv = seatEnvironment(terminalEnv, seat, tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME);
-    } catch (_) {
-      managedSessions.delete(id);
-      receiptSessions.delete(id);
-      send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
-      send('pty:exit', { id });
-      return;
-    }
-  }
+  terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
+
   // Never inherit an outer deck's managed capability into an independent shell.
   for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_RECEIPT_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
   terminalEnv.AGENTDECK_RECEIPT_TOKEN = receiptToken;
@@ -257,7 +286,6 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   }
   let p;
   try {
-    writeCredentials(boardControlDir, id, receiptToken, token);
     p = pty.spawn(shellFile(), shellArgs(), {
       name: 'xterm-256color',
       cols: cols || 80,
@@ -278,6 +306,11 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     send('pty:exit', { id, reason: `shell 启动失败: ${err.message}` });
     return;
   }
+  // A bad cwd exits before the next turn of the event loop. Listen first;
+  // writing the tty credential does disk I/O and would miss that exit.
+  const tty = ttyFromPty(p);
+  ptys.set(id, p);
+  ptySeats.set(id, binding);
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
@@ -285,6 +318,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     if (ptys.get(id) === p) {
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
+      ptySeats.delete(id);
       managedSessions.delete(id);
       receiptSessions.delete(id);
       removeCredentials(boardControlDir, id);
@@ -294,7 +328,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
       send('pty:exit', { id, reason: `终端进程退出（exit ${exitCode}${signal ? `，signal ${signal}` : ''}）` });
     }
   });
-  ptys.set(id, p);
+  try { writeCredentials(boardControlDir, id, receiptToken, token, tty); }
+  catch (_) { removeCredentials(boardControlDir, id); }
 }
 
 function send(channel, payload) {
@@ -309,6 +344,7 @@ function killPty(id, keepReplay) {
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
+  ptySeats.delete(id);
   managedSessions.delete(id);
   receiptSessions.delete(id);
   removeCredentials(boardControlDir, id);
@@ -380,7 +416,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -426,6 +462,8 @@ function setupBoardControl() {
     for (const file of ['board-credentials.js', 'security.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
+    fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));
+    fs.copyFileSync(path.join(__dirname, 'scripts', 'codex-captain-host.js'), path.join(toolsDir, 'codex-captain-host.js'));
   } catch (err) {
     nlog(`board-control setup failed: ${err.message}`);
   }
@@ -672,7 +710,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (isWin) app.setAppUserModelId('com.jinhao.agentdeck');
   if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -688,12 +726,13 @@ app.whenReady().then(() => {
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
-  registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
+  registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
+    getColumn: (id) => seatConfig().columns?.find((c) => c.id === id),
     onUsageRecorded: () => { quotaRead = null; } });
   if (!tudArg) {
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
-    const refresh = () => claudeQuotaRefresh.tick().catch(() => {});
+    const refresh = () => claudeQuotaRefresh.tick().then(() => send('quota:updated', claudeQuotaRefresh.samples())).catch(() => {});
     refresh();
     claudeQuotaTimer = setInterval(refresh, 30000);
     claudeQuotaTimer.unref();
@@ -701,6 +740,73 @@ app.whenReady().then(() => {
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
+  let mobileSettings = notificationConfig.mobileWeb || { enabled: false };
+  // The tunnel installer supplies only the public origin, never login secrets.
+  if (!tudArg && !mobileSettings.publicOrigin) {
+    try {
+      const endpoint = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json'), 'utf8'));
+      if (typeof endpoint.publicOrigin === 'string') mobileSettings.publicOrigin = endpoint.publicOrigin;
+    } catch (_) {}
+  }
+  let mobileInitializing = true;
+  let mobileStartupError = '';
+  mobileWeb = new MobileWebServer({
+    getSessions: () => requestMobile('sessions'),
+    getTasks: () => taskStore.list(),
+    getOutput: (id) => requestMobile('output', { id }),
+    getCaptain: () => requestMobile('captain-history'),
+    sendCaptain: (message) => requestMobile('captain', { message }),
+    saveSettings: (settings) => {
+      mobileSettings = settings;
+      if (mobileInitializing && !settings.enabled) return;
+      notificationConfig = { ...seatConfig(), mobileWeb: settings };
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(notificationConfig, null, 2), { mode: 0o600 });
+      fs.chmodSync(configPath + '.tmp', 0o600);
+      fs.renameSync(configPath + '.tmp', configPath);
+      // Restore the private web service after a Mac login. Isolated tests must
+      // never change the real app's login item.
+      if (!tudArg && app.isPackaged && process.platform === 'darwin' && settings.enabled && settings.publicOrigin) {
+        try { app.setLoginItemSettings({ openAtLogin: true }); mobileStartupError = ''; }
+        catch (_) { mobileStartupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+      }
+    },
+  });
+  await mobileWeb.configure(mobileSettings);
+  mobileInitializing = false;
+  // Only the trusted desktop settings page can enable the listener. The web
+  // page has fixed read/send operations and never sees an Electron IPC bridge.
+  handleMain('mobile-web:settings', async (_event, input) => {
+    if (input !== undefined) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid mobile web setting.');
+      if (typeof input.enabled === 'boolean') await mobileWeb.configure({ ...mobileSettings, enabled: input.enabled });
+      else if (typeof input.publicOrigin === 'string') await mobileWeb.configure({ ...mobileSettings, publicOrigin: input.publicOrigin });
+      else if (input.revoke === true) await mobileWeb.revokeDevices();
+      else throw new Error('Invalid mobile web setting.');
+    }
+    const status = mobileWeb.status();
+    status.startupError = mobileStartupError;
+    if (!tudArg && app.isPackaged && process.platform === 'darwin' && status.enabled && status.publicOrigin) {
+      try {
+        const login = app.getLoginItemSettings();
+        if (!login.openAtLogin || login.status === 'requires-approval') status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。';
+      } catch (_) { status.startupError = '请在 macOS 登录项中允许 AgentDeck 自动启动。'; }
+    }
+    if (!tudArg && status.publicOrigin) {
+      try {
+        const access = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'vps-access.json'), 'utf8'));
+        status.gatewayUser = typeof access.username === 'string' ? access.username : '';
+        status.gatewayPassword = typeof access.password === 'string' ? access.password : '';
+      } catch (_) {}
+    }
+    return status;
+  });
+  onMain('mobile-web:response', (_event, payload) => {
+    const pending = mobileRequests.get(payload?.requestId);
+    if (!pending) return;
+    mobileRequests.delete(payload.requestId); clearTimeout(pending.timer);
+    if (typeof payload.error === 'string' && payload.error) pending.reject(new Error(payload.error));
+    else pending.resolve(payload.result);
+  });
   const quotaAlertPath = path.join(app.getPath('userData'), 'quota-bark-state.json');
   let quotaAlertState = {};
   try {
@@ -730,30 +836,83 @@ app.whenReady().then(() => {
     } catch (_) { send('toast', { text: '额度 Bark 去重记录无法保存，未发送提醒。' }); }
   };
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
+  let warmupCaptain = { id: '', idle: false, at: 0 };
+  const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
+    warmupCaptain.id === seatConfig().mainSession?.colId ? warmupCaptain.id : '';
+  quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
+  if (tudArg) { app.testWarmupRuns = []; app.testWarmupResults = []; }
+  quotaWarmup = createWarmupService({
+    stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
+    logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
+    getSettings: () => seatConfig().quotaWarmup,
+    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
+    getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome),
+      quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
+      tudArg ? async () => [] : undefined),
+    run: tudArg ? async (seat) => {
+      // Isolated UI tests can supply deterministic results from the Electron
+      // harness; no test profile is allowed to call a real account.
+      app.testWarmupRuns.push({ seatId: seat.id, configDir: seat.configDir });
+      return app.testWarmupResults.shift() || { ok: false, status: 'test-disabled' };
+    } : (seat, options) => quotaWarmupRunner.run(seat, options),
+  });
+  handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
+  handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
+    const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === colId);
+    if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
+    const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
+    warmupCaptain = { id: colId, idle, at: Date.now() };
+    if (!idle) quotaWarmup.cancel(col.claudeSeatId || cfg.activeClaudeSeatId);
+    else if (changed) quotaWarmup.tick().catch(() => {});
+    return true;
+  });
+  if (tudArg) app.testQuotaWarmup = quotaWarmup;
+  quotaWarmupTimer = setInterval(() => quotaWarmup.tick().catch(() => {}), 30_000);
+  quotaWarmupTimer.unref();
+  if (tudArg) app.testRelayAlerts = [];
+  const sendRelayBark = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testRelayAlerts.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  handleMain('captain:relay-notify', (_e, { colId, message }) => {
+    if (colId !== notificationConfig.mainSession?.colId || !notificationConfig.columns?.some((c) => c.id === colId && c.isMain) ||
+      typeof message !== 'string' || !message.trim() || message.length > 1000) throw new Error('无效队长轮换提醒');
+    return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
+  });
+
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
+    cfg.mobileWeb = mobileSettings;
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
+    if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
-      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), 'utf-8');
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      fs.chmodSync(configPath + '.tmp', 0o600);
       fs.renameSync(configPath + '.tmp', configPath);
     } catch (_) {}
     checkQuotaBark();
   });
   onMain('env-info-sync', (e) => { e.returnValue = {
-    platform: process.platform, home: HOME,
+    platform: process.platform, home: HOME, version: app.getVersion(),
+    build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
   }; });
 
   // Test profiles never read the user's quota caches or conversation logs.
   handleMain('quota:local', async () => {
     if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
     await claudeQuotaRefresh?.tick();
+
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
@@ -767,8 +926,23 @@ app.whenReady().then(() => {
     }
     return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || [])]);
   });
+  handleMain('quota:refresh', async (_e, { seatId } = {}) => {
+    if (tudArg) return [];
+    if (seatId && !ClaudeSeatsCore.normalize(seatConfig().claudeSeats).some((s) => s.id === seatId)) throw new Error('席位不存在');
+    await claudeQuotaRefresh.tick({ force: true, seatId });
+    quotaRead = null;
+    return claudeQuotaRefresh.samples().filter((s) => !seatId || s.seatId === seatId);
+  });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
-  onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
+  onMain('pty:input', (_e, { id, data }) => {
+    if (id === warmupCaptain.id) {
+      warmupCaptain.idle = false;
+      const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === id);
+      quotaWarmup.cancel(col?.claudeSeatId || cfg.activeClaudeSeatId);
+    }
+    const p = ptys.get(id); if (p) p.write(data);
+  });
+
   onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }
@@ -784,7 +958,7 @@ app.whenReady().then(() => {
       try { result = await pending.notifyPromise; }
       catch (err) { error = err.message; }
     }
-    const verbatim = action === 'main-briefing' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-task';
+    const verbatim = action === 'main-briefing' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task';
     pendingBoardCommands.delete(requestId);
     if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
@@ -1134,15 +1308,29 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
+  if (mobileWeb) mobileWeb.close();
+  for (const pending of mobileRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error('AgentDeck 已关闭。')); }
+  mobileRequests.clear();
+  clearInterval(quotaWarmupTimer);
+  quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
+
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it
   // (the periodic flush already covers crashes that skip this handler).
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);
   for (const [id, p] of ptys) {
+    // kill() only signals the shell. The master fd stays open and keeps
+    // the process alive after will-quit, so Playwright never sees the exit.
     try { p.kill(); } catch (_) {}
+    try { if (typeof p.destroy === 'function') p.destroy(); } catch (_) {}
+
     removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }
+  ptys.clear();
 });
+// before-quit already removed credentials and closed PTY masters. Exit
+// immediately so inspector sockets cannot keep quit waiting.
+app.on('will-quit', () => { app.exit(0); });
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });

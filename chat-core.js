@@ -217,6 +217,7 @@
         ...(t.interrupted === true ? { interrupted: true } : {}),
         // files and pasted images sent with the prompt (paths)
         atts: Array.isArray(t.atts) ? t.atts.filter((a) => typeof a === 'string' && a.length <= 2000).slice(0, 20) : [],
+        ...(t.kind === 'notice' ? { kind: 'notice' } : {}),
         ...(t.kind === 'task' && t.task && typeof t.task === 'object' ? { kind: 'task', task: normalizeTask(t.task) } : {}),
       });
     }

@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -36,6 +37,8 @@ async function launch() {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
+  await expect(page.locator('.column')).not.toHaveCount(0);
+  await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   page.on('dialog', (d) => d.accept());
 }
 
@@ -52,11 +55,11 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(2);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
-test('there is one Captain: the sidebar entry creates it first, then just returns to it', async () => {
+test('there is one Captain: the sidebar entry creates it first, then just returns to it', { tag: '@smoke' }, async () => {
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeVisible();
   await page.locator('#mdCmd').fill('');           // a plain shell stands in for the agent
@@ -75,12 +78,12 @@ test('there is one Captain: the sidebar entry creates it first, then just return
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeHidden();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(mainId);
-  // the list row selects it too, and shows its conversation even from terminal view
+  // the list row selects it too and opens the terminal by default
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await page.evaluate((i) => ChatUI.setMode(i, 'term'), mainId);
   await row.click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(mainId);
-  await expect(page.locator(`.column[data-col-id="${mainId}"]`)).toHaveClass(/chat-mode/);
+  await expect(page.locator(`.column[data-col-id="${mainId}"]`)).not.toHaveClass(/chat-mode/);
   await expect(page.locator('#mainDialog')).toBeHidden();
   expect(await page.evaluate(() => columns.filter((c) => c.isMain).length)).toBe(1);
   await expect(page.locator('.colnav-item.captain-item')).toHaveCount(1);
@@ -105,7 +108,7 @@ test('the Captain row cannot be dragged into a folder or onto the archive, nor a
   await expect(page.locator(`#navList .colnav-item.captain-item[data-col-id="${mainId}"]`)).toHaveCount(1);
 });
 
-test('new: a fresh column gets the task as its first message, and the receipt comes back', async () => {
+test('new: a fresh column gets the task as its first message, and the receipt comes back', { tag: '@smoke' }, async () => {
   // --command keeps the new column on the stand-in, never a real agent
   await run(mainId, `node "${CLI}" new --title "写周报" --task "please write the report" --command "${FAKE.replace(/"/g, '')}"`);
   await expect.poll(() => page.evaluate(() => columns.some((c) => c.displayTitle === '写周报'))).toBe(true);
@@ -126,7 +129,9 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await expect(card.locator('.task-summary')).toContainText('stand-in finished please write the report');
   await expect(card.locator('.att')).toHaveAttribute('title', demoFile);
   expect(await page.evaluate((i) => columns.find((c) => c.id === i).lastReceipt.files, child)).toEqual([demoFile]);
-  await expect(head).toContainText('1 完成');
+  await expect(head).toHaveAttribute('title', /1 完成/);
+  // The terminal is the default view; open chat explicitly to use its card.
+  await page.evaluate((id) => ChatUI.setMode(id, 'chat'), mainId);
   // clicking the card's title opens it right after the Captain
   await card.locator('.task-title').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(child);
@@ -135,9 +140,26 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   // and it goes back once you move on
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
+  await test.step('new allows verified agy legacy models without starting a real model', async () => {
+    const commands = await page.evaluate(async () => {
+      const createSession = deckHost.createSession, commands = [];
+      // Exercise the real new gate, then intercept before any PTY starts.
+      deckHost.createSession = (col) => { commands.push(col.cmd); throw new Error('smoke-intercept-session'); };
+      try {
+        for (const model of ['claude-sonnet-4-6', 'claude-opus-4-6-thinking']) {
+          try {
+            await MainSession.handle({ action: 'main-new', id: `smoke-${model}`, title: model, task: 'stand-in only',
+              command: `agy --model ${model} --effort high` }, MainSession.mainCol());
+          } catch (error) { if (error.message !== 'smoke-intercept-session') throw error; }
+        }
+      } finally { deckHost.createSession = createSession; }
+      return commands;
+    });
+    expect(commands).toEqual(['agy --model claude-sonnet-4-6', 'agy --model claude-opus-4-6-thinking']);
+  });
 });
 
-test('tell, ledger and read from the Captain terminal; a worker stuck on a confirmation goes to the Captain', async () => {
+test('tell, ledger and read from the Captain terminal; a worker stuck on a confirmation goes to the Captain', { tag: '@smoke' }, async () => {
   await run(mainId, `clear; node "${CLI}" tell --to cap-x --message "ask me first"`);
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: 'Worker x' });
   await expect(card).toHaveClass(/st-input/, { timeout: 30000 });
@@ -193,10 +215,10 @@ test('a session the Captain only told something keeps its place; its own session
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
 });
 
-test('new refuses Claude 4.x and Haiku before any session starts, and says what to use', async () => {
+test('new refuses unapproved old Claude models before any session starts, and says what to use', async () => {
   const before = await page.evaluate(() => columns.length);
-  await run(mainId, `clear; node "${CLI}" new --title "旧模型" --task "x" --command "agy --model claude-sonnet-4-6"`);
-  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('用户不用 claude-sonnet-4-6');
+  await run(mainId, `clear; node "${CLI}" new --title "旧模型" --task "x" --command "agy --model claude-sonnet-4-5-20250929"`);
+  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('用户不用 claude-sonnet-4-5-20250929');
   await expect.poll(() => screen(mainId)).toContain('gemini-3.8-flash-high');
   expect(await page.evaluate(() => columns.length)).toBe(before);
 });
@@ -215,7 +237,7 @@ test('past the limit new work waits for a slot; finished background sessions are
     await expect(card('乙')).toHaveClass(/st-waiting/);
     await expect(card('乙')).toContainText('等空位');
     expect(await col('乙')).toBe(null);
-    await expect(page.locator('.captain-item .crew-counts')).toContainText('1 排队');
+    await expect(page.locator('.captain-item .crew-counts')).toHaveAttribute('title', /1 排队/);
     // unfolded: work in progress on top, then what waits for a slot, finished ones below
     const a0 = await col('甲');
     const keep0 = await col('写周报');
@@ -278,7 +300,7 @@ test('Captain stop interrupts a busy worker, cancels supplements; archive ends i
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "cancel this supplement"`);
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
-  await expect(page.locator('.captain-item .crew-counts')).toContainText('1 待补充');
+  await expect(page.locator('.captain-item .crew-counts')).toHaveAttribute('title', /1 待补充/);
   await run(mainId, `clear; node "${CLI}" stop --id ${child}`);
   await expect.poll(() => screen(child)).toContain('Interrupted by Esc');
   expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
@@ -371,7 +393,7 @@ test('quota generates a failure receipt; queued work still waits for the quota s
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '额度等待' }).last();
   await expect(card.locator('.task-status')).toHaveText('没做成');
   await expect(card.locator('.task-failed')).toContainText("You've hit your limit");
-  await expect(page.locator('.captain-item .crew-counts')).toContainText('额度用尽/等待');
+  await expect(page.locator('.captain-item .crew-counts')).toHaveAttribute('title', /额度用尽\/等待/);
   await run(mainId, `clear; node "${CLI}" ledger`);
   await expect.poll(() => screen(mainId)).toContain('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "after quota"`);
@@ -627,6 +649,9 @@ test('screen receipts and questions never settle tasks; only ended turns get a t
 
 test('receipts ride along with the next message to the Captain, not in its bubble', async () => {
   expect(await page.evaluate(() => config.mainSession.pending.length)).toBeGreaterThan(0);
+  // Select the Captain before opening chat; clicking an unfocused column switches to its terminal.
+  await page.locator('.captain-item').click();
+  await page.locator(`.column[data-col-id="${mainId}"] .view-toggle`).click();
   const box = page.locator(`.column[data-col-id="${mainId}"] .composer textarea`);
   await box.click();
   await page.keyboard.type('status please');
@@ -788,7 +813,7 @@ test('a restored Captain gets the current provider and effort instructions', asy
     config.mainSession.cmd = cmd;
     flushConfig();
   }, { id, cmd: FAKE });
-  await application.close();
+  await closeElectron(application);
   application = null;
   await launch();
   await expect.poll(() => capturedPrompts().slice(captureStart).join('\n'), { timeout: 30000 }).toContain('claude-opus-5-5-max');
@@ -835,9 +860,10 @@ test('after a restart the Captain row is still pinned and shows its saved conver
   await row.click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(id);
   const col = page.locator(`.column[data-col-id="${id}"]`);
-  await expect(col).toHaveClass(/chat-mode/);
+  await expect(col).not.toHaveClass(/chat-mode/);
   await expect(col.locator('.chat-scroll > .turn .task-card.st-done', { hasText: 'Worker y' })).toHaveCount(1);
   // the conversation from before the clear, from its saved file, read-only
+  await col.locator('.view-toggle').click();
   const turnsBefore = await page.evaluate((i) => ChatUI.turnsOf(i).length, id);
   await col.locator('.retired-toggle').click();
   const seg = col.locator(`.retired-chat[data-chat-id="${oldCaptainId}"]`);

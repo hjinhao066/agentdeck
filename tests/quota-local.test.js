@@ -89,10 +89,13 @@ test('feat/claude-seats agentdeck-usage cache preserves observation time and rel
     const file = path.join(home, '.claude-west/agentdeck-usage.json');
     const data = { at, source: 'Claude /usage', windows: [{ key: 'fiveHour', remaining: 65, resetText: 'in 1h' }, { key: 'weekly', remaining: 30, resetText: 'in 4d' }] };
     fs.writeFileSync(path.join(home, '.claude-west/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'west@example.com' } }));
-    M.writeUsage({ id: 'west', configDir: '~/.claude-west' }, home, data);
+    M.writeUsage({ id: 'west', configDir: '~/.claude-west' }, home, data, 'usage-west-column');
+
     const seats = [{ id: 'west', name: '西席', configDir: '~/.claude-west' }];
     const result = (await readLocal(home, undefined, now, seats)).filter(q => q.windows);
     assert.equal(result[0].at, at);
+    assert.equal(result[0].accountBound, true);
+    assert.equal(result[0].sourceColumnId, 'usage-west-column');
     assert.deepEqual(result[0].windows.map(w => [w.remaining, w.resetAt]), [[65, at + 3600000], [30, at + 4 * 86400000]]);
     fs.writeFileSync(file, JSON.stringify({ ...data, at: now - 3600000 }));
     assert.equal((await readLocal(home, undefined, now, seats)).filter(q => q.windows).length, 0);
@@ -154,11 +157,12 @@ test('two seats with bound data each show their own numbers; an unattributable l
     M.writeUsage(seats[1], home, S.footerUsage(['Opus 5.5   5h剩余 83% · 7d剩余 59%'], now));
     [cn, us] = await summaries();
     assert.equal(cn.label, '未知');
-    assert.equal(us.displayLabel, '5h 83% · 7d 59%');
+    assert.equal(us.displayLabel, '5h 83% ↻未知 · 7d 59% ↻未知');
     assert.match(us.detail, /会话状态行/);
     M.writeUsage(seats[0], home, S.usage('Current session\n  10% used\n  Resets 11pm\nCurrent week (all models)\n  40% used\n', now));
     [cn, us] = await summaries();
-    assert.equal(cn.displayLabel, '5h 90% · 7d 60%');
-    assert.equal(us.displayLabel, '5h 83% · 7d 59%');
+    assert.match(cn.displayLabel, /5h 90% ↻\d\d:\d\d · 7d 60% ↻未知/);
+    assert.equal(us.displayLabel, '5h 83% ↻未知 · 7d 59% ↻未知');
+
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

@@ -82,11 +82,13 @@ test('Captain badge repairs poisoned model cache using its own custom statusline
   await expect(sidebar.locator('.agent-model-label')).toHaveText('Opus 5.5');
 });
 
-test('Captain arrow folds without selecting it; live counts stay visible, its row still opens chat', async ({}, testInfo) => {
+test('Captain arrow folds without selecting it; live counts stay on its one-line row, its row still opens chat', async ({}, testInfo) => {
   const row = page.locator('.captain-item');
   const fold = row.locator('.captain-fold');
   const counts = row.locator('.crew-counts');
-  await expect(counts).toHaveText('3 干活中', { timeout: 15000 });
+  // One line: a tiny working count; the full breakdown is its tooltip.
+  await expect(counts).toHaveAttribute('title', '3 干活中', { timeout: 15000 });
+  await expect(counts).toHaveText('3');
   await expect(page.locator('.crew-head, .nav-crew .nav-folder-name, .nav-crew .nav-folder-ico')).toHaveCount(0);
   await expect(row).not.toContainText('后台');
   await expect(fold).toHaveAttribute('title', '收起队员列表');
@@ -107,14 +109,15 @@ test('Captain arrow folds without selecting it; live counts stay visible, its ro
   await page.evaluate(() => window.deck.ptyInput('worker-1', '\x1b'));
   await expect.poll(() => page.evaluate(() => terms.get('worker-1').state)).toBe('done');
   await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'failed'; Sidebar.refreshCrew(); });
-  await expect(counts).toHaveText('2 干活中 · 1 失败');
+  await expect(counts).toHaveAttribute('title', '2 干活中 · 1 失败');
+  await expect(row).toHaveAttribute('title', /^队长 · 2 干活中 · 1 失败/);
   const dir = process.env.AGENTDECK_SCREENSHOT_DIR || testInfo.outputDir;
   fs.mkdirSync(dir, { recursive: true });
   await page.mouse.move(800, 100);
   await page.evaluate(() => document.activeElement?.blur());
   await page.locator('#colNav').screenshot({ path: path.join(dir, 'sidebar-folded.png') });
   await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'done'; Sidebar.refreshCrew(); });
-  await expect(counts).toHaveText('2 干活中 · 1 完成');
+  await expect(counts).toHaveAttribute('title', '2 干活中 · 1 完成');
   await fold.focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('.nav-crew .colnav-item')).toHaveCount(3);
@@ -122,16 +125,16 @@ test('Captain arrow folds without selecting it; live counts stay visible, its ro
   await page.evaluate(() => ChatUI.setMode('captain', 'term'));
   await row.locator('.cn-label').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('captain');
-  await expect(page.locator('.column[data-col-id="captain"]')).toHaveClass(/chat-mode/);
+  await expect(page.locator('.column[data-col-id="captain"]')).not.toHaveClass(/chat-mode/);
   await expect(fold).toHaveAttribute('aria-expanded', 'true');
   await page.evaluate(() => {
     MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'working';
     window.deck.ptyInput('worker-1', 'keep working\r');
   });
-  await expect(counts).toHaveText('3 干活中');
+  await expect(counts).toHaveAttribute('title', '3 干活中');
 });
 
-test('worker titles use two full-width lines above metadata at default, minimum and wide sidebar widths', async ({}, testInfo) => {
+test('worker titles stay one full-width line above metadata at default, minimum and wide sidebar widths', async ({}, testInfo) => {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 760));
   for (const width of [252, 200, 420]) {
     await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
@@ -150,7 +153,8 @@ test('worker titles use two full-width lines above metadata at default, minimum 
         const m = meta.getBoundingClientRect();
         return { titleWidth: l.width, modelBelow: b.top >= l.bottom,
           timeBelow: getComputedStyle(meta).display === 'none' || m.top >= l.bottom,
-          contained: l.right <= r.right, clamped: getComputedStyle(label).webkitLineClamp === '2',
+          contained: l.right <= r.right,
+          clamped: getComputedStyle(label).whiteSpace === 'nowrap' && getComputedStyle(label).textOverflow === 'ellipsis' && getComputedStyle(label).overflow === 'hidden',
           lines: l.height / parseFloat(getComputedStyle(label).lineHeight),
           fontSize: parseFloat(getComputedStyle(label).fontSize),
           navFontSize: parseFloat(getComputedStyle(document.querySelector('.nav-row')).fontSize) };
@@ -158,7 +162,7 @@ test('worker titles use two full-width lines above metadata at default, minimum 
       expect(await check()).toMatchObject({ modelBelow: true, timeBelow: true, contained: true, clamped: true });
       const layout = await check();
       expect(layout.titleWidth).toBeGreaterThan(120);
-      expect(layout.lines).toBeLessThanOrEqual(2.01);
+      expect(layout.lines).toBeLessThanOrEqual(1.35);
       expect(layout.fontSize).toBe(12.5);
       expect(layout.fontSize).toBeLessThan(layout.navFontSize);
       await row.hover();
@@ -206,10 +210,10 @@ test('Captain metadata and counts stay inside its row when the sidebar list over
         }).filter((b) => b.visible);
         const next = captain.nextElementSibling.hidden ? captain.nextElementSibling.nextElementSibling : captain.nextElementSibling;
         return { contained: parts.every((b) => b.top >= r.top && b.bottom <= r.bottom && b.left >= r.left && b.right <= r.right),
-          ordered: parts[1].top >= parts[0].bottom && parts[3].top >= parts[1].bottom,
+          oneLine: parts.every((b) => Math.abs((b.top + b.bottom) / 2 - (parts[0].top + parts[0].bottom) / 2) <= 2),
           separate: next.getBoundingClientRect().top >= r.bottom };
       });
-      expect(layout, `width=${width}, open=${open}`).toEqual({ contained: true, ordered: true, separate: true });
+      expect(layout, `width=${width}, open=${open}`).toEqual({ contained: true, oneLine: true, separate: true });
     }
   }
 });

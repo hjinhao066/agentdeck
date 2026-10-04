@@ -45,7 +45,7 @@
   }
 
   // ---- view mode ----
-  // New columns follow the global choice; their own toggle stays independent.
+  // The per-column mode overrides the current global choice.
   function modeOf(col) {
     return C.normalizeViewMode(col.view || host.config.globalViewMode);
   }
@@ -316,6 +316,11 @@
   // readOnly: a turn from a retired 队长 conversation; it is not tracked in
   // v.rows, so live updates of the current chat never touch it.
   function turnRows(v, turn, readOnly) {
+    if (turn.kind === 'notice') {
+      const notice = el('div', 'captain-relay-notice', turn.reply);
+      notice.dataset.turn = turn.id; notice.setAttribute('role', 'status');
+      return notice;
+    }
     if (turn.kind === 'task') {
       const wrap = el('div', 'turn task-turn');
       wrap.dataset.turn = turn.id;
@@ -1033,6 +1038,10 @@
     appendTurn(id, turn);
     scheduleSave(id);
   }
+  function addNotice(id, text, ts = Date.now()) {
+    const turn = C.addTurn(chatFor(id), { kind: 'notice', ts, user: '永动机', reply: text, done: true, atts: [] });
+    appendTurn(id, turn); saveNow(id);
+  }
   function updateCard(id, task) {
     const chat = chats.get(id);
     if (!chat) return;
@@ -1260,6 +1269,7 @@
     hasDraft: (id) => { const v = views.get(id); return !!v && (!!v.ta.value || v.atts.length > 0); },
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
-    addCard, updateCard, retireChat, snapshotForHandoff, turnsOf, captainArchives, captainSnapshot, archiveCaptainSnapshot,
+    addCard, addNotice, updateCard, retireChat, snapshotForHandoff, turnsOf, captainArchives, captainSnapshot, archiveCaptainSnapshot,
+
   };
 })();
