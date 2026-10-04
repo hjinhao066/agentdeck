@@ -788,9 +788,12 @@ test('after a restart the conversation from before the clear is still listed and
   // Old files remain searchable even after their compact ledger metadata drops
   // out of the list. This runs after loading the chats from disk again.
   await page.evaluate(() => { config.captainHistory = []; });
-  await run(id, `clear; node "${CLI}" read --id captain-history --find "status please" --turns 1`);
-  await expect.poll(() => screen(id), { timeout: 15000 }).toContain(`记录：${oldCaptainId}`);
-  expect(await screen(id)).toContain('用户：status please');
+  // The previous read contains the same record; wait for its screen to clear
+  // before checking the fallback, so old output cannot satisfy its assertions.
+  await run(id, 'clear');
+  await expect.poll(() => screen(id), { timeout: 15000 }).not.toContain(`记录：${oldCaptainId}`);
+  await run(id, `node "${CLI}" read --id captain-history --find "status please" --turns 1`);
+  await expect.poll(() => screen(id), { timeout: 15000 }).toMatch(new RegExp(`记录：${oldCaptainId}.*用户：status please`));
 });
 
 test('after a restart the Captain row is still pinned and shows its saved conversation, older ones read-only', async () => {
