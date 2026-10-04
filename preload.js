@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
@@ -11,8 +11,10 @@ contextBridge.exposeInMainWorld('deck', {
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
   quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
   onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
-  clipboardWrite: (t) => clipboard.writeText(t),
-  clipboardRead: () => clipboard.readText(),
+  // Electron gives a preload no `clipboard` module, so main reads and writes
+  // it. A failed write throws: a copy button must not report success for it.
+  clipboardWrite: (t) => { if (ipcRenderer.sendSync('clipboard:write-sync', t) !== true) throw new Error('Clipboard write failed.'); },
+  clipboardRead: () => ipcRenderer.sendSync('clipboard:read-sync') || '',
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
   getPathForFile: (file) => webUtils.getPathForFile(file),
   // Retired bridge: main only removes old spools; it never writes new ones.
