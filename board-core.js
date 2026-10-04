@@ -46,6 +46,7 @@
     claude: CLAUDE,
     'claude --dangerously-skip-permissions': CLAUDE,
     codex: CODEX,
+    'codex --dangerously-bypass-approvals-and-sandbox': CODEX,
     gemini: GEMINI,
   });
 
@@ -158,13 +159,13 @@
   // Invoke the binary directly for app launches, without changing saved commands.
   // Quoting the name also prevents shell alias expansion.
   function shellLaunchCommand(command, platform) {
-    // A shared Codex server retains its own launch environment, not this PTY's
-    // per-column capabilities. Use an embedded server for new and resumed runs.
+    // A shared Codex server keeps the environment from whenever it first
+    // started, not this column's receipt credentials. Stay in-process.
     const words = String(command).match(/(?:[^\s"']|"[^"]*"|'[^']*')+/g) || [];
     const program = (words[0] === 'command' ? words[1] : words[0]) || '';
     const name = program.replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '');
     if (name.toLowerCase() === 'codex' && !words.includes('--no-daemon')) {
-      command = command.replace(program, program + ' --no-daemon');
+      command = command.replace(program, `${program} --no-daemon`);
     }
     return platform !== 'win32' && /^codex(?=\s|$)/.test(command)
       ? command.replace(/^codex/, 'command "codex"') : command;

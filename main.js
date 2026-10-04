@@ -5,6 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
+const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = require('./board-credentials');
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createQuotaLowBark } = require('./quota-low-bark');
@@ -213,7 +214,6 @@ const ptySeats = new Map();
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
-const { clearCredentials, removeCredentials, writeCredentials } = require('./board-credentials');
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -274,7 +274,6 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   }
   let p;
   try {
-    writeCredentials(boardControlDir, id, receiptToken, token);
     p = pty.spawn(shellFile(), shellArgs(), {
       name: 'xterm-256color',
       cols: cols || 80,
@@ -295,6 +294,11 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     send('pty:exit', { id, reason: `shell 启动失败: ${err.message}` });
     return;
   }
+  // A bad cwd exits before the next turn of the event loop. Listen first;
+  // writing the tty credential does disk I/O and would miss that exit.
+  const tty = ttyFromPty(p);
+  ptys.set(id, p);
+  ptySeats.set(id, binding);
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
@@ -312,8 +316,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
       send('pty:exit', { id, reason: `终端进程退出（exit ${exitCode}${signal ? `，signal ${signal}` : ''}）` });
     }
   });
-  ptys.set(id, p);
-  ptySeats.set(id, binding);
+  try { writeCredentials(boardControlDir, id, receiptToken, token, tty); }
+  catch (_) { removeCredentials(boardControlDir, id); }
 }
 
 function send(channel, payload) {
@@ -1239,9 +1243,16 @@ app.on('before-quit', () => {
   // (the periodic flush already covers crashes that skip this handler).
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);
   for (const [id, p] of ptys) {
+    // kill() only signals the shell. The master fd stays open and keeps
+    // the process alive after will-quit, so Playwright never sees the exit.
     try { p.kill(); } catch (_) {}
+    try { if (typeof p.destroy === 'function') p.destroy(); } catch (_) {}
     removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }
+  ptys.clear();
 });
+// before-quit already removed credentials and closed PTY masters. Exit
+// immediately so inspector sockets cannot keep quit waiting.
+app.on('will-quit', () => { app.exit(0); });
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });

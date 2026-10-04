@@ -33,6 +33,9 @@ test('submission schema rejects invalid results and files instead of silently cu
   assert.deepEqual(M.commandReceipt({ result: 'ok', files: ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a'] }).files, ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a']);
   for (const command of ['complete --result', 'ask --question', 'progress --message']) assert.ok(M.RECEIPT_CONTRACT.includes(command));
   assert.ok(M.RECEIPT_CONTRACT.includes('$env:AGENTDECK_BOARD_CLI'));
+  assert.match(M.RECEIPT_CONTRACT, /不要 unset、覆盖或清掉 AGENTDECK_/);
+  assert.match(M.RECEIPT_CONTRACT, /只在子进程里清/);
+  assert.match(M.RECEIPT_CONTRACT, /按当前终端认回自己的凭据/);
 });
 
 test('submission CLI uses its receipt token and transports exact text, files and failure', async () => {

@@ -54,6 +54,7 @@ test('upgrades legacy default commands while preserving custom commands and conf
   assert.equal(BoardCore.upgradeLegacyCommand('cursor-agent'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(BoardCore.upgradeLegacyCommand('claude'), 'claude --dangerously-skip-permissions --effort high');
   assert.equal(BoardCore.upgradeLegacyCommand('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(BoardCore.upgradeLegacyCommand('codex --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
   assert.equal(BoardCore.upgradeLegacyCommand('gemini'), 'gemini --yolo');
 
   // custom commands remain completely untouched

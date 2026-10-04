@@ -398,7 +398,9 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`
   (Antigravity's effort is the model id's suffix, `-low|-medium|-high`; given
   `--effort` beside such an id it silently runs a different model), `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
-  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`.
+  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`
+  (`--no-daemon` keeps each column off the shared Codex server, which otherwise
+  keeps a stale environment and cannot submit that column's receipt).
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -528,10 +530,14 @@ restored sessions. A shared Codex app server uses its own process environment
 and can lose the current terminal's receipt/control channel variables. Embedded
 servers inherit the column environment. This does not edit Codex user settings.
 
-The bridge still prefers environment credentials. If a shell policy filters the
-tokens, it reads `board-control/credentials/<terminal-id>.json` for the explicit
-`AGENTDECK_TERMINAL_ID` only. The standalone bridge can locate its own profile
-without `CONTROL_DIR`; it never searches other profiles or guesses an identity.
+The bridge prefers environment credentials when this process's controlling
+terminal has no private file. If a shell policy filters the tokens, the
+standalone bridge reads the credential file indexed by that tty
+(`board-control/credentials/by-tty/`), never by `AGENTDECK_TERMINAL_ID`: a
+shared Codex daemon keeps a stale terminal id and must not select another
+column. An empty `CONTROL_DIR` does not search the home profile. The managed
+copy can locate its own profile without `CONTROL_DIR`; it never searches other
+profiles.
 Files are private (0600, directory 0700 on POSIX), rotate when a PTY starts, and
 are removed on spawn failure, PTY exit, archive/kill, quit and the next app startup.
 Workers retain submission-only capabilities; only the Captain has control access.
