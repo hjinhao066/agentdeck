@@ -40,6 +40,11 @@ async function launch() {
     reply: '**检查步骤**\n- 打开 [说明](https://example.com/docs)\n- 运行 `npm test`\n\n```bash\nnpx playwright test tests/e2e/mobile-web.spec.js --workers=1 --reporter=line --grep mobile\n```\n见 https://example.com/report。\n[危险](javascript:window.mdInjected=1) <img src=x onerror="window.mdInjected=1">',
     done: true, atts: [],
   }, {
+    id: 'mobile-history-table', ts: Date.now() - 40_000, user: '把验收结果列成表。',
+    reply: '验收结果：\n\n| 项目 | 状态 | 说明 | 负责人 |\n|:--|:-:|:--|---|\n| 登录 | **通过** | 见 https://example.com/a。然后复查 | 界面实现 |\n'
+      + '| 看板 | 待验收 | `npm test` 通过，泳道在窄屏隐藏空列，等待真机复核 | 数据导入 |\n| 管道 | a \\| b | <img src=x onerror="window.tableInjected=1"> | 队长 |\n\n---\n结论见 https://example.com/b，下一步继续。',
+    done: true, atts: [],
+  }, {
     id: 'mobile-history-latest', ts: Date.now() - 30_000, user: '手机首次打开也要看得到完整的发送按钮。',
     reply: '竖屏布局测试回复：最近对话可以上下滑动查看，发送按钮保持在底部导航上方。', done: true, atts: [],
   }] }));
@@ -159,12 +164,16 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
   await mobile.getByLabel('给队长的消息').fill('断线时写的草稿');
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(mobile.locator('#notice')).toHaveText('暂时连不上桌面端，正在自动重连…');
+  await expect(mobile.locator('#view-meta')).toHaveText('连接中断');
+  await expect(mobile.locator('#title-dot')).toHaveAttribute('data-status', 'offline');
   await expect(mobile.locator('#send')).toBeDisabled();
   await expect(mobile.locator('#captain-turns')).toContainText('队长测试回复：');
   await screenshot('offline');
   await mobile.unroute('**/api/**');
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(mobile.locator('#notice')).toBeHidden();
+  await expect(mobile.locator('#view-meta')).not.toHaveText(/连接中断/);
+  await expect(mobile.locator('#title-dot')).not.toHaveAttribute('data-status', 'offline');
   await expect(mobile.locator('#send')).toBeEnabled();
   await expect(mobile.getByLabel('给队长的消息')).toHaveValue('断线时写的草稿');
   await mobile.getByLabel('给队长的消息').fill('');
@@ -194,6 +203,33 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     await markdown.getByRole('button', { name: '复制代码', exact: true }).click();
     expect(await mobile.evaluate(() => navigator.clipboard.readText())).toBe('npx playwright test tests/e2e/mobile-web.spec.js --workers=1 --reporter=line --grep mobile');
     expect(await mobile.evaluate(() => window.mdInjected)).toBeUndefined();
+    // Pipe tables become a sideways-scrolling table, --- a thin rule; a bare
+    // link stops before the Chinese text that follows it.
+    const tableReply = mobile.locator('[data-turn-id="mobile-history-table"] .markdown');
+    await expect(tableReply.locator('.table-wrap')).toHaveCSS('overflow-x', 'auto');
+    await expect(tableReply.locator('th')).toHaveText(['项目', '状态', '说明', '负责人']);
+    await expect(tableReply.locator('tbody tr')).toHaveCount(3);
+    await expect(tableReply.locator('th').nth(1)).toHaveCSS('text-align', 'center');
+    await expect(tableReply.locator('tbody tr').nth(0).locator('strong')).toHaveText('通过');
+    await expect(tableReply.locator('tbody tr').nth(1).locator('.md-code')).toHaveText('npm test');
+    await expect(tableReply.locator('tbody tr').nth(2).locator('td').nth(1)).toHaveText('a | b');
+    await expect(tableReply.locator('tbody tr').nth(2).locator('td').nth(2)).toHaveText('<img src=x onerror="window.tableInjected=1">');
+    await expect(tableReply.locator('hr')).toHaveCount(1);
+    await expect(tableReply).not.toContainText('---');
+    await expect(tableReply).not.toContainText('|:--');
+    await expect(tableReply.getByRole('link', { name: 'https://example.com/a', exact: true })).toHaveAttribute('href', 'https://example.com/a');
+    await expect(tableReply.locator('tbody tr').nth(0).locator('td').nth(2)).toHaveText('见 https://example.com/a。然后复查');
+    await expect(tableReply.getByRole('link', { name: 'https://example.com/b', exact: true })).toHaveAttribute('href', 'https://example.com/b');
+    await expect(tableReply.locator('p').last()).toHaveText('结论见 https://example.com/b，下一步继续。');
+    expect(await tableReply.locator('img, script, [onerror]').count()).toBe(0);
+    expect(await mobile.evaluate(() => window.tableInjected)).toBeUndefined();
+    await tableReply.locator('.table-wrap').evaluate((element) => {
+      const conversation = document.getElementById('captain-turns');
+      conversation.scrollTop += element.getBoundingClientRect().top - conversation.getBoundingClientRect().top - 12;
+    });
+    await expect(tableReply.locator('hr')).toBeInViewport();
+    await screenshot(`markdown-table-${theme}`);
+    await mobile.locator('#captain-turns').evaluate((element) => { element.scrollTop = element.scrollHeight; });
     for (const [width, height] of [[390, 844], [430, 932]]) {
       await mobile.setViewportSize({ width, height });
       await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeGreaterThan(height - 80);
@@ -215,9 +251,20 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
       await screenshot(`captain-${width}-${theme}`);
       await mobile.getByLabel('给队长的消息').fill('');
     }
+    // Lost connection in either theme: the header stops claiming a live status.
+    await mobile.setViewportSize({ width: 390, height: 844 });
+    await mobile.route('**/api/**', (route) => route.abort());
+    await mobile.getByRole('button', { name: '刷新', exact: true }).click();
+    await expect(mobile.locator('#view-meta')).toHaveText('连接中断');
+    await screenshot(`offline-${theme}`);
+    await mobile.unroute('**/api/**');
+    await mobile.getByRole('button', { name: '刷新', exact: true }).click();
+    await expect(mobile.locator('#title-dot')).not.toHaveAttribute('data-status', 'offline');
     // Soft keyboard open: the composer stays within 30% of what is visible.
     await mobile.setViewportSize({ width: 390, height: 420 });
     await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeGreaterThan(420 - 80);
+    // Wait for the shell to refit the shorter viewport before measuring the composer.
+    await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeLessThanOrEqual(420);
     await mobile.getByLabel('给队长的消息').fill(Array.from({ length: 12 }, (_, i) => '第 ' + (i + 1) + ' 行').join('\n'));
     expect((await mobile.locator('#message').boundingBox()).height).toBeLessThanOrEqual(420 * 0.3 + 1);
     expect((await mobile.locator('#captain-turns').boundingBox()).height).toBeGreaterThanOrEqual(150);
