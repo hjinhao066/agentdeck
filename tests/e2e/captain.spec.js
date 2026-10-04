@@ -5,7 +5,7 @@ const path = require('path');
 
 // 队长 (Captain, the main session). Its column runs a plain shell here, and the
 // test types the real control commands into it, the same ones the agent would
-// run. The columns it drives run a stand-in agent that writes receipts.
+// run. The columns it drives run a stand-in agent that submits command receipts.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const CLI = process.platform === 'win32' ? '$env:AGENTDECK_BOARD_CLI' : '$AGENTDECK_BOARD_CLI';
 let application, page, profile, demoFile, mainId;
@@ -27,7 +27,7 @@ async function waitForShell(id) {
 }
 
 async function launch() {
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'received-prompts.jsonl') };
+  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'received-prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received-columns.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -109,9 +109,11 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await run(mainId, `node "${CLI}" new --title "写周报" --task "please write the report" --command "${FAKE.replace(/"/g, '')}"`);
   await expect.poll(() => page.evaluate(() => columns.some((c) => c.displayTitle === '写周报'))).toBe(true);
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
-  // it runs in the background: a folded 后台 row under the Captain, not a deck column
-  const head = page.locator('.colnav-item.captain-item + .nav-crew .crew-head');
-  await expect(head).toContainText('后台');
+  // it runs in the background: counts and a folding arrow on the Captain row
+  const head = page.locator('.captain-item .crew-counts');
+  await expect(head).not.toContainText('后台');
+  await expect(page.locator('.nav-crew .crew-head')).toHaveCount(0);
+  await expect(page.locator('.captain-item .captain-fold')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator(`.nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(0);
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
   expect(await page.evaluate((i) => deckColumns().some((c) => c.id === i), child)).toBe(false);
@@ -161,8 +163,8 @@ test('tell, ledger and read from the Captain terminal; a worker stuck on a confi
 test('a session the Captain only told something keeps its place; its own sessions leave and come back by drag', async () => {
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
   const crew = (id) => page.locator(`.nav-crew .colnav-item[data-col-id="${id}"]`);
-  // unfolding 后台 lists them
-  await page.locator('.nav-crew .crew-head').click();
+  // the Captain arrow unfolds its crew
+  await page.locator('.captain-item .captain-fold').click();
   await expect(crew(child)).toHaveCount(1);
   await expect(crew('cap-x')).toHaveCount(0);
   await expect(page.locator('.nav-group:not(.nav-crew) .colnav-item[data-col-id="cap-x"]')).toHaveCount(1);
@@ -180,6 +182,8 @@ test('a session the Captain only told something keeps its place; its own session
   expect(await page.evaluate((i) => [columns.find((c) => c.id === i).captainCrew, deckColumns().some((c) => c.id === i)], child)).toEqual([false, true]);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await expect(page.locator(`.column[data-col-id="${child}"]`)).not.toHaveClass(/backstage/);
+  // With no crew, the disabled arrow must still let a drop reach the Captain row.
+  await expect(page.locator('.captain-item .captain-fold')).toBeDisabled();
   await drag(page.locator(`.colnav-item[data-col-id="${child}"]`), page.locator('.colnav-item.captain-item'));
   await expect(crew(child)).toHaveCount(1);
   expect(await page.evaluate(() => [...deckEl.querySelectorAll('.column')][1].dataset.colId)).toBe(child);
@@ -208,11 +212,11 @@ test('past the limit new work waits for a slot; finished background sessions are
     await expect(card('乙')).toHaveClass(/st-waiting/);
     await expect(card('乙')).toContainText('等空位');
     expect(await col('乙')).toBe(null);
-    await expect(page.locator('.nav-crew .crew-head')).toContainText('1 排队');
+    await expect(page.locator('.captain-item .crew-counts')).toContainText('1 排队');
     // unfolded: work in progress on top, then what waits for a slot, finished ones below
     const a0 = await col('甲');
     const keep0 = await col('写周报');
-    if (!(await page.evaluate(() => !!config.crewOpen))) await page.locator('.nav-crew .crew-head').click();
+    if (!(await page.evaluate(() => !!config.crewOpen))) await page.locator('.captain-item .captain-fold').click();
     await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.nav-crew > .colnav-item')]
       .map((r) => r.dataset.colId || 'waiting:' + r.querySelector('.cn-label').textContent)))
       .toEqual([a0, 'waiting:乙', keep0]);
@@ -271,7 +275,7 @@ test('Captain stop interrupts a busy worker, cancels supplements; archive ends i
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "cancel this supplement"`);
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
-  await expect(page.locator('.nav-crew .crew-head')).toContainText('1 待补充');
+  await expect(page.locator('.captain-item .crew-counts')).toContainText('1 待补充');
   await run(mainId, `clear; node "${CLI}" stop --id ${child}`);
   await expect.poll(() => screen(child)).toContain('Interrupted by Esc');
   expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
@@ -300,14 +304,17 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令')?.id)).toBeTruthy();
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令').id);
   await expect.poll(() => screen(child)).toContain('Doing…');
-  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
+  const queuedCount = () => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child);
+  let queued = 0;
   for (const message of ['merge alpha', 'merge beta', 'merge gamma']) {
     await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
+    await expect.poll(queuedCount).toBe(++queued);
+    await waitForShell(mainId);
     await expect.poll(() => screen(mainId)).toContain('待补充');
   }
   // The stand-in finishes its current operation; the three additions arrive as one prompt.
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
-  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('merge alpha')).length, { timeout: 20000 }).toBe(1);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('merge alpha')).length).toBe(1);
   const merged = capturedPrompts().find((p) => p.startsWith('merge alpha'));
   expect(merged).toContain('merge alpha\n\nmerge beta\n\nmerge gamma');
   expect(merged.split('（AgentDeck 约定）')).toHaveLength(2);
@@ -315,50 +322,64 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i).at(-1)?.status, child), { timeout: 30000 }).toBe('done');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --now --message "keep working replace probe"`);
   await expect.poll(() => screen(child)).toContain('keep working replace probe');
-  // Echo is visible before the next status tick marks the worker busy.
-  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
+  // A prompt can appear before the status loop has observed the busy screen.
+  await expect.poll(() => page.evaluate((i) => {
+    const entry = terms.get(i);
+    return entry?.state === 'working' && MainCore.terminalActivity(entry.lastScreen) === 'working';
+  }, child), { timeout: 15000 }).toBe(true);
+  queued = 0;
   for (const message of ['discard alpha', 'discard beta']) {
     await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
+    await expect.poll(queuedCount).toBe(++queued);
+    await waitForShell(mainId);
     await expect.poll(() => screen(mainId)).toContain('待补充');
   }
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --message "replacement only"`);
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
+  await waitForShell(mainId);
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
-  await expect.poll(() => capturedPrompts().some((p) => p.startsWith('replacement only')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => capturedPrompts().some((p) => p.startsWith('replacement only'))).toBe(true);
   expect(capturedPrompts().some((p) => /^(discard alpha|discard beta)/.test(p))).toBe(false);
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('done');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "keep working now probe"`);
   await expect.poll(() => screen(child)).toContain('keep working now probe');
-  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
+  // A prompt can appear before the status loop has observed the busy screen.
+  await expect.poll(() => page.evaluate((i) => {
+    const entry = terms.get(i);
+    return entry?.state === 'working' && MainCore.terminalActivity(entry.lastScreen) === 'working';
+  }, child), { timeout: 15000 }).toBe(true);
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "discard with now"`);
+  await expect.poll(queuedCount).toBe(1);
+  await waitForShell(mainId);
   await expect.poll(() => screen(mainId)).toContain('待补充');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --now --message "urgent replacement"`);
-  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('urgent replacement')).length, { timeout: 20000 }).toBe(1);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('urgent replacement')).length).toBe(1);
   expect(capturedPrompts().some((p) => p.startsWith('discard with now'))).toBe(false);
   expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
   await run(mainId, `clear; node "${CLI}" archive --id ${child}`);
   await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
 });
 
-test('quota wait stays waiting, not working/completed; queued work waits and resumes after the wait clears', async () => {
+test('quota generates a failure receipt; queued work still waits for the quota screen to clear', async () => {
   await run(mainId, `clear; node "${CLI}" new --title "额度等待" --task "wait for quota probe" --command "${FAKE.replace(/"/g, '')} --interruptible"`);
   await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '额度等待')?.id)).toBeTruthy();
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '额度等待').id);
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('quota');
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '额度等待' }).last();
-  await expect(card.locator('.task-status')).toHaveText('额度用尽/等待');
-  await expect(page.locator('.nav-crew .crew-head')).toContainText('额度用尽/等待');
+  await expect(card.locator('.task-status')).toHaveText('没做成');
+  await expect(card.locator('.task-failed')).toContainText("You've hit your limit");
+  await expect(page.locator('.captain-item .crew-counts')).toContainText('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" ledger`);
   await expect.poll(() => screen(mainId)).toContain('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "after quota"`);
   await expect.poll(() => screen(mainId)).toContain('待补充');
   const status = await page.evaluate((i) => {
-    const entry = terms.get(i); const t = config.mainSession.tasks.find((t) => t.colId === i && t.status === 'quota');
+    const entry = terms.get(i); const t = config.mainSession.tasks.find((t) => t.colId === i && t.status === 'failed');
     t.idleSince = Date.now() - 600000;
     MainSession.onTick(i, { ...entry, lastOutputAt: Date.now() - 600000 });
     return t.status;
   }, child);
-  expect(status).toBe('quota');
+  expect(status).toBe('failed');
   expect(capturedPrompts().some((p) => p.startsWith('after quota'))).toBe(false);
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
   await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('after quota')).length).toBe(1);
@@ -530,7 +551,7 @@ test('keys typed while a receipt is being entered are held and follow it; the bo
   await page.evaluate(() => terms.get('cap-y').term.reset());
 });
 
-test('a pause or a silent start is not a stop: only a receipt, a question, a failure or a long quiet ends a task', async () => {
+test('screen receipts and questions never settle tasks; only ended turns get a three-minute fallback', async () => {
   const before = await page.evaluate(() => ({ pending: config.mainSession.pending.length, tasks: config.mainSession.tasks.length }));
   const probe = await page.evaluate(() => {
     const s = config.mainSession;
@@ -543,20 +564,20 @@ test('a pause or a silent start is not a stop: only a receipt, a question, a fai
     out.afterEarlyTurnEnd = a.status;
     MainSession.onTick('probe-col', quiet({}));
     out.afterShortQuiet = a.status;
-    // the receipt comes later, on the screen only (the column has been quiet for 10s)
+    // A later screen-only receipt is still ignored, even after 10 seconds quiet.
     a.idleSince = Date.now() - 10_000;
     MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 10_000, lastScreen: `${'─'.repeat(20)}\n  【回执】\n  摘要：后来才做完\n  文件：无\n` }));
     out.screenReceipt = [a.status, a.receipt && a.receipt.summary, a.receipt && a.receipt.explicit];
-    // a question and a failure still end it at once
+    // Screen-only questions and failures cannot end it either.
     const b = mk('probe-b', 'tb');
     MainSession.onTurnDone('probe-col', { id: 'tb', reply: '【提问】\n问题：用哪个库？' });
     out.question = b.status;
     const c = mk('probe-c', 'tc');
     MainSession.onTurnDone('probe-col', { id: 'tc', reply: '【回执】\n摘要：没成\n文件：无\n失败：没有权限' });
     out.failure = c.status;
-    // a screen quiet for minutes with nothing written is a real stop
+    // An ended turn with no command receipt gets only the no-receipt notice.
     const d = mk('probe-d', 'td');
-    d.idleSince = Date.now() - 10 * 60_000;
+    d.endedAt = Date.now() - 10 * 60_000;
     MainSession.onTick('probe-col', quiet({ lastOutputAt: Date.now() - 10 * 60_000 }));
     out.longQuiet = [d.status, d.receipt && d.receipt.explicit];
     // still printing: never
@@ -575,9 +596,9 @@ test('a pause or a silent start is not a stop: only a receipt, a question, a fai
   });
   expect(probe.afterEarlyTurnEnd).toBe('working');
   expect(probe.afterShortQuiet).toBe('working');
-  expect(probe.screenReceipt).toEqual(['done', '后来才做完', true]);
-  expect(probe.question).toBe('asking');
-  expect(probe.failure).toBe('failed');
+  expect(probe.screenReceipt).toEqual(['working', null, null]);
+  expect(probe.question).toBe('working');
+  expect(probe.failure).toBe('working');
   expect(probe.longQuiet).toEqual(['stopped', false]);
   expect(probe.stillPrinting).toBe('working');
   expect(probe.stillDoing).toBe('working');
@@ -666,7 +687,6 @@ test('clearing the Captain resets only its model context: work, receipts and que
   }, FAKE);
   await expect.poll(() => page.evaluate((i) => terms.get(i).state, oldCaptainId), { timeout: 20000 }).toBe('input');
   expect(await page.evaluate(() => config.mainSession.inflight.length)).toBeGreaterThan(0);
-  const captureStart = capturedPrompts().length;
   const messages = [];
   const spy = (d) => messages.push(d.message());
   page.on('dialog', spy);
@@ -694,7 +714,7 @@ test('clearing the Captain resets only its model context: work, receipts and que
   await expect(page.locator(`.column[data-col-id="${fresh}"] .task-card.st-input`, { hasText: 'Worker x' })).toHaveCount(1);
 
   // a fresh agent gets the default instructions again, plus where the old conversation is
-  const received = () => capturedPrompts().slice(captureStart).join('\n');
+  const received = () => fs.readFileSync(path.join(profile, 'received-columns.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter((p) => p.colId === fresh).map((p) => p.text).join('\n');
   await expect.poll(received, { timeout: 30000 }).toContain('claude-opus-5-5-max');
   await expect.poll(received, { timeout: 15000 }).toContain(`read --id ${oldCaptainId}`);
   // then the question reaches it by itself
@@ -779,7 +799,7 @@ test('after a restart the Captain row is still pinned and shows its saved conver
   expect(await page.evaluate(() => [columns.filter((c) => c.isMain).length, deckEl.querySelector('.column').dataset.colId])).toEqual([1, id]);
   // the sessions it opened are still in its background
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
-  await expect(page.locator('.colnav-item.captain-item + .nav-crew .crew-head')).toHaveCount(1);
+  await expect(page.locator('.captain-item .crew-counts')).toHaveCount(1);
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await page.evaluate((i) => ChatUI.setMode(i, 'term'), id);

@@ -37,6 +37,7 @@ const ICONS = {
   folderPlus: S('<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/><line x1="12" y1="10" x2="12" y2="16"/><line x1="9" y1="13" x2="15" y2="13"/>'),
   chevRight: S('<polyline points="9 18 15 12 9 6"/>'),
   chevDown: S('<polyline points="6 9 12 15 18 9"/>'),
+  gear: S('<path d="m9 3-1 3-3 1 1 3-2 2 2 2-1 3 3 1 1 3h6l1-3 3-1-1-3 2-2-2-2 1-3-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/>'),
   more: S('<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>'),
   archive: S('<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>'),
   restore: S('<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>'),
@@ -55,6 +56,7 @@ const ICONS = {
   eraser: S('<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'),
   crown: S('<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>'),
   eye: S('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>'),
+  settings: S('<path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="m9 3-1 3-3 1-2 3 2 2-1 3 2 3 3-1 3 2 3-2 3 1 2-3-1-3 2-2-2-3-3-1-1-3Z"/>'),
 };
 
 // ---- Config / state ----
@@ -101,10 +103,14 @@ let config = {
   boardResponses: {}, boardPositions: {}, globalViewMode: 'chat',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
+  captainNotifications: NotificationPolicy.normalizeSettings(),
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
+  captainTokenSaver: MainCore.tokenSaverSettings(),
 };
 const saved = window.deck.loadConfig();
+// Persist only parsed observations, never terminal text or credentials.
+config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
   config.captainRelayLabel = typeof saved.captainRelayLabel === 'string' ? saved.captainRelayLabel.slice(0, 80) : 'Relay';
@@ -114,6 +120,7 @@ if (saved) {
     command: typeof saved.captainRelayCodex.command === 'string' ? saved.captainRelayCodex.command : ClaudeSeatsCore.CODEX_COMMAND,
   };
   if (typeof saved.captainRelayClaudeCommand === 'string') config.captainRelayClaudeCommand = saved.captainRelayClaudeCommand;
+  config.captainNotifications = NotificationPolicy.normalizeSettings(saved.captainNotifications);
   config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
@@ -128,6 +135,7 @@ if (saved) {
   config.navArchivedOpen = !!saved.navArchivedOpen;
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
+  config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (saved.activeView === 'board') config.activeView = 'board';
@@ -164,6 +172,8 @@ if (saved) {
       agentProvider: c.agentProvider,
       agentModel: c.agentModel,
       agentEffort: c.agentEffort,
+      claudeSeatId: c.claudeSeatId,
+      claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       // Relaunch follows the saved global choice; local overrides last this run.
@@ -356,6 +366,7 @@ function visibleInputBox(entry) {
   } catch (_) { return null; }
 }
 function userComposing(id) {
+  if (ChatUI.hasDraft(id)) return true;
   const entry = terms.get(id);
   if (!entry || !entry.typing) return false;
   const t = entry.typing;
@@ -371,7 +382,7 @@ const terms = new Map(); // id -> { term, fit, el, wrap, titleEl, dot, alive }
 let focusedId = null;    // id of the column whose terminal last had focus
 // Sessions 队长 opened run in the background ("backstage"): their columns stay
 // built and sized (PTY, status, receipts) but sit outside the deck. Opening one
-// (sidebar, task card, notification) shows it after 队长 until focus moves on.
+// (sidebar or task card) shows it after 队长 until focus moves on.
 let peekId = null;
 function isBackstage(col) {
   return !!col && !!col.captainCrew && !col.isMain && col.id !== peekId && columns.some((c) => c.isMain);
@@ -408,10 +419,11 @@ window.deck.onPtyData((id, data) => {
   const t = terms.get(id);
   if (t) { t.lastOutputAt = Date.now(); t.term.write(data); }
 });
-window.deck.onPtyExit((id) => {
+window.deck.onPtyExit((id, reason) => {
   const t = terms.get(id);
   if (t) {
     t.alive = false; t.state = 'exited';
+    t.exitReason = reason || '终端进程已退出';
     // Finalize a running timer so the exited column shows "✓ total", not a
     // frozen mid-count.
     if (t.workStart) { t.workedMs = Date.now() - t.workStart; t.workStart = 0; t.doneAt = Date.now(); }
@@ -443,8 +455,8 @@ function classify(text, entry) {
   const activity = MainCore.terminalActivity(text);
   if (activity === 'quota') return activity;
   const lines = text.split('\n');
-  if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   if (activity === 'working') return activity;
+  if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   if (WORKING_RE.test(lines.slice(-15).join('\n'))) return 'working';
   if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
@@ -504,6 +516,24 @@ function railBtn(svg, tip, onClick, accent) {
   b.innerHTML = svg; b.title = tip; b.onclick = onClick;
   return b;
 }
+function openNotificationSettings() {
+  const dialog = document.getElementById('notificationSettings');
+  const settings = config.captainNotifications;
+  document.getElementById('captainNotifyEnabled').checked = settings.enabled;
+  document.getElementById('captainSoundEnabled').checked = settings.sound;
+  document.getElementById('captainSoundTone').value = settings.tone;
+  document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
+  MainSession.openSettings();
+  dialog.showModal();
+}
+function saveNotificationSettings() {
+  config.captainNotifications = NotificationPolicy.normalizeSettings({
+    enabled: document.getElementById('captainNotifyEnabled').checked,
+    sound: document.getElementById('captainSoundEnabled').checked,
+    tone: document.getElementById('captainSoundTone').value,
+  });
+  saveConfig();
+}
 function buildChrome() {
   const head = document.getElementById('navHead');
   const tbLeft = document.getElementById('tbLeft');
@@ -551,7 +581,9 @@ function buildChrome() {
   brand.textContent = 'AgentDeck';
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
-  bottom.append(brand, themeBtn,
+  const settingsBtn = railBtn(ICONS.gear, '设置', openNotificationSettings);
+  settingsBtn.id = 'settingsBtn'; settingsBtn.setAttribute('aria-label', '设置');
+  bottom.append(brand, settingsBtn, themeBtn,
     railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()),
     railBtn(ICONS.reset, '恢复默认布局', () => {
       if (!confirm('恢复默认布局？现有对话的终端会关闭，对话记录会删掉。已归档的不受影响。')) return;
@@ -1773,7 +1805,7 @@ function buildColumn(col, isFresh) {
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
           const spawnId = col.id;
-          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, seatLaunchCommand(col, BoardCore.shellLaunchCommand(launch, env.platform)) + '\r'); }, 700);
+          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, BoardCore.shellLaunchCommand(launch, env.platform)), env.platform) + '\r'); }, 700);
         }
         if (!isFresh && col.role !== 'manual' && !col.taskCompleted) {
           // A cold restart killed the old CLI caller. Re-deliver managed
@@ -1801,7 +1833,6 @@ function buildColumn(col, isFresh) {
           if (entry) {
             entry.hasWorked = true;
             entry.lastOutputAt = Date.now();
-            entry.notificationState = { state: 'working', notified: null, since: null };
             window.deck.notifyCancel({ id: col.id });
           }
         }
@@ -2487,9 +2518,8 @@ function jumpToColumn(col) {
   syncNav();
 }
 
-// Popup-notification click: jump straight to the column whose agent fired the
-// event (id = that pty's AGENTDECK_COL_ID). Stale id — the column respawned
-// since — falls back to a column waiting for input, then to a just-done one.
+// Native notification / external focus request: reveal the exact column.
+// Stale IDs leave the current column unchanged.
 window.deck.onFocusColumn((id) => {
   const col = columns.find((c) => c.id === id);
   if (!col) {
@@ -2809,12 +2839,12 @@ boardInspectorSendTaskEl.onclick = () => {
 const MAX_MANAGED_TASKS = 48;
 const MAX_TASK_DEPTH = 8;
 
-function respondBoard(requestId, payload) {
+function respondBoard(requestId, payload, verbatim = false) {
   const id = BoardCore.cleanText(requestId, 200);
   if (!id) return;
   const response = {
     done: !!payload.done,
-    result: BoardCore.cleanText(payload.result, 12000),
+    result: verbatim && typeof payload.result === 'string' ? payload.result : BoardCore.cleanText(payload.result, 12000),
     error: BoardCore.cleanText(payload.error, 2000),
     childId: BoardCore.cleanText(payload.childId, 160),
     snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : undefined,
@@ -2949,23 +2979,30 @@ window.deck.onBoardCommand((message) => {
     }
   }
   const caller = columns.find((col) => col.id === message.callerId);
+  if (['complete', 'ask', 'progress', 'session-exit'].includes(message.action) && caller) {
+    try {
+      const response = MainSession.submit(message, caller);
+      if (response) { respondBoard(message.id, response); return; }
+      if (message.action === 'session-exit') { respondBoard(message.id, { done: true }); return; }
+    } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
+  }
   // 队长's commands: only its own column may use them.
   if (String(message.action || '').startsWith('main-')) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response);
+        if (message.action === 'main-peek' || message.action === 'main-quota' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        else respondBoard(message.id, response, message.action === 'main-receipts');
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-peek') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;
   }
-  if (!caller || caller.role === 'manual') {
+  if (!caller || caller.role === 'manual' || (message.submitOnly && !['complete', 'ask', 'progress'].includes(message.action))) {
     respondBoard(message.id, { done: true, error: 'Managed caller terminal no longer exists.' });
     return;
   }
@@ -3082,6 +3119,11 @@ document.getElementById('searchNext').innerHTML = ICONS.down;
 document.getElementById('searchClose').innerHTML = ICONS.close;
 document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
+document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
+document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone'].forEach((id) => {
+  document.getElementById(id).addEventListener('change', saveNotificationSettings);
+});
 buildChrome();
 setNavCollapsed(config.navCollapsed); // sets class + width
 attachNavResize(document.getElementById('navResizer'));
@@ -3111,6 +3153,8 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
+  quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
+  captainTurnStarted, captainTurnDone,
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
@@ -3119,6 +3163,16 @@ ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
+renderQuotaBar();
+async function readQuotaCache() {
+  const samples = await window.deck.quotaLocal();
+  let changed = false;
+  for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
+  if (changed) saveConfig();
+  renderQuotaBar();
+}
+readQuotaCache().catch(() => {});
+setInterval(() => readQuotaCache().catch(() => {}), 30000);
 syncChromeState();
 window.addEventListener('resize', () => {
   if (activeView === 'board') renderBoardGraph();
@@ -3129,8 +3183,7 @@ window.addEventListener('resize', () => {
 window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
 
-// Periodically mirror each column's rendered screen to the watch-ai daemon so
-// it can notify when an agent running inside AgentDeck goes idle.
+// Read terminal screens for status, reply extraction and Captain readiness.
 function dumpScreen(term, count = 40) {
   const buf = term.buffer.active;
   // Fresh/tall terminals have many blank rows below the cursor. Starting at
@@ -3199,21 +3252,91 @@ function updateAgentIdentityBadge(id, entry, screenText) {
   }
 }
 
-// Cross-platform notifications include every agent, independent of the launch
-// command. Keep the policy pure so quiet periods and repeat turns are tested.
+// Alerts use real chat turns, with a quiet-output guard against pauses during tools.
+function captainTurnStarted(id, turn) {
+  const entry = terms.get(id);
+  if (!entry) return;
+  entry.captainTurnId = turn.id;
+  entry.captainAlert = null;
+  window.deck.notifyCancel({ id });
+}
+function captainTurnDone(id, turn) {
+  const entry = terms.get(id);
+  if (!entry || !entry.alive || turn.interrupted || !turn.reply.trim()) return;
+  entry.captainAlert = { turnId: turn.id, reply: turn.reply, since: Date.now() };
+}
+function captainColumnVisible(id) {
+  const wrap = terms.get(id)?.wrap;
+  if (!wrap || deckEl.hidden || !document.getElementById('pageView').hidden || getComputedStyle(wrap).display === 'none') return false;
+  const r = wrap.getBoundingClientRect(), d = deckEl.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 && r.right > d.left && r.left < d.right && r.bottom > d.top && r.top < d.bottom;
+}
 function maybeNotifyState(id, entry, st) {
-  const result = window.NotificationPolicy.advance(entry.notificationState || {}, {
-    state: st, hasWorked: entry.hasWorked, lastActivity: entry.lastOutputAt || 0,
-  });
-  entry.notificationState = result.next;
-  if (result.action === 'cancel') window.deck.notifyCancel({ id });
-  else if (result.action) {
-    const col = columns.find((candidate) => candidate.id === id);
-    // background sessions report to 队长, who tells you
-    if (col && !isBackstage(col)) window.deck.notifyState({ id, title: columnLabel(col), state: result.action });
+  const col = columns.find((c) => c.id === id);
+  if (!col?.isMain) { window.deck.notifyCancel({ id }); return; }
+  const previous = entry.captainNotifyState;
+  entry.captainNotifyState = st;
+  if (['working', 'quota', 'plain', 'exited'].includes(st)) {
+    entry.captainAlert = null;
+    window.deck.notifyCancel({ id });
+    return;
   }
+  if (st === 'done' && previous !== 'done' && !entry.captainAlert && entry.captainTurnId) {
+    const turn = ChatUI.turnsOf(id).find((t) => t.id === entry.captainTurnId);
+    if (turn?.done && !turn.interrupted) {
+      const reply = ChatCore.extractReply((entry.lastScreen || '').split('\n'), turn.user, entry.term.cols);
+      if (reply.trim()) entry.captainAlert = { turnId: turn.id, reply, since: Date.now() };
+    }
+  }
+  let alert = null;
+  if (st === 'input' && previous !== 'input') {
+    const turn = ChatUI.turnsOf(id).findLast((t) => t.kind !== 'task');
+    const reply = ChatCore.extractReply((entry.lastScreen || '').split('\n'), turn?.user || '', entry.term.cols);
+    alert = { turnId: entry.captainTurnId || 'startup-input', reply: reply || '队长需要你确认。' };
+  } else if (st === 'done' && entry.captainAlert &&
+      Date.now() - Math.max(entry.captainAlert.since, entry.lastOutputAt || 0) >= NotificationPolicy.QUIET_MS) {
+    alert = entry.captainAlert;
+    entry.captainAlert = null;
+  }
+  if (alert) window.deck.notifyState({ id, state: st, ...alert, visible: captainColumnVisible(id) });
 }
 let lastAttnCount = -1;
+function claudeCaptainSeatId() {
+  const captain = columns.find((c) => c.id === config.mainSession?.colId);
+  if (!captain || (captain.agentProvider !== 'Claude' && !/\bclaude\b/i.test(captain.cmd || ''))) return null;
+  return QuotaCore.seatForColumn(captain, QuotaCore.claudeSeats(config.claudeSeats))?.id || null;
+}
+function renderQuotaBar() {
+  const bar = document.getElementById('quotaBar');
+  const items = QuotaCore.items(config.claudeSeats);
+  for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
+  for (const [index, { provider, seat, key }] of items.entries()) {
+    let item = bar.querySelector(`[data-quota-key="${key}"]`);
+    if (!item) {
+      item = document.createElement('span');
+      item.className = 'quota-item'; item.dataset.provider = provider;
+      item.dataset.quotaKey = key;
+      if (seat) item.dataset.seatId = seat.id;
+      item.setAttribute('role', 'group');
+      item.tabIndex = 0; // keyboard users can inspect the same tooltip
+      const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider];
+      const label = document.createElement('span'); label.className = 'quota-label';
+      const name = document.createElement('span'); name.className = 'quota-name';
+      const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
+      item.setAttribute('aria-describedby', tip.id);
+      item.append(icon, name, label, tip); bar.append(item);
+    }
+    const q = QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId());
+    item.dataset.state = q.state;
+    item.setAttribute('aria-label', q.detail);
+    item.title = q.detail;
+    item.querySelector('.quota-label').textContent = q.displayLabel;
+    item.querySelector('.quota-name').textContent = q.name;
+    item.querySelector('.quota-tooltip').textContent = q.detail;
+    if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
+  }
+}
 setInterval(() => {
   let attn = 0;
   terms.forEach((entry, id) => {
@@ -3221,7 +3344,7 @@ setInterval(() => {
     const identityText = text;
     // A restored session replays the PREVIOUS run's output above a separator.
     // That old text can contain working/permission-prompt chrome; only what's
-    // below the separator is live, so classification (and watch-ai) must not
+    // below the separator is live, so classification must not
     // see the replayed part. Once real output scrolls the separator out of the
     // 40-line window this is a no-op.
     const sep = text.lastIndexOf('以上为上次会话的输出');
@@ -3230,17 +3353,6 @@ setInterval(() => {
       text = nl >= 0 ? text.slice(nl + 1) : '';
     }
     entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
-    // Skip the full disk write when nothing changed on screen — with several
-    // idle columns that was multiple synchronous writes/sec. But watch-ai
-    // treats a spool file older than 8s as a dead column, so the mtime must
-    // still be bumped: send a cheap "touch" instead of the text.
-    if (env.legacyWatch && text !== entry.lastDump) {
-      entry.lastDump = text;
-      try { window.deck.agentdeckDump(id, entry.titleEl ? entry.titleEl.textContent : '', text); } catch (_) {}
-    } else if (env.legacyWatch) {
-      try { window.deck.agentdeckTouch(id); } catch (_) {}
-    }
-
     if (entry.alive) {
       let st = classify(text, entry);
       if (st === 'working' || st === 'input' || st === 'quota') {
@@ -3279,7 +3391,7 @@ setInterval(() => {
       entry.state = st;
       setDot(entry, st);
       maybeNotifyState(id, entry, st);
-      if (st === 'input') attn++;
+      if (st === 'input' && columns.find((c) => c.id === id)?.isMain) attn++;
 
       // Header timer: live count-up while working / waiting, "✓ total" when done.
       if (entry.timerEl) {
@@ -3299,6 +3411,25 @@ setInterval(() => {
     // separator. It is excluded from status classification, but remains the
     // best source for recovering the last provider/model before a fresh shell.
     updateAgentIdentityBadge(id, entry, identityText);
+    if (entry.alive && entry.lastOutputAt && text !== entry.lastQuotaScreen) {
+      entry.lastQuotaScreen = text;
+      const col = columns.find((c) => c.id === id);
+      const provider = AgentInfo.inferProvider(col?.cmd, text) || entry.detectedProvider;
+      const footer = (entry.footerLines || []).map((line) => line.map((s) => s.text).join(''));
+      const model = AgentInfo.extractModel(MainCore.afterContract(text), '', footer) || col?.agentModel || AgentInfo.extractModel('', col?.cmd);
+      let sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt, model);
+      if (sample && provider === 'Claude') {
+        const seat = QuotaCore.seatForColumn(col, QuotaCore.claudeSeats(config.claudeSeats));
+        sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir } : null;
+      }
+      const signature = sample && JSON.stringify([provider, sample.seatId, sample.model, sample.windows.map((w) => [w.label, w.remaining, w.resetText]), sample.exhausted, sample.resumed, sample.resetText]);
+      // Redrawing unrelated text must not move a relative reset forward or
+      // make an unchanged percentage appear freshly sampled.
+      if (signature !== entry.lastQuotaObservation) {
+        entry.lastQuotaObservation = signature;
+        if (QuotaCore.observe(config.quotas, sample)) saveConfig();
+      }
+    }
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);
@@ -3308,6 +3439,7 @@ setInterval(() => {
     }
   });
   syncNav(); // mirror status dots + active highlight into the sidebar
+  renderQuotaBar();
   Sidebar.refreshTimes();
   syncBoardState();
   CrewMap.refresh();

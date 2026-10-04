@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "0.9.9",
+  "version": "1.0.0",
   "description": "TweetDeck-style multi-column deck for terminal AI agents",
   "main": "main.js",
   "scripts": {
@@ -45,6 +45,9 @@
       "board-cli.js",
       "chat-core.js",
       "agent-info.js",
+      "quota-core.js",
+      "quota-local.js",
+      "quota-codex.js",
       "chat-ui.js",
       "sidebar-core.js",
       "sidebar.js",
@@ -65,9 +68,7 @@
       "vendor/**",
       "security.js",
       "notifications.js",
-      "notification*.js",
-      "notification.html",
-      "notification.css"
+      "notification-policy.js"
     ],
     "mac": {
       "target": "dmg",

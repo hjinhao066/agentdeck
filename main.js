@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, screen, session } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -11,6 +11,8 @@ const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const { seatEnvironment, registerSeatsIpc } = require('./claude-seats-main');
+const { readLocal: readLocalQuota } = require('./quota-local');
+const { readCodex: readCodexQuota } = require('./quota-codex');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
@@ -23,7 +25,7 @@ const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('-
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 
 // Every privileged channel belongs exclusively to the local deck main frame.
-// Notification windows expose a separate, minimal bridge.
+// Native notifications are created here, never in a page.
 const mainPage = path.join(__dirname, 'index.html');
 function validMessage(payload) {
   if (payload && typeof payload === 'object') {
@@ -70,8 +72,7 @@ const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
 const HOME = os.homedir();
 
-// Spool dir the watch-ai daemon reads to "see" inside AgentDeck columns (it
-// can't via AppleScript/tmux). Each column's rendered screen is dumped here.
+// Retired watch-ai spool directory, kept only to remove old column dumps.
 const WATCH_SPOOL = path.join(HOME, '.local', 'share', 'watch-ai', 'agentdeck');
 const spoolPath = (id) => privateFile(WATCH_SPOOL, id);
 
@@ -182,6 +183,7 @@ function shellArgs() {
 
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
+const receiptSessions = new Map(); // every column: submission only, never control
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -200,14 +202,14 @@ function bufferAppend(id, data) {
 
 function spawnPty(id, cwd, cols, rows, managed, seatId) {
   if (!validId(id) || ptys.size >= 100) return;
-  // Internal notifications replace watch-ai spools by default, avoiding double
+  // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
-  if (process.env.AGENTDECK_LEGACY_WATCH !== '1') {
-    try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
-  }
+  try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
+  const receiptToken = crypto.randomBytes(24).toString('hex');
+  receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
   let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
@@ -227,7 +229,10 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
     }
   }
   // Never inherit an outer deck's managed capability into an independent shell.
-  for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
+  for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_RECEIPT_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
+  terminalEnv.AGENTDECK_RECEIPT_TOKEN = receiptToken;
+  terminalEnv.AGENTDECK_CONTROL_DIR = boardControlDir;
+  terminalEnv.AGENTDECK_BOARD_CLI = boardCliPath;
   terminalEnv.AGENTDECK_NATIVE_NOTIFICATIONS = '1';
   if (token) {
     terminalEnv.AGENTDECK_MANAGED = '1';
@@ -249,24 +254,26 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
     });
   } catch (err) {
     managedSessions.delete(id);
+    receiptSessions.delete(id);
     // Spawn can fail (fd exhaustion, bad shell). Surface it in the column
     // instead of throwing inside the IPC handler and crashing the main process.
     send('pty:data', { id, data: `\r\n[AgentDeck] shell 启动失败: ${err.message}\r\n` });
-    send('pty:exit', { id });
+    send('pty:exit', { id, reason: `shell 启动失败: ${err.message}` });
     return;
   }
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
-  p.onExit(() => {
+  p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
     // column is respawned quickly with the same id.
     if (ptys.get(id) === p) {
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
       managedSessions.delete(id);
+      receiptSessions.delete(id);
       if (notifications) notifications.cancel(id);
       // Keep the frozen buffer until the column is explicitly removed. It lets
       // a renderer reload still show an exited terminal's useful final output.
-      send('pty:exit', { id });
+      send('pty:exit', { id, reason: `终端进程退出（exit ${exitCode}${signal ? `，signal ${signal}` : ''}）` });
     }
   });
   ptys.set(id, p);
@@ -285,6 +292,7 @@ function killPty(id, keepReplay) {
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
   managedSessions.delete(id);
+  receiptSessions.delete(id);
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
 }
 
@@ -336,16 +344,21 @@ function processBoardRequests() {
       }
       catch (_) { try { fs.unlinkSync(file); } catch (_) {} continue; }
       try { fs.unlinkSync(file); } catch (_) {}
-      const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token);
+      const action = String(request.action || '');
+      const submitOnly = Array.from(receiptSessions.entries()).find(([, token]) => token === request.token);
+      const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token) || submitOnly;
       if (!caller) {
         writeBoardResponse(request.id, { done: true, error: 'Control request rejected: terminal is not conductor-managed.' });
         continue;
       }
-      const action = String(request.action || '');
+      if (submitOnly && !['complete', 'ask', 'progress', 'session-exit'].includes(action)) {
+        writeBoardResponse(request.id, { done: true, error: 'Receipt capability allows only complete, ask and progress; it cannot control other sessions.' });
+        continue;
+      }
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
-      if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status',
-        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+      if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
+        'main-ledger', 'main-quota', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -354,7 +367,7 @@ function processBoardRequests() {
         writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
         continue;
       }
-      const command = { ...request, callerId: caller[0] };
+      const command = { ...request, callerId: caller[0], submitOnly: !!submitOnly };
       // Do not discard an authenticated request while the renderer is loading.
       // It stays here until the renderer acknowledges it with board:response;
       // board:ready replays pending commands after a hot reload.
@@ -629,6 +642,7 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 app.whenReady().then(() => {
+  if (isWin) app.setAppUserModelId('com.jinhao.agentdeck');
   if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
@@ -644,11 +658,17 @@ app.whenReady().then(() => {
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId });
+  let quotaSeatConfig;
+  let notificationConfig = {};
+  try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
   onMain('load-config-sync', (e) => {
-    try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
+    try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
+    quotaSeatConfig = cfg?.claudeSeats;
+    notificationConfig = cfg;
+    if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
@@ -657,9 +677,26 @@ app.whenReady().then(() => {
     } catch (_) {}
   });
   onMain('env-info-sync', (e) => { e.returnValue = {
-    platform: process.platform, home: HOME, legacyWatch: process.env.AGENTDECK_LEGACY_WATCH === '1',
+    platform: process.platform, home: HOME,
   }; });
 
+  // Test profiles never read the user's quota caches or conversation logs.
+  let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
+  handleMain('quota:local', () => {
+    if (tudArg) return [];
+    const seatsKey = JSON.stringify(quotaSeatConfig || null);
+    if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
+      quotaSeatsKey = seatsKey;
+      quotaReadAt = Date.now();
+      if (!codexQuotaRead || Date.now() - codexQuotaAt >= 60000) {
+        codexQuotaAt = Date.now();
+        codexQuotaRead = readCodexQuota(ENV);
+      }
+      quotaRead = Promise.all([readLocalQuota(os.homedir(), process.env.CODEX_HOME, Date.now(), quotaSeatConfig), codexQuotaRead])
+        .then(([local, codex]) => codex ? [...local, codex] : local).catch(() => []);
+    }
+    return quotaRead;
+  });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId }) => spawnPty(id, cwd, cols, rows, !!managed, seatId));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
   onMain('pty:resize', (_e, { id, cols, rows }) => {
@@ -669,11 +706,13 @@ app.whenReady().then(() => {
   onMain('pty:kill', (_e, { id, keepReplay }) => killPty(id, !!keepReplay));
 
   onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
-    const peek = pendingBoardCommands.get(requestId)?.command.action === 'main-peek';
+    const action = pendingBoardCommands.get(requestId)?.command.action;
+    const verbatim = action === 'main-peek' || action === 'main-receipts';
     pendingBoardCommands.delete(requestId);
+    if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
       done: !!done,
-      result: typeof result === 'string' ? result.slice(0, peek ? 2_100_000 : 12000) : '',
+      result: typeof result === 'string' ? (verbatim ? result : result.slice(0, 12000)) : '',
       error: typeof error === 'string' ? error.slice(0, 2000) : '',
       childId: typeof childId === 'string' ? childId : '',
       snapshot: snapshot && typeof snapshot === 'object' ? snapshot : undefined,
@@ -904,8 +943,24 @@ app.whenReady().then(() => {
     return r.canceled ? [] : r.filePaths.slice(0, 50);
   });
 
-  notifications = createNotifications({ BrowserWindow, ipcMain, screen, focusColumn,
-    getMainWindow: () => mainWindow, onCreate: tudArg ? hideTestWindow : null });
+  // Test profiles record native delivery and playback without desktop side effects.
+  let NativeNotification = Notification;
+  if (tudArg) {
+    app.testCaptainAlerts = [];
+    NativeNotification = class extends require('events').EventEmitter {
+      static isSupported() { return true; }
+      constructor(options) { super(); this.options = options; }
+      show() { app.testCaptainAlerts.push({ type: 'notification', ...this.options }); app.testCaptainNotification = this; }
+      close() { app.testCaptainAlerts.push({ type: 'cancel' }); }
+    };
+  }
+  notifications = createNotifications({ Notification: NativeNotification, focusColumn,
+    getMainWindow: () => mainWindow, getConfig: () => notificationConfig,
+    playSound: (tone) => {
+      if (tudArg) { app.testCaptainAlerts.push({ type: 'sound', tone }); return; }
+      execFile('/usr/bin/afplay', ['-v', '0.35', '-t', '1', `/System/Library/Sounds/${tone}.aiff`],
+        { timeout: 2000 }, () => {});
+    } });
   onMain('notify-state', (_event, payload) => {
     if (payload && ptys.has(payload.id)) notifications.show(payload);
   });
@@ -927,19 +982,9 @@ app.whenReady().then(() => {
     if (w && !w.isDestroyed()) w.webContents.reload();
   });
 
-  // Renderer pushes each column's rendered screen; mirror it to the watch-ai
-  // spool so the daemon can detect idle agents running inside AgentDeck.
-  onMain('agentdeck:dump', (_e, { id, text }) => {
-    if (process.env.AGENTDECK_LEGACY_WATCH !== '1') return;
-    try { fs.mkdirSync(WATCH_SPOOL, { recursive: true }); fs.writeFileSync(spoolPath(id), text || '', 'utf-8'); }
-    catch (_) {}
-  });
-  // Metadata-only keepalive for an unchanged screen (see preload agentdeckTouch).
-  onMain('agentdeck:touch', (_e, { id }) => {
-    if (process.env.AGENTDECK_LEGACY_WATCH !== '1') return;
-    const now = new Date();
-    try { fs.utimesSync(spoolPath(id), now, now); } catch (_) {}
-  });
+  // Legacy watch-ai spools must never bypass Captain-only alerts.
+  onMain('agentdeck:dump', (_e, { id }) => { try { fs.unlinkSync(spoolPath(id)); } catch (_) {} });
+  onMain('agentdeck:touch', (_e, { id }) => { try { fs.unlinkSync(spoolPath(id)); } catch (_) {} });
 
   // Open URLs in the browser / reveal local paths in Finder (clicked links).
   onMain('open-external', (_e, url) => {

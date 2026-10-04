@@ -4,23 +4,23 @@ contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
   saveConfig: (cfg) => ipcRenderer.send('save-config', cfg),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
+  quotaLocal: () => ipcRenderer.invoke('quota:local'),
   clipboardWrite: (t) => clipboard.writeText(t),
   clipboardRead: () => clipboard.readText(),
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
   getPathForFile: (file) => webUtils.getPathForFile(file),
-  // Push a column's rendered screen text so the watch-ai daemon can see it.
+  // Retired bridge: main only removes old spools; it never writes new ones.
   agentdeckDump: (id, title, text) => ipcRenderer.send('agentdeck:dump', { id, title, text }),
-  // Screen unchanged: just bump the spool's mtime so watch-ai keeps seeing it
-  // as live (it treats files older than ~8s as dead columns).
+  // Kept for older renderers; this also only removes old spools.
   agentdeckTouch: (id) => ipcRenderer.send('agentdeck:touch', { id }),
   // Pasted-image support: if the clipboard holds an image, main saves it to a
   // temp PNG and returns the path (null otherwise).
   pasteImageSave: () => ipcRenderer.invoke('paste-image:save'),
   // Dock badge: how many columns are blocked waiting for the user.
   setAttnCount: (n) => ipcRenderer.send('attn:count', n),
-  // Windows popup for a non-Claude column turning done/input (click → jump).
+  // Captain native system notification (click → exact column).
   notifyState: (payload) => ipcRenderer.send('notify-state', payload),
-  // Retract this column's popup — it fired "done" but the agent resumed working.
+  // Retract an obsolete Captain notification.
   notifyCancel: (payload) => ipcRenderer.send('notify-cancel', payload),
   // Column state transitions, mirrored to the main-process diagnostic log.
   stateDebug: (payload) => ipcRenderer.send('state-debug', payload),
@@ -80,7 +80,7 @@ contextBridge.exposeInMainWorld('deck', {
   // External "jump to this column" request (popup-notification click).
   onFocusColumn: (cb) => ipcRenderer.on('focus-column', (_e, m) => cb(m.id)),
   onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data)),
-  onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, m) => cb(m.id)),
+  onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, m) => cb(m.id, m.reason)),
   // Capability-checked commands emitted by conductor-managed terminals via
   // board-cli.js. Manual terminals never receive the control token.
   onBoardCommand: (cb) => ipcRenderer.on('board:command', (_e, m) => cb(m)),

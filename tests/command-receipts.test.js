@@ -1,0 +1,102 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawn, execFileSync } = require('child_process');
+const M = require('../main-core');
+const C = require('../chat-core');
+const B = require('../board-core');
+
+test('command receipts preserve Unicode, whitespace, long content and every file across saving', () => {
+  const result = '  完成🙂\n' + '中文𠮷'.repeat(6000) + '\n结尾  ';
+  const files = Array.from({ length: 12 }, (_, i) => '/tmp/' + 'long'.repeat(140) + i + '.png');
+  const receipt = M.commandReceipt({ action: 'complete', result, files, failed: '  原因\n详情🙂  ' });
+  assert.equal(receipt.summary, result);
+  assert.equal(receipt.failed, '  原因\n详情🙂  ');
+  const saved = C.normalizeChat({ turns: [{ id: 'card', user: '', kind: 'task', task: { receipt } }] }, 'captain').turns[0].task;
+  assert.deepEqual(saved.receipt, receipt);
+  const text = M.receiptsForModel([{ title: 'worker', colId: 'x', ...receipt }]);
+  assert.ok(text.includes(result));
+  assert.ok(text.includes(receipt.failed));
+  assert.ok(text.includes(files.at(-1)));
+  const question = '  哪个方案？\n' + '选择🙂'.repeat(6000);
+  assert.equal(M.commandReceipt({ action: 'ask', question }).question, question);
+  assert.ok(M.receiptsForModel([{ title: 'worker', ...M.commandReceipt({ action: 'ask', question }) }]).includes(question));
+});
+
+test('submission schema rejects invalid results and files instead of silently cutting or dropping them', () => {
+  for (const message of [{ result: '' }, { result: true }, { result: 'ok', files: 'a' }, { result: 'ok', files: ['relative/file'] }, { result: 'ok', failed: true }, { action: 'ask', question: ' ' }]) {
+    assert.throws(() => M.commandReceipt(message));
+  }
+  assert.deepEqual(M.commandReceipt({ result: 'ok', files: ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a'] }).files, ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a']);
+  for (const command of ['complete --result', 'ask --question', 'progress --message']) assert.ok(M.RECEIPT_CONTRACT.includes(command));
+  assert.ok(M.RECEIPT_CONTRACT.includes('$env:AGENTDECK_BOARD_CLI'));
+});
+
+test('submission CLI uses its receipt token and transports exact text, files and failure', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-submit-unit-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  try {
+    for (const [args, expected] of [
+      [['complete', '--result', '  完成🙂\n第二行  ', '--files', '/tmp/a b,C:\\work\\b', '--failed', '  失败原因🙂  '], { action: 'complete', result: '  完成🙂\n第二行  ', files: ['/tmp/a b', 'C:\\work\\b'], failed: '  失败原因🙂  ' }],
+      [['ask', '--question', '  选哪种？\n🙂  '], { action: 'ask', question: '  选哪种？\n🙂  ' }],
+      [['progress', '--message', '  正在验收🙂  '], { action: 'progress', message: '  正在验收🙂  ' }],
+    ]) {
+      const child = spawn(process.execPath, [path.resolve(__dirname, '../board-cli.js'), ...args], {
+        env: { ...process.env, AGENTDECK_CONTROL_DIR: dir, AGENTDECK_RECEIPT_TOKEN: 'receipt-token', AGENTDECK_CONTROL_TOKEN: 'control-token' }, stdio: 'ignore',
+      });
+      const closed = new Promise((resolve) => child.on('close', resolve));
+      let request;
+      for (let tries = 0; !request && tries < 200; tries++) {
+        const file = fs.readdirSync(path.join(dir, 'requests')).find((name) => name.endsWith('.json'));
+        if (file) {
+          request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+          fs.unlinkSync(path.join(dir, 'requests', file));
+          fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true }));
+        } else await new Promise((r) => setTimeout(r, 10));
+      }
+      assert.ok(request);
+      assert.equal(request.token, 'receipt-token');
+      for (const [key, value] of Object.entries(expected)) assert.deepEqual(request[key], value);
+      assert.equal(await closed, 0);
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('launch exit reporting captures the actual exit code even when the shell survives', { skip: process.platform === 'win32' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-exit-unit-'));
+  const cli = path.join(dir, 'capture.js');
+  fs.writeFileSync(cli, 'process.stdout.write(JSON.stringify(process.argv.slice(2)));');
+  try {
+    for (const code of [0, 7, 137]) {
+      const output = execFileSync('/bin/sh', ['-c', B.reportAgentExit(`sh -c 'exit ${code}'`, 'darwin')], {
+        env: { ...process.env, AGENTDECK_BOARD_CLI: cli }, encoding: 'utf8',
+      });
+      assert.deepEqual(JSON.parse(output), ['session-exit', '--code', String(code)]);
+    }
+    assert.ok(B.reportAgentExit('agy', 'win32').includes('session-exit --code "$LASTEXITCODE"'));
+    assert.ok(B.launchInput('codex', 'darwin', true).includes('command "codex"; node'));
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('quota output is recognized for Claude, Codex, Cursor and Antigravity', () => {
+  for (const line of ["You've hit your usage limit", 'Usage limit reached', 'Error: Quota exceeded', 'RESOURCE_EXHAUSTED: quota exhausted']) assert.equal(M.terminalActivity(line), 'quota', line);
+  assert.equal(M.terminalActivity('I will test quota exceeded handling'), '');
+});
+
+test('internal exit reports queue durably without waiting on a quitting renderer', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-exit-cli-'));
+  try {
+    const child = spawn(process.execPath, [path.resolve(__dirname, '../board-cli.js'), 'session-exit', '--code', '7'], {
+      env: { ...process.env, AGENTDECK_CONTROL_DIR: dir, AGENTDECK_RECEIPT_TOKEN: 'exit-token' }, stdio: 'ignore',
+    });
+    assert.equal(await new Promise((resolve) => child.on('close', resolve)), 0);
+    const files = fs.readdirSync(path.join(dir, 'requests'));
+    assert.equal(files.length, 1);
+    const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', files[0]), 'utf8'));
+    assert.equal(request.action, 'session-exit'); assert.equal(request.code, 7); assert.equal(request.token, 'exit-token');
+    assert.equal(fs.existsSync(path.join(dir, 'responses')), false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

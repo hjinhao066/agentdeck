@@ -1,5 +1,5 @@
 // Left sidebar, Cursor style: New chat / Search / Schedule / Artifacts on top,
-// then the pinned 队长 row (once it exists) with a folded 后台 row for the
+// then the pinned 队长 row (once it exists) with a folding arrow and counts for the
 // sessions it runs in the background, folders, loose sessions and the archive. Every session is a live
 // terminal column; the deck shows them in exactly this order, so dragging a
 // session into a folder also moves its column. Plain script; everything it
@@ -12,7 +12,7 @@
   let menu = null;
   let lastTimesAt = 0;
   let captainRow = null;       // the 队长 entry at the top
-  let crewHead = null;         // 队长's background sessions: { head, counts, ids, open, shown }
+  let crewHead = null;         // 队长's sessions: { counts, ids, open, shown }
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -27,7 +27,7 @@
   }
   function iconButton(name, title, onClick, cls) {
     const b = el('button', 'nav-ibtn' + (cls ? ' ' + cls : ''));
-    b.type = 'button'; b.title = title; b.innerHTML = host.ICONS[name] || '';
+    b.type = 'button'; b.title = title; b.setAttribute('aria-label', title); b.innerHTML = host.ICONS[name] || '';
     b.addEventListener('mousedown', (e) => e.stopPropagation());
     b.addEventListener('click', (e) => { e.stopPropagation(); onClick(e); });
     return b;
@@ -105,9 +105,10 @@
     const { crew, groups, loose } = SC.groupSessions(cols, folders);
     crewHead = null;
     if (main) {
-      listEl.appendChild(captainListRow(main));
       const waiting = (window.MainSession.state()?.waitlist || []).length;
-      if (crew.length || waiting) listEl.appendChild(crewBlock(crew));
+      const captain = captainListRow(main, !!(crew.length || waiting));
+      listEl.appendChild(captain);
+      if (crew.length || waiting) listEl.appendChild(crewBlock(crew, captain.querySelector('.crew-counts')));
     }
 
     listEl.appendChild(sectionHead('folders', '文件夹', null, [iconButton('folderPlus', '新建文件夹', () => createFolder(true))]));
@@ -150,7 +151,7 @@
   const captainMirror = new MutationObserver((records) => {
     records.forEach((r) => { captainRow.dot.className = r.target.className; });
   });
-  function captainListRow(col) {
+  function captainListRow(col, hasCrew) {
     const item = el('div', 'colnav-item captain-item');
     item.dataset.colId = col.id;
     item.dataset.captain = '1';
@@ -163,7 +164,19 @@
     const sub = el('span', 'cn-sub');
     text.append(label, sub);
     const meta = el('span', 'cn-meta', ago(host.lastTurnTs(col.id)));
-    item.append(badge, iconEl('crown', 'cn-crown'), dot, text, meta);
+    const open = !!host.config.crewOpen;
+    const fold = iconButton(open ? 'chevDown' : 'chevRight', hasCrew ? (open ? '收起队员列表' : '展开队员列表') : '暂无队员会话', () => {
+      host.config.crewOpen = !open;
+      host.saveConfig();
+      render();
+    }, 'captain-fold');
+    fold.disabled = !hasCrew;
+    fold.setAttribute('aria-expanded', String(open && hasCrew));
+    if (hasCrew) fold.setAttribute('aria-controls', 'captainCrewList');
+    const counts = el('span', 'crew-counts');
+    counts.hidden = !hasCrew;
+    counts.setAttribute('aria-live', 'polite');
+    item.append(fold, badge, iconEl('crown', 'cn-crown'), dot, text, meta, counts);
     if (window.ClaudeSeats) item.appendChild(window.ClaudeSeats.rotationButton(col));
     item.addEventListener('click', () => selectCaptain(col));
     item.addEventListener('contextmenu', (e) => {
@@ -181,29 +194,14 @@
     captainMirror.observe(dot, { attributes: true, attributeFilter: ['class'] });
     return item;
   }
-  // The sessions 队长 runs in the background: one summary row under it with
-  // live counts, folded by default; unfolded, each one opens on click.
-  function crewBlock(crew) {
+  // Indented sessions, folded by the Captain's arrow; counts stay on its row.
+  function crewBlock(crew, counts) {
     const open = !!host.config.crewOpen;
     const box = el('div', 'nav-group nav-crew');
     box.dataset.group = '';
     box.dataset.crew = '1';
-    const head = el('div', 'nav-folder-head crew-head');
-    head.dataset.crew = '1';
-    head.title = '队长派出去的会话在后台跑；点开看每一个，点某一个就在队长旁边打开它';
-    const counts = el('span', 'crew-counts');
-    head.append(
-      iconEl(open ? 'chevDown' : 'chevRight', 'nav-chev'),
-      iconEl('board', 'nav-folder-ico'),
-      el('span', 'nav-folder-name', '后台'),
-      counts,
-    );
-    head.addEventListener('click', () => {
-      host.config.crewOpen = !open;
-      host.saveConfig();
-      render();
-    });
-    box.appendChild(head);
+    box.id = 'captainCrewList';
+    box.hidden = !open;
     const order = crewOrder(crew);
     if (open) {
       const byId = new Map(crew.map((c) => [c.id, c]));
@@ -218,9 +216,9 @@
       });
       order.finished.forEach((id) => box.appendChild(sessionRow(byId.get(id))));
     } else {
-      crew.forEach((col) => host.navItems.set(col.id, { el: null, dot: null, label: null, sub: null, meta: null, folderHead: head }));
+      crew.forEach((col) => host.navItems.set(col.id, { el: null, dot: null, label: null, sub: null, meta: null }));
     }
-    crewHead = { head, counts, ids: crew.map((c) => c.id), open, shown: orderKey(order) };
+    crewHead = { counts, ids: crew.map((c) => c.id), open, shown: orderKey(order) };
     refreshCrew();
     return box;
   }
@@ -233,20 +231,23 @@
   // 「3 干活中 · 1 停在确认 · 2 完成 · 1 排队」, from the 1.5s status loop.
   function refreshCrew() {
     if (!crewHead) return;
-    const n = { working: 0, quota: 0, input: 0, done: 0 };
+    const n = { working: 0, quota: 0, input: 0, done: 0, failed: 0 };
+    const tasks = window.MainSession.state()?.tasks || [];
+    const latest = new Map(tasks.map((t) => [t.colId, t]));
     crewHead.ids.forEach((id) => {
       const st = host.terms.get(id)?.state;
-      if (n[st] !== undefined) n[st]++;
+      if (latest.get(id)?.status === 'failed' && !['working', 'quota', 'input'].includes(st)) n.failed++;
+      else if (n[st] !== undefined) n[st]++;
     });
     const waiting = waitlist().length;
-    const supplement = (window.MainSession.state()?.tasks || []).filter((t) => t.status === 'queued' && crewHead.ids.includes(t.colId)).length;
+    const supplement = tasks.filter((t) => t.status === 'queued' && crewHead.ids.includes(t.colId)).length;
     // an unfolded list follows the work: re-sort when something starts or finishes
     // (not in the middle of a drag or a rename)
     if (crewHead.open && !document.body.classList.contains('reordering') && !listEl.querySelector('[contenteditable="true"]')) {
       const cols = crewHead.ids.map((id) => host.columns().find((c) => c.id === id)).filter(Boolean);
       if (orderKey(crewOrder(cols)) !== crewHead.shown) { render(); return; }
     }
-    const text = [n.working && `${n.working} 干活中`, n.quota && `${n.quota} 额度用尽/等待`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, supplement && `${supplement} 待补充`, waiting && `${waiting} 排队`]
+    const text = [n.working && `${n.working} 干活中`, n.quota && `${n.quota} 额度用尽/等待`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, n.failed && `${n.failed} 失败`, supplement && `${supplement} 待补充`, waiting && `${waiting} 排队`]
       .filter(Boolean).join(' · ') || `${crewHead.ids.length} 个`;
     if (crewHead.counts.textContent !== text) crewHead.counts.textContent = text;
   }
@@ -509,7 +510,6 @@
       return { kind: 'move', crew, folderId, beforeId, el: row, cls: after ? 'drop-after' : 'drop-before' };
     }
     const fhead = over.closest('.nav-folder-head');
-    if (fhead && fhead.dataset.crew) return { kind: 'move', crew: true, beforeId: null, el: fhead, cls: 'drop-into' };
     if (fhead) return { kind: 'move', folderId: fhead.dataset.folderId, beforeId: null, el: fhead, cls: 'drop-into' };
     const section = over.closest('.nav-section');
     if (section && section.dataset.section === 'archived') return { kind: 'archive', el: section, cls: 'drop-into' };
@@ -517,7 +517,7 @@
     const group = over.closest('[data-group]');
     if (group) {
       const crew = !!group.dataset.crew;
-      const target = group.dataset.group || crew ? group.querySelector('.nav-folder-head') : group;
+      const target = crew ? listEl.querySelector('.captain-item') : (group.dataset.group ? group.querySelector('.nav-folder-head') : group);
       return { kind: 'move', crew, folderId: crew ? null : group.dataset.group || null, beforeId: null, el: target, cls: 'drop-into' };
     }
     return null;

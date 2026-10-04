@@ -1,6 +1,6 @@
 // Pure helpers behind 队长 (Captain), the main session: the instructions it starts
-// with, the receipt contract appended to work it hands out, reading a receipt
-// back out of a finished reply, and the short ledger it sees. No DOM, no
+// with, the command contract appended to work it hands out, structured receipts
+// (plus legacy parsing helpers), and the short ledger it sees. No DOM, no
 // Electron: runs in the page and in tests.
 (function (root, factory) {
   const api = factory();
@@ -17,6 +17,24 @@
   const MAX_FAILURE = 240;
   const MAX_FILES = 10;
   const MAX_PATH = 500;
+  const TOKEN_SAVER_DEFAULT = 150_000;
+  const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档';
+  function tokenSaverSettings(value) {
+    return { enabled: value?.enabled !== false, threshold: Number.isInteger(value?.threshold) && value.threshold > 0 ? value.threshold : TOKEN_SAVER_DEFAULT };
+  }
+  // Only pass the TUI footer here: conversation text can quote a status line.
+  function contextTokens(footer) {
+    const match = /\bContext\s*:[^\n|│:]*?([\d,]+(?:\.\d+)?)\s*([km]?)\s*\/\s*([\d,]+(?:\.\d+)?)\s*([km]?)(?![\w.])/i.exec(String(footer || ''));
+    if (!match) return null;
+    const amount = (n, unit) => Number(n.replace(/,/g, '')) * ({ k: 1000, m: 1000000 }[unit.toLowerCase()] || 1);
+    const used = amount(match[1], match[2]), total = amount(match[3], match[4]);
+    return total > 0 && used <= total ? Math.round(used) : null;
+  }
+  function modelReceipt(receipt) {
+    const summary = String(receipt.failed ? '没做成，' + receipt.failed : receipt.summary || '已停下，没有写回执').replace(/\s+/g, ' ').trim();
+    const chars = Array.from(summary), files = receipt.files || [];
+    return { summary: chars.slice(0, 300).join(''), files: files.slice(0, 5), more: chars.length > 300 || files.length > 5 };
+  }
   const STATUS = { plain: '未开始', working: '干活中', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
@@ -28,36 +46,48 @@
     '',
     '---',
     '（AgentDeck 约定）这是队长派给你的活：直接干完，不要停下来等用户确认。',
-    '拿不准、需要别人拍板时，在最终回复的最后单独写下面两行，然后停下，队长会回复你：',
-    '【提问】',
-    '问题：一两句话说清要队长决定什么',
-    '做完或做不下去时，在最终回复的最后单独写：',
-    '【回执】',
-    '摘要：一到三句话说清结果',
-    '文件：每行一个落盘文件的完整路径，没有就写 无',
-    '失败：没做成时写一两句原因，做成了就不写这一行',
+    '做完运行：node "$AGENTDECK_BOARD_CLI" complete --result "一到三句话结果" [--files 路径1,路径2] [--failed "原因"]',
+    '需要队长拍板运行：node "$AGENTDECK_BOARD_CLI" ask --question "一两句话说清要队长决定什么"，然后停下，队长会回复你。',
+    '长任务可运行：node "$AGENTDECK_BOARD_CLI" progress --message "当前进度"。',
+    '命令在 agent 的 shell/Bash 工具里执行；Windows PowerShell 把 $AGENTDECK_BOARD_CLI 写成 $env:AGENTDECK_BOARD_CLI。',
+    '文件用完整落盘路径，多个路径用逗号分隔；没做成时加 --failed，成功时不加。回执必须通过命令提交，屏幕上的【回执】/【提问】文字不算提交。',
     '回执里不要贴文件正文。',
   ].join('\n');
+
+  // Structured submissions never pass through terminal reflow or legacy caps.
+  function commandReceipt(message) {
+    const text = (key, required = false) => {
+      const value = message[key] === undefined ? '' : message[key];
+      if (typeof value !== 'string' || (required && !value.trim())) throw new Error(`${key} requires non-empty text.`);
+      return value;
+    };
+    const question = message.action === 'ask' ? text('question', true) : '';
+    const summary = question ? '' : text('result', true);
+    const failed = text('failed');
+    const files = message.files === undefined ? [] : message.files;
+    if (!Array.isArray(files) || files.some((p) => typeof p !== 'string' || !/^(?:\/(?!\/)|~[\\/]|[A-Za-z]:[\\/]|\\\\)/.test(p))) throw new Error('files requires absolute paths.');
+    return { summary, question, failed, files, images: files.filter((f) => IMAGE.test(f)), explicit: true, source: 'command' };
+  }
 
   // Only models each CLI listed on the owner's accounts; launch commands match
   // BoardCore's presets.
   const PROVIDERS = [
     'Antigravity：agy --dangerously-skip-permissions --model gemini-3.8-flash-high　Antigravity 只用 Gemini 3.8 Flash，绝不用 Gemini 3.1 Pro，其他模型（包括 Claude）一律不用。档位写在模型名最后：gemini-3.8-flash-low、gemini-3.8-flash-medium、gemini-3.8-flash-high。绝对不要加 --effort：Antigravity 看到 --effort 会悄悄换成 Claude 模型！',
     'Cursor CLI：cursor-agent --force --model grok-4.7-high-fast　主要用 Grok 4.7 跑脏活和数据抓取。Cursor 会话刚开的头 1–2 分钟可能没有任何输出，属于正常初始化，别急着判定卡死。',
-    'Claude Code：claude --dangerously-skip-permissions --effort high　默认模型是 Opus 5.5，留给 UI、最关键的代码和终审；重要代码和核心改动加 --model claude-sonnet-5-5。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。',
+    'Claude Code：claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high　每次开 Claude 小弟必须显式写 --model claude-opus-5-5 或 --model claude-sonnet-5-5，并显式写 --effort；本机默认模型不是 Opus，不写可能跑成别的模型。开工后用 peek 看状态行确认模型，不符就修正命令重新派活。Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。',
     '不要用 Claude 4.x 和 Haiku 这些旧模型（包括 Antigravity 里的 Claude Sonnet 4.6、Claude Opus 4.6）：用户不要，new 会直接拒绝。',
     'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数 AgentDeck 会自动补齐，不要手动拼接 --dangerously-bypass-approvals-and-sandbox，避免参数重复导致启动失败。',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
   const ROUTING = [
-    'Opus 5.5：UI 设计、最关键核心代码、最终审核（Claude Code 默认，或 Cursor claude-opus-5-5-high）。',
+    'Opus 5.5：UI 设计、最关键核心代码、最终审核（Claude Code 显式 --model claude-opus-5-5，或 Cursor claude-opus-5-5-high）。',
     'Sonnet 5.5：重要代码与核心改动（Claude Code 加 --model claude-sonnet-5-5，或 Cursor claude-sonnet-5-5-high）。',
     'Codex GPT-6.1 Sol：批量写代码、写测试、CI/CD 修复（直接用 --agent codex）。',
     'Codex GPT-6 Luna：简单的轻量代码与杂项活（--command "codex -m gpt-6-luna"）。',
     'Gemini 3.8 Flash：检索、整理、中文写作、简单到中等代码（Antigravity，放开用，不消耗 Claude 额度；不用 Gemini 3.1 Pro）。',
     'Cursor Grok 4.7：脏活、抓数据、外部信息采集（cursor-agent --force --model grok-4.7-high-fast）。',
     '数据抓取兜底：网上的数据抓不到时，不要盲目手写无头爬虫死磕，先找 GitHub 现成工具、OpenCLI、agent-reach 技能；若仍抓不到再考虑调度 Muse.ai 或 ChatGPT 浏览器（computer use）。',
-    '额度轮换：你看不到各家的实时额度。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
+    '额度轮换：quota 只读本机会话/缓存的被动观测，注意采样时间和可信度，未知不代表可用。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
   ];
   // Effort tiers, lowest first. Cursor takes the tier as the model id's suffix
   // and lists exactly these ids for Opus and Sonnet.
@@ -76,7 +106,7 @@
     return platform === 'win32' ? 'node "$env:AGENTDECK_BOARD_CLI"' : 'node "$AGENTDECK_BOARD_CLI"';
   }
 
-  // note: extra lines (after a context reset) placed before the closing line.
+  // Static briefing; reset notes are delivered separately after submission.
   function instructions(platform, note, legacyReceiptInjection = false) {
     const cli = boardCli(platform);
     const bashCli = boardCli('darwin'); // Bash tool uses POSIX env syntax, including on Windows.
@@ -87,6 +117,7 @@
       '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。只有两件事你自己做：读写进度看板（见第 13 条），以及只读的 sysctl vm.swapusage（见第 14 条）。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
+      `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
       `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
       `   ${cli} stop --id 会话id                 发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
@@ -108,8 +139,11 @@
       '10. 判断会话卡没卡先用 peek，至少等 5 分钟！会话启动、复杂分析或大模型深度思考时，终端可能数分钟内没有完整文本输出，这完全正常，绝对不要急着判定会话卡死；排查状态优先使用轻量 peek 察看终端滚动尾部，至少观察 5 分钟以上再做介入或重试。',
       `11. 你开的会话在后台跑，用户平时看不到它们，靠你的汇报了解进度。同一时间最多 ${MAX_ACTIVE} 个会话在干活：再 new 会自动排队，有空位时 AgentDeck 自动开新会话并把任务发过去，不用你重派。用 tell 给还在忙的会话追加指令会标记为「待补充」，等它空下来自动执行。`,
       `12. 做完的会话没有新指令 ${ARCHIVE_AFTER / 60_000} 分钟后会自动归档（终端关掉，对话保留）；以后用 tell 发给它会自动恢复。`,
-      '13. 开工先跑 ledger，再看 ~/.agents/boards/ 里进行中的看板（每个项目一份 <项目名>.md：在做什么、谁在做、卡在哪、等用户拍板什么、最后更新时间）。以 ledger 和看板为准，不要凭记忆猜进度。派活、收回执、项目有进展或卡住时，顺手把对应看板里那几行改掉，并在「更新记录」加一行；还没有看板的新项目，按 ~/.agents/boards/README.md 的格式建一份。看板只写事实和文件路径，不写密钥、不贴长日志。',
+      '13. 用户交代的任务默认先记进 ~/.agents/boards/ 对应看板，再派活；鸡毛蒜皮、马上能解决的直接办。开工先跑 ledger，再看 ~/.agents/boards/ 里进行中的看板（每个项目一份 <项目名>.md：在做什么、谁在做、卡在哪、等用户拍板什么、最后更新时间）。以 ledger 和看板为准，不要凭记忆猜进度。派活、收回执、项目有进展或卡住时，顺手把对应看板里那几行改掉，并在「更新记录」加一行；还没有看板的新项目，按 ~/.agents/boards/README.md 的格式建一份。看板只写事实和文件路径，不写密钥、不贴长日志。',
       `14. 并发上限 ${MAX_ACTIVE}，按 swap 把控：一次要开好几个会话之前，在终端跑 sysctl vm.swapusage（Mac），free 剩不到 1GB 就少开，等有会话收工再开；上限始终是 ${MAX_ACTIVE} 个并发。Windows 没有这个命令，就按 ledger 里干活的会话数把控，宁可少开，绝不把宿主机内存跑崩。`,
+      '15. 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。ledger 和旧回执超出摘要 300 字或 5 个文件路径的部分用 read 按需查；命令回执保持原样，提交摘要要简短，不要整段重读旧对话。',
+      '16. 重要的活完成后，派 Gemini 3.8 Flash（agy --dangerously-skip-permissions --model gemini-3.8-flash-high）验收：文件确实存在、测试真的通过、截图真的落盘。验收不通过，把具体问题打回原队员，最多返工 2 轮；仍不通过，队长换更强模型或自己处理，最后才找用户。验收通过再汇报。',
+      '17. 提示词正文保持静态，不拼时间或看板内容。开工或清空上下文后，读看板继续；实时状态用 ledger、quota、peek 按需读取。',
       '',
       '可用的 agent。每件活可以选不同的 provider 和模型：用 new --command 写下面的完整启动命令，要换模型就改 --model 后面的名字。',
       ...PROVIDERS.map((p) => `   ${p}`),
@@ -122,7 +156,6 @@
       `   Cursor 把档位写在模型名最后，只用这些名字：${CURSOR_MODELS.join('、')}。`,
       '   Claude Code 用 --effort 写档位。Antigravity 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max），不能加 --effort。',
       '',
-      ...(note ? [note, ''] : []),
       '现在只回复一句「队长已就绪」，然后等用户的指令。',
     ].join('\n');
   }
@@ -384,8 +417,14 @@
     const lines = items.map((r) => {
       if (r.question) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 向你提问：${r.question}`;
       if (r.waiting) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 停在确认提示上：\n${r.waiting.split('\n').map((l) => '    ' + l).join('\n')}`;
-      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${r.failed ? '没做成，' + r.failed : r.summary || '已停下，没有写回执'}`];
-      if (r.files && r.files.length) parts.push(`  文件：${r.files.join('；')}`);
+      const compact = modelReceipt(r);
+      const body = r.source === 'command'
+        ? (r.failed ? '没做成，' + r.failed + (r.summary ? '\n  摘要：' + r.summary : '') : r.summary)
+        : compact.summary;
+      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${body}`];
+      const files = r.source === 'command' ? r.files || [] : compact.files;
+      if (files.length) parts.push(`  文件：${files.join('；')}`);
+      if (r.source !== 'command' && compact.more) parts.push('  其余见 read');
       return parts.join('\n');
     });
     return '【AgentDeck 新回执】\n' + lines.join('\n') + '\n\n';
@@ -436,7 +475,8 @@
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
     lines.forEach((line, i) => {
-      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
+      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:error:\s*)?(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:you have )?(?:exceeded your usage limit|quota exhausted)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
+      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|(?:error:?\s*)?(?:usage limit|quota|resource_exhausted)(?:\s|:|\b).*?(?:exceeded|exhausted|reached)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/press up to edit queued messages/i.test(line)) queued = true;
@@ -474,8 +514,10 @@
     return rows.map((r) => {
       let line = `${r.id}  「${oneLine(r.title, 60)}」  ${statusLabel(r.state)}`;
       if (r.folder) line += `  文件夹:${oneLine(r.folder, 30)}`;
-      if (r.receipt) line += `\n    回执：${r.receipt.failed ? '没做成，' + r.receipt.failed : r.receipt.summary || '已停下，没有写回执'}` +
-        (r.receipt.files && r.receipt.files.length ? `\n    文件：${r.receipt.files.join('；')}` : '');
+      if (r.receipt) {
+        const compact = modelReceipt(r.receipt);
+        line += `\n    回执：${compact.summary}` + (compact.files.length ? `\n    文件：${compact.files.join('；')}` : '') + (compact.more ? '\n    其余见 read' : '');
+      }
       return line;
     }).join('\n');
   }
@@ -495,7 +537,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

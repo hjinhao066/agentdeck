@@ -464,7 +464,7 @@
     launchNote(id, `正在启动 ${label}…`, false);
     const before = window.BoardCore.launchErrors(entry.lastScreen, cmd);
     const launch = host.seatLaunchCommand ? host.seatLaunchCommand(col, window.BoardCore.shellLaunchCommand(cmd, host.platform)) : window.BoardCore.shellLaunchCommand(cmd, host.platform);
-    window.deck.ptyInput(id, (host.platform === 'win32' ? '\x1b[1;5F\x1b[1;5H' : '\x15') + launch + '\r');
+    window.deck.ptyInput(id, (host.platform === 'win32' ? '\x1b[1;5F\x1b[1;5H' : '\x15') + window.BoardCore.reportAgentExit(launch, host.platform) + '\r');
     const started = Date.now();
     const finish = (ok, note) => {
       launching.delete(id);
@@ -872,7 +872,6 @@
           }
         }, 600);
       }
-      entry.notificationState = { state: 'working', notified: null, since: null };
       window.deck.notifyCancel({ id: col.id });
       const nameFrom = o.display || prompt;
       if (nameFrom && !o.silent) host.maybeAutoName(col, nameFrom.split('\n')[0].trim());
@@ -1229,6 +1228,7 @@
     init, mountColumn, isChatMode, focusInput, setMode, toggleGlobalMode, onSubmitted, noteSent, sendPrompt,
     onTick, onExit, onColumnMouseDown, onColumnRemoved, onColumnArchived, deleteArchivedChat, onColumnIdChanged, onRender,
     focusSearch, reveal, lastTurnTs, artifactSources, readFooter,
+    hasDraft: (id) => { const v = views.get(id); return !!v && (!!v.ta.value || v.atts.length > 0); },
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
     addCard, updateCard, retireChat, snapshotForHandoff, turnsOf, captainArchives,

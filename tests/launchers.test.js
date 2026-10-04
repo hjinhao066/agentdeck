@@ -158,7 +158,8 @@ test('a launch only counts as started once the agent is identified; a Windows ti
 
 test('队长 knows the providers, only verified models, and the routing preferences', () => {
   const text = M.instructions();
-  for (const key of ['agy', 'claude']) assert.ok(text.includes(B.commandForAgent(key)), key);
+  for (const key of ['agy']) assert.ok(text.includes(B.commandForAgent(key)), key);
+  assert.ok(text.includes('claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high'));
   assert.ok(text.includes('cursor-agent --force --model grok-4.7-high-fast'));
   // Codex: --agent codex (default GPT-6.1 Sol) or the Luna command; the bypass flag is named only to forbid writing it
   assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*不要手动拼接 --dangerously-bypass-approvals-and-sandbox/);
@@ -167,7 +168,7 @@ test('队长 knows the providers, only verified models, and the routing preferen
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [
-    'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
+    'claude-opus-5-5', 'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
     'claude-opus-5-5-xhigh', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-max',
     'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
     'gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'grok-4.7-high-fast',
@@ -187,14 +188,14 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(route('简单的轻量代码'), /GPT-6 Luna/);
   assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*放开用/);
   assert.match(route('脏活'), /Cursor Grok 4\.7[^\n]*抓数据/);
-  assert.match(text, /Claude Code：[^\n]*默认模型是 Opus 5\.5，留给 UI、最关键的代码和终审[^\n]*--model claude-sonnet-5-5/);
+  assert.match(text, /Claude Code：[^\n]*--model claude-opus-5-5 --effort high[^\n]*--model claude-sonnet-5-5[^\n]*开工后用 peek/);
   assert.match(text, /Cursor CLI：[^\n]*1–2 分钟可能没有任何输出[^\n]*别急着判定卡死/);
-  // the standalone Grok subscription is gone; quotas are not visible
+  // The standalone Grok subscription is gone; quota is passive and read-only.
   assert.match(text, /独立的 Grok CLI[^\n]*不要用它派活/);
-  assert.match(text, /看不到各家的实时额度/);
-  assert.ok(!/(?:查看|读取|查询|检查)[^\n。]{0,6}额度|剩余额度|quota/i.test(text), 'never promises to read quotas');
+  assert.match(text, /quota.*只读各家订阅额度/);
+  assert.match(text, /派活前可跑 quota，避开已用尽或快用尽/);
   // progress boards, concurrency, scraping fallbacks and stuck-session patience
-  assert.match(text, /13\. 开工先跑 ledger，再看 ~\/\.agents\/boards\/ 里进行中的看板[^\n]*顺手把对应看板里那几行改掉/);
+  assert.match(text, /13\. [^\n]*开工先跑 ledger，再看 ~\/\.agents\/boards\/ 里进行中的看板[^\n]*顺手把对应看板里那几行改掉/);
   assert.match(text, /14\. [^\n]*sysctl vm\.swapusage[^\n]*free 剩不到 1GB 就少开/);
   assert.match(text, /GitHub 现成工具、OpenCLI、agent-reach[^\n]*Muse\.ai 或 ChatGPT 浏览器/);
   assert.match(text, /3\. 先弄懂再派活：[^\n]*表述不清、模棱两可、你没完全理解，先问清楚[^\n]*更好的办法[^\n]*有把握把活做好，才把任务拆开派下去[^\n]*自己决定，不拿去问用户/);

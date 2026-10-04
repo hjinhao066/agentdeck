@@ -42,9 +42,24 @@
     return null;
   }
 
-  // Model extraction: Parse dedicated metadata/TUI lines ONLY, newest explicit line wins.
-  // Avoid conversational prose containing model names.
-  function extractModel(screenText, command, footerRows) {
+  function modelMatchesProvider(model, provider) {
+    if (!model) return false;
+    if (!provider || provider === 'Cursor' || provider === 'Antigravity') return true;
+    const short = shortModelName(model);
+    const family = /^(?:Opus|Sonnet|Haiku)\b/i.test(short) ? 'Claude'
+      : /^(?:Flash|Pro|Gemini)\b/i.test(short) ? 'Antigravity'
+      : /^Grok\b/i.test(short) ? 'Grok'
+      : /^(?:GPT-|o[13]\b)/i.test(short) ? 'Codex' : null;
+    return !family || family === provider;
+  }
+
+  // Claude's banner and custom statusline omit "Model:". Require a model
+  // segment followed by a TUI separator, allowing its leading glyph/mascot.
+  const CLAUDE_STATUS_MODEL = /^[^a-zA-Z0-9]*((?:Claude\s+)?(?:Opus|Sonnet|Haiku)\s+\d+\.\d+)(?=\s*[|│·•])/i;
+
+  // Read the actual footer when available, never model examples above it.
+  // Direct tools only accept their own family; Cursor/Antigravity support others.
+  function extractModel(screenText, command, footerRows, provider = inferProvider(command)) {
     // 1. Dedicated footer rows from TUI if provided (most authoritative)
     if (Array.isArray(footerRows) && footerRows.length) {
       for (let i = footerRows.length - 1; i >= 0; i--) {
@@ -52,15 +67,17 @@
         const m = raw.match(/(?:^|[|│])\s*Model:\s*([^|│\r\n]+)/i);
         if (m) {
           const val = m[1].trim();
-          if (val && !/^None$/i.test(val)) return val;
+          if (val && !/^None$/i.test(val) && modelMatchesProvider(val, provider)) return val;
         }
         const codex = raw.match(/^\s*(gpt[- ]?\d+(?:\.\d+)?(?:[- ](?:sol|astra|luna|terra|codex|mini|nano|pro))?(?:[- ](?:xhigh|high|max|medium|low))?)(?=\s*(?:[|│·•]|$))/i);
-        if (codex) return codex[1].trim();
+        if (codex && modelMatchesProvider(codex[1], provider)) return codex[1].trim();
+        const claude = raw.match(CLAUDE_STATUS_MODEL);
+        if (claude && modelMatchesProvider(claude[1], provider)) return claude[1].trim();
       }
     }
 
     // 2. Live terminal screen text: scan from bottom to top (newest first)
-    if (screenText) {
+    if (screenText && !(Array.isArray(footerRows) && footerRows.length)) {
       const clean = stripAnsi(screenText);
       const lines = clean.split(/\r?\n/);
       for (let i = lines.length - 1; i >= 0; i--) {
@@ -71,28 +88,31 @@
         const statusMatch = line.match(/(?:^|[|│])\s*Model:\s*([^|│\r\n]+)/i);
         if (statusMatch) {
           const val = statusMatch[1].trim();
-          if (val && !/^None$/i.test(val)) return val;
+          if (val && !/^None$/i.test(val) && modelMatchesProvider(val, provider)) return val;
         }
 
         // Codex writes its selected model directly in the TUI footer, without
         // a "Model:" label. When that footer isn't split into rows by xterm,
         // the restored screen dump is the remaining source after a restart.
         const codexFooter = line.match(/^\s*(gpt[- ]?\d+(?:\.\d+)?(?:[- ](?:sol|astra|luna|terra|codex|mini|nano|pro))?(?:[- ](?:xhigh|high|max|medium|low))?)(?=\s*(?:[|│·•]))/i);
-        if (codexFooter) return codexFooter[1].trim();
+        if (codexFooter && modelMatchesProvider(codexFooter[1], provider)) return codexFooter[1].trim();
+        const claude = line.match(CLAUDE_STATUS_MODEL);
+        if (claude && modelMatchesProvider(claude[1], provider)) return claude[1].trim();
 
         // Dedicated model switch / banner: e.g. "Switched model to claude-opus-5-5-high" or "> /model claude-sonnet-5-5-high"
         const switchMatch = line.match(/(?:^|[|│>❯$#•*]\s*)(?:model\s+changed\s+to|switched to model|switched model to|using model:?|current model:?)\s+([a-zA-Z0-9_.-]+)/i);
         if (switchMatch) {
           const val = switchMatch[1].trim();
-          if (val) return val;
+          if (val && modelMatchesProvider(val, provider)) return val;
         }
       }
     }
 
     // 3. Fallback to starting command: e.g. --model claude-opus-5-5-high
     if (command) {
-      const cmdMatch = String(command).match(/(?:--model|-m)\s+([a-zA-Z0-9_.-]+)/i);
-      if (cmdMatch) return cmdMatch[1].trim();
+      const cmdMatch = String(command).match(/(?:^|\s)(?:--model|-m)(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([a-zA-Z0-9_.\/-]+))/i);
+      const model = cmdMatch && (cmdMatch[1] || cmdMatch[2] || cmdMatch[3]).trim();
+      if (model && modelMatchesProvider(model, provider)) return model;
     }
 
     return null;
@@ -102,6 +122,9 @@
     const clean = stripAnsi(screenText || '');
     const lines = clean.split(/\r?\n/);
     for (let i = lines.length - 1; i >= 0; i--) {
+      const status = lines[i].match(CLAUDE_STATUS_MODEL);
+      const statusEffort = status && lines[i].slice(status[0].length).match(/^\s*[|│·•]\s*(xhigh|high|max|medium|low)\b/i);
+      if (statusEffort) return statusEffort[1].toLowerCase();
       const live = lines[i].match(/(?:^|[|│])\s*(?:Thinking|Effort):\s*(xhigh|high|max|medium|low)\b/i);
       if (live) return live[1].toLowerCase();
     }
@@ -205,7 +228,8 @@
   function resolveAgentInfo(col, entry, screenText, footerRows, historyReplies) {
     const cmd = (col && col.cmd) || '';
     const screen = screenText || (entry && entry.lastScreen) || '';
-    const footers = footerRows || (entry && entry.footerLines ? entry.footerLines.map((line) => line.map((s) => s.text).join('')) : null);
+    const footerSource = footerRows || (entry && entry.footerLines);
+    const footers = Array.isArray(footerSource) ? footerSource.map((line) => Array.isArray(line) ? line.map((s) => s.text).join('') : line) : null;
 
     // Provider inference: command is authoritative, screen is fallback for manual agent
     let provider = inferProvider(cmd, screen);
@@ -215,14 +239,14 @@
     let historyProvider = null;
     let historyModel = null;
     let historyEffort = null;
-    if (Array.isArray(historyReplies)) {
+    if (Array.isArray(historyReplies) && !inferProvider(cmd)) {
       for (let i = historyReplies.length - 1; i >= 0; i--) {
         const reply = String(historyReplies[i] || '');
         if (!reply) continue;
-        const replyProvider = inferProvider(cmd, reply);
+        const replyProvider = inferProvider('', reply);
         if (!historyProvider && replyProvider) historyProvider = replyProvider;
         const targetProvider = provider || historyProvider;
-        const replyModel = extractModel(reply, '', null);
+        const replyModel = extractModel(reply, '', null, targetProvider);
         if (!historyModel && replyModel && (!replyProvider || !targetProvider || replyProvider === targetProvider)) {
           historyModel = replyModel;
           historyEffort = extractEffort(replyModel, cmd, reply);
@@ -251,10 +275,12 @@
     }
 
     // Model extraction
-    const liveModel = extractModel(screen, '', footers);
-    const rawModel = liveModel || historyModel || (col && col.agentModel) || extractModel('', cmd, null);
+    const liveModel = extractModel(screen, '', footers, provider);
+    const cachedModel = col && (!col.agentProvider || col.agentProvider === provider) && modelMatchesProvider(col.agentModel, provider) ? col.agentModel : null;
+    const rawModel = liveModel || historyModel || cachedModel || extractModel('', cmd, null, provider);
     const shortModel = shortModelName(rawModel);
-    const effort = extractEffort(rawModel, cmd, screen) || (historyModel && rawModel === historyModel ? historyEffort : null) || (col && col.agentEffort) || null;
+    const liveStatus = liveModel ? (footers && footers.length ? footers.join('\n') : screen) : '';
+    const effort = extractEffort(rawModel, cmd, liveStatus) || (historyModel && rawModel === historyModel ? historyEffort : null) || (cachedModel && rawModel === cachedModel ? col.agentEffort : null) || null;
     const tooltip = formatTooltip(provider, rawModel, effort);
     const key = `${provider}:${rawModel || ''}:${effort || ''}`;
 

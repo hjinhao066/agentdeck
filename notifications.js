@@ -1,83 +1,55 @@
 'use strict';
-const path = require('path');
-const { trustedSender, validId } = require('./security');
+const { validId } = require('./security');
+const { normalizeSettings, firstSentence, SOUND_COOLDOWN_MS } = require('./notification-policy');
 
-// A single sandboxed, non-activating window holds the notification queue.
-// No shell scripts, per-terminal processes, or notification permissions needed.
-// onCreate: called with each new popup window (tests make it invisible).
-function createNotifications({ BrowserWindow, ipcMain, screen, focusColumn, getMainWindow, onCreate }) {
+// Native OS alerts only. The caller rechecks the current Captain and preferences.
+function createNotifications({ Notification, getMainWindow, focusColumn, playSound,
+  getConfig, now = Date.now, platform = process.platform }) {
   const items = new Map();
-  const file = path.join(__dirname, 'notification.html');
-  let win = null;
-  let ready = false;
-  function position() {
-    if (!win || win.isDestroyed() || !items.size) return;
-    const main = getMainWindow();
-    const display = main && !main.isDestroyed()
-      ? screen.getDisplayMatching(main.getBounds()) : screen.getPrimaryDisplay();
-    const area = display.workArea;
-    // halved area from 270x76 (owner request): ~0.7071 per side -> 191x54
-    const width = Math.min(191, area.width - 24);
-    const height = Math.min(226, items.size * 50 + 4, area.height - 24);
-    win.setBounds({ x: area.x + area.width - width - 12,
-      y: area.y + area.height - height - 12, width, height });
+  const seen = new Set();
+  let lastSoundAt = -Infinity;
+  function cancel(id) {
+    const item = items.get(id);
+    items.delete(id);
+    if (item) item.close();
   }
-  function refresh() {
-    if (!items.size) {
-      if (win && !win.isDestroyed()) {
-        if (ready) win.webContents.send('notification:items', []);
-        win.hide();
-      }
-      return;
-    }
-    if (!win || win.isDestroyed()) {
-      ready = false;
-      win = new BrowserWindow({ width: 191, height: 54, show: false,
-        frame: false, resizable: false, minimizable: false, maximizable: false,
-        focusable: false,
-        skipTaskbar: true, alwaysOnTop: true, backgroundColor: '#15191f',
-        title: 'AgentDeck notifications',
-        webPreferences: { preload: path.join(__dirname, 'notification-preload.js'),
-          contextIsolation: true, nodeIntegration: false, sandbox: true },
-      });
-      win.setAlwaysOnTop(true, 'screen-saver');
-      if (onCreate) onCreate(win);
-      if (process.platform === 'darwin') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-      win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      win.webContents.on('will-navigate', (event) => event.preventDefault());
-      win.webContents.on('did-finish-load', () => { ready = true; refresh(); });
-      win.on('closed', () => { win = null; ready = false; });
-      win.loadFile(file);
-    }
-    position();
-    if (ready) {
-      win.webContents.send('notification:items', [...items.values()]);
-      win.showInactive();
-    }
-  }
-  function cancel(id) { items.delete(id); refresh(); }
-  ipcMain.on('notification:action', (event, data) => {
-    if (!trustedSender(event, win, file) || !data || !items.has(data.id)) return;
-    if (data.action === 'open') { cancel(data.id); focusColumn(data.id); }
-    else if (data.action === 'dismiss') cancel(data.id);
-  });
-  screen.on('display-metrics-changed', position);
-  screen.on('display-removed', position);
   return {
-    show({ id, title, state }) {
-      if (!validId(id) || !['input', 'done'].includes(state)) return;
-      items.set(id, { id, title: String(title || 'Terminal').slice(0, 120), state });
-      // Bound the queue while keeping every ordinary multi-terminal event.
-      if (items.size > 100) items.delete(items.keys().next().value);
-      refresh();
+    show(payload) {
+      if (!payload || !validId(payload.id) || typeof payload.turnId !== 'string' ||
+          !payload.turnId || payload.turnId.length > 120 || !['input', 'done'].includes(payload.state)) return;
+      const config = getConfig();
+      const captain = (config.columns || []).find((c) => c.isMain && c.id === payload.id);
+      if (!captain) return;
+      const body = firstSentence(payload.reply);
+      if (!body) return;
+      const key = payload.id + ':' + payload.turnId;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (seen.size > 200) seen.delete(seen.values().next().value);
+      const settings = normalizeSettings(config.captainNotifications);
+      const win = getMainWindow();
+      const visible = win && !win.isDestroyed() && win.isFocused() && !win.isMinimized() && payload.visible === true;
+      const audible = settings.sound && !visible && now() - lastSoundAt >= SOUND_COOLDOWN_MS;
+      cancel(payload.id);
+      if (settings.enabled && Notification.isSupported()) {
+        try {
+          const item = new Notification({ title: '队长', body,
+            // macOS playback is separate so volume stays gentle and predictable.
+            silent: platform !== 'win32' || !audible });
+          items.set(payload.id, item);
+          item.on('click', () => { if (items.get(payload.id) === item) { cancel(payload.id); focusColumn(payload.id); } });
+          item.on('failed', () => { if (items.get(payload.id) === item) items.delete(payload.id); });
+          item.show();
+          if (platform === 'win32' && audible) lastSoundAt = now();
+        } catch (_) { /* Unsupported/unavailable OS notifications are optional. */ }
+      }
+      if (platform === 'darwin' && audible) {
+        lastSoundAt = now();
+        playSound(settings.tone);
+      }
     },
     cancel,
-    dispose() {
-      items.clear();
-      screen.removeListener('display-metrics-changed', position);
-      screen.removeListener('display-removed', position);
-      if (win && !win.isDestroyed()) win.destroy();
-    },
+    dispose() { for (const id of items.keys()) cancel(id); },
   };
 }
 module.exports = { createNotifications };

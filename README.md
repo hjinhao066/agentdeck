@@ -10,7 +10,7 @@ The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
 - **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
-  then the 队长 row (once the Captain exists) with a folded 后台 row for the
+  then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
@@ -20,16 +20,20 @@ the middle:
   deck columns until you open one.
   The 队长 row is pinned: clicking it selects the Captain and shows its saved
   conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
-  Sessions the 队长 opens with `new` run in the background: one 后台 row under
-  it shows live counts (干活中 / 停在确认 / 完成 / 排队) and unfolds into the list:
+  Sessions the 队长 opens with `new` run in the background: the arrow at the far
+  left of its row unfolds the indented list without selecting the Captain.
+  Clicking the Captain row still opens its conversation. Muted counts below it
+  stay visible even when folded (干活中 / 停在确认 / 完成 / 失败 / 排队).
+  The list shows
   work in progress on top (in the order it was handed out), then work waiting
   for a slot, then finished sessions, most recently finished first; it re-sorts
   as work starts and finishes.
+  Captain and worker titles occupy their own full-width line and wrap in narrow
+  sidebars; model badges and timestamps/actions sit below the title.
   Their columns keep running at a normal size but sit outside the deck, and their
-  popups are left to the 队长. Opening one (from that list, a task card or a
-  notification) shows it right after the 队长 until you move on to another
+  popups are left to the 队长. Opening one (from that list or a task card) shows it right after the 队长 until you move on to another
   column. 拉到前台 in its menu, or dragging it into a folder or 对话, makes it an
-  ordinary session; dropping a session on the 队长 or 后台 row (or 交给队长后台)
+  ordinary session; dropping a session on the 队长 row (or 交给队长后台)
   hands it back. Sessions the 队长 only `tell`s something keep their place.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
   top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
@@ -37,6 +41,19 @@ the middle:
   Scroll up in a terminal or conversation to pause following output. New output
   preserves your reading position and shows 有新内容 ↓ at the bottom; click it
   or scroll to the bottom to resume following.
+- **Subscription quota**: compact provider icons in the top bar show remaining
+  percentages (the lowest known window), or 正常 / 已用尽 / 未知. Hover or focus for
+  each window, reset time, model, masked account, source, confidence and sample time.
+  Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
+  Claude shows a separate item per `claudeSeats` configuration, with both
+  5-hour/weekly percentages, resets in the tooltip, and the running Captain’s
+  seat marked. No configuration shows one `~/.claude` item; missing seat usage
+  says 未登录/无数据. Remaining ≤20% is
+  amber and ≤10% is red. AgentDeck passively reads live TUI screens first, then
+  known local quota caches every 30 seconds. Codex additionally uses the official
+  read-only account/rateLimits/read RPC once per minute without model turns.
+  It sends no slash commands. Missing/15-minute-old data is unknown, never an invented percentage.
+  See [quota sources and limits](QUOTA_SOURCES.md).
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
   output; restoring replays that output and relaunches the agent. New Claude and
@@ -93,9 +110,11 @@ again with the current provider, model and effort instructions.
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
-  receipts | answer | peek | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
+  receipts | answer | peek | quota | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
-  capability token those commands need; the columns it drives get none.
+  control capability token those commands need. Every column has a separate
+  submission-only token, so a worker can report its own task without controlling
+  any session.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
   permissions) unless it picks another with `--agent claude|agy|cursor|grok|codex` or a full
   `--command`. Its instructions list the providers and the models their CLIs report
@@ -117,7 +136,7 @@ again with the current provider, model and effort instructions.
   what to use instead.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
-  AgentDeck cannot read live quotas; the 队长 switches
+  The 队长 can read observed subscription quotas with `quota` and switches
   provider when a worker reports a limit. At most 15 background sessions work at
   once: a further `new` waits (its card says 等空位, the only thing called 排队) and starts by itself, oldest
   first, when one finishes. A finished background session is archived after 10
@@ -134,13 +153,20 @@ again with the current provider, model and effort instructions.
   asks "Do you trust this workspace?" in a folder it has not seen), nothing is
   typed into the dialog; the 队长 is sent its text once and answers with
   `answer --key enter`, after which the task goes in.
-  New sessions appear under the Captain's folded 后台 row and get the task as
+  New sessions appear under the Captain's folding arrow and get the task as
   their first message; opening one reveals its column temporarily. The app
-  appends a contract: finish without waiting on the user, ask the
-  队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
-  failure reason; never file bodies).
-- When a worker's turn ends with a receipt, a question or a failure, it is read
-  from its final reply,
+  appends a contract: finish without waiting on the user, then submit through
+  the agent's shell tool:
+  `node "$AGENTDECK_BOARD_CLI" complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"]`.
+  Use `ask --question "Decision needed"` to ask the Captain, and
+  `progress --message "Current progress"` for long work. PowerShell uses
+  `$env:AGENTDECK_BOARD_CLI`; Bash uses `$AGENTDECK_BOARD_CLI` on either platform.
+  Files are absolute paths, separated by commas. Do not include file bodies.
+  The CLI, private control directory and submission token are inherited by
+  Claude, Codex, Antigravity and Cursor, including manually opened sessions.
+- Command submissions are authoritative and preserve the original Unicode,
+  whitespace, result, question, failure and file paths without terminal reflow
+  or truncation. A submission is
   shown as a card in the 队长 column (click the title to jump there), stored as the
   column's last receipt, and read through the Captain's background channel.
   With Claude Code, the Captain runs `receipts --wait --timeout 300` using Bash
@@ -157,9 +183,12 @@ again with the current provider, model and effort instructions.
   `tell --to <session-id> --message "…" --replace` cancels all unsent additions
   and keeps this one. `--now` first sends Esc and then sends the additions as
   soon as the input is ready; combine `--replace --now` to send just the new
-  instruction. Both keep the user-input guard. Claude usage-limit waits show
-  额度用尽/等待 in the dot tooltip, sidebar, task card and ledger; they keep their
-  slot and do not complete the task or receive pending additions until resumed.
+  instruction. Both keep the user-input guard. Quota exhaustion automatically
+  creates a failed task receipt with the
+  provider's reason. The terminal stays open with 额度用尽/等待 in the dot/sidebar;
+  pending additions cannot be delivered until the quota screen clears. Agent
+  launch wrappers report nonzero exit codes as failures even when the parent
+  shell stays alive; PTY exits include their exit code/signal or spawn error.
   **Receipts never pass through the Captain's input box.** They also stay out
   of your next chat message. The background command uses the same Captain-only
   capability token as `receipts`; workers and independent terminals cannot read
@@ -174,14 +203,18 @@ again with the current provider, model and effort instructions.
   to the 队长 with only the prompt's last lines; it answers with `answer` when sure
   and asks you otherwise. A pause between tool calls, between two instructions or a silent
   start (Cursor can print nothing for a minute or two) is not a stop: a turn that
-  ended without a receipt waits for the receipt to show up on screen, and only a
-  screen quiet for 3 minutes is shown as 已停下, never as success.
-  `Doing…` and `Press up to edit queued messages` keep the session working even
-  through silent periods. Only a final receipt/question block counts: inline
-  mentions, fenced examples and echoed contract placeholders are ignored.
-  Receipt file fields accept absolute local paths only; CLI update notices and
-  other footer text are ignored. Prompt submission waits for the paste redraw
+  ended without a command receipt gets a three-minute grace period. Only a
+  finished, uninterrupted turn or a reported normal agent exit can trigger the
+  fallback: “已结束，未提交回执”, with no screen content or inferred files.
+  Screen 【回执】/【提问】 blocks, examples, contract echoes and Doing… never count
+  as submissions. A late command replaces the fallback notice. Prompt submission
+  waits for the paste redraw
   to settle before pressing Enter once, including in background sessions.
+  Legacy receipts and ledger summaries have at most **300 characters of summary
+  and 5 file paths**. Command-submitted receipts remain complete in the receipts
+  channel. Overflow
+  says `其余见 read`; the worker's saved reply and local task card keep the source
+  receipt. Questions and confirmation prompts keep their existing formats.
 - `peek --id <session-id> [--lines 40]` reads live terminal output, with ANSI
   styling removed (1–1000 terminal rows). It reads the active screen and recent
   scrollback, even while someone is reading older output. It sends no input,
@@ -189,6 +222,37 @@ again with the current provider, model and effort instructions.
   Unlike `read`, it does not read saved chat replies.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
+
+### Automatic context saving (Claude Code Captain)
+
+Enabled by default at **150k tokens**. Open the sidebar's **settings icon** to
+change the threshold in k tokens or turn it off. The setting is saved locally.
+AgentDeck reads the live TUI status rows below the input box, such as
+`Context: … 290k/1000k`, including wrapped rows. A percentage alone, a missing
+status or a quoted line in a reply does not trigger it. Other agent providers
+are not sent Claude's `/clear` command.
+
+When usage is strictly above the threshold, the Captain is idle with quiet output,
+and both its chat composer (including attachments) and terminal input are empty:
+
+1. The Captain column's top line announces the process, with a cancellation icon.
+2. AgentDeck sends `把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档`.
+3. Only that turn's final reply `已存档` permits `/clear`. Failed or missing
+   acknowledgements leave the context intact; a stage times out after 5 minutes.
+4. Once the live usage drops below half the previous usage and the Captain is
+   idle again, AgentDeck resends its instructions with `读看板继续`.
+
+No terminal is restarted. The column, local conversation, workers, task cards and
+unread receipts stay in place. Every send rechecks the idle and user-input guards.
+New user messages cancel the remaining steps. The cancellation icon also stops
+the next steps, but cannot undo a command already being submitted. Cancellation
+or failure pauses automatic retries until usage falls back to the threshold
+(or the user saves new settings). If `/clear` does not reduce the reported usage,
+rebriefing waits and then pauses with a notice. This relies on Claude's status
+and acknowledgement; AgentDeck does not inspect or independently verify the board.
+
+The Captain's instructions also require: `不读大文件正文，只看报告的结论段；查进度优先 peek`.
+Use `read` only for details needed from a saved worker reply.
 
 The queue verification and command semantics are documented in
 [Captain control report](docs/captain-control-report.md).
@@ -259,7 +323,12 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   instance, Cursor remains Cursor even when running Claude or Gemini models).
   The last confirmed provider, model and effort are saved with the session and
   restored after relaunch; saved chat replies and prior terminal output are
-  checked when recovering older sessions. Model families such as Grok, GPT-6
+  checked when recovering older sessions without a known agent launch command.
+  The launch command fixes the tool identity; the actual TUI footer (including
+  Claude's custom Opus/Sonnet statusline) supplies the live model. Model examples
+  above that footer and cached models belonging to another tool are ignored;
+  the launch model is used when no valid live or saved model is available.
+  Model families such as Grok, GPT-6
   Luna and Meta Muse Spark appear in the label even when Cursor is the launching
   tool. Full provider, model and effort appear in the tooltip; plain shells
   display no fake model.
@@ -313,29 +382,32 @@ new terminal, so an agent launching the app cannot disable independent CLI histo
 
 ## Desktop notifications
 
-Notifications are built into the app on both platforms. No PowerShell popup
-script, watch-ai daemon, or OS notification permission is needed.
+Only the Captain alerts the user: when a reply finishes and stays quiet for 12
+seconds, or when its terminal stops at a confirmation/input prompt. Completion
+is still a screen/quiet-output heuristic; a silent tool can look idle. Workers
+never create notifications, popups, sounds or Dock badges, including while peeked
+or moved to the foreground. Worker questions and receipts go to the Captain.
 
-- A permission/input prompt shows a persistent popup. Completed output shows a
-  popup after at least 12 seconds of stable idle state and no further PTY output.
-- Works for Claude, Codex, Grok, Antigravity and manually launched agents. Screen
-  detection is heuristic: a silent tool can look idle, and unknown prompt formats
-  may be missed. The popup intentionally says output stopped, not task succeeded.
-- Popups stay above ordinary windows without stealing the keyboard. Cards are
-  compact (~191×54 px per card, halved again for minimal footprint), stacked in
-  the bottom-right corner with 12px margin; close a card to dismiss it.
-- Click a card to restore AgentDeck, leave Board view, scroll/re-zoom to that
-  exact terminal, and focus its input. A deleted terminal never redirects to an
-  unrelated column. Resumed work retracts its obsolete popup.
-- The app must be running. macOS Spaces/fullscreen visibility is requested; OS
-  secure desktops and other OS restrictions can still cover ordinary app windows.
+- Uses native macOS Notification Center / Windows system notifications, with
+  title 「队长」 and the reply's first sentence (at most 60 Unicode characters).
+  Clicking restores the exact Captain column without redirecting a stale ID.
+- Settings (gear icon) independently toggle system notifications and sound.
+  macOS offers Glass or Tink, played for at most one second at 35% playback volume.
+  Windows uses its default notification sound; unavailable native notifications
+  are gracefully skipped.
+- Sound is muted when AgentDeck is focused and the Captain column is visible.
+  Each turn alerts once (including input followed by completion); sounds from
+  consecutive turns are at least 30 seconds apart. Resumed work retracts an old
+  notification. Settings persist in the local profile.
+- macOS requires notification permission and a signed application. OS Focus /
+  Do Not Disturb can suppress banners. See the [Electron native notification API](https://www.electronjs.org/docs/latest/api/notification).
 
-Legacy watch-ai screen dumps are off by default (also avoids plaintext screen
-copies). Set `AGENTDECK_LEGACY_WATCH=1` only when deliberately using that bridge.
-If an existing Claude hook independently displays popups, skip that hook's popup
-when `AGENTDECK_NATIVE_NOTIFICATIONS=1`; leave hooks in other terminals unchanged.
-For the known Windows `~/.claude/hooks/claude-popup.ps1`, run
-`node scripts/migrate-popup-hook.js` once. It backs up and adds only this guard.
+The legacy watch-ai bridge is disabled, including with `AGENTDECK_LEGACY_WATCH=1`,
+to avoid bypassing this policy. Child terminals export
+`AGENTDECK_NATIVE_NOTIFICATIONS=1`; external hooks must honor that guard. For the
+known Windows `~/.claude/hooks/claude-popup.ps1`, `node scripts/migrate-popup-hook.js`
+backs up and adds the guard without affecting terminals outside AgentDeck.
+The bundled xterm does not play audio for terminal BEL.
 
 ## Development and builds
 
@@ -381,3 +453,5 @@ AI contributors must follow [AGENTS.md](AGENTS.md), including immediate commit
 and GitHub synchronization after every completed change.
 
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
+
+The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.

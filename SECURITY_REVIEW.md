@@ -92,3 +92,20 @@ and regression pass, not a penetration-test certification.
   CPU architectures. Physical-device update status must be reported separately.
 
 Reference: [Electron security guidance](https://www.electronjs.org/docs/latest/tutorial/security).
+
+## Captain-only native notifications (feat/captain-notify)
+
+- Removed the notification BrowserWindow and its separate renderer/preload.
+  Notification IPC keeps the main-frame origin check and rechecks the target's
+  `isMain` flag against the current saved configuration. Non-Captain alerts are
+  rejected even if an outdated renderer sends them.
+- Per-turn deduplication and sound cooldown are enforced in the main process.
+  Notification text is plain text, reduced to one sentence and 60 Unicode
+  characters. Native click callbacks cannot redirect a cancelled alert.
+- macOS audio uses `execFile` with fixed `/usr/bin/afplay`, fixed volume/duration,
+  and a two-value system-sound whitelist; no prompt text becomes shell code or
+  a sound path. Test profiles replace notifications/audio with recording doubles.
+- watch-ai spool production is disabled even with the old opt-in flag; known
+  external hooks still receive the existing native-notifications environment guard.
+  macOS native banners require OS permission and a signed executable, which
+  source E2E with notification doubles does not verify.
