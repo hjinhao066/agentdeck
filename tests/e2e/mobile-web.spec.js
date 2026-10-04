@@ -36,6 +36,10 @@ async function launch() {
     id: 'mobile-history', ts: Date.now() - 60_000, user: '外出期间请检查队员的执行情况。',
     reply: '队长测试回复：界面任务正在核对，登录验收等待安排。\n<script>window.captainInjected=true</script>', done: true, atts: [],
   }, {
+    id: 'mobile-history-markdown', ts: Date.now() - 45_000, user: '把检查步骤列一下。',
+    reply: '**检查步骤**\n- 打开 [说明](https://example.com/docs)\n- 运行 `npm test`\n\n```bash\nnpx playwright test tests/e2e/mobile-web.spec.js --workers=1 --reporter=line --grep mobile\n```\n见 https://example.com/report。\n[危险](javascript:window.mdInjected=1) <img src=x onerror="window.mdInjected=1">',
+    done: true, atts: [],
+  }, {
     id: 'mobile-history-latest', ts: Date.now() - 30_000, user: '手机首次打开也要看得到完整的发送按钮。',
     reply: '竖屏布局测试回复：最近对话可以上下滑动查看，发送按钮保持在底部导航上方。', done: true, atts: [],
   }] }));
@@ -93,7 +97,7 @@ async function screenshot(name) {
   if (process.env.AGENTDECK_MOBILE_SCREENSHOT_DIR) {
     const dir = path.resolve(process.env.AGENTDECK_MOBILE_SCREENSHOT_DIR);
     fs.mkdirSync(dir, { recursive: true });
-    await mobile.screenshot({ path: path.join(dir, name + '.png') });
+    await mobile.screenshot({ path: path.join(dir, name + '.png'), animations: 'disabled' });
   }
 }
 async function restartDesktop() {
@@ -145,6 +149,20 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
   await mobile.unroute('**/api/sessions');
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(mobile.locator('#attention')).toBeHidden();
+  // Lost connection: explicit state, draft kept, sending blocked until it recovers.
+  await mobile.route('**/api/**', (route) => route.abort());
+  await mobile.getByLabel('给队长的消息').fill('断线时写的草稿');
+  await mobile.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(mobile.locator('#notice')).toHaveText('暂时连不上桌面端，正在自动重连…');
+  await expect(mobile.locator('#send')).toBeDisabled();
+  await expect(mobile.locator('#captain-turns')).toContainText('队长测试回复：');
+  await screenshot('offline');
+  await mobile.unroute('**/api/**');
+  await mobile.getByRole('button', { name: '刷新', exact: true }).click();
+  await expect(mobile.locator('#notice')).toBeHidden();
+  await expect(mobile.locator('#send')).toBeEnabled();
+  await expect(mobile.getByLabel('给队长的消息')).toHaveValue('断线时写的草稿');
+  await mobile.getByLabel('给队长的消息').fill('');
   await desktop.evaluate(() => { terms.get('mobile-worker').state = 'done'; });
   for (const theme of ['dark', 'light']) {
     await mobile.evaluate((value) => { localStorage.setItem('agentdeck-mobile-theme', value); }, theme);
@@ -154,6 +172,23 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     await expect(mobile.locator('html')).toHaveAttribute('data-theme', theme);
     await expect(mobile.locator('#captain-turns')).toContainText('队长测试回复：');
     expect(await mobile.evaluate(() => window.captainInjected)).toBeUndefined();
+    // Minimal Markdown built with textContent only: bold, lists, code, http(s) links.
+    const markdown = mobile.locator('[data-turn-id="mobile-history-markdown"] .markdown');
+    await expect(markdown.locator('strong')).toHaveText('检查步骤');
+    await expect(markdown.locator('ul > li')).toHaveCount(2);
+    await expect(markdown.locator('.md-code')).toHaveText('npm test');
+    await expect(markdown.locator('a')).toHaveCount(2);
+    await expect(markdown.getByRole('link', { name: '说明' })).toHaveAttribute('href', 'https://example.com/docs');
+    await expect(markdown.getByRole('link', { name: '说明' })).toHaveAttribute('rel', 'noopener noreferrer');
+    await expect(markdown.getByRole('link', { name: 'https://example.com/report' })).toHaveAttribute('target', '_blank');
+    await expect(markdown).toContainText('[危险](javascript:window.mdInjected=1) <img src=x');
+    expect(await markdown.locator('img, script, [onerror]').count()).toBe(0);
+    const code = markdown.locator('.code-block pre');
+    await expect(code).toHaveCSS('white-space', 'pre');
+    expect(await code.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+    await markdown.getByRole('button', { name: '复制代码', exact: true }).click();
+    expect(await mobile.evaluate(() => navigator.clipboard.readText())).toBe('npx playwright test tests/e2e/mobile-web.spec.js --workers=1 --reporter=line --grep mobile');
+    expect(await mobile.evaluate(() => window.mdInjected)).toBeUndefined();
     for (const [width, height] of [[390, 844], [430, 932]]) {
       await mobile.setViewportSize({ width, height });
       await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeGreaterThan(height - 80);
@@ -175,9 +210,17 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
       await screenshot(`captain-${width}-${theme}`);
       await mobile.getByLabel('给队长的消息').fill('');
     }
+    // Soft keyboard open: the composer stays within 30% of what is visible.
+    await mobile.setViewportSize({ width: 390, height: 420 });
+    await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeGreaterThan(420 - 80);
+    await mobile.getByLabel('给队长的消息').fill(Array.from({ length: 12 }, (_, i) => '第 ' + (i + 1) + ' 行').join('\n'));
+    expect((await mobile.locator('#message').boundingBox()).height).toBeLessThanOrEqual(420 * 0.3 + 1);
+    expect((await mobile.locator('#captain-turns').boundingBox()).height).toBeGreaterThanOrEqual(150);
+    await mobile.getByLabel('给队长的消息').fill('');
     await mobile.setViewportSize({ width: 390, height: 844 });
     await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
     await expect(mobile.getByText('会话与看板已完成，正在核对竖屏布局。')).toBeVisible();
+    await expect(mobile.locator('.app-header')).toHaveJSProperty('inert', true);
     await screenshot(`sessions-${theme}`);
     await mobile.locator('#open-board').click();
     await expect(mobile.getByText('核对深浅主题')).toBeVisible();

@@ -20,7 +20,7 @@
   const needsUser = new Set(['input', 'asking']);
   const taskStatuses = [['todo', '待办'], ['doing', '进行中'], ['review', '待验收'], ['needs_user', '等用户'], ['done', '完成']];
   const flagNames = { failed: '失败', blocked: '前置未完成', held: '挂起' };
-  let sessions = [], cards = [], captainData = { turns: [] }, view = 'captain', selected = null, refreshing = false, sending = false, loaded = false, csrfToken = '';
+  let sessions = [], cards = [], captainData = { turns: [] }, view = 'captain', selected = null, refreshing = false, sending = false, loaded = false, offline = false, csrfToken = '';
   let sessionsSignature, boardSignature, turnsSignature, attentionSignature;
   let outputRequest = 0, statusTimer;
   const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
@@ -105,14 +105,97 @@
   }
   function empty(message) { return node('p', 'empty', message); }
 
+  // Minimal Markdown for Captain replies. Every piece of text goes in through
+  // textContent and links are limited to http(s); no markup is ever parsed.
+  const inlinePattern = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"'`]+)/g;
+  function link(text, href) {
+    let url;
+    try { url = new URL(href); } catch (_) { return document.createTextNode(text); }
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return document.createTextNode(text);
+    const a = node('a', '', text);
+    a.href = url.href; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    return a;
+  }
+  function inline(parent, text) {
+    let last = 0;
+    for (const match of text.matchAll(inlinePattern)) {
+      let [whole, code, bold, label, labelHref, bare] = match;
+      let end = match.index + whole.length;
+      if (bare) {
+        const trimmed = bare.replace(/[.,;:!?)\]。，；：！？）」』]+$/, '');
+        end -= bare.length - trimmed.length; bare = trimmed;
+      }
+      if (match.index > last) parent.append(text.slice(last, match.index));
+      if (code) parent.append(node('code', 'md-code', code.slice(1, -1)));
+      else if (bold) parent.append(node('strong', '', bold.slice(2, -2)));
+      else if (label) parent.append(link(label, labelHref));
+      else parent.append(link(bare, bare));
+      last = end;
+    }
+    if (last < text.length) parent.append(text.slice(last));
+    return parent;
+  }
+  function codeBlock(code, language) {
+    const block = node('div', 'code-block');
+    const bar = node('div', 'code-bar');
+    bar.append(node('span', '', language || '代码'), iconButton('copy', '复制代码', (button) => copyText(button, code, '复制代码')));
+    const pre = node('pre'); pre.tabIndex = 0;
+    pre.append(node('code', '', code));
+    block.append(bar, pre);
+    return block;
+  }
+  function markdown(text) {
+    const root = node('div', 'chat-text markdown');
+    const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
+    let paragraph = [], list = null;
+    const flush = () => {
+      if (paragraph.length) root.append(inline(node('p'), paragraph.join('\n')));
+      paragraph = []; list = null;
+    };
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const fence = /^\s*(```|~~~)\s*([\w+#.-]*)\s*$/.exec(line);
+      if (fence) {
+        flush();
+        const body = [];
+        for (i++; i < lines.length && !new RegExp('^\\s*' + fence[1] + '\\s*$').test(lines[i]); i++) body.push(lines[i]);
+        root.append(codeBlock(body.join('\n'), fence[2]));
+        continue;
+      }
+      const bullet = /^\s*[-*+]\s+(.*)$/.exec(line), ordered = /^\s*(\d{1,9})[.)]\s+(.*)$/.exec(line);
+      if (bullet || ordered) {
+        const tag = bullet ? 'ul' : 'ol';
+        if (paragraph.length) flush();
+        if (!list || list.tagName.toLowerCase() !== tag) {
+          list = node(tag);
+          if (ordered && ordered[1] !== '1') list.start = Number(ordered[1]);
+          root.append(list);
+        }
+        list.append(inline(node('li'), bullet ? bullet[1] : ordered[2]));
+        continue;
+      }
+      const heading = /^\s*#{1,6}\s+(.*)$/.exec(line), quote = /^\s*>\s?(.*)$/.exec(line);
+      if (heading) { flush(); root.append(inline(node('p', 'md-heading'), heading[1])); continue; }
+      if (quote) { flush(); root.append(inline(node('blockquote'), quote[1])); continue; }
+      if (!line.trim()) { flush(); continue; }
+      if (list) list = null;
+      paragraph.push(line);
+    }
+    flush();
+    return root;
+  }
+
+  const background = () => document.querySelectorAll('.app-header, .attention, .notice, .views, .composer');
   function openDrawer() {
     $('drawer').hidden = false; $('drawer-backdrop').hidden = false;
+    background().forEach((el) => { el.inert = true; });
     $('menu').setAttribute('aria-expanded', 'true');
     $('drawer-close').focus();
   }
   function closeDrawer(focusMenu = true) {
     if ($('drawer').hidden) return;
     $('drawer').hidden = true; $('drawer-backdrop').hidden = true;
+    background().forEach((el) => { el.inert = false; });
     $('menu').setAttribute('aria-expanded', 'false');
     if (focusMenu && !$('menu').hidden) $('menu').focus();
   }
@@ -145,7 +228,7 @@
     }
   }
   function renderAttention() {
-    const waiting = sessions.filter((s) => needsUser.has(s.status));
+    const waiting = sessions.filter((s) => needsUser.has(s.status) && !(view === 'output' && s.id === selected?.id));
     const signature = JSON.stringify(waiting.map((s) => [s.id, s.title, s.status]));
     if (signature === attentionSignature) return;
     attentionSignature = signature;
@@ -178,7 +261,7 @@
       lanes.tabIndex = 0; lanes.setAttribute('aria-label', project + '，左右滑动查看状态列');
       for (const [status, label] of taskStatuses) {
         const tasksInLane = tasks.filter((t) => t.status === status);
-        const lane = node('section', 'board-lane'); lane.dataset.status = status;
+        const lane = node('section', 'board-lane' + (tasksInLane.length ? '' : ' is-empty')); lane.dataset.status = status;
         const laneTitle = node('h3', 'lane-heading');
         laneTitle.append(node('span', '', label), node('span', 'lane-count', String(tasksInLane.length)));
         lane.append(laneTitle);
@@ -199,13 +282,14 @@
   function renderCaptain() {
     const captain = sessions.find((s) => s.isMain);
     const conversation = $('captain-turns');
-    const signature = JSON.stringify([captainData.turns, !!captain]);
+    const signature = JSON.stringify([captainData.turns, !!captain, !loaded && offline]);
     if (signature !== turnsSignature) {
       const follow = turnsSignature === undefined || atBottom(conversation);
       const scrollTop = conversation.scrollTop;
       turnsSignature = signature;
       conversation.replaceChildren();
-      if (!captain && loaded) conversation.append(empty('尚未创建队长。先在桌面端创建队长。'));
+      if (!loaded && offline) conversation.append(empty('暂时连不上桌面端，正在自动重连…'));
+      else if (!captain && loaded) conversation.append(empty('尚未创建队长。先在桌面端创建队长。'));
       else if (!captainData.turns.length) conversation.append(empty(loaded ? '还没有对话。发一条指令，让队长开始安排。' : ''));
       for (const turn of captain ? captainData.turns : []) {
         const row = node('article', 'captain-turn');
@@ -218,7 +302,7 @@
         const reply = node('div', 'chat-message captain-message');
         reply.append(node('span', 'chat-label', '队长'));
         if (turn.reply) {
-          reply.append(node('p', 'chat-text', turn.reply));
+          reply.append(markdown(turn.reply));
           const actions = node('div', 'turn-actions');
           actions.append(iconButton('copy', '复制队长回复', (button) => copyText(button, turn.reply, '复制队长回复')));
           if (turn.interrupted) actions.append(node('span', 'turn-state', '已中断'));
@@ -238,8 +322,9 @@
       }
       conversation.scrollTop = follow ? conversation.scrollHeight : scrollTop;
     }
+    // Offline keeps the draft editable (flaky mobile networks) but blocks sending.
     $('message').disabled = !captain || sending;
-    updateSend();
+    updateComposer(); updateSend();
   }
   function updateHeading() {
     const captain = sessions.find((s) => s.isMain);
@@ -258,7 +343,7 @@
   function updateComposer() {
     const worker = view === 'output' && selected;
     $('message-form').hidden = view === 'board';
-    $('message').placeholder = worker ? '回复这位队员（由队长转达）' : '给队长发消息';
+    $('message').placeholder = offline ? '连接中断，恢复后可发送' : worker ? '回复这位队员（由队长转达）' : '给队长发消息';
   }
   function showView(next) {
     if (view === 'output' && next !== 'output') outputRequest++;
@@ -267,7 +352,7 @@
     $('back').hidden = view === 'captain';
     $('menu').hidden = view !== 'captain';
     $('copy').hidden = view !== 'output';
-    updateHeading(); updateComposer(); renderSessions();
+    updateHeading(); updateComposer(); renderSessions(); renderAttention();
     if (view === 'captain') toBottom($('captain-turns'));
   }
   async function loadOutput(silent = false) {
@@ -298,18 +383,23 @@
     if (!loaded) notice('正在读取会话和看板…');
     try {
       const [sessionData, taskData, captain, auth] = await Promise.all([api('/api/sessions'), api('/api/tasks'), api('/api/captain'), api('/api/auth')]);
-      sessions = sessionData.sessions; cards = taskData.cards; captainData = captain; csrfToken = auth.csrfToken; loaded = true;
+      sessions = sessionData.sessions; cards = taskData.cards; captainData = captain; csrfToken = auth.csrfToken; loaded = true; offline = false;
       renderSessions(); renderAttention(); renderBoard(); renderCaptain(); updateHeading(); notice('');
       if (view === 'output') await loadOutput(true);
-    } catch (err) { notice(err.message + ' 点击右上角刷新重试。', true); }
+    } catch (err) {
+      // fetch rejects with a TypeError when the desktop or tunnel is unreachable.
+      offline = true;
+      notice(err instanceof TypeError ? '暂时连不上桌面端，正在自动重连…' : err.message + ' 正在自动重试…', true);
+      renderCaptain();
+    }
     finally { refreshing = false; $('refresh').disabled = false; $('refresh').classList.remove('refreshing'); }
   }
   function fitComposer() {
     const message = $('message');
     message.style.height = 'auto';
-    message.style.height = Math.max(44, message.scrollHeight) + 'px';
+    message.style.height = message.scrollHeight + 'px';
   }
-  function updateSend() { $('send').disabled = sending || !csrfToken || !sessions.some((s) => s.isMain) || !$('message').value.trim(); }
+  function updateSend() { $('send').disabled = sending || offline || !csrfToken || !sessions.some((s) => s.isMain) || !$('message').value.trim(); }
   $('message').addEventListener('input', () => {
     const conversation = $('captain-turns'), follow = atBottom(conversation);
     sendStatus(''); fitComposer(); updateSend();
