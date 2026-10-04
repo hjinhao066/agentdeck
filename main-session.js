@@ -279,7 +279,7 @@
     const idle = entry?.alive && entry.state === 'done' && !briefing && !delivering &&
       !entry.sendingPrompt && !entry.injecting && !host.userComposing(col.id) &&
       !M.terminalActivity(entry.lastScreen) && !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
-    if (idle && window.AgentInfo.inferProvider(col.cmd, entry.lastScreen) === 'Claude') {
+    if (idle && state().relayTargetId !== 'chatgpt' && window.AgentInfo.resolveAgentInfo(col, entry).provider === 'Claude') {
       await new Promise((resolve, reject) => {
         const op = { colId: col.id, entry, relay: true, resolve, reject };
         tokenSaving = op;

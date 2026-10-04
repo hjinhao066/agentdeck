@@ -25,10 +25,11 @@ test.afterAll(async () => {
   if (application) await application.close();
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
-const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"]`);
+const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"]${provider === 'Claude' ? '[data-seat-id="cn"]' : ''}`);
 
 test('passive live screens show remaining quota, provider icons and accessible details', async () => {
   await expect(badge('Claude').locator('.quota-label')).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未登录/无数据');
   await expect(badge('Codex').locator('.quota-label')).toHaveText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider).locator('.quota-label')).toHaveText('正常');
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
@@ -102,7 +103,7 @@ test('Cursor and agy errors latch provider-wide through normal redraw and reload
   expect(await page.evaluate(() => config.quotas.Antigravity.blocked.resetAt)).toBe(resetAt);
 });
 
-test('Captain quota CLI returns four lines and changes no tasks, receipts or cached board responses', async () => {
+test('Captain quota CLI returns both Claude seats and changes no tasks, receipts or cached board responses', async () => {
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeVisible();
   await page.locator('#mdCmd').fill('');
@@ -115,8 +116,8 @@ test('Captain quota CLI returns four lines and changes no tasks, receipts or cac
   // Node writes UTF-8 on both platforms; PowerShell 5 redirection writes UTF-16.
   const command = `node -e "require('fs').writeFileSync(process.argv[1],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}))" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
-  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ Claude：19%[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
-  expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(4);
+  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未登录\/无数据[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
+  expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(5);
   expect(await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]))).toBe(before);
   // A worker doesn't have the Captain capability, even for this read-only command.
   const rejected = await page.evaluate(async () => {

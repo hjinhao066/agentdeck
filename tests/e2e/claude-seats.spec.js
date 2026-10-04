@@ -18,19 +18,30 @@ function capture(name) {
   try { return fs.readFileSync(path.join(profile, name), 'utf8'); }
   catch (e) { if (e.code === 'ENOENT') return ''; throw e; }
 }
+function promptsFor(id) {
+  return capture('prompt-columns.jsonl').trim().split('\n').filter(Boolean).map(JSON.parse).filter((r) => r.colId === id).map((r) => r.text);
+}
+async function idle(id) {
+  await expect.poll(() => page.evaluate((i) => { const e = terms.get(i); return e?.state === 'done' && !e.sendingPrompt && !e.injecting && ChatUI.turnsOf(i).every((t) => t.kind === 'task' || t.done); }, id), { timeout: 20000 }).toBe(true);
+}
 async function launch() {
-  const env = { ...process.env, AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'), AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl'), AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
+  const saved = JSON.parse(fs.readFileSync(path.join(profile, 'config.json')));
+  const captainId = saved.mainSession.colId;
+  const promptCount = promptsFor(captainId).length;
+  const env = { ...process.env, AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'), AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'prompt-columns.jsonl'), AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  const count = JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).columns.length;
+  const count = saved.columns.length;
   await expect(page.locator('.column.chat-mode')).toHaveCount(count);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|Codex CLI/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(count);
   await expect(page.locator('.claude-seat-rotate')).toBeEnabled({ timeout: 15000 });
-  await expect.poll(() => page.evaluate(() => !terms.get(config.mainSession.colId)?.sendingPrompt), { timeout: 15000 }).toBe(true);
+  await expect.poll(() => promptsFor(captainId).slice(promptCount).some((p) => p.startsWith('你是 AgentDeck')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 你是 AgentDeck'), captainId), { timeout: 20000 }).toBe(true);
+  await idle(captainId);
 }
 test.beforeEach(async () => {
   profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-seats-e2e-')));
@@ -49,7 +60,7 @@ test.beforeEach(async () => {
     ],
     archived: [{ id: 'seat-legacy-archived', title: 'Legacy archived', cmd: FAKE, cwd: profile, archivedAt: 1 }],
     mainSession: { colId: cn, cmd: FAKE, gen: 1, crewMarked: true, tasks: [], pending: [], inflight: [], waitlist: [] },
-    captainRelayCodex: { name: 'ChatGPT', command: FAKE + ' --provider=codex --board-probe' },
+    captainRelayCodex: { name: 'ChatGPT', command: FAKE + ' --provider=codex --board-probe --archive-fail' },
   }));
   await launch();
 });
@@ -212,12 +223,13 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="chatgpt"]')).toHaveAttribute('title', 'ChatGPT · Codex GPT-6.1 Sol');
   await page.locator('#claudeSeatMenu button[data-seat-id="chatgpt"]').click();
-  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId)).toBe('chatgpt');
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 20000 }).toBe('chatgpt');
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((i) => /Codex CLI/.test(terms.get(i)?.lastScreen || ''), id), { timeout: 20000 }).toBe(true);
-  await expect.poll(() => capture('prompts.jsonl'), { timeout: 20000 }).toContain('读看板继续');
+  await expect.poll(() => promptsFor(id).some((p) => p.startsWith('用户刚清空了你的模型上下文。') && p.includes('读看板继续')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 用户刚清空了你的模型上下文。'), id), { timeout: 20000 }).toBe(true);
   async function board(args, expected) {
-    await expect.poll(() => page.evaluate((i) => { const e = terms.get(i); return e?.state === 'done' && !e.sendingPrompt && !e.injecting && ChatUI.turnsOf(i).every((t) => t.done); }, id), { timeout: 20000 }).toBe(true);
+    await idle(id);
     await page.evaluate(([i, a]) => window.deck.ptyInput(i, 'BOARD ' + JSON.stringify(a) + '\r'), [id, args]);
     await expect.poll(() => page.evaluate((i) => dumpScreen(terms.get(i).term).replace(/\n/g, ''), id), { timeout: 20000 }).toContain(expected);
   }
@@ -232,6 +244,7 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：ChatGPT');
   await screenshot('chatgpt-captain-relay');
   await page.locator('#claudeSeatMenu button[data-seat-id="cn"]').click();
-  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId)).toBe('cn');
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 20000 }).toBe('cn');
+  expect(promptsFor(id).some((p) => p.startsWith('把当前进度写进'))).toBe(false);
   await expect.poll(() => page.evaluate(() => AgentInfo.resolveAgentInfo(MainSession.mainCol(), terms.get(config.mainSession.colId)).provider), { timeout: 20000 }).toBe('Claude');
 });
