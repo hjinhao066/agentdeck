@@ -2,6 +2,8 @@
 
 核查日期：2026-10-03。分支：`feat/captain-stop-archive`。
 
+后续 `feat/command-receipts` 已用命令提交取代本文的屏幕回执读取，并在额度用尽时自动生成失败回执；当前行为见 [README](../README.md#队长-captain)。以下保留当时的队列与控制核查记录。
+
 ## 本次行为
 
 - `stop --id <会话id>`：向指定队员发送 Esc，取消 AgentDeck 中尚未送达的补充指令，保留终端、会话和历史。这是中断请求，不承诺 CLI 内的后台任务也会停止。

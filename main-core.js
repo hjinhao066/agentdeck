@@ -1,6 +1,6 @@
 // Pure helpers behind 队长 (Captain), the main session: the instructions it starts
-// with, the receipt contract appended to work it hands out, reading a receipt
-// back out of a finished reply, and the short ledger it sees. No DOM, no
+// with, the command contract appended to work it hands out, structured receipts
+// (plus legacy parsing helpers), and the short ledger it sees. No DOM, no
 // Electron: runs in the page and in tests.
 (function (root, factory) {
   const api = factory();
@@ -28,16 +28,28 @@
     '',
     '---',
     '（AgentDeck 约定）这是队长派给你的活：直接干完，不要停下来等用户确认。',
-    '拿不准、需要别人拍板时，在最终回复的最后单独写下面两行，然后停下，队长会回复你：',
-    '【提问】',
-    '问题：一两句话说清要队长决定什么',
-    '做完或做不下去时，在最终回复的最后单独写：',
-    '【回执】',
-    '摘要：一到三句话说清结果',
-    '文件：每行一个落盘文件的完整路径，没有就写 无',
-    '失败：没做成时写一两句原因，做成了就不写这一行',
+    '做完运行：node "$AGENTDECK_BOARD_CLI" complete --result "一到三句话结果" [--files 路径1,路径2] [--failed "原因"]',
+    '需要队长拍板运行：node "$AGENTDECK_BOARD_CLI" ask --question "一两句话说清要队长决定什么"，然后停下，队长会回复你。',
+    '长任务可运行：node "$AGENTDECK_BOARD_CLI" progress --message "当前进度"。',
+    '命令在 agent 的 shell/Bash 工具里执行；Windows PowerShell 把 $AGENTDECK_BOARD_CLI 写成 $env:AGENTDECK_BOARD_CLI。',
+    '文件用完整落盘路径，多个路径用逗号分隔；没做成时加 --failed，成功时不加。回执必须通过命令提交，屏幕上的【回执】/【提问】文字不算提交。',
     '回执里不要贴文件正文。',
   ].join('\n');
+
+  // Structured submissions never pass through terminal reflow or legacy caps.
+  function commandReceipt(message) {
+    const text = (key, required = false) => {
+      const value = message[key] === undefined ? '' : message[key];
+      if (typeof value !== 'string' || (required && !value.trim())) throw new Error(`${key} requires non-empty text.`);
+      return value;
+    };
+    const question = message.action === 'ask' ? text('question', true) : '';
+    const summary = question ? '' : text('result', true);
+    const failed = text('failed');
+    const files = message.files === undefined ? [] : message.files;
+    if (!Array.isArray(files) || files.some((p) => typeof p !== 'string' || !/^(?:\/(?!\/)|~[\\/]|[A-Za-z]:[\\/]|\\\\)/.test(p))) throw new Error('files requires absolute paths.');
+    return { summary, question, failed, files, images: files.filter((f) => IMAGE.test(f)), explicit: true, source: 'command' };
+  }
 
   // Only models each CLI listed on the owner's accounts; launch commands match
   // BoardCore's presets.
@@ -384,7 +396,8 @@
     const lines = items.map((r) => {
       if (r.question) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 向你提问：${r.question}`;
       if (r.waiting) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 停在确认提示上：\n${r.waiting.split('\n').map((l) => '    ' + l).join('\n')}`;
-      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${r.failed ? '没做成，' + r.failed : r.summary || '已停下，没有写回执'}`];
+      const body = r.failed ? '没做成，' + r.failed + (r.source === 'command' && r.summary ? '\n  摘要：' + r.summary : '') : r.summary || '已结束，未提交回执';
+      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${body}`];
       if (r.files && r.files.length) parts.push(`  文件：${r.files.join('；')}`);
       return parts.join('\n');
     });
@@ -436,7 +449,7 @@
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
     lines.forEach((line, i) => {
-      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
+      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|(?:error:?\s*)?(?:usage limit|quota|resource_exhausted)(?:\s|:|\b).*?(?:exceeded|exhausted|reached)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/press up to edit queued messages/i.test(line)) queued = true;
@@ -495,7 +508,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

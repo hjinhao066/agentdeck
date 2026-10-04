@@ -180,6 +180,7 @@ function shellArgs() {
 
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
+const receiptSessions = new Map(); // every column: submission only, never control
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -206,11 +207,16 @@ function spawnPty(id, cwd, cols, rows, managed) {
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
+  const receiptToken = crypto.randomBytes(24).toString('hex');
+  receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
   const terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
   // Never inherit an outer deck's managed capability into an independent shell.
-  for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
+  for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_RECEIPT_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
+  terminalEnv.AGENTDECK_RECEIPT_TOKEN = receiptToken;
+  terminalEnv.AGENTDECK_CONTROL_DIR = boardControlDir;
+  terminalEnv.AGENTDECK_BOARD_CLI = boardCliPath;
   terminalEnv.AGENTDECK_NATIVE_NOTIFICATIONS = '1';
   if (token) {
     terminalEnv.AGENTDECK_MANAGED = '1';
@@ -232,24 +238,26 @@ function spawnPty(id, cwd, cols, rows, managed) {
     });
   } catch (err) {
     managedSessions.delete(id);
+    receiptSessions.delete(id);
     // Spawn can fail (fd exhaustion, bad shell). Surface it in the column
     // instead of throwing inside the IPC handler and crashing the main process.
     send('pty:data', { id, data: `\r\n[AgentDeck] shell 启动失败: ${err.message}\r\n` });
-    send('pty:exit', { id });
+    send('pty:exit', { id, reason: `shell 启动失败: ${err.message}` });
     return;
   }
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
-  p.onExit(() => {
+  p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
     // column is respawned quickly with the same id.
     if (ptys.get(id) === p) {
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
       managedSessions.delete(id);
+      receiptSessions.delete(id);
       if (notifications) notifications.cancel(id);
       // Keep the frozen buffer until the column is explicitly removed. It lets
       // a renderer reload still show an exited terminal's useful final output.
-      send('pty:exit', { id });
+      send('pty:exit', { id, reason: `终端进程退出（exit ${exitCode}${signal ? `，signal ${signal}` : ''}）` });
     }
   });
   ptys.set(id, p);
@@ -268,6 +276,7 @@ function killPty(id, keepReplay) {
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
   managedSessions.delete(id);
+  receiptSessions.delete(id);
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
 }
 
@@ -319,15 +328,20 @@ function processBoardRequests() {
       }
       catch (_) { try { fs.unlinkSync(file); } catch (_) {} continue; }
       try { fs.unlinkSync(file); } catch (_) {}
-      const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token);
+      const action = String(request.action || '');
+      const submitOnly = Array.from(receiptSessions.entries()).find(([, token]) => token === request.token);
+      const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token) || submitOnly;
       if (!caller) {
         writeBoardResponse(request.id, { done: true, error: 'Control request rejected: terminal is not conductor-managed.' });
         continue;
       }
-      const action = String(request.action || '');
+      if (submitOnly && !['complete', 'ask', 'progress', 'session-exit'].includes(action)) {
+        writeBoardResponse(request.id, { done: true, error: 'Receipt capability allows only complete, ask and progress; it cannot control other sessions.' });
+        continue;
+      }
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
-      if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status',
+      if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
         'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
@@ -337,7 +351,7 @@ function processBoardRequests() {
         writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
         continue;
       }
-      const command = { ...request, callerId: caller[0] };
+      const command = { ...request, callerId: caller[0], submitOnly: !!submitOnly };
       // Do not discard an authenticated request while the renderer is loading.
       // It stays here until the renderer acknowledges it with board:response;
       // board:ready replays pending commands after a hot reload.
@@ -648,11 +662,13 @@ app.whenReady().then(() => {
   onMain('pty:kill', (_e, { id, keepReplay }) => killPty(id, !!keepReplay));
 
   onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
-    const peek = pendingBoardCommands.get(requestId)?.command.action === 'main-peek';
+    const action = pendingBoardCommands.get(requestId)?.command.action;
+    const verbatim = action === 'main-peek' || action === 'main-receipts';
     pendingBoardCommands.delete(requestId);
+    if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
       done: !!done,
-      result: typeof result === 'string' ? result.slice(0, peek ? 2_100_000 : 12000) : '',
+      result: typeof result === 'string' ? (verbatim ? result : result.slice(0, 12000)) : '',
       error: typeof error === 'string' ? error.slice(0, 2000) : '',
       childId: typeof childId === 'string' ? childId : '',
       snapshot: snapshot && typeof snapshot === 'object' ? snapshot : undefined,

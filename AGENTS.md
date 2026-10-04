@@ -44,7 +44,7 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Do not log prompts, tokens or terminal contents. Do not commit local settings,
   session output, screenshots containing user data, keys, or installed bundles.
 - Managed terminal tokens provide app-level routing, not an OS sandbox against
-  programs running as the same user. Never inherit tokens into manual columns
+  programs running as the same user. Never inherit control tokens into manual columns
   (the one exception is the 队长 column, which the user creates explicitly).
 - Chat view: the xterm of a chat-mode column stays mounted (hidden, never
   `display:none`) so PTY size, status dots and notifications keep working. Bubbles
@@ -70,8 +70,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   printing output is never archived, automatically or by click, and never asks first
   (`archiveColumn` shows a notice and stops). The Captain's explicit capability-checked
   `archive --id` command can end and archive a busy worker without confirmation;
-  `stop --id` only sends Esc and cancels unsent supplements. Quota waits stay open,
-  hold their slot and block automatic delivery. Work that cannot go in because the
+  `stop --id` only sends Esc and cancels unsent supplements. Quota waits stay open
+  and block automatic delivery; assigned tasks receive failure receipts with the
+  provider reason. Work that cannot go in because the
   session sits on a startup dialog is reported to the 队长 once, never typed into it.
 - Schedule runs only while the app is open, never fires overdue runs late at
   launch (reported as missed), and sends through the same path as the composer.
@@ -87,14 +88,20 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   that row is never dragged, filed into a folder, archived or deleted like an
   ordinary session, and the top 队长 entry stays for creating/jumping. Its terminal is
   the only manual column spawned with a control token; `main-*` board actions are
-  accepted only from that column. Columns it drives never get a token. Nothing new
+  accepted only from that column. Columns it drives never get a control token;
+  every column has a separate capability restricted to submitting its own
+  complete/ask/progress commands. Nothing new
   is exposed to the page: the existing board request channel carries it.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded
   (no terminal restart, no new main-process read); they never enter its model context.
-- Receipts come from the worker's own 【回执】/【提问】 block in its final reply; full
-  output, logs and file bodies never go into the 队长's context. Tests must drive
-  workers with the stand-in agent (`--command`), never a real agent CLI.
+- Receipts come from authenticated worker complete/ask/progress commands and
+  retain their original text and paths. Never parse screen receipt/question
+  blocks. After a finished turn has waited three minutes without a command,
+  report only 已结束，未提交回执. Agent crashes and quota exhaustion create failure
+  receipts. Full output, logs and file bodies never go into the 队长's context.
+  Automated tests must use the stand-in agent (`--command`); real CLI smoke tasks
+  require an explicit user request and an isolated profile.
 - The side pane browser is a sandboxed `WebContentsView` with its own partition,
   http(s) only, permissions and downloads denied. Previews are read in the main
   process with size caps; the page never gets a raw path it did not click on.

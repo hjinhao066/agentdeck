@@ -1,9 +1,17 @@
 // Stand-in for an agent TUI (Claude Code shape): replies with a bullet, then
 // redraws an input box between two rules with colored status lines below it.
 // Lines arriving together (a multi-line prompt) are answered once. A prompt
-// carrying the AgentDeck receipt contract gets a 【回执】 block back; "ask me"
+// carrying the AgentDeck receipt contract submits through board-cli; "ask me"
 // makes it stop at a y/n question like a permission prompt.
 const readline = require('readline');
+if (process.env.AGENTDECK_TEST_RECEIPT_ENV_DIR) {
+  require('fs').writeFileSync(require('path').join(process.env.AGENTDECK_TEST_RECEIPT_ENV_DIR, process.env.AGENTDECK_COL_ID + '.json'), JSON.stringify({
+    AGENTDECK_RECEIPT_TOKEN: process.env.AGENTDECK_RECEIPT_TOKEN,
+    AGENTDECK_CONTROL_DIR: process.env.AGENTDECK_CONTROL_DIR,
+    AGENTDECK_BOARD_CLI: process.env.AGENTDECK_BOARD_CLI,
+    control: !!process.env.AGENTDECK_CONTROL_TOKEN,
+  }));
+}
 if (process.env.AGENTDECK_TEST_CONTROL_ENV_FILE && process.env.AGENTDECK_CONTROL_TOKEN) {
   require('fs').writeFileSync(process.env.AGENTDECK_TEST_CONTROL_ENV_FILE, JSON.stringify({
     AGENTDECK_CONTROL_DIR: process.env.AGENTDECK_CONTROL_DIR,
@@ -50,9 +58,15 @@ function answer() {
     return;
   }
   let out = '\n⏺ GOT ' + first.slice(-40) + '\n  wrote ' + process.env.AGENTDECK_DEMO_FILE + '\n';
-  if (text.includes('AgentDeck 约定')) out += '\n  【回执】\n  摘要：stand-in finished ' + first.slice(0, 30) + '\n  文件：' + process.env.AGENTDECK_DEMO_FILE + '\n';
+  if (text.includes('AgentDeck 约定') && !process.argv.includes('--screen-only')) {
+    const args = [process.env.AGENTDECK_BOARD_CLI, 'complete', '--result', 'stand-in finished ' + first.slice(0, 30)];
+    if (process.env.AGENTDECK_DEMO_FILE) args.push('--files', process.env.AGENTDECK_DEMO_FILE);
+    require('child_process').execFile(process.execPath, args, (error) => { if (error) process.stderr.write('Receipt submission failed\n'); });
+  }
+  if (process.argv.includes('--screen-only')) out += '\n  【回执】\n  摘要：screen template must be ignored\n  文件：无\n';
   process.stdout.write(out);
   box();
+  if (text.includes('AgentDeck 约定') && process.argv.includes('--exit-after-task')) setTimeout(() => process.exit(7), 500);
 }
 function listen() {
   if (process.argv.includes('--interruptible')) {
@@ -110,6 +124,7 @@ function listen() {
 }
 function start() {
   console.log('Welcome to Claude Code (test stand-in)');
+  if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
   listen();
 }

@@ -40,7 +40,8 @@ function sleep(ms) {
 
 async function request(command, waitForCompletion) {
   const controlDir = process.env.AGENTDECK_CONTROL_DIR;
-  const token = process.env.AGENTDECK_CONTROL_TOKEN;
+  const submission = ['complete', 'ask', 'progress', 'session-exit'].includes(command.action);
+  const token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN;
   if (!controlDir || !token) {
     fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
   }
@@ -48,6 +49,10 @@ async function request(command, waitForCompletion) {
   const requestFile = path.join(controlDir, 'requests', `${id}.json`);
   const responseFile = path.join(controlDir, 'responses', `${id}.json`);
   atomicJson(requestFile, { id, token, createdAt: Date.now(), ...command });
+  // The launch wrapper can run while Electron is quitting. Its exit status is
+  // already durably queued; never keep the shell alive waiting for a renderer
+  // that is shutting down. User complete/ask/progress still wait for acceptance.
+  if (command.action === 'session-exit') return { done: true };
 
   const timeoutMs = Math.max(5000, Number(command.timeoutMs) || (waitForCompletion ? 6 * 60 * 60 * 1000 : 30000));
   const deadline = command.expiresAt === undefined ? Date.now() + timeoutMs : Math.min(Date.now() + timeoutMs, command.expiresAt);
@@ -87,7 +92,8 @@ function usage() {
     '  wait --task <task-id>\n' +
     '  send --task <task-id> --message "Follow-up or answer"\n' +
     '  progress --message "Current progress"\n' +
-    '  complete --result "Useful final result"\n' +
+    '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"]\n' +
+    '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
@@ -150,18 +156,36 @@ async function main() {
   }
 
   if (action === 'progress') {
-    const message = String(args.message || args._.slice(1).join(' ')).trim();
-    if (!message) fail('progress requires --message.');
+    const message = typeof args.message === 'string' ? args.message : args._.slice(1).join(' ');
+    if (!message.trim()) fail('progress requires --message.');
     await request({ action, message }, false);
     process.stdout.write('Progress recorded.\n');
     return;
   }
 
   if (action === 'complete') {
-    const result = String(args.result || args._.slice(1).join(' ')).trim();
-    if (!result) fail('complete requires --result.');
-    await request({ action, result }, false);
+    const result = typeof args.result === 'string' ? args.result : args._.slice(1).join(' ');
+    if (!result.trim()) fail('complete requires --result.');
+    if (args.files !== undefined && typeof args.files !== 'string') fail('complete --files requires comma-separated paths.');
+    if (args.failed !== undefined && (typeof args.failed !== 'string' || !args.failed.trim())) fail('complete --failed requires a reason.');
+    await request({ action, result, files: args.files ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : [], failed: args.failed || '' }, false);
     process.stdout.write('Result delivered to the parent task.\n');
+    return;
+  }
+
+  if (action === 'ask') {
+    if (typeof args.question !== 'string' || !args.question.trim()) fail('ask requires --question.');
+    await request({ action, question: args.question }, false);
+    process.stdout.write('Question delivered to the Captain.\n');
+    return;
+  }
+
+  // App launch wrappers report the actual agent exit status, even though its
+  // parent interactive shell remains alive. Not a worker completion command.
+  if (action === 'session-exit') {
+    const code = typeof args.code === 'string' ? Number(args.code) : NaN;
+    if (!Number.isInteger(code)) fail('session-exit requires an integer --code.');
+    await request({ action, code }, false);
     return;
   }
 

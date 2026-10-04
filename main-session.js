@@ -2,22 +2,14 @@
 // to other columns, and shows you short receipts. It never does the work in
 // its own column. Its control channel is the existing capability-tokened board
 // bridge: only this column's terminal holds a token that main-* commands
-// accept; the columns it drives get no token and so no control of anything.
+// accept; workers receive a separate submission-only capability.
 (function () {
   'use strict';
   const M = window.MainCore;
   const ACTIVE_OUTPUT_MS = 60_000;   // output this recent: not finished, whatever the status dot says
-  const C = window.ChatCore;
   let host = null;
-  const startedAt = Date.now();
   const MAX_TASKS = 120;            // cards kept in config.json; older ones drop off
-  const FALLBACK_AFTER = 30_000;   // after an app restart: a column with no extracted turn gets a screen-based receipt
-  // A column that looks idle is not necessarily done: it pauses between tool
-  // calls, between two instructions, and Cursor can stay silent for a minute or
-  // two after it starts. Only a written receipt, a question or a failure ends
-  // a task at once; without one the column must stay quiet this long first.
-  const STOP_QUIET = 3 * 60_000;
-  const SCREEN_QUIET = 4_000;      // a receipt on the screen counts once the column has stopped printing
+  const STOP_QUIET = 3 * 60_000; // ended turns with no command receipt
   const dispatches = new Map();  // one delivery loop per session; additions merge until submission
 
   const $ = (id) => document.getElementById(id);
@@ -250,7 +242,7 @@
   function supersede(task) {
     const s = state();
     s.tasks.forEach((t) => {
-      if (t === task || t.colId !== task.colId || !['working', 'quota', 'input'].includes(t.status)) return;
+      if (t === task || t.colId !== task.colId || !['working', 'quota', 'input', 'asking'].includes(t.status)) return;
       t.receipt = { summary: '后来又给这个会话发了新指令，结果看后面的卡片。', files: [], images: [], failed: '', explicit: true };
       t.status = 'done';
       t.doneAt = Date.now();
@@ -326,8 +318,8 @@
     const col = host.columns().find((c) => c.id === task.colId);
     if (col && !receipt.question) col.lastReceipt = { ...receipt, ts: task.doneAt };
     push(task, receipt.question
-      ? { question: receipt.question }
-      : { summary: receipt.summary, files: receipt.files, failed: receipt.failed });
+      ? { question: receipt.question, source: receipt.source }
+      : { summary: receipt.summary, files: receipt.files, failed: receipt.failed, source: receipt.source });
     update(task);
   }
   // Queue something for 队长's background reader (or the legacy quiet-moment injection).
@@ -405,6 +397,43 @@
     });
   }
 
+  // Authenticated submissions bind to the most recent instruction actually
+  // sent to this column, never to an unsent supplement or another worker.
+  function submit(message, caller) {
+    const s = state();
+    if (!s || isMain(caller)) return null;
+    const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit'));
+    if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return null;
+    const response = { done: true, result: 'Submission recorded.' };
+    if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
+    if (message.action === 'session-exit') {
+      if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
+      if (message.code !== 0) {
+        if (task.status === 'asking') task.status = 'working';
+        settle(task, { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process' });
+      } else { task.endedAt = Date.now(); task.processEnded = true; update(task); }
+      return response;
+    }
+    if (message.action === 'progress') {
+      if (typeof message.message !== 'string' || !message.message.trim()) throw new Error('progress requires --message.');
+      task.progress = message.message;
+      caller.progress = message.message;
+      task.endedAt = 0;
+      update(task);
+      return response;
+    }
+    const receipt = M.commandReceipt(message);
+    // A real submission may follow a question or the no-receipt notice. Replace
+    // an unread automatic notice so the Captain sees the authoritative result.
+    if (['asking', 'stopped', 'failed'].includes(task.status)) {
+      if (task.receipt?.source === 'command' && task.status !== 'asking') return response;
+      s.pending = s.pending.filter((p) => p.taskId !== task.id);
+      task.status = 'working';
+    }
+    settle(task, receipt);
+    return response;
+  }
+
   // ---- heartbeat: called for every column on the 1.5s status loop ----
   function confirmationExcerpt(entry) {
     return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
@@ -417,8 +446,18 @@
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
-      if (task.colId !== id || !['queued', 'working', 'quota', 'input'].includes(task.status)) continue;
-      if (!entry.alive) { settle(task, { summary: '', files: [], images: [], failed: '这个会话的终端已经退出', explicit: true }); continue; }
+      if (task.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(task.status)) continue;
+      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process' }); continue; }
+      const activity = M.terminalActivity(entry.lastScreen);
+      if (entry.state === 'quota' || activity === 'quota') {
+        // Follow-ups queued after the failure still wait for the provider to
+        // resume; a brand-new session exhausted at startup fails its first task.
+        if (task.status === 'queued' && col?.lastReceipt?.source === 'quota') continue;
+        if (task.status === 'asking') task.status = 'working';
+        const reason = String(entry.lastScreen || '').split('\n').filter((line) => M.terminalActivity(line) === 'quota').join('\n');
+        settle(task, { summary: '', files: [], images: [], failed: '额度用尽' + (reason ? '：' + reason.trim() : '，agent 无法继续当前任务'), explicit: true, source: 'quota' });
+        continue;
+      }
       if (task.status === 'queued') {
         // Not delivered yet and the session is stopped on a dialog (Cursor asks "Do you
         // trust this workspace?" in a folder it has not seen): the work cannot go in until
@@ -430,12 +469,7 @@
         } else if (entry.state !== 'input' && task.blockedAsked) task.blockedAsked = false;
         continue;
       }
-      const activity = M.terminalActivity(entry.lastScreen);
-      if (entry.state === 'quota' || activity === 'quota') {
-        if (task.status !== 'quota') { task.status = 'quota'; update(task); }
-        task.idleSince = 0;
-        continue;
-      }
+      if (task.status === 'asking') continue;
       if (task.status === 'quota') { task.status = 'working'; update(task); }
       if (entry.state === 'input') {
         // just answered: the old prompt can still be on screen for a moment
@@ -448,35 +482,14 @@
       }
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
-      if (entry.state === 'working' || activity === 'working') { task.idleSince = 0; continue; }
-      // The reply normally arrives through the chat turn (onTurnDone). That
-      // turn can end early (a pause, a slow start) and the receipt then appears
-      // on the screen only. If the app restarted mid-task, or no turn was
-      // recorded, don't wait forever either — but a quiet screen alone is not
-      // an ending until it has stayed quiet for STOP_QUIET.
-      if (entry.state === 'done' || entry.state === 'plain') {
-        task.idleSince = task.idleSince || Date.now();
-        // its chat turn is still open: that turn's reply (unwrapped) is the better source
-        const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
-        if (turn && !turn.done) continue;
-        const quiet = Date.now() - Math.max(task.idleSince, entry.lastOutputAt || 0);
-        const finalReply = C.extractReply(M.afterContract(entry.lastScreen).split('\n'), '', entry.term?.cols);
-        const fromScreen = M.parseReceipt(finalReply, filePaths);
-        const prev = col && col.lastReceipt;
-        const stale = !!prev && prev.summary === fromScreen.summary && prev.failed === fromScreen.failed;   // the last task's receipt, still on screen
-        if (fromScreen.explicit && !stale && quiet >= SCREEN_QUIET) { settle(task, fromScreen); continue; }
-        const restarted = (task.startedAt || task.sentAt) < startedAt;
-        if (quiet < (restarted ? FALLBACK_AFTER : STOP_QUIET)) continue;
-        // 1) a reply already saved for this turn; 2) say what happened
-        // a reply cut off when the app closed is not that turn's final reply
-        const saved = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId && t.reply && !t.interrupted);
-        if (saved) settle(task, M.parseReceipt(saved.reply, filePaths));
-        else if (restarted) {
-          settle(task, { summary: 'AgentDeck 重启过，没收到这件活的回执，去那一列看结果。', files: [], images: [], failed: '', explicit: false });
-        } else settle(task, fromScreen);
-      } else {
-        task.idleSince = 0;
-      }
+      if (!task.processEnded && (entry.state === 'working' || activity === 'working')) { task.endedAt = 0; continue; }
+      // Never parse a screen/reply for receipts. A finished turn (or a real
+      // zero process exit) gets a three-minute grace period for its command.
+      const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
+      const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
+      if (!ended || turn && !turn.done && !task.processEnded) continue;
+      if (Date.now() - Math.max(ended, entry.lastOutputAt || 0) < STOP_QUIET) continue;
+      settle(task, { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' });
     }
   }
   function onTurnStarted(colId, turn) {
@@ -497,17 +510,10 @@
       return;
     }
     const task = s.tasks.find((t) => t.colId === colId && t.turnId === turn.id);
-    if (!task) return;
+    if (!task || CLOSED.includes(task.status) || turn.interrupted) return;
     const entry = host.terms.get(colId);
-    if (entry && (entry.state === 'working' || entry.state === 'quota' || M.terminalActivity(entry.lastScreen))) return;
-    // A turn also "ends" on a pause between tool calls or a silent start. Only
-    // a receipt, a question or a failure closes the task here; otherwise onTick
-    // waits for the column to stay quiet before calling it stopped.
-    const r = M.parseReceipt(turn.reply, filePaths);
-    if (r.explicit || r.question || r.failed) settle(task, r);
-  }
-  function filePaths(text) {
-    return String(text).split('\n').flatMap((line) => host.findLinks(line)).filter((m) => m.kind === 'file').map((m) => m.text.trim());
+    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen)) return;
+    task.endedAt = Date.now();
   }
 
   // Only the opt-in legacy mode adds receipts to the user's next message.
@@ -580,7 +586,7 @@
         // if it was queued while the renderer was unavailable and has expired.
         if (message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt)) return { done: true, result: '' };
         if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
-        const text = takePending().trim();
+      const text = takePending();
         return { done: true, result: text || '没有新的回执。' };
       }
       case 'main-peek': {
@@ -693,12 +699,13 @@
     if (task.status === 'input') card.appendChild(el('div', 'task-note', '停在确认提示上，已交给队长判断；队长拿不准会来问你。'));
     if (task.status === 'queued') card.appendChild(el('div', 'task-note', '追加给还在忙的会话，等它空下来就发过去。'));
     if (task.status === 'waiting') card.appendChild(el('div', 'task-note', `同时最多 ${M.MAX_ACTIVE} 个会话干活，前面有空位就自动开会话开始做。`));
+    if (task.progress && !task.receipt) card.appendChild(el('div', 'task-summary', task.progress));
     const r = task.receipt;
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));
     else if (r) {
       if (r.failed) card.appendChild(el('div', 'task-failed', r.failed));
       if (r.summary) card.appendChild(el('div', 'task-summary', r.summary));
-      if (!r.explicit && !r.failed) card.appendChild(el('div', 'task-note', '这一列停下了，但没有写回执；结果以那一列为准。'));
+      if (!r.explicit && !r.failed) card.appendChild(el('div', 'task-note', '会话已结束，等待命令回执超过 3 分钟。'));
       if (r.files && r.files.length) {
         const files = el('div', 'task-files');
         r.files.forEach((p) => files.appendChild(window.ChatUI.attachmentChip(p, task.colId)));
@@ -716,7 +723,7 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, handle, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),

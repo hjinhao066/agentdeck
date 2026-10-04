@@ -463,7 +463,7 @@
     }
     launchNote(id, `正在启动 ${label}…`, false);
     const before = window.BoardCore.launchErrors(entry.lastScreen, cmd);
-    window.deck.ptyInput(id, window.BoardCore.launchInput(cmd, host.platform));
+    window.deck.ptyInput(id, window.BoardCore.launchInput(cmd, host.platform, true));
     const started = Date.now();
     const finish = (ok, note) => {
       launching.delete(id);
