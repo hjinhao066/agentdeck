@@ -576,7 +576,21 @@
     return /AgentDeck\s*约定/.test(rest) ? '' : rest;
   }
 
-  function terminalActivity(screen) {
+  // Cursor keeps the input visible while tools run. Its stop hint shares the
+  // prompt row, and completed tool/spinner rows may remain above that prompt.
+  function cursorActivity(screen) {
+    const lines = String(screen || '').split('\n').filter((line) => line.trim()).slice(-6);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const row = /^\s*[│┃]?\s*→\s*(.*?)[│┃]?\s*$/.exec(lines[i]);
+      if (!row) continue;
+      if (/\bctrl\+c to stop\s*$/i.test(row[1])) return 'working';
+      if (/^(?:Add a follow-up(?: — \/plan to review and build)?|Plan, search, build anything|Build anything)\s*$/i.test(row[1])) return 'idle';
+      return '';
+    }
+    return '';
+  }
+
+  function terminalActivity(screen, cmd) {
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
     lines.forEach((line, i) => {
@@ -585,9 +599,13 @@
       if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|(?:error:?\s*)?(?:usage limit|quota|resource_exhausted)(?:\s|:|\b).*?(?:exceeded|exhausted|reached)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
+      if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;
       if (/press up to edit queued messages/i.test(line)) queued = true;
     });
     if (quota > resumed && quota > working) return 'quota';
+    const cursor = cursorActivity(screen);
+    if (cursor === 'working') return 'working';
+    if (cursor === 'idle' && /\bcursor-agent\b/i.test(cmd || '')) return '';
     if (working >= 0 || queued) return 'working';
     return '';
   }
@@ -635,6 +653,7 @@
     if (!rows.length) return '还没有别的会话。';
     return rows.map((r) => {
       let line = `${r.id}  「${oneLine(r.title, 60)}」  ${statusLabel(r.state)}`;
+      if (r.terminalState && r.terminalState !== r.state) line += `  终端:${statusLabel(r.terminalState)}`;
       if (r.folder) line += `  文件夹:${oneLine(r.folder, 30)}`;
       if (r.project) line += `  项目:${oneLine(r.project, 120)}`;
       if (r.reviews && r.reviews.length) line += `  审查:${r.reviews.join(',')}`;
@@ -662,6 +681,6 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
-    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, MAX_SUMMARY, MAX_HISTORY,
   };
 });

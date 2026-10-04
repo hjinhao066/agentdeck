@@ -65,3 +65,66 @@ test('quota and confirmation states remain distinct from busy spinners', () => {
   assert.equal(classify('Proceed? (y/n)\n❯', { hasWorked: true }), 'input');
   assert.equal(classify(busy[0] + '\nwaiting for user confirmation', { hasWorked: true }), 'working');
 });
+
+test('Cursor uses the live stop hint on its input row, including wrapped multi-character spinners', () => {
+  const term = terminal(['⠰⠳ Grepping  32.91k tokens', '',
+    '  → Add a follow-up              ctrl+c to ', { text: 'stop' }]);
+  const screen = statusScreen(term);
+  assert.equal(MainCore.terminalActivity(screen), 'working');
+  assert.equal(classify(screen, { hasWorked: true }, 'cursor-agent --force'), 'working');
+  assert.equal(classify('→ my queued follow-up   ctrl+c to stop', { hasWorked: true }), 'working');
+  assert.notEqual(classify('The docs say ctrl+c to stop.\n❯', { hasWorked: true }), 'working');
+});
+
+test('Cursor startup silence stays busy after submission and an idle prompt clears old tool indicators', () => {
+  assert.equal(classify('', { hasWorked: true }, 'cursor-agent --model grok-4.7-high-fast'), 'working');
+  assert.equal(classify('Initializing\nComposer', { hasWorked: true }, 'cursor-agent'), 'working');
+  assert.equal(classify('', { hasWorked: false }, 'cursor-agent'), 'plain');
+  const idle = '⠋ Thinking…\n⠰⠳ Grepping  32.91k tokens\n\n→ Add a follow-up';
+  assert.equal(MainCore.terminalActivity(idle, 'cursor-agent'), '');
+  assert.equal(classify(idle, { hasWorked: true }, 'cursor-agent'), 'done');
+  assert.equal(classify('→ Plan, search, build anything', { hasWorked: false }, 'cursor-agent'), 'plain');
+  assert.equal(classify('✻ Doing…\n→ Add a follow-up', { hasWorked: true }, 'claude'), 'working');
+  assert.equal(classify('Usage limit reached\n→ Add a follow-up  ctrl+c to stop', { hasWorked: true }, 'cursor-agent'), 'working');
+  assert.equal(classify('→ Add a follow-up  ctrl+c to stop\nUsage limit reached', { hasWorked: true }, 'cursor-agent'), 'quota');
+});
+
+test('archive rechecks the live terminal and open turns instead of trusting a stale green dot', () => {
+  const col = { id: 'worker', cmd: 'cursor-agent' }, child = { id: 'child', cmd: 'agy' };
+  let now = 1_000_000, detached = 0, open = false, composing = false, draft = false;
+  const entry = { alive: true, state: 'done', hasWorked: true, lastOutputAt: 1,
+    term: terminal(['→ Add a follow-up              ctrl+c to stop']) };
+  const terms = new Map([[col.id, entry]]);
+  const columns = [col];
+  const ctx = vm.createContext({ MainCore, terms, columns, config: {}, Date: { now: () => now },
+    managedSubtree: () => terms.has(child.id) ? [child] : [], showToast() {}, columnLabel: () => 'worker',
+    userComposing: () => composing, ChatUI: { hasDraft: () => draft,
+      turnsOf: () => open ? [{ kind: 'turn', done: false }] : [], onColumnArchived() {} },
+    cancelManagedRequests() {}, releaseManagedSubtree() {}, detachColumn: () => detached++,
+    saveConfig() {}, renderColNav() {}, renderBoardGraph() {} });
+  vm.runInContext(source.slice(source.indexOf('const WORKING_RE'), source.indexOf('function setDot')) +
+    source.slice(source.indexOf('function statusScreen'), source.indexOf('// Format elapsed ms')) +
+    source.slice(source.indexOf('function archiveColumn'), source.indexOf('// quiet: 队长 bringing back')), ctx);
+  const archive = () => ctx.archiveColumn(col, { quiet: true });
+  archive(); assert.equal(detached, 0, 'live stop footer protects a quiet green terminal');
+  entry.term = terminal(['→ Add a follow-up']);
+  for (const flag of ['sendingPrompt', 'injecting']) {
+    entry[flag] = true; archive(); assert.equal(detached, 0); entry[flag] = false;
+  }
+  for (const state of ['working', 'input', 'quota']) {
+    entry.state = state; archive(); assert.equal(detached, 0);
+  }
+  entry.state = 'done';
+  open = true; archive(); assert.equal(detached, 0); open = false;
+  composing = true; archive(); assert.equal(detached, 0); composing = false;
+  draft = true; archive(); assert.equal(detached, 0); draft = false;
+  entry.lastOutputAt = now - 1000; archive(); assert.equal(detached, 0);
+  entry.lastOutputAt = 1;
+  terms.set(child.id, { ...entry, term: terminal(['Searching… (20s · esc to cancel)']) });
+  archive(); assert.equal(detached, 0, 'busy descendant is protected');
+  terms.delete(child.id);
+  archive(); assert.equal(detached, 1, 'only a genuinely idle terminal is archived');
+  entry.term = terminal(['→ Add a follow-up              ctrl+c to stop']);
+  ctx.archiveColumn(col, { captain: true, quiet: true });
+  assert.equal(detached, 2, 'explicit Captain archive remains authorized');
+});

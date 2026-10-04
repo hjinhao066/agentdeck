@@ -483,13 +483,21 @@ const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800
 const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)/im;
 const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Plan, search, build anything|Add a follow-up|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
-function classify(text, entry) {
-  const activity = MainCore.terminalActivity(text);
+function classify(text, entry, cmd) {
+  const activity = MainCore.terminalActivity(text, cmd);
   if (activity === 'quota') return activity;
   const lines = text.split('\n');
   if (activity === 'working') return activity;
+  // The live Cursor prompt takes precedence over old spinner/tool rows.
+  if (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorActivity(text) === 'idle') {
+    if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+    return entry?.hasWorked ? 'done' : 'plain';
+  }
   if (WORKING_RE.test(text)) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+  // After submission, an unrecognised/empty Cursor screen is initialization
+  // or work without a ready prompt, never evidence that the turn finished.
+  if (/\bcursor-agent\b/i.test(cmd || '') && entry?.hasWorked) return 'working';
   if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
 }
@@ -2378,7 +2386,12 @@ function archiveColumn(col, opts) {
   const descendants = managedSubtree(col, false);
   const busy = [col, ...descendants].some((candidate) => {
     const entry = terms.get(candidate.id);
-    return entry && entry.alive && (entry.state === 'working' || entry.state === 'quota' || entry.state === 'input');
+    if (!entry?.alive) return false;
+    const live = classify(statusScreen(entry.term), entry, candidate.cmd);
+    return ['working', 'quota', 'input'].includes(entry.state) || ['working', 'quota', 'input'].includes(live) ||
+      entry.sendingPrompt || entry.injecting || userComposing(candidate.id) || ChatUI.hasDraft(candidate.id) ||
+      ChatUI.turnsOf(candidate.id).some((turn) => turn.kind !== 'task' && !turn.done) ||
+      Date.now() - (entry.lastOutputAt || 0) < 60_000;
   });
   // Archiving ends the terminal, so a session that is working or waiting on an
   // answer is protected from click/automatic archive; the Captain's explicit
@@ -2485,7 +2498,7 @@ function sendWhenReady(col, text, opts) {
     if (!columns.includes(col) || col.id !== id) return;
     const entry = terms.get(col.id);
     if (entry && entry.alive) {
-      const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working' && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen);
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working' && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)
@@ -3681,7 +3694,7 @@ setInterval(() => {
     text = MainCore.afterReplay(text, env.platform);
     entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
     if (entry.alive) {
-      let st = classify(env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term), entry);
+      let st = classify(env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term), entry, columns.find((c) => c.id === id)?.cmd);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;

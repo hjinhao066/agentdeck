@@ -61,6 +61,11 @@ the middle:
   even during silent background tools. Wrapped rows are joined; old scrollback
   and replayed output do not keep a finished session yellow. Once the busy
   indicator disappears, the existing two-tick debounce permits green.
+  Cursor's `→ Add a follow-up … ctrl+c to stop` input row is busy evidence;
+  only its ready input row can end a submitted turn, including during silent
+  initialization. Its ready row also clears obsolete tool indicators above it.
+  `ledger` marks an assignment complete after its command receipt and shows a
+  separate terminal status if that agent is still running or waiting.
 - **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
   one row per provider (icon, name, remaining percentage — the lowest known
   window — or 正常 / 已用尽 / 未知). With the sidebar collapsed, a gauge icon in
@@ -95,6 +100,10 @@ the middle:
   output; restoring replays that output and relaunches the agent. New Claude and
   Grok columns resume their own saved model session by ID; older columns without
   an ID start fresh and show a warning. Delete removes the session and its conversation.
+  Click and automatic archive recheck the live screen, open turns, drafts,
+  delivery and recent output of the session and its children before stopping
+  a PTY. A completion receipt alone does not permit archiving a busy terminal;
+  the Captain's explicit `archive --id` remains the authorized override.
 - **Schedule** sends a prompt to a session (or a fresh one) once, on chosen
   weekdays at a time, or every N minutes/hours. It runs only while AgentDeck is
   open; a run that was due while it was closed is shown as missed, not fired
