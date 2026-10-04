@@ -19,8 +19,9 @@ async function waitForShell(id) {
   if (process.platform === 'win32') {
     await expect.poll(() => page.evaluate((i) => {
       const t = terms.get(i);
-      return MainCore.isWindowsShellPrompt(t?.term ? dumpScreen(t.term) : (t?.lastScreen || ''));
-    }, id), { timeout: 15000 }).toBe(true);
+      const screen = t?.term ? dumpScreen(t.term) : (t?.lastScreen || '');
+      return { ready: MainCore.isWindowsShellPrompt(screen), screen };
+    }, id), { timeout: 15000 }).toMatchObject({ ready: true });
   } else {
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), id), { timeout: 15000 }).not.toBe('node');
   }
