@@ -27,6 +27,7 @@
   }
   function isClaude(col) {
     if (!col) return false;
+    if (col.isMain && window.MainSession.state()?.relayTargetId === 'chatgpt') return false;
     return window.AgentInfo.resolveAgentInfo(col, host.terms.get(col.id)).provider === 'Claude';
   }
   function hasDraft(col) {
