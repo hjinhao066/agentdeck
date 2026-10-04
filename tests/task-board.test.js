@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { TaskStore, newCard, projectName } = require('../task-board');
+const { TaskStore, newCard, projectName, localSessions } = require('../task-board');
 const { TaskHeartbeat } = require('../task-heartbeat');
 const { initialCards, migrate } = require('../scripts/migrate-task-boards');
 const M = require('../main-core');
@@ -366,7 +366,7 @@ for (const reason of ['Rate limit handling test fails in api.js', 'Unauthorized 
   });
 }
 
-test('closed missing workers release occupancy on done to doing; unknown open attempts stay fenced', (t) => {
+test('closed missing workers release occupancy on done to doing; foreign open attempts stay fenced', (t) => {
   const { store, add, bind, event } = fixture(t); const c = add();
   bind(c.id); event(c.id, 'complete', 'Done on another machine');
   assert.equal(store.occupied(store.list()[0]), false);
@@ -375,6 +375,9 @@ test('closed missing workers release occupancy on done to doing; unknown open at
   const starts = []; new TaskHeartbeat(store, { onStart: (input) => starts.push(input) }).scan();
   assert.equal(starts.length, 1);
   const open = add(); bind(open.id, 'open', 'remote-worker');
+  const file = path.join(store.dir, '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards.find((card) => card.id === open.id).session_host = os.hostname() + '-other-machine';
+  fs.writeFileSync(file, JSON.stringify(doc));
   assert.equal(store.occupied(store.list().find((card) => card.id === open.id)), true);
   assert.equal(store.move({ id: open.id, status: 'doing' }).card.session_id, 'remote-worker');
 });
@@ -397,4 +400,47 @@ test('a finished unarchived worker reports occupancy rather than active executio
   store.move({ id: c.id, status: 'todo' });
   assert.equal(store.activeAttempt(store.list()[0]), false);
   assert.equal(store.claim({ id: c.id, newEntry: true }).occupied, true);
+});
+
+test('missing local open workers in doing or needs_user can bind directly without a move', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  for (const status of ['doing', 'needs_user']) {
+    const c = add(); bind(c.id, 'old-' + status, 'gone-' + status);
+    event(c.id, status === 'doing' ? 'started' : 'ask', 'Need an answer', 'old-' + status, 'gone-' + status);
+    assert.equal(bind(c.id, 'new-' + status, 'replacement-' + status).card.session_host, os.hostname());
+    assert.equal(event(c.id, 'complete', 'late old reply', 'old-' + status, 'gone-' + status).ignored, true);
+  }
+});
+
+test('legacy missing local workers are identified by local task history, not remote absence', (t) => {
+  const { store, add, bind, event, root } = fixture(t); const c = add();
+  bind(c.id, 'legacy', 'old-local'); event(c.id, 'started', '', 'legacy', 'old-local');
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  delete doc.cards[0].session_host; fs.writeFileSync(file, JSON.stringify(doc));
+  store.sessions = () => localSessions({ columns: [{ id: 'live' }], archived: [{ id: 'archived' }],
+    mainSession: { tasks: [{ colId: 'old-local', status: 'working' }, { colId: 'old-local' }, { colId: 'live', status: 'working' }] } });
+  assert.deepEqual(store.sessions().map((s) => s.id), ['live', 'archived', 'old-local']);
+  assert.equal(bind(c.id, 'fresh', 'new-local').card.session_id, 'new-local');
+  // No owner and no local history is not proof that a legacy remote worker ended.
+  const after = JSON.parse(fs.readFileSync(file)); delete after.cards[0].session_host;
+  fs.writeFileSync(file, JSON.stringify(after));
+  assert.throws(() => bind(c.id, 'unsafe-takeover', 'other'), /active execution/);
+});
+
+test('foreign-machine open workers remain fenced even though absent from local sessions', (t) => {
+  const { store, add, bind, event, root } = fixture(t); const c = add();
+  bind(c.id, 'remote', 'remote-worker'); event(c.id, 'started', '', 'remote', 'remote-worker');
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards[0].session_host = os.hostname() + '-other-machine'; fs.writeFileSync(file, JSON.stringify(doc));
+  assert.throws(() => bind(c.id, 'duplicate', 'local-worker'), /active execution/);
+  assert.equal(store.move({ id: c.id, status: 'doing' }).card.session_id, 'remote-worker');
+  assert.equal(store.claim({ id: c.id }).ignored, true);
+});
+
+test('a bind reservation fences startup but expires if the local session was never created', (t) => {
+  const { store, add, bind, root } = fixture(t); const c = add(); bind(c.id);
+  assert.throws(() => bind(c.id, 'race', 'duplicate'), /active execution/);
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards[0].session_bound_at = Date.now() - 15_001; fs.writeFileSync(file, JSON.stringify(doc));
+  assert.equal(bind(c.id, 'recover', 'replacement').card.session_id, 'replacement');
 });

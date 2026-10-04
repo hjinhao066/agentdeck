@@ -42,8 +42,21 @@
   function modelName(value) {
     return typeof value === 'string' && /^(?:gemini|grok|gpt|claude|opus|sonnet)[- .\d\w()]{0,80}$/i.test(value) ? value : '';
   }
-  const EXHAUSTED = /^(?:[│⏺⎿✻✽●!⚠>\s]*)(?:error:\s*)?(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:request failed[^\n]*?[:：]\s*)?(?:you have )?(?:exceeded your usage limit|usage limit exceeded|quota exhausted)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i;
-  const RATE_LIMITED = /^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?(?:429\b[^\n]*(?:rate[_ -]?limit|too many requests)|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b)/i;
+  // Complete native messages or a native reset/retry suffix, never a topic prefix
+  // such as "Rate limit handling test fails" in an ordinary worker reply.
+  const EXHAUSTED = /^(?:(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage|weekly|session) limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:request failed[^\n]*?[:：]\s*)?(?:you have )?(?:exceeded your usage limit|usage limit exceeded|quota (?:exhausted|exceeded)))(?:[.!]?|\s*[.·,:;-]\s*(?:resets?|limit resets?|try again|please|to continue|upgrade)\b[^\n]*)|continuing (?:automatically at|at|shortly)[^\n]*esc to cancel|额度用尽|配额(?:用尽|耗尽))$/i;
+  const RATE_LIMITED = /^(?:(?:429\s+)?(?:rate_limit_error)(?:\s*:\s*[^\n]+|[.!]?)|(?:429\s+)?too many requests(?:[.!]?|\s*:\s*[^\n]+)|rate[ -]limit(?: reached| exceeded|ed)(?:[.!]?|\s*[.·,:;-]\s*(?:resets?|try again|please)\b[^\n]*)|请求被限流|被限流)$/i;
+  function resourceError(raw) {
+    const line = String(raw || '').trim().replace(/^[│⏺⎿✻✽●!⚠>\s]+/, '').replace(/\s*[│┃]$/, '')
+      .replace(/^(?:API |request )?error:\s*/i, '');
+    if (EXHAUSTED.test(line) || /^RESOURCE_EXHAUSTED(?:\s*:\s*[^\n]+|[.!]?)$/i.test(line)) return 'quota';
+    if (/^429\s+\{[^\n]*"status"\s*:\s*"RESOURCE_EXHAUSTED"[^\n]*\}$/i.test(line)) return 'quota';
+    if (/^429\s+\{[^\n]*"type"\s*:\s*"rate_limit_error"[^\n]*\}$/i.test(line)) return 'rate_limit';
+    if (RATE_LIMITED.test(line)) return 'rate_limit';
+    if (/^401\s+\{[^\n]*"type"\s*:\s*"authentication_error"[^\n]*\}$/i.test(line)) return 'auth';
+    if (/^(?:401\s+Unauthorized(?:[.!]?|\s*:\s*[^\n]+)|authentication_error(?:\s*:\s*[^\n]+|[.!]?)|(?:you['’]?(?:re| are) )?not (?:logged|signed) in(?:[.!]?|[.!]\s*(?:please (?:(?:log|sign) in|run \/login)|run \/login)\b[^\n]*)|authentication (?:required|failed)[.!]?|login required[.!]?|please (?:(?:log|sign) in|run \/login)\b[^\n]*|未登录|尚未登录|请先登录)$/i.test(line)) return 'auth';
+    return '';
+  }
   function percent(n) { return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null; }
   function resetTime(value, now) {
     if (typeof value === 'number') return value > 1e9 && value < 1e11 ? value * 1000 : null;
@@ -107,7 +120,7 @@
     const lines = clean.split('\n');
     let error = -1, resumed = -1;
     lines.forEach((line, i) => {
-      if (EXHAUSTED.test(line) || RATE_LIMITED.test(line)) error = i;
+      if (['quota', 'rate_limit'].includes(resourceError(line))) error = i;
       if (/^[│⏺✻✽●\s]*(?:usage limit reset\b|quota reset\b)/i.test(line)) resumed = i;
       // A model switch below an old error means that error belongs to the
       // previous model, even if it remains visible in the screen history.
@@ -379,6 +392,6 @@
     return summary(store || {}, provider, now, seat);
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text };
 
 });

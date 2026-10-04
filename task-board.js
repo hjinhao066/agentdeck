@@ -19,6 +19,19 @@ function text(value, name, required = false) {
   return value;
 }
 function sentence(value) { return String(value || '').trim().split(/(?<=[。！？.!?])(?:\s|$)|\r?\n/u)[0]; }
+function localSessions(config) {
+  const tasks = config.mainSession?.tasks || [];
+  const sessions = [...(config.columns || []).map((c) => {
+    const status = tasks.findLast((t) => t.colId === c.id)?.status;
+    return { ...c, active: ['queued', 'working', 'quota', 'input', 'asking'].includes(status), failed: ['failed', 'stopped'].includes(status) };
+  }), ...(config.archived || []).map((c) => ({ ...c, archived: true }))];
+  const known = new Set(sessions.map((s) => s.id));
+  // A local assignment record proves provenance even after its column is deleted.
+  for (const task of tasks) if (task.colId && !known.has(task.colId)) {
+    sessions.push({ id: task.colId, archived: true }); known.add(task.colId);
+  }
+  return sessions;
+}
 function touch(card) { card.updated = new Date(Math.max(Date.now(), (Date.parse(card.updated) || 0) + 1)).toISOString(); }
 function newCard(input, now = new Date().toISOString()) {
   const project = projectName(input.project);
@@ -153,19 +166,21 @@ class TaskStore {
       cards.push(card); return { card, notices: [] };
     });
   }
-  sessionOpen(id, attemptClosed = false, sessions = this.sessions()) {
+  sessionOpen(id, attemptClosed = false, sessions = this.sessions(), host, reservedAt = 0) {
     if (!id) return false;
     const session = sessions.find((s) => s.id === id);
-    return session ? !session.archived : !attemptClosed;
+    // Give a fresh bind time to spawn and persist its local column. A started
+    // attempt, or a local deletion record, has no such reservation.
+    return session ? !session.archived : !attemptClosed && (!host || host !== os.hostname() || Date.now() - reservedAt < 15_000);
   }
   occupied(card, sessions = this.sessions()) {
-    return this.sessionOpen(card.session_id, card.attempt_closed, sessions) || this.sessionOpen(card.dispatch_session_id, false, sessions) ||
+    return this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) || this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at) ||
       sessions.some((s) => !s.archived && (s.boardId === card.id || s.dispatcherCardId === card.id));
   }
   activeAttempt(card) {
     const sessions = this.sessions();
     const session = sessions.find((s) => s.id === card.session_id);
-    return (card.session_id && this.sessionOpen(card.session_id, card.attempt_closed, sessions) && !card.attempt_closed &&
+    return (card.session_id && this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) && !card.attempt_closed &&
       !session?.failed && !(session?.lastReceipt?.failed && !session.active) &&
       !['failed', 'quota', 'held'].includes(card.flag) && !/:failed:/.test(card.last_event || '')) ||
       sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
@@ -203,8 +218,8 @@ class TaskStore {
       // worker which the Captain may tell to rework. A reviewer rejection ends
       // its old attempt, so late receipts cannot undo the rejection.
       const sessions = this.sessions();
-      if (input.status !== 'doing' || !this.sessionOpen(card.session_id, card.attempt_closed, sessions)) { card.session_id = null; card.attempt_id = null; }
-      if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id, false, sessions)) card.dispatch_session_id = null;
+      if (input.status !== 'doing' || !this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at)) { card.session_id = null; card.attempt_id = null; card.session_host = null; card.session_bound_at = null; }
+      if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at)) { card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; }
       if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
       card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
       if (input.status !== 'doing') card.dispatch_claim = null;
@@ -273,8 +288,8 @@ class TaskStore {
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       const review = card.status === 'review';
       if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
-      Object.assign(card, { session_id: input.session_id, attempt_id: input.attempt_id, assignee: input.assignee,
-        review_session: review, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_wait: null, resource_failure: null });
+      Object.assign(card, { session_id: input.session_id, session_host: os.hostname(), session_bound_at: Date.now(), attempt_id: input.attempt_id, assignee: input.assignee,
+        review_session: review, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
       touch(card);
@@ -317,7 +332,7 @@ class TaskStore {
       if (this.occupied(card)) return { card, ignored: true, notices: [] };
       if (input.session_id) {
         if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
-        card.dispatch_session_id = idValue(input.session_id); card.dispatch_wait = null;
+        card.dispatch_session_id = idValue(input.session_id); card.dispatch_host = os.hostname(); card.dispatch_bound_at = Date.now(); card.dispatch_wait = null;
       }
       if (input.session_id) touch(card);
       return { card, captain: card.important === true || card.start_previous_status === 'needs_user' || card.flag === 'failed' || !card.detail.trim(), notices: [] };
@@ -365,7 +380,7 @@ class TaskStore {
         card.latest_receipt = sentence(input.question || '调度已结束，尚未派出执行会话');
         if (!input.question) notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
       }
-      card.dispatch_session_id = null; touch(card); return { card, notices };
+      card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; touch(card); return { card, notices };
     });
   }
   identity(input) {
@@ -387,4 +402,4 @@ class TaskStore {
     });
   }
 }
-module.exports = { TaskStore, STATUSES, projectName, newCard, sentence };
+module.exports = { TaskStore, STATUSES, projectName, newCard, sentence, localSessions };

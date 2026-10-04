@@ -3,10 +3,10 @@
 // (plus legacy parsing helpers), and the short ledger it sees. No DOM, no
 // Electron: runs in the page and in tests.
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports ? require('./quota-core') : root.QuotaCore);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.MainCore = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (QuotaCore) {
   'use strict';
 
   // How many sessions may work at once. Settings store 5–50 (default 30).
@@ -607,10 +607,11 @@
   function resourceFailure(reason, source = '') {
     if (!['quota', 'process', 'automatic'].includes(source)) return '';
     for (const raw of String(reason || '').split('\n')) {
-      const line = raw.trim().replace(/^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?/i, '');
-      if (/^(?:额度用尽|配额(?:用尽|耗尽)|RESOURCE_EXHAUSTED\b|quota (?:exceeded|exhausted)|(?:you have )?exceeded your usage limit|you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|individual quota reached|you['’]?(?:re| are) out of (?:extra )?usage|continuing (?:automatically at|at|shortly).*esc to cancel)/i.test(line)) return 'quota';
-      if (/^(?:429\b|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b|被限流|请求被限流)/i.test(line)) return 'rate_limit';
-      if (/^(?:401\b|unauthorized\b|(?:you['’]?(?:re| are) )?not (?:logged|signed) in\b|authentication(?:_error| (?:required|failed))\b|login required\b|please (?:(?:log|sign) in\b|run \/login\b)|未登录|尚未登录|请先登录)/i.test(line)) return 'auth';
+      // resourceReceipt adds a localized label before the native error. Remove
+      // only that generated prefix, only for an authenticated quota receipt.
+      const line = source === 'quota' ? raw.replace(/^(?:未登录|请求被限流|额度用尽)[:：]/, '') : raw;
+      const kind = QuotaCore.resourceError(line);
+      if (kind) return kind;
     }
     return source === 'quota' ? 'quota' : '';
   }
@@ -633,9 +634,6 @@
     let quota = -1, resumed = -1, working = -1, queued = false;
     lines.forEach((line, i) => {
       if (resourceFailure(line, 'automatic')) quota = i;
-      if (/^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?(?:429\b[^\n]*(?:rate[_ -]?limit|too many requests)|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b)/i.test(line)) quota = i;
-      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:error:\s*)?(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:you have )?(?:exceeded your usage limit|quota exhausted)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
-      if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|(?:error:?\s*)?(?:usage limit|quota|resource_exhausted)(?:\s|:|\b).*?(?:exceeded|exhausted|reached)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;

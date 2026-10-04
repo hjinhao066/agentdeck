@@ -258,6 +258,33 @@ test('Captain held/completed moves never open a dispatcher and new binds stale a
   await command(['complete', '--result', 'Done'], fresh.env);
 });
 
+test('new rebinds missing legacy local workers directly, while a foreign-machine open attempt remains protected', async () => {
+  for (const status of ['doing', 'needs_user']) {
+    const c = await add('Missing legacy worker ' + status); const old = await worker(c.id);
+    await command(['archive', '--id', old.session]);
+    await page.evaluate(async (id) => {
+      config.archived = config.archived.filter((c) => c.id !== id);
+      await window.deck.saveConfig({ ...config, columns });
+    }, old.session);
+    const file = path.join(profile, 'tasks', 'e2e.json'), doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const item = doc.cards.find((card) => card.id === c.id);
+    Object.assign(item, { status, flag: null, session_id: old.session, attempt_id: 'legacy', attempt_closed: false });
+    delete item.session_host; fs.writeFileSync(file, JSON.stringify(doc));
+    const fresh = await worker(c.id, 'Direct replacement');
+    expect((await card(c.id)).session_id).toBe(fresh.session);
+    expect((await card(c.id)).session_host).toBe(os.hostname());
+    await command(['complete', '--result', 'Replacement finished'], fresh.env);
+  }
+  const remote = await add('Still running on another machine');
+  const file = path.join(profile, 'tasks', 'e2e.json'), doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  Object.assign(doc.cards.find((card) => card.id === remote.id), { status: 'doing', session_id: 'remote-worker',
+    session_host: os.hostname() + '-other-machine', attempt_id: 'remote-attempt', attempt_closed: false });
+  fs.writeFileSync(file, JSON.stringify(doc));
+  const rejected = await cli(['new', '--task-id', remote.id, '--title', 'Unsafe takeover', '--task', 'test', '--command', FAKE]);
+  expect(rejected.code).toBe(1); expect(rejected.stderr).toContain('active execution or verification session');
+  expect((await card(remote.id)).session_id).toBe('remote-worker');
+});
+
 test('Codex completed screen releases ordinary tell and tell --now after a Captain card move', async () => {
   const c = await add('Codex idle rework');
   const w = await worker(c.id, 'Codex completed stand-in', FAKE + ' --codex-completed --interruptible');

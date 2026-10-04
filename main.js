@@ -23,7 +23,7 @@ const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
 
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
-const { TaskStore } = require('./task-board');
+const { TaskStore, localSessions } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer } = require('./mobile-web');
@@ -57,11 +57,7 @@ if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => {
   const file = path.join(app.getPath('userData'), 'config.json');
   const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-  return [...(cfg.columns || []).map((c) => {
-    const status = cfg.mainSession?.tasks?.findLast((t) => t.colId === c.id)?.status;
-    return { ...c, active: ['queued', 'working', 'quota', 'input', 'asking'].includes(status), failed: ['failed', 'stopped'].includes(status) };
-  }),
-    ...(cfg.archived || []).map((c) => ({ ...c, archived: true }))];
+  return localSessions(cfg);
 } });
 handleMain('task-board:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');

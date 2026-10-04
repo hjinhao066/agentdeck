@@ -32,7 +32,8 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | important | 可选 boolean，默认 false；明确标为重要的卡片交队长调度，与 verify 独立 |
 
 程序还保存 `attempt_id`、`review_session`、`attempt_closed`、`last_event`、
-`last_failure_attempt`、`consecutive_failures`、`dispatch_session_id`、
+`last_failure_attempt`、`consecutive_failures`、`session_host`、`session_bound_at`、
+`dispatch_session_id`、`dispatch_host`、`dispatch_bound_at`、
 `dispatch_claim`、`dispatch_wait`（额度排队提示）、`resource_failure`（quota/auth/rate_limit）、`start_previous_status`；迁移卡另有 `migration_source`。
 客户端编辑时保留这些字段以及未知字段，不自行构造或删除流转标记。
 
@@ -205,9 +206,17 @@ Claude 席位判断；已用尽时不开 PTY，显示「额度用尽，稍后自
 开工事件、重复文件通知均不启动调度。同一卡片同一次开始只认领一次；退出重开
 保留 delivered 标记，尚未送出的本机认领在有队长后接续。再次开始必须先回 todo，
 再通过 startCard 或移入 doing。历史迁移卡已标认领完成，避免重复派旧活。
-已关闭的尝试若本机找不到旧会话（已删除或在另一台电脑），移回 doing 时清除旧绑定；
-尚未关闭且本机未知的会话继续保留占用。心跳单次扫描复用一份会话配置，下次扫描重新读取。
+新执行/调度绑定由主进程记录本机 hostname，不接受调用方指定归属。已关闭的尝试若本机
+找不到旧会话，移回 doing 时清除旧绑定；未关闭的本机旧会话缺失时也可直接 new 重绑，
+无需先移动卡片。旧版本无 hostname 的绑定，用本机归档和 mainSession.tasks 的派活记录
+证明归属：曾在本机派活、当前列已消失的 id 视为关闭。明确属于另一台机器，或既无机器
+归属也无本机记录的未关闭绑定继续保护，不能仅凭本机 ledger 缺失就覆盖远端工作。
+新绑定尚未开工、配置尚未落盘的 15 秒内保留占用；已开工或有本机删除记录时无需等待。
+心跳单次扫描复用一份会话配置，下次扫描重新读取。
 拖到进行中遇到旧会话占用时，界面提示队长检查未归档会话，不再声称有队员正在做。
+终端状态与侧栏额度采样共用原生错误识别，只接受完整额度提示、原生重置/重试后缀、
+登录指引或明确的 API 错误码/错误类型；Rate limit、Unauthorized、Limit reached 等
+普通回复的主题前缀不再触发额度失败回执或额度缓存。
 日志通过已有主进程诊断日志（系统临时目录 `agentdeck-notify.log`）记录
 `task-board start claimed`、卡片 ID、项目和认领键，
 不记录卡片正文或能力 token；无变化不调用模型、不产生日志。
