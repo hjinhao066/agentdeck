@@ -693,7 +693,10 @@ function buildChrome() {
 
   const brand = document.createElement('span');
   brand.className = 'nav-brand';
-  brand.textContent = 'AgentDeck';
+  brand.textContent = `v${env.version}`;
+  const versionDetails = [`AgentDeck v${env.version}`, env.build].filter(Boolean).join(' · ');
+  brand.title = versionDetails;
+  brand.setAttribute('aria-label', versionDetails);
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
   const settingsBtn = railBtn(ICONS.gear, '设置', openNotificationSettings);

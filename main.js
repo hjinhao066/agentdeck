@@ -903,7 +903,8 @@ app.whenReady().then(async () => {
     checkQuotaBark();
   });
   onMain('env-info-sync', (e) => { e.returnValue = {
-    platform: process.platform, home: HOME,
+    platform: process.platform, home: HOME, version: app.getVersion(),
+    build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
   }; });
 
   // Test profiles never read the user's quota caches or conversation logs.
