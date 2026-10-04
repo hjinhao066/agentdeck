@@ -59,6 +59,11 @@ function processStart(value) {
   return /^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(normalized) ? normalized : '';
 }
 
+async function isRegistryPath(parent) {
+  const actual = await fs.promises.realpath(parent), expected = path.resolve(parent);
+  return process.platform === 'win32' ? actual.toLowerCase() === expected.toLowerCase() : actual === expected;
+}
+
 async function metadataPid(dir, filename, byPid) {
   if (!path.isAbsolute(dir)) return null;
   const directories = filename.startsWith('sessions/') ? [dir, path.join(dir, 'sessions')] : [dir];
@@ -67,7 +72,7 @@ async function metadataPid(dir, filename, byPid) {
   try {
     for (const parent of directories) {
       const stat = await fs.promises.lstat(parent);
-      if (!stat.isDirectory() || stat.isSymbolicLink() || await fs.promises.realpath(parent) !== path.resolve(parent)) {
+      if (!stat.isDirectory() || stat.isSymbolicLink() || !await isRegistryPath(parent)) {
         throw new Error('Linked process registry');
       }
       identities.push(stat);
@@ -87,7 +92,7 @@ async function metadataPid(dir, filename, byPid) {
     for (const [index, parent] of directories.entries()) {
       const after = await fs.promises.lstat(parent);
       if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== identities[index].dev || after.ino !== identities[index].ino ||
-        await fs.promises.realpath(parent) !== path.resolve(parent)) {
+        !await isRegistryPath(parent)) {
         throw new Error('Replaced process registry');
       }
     }
