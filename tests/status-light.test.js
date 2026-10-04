@@ -20,6 +20,10 @@ const busy = [
   'Responding…',
   '  ⠰⠳ Thinking  64.14k tokens',
   '  ⠠⠜ Running  45.56k tokens',
+  '  ⠘⠣ Grepping  114.61k tokens',
+  '  ⠘⠆ Reading  20.5k tokens',
+  ':: Thinking  69.26k tokens',
+  'Editing  3k tokens',
   '◦ Waiting for background terminal',
 ];
 function terminal(lines, baseY = 0, rows = lines.length - baseY) {

@@ -461,7 +461,7 @@ window.deck.onPtyExit((id, reason) => {
 // flip (~3s) so the dot doesn't flash green in the gaps between tool calls.
 // Live TUI indicators, not words quoted in an answer or an idle model's
 // Thinking: high setting. Gemini/agy uses timed 'esc to cancel' spinners.
-const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800-\u28FF]+\s*)?(?:Doing(?:…|\.\.\.)|Working(?:\s*\(|\s*(?:…|\.\.\.)|\s*$|\s+\d+(?:\.\d+)?k?\s+tokens\b)|Running(?:…|\.\.\.|\s*$|\s+\d+(?:\.\d+)?k?\s+tokens\b)|(?:Thinking|Responding|Generating|思考中|正在思考)(?:…|\.\.\.|\s*\(|\s*$|\s+\d+(?:\.\d+)?k?\s+tokens\b)|Waiting for background terminal\b|esc to interrupt\b|ctrl\+c to stop\b|[↑↓]\s*[\d.]+k?\s+tokens)|^\s*[✻✽✳✶✢✺∴*·\u2800-\u28FF]\s+\S[^\n]*(?:…|\.\.\.|esc to interrupt)|^\s*[^\n]*…\s*\([^\n]*esc to cancel\)|^\s*⎿\s+Running\b/im;
+const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·:\u2800-\u28FF]+\s*)?(?:Doing(?:…|\.\.\.)|Working(?:\s*\(|\s*(?:…|\.\.\.)|\s*$|\s+\d+(?:\.\d+)?k?\s+tokens\b)|Running(?:…|\.\.\.|\s*$|\s+\d+(?:\.\d+)?k?\s+tokens\b)|(?:Thinking|Responding|Generating|思考中|正在思考)(?:…|\.\.\.|\s*\(|\s*$|\s+\d+(?:\.\d+)?k?\s+tokens\b)|(?:Grepping|Reading|Editing|Updating|Exploring|Waiting)\s+\d+(?:\.\d+)?k?\s+tokens\b|Waiting for background terminal\b|esc to interrupt\b|ctrl\+c to stop\b|[↑↓]\s*[\d.]+k?\s+tokens)|^\s*[✻✽✳✶✢✺∴*·\u2800-\u28FF]\s+\S[^\n]*(?:…|\.\.\.|esc to interrupt)|^\s*[^\n]*…\s*\([^\n]*esc to cancel\)|^\s*⎿\s+Running\b/im;
 // Only structurally dialog-shaped patterns: prose like "Would you like me to
 // also…?" at the end of a normal reply must NOT hold a column red forever.
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n

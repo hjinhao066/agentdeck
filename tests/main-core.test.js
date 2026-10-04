@@ -323,8 +323,11 @@ test('a finished background session is archived only after 10 quiet minutes with
   assert.equal(M.activeCrew([{ colId: 'a', status: 'working' }], new Set(['a'])).size, 1);
   assert.equal(M.archivable({ tasks: [{ colId: 'a', status: 'working', sentAt: 0 }] }, 'a', now - 30 * min, now), false);
   assert.equal(M.terminalActivity('  ⠰⠳ Thinking  64.14k tokens\nAdd a follow-up'), 'working');
+  assert.equal(M.terminalActivity(':: Thinking  69.26k tokens\nComposer'), 'working');
+  assert.equal(M.terminalActivity('  ⠘⠣ Grepping  114.61k tokens'), 'working');
   assert.equal(M.terminalActivity('◦ Waiting for background terminal\nOpenAI Codex'), 'working');
   assert.equal(M.terminalActivity('Thinking: xhigh\nAdd a follow-up'), '');
+  assert.equal(M.terminalActivity('Grepped "filteredEnv" in tests\n❯'), '');
 });
 
 test('队长 is told about background work, the limit and automatic archiving', () => {

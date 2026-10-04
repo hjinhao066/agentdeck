@@ -564,7 +564,7 @@
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       // Cursor prints "Thinking/Running" plus a token count, not an ellipsis.
       // Codex sits on this line while a background command is still running.
-      if (/^\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800-\u28FF]+\s*)?(?:Thinking|Running|Responding|Generating|思考中|正在思考)\s+\d+(?:\.\d+)?k?\s+tokens\b/i.test(line)) working = i;
+      if (/^\s*(?:[◦●•✻✽✳✶✢✺∴*·:\u2800-\u28FF]+\s*)?(?:Thinking|Running|Grepping|Reading|Editing|Updating|Exploring|Responding|Generating|思考中|正在思考|Waiting)\s+\d+(?:\.\d+)?k?\s+tokens\b/i.test(line)) working = i;
       if (/^\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800-\u28FF]+\s*)?Waiting for background terminal\b/i.test(line)) working = i;
       if (/press up to edit queued messages/i.test(line)) queued = true;
     });
