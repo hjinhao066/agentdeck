@@ -56,6 +56,7 @@ const ICONS = {
   eraser: S('<path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/>'),
   crown: S('<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>'),
   eye: S('<path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>'),
+  settings: S('<path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="m9 3-1 3-3 1-2 3 2 2-1 3 2 3 3-1 3 2 3-2 3 1 2-3-1-3 2-2-2-3-3-1-1-3Z"/>'),
 };
 
 // ---- Config / state ----
@@ -103,6 +104,7 @@ let config = {
   captainNotifications: NotificationPolicy.normalizeSettings(),
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
+  captainTokenSaver: MainCore.tokenSaverSettings(),
 };
 const saved = window.deck.loadConfig();
 // Persist only parsed observations, never terminal text or credentials.
@@ -123,6 +125,7 @@ if (saved) {
   config.navArchivedOpen = !!saved.navArchivedOpen;
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
+  config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (saved.activeView === 'board') config.activeView = 'board';
@@ -348,6 +351,7 @@ function visibleInputBox(entry) {
   } catch (_) { return null; }
 }
 function userComposing(id) {
+  if (ChatUI.hasDraft(id)) return true;
   const entry = terms.get(id);
   if (!entry || !entry.typing) return false;
   const t = entry.typing;

@@ -166,6 +166,18 @@
     </div>
   </aside>
 
+  <dialog id="captainSettings" aria-labelledby="csTitle">
+    <h3 id="csTitle">设置 · 队长省上下文</h3>
+    <label class="sd-check"><input id="csEnabled" type="checkbox" />自动存看板并清空上下文</label>
+    <label for="csThreshold">上下文阈值（k tokens，默认 150）</label>
+    <input id="csThreshold" type="number" min="1" step="1" required />
+    <p class="hint">仅 Claude Code 队长空闲且输入框为空时执行：存看板 → 收到「已存档」→ /clear → 重发提示词并读看板继续。顶部可取消后续步骤。</p>
+    <div class="row">
+      <button id="csClose" class="icon-btn" type="button" title="关闭设置" aria-label="关闭设置"></button>
+      <button id="csSave" class="btn primary" type="button">保存设置</button>
+    </div>
+  </dialog>
+
   <dialog id="boardLinkDialog" class="link-dialog">
     <h3 id="boardLinkDialogTitle">Connect terminals</h3>
     <p class="link-endpoints"><strong id="linkSourceLabel"></strong><span>→</span><strong id="linkTargetLabel"></strong></p>
