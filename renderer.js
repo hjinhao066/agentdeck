@@ -1603,7 +1603,12 @@ function buildColumn(col, isFresh) {
     term.loadAddon(fit);
     const search = new SearchAddonNS.SearchAddon();
     term.loadAddon(search);
-    term.open(termEl);
+    // FitAddon measures its immediate parent's height, without subtracting
+    // that parent's padding. Give it the actual content box inside .term.
+    const termContent = document.createElement('div');
+    termContent.className = 'term-content';
+    termEl.appendChild(termContent);
+    term.open(termContent);
     // Renderer: the Canvas addon (2D canvas), NOT WebGL. Each WebGL terminal
     // holds its own GPU context, and Chromium hard-caps live WebGL contexts
     // (~16) and silently EVICTS the oldest when a new one is created — including
