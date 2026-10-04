@@ -209,7 +209,7 @@
     for (const w of warmups) if (w.warmupEligible !== false && w.status === 'pending' && w.resetAt > now) {
       parts.push(`${name(seats.find((s) => s.id === w.seatId))} ${new Date(w.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })} 重置后自动预热`);
     }
-    if (other?.weeklyTrusted && other.weeklyRemaining <= config.threshold) parts.push(`${name(other)} 每周额度不足，不切换也不预热`);
+    if (other?.weeklyTrusted && other.weeklyRemaining <= config.threshold) parts.push(`${name(other)} 每周额度不足，不切换`);
     else if (other) parts.push(`${name(current)} 剩 ${config.threshold}% 时切到 ${name(other)}`);
     if (config.preferEarlier) parts.push('有可用额度时优先用快到期的席位');
     return parts.join(' · ');

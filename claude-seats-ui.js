@@ -137,7 +137,7 @@
     });
     warmupToggle.id = 'quotaWarmupEnabled'; warmupToggle.setAttribute('aria-pressed', String(warmupEnabled));
     warmupRow.append(node('span', '', '额度窗口预热'), warmupToggle); d.append(warmupRow);
-    d.append(node('p', 'seat-help', '已知 5 小时窗口重置约 1 分钟后，空闲席位后台发一个字母请求；正在用的队长空闲时也可补一次。每周额度不足或未知不预热，每窗一次，失败仅重试一次。'));
+    d.append(node('p', 'seat-help', '已知 5 小时窗口重置约 1 分钟后，空闲席位后台发一个字母请求；正在用的队长空闲时也可补一次。不看每周额度，每窗成功一次，失败按 1、5、15 分钟退避重试。'));
     const bark = field('Bark 密钥文件路径', host.config.barkKeyFile || '');
     bark.input.id = 'perpetualBarkKeyFile'; d.append(bark.l);
     const fields = host.config.claudeSeats.map((s) => {
@@ -311,15 +311,17 @@
     refresh().catch(() => {});
     setInterval(() => refresh().catch(() => {}), 30_000);
   }
-  function warmupDetail(seatId) {
+  function activationLine(seatId) {
     const entry = warmups.find((s) => s.seatId === seatId);
-    let detail = entry?.status === 'abandoned' ? '\n预热失败 · 本窗口已放弃' : entry?.status === 'retry' ? '\n预热失败 · 等待仅一次重试' : '';
-    const reset = entry?.newResetAt > Date.now() ? new Date(entry.newResetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '未知';
-    if (!detail && entry?.warmAt) detail = `\n已预热 · 下次重置 ${reset}`;
+    return entry ? window.QuotaWarmupCore.label(entry, { loggedIn: entry.loggedIn }) : '';
+  }
+  function warmupDetail(seatId) {
+    const line = activationLine(seatId);
+    const detail = line ? '\n' + line : '';
     const now = Date.now();
     const candidates = seats.map((info) => ({ ...info, ...P.seatQuota(host.config.quotas?.[window.QuotaCore.seatKey(info.id)],
       { ...info, configuredDir: host.config.claudeSeats.find((s) => s.id === info.id)?.configDir }, now) }));
     return detail + '\n' + P.strategyText({ settings: host.config.perpetualCaptain, currentId: current().id, seats: candidates, warmups, now });
   }
-  window.ClaudeSeats = { init, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail };
+  window.ClaudeSeats = { init, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, activationLine };
 })();

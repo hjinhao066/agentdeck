@@ -269,7 +269,7 @@
       return before !== JSON.stringify(out);
     }
     if (next.failureOnly) {
-      out.officialStatus = { failures: next.failures, checkedAt: next.checkedAt, failure: next.failure };
+      out.officialStatus = { failures: next.failures, checkedAt: next.checkedAt, failure: next.failure, ...(next.reason ? { reason: next.reason } : {}) };
       store[key] = out;
       return before !== JSON.stringify(out);
     }
@@ -408,7 +408,8 @@
     const seat = provider === 'Claude' ? seatList.find((s) => s.id === activeSeatId) || seatForColumn({ cmd }, seatList) : null;
     return summary(store || {}, provider, now, seat);
   }
-  function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
+  // `extra(seatId)` appends one line per seat, e.g. the idle-window activation state.
+  function text(store, now, seats, captainSeatId, extra) { return items(seats).map(({ provider, seat }) => [summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · '), seat && extra?.(seat.id)].filter(Boolean).join(' · ')).join('\n'); }
   return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text };
 
 });

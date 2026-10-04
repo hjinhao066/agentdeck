@@ -170,11 +170,11 @@ test('a proven reset warms once in the background and shows its log and next res
   expect(Number.isFinite(Date.parse(log[0].time))).toBe(true);
   await refresh();
   const seat = page.locator('#quotaBar [data-seat-id="cn"]');
-  await expect(seat).toHaveAttribute('data-detail', /已预热 · 下次重置 \d{2}:\d{2}/);
+  await expect(seat).toHaveAttribute('data-detail', /窗口已激活 ↻\d{2}:\d{2}/);
   await expect(seat).toHaveAttribute('aria-describedby', 'quota-tip-Claude-cn');
   await seat.focus();
   await expect(seat.getByRole('tooltip')).toBeVisible();
-  await expect(seat.getByRole('tooltip')).toContainText('已预热 · 下次重置');
+  await expect(seat.getByRole('tooltip')).toContainText('窗口已激活 ↻');
   await screenshot('warmup-details');
   await workerPreserved(1);
 });
@@ -229,21 +229,20 @@ test('official quota fields warm the matching seat without native cache or accou
   await tick([{ ok: true, provenNative: true, resetAt: nextReset }]);
   expect((await runs()).map((run) => run.seatId)).toEqual(['us']);
   await refresh();
-  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-detail', /已预热 · 下次重置/);
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-detail', /窗口已激活 ↻/);
   await workerPreserved(1);
 });
 
-test('weekly exhausted and threshold quotas prevent preheat without consuming the window', async () => {
-  for (const remaining of [0, 3]) {
-    cache('us', { windows: [{ key: 'fiveHour', remaining: 80, resetText: new Date(Date.now() - 90000).toISOString() },
-      { key: 'weekly', remaining, resetText: new Date(Date.now() + 7 * 86400000).toISOString() }] });
-    await tick(); expect(await runs()).toHaveLength(0);
-    expect((await snapshot()).find((s) => s.seatId === 'us').attempts).toBe(0);
-  }
-  expect(records('quota-warmup.log')).toHaveLength(0);
+test('the weekly quota is ignored: an exhausted week still preheats the idle five-hour window', async () => {
+  await keepWorking(WORKER);
+  cache('cn', { windows: [{ key: 'fiveHour', remaining: 80, resetText: new Date(Date.now() - 90000).toISOString() },
+    { key: 'weekly', remaining: 0, resetText: new Date(Date.now() + 7 * 86400000).toISOString() }] });
+  await tick([{ ok: true, provenNative: true, resetAt: Date.now() + 5 * 3600000 }]);
+  expect((await runs()).map((run) => run.seatId)).toEqual(['cn']);
+  await workerPreserved(1);
 });
 
-test('two failed requests abandon the same reset window, including across isolated restart', async () => {
+test('four failed requests abandon the same reset window, including across isolated restart', async () => {
   test.setTimeout(90000);
   cache('cn');
   await tick([{ ok: false, status: 'quota' }]);
@@ -256,15 +255,16 @@ test('two failed requests abandon the same reset window, including across isolat
   // process. Production state and the installed AgentDeck are never touched.
   const file = path.join(profile, 'quota-warmup-state.json');
   const state = JSON.parse(fs.readFileSync(file, 'utf8'));
-  state.seats.cn.retryAt = Date.now() - 1000;
+  // The fourth and last try: attempts 2 and 3 only differ by longer backoff.
+  Object.assign(state.seats.cn, { attempts: 3, status: 'retry', retryAt: Date.now() - 1000 });
   fs.writeFileSync(file, JSON.stringify(state));
   await launch();
   await tick([{ ok: false, status: 'timeout' }]);
   expect(await runs()).toHaveLength(1);
-  expect((await snapshot()).find((s) => s.seatId === 'cn')).toMatchObject({ status: 'abandoned', attempts: 2 });
+  expect((await snapshot()).find((s) => s.seatId === 'cn')).toMatchObject({ status: 'abandoned', attempts: 4 });
   await tick(); await tick();
   expect(await runs()).toHaveLength(1);
-  expect(records('quota-warmup.log').map((r) => [r.attempt, r.outcome])).toEqual([[1, 'failed'], [2, 'failed']]);
+  expect(records('quota-warmup.log').map((r) => [r.attempt, r.outcome])).toEqual([[1, 'failed'], [4, 'failed']]);
   await refresh();
   await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('data-detail', /预热失败 · 本窗口已放弃/);
   await expect(page.locator('.column')).toHaveCount(1);

@@ -3436,7 +3436,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
-  quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
+  quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId(), (id) => ClaudeSeats.activationLine(id)),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };

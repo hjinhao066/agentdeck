@@ -538,3 +538,11 @@ test('resourceError ignores resource words in ordinary replies, code and grep ou
     }
   }
 });
+
+test('quota text appends the per-seat extra line, only for seats', () => {
+  const seats = [{ id: 'cn', name: 'CN', configDir: '~/.claude' }];
+  const plain = Q.text({}, Date.now(), seats, 'cn');
+  const extra = Q.text({}, Date.now(), seats, 'cn', (id) => id === 'cn' ? '窗口已激活 ↻14:30' : '');
+  assert.equal(extra, plain.split('\n').map((line, i) => i === plain.split('\n').findIndex((l) => l.includes('CN')) ? line + ' · 窗口已激活 ↻14:30' : line).join('\n'));
+  assert.equal(Q.text({}, Date.now(), seats, 'cn', () => ''), plain);
+});

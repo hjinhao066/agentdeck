@@ -54,20 +54,46 @@ test('one successful warmup per window remains complete through restart and repe
   state = W.observe(JSON.parse(JSON.stringify(state)), observation(), DUE + 2000);
   assert.equal(choose(state, { now: DUE + 5 * 3600_000 }), null);
 });
-test('the first failure waits sixty seconds before its only retry, and a second failure abandons the window', () => {
-  let state = observed(); let decision = choose(state);
-  state = W.begin(state, decision);
-  const failedAt = DUE + 1000;
-  state = W.finish(state, { ...decision, success: false }, failedAt);
-  assert.equal(state.seats.cn.status, 'retry');
-  assert.equal(choose(state, { now: failedAt + W.RETRY_DELAY_MS - 1 }), null);
-  decision = choose(state, { now: failedAt + W.RETRY_DELAY_MS });
-  assert.equal(decision.attempt, 2);
-  state = W.begin(state, decision);
-  state = W.finish(state, { ...decision, success: false }, decision.at + 1000);
+test('failures back off 1, 5 and 15 minutes, then the fourth failure abandons the window', () => {
+  assert.deepEqual(W.RETRY_DELAYS_MS, [60_000, 300_000, 900_000]);
+  let state = observed(); let decision = choose(state), failedAt = DUE + 1000;
+  for (const [index, delay] of W.RETRY_DELAYS_MS.entries()) {
+    state = W.finish(W.begin(state, decision), { ...decision, success: false }, failedAt);
+    assert.equal(state.seats.cn.status, 'retry');
+    assert.equal(state.seats.cn.attempts, index + 1);
+    assert.equal(choose(state, { now: failedAt + delay - 1 }), null);
+    decision = choose(state, { now: failedAt + delay });
+    assert.equal(decision.attempt, index + 2);
+    failedAt = decision.at + 1000;
+  }
+  state = W.finish(W.begin(state, decision), { ...decision, success: false }, failedAt);
   assert.equal(state.seats.cn.status, 'abandoned');
-  assert.equal(state.seats.cn.attempts, 2);
-  assert.equal(choose(state, { now: decision.at + 3600_000 }), null);
+  assert.equal(state.seats.cn.attempts, W.MAX_ATTEMPTS);
+  assert.equal(choose(state, { now: failedAt + 24 * 3600_000 }), null);
+});
+test('a rejected login stops the window without retries until a new proven window or a re-login', () => {
+  let state = observed(); const decision = choose(state);
+  state = W.finish(W.begin(state, decision), { ...decision, success: false, authFailed: true }, DUE + 1000);
+  assert.equal(state.seats.cn.status, 'needs-login');
+  assert.equal(state.seats.cn.retryAt, undefined);
+  assert.equal(choose(state, { now: DUE + 24 * 3600_000 }), null);
+  assert.deepEqual(W.normalizeState(JSON.parse(JSON.stringify(state))), state);
+  assert.equal(choose(W.relogin(state, 'cn'), { now: DUE + 24 * 3600_000 }).attempt, 1);
+  assert.equal(choose(W.observe(state, observation(cn, { resetAt: RESET + 5 * 3600_000 }), DUE), { now: RESET + 5 * 3600_000 + W.RESET_DELAY_MS }).attempt, 1);
+});
+test('the weekly quota is not a warmup condition', () => {
+  assert.equal(W.WEEKLY_FLOOR_PERCENT, undefined);
+});
+test('the panel label says the window is active with its next reset, and flags failures and logins', () => {
+  const at = Date.UTC(2026, 9, 3, 14, 30);
+  assert.match(W.label({ warmAt: DUE, newResetAt: at }, { now: DUE }), /^窗口已激活 ↻\d{2}:\d{2}$/);
+  assert.equal(W.label({ warmAt: DUE }, { now: DUE }), '窗口已激活 ↻未知');
+  assert.equal(W.label({ warmAt: DUE, newResetAt: DUE - 1 }, { now: DUE }), '窗口已激活 ↻未知');
+  assert.equal(W.label({ status: 'needs-login' }), '未登录 · 不预激活');
+  assert.equal(W.label({ warmAt: DUE, newResetAt: at }, { now: DUE, loggedIn: false }), '未登录 · 不预激活');
+  assert.equal(W.label({ status: 'abandoned' }), '预热失败 · 本窗口已放弃');
+  assert.equal(W.label({ status: 'retry' }), '预热失败 · 稍后退避重试');
+  assert.equal(W.label(undefined), '');
 });
 test('a successful retry also seals the window and cannot become a third attempt', () => {
   let state = observed(); let decision = choose(state);
@@ -78,7 +104,7 @@ test('a successful retry also seals the window and cannot become a third attempt
   assert.equal(state.seats.cn.status, 'succeeded');
   assert.equal(choose(state, { now: decision.at + 3600_000 }), null);
 });
-test('startup recovery counts a crashed started request as one failure and never grants a third attempt', () => {
+test('startup recovery counts a crashed started request as one failed attempt with the normal backoff', () => {
   let state = observed(); let decision = choose(state);
   state = W.recoverRunning(JSON.parse(JSON.stringify(W.begin(state, decision))), DUE + 500);
   assert.equal(state.seats.cn.attempts, 1);
@@ -87,8 +113,8 @@ test('startup recovery counts a crashed started request as one failure and never
   decision = choose(state, { now: DUE + 500 + W.RETRY_DELAY_MS });
   state = W.recoverRunning(W.begin(state, decision), decision.at + 500);
   assert.equal(state.seats.cn.attempts, 2);
-  assert.equal(state.seats.cn.status, 'abandoned');
-  assert.equal(choose(state, { now: decision.at + 3600_000 }), null);
+  assert.equal(state.seats.cn.status, 'retry');
+  assert.equal(state.seats.cn.retryAt, decision.at + 500 + W.RETRY_DELAYS_MS[1]);
 });
 test('a new proven window resets attempts while preserving the latest successful warmup for the UI', () => {
   let state = observed(); const decision = choose(state);

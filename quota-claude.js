@@ -11,7 +11,11 @@ const M = require('./claude-seats-main');
 const Q = require('./quota-core');
 const INTERVAL_MS = 5 * 60_000;
 const MAX_BYTES = 64 * 1024;
-async function readCredentials(seat, home, platform = process.platform, exec = execFile) {
+const FAILURES = { 'credentials-expired': '登录凭据已过期，闲置席位需一次 Claude 请求才能刷新',
+  'no-window': '5 小时窗口还没开始计时' };
+// `diag.reason` tells a caller why no token came back: 'credentials-expired' is
+// an idle seat whose access token ran out (only a Claude request refreshes it).
+async function readCredentials(seat, home, platform = process.platform, exec = execFile, diag = {}) {
   const loc = M.credentialLocation(seat, home);
   // Even the default seat must not borrow another directory's credentials.
   for (const file of [loc.dir, loc.metadataPath, loc.credentialsPath]) {
@@ -37,7 +41,8 @@ async function readCredentials(seat, home, platform = process.platform, exec = e
   const auth = JSON.parse(raw)?.claudeAiOauth;
   if (typeof auth?.accessToken !== 'string' || !/^[\x21-\x7e]{1,8192}$/.test(auth.accessToken) ||
       !Array.isArray(auth.scopes) || !auth.scopes.includes('user:profile') ||
-      !Number.isFinite(auth.expiresAt) || auth.expiresAt <= Date.now()) return null;
+      !Number.isFinite(auth.expiresAt)) return null;
+  if (auth.expiresAt <= Date.now()) { diag.reason = 'credentials-expired'; return null; }
   return auth.accessToken;
 }
 function officialUsage(data, seat, service, at) {
@@ -52,7 +57,7 @@ function officialUsage(data, seat, service, at) {
     credentialKey: createHash('sha256').update(service).digest('hex').slice(0, 16),
     at, source: Q.CLAUDE_OAUTH_SOURCE, confidence: '高（官方采样）', official: true, windows };
 }
-function requestUsage(token, get = https.get, timeoutMs = 8000) {
+function requestUsage(token, get = https.get, timeoutMs = 8000, diag = {}) {
   return new Promise((resolve) => {
     let request, response, bytes = 0, body = '', done = false;
     const finish = (value = null) => {
@@ -83,19 +88,27 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
             const data = JSON.parse(body), at = Date.now();
             const windows = officialUsage(data, { id: 'default' }, '', at).windows.map((w) => ({ key: w.key, remaining: 100 - w.used, resetText: w.resetText }));
             finish({ at, source: Q.CLAUDE_OAUTH_SOURCE, windows });
-          } catch (_) { finish(); }
+          } catch (_) {
+            // Valid weekly data without a five-hour window means the account has
+            // no window running yet: that is an answer, not a broken query.
+            try {
+              const data = JSON.parse(body), five = data?.five_hour;
+              if ((five === null || (five && !five.resets_at && !(five.utilization > 0))) && Q.percent(data?.seven_day?.utilization) !== null && data.seven_day.resets_at) diag.reason = 'no-window';
+            } catch (_) {}
+            finish();
+          }
         });
       });
       request.on('error', () => finish());
     } catch (_) { finish(); }
   });
 }
-async function readSeat(seat, home, credentials = readCredentials, usage = requestUsage) {
+async function readSeat(seat, home, credentials = readCredentials, usage = requestUsage, diag = {}) {
   try {
     const loc = M.credentialLocation(seat, home), accountKey = M.usageAccountKey(loc);
     if (!accountKey) return null;
-    const token = await credentials(seat, home);
-    const value = token ? await usage(token) : null;
+    const token = await credentials(seat, home, process.platform, execFile, diag);
+    const value = token ? await usage(token, undefined, undefined, diag) : null;
     const current = M.credentialLocation(seat, home);
     if (!value || current.dir !== loc.dir || accountKey !== M.usageAccountKey(current)) return null;
     return { ...value, accountKey, configDir: loc.dir };
@@ -133,7 +146,8 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
       entry.due = now() + INTERVAL_MS;
       entry.pending = (async () => {
         let value = null;
-        try { value = await read(entry.seat, home); } catch (_) {}
+        const diag = {};
+        try { value = await read(entry.seat, home, undefined, undefined, diag); } catch (_) {}
         if (!stopped && entries.get(entry.seat.id) === entry) {
           const usage = boundUsage(entry.seat, home, value && { ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE });
           if (usage) {
@@ -142,7 +156,8 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
           } else {
             entry.failures++;
             entry.failure = { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
-              at: now(), failureOnly: true, failures: entry.failures, checkedAt: now(), failure: '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
+              at: now(), failureOnly: true, failures: entry.failures, checkedAt: now(), reason: diag.reason || 'unavailable',
+              failure: FAILURES[diag.reason] || '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
           }
         }
       })().finally(() => { entry.pending = null; });

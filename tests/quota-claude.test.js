@@ -304,3 +304,49 @@ test('forced refresh targets one seat; normal polling includes CN and coalesces 
   assert.deepEqual(duplicates.samples().map(s => s.seatId), ['cn']);
   assert.deepEqual(calls, ['cn', 'us', 'cn', 'cn']);
 });
+
+test('an expired access token on an idle seat is reported as credentials-expired, never refreshed here', async (t) => {
+  const home = fixture(t), [, us] = S.normalize();
+  const write = (expiresAt) => fs.writeFileSync(M.credentialLocation(us, home).credentialsPath,
+    JSON.stringify({ claudeAiOauth: { accessToken: 'fake-us', refreshToken: 'fake-refresh', scopes: ['user:profile'], expiresAt } }));
+  let diag = {};
+  write(Date.now() - 1000);
+  assert.equal(await C.readCredentials(us, home, 'win32', undefined, diag), null);
+  assert.equal(diag.reason, 'credentials-expired');
+  diag = {}; write(Date.now() + 3600000);
+  assert.equal(await C.readCredentials(us, home, 'win32', undefined, diag), 'fake-us');
+  assert.equal(diag.reason, undefined);
+  fs.rmSync(M.credentialLocation(us, home).credentialsPath);
+  diag = {};
+  await assert.rejects(C.readCredentials(us, home, 'win32', undefined, diag));
+  assert.equal(diag.reason, undefined);
+});
+test('weekly data without a five-hour window is reported as no-window, other bad answers stay unspecific', async () => {
+  const week = { utilization: 40, resets_at: '2099-01-01T00:00:00Z' };
+  for (const five of [null, { utilization: 0, resets_at: null }, { utilization: null, resets_at: null }]) {
+    const diag = {};
+    assert.equal(await C.requestUsage('fake', transport(200, JSON.stringify({ five_hour: five, seven_day: week }), []), 1000, diag), null);
+    assert.equal(diag.reason, 'no-window');
+  }
+  for (const body of [{ five_hour: { utilization: 20, resets_at: null }, seven_day: week }, { five_hour: null, seven_day: { utilization: 1, resets_at: null } },
+    { five_hour: null, seven_day: null }, 'not-json']) {
+    const diag = {};
+    assert.equal(await C.requestUsage('fake', transport(200, typeof body === 'string' ? body : JSON.stringify(body), []), 1000, diag), null);
+    assert.equal(diag.reason === 'no-window', !!(body.five_hour === null && body.seven_day?.utilization === 1 && body.seven_day.resets_at));
+  }
+  const diag = {};
+  assert.equal(await C.requestUsage('fake', transport(500, '{}', []), 1000, diag), null);
+  assert.equal(diag.reason, undefined);
+});
+test('a failed refresh carries its reason into the failure sample and the stored official status', async (t) => {
+  const home = fixture(t), [cn] = S.normalize();
+  for (const [reason, text] of [['credentials-expired', /凭据已过期/], ['no-window', /还没开始计时/], [undefined, /刷新凭据或网络恢复/]]) {
+    const poller = C.createRefresh({ home, getSeats: () => [cn], read: async (seat, h, c, u, diag) => { if (reason) diag.reason = reason; return null; } });
+    await poller.tick();
+    const [failure] = poller.samples();
+    assert.equal(failure.failureOnly, true); assert.equal(failure.reason, reason || 'unavailable'); assert.match(failure.failure, text);
+    const store = {}; Q.observe(store, failure, Date.now());
+    assert.equal(store['Claude:cn'].officialStatus.reason, reason || 'unavailable');
+    poller.dispose();
+  }
+});

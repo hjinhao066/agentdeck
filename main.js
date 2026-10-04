@@ -849,10 +849,16 @@ app.whenReady().then(async () => {
     stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
     logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
     getSettings: () => seatConfig().quotaWarmup,
-    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
     getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
     readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome),
       quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    // Test profiles never query a real account; without this hook the service
+    // keeps its plain behavior.
+    refreshUsage: tudArg ? undefined : async (seat) => {
+      await claudeQuotaRefresh?.tick({ force: true, seatId: seat.id });
+      const latest = claudeQuotaRefresh?.samples().find((s) => s.seatId === seat.id);
+      return latest?.failureOnly ? { reason: latest.reason } : latest;
+    },
     occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
       tudArg ? async () => [] : undefined),
     run: tudArg ? async (seat) => {

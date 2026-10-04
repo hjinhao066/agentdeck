@@ -384,5 +384,28 @@ test('strategy details use plain language and show the reset, threshold and week
   const seats = [{ id: 'cn', name: 'CN' }, { id: 'us', name: 'US', weeklyTrusted: true, weeklyRemaining: 60 }];
   const text = P.strategyText({ currentId: 'cn', seats, warmups: [{ seatId: 'us', resetAt: NOW + 3600000, status: 'pending' }], now: NOW });
   assert.match(text, /正在用 CN/); assert.match(text, /US .*重置后自动预热/); assert.match(text, /CN 剩 3% 时切到 US/);
-  assert.match(P.strategyText({ currentId: 'cn', seats: [seats[0], { ...seats[1], weeklyRemaining: 0 }] }), /每周额度不足，不切换也不预热/);
+  assert.match(P.strategyText({ currentId: 'cn', seats: [seats[0], { ...seats[1], weeklyRemaining: 0 }] }), /每周额度不足，不切换/);
+});
+
+test('prewarming the idle seat leaves the switching rules alone and cannot make the captain flap', () => {
+  const H = 3600_000;
+  const seat = (id, remaining, resetAt, at = NOW) => ({ id, loggedIn: true, trusted: true, remaining, remainingAt: at, resetAt,
+    weeklyTrusted: true, weeklyRemaining: 60 });
+  let state = P.normalizeState();
+  // Before: US has no running window; unknown stays put. After the prewarm US's
+  // window ends later than CN's, so preferEarlier keeps CN.
+  assert.equal(P.decide({ currentId: 'cn', seats: [seat('cn', 60, NOW + H), unknown('us')], state, now: NOW }), null);
+  const warmed = [seat('cn', 60, NOW + H), seat('us', 100, NOW + 5 * H)];
+  assert.equal(P.decide({ currentId: 'cn', seats: warmed, state, now: NOW }), null);
+  // CN burns down to the threshold: one switch to US.
+  const later = NOW + 30 * 60_000;
+  const low = [seat('cn', 3, NOW + H, later), seat('us', 100, NOW + 5 * H, later)];
+  const move = P.decide({ currentId: 'cn', seats: low, state, now: later });
+  assert.equal(move.targetId, 'us'); assert.equal(move.reason, 'threshold');
+  state = P.recordSwitch(state, { fromId: 'cn', targetId: 'us', reason: move.reason, at: NOW + 30 * 60_000 });
+  // CN's window resets and CN looks fresher, but the cooldown stops any bounce back.
+  for (const minutes of [31, 35, 39]) {
+    const at = NOW + minutes * 60_000, back = [seat('cn', 100, NOW + 2 * H, at), seat('us', 90, NOW + 5 * H, at)];
+    assert.equal(P.decide({ currentId: 'us', seats: back, state, now: at }), null);
+  }
 });

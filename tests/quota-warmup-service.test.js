@@ -58,14 +58,18 @@ test('occupied and disabled seats skip without consuming a window', async (t) =>
   await f.service.tick(); assert.equal(f.calls.length, 0);
   f.settings.enabled = true; await f.service.tick(); assert.equal(f.calls.length, 1);
 });
-test('failure retries once after a minute, then abandons with two metadata log entries', async (t) => {
+test('failures back off 1, 5, 15 minutes, then abandon with four metadata log entries', async (t) => {
   let calls = 0;
   const f = fixture(t, { run: async () => { calls++; return { ok: false, status: 'failed', unsafeRaw: 'do not log' }; } });
   await f.service.tick(); await f.service.tick(); assert.equal(calls, 1);
-  f.advance(60_000); await f.service.tick(); await f.service.tick(); assert.equal(calls, 2);
+  for (const [index, delay] of [60_000, 300_000, 900_000].entries()) {
+    f.advance(delay - 1); await f.service.tick(); assert.equal(calls, index + 1);
+    f.advance(1); await f.service.tick(); await f.service.tick(); assert.equal(calls, index + 2);
+  }
   assert.equal((await f.service.snapshot())[0].status, 'abandoned');
+  f.advance(24 * 3600_000); await f.service.tick(); assert.equal(calls, 4);
   const text = fs.readFileSync(f.logFile, 'utf8');
-  assert.equal(text.trim().split('\n').length, 2); assert.ok(!text.includes('do not log'));
+  assert.equal(text.trim().split('\n').length, 4); assert.ok(!text.includes('do not log'));
 });
 test('a newly starting normal session aborts only the owned warmup and never records success', async (t) => {
   let started;
@@ -159,16 +163,13 @@ test('a later trusted quota sample supplies the next reset after a successful re
   assert.ok(status.warmAt); await f.service.tick(); assert.equal(calls, 1);
 });
 
-test('weekly exhausted, low, unknown or expired quota skips preheat; it becomes eligible after a usable weekly sample', async (t) => {
+test('the weekly quota never blocks preheat: low, exhausted or missing weekly still warms', async (t) => {
   let week = weekly;
   const sample = { provider: 'Claude', scope: 'claude', seatId: 'cn', official: true, credentialKey: 'cn-slot',
     configDir: '/home/test/.claude', at: Date.parse('2026-10-03T11:55:00Z') };
   const f = fixture(t, { readSeat: async () => ({ accountKey: 'own-account', credentialKey: 'cn-slot', configDir: sample.configDir,
     quota: { sample: { ...sample, windows: [{ key: 'fiveHour', resetAt: Date.parse('2026-10-03T12:00:00Z') }, week].filter(Boolean) } } }) });
-  for (const value of [{ ...weekly, remaining: 0 }, { ...weekly, remaining: 3 }, null, { ...weekly, resetAt: Date.parse('2026-10-03T11:00:00Z') }]) {
-    week = value; await f.service.tick(); assert.equal(f.calls.length, 0);
-  }
-  week = { ...weekly, remaining: 4 }; await f.service.tick(); assert.equal(f.calls.length, 1);
+  week = { ...weekly, remaining: 0 }; await f.service.tick(); assert.equal(f.calls.length, 1);
 });
 test('a just-reset window is warmed before a fresh counting window can prefer the other seat', async (t) => {
   const P = require('../perpetual-captain-core');
@@ -185,4 +186,93 @@ test('a just-reset window is warmed before a fresh counting window can prefer th
   } });
   await f.service.tick(); assert.equal(f.calls.length, 1);
   assert.equal(decide().targetId, 'us'); assert.equal(decide().reason, 'earlier-reset');
+});
+
+// Forced re-sampling before acting, login handling and backoff of the refresh itself.
+const NOW0 = Date.parse('2026-10-03T12:01:01Z');
+const fresh = (at, five, week = { remaining: 60, resetAt: weekly.resetAt }) => ({ at,
+  windows: [{ key: 'fiveHour', remaining: 100, resetAt: five }, { key: 'weekly', ...week }] });
+function refreshing(t, answers, extra = {}) {
+  const asked = [];
+  const f = fixture(t, { refreshUsage: async (seat) => { asked.push(seat.id); const a = answers.shift() ?? { reason: 'unavailable' }; return typeof a === 'function' ? a() : a; }, ...extra });
+  return { ...f, asked };
+}
+test('a fresh sample showing a counting window cancels the warmup and moves the window forward', async (t) => {
+  const f = refreshing(t, [fresh(NOW0, NOW0 + 4 * 3600_000)]);
+  await f.service.tick();
+  assert.equal(f.calls.length, 0); assert.deepEqual(f.asked, ['cn']);
+  const status = (await f.service.snapshot())[0];
+  assert.equal(status.resetAt, NOW0 + 4 * 3600_000); assert.equal(status.attempts, 0); assert.equal(status.warmAt, undefined);
+  await f.service.tick(); assert.equal(f.calls.length, 0);
+});
+test('unknown refresh results never act, never use an attempt, and re-sample no more than every five minutes', async (t) => {
+  const f = refreshing(t, [{ reason: 'unavailable' }, { reason: 'unavailable' }, { reason: 'unavailable' }]);
+  await f.service.tick(); await f.service.tick(); await f.service.tick();
+  assert.equal(f.calls.length, 0); assert.equal(f.asked.length, 1);
+  f.advance(5 * 60_000 - 2000); await f.service.tick(); assert.equal(f.asked.length, 1);
+  f.advance(2000); await f.service.tick(); assert.equal(f.asked.length, 2);
+  f.advance(5 * 60_000); await f.service.tick(); assert.equal(f.asked.length, 3);
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.service.snapshot())[0].attempts, 0);
+  const none = refreshing(t, [null, undefined]);
+  await none.service.tick(); assert.equal(none.calls.length, 0);
+});
+test('a thrown refresh is quiet, counts as unknown and does not act', async (t) => {
+  const f = refreshing(t, [() => { throw new Error('network'); }]);
+  await f.service.tick(); assert.equal(f.calls.length, 0);
+});
+test('expired credentials on an idle seat allow the request, which then re-samples with the refreshed login', async (t) => {
+  const answers = [{ reason: 'credentials-expired' }];
+  const f = refreshing(t, answers, { run: async () => {
+    f.calls.push('run'); answers.push(fresh(NOW0 + 1, NOW0 + 5 * 3600_000));
+    return { ok: true, provenNative: false, resetAt: null };
+  } });
+  await f.service.tick();
+  assert.equal(f.calls.length, 1); assert.equal(f.asked.length, 2);
+  const status = (await f.service.snapshot())[0];
+  assert.equal(status.newResetAt, NOW0 + 5 * 3600_000); assert.ok(status.warmAt);
+  await f.service.tick(); assert.equal(f.calls.length, 1);
+});
+test('an API answer that no five-hour window is running allows the request', async (t) => {
+  const f = refreshing(t, [{ reason: 'no-window' }]);
+  await f.service.tick(); assert.equal(f.calls.length, 1);
+});
+test('a fresh sample with a low weekly number still allows the request when the window is not counting', async (t) => {
+  const f = refreshing(t, [{ reason: 'no-window' }]);
+  await f.service.tick(); assert.equal(f.calls.length, 1);
+});
+test('an occupied seat is neither re-sampled nor warmed', async (t) => {
+  const f = refreshing(t, [{ reason: 'no-window' }]);
+  f.setBusy(new Set(['cn'])); await f.service.tick();
+  assert.equal(f.asked.length, 0); assert.equal(f.calls.length, 0);
+});
+test('a logged-out seat is flagged, never sampled or warmed, and resumes after login', async (t) => {
+  let loggedIn = false;
+  const f = refreshing(t, [{ reason: 'no-window' }], { readSeat: async () => ({ accountKey: 'own-account', configDir: '/home/test/.claude',
+    loggedIn, usage: { accountBound: true, accountKey: 'own-account', configDir: '/home/test/.claude', at: NOW0 - 3600_000,
+      windows: [{ key: 'fiveHour', remaining: 0, resetText: '2026-10-03T12:00:00Z' }, weekly] } }) });
+  for (let i = 0; i < 3; i++) { await f.service.tick(); f.advance(3600_000); }
+  assert.equal(f.calls.length, 0); assert.equal(f.asked.length, 0);
+  assert.equal((await f.service.snapshot())[0].loggedIn, false);
+  loggedIn = true; await f.service.tick(); assert.equal(f.calls.length, 1);
+  assert.equal((await f.service.snapshot())[0].loggedIn, true);
+});
+test('a rejected login stops after one request, even as time passes, until the user logs in again', async (t) => {
+  let loggedIn = true;
+  const f = refreshing(t, [{ reason: 'no-window' }], { readSeat: async () => ({ accountKey: 'own-account', configDir: '/home/test/.claude', loggedIn,
+    usage: { accountBound: true, accountKey: 'own-account', configDir: '/home/test/.claude', at: NOW0 - 3600_000,
+      windows: [{ key: 'fiveHour', remaining: 0, resetText: '2026-10-03T12:00:00Z' }, weekly] } }),
+    run: async () => { f.calls.push('run'); return { ok: false, status: 'authentication' }; } });
+  await f.service.tick();
+  assert.equal(f.calls.length, 1);
+  assert.equal((await f.service.snapshot())[0].status, 'needs-login');
+  for (let i = 0; i < 4; i++) { f.advance(3600_000); await f.service.tick(); }
+  assert.equal(f.calls.length, 1);
+  loggedIn = false; await f.service.tick(); loggedIn = true; await f.service.tick();
+  assert.equal((await f.service.snapshot())[0].status, 'pending');
+});
+test('one activation per window holds even when the refreshed sample repeats the old reset', async (t) => {
+  const f = refreshing(t, [{ reason: 'no-window' }, fresh(NOW0, NOW0 - 1)]);
+  await f.service.tick(); await f.service.tick(); f.advance(3600_000); await f.service.tick();
+  assert.equal(f.calls.length, 1);
 });

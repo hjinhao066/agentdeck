@@ -5,9 +5,12 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
   const RESET_DELAY_MS = 60_000;
-  const RETRY_DELAY_MS = 60_000;
-  const MAX_ATTEMPTS = 2;
-  const STATUSES = ['pending', 'running', 'retry', 'succeeded', 'abandoned'];
+  // Failed requests back off 1, 5 then 15 minutes (four tries per window), so a
+  // short outage cannot burn the window's chance while a dead login cannot spin.
+  const RETRY_DELAYS_MS = [60_000, 5 * 60_000, 15 * 60_000];
+  const RETRY_DELAY_MS = RETRY_DELAYS_MS[0];
+  const MAX_ATTEMPTS = RETRY_DELAYS_MS.length + 1;
+  const STATUSES = ['pending', 'running', 'retry', 'succeeded', 'abandoned', 'needs-login'];
   const seatId = (value) => value === 'cn' || value === 'us';
   const time = (value) => Number.isFinite(value) && value > 0 ? value : null;
   const account = (value) => typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\x00-\x1f]/.test(value);
@@ -84,11 +87,14 @@
   }
   function fail(saved, now) {
     saved.status = saved.attempts >= MAX_ATTEMPTS ? 'abandoned' : 'retry';
-    if (saved.status === 'retry') saved.retryAt = now + RETRY_DELAY_MS; else delete saved.retryAt;
+    if (saved.status === 'retry') saved.retryAt = now + RETRY_DELAYS_MS[Math.min(saved.attempts, RETRY_DELAYS_MS.length) - 1]; else delete saved.retryAt;
   }
   function finish(value, event, now = Date.now()) {
     const state = normalizeState(value), saved = state.seats[event?.seatId];
     if (!event || !matches(saved, event) || saved.resetAt !== event.resetAt || saved.status !== 'running' || event.attempt !== saved.attempts || !time(now) || now < saved.lastAt) return state;
+    // A rejected login is not transient: stop until a new proven window or a
+    // fresh login shows the seat works again.
+    if (event.authFailed === true && event.success !== true) { saved.status = 'needs-login'; delete saved.retryAt; return state; }
     if (event.success !== true) { fail(saved, now); return state; }
     saved.status = 'succeeded'; saved.warmAt = now; saved.warmWindowResetAt = saved.resetAt;
     if (event.provenNative === true && time(event.newResetAt) && event.newResetAt > now && event.newResetAt > saved.resetAt) {
@@ -104,5 +110,21 @@
     for (const saved of Object.values(state.seats)) if (saved.status === 'running') fail(saved, now);
     return state;
   }
-  return { RESET_DELAY_MS, RETRY_DELAY_MS, MAX_ATTEMPTS, normalizeSettings, normalizeState, observe, decide, begin, finish, recoverRunning };
+  // A seat whose login was rejected becomes eligible again after the user logs
+  // in again; the old window and its reset time remain valid.
+  function relogin(value, seatKey) {
+    const state = normalizeState(value), saved = state.seats[seatKey];
+    if (saved?.status === 'needs-login') { saved.status = 'pending'; saved.attempts = 0; delete saved.retryAt; }
+    return state;
+  }
+  // One line for the quota panel and the quota command.
+  function label(entry, { now = Date.now(), loggedIn = true } = {}) {
+    const clock = (t) => new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    if (loggedIn === false || entry?.status === 'needs-login') return '未登录 · 不预激活';
+    if (entry?.status === 'abandoned') return '预热失败 · 本窗口已放弃';
+    if (entry?.status === 'retry') return '预热失败 · 稍后退避重试';
+    if (entry?.warmAt) return `窗口已激活 ↻${entry.newResetAt > now ? clock(entry.newResetAt) : '未知'}`;
+    return '';
+  }
+  return { RESET_DELAY_MS, RETRY_DELAY_MS, RETRY_DELAYS_MS, MAX_ATTEMPTS, relogin, label, normalizeSettings, normalizeState, observe, decide, begin, finish, recoverRunning };
 });
