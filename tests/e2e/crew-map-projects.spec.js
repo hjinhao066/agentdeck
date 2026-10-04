@@ -10,7 +10,8 @@ let application, page, profile, controls, reviewerId;
 test.describe.configure({ mode: 'serial' });
 
 async function launch() {
-  const env = { ...process.env, AGENTDECK_TEST_CONTROL_ENV_FILE: path.join(profile, 'control.json') };
+  const env = { ...process.env, AGENTDECK_TEST_CONTROL_ENV_FILE: path.join(profile, 'control.json'),
+    AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -115,7 +116,8 @@ test('project cards open real sessions where the user can speak directly', async
   await page.evaluate(() => showView('board'));
 });
 
-test('real authenticated new CLI stores project/reviews, rejects unknown targets, and archive/tell preserve metadata', async () => {
+test('real authenticated new CLI stores project/reviews, rejects unknown targets, and archive/tell preserve metadata', async ({}, testInfo) => {
+  try {
   await expect(cli(['new', '--title', 'invalid', '--task', 'Inspect', '--command', FAKE, '--reviews', 'missing'])).rejects.toThrow(/找不到可审查的会话/);
   await cli(['new', '--title', '专项审查', '--task', 'Inspect only declared sessions', '--command', FAKE, '--cwd', profile, '--project', '客户门户', '--reviews', 'a1,a3']);
   reviewerId = await page.evaluate(() => columns.find((c) => columnLabel(c) === '专项审查').id);
@@ -128,6 +130,18 @@ test('real authenticated new CLI stores project/reviews, rejects unknown targets
   await cli(['tell', '--to', reviewerId, '--message', 'Verify once again']);
   await expect.poll(() => page.evaluate((id) => columns.find((c) => c.id === id)?.project, reviewerId)).toBe('客户门户');
   await expect.poll(() => page.evaluate((id) => MainSession.state().tasks.filter((t) => t.colId === id).at(-1).status, reviewerId), { timeout: 20000 }).toBe('done');
+  } catch (error) {
+    const state = await page.evaluate((id) => {
+      const e = terms.get(id);
+      return { screen: e && dumpScreen(e.term), state: e?.state, lastScreen: e?.lastScreen,
+        sending: e?.sendingPrompt, typing: e?.typing,
+        tasks: MainSession.state().tasks.filter(t => t.colId === id), turns: ChatUI.turnsOf(id) };
+    }, reviewerId);
+    const file = path.join(profile, 'received.jsonl');
+    const received = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(p => p.colId === reviewerId) : [];
+    await testInfo.attach('reviewer-state', { body: JSON.stringify({ state, received }, null, 2), contentType: 'application/json' });
+    throw error;
+  }
 });
 
 test('new at the concurrency limit retains project/reviews in queue and applies them when the slot opens', async () => {
