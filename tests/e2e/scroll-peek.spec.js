@@ -37,7 +37,7 @@ test.beforeAll(async () => {
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
   await expect(col(worker)).toBeVisible();
-  await expect.poll(() => page.evaluate((id) => terms.get(id)?.lastScreen || '', worker)).toContain('LIVE_ROW_0100');
+  await expect.poll(() => page.evaluate((id) => terms.get(id)?.lastScreen || '', worker), { timeout: 20000 }).toContain('LIVE_ROW_0100');
   await page.locator('.nav-row[data-nav="captain"]').click();
   await page.locator('#mdCmd').fill('');
   await page.locator('#mdCwd').fill(profile);
@@ -45,6 +45,9 @@ test.beforeAll(async () => {
   captain = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((id) => !!terms.get(id), captain)).toBe(true);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
+  if (process.platform === 'win32') {
+    await expect.poll(() => page.evaluate((id) => MainCore.isWindowsShellPrompt(dumpScreen(terms.get(id).term)), captain), { timeout: 15000 }).toBe(true);
+  }
   const tokenFile = path.join(profile, 'test-token.json');
   await input(captain, `node -e "require('fs').writeFileSync(process.env.AGENTDECK_CONTROL_DIR+'/../test-token.json',JSON.stringify(process.env.AGENTDECK_CONTROL_TOKEN))"\r`);
   await expect.poll(() => fs.existsSync(tokenFile), { timeout: 15000 }).toBe(true);

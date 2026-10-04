@@ -34,7 +34,8 @@ if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
   }));
 }
 // A TUI redraws the current screen; old prompts must not look like a live menu.
-process.stdout.write('\x1b[?1049h');
+const delayedStart = process.argv.includes('--delayed-start');
+if (!delayedStart) process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 const captainStatusline = process.argv.includes('--captain-statusline');
 let model = captainStatusline ? 'Opus 5.5' : 'Fake';
@@ -197,6 +198,7 @@ function listen() {
   }
 }
 function start() {
+  if (delayedStart) process.stdout.write('\x1b[?1049h');
   console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
@@ -208,4 +210,5 @@ if (process.argv.includes('--trust-dialog')) {
   process.stdout.write('Do you trust the contents of this directory?\n  ▶ [a] Trust this workspace\n    [q] Quit\n  Use arrow keys to navigate, Enter to select\n');
   process.stdin.setRawMode(true);
   process.stdin.once('data', () => { process.stdin.setRawMode(false); process.stdin.removeAllListeners('data'); process.stdin.pause(); process.stdout.write('\x1b[2J\x1b[H'); start(); });
-} else start();
+} else if (delayedStart) setTimeout(start, 6000);
+else start();
