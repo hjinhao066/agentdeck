@@ -17,10 +17,22 @@ const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
+const { MobileWebServer } = require('./mobile-web');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
 let pendingFocusColumn = null;
+let mobileWeb = null;
+const mobileRequests = new Map();
+function requestMobile(op, input) {
+  if (!mainWindow || mainWindow.isDestroyed() || !boardRendererReady) return Promise.reject(new Error('AgentDeck 尚未准备好，请稍后刷新。'));
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    const timer = setTimeout(() => { mobileRequests.delete(id); reject(new Error('AgentDeck 响应超时，请稍后重试。')); }, 5000);
+    mobileRequests.set(id, { resolve, reject, timer });
+    send('mobile-web:request', { id, op, input });
+  });
+}
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
 // its own userData (own config/sessions AND own single-instance lock), so an
@@ -662,7 +674,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (isWin) app.setAppUserModelId('com.jinhao.agentdeck');
   if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -682,6 +694,40 @@ app.whenReady().then(() => {
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
+  let mobileSettings = notificationConfig.mobileWeb || { enabled: false };
+  let mobileInitializing = true;
+  mobileWeb = new MobileWebServer({
+    getSessions: () => requestMobile('sessions'),
+    getTasks: () => taskStore.list(),
+    getOutput: (id) => requestMobile('output', { id }),
+    sendCaptain: (message) => requestMobile('captain', { message }),
+    saveSettings: (settings) => {
+      mobileSettings = settings;
+      if (mobileInitializing && !settings.enabled) return;
+      notificationConfig = { ...seatConfig(), mobileWeb: settings };
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(notificationConfig, null, 2), { mode: 0o600 });
+      fs.chmodSync(configPath + '.tmp', 0o600);
+      fs.renameSync(configPath + '.tmp', configPath);
+    },
+  });
+  await mobileWeb.configure(mobileSettings);
+  mobileInitializing = false;
+  // Only the trusted desktop settings page can enable the listener. The web
+  // page has four fixed operations and never sees an Electron IPC bridge.
+  handleMain('mobile-web:settings', async (_event, input) => {
+    if (input !== undefined) {
+      if (!input || typeof input.enabled !== 'boolean' || Object.keys(input).some((key) => key !== 'enabled')) throw new Error('Invalid mobile web setting.');
+      await mobileWeb.configure({ ...mobileSettings, enabled: input.enabled });
+    }
+    return mobileWeb.status();
+  });
+  onMain('mobile-web:response', (_event, payload) => {
+    const pending = mobileRequests.get(payload?.requestId);
+    if (!pending) return;
+    mobileRequests.delete(payload.requestId); clearTimeout(pending.timer);
+    if (typeof payload.error === 'string' && payload.error) pending.reject(new Error(payload.error));
+    else pending.resolve(payload.result);
+  });
   const quotaAlertPath = path.join(app.getPath('userData'), 'quota-bark-state.json');
   let quotaAlertState = {};
   try {
@@ -716,13 +762,15 @@ app.whenReady().then(() => {
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
+    cfg.mobileWeb = mobileSettings;
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
-      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), 'utf-8');
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      fs.chmodSync(configPath + '.tmp', 0o600);
       fs.renameSync(configPath + '.tmp', configPath);
     } catch (_) {}
     checkQuotaBark();
@@ -1099,6 +1147,9 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  if (mobileWeb) mobileWeb.close();
+  for (const pending of mobileRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error('AgentDeck 已关闭。')); }
+  mobileRequests.clear();
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it

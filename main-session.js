@@ -14,6 +14,7 @@
   let tokenSaving = null;
   let tokenSaverPaused = false;  // cancel/failure: no retry until usage falls below the threshold
   let contextReset = null;
+  let mobileDelivery = null;
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -160,6 +161,7 @@
     // A turn open at shutdown cannot acknowledge these items after relaunch.
     s.pending = [...s.inflight, ...s.pending].slice(-50);
     s.inflight = [];
+    s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((text) => typeof text === 'string' && text.trim() && text.length <= 8000) : [];
     s.fresh = !!s.fresh;
     s.legacyReceiptInjection = s.legacyReceiptInjection === true;
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
@@ -800,7 +802,7 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
-    if (id === s.colId) { retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) deliver(entry); pump(); } return; }
+    if (id === s.colId) { retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return; }
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
@@ -899,6 +901,38 @@
   }
 
   // ---- commands from the main session's terminal (board-cli) ----
+  function sendMessage(message) {
+    const col = mainCol();
+    if (!col || !host.terms.get(col.id)?.alive) throw new Error('请先在 AgentDeck 创建并启动队长。');
+    if (typeof message !== 'string' || !message.trim() || message.length > 8000) throw new Error('消息须为 1–8000 个字符。');
+    const s = state();
+    s.mobileMessages ||= [];
+    if (s.mobileMessages.length >= 20) throw new Error('队长已有 20 条消息等待送达，请稍后再发。');
+    s.mobileMessages.push(message);
+    host.flushConfig();
+    deliverMobile();
+  }
+  function deliverMobile() {
+    const col = mainCol(), s = state();
+    if (mobileDelivery || !col || !s?.mobileMessages?.length || briefing === col.id || seatChanging || tokenSaving || contextReset) return;
+    const delivery = { col, s }, message = s.mobileMessages[0];
+    mobileDelivery = delivery;
+    host.sendWhenReady(col, message, {
+      guardUserInput: true, requireIdle: true, userInitiated: true,
+      cancelled: () => {
+        const cancelled = mobileDelivery !== delivery || mainCol() !== col || state() !== s;
+        if (cancelled && mobileDelivery === delivery) mobileDelivery = null;
+        return cancelled;
+      },
+      onSent: () => {
+        if (mobileDelivery !== delivery) return;
+        s.mobileMessages.shift(); mobileDelivery = null; save();
+      },
+      // Keep accepted messages in config when busy/draft waits outlast a
+      // delivery attempt. The next tick retries the same FIFO head.
+      onGiveUp: () => { if (mobileDelivery === delivery) mobileDelivery = null; },
+    });
+  }
   function ledgerRows() {
     const folders = new Map((host.config.folders || []).map((f) => [f.id, f.name]));
     return host.columns().filter((c) => !c.isMain).map((c) => {
@@ -1128,7 +1162,7 @@
 
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
-    isMain, isMainId, mainCol, state,
+    isMain, isMainId, mainCol, state, sendMessage,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),
     pauseForSeatSwitch: (value) => { seatChanging = !!value; },

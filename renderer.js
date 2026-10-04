@@ -555,8 +555,29 @@ function openNotificationSettings() {
   document.getElementById('captainSoundTone').value = settings.tone;
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
   MainSession.openSettings();
+  updateMobileWebSettings();
   dialog.showModal();
 }
+async function updateMobileWebSettings(input) {
+  const toggle = document.getElementById('mobileWebEnabled');
+  toggle.disabled = true;
+  try {
+    const status = await window.deck.mobileWebSettings(input);
+    toggle.checked = status.enabled;
+    document.querySelector('.mobile-web-access').hidden = !status.enabled;
+    document.getElementById('mobileWebUrl').value = status.url || '';
+    document.getElementById('mobileWebToken').value = status.token || '';
+    document.getElementById('mobileWebStatus').textContent = status.error || (status.enabled ? '已开启，仅监听 127.0.0.1' : '未开启');
+  } catch (error) { document.getElementById('mobileWebStatus').textContent = error.message; }
+  finally { toggle.disabled = false; }
+}
+document.getElementById('mobileWebEnabled').addEventListener('change', (event) => updateMobileWebSettings({ enabled: event.target.checked }));
+document.getElementById('mobileWebCopyToken').addEventListener('click', (event) => {
+  window.deck.clipboardWrite(document.getElementById('mobileWebToken').value);
+  const button = event.currentTarget, original = button.innerHTML;
+  button.innerHTML = ICONS.check; button.title = '已复制';
+  setTimeout(() => { button.innerHTML = original; button.title = '复制登录 token'; }, 1400);
+});
 function saveNotificationSettings() {
   config.captainNotifications = NotificationPolicy.normalizeSettings({
     enabled: document.getElementById('captainNotifyEnabled').checked,
@@ -2993,6 +3014,31 @@ function createManagedChild(message, caller) {
   }
   return child;
 }
+
+window.deck.onMobileRequest(async ({ id, op, input }) => {
+  try {
+    let result;
+    if (op === 'sessions') {
+      result = columns.map((col) => {
+        const entry = terms.get(col.id), info = AgentInfo.resolveAgentInfo(col, entry);
+        const task = [...(MainSession.state()?.tasks || [])].reverse().find((t) => t.colId === col.id);
+        const active = entry?.alive && (entry.state === 'working' || entry.sendingPrompt || task?.status === 'working');
+        const failed = !active && (task?.status === 'failed' || col.lastReceipt?.failed || entry && !entry.alive);
+        return { id: col.id, title: columnLabel(col), model: info.model || info.provider || '未知模型',
+          status: active ? 'working' : failed ? 'failed' : 'idle', isMain: !!col.isMain,
+          receipt: String(col.lastReceipt?.summary || col.lastReceipt?.failed || '').slice(0, 1000) };
+      });
+    } else if (op === 'output') {
+      const col = columns.find((c) => c.id === input?.id && !c.isMain);
+      const entry = col && terms.get(col.id);
+      result = col ? { id: col.id, title: columnLabel(col), text: entry?.term ? dumpScreen(entry.term, 100).slice(-16000) : '' } : null;
+    } else if (op === 'captain') {
+      MainSession.sendMessage(input?.message);
+      result = { queued: true };
+    } else throw new Error('未知网页操作。');
+    window.deck.mobileRespond({ requestId: id, result });
+  } catch (error) { window.deck.mobileRespond({ requestId: id, error: error.message }); }
+});
 
 window.deck.onBoardCommand(async (message) => {
   const cached = config.boardResponses[message.id];
