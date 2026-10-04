@@ -107,7 +107,9 @@
 
   // Minimal Markdown for Captain replies. Every piece of text goes in through
   // textContent and links are limited to http(s); no markup is ever parsed.
-  const inlinePattern = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"'`]+)/g;
+  // Bare links stop at the first non-ASCII character, so Chinese text or
+  // punctuation right after a URL (https://x.com/a。然后) stays outside it.
+  const inlinePattern = /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)|(https?:\/\/[^\s<>"'`\u0080-￿]+)/g;
   function link(text, href) {
     let url;
     try { url = new URL(href); } catch (_) { return document.createTextNode(text); }
@@ -144,6 +146,30 @@
     block.append(bar, pre);
     return block;
   }
+  // Pipe tables: a header row, a |---|:--:| separator, then body rows. Cells go
+  // through the same inline renderer; the wrapper scrolls sideways when wide.
+  const tableSeparator = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  const cells = (line) => line.trim().replace(/\\\|/g, '\0').replace(/^\||\|$/g, '').split('|').map((cell) => cell.trim().replace(/\0/g, '|'));
+  function table(header, separator, rows) {
+    const align = cells(separator).map((cell) => cell.endsWith(':') ? (cell.startsWith(':') ? 'center' : 'right') : '');
+    const wrap = node('div', 'table-wrap'); wrap.tabIndex = 0;
+    const el = node('table'), head = node('thead'), body = node('tbody');
+    const row = (values, tag) => {
+      const tr = node('tr');
+      header.forEach((_, i) => {
+        const cell = inline(node(tag), values[i] || '');
+        if (align[i]) cell.style.textAlign = align[i];
+        tr.append(cell);
+      });
+      return tr;
+    };
+    head.append(row(header, 'th'));
+    rows.forEach((values) => body.append(row(values, 'td')));
+    el.append(head);
+    if (rows.length) el.append(body);
+    wrap.append(el);
+    return wrap;
+  }
   function markdown(text) {
     const root = node('div', 'chat-text markdown');
     const lines = String(text).replace(/\r\n?/g, '\n').split('\n');
@@ -162,6 +188,15 @@
         root.append(codeBlock(body.join('\n'), fence[2]));
         continue;
       }
+      if (line.includes('|') && i + 1 < lines.length && lines[i + 1].includes('|') && tableSeparator.test(lines[i + 1])) {
+        flush();
+        const header = cells(line), separator = lines[i + 1], rows = [];
+        for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes('|'); i++) rows.push(cells(lines[i]));
+        i--;
+        root.append(table(header, separator, rows));
+        continue;
+      }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { flush(); root.append(node('hr')); continue; }
       const bullet = /^\s*[-*+]\s+(.*)$/.exec(line), ordered = /^\s*(\d{1,9})[.)]\s+(.*)$/.exec(line);
       if (bullet || ordered) {
         const tag = bullet ? 'ul' : 'ol';
@@ -334,6 +369,8 @@
       output: [selected?.title || '队员输出', '只读' + (current ? ' · ' + (statusNames[current.status] || '空闲') : ''), current?.status || 'none'],
       board: ['任务看板', '只读', null],
     }[view];
+    // Statuses are stale while the desktop is unreachable; say so instead.
+    if (offline) { heading[1] = view === 'captain' ? '连接中断' : '只读 · 连接中断'; heading[2] = 'offline'; }
     $('view-title').textContent = heading[0];
     $('view-meta').textContent = heading[1];
     $('title-dot').hidden = !heading[2];
@@ -390,7 +427,7 @@
       // fetch rejects with a TypeError when the desktop or tunnel is unreachable.
       offline = true;
       notice(err instanceof TypeError ? '暂时连不上桌面端，正在自动重连…' : err.message + ' 正在自动重试…', true);
-      renderCaptain();
+      renderCaptain(); updateHeading();
     }
     finally { refreshing = false; $('refresh').disabled = false; $('refresh').classList.remove('refreshing'); }
   }

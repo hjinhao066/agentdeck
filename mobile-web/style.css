@@ -51,6 +51,8 @@ h1, h2, h3, h4, p { margin: 0; }
 .dot[data-status="input"], .dot[data-status="asking"] { background: var(--orange); box-shadow: 0 0 0 3px color-mix(in srgb, var(--orange) 28%, transparent); }
 .dot[data-status="failed"] { background: var(--red); }
 .dot[data-status="none"] { background: var(--line); }
+/* Desktop unreachable: a hollow ring, since the last known status is stale. */
+.dot[data-status="offline"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
 
 .attention { flex: none; display: flex; gap: 8px; padding: 4px 12px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); background: var(--orange-soft); }
 .attention::-webkit-scrollbar { display: none; }
@@ -88,6 +90,17 @@ h1, h2, h3, h4, p { margin: 0; }
 .code-bar .icon-button { color: var(--muted); }
 .code-bar svg { width: 18px; height: 18px; }
 .code-block pre { margin: 0; padding: 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; tab-size: 2; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+/* Tables keep their columns and scroll sideways inside the reply. */
+.table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+.markdown table { min-width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.5; }
+.markdown th, .markdown td { padding: 7px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+.markdown th { font-weight: 600; white-space: nowrap; background: var(--raised); }
+.markdown td { min-width: 7em; }
+.markdown th + th, .markdown td + td { border-left: 1px solid var(--line); }
+.markdown tbody tr:last-child td { border-bottom: 0; }
+.markdown td .md-code, .markdown th .md-code { overflow-wrap: normal; }
+.markdown hr { height: 0; margin: 16px 0; border: 0; border-top: 1px solid var(--line); }
+.markdown > hr + * { margin-top: 0; }
 .turn-actions { display: flex; align-items: center; gap: 4px; margin: -4px 0 -12px -12px; }
 .turn-actions .icon-button { color: var(--muted); }
 .turn-actions svg { width: 18px; height: 18px; }
