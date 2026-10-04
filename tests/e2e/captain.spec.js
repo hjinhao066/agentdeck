@@ -629,9 +629,16 @@ test('receipts ride along with the next message to the Captain, not in its bubbl
 
 test('only the Captain holds control: other columns get no token and are refused', async () => {
   await run('cap-y', 'ask nothing');   // wakes the stand-in; harmless
+  // Earlier screen probes reset xterm without resetting ConPTY. Let the real
+  // stand-in redraw before exiting, so its shell prompt uses the same cursor.
+  await expect.poll(() => screen('cap-y'), { timeout: 15000 }).toContain('GOT ask nothing');
   await page.evaluate(() => window.deck.ptyInput('cap-y', '\x03'));    // leave the stand-in
   await waitForShell('cap-y');
-  await run('cap-y', 'clear; node -e "console.log(\'TOKEN=\' + (process.env.AGENTDECK_CONTROL_TOKEN || \'none\'))"');
+  const probe = path.join(profile, 'worker-token.js');
+  const result = path.join(profile, 'worker-token.txt');
+  fs.writeFileSync(probe, `const value = 'TOKEN=' + (process.env.AGENTDECK_CONTROL_TOKEN || 'none'); require('fs').writeFileSync(process.argv[2], value); console.log(value);`);
+  await run('cap-y', `clear; node "${probe}" "${result}"`);
+  await expect.poll(() => fs.existsSync(result) ? fs.readFileSync(result, 'utf8') : '', { timeout: 15000 }).toBe('TOKEN=none');
   await expect.poll(() => screen('cap-y'), { timeout: 15000 }).toContain('TOKEN=none');
   const refused = await page.evaluate(() => MainSession.handle({ action: 'main-ledger' }, columns.find((c) => c.id === 'cap-x'))
     .then(() => 'allowed', (e) => e.message));
