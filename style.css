@@ -300,6 +300,16 @@ body.nav-collapsed #tbLeft { display: flex; }
 body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .tb-spacer { flex: 1; }
 #tbRight { display: flex; align-items: center; gap: 2px; }
+#quotaBar { display: flex; gap: 3px; flex-shrink: 0; -webkit-app-region: no-drag; }
+.quota-item { position: relative; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 5px; border-radius: 5px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.quota-icon { display: flex; }
+.quota-item[data-state="normal"] { color: var(--text); }
+.quota-item[data-state="warning"] { color: #d99426; }
+.quota-item[data-state="danger"], .quota-item[data-state="exhausted"] { color: #e46464; }
+.quota-item:hover, .quota-item:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
+.quota-tooltip { display: none; position: absolute; top: calc(100% + 7px); right: 0; width: max-content; max-width: min(420px, 80vw); padding: 9px 12px; z-index: 100; white-space: pre-wrap; background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 8px; box-shadow: var(--shadow-pop); pointer-events: none; line-height: 1.6; }
+.quota-item:hover .quota-tooltip, .quota-item:focus-visible .quota-tooltip { display: block; }
+@media (max-width: 850px) { #quotaBar { gap: 0; } .quota-item { padding: 0 3px; } }
 #tbSplit {
   display: inline-flex; align-items: center; gap: 1px; padding: 2px;
   background: var(--pill-bg); border-radius: 8px;

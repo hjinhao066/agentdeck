@@ -9,6 +9,7 @@ const { createNotifications } = require('./notifications');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
+const { readLocal: readLocalQuota } = require('./quota-local');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
@@ -328,7 +329,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status',
-        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -639,6 +640,16 @@ app.whenReady().then(() => {
     platform: process.platform, home: HOME, legacyWatch: process.env.AGENTDECK_LEGACY_WATCH === '1',
   }; });
 
+  // Test profiles never read the user's quota caches or conversation logs.
+  let quotaRead = null, quotaReadAt = 0;
+  handleMain('quota:local', () => {
+    if (tudArg) return [];
+    if (!quotaRead || Date.now() - quotaReadAt >= 30000) {
+      quotaReadAt = Date.now();
+      quotaRead = readLocalQuota(os.homedir(), process.env.CODEX_HOME).catch(() => []);
+    }
+    return quotaRead;
+  });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed }) => spawnPty(id, cwd, cols, rows, !!managed));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
   onMain('pty:resize', (_e, { id, cols, rows }) => {

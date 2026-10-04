@@ -37,6 +37,13 @@ the middle:
   Scroll up in a terminal or conversation to pause following output. New output
   preserves your reading position and shows 有新内容 ↓ at the bottom; click it
   or scroll to the bottom to resume following.
+- **Subscription quota**: four compact provider icons in the top bar show remaining
+  percentages (the lowest known window), or 正常 / 已用尽 / 未知. Hover or focus for
+  each window, reset time, source, confidence and sample time. Remaining ≤20% is
+  amber and ≤10% is red. AgentDeck passively reads live TUI screens first, then
+  known local quota caches every 30 seconds; it sends no slash commands or API
+  requests. Missing/15-minute-old data is unknown, never an invented percentage.
+  See [quota sources and limits](QUOTA_SOURCES.md).
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
   output; restoring replays that output and relaunches the agent. New Claude and
@@ -87,7 +94,7 @@ again with the current provider, model and effort instructions.
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
-  receipts | answer | peek | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
+  receipts | answer | peek | quota | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
   capability token those commands need; the columns it drives get none.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass

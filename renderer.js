@@ -103,6 +103,8 @@ let config = {
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
 };
 const saved = window.deck.loadConfig();
+// Persist only parsed observations, never terminal text or credentials.
+config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
   config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
   if (saved.theme) config.theme = saved.theme;
@@ -2938,12 +2940,12 @@ window.deck.onBoardCommand((message) => {
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-peek') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;
@@ -3094,6 +3096,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
+  quotaText: () => QuotaCore.text(config.quotas),
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
@@ -3101,6 +3104,16 @@ MainSession.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
+renderQuotaBar();
+async function readQuotaCache() {
+  const samples = await window.deck.quotaLocal();
+  let changed = false;
+  for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
+  if (changed) saveConfig();
+  renderQuotaBar();
+}
+readQuotaCache().catch(() => {});
+setInterval(() => readQuotaCache().catch(() => {}), 30000);
 syncChromeState();
 window.addEventListener('resize', () => {
   if (activeView === 'board') renderBoardGraph();
@@ -3196,6 +3209,30 @@ function maybeNotifyState(id, entry, st) {
   }
 }
 let lastAttnCount = -1;
+function renderQuotaBar() {
+  const bar = document.getElementById('quotaBar');
+  for (const provider of QuotaCore.PROVIDERS) {
+    let item = bar.querySelector(`[data-provider="${provider}"]`);
+    if (!item) {
+      item = document.createElement('span');
+      item.className = 'quota-item'; item.dataset.provider = provider;
+      item.setAttribute('role', 'group');
+      item.tabIndex = 0; // keyboard users can inspect the same tooltip
+      const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
+      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider];
+      const label = document.createElement('span'); label.className = 'quota-label';
+      const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}`; tip.setAttribute('role', 'tooltip');
+      item.setAttribute('aria-describedby', tip.id);
+      item.append(icon, label, tip); bar.append(item);
+    }
+    const q = QuotaCore.summary(config.quotas, provider);
+    item.dataset.state = q.state;
+    item.setAttribute('aria-label', q.detail);
+    item.title = q.detail;
+    item.querySelector('.quota-label').textContent = q.label;
+    item.querySelector('.quota-tooltip').textContent = q.detail;
+  }
+}
 setInterval(() => {
   let attn = 0;
   terms.forEach((entry, id) => {
@@ -3280,6 +3317,20 @@ setInterval(() => {
     // separator. It is excluded from status classification, but remains the
     // best source for recovering the last provider/model before a fresh shell.
     updateAgentIdentityBadge(id, entry, identityText);
+    if (entry.alive && entry.lastOutputAt && text !== entry.lastQuotaScreen) {
+      entry.lastQuotaScreen = text;
+      const col = columns.find((c) => c.id === id);
+      const provider = AgentInfo.inferProvider(col?.cmd, text) || entry.detectedProvider;
+      const footer = (entry.footerLines || []).map((line) => line.map((s) => s.text).join(''));
+      const sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt);
+      const signature = sample && JSON.stringify([provider, sample.windows.map((w) => [w.label, w.remaining, w.resetText]), sample.exhausted, sample.resumed, sample.resetText]);
+      // Redrawing unrelated text must not move a relative reset forward or
+      // make an unchanged percentage appear freshly sampled.
+      if (signature !== entry.lastQuotaObservation) {
+        entry.lastQuotaObservation = signature;
+        if (QuotaCore.observe(config.quotas, sample)) saveConfig();
+      }
+    }
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);
@@ -3289,6 +3340,7 @@ setInterval(() => {
     }
   });
   syncNav(); // mirror status dots + active highlight into the sidebar
+  renderQuotaBar();
   Sidebar.refreshTimes();
   syncBoardState();
   CrewMap.refresh();

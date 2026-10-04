@@ -45,6 +45,8 @@
       "board-cli.js",
       "chat-core.js",
       "agent-info.js",
+      "quota-core.js",
+      "quota-local.js",
       "chat-ui.js",
       "sidebar-core.js",
       "sidebar.js",

@@ -538,6 +538,8 @@
     const s = state();
     if (!s || !caller || !isMain(caller)) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
+      case 'main-quota':
+        return { done: true, result: host.quotaText() };
       case 'main-stop':
       case 'main-archive': {
         const id = String(message.to || '').trim();
