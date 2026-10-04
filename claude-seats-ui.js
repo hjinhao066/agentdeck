@@ -52,7 +52,8 @@
       const configured = host.config.claudeSeats.find((s) => s.id === info.id);
       if (!configured) return;
       window.QuotaCore.observe(host.config.quotas, { provider: 'Claude', scope: 'claude', seatId: info.id,
-        at: Date.now(), identityOnly: true, configDir: configured.configDir, accountKey: info.accountKey, account: info.maskedEmail });
+        at: Date.now(), identityOnly: true, configDir: configured.configDir, accountKey: info.accountKey, account: info.maskedEmail,
+        credentialKey: info.credentialKey });
       const usage = await window.deck.claudeSeatUsage(info.id);
       if (usage) acceptUsage(info.id, usage);
     }));
@@ -218,7 +219,8 @@
     const now = Date.now(), settings = P.normalizeSettings(host.config.perpetualCaptain);
     const candidates = seats.map((info) => {
       const configured = host.config.claudeSeats.find((s) => s.id === info.id);
-      const q = P.seatQuota(host.config.quotas[window.QuotaCore.seatKey(info.id)], { ...info, configuredDir: configured?.configDir }, now);
+      const q = P.seatQuota(host.config.quotas[window.QuotaCore.seatKey(info.id)], { ...info, configuredDir: configured?.configDir,
+        officialNotBefore: host.config.perpetualCaptainState?.seats?.[info.id]?.officialNotBefore }, now);
       let state = P.observe(host.config.perpetualCaptainState, { seatId: info.id, accountKey: info.accountKey, configDir: configured?.configDir }, now);
       if (q.exhausted) state = P.observe(state, { seatId: info.id, at: q.exhaustedAt, exhausted: true, resetAt: q.exhaustedResetAt }, now);
       if (q.trusted) state = P.observe(state, { seatId: info.id, at: q.remainingAt, remainingAt: q.remainingAt, remaining: q.remaining, trusted: true, resetAt: q.resetAt, threshold: settings.threshold }, now);

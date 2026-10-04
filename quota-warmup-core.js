@@ -29,7 +29,13 @@
       for (const key of ['lastAt', 'retryAt', 'warmAt', 'warmWindowResetAt', 'newResetAt']) if (time(raw[key])) out[key] = raw[key];
       seats[id] = out;
     }
-    return { seats };
+    const owners = {};
+    for (const [id, raw] of Object.entries(value && typeof value === 'object' ? value.owners || {} : {})) {
+      if (!seatId(id) || !account(raw?.accountKey) || !directory(raw?.configDir)) continue;
+      owners[id] = { accountKey: raw.accountKey, configDir: raw.configDir };
+      if (time(raw.officialNotBefore)) owners[id].officialNotBefore = raw.officialNotBefore;
+    }
+    return { seats, ...(Object.keys(owners).length ? { owners } : {}) };
   }
   function matches(saved, event) {
     return !!saved && account(event.accountKey) && saved.accountKey === event.accountKey && !!directory(event.configDir) && directory(saved.configDir) === directory(event.configDir);

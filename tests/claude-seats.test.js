@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const S = require('../claude-seats-core');
 const M = require('../claude-seats-main');
@@ -97,6 +98,9 @@ test('metadata yields only a masked email and no credential material', async (t)
   const a = await M.seatInfo(cn, home, 'darwin', keychain), b = await M.seatInfo(us, home, 'darwin', keychain);
   assert.equal(a.maskedEmail, 'c***@example.test'); assert.equal(a.loggedIn, true); assert.equal(b.loggedIn, false);
   assert.match(a.accountKey, /^[a-f0-9]{16}$/);
+  assert.equal(a.credentialKey, crypto.createHash('sha256').update(M.credentialLocation(cn, home).keychainService).digest('hex').slice(0, 16));
+  assert.equal(b.credentialKey, crypto.createHash('sha256').update(M.credentialLocation(us, home).keychainService).digest('hex').slice(0, 16));
+  assert.notEqual(a.credentialKey, b.credentialKey);
   assert.equal(S.maskEmail('broken'), '');
   assert.ok(!JSON.stringify(a).includes('cn@example.test'));
   assert.equal(queried.length, 2);

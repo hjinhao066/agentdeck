@@ -175,6 +175,60 @@ test('numeric quota requires its own account and directory ownership and only us
   assert.equal(P.seatQuota({ sample: sample({ windows: [{ label: '每周', remaining: 0 }] }) }, info, NOW).remaining, null);
   assert.equal(P.seatQuota({ sample: sample({ windows: [{ label: '5 小时', remaining: 70 }, { label: '每周', remaining: 0 }] }) }, info, NOW).remaining, 70);
 });
+test('official quota binds to the current seat directory and credential storage slot without changing the API payload', () => {
+  const current = { ...info, credentialKey: 'cn-current-slot' };
+  const official = { provider: 'Claude', scope: 'claude', official: true, seatId: 'cn', configDir: info.configuredDir,
+    credentialKey: current.credentialKey, at: NOW,
+    windows: [{ key: 'fiveHour', used: 97, remaining: 3, resetAt: NOW + 3600_000 }] };
+  const before = JSON.stringify(official);
+  assert.equal(P.bound(official, current), true);
+  assert.equal(P.seatQuota({ sample: official }, current, NOW).remaining, 3);
+  assert.equal(P.bound({ ...official, configDir: current.configDir }, current), true);
+  assert.equal(JSON.stringify(official), before);
+  for (const extra of [{ official: false }, { provider: 'Codex' }, { scope: 'codex' }, { seatId: 'us' },
+    { configDir: '~/.claude-us' }, { credentialKey: 'old-slot' }, { credentialKey: null }, { accountKey: 'us-account' }]) {
+    assert.equal(P.bound({ ...official, ...extra }, current), false, JSON.stringify(extra));
+  }
+  assert.equal(P.bound(official, { ...current, credentialKey: null }), false);
+  assert.equal(P.bound({ ...official, accountKey: current.accountKey }, current), true);
+  // A slot hash is insufficient to promote a native/legacy cache's digits.
+  assert.equal(P.bound(sample({ accountBound: false, credentialKey: current.credentialKey }), current), false);
+});
+test('official samples cannot trigger automation when stale, future-dated or past their five-hour reset', () => {
+  const current = { ...info, credentialKey: 'cn-current-slot' };
+  const official = { provider: 'Claude', scope: 'claude', official: true, seatId: 'cn', configDir: info.configDir,
+    credentialKey: current.credentialKey, at: NOW,
+    windows: [{ key: 'fiveHour', used: 100, remaining: 0, exhausted: true, resetAt: NOW + 3600_000 }] };
+  const blocked = { at: NOW, numeric: true, resetAt: NOW + 3600_000 };
+  const active = P.seatQuota({ sample: official, blocked }, current, NOW);
+  assert.equal(active.trusted, true); assert.equal(active.exhausted, true);
+  for (const now of [NOW + P.FRESH_MS + 1, NOW - 60_001, NOW + 3600_000]) {
+    const result = P.seatQuota({ sample: official, blocked }, current, now);
+    assert.equal(result.trusted, false); assert.equal(result.exhausted, false);
+  }
+  const ownedBlock = { ...official, windows: undefined, numeric: true, resetAt: NOW + 3600_000 };
+  assert.equal(P.seatQuota({ blocked: ownedBlock }, current, NOW).exhausted, true);
+  assert.equal(P.seatQuota({ blocked: ownedBlock }, current, NOW + P.FRESH_MS + 1).exhausted, false);
+});
+test('known account or directory changes invalidate older official samples but first identity observation preserves them', () => {
+  const current = { ...info, credentialKey: 'cn-current-slot' };
+  const official = { provider: 'Claude', scope: 'claude', official: true, seatId: 'cn', configDir: info.configuredDir,
+    credentialKey: current.credentialKey, at: NOW, windows: [{ key: 'fiveHour', remaining: 3, resetAt: NOW + 3600_000 }] };
+  let state = P.observe({}, { seatId: 'cn', accountKey: info.accountKey, configDir: info.configuredDir }, NOW + 1);
+  assert.equal(state.seats.cn.officialNotBefore, undefined);
+  assert.equal(P.seatQuota({ sample: official }, { ...current, ...state.seats.cn }, NOW + 1).trusted, true);
+  state = P.observe(state, { seatId: 'cn', accountKey: 'new-account', configDir: info.configuredDir }, NOW + 2);
+  assert.equal(state.seats.cn.officialNotBefore, NOW + 2);
+  assert.equal(P.bound(official, { ...current, officialNotBefore: NOW + 2 }), false);
+  assert.equal(P.seatQuota({ sample: official, officialNotBefore: NOW + 2 }, current, NOW + 2).trusted, false);
+  assert.equal(P.seatQuota({ sample: official, officialNotBefore: NOW + 2 }, { ...current, officialNotBefore: NOW - 1 }, NOW + 2).trusted, false);
+  assert.equal(P.seatQuota({ sample: official, officialNotBefore: NOW - 1 }, { ...current, officialNotBefore: NOW + 2 }, NOW + 2).trusted, false);
+  assert.equal(P.bound({ ...official, at: NOW + 2 }, { ...current, officialNotBefore: NOW + 2 }), true);
+  state = P.observe(state, { seatId: 'cn', accountKey: 'new-account', configDir: '~/.claude-new' }, NOW + 3);
+  assert.equal(state.seats.cn.officialNotBefore, NOW + 3);
+  assert.deepEqual(P.normalizeState(JSON.parse(JSON.stringify(state))), P.normalizeState(state));
+  assert.equal(P.seatQuota({ sample: sample(), officialNotBefore: NOW + 2 }, current, NOW + 2).trusted, true);
+});
 test('expired, reset, future or invalid numeric observations become unknown', () => {
   for (const extra of [{ at: NOW - P.FRESH_MS - 1 }, { at: NOW + 60_001 }, { windows: [{ label: '5 小时', remaining: -1 }] },
     { windows: [{ label: '5 小时', remaining: 0, resetAt: NOW }] }]) {

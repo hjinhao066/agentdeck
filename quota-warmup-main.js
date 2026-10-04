@@ -12,12 +12,13 @@ const ARGS = ['--print', '--model', MODEL, '--effort', 'low', '--safe-mode', '--
   '--tools', '', '--disable-slash-commands', '--permission-mode', 'dontAsk', '--permission-prompts', 'none',
   '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--setting-sources', '',
   '--settings', '{"disableAllHooks":true}', '--max-turns', '1',
-  '--system-prompt', 'A', '--output-format', 'stream-json', '--verbose', 'A'];
+  '--system-prompt', 'Reply with A only.', '--output-format', 'stream-json', '--verbose', 'A'];
 const SUMMARIES = {
   success: 'Sonnet 5.5 预热请求已完成。', quota: '预热请求遇到额度用尽或限流。',
   authentication: '预热请求无法通过席位认证。', timeout: '预热请求超时。',
   aborted: '预热请求已取消。', failed: '预热请求失败。',
   'unverified-model': '预热请求未能确认使用 Sonnet 5.5。',
+  'unexpected-response': '预热请求没有返回所要求的单个字母。',
 };
 
 // Only native CLI records count. JSON inside assistant text is model output,
@@ -49,7 +50,7 @@ function parseWarmupOutput(stdout, now = Date.now()) {
   const status = rejected || result?.api_error_status === 429 ? 'quota'
     : [401, 403].includes(result?.api_error_status) ? 'authentication'
     : result?.subtype === 'success' && result.is_error === false && result.num_turns === 1
-      ? verified ? 'success' : 'unverified-model' : 'failed';
+      ? !verified ? 'unverified-model' : typeof result.result === 'string' && result.result.trim() === 'A' ? 'success' : 'unexpected-response' : 'failed';
   return { ok: status === 'success', status, resetAt, resetSource, provenNative: resetAt !== null,
     model: verified ? models[0] : null, summary: SUMMARIES[status] };
 }

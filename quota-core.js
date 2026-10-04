@@ -189,19 +189,24 @@
   function observe(store, next, now = Date.now()) {
     if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || now - next.at > FRESH_MS) return false;
     if (next.scope !== SCOPES[next.provider]) return false;
-    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && !next.accountBound) next = { ...next, windows: [] };
+    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && !next.accountBound && !next.official) next = { ...next, windows: [] };
     const key = next.provider === 'Claude' ? seatKey(next.seatId) : next.provider;
     const before = JSON.stringify(store[key] || {});
     let previous = store[key] || {};
+    const identityChanged = (next.accountKey && previous.accountKey && next.accountKey !== previous.accountKey && next.legacyAccountKey !== previous.accountKey) ||
+      (next.configDir && previous.configDir && next.configDir !== previous.configDir);
+    const officialNotBefore = Math.max(previous.officialNotBefore || 0, identityChanged ? next.at : 0);
+    if (next.official && next.at < officialNotBefore) return false;
     // Drop the old provider-wide latches: their model/account was not recorded.
     if (previous.scope !== next.scope || (next.accountKey && previous.accountKey && next.accountKey !== previous.accountKey && next.legacyAccountKey !== previous.accountKey) || (next.configDir && previous.configDir && next.configDir !== previous.configDir)) previous = {};
-    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && previous.sample && !previous.sample.accountBound) {
+    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && previous.sample && !previous.sample.accountBound && !previous.sample.official) {
       previous = { ...previous, sample: { ...previous.sample, windows: [] } };
       if (previous.blocked?.numeric) delete previous.blocked;
     }
     const out = { ...previous };
+    if (officialNotBefore) out.officialNotBefore = officialNotBefore;
     out.scope = next.scope;
-    for (const key of ['account', 'accountKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
+    for (const key of ['account', 'accountKey', 'credentialKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
     if (next.accountKey && next.legacyAccountKey === previous.accountKey && out.blocked && !out.blocked.numeric && out.blocked.accountKey === previous.accountKey) {
       out.blocked = { ...out.blocked, accountKey: next.accountKey };
     }
@@ -237,7 +242,9 @@
   function summary(store, provider, now = Date.now(), seat = null, captainSeatId = null) {
     const saved = store[seat ? seatKey(seat.id) : provider] || {};
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
-    const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir);
+    const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir) ||
+      (sample?.official && sample.seatId === seat.id && sample.credentialKey && sample.credentialKey === entry.credentialKey &&
+        sample.configDir === seat.configDir && sample.at >= (entry.officialNotBefore || 0));
     const fresh = sample && trusted && now - sample.at <= FRESH_MS;
     const windows = fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
     const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;

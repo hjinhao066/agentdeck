@@ -48,7 +48,9 @@ async function seatInfo(seat, home, platform = process.platform, keychain = hasK
     accountKey = usageAccountKey(loc) || '';
   } catch (_) {}
   const present = !!email && (fs.existsSync(loc.credentialsPath) || (platform === 'darwin' && await keychain(loc.keychainService)));
-  return { ...seat, configDir: loc.dir, maskedEmail: email, accountKey, loggedIn: !!email && !!present, usagePath: loc.usagePath };
+  return { ...seat, configDir: loc.dir, maskedEmail: email, accountKey,
+    credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16),
+    loggedIn: !!email && !!present, usagePath: loc.usagePath };
 }
 function sanitizeUsage(value) {
   if (!value || !Number.isFinite(value.at) || !Array.isArray(value.windows)) throw new Error('无效用量记录');

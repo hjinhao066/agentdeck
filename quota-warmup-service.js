@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const W = require('./quota-warmup-core');
 const Q = require('./quota-core');
+const P = require('./perpetual-captain-core');
 
 function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSeat, occupied, run, now = Date.now }) {
   let state;
@@ -26,10 +27,18 @@ function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSe
     for (const seat of getSeats().filter((s) => ['cn', 'us'].includes(s.id))) {
       let info;
       try { info = await readSeat(seat); } catch (_) { continue; }
+      const owner = state.owners?.[seat.id];
+      const changed = owner && (owner.accountKey !== info?.accountKey || dirKey(owner.configDir) !== dirKey(info?.configDir));
+      const officialNotBefore = changed ? now() : owner?.officialNotBefore;
+      if (info?.accountKey && info?.configDir) {
+        state.owners ||= {};
+        state.owners[seat.id] = { accountKey: info.accountKey, configDir: info.configDir,
+          ...(officialNotBefore ? { officialNotBefore } : {}) };
+      }
       // Consume the same quota structure as the bar/Relay, plus the existing
       // seat-bound native cache. The API reader is owned by the quota feature.
-      const records = [info?.quota?.sample, info?.usage].filter((record) => record?.accountBound &&
-        record.accountKey === info.accountKey && [seat.configDir, info.configDir].some((dir) => dirKey(dir) === dirKey(record.configDir)) &&
+      const records = [info?.quota?.sample, info?.usage].filter((record) => P.bound(record,
+        { ...info, id: seat.id, configuredDir: seat.configDir, officialNotBefore }) &&
         Number.isFinite(record.at) && (!record.seatId || record.seatId === seat.id));
       const samples = records.map((record) => {
         const w = record.windows?.find((w) => w.key === 'fiveHour' || w.label === '5 小时');

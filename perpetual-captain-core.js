@@ -21,7 +21,7 @@
     for (const [id, raw] of Object.entries(value.seats || {})) {
       if (!validId(id) || !raw || typeof raw !== 'object') continue;
       const seat = {};
-      for (const key of ['exhaustedAt', 'resetAt', 'lowAt', 'lowResetAt', 'recoveredAt', 'clearedAt', 'enteredAt', 'leftAt']) if (time(raw[key])) seat[key] = raw[key];
+      for (const key of ['exhaustedAt', 'resetAt', 'lowAt', 'lowResetAt', 'recoveredAt', 'clearedAt', 'enteredAt', 'leftAt', 'officialNotBefore']) if (time(raw[key])) seat[key] = raw[key];
       if (percent(raw.lowRemaining) !== null) seat.lowRemaining = raw.lowRemaining;
       for (const key of ['accountKey', 'configDir']) if (typeof raw[key] === 'string' && raw[key]) seat[key] = raw[key];
       seats[id] = seat;
@@ -46,10 +46,14 @@
     for (const seat of Object.values(state.seats)) recover(seat, now);
     if (!event || !validId(event.seatId)) return state;
     let seat = state.seats[event.seatId] || (state.seats[event.seatId] = {});
+    const identityChanged = (event.accountKey && seat.accountKey && event.accountKey !== seat.accountKey) ||
+      (event.configDir && seat.configDir && event.configDir !== seat.configDir);
+    const officialNotBefore = Math.max(seat.officialNotBefore || 0, identityChanged ? now : 0);
     if ((event.accountKey && event.accountKey !== seat.accountKey) || (event.configDir && seat.configDir && event.configDir !== seat.configDir)) {
       // A new login/directory cannot inherit the previous account's quota lock.
       seat = state.seats[event.seatId] = { enteredAt: seat.enteredAt, leftAt: seat.leftAt };
     }
+    if (time(officialNotBefore)) seat.officialNotBefore = officialNotBefore;
     for (const key of ['accountKey', 'configDir']) if (typeof event[key] === 'string' && event[key]) seat[key] = event[key];
     const at = time(event.at);
     if (!at || at > now + 60_000 || at <= (seat.clearedAt || 0)) return state;
@@ -86,11 +90,19 @@
     return !!dir && [info.configDir, info.configuredDir].some((expected) => dir === clean(expected));
   }
   function bound(evidence, info) {
-    return !!evidence && evidence.accountBound === true && !!info.accountKey && evidence.accountKey === info.accountKey && sameDir(evidence.configDir, info);
+    if (!evidence || !info || !sameDir(evidence.configDir, info)) return false;
+    // The API's credential key identifies the current seat's storage slot,
+    // not its account. Known account contradictions still invalidate it.
+    if (evidence.official === true) return evidence.provider === 'Claude' && evidence.scope === 'claude' &&
+      evidence.seatId === info.id && !!info.credentialKey && evidence.credentialKey === info.credentialKey &&
+      (!time(info.officialNotBefore) || (time(evidence.at) && evidence.at >= info.officialNotBefore)) &&
+      (!evidence.accountKey || (!!info.accountKey && evidence.accountKey === info.accountKey));
+    return evidence.accountBound === true && !!info.accountKey && evidence.accountKey === info.accountKey;
   }
   function seatQuota(saved = {}, info = {}, now = Date.now()) {
     if (!saved || typeof saved !== 'object') saved = {};
     if (!info || typeof info !== 'object') info = {};
+    info = { ...info, officialNotBefore: Math.max(time(info.officialNotBefore) || 0, time(saved.officialNotBefore) || 0) };
     const sample = saved.sample;
     const fresh = sample && time(sample.at) && sample.at <= now + 60_000 && now - sample.at <= FRESH_MS;
     const fiveHour = fresh && bound(sample, info) && (sample.windows || []).find((window) =>
@@ -100,8 +112,9 @@
     // percentages additionally need the account fingerprint from that sample.
     const errorBound = block && !block.numeric && !!block.sourceColumnId && sameDir(block.configDir, info) &&
       (!block.accountKey || (!!info.accountKey && block.accountKey === info.accountKey));
-    const numericBound = block && block.numeric && (bound(block, info) ||
-      (bound(sample, info) && sample.at >= block.at && (sample.windows || []).some((window) => window.exhausted)));
+    const numericBound = block && block.numeric && ((bound(block, info) &&
+      (block.official !== true || (time(block.at) && now - block.at <= FRESH_MS))) ||
+      (bound(sample, info) && (sample.official !== true || fresh) && sample.at >= block.at && (sample.windows || []).some((window) => window.exhausted)));
     const blocked = block && time(block.at) && block.at <= now + 60_000 && (!time(block.resetAt) || block.resetAt > now) && (errorBound || numericBound);
     const recovery = saved.resumed || (fresh && sample.resumed ? sample : null);
     const resumed = recovery && time(recovery.at) && recovery.at <= now + 60_000 && recovery.at > (block?.at || 0) &&
@@ -166,5 +179,5 @@
     state.lastSwitch = { fromId: event.fromId, targetId: event.targetId, reason: String(event.reason || ''), at: event.at };
     return state;
   }
-  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, normalizeSettings, normalizeState, observe, seatQuota, decide, recordSwitch };
+  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, normalizeSettings, normalizeState, observe, bound, seatQuota, decide, recordSwitch };
 });

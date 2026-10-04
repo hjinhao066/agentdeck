@@ -1,13 +1,29 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { occupied, scanProcesses } = require('../quota-warmup-occupancy');
 const seats = [{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }];
 const row = (pid, ppid, comm) => ({ pid, ppid, comm });
 const column = (id, seatId, cmd = 'claude --model claude-sonnet-5-5') => ({ id, claudeSeatId: seatId,
   claudeConfigDir: seats.find((s) => s.id === seatId)?.configDir, cmd });
 const check = (columns, rows = [], ptys = new Map(columns.map((c, i) => [c.id, { pid: 100 + i }]))) =>
-  occupied({ seats, columns, ptys }, async () => rows);
+  occupied({ seats, columns, ptys, home: '/nonexistent-agentdeck-test-home' }, async () => rows);
+const birth = 'Sun Oct  4 02:20:34 2026';
+const bornRow = (pid, ppid, comm = 'claude', procStart = birth) => ({ ...row(pid, ppid, comm), procStart });
+function registry(t) {
+  const home = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'agentdeck-occupancy-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const fixtureSeats = seats.map((seat) => ({ ...seat, configDir: seat.configDir.replace('~', home) }));
+  fixtureSeats.forEach((seat) => fs.mkdirSync(path.join(seat.configDir, 'sessions'), { recursive: true }));
+  const file = (seatId, pid) => path.join(fixtureSeats.find((seat) => seat.id === seatId).configDir,
+    pid === 'daemon' ? 'daemon.lock' : `sessions/${pid}.json`);
+  const write = (seatId, pid, value = { pid, procStart: birth }) => fs.writeFileSync(file(seatId, pid), JSON.stringify(value));
+  const inspect = (rows) => occupied({ seats: fixtureSeats, columns: [], ptys: new Map(), home }, async () => rows);
+  return { home, seats: fixtureSeats, file, write, inspect };
+}
 
 test('live Claude columns reserve only their frozen seat, even before the CLI starts', async () => {
   assert.deepEqual(await check([column('cap', 'cn')]), new Set(['cn']));
@@ -84,21 +100,81 @@ test('Windows paths match without case sensitivity and executable metadata attri
     async () => [row(201, 100, 'C:\\Program Files\\Claude\\claude.exe')]), new Set(['cn']));
 });
 
-test('process scanner requests only PID, PPID and process name/path, never arguments or environment', async () => {
+test('birth-matched external CN sessions and their daemon descendants leave US available', async (t) => {
+  const fixture = registry(t);
+  fixture.write('cn', 201);
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1)]), new Set(['cn']));
+  fixture.write('cn', 'daemon', { pid: 300, procStart: birth });
+  fixture.write('cn', 302);
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1), bornRow(300, 1),
+    bornRow(301, 300, 'claude bg-pty-host'), bornRow(302, 301, 'claude bg-spare')]), new Set(['cn']));
+  // Whitespace padding in ps lstart is not part of the process identity.
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1, 'claude', birth.replace(/\s+/g, ' '))]), new Set(['cn']));
+});
+
+test('stale PID, missing birth time, wrong file PID and unknown external sessions remain untrusted', async (t) => {
+  const fixture = registry(t);
+  fixture.write('cn', 201);
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1, 'claude', 'Sun Oct  4 02:20:35 2026')]), new Set(['cn', 'us']));
+  assert.deepEqual(await fixture.inspect([row(201, 1, 'claude')]), new Set(['cn', 'us']));
+  fixture.write('cn', 201, { pid: 202, procStart: birth });
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1), bornRow(202, 1, 'node')]), new Set(['cn', 'us']));
+  fixture.write('cn', 201);
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1), bornRow(202, 1)]), new Set(['cn', 'us']));
+  fixture.write('cn', 'daemon', { pid: 300, procStart: 'Sun Oct  4 02:20:35 2026' });
+  assert.deepEqual(await fixture.inspect([bornRow(300, 1), bornRow(301, 300, 'claude bg-spare')]), new Set(['cn', 'us']));
+});
+
+test('registrations outside the configured seat directories cannot prove ownership', async (t) => {
+  const fixture = registry(t), other = path.join(fixture.home, '.other-seat', 'sessions');
+  fs.mkdirSync(other, { recursive: true });
+  fs.writeFileSync(path.join(other, '201.json'), JSON.stringify({ pid: 201, procStart: birth }));
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1)]), new Set(['cn', 'us']));
+});
+
+test('conflicting direct or ancestor registrations and impossible process inventories fail closed', async (t) => {
+  const fixture = registry(t);
+  fixture.write('cn', 201); fixture.write('us', 201);
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1)]), new Set(['cn', 'us']));
+  fs.unlinkSync(fixture.file('cn', 201));
+  fixture.write('cn', 'daemon', { pid: 300, procStart: birth });
+  assert.deepEqual(await fixture.inspect([bornRow(300, 1), bornRow(201, 300)]), new Set(['cn', 'us']));
+  assert.deepEqual(await fixture.inspect([bornRow(201, 202), bornRow(202, 201, 'node')]), new Set(['cn', 'us']));
+  assert.deepEqual(await fixture.inspect([bornRow(201, 1), bornRow(201, 2)]), new Set(['cn', 'us']));
+});
+
+test('seat roots, session directories and process files cannot be symbolic or cross-seat hard links', async (t) => {
+  for (const kind of ['root', 'sessions', 'file', 'hardlink']) {
+    const fixture = registry(t);
+    fixture.write('cn', 201);
+    const cn = fixture.seats[0].configDir, us = fixture.seats[1].configDir;
+    if (kind === 'root') {
+      fs.rmSync(us, { recursive: true }); fs.symlinkSync(cn, us);
+    } else if (kind === 'sessions') {
+      fs.rmSync(path.join(us, 'sessions'), { recursive: true }); fs.symlinkSync(path.join(cn, 'sessions'), path.join(us, 'sessions'));
+    } else if (kind === 'file') fs.symlinkSync(fixture.file('cn', 201), fixture.file('us', 201));
+    else fs.linkSync(fixture.file('cn', 201), fixture.file('us', 201));
+    assert.deepEqual(await fixture.inspect([bornRow(201, 1)]), new Set(['cn', 'us']), kind);
+  }
+});
+
+test('process scanner requests only PID, PPID, birth time and process name/path, never arguments or environment', async () => {
   for (const platform of ['darwin', 'linux', 'win32']) {
     const rows = await scanProcesses({ platform, execFileImpl: (command, args, options, callback) => {
       assert.equal(options.shell, false); assert.ok(options.timeout <= 3000);
+      assert.equal(options.env.TZ, 'UTC'); assert.equal(options.env.LC_ALL, 'C');
       if (platform === 'win32') {
         assert.equal(command, 'powershell.exe');
         assert.match(args.at(-1), /ProcessId,ParentProcessId,Name,ExecutablePath/);
         assert.ok(!/CommandLine|Environment/i.test(args.at(-1)));
         callback(null, '\uFEFF[{"ProcessId":201,"ParentProcessId":100,"Name":"claude.exe","ExecutablePath":null}]');
       } else {
-        assert.equal(command, 'ps'); assert.deepEqual(args, ['-eo', 'pid=,ppid=,comm=']);
-        callback(null, '  100  1 /bin/zsh\n  201  100 /a directory/claude\n');
+        assert.equal(command, 'ps'); assert.deepEqual(args, ['-eo', 'pid=,ppid=,lstart=,comm=']);
+        callback(null, `  100  1 ${birth} /bin/zsh\n  201  100 ${birth} /a directory/claude\n`);
       }
     } });
     assert.equal(rows.at(-1).pid, 201); assert.equal(rows.at(-1).ppid, 100);
+    if (platform !== 'win32') assert.equal(rows.at(-1).procStart, birth.replace(/\s+/g, ' '));
   }
 });
 

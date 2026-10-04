@@ -73,6 +73,15 @@ test('native quota/auth failures are safe summaries with no raw output', () => {
   assert.equal(parseWarmupOutput('not-json\n{"partial":', now).status, 'failed');
 });
 
+test('successful inference must return the requested single letter without leaking other output', () => {
+  assert.equal(parseWarmupOutput(output(result({ result: 'A\n' })), now).ok, true);
+  for (const response of ['AA', 'A private detail', '', undefined, null, {}]) {
+    const parsed = parseWarmupOutput(output(result({ result: response })), now);
+    assert.equal(parsed.status, 'unexpected-response'); assert.equal(parsed.ok, false);
+    assert.equal(JSON.stringify(parsed).includes('private detail'), false);
+  }
+});
+
 test('runner pins seat auth routing, disables retries and customizations, and removes its own cwd', async (t) => {
   const home = fixture(t), calls = [];
   const env = { PATH: '/fixture/bin', CLAUDE_CONFIG_DIR: '/wrong', CLAUDE_CODE_OAUTH_TOKEN: 'test-secret',
@@ -106,7 +115,7 @@ test('runner pins seat auth routing, disables retries and customizations, and re
     for (const key of Object.keys(before).filter((key) => key !== 'PATH' && key !== 'CLAUDE_CONFIG_DIR' && key !== 'CLAUDE_CODE_MAX_RETRIES')) assert.equal(options.env[key], undefined);
     for (const flag of ['--print', '--safe-mode', '--no-session-persistence', '--disable-slash-commands', '--strict-mcp-config']) assert.equal(args.includes(flag), true);
     for (const [flag, value] of [['--model', MODEL], ['--effort', 'low'], ['--tools', ''], ['--setting-sources', ''],
-      ['--settings', '{"disableAllHooks":true}'], ['--max-turns', '1'], ['--system-prompt', 'A'], ['--output-format', 'stream-json']]) assert.equal(args[args.indexOf(flag) + 1], value);
+      ['--settings', '{"disableAllHooks":true}'], ['--max-turns', '1'], ['--system-prompt', 'Reply with A only.'], ['--output-format', 'stream-json']]) assert.equal(args[args.indexOf(flag) + 1], value);
     assert.equal(args.at(-1), 'A'); assert.equal(args.includes('--bare'), false);
     assert.equal(fs.existsSync(options.cwd), false);
   }
