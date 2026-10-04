@@ -16,6 +16,11 @@
   const unsaved = new Set();   // saves asked for before the saved chats were loaded
   let loaded = false;
   let nav = null;              // left-hand search handles
+  let restoringDraft = false;
+  // Set on mousedown while the composer still has focus, before the click
+  // moves focus to a toggle. View switches use it to keep the caret.
+  let typingColumnId = null;
+  let caretSnap = null;
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -59,20 +64,41 @@
     v.toggle.textContent = chat ? '终端' : '对话';
     v.toggle.title = chat ? '切到原始终端' : '切到对话视图';
   }
+  function takeComposerCaret(id) {
+    const keep = typingColumnId === id;
+    const snap = caretSnap && caretSnap.id === id ? caretSnap : null;
+    typingColumnId = null;
+    caretSnap = null;
+    return { keep, snap };
+  }
+  function restoreCaret(v, snap) {
+    if (!v || !snap || v.ta.value !== snap.value) return;
+    const len = v.ta.value.length;
+    v.ta.selectionStart = Math.min(snap.start, len);
+    v.ta.selectionEnd = Math.min(snap.end, len);
+  }
   function setMode(id, mode) {
     const col = columnById(id);
     const v = views.get(id);
     if (!col || !v) return;
+    const caret = takeComposerCaret(id);
     if (mode === 'term' && window.SidePane.holdsTerminalOf(id)) window.SidePane.restoreTerminal();
     col.view = mode;
     applyMode(col);
     host.saveConfig();
     host.layout();
+    restoreCaret(v, caret.snap);
     if (mode === 'chat') { renderChat(id); focusInput(id); window.SidePane.syncTerminal(); }
+    else if (caret.keep) v.ta.focus({ preventScroll: true });
     else { const t = host.terms.get(id); if (t) t.term.focus(); }
+    updateTerminalHint(v, id);
   }
 
   function toggleGlobalMode() {
+    const keepId = typingColumnId;
+    const snap = caretSnap;
+    typingColumnId = null;
+    caretSnap = null;
     window.SidePane.restoreTerminal();
     C.toggleGlobalView(host.config, host.columns());
     host.columns().forEach((col) => {
@@ -81,8 +107,12 @@
     });
     host.saveConfig();
     host.layout();
+    const kept = keepId && views.get(keepId);
+    if (kept) restoreCaret(kept, snap && snap.id === keepId ? snap : null);
     const id = host.focusedId();
-    if (id && !focusInput(id)) host.terms.get(id)?.term.focus();
+    if (kept) kept.ta.focus({ preventScroll: true });
+    else if (id && !focusInput(id)) host.terms.get(id)?.term.focus();
+    views.forEach((v, vid) => updateTerminalHint(v, vid));
     window.SidePane.syncTerminal();
   }
 
@@ -92,6 +122,10 @@
     const scroll = el('div', 'chat-scroll');
     const attn = el('div', 'chat-attn');
     attn.hidden = true;
+    // Fixed wording. The agent's unsent prompt is never copied into this node.
+    const hint = el('div', 'draft-hint', '终端里有未发送的输入');
+    hint.hidden = true;
+    hint.setAttribute('role', 'status');
     const form = el('form', 'composer');
     const box = el('div', 'composer-box');
     const ta = el('textarea');
@@ -121,14 +155,14 @@
     const newContent = el('button', 'new-content chat-new-content', '有新内容 ↓');
     newContent.type = 'button';
     newContent.hidden = true;
-    chat.append(scroll, newContent, attn, form, footer);
+    chat.append(scroll, newContent, attn, hint, form, footer);
     wrap.insertBefore(chat, termEl);
 
     const toggle = el('button', 'view-toggle');
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
+    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, hint, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
     scroll.addEventListener('scroll', () => {
       v.following = nearBottom(scroll);
       if (v.following) newContent.hidden = true;
@@ -151,7 +185,12 @@
       }).catch(() => {});
     });
     box.addEventListener('mousedown', (e) => { if (e.target === box || e.target === bar || e.target === spacer) { e.preventDefault(); ta.focus(); } });
-    ta.addEventListener('input', () => autosize(ta));
+    ta.addEventListener('input', () => { autosize(ta); captureDraft(v); });
+    const rememberCaret = () => captureDraft(v);
+    ta.addEventListener('keyup', rememberCaret);
+    ta.addEventListener('mouseup', rememberCaret);
+    ta.addEventListener('select', rememberCaret);
+    ta.addEventListener('focusout', rememberCaret);
     ta.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); submit(col); return; }
       if (e.key === 'ArrowUp' && !ta.value && !e.isComposing) { recallHistory(v, col.id, 1); e.preventDefault(); }
@@ -177,7 +216,7 @@
       ta.focus();
     });
 
-    if (loaded) renderChat(col.id);
+    if (loaded) { renderChat(col.id); applySavedDraft(col.id); }
   }
   function autosize(ta) {
     ta.style.height = 'auto';
@@ -239,6 +278,7 @@
     v.atts.forEach((p, i) => v.attBox.appendChild(attachmentChip(p, v.id, () => {
       v.atts.splice(i, 1);
       renderAttachments(v);
+      captureDraft(v);
       v.ta.focus();
     })));
   }
@@ -246,6 +286,7 @@
     if (!path || v.atts.includes(path) || v.atts.length >= 20) return;
     v.atts.push(path);
     renderAttachments(v);
+    captureDraft(v);
   }
 
   function recallHistory(v, id, dir) {
@@ -254,6 +295,9 @@
     v.hist = Math.max(-1, Math.min(asked.length - 1, v.hist + dir));
     v.ta.value = v.hist < 0 ? '' : asked[v.hist];
     autosize(v.ta);
+    const len = v.ta.value.length;
+    v.ta.selectionStart = v.ta.selectionEnd = len;
+    captureDraft(v);
   }
 
   // ---- rendering ----
@@ -737,10 +781,11 @@
     const v = views.get(id);
     if (!v) return;
     const chatMode = isChatMode(id);
+    v.stop.hidden = entry.state !== 'working';
+    v.agentDot.className = 'cp-agent-dot ' + (entry.alive ? entry.state || 'plain' : 'exited');
+    v.agentDot.title = window.MainCore.statusLabel(entry.alive ? entry.state : 'exited');
+    updateTerminalHint(v, id);
     if (chatMode) {
-      v.stop.hidden = entry.state !== 'working';
-      v.agentDot.className = 'cp-agent-dot ' + (entry.alive ? entry.state || 'plain' : 'exited');
-      v.agentDot.title = window.MainCore.statusLabel(entry.alive ? entry.state : 'exited');
       renderFooter(v, entry);
       setAttention(v, id, entry.state === 'input' ? text : null);
       const col = columnById(id);
@@ -811,6 +856,7 @@
       if (!sent || v.ta.value.replace(/\s+$/, '') !== text) return;
       v.ta.value = ''; v.hist = -1; autosize(v.ta);
       v.atts = v.atts.filter((p) => !atts.includes(p)); renderAttachments(v);
+      captureDraft(v);
     });
   }
   // Type a prompt into the column's terminal as if sent from the composer.
@@ -960,6 +1006,7 @@
   // Leaving the page (quit, reload): a turn still running keeps the reply seen
   // so far and is marked unfinished, instead of being saved with no reply.
   function onLeave() {
+    views.forEach((v) => captureDraft(v));
     pending.forEach((open, id) => {
       const entry = host.terms.get(id);
       if (entry) {
@@ -987,6 +1034,8 @@
   }
   // Archiving keeps the conversation: close any open turn and save it now.
   function onColumnArchived(id) {
+    const leaving = views.get(id);
+    if (leaving) captureDraft(leaving);
     finalizeTurn(id);
     forget(id);
     saveNow(id);
@@ -1001,6 +1050,8 @@
   function onColumnIdChanged(oldId, newId) {
     const open = pending.get(oldId);
     if (open) { open.turn.done = true; open.turn.interrupted = true; }
+    const leaving = views.get(oldId);
+    if (leaving) captureDraft(leaving);
     forget(oldId);
     const chat = chats.get(oldId);
     if (chat) {
@@ -1222,6 +1273,47 @@
   }
 
   // ---- keyboard ----
+  // One composer per session. Text, caret and attachments live on that element
+  // and in the saved chat, so both pages show the same draft. Keys typed into
+  // the terminal are the agent's own prompt and are never written here.
+  function captureDraft(v) {
+    if (!v || restoringDraft) return;
+    const chat = chatFor(v.id);
+    const draft = C.normalizeDraft({
+      text: v.ta.value,
+      selStart: v.ta.selectionStart || 0,
+      selEnd: v.ta.selectionEnd || 0,
+      atts: v.atts,
+    });
+    const before = JSON.stringify(chat.draft || null);
+    if (draft) chat.draft = draft;
+    else delete chat.draft;
+    if (JSON.stringify(chat.draft || null) !== before) scheduleSave(v.id);
+  }
+  function applySavedDraft(id) {
+    const v = views.get(id);
+    const draft = chatFor(id).draft;
+    if (!v || !draft || v.ta.value || v.atts.length) return;
+    restoringDraft = true;
+    try {
+      v.ta.value = draft.text;
+      v.atts = draft.atts.slice();
+      renderAttachments(v);
+      autosize(v.ta);
+      const len = v.ta.value.length;
+      v.ta.selectionStart = Math.min(draft.selStart, len);
+      v.ta.selectionEnd = Math.min(draft.selEnd, len);
+    } finally { restoringDraft = false; }
+  }
+  function updateTerminalHint(v, id) {
+    if (!v) return;
+    const entry = host.terms.get(id);
+    const box = host.agentPromptText ? host.agentPromptText(id) : null;
+    const show = isChatMode(id) && !!entry && !entry.sendingPrompt && !entry.injecting
+      && C.showTerminalUnsentHint(entry.typing, box);
+    v.hint.hidden = !show;
+  }
+
   function initKeys() {
     document.addEventListener('keydown', (e) => {
       if (!e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
@@ -1237,6 +1329,20 @@
     host = h;
     initNav();
     initKeys();
+    document.addEventListener('mousedown', (e) => {
+      const el = document.activeElement;
+      const outside = el && e.target !== el;
+      typingColumnId = null;
+      caretSnap = null;
+      if (!outside) return;
+      for (const [id, v] of views) {
+        if (v.ta !== el) continue;
+        typingColumnId = id;
+        caretSnap = { id, start: el.selectionStart || 0, end: el.selectionEnd || 0, value: el.value };
+        captureDraft(v);
+        break;
+      }
+    }, true);
     window.addEventListener('pagehide', onLeave);
     try {
       const saved = await window.deck.chatLoadAll();
@@ -1248,7 +1354,7 @@
     loaded = true;
     unsaved.forEach((id) => scheduleSave(id));
     unsaved.clear();
-    views.forEach((v, id) => renderChat(id));
+    views.forEach((v, id) => { renderChat(id); applySavedDraft(id); });
     if (nav.input.value.trim()) runSearch();
     if (window.Sidebar) window.Sidebar.render();
   }

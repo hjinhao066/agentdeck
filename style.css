@@ -1008,6 +1008,15 @@ body.linking-board .board-port.out::before {
 .column .chat { display: none; }
 /* ⌘−/⌘= scale the chat view with the terminal font (renderer sets --chat-zoom) */
 .column.chat-mode .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; zoom: var(--chat-zoom, 1); }
+/* Terminal view keeps the same composer under the raw terminal. Everything
+   else in the chat (bubbles, attention, the unsent-terminal hint) stays in
+   the conversation page. */
+.column:not(.chat-mode) .term { order: 1; }
+.column:not(.chat-mode) .chat {
+  display: flex; flex-direction: column; flex: 0 0 auto; order: 2;
+  min-height: 0; min-width: 0; zoom: var(--chat-zoom, 1);
+}
+.column:not(.chat-mode) .chat > :not(.composer) { display: none !important; }
 .column.chat-mode > .term {
   position: absolute; left: 0; right: 0; top: 40px; bottom: 0;
   visibility: hidden; pointer-events: none;
@@ -1123,7 +1132,16 @@ body.linking-board .board-port.out::before {
 }
 .attn-key:hover { border-color: var(--accent); color: var(--accent); }
 
-/* Composer: Cursor-style box with the agent shown on the right. */
+/* The conversation page says this when the agent prompt itself holds text.
+   It is not the composer draft and never contains that text. */
+.draft-hint {
+  flex: 0 0 auto; margin: 0 14px 2px; padding: 2px 2px 0;
+  color: var(--muted); font-size: 12px; line-height: 1.4;
+}
+.draft-hint[hidden] { display: none !important; }
+
+/* Composer: Cursor-style box with the agent shown on the right.
+   One element per session, shown at the bottom of both pages. */
 .composer { flex: 0 0 auto; padding: 6px 14px 6px; }
 .composer-box {
   display: flex; flex-direction: column; gap: 4px;

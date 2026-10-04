@@ -257,6 +257,59 @@ test('blank redraw padding before the echo does not hide it', () => {
   assert.equal(C.extractReply(screen, 'please summarize\nline two', 80), 'Summary here');
 });
 
+test('one composer draft is stored per session and is not the agent prompt', () => {
+  const draft = C.normalizeDraft({
+    text: '  对话和终端同一份  ',
+    selStart: 2,
+    selEnd: 5,
+    atts: ['/tmp/note.md', '/tmp/shot.png', 3, '', '/tmp/note.md'],
+  });
+  assert.deepEqual(draft, {
+    text: '  对话和终端同一份  ',
+    selStart: 2,
+    selEnd: 5,
+    atts: ['/tmp/note.md', '/tmp/shot.png', '/tmp/note.md'],
+  });
+  assert.equal(C.normalizeDraft({ text: '', atts: [] }), null);
+  assert.equal(C.normalizeDraft({ draft: '终端里半句话', unknown: true, lastKeyAt: 1 }), null);
+  const swapped = C.normalizeDraft({ text: 'abcdef', selStart: 5, selEnd: 1, atts: [] });
+  assert.deepEqual([swapped.selStart, swapped.selEnd], [1, 5]);
+  const clipped = C.normalizeDraft({ text: 'x'.repeat(200001), selStart: 200000, selEnd: 200001, atts: [] });
+  assert.equal(clipped.text.length, 200000);
+  assert.deepEqual([clipped.selStart, clipped.selEnd], [200000, 200000]);
+
+  const chat = C.normalizeChat({
+    turns: [],
+    draft: { text: 'composer only', selStart: 1, selEnd: 4, atts: ['/tmp/shot.png'] },
+    typing: { draft: 'agent prompt only', unknown: true },
+  }, 'session-a');
+  assert.equal(chat.draft.text, 'composer only');
+  assert.deepEqual(chat.draft.atts, ['/tmp/shot.png']);
+  assert.equal(JSON.stringify(chat).includes('agent prompt only'), false);
+  const other = C.normalizeChat({ turns: [], draft: { text: 'other session' } }, 'session-b');
+  assert.equal(other.draft.text, 'other session');
+  assert.notEqual(other.id, chat.id);
+
+  const onDisk = () => C.normalizeChat({ turns: [{ id: 'a', user: 'old', reply: '', done: true }], draft: { text: 'from disk', selStart: 0, selEnd: 0 } }, 'session-a');
+  const typedDuringLoad = C.emptyChat('session-a');
+  typedDuringLoad.draft = C.normalizeDraft({ text: 'typed first', selStart: 3, selEnd: 3, atts: [] });
+  assert.equal(C.mergeChats(onDisk(), typedDuringLoad).draft.text, 'typed first');
+  assert.equal(C.mergeChats(onDisk(), C.emptyChat('session-a')).draft.text, 'from disk');
+  assert.equal(C.normalizeChat({ turns: [] }, 'plain').draft, undefined);
+});
+
+test('the chat-page hint reports an unsent agent prompt without becoming that text', () => {
+  assert.equal(C.showTerminalUnsentHint({ draft: 'agent prompt only', unknown: false, lastKeyAt: 0 }, null), true);
+  assert.equal(C.showTerminalUnsentHint({ draft: '', unknown: true, lastKeyAt: Date.now() }, ''), false);
+  assert.equal(C.showTerminalUnsentHint({ draft: '', unknown: true }, null), true);
+  assert.equal(C.showTerminalUnsentHint({ draft: 'tracked', unknown: false }, ''), true);
+  assert.equal(C.showTerminalUnsentHint({ draft: '', unknown: false, lastKeyAt: Date.now() }, null), false);
+  assert.equal(C.showTerminalUnsentHint(null, 'visible box text'), true);
+  assert.equal(C.showTerminalUnsentHint(null, ''), false);
+  assert.equal(C.showTerminalUnsentHint(null, null), false);
+  assert.equal(typeof C.showTerminalUnsentHint({ draft: 'agent prompt only' }, 'visible box text'), 'boolean');
+});
+
 test('view preference defaults legacy or invalid values to chat', () => {
   for (const value of [undefined, null, '', 'terminal', 'board', false, {}]) {
     assert.equal(C.normalizeViewMode(value), 'chat');

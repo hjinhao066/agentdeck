@@ -295,7 +295,10 @@ function maybeAutoName(col, line) {
 }
 
 // Rebuild the line being typed from raw pty input so the submitted prompt can
-// be caught. Printables append, backspace deletes, Enter submits. Escape
+// be caught. This is the agent program's own input line, not the composer.
+// Nothing here is copied into the composer, and the composer is not written
+// back except when the user actually sends. Printables append, backspace
+// deletes, Enter submits. Escape
 // sequences (arrow keys, and xterm's auto-replies to terminal queries) are
 // skipped (OSC/DCS replies such as colour queries too); inside a bracketed paste
 // a newline is literal content, not "send".
@@ -382,6 +385,13 @@ function visibleInputBox(entry) {
     return MainCore.inputBoxText(plain, masked);
   } catch (_) { return null; }
 }
+// Text sitting in the agent's own prompt, if the screen has a recognised box.
+// Null when no box is recognised. Never written back, and never used as the
+// composer draft — the chat page only uses it to decide a yes/no hint.
+function agentPromptText(id) {
+  const entry = terms.get(id);
+  return entry ? visibleInputBox(entry) : null;
+}
 function userComposing(id) {
   if (ChatUI.hasDraft(id)) return true;
   const entry = terms.get(id);
@@ -413,7 +423,8 @@ function peekColumn(col) {
 function deckColumns() { return columns.filter((c) => !isBackstage(c)); }
 let zoomedId = null;     // column temporarily maximized to fill the deck (Cmd+Enter / double-click header)
 
-// Chat-mode columns take typing in their composer; terminal-mode ones in xterm.
+// The composer is the app's input on both pages. Terminal view still focuses
+// xterm unless the user was already typing in that composer.
 function focusColumnInput(id) {
   const t = terms.get(id);
   if (!t) return;
@@ -3261,7 +3272,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
+  createMain, respawnColumn, agentInForeground, isBackstage, userComposing, agentPromptText, dumpScreen,
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,

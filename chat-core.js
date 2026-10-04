@@ -12,6 +12,10 @@
   // them at a time and loads older ones on request.
   const RENDER_STEP = 150;
   const MAX_TEXT = 20000;
+  // Unsent composer text is kept whole across a restart, including a long
+  // prompt that will be sent as a file. The agent's own prompt line is not
+  // stored here.
+  const MAX_DRAFT = 200000;
 
   // The global choice stays independent of per-column overrides.
   function normalizeViewMode(mode) { return mode === 'term' ? 'term' : 'chat'; }
@@ -202,10 +206,45 @@
 
   // ---- saved conversations ----
   function emptyChat(id) { return { v: 1, id, turns: [] }; }
+  // The composer's unsent text, caret and attachments. A terminal typing
+  // tracker ({ draft, unknown, lastKeyAt }) has no `text` field and becomes
+  // nothing: that line belongs to the agent program and is not a composer draft.
+  function clampCaret(n, len) {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return len;
+    return Math.max(0, Math.min(len, Math.floor(v)));
+  }
+  function normalizeDraft(raw) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const text = typeof raw.text === 'string' ? raw.text.slice(0, MAX_DRAFT) : '';
+    const atts = Array.isArray(raw.atts)
+      ? raw.atts.filter((a) => typeof a === 'string' && a.length > 0 && a.length <= 2000).slice(0, 20)
+      : [];
+    if (!text && !atts.length) return null;
+    const len = text.length;
+    const selStart = clampCaret(raw.selStart, len);
+    const selEnd = clampCaret(raw.selEnd == null ? raw.selStart : raw.selEnd, len);
+    return { text, selStart: Math.min(selStart, selEnd), selEnd: Math.max(selStart, selEnd), atts };
+  }
+  // Whether the chat page should say the terminal's own prompt still has
+  // unsent text. Returns a yes/no only — never the text itself.
+  // boxText is the agent input box read off the terminal screen: a string
+  // (possibly empty) when the box is recognised, otherwise null.
+  // A recognised empty box clears "cannot tell". Recent keystrokes alone are
+  // not unsent text; draftBlocks still uses those to hold automatic sends.
+  function showTerminalUnsentHint(typing, boxText) {
+    const box = typeof boxText === 'string' ? boxText : null;
+    const tracked = !!(typing && typeof typing.draft === 'string' && typing.draft.length > 0);
+    if (box) return true;
+    if (box === '') return tracked;
+    return tracked || !!(typing && typing.unknown);
+  }
   function normalizeChat(raw, id) {
     const chat = emptyChat(id);
     if (!raw || typeof raw !== 'object' || !Array.isArray(raw.turns)) return chat;
     if (raw.captainArchive === true) chat.captainArchive = true;
+    const draft = normalizeDraft(raw.draft);
+    if (draft) chat.draft = draft;
     for (const t of raw.turns.filter((x) => x && typeof x.user === 'string')) {
       chat.turns.push({
         id: typeof t.id === 'string' ? t.id.slice(0, 40) : 'u' + chat.turns.length,
@@ -249,7 +288,11 @@
   }
   // Turns recorded before the saved file was loaded go after the saved ones.
   function mergeChats(saved, mem) {
-    if (!mem || mem === saved || !mem.turns.length) return saved;
+    if (!mem || mem === saved) return saved;
+    // Text typed in this launch wins over the file, including when startup
+    // had not recorded a turn yet.
+    if (mem.draft) saved.draft = mem.draft;
+    if (!mem.turns.length) return saved;
     const ids = new Set(saved.turns.map((t) => t.id));
     saved.turns.push(...mem.turns.filter((t) => !ids.has(t.id)));
     return saved;
@@ -456,7 +499,7 @@
 
   return {
     normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
-    emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
+    emptyChat, normalizeChat, normalizeDraft, showTerminalUnsentHint, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
   };
 });
