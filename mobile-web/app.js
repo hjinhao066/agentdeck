@@ -4,14 +4,16 @@
   const $ = (id) => document.getElementById(id);
   const icons = {
     refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 7a7 7 0 0 1 11.6-1L20 9M4 15l2.3 3A7 7 0 0 0 18 17"/>',
-    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
     moon: '<path d="M20.8 13a9 9 0 0 1-9.8-9.8A9 9 0 1 0 20.8 13Z"/>',
     copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V4H4v12h4"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     send: '<path d="M12 19V5M6 11l6-6 6 6"/>',
     logout: '<path d="M9 4H4v16h5M14 8l4 4-4 4M8 12h12"/>',
     back: '<path d="m14 6-6 6 6 6M8 12h12"/>',
-    menu: '<path d="M4 7h16M4 12h16M4 17h10"/>',
+    chat: '<path d="M5 5h14a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2Z"/>',
+    sessions: '<circle cx="9" cy="8" r="3.2"/><path d="M3 19c.6-3.2 3-5 6-5s5.4 1.8 6 5M16 5.2a3.2 3.2 0 0 1 0 5.6M18 14.4c1.7.7 2.7 2.3 3 4.6"/>',
+    more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+    image: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="m4 17 5-4.5 3.5 3 3-2.5L21 17"/>',
     close: '<path d="M6 6l12 12M18 6 6 18"/>',
     board: '<path d="M4 4v16M12 4v16M20 4v16M4 8h4m4 5h4m4-5h2"/>',
   };
@@ -20,7 +22,7 @@
   const needsUser = new Set(['input', 'asking']);
   const taskStatuses = [['todo', '待办'], ['doing', '进行中'], ['review', '待验收'], ['needs_user', '等用户'], ['done', '完成']];
   const flagNames = { failed: '失败', blocked: '前置未完成', held: '挂起' };
-  let sessions = [], cards = [], captainData = { turns: [] }, view = 'captain', selected = null, refreshing = false, sending = false, loaded = false, offline = false, csrfToken = '';
+  let sessions = [], cards = [], captainData = { turns: [] }, view = 'captain', outputFrom = 'sessions', selected = null, refreshing = false, sending = false, loaded = false, offline = false, csrfToken = '';
   let sessionsSignature, boardSignature, turnsSignature, attentionSignature;
   let outputRequest = 0, statusTimer;
   const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
@@ -28,8 +30,9 @@
   try { savedTheme = localStorage.getItem('agentdeck-mobile-theme'); } catch (_) { /* Storage can be unavailable in private browsers. */ }
   function applyTheme(theme) {
     document.documentElement.dataset.theme = theme;
-    $('theme').title = theme === 'dark' ? '切换浅色主题' : '切换深色主题';
-    $('theme').innerHTML = svg(theme === 'dark' ? 'sun' : 'moon');
+    $('theme').setAttribute('aria-checked', String(theme === 'dark'));
+    // Safari tints its own bars with this, so they match the page edge to edge.
+    $('theme-color').content = theme === 'dark' ? '#171717' : '#ffffff';
   }
   applyTheme(savedTheme === 'dark' || savedTheme === 'light' ? savedTheme : systemTheme.matches ? 'dark' : 'light');
   systemTheme.addEventListener('change', () => { if (!savedTheme) applyTheme(systemTheme.matches ? 'dark' : 'light'); });
@@ -38,25 +41,37 @@
     applyTheme(savedTheme);
     try { localStorage.setItem('agentdeck-mobile-theme', savedTheme); } catch (_) { /* Keep the choice for this page. */ }
   });
-  ['refresh', 'copy', 'send', 'back', 'logout', 'menu'].forEach((name) => { $(name).innerHTML = svg(name); });
-  $('drawer-close').innerHTML = svg('close');
-  $('open-board').querySelector('.row-icon').innerHTML = svg('board');
+  ['refresh', 'copy', 'send', 'back'].forEach((name) => { $(name).innerHTML = svg(name); });
+  $('attach').innerHTML = svg('image');
+  $('theme').querySelector('.row-icon').innerHTML = svg('moon');
+  $('logout').querySelector('.row-icon').innerHTML = svg('logout');
+  const tabs = [...document.querySelectorAll('.tab')];
+  tabs.forEach((tab) => tab.querySelector('.tab-icon').insertAdjacentHTML('afterbegin', svg({ captain: 'chat', sessions: 'sessions', board: 'board', more: 'more' }[tab.dataset.view])));
 
   // Keep the shell inside the visual viewport so the soft keyboard pushes the
   // composer up instead of covering it (iOS Safari does not resize the layout).
+  // The keyboard counts as open while a text field has focus and the visible
+  // height is well below the tallest seen at this width (iOS keeps innerHeight,
+  // Android shrinks it too). The tab bar hides then, so the composer sits on
+  // the keyboard and the conversation keeps its room.
   const viewport = window.visualViewport;
+  let fullHeight = 0, fullWidth = 0;
   function fitViewport() {
     if (!viewport) return;
     const root = document.documentElement.style;
     root.setProperty('--app-height', viewport.height + 'px');
     root.setProperty('--app-top', viewport.offsetTop + 'px');
-    $('app').classList.toggle('keyboard-open', window.innerHeight - viewport.height > 120);
+    if (viewport.width !== fullWidth) { fullWidth = viewport.width; fullHeight = 0; }
+    fullHeight = Math.max(fullHeight, viewport.height, window.innerHeight);
+    $('app').classList.toggle('keyboard-open', document.activeElement === $('message') && fullHeight - viewport.height > 120);
   }
   function onResize() { const follow = atBottom($('captain-turns')); fitViewport(); if (follow) toBottom($('captain-turns')); }
   if (viewport) {
     viewport.addEventListener('resize', onResize);
     viewport.addEventListener('scroll', fitViewport);
     window.addEventListener('resize', onResize);
+    $('message').addEventListener('focus', onResize);
+    $('message').addEventListener('blur', onResize);
     fitViewport();
   }
 
@@ -220,50 +235,34 @@
     return root;
   }
 
-  const background = () => document.querySelectorAll('.app-header, .attention, .notice, .views, .composer');
-  function openDrawer() {
-    $('drawer').hidden = false; $('drawer-backdrop').hidden = false;
-    background().forEach((el) => { el.inert = true; });
-    $('menu').setAttribute('aria-expanded', 'true');
-    $('drawer-close').focus();
-  }
-  function closeDrawer(focusMenu = true) {
-    if ($('drawer').hidden) return;
-    $('drawer').hidden = true; $('drawer-backdrop').hidden = true;
-    background().forEach((el) => { el.inert = false; });
-    $('menu').setAttribute('aria-expanded', 'false');
-    if (focusMenu && !$('menu').hidden) $('menu').focus();
-  }
-  $('menu').addEventListener('click', openDrawer);
-  $('drawer-close').addEventListener('click', () => closeDrawer());
-  $('drawer-backdrop').addEventListener('click', () => closeDrawer());
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawer(); });
-  $('open-board').addEventListener('click', () => { closeDrawer(false); showView('board'); });
-
   function renderSessions() {
-    const signature = JSON.stringify([sessions, view, selected?.id]);
+    const workers = sessions.filter((s) => !s.isMain);
+    const waiting = workers.filter((s) => needsUser.has(s.status)).length;
+    const signature = JSON.stringify([workers, loaded]);
     if (signature === sessionsSignature) return;
     sessionsSignature = signature;
+    // The tab badge counts the sessions that are waiting on the user.
+    const badge = $('sessions-badge'), tab = badge.closest('.tab');
+    badge.hidden = !waiting; badge.textContent = waiting > 9 ? '9+' : String(waiting);
+    tab.setAttribute('aria-label', waiting ? '会话，' + waiting + ' 个等你处理' : '会话');
     const list = $('sessions'); list.replaceChildren();
-    const working = sessions.filter((s) => s.status === 'working').length;
-    $('working-count').textContent = working ? '· ' + working + ' 个干活中' : '';
-    if (!sessions.length) { list.append(node('p', 'row-sub', '暂无会话。先在桌面端创建队长或队员。')); return; }
-    const ordered = [...sessions.filter((s) => s.isMain), ...sessions.filter((s) => !s.isMain && s.status === 'working'), ...sessions.filter((s) => !s.isMain && s.status !== 'working')];
-    for (const session of ordered) {
-      const button = node('button', 'session-row' + (session.isMain ? ' is-captain' : ''));
+    if (!workers.length) { list.append(empty(loaded ? '暂无队员会话。队长派活后会显示在这里。' : '')); return; }
+    const rank = (s) => needsUser.has(s.status) ? 0 : s.status === 'working' ? 1 : 2;
+    for (const session of [...workers].sort((a, b) => rank(a) - rank(b))) {
+      const button = node('button', 'session-row');
       button.type = 'button'; button.dataset.sessionId = session.id;
       button.setAttribute('aria-label', session.title);
-      if (session.isMain ? view === 'captain' : view === 'output' && selected?.id === session.id) button.setAttribute('aria-current', 'page');
       const main = node('span', 'row-main');
-      main.append(node('span', 'row-title', session.title), node('span', 'row-sub', session.isMain ? (session.model || '模型未识别') : (session.receipt || session.model || '尚未提交回执')));
-      const tag = node('span', 'row-tag' + (needsUser.has(session.status) ? ' alert' : session.status === 'failed' ? ' failed' : ''), (session.isMain ? '队长 · ' : '') + (statusNames[session.status] || '空闲'));
+      main.append(node('span', 'row-title', session.title), node('span', 'row-sub', session.receipt || session.model || '尚未提交回执'));
+      const tag = node('span', 'row-tag' + (needsUser.has(session.status) ? ' alert' : session.status === 'failed' ? ' failed' : ''), statusNames[session.status] || '空闲');
       button.append(dot(session.status), main, tag);
-      button.addEventListener('click', () => { closeDrawer(false); if (session.isMain) showView('captain'); else openOutput(session); });
+      button.addEventListener('click', () => openOutput(session));
       list.append(button);
     }
   }
   function renderAttention() {
-    const waiting = sessions.filter((s) => needsUser.has(s.status) && !(view === 'output' && s.id === selected?.id));
+    // The sessions page already lists them, and settings need no reminder.
+    const waiting = view === 'sessions' || view === 'more' ? [] : sessions.filter((s) => needsUser.has(s.status) && !(view === 'output' && s.id === selected?.id));
     const signature = JSON.stringify(waiting.map((s) => [s.id, s.title, s.status]));
     if (signature === attentionSignature) return;
     attentionSignature = signature;
@@ -329,6 +328,17 @@
       for (const turn of captain ? captainData.turns : []) {
         const row = node('article', 'captain-turn');
         if (turn.id) row.dataset.turnId = turn.id;
+        const images = (turn.images || []).filter((id) => imageId.test(id));
+        if (images.length) {
+          const strip = node('div', 'sent-images');
+          images.forEach((id, i) => {
+            const open = node('a', 'sent-image'), img = node('img');
+            open.href = '/api/image?id=' + id; open.target = '_blank'; open.rel = 'noopener noreferrer';
+            img.src = open.href; img.alt = '你发的图片 ' + (i + 1); img.loading = 'lazy';
+            open.append(img); strip.append(open);
+          });
+          row.append(strip);
+        }
         if (turn.user) {
           const prompt = node('div', 'chat-message user-message');
           prompt.append(node('span', 'chat-label', '你'), node('p', 'chat-text', turn.user));
@@ -359,18 +369,23 @@
     }
     // Offline keeps the draft editable (flaky mobile networks) but blocks sending.
     $('message').disabled = !captain || sending;
+    $('attach').disabled = !captain || sending;
     updateComposer(); updateSend();
   }
   function updateHeading() {
     const captain = sessions.find((s) => s.isMain);
     const current = view === 'output' ? sessions.find((s) => s.id === selected?.id) || selected : null;
+    const workers = sessions.filter((s) => !s.isMain);
+    const counts = [[workers.filter((s) => s.status === 'working').length, ' 个干活中'], [workers.filter((s) => needsUser.has(s.status)).length, ' 个等你处理']];
     const heading = {
       captain: [captain?.title || '队长', captain ? [statusNames[captain.status] || '空闲', captain.model].filter(Boolean).join(' · ') : loaded ? '尚未创建' : '', captain ? captain.status : 'none'],
       output: [selected?.title || '队员输出', '只读' + (current ? ' · ' + (statusNames[current.status] || '空闲') : ''), current?.status || 'none'],
+      sessions: ['会话', counts.filter(([count]) => count).map(([count, label]) => count + label).join(' · ') || (workers.length ? workers.length + ' 个会话' : ''), null],
       board: ['任务看板', '只读', null],
+      more: ['更多', '', null],
     }[view];
     // Statuses are stale while the desktop is unreachable; say so instead.
-    if (offline) { heading[1] = view === 'captain' ? '连接中断' : '只读 · 连接中断'; heading[2] = 'offline'; }
+    if (offline && view !== 'more') { heading[1] = view === 'captain' || view === 'sessions' ? '连接中断' : '只读 · 连接中断'; heading[2] = 'offline'; }
     $('view-title').textContent = heading[0];
     $('view-meta').textContent = heading[1];
     $('title-dot').hidden = !heading[2];
@@ -379,17 +394,19 @@
   }
   function updateComposer() {
     const worker = view === 'output' && selected;
-    $('message-form').hidden = view === 'board';
+    $('message-form').hidden = view !== 'captain' && view !== 'output';
     $('message').placeholder = offline ? '连接中断，恢复后可发送' : worker ? '回复这位队员（由队长转达）' : '给队长发消息';
   }
   function showView(next) {
     if (view === 'output' && next !== 'output') outputRequest++;
+    if (next === 'output' && view !== 'output') outputFrom = view;
     view = next;
-    ['board', 'captain', 'output'].forEach((name) => { $(name + '-view').hidden = name !== view; });
-    $('back').hidden = view === 'captain';
-    $('menu').hidden = view !== 'captain';
+    ['board', 'captain', 'sessions', 'output', 'more'].forEach((name) => { $(name + '-view').hidden = name !== view; });
+    // A worker's output is a page inside the sessions tab.
+    tabs.forEach((tab) => { if (tab.dataset.view === (view === 'output' ? 'sessions' : view)) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current'); });
+    $('back').hidden = view !== 'output';
     $('copy').hidden = view !== 'output';
-    updateHeading(); updateComposer(); renderSessions(); renderAttention();
+    updateHeading(); updateComposer(); renderAttention();
     if (view === 'captain') toBottom($('captain-turns'));
   }
   async function loadOutput(silent = false) {
@@ -427,7 +444,7 @@
       // fetch rejects with a TypeError when the desktop or tunnel is unreachable.
       offline = true;
       notice(err instanceof TypeError ? '暂时连不上桌面端，正在自动重连…' : err.message + ' 正在自动重试…', true);
-      renderCaptain(); updateHeading();
+      renderSessions(); renderCaptain(); updateHeading();
     }
     finally { refreshing = false; $('refresh').disabled = false; $('refresh').classList.remove('refreshing'); }
   }
@@ -436,24 +453,135 @@
     message.style.height = 'auto';
     message.style.height = message.scrollHeight + 'px';
   }
-  function updateSend() { $('send').disabled = sending || offline || !csrfToken || !sessions.some((s) => s.isMain) || !$('message').value.trim(); }
+  // ---- images ----
+  // A picked or pasted image is shrunk on the phone, uploaded straight away
+  // and sent with the next message as a server-issued id.
+  const imageId = /^[a-f0-9]{32}\.(?:jpg|png|gif|webp)$/;
+  const MAX_IMAGES = 6, KEEP_BYTES = 800 * 1024, MAX_EDGE = 1600, THUMB_EDGE = 160;
+  let attachments = [];
+  async function decode(file) {
+    try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+    catch (_) { return createImageBitmap(file); }
+  }
+  function draw(bitmap, edge) {
+    const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    // JPEG has no transparency; put screenshots with alpha on white.
+    context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+  // Small JPEG/PNG/GIF/WebP files go up unchanged. Anything larger, and any
+  // other format the browser can decode (HEIC on iPhone), becomes a JPEG.
+  async function prepare(file) {
+    const bitmap = await decode(file);
+    try {
+      const thumb = draw(bitmap, THUMB_EDGE).toDataURL('image/jpeg', 0.75);
+      if (/^image\/(?:jpeg|png|gif|webp)$/.test(file.type) && file.size <= KEEP_BYTES) return { thumb, blob: file };
+      const blob = await new Promise((resolve) => draw(bitmap, MAX_EDGE).toBlob(resolve, 'image/jpeg', 0.82));
+      if (!blob) throw new Error('encode');
+      return { thumb, blob };
+    } finally { bitmap.close(); }
+  }
+  function upload(item) {
+    item.state = 'uploading'; item.progress = 0; renderAttachments();
+    const request = new XMLHttpRequest();
+    item.request = request;
+    request.open('POST', '/api/upload');
+    request.setRequestHeader('Content-Type', 'application/octet-stream');
+    request.setRequestHeader('X-CSRF-Token', csrfToken);
+    request.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable) return;
+      item.progress = event.loaded / event.total;
+      if (item.bar) item.bar.style.width = Math.round(item.progress * 100) + '%';
+    });
+    const failed = (message) => { item.state = 'failed'; item.error = message; renderAttachments(); };
+    request.addEventListener('load', () => {
+      if (request.status === 401) { window.location.reload(); return; }
+      let id;
+      try { id = JSON.parse(request.responseText).id; } catch (_) { /* Reported below. */ }
+      if (request.status === 200 && imageId.test(id)) { item.state = 'done'; item.id = id; renderAttachments(); }
+      else failed(request.status === 413 ? '图片太大，没能上传。' : request.status === 415 ? '这种图片格式不支持。' : '图片上传失败，可重试。');
+    });
+    request.addEventListener('error', () => failed('网络中断，图片没传上去，可重试。'));
+    request.addEventListener('abort', () => {});
+    request.send(item.blob);
+  }
+  async function addImages(files) {
+    const images = [...files].filter((file) => /^image\//.test(file.type) || /\.(?:heic|heif)$/i.test(file.name));
+    if (!images.length) return;
+    const room = MAX_IMAGES - attachments.length;
+    if (images.length > room) notice('一次最多发 ' + MAX_IMAGES + ' 张图片，多出的没有添加。', true);
+    for (const file of images.slice(0, Math.max(0, room))) {
+      try {
+        const item = { ...await prepare(file) };
+        attachments.push(item);
+        upload(item);
+      } catch (_) { notice('有一张图片读不出来（这台设备不支持该格式），请换成截图、JPEG 或 PNG。', true); }
+    }
+    renderAttachments();
+  }
+  function renderAttachments() {
+    const box = $('attachments'), conversation = $('captain-turns'), follow = atBottom(conversation);
+    box.replaceChildren(); box.hidden = !attachments.length;
+    attachments.forEach((item, i) => {
+      const chip = node('div', 'attachment'); chip.dataset.state = item.state; chip.setAttribute('role', 'listitem');
+      const img = node('img'); img.src = item.thumb; img.alt = '待发送的图片 ' + (i + 1);
+      chip.append(img);
+      if (item.state === 'uploading') {
+        const track = node('span', 'upload-track'); track.setAttribute('role', 'progressbar'); track.setAttribute('aria-label', '正在上传图片 ' + (i + 1));
+        item.bar = node('span', 'upload-bar'); item.bar.style.width = Math.round(item.progress * 100) + '%';
+        track.append(item.bar); chip.append(track);
+      } else if (item.state === 'failed') {
+        const retry = iconButton('refresh', '重试上传', () => upload(item));
+        retry.classList.add('attachment-retry'); chip.append(retry);
+      }
+      const remove = iconButton('close', '移除图片', () => {
+        if (item.request) item.request.abort();
+        attachments = attachments.filter((other) => other !== item);
+        renderAttachments(); $('message').focus({ preventScroll: true });
+      });
+      remove.classList.add('attachment-remove'); chip.append(remove);
+      box.append(chip);
+    });
+    const failed = attachments.find((item) => item.state === 'failed');
+    if (failed) sendStatus(failed.error, true);
+    else if (attachments.some((item) => item.state === 'uploading')) sendStatus('正在上传图片…', true);
+    else if (/图片/.test($('send-status').textContent)) sendStatus('');
+    updateSend();
+    if (follow) toBottom(conversation);
+  }
+  $('attach').addEventListener('click', () => $('image-input').click());
+  $('image-input').addEventListener('change', () => { addImages($('image-input').files); $('image-input').value = ''; });
+  $('message').addEventListener('paste', (event) => {
+    const files = [...(event.clipboardData?.files || [])].filter((file) => /^image\//.test(file.type));
+    if (!files.length) return;
+    event.preventDefault(); addImages(files);
+  });
+  function updateSend() {
+    const ready = attachments.every((item) => item.state === 'done');
+    $('send').disabled = sending || offline || !csrfToken || !sessions.some((s) => s.isMain) || !ready || !($('message').value.trim() || attachments.length);
+  }
   $('message').addEventListener('input', () => {
     const conversation = $('captain-turns'), follow = atBottom(conversation);
-    sendStatus(''); fitComposer(); updateSend();
+    if (!attachments.length) sendStatus('');
+    fitComposer(); updateSend();
     if (follow) toBottom(conversation);
   });
   $('message-form').addEventListener('submit', async (event) => {
     event.preventDefault();
-    const text = $('message').value;
-    if (sending || !text.trim() || !sessions.some((s) => s.isMain)) return;
+    const text = $('message').value, images = attachments.map((item) => item.id);
+    if (sending || !(text.trim() || images.length) || images.includes(undefined) || !sessions.some((s) => s.isMain)) return;
     // Workers have no direct channel; a reply from a worker's page goes to the
     // Captain with the worker named, through the same validated endpoint.
     const message = view === 'output' && selected ? '关于队员「' + selected.title + '」：\n' + text : text;
-    sending = true; $('message').disabled = true; updateSend(); sendStatus('正在发送…', true);
+    sending = true; $('message').disabled = true; $('attach').disabled = true; updateSend(); sendStatus('正在发送…', true);
     try {
-      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message }) });
+      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(images.length ? { message, images } : { message }) });
       if (!result.queued) throw new Error('消息未加入队列，请重试。');
-      $('message').value = ''; fitComposer();
+      $('message').value = ''; fitComposer(); attachments = []; renderAttachments();
       sendStatus(view === 'output' ? '已转给队长，等待处理。' : '已排队，等待队长处理。');
       refresh();
     } catch (err) { sendStatus(err.message + ' 消息已保留，可重试。', true); }
@@ -461,11 +589,12 @@
   });
   $('copy').addEventListener('click', () => copyText($('copy'), $('outputText').textContent, '复制输出'));
   $('refresh').addEventListener('click', refresh);
-  $('back').addEventListener('click', () => showView('captain'));
+  $('back').addEventListener('click', () => showView(outputFrom));
+  tabs.forEach((tab) => tab.addEventListener('click', () => showView(tab.dataset.view)));
   $('logout').addEventListener('click', async () => {
     $('logout').disabled = true;
     try { await api('/logout', { method: 'POST' }); window.location.reload(); }
-    catch (err) { closeDrawer(); notice(err.message, true); $('logout').disabled = false; }
+    catch (err) { notice(err.message, true); $('logout').disabled = false; }
   });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
   setInterval(() => { if (!document.hidden) refresh(); }, 5000);
