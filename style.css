@@ -1943,3 +1943,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 :root[data-theme="dark"] .quota-item[data-state="danger"], :root[data-theme="dark"] .quota-item[data-state="exhausted"] { color: #ffb4aa; }
 :root[data-theme="light"] .quota-item[data-state="warning"] { color: #765000; }
 :root[data-theme="light"] .quota-item[data-state="danger"], :root[data-theme="light"] .quota-item[data-state="exhausted"] { color: #a02020; }
+
+.quota-heading { display: flex; align-items: center; justify-content: space-between; }
+#navQuota .quota-item, #quotaPopList .quota-item { flex-wrap: wrap; }
+#navQuota .quota-label, #quotaPopList .quota-label { flex-basis: 100%; white-space: normal; line-height: 1.6; }
+:root .quota-item .quota-label { color: inherit; }

@@ -9,10 +9,10 @@ test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-official-usage-'));
   const at = Date.now(), quotas = {};
   S.normalize().forEach((seat, i) => {
-    Q.observe(quotas, officialUsage({ five_hour: { utilization: i ? 100 : 9, resets_at: new Date(at + 2 * 3600000).toISOString() },
-      seven_day: { utilization: i ? 52 : 10, resets_at: new Date(at + 3 * 86400000).toISOString() } }, seat, `fixture-${seat.id}`, at));
+    Q.observe(quotas, { ...officialUsage({ five_hour: { utilization: i ? 100 : 9, resets_at: new Date(at + 2 * 3600000).toISOString() },
+      seven_day: { utilization: i ? 52 : 10, resets_at: new Date(at + 3 * 86400000).toISOString() } }, seat, `fixture-${seat.id}`, at), accountKey: `offline-${seat.id}`, accountBound: true });
   });
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', quotas, columns: [], claudeSeats: S.normalize() }));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', quotas, columns: [{ id: 'usage-preview', title: '额度预览（模拟数据）', cmd: '', cwd: profile, role: 'manual' }], claudeSeats: S.normalize() }));
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
@@ -29,7 +29,7 @@ async function screenshot(name) {
 test('all Claude surfaces use remaining percentages and resets; icons refresh without dropping values', async () => {
   await expect(seat('cn').locator('.quota-label')).toHaveText(/5h 91% ↻\d\d:\d\d · 7d 90% ↻\d\d-\d\d \d\d:\d\d/);
   await expect(seat('us').locator('.quota-label')).toHaveText(/5h 已用尽 ↻\d\d:\d\d · 7d 48% ↻/);
-  await expect(seat('cn')).toHaveAttribute('title', /官方用量接口/);
+  await expect(seat('cn')).toHaveAttribute('title', /Claude OAuth usage/);
   const refresh = page.getByRole('button', { name: '刷新额度', exact: true });
   await expect(refresh).toHaveAttribute('title', '刷新额度');
   await refresh.click();

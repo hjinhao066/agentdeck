@@ -220,7 +220,6 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
-  if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   let selectedSeat, binding;
   try {
@@ -314,6 +313,7 @@ function killPty(id, keepReplay) {
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
+  ptySeats.delete(id);
   managedSessions.delete(id);
   receiptSessions.delete(id);
   removeCredentials(boardControlDir, id);

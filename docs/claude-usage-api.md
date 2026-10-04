@@ -83,3 +83,17 @@ instruction. An API network/401/403 failure only affects usage sampling.
 This branch does not restart installed AgentDeck or migrate running terminals.
 These process-binding fixes take effect when the new runtime is installed and
 columns are next spawned/reconnected.
+
+## Focused verification
+
+Function branches run the affected specs with one worker, after any release-test
+load gate has cleared; they do not run the full E2E suite:
+
+```sh
+npx playwright test tests/e2e/claude-usage-api.spec.js tests/e2e/quota.spec.js tests/e2e/quota-seats.spec.js tests/e2e/claude-seats.spec.js --workers=1
+```
+
+The screenshot fixture uses an explicit empty-command column, so it cannot fall
+back to the app's default real agent launchers. Quota detail appears when its item
+receives focus, including after a mouse click on refresh, and remains accessible
+from the keyboard. Isolated profiles do not read real credentials or query usage.
