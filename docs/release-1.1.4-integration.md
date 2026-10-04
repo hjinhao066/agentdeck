@@ -141,3 +141,14 @@ Integrated `origin/fix/cursor-live-busy` at `a1c436e` without conflicts.
 The branch only adds three sanitized Grok busy-screen fixtures and regression
 tests at four column widths; no runtime code changes. Preserve the fixtures'
 terminal padding verbatim. Unit tests passed **508/508**.
+
+## Release preparation checkpoint
+
+Version metadata is **1.1.4** in package.json and package-lock.json; no tag or
+main merge. Final unit tests **508/508**, source release smoke **8/8**, dependency
+audit **zero vulnerabilities**. The Captain added mobile-chat-ui as a required
+pre-packaging delivery, currently awaiting Opus final review. No DMG build,
+installation or restart has started at this checkpoint. Once accepted, merge
+the delivered mobile tip, validate it, then build and verify the signed DMG.
+Release-branch CI has no runs; this checkpoint is local macOS verification,
+not Windows verification.
