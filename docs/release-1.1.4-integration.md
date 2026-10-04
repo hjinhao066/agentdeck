@@ -134,3 +134,10 @@ passed 7 and failed 1: the ledger assertion read the previous completed state
 before the 1.5-second status tick. Wait for the real working state before
 submitting the receipt; the complete repeated batch passed **8/8**.
 This correction changes only the test's synchronization, not the runtime guard.
+
+## Follow-up: Cursor live busy samples
+
+Integrated `origin/fix/cursor-live-busy` at `a1c436e` without conflicts.
+The branch only adds three sanitized Grok busy-screen fixtures and regression
+tests at four column widths; no runtime code changes. Preserve the fixtures'
+terminal padding verbatim. Unit tests passed **508/508**.
