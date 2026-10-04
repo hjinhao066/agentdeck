@@ -80,11 +80,11 @@ test('⌘−/⌘= (Ctrl on Windows) shrink and grow the chat text with the termi
   const small = await size();
   expect(small.font).toBe(10);
   expect(small.term).toBe(10);
-  expect(small.chatH).toBeLessThan(base.chatH * 0.85);
-  // the chat still fills its column: only its contents get smaller
+  expect(small.chatH).toBeLessThan(base.chatH);
+  // the chat still fills its column: only its letters get smaller
   expect(Math.abs(small.chatW - base.chatW)).toBeLessThan(2);
   await page.keyboard.press(`${mod}+Equal`);
-  expect((await size()).font).toBe(11);
+  expect((await size()).font).toBe(12);
   await page.keyboard.press(`${mod}+0`);
   const reset = await size();
   expect(reset.font).toBe(13);

@@ -66,6 +66,7 @@
 
 /* Status colors (dots, timer) — shared by header + sidebar. */
 :root {
+  --text-scale: 1;
   --st-plain: #6b7280;
   --st-working: #ffd400;
   --st-input: #f4212e;
@@ -91,6 +92,7 @@ button { font: inherit; }
 
 /* ===== Left sidebar ===== */
 #colNav {
+  --sidebar-scale: var(--text-scale, 1);
   position: relative;
   flex: 0 0 252px; width: 252px; height: 100%;
   display: flex; flex-direction: column;
@@ -122,7 +124,7 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 #navTop { flex: 0 0 auto; display: flex; flex-direction: column; gap: 1px; padding: 2px 8px 6px; }
 .nav-row, .nav-search {
   display: flex; align-items: center; gap: 10px;
-  height: 32px; padding: 0 10px; width: 100%;
+  min-height: 32px; height: auto; padding: 4px 10px; width: 100%;
   border: none; border-radius: 7px; background: transparent;
   color: var(--text-2); font-size: calc(13.5px * var(--sidebar-scale, 1)); text-align: left; cursor: pointer;
   transition: background .12s ease, color .12s ease;
@@ -135,7 +137,7 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 .nav-search { position: relative; cursor: text; }
 .nav-search:focus-within { background: var(--pill-bg-hover); color: var(--text); }
 .nav-search input {
-  flex: 1; min-width: 0; height: 100%; border: none; outline: none; background: transparent;
+  flex: 1; min-width: 0; height: auto; border: none; outline: none; background: transparent;
   color: var(--text); font: inherit; font-size: calc(13.5px * var(--sidebar-scale, 1));
 }
 .nav-search input::placeholder { color: var(--text-2); }
@@ -156,7 +158,7 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 #navList::-webkit-scrollbar-thumb, .nav-results::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; }
 .nav-section {
   display: flex; align-items: center; gap: 6px;
-  height: 28px; margin-top: 12px; padding: 0 6px 0 10px; border-radius: 7px;
+  min-height: 28px; height: auto; margin-top: 12px; padding: 4px 6px 4px 10px; border-radius: 7px;
   color: var(--muted); font-size: calc(12px * var(--sidebar-scale, 1)); font-weight: 500; user-select: none;
 }
 .nav-section.toggle { cursor: pointer; }
@@ -176,7 +178,7 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 
 .nav-folder-head {
   display: flex; align-items: center; gap: 7px;
-  height: 30px; padding: 0 6px 0 8px; border-radius: 7px;
+  min-height: 30px; height: auto; padding: 4px 6px 4px 8px; border-radius: 7px;
   color: var(--text-2); cursor: pointer; user-select: none;
 }
 .nav-folder-head:hover { background: var(--icon-hover-bg); color: var(--text); }
@@ -544,7 +546,8 @@ body.reordering, body.reordering * { cursor: grabbing !important; }
   padding: 8px 6px 8px 12px;
   overflow: hidden;
 }
-.term .xterm { height: 100%; }
+.term .term-content, .term .xterm { height: 100%; }
+.term .term-content { min-height: 0; min-width: 0; }
 /* IME / voice input: keep xterm's hidden textarea and its composition preview
    fully NATIVE. Overriding their geometry (forcing a fixed/1px textarea, or
    restyling the composition-view) breaks Chinese composition — you could only
@@ -1006,8 +1009,9 @@ body.linking-board .board-port.out::before {
    The real xterm stays mounted and laid out underneath, only hidden, so the
    pty keeps its size and status detection keeps reading the screen. */
 .column .chat { display: none; }
-/* ⌘−/⌘= scale the chat view with the terminal font (renderer sets --chat-zoom) */
-.column.chat-mode .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; zoom: var(--chat-zoom, 1); }
+/* Text scale is font-size only (see the block at the end of this file). CSS zoom
+   would grow bubbles, icons, and borders along with the letters. */
+.column.chat-mode .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .column.chat-mode > .term {
   position: absolute; left: 0; right: 0; top: 40px; bottom: 0;
   visibility: hidden; pointer-events: none;
@@ -1124,16 +1128,16 @@ body.linking-board .board-port.out::before {
 .attn-key:hover { border-color: var(--accent); color: var(--accent); }
 
 /* Composer: Cursor-style box with the agent shown on the right. */
-.composer { flex: 0 0 auto; padding: 6px 14px 6px; }
+.composer { flex: 0 0 auto; min-width: 0; padding: 6px 14px 6px; }
 .composer-box {
-  display: flex; flex-direction: column; gap: 4px;
+  display: flex; flex-direction: column; gap: 4px; min-width: 0; overflow: hidden;
   padding: 9px 10px 7px 12px; border-radius: 12px;
   background: var(--elev); border: 1px solid var(--border);
   cursor: text; transition: border-color .15s ease;
 }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--text) 30%, transparent); }
 .composer textarea {
-  width: 100%; resize: none; max-height: 200px; overflow-y: auto;
+  width: 100%; min-width: 0; resize: none; max-height: 200px; overflow-x: hidden; overflow-y: auto;
   padding: 2px; border: none; background: transparent; color: var(--text);
   font: inherit; font-size: 14px; line-height: 1.5; outline: none;
 }
@@ -1652,7 +1656,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #cmArrowBackBad path { fill: var(--cm-back-bad); }
 
 .cm-node {
-  position: absolute; z-index: 2;
+  position: absolute; z-index: 2; overflow: hidden;
   display: flex; flex-direction: column; gap: 4px; text-align: left;
   padding: 11px 13px 10px;
   width: 240px; height: 176px;
@@ -1678,8 +1682,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-node.kind-waiting { background: transparent; box-shadow: none; }
 .cm-node.archived { opacity: .5; border-style: dashed; box-shadow: none; }
 .cm-node.archived:hover { opacity: .85; }
-.cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; height: 20px; }
-.cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 18px; }
+.cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; min-height: 20px; height: auto; }
+.cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 11px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 18px; height: auto; }
 .cm-status-text { overflow: hidden; text-overflow: ellipsis; }
 .cm-dot { position: relative; flex: 0 0 auto; width: 8px; height: 8px; border-radius: 999px; background: var(--st-plain); }
 .st-working .cm-dot { background: var(--st-working); }
@@ -1861,7 +1865,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   display: grid; grid-template-columns: repeat(5, var(--tbv-col)); gap: var(--tbv-gap);
   padding: 12px 11px 8px; background: var(--app-bg);
 }
-.tbv-head { display: flex; align-items: center; gap: 7px; height: 30px; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
+.tbv-head { display: flex; align-items: center; gap: 7px; min-height: 30px; height: auto; min-width: 0; font-size: 12.5px; font-weight: 600; color: var(--text-2); }
 .tbv-head-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tbv-head-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--st-plain); }
 .tbv-head[data-status="doing"] .tbv-head-dot { background: var(--st-working); }
@@ -1881,7 +1885,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   --project-color: hsl(var(--project-hue) 65% 48%);
   background: color-mix(in srgb, var(--project-color) 6%, var(--app-bg));
 }
-.tbv-lane-head { display: flex; align-items: center; gap: 8px; height: 42px; min-width: 0; }
+.tbv-lane-head { display: flex; align-items: center; gap: 8px; min-height: 42px; height: auto; min-width: 0; }
 .tbv-dot { flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--project-color); }
 .tbv-lane-name { margin: 0; font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tbv-lane-count { flex: 0 0 auto; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
@@ -1904,7 +1908,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   margin: 0; font-size: 13px; font-weight: 600; line-height: 1.4; color: var(--text);
   overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
 }
-.tbv-owner { display: flex; align-items: center; gap: 6px; min-width: 0; height: 18px; font-size: 12px; color: var(--text-2); white-space: nowrap; }
+.tbv-owner { display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 18px; height: auto; font-size: 12px; color: var(--text-2); white-space: nowrap; }
 .tbv-owner .cn-badge { margin-right: 0; max-width: 110px; }
 .tbv-owner .cn-badge .agent-model-label { max-width: 84px; }
 .tbv-model { flex: 0 0 auto; max-width: 96px; padding: 1px 5px; border-radius: 4px; background: var(--pill-bg); font-size: 10.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
@@ -1935,3 +1939,90 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .tbv-empty-board { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
 .tbv-empty-board[hidden] { display: none; }
 .tbv-empty-board strong { color: var(--text); font-size: 15px; }
+
+/* ⌘+/⌘−/⌘0: type scales, frames do not. Sidebar text already uses --sidebar-scale,
+   which follows --text-scale. These overrides keep the 100% sizes and multiply
+   only font-size (and the line boxes that would otherwise clip the glyphs). */
+.nav-brand { font-size: calc(12.5px * var(--text-scale, 1)); }
+.nr-head { font-size: calc(12.5px * var(--text-scale, 1)); }
+.nr-role { font-size: calc(10px * var(--text-scale, 1)); }
+.nr-snippet { font-size: calc(12px * var(--text-scale, 1)); overflow-wrap: anywhere; }
+.nr-empty { font-size: calc(12px * var(--text-scale, 1)); }
+.nq-title { font-size: calc(11px * var(--text-scale, 1)); }
+.quota-item { font-size: calc(11.5px * var(--text-scale, 1)); }
+.quota-tooltip { font-size: calc(12px * var(--text-scale, 1)); }
+.quota-sampled { font-size: calc(10px * var(--text-scale, 1)); }
+.split-btn { font-size: calc(12px * var(--text-scale, 1)); }
+.col-head .title { font-size: calc(13.5px * var(--text-scale, 1)); }
+.col-head .work-timer { font-size: calc(11px * var(--text-scale, 1)); }
+.col-head .view-toggle { font-size: calc(11.5px * var(--text-scale, 1)); }
+.agent-seat-label { font-size: calc(12px * var(--text-scale, 1)); }
+.chat-empty { font-size: calc(12.5px * var(--text-scale, 1)); }
+.chat-empty strong { font-size: calc(17px * var(--text-scale, 1)); }
+.launch-btn { font-size: calc(12.5px * var(--text-scale, 1)); }
+.launch-note { font-size: calc(12px * var(--text-scale, 1)); }
+.msg.user .bubble { font-size: calc(14px * var(--text-scale, 1)); overflow-wrap: anywhere; }
+.reply { font-size: calc(14px * var(--text-scale, 1)); overflow-wrap: anywhere; }
+.reply.md pre.md-code code { font-size: calc(12.5px * var(--text-scale, 1)); }
+.reply.quiet { font-size: calc(12.5px * var(--text-scale, 1)); }
+.live-line { font-size: calc(12px * var(--text-scale, 1)); }
+.msg-time { font-size: calc(11.5px * var(--text-scale, 1)); }
+.attn-title { font-size: calc(12px * var(--text-scale, 1)); }
+.attn-screen { font-size: calc(11.5px * var(--text-scale, 1)); }
+.attn-key { font-size: calc(12px * var(--text-scale, 1)); }
+.composer textarea { font-size: calc(14px * var(--text-scale, 1)); }
+.cp-agent { font-size: calc(12px * var(--text-scale, 1)); }
+.tui-footer { font-size: calc(11px * var(--text-scale, 1)); }
+.chat-earlier, .retired-head, .reply-note { font-size: calc(12px * var(--text-scale, 1)); }
+.task-card { font-size: calc(13px * var(--text-scale, 1)); }
+.task-summary { overflow-wrap: anywhere; }
+.task-status { font-size: calc(11.5px * var(--text-scale, 1)); }
+.task-note { font-size: calc(12px * var(--text-scale, 1)); }
+.board-toolbar h1 { font-size: calc(20px * var(--text-scale, 1)); }
+.board-kicker { font-size: calc(10px * var(--text-scale, 1)); }
+.board-mode button { font-size: calc(12px * var(--text-scale, 1)); }
+.board-edge-label { font-size: calc(10px * var(--text-scale, 1)); }
+.board-role { font-size: calc(10px * var(--text-scale, 1)); }
+.board-agent { font-size: calc(11px * var(--text-scale, 1)); }
+.board-node h2 { font-size: calc(15px * var(--text-scale, 1)); }
+.board-node-status { font-size: calc(12px * var(--text-scale, 1)); }
+.board-relation, .board-progress { font-size: calc(11px * var(--text-scale, 1)); }
+.board-inspect { font-size: calc(11px * var(--text-scale, 1)); }
+.board-link-chip { font-size: calc(9px * var(--text-scale, 1)); }
+.board-legend { font-size: calc(11px * var(--text-scale, 1)); }
+#boardEmpty { font-size: calc(13px * var(--text-scale, 1)); }
+#boardEmpty strong { font-size: calc(15px * var(--text-scale, 1)); }
+.cm-status { font-size: calc(11px * var(--text-scale, 1)); }
+.cm-agent { font-size: calc(10.5px * var(--text-scale, 1)); }
+.cm-title {
+  font-size: calc(13.5px * var(--text-scale, 1));
+  line-height: calc(20px * var(--text-scale, 1));
+  flex-basis: calc(40px * var(--text-scale, 1));
+  min-height: calc(40px * var(--text-scale, 1));
+}
+.cm-node.kind-captain .cm-title { font-size: calc(15px * var(--text-scale, 1)); }
+.cm-line {
+  font-size: calc(11.5px * var(--text-scale, 1));
+  line-height: calc(18px * var(--text-scale, 1));
+  flex-basis: calc(36px * var(--text-scale, 1));
+  min-height: calc(36px * var(--text-scale, 1));
+  overflow-wrap: anywhere;
+}
+.cm-live { font-size: calc(10.5px * var(--text-scale, 1)); height: auto; line-height: calc(16px * var(--text-scale, 1)); }
+.cm-project-name { font-size: calc(16px * var(--text-scale, 1)); }
+.cm-project-summary { font-size: calc(11px * var(--text-scale, 1)); }
+.tbv-head { font-size: calc(12.5px * var(--text-scale, 1)); }
+.tbv-count { font-size: calc(11px * var(--text-scale, 1)); }
+.tbv-lane-name { font-size: calc(14px * var(--text-scale, 1)); }
+.tbv-lane-count { font-size: calc(12px * var(--text-scale, 1)); }
+.tbv-title { font-size: calc(13px * var(--text-scale, 1)); overflow-wrap: anywhere; }
+.tbv-owner { font-size: calc(12px * var(--text-scale, 1)); }
+.tbv-model { font-size: calc(10.5px * var(--text-scale, 1)); }
+.tbv-receipt { font-size: calc(12px * var(--text-scale, 1)); overflow-wrap: anywhere; }
+.tbv-tag, .tbv-time, .tbv-summary, .tbv-status { font-size: calc(11px * var(--text-scale, 1)); }
+.tbv-summary, .tbv-status { font-size: calc(12px * var(--text-scale, 1)); }
+.tbv-empty-board { font-size: calc(13px * var(--text-scale, 1)); }
+.tbv-empty-board strong { font-size: calc(15px * var(--text-scale, 1)); }
+#topBar, .board-toolbar { flex: 0 0 auto; min-height: 40px; height: auto; }
+.board-toolbar { min-height: 76px; }
+.split-btn { height: auto; min-height: 24px; }

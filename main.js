@@ -18,6 +18,7 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const FontScale = require('./font-scale');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
@@ -614,6 +615,17 @@ function createWindow() {
   // keeps rendering but is transparent and click-through, so a test run never
   // covers the user's apps or catches their clicks.
   if (tudArg) win.once('ready-to-show', () => { hideTestWindow(win); win.showInactive(); });
+  win.webContents.setZoomFactor(1);
+  win.webContents.setVisualZoomLevelLimits(1, 1).catch(() => {});
+  win.webContents.on('zoom-changed', () => { if (!win.isDestroyed()) win.webContents.setZoomFactor(1); });
+  // Keep Cmd/Ctrl +/-/0 (and the unshifted equals key) from zooming the window.
+  // The page applies one text percent instead.
+  win.webContents.on('before-input-event', (event, input) => {
+    const delta = FontScale.keyDelta(input);
+    if (delta === null) return;
+    event.preventDefault();
+    send('font-size', { delta });
+  });
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());
@@ -1111,16 +1123,24 @@ app.whenReady().then(() => {
     } catch (_) {}
   });
 
-  // Electron's default View accelerators zoom the entire page before the
-  // renderer can handle them. Route only those three items to the shared text
-  // size control, preserving the other native menu items.
-  const textZoom = { resetzoom: 0, zoomin: 1, zoomout: -1 };
+  // Electron's default View accelerators zoom the entire page. Replace those
+  // three items so the shortcut is shown and only the shared text percent moves.
+  const textZoom = {
+    resetzoom: { delta: 0, label: '默认字号', accelerator: 'CommandOrControl+0' },
+    zoomin: { delta: 1, label: '放大文字', accelerator: 'CommandOrControl+Plus' },
+    zoomout: { delta: -1, label: '缩小文字', accelerator: 'CommandOrControl+-' },
+  };
   const fontMenu = (menu) => menu.items.map((item) => {
-    if (Object.hasOwn(textZoom, item.role)) return {
-      id: `text-${item.role}`, label: item.label, accelerator: item.accelerator,
-      click: () => send('font-size', { delta: textZoom[item.role] }),
-    };
-    return item.submenu ? { label: item.label, role: item.role, submenu: fontMenu(item.submenu) } : item;
+    if (Object.hasOwn(textZoom, item.role)) {
+      const spec = textZoom[item.role];
+      return {
+        id: `text-${item.role}`, label: spec.label, accelerator: spec.accelerator,
+        click: () => send('font-size', { delta: spec.delta }),
+      };
+    }
+    if (!item.submenu) return item;
+    const view = item.role === 'viewMenu' || item.label === 'View';
+    return { label: view ? '视图' : item.label, role: view ? undefined : item.role, submenu: fontMenu(item.submenu) };
   });
   const nativeMenu = Menu.getApplicationMenu();
   if (nativeMenu) Menu.setApplicationMenu(Menu.buildFromTemplate(fontMenu(nativeMenu)));

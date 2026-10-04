@@ -244,11 +244,11 @@ test('sidebar text shortcuts scale metadata with titles, clamp safely and share 
   const base = await sizes();
   for (let i = 0; i < 3; i++) {
     await page.keyboard.press(`${mod}+${i === 2 ? 'Shift+Equal' : 'Equal'}`);
-    await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(14 + i);
+    await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(110 + i * 10);
   }
   const large = await sizes();
-  for (const key of Object.keys(base)) expect(large[key] / base[key], key).toBeCloseTo(16 / 13, 3);
-  expect(await page.evaluate(() => config.fontSize)).toBe(13);
+  for (const key of Object.keys(base)) expect(large[key] / base[key], key).toBeCloseTo(1.3, 2);
+  expect(await page.evaluate(() => config.fontSize)).toBe(17);
   expect(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getZoomLevel())).toBe(0);
   const shots = process.env.AGENTDECK_SCREENSHOT_DIR || testInfo.outputDir;
   fs.mkdirSync(shots, { recursive: true });
@@ -256,12 +256,12 @@ test('sidebar text shortcuts scale metadata with titles, clamp safely and share 
   await page.evaluate(() => { document.getElementById('navList').scrollTop = 0; });
   await page.locator('#colNav').screenshot({ path: path.join(shots, 'sidebar-font-large.png') });
   for (let i = 0; i < 20; i++) await page.keyboard.press(`${mod}+Minus`);
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(10);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(80);
   const small = await sizes();
-  for (const key of Object.keys(base)) expect(small[key] / base[key], key).toBeCloseTo(10 / 13, 3);
+  for (const key of Object.keys(base)) expect(small[key] / base[key], key).toBeCloseTo(0.8, 2);
   await page.locator('#colNav').screenshot({ path: path.join(shots, 'sidebar-font-small.png') });
   for (let i = 0; i < 20; i++) await page.keyboard.press(`${mod}+Equal`);
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(20);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(200);
   for (const width of [200, 252]) {
     await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
     for (const open of [true, false]) {
@@ -281,37 +281,37 @@ test('sidebar text shortcuts scale metadata with titles, clamp safely and share 
   }
   await page.locator('.captain-fold').focus();
   await page.keyboard.press(`${mod}+0`);
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(13);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(100);
   const invoke = (role) => application.evaluate(({ Menu, BrowserWindow }, r) => {
     const items = (m) => m.items.flatMap((i) => [i, ...(i.submenu ? items(i.submenu) : [])]);
     const item = items(Menu.getApplicationMenu()).find((i) => i.id === `text-${r}`);
     const win = BrowserWindow.getAllWindows()[0]; item.click(undefined, win, win.webContents);
   }, role);
   await invoke('zoomin');
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(14);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(110);
   await invoke('resetzoom');
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(13);
-  // Chat/terminal content retains its own size control, separate from the sidebar.
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(100);
+  // The same percent moves sidebar type, conversation text, and the terminal.
   await page.locator('.captain-item .cn-label').click();
   await page.locator('.column[data-col-id="captain"] .composer textarea').focus();
   await page.keyboard.press(`${mod}+Minus`);
-  await expect.poll(() => page.evaluate(() => config.fontSize)).toBe(12);
-  expect(await page.evaluate(() => config.sidebarFontSize)).toBe(13);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(90);
+  expect(await page.evaluate(() => config.fontSize)).toBe(12);
   expect(await page.evaluate(() => terms.get('captain').term.options.fontSize)).toBe(12);
+  expect(await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.captain-item .cn-label')).fontSize))).toBeCloseTo(13.5 * 0.9, 1);
   await page.keyboard.press(`${mod}+0`);
-  await expect.poll(() => page.evaluate(() => config.fontSize)).toBe(13);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(100);
   await page.evaluate(() => ChatUI.setMode('captain', 'term'));
   await page.locator('.column[data-col-id="captain"] .xterm textarea').focus();
   await page.keyboard.press(`${mod}+Equal`);
-  await expect.poll(() => page.evaluate(() => config.fontSize)).toBe(14);
-  expect(await page.evaluate(() => config.sidebarFontSize)).toBe(13);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(110);
+  expect(await page.evaluate(() => config.fontSize)).toBe(14);
   await page.keyboard.press(`${mod}+0`);
   await page.evaluate(() => ChatUI.setMode('captain', 'chat'));
-  // A click on non-focusable chrome must switch scope even if a composer had focus.
   await page.locator('#navList').click({ position: { x: 2, y: 2 } });
   await page.keyboard.press(`${mod}+Equal`);
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(14);
-  expect(await page.evaluate(() => config.fontSize)).toBe(13);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(110);
+  expect(await page.evaluate(() => config.fontSize)).toBe(14);
   await page.keyboard.press(`${mod}+0`);
 });
 
@@ -319,7 +319,7 @@ test('sidebar font preference survives an isolated application restart', async (
   const mod = process.platform === 'darwin' ? 'Meta' : 'Control';
   await page.locator('.captain-fold').focus();
   for (let i = 0; i < 3; i++) await page.keyboard.press(`${mod}+Equal`);
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(16);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(130);
   // The earlier identity tests assign real commands as metadata. Restore stand-ins
   // before restart so this test can never launch a real agent or spend quota.
   await page.evaluate((fake) => {
@@ -327,7 +327,7 @@ test('sidebar font preference survives an isolated application restart', async (
     config.mainSession.cmd = columns.find((c) => c.isMain).cmd;
     flushConfig();
   }, FAKE);
-  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).sidebarFontSize).toBe(16);
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).fontScale).toBe(130);
   await application.close();
   application = null;
   const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
@@ -338,7 +338,7 @@ test('sidebar font preference survives an isolated application restart', async (
   });
   page = await application.firstWindow();
   await expect(page.locator('.captain-fold')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(16);
-  await expect.poll(() => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.captain-item .cn-label')).fontSize))).toBeCloseTo(13.5 * 16 / 13, 3);
-  expect(await page.evaluate(() => config.fontSize)).toBe(13);
+  await expect.poll(() => page.evaluate(() => config.fontScale)).toBe(130);
+  await expect.poll(() => page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('.captain-item .cn-label')).fontSize))).toBeCloseTo(13.5 * 1.3, 1);
+  expect(await page.evaluate(() => config.fontSize)).toBe(17);
 });

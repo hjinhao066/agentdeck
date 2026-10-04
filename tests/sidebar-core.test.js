@@ -129,9 +129,3 @@ test('activity subtitles discard TUI controls and keep actual progress', () => {
 });
 
 
-test('sidebar text size restores defaults for invalid settings and clamps its independent range', () => {
-  for (const value of [undefined, null, '16', NaN, Infinity, -Infinity]) assert.equal(S.normalizeFontSize(value), 13);
-  assert.equal(S.normalizeFontSize(16), 16);
-  assert.equal(S.normalizeFontSize(-1), 10);
-  assert.equal(S.normalizeFontSize(32), 20);
-});

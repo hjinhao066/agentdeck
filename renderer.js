@@ -102,7 +102,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
-  navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
+  navCollapsed: false, fontSize: 13, fontScale: 100, activeView: 'terminals', columns: defaultColumns(), links: [],
   boardResponses: {}, boardPositions: {}, globalViewMode: 'chat',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
@@ -113,7 +113,6 @@ let config = {
   captainTokenSaver: MainCore.tokenSaverSettings(),
 };
 const saved = window.deck.loadConfig();
-config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
@@ -146,7 +145,6 @@ if (saved) {
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
-  if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher)) config.taskBoard = { dispatcher: saved.taskBoard.dispatcher };
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
@@ -200,6 +198,8 @@ if (saved) {
     }));
   }
 }
+config.fontScale = FontScale.resolve(saved);
+config.fontSize = FontScale.terminalFontSize(config.fontScale);
 function seatLaunchCommand(col, command) {
   const seat = ClaudeSeatsCore.bindColumn(col, config);
   if (!seat.configDir) return ''; // A removed, unbound seat must not launch under another login.
@@ -496,51 +496,31 @@ function applyTheme(theme) {
 }
 
 // ---- Text size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
-const FONT_MIN = 8, FONT_MAX = 32, FONT_DEFAULT = 13;
-// The chat view follows the same size: it scales with the terminal font.
-function applyChatZoom() {
-  document.documentElement.style.setProperty('--chat-zoom', String(config.fontSize / FONT_DEFAULT));
-}
-applyChatZoom();
-function setFontSize(size) {
-  size = Math.max(FONT_MIN, Math.min(FONT_MAX, size));
-  if (size === config.fontSize) return;
-  config.fontSize = size;
-  applyChatZoom();
-  terms.forEach(({ term }) => { term.options.fontSize = size; });
+// One percent for terminal glyphs, conversation text, and sidebar/board type.
+// --text-scale multiplies font-size only. It is not the window zoomFactor.
+function applyTextScale() {
+  document.documentElement.style.setProperty('--text-scale', String(config.fontScale / FontScale.DEFAULT));
+  const px = FontScale.terminalFontSize(config.fontScale);
+  config.fontSize = px;
+  terms.forEach(({ term }) => { term.options.fontSize = px; });
   fitAll();
+}
+applyTextScale();
+function setTextScale(percent) {
+  percent = FontScale.normalize(percent);
+  if (percent === config.fontScale) return;
+  config.fontScale = percent;
+  applyTextScale();
   saveConfig();
-  showToast(`字体大小 ${size}px`);
+  showToast(`文字 ${percent}%`);
 }
-// Returns +1/-1 for a font-size keydown, 0 for reset, null otherwise.
-function fontSizeDelta(e) {
-  if (e.type !== 'keydown' || e.altKey) return null;
-  if (!(e.ctrlKey || e.metaKey) || (e.ctrlKey && e.metaKey)) return null;
-  const k = e.key;
-  if (k === '+' || k === '=') return 1;
-  if (k === '-' || k === '_') return -1;
-  if (k === '0') return 0;
-  return null;
-}
-function applySidebarFontSize() {
-  document.getElementById('colNav').style.setProperty('--sidebar-scale', String(config.sidebarFontSize / SidebarCore.FONT_DEFAULT));
-}
-applySidebarFontSize();
-let contentFontFocus = false;
-// Clicking non-focusable chrome also changes the shortcut's target; tabbing
-// back to a terminal/composer changes it back. Native menus share this scope.
-for (const event of ['pointerdown', 'focusin']) document.addEventListener(event, (e) => {
-  contentFontFocus = !!e.target.closest('.xterm, .composer, .chat-scroll');
-}, true);
+// Menu accelerators and the page keydown can both see one press. Keep one step.
+let lastTextScaleAt = 0;
 function adjustTextSize(delta) {
-  if (contentFontFocus) {
-    setFontSize(delta === 0 ? FONT_DEFAULT : config.fontSize + delta);
-  } else {
-    config.sidebarFontSize = SidebarCore.normalizeFontSize(delta === 0 ? SidebarCore.FONT_DEFAULT : config.sidebarFontSize + delta);
-    applySidebarFontSize();
-    saveConfig();
-    showToast(`侧边栏字号 ${Math.round(config.sidebarFontSize / SidebarCore.FONT_DEFAULT * 100)}%`);
-  }
+  const now = Date.now();
+  if (now - lastTextScaleAt < 8) return;
+  lastTextScaleAt = now;
+  setTextScale(FontScale.adjust(config.fontScale, delta));
 }
 window.deck.onFontSize((delta) => {
   if (delta === -1 || delta === 0 || delta === 1) adjustTextSize(delta);
@@ -1707,7 +1687,13 @@ function buildColumn(col, isFresh) {
     term.loadAddon(fit);
     const search = new SearchAddonNS.SearchAddon();
     term.loadAddon(search);
-    term.open(termEl);
+    // FitAddon measures its immediate parent's height, without subtracting
+    // that parent's padding. Give it the actual content box inside .term so
+    // the last row is not clipped after the font grows.
+    const termContent = document.createElement('div');
+    termContent.className = 'term-content';
+    termEl.appendChild(termContent);
+    term.open(termContent);
     // Renderer: the Canvas addon (2D canvas), NOT WebGL. Each WebGL terminal
     // holds its own GPU context, and Chromium hard-caps live WebGL contexts
     // (~16) and silently EVICTS the oldest when a new one is created — including
@@ -3667,7 +3653,7 @@ document.addEventListener('keydown', (e) => {
 // Text size works everywhere, including inside a terminal: capture phase runs
 // before xterm's own handlers, so Ctrl+- never reaches the pty as ^_.
 document.addEventListener('keydown', (e) => {
-  const zd = fontSizeDelta(e);
+  const zd = FontScale.keyDelta(e);
   if (zd === null) return;
   adjustTextSize(zd);
   e.preventDefault();

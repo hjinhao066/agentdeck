@@ -11,10 +11,6 @@
 
   const MAX_FOLDERS = 100;
   const MAX_ARCHIVED = 500;
-  const FONT_DEFAULT = 13;
-  function normalizeFontSize(size) {
-    return typeof size === 'number' && Number.isFinite(size) ? Math.max(10, Math.min(20, size)) : FONT_DEFAULT;
-  }
   // same shape the main process accepts for terminal ids (security.js)
   const ID_RE = /^[A-Za-z0-9_-][A-Za-z0-9._-]{0,159}$/;
 
@@ -151,7 +147,7 @@
   }
 
   return {
-    MAX_FOLDERS, FONT_DEFAULT, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
+    MAX_FOLDERS, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
     orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, normalizeArchived,
   };
 });
