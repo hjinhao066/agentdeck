@@ -35,6 +35,10 @@ async function geometry(id) {
 }
 
 async function check(id, label, samples) {
+  // Layout helpers schedule fit on the next frame. Measure after those frames,
+  // then keep the matching renderer/PTY pair instead of racing a fresh read.
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  let sample;
   await expect.poll(async () => {
     const g = await geometry(id);
     const file = path.join(profile, `${id}.size.json`);
@@ -45,10 +49,10 @@ async function check(id, label, samples) {
     if (pty.cols !== g.cols) errors.push(`xterm ${g.cols} / PTY ${pty.cols} columns`);
     if (g.screenBottom > g.clipBottom || g.screenBottom > g.contentBottom) errors.push(`last row bottom ${g.screenBottom}, clip bottom ${g.clipBottom}, content bottom ${g.contentBottom}`);
     if (g.footer !== FOOTER) errors.push(`footer: ${g.footer}`);
+    if (!errors.length) sample = { g, pty };
     return errors;
   }, { message: label, timeout: 10000 }).toEqual([]);
-  const g = await geometry(id);
-  const pty = JSON.parse(fs.readFileSync(path.join(profile, `${id}.size.json`), 'utf8'));
+  const { g, pty } = sample;
   expect(pty, label).toEqual({ rows: g.capacity, cols: g.cols });
   expect(g.screenBottom, label).toBeLessThanOrEqual(g.contentBottom);
   samples.push({ label, id, ...g, pty });
