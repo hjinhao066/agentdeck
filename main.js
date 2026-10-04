@@ -903,6 +903,15 @@ app.whenReady().then(async () => {
     } catch (_) {}
     checkQuotaBark();
   });
+  // The deck page has no clipboard module of its own. Test profiles get a
+  // private clipboard: a test run never reads or replaces what the user copied.
+  let testClipboard = '';
+  onMain('clipboard:write-sync', (e, text) => {
+    if (typeof text !== 'string') { e.returnValue = null; return; }
+    if (tudArg) testClipboard = text; else clipboard.writeText(text);
+    e.returnValue = true;
+  });
+  onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : clipboard.readText(); });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME, version: app.getVersion(),
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),

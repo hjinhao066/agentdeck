@@ -184,6 +184,34 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
   if (process.platform !== 'win32') expect(fs.statSync(path.join(profile, 'config.json')).mode & 0o777).toBe(0o600);
 });
 
+test('desktop copy buttons put the login token and entry password on the clipboard', async () => {
+  await launch();
+  // The real preload → main path. A test profile has a private clipboard, so
+  // this never reads or replaces what the user has copied.
+  const copies = async (id, label, value) => {
+    const button = desktop.locator(id);
+    const icon = await button.innerHTML();
+    await expect(button).toHaveAttribute('title', label);
+    await button.click();
+    await expect(button).toHaveAttribute('aria-label', '已复制');
+    await expect(button).toHaveAttribute('title', '已复制');
+    expect(await desktop.evaluate(() => deck.clipboardRead()) === value).toBe(true);
+    await expect(button).toHaveAttribute('aria-label', label, { timeout: 5000 });
+    await expect(button).toHaveAttribute('title', label);
+    expect(await button.innerHTML()).toBe(icon);
+  };
+  await copies('#mobileWebCopyToken', '复制登录 token', token);
+  // The entry password comes from the tunnel installer's private file, which a
+  // test profile never reads; show the field with a stand-in value.
+  const entryPassword = 'stand-in-entry-password';
+  await desktop.evaluate((value) => {
+    document.getElementById('mobileWebGateway').hidden = false;
+    document.getElementById('mobileWebGatewayPassword').value = value;
+  }, entryPassword);
+  await copies('#mobileWebCopyGateway', '复制入口口令', entryPassword);
+  expect(await desktop.evaluate(() => deck.clipboardRead()) === token).toBe(false);
+});
+
 test('mobile message waits for desktop draft, goes only to Captain; forbidden controls reject', async () => {
   await launch(); await login();
   const composer = desktop.locator('.column.is-main .composer textarea');
