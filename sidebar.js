@@ -13,6 +13,7 @@
   let lastTimesAt = 0;
   let captainRow = null;       // the 队长 entry at the top
   let crewHead = null;         // 队长's sessions: { counts, ids, open, shown }
+  let captainHead = null;      // 队长's pinned row: { col, item, counts, sub }
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -116,6 +117,7 @@
     const cols = host.columns();
     const { crew, groups, loose } = SC.groupSessions(cols, folders);
     crewHead = null;
+    captainHead = null;
     if (main) {
       const waiting = (window.MainSession.state()?.waitlist || []).length;
       const captain = captainListRow(main, !!(crew.length || waiting));
@@ -159,7 +161,9 @@
 
   // 队长's own row, pinned first like its column in the deck. It cannot be
   // dragged, filed into a folder, archived or deleted from the list; the top
-  // 队长 entry still creates it and its dot mirrors this row's.
+  // 队长 entry still creates it and its dot mirrors this row's. One line:
+  // [fold][crown][dot] 队长 … [count][model][switch]; the full counts, last
+  // activity and live status line live in the tooltip.
   const captainMirror = new MutationObserver((records) => {
     records.forEach((r) => { captainRow.dot.className = r.target.className; });
   });
@@ -167,7 +171,6 @@
     const item = el('div', 'colnav-item captain-item');
     item.dataset.colId = col.id;
     item.dataset.captain = '1';
-    item.title = '队长：固定在最前面，不能拖进文件夹或归档';
     const badge = el('span', 'agent-badge cn-badge');
     badge.hidden = true;
     const dot = el('span', 'cn-dot');
@@ -187,8 +190,8 @@
     if (hasCrew) fold.setAttribute('aria-controls', 'captainCrewList');
     const counts = el('span', 'crew-counts');
     counts.hidden = !hasCrew;
-    counts.setAttribute('aria-live', 'polite');
-    item.append(fold, badge, iconEl('crown', 'cn-crown'), dot, text, meta, counts);
+    counts.setAttribute('role', 'status');
+    item.append(fold, iconEl('crown', 'cn-crown'), dot, text, counts, badge, meta);
     if (window.ClaudeSeats) item.appendChild(window.ClaudeSeats.rotationButton(col));
     item.addEventListener('click', () => selectCaptain(col));
     item.addEventListener('contextmenu', (e) => {
@@ -204,6 +207,8 @@
       window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar');
     }
     captainMirror.observe(dot, { attributes: true, attributeFilter: ['class'] });
+    captainHead = { col, item, counts, sub };
+    captainTip('');
     return item;
   }
   // Indented sessions, folded by the Captain's arrow; counts stay on its row.
@@ -240,9 +245,20 @@
     return window.MainCore.crewOrder(items, window.MainSession.state()?.tasks);
   }
   const orderKey = (order) => [...order.running, '|' + waitlist().length + (window.MainSession.memoryHeld() ? ':mem' : ''), ...order.finished].join(',');
-  // 「3 干活中 · 1 停在确认 · 2 完成 · 1 排队」, from the 1.5s status loop.
+  // Tooltip of the one-line 队长 row: counts, last activity, live status line.
+  function captainTip(counts) {
+    if (!captainHead) return;
+    const last = host.lastTurnTs(captainHead.col.id);
+    const when = last ? (ago(last) === '刚刚' ? '刚刚有活动' : `${ago(last)}前有活动`) : '';
+    const live = captainHead.item.classList.contains('live') && captainHead.sub.textContent;
+    const tip = ['队长', counts, when].filter(Boolean).join(' · ') + (live ? '\n现在：' + live : '');
+    if (captainHead.item.title !== tip) captainHead.item.title = tip;
+  }
+  // 「3 干活中 · 1 停在确认 · 2 完成 · 1 排队」, from the 1.5s status loop. The
+  // row shows only a tiny count (working, else all sessions); the rest is in
+  // the tooltip and the accessible name.
   function refreshCrew() {
-    if (!crewHead) return;
+    if (!crewHead) { captainTip(''); return; }
     const n = { working: 0, quota: 0, input: 0, done: 0, failed: 0 };
     const tasks = window.MainSession.state()?.tasks || [];
     const latest = new Map(tasks.map((t) => [t.colId, t]));
@@ -261,7 +277,13 @@
     }
     const text = [n.working && `${n.working} 干活中`, n.quota && `${n.quota} 额度用尽/等待`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, n.failed && `${n.failed} 失败`, supplement && `${supplement} 待补充`, waiting && `${waiting} 排队`]
       .filter(Boolean).join(' · ') || `${crewHead.ids.length} 个`;
-    if (crewHead.counts.textContent !== text) crewHead.counts.textContent = text;
+    const short = String(n.working || crewHead.ids.length + waiting);
+    const c = crewHead.counts;
+    if (c.textContent !== short) c.textContent = short;
+    if (c.title !== text) { c.title = text; c.setAttribute('aria-label', '队员：' + text); }
+    c.classList.toggle('busy', n.working > 0);
+    c.classList.toggle('attn', !!(n.input || n.quota || n.failed || supplement));
+    captainTip(text);
   }
   // Selecting the row returns to the Captain's terminal; the explicit menu
   // action still opens its conversation view.

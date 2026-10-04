@@ -234,7 +234,7 @@ test('past the limit new work waits for a slot; finished background sessions are
     await expect(card('乙')).toHaveClass(/st-waiting/);
     await expect(card('乙')).toContainText('等空位');
     expect(await col('乙')).toBe(null);
-    await expect(page.locator('.captain-item .crew-counts')).toContainText('1 排队');
+    await expect(page.locator('.captain-item .crew-counts')).toHaveAttribute('title', /1 排队/);
     // unfolded: work in progress on top, then what waits for a slot, finished ones below
     const a0 = await col('甲');
     const keep0 = await col('写周报');
@@ -297,7 +297,7 @@ test('Captain stop interrupts a busy worker, cancels supplements; archive ends i
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "cancel this supplement"`);
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
-  await expect(page.locator('.captain-item .crew-counts')).toContainText('1 待补充');
+  await expect(page.locator('.captain-item .crew-counts')).toHaveAttribute('title', /1 待补充/);
   await run(mainId, `clear; node "${CLI}" stop --id ${child}`);
   await expect.poll(() => screen(child)).toContain('Interrupted by Esc');
   expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
@@ -390,7 +390,7 @@ test('quota generates a failure receipt; queued work still waits for the quota s
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '额度等待' }).last();
   await expect(card.locator('.task-status')).toHaveText('没做成');
   await expect(card.locator('.task-failed')).toContainText("You've hit your limit");
-  await expect(page.locator('.captain-item .crew-counts')).toContainText('额度用尽/等待');
+  await expect(page.locator('.captain-item .crew-counts')).toHaveAttribute('title', /额度用尽\/等待/);
   await run(mainId, `clear; node "${CLI}" ledger`);
   await expect.poll(() => screen(mainId)).toContain('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "after quota"`);

@@ -76,6 +76,8 @@
       "crew-map.js",
       "task-board-ui-core.js",
       "task-board-ui.js",
+      "version-progress-core.js",
+      "version-progress.js",
       "side-pane.js",
       "side-main.js",
       "skills-core.js",
