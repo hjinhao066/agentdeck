@@ -11,7 +11,8 @@ test.describe.configure({ mode: 'serial' });
 
 async function launch() {
   const env = { ...process.env, AGENTDECK_TEST_CONTROL_ENV_FILE: path.join(profile, 'control.json'),
-    AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received.jsonl') };
+    AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received.jsonl'),
+    AGENTDECK_TEST_RECEIPTS_FILE: path.join(profile, 'receipts.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -139,7 +140,9 @@ test('real authenticated new CLI stores project/reviews, rejects unknown targets
     }, reviewerId);
     const file = path.join(profile, 'received.jsonl');
     const received = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(p => p.colId === reviewerId) : [];
-    await testInfo.attach('reviewer-state', { body: JSON.stringify({ state, received }, null, 2), contentType: 'application/json' });
+    const receiptsFile = path.join(profile, 'receipts.jsonl');
+    const receipts = fs.existsSync(receiptsFile) ? fs.readFileSync(receiptsFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(p => p.colId === reviewerId) : [];
+    await testInfo.attach('reviewer-state', { body: JSON.stringify({ state, received, receipts }, null, 2), contentType: 'application/json' });
     throw error;
   }
 });

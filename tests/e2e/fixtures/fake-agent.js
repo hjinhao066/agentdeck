@@ -129,7 +129,11 @@ function answer() {
   if (text.includes('AgentDeck 约定') && !process.argv.includes('--screen-only')) {
     const args = [process.env.AGENTDECK_BOARD_CLI, 'complete', '--result', 'stand-in finished ' + first.slice(0, 30)];
     if (process.env.AGENTDECK_DEMO_FILE) args.push('--files', process.env.AGENTDECK_DEMO_FILE);
-    require('child_process').execFile(process.execPath, args, (error) => { if (error) process.stderr.write('Receipt submission failed\n'); });
+    require('child_process').execFile(process.execPath, args, (error, stdout, stderr) => {
+      if (process.env.AGENTDECK_TEST_RECEIPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_RECEIPTS_FILE,
+        JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, code: error?.code || 0, stdout, stderr }) + '\n');
+      if (error) process.stderr.write('Receipt submission failed\n');
+    });
   }
   if (process.argv.includes('--screen-only')) out += '\n  【回执】\n  摘要：screen template must be ignored\n  文件：无\n';
   process.stdout.write(out);
