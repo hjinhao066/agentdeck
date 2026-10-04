@@ -452,6 +452,16 @@ test('manual reset requires fresh success evidence, including low-context clear 
   assert.equal(M.contextResetEvidence('Claude', 'Context: 290k/1000k', 'Context: 145k/1000k', ''), false);
 });
 
+test('manual reset preserves ConPTY row boundaries without accepting horizontal quoted success text', () => {
+  // Captured Windows stand-in reset: ConPTY goes straight from the success
+  // text to the input rule using CUP, with no newline between them.
+  const packet = '\x1b[H\x1b[?25h\x1b[?25l⏺ (no content)\x1b[3;1H────────────────\r\n> \r\n────────────────\x1b[33m\r\nContext: 23%\x1b[m';
+  assert.equal(M.contextResetEvidence('Claude', 'Context: 23%', 'Context: 23%', packet), true);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1H⏺ Conversation cleared\x1b[3;1H────'), true);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1HUser: \x1b[1;7HConversation cleared\x1b[3;1H────'), false);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1H⏺ Conversation cleared\x1b[3;1HFailed to start new session'), false);
+});
+
 
 test('Codex reset evidence reads its native footer below the prompt, never a quoted status', () => {
   assert.equal(M.codexContextFooter('• example 100% context left\n› Ask Codex to do anything\n\n  ⏎ send   98% context left'), '\n  ⏎ send   98% context left');

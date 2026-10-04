@@ -32,7 +32,10 @@ async function launch(flags = '', restart = false) {
   const env = { ...process.env, AGENTDECK_TEST_PROMPTS_FILE: promptsFile,
     AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir };
   delete env.ELECTRON_RUN_AS_NODE;
-  application = await electron.launch({ args: [ROOT, `--test-user-data=${profile}`], env });
+  application = await electron.launch({
+    executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env,
+  });
   page = await application.firstWindow();
   await expect(page.locator('.column.is-main')).toHaveCount(1, { timeout: 20000 });
   await expect.poll(() => briefs().length, { timeout: 20000 }).toBe(previousBriefs + 1);
