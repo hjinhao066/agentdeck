@@ -24,7 +24,7 @@ test.beforeAll(async () => {
     columns: [
       { id: 'captain', title: '队长', cmd: FAKE + ' --captain-statusline', cwd: profile, width: 460, role: 'manual', isMain: true },
       ...titles.map((title, i) => ({ id: `worker-${i}`, title, displayTitle: title, manualTitle: true,
-        cmd: FAKE + ' --interruptible', cwd: profile, width: 460, role: 'manual', captainCrew: true })),
+        cmd: FAKE + ' --interruptible --sidebar-controls', cwd: profile, width: 460, role: 'manual', captainCrew: true })),
     ],
     mainSession: { colId: 'captain', cmd: FAKE + ' --captain-statusline', gen: 1, pending: [], inflight: [],
       fresh: false, crewMarked: true, waitlist: [], tasks: titles.map((title, i) => ({
@@ -131,7 +131,8 @@ test('Captain arrow folds without selecting it; live counts stay visible, its ro
   await expect(counts).toHaveText('3 干活中');
 });
 
-test('worker titles remain fully readable above metadata at default, minimum and wide sidebar widths', async ({}, testInfo) => {
+test('worker titles use two full-width lines above metadata at default, minimum and wide sidebar widths', async ({}, testInfo) => {
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 760));
   for (const width of [252, 200, 420]) {
     await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
     const rows = page.locator('.nav-crew .colnav-item');
@@ -147,17 +148,21 @@ test('worker titles remain fully readable above metadata at default, minimum and
         const l = label.getBoundingClientRect(), b = badge.getBoundingClientRect(), r = el.getBoundingClientRect();
         const meta = el.querySelector('.cn-meta');
         const m = meta.getBoundingClientRect();
-        const range = document.createRange(); range.selectNodeContents(label);
-        const rects = [...range.getClientRects()];
         return { titleWidth: l.width, modelBelow: b.top >= l.bottom,
           timeBelow: getComputedStyle(meta).display === 'none' || m.top >= l.bottom,
-          fullTitle: rects.every((x) => x.left >= l.left - 1 && x.right <= l.right + 1 && x.bottom <= l.bottom + 1),
-          contained: l.right <= r.right, clipped: getComputedStyle(label).overflow === 'hidden' };
+          contained: l.right <= r.right, clamped: getComputedStyle(label).webkitLineClamp === '2',
+          lines: l.height / parseFloat(getComputedStyle(label).lineHeight),
+          fontSize: parseFloat(getComputedStyle(label).fontSize),
+          navFontSize: parseFloat(getComputedStyle(document.querySelector('.nav-row')).fontSize) };
       });
-      expect(await check()).toMatchObject({ modelBelow: true, timeBelow: true, fullTitle: true, contained: true, clipped: false });
-      expect((await check()).titleWidth).toBeGreaterThan(130);
+      expect(await check()).toMatchObject({ modelBelow: true, timeBelow: true, contained: true, clamped: true });
+      const layout = await check();
+      expect(layout.titleWidth).toBeGreaterThan(120);
+      expect(layout.lines).toBeLessThanOrEqual(2.01);
+      expect(layout.fontSize).toBe(12.5);
+      expect(layout.fontSize).toBeLessThan(layout.navFontSize);
       await row.hover();
-      expect(await check()).toMatchObject({ modelBelow: true, fullTitle: true, clipped: false });
+      expect(await check()).toMatchObject({ modelBelow: true, clamped: true });
       for (const button of await row.locator('.cn-actions button').all()) {
         await expect(button).toHaveAttribute('aria-label', /.+/);
         await expect(button).toHaveAttribute('title', /.+/);
@@ -175,6 +180,51 @@ test('worker titles remain fully readable above metadata at default, minimum and
     await page.evaluate(() => document.activeElement?.blur());
     const dir = process.env.AGENTDECK_SCREENSHOT_DIR || testInfo.outputDir;
     fs.mkdirSync(dir, { recursive: true });
+    await expect(rows.locator('.cn-sub')).toHaveText(['✻ Doing…', '✻ Doing…', '✻ Doing…']);
+    await page.evaluate(() => { document.getElementById('navList').scrollTop = 0; });
     await page.locator('#colNav').screenshot({ path: path.join(dir, `sidebar-${width}.png`) });
   }
+});
+
+test('Captain metadata and counts stay inside its row when the sidebar list overflows or folds', async () => {
+  // The old flex-shrunk Captain row overlapped the first worker only with a
+  // crowded list; the roomy default window did not expose it.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 520));
+  for (const width of [200, 225, 252, 320, 420]) {
+    await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
+    for (const open of [true, false]) {
+      await page.evaluate((value) => { config.crewOpen = value; Sidebar.render(); }, open);
+      await page.mouse.move(800, 100);
+      await page.evaluate(() => { document.getElementById('navList').scrollTop = 0; });
+      if (open) expect(await page.locator('#navList').evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+      const layout = await page.evaluate(() => {
+        const captain = document.querySelector('.captain-item');
+        const r = captain.getBoundingClientRect();
+        const parts = ['.cn-label', '.cn-badge', '.cn-meta', '.crew-counts'].map((selector) => {
+          const el = captain.querySelector(selector), b = el.getBoundingClientRect();
+          return { visible: getComputedStyle(el).display !== 'none', top: b.top, bottom: b.bottom, left: b.left, right: b.right };
+        }).filter((b) => b.visible);
+        const next = captain.nextElementSibling.hidden ? captain.nextElementSibling.nextElementSibling : captain.nextElementSibling;
+        return { contained: parts.every((b) => b.top >= r.top && b.bottom <= r.bottom && b.left >= r.left && b.right <= r.right),
+          ordered: parts[1].top >= parts[0].bottom && parts[3].top >= parts[1].bottom,
+          separate: next.getBoundingClientRect().top >= r.bottom };
+      });
+      expect(layout, `width=${width}, open=${open}`).toEqual({ contained: true, ordered: true, separate: true });
+    }
+  }
+});
+
+test('subtitles hide controls-only screens and show new real progress', async () => {
+  await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
+  const sub = page.locator('.nav-crew [data-col-id="worker-0"] .cn-sub');
+  const writeScreen = (text) => page.evaluate((value) => new Promise((resolve) => {
+    terms.get('worker-0').term.write('\x1b[2J\x1b[H' + value.replace(/\n/g, '\r\n'), resolve);
+  }), text);
+  await writeScreen('Thinking: xhigh\n← for agents · ? for shortcuts ⚠…');
+  await expect.poll(() => page.evaluate(() => terms.get('worker-0').lastScreen)).toContain('← for agents');
+  await expect(sub).toHaveText('', { timeout: 10000 });
+  await expect(sub).toBeHidden();
+  await writeScreen('✻ 正在跑侧边栏回归测试…\n────────────────────\n> \n────────────────────\nThinking: xhigh\n← for agents · ? for shortcuts ⚠…');
+  await expect(sub).toHaveText('✻ 正在跑侧边栏回归测试…', { timeout: 10000 });
+  await expect(sub).toBeVisible();
 });

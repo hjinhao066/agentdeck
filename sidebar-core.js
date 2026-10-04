@@ -18,6 +18,19 @@
     .replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);
   const validId = (id) => typeof id === 'string' && ID_RE.test(id);
 
+  // Terminal controls/settings are not progress, even without a ruled input box.
+  const ACTIVITY_NOISE = /for agents|for shortcuts|bypass permissions|shift\+tab|esc to (?:interrupt|cancel)|press (?:up|esc|enter)|ctrl\+[a-z]|auto-accept|context left|⏵⏵|^Thinking:\s*(?:low|medium|high|xhigh|max)\b|^(?:Context|Session|Model|Weekly Reset):|^(?:Claude Code|OpenAI Codex)\s*$/i;
+  function activityLine(lines) {
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const text = lines[i].trim();
+      if (!text || ACTIVITY_NOISE.test(text) || /^[>❯›]/.test(text) ||
+          /^[\s│⎿─━╌═╭╮╰╯┌┐└┘\-—·.]*$/.test(text) ||
+          /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏⣾⣽⣻⢿⡿⣟⣯⣷]\s*$/.test(text)) continue;
+      return text.length > 60 ? text.slice(0, 59) + '…' : text;
+    }
+    return '';
+  }
+
   function newFolderId() { return 'f' + Date.now().toString(36) + Math.floor(Math.random() * 46656).toString(36); }
 
   function normalizeFolders(raw) {
@@ -134,7 +147,7 @@
   }
 
   return {
-    MAX_FOLDERS, validId, newFolderId, normalizeFolders, folderOf, groupSessions,
+    MAX_FOLDERS, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
     orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, normalizeArchived,
   };
 });

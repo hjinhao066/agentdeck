@@ -30,6 +30,10 @@ the middle:
   as work starts and finishes.
   Captain and worker titles occupy their own full-width line and wrap in narrow
   sidebars; model badges and timestamps/actions sit below the title.
+  Worker titles are slightly smaller than navigation labels and use at most two
+  lines. The Captain row keeps its full height when the list scrolls. Activity
+  subtitles show progress/status text, filtering out terminal shortcut hints
+  and settings such as `Thinking: xhigh`.
   Their columns keep running at a normal size but sit outside the deck, and their
   popups are left to the 队长. Opening one (from that list or a task card) shows it right after the 队长 until you move on to another
   column. 拉到前台 in its menu, or dragging it into a folder or 对话, makes it an

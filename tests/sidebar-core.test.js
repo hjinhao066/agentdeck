@@ -110,3 +110,20 @@ test('a session leaves 队长 when filed elsewhere, and can be put back or reord
   S.moveColumn(solo, folders, 'b', { crew: true });
   assert.equal(solo[1].captainCrew, false);
 });
+
+test('activity subtitles discard TUI controls and keep actual progress', () => {
+  const C = require('../chat-core');
+  const activity = (text) => S.activityLine(C.cutInputBox(text.split('\n')));
+  const controls = ['← for agents · ? for shortcuts ⚠…', 'Thinking: xhigh',
+    'esc to interrupt', '⏵⏵ bypass permissions on (shift+tab to cycle)',
+    'Context: 23% | Session: 26.0%', 'Model: GPT-6.1 Sol', 'Claude Code'];
+  for (const hint of controls) {
+    assert.equal(activity(hint), '', hint);
+    assert.equal(activity('正在跑侧边栏回归测试\n' + hint), '正在跑侧边栏回归测试', hint);
+  }
+  assert.equal(activity('正在验证布局\n────────────────────\n> 提示占位文字\n────────────────────\nThinking: xhigh'), '正在验证布局');
+  assert.equal(activity('> 用户输入\n← for agents · ? for shortcuts'), '');
+  assert.equal(activity('Thinking: how to preserve the progress line'), 'Thinking: how to preserve the progress line');
+  assert.equal(activity('Proceed with the change? (y/n)'), 'Proceed with the change? (y/n)');
+  assert.equal(activity('✻ Doing…\nPress up to edit queued messages'), '✻ Doing…');
+});
