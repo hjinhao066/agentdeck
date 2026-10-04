@@ -144,7 +144,7 @@ function answer() {
 function listen() {
   if (process.env.AGENTDECK_TEST_RAW_INPUT_FILE) process.stdin.on('data', (data) => {
     require('fs').appendFileSync(process.env.AGENTDECK_TEST_RAW_INPUT_FILE,
-      JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, data: data.toString('base64') }) + '\n');
+      JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, data: Buffer.from(data).toString('base64') }) + '\n');
   });
   if (process.argv.includes('--interruptible')) {
     process.stdin.setRawMode(true);

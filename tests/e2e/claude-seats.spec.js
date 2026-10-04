@@ -34,11 +34,11 @@ async function launch() {
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
-  await application.evaluate(async ({ ipcMain }, file) => {
-    const fs = await import('node:fs');
+  page = await application.firstWindow();
+  await application.evaluate(({ ipcMain }, file) => {
+    const fs = process.getBuiltinModule('fs');
     ipcMain.on('pty:input', (_event, input) => fs.appendFileSync(file, JSON.stringify(input) + '\n'));
   }, path.join(profile, 'pty-input.jsonl'));
-  page = await application.firstWindow();
   const count = saved.columns.length;
   await expect(page.locator('.column.chat-mode')).toHaveCount(count);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|Codex CLI/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(count);
@@ -69,7 +69,7 @@ test.beforeEach(async ({}, testInfo) => {
   try {
     await launch();
   } catch (error) {
-    const state = await page.evaluate(() => [...terms].map(([id, e]) => ({
+    const state = await page.evaluate(() => typeof terms === 'undefined' ? [] : [...terms].map(([id, e]) => ({
       id, screen: dumpScreen(e.term), lastScreen: e.lastScreen, state: e.state,
       alive: e.alive, sending: e.sendingPrompt, injecting: e.injecting,
       typing: e.typing, inputBox: visibleInputBox(e), composing: userComposing(id),
