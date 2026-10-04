@@ -22,6 +22,7 @@ async function launch(columnCount) {
   });
   page = await application.firstWindow();
   page.on('dialog', (d) => d.accept());
+  await page.waitForFunction(() => typeof columns !== 'undefined' && typeof ChatUI !== 'undefined' && typeof terms !== 'undefined' && columns.length > 0 && columns.every((col) => terms.get(col.id)?.wrap?.isConnected));
   await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   await expect(page.locator('.column.chat-mode')).toHaveCount(columnCount);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(columnCount);

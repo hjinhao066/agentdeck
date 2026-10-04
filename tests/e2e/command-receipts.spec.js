@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -33,7 +34,7 @@ test.beforeAll(async () => {
   await page.evaluate(([id, c]) => window.deck.ptyInput(id, c + '\r'), [captain, exportEnv]);
   await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterAll(async () => { if (app) await closeElectron(app); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 
 function cli(args, env) {
   return new Promise((resolve) => {
@@ -211,7 +212,7 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
   expect(reason).toMatch(/启动失败|终端进程退出/);
   expect(fs.existsSync(file)).toBe(false);
   const previous = workerEnv().AGENTDECK_RECEIPT_TOKEN;
-  await app.close(); app = null;
+  await closeElectron(app); app = null;
   expect(fs.existsSync(path.join(dir, 'submit-worker.json'))).toBe(false);
   // Simulate a file left by an abnormal exit, then start the isolated app again.
   fs.writeFileSync(path.join(dir, 'stale.json'), '{}', { mode: 0o600 });

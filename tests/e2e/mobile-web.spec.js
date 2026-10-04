@@ -188,6 +188,7 @@ test('mobile message waits for desktop draft, goes only to Captain; forbidden co
   await launch(); await login();
   const composer = desktop.locator('.column.is-main .composer textarea');
   await desktop.locator('#notificationSettingsClose').click();
+  await desktop.evaluate(() => ChatUI.setMode('mobile-captain', 'chat'));
   await composer.fill('桌面尚未发送的草稿');
   const message = '手机消息只给队长';
   await mobile.locator('[data-view="captain"]').click();
@@ -218,6 +219,7 @@ test('accepted mobile messages survive a blocked delivery attempt and isolated a
   await launch(); await login();
   await desktop.locator('#notificationSettingsClose').click();
   const composer = desktop.locator('.column.is-main .composer textarea');
+  await desktop.evaluate(() => ChatUI.setMode('mobile-captain', 'chat'));
   await composer.fill('阻止发送的桌面草稿');
   await desktop.evaluate(() => {
     const send = deckHost.sendWhenReady;

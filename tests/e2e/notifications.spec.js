@@ -57,7 +57,7 @@ test('native click restores exact Captain from board/zoom/minimized views withou
   });
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('captain');
   await expect.poll(() => page.evaluate(() => activeView)).toBe('terminals');
-  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('captain').wrap.querySelector('.composer textarea'))).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('captain').el.querySelector('.xterm-helper-textarea'))).toBe(true);
   await page.evaluate(() => jumpToColumn(columns.find((c) => c.id === 'manual')));
   await application.evaluate(({ app }) => app.testCaptainNotification.emit('click'));
   expect(await page.evaluate(() => focusedId)).toBe('manual');

@@ -111,6 +111,8 @@ test('project cards open real sessions where the user can speak directly', async
   await node('a1').click();
   await expect.poll(() => page.evaluate(() => [activeView, focusedId])).toEqual(['terminals', 'a1']);
   const column = page.locator('.column[data-col-id="a1"]');
+  await column.locator('.view-toggle').click();
+  await expect(column).toHaveClass(/chat-mode/);
   await column.locator('.composer textarea').fill('用户直接交代的新说明');
   await column.locator('.composer textarea').press('Enter');
   await expect(column.locator('.msg.user .bubble')).toContainText('用户直接交代的新说明');

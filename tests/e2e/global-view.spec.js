@@ -89,7 +89,10 @@ test('new manual and Captain columns always start in terminal mode', async () =>
   await expect(column(chatId)).not.toHaveClass(/chat-mode/);
   await page.locator('.nav-row[data-nav="new"]').click();
   await expect(page.locator('.column')).toHaveCount(8);
-  await expect(page.locator('.column.chat-mode')).toHaveCount(0);
+  // Existing conversations keep their explicit chat selection. Only the five
+  // newly created columns must start in terminals.
+  await expect(page.locator('.column.chat-mode')).toHaveCount(3);
+  for (const id of ['view-0', 'view-1', 'view-2']) await expect(column(id)).toHaveClass(/chat-mode/);
 });
 
 test('every app launch returns sessions to terminal mode', async () => {
@@ -129,9 +132,13 @@ test('global changes preserve terminal objects, draft and side-pane terminal own
   })).toBe(true);
   await globalButton().click();
   await expectGlobal('chat');
-  for (const id of ['view-0', 'view-1', 'view-2']) await expect(column(id).locator('.term .xterm')).toHaveCount(1);
+  await expect(page.locator('#sideTerminal .xterm')).toHaveCount(1);
+  await expect(column('view-0').locator('.term .xterm')).toHaveCount(0);
+  for (const id of ['view-1', 'view-2']) await expect(column(id).locator('.term .xterm')).toHaveCount(1);
   await globalButton().click();
   await expectGlobal('term');
+  await expect(page.locator('#sideTerminal .xterm')).toHaveCount(0);
+  for (const id of ['view-0', 'view-1', 'view-2']) await expect(column(id).locator('.term .xterm')).toHaveCount(1);
   await expect(column('view-0').locator('.composer textarea')).toHaveValue('unsent draft');
   expect(await page.evaluate(() => [...terms.values()].every((t, i) => t.term === window.originalTerminals[i]))).toBe(true);
   expect(await page.evaluate(() => ChatUI.turnsOf('view-0').length)).toBe(0);

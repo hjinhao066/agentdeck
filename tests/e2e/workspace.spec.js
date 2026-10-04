@@ -38,6 +38,7 @@ test.beforeAll(async () => {
   });
   page = await application.firstWindow();
   await expect(page.locator('.column')).toHaveCount(4);
+  await page.waitForFunction(() => typeof columns !== 'undefined' && typeof ChatUI !== 'undefined' && typeof terms !== 'undefined' && columns.length > 0 && columns.every((col) => terms.get(col.id)?.wrap?.isConnected));
   await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   await expect(page.locator('.column.chat-mode')).toHaveCount(4);
   // the stand-in has printed its box: the session is ready for prompts
