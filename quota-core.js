@@ -41,6 +41,7 @@
     return typeof value === 'string' && /^(?:gemini|grok|gpt|claude|opus|sonnet)[- .\d\w()]{0,80}$/i.test(value) ? value : '';
   }
   const EXHAUSTED = /^(?:[│⏺⎿✻✽●!⚠>\s]*)(?:error:\s*)?(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:request failed[^\n]*?[:：]\s*)?(?:you have )?(?:exceeded your usage limit|usage limit exceeded|quota exhausted)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i;
+  const RATE_LIMITED = /^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?(?:429\b[^\n]*(?:rate[_ -]?limit|too many requests)|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b)/i;
   function percent(n) { return typeof n === 'number' && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null; }
   function resetTime(value, now) {
     if (typeof value === 'number') return value > 1e9 && value < 1e11 ? value * 1000 : null;
@@ -104,7 +105,7 @@
     const lines = clean.split('\n');
     let error = -1, resumed = -1;
     lines.forEach((line, i) => {
-      if (EXHAUSTED.test(line)) error = i;
+      if (EXHAUSTED.test(line) || RATE_LIMITED.test(line)) error = i;
       if (/^[│⏺✻✽●\s]*(?:usage limit reset\b|quota reset\b)/i.test(line)) resumed = i;
       // A model switch below an old error means that error belongs to the
       // previous model, even if it remains visible in the screen history.
@@ -203,23 +204,34 @@
     if (next.scope !== SCOPES[next.provider]) return false;
     if (next.provider === 'Claude' && next.source === CLAUDE_OAUTH_SOURCE &&
       (!next.accountBound || !next.accountKey || !next.configDir || !next.windows?.length)) return false;
-    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && !next.accountBound) next = { ...next, windows: [] };
+    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && !next.accountBound && !next.official) next = { ...next, windows: [] };
     const key = next.provider === 'Claude' ? seatKey(next.seatId) : next.provider;
     const before = JSON.stringify(store[key] || {});
     let previous = store[key] || {};
+    const identityChanged = (next.accountKey && previous.accountKey && next.accountKey !== previous.accountKey && next.legacyAccountKey !== previous.accountKey) ||
+      (next.configDir && previous.configDir && next.configDir !== previous.configDir);
+    const officialNotBefore = Math.max(previous.officialNotBefore || 0, identityChanged ? next.at : 0);
+    if (next.official && next.at < officialNotBefore) return false;
     if (next.provider === 'Claude' && next.source === CLAUDE_OAUTH_SOURCE &&
       ((previous.accountKey && next.accountKey !== previous.accountKey && next.legacyAccountKey !== previous.accountKey) ||
        (previous.configDir && next.configDir !== previous.configDir))) return false;
     // Drop the old provider-wide latches: their model/account was not recorded.
     if (previous.scope !== next.scope || (next.accountKey && previous.accountKey && next.accountKey !== previous.accountKey && next.legacyAccountKey !== previous.accountKey) || (next.configDir && previous.configDir && next.configDir !== previous.configDir)) previous = {};
-    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && previous.sample && !previous.sample.accountBound) {
+    if (next.provider === 'Claude' && next.seatId && next.seatId !== 'default' && previous.sample && !previous.sample.accountBound && !previous.sample.official) {
+
       previous = { ...previous, sample: { ...previous.sample, windows: [] } };
       if (previous.blocked?.numeric) delete previous.blocked;
     }
     const out = { ...previous };
     if (out.blocked?.resetAt && out.blocked.resetAt <= Math.max(now, next.at)) delete out.blocked; // past its reset time
+    if (officialNotBefore) out.officialNotBefore = officialNotBefore;
+
     out.scope = next.scope;
-    for (const key of ['account', 'accountKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
+    for (const key of ['account', 'accountKey', 'credentialKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
+    if (next.accountKey && next.legacyAccountKey === previous.accountKey && out.blocked && !out.blocked.numeric && out.blocked.accountKey === previous.accountKey) {
+      out.blocked = { ...out.blocked, accountKey: next.accountKey };
+    }
+    if (next.accountKey && next.legacyAccountKey === previous.accountKey && out.resumed && out.resumed.accountKey === previous.accountKey) out.resumed = { ...out.resumed, accountKey: next.accountKey };
     if (next.identityOnly) {
       store[key] = out;
       return before !== JSON.stringify(out);
@@ -241,9 +253,12 @@
     if (previous.sample?.official && !next.official) {
       if (next.exhausted) {
         const resets = previous.sample.windows.filter((w) => w.resetAt > now && (w.exhausted || w.key === 'fiveHour')).map((w) => w.resetAt);
-        out.blocked = { at: next.at, resetAt: next.resetAt || (resets.length ? Math.max(...resets) : null), resetText: next.resetText, source: next.source, sourceColumnId: next.sourceColumnId };
+        out.blocked = { at: next.at, resetAt: next.resetAt || (resets.length ? Math.max(...resets) : null), resetText: next.resetText, source: next.source, sourceColumnId: next.sourceColumnId, accountKey: out.accountKey, configDir: out.configDir };
       }
-      if (next.resumed && next.at > (out.blocked?.at || 0)) delete out.blocked;
+      if (next.resumed && next.at > (out.blocked?.at || 0) && next.at > (out.resumed?.at || 0)) {
+        delete out.blocked;
+        out.resumed = { at: next.at, sourceColumnId: next.sourceColumnId, accountKey: out.accountKey, configDir: out.configDir, source: next.source, accountBound: next.accountBound === true };
+      }
       store[key] = out;
       return before !== JSON.stringify(out);
     }
@@ -254,12 +269,18 @@
     if (previous.sample?.source === CLAUDE_OAUTH_SOURCE && now - previous.sample.at <= freshMs(previous.sample) &&
       next.at <= previous.sample.at) return false;
     // A quota error latches across redraws, session deletion and app restart.
-    if (next.exhausted && (!previous.blocked || next.at > previous.blocked.at)) out.blocked = { at: next.at, resetAt: next.resetAt, resetText: next.resetText, source: next.source, sourceColumnId: next.sourceColumnId };
-    if (next.resumed && next.at > (out.blocked?.at || 0)) delete out.blocked;
+    if (next.exhausted && (!previous.blocked || next.at > previous.blocked.at)) out.blocked = { at: next.at, resetAt: next.resetAt, resetText: next.resetText, source: next.source,
+      sourceColumnId: next.sourceColumnId, accountKey: out.accountKey, configDir: out.configDir };
+    if (next.resumed && next.at > (out.blocked?.at || 0) && next.at > (out.resumed?.at || 0)) {
+      delete out.blocked;
+      // Keep explicit recovery even when an older numeric sample wins below.
+      out.resumed = { at: next.at, sourceColumnId: next.sourceColumnId, accountKey: out.accountKey, configDir: out.configDir, source: next.source, accountBound: next.accountBound === true };
+    }
+
     const zeros = (next.windows || []).filter((w) => w.exhausted);
     if (zeros.length && !out.blocked) out.blocked = {
       at: next.at, resetAt: zeros.every((w) => w.resetAt) ? Math.max(...zeros.map((w) => w.resetAt)) : null,
-      resetText: '', source: next.source, numeric: true,
+      resetText: '', source: next.source, sourceColumnId: next.sourceColumnId, accountKey: out.accountKey, configDir: out.configDir, accountBound: next.accountBound === true, numeric: true,
     };
     if (!zeros.length && next.windows?.length && out.blocked?.numeric && next.at > out.blocked.at) delete out.blocked;
     const old = previous.sample;
@@ -275,11 +296,14 @@
   function summary(store, provider, now = Date.now(), seat = null, captainSeatId = null) {
     const saved = store[seat ? seatKey(seat.id) : provider] || {};
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
-    const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir);
+    const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir && sample.at >= (entry.officialNotBefore || 0)) ||
+      (sample?.official && sample.seatId === seat.id && sample.credentialKey && sample.credentialKey === entry.credentialKey &&
+        sample.configDir === seat.configDir && sample.at >= (entry.officialNotBefore || 0));
     const fresh = sample && trusted && now - sample.at <= freshMs(sample);
     const retained = trusted && !!sample?.official;
     const stale = retained && (!fresh || entry.officialStatus?.failures >= 3 || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
     const windows = retained ? sample.windows || [] : fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
+
     const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
     const remaining = windows.length ? Math.min(...windows.map((w) => w.remaining)) : null;
     const exhausted = !!blocked || windows.some((w) => w.exhausted && (!w.resetAt || w.resetAt > now));
@@ -300,6 +324,7 @@
     details.unshift(`模型：${entry.model || ({ Claude: 'Claude（账号共享额度）', Codex: 'Codex（账号共享额度）', Cursor: 'Grok 4.7', Antigravity: 'Gemini（共享分组）' }[provider])}；账号：${entry.account || (seat ? '未识别（此席位）' : '未识别（本机当前登录）')}`);
     if (seat) details.unshift(`席位：${seat.name}（${seat.id}）${seat.id === captainSeatId ? '；当前队长使用此席位' : ''}；配置目录：${seat.configDir}`);
     if (provider === 'Claude') for (const [name, short] of [['5 小时', '5h'], ['每周', '7d']]) if (!windows.some((w) => w.label === name)) details.push(`${short} 无数据 ↻未知`);
+
     if (provider === 'Cursor') details.push('仅统计 Grok 4.7；Cursor Models 池百分比暂不可可靠取得');
     if (provider === 'Antigravity') details.push('仅统计 Gemini 分组；不含 agy Claude / 第三方额度');
     if (sample?.note) details.push(sample.note);
@@ -307,6 +332,7 @@
     if (blocked) details.push(provider === 'Claude' ? `已用尽 ↻${recovery ? clock(recovery, recovery - now > 86400000) : blocked.resetText || '未知'}` : `已用尽；恢复 ${blocked.resetAt ? new Date(blocked.resetAt).toLocaleString() : blocked.resetText || '时间未知'}`);
     if (provider === 'Claude' && blocked && windows.length) details.push(`上次采样：${windows.map((w) => claudeWindow(w, false)).join(' · ')}；采样 ${new Date(sample.at).toLocaleString()}`);
     if (blocked?.sourceColumnId) details.push(`报错会话：${blocked.sourceColumnId}`);
+
     if (!windows.length && !blocked) details.push(state === 'normal' ? '未观察到额度用尽；无法取得数字' : '无新鲜额度信息；等待会话/缓存更新');
     if (entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；连续 ${entry.officialStatus.failures} 次${entry.officialStatus.failures >= 3 ? '，保留上次成功采样（数据已旧）' : '，保留上次数字'}`);
     if (retained && windows.some((w) => w.resetAt <= now)) details.push('窗口重置时间已过，等待新采样（显示上次数字）');
@@ -317,5 +343,6 @@
     return { provider, state, label, displayLabel, sampleLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
+
 });

@@ -6,6 +6,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { resolveBoardAuth, controllingTerminal } = require('./board-credentials');
 
+
 function fail(message, code = 1) {
   process.stderr.write(`[AgentDeck Board] ${message}\n`);
   process.exit(code);
@@ -45,6 +46,7 @@ async function request(command, waitForCompletion) {
   });
   const controlDir = auth.controlDir;
   const token = auth.token;
+
   if (!controlDir || !token) {
     fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
   }

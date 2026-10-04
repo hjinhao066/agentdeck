@@ -122,6 +122,7 @@ test('Codex app launches bypass shell wrappers without duplicating their --yolo 
   assert.equal(B.shellLaunchCommand('codex --no-daemon --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
   assert.equal(B.shellLaunchCommand('/opt/bin/codex --yolo', 'darwin'), '/opt/bin/codex --no-daemon --yolo');
   assert.equal(B.shellLaunchCommand('command "codex" --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
+
   for (const custom of ['node fake-agent.js', './codex-wrapper.sh']) {
     assert.equal(B.shellLaunchCommand(custom, 'darwin'), custom);
   }

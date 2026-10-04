@@ -108,6 +108,9 @@ let config = {
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
   claudeQuotaAlert: { thresholdPercent: 2, volume: 3 }, barkKeyFile: '',
+  perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
+  quotaWarmup: QuotaWarmupCore.normalizeSettings(),
+
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
   captainTokenSaver: MainCore.tokenSaverSettings(),
@@ -123,11 +126,15 @@ if (saved) {
     config.claudeQuotaAlert = { ...config.claudeQuotaAlert, ...saved.claudeQuotaAlert };
   }
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
+  config.perpetualCaptain = PerpetualCaptainCore.normalizeSettings(saved.perpetualCaptain);
+  config.quotaWarmup = QuotaWarmupCore.normalizeSettings(saved.quotaWarmup);
+  config.perpetualCaptainState = PerpetualCaptainCore.normalizeState(saved.perpetualCaptainState);
+  if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
   config.captainRelayLabel = typeof saved.captainRelayLabel === 'string' ? saved.captainRelayLabel.slice(0, 80) : 'Relay';
   config.activeClaudeSeatId = ClaudeSeatsCore.active({ ...saved, claudeSeats: config.claudeSeats }).id;
   if (saved.captainRelayCodex && typeof saved.captainRelayCodex === 'object') config.captainRelayCodex = {
     name: typeof saved.captainRelayCodex.name === 'string' ? saved.captainRelayCodex.name.slice(0, 80) : 'ChatGPT',
-    command: typeof saved.captainRelayCodex.command === 'string' ? saved.captainRelayCodex.command : ClaudeSeatsCore.CODEX_COMMAND,
+    command: typeof saved.captainRelayCodex.command === 'string' ? BoardCore.upgradeLegacyCommand(saved.captainRelayCodex.command) : ClaudeSeatsCore.CODEX_COMMAND,
   };
   if (typeof saved.captainRelayClaudeCommand === 'string') config.captainRelayClaudeCommand = saved.captainRelayClaudeCommand;
   config.captainNotifications = NotificationPolicy.normalizeSettings(saved.captainNotifications);
@@ -199,6 +206,7 @@ if (saved) {
       boardId: typeof c.boardId === 'string' ? c.boardId : '',
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
       dispatcherCardId: typeof c.dispatcherCardId === 'string' ? c.dispatcherCardId : '',
+
       claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
@@ -1954,6 +1962,7 @@ function buildColumn(col, isFresh) {
         // 队长 gets a control token too; the columns it drives never do.
         const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
+
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
 
         if (launch) {
@@ -3588,15 +3597,17 @@ function renderQuotaBar() {
         item.append(icon, name, label, sampled, tip); bar.append(item);
       }
       const q = summaries[index];
+      const detail = q.detail + (seat ? ClaudeSeats.warmupDetail(seat.id) : '');
       item.dataset.state = q.state;
-      item.setAttribute('aria-label', q.detail);
-      item.title = q.detail;
+      item.setAttribute('aria-label', detail);
+      item.title = detail;
       item.querySelector('.quota-label').textContent = q.displayLabel;
       item.querySelector('.quota-name').textContent = q.name || (provider === 'Codex' ? 'ChatGPT' : provider);
       item.querySelector('.quota-sampled').textContent = q.sampleLabel || '';
-      item.querySelector('.quota-tooltip').textContent = q.detail;
+      item.querySelector('.quota-tooltip').textContent = detail;
       if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
     }
+
   }
   // The collapsed-sidebar gauge takes the colour of the provider closest to running out.
   const rank = { warning: 1, danger: 2, exhausted: 2 };
@@ -3672,7 +3683,6 @@ setInterval(() => {
 
     ChatUI.onTick(id, entry, text);
     MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
-    ClaudeSeats.onTick(id, entry, text);
 
     // A restarted terminal replays the PREVIOUS run's output above a
     // separator. It is excluded from status classification, but remains the
@@ -3698,6 +3708,8 @@ setInterval(() => {
         if (sample?.provider === 'Claude' && sample.exhausted) refreshQuota(sample.seatId).catch(() => {});
       }
     }
+
+    ClaudeSeats.onTick(id, entry, text);
 
     // Sidebar live activity line (skipped while the sidebar is collapsed).
     const nav = navItems.get(id);

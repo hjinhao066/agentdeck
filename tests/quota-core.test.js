@@ -138,6 +138,10 @@ test('Claude seats isolate percentages and exhaustion; missing/stale windows sta
   assert.match(Q.summary(store, 'Claude', now, seats[0], 'east').detail, /当前队长使用此席位/);
   assert.equal(Q.summary(store, 'Claude', now, seats[1]).label, '已用尽');
   assert.match(Q.summary(store, 'Claude', now, seats[1]).detail, /7d 无数据/);
+  assert.equal(store['Claude:west'].blocked.accountBound, true);
+  assert.equal(store['Claude:west'].blocked.accountKey, 'west-account');
+  assert.equal(store['Claude:west'].blocked.configDir, '~/.claude-west');
+
   assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 1, seats[0]).label, '未知');
   assert.equal(Q.summary(store, 'Claude', now, { ...seats[0], configDir: '~/.different' }).label, '未知');
   assert.equal(Q.text(store, now, seats).split('\n').length, 5);
@@ -240,4 +244,80 @@ test('official success overrides a recent bound screen and supplies the reset fo
   Q.observe(priorError, api, now + 1);
   assert.equal(priorError[Q.seatKey(seat.id)].blocked.resetAt, now + 3600000);
   assert.equal(Q.summary(priorError, 'Claude', now + 3600000, seat).state, 'normal');
+});
+
+
+test('configured Claude seats discard shared screen numbers and persisted unbound samples in all summaries', () => {
+  const seats = Q.claudeSeats([{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }]), store = {};
+  const shared = Q.screen('Claude', 'Claude Code', ['Session: 47% | Weekly: 45%'], now);
+  for (const seat of seats) Q.observe(store, { ...shared, seatId: seat.id, configDir: seat.configDir }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seats[0]).label, '未知');
+  // Migration must reject data written by an older AgentDeck as well.
+  store['Claude:cn'].sample = { ...shared, windows: [{ label: '5 小时', remaining: 53 }], configDir: '~/.claude', at: now };
+  assert.doesNotMatch(Q.text(store, now, seats), /剩余 53/);
+  Q.observe(store, { ...shared, seatId: 'cn', configDir: '~/.claude', exhausted: true, resetText: '9:20 PM', resetAt: now + 3600000, sourceColumnId: 'cn-captain' }, now);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 47, weeklyUsage: 45 }, now - 1000), seatId: 'us', configDir: '~/.claude-us', accountBound: true, accountKey: 'us-account' }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 53% ↻未知 · 7d 55% ↻未知');
+  const cn = Q.summary(store, 'Claude', now, seats[0]);
+  assert.equal(cn.label, '已用尽');
+  assert.match(cn.detail, /已用尽 ↻/);
+  assert.match(cn.detail, /报错会话：cn-captain/);
+  assert.doesNotMatch(cn.detail, /剩余 53|剩余 55/);
+  assert.match(Q.text(store, now, seats), /Claude \/ 🇨🇳 CN：已用尽/);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20 }, now), seatId: 'cn', configDir: '~/.claude', accountBound: true, accountKey: 'cn-account' }, now);
+  const retained = Q.summary(store, 'Claude', now, seats[0]);
+  assert.equal(retained.label, '已用尽');
+  assert.match(retained.detail, /上次采样：5h 80%/);
+  assert.match(retained.detail, /报错会话：cn-captain/);
+});
+
+
+test('account ID migration retains genuine exhaustion but never promotes legacy numbers', () => {
+  const seat = { id: 'cn', configDir: '~/.claude' }, store = { 'Claude:cn': { scope: 'claude', configDir: seat.configDir, accountKey: 'old-email-key', blocked: { at: now, resetAt: now + 3600000, source: '会话屏幕', accountKey: 'old-email-key' }, sample: { at: now, windows: [{ label: '5 小时', remaining: 53 }] } } };
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', configDir: seat.configDir, identityOnly: true, at: now, accountKey: 'account-id-key', legacyAccountKey: 'old-email-key' }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seat).label, '已用尽');
+  assert.equal(store['Claude:cn'].blocked.accountKey, 'account-id-key');
+  assert.doesNotMatch(Q.summary(store, 'Claude', now, seat).detail, /剩余 53/);
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', configDir: seat.configDir, identityOnly: true, at: now, accountKey: 'other-account-id', legacyAccountKey: 'old-email-key' }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seat).label, '未知');
+});
+
+test('native rate limit errors latch quota, quoted mentions do not', () => {
+  for (const text of ['API Error: 429 rate_limit_error: Too many requests', 'Rate limit reached. Resets in 1h']) {
+    assert.equal(Q.screen('Claude', text, [], Date.now()).exhausted, true);
+  }
+  assert.equal(Q.screen('Claude', 'The report mentions rate_limit errors.', [], Date.now()).exhausted, false);
+});
+
+test('explicit recovery survives retaining the older fresh numeric sample', () => {
+  const store = {}, owner = { seatId: 'cn', configDir: '~/.claude', accountKey: 'cn-account', sourceColumnId: 'captain-cn' };
+  const numeric = { ...Q.cacheClaude({ sessionUsage: 20 }, now), ...owner, accountBound: true };
+  Q.observe(store, numeric, now);
+  Q.observe(store, { ...Q.screen('Claude', 'Usage limit reached', [], now + 1), ...owner }, now + 1);
+  assert.equal(store['Claude:cn'].blocked.at, now + 1);
+  Q.observe(store, { ...Q.screen('Claude', 'Usage limit reset', [], now + 2), ...owner }, now + 2);
+  const saved = store['Claude:cn'];
+  assert.deepEqual(saved.sample, numeric);
+  assert.equal(saved.blocked, undefined);
+  assert.deepEqual(saved.resumed, { at: now + 2, sourceColumnId: owner.sourceColumnId, accountKey: owner.accountKey, configDir: owner.configDir, source: '会话屏幕', accountBound: false });
+  Q.observe(store, { provider: 'Claude', scope: 'claude', ...owner, identityOnly: true, at: now + 3, accountKey: 'other-account' }, now + 3);
+  assert.equal(store['Claude:cn'].resumed, undefined);
+});
+
+test('official slot samples survive first identity observation but older samples are rejected after a saved identity change', () => {
+  const seat = { id: 'cn', configDir: '/home/test/.claude' }, store = {};
+  const sample = { provider: 'Claude', scope: 'claude', seatId: seat.id, configDir: seat.configDir,
+    at: now, official: true, credentialKey: 'cn-slot',
+    windows: [{ key: 'fiveHour', label: '5 小时', used: 20, remaining: 80, resetAt: now + 3600000 }] };
+  Q.observe(store, sample, now);
+  Q.observe(store, { ...sample, identityOnly: true, official: false, at: now + 1, accountKey: 'first-account' }, now + 1);
+  assert.equal(Q.summary(store, 'Claude', now + 1, seat).label, '80%');
+  assert.equal(store['Claude:cn'].officialNotBefore, undefined);
+  Q.observe(store, { ...sample, identityOnly: true, official: false, at: now + 2, accountKey: 'second-account' }, now + 2);
+  const restored = JSON.parse(JSON.stringify(store));
+  assert.equal(restored['Claude:cn'].officialNotBefore, now + 2);
+  assert.equal(Q.observe(restored, sample, now + 2), false);
+  assert.equal(Q.summary(restored, 'Claude', now + 2, seat).label, '未知');
+  Q.observe(restored, { ...sample, at: now + 3 }, now + 3);
+  assert.equal(Q.summary(restored, 'Claude', now + 3, seat).label, '80%');
 });

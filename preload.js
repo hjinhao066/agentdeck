@@ -65,7 +65,11 @@ contextBridge.exposeInMainWorld('deck', {
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   claudeSeatUsage: (seatId) => ipcRenderer.invoke('seats:usage', { seatId }),
-  recordClaudeSeatUsage: (seatId, usage, configDir) => ipcRenderer.invoke('seats:record-usage', { seatId, usage, configDir }),
+  claudeWarmupStatus: () => ipcRenderer.invoke('seats:warmup-status'),
+  claudeWarmupIdle: (colId, idle) => ipcRenderer.invoke('seats:warmup-idle', { colId, idle }),
+  recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
+  captainRelayNotify: (colId, message) => ipcRenderer.invoke('captain:relay-notify', { colId, message }),
+
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   // keepReplay: save the output first (archiving), so restoring can replay it.

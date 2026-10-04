@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const S = require('../claude-seats-core');
 const M = require('../claude-seats-main');
@@ -26,6 +27,8 @@ test('seat config has one source for names and survives normalization', () => {
   assert.deepEqual(S.normalize().map((s) => s.icon), ['🇨🇳', '🇺🇸']);
   assert.match(S.CODEX_COMMAND, /--model gpt-6\.1-sol/);
   assert.match(S.CODEX_COMMAND, /--dangerously-bypass-approvals-and-sandbox/);
+  assert.match(S.CODEX_COMMAND, /--no-daemon -c model_reasoning_effort=high/);
+  assert.match(S.codexCommand('xhigh'), /model_reasoning_effort=xhigh/);
   assert.match(S.CLAUDE_COMMAND, /--model claude-opus-5-5/);
 });
 test('us setup shares brain files, never credentials/account/caches; repeat is safe', (t) => {
@@ -94,6 +97,10 @@ test('metadata yields only a masked email and no credential material', async (t)
   const keychain = async (service) => { queried.push(service); return service === 'Claude Code-credentials'; };
   const a = await M.seatInfo(cn, home, 'darwin', keychain), b = await M.seatInfo(us, home, 'darwin', keychain);
   assert.equal(a.maskedEmail, 'c***@example.test'); assert.equal(a.loggedIn, true); assert.equal(b.loggedIn, false);
+  assert.match(a.accountKey, /^[a-f0-9]{16}$/);
+  assert.equal(a.credentialKey, crypto.createHash('sha256').update(M.credentialLocation(cn, home).keychainService).digest('hex').slice(0, 16));
+  assert.equal(b.credentialKey, crypto.createHash('sha256').update(M.credentialLocation(us, home).keychainService).digest('hex').slice(0, 16));
+  assert.notEqual(a.credentialKey, b.credentialKey);
   assert.equal(S.maskEmail('broken'), '');
   assert.ok(!JSON.stringify(a).includes('cn@example.test'));
   assert.equal(queried.length, 2);
@@ -198,8 +205,8 @@ test('recording owned usage invalidates quota cache only after a successful writ
   fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'offline-cn' } }));
   const handlers = {}; let invalidated = 0;
   M.registerSeatsIpc({ handleMain: (name, handler) => { handlers[name] = handler; }, home,
-    getSeats: () => S.normalize(), onUsageRecorded: () => { invalidated++; } });
-  const input = { seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 2 }] } };
+    getSeats: () => S.normalize(), getColumn: () => ({ id: 'cache-column', claudeSeatId: 'cn', claudeConfigDir: '~/.claude' }), onUsageRecorded: () => { invalidated++; } });
+  const input = { colId: 'cache-column', seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 2 }] } };
   assert.equal(handlers['seats:record-usage'](null, input), true);
   assert.equal(invalidated, 1);
   assert.throws(() => handlers['seats:record-usage'](null, { ...input, configDir: '~/.wrong' }));
@@ -233,4 +240,25 @@ test('credential checks allow Claude to refresh expired access; no login prompt 
   assert.equal(locked.loginReason, ''); assert.match(locked.authReason, /钥匙串访问权限/);
   assert.match((await read({}, { code: 44 })).loginReason, /没有登录凭据/);
   assert.doesNotMatch(JSON.stringify(refreshed), /fake-access|fake-refresh/);
+});
+
+test('usage IPC binds native panel observations to the saved source column and seat snapshot', (t) => {
+  const home = fixture(t), handlers = {}, seat = S.normalize()[0], colId = 'captain-cn';
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'cn-fixture-account' } }));
+  const column = { id: colId, claudeSeatId: 'cn', claudeConfigDir: '~/.claude' };
+  M.registerSeatsIpc({ handleMain: (name, handler) => { handlers[name] = handler; }, home,
+    getSeats: () => [seat], getColumn: (id) => id === column.id ? column : null });
+  const payload = { colId, seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 2 }] } };
+  assert.throws(() => handlers['seats:record-usage'](null, { ...payload, colId: 'missing-column' }), /来源会话/);
+  assert.throws(() => handlers['seats:record-usage'](null, { ...payload, colId: undefined }), /来源会话/);
+  assert.equal(handlers['seats:record-usage'](null, payload), true);
+  const value = handlers['seats:usage'](null, { seatId: 'cn' });
+  assert.equal(value.accountBound, true);
+  assert.match(value.accountKey, /^[a-f0-9]{16}$/);
+  assert.equal(value.sourceColumnId, colId);
+  assert.equal(value.configDir, seat.configDir);
+  assert.equal(value.windows[0].remaining, 2);
+  column.claudeConfigDir = '~/.claude-other';
+  assert.throws(() => handlers['seats:record-usage'](null, payload), /快照不匹配/);
+
 });

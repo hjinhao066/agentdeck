@@ -105,7 +105,7 @@ function boundUsage(seat, home, value) {
   if (!value?.accountKey) return null;
   try {
     const loc = M.credentialLocation(seat, home);
-    if (value.accountKey !== M.usageAccountKey(loc) || value.configDir !== loc.dir) return null;
+    if (value.accountKey !== M.usageAccountKey(loc) || (value.configDir !== loc.dir && value.configDir !== seat.configDir)) return null;
     return { ...M.sanitizeUsage(value), accountKey: value.accountKey, configDir: loc.dir };
   } catch (_) { return null; }
 }
@@ -152,7 +152,8 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
   return { tick, samples: () => stopped ? [] : [...sync().values()].flatMap(({ seat, usage, failure }) => {
     if (failure) return [failure];
     const bound = boundUsage(seat, home, usage);
-    return bound ? [{ ...Q.cacheClaude(bound, bound.at), seatId: seat.id, configDir: seat.configDir, accountKey: bound.accountKey, accountBound: true, official: true }] : [];
+    return bound ? [{ ...Q.cacheClaude(bound, bound.at), seatId: seat.id, configDir: seat.configDir, accountKey: bound.accountKey,
+      credentialKey: createHash('sha256').update(M.credentialLocation(seat, home).keychainService).digest('hex').slice(0, 16), accountBound: true, official: true }] : [];
   }),
     dispose: () => { stopped = true; entries.clear(); } };
 }

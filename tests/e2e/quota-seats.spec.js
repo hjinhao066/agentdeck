@@ -32,6 +32,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect(seat('us').locator('.quota-name')).toHaveText('🇺🇸 US · 队长');
   await expect(seat('cn').locator('.quota-label')).toHaveText('未知');
   await expect(seat('cn')).toHaveAttribute('title', /7d 无数据 ↻未知/);
+
   await page.evaluate(() => { config.activeClaudeSeatId = 'cn'; renderQuotaBar(); });
   await expect(seat('us').locator('.quota-name')).toHaveText('🇺🇸 US · 队长'); // Switching the next seat is not switching the running Captain.
   // The same shared footer cannot populate the other seat.
@@ -43,6 +44,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect(seat('cn').locator('.quota-label')).toHaveText(/5h 65% ↻.* · 7d 30% ↻/);
   await expect(seat('cn')).toHaveAttribute('title', /5h 65% ↻.*7d 30% ↻/s);
   await expect(seat('us').locator('.quota-label')).toHaveText(/5h 19% ↻.* · 7d 91% ↻/);
+
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'exhausted\r'));
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   await expect(seat('us')).toHaveAttribute('data-state', 'warning');
@@ -71,6 +73,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
     expect(after.split('\n')).toContain(title.replace(/\n/g, ' · '));
     await expect(seat(id).getByRole('tooltip', { includeHidden: true })).toHaveText(title);
   }
+
   await seat('us').focus();
   await expect(seat('us').getByRole('tooltip')).toBeVisible();
   await page.waitForTimeout(1800);

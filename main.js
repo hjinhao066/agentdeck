@@ -9,11 +9,18 @@ const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = re
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createQuotaLowBark } = require('./quota-low-bark');
+
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
-const { seatEnvironment, credentialLocation, registerSeatsIpc } = require('./claude-seats-main');
+const QuotaCore = require('./quota-core');
+const PerpetualCaptainCore = require('./perpetual-captain-core');
+const { seatEnvironment, credentialLocation, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { createWarmupService } = require('./quota-warmup-service');
+const { createQuotaWarmupRunner } = require('./quota-warmup-main');
+const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
+
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
@@ -26,6 +33,8 @@ let notifications = null;
 let notifyUser = null;
 let sidePane = null;
 let claudeQuotaRefresh = null, claudeQuotaTimer = null;
+let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
+
 let pendingFocusColumn = null;
 let mobileWeb = null;
 const mobileRequests = new Map();
@@ -252,6 +261,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     if (ptySeats.get(id) === binding) return;
     killPty(id, true);
   }
+  if (selectedSeat) quotaWarmup?.cancel(selectedSeat.id);
+
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   const receiptToken = crypto.randomBytes(24).toString('hex');
@@ -260,6 +271,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   else managedSessions.delete(id);
   let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
   terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
+
   // Never inherit an outer deck's managed capability into an independent shell.
   for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_RECEIPT_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
   terminalEnv.AGENTDECK_RECEIPT_TOKEN = receiptToken;
@@ -405,6 +417,7 @@ function processBoardRequests() {
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
         'main-ledger', 'main-quota', 'main-briefing', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
+
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -714,6 +727,7 @@ app.whenReady().then(async () => {
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
+    getColumn: (id) => seatConfig().columns?.find((c) => c.id === id),
     onUsageRecorded: () => { quotaRead = null; } });
   if (!tudArg) {
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
@@ -821,6 +835,54 @@ app.whenReady().then(async () => {
     } catch (_) { send('toast', { text: '额度 Bark 去重记录无法保存，未发送提醒。' }); }
   };
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
+  let warmupCaptain = { id: '', idle: false, at: 0 };
+  const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
+    warmupCaptain.id === seatConfig().mainSession?.colId ? warmupCaptain.id : '';
+  quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
+  if (tudArg) { app.testWarmupRuns = []; app.testWarmupResults = []; }
+  quotaWarmup = createWarmupService({
+    stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
+    logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
+    getSettings: () => seatConfig().quotaWarmup,
+    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
+    getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome),
+      quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
+      tudArg ? async () => [] : undefined),
+    run: tudArg ? async (seat) => {
+      // Isolated UI tests can supply deterministic results from the Electron
+      // harness; no test profile is allowed to call a real account.
+      app.testWarmupRuns.push({ seatId: seat.id, configDir: seat.configDir });
+      return app.testWarmupResults.shift() || { ok: false, status: 'test-disabled' };
+    } : (seat, options) => quotaWarmupRunner.run(seat, options),
+  });
+  handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
+  handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
+    const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === colId);
+    if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
+    const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
+    warmupCaptain = { id: colId, idle, at: Date.now() };
+    if (!idle) quotaWarmup.cancel(col.claudeSeatId || cfg.activeClaudeSeatId);
+    else if (changed) quotaWarmup.tick().catch(() => {});
+    return true;
+  });
+  if (tudArg) app.testQuotaWarmup = quotaWarmup;
+  quotaWarmupTimer = setInterval(() => quotaWarmup.tick().catch(() => {}), 30_000);
+  quotaWarmupTimer.unref();
+  if (tudArg) app.testRelayAlerts = [];
+  const sendRelayBark = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testRelayAlerts.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  handleMain('captain:relay-notify', (_e, { colId, message }) => {
+    if (colId !== notificationConfig.mainSession?.colId || !notificationConfig.columns?.some((c) => c.id === colId && c.isMain) ||
+      typeof message !== 'string' || !message.trim() || message.length > 1000) throw new Error('无效队长轮换提醒');
+    return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
+  });
+
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
@@ -829,6 +891,7 @@ app.whenReady().then(async () => {
     cfg.mobileWeb = mobileSettings;
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
+    if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
@@ -847,6 +910,7 @@ app.whenReady().then(async () => {
   handleMain('quota:local', async () => {
     if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
     await claudeQuotaRefresh?.tick();
+
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
@@ -868,7 +932,15 @@ app.whenReady().then(async () => {
     return claudeQuotaRefresh.samples().filter((s) => !seatId || s.seatId === seatId);
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
-  onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
+  onMain('pty:input', (_e, { id, data }) => {
+    if (id === warmupCaptain.id) {
+      warmupCaptain.idle = false;
+      const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === id);
+      quotaWarmup.cancel(col?.claudeSeatId || cfg.activeClaudeSeatId);
+    }
+    const p = ptys.get(id); if (p) p.write(data);
+  });
+
   onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }
@@ -1237,6 +1309,9 @@ app.on('before-quit', () => {
   if (mobileWeb) mobileWeb.close();
   for (const pending of mobileRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error('AgentDeck 已关闭。')); }
   mobileRequests.clear();
+  clearInterval(quotaWarmupTimer);
+  quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
+
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it
@@ -1247,6 +1322,7 @@ app.on('before-quit', () => {
     // the process alive after will-quit, so Playwright never sees the exit.
     try { p.kill(); } catch (_) {}
     try { if (typeof p.destroy === 'function') p.destroy(); } catch (_) {}
+
     removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }

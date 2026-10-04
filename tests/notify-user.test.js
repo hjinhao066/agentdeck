@@ -3,7 +3,8 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { createNotifyUser } = require('../notify-user');
+const { createNotifyUser, createBarkSender } = require('../notify-user');
+
 
 function harness(fetchImpl) {
   const config = { columns: [{ id: 'captain', isMain: true }, { id: 'crew' }] }, alerts = [], calls = [];
@@ -14,6 +15,40 @@ function harness(fetchImpl) {
     callerId: 'captain', id: 'request-1', message: '请亲自登录。第二句。', urgent: false, ...extra,
   }, visible, turnId) };
 }
+
+test('ordinary Bark sends active notifications with no critical volume, by default or explicitly', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-bark-ordinary-'));
+  try {
+    const file = path.join(dir, 'key'); fs.writeFileSync(file, 'fake_ordinary_key');
+    const calls = [];
+    const send = createBarkSender({ getConfig: () => ({ barkKeyFile: file }), fetchImpl: async (...args) => {
+      calls.push(args); return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } });
+    for (const extra of [{}, { level: 'active' }]) {
+      assert.deepEqual(await send({ message: ' CN → US：5 小时剩余额度 ≤ 3%。 ', title: '永动机', ...extra }), {
+        ok: true, httpStatus: 200, apiCode: 200, message: 'Bark 提醒已发送。',
+      });
+    }
+    assert.equal(calls.length, 2);
+    for (const [url, options] of calls) {
+      assert.equal(url, 'https://api.day.app/push');
+      assert.equal(options.redirect, 'error');
+      assert.deepEqual(JSON.parse(options.body), { device_key: 'fake_ordinary_key', title: '永动机',
+        body: 'CN → US：5 小时剩余额度 ≤ 3%。', level: 'active', sound: 'minuet' });
+    }
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('ordinary sender rejects malformed messages and levels before key lookup or transport', async () => {
+  let lookups = 0, calls = 0;
+  const send = createBarkSender({ getConfig: () => { lookups++; return {}; }, fetchImpl: async () => { calls++; } });
+  for (const value of [{ message: '' }, { message: true }, { message: ' ' }, { message: 'x'.repeat(4001) },
+    { message: 'relay', level: 'timeSensitive' }, { message: 'relay', level: false }]) {
+    await assert.rejects(send(value), /Invalid Bark message or notification level/);
+  }
+  assert.equal(lookups, 0); assert.equal(calls, 0);
+});
+
 test('default uses local alerts and current turn, never reads a key or sends Bark', async () => {
   const h = harness(); h.config.barkKeyFile = '/does/not/exist';
   assert.match(await h.notify({}, true, 'reply-turn'), /本机提醒/);

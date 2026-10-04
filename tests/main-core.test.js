@@ -480,3 +480,10 @@ test('Codex reset evidence reads its native footer below the prompt, never a quo
   assert.equal(M.codexContextFooter('• 100% context left'), '');
   assert.equal(M.codexContextFooter('› old prompt\n100% context left\n› current prompt\n98% context left'), '98% context left');
 });
+
+test('native rate limit waits are quota state and a newer working line wins', () => {
+  assert.equal(M.terminalActivity('API Error: 429 rate_limit_error: Too many requests'), 'quota');
+  assert.equal(M.terminalActivity('Rate limit reached.\n✻ Doing…'), 'working');
+  assert.equal(M.terminalActivity('The report mentions rate_limit errors.'), '');
+
+});

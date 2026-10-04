@@ -35,6 +35,7 @@ const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"
 
 test('passive live screens show remaining quota, provider icons and accessible details', { tag: '@smoke' }, async () => {
   await expect(badge('Claude').locator('.quota-label')).toHaveText(/5h 19% ↻\d\d:\d\d · 7d 91% ↻/, { timeout: 20000 });
+
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未知');
   await expect(badge('Codex').locator('.quota-label')).toHaveText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider).locator('.quota-label')).toHaveText('正常');
@@ -42,6 +43,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
   await expect(badge('Claude')).toHaveAttribute('aria-label', /5h 19% ↻/);
   await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位用量（\/usage）；高（按账号 ID 归属）/);
+
   await expect(badge('Claude').locator('svg')).toBeVisible();
   await badge('Claude').focus();
   await expect(badge('Claude').getByRole('tooltip')).toBeVisible();
@@ -66,6 +68,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await page.evaluate(() => document.activeElement?.blur());
   await page.mouse.move(500, 400);
   if (process.env.AGENTDECK_ICON_SHOT) await page.locator('#quotaBar').screenshot({ path: process.env.AGENTDECK_ICON_SHOT });
+
 });
 
 test('Claude-model limits never exhaust Gemini or Grok 4.7; screenshots use simulated data', async () => {
@@ -132,14 +135,25 @@ test('Captain quota CLI returns both Claude seats and changes no tasks, receipts
   await page.locator('#mdCreate').click();
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyForeground(id), id)).toMatch(/^(?:zsh|bash|sh|powershell|pwsh|cmd)$/i);
-  const before = await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]));
+  await page.evaluate(() => {
+    window.quotaRequestIds = [];
+    window.deck.onBoardCommand((m) => { if (m.action === 'main-quota') window.quotaRequestIds.push(m.id); });
+  });
+  const before = await page.evaluate(() => JSON.parse(JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses])));
   const output = path.join(profile, 'quota.txt');
   // Node writes UTF-8 on both platforms; PowerShell 5 redirection writes UTF-16.
   const command = `node -e "require('fs').writeFileSync(process.argv[1],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}))" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
   await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未知[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
   expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(5);
-  expect(await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]))).toBe(before);
+  const after = await page.evaluate(() => [config.mainSession.tasks, config.mainSession.pending, config.boardResponses]);
+  expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
+  // Other startup/exit acknowledgements may arrive concurrently. The quota
+  // request itself never adds a cache entry or changes an existing response.
+  for (const [key, value] of Object.entries(before[2])) expect(after[2][key]).toEqual(value);
+  const quotaIds = await page.evaluate(() => window.quotaRequestIds);
+  expect(quotaIds).toHaveLength(1);
+  for (const requestId of quotaIds) expect(after[2]).not.toHaveProperty(requestId);
   // A worker doesn't have the Captain capability, even for this read-only command.
   const rejected = await page.evaluate(async () => {
     try { await MainSession.handle({ action: 'main-quota' }, columns.find((c) => c.id === 'quota-Cursor')); return ''; }

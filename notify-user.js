@@ -18,16 +18,21 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch }) {
     const local = '已处理本机提醒（遵循通知/声音设置、前台静音及30秒间隔）。';
     if (!command.urgent) return local;
     const result = await sendBark(command.test
-      ? { message: '【测试】AgentDeck Bark 通知（critical，音量 3）。', title: '【测试】队长', volume: 3 }
-      : { message: command.message });
+      ? { message: '【测试】AgentDeck Bark 通知（critical，音量 3）。', title: '【测试】队长', level: 'critical', volume: 3 }
+      : { message: command.message, level: 'critical' });
+
     return local + '\n' + result.message;
   };
 }
 // Shared sender extracted from origin/feat/captain-notify (0a850e0).
 // Fixed endpoint, private key-file lookup and redacted errors stay in one place.
 function createBarkSender({ getConfig, fetchImpl = fetch }) {
-  return async ({ message, title = '队长', volume = 4 }) => {
-    let file = typeof getConfig().barkKeyFile === 'string' ? getConfig().barkKeyFile.trim() : '';
+  return async ({ message, title = '队长', level = 'active', volume = 4 }) => {
+    if (typeof message !== 'string' || !message.trim() || message.length > 4000 ||
+        !['active', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
+    const config = getConfig();
+    let file = typeof config.barkKeyFile === 'string' ? config.barkKeyFile.trim() : '';
+
     if (!file) return { ok: false, message: 'Bark 已跳过：请在设置中配置本机密钥文件路径。' };
     if (file.startsWith('~/')) file = path.join(os.homedir(), file.slice(2));
     let key;
@@ -45,12 +50,14 @@ function createBarkSender({ getConfig, fetchImpl = fetch }) {
         method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000),
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify({ device_key: key, title, body: message.trim(),
-          level: 'critical', volume, sound: 'minuet' }),
+          level, ...(level === 'critical' ? { volume } : {}), sound: 'minuet' }),
+
       });
       const code = (await response.json()).code;
       return { ok: response.ok && code === 200, httpStatus: response.status,
         apiCode: typeof code === 'number' ? code : null,
-        message: response.ok && code === 200 ? 'Bark 紧急提醒已发送。' : 'Bark 发送失败（网络、服务或设备 key 问题），请检查后重试。' };
+        message: response.ok && code === 200 ? (level === 'critical' ? 'Bark 紧急提醒已发送。' : 'Bark 提醒已发送。') : 'Bark 发送失败（网络、服务或设备 key 问题），请检查后重试。' };
+
     } catch (_) {
       // Network/server errors can include secrets. Never return their text.
       return { ok: false, message: 'Bark 发送失败（网络、服务或设备 key 问题），请检查后重试。' };
