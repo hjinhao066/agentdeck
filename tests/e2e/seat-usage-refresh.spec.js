@@ -65,10 +65,10 @@ test.afterEach(async () => { if (app) await app.close(); if (profile) fs.rmSync(
 test('both idle seats show independent fresh windows, resets and visible sample times without sending any prompt', async () => {
   await app.evaluate(() => globalThis.seatRefreshTest.poller.tick());
   await page.evaluate(() => readQuotaCache());
-  await expect(seat('cn').locator('.quota-label')).toHaveText('5h 75% · 7d 60%');
-  await expect(seat('us').locator('.quota-label')).toHaveText('5h 40% · 7d 90%');
+  await expect(seat('cn').locator('.quota-values')).toHaveText('75%');
+  await expect(seat('us').locator('.quota-values')).toHaveText('40%');
   for (const id of ['cn', 'us']) {
-    await expect(seat(id).locator('.quota-sampled')).toHaveText(/采样 \d\d:\d\d/);
+    await expect(seat(id)).toHaveAttribute('title', /^状态：正常 · 采样 \d\d:\d\d\n/);
     await expect(seat(id)).toHaveAttribute('title', /5 小时剩余.*重置.*每周剩余.*重置.*Claude OAuth usage.*采样/s);
   }
   if (process.env.AGENTDECK_REFRESH_SHOTS) {
@@ -89,10 +89,10 @@ test('one-seat authentication failure emits no authoritative sample; expired usa
   });
   expect(await app.evaluate(() => globalThis.seatRefreshTest.poller.samples().some((s) => s.seatId === 'us'))).toBe(false);
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, at);
-  await expect(seat('cn').locator('.quota-label')).toHaveText('5h 75% · 7d 60%');
+  await expect(seat('cn').locator('.quota-values')).toHaveText('75%');
   await expect(seat('us')).toHaveAttribute('data-state', 'unknown');
-  await expect(seat('us').locator('.quota-label')).toHaveText('未知');
-  await expect(seat('us').locator('.quota-sampled')).toHaveText('');
+  await expect(seat('us').locator('.quota-values')).toHaveText('—');
+  await expect(seat('us')).toHaveAttribute('title', /^状态：未知 · /);
   await expect(seat('us')).toHaveAttribute('title', /5 小时：未知；重置 未知[\s\S]*每周：未知；重置 未知[\s\S]*无新鲜额度信息[\s\S]*已过期/);
   await page.reload();
   await expect(page.locator('#quotaBar [data-seat-id]')).toHaveCount(2);
@@ -103,7 +103,7 @@ test('one-seat authentication failure emits no authoritative sample; expired usa
     state.at += 15 * 60000; state.failUs = false; await state.poller.tick(); return state.at;
   });
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, later);
-  await expect(seat('us').locator('.quota-label')).toHaveText('5h 40% · 7d 90%');
+  await expect(seat('us').locator('.quota-values')).toHaveText('40%');
   expect(await app.evaluate(() => globalThis.seatRefreshTest.calls.slice().sort())).toEqual(['cn', 'cn', 'cn', 'us', 'us', 'us']);
   expect(await page.evaluate(() => config.mainSession.colId)).toBe('captain');
   expect(await page.evaluate(() => Promise.all(['captain', 'worker'].map(id => window.deck.ptyIsAlive(id))))).toEqual([true, true]);

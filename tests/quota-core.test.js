@@ -242,8 +242,42 @@ test('official success overrides a recent bound screen and supplies the reset fo
   const priorError = {};
   Q.observe(priorError, bind(Q.screen('Claude', 'Usage limit reached', [], now)), now);
   Q.observe(priorError, api, now + 1);
-  assert.equal(priorError[Q.seatKey(seat.id)].blocked.resetAt, now + 3600000);
-  assert.equal(Q.summary(priorError, 'Claude', now + 3600000, seat).state, 'normal');
+  // The newer official sample has room in both windows, so the older error is cleared.
+  assert.equal(priorError[Q.seatKey(seat.id)].blocked, undefined);
+  assert.equal(Q.summary(priorError, 'Claude', now + 1, seat).state, 'normal');
+});
+
+test('a newer official sample with room clears an older screen error; a newer 0% sample stays exhausted', () => {
+  const seats = Q.claudeSeats([{ id: 'us', configDir: '~/.claude-us' }, { id: 'cn', configDir: '~/.claude-cn' }]), store = {};
+  const official = (seat, at, five, week) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: five, resetText: new Date(now + 2 * 3600000).toISOString() },
+    { key: 'weekly', remaining: week, resetText: new Date(now + 5 * 86400000).toISOString() }] }, at),
+    seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: `${seat.id}-account`, credentialKey: `${seat.id}-cred` });
+  const error = (seat, at) => ({ ...Q.screen('Claude', "You've hit your limit", [], at), seatId: seat.id, configDir: seat.configDir, sourceColumnId: `${seat.id}-col` });
+  for (const seat of seats) {
+    Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: seat.id, at: now - 11 * 60000, identityOnly: true, configDir: seat.configDir, accountKey: `${seat.id}-account`, credentialKey: `${seat.id}-cred` }, now);
+    Q.observe(store, error(seat, now - 10 * 60000), now);
+    assert.equal(Q.summary(store, 'Claude', now, seat).state, 'exhausted');
+  }
+  // Stored state from an older build already holds the stale error next to the newer sample.
+  const persisted = JSON.parse(JSON.stringify(store));
+  Q.observe(store, official(seats[0], now, 93, 48), now);
+  Q.observe(store, official(seats[1], now, 0, 82), now);
+  const us = Q.summary(store, 'Claude', now, seats[0]), cn = Q.summary(store, 'Claude', now, seats[1]);
+  assert.equal(store['Claude:us'].blocked, undefined);
+  assert.equal(us.state, 'normal');
+  assert.deepEqual([us.fiveHour, us.weekly], [93, 48]);
+  assert.equal(cn.state, 'exhausted');
+  assert.equal(cn.recoveryAt, now + 2 * 3600000);
+  const text = Q.text(store, now, seats);
+  assert.doesNotMatch(text.split('\n')[0], /已用尽/);
+  assert.match(text.split('\n')[1], /已用尽/);
+  // Summary applies the same rule to a persisted error that observe never cleared.
+  persisted['Claude:us'].sample = official(seats[0], now, 93, 48);
+  assert.equal(Q.summary(persisted, 'Claude', now, seats[0]).state, 'normal');
+  // An error after the official sample is newer and still counts.
+  Q.observe(store, error(seats[0], now + 1000), now + 1000);
+  assert.equal(Q.summary(store, 'Claude', now + 1000, seats[0]).state, 'exhausted');
 });
 
 

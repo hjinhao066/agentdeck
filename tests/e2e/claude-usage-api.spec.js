@@ -37,13 +37,16 @@ async function screenshot(name) {
   await page.screenshot({ path: path.join(shots, name + '.png') });
 }
 test('all Claude surfaces use remaining percentages and resets; icons refresh without dropping values', async () => {
-  await expect(seat('cn').locator('.quota-label')).toHaveText(/5h 91% ↻\d\d:\d\d · 7d 90% ↻\d\d-\d\d \d\d:\d\d/);
-  await expect(seat('us').locator('.quota-label')).toHaveText(/5h 已用尽 ↻\d\d:\d\d · 7d 48% ↻/);
+  await expect(seat('cn').locator('.quota-values')).toHaveText('91%');
+  // Exhausted rows replace the numbers with the recovery time.
+  await expect(seat('us')).toHaveAttribute('data-state', 'exhausted');
+  await expect(seat('us').locator('.quota-values')).toHaveText(/^↻\d\d:\d\d$/);
+  await expect(seat('us')).toHaveAttribute('aria-label', /已用尽，\d\d:\d\d 恢复/);
   await expect(seat('cn')).toHaveAttribute('title', /Claude OAuth usage/);
   const refresh = page.getByRole('button', { name: '刷新额度', exact: true });
   await expect(refresh).toHaveAttribute('title', '刷新额度');
   await refresh.click();
-  await expect(seat('cn').locator('.quota-label')).toContainText('91%');
+  await expect(seat('cn').locator('.quota-values')).toContainText('91%');
   const text = await page.evaluate(() => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats));
   expect(text).toContain('5h 91% ↻'); expect(text).toContain('7d 90% ↻');
   expect(text).not.toMatch(/已用 \d|剩余|5h 9%/);
@@ -62,7 +65,7 @@ test('usage colors contrast with both sidebar backgrounds by at least 4.5:1', as
         return rgb[0] * .2126 + rgb[1] * .7152 + rgb[2] * .0722;
       };
       const bg = luminance(getComputedStyle(document.getElementById('colNav')).backgroundColor);
-      return [...document.querySelectorAll('#quotaBar [data-seat-id]')].map(e => {
+      return [...document.querySelectorAll('#quotaBar [data-seat-id], #quotaBar [data-seat-id] .quota-values > span')].map(e => {
         const fg = luminance(getComputedStyle(e).color);
         return (Math.max(fg, bg) + .05) / (Math.min(fg, bg) + .05);
       });
@@ -82,13 +85,13 @@ test('three failed samples retain windows, resets and stale sample time across r
   await page.reload();
   await expect(seat('cn')).toHaveAttribute('title', /连续 3 次.*数据已旧/s);
   expect(await page.evaluate(() => config.quotas['Claude:cn'].sample.at)).toBe(before);
-  await expect(seat('cn').locator('.quota-sampled')).toContainText('数据已旧');
-  await expect(seat('cn').locator('.quota-label')).toHaveText(/5h 91% ↻\d\d:\d\d · 7d 90% ↻\d\d-\d\d \d\d:\d\d/);
+  await expect(seat('cn')).toHaveAttribute('title', /^状态：正常 · 采样 [^\n]*（数据已旧）/);
+  await expect(seat('cn').locator('.quota-values')).toHaveText('91%');
   await page.locator('#navCollapseBtn').click();
   await page.getByRole('button', { name: '订阅额度', exact: true }).click();
   await expect(page.locator('#quotaPop')).toBeVisible();
   const popupSeat = page.locator('#quotaPopList [data-seat-id="cn"]');
-  await expect(popupSeat.locator('.quota-label')).toContainText('5h 91% ↻');
-  await expect(popupSeat.locator('.quota-sampled')).toContainText('数据已旧');
+  await expect(popupSeat.locator('.quota-values')).toHaveText('91%');
+  await expect(popupSeat).toHaveAttribute('title', /数据已旧/);
   await screenshot('official-usage-collapsed');
 });

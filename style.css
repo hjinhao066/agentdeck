@@ -310,14 +310,18 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 #navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; }
 .nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 #quotaBar, #quotaPopList { display: flex; flex-direction: column; gap: 1px; }
-.quota-item { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; padding: 0 6px; border-radius: 6px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: default; white-space: nowrap; }
-.quota-icon { display: flex; flex: 0 0 auto; }
-.quota-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
-.quota-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.quota-item[data-state="normal"] { color: var(--text); }
-.quota-item[data-state="warning"], .quota-item[data-state="warning"] .quota-label { color: #d99426; }
-.quota-item[data-state="danger"], .quota-item[data-state="exhausted"],
-.quota-item[data-state="danger"] .quota-label, .quota-item[data-state="exhausted"] .quota-label { color: #e46464; }
+.quota-item { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; height: 22px; padding: 0 6px; border-radius: 5px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
+.quota-icon { display: flex; flex: 0 0 auto; color: var(--text-2); }
+.quota-name { display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 0; color: var(--text-2); line-height: 1; }
+.quota-item[data-seat-id] .quota-name { font-size: 13px; }
+.quota-captain { display: inline-flex; color: #e0a91c; }
+.quota-captain svg { width: 11px; height: 11px; }
+/* Right-aligned gauge column: monospace digits so every row lines up. */
+.quota-values { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: 0 0 auto; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
+.quota-value { min-width: 4ch; text-align: right; }
+.quota-value.low { color: var(--quota-low); }
+.quota-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--st-input); }
+.quota-recovery { color: var(--quota-out); }
 .quota-item:hover, .quota-item:focus-visible, .quota-item:focus { background: var(--icon-hover-bg); outline: none; }
 .quota-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
 /* Details open beside the row (over the deck), never inside the narrow sidebar. */
@@ -332,8 +336,6 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 body.nav-collapsed #quotaRailBtn { display: inline-flex; }
 #quotaRailBtn[data-state="warning"] { color: #d99426; }
 #quotaRailBtn[data-state="danger"], #quotaRailBtn[data-state="exhausted"] { color: #e46464; }
-.quota-sampled { color: var(--muted); font-size: 10px; flex: 0 0 auto; }
-.quota-sampled:empty { display: none; }
 #tbSplit {
   display: inline-flex; align-items: center; gap: 1px; padding: 2px;
   background: var(--pill-bg); border-radius: 8px;
@@ -1947,15 +1949,15 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #quotaRefresh { display: grid; place-items: center; width: 32px; height: 32px; background: transparent; border: 0; border-radius: 5px; color: inherit; cursor: pointer; }
 #quotaRefresh svg { width: 16px; height: 16px; }
 #quotaRefresh:hover, #quotaRefresh:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
-:root[data-theme="dark"] .quota-item[data-state="warning"] { color: #f4cc77; }
-:root[data-theme="dark"] .quota-item[data-state="danger"], :root[data-theme="dark"] .quota-item[data-state="exhausted"] { color: #ffb4aa; }
-:root[data-theme="light"] .quota-item[data-state="warning"] { color: #765000; }
-:root[data-theme="light"] .quota-item[data-state="danger"], :root[data-theme="light"] .quota-item[data-state="exhausted"] { color: #a02020; }
+#quotaRefresh:disabled { cursor: default; opacity: .7; }
+#quotaRefresh.spinning svg { animation: quota-spin .9s linear infinite; }
+@keyframes quota-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { #quotaRefresh.spinning svg { animation: none; } }
+:root { --quota-low: #d99426; --quota-out: #e46464; }
+:root[data-theme="dark"] { --quota-low: #f4cc77; --quota-out: #ffb4aa; }
+:root[data-theme="light"] { --quota-low: #765000; --quota-out: #a02020; }
 
 .quota-heading { display: flex; align-items: center; justify-content: space-between; }
-#navQuota .quota-item, #quotaPopList .quota-item { flex-wrap: wrap; }
-#navQuota .quota-label, #quotaPopList .quota-label { flex-basis: 100%; white-space: normal; line-height: 1.6; }
-:root .quota-item .quota-label { color: inherit; }
 .perpetual-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }
 #perpetualEnabled[aria-pressed="true"], #quotaWarmupEnabled[aria-pressed="true"], #preferEarlierSeat[aria-pressed="true"] { color: var(--accent); background: var(--icon-hover-bg); }
 .captain-relay-notice { margin: 12px 8px; padding: 10px 12px; border-left: 2px solid var(--accent); color: var(--muted); font-size: 12px; line-height: 1.6; }

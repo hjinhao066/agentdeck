@@ -24,11 +24,16 @@ were left running. Quota probes made no inference requests.
   the actual `mainSession.colId` column's `claudeSeatId`, not
   `activeClaudeSeatId` (the next-launch preference). Legacy untagged columns
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
-- Each item shows `5h …% · 7d …%` in the sidebar quota block, both reset timestamps in its
-  tooltip, model and masked account. Missing windows say `无数据`; if neither
+- Each item is one compact row in the sidebar quota block: provider icon, seat flag
+  (plus a crown on the seat the running Captain uses), and the right-aligned 5-hour
+  remaining %. An exhausted row shows a red dot and `↻HH:MM` recovery instead. The
+  weekly %, both resets, sample time, model and masked account live in the tooltip
+  and the row's aria-label. Missing windows say `无数据`; if neither
   window can be read, show `未知` (never 未登录: the masked account still shows). A welcome/model banner alone cannot
   prove Claude quota or login. An explicit exhausted error remains visible
-  even if an older numeric footer still shows a positive percentage.
+  even if an older numeric footer still shows a positive percentage, but a **newer**
+  official OAuth sample whose 5-hour window and every other window are above 0%
+  clears the older error (panel, perpetual Captain and `quota` CLI text alike).
 - Confirmed by inspecting the sibling branch's `claude-seats-main.js`:
   **`<configDir>/agentdeck-usage.json`** is its canonical snapshot:
   `{at, source: 'Claude /usage', windows: [{key: 'fiveHour'|'weekly',

@@ -9,6 +9,8 @@
   const FRESH_MS = 15 * 60_000;
   const CLAUDE_OAUTH_SOURCE = 'Claude OAuth usage';
   const freshMs = (sample) => sample?.source === CLAUDE_OAUTH_SOURCE ? 30 * 60_000 : FRESH_MS;
+  // An official sample with a 5-hour window and every window above 0% proves the account still has room.
+  const officialRoom = (sample) => !!sample?.official && !!sample.windows?.some((w) => w.key === 'fiveHour') && sample.windows.every((w) => w.remaining > 0 && !w.exhausted);
   const SCOPES = { Claude: 'claude', Codex: 'codex', Cursor: 'grok-4.7', Antigravity: 'gemini' };
   const NAMES = { Claude: 'Claude', Codex: 'Codex / ChatGPT', Cursor: 'Cursor / Grok 4.7', Antigravity: 'Antigravity / Gemini' };
   function claudeSeats(value) {
@@ -243,6 +245,8 @@
     }
     if (next.official) {
       out.officialStatus = { failures: 0, checkedAt: next.at };
+      // A newer official sample with room outranks an older screen error.
+      if (out.blocked && next.at > out.blocked.at && officialRoom(next)) delete out.blocked;
       if (out.blocked && !out.blocked.resetAt) {
         const resets = next.windows.filter((w) => w.resetAt > now && (w.exhausted || w.key === 'fiveHour')).map((w) => w.resetAt);
         if (resets.length) out.blocked = { ...out.blocked, resetAt: Math.max(...resets) };
@@ -262,7 +266,7 @@
       store[key] = out;
       return before !== JSON.stringify(out);
     }
-    // Bound server observations cannot clear a CLI exhaustion latch. Older
+    // Non-official observations cannot clear a CLI exhaustion latch. Older
     // observations cannot override a newer server sample or quota error.
     if (next.provider === 'Claude' && next.source === CLAUDE_OAUTH_SOURCE &&
       (next.at < (previous.sample?.at || 0) || next.at < (previous.blocked?.at || 0))) return false;
@@ -304,7 +308,8 @@
     const stale = retained && (!fresh || entry.officialStatus?.failures >= 3 || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
     const windows = retained ? sample.windows || [] : fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
 
-    const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
+    const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) &&
+      !(retained && sample.at > entry.blocked.at && officialRoom(sample)) ? entry.blocked : null;
     const remaining = windows.length ? Math.min(...windows.map((w) => w.remaining)) : null;
     const exhausted = !!blocked || windows.some((w) => w.exhausted && (!w.resetAt || w.resetAt > now));
     const state = exhausted ? 'exhausted' : remaining !== null ? (remaining <= 10 ? 'danger' : remaining <= 20 ? 'warning' : 'normal') : provider !== 'Claude' && fresh && !sample.windows?.length && !entry.blocked ? 'normal' : 'unknown';
@@ -340,7 +345,11 @@
     if (evidence) details.push(`来源：${evidence.source}；${blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；采样 ${new Date(evidence.at).toLocaleString()}${stale ? '（数据已旧）' : !fresh && (!blocked || retained) ? '（已过期）' : ''}`);
     const displayLabel = provider === 'Claude' && windows.length ? (blocked && !windows.some((w) => w.label === '5 小时') ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'} · ` : '') + windows.map((w) => claudeWindow(w)).join(' · ') : provider === 'Claude' && blocked ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'}` : label;
     const sampleLabel = provider === 'Claude' && (fresh || retained) ? `采样 ${stale ? new Date(sample.at).toLocaleString() : new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}${stale ? '（数据已旧）' : ''}` : '';
-    return { provider, state, label, displayLabel, sampleLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    // Compact panel fields: the two remaining percentages, or the recovery time while exhausted.
+    const pick = (re) => windows.find((w) => re.test(w.label))?.remaining ?? null;
+    const statusText = { exhausted: '已用尽', danger: '快用完', warning: '快用完', normal: '正常' }[state] || '未知';
+    const sampledAt = (fresh || retained) ? sample.at : evidence?.at || null;
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour: pick(/5 小时$/), weekly: pick(/每周$/), recoveryAt: exhausted && recovery || null, sampledAt, stale: !!stale, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
   return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
