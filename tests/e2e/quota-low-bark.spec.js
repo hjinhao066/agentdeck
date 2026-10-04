@@ -3,6 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '../..');
+const M = require('../../claude-seats-main');
 const FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
 let application, page, profile;
 const alerts = () => application.evaluate(({ app }) => app.testQuotaAlerts);
@@ -17,6 +18,13 @@ async function launch() {
 }
 test.beforeEach(() => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-low-bark-'));
+  const home = path.join(profile, 'seats-home');
+  for (const id of ['cn', 'us']) {
+    const seat = { id, configDir: `~/.claude-${id}` }, loc = M.credentialLocation(seat, home);
+    fs.mkdirSync(loc.dir, { recursive: true });
+    fs.writeFileSync(loc.metadataPath, JSON.stringify({ oauthAccount: { accountUuid: `offline-${id}`, emailAddress: `${id}@example.test` } }));
+    if (id === 'us') M.writeUsage(seat, home, { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 19, resetText: 'in 1h' }, { key: 'weekly', remaining: 91, resetText: 'in 4d' }] });
+  }
   const file = path.join(profile, 'fake-key'); fs.writeFileSync(file, 'fake_e2e_quota_device_key');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ barkKeyFile: file,
     claudeSeats: ['cn', 'us'].map((id) => ({ id, name: id.toUpperCase(), configDir: `~/.claude-${id}` })),
@@ -31,8 +39,8 @@ test.afterEach(async () => {
 test('startup low quotas send once per account; relaunch and renderer replay do not resend', async () => {
   const file = path.join(profile, 'config.json'), config = JSON.parse(fs.readFileSync(file));
   config.quotas = Object.fromEntries(['cn', 'us'].map((id) => [`Claude:${id}`, {
-    scope: 'claude', configDir: `~/.claude-${id}`, accountKey: `fake-${id}`,
-    sample: { at: Date.now(), source: 'offline fixture', windows: [
+    scope: 'claude', configDir: `~/.claude-${id}`, accountKey: require('crypto').createHash('sha256').update(`offline-${id}`).digest('hex').slice(0, 16),
+    sample: { at: Date.now(), source: 'offline fixture', accountBound: true, configDir: `~/.claude-${id}`, accountKey: require('crypto').createHash('sha256').update(`offline-${id}`).digest('hex').slice(0, 16), windows: [
       { label: '5 小时', remaining: 2, resetAt: Date.now() + 3600000 },
     ] },
   }]));

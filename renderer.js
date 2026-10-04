@@ -138,7 +138,7 @@ if (saved) {
   if (saved.navWidth) config.navWidth = saved.navWidth < NAV_MIN_W ? NAV_DEFAULT_W : Math.min(NAV_MAX_W, saved.navWidth);
   config.folders = SidebarCore.normalizeFolders(saved.folders);
   config.archived = SidebarCore.normalizeArchived(saved.archived).map((c) => ({ ...c,
-    claudeSeatId: config.claudeSeats.some((s) => s.id === c.claudeSeatId) ? c.claudeSeatId : config.activeClaudeSeatId,
+    claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
   }));
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
@@ -195,13 +195,14 @@ if (saved) {
       boardId: typeof c.boardId === 'string' ? c.boardId : '',
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
       dispatcherCardId: typeof c.dispatcherCardId === 'string' ? c.dispatcherCardId : '',
-      claudeSeatId: config.claudeSeats.some((s) => s.id === c.claudeSeatId) ? c.claudeSeatId : config.activeClaudeSeatId,
+      claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
   }
 }
 function seatLaunchCommand(col, command) {
-  const seat = config.claudeSeats.find((s) => s.id === col.claudeSeatId) || ClaudeSeatsCore.active(config);
+  const seat = ClaudeSeatsCore.bindColumn(col, config);
+  if (!seat.configDir) return ''; // A removed, unbound seat must not launch under another login.
   return ClaudeSeatsCore.launchCommand(command, seat, env.home, env.platform);
 }
 // Once: sessions 队长 opened before they were marked go under it too.
@@ -214,6 +215,8 @@ if (config.mainSession && !config.mainSession.crewMarked) {
 // folders, then loose ones.
 config.columns = SidebarCore.orderedColumns(config.columns, config.folders);
 let columns = config.columns;
+columns.forEach((col) => ClaudeSeatsCore.bindColumn(col, config));
+config.archived.forEach((col) => ClaudeSeatsCore.bindColumn(col, config));
 let activeView = config.activeView;
 // Changes arriving together (a drag, 队长 task updates) are written once:
 // the main process writes config.json synchronously, so bursts would stall
@@ -1899,7 +1902,8 @@ function buildColumn(col, isFresh) {
           });
         }
         // 队长 gets a control token too; the columns it drives never do.
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, col.claudeSeatId || config.activeClaudeSeatId);
+        const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
 
         if (launch) {
           // Capture the id: if the user edits the column within 700ms,
@@ -3571,7 +3575,7 @@ setInterval(() => {
       let sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt, model);
       if (sample && provider === 'Claude') {
         const seat = QuotaCore.seatForColumn(col, QuotaCore.claudeSeats(config.claudeSeats));
-        sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir } : null;
+        sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir, sourceColumnId: id } : null;
       }
       const signature = sample && JSON.stringify([provider, sample.seatId, sample.model, sample.windows.map((w) => [w.label, w.remaining, w.resetText]), sample.exhausted, sample.resumed, sample.resetText]);
       // Redrawing unrelated text must not move a relative reset forward or

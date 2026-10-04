@@ -324,3 +324,17 @@ test('single-provider tools reject foreign models, Cursor and Antigravity suppor
   assert.equal(AgentInfo.resolveAgentInfo({ cmd: 'cursor-agent --model claude-opus-5-5-high' }, null, 'Model: gpt-6.1-sol').shortModel, 'GPT-6.1 Sol');
   assert.equal(AgentInfo.resolveAgentInfo({ cmd: 'agy --model gemini-3.8-flash-high' }, null, 'Model: claude-sonnet-4-6').shortModel, 'Sonnet 4.6');
 });
+
+
+test('Claude sidebar identity carries the pinned seat; Cursor Opus remains Cursor and has no Claude seat label', () => {
+  const col = { cmd: 'claude --model claude-opus-5-5', claudeSeatId: 'cn', claudeConfigDir: '~/.claude' };
+  const cn = AgentInfo.resolveAgentInfo(col, null);
+  assert.deepEqual(cn.seat, { id: 'cn', configDir: '~/.claude' });
+  const us = AgentInfo.resolveAgentInfo({ ...col, claudeSeatId: 'us', claudeConfigDir: '~/.claude-us' }, null);
+  assert.notEqual(cn.key, us.key);
+  const cursor = AgentInfo.resolveAgentInfo({ ...col, cmd: 'cursor-agent --model claude-opus-5-5-high' }, null, "Claude Code\nYou've hit your session limit");
+  assert.equal(cursor.provider, 'Cursor');
+  assert.equal(cursor.seat, null);
+  const Q = require('../quota-core');
+  assert.equal(Q.screen(cursor.provider, "You've hit your session limit · resets 9:20pm", ['Model: claude-opus-5-5-high'], Date.now(), cursor.rawModel), null);
+});

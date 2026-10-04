@@ -1,19 +1,33 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs'), os = require('os'), path = require('path');
 const ROOT = path.resolve(__dirname, '../..'), FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
-// All quota numbers come from the offline quota-agent stand-in, not live usage.
+const S = require('../../claude-seats-core'), M = require('../../claude-seats-main');
+// Claude numbers come from an account-bound native cache in the isolated home;
+// the other providers use the offline quota-agent stand-in, never live usage.
 const shots = process.env.AGENTDECK_TOPBAR_SHOTS;
 let app, page, profile;
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
-  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-topbar-'));
+  profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-topbar-')));
+  const home = path.join(profile, 'seats-home');
+  const seats = S.normalize([{ id: 'cn', name: '🇨🇳 CN', configDir: path.join(home, '.claude') }, { id: 'us', name: '🇺🇸 US', configDir: path.join(home, '.claude-us') }]);
+  for (const seat of seats) {
+    const loc = M.credentialLocation(seat, home);
+    fs.mkdirSync(loc.dir, { recursive: true });
+    fs.writeFileSync(loc.metadataPath, JSON.stringify({ oauthAccount: { accountUuid: `fake-topbar-${seat.id}`, emailAddress: `${seat.id}@example.test` } }));
+  }
+  M.writeUsage(seats[0], home, { at: Date.now(), source: 'Claude /usage', windows: [
+    { key: 'fiveHour', remaining: 19, resetText: '2hr 10m' },
+    { key: 'weekly', remaining: 91, resetText: '3d' },
+  ] });
   const col = (id, title, cmd, extra = {}) => ({ id, title, cmd, cwd: profile, width: 600, role: 'manual', ...extra });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,
-    claudeSeats: [{ id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude' }, { id: 'us', name: '🇺🇸 US', configDir: '~/.claude-us' }],
+    claudeSeats: seats,
     activeClaudeSeatId: 'cn', mainSession: { colId: 'tb-cn', tasks: [], pending: [] },
     columns: [
-      // quota-agent prints Claude numbers for any seat argument other than "cn".
+      // Legacy screen percentages do not identify an account; only CN's bound
+      // native cache above supplies trusted numbers. US deliberately has none.
       col('tb-cn', 'CN 模拟会话', `node "${FAKE}" Claude us`, { claudeSeatId: 'cn', isMain: true }),
       col('tb-us', 'US 模拟会话', `node "${FAKE}" Claude cn`, { claudeSeatId: 'us' }),
       ...['Codex', 'Cursor', 'Antigravity'].map((p) => col(`tb-${p}`, `${p} 模拟会话`, `node "${FAKE}" ${p}`)),
@@ -23,6 +37,8 @@ test.beforeAll(async () => {
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
   await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-label')).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未知');
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(page.locator('#quotaBar [data-provider="Codex"] .quota-label')).toHaveText('8%');
 });
 test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
@@ -154,7 +170,8 @@ test('collapsed sidebar keeps a gauge icon whose popover lists every quota', asy
   await expect(pop).toBeVisible();
   await expect(rail).toHaveAttribute('aria-expanded', 'true');
   await expect(pop.locator('.quota-item')).toHaveCount(5);
-  await expect(pop.locator('[data-seat-id="us"] .quota-label')).toHaveText('未登录/无数据');
+  await expect(pop.locator('[data-seat-id="us"] .quota-label')).toHaveText('未知');
+  await expect(pop.locator('[data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(pop.locator('[data-provider="Codex"] .quota-name')).toHaveText('ChatGPT');
   for (const theme of ['dark', 'light']) {
     await page.evaluate((t) => applyTheme(t), theme);

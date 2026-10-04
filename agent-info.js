@@ -284,13 +284,16 @@
     const liveStatus = liveModel ? (footers && footers.length ? footers.join('\n') : screen) : '';
     const effort = extractEffort(rawModel, cmd, liveStatus) || (historyModel && rawModel === historyModel ? historyEffort : null) || (cachedModel && rawModel === cachedModel ? col.agentEffort : null) || null;
     const tooltip = formatTooltip(provider, rawModel, effort);
-    const key = `${provider}:${rawModel || ''}:${effort || ''}`;
+    const seat = provider === 'Claude' && col?.claudeSeatId && col?.claudeConfigDir
+      ? { id: col.claudeSeatId, configDir: col.claudeConfigDir } : null;
+    const key = `${provider}:${rawModel || ''}:${effort || ''}:${seat?.id || ''}:${seat?.configDir || ''}`;
 
     return {
       provider,
       model: shortModel,
       rawModel,
       shortModel,
+      seat,
       effort,
       tooltip,
       isShell: false,
@@ -333,6 +336,19 @@
       label.className = 'agent-model-label';
       label.textContent = labelText;
       badgeEl.appendChild(label);
+    }
+    if (context === 'sidebar' && info.seat) {
+      const flag = { cn: '🇨🇳', us: '🇺🇸' }[info.seat.id];
+      if (flag) {
+        const label = document.createElement('span');
+        label.className = 'agent-seat-label';
+        label.textContent = flag;
+        label.title = `当前账号：${info.seat.id.toUpperCase()} · ${info.seat.configDir}`;
+        label.setAttribute('aria-label', label.title);
+        label.setAttribute('role', 'img');
+        label.tabIndex = 0;
+        badgeEl.appendChild(label);
+      }
     }
   }
 

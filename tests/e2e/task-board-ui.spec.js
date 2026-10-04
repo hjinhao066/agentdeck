@@ -256,7 +256,7 @@ test('Escape restores sidebar focus and keyboard column navigation closes the ov
     await page.evaluate((v) => showView(v), view);
     await page.locator('#taskBoardBtn').click();
     await expect(page.locator('#taskBoardView')).toBeVisible();
-    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+1' : 'Control+1');
+    await page.keyboard.press('Meta+1');
     await expect(page.locator('#taskBoardView')).toBeHidden();
     expect(await page.evaluate(() => columns.map((c) => c.id))).toEqual(originalIds);
     for (const id of originalIds) expect(await page.evaluate((s) => window.deck.ptyIsAlive(s), id)).toBe(true);

@@ -3,11 +3,16 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const ROOT = path.resolve(__dirname, '../..');
+const M = require('../../claude-seats-main');
 const FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
 let application, page, profile;
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-e2e-'));
+  const home = path.join(profile, 'seats-home');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test' } }));
+  M.writeUsage({ id: 'cn', configDir: '~/.claude' }, home, { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 19, resetText: 'in 1h' }, { key: 'weekly', remaining: 91, resetText: 'in 4d' }] });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,
     claudeSeats: [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }],
@@ -29,22 +34,22 @@ const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"
 
 test('passive live screens show remaining quota, provider icons and accessible details', async () => {
   await expect(badge('Claude').locator('.quota-label')).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
-  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未登录/无数据');
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未知');
   await expect(badge('Codex').locator('.quota-label')).toHaveText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider).locator('.quota-label')).toHaveText('正常');
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
   await expect(badge('Claude')).toHaveAttribute('aria-label', /5 小时剩余 19%；重置/);
-  await expect(badge('Claude')).toHaveAttribute('title', /来源：会话屏幕/);
+  await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位用量（\/usage）；高（按账号 ID 归属）/);
   await expect(badge('Claude').locator('svg')).toBeVisible();
   await badge('Claude').focus();
   await expect(badge('Claude').getByRole('tooltip')).toBeVisible();
   await expect(badge('Claude').getByRole('tooltip')).toContainText('每周剩余 91%');
   await expect(badge('Cursor').locator('.quota-name')).toHaveText('Grok 4.7');
   await expect(badge('Antigravity').locator('.quota-name')).toHaveText('Gemini');
-  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：未识别/);
+  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：cn\*\*\*@example.test/);
   // The isolated profile is barred from reading the user's real quota caches.
-  expect(await page.evaluate(() => window.deck.quotaLocal())).toEqual([]);
+  expect((await page.evaluate(() => window.deck.quotaLocal())).filter(q => q.windows).map(q => q.seatId)).toEqual(['cn']);
   // Quota tracks Grok on Cursor, while model badges already choose that family.
   for (const [provider, family] of [['Codex', 'codex'], ['Cursor', 'grok']]) {
     const svg = badge(provider).locator('.quota-icon svg');
@@ -131,7 +136,7 @@ test('Captain quota CLI returns both Claude seats and changes no tasks, receipts
   // Node writes UTF-8 on both platforms; PowerShell 5 redirection writes UTF-16.
   const command = `node -e "require('fs').writeFileSync(process.argv[1],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}))" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
-  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未登录\/无数据[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
+  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未知[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
   expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(5);
   expect(await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]))).toBe(before);
   // A worker doesn't have the Captain capability, even for this read-only command.

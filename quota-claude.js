@@ -84,10 +84,23 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
     } catch (_) { finish(); }
   });
 }
-async function readSeat(seat, home) {
+async function readSeat(seat, home, credentials = readCredentials, usage = requestUsage) {
   try {
-    const token = await readCredentials(seat, home);
-    return token ? await requestUsage(token) : null;
+    const loc = M.credentialLocation(seat, home), accountKey = M.usageAccountKey(loc);
+    if (!accountKey) return null;
+    const token = await credentials(seat, home);
+    const value = token ? await usage(token) : null;
+    const current = M.credentialLocation(seat, home);
+    if (!value || current.dir !== loc.dir || accountKey !== M.usageAccountKey(current)) return null;
+    return { ...value, accountKey, configDir: loc.dir };
+  } catch (_) { return null; }
+}
+function boundUsage(seat, home, value) {
+  if (!value?.accountKey) return null;
+  try {
+    const loc = M.credentialLocation(seat, home);
+    if (value.accountKey !== M.usageAccountKey(loc) || value.configDir !== loc.dir) return null;
+    return { ...M.sanitizeUsage(value), accountKey: value.accountKey, configDir: loc.dir };
   } catch (_) { return null; }
 }
 function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, now = Date.now }) {
@@ -109,17 +122,20 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
         let value = null;
         try { value = await read(entry.seat, home); } catch (_) {}
         if (!stopped && entries.get(entry.seat.id) === entry) {
-          // Whitelist again before persistence/IPC; a failed seat is explicitly
-          // unknown and cannot resurrect its old cache or exhaustion latch.
-          try { entry.usage = M.sanitizeUsage({ ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE, windows: value?.windows || [] }); }
-          catch (_) { entry.usage = { at: now(), source: Q.CLAUDE_OAUTH_SOURCE, windows: [] }; }
-          try { write(entry.seat, home, entry.usage); } catch (_) {}
+          // Failed/unbound reads have no authority over an exhaustion latch.
+          entry.usage = boundUsage(entry.seat, home, value && { ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE });
+          if (entry.usage) {
+            try { write(entry.seat, home, entry.usage); } catch (_) {}
+          }
         }
       })().finally(() => { entry.pending = null; });
       return entry.pending;
     }));
   }
-  return { tick, samples: () => stopped ? [] : [...sync().values()].filter(({ usage }) => usage).map(({ seat, usage }) => ({ ...Q.cacheClaude(usage, usage.at), seatId: seat.id, configDir: seat.configDir })),
+  return { tick, samples: () => stopped ? [] : [...sync().values()].flatMap(({ seat, usage }) => {
+    const bound = boundUsage(seat, home, usage);
+    return bound ? [{ ...Q.cacheClaude(bound, bound.at), seatId: seat.id, configDir: seat.configDir, accountKey: bound.accountKey, accountBound: true }] : [];
+  }),
     dispose: () => { stopped = true; entries.clear(); } };
 }
 module.exports = { INTERVAL_MS, readCredentials, requestUsage, readSeat, createRefresh };

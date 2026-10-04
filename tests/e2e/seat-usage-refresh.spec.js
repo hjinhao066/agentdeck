@@ -6,8 +6,9 @@ let app, page, profile;
 const seat = (id) => page.locator(`#quotaBar [data-seat-id="${id}"]`);
 test.beforeEach(async () => {
   profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-seat-refresh-e2e-')));
+  const home = path.join(profile, 'seats-home');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
-    claudeSeats: [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }],
+    claudeSeats: [{ id: 'cn', name: 'CN', configDir: path.join(home, '.claude') }, { id: 'us', name: 'US', configDir: path.join(home, '.claude-us') }],
     columns: ['captain', 'worker'].map(id => ({ id, title: id, cmd: `node "${FAKE}"`, cwd: profile, isMain: id === 'captain', claudeSeatId: 'cn' })),
     mainSession: { colId: 'captain', tasks: [], pending: [], crewMarked: true },
   }));
@@ -27,16 +28,17 @@ test.beforeEach(async () => {
     const M = require(path.join(root, 'claude-seats-main'));
     const { readLocal } = require(path.join(root, 'quota-local'));
     const home = path.join(profile, 'seats-home');
-    const seats = S.normalize();
+    const seats = S.normalize(JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).claudeSeats);
     const state = globalThis.seatRefreshTest = { at: Date.now(), failUs: false, calls: [] };
     for (const seat of seats) {
       const loc = M.credentialLocation(seat, home);
       fs.mkdirSync(loc.dir, { recursive: true });
+      fs.writeFileSync(loc.metadataPath, JSON.stringify({ oauthAccount: { accountUuid: `fake-refresh-${seat.id}`, emailAddress: `${seat.id}@example.test` } }));
       fs.writeFileSync(loc.credentialsPath, JSON.stringify({ claudeAiOauth: { accessToken: `fake-${seat.id}`, scopes: ['user:profile'], expiresAt: state.at + 86400000 } }));
     }
     state.poller = C.createRefresh({ home, getSeats: () => seats, now: () => state.at, read: async (seat) => {
       const token = await C.readCredentials(seat, home, 'win32');
-      return C.requestUsage(token, (url, options, cb) => {
+      const value = await C.requestUsage(token, (url, options, cb) => {
         if (url !== 'https://api.anthropic.com/api/oauth/usage' || options.headers.Authorization !== `Bearer fake-${seat.id}`) throw new Error('wrong request');
         state.calls.push(seat.id);
         const req = new EventEmitter(); req.destroy = () => {};
@@ -50,6 +52,8 @@ test.beforeEach(async () => {
         });
         return req;
       });
+      const loc = M.credentialLocation(seat, home);
+      return value ? { ...value, accountKey: M.usageAccountKey(loc), configDir: loc.dir } : null;
     } });
     ipcMain.removeHandler('quota:local');
     ipcMain.handle('quota:local', async () => [...await readLocal(home, undefined, state.at, seats), ...state.poller.samples()]);
@@ -78,17 +82,18 @@ test('both idle seats show independent fresh windows, resets and visible sample 
   expect(await page.evaluate(() => ChatUI.turnsOf('worker').length)).toBe(0);
   expect(await page.evaluate(() => Promise.all(['captain', 'worker'].map(id => window.deck.ptyIsAlive(id))))).toEqual([true, true]);
 });
-test('one-seat authentication failure becomes unknown, preserves sessions and recovers at the next interval', async () => {
+test('one-seat authentication failure emits no authoritative sample; expired usage becomes unknown and recovers', async () => {
   const at = await app.evaluate(async () => {
     const state = globalThis.seatRefreshTest;
-    state.at += 15 * 60000; state.failUs = true; await state.poller.tick(); return state.at;
+    state.at += 31 * 60000; state.failUs = true; await state.poller.tick(); return state.at;
   });
+  expect(await app.evaluate(() => globalThis.seatRefreshTest.poller.samples().some((s) => s.seatId === 'us'))).toBe(false);
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, at);
   await expect(seat('cn').locator('.quota-label')).toHaveText('5h 75% · 7d 60%');
   await expect(seat('us')).toHaveAttribute('data-state', 'unknown');
-  await expect(seat('us').locator('.quota-label')).toHaveText('未登录/无数据');
-  await expect(seat('us').locator('.quota-sampled')).toHaveText(/查询 \d\d:\d\d/);
-  await expect(seat('us')).toHaveAttribute('title', /未知（刷新未取得数据）；查询/);
+  await expect(seat('us').locator('.quota-label')).toHaveText('未知');
+  await expect(seat('us').locator('.quota-sampled')).toHaveText('');
+  await expect(seat('us')).toHaveAttribute('title', /5 小时：未知；重置 未知[\s\S]*每周：未知；重置 未知[\s\S]*无新鲜额度信息[\s\S]*已过期/);
   await page.reload();
   await expect(page.locator('#quotaBar [data-seat-id]')).toHaveCount(2);
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, at);

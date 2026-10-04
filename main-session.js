@@ -470,6 +470,7 @@
     col.cmd = M.freshCommand(rotation && options.command ? options.command : col.cmd);
     if (rotation) {
       col.claudeSeatId = options.seatId;
+      delete col.claudeConfigDir; // Only the replacement Captain adopts the new seat.
       host.config.activeClaudeSeatId = options.seatId;
       s.seatCheckpoint = options.checkpointPath;
       s.relayTargetId = options.relayTargetId || options.seatId;
