@@ -64,7 +64,7 @@ test('native click restores exact Captain from board/zoom/minimized views withou
   await page.evaluate(() => { if (zoomedId) toggleZoom(zoomedId); });
 });
 
-test('background, peeked, foreground workers and ordinary sessions never popup or sound', async () => {
+test('background, peeked, foreground workers and unarmed manual sessions never popup or sound', async () => {
   const before = (await alerts()).filter((e) => ['notification', 'sound'].includes(e.type)).length;
   await page.evaluate((cmd) => window.deck.ptyInput('crew', cmd + '\r'), FAKE);
   await expect.poll(() => page.evaluate(() => dumpScreen(terms.get('crew').term)), { timeout: 15000 }).toContain('Claude Code');

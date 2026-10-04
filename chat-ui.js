@@ -726,6 +726,7 @@
     refreshTurn(id, open.turn);
     scheduleSave(id);
     if (window.MainSession) window.MainSession.onTurnDone(id, open.turn);
+    host.manualTurnDone(id, open.turn);
     if (nav && nav.input.value.trim()) runSearch();
     if (window.Pages) window.Pages.refresh();
   }
@@ -806,7 +807,7 @@
     const prefix = window.MainSession ? window.MainSession.outgoingPrefix(col) : '';
     const atts = v.atts.slice();
     // a long prompt resolves once its file is written; keep the text until then
-    Promise.resolve(sendPrompt(col, text, atts, { prefix })).then((sent) => {
+    Promise.resolve(sendPrompt(col, text, atts, { prefix, userInitiated: true })).then((sent) => {
       if (!sent || v.ta.value.replace(/\s+$/, '') !== text) return;
       v.ta.value = ''; v.hist = -1; autosize(v.ta);
       v.atts = v.atts.filter((p) => !atts.includes(p)); renderAttachments(v);
@@ -842,6 +843,9 @@
       const paths = (atts || []).map(host.shellQuote).join(' ');
       const body = paths ? paths + (prompt ? ' ' + prompt : '') : prompt;
       const text = (o.prefix || '') + body + (o.suffix || '');
+      // Automatic work replaces any manual notification eligibility, even for
+      // silent sends. Arm a user turn only after its Enter actually goes out.
+      host.manualPromptSent(col.id, null, false);
       // display/displayAtts: what the bubble shows when it differs from what is typed
       const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text);
       // bracketed paste keeps multi-line text one prompt; the CR goes separately so
@@ -859,6 +863,7 @@
         if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
       } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
       window.deck.ptyInput(col.id, '\r');
+      host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();
@@ -899,7 +904,8 @@
     const entry = host.terms.get(col.id);
     if (!entry || entry.state === 'input' || C.isPromptAnswer(line)) return;
     if (C.isSecretPrompt(cursorRow(entry.term))) return;
-    beginTurn(col, line);
+    const turn = beginTurn(col, line);
+    host.manualPromptSent(col.id, turn, true);
   }
   function cursorRow(term) {
     try {
@@ -909,9 +915,11 @@
     } catch (_) { return ''; }
   }
   // Text sent on the column's behalf (broadcast, board messages).
-  function noteSent(col, text) {
+  function noteSent(col, text, userInitiated = false) {
+    host.manualPromptSent(col.id, null, false);
     if (!text || C.isPromptAnswer(text)) return;
-    beginTurn(col, String(text).slice(0, 4000));
+    const turn = beginTurn(col, String(text).slice(0, 4000));
+    host.manualPromptSent(col.id, turn, userInitiated);
   }
 
   // ---- focus ----

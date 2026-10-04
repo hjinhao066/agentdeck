@@ -448,7 +448,7 @@ const WORKING_RE = /esc to interrupt|ctrl\+c to stop|\bWorking\b|Running(?:\.\.\
 // also…?" at the end of a normal reply must NOT hold a column red forever.
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
-const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|waiting for (?:your |user )?(?:input|confirmation|approval|permission)/im;
+const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)/im;
 const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Plan, search, build anything|Add a follow-up|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
 function classify(text, entry) {
@@ -3155,6 +3155,7 @@ const deckHost = {
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone,
+  manualPromptSent, manualTurnDone,
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
@@ -3253,6 +3254,20 @@ function updateAgentIdentityBadge(id, entry, screenText) {
 }
 
 // Alerts use real chat turns, with a quiet-output guard against pauses during tools.
+// These ids live only in this renderer: restored history/output never arms them.
+function manualPromptSent(id, turn, userInitiated) {
+  const entry = terms.get(id);
+  const col = columns.find((c) => c.id === id);
+  if (!entry || !NotificationPolicy.isManualColumn(col)) return;
+  entry.manualTurnId = userInitiated && turn ? turn.id : null;
+  entry.captainAlert = null;
+  window.deck.notifyCancel({ id });
+}
+function manualTurnDone(id, turn) {
+  const entry = terms.get(id);
+  if (!entry || entry.manualTurnId !== turn.id || !entry.alive || turn.interrupted) return;
+  entry.captainAlert = { turnId: turn.id, reply: turn.reply.trim() || '本轮输出已停止。', since: Date.now() };
+}
 function captainTurnStarted(id, turn) {
   const entry = terms.get(id);
   if (!entry) return;
@@ -3273,7 +3288,9 @@ function captainColumnVisible(id) {
 }
 function maybeNotifyState(id, entry, st) {
   const col = columns.find((c) => c.id === id);
-  if (!col?.isMain) { window.deck.notifyCancel({ id }); return; }
+  const manual = NotificationPolicy.isManualColumn(col) && !!entry.manualTurnId;
+  if (!col?.isMain && !manual) { window.deck.notifyCancel({ id }); return; }
+  const turnId = manual ? entry.manualTurnId : entry.captainTurnId;
   const previous = entry.captainNotifyState;
   entry.captainNotifyState = st;
   if (['working', 'quota', 'plain', 'exited'].includes(st)) {
@@ -3281,24 +3298,24 @@ function maybeNotifyState(id, entry, st) {
     window.deck.notifyCancel({ id });
     return;
   }
-  if (st === 'done' && previous !== 'done' && !entry.captainAlert && entry.captainTurnId) {
-    const turn = ChatUI.turnsOf(id).find((t) => t.id === entry.captainTurnId);
+  if (st === 'done' && previous !== 'done' && !entry.captainAlert && turnId) {
+    const turn = ChatUI.turnsOf(id).find((t) => t.id === turnId);
     if (turn?.done && !turn.interrupted) {
       const reply = ChatCore.extractReply((entry.lastScreen || '').split('\n'), turn.user, entry.term.cols);
-      if (reply.trim()) entry.captainAlert = { turnId: turn.id, reply, since: Date.now() };
+      if (reply.trim() || manual) entry.captainAlert = { turnId: turn.id, reply: reply.trim() || '本轮输出已停止。', since: Date.now() };
     }
   }
   let alert = null;
-  if (st === 'input' && previous !== 'input') {
+  if (!manual && st === 'input' && previous !== 'input' && turnId) {
     const turn = ChatUI.turnsOf(id).findLast((t) => t.kind !== 'task');
     const reply = ChatCore.extractReply((entry.lastScreen || '').split('\n'), turn?.user || '', entry.term.cols);
-    alert = { turnId: entry.captainTurnId || 'startup-input', reply: reply || '队长需要你确认。' };
+    alert = { turnId, reply: reply || '队长需要你确认。' };
   } else if (st === 'done' && entry.captainAlert &&
       Date.now() - Math.max(entry.captainAlert.since, entry.lastOutputAt || 0) >= NotificationPolicy.QUIET_MS) {
     alert = entry.captainAlert;
     entry.captainAlert = null;
   }
-  if (alert) window.deck.notifyState({ id, state: st, ...alert, visible: captainColumnVisible(id) });
+  if (alert) window.deck.notifyState({ id, state: st, ...alert, userInitiated: manual, visible: captainColumnVisible(id) });
 }
 let lastAttnCount = -1;
 function claudeCaptainSeatId() {
@@ -3551,7 +3568,7 @@ function sendBroadcast() {
   // the input box instead of submitting.
   terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, text); });
   setTimeout(() => { terms.forEach((t, id) => { if (t.alive) window.deck.ptyInput(id, '\r'); }); }, 60);
-  columns.forEach((col) => { const t = terms.get(col.id); if (t && t.alive) ChatUI.noteSent(col, text); });
+  columns.forEach((col) => { const t = terms.get(col.id); if (t && t.alive) ChatUI.noteSent(col, text, true); });
   bcastInput.value = '';
 }
 bcastInput.addEventListener('keydown', (e) => {

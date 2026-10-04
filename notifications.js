@@ -1,8 +1,8 @@
 'use strict';
 const { validId } = require('./security');
-const { normalizeSettings, firstSentence, SOUND_COOLDOWN_MS } = require('./notification-policy');
+const { normalizeSettings, firstSentence, SOUND_COOLDOWN_MS, isManualColumn } = require('./notification-policy');
 
-// Native OS alerts only. The caller rechecks the current Captain and preferences.
+// Native OS alerts only. Recheck the current column and preferences here too.
 function createNotifications({ Notification, getMainWindow, focusColumn, playSound,
   getConfig, now = Date.now, platform = process.platform }) {
   const items = new Map();
@@ -18,8 +18,8 @@ function createNotifications({ Notification, getMainWindow, focusColumn, playSou
       if (!payload || !validId(payload.id) || typeof payload.turnId !== 'string' ||
           !payload.turnId || payload.turnId.length > 120 || !['input', 'done'].includes(payload.state)) return;
       const config = getConfig();
-      const captain = (config.columns || []).find((c) => c.isMain && c.id === payload.id);
-      if (!captain) return;
+      const col = (config.columns || []).find((c) => c.id === payload.id);
+      if (!col?.isMain && !(isManualColumn(col) && payload.userInitiated === true && payload.state === 'done')) return;
       const body = firstSentence(payload.reply);
       if (!body) return;
       const key = payload.id + ':' + payload.turnId;
@@ -33,7 +33,7 @@ function createNotifications({ Notification, getMainWindow, focusColumn, playSou
       cancel(payload.id);
       if (settings.enabled && Notification.isSupported()) {
         try {
-          const item = new Notification({ title: '队长', body,
+          const item = new Notification({ title: col.isMain ? '队长' : firstSentence(col.displayTitle || col.title) || '终端', body,
             // macOS playback is separate so volume stays gentle and predictable.
             silent: platform !== 'win32' || !audible });
           items.set(payload.id, item);

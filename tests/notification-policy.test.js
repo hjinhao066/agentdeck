@@ -6,7 +6,8 @@ const { createNotifications } = require('../notifications');
 
 function harness(platform = 'darwin') {
   let clock = 0, focused = false, supported = true;
-  const config = { columns: [{ id: 'captain', isMain: true }, { id: 'crew', captainCrew: true }] };
+  const config = { columns: [{ id: 'captain', isMain: true }, { id: 'crew', captainCrew: true },
+    { id: 'manual', role: 'manual', title: '手动终端' }, { id: 'worker', role: 'worker' }] };
   const events = [], items = [];
   class Notification extends EventEmitter {
     static isSupported() { return supported; }
@@ -31,15 +32,42 @@ test('settings normalize safely and first sentence is limited by Unicode charact
   assert.equal(firstSentence('😀'.repeat(70)), '😀'.repeat(60));
   assert.equal(firstSentence(null), '');
 });
-test('only Captain alerts, including peeked/foreground workers and invalid payloads', () => {
+test('unarmed manual sessions and workers stay silent, including invalid payloads', () => {
   const h = harness();
   h.show('t1', { id: 'crew' });
   h.show('t1', { id: 'other' });
+  h.show('t1', { id: 'manual' });
+  h.show('t1', { id: 'worker', userInitiated: true });
+  h.show('t1', { id: 'crew', userInitiated: true, visible: true });
   h.show('t1', { state: 'working' });
   h.show('', {});
   assert.deepEqual(h.events, []);
   h.show('t1');
   assert.deepEqual(h.events, [{ type: 'show', title: '队长', body: '已经完成。', silent: true }, { type: 'sound', tone: 'Glass' }]);
+});
+test('a user-submitted manual completion alerts once with its own title and exact click target', () => {
+  const h = harness();
+  h.show('manual-turn', { id: 'manual', state: 'input', userInitiated: true });
+  assert.deepEqual(h.events, []);
+  h.show('manual-turn', { id: 'manual', userInitiated: true });
+  h.show('manual-turn', { id: 'manual', userInitiated: true });
+  assert.deepEqual(h.events, [{ type: 'show', title: '手动终端', body: '已经完成。', silent: true }, { type: 'sound', tone: 'Glass' }]);
+  h.items[0].emit('click');
+  assert.deepEqual(h.events.at(-1), { type: 'focus', id: 'manual' });
+  h.show('next-turn', { id: 'manual', userInitiated: true });
+  h.alerts.cancel('manual'); h.items[1].emit('click');
+  assert.equal(h.events.filter((e) => e.type === 'focus').length, 1);
+});
+test('delegation is rechecked and manual alerts share the Captain sound cooldown and visibility gate', () => {
+  const h = harness(); h.focus(true);
+  h.show('visible-manual', { id: 'manual', userInitiated: true, visible: true });
+  assert.equal(h.events.filter((e) => e.type === 'sound').length, 0);
+  h.show('captain');
+  h.show('hidden-manual', { id: 'manual', userInitiated: true });
+  assert.equal(h.events.filter((e) => e.type === 'sound').length, 1);
+  h.config.columns.find((c) => c.id === 'manual').parentTaskId = 'captain-task';
+  h.show('delegated', { id: 'manual', userInitiated: true });
+  assert.equal(h.events.filter((e) => e.type === 'show').length, 3);
 });
 test('input/completion share a turn; resume/cancel cannot cause a second alert; 30s sound cooldown', () => {
   const h = harness();

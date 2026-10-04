@@ -382,23 +382,30 @@ new terminal, so an agent launching the app cannot disable independent CLI histo
 
 ## Desktop notifications
 
-Only the Captain alerts the user: when a reply finishes and stays quiet for 12
+The Captain alerts the user when a reply finishes and stays quiet for 12
 seconds, or when its terminal stops at a confirmation/input prompt. Completion
-is still a screen/quiet-output heuristic; a silent tool can look idle. Workers
+is still a screen/quiet-output heuristic; a silent tool can look idle. Independent
+manual terminals also alert when a turn submitted by the user (composer or raw
+terminal) finishes and stays quiet for 12 seconds. Automatic sends, startup,
+restored history and resumed sessions do not arm manual alerts; a new user
+submission is required after every restart or renderer reload. Workers
 never create notifications, popups, sounds or Dock badges, including while peeked
 or moved to the foreground. Worker questions and receipts go to the Captain.
 
 - Uses native macOS Notification Center / Windows system notifications, with
-  title 「队长」 and the reply's first sentence (at most 60 Unicode characters).
-  Clicking restores the exact Captain column without redirecting a stale ID.
+  title 「队长」 or the manual terminal's title and the reply's first sentence
+  (at most 60 Unicode characters). Clicking restores the exact column without
+  redirecting a stale ID.
 - Settings (gear icon) independently toggle system notifications and sound.
   macOS offers Glass or Tink, played for at most one second at 35% playback volume.
   Windows uses its default notification sound; unavailable native notifications
   are gracefully skipped.
-- Sound is muted when AgentDeck is focused and the Captain column is visible.
+- Sound is muted when AgentDeck is focused and the notifying column is visible.
   Each turn alerts once (including input followed by completion); sounds from
   consecutive turns are at least 30 seconds apart. Resumed work retracts an old
   notification. Settings persist in the local profile.
+- Confirmation detection requires dialog controls (options, y/n or a confirmation
+  footer). Prose such as Gemini's “waiting for confirmation” is not a prompt.
 - macOS requires notification permission and a signed application. OS Focus /
   Do Not Disturb can suppress banners. See the [Electron native notification API](https://www.electronjs.org/docs/latest/api/notification).
 
