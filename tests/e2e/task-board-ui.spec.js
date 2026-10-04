@@ -402,9 +402,11 @@ test('需要你: the card shows the question, the drawer takes an answer and sen
   await expect(detail.locator('.tbv-d-file')).toHaveText('/Users/demo/docs/security/password-policy.md');
   const copy = detail.locator('.tbv-d-files .tbv-copy');
   await expect(copy).toHaveAttribute('aria-label', '复制路径');
+  const saved = await page.evaluate(async () => await window.deck.clipboardRead()); // put the machine's clipboard back afterwards
   await copy.click();
   await expect(copy).toHaveClass(/ok/);
-  expect(await page.evaluate(() => window.deck.clipboardRead())).toBe('/Users/demo/docs/security/password-policy.md');
+  expect(await page.evaluate(async () => await window.deck.clipboardRead())).toBe('/Users/demo/docs/security/password-policy.md');
+  await page.evaluate((text) => window.deck.clipboardWrite(text), saved);
   // an empty answer is not sent; a refresh in between keeps what was typed
   await detail.locator('.tbv-send').click();
   expect((await captainNotices()).length).toBe(1);
@@ -429,35 +431,13 @@ test('需要你: the card shows the question, the drawer takes an answer and sen
   // 移到 in the drawer is the same move as a drag; the terminal icon opens the session
   await detail.locator('.tbv-d-moves button[data-status="needs_user"]').click();
   await expect.poll(() => readCard('p-ask').status).toBe('needs_user');
-  const go = detail.locator('.tbv-d-open');
-  await expect(go).toHaveAttribute('aria-label', '打开「密码策略」的终端');
+  expect(readCard('p-ask').session_id).toBeNull(); // a move lets go of the session, so no terminal icon is left
+  await expect(detail.locator('.tbv-d-open')).toHaveCount(0);
   await card('r-export').click();
+  await expect(detail.locator('.tbv-d-open')).toHaveAttribute('aria-label', '打开「导出报表」的终端');
   await detail.locator('.tbv-d-open').click();
   await expect(page.locator('#taskBoardView')).toBeHidden();
   await expect.poll(() => page.evaluate(() => [activeView, focusedId])).toEqual(['terminals', 'w-report']);
-  expect(errors).toEqual([]);
-});
-
-test('crew map: 队长 shows how many sessions are working as the big number in a box no taller than its content', async () => {
-  await launch();
-  await resize(1440, 900);
-  await page.evaluate(() => { showView('board'); if (CrewMap.mode() !== 'crew') CrewMap.setMode('crew'); });
-  const captain = page.locator('.cm-node.kind-captain');
-  await expect(captain.locator('.cm-stat')).toHaveText(['3干活中', '1失败', '1已完成']);
-  const g = await captain.evaluate((n) => {
-    const size = (s) => parseFloat(getComputedStyle(n.querySelector(s)).fontSize);
-    const box = n.getBoundingClientRect(), scale = box.height / n.offsetHeight;
-    const inner = [...n.querySelectorAll('.cm-top, .cm-stats, .cm-stat')].map((x) => x.getBoundingClientRect());
-    return { height: n.offsetHeight, working: size('.cm-stat[data-status="working"] b'), failed: size('.cm-stat[data-status="failed"] b'), title: size('.cm-title'),
-      slack: (box.bottom - Math.max(...inner.map((r) => r.bottom))) / scale, inside: inner.every((r) => r.right <= box.right && r.bottom <= box.bottom) };
-  });
-  expect(g.working).toBeGreaterThanOrEqual(30);
-  expect(g.working).toBeGreaterThan(g.failed);
-  expect(g.failed).toBeGreaterThan(g.title);
-  expect(g.height).toBeLessThanOrEqual(100);
-  expect(g.inside).toBe(true);
-  expect(g.slack, 'no empty band under the numbers').toBeLessThanOrEqual(16);
-  await screenshot('5-crewmap-captain-1440x900-dark');
   expect(errors).toEqual([]);
 });
 

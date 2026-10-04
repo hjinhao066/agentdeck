@@ -1908,9 +1908,10 @@ function buildColumn(col, isFresh) {
       // any future bindings keep their behavior.
       if (e.type === 'keydown' && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey &&
           (e.key === 'v' || e.key === 'V' || e.code === 'KeyV')) {
-        const text = window.deck.clipboardRead();
-        if (text) term.paste(text);
-        else pasteImageAsPath(); // clipboard holds an image (screenshot) → paste its temp-file path
+        window.deck.clipboardRead().then((text) => {
+          if (text) term.paste(text);
+          else pasteImageAsPath(); // clipboard holds an image (screenshot) → paste its temp-file path
+        }).catch(() => {});
         e.preventDefault();
         return false;
       }
@@ -3807,6 +3808,7 @@ function focusColumnByIndex(idx) {
 }
 document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos
+  if (e.target.closest && e.target.closest('.tbv-answer')) return; // 需要你 answer box: Cmd+Enter sends the answer
   const k = e.key;
   let handled = true;
   if (k === 'n' || k === 'N') {

@@ -46,8 +46,6 @@ test('the map follows the ledger: one line from 队长 to each session it handed
   assert.equal(map.nodes[1].line, '文档写好了');
   assert.equal(map.nodes[2].kind, 'waiting');
   assert.equal(map.captain.line, '1 干活中 · 1 排队 · 1 已完成');
-  assert.deepEqual(map.captain.stats, [{ status: 'working', count: 1, label: '干活中' }, { status: 'queued', count: 1, label: '排队' }, { status: 'done', count: 1, label: '已完成' }]);
-  assert.deepEqual(C.captainStats({ failed: 2 }), [{ status: 'working', count: 0, label: '干活中' }, { status: 'failed', count: 2, label: '失败' }], '干活中 always shows, even at 0');
 });
 
 test('archived sessions fold away by default and come back faded on request', () => {

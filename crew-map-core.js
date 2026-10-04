@@ -170,7 +170,7 @@
       captain = {
         id: c.id, kind: 'captain', title: oneLine(c.title, 60) || '队长', provider: c.provider || '', model: c.model || '',
         status: st, statusLabel: st === 'idle' ? (c.alive === false ? '已退出' : '待命') : STATUS_LABEL[st], detail: '',
-        line: summaryLine(counts), stats: captainStats(counts), live: '', archived: false, review: false,
+        line: summaryLine(counts), live: '', archived: false, review: false,
       };
     }
     return {
@@ -178,13 +178,6 @@
       archivedCount: all.filter((n) => n.archived).length,
       hiddenArchived: all.length - visible.length,
     };
-  }
-
-  // The 队长 card's numbers: 干活中 always first (0 included, it is the one the
-  // user looks for), then every other status that has sessions.
-  function captainStats(counts) {
-    const order = ['working', 'input', 'queued', 'failed', 'done', 'stopped', 'idle'];
-    return order.filter((s) => s === 'working' || counts[s]).map((s) => ({ status: s, count: counts[s] || 0, label: STATUS_LABEL[s] }));
   }
 
   // 「2 干活中 · 1 待补充 · 3 已完成」 for the 队长 card.
@@ -413,5 +406,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine, captainStats };
+  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
 });

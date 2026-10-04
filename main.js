@@ -903,6 +903,8 @@ app.whenReady().then(async () => {
     } catch (_) {}
     checkQuotaBark();
   });
+  handleMain('clipboard-read', async () => String(await clipboard.readText() || ''));
+  onMain('clipboard-write-sync', (e, payload) => { if (payload && typeof payload.text === 'string' && payload.text.length <= 1000000) clipboard.writeText(payload.text); e.returnValue = true; });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME, version: app.getVersion(),
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),

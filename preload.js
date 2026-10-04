@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
@@ -11,8 +11,9 @@ contextBridge.exposeInMainWorld('deck', {
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
   quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
   onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
-  clipboardWrite: (t) => clipboard.writeText(t),
-  clipboardRead: () => clipboard.readText(),
+  // `clipboard` is not exposed to a sandboxed preload any more: go through the main process.
+  clipboardWrite: (t) => { ipcRenderer.sendSync('clipboard-write-sync', { text: String(t) }); },
+  clipboardRead: () => ipcRenderer.invoke('clipboard-read'), // a Promise<string>
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
   getPathForFile: (file) => webUtils.getPathForFile(file),
   // Retired bridge: main only removes old spools; it never writes new ones.

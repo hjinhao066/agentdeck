@@ -8,7 +8,7 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 240, nodeH: 176, captainW: 340, captainH: 96, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, pad: 40 };
+  const NODE = { nodeW: 240, nodeH: 176, captainW: 340, captainH: 140, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, pad: 40 };
   const DRAG_PX = 4;
   let host = null;
   let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn;
@@ -102,20 +102,7 @@
       returned.title = '结果已交回队长';
       foot.appendChild(returned);
     }
-    if (node.kind === 'captain') {
-      // 队长: name and state on one row, then how many sessions are working (the
-      // big number) / failed / done. Nothing else, so the box is only that tall.
-      top.prepend(title);
-      const stats = el('div', 'cm-stats');
-      (node.stats || []).forEach((s) => {
-        const stat = el('span', 'cm-stat');
-        stat.dataset.status = s.status;
-        stat.append(el('b', null, String(s.count)), el('span', null, s.label));
-        stats.appendChild(stat);
-      });
-      stats.setAttribute('aria-label', node.line);
-      n.append(top, stats);
-    } else n.append(top, title, line, liveLine, foot);
+    n.append(top, title, line, liveLine, foot);
     n.title = node.kind === 'waiting' ? node.title
       : `${node.title}\n${node.line || ''}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`.trim();
     n.addEventListener('pointerdown', (e) => startCardDrag(e, n, node, box));
