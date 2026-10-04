@@ -20,8 +20,8 @@ async function waitForShell(id) {
     await expect.poll(() => page.evaluate((i) => {
       const t = terms.get(i);
       const screen = t?.term ? dumpScreen(t.term) : (t?.lastScreen || '');
-      return { ready: MainCore.isWindowsShellPrompt(screen), screen };
-    }, id), { timeout: 15000 }).toMatchObject({ ready: true });
+      return MainCore.isWindowsShellPrompt(screen) ? '[PowerShell ready]' : screen;
+    }, id), { timeout: 15000 }).toBe('[PowerShell ready]');
   } else {
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), id), { timeout: 15000 }).not.toBe('node');
   }
@@ -535,9 +535,18 @@ test('keys typed while a receipt is being entered are held and follow it; the bo
   const read = (screenText) => page.evaluate(async (text) => {
     const entry = terms.get('cap-y');
     entry.typing.lastKeyAt = 0; entry.typing.unknown = false; entry.typing.draft = '';
-    entry.term.reset();
-    await new Promise((resolve) => entry.term.write(text, resolve));
-    return userComposing('cap-y');
+    // Synthetic screens must not reset the live xterm independently of
+    // ConPTY's screen, which would corrupt subsequent shell redraws.
+    const live = entry.term;
+    const probe = new Terminal({ cols: live.cols, rows: live.rows });
+    try {
+      entry.term = probe;
+      await new Promise((resolve) => probe.write(text, resolve));
+      return userComposing('cap-y');
+    } finally {
+      entry.term = live;
+      probe.dispose();
+    }
   }, screenText);
   const rule = '─'.repeat(30);
   expect(await read(`⏺ done\r\n${rule}\r\n> half a sentence\r\n${rule}\r\n`)).toBe(true);
@@ -551,7 +560,6 @@ test('keys typed while a receipt is being entered are held and follow it; the bo
   })).toBe(true);
   await page.evaluate(() => { terms.get('cap-y').typing.lastKeyAt = 0; });
   expect(await page.evaluate(() => userComposing('cap-y'))).toBe(false);
-  await page.evaluate(() => terms.get('cap-y').term.reset());
 });
 
 test('screen receipts and questions never settle tasks; only ended turns get a three-minute fallback', async () => {
