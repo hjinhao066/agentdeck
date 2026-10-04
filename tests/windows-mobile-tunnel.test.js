@@ -51,7 +51,8 @@ test('loading the installer does not touch the live tunnel directory', () => {
   assert.equal(typeof main, 'function');
 });
 
-test('a partial flag does not fall through to the macOS installer', () => {
+// On Windows these flags are the real Windows path (and --platform win32 alone would install for real), so this is POSIX-only.
+test('a partial flag does not fall through to the macOS installer', { skip: process.platform === 'win32' ? 'on Windows these flags take the Windows path' : false }, () => {
   assert.throws(() => main(['--dry-run']), /macOS installer was not run/);
   assert.throws(() => main(['--platform', 'win32']), /Re-run with --dry-run/);
   liveUnchanged();
