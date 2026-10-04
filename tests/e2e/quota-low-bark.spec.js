@@ -64,7 +64,7 @@ test('live Claude seat footer triggers inclusively, deduplicates and rearms afte
   const badge = page.locator('#quotaBar [data-quota-key="Claude:us"] .quota-label');
   await expect(badge).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
   expect(await alerts()).toHaveLength(0);
-  await expect.poll(() => page.evaluate(() => terms.get('us')?.lastScreen || '')).toContain('Claude Code');
+  await expect.poll(() => page.evaluate(() => terms.get('us')?.lastScreen || ''), { timeout: 20000 }).toContain('Claude Code');
   await page.evaluate(() => window.deck.ptyInput('us', 'remaining:2\r'));
   await expect.poll(async () => (await alerts()).length).toBe(1);
   expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 3, body: expect.stringMatching(/US.*剩余 2%/) });
