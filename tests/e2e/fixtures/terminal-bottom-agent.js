@@ -7,7 +7,7 @@ function size() {
   if (process.platform !== 'win32') return process.stdout;
   // stdout can still reference the inactive console buffer after 1049h. A
   // fresh CONOUT$ handle measures the active ConPTY buffer, including shrink.
-  const stream = new (require('tty').WriteStream)(fs.openSync('CONOUT$', 'w'));
+  const stream = new (require('tty').WriteStream)(fs.openSync('CONOUT$', 'r+'));
   const current = { rows: stream.rows, columns: stream.columns };
   stream.destroy();
   return current;
