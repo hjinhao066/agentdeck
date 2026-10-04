@@ -548,6 +548,15 @@
     return !base || SHELL_NAMES.test(base);
   }
 
+  function afterReplay(screen) {
+    const lines = String(screen || '').split('\n');
+    let from = 0;
+    lines.forEach((line, i) => {
+      if (/^\s*── 上次输出回放[，；]|以上为上次会话的输出/.test(line)) from = i + 1;
+    });
+    return lines.slice(from).join('\n');
+  }
+
   // ConPTY has no foreground-process name. Ignore old agent chrome above the
   // latest PowerShell prompt, including prompts wrapped across terminal rows.
   function windowsAgentOutput(screen) {
@@ -591,7 +600,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

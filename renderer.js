@@ -3516,14 +3516,10 @@ setInterval(() => {
     // below the separator is live, so classification must not
     // see the replayed part. Once real output scrolls the separator out of the
     // 40-line window this is a no-op.
-    const sep = text.lastIndexOf('以上为上次会话的输出');
-    if (sep >= 0) {
-      const nl = text.indexOf('\n', sep);
-      text = nl >= 0 ? text.slice(nl + 1) : '';
-    }
+    text = MainCore.afterReplay(text);
     entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
     if (entry.alive) {
-      let st = classify(statusScreen(entry.term), entry);
+      let st = classify(MainCore.afterReplay(statusScreen(entry.term)), entry);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
