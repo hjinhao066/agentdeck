@@ -39,6 +39,10 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   Only the Captain notifies; all workers (including peeked/foreground sessions)
   are silent. Mute sound when the focused window shows the Captain, with at least
   30 seconds between sounds. Never re-enable legacy watch-ai spools.
+  `notify-user --message ... [--urgent]` uses the authenticated Captain board
+  channel; urgent additionally sends Bark critical/volume=4/sound=minuet. Read
+  the device key from the locally configured file only in the main process;
+  never log/return/store its contents. Test profiles must stub phone delivery.
 - Automatic input (队长 receipts, work handed to a session) must never go through
   an input box holding text the user has not sent: gate on `userComposing` and pass
   `guardUserInput` to `ChatUI.sendPrompt`. Never press Enter on the user's behalf

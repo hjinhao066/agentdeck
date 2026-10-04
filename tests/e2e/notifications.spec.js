@@ -121,6 +121,8 @@ test('settings use accessible icon/switch controls and persist both toggles and 
   await page.getByRole('switch', { name: '系统通知', exact: true }).uncheck();
   await page.getByRole('switch', { name: '提示音', exact: true }).uncheck();
   if (process.platform === 'darwin') await page.getByLabel('选择提示音').selectOption('Tink');
+  await page.getByLabel('Bark 本机密钥文件路径', { exact: true }).fill(process.platform === 'win32' ? 'C:\\Users\\demo\\bark-key.txt' : '/Users/demo/.secrets/bark-key.txt');
+  await page.getByLabel('Bark 本机密钥文件路径', { exact: true }).press('Tab');
   const shotDir = process.env.AGENTDECK_NOTIFY_SCREENSHOTS;
   if (shotDir) {
     fs.mkdirSync(shotDir, { recursive: true });

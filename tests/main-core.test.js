@@ -269,6 +269,8 @@ test('a finished background session is archived only after 10 quiet minutes with
 
 test('队长 is told about background work, the limit and automatic archiving', () => {
   const text = M.instructions();
+  assert.match(text, /notify-user --message/);
+  assert.match(text, /需要用户亲自登录\/授权.*notify-user --urgent/);
   assert.match(text, /后台跑[^\n]*最多 15 个会话在干活[^\n]*自动排队/);
   assert.match(text, /10 分钟后会自动归档[^\n]*tell 发给它会自动恢复/);
 });

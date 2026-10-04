@@ -90,6 +90,7 @@ function usage() {
     '  complete --result "Useful final result"\n' +
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
+    '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
     '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|cursor|grok | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
@@ -109,6 +110,16 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const action = args._[0];
   if (!action || action === 'help' || args.help) { usage(); return; }
+
+  if (action === 'notify-user') {
+    if (typeof args.message !== 'string' || !args.message.trim() || args.message.length > 4000 ||
+        (args.urgent !== undefined && args.urgent !== true)) {
+      fail('notify-user requires --message (1–4000 characters) and optional --urgent.');
+    }
+    const response = await request({ action: 'main-notify-user', message: args.message, urgent: args.urgent === true }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
 
   if (action === 'create-child' || action === 'spawn-child') {
     const title = String(args.title || '').trim();

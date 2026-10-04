@@ -540,6 +540,9 @@
     const s = state();
     if (!s || !caller || !isMain(caller)) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
+      case 'main-notify-user':
+        return { done: true, visible: host.captainColumnVisible(caller.id),
+          turnId: host.terms.get(caller.id)?.captainTurnId || message.id };
       case 'main-stop':
       case 'main-archive': {
         const id = String(message.to || '').trim();

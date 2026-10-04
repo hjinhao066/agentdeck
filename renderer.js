@@ -101,12 +101,14 @@ let config = {
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
   boardResponses: {}, boardPositions: {}, globalViewMode: 'chat',
   captainNotifications: NotificationPolicy.normalizeSettings(),
+  barkKeyFile: '',
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
 };
 const saved = window.deck.loadConfig();
 if (saved) {
   config.captainNotifications = NotificationPolicy.normalizeSettings(saved.captainNotifications);
+  config.barkKeyFile = typeof saved.barkKeyFile === 'string' ? saved.barkKeyFile : '';
   config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
@@ -497,6 +499,7 @@ function openNotificationSettings() {
   document.getElementById('captainSoundEnabled').checked = settings.sound;
   document.getElementById('captainSoundTone').value = settings.tone;
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
+  document.getElementById('barkKeyFile').value = config.barkKeyFile;
   dialog.showModal();
 }
 function saveNotificationSettings() {
@@ -505,6 +508,7 @@ function saveNotificationSettings() {
     sound: document.getElementById('captainSoundEnabled').checked,
     tone: document.getElementById('captainSoundTone').value,
   });
+  config.barkKeyFile = document.getElementById('barkKeyFile').value.trim();
   saveConfig();
 }
 function buildChrome() {
@@ -2820,6 +2824,8 @@ function respondBoard(requestId, payload) {
     result: BoardCore.cleanText(payload.result, 12000),
     error: BoardCore.cleanText(payload.error, 2000),
     childId: BoardCore.cleanText(payload.childId, 160),
+    visible: typeof payload.visible === 'boolean' ? payload.visible : undefined,
+    turnId: typeof payload.turnId === 'string' ? payload.turnId.slice(0, 120) : undefined,
     snapshot: payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : undefined,
     updatedAt: Date.now(),
   };
@@ -3087,7 +3093,7 @@ document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
-['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone'].forEach((id) => {
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile'].forEach((id) => {
   document.getElementById(id).addEventListener('change', saveNotificationSettings);
 });
 buildChrome();
@@ -3119,7 +3125,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
-  captainTurnStarted, captainTurnDone,
+  captainTurnStarted, captainTurnDone, captainColumnVisible,
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);

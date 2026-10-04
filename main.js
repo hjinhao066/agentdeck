@@ -6,11 +6,13 @@ const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
 const { createNotifications } = require('./notifications');
+const { createNotifyUser } = require('./notify-user');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 let mainWindow = null;
 let notifications = null;
+let notifyUser = null;
 let sidePane = null;
 let pendingFocusColumn = null;
 
@@ -325,7 +327,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'status',
-        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+        'main-ledger', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -649,8 +651,15 @@ app.whenReady().then(() => {
   });
   onMain('pty:kill', (_e, { id, keepReplay }) => killPty(id, !!keepReplay));
 
-  onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
-    const peek = pendingBoardCommands.get(requestId)?.command.action === 'main-peek';
+  onMain('board:response', async (_e, { requestId, done, result, error, childId, snapshot, visible, turnId }) => {
+    const pending = pendingBoardCommands.get(requestId);
+    const peek = pending?.command.action === 'main-peek';
+    if (pending?.command.action === 'main-notify-user' && !error) {
+      // Replayed renderer acknowledgements share one delivery, including Bark.
+      pending.notifyPromise ||= notifyUser(pending.command, visible === true, turnId);
+      try { result = await pending.notifyPromise; }
+      catch (err) { error = err.message; }
+    }
     pendingBoardCommands.delete(requestId);
     writeBoardResponse(requestId, {
       done: !!done,
@@ -903,6 +912,13 @@ app.whenReady().then(() => {
       execFile('/usr/bin/afplay', ['-v', '0.35', '-t', '1', `/System/Library/Sounds/${tone}.aiff`],
         { timeout: 2000 }, () => {});
     } });
+  notifyUser = createNotifyUser({ getConfig: () => notificationConfig, notifications,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      // Never retain the device key in the test trace either.
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testCaptainAlerts.push({ type: 'bark', ...payload });
+      return { ok: true, json: async () => ({ code: 200 }) };
+    } } : {}) });
   onMain('notify-state', (_event, payload) => {
     if (payload && ptys.has(payload.id)) notifications.show(payload);
   });

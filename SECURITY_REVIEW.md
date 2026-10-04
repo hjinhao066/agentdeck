@@ -109,3 +109,15 @@ Reference: [Electron security guidance](https://www.electronjs.org/docs/latest/t
   external hooks still receive the existing native-notifications environment guard.
   macOS native banners require OS permission and a signed executable, which
   source E2E with notification doubles does not verify.
+
+- `notify-user` reuses the capability-authenticated board channel and renderer
+  Captain check; the main process rechecks current `isMain` before any effects.
+  Replayed acknowledgements share one in-flight delivery promise. CLI alerts use
+  the current Captain turn ID so automatic completion cannot ring twice.
+- Bark has no generic renderer HTTP/file-reading API. Configuration stores only
+  the file path; main reads a bounded, plain device-key file for explicit urgent
+  requests and posts to fixed `https://api.day.app/push`, never a key-bearing URL.
+  Redirects are rejected, network timeout is 8 seconds, HTTP/API failures return
+  generic hints, and no key or upstream error body is logged or returned.
+  Missing/unreadable/invalid keys skip phone delivery after the local alert.
+  Test profiles stub the transport and record only nonsecret Bark fields.

@@ -19,6 +19,9 @@
     <label class="notify-setting"><span>提示音</span><input type="checkbox" role="switch" id="captainSoundEnabled" aria-label="提示音" /></label>
     <label class="notify-setting"><span>选择提示音</span><select id="captainSoundTone" aria-label="选择提示音"><option value="Glass">Glass</option><option value="Tink">Tink</option></select></label>
     <p class="notify-settings-note">正在前台看队长时静音；30 秒内不重复响铃。Windows 使用系统默认提示音。</p>
+    <label class="bark-key-setting" for="barkKeyFile">Bark 本机密钥文件路径</label>
+    <input type="text" id="barkKeyFile" placeholder="留空则不发手机提醒" autocomplete="off" spellcheck="false" aria-describedby="barkKeyNote" />
+    <p id="barkKeyNote">仅紧急提醒发到手机，用于登录、授权、付款确认。文件仅含设备 key；这里只保存路径。手机需开启 Bark 重要警告权限。</p>
   </dialog>
   <nav id="colNav" aria-label="对话列表">
     <div id="navHead"></div>

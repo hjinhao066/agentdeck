@@ -326,6 +326,25 @@ or moved to the foreground. Worker questions and receipts go to the Captain.
 - macOS requires notification permission and a signed application. OS Focus /
   Do Not Disturb can suppress banners. See the [Electron native notification API](https://www.electronjs.org/docs/latest/api/notification).
 
+The Captain can request an explicit alert through the same authenticated board
+channel: `node "$AGENTDECK_BOARD_CLI" notify-user --message "请亲自登录"` (PowerShell:
+`node "$env:AGENTDECK_BOARD_CLI" ...`). It follows local notification/audio settings,
+foreground muting, per-turn deduplication and the 30-second sound interval.
+Workers cannot use this command.
+
+Add `--urgent` only when the user must personally log in, authorize, or confirm a
+payment. This additionally sends a phone Bark alert, independently of local mute
+settings, with `level=critical`, `volume=4`, `sound=minuet`. Settings → 队长提醒 →
+Bark 本机密钥文件路径 accepts an absolute path (or `~/...` on macOS) to a UTF-8 file
+containing only the device key. Store that file outside the repository, keep it
+private, and do not paste its contents into commands or settings. Only the path
+is saved in local configuration. Enable Bark's critical-alert permission on the
+phone. An absent/invalid file or failed delivery prints a short CLI hint and
+does not prevent the local alert. There are no automatic retries or phone alerts
+on worker completion. The key is read only by the main process and sent in the
+JSON body to the fixed HTTPS `/push` endpoint; redirects and secret-bearing error
+output are blocked. See the [official Bark API parameters](https://github.com/Finb/Bark/blob/master/docs/en-us/params.md).
+
 The legacy watch-ai bridge is disabled, including with `AGENTDECK_LEGACY_WATCH=1`,
 to avoid bypassing this policy. Child terminals export
 `AGENTDECK_NATIVE_NOTIFICATIONS=1`; external hooks must honor that guard. For the

@@ -171,6 +171,8 @@ test('peek sends the id and default or requested row count and prints only live 
 
 test('Captain stop/archive and tell flags use the authenticated request channel', async () => {
   for (const [args, expected] of [
+    [['notify-user', '--message', '请登录'], { action: 'main-notify-user', message: '请登录', urgent: false }],
+    [['notify-user', '--message', '请授权', '--urgent'], { action: 'main-notify-user', message: '请授权', urgent: true }],
     [['stop', '--id', 'worker'], { action: 'main-stop', to: 'worker' }],
     [['archive', '--id', 'worker'], { action: 'main-archive', to: 'worker' }],
     [['tell', '--to', 'worker', '--message', 'new plan', '--replace', '--now'], { action: 'main-tell', to: 'worker', message: 'new plan', replace: true, now: true }],
@@ -196,4 +198,14 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
     assert.notEqual(r.code, 0);
     assert.match(r.stderr, /requires --id/);
   }
+});
+
+test('notify-user rejects missing/empty/oversized messages and invalid urgent values', async () => {
+  for (const args of [[], ['--message'], ['--message', ' '], ['--message', 'a'.repeat(4001)],
+    ['--message', 'login', '--urgent=false']]) {
+    const r = await runCli(['notify-user', ...args], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(r.code, 1); assert.match(r.stderr, /notify-user requires --message/);
+  }
+  const r = await runCli(['notify-user', '--message', 'login'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.equal(r.code, 1); assert.match(r.stderr, /Only conductor-managed terminals/);
 });

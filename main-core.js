@@ -87,6 +87,7 @@
       '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。只有两件事你自己做：读写进度看板（见第 13 条），以及只读的 sysctl vm.swapusage（见第 14 条）。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
+      `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机系统通知和提示音；--urgent 额外发手机 Bark。需要用户亲自登录/授权或付款确认时，用 notify-user --urgent；普通队员完成不发提醒。`,
       `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
       `   ${cli} stop --id 会话id                 发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
