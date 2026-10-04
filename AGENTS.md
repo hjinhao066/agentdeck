@@ -92,6 +92,14 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   every column has a separate capability restricted to submitting its own
   complete/ask/progress commands. Nothing new
   is exposed to the page: the existing board request channel carries it.
+- Task boards (`task-board.js`, `task-heartbeat.js`): shared UTF-8 JSON in
+  `~/.agents/boards/tasks`, fresh reads and atomic writes; invalid synced JSON
+  is never overwritten. UI uses the fixed `TaskBoard` bridge documented in
+  `docs/task-board-api.md`. A Gemini dispatcher has only one exception to the
+  submission-only capability: `main-new` for its explicitly assigned card, once.
+  The zero-token watcher/poll heartbeat claims only new start edges, not content
+  changes or worker activity; respect durable claims and held cards. Tests must
+  use the isolated profile task store and stand-in agents, never real shared data.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded
   (no terminal restart, no new main-process read); they never enter its model context.

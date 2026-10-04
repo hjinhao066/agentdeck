@@ -41,7 +41,7 @@ function sleep(ms) {
 async function request(command, waitForCompletion) {
   const controlDir = process.env.AGENTDECK_CONTROL_DIR;
   const submission = ['complete', 'ask', 'progress', 'session-exit'].includes(command.action);
-  const token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN;
+  const token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN || (command.action === 'main-new' && process.env.AGENTDECK_RECEIPT_TOKEN);
   if (!controlDir || !token) {
     fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
   }
@@ -96,8 +96,12 @@ function usage() {
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
+    '  task add --project "Project" --title "Task" [--detail "Description"] [--depends id,id] [--verify]\n' +
+    '  task list [--project "Project"] [--status todo|doing|review|needs_user|done]\n' +
+    '  task move --id <card-id> --status todo|doing|review|needs_user|done\n' +
+    '  task archive --done [--project "Project"]\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
-    '  new --title "One line" --task "Task" [--cwd path] [--agent claude|agy|cursor|grok | --command "launch"]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--task-id <card-id>] [--cwd path] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
     '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
@@ -190,6 +194,27 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'task') {
+    const op = args._[1];
+    if (!['add', 'list', 'move', 'archive'].includes(op)) fail('task requires add, list, move or archive.');
+    const input = {};
+    for (const key of ['project', 'title', 'detail', 'id', 'status']) {
+      if (args[key] !== undefined) {
+        if (typeof args[key] !== 'string' || key !== 'detail' && !args[key].trim()) fail(`task --${key} requires a value.`);
+        input[key] = args[key];
+      }
+    }
+    if (args.depends !== undefined) {
+      if (typeof args.depends !== 'string') fail('--depends requires comma-separated ids.');
+      input.depends_on = args.depends.split(',').map((v) => v.trim()).filter(Boolean);
+    }
+    if (args.verify !== undefined && args.verify !== true) fail('--verify is a boolean flag.');
+    input.verify = args.verify === true;
+    input.done = args.done === true;
+    const response = await request({ action: 'main-task', op, input }, false);
+    process.stdout.write(`${response.result}\n`);
+    return;
+  }
   if (action === 'stop' || action === 'archive') {
     const id = typeof args.id === 'string' ? args.id.trim() : '';
     if (!id) fail(`${action} requires --id.`);
@@ -221,11 +246,14 @@ async function main() {
     const title = String(args.title || '').trim();
     const task = String(args.task || args._.slice(1).join(' ')).trim();
     if (!title || !task) fail('new requires --title and --task.');
+    for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     const response = await request({
       action: 'main-new', title, task,
       agent: typeof args.agent === 'string' ? args.agent : '',
       command: typeof args.command === 'string' ? args.command : '',
       cwd: typeof args.cwd === 'string' ? args.cwd : '',
+      project: typeof args.project === 'string' ? args.project : '',
+      boardId: typeof args['task-id'] === 'string' ? args['task-id'] : '',
     }, false);
     process.stdout.write(`${response.result}\n`);
     return;

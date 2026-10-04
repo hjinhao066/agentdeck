@@ -52,6 +52,8 @@
       "pages.js",
       "main-core.js",
       "main-session.js",
+      "task-board.js",
+      "task-heartbeat.js",
       "crew-map-core.js",
       "crew-map.js",
       "side-pane.js",
