@@ -3542,6 +3542,7 @@ function focusColumnByIndex(idx) {
   const shown = deckColumns();
   const col = shown[Math.max(0, Math.min(idx, shown.length - 1))];
   if (!col) return;
+  TaskBoardUI.close();
   if (activeView === 'board') {
     selectBoardNode(col.id, true);
     return;
@@ -3735,7 +3736,6 @@ CrewMap.init({
 });
 // 任务看板 covers whichever view is showing; opening it hides any page.
 TaskBoardUI.init({
-  showToast,
   sessionLabel: (id) => {
     const col = columns.find((c) => c.id === id) || (config.archived || []).find((a) => a.id === id);
     return col ? columnLabel(col) : null;

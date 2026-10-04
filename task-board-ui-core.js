@@ -1,5 +1,5 @@
-// Pure helpers behind the 任务看板 view: which column a card sits in, project
-// filter, the two sort orders, dependency/parallel marks and the archive call.
+// Pure helpers behind the 任务看板 view: project columns, status labels,
+// project filter, the two sort orders and dependency/parallel marks.
 // Cards come from TaskBoard.list (docs/task-board-api.md). No DOM: runs in the
 // page and in tests.
 (function (root, factory) {
@@ -10,8 +10,8 @@
   'use strict';
 
   // The data layer's five statuses, plus 失败 for cards flagged failed (a failed
-  // card stays doing/review in the file; the board pulls it out so it is seen).
-  const COLUMNS = [
+  // card stays doing/review in the file; its label makes the failure visible).
+  const STATUSES = [
     { key: 'todo', label: '待办' },
     { key: 'doing', label: '进行中' },
     { key: 'review', label: '待验收' },
@@ -24,9 +24,9 @@
 
   const time = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? t : 0; };
 
-  function columnOf(card) {
+  function statusOf(card) {
     if (card.flag === 'failed') return 'failed';
-    return COLUMNS.some((c) => c.key === card.status) ? card.status : 'todo';
+    return STATUSES.some((c) => c.key === card.status) ? card.status : 'todo';
   }
 
   // Projects that have at least one visible card, in name order.
@@ -72,25 +72,23 @@
   }
 
   // The whole board for one render: visible (non-archived) cards of the chosen
-  // project, split into the columns above, each sorted, each card decorated.
+  // project, split into project columns, each sorted, each card decorated.
   function buildBoard(allCards, opts = {}) {
     const sort = SORTS.includes(opts.sort) ? opts.sort : 'updated';
     const index = new Map(allCards.map((c) => [c.id, c]));
     const live = allCards.filter((c) => !c.archived);
-    const shown = sortCards(filterProject(live, opts.project || ALL), sort);
-    const columns = COLUMNS.map((c) => ({ ...c, cards: [] }));
+    const projectNames = projects(live);
+    const project = projectNames.includes(opts.project) ? opts.project : ALL;
+    const shown = sortCards(filterProject(live, project), sort);
+    const columns = projectNames.filter((p) => !project || p === project).map((p) => ({ key: p, label: p, cards: [] }));
     const byKey = new Map(columns.map((c) => [c.key, c]));
     shown.forEach((card) => {
       const waits = waitsOn(card, index);
-      byKey.get(columnOf(card)).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits) });
+      const status = statusOf(card);
+      const statusLabel = STATUSES.find((s) => s.key === status).label;
+      byKey.get(card.project).cards.push({ card, status, statusLabel, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits) });
     });
-    return { columns, projects: projects(allCards), total: shown.length };
-  }
-
-  // 「已完成」一键归档: the data layer's archiveDone, scoped to the filtered
-  // project (all projects when the filter is 全部). Never writes files itself.
-  function archiveDone(api, project) {
-    return project ? api.archiveDone(project) : api.archiveDone();
+    return { columns, projects: projectNames, project, total: shown.length };
   }
 
   function formatUpdated(iso, now = Date.now()) {
@@ -114,5 +112,5 @@
     return '未派活';
   }
 
-  return { COLUMNS, SORTS, ALL, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, archiveDone, formatUpdated, ownerLabel };
+  return { STATUSES, SORTS, ALL, statusOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, formatUpdated, ownerLabel };
 });

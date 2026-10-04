@@ -10,14 +10,16 @@ const card = (id, extra) => ({ id, project: 'agentdeck', title: id, status: 'tod
 const ids = (col) => col.cards.map((c) => c.card.id);
 const column = (board, key) => board.columns.find((c) => c.key === key);
 
-test('cards group by data-layer status, failed flag pulled into its own column', () => {
+test('cards group by project and retain status labels, including failed cards', () => {
   const board = U.buildBoard([
     card('a'), card('b', { status: 'doing' }), card('c', { status: 'review' }), card('d', { status: 'needs_user' }),
-    card('e', { status: 'done' }), card('f', { status: 'doing', flag: 'failed' }), card('g', { status: 'done', archived: true }),
+    card('e', { status: 'done' }), card('f', { project: 'other', status: 'doing', flag: 'failed' }), card('g', { status: 'done', archived: true }),
   ]);
-  assert.deepEqual(board.columns.map((c) => c.key), ['todo', 'doing', 'review', 'needs_user', 'done', 'failed']);
-  assert.deepEqual(board.columns.map((c) => c.label), ['待办', '进行中', '待验收', '等用户', '已完成', '失败']);
-  assert.deepEqual(board.columns.map(ids), [['a'], ['b'], ['c'], ['d'], ['e'], ['f']]);
+  assert.deepEqual(board.columns.map((c) => c.key), ['agentdeck', 'other']);
+  assert.deepEqual(board.columns.map((c) => c.label), ['agentdeck', 'other']);
+  assert.deepEqual(board.columns.map(ids), [['a', 'b', 'c', 'd', 'e'], ['f']]);
+  assert.deepEqual(board.columns.flatMap((c) => c.cards.map((item) => item.status)), ['todo', 'doing', 'review', 'needs_user', 'done', 'failed']);
+  assert.deepEqual(board.columns.flatMap((c) => c.cards.map((item) => item.statusLabel)), ['待办', '进行中', '待验收', '等用户', '已完成', '失败']);
   assert.equal(board.total, 6, 'archived cards are not shown');
 });
 
@@ -25,27 +27,28 @@ test('project filter keeps one project; 全部 keeps all; project list is sorted
   const cards = [card('a', { project: 'zeta' }), card('b', { project: '阿尔法' }), card('c', { project: 'agentdeck' }),
     card('d', { project: 'old', archived: true, status: 'done' })];
   assert.deepEqual(U.buildBoard(cards, { project: 'zeta' }).columns[0].cards.map((c) => c.card.id), ['a']);
+  assert.deepEqual(U.buildBoard(cards, { project: 'zeta' }).columns.map((c) => c.key), ['zeta']);
   assert.equal(U.buildBoard(cards, { project: U.ALL }).total, 3);
   assert.deepEqual(U.buildBoard(cards).projects, ['agentdeck', 'zeta', '阿尔法'].sort((a, b) => a.localeCompare(b)));
   assert.ok(!U.projects(cards).includes('old'));
 });
 
-test('sort by updated is newest first; sort by order follows project/order/id', () => {
+test('sort by updated and order applies within each project column', () => {
   const cards = [
     card('x1', { project: 'b', order: 0, updated: '2026-10-01T10:00:00Z' }),
     card('x2', { project: 'a', order: 2, updated: '2026-10-03T10:00:00Z' }),
     card('x3', { project: 'a', order: 1, updated: '2026-10-02T10:00:00Z' }),
     card('x0', { project: 'a', order: 1, updated: '2026-10-02T10:00:00Z' }),
   ];
-  assert.deepEqual(ids(column(U.buildBoard(cards, { sort: 'updated' }), 'todo')), ['x2', 'x0', 'x3', 'x1']);
-  assert.deepEqual(ids(column(U.buildBoard(cards, { sort: 'order' }), 'todo')), ['x0', 'x3', 'x2', 'x1']);
-  assert.deepEqual(ids(column(U.buildBoard(cards, { sort: 'bogus' }), 'todo')), ['x2', 'x0', 'x3', 'x1'], 'unknown sort falls back to updated');
+  assert.deepEqual(U.buildBoard(cards, { sort: 'updated' }).columns.map(ids), [['x2', 'x0', 'x3'], ['x1']]);
+  assert.deepEqual(U.buildBoard(cards, { sort: 'order' }).columns.map(ids), [['x0', 'x3', 'x2'], ['x1']]);
+  assert.deepEqual(U.buildBoard(cards, { sort: 'bogus' }).columns.map(ids), [['x2', 'x0', 'x3'], ['x1']], 'unknown sort falls back to updated');
 });
 
 test('dependencies: unfinished prerequisites read 等 X 完成, met ones are parallel', () => {
   const cards = [
-    card('pre', { title: '先做 A', status: 'doing' }),
-    card('old', { title: '旧的', status: 'done', archived: true }),
+    card('pre', { project: 'other', title: '先做 A', status: 'doing' }),
+    card('old', { project: 'other', title: '旧的', status: 'done', archived: true }),
     card('wait', { title: 'B', depends_on: ['pre', 'old'], flag: 'blocked' }),
     card('free', { title: 'C', depends_on: ['old'] }),
     card('lone', { title: 'D' }),
@@ -53,7 +56,7 @@ test('dependencies: unfinished prerequisites read 等 X 完成, met ones are par
     card('ghost', { title: 'F', depends_on: ['t-missing'] }),
     card('many', { title: 'G', depends_on: ['pre', 'wait', 'free'] }),
   ];
-  const todo = new Map(column(U.buildBoard(cards), 'todo').cards.map((c) => [c.card.id, c]));
+  const todo = new Map(column(U.buildBoard(cards, { project: 'agentdeck' }), 'agentdeck').cards.map((c) => [c.card.id, c]));
   assert.equal(todo.get('wait').waitLabel, '等「先做 A」完成');
   assert.equal(todo.get('wait').parallel, false);
   assert.equal(todo.get('free').waitLabel, '', 'an archived done prerequisite counts as finished');
@@ -62,16 +65,19 @@ test('dependencies: unfinished prerequisites read 等 X 完成, met ones are par
   assert.equal(todo.get('held').parallel, false);
   assert.equal(todo.get('ghost').waitLabel, '等「t-missing」完成');
   assert.equal(todo.get('many').waitLabel, '等「先做 A」、「B」 等 3 项完成');
-  const doing = column(U.buildBoard(cards), 'doing').cards[0];
+  const doing = column(U.buildBoard(cards), 'other').cards[0];
   assert.equal(doing.parallel, false, 'only todo cards are marked parallel');
 });
 
-test('archive goes through the data layer archiveDone, scoped to the filtered project', async () => {
-  const calls = [];
-  const api = { archiveDone: (...args) => { calls.push(args); return Promise.resolve({ cards: [], notices: [] }); } };
-  await U.archiveDone(api, 'agentdeck');
-  await U.archiveDone(api, U.ALL);
-  assert.deepEqual(calls, [['agentdeck'], []]);
+test('an archived-only or removed project filter returns all visible projects immediately', () => {
+  const cards = [card('a'), card('old', { project: 'old', status: 'done', archived: true })];
+  for (const project of ['old', 'removed']) {
+    const board = U.buildBoard(cards, { project });
+    assert.equal(board.project, U.ALL);
+    assert.deepEqual(board.columns.map(ids), [['a']]);
+  }
+  assert.deepEqual(U.buildBoard([]).columns, []);
+  assert.equal(U.archiveDone, undefined, 'read-only UI has no archive helper');
 });
 
 test('owner and updated labels', () => {
