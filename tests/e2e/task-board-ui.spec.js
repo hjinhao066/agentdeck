@@ -81,7 +81,7 @@ async function launch() {
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
-  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  if (profile) fs.rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   application = null;
 });
 

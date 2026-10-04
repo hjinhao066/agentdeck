@@ -98,6 +98,7 @@ test('all raw terminals hold scrollback during output and input, then follow on 
 test('new cards and receipts preserve the reading position in every chat including Captain', async () => {
   for (const id of [captain, worker]) {
     await page.evaluate((id) => {
+      jumpToColumn(columns.find((c) => c.id === id));
       ChatUI.setMode(id, 'chat');
       for (let i = 0; i < 30; i++) ChatUI.addCard(id, { id: id + '-card-' + i, title: 'Task ' + i, colId: id, status: 'working' });
     }, id);
@@ -170,7 +171,7 @@ test('the copied peek CLI returns fresh ANSI-free rows without moving or writing
 
 test('new prompts and completed replies leave older chat content in place', async () => {
   for (const id of [captain, worker]) {
-    await page.evaluate((id) => ChatUI.setMode(id, 'chat'), id);
+    await page.evaluate((id) => { jumpToColumn(columns.find((c) => c.id === id)); ChatUI.setMode(id, 'chat'); }, id);
     const scroll = col(id).locator('.chat-scroll');
     await scroll.evaluate((s) => { s.scrollTop = 100; });
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
