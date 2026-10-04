@@ -192,7 +192,7 @@ test('dragging a session into a folder moves its column, and the order persists'
   expect(await alive('ws-d')).toBe(true);
 });
 
-test('archive keeps the conversation; restore brings the session back with it', async () => {
+test('archive keeps the conversation; restore brings the session back with it', { tag: '@smoke' }, async () => {
   const col = page.locator('.column[data-col-id="ws-a"]');
   await col.locator('.composer textarea').click();
   await page.keyboard.type('remember the archive drill');

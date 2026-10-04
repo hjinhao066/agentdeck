@@ -207,7 +207,7 @@ test('sidebar entry, crew-map tab and the board: lanes, columns, colours, layout
   expect(errors).toEqual([]);
 });
 
-test('the board stays read-only and opens with no cards', async () => {
+test('the board stays read-only and opens with no cards', { tag: '@smoke' }, async () => {
   await launch();
   fs.rmSync(path.join(profile, 'tasks'), { recursive: true, force: true });
   await page.locator('#navTop .nav-row[data-nav="tasks"]').click();

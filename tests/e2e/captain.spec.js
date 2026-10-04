@@ -55,7 +55,7 @@ test.afterAll(async () => {
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
-test('there is one Captain: the sidebar entry creates it first, then just returns to it', async () => {
+test('there is one Captain: the sidebar entry creates it first, then just returns to it', { tag: '@smoke' }, async () => {
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeVisible();
   await page.locator('#mdCmd').fill('');           // a plain shell stands in for the agent
@@ -104,7 +104,7 @@ test('the Captain row cannot be dragged into a folder or onto the archive, nor a
   await expect(page.locator(`#navList .colnav-item.captain-item[data-col-id="${mainId}"]`)).toHaveCount(1);
 });
 
-test('new: a fresh column gets the task as its first message, and the receipt comes back', async () => {
+test('new: a fresh column gets the task as its first message, and the receipt comes back', { tag: '@smoke' }, async () => {
   // --command keeps the new column on the stand-in, never a real agent
   await run(mainId, `node "${CLI}" new --title "写周报" --task "please write the report" --command "${FAKE.replace(/"/g, '')}"`);
   await expect.poll(() => page.evaluate(() => columns.some((c) => c.displayTitle === '写周报'))).toBe(true);
@@ -136,7 +136,7 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
 });
 
-test('tell, ledger and read from the Captain terminal; a worker stuck on a confirmation goes to the Captain', async () => {
+test('tell, ledger and read from the Captain terminal; a worker stuck on a confirmation goes to the Captain', { tag: '@smoke' }, async () => {
   await run(mainId, `clear; node "${CLI}" tell --to cap-x --message "ask me first"`);
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: 'Worker x' });
   await expect(card).toHaveClass(/st-input/, { timeout: 30000 });
