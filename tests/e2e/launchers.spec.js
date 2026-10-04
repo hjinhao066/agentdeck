@@ -19,6 +19,7 @@ async function launch() {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
+  await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   await expect(page.locator('.column.chat-mode')).toHaveCount(3);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length)).toBe(3);
 }

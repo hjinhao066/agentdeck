@@ -182,7 +182,7 @@
     item.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       openMenu({ x: e.clientX, y: e.clientY }, [
-        { label: '打开对话', run: () => selectCaptain(col) },
+        { label: '打开对话', run: () => selectCaptain(col, 'chat') },
         { label: '打开终端', run: () => { host.jumpToColumn(col); host.showSideTerminal(); } },
       ]);
     });
@@ -251,10 +251,11 @@
       .filter(Boolean).join(' · ') || `${crewHead.ids.length} 个`;
     if (crewHead.counts.textContent !== text) crewHead.counts.textContent = text;
   }
-  // Selecting it shows its saved conversation.
-  function selectCaptain(col) {
+  // Selecting the row returns to the Captain's terminal; the explicit menu
+  // action still opens its conversation view.
+  function selectCaptain(col, view) {
     host.jumpToColumn(col);
-    if (!host.isChatMode(col.id)) host.setMode(col.id, 'chat');
+    if (view === 'chat') host.setMode(col.id, 'chat');
   }
 
   function folderBlock(g) {

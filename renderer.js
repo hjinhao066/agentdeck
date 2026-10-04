@@ -100,7 +100,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {}, boardPositions: {}, globalViewMode: 'chat',
+  boardResponses: {}, boardPositions: {}, globalViewMode: 'term',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
@@ -121,7 +121,9 @@ if (saved) {
   };
   if (typeof saved.captainRelayClaudeCommand === 'string') config.captainRelayClaudeCommand = saved.captainRelayClaudeCommand;
   config.captainNotifications = NotificationPolicy.normalizeSettings(saved.captainNotifications);
-  config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
+  // The last global toggle applies only during this run. Every launch starts
+  // in the terminal, even when an older config saved chat mode.
+  config.globalViewMode = 'term';
   if (saved.theme) config.theme = saved.theme;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
@@ -176,8 +178,8 @@ if (saved) {
       claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
-      // Relaunch follows the saved global choice; local overrides last this run.
-      view: config.globalViewMode,
+      // Relaunch always starts each session in the terminal.
+      view: 'term',
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       captainCrew: !!c.captainCrew,
@@ -400,6 +402,7 @@ let zoomedId = null;     // column temporarily maximized to fill the deck (Cmd+E
 function focusColumnInput(id) {
   const t = terms.get(id);
   if (!t) return;
+  if (focusedId !== id) ChatUI.setMode(id, 'term');
   if (!ChatUI.focusInput(id)) t.term.focus();
 }
 
@@ -517,6 +520,7 @@ function railBtn(svg, tip, onClick, accent) {
   return b;
 }
 function openNotificationSettings() {
+  if (focusedId) ChatUI.setMode(focusedId, 'term');
   const dialog = document.getElementById('notificationSettings');
   const settings = config.captainNotifications;
   document.getElementById('captainNotifyEnabled').checked = settings.enabled;
@@ -736,6 +740,7 @@ function selectBoardNode(columnId, focusTerminal) {
 
 function showView(view) {
   activeView = view === 'board' ? 'board' : 'terminals';
+  if (activeView === 'board' && focusedId) ChatUI.setMode(focusedId, 'term');
   config.activeView = activeView;
   SidePane.onViewChange();
   deckEl.hidden = activeView === 'board';
@@ -1869,6 +1874,7 @@ function buildColumn(col, isFresh) {
     // Buttons/grip/inline-rename keep their own behavior.
     wrap.addEventListener('mousedown', (e) => {
       if (e.target.closest('.icon-btn') || e.target.closest('.grip') || e.target.closest('[contenteditable="true"]')) return;
+      if (focusedId !== col.id) ChatUI.setMode(col.id, 'term');
       if (!ChatUI.onColumnMouseDown(col, e)) { term.focus(); focusedId = col.id; syncNav(); }
     });
 
@@ -2235,7 +2241,7 @@ function restoreArchived(id, focus, quiet) {
   if (!a) return null;
   config.archived = config.archived.filter((x) => x !== a);
   const { archivedAt, ...rest } = a;
-  const col = BoardCore.normalizeColumn({ ...rest, role: 'manual', relationship: 'Independent manual terminal' });
+  const col = BoardCore.normalizeColumn({ ...rest, role: 'manual', relationship: 'Independent manual terminal', view: 'term' });
   if (col.folderId && !config.folders.some((f) => f.id === col.folderId)) col.folderId = null;
   if (!quiet) {
     if (zoomedId) { zoomedId = null; updateColumnStyles(); }
@@ -2346,7 +2352,8 @@ function sendWhenReady(col, text, opts) {
 function addColumn(c) {
   const col = BoardCore.normalizeColumn({
     id: newId(), taskId: newTaskId(), width: defaultColWidth(), cwd: '',
-    role: 'manual', relationship: 'Independent manual terminal', view: config.globalViewMode, claudeSeatId: config.activeClaudeSeatId, ...c,
+    role: 'manual', relationship: 'Independent manual terminal', claudeSeatId: config.activeClaudeSeatId, ...c,
+    view: 'term',
   });
   insertColumn(col, true); // brand-new column: never auto-resume
   return col;
@@ -2509,6 +2516,7 @@ function jumpToColumn(col) {
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
   // Explicit navigation must bypass the IME drift guard. Focus only after
   // scrolling, otherwise focusin arms that guard and snaps the deck back.
+  ChatUI.setMode(col.id, 'term');
   isUserScrollingDeck = true;
   clearTimeout(userScrollTimeout);
   t.wrap.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
@@ -3146,7 +3154,11 @@ const deckHost = {
   addAndFocusColumn, removeCol, archiveColumn, restoreArchived, deleteArchived, moveSession, removeFolder,
   renameSession: (col, title) => setColumnDisplayTitle(col, title),
   lastTurnTs: (id) => ChatUI.lastTurnTs(id),
-  togglePage: (name) => { if (activeView === 'board') showView('terminals'); Pages.toggle(name); },
+  togglePage: (name) => {
+    if (activeView === 'board') showView('terminals');
+    if (focusedId) ChatUI.setMode(focusedId, 'term');
+    Pages.toggle(name);
+  },
   showSideTerminal: () => SidePane.show('terminal', true),
   // Schedule
   createSession, sendWhenReady,

@@ -35,6 +35,7 @@ async function launch() {
       `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
+  await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   page.on('dialog', (d) => d.accept());
 }
 
@@ -74,12 +75,12 @@ test('there is one Captain: the sidebar entry creates it first, then just return
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeHidden();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(mainId);
-  // the list row selects it too, and shows its conversation even from terminal view
+  // the list row selects it too and opens the terminal by default
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await page.evaluate((i) => ChatUI.setMode(i, 'term'), mainId);
   await row.click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(mainId);
-  await expect(page.locator(`.column[data-col-id="${mainId}"]`)).toHaveClass(/chat-mode/);
+  await expect(page.locator(`.column[data-col-id="${mainId}"]`)).not.toHaveClass(/chat-mode/);
   await expect(page.locator('#mainDialog')).toBeHidden();
   expect(await page.evaluate(() => columns.filter((c) => c.isMain).length)).toBe(1);
   await expect(page.locator('.colnav-item.captain-item')).toHaveCount(1);
@@ -806,7 +807,7 @@ test('after a restart the Captain row is still pinned and shows its saved conver
   await row.click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(id);
   const col = page.locator(`.column[data-col-id="${id}"]`);
-  await expect(col).toHaveClass(/chat-mode/);
+  await expect(col).not.toHaveClass(/chat-mode/);
   await expect(col.locator('.chat-scroll > .turn .task-card.st-done', { hasText: 'Worker y' })).toHaveCount(1);
   // the conversation from before the clear, from its saved file, read-only
   const turnsBefore = await page.evaluate((i) => ChatUI.turnsOf(i).length, id);

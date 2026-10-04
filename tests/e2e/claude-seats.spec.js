@@ -36,6 +36,7 @@ async function launch() {
   });
   page = await application.firstWindow();
   const count = saved.columns.length;
+  await page.evaluate(() => columns.forEach((col) => ChatUI.setMode(col.id, 'chat')));
   await expect(page.locator('.column.chat-mode')).toHaveCount(count);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|Codex CLI/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(count);
   await expect(page.locator('.claude-seat-rotate')).toBeEnabled({ timeout: 15000 });
