@@ -162,6 +162,7 @@ test('official numbers remain current between successful polls; rereading an old
   Q.observe(store, { ...api, at: now + 2000, official: false, source: '会话屏幕', exhausted: true, windows: [] }, now + 2000);
   Q.observe(store, api, now + 2000);
   assert.equal(Q.summary(store, 'Claude', now + 2000, seat).state, 'exhausted');
+  // A newer weekly-only sample cannot prove the 5-hour window has room.
   Q.observe(store, { ...api, at: now + 3000 }, now + 3000);
   assert.equal(Q.summary(store, 'Claude', now + 3000, seat).state, 'exhausted');
   Q.observe(store, { ...api, at: now + 4000, official: false, source: '会话屏幕', windows: [], resumed: true }, now + 4000);

@@ -3400,9 +3400,9 @@ window.addEventListener('claude-seat-changed', (e) => {
   if (e.detail?.seatId !== 'chatgpt') refreshQuota(e.detail?.seatId).catch(() => {});
 });
 document.getElementById('quotaRefresh').addEventListener('click', async (e) => {
-  const button = e.currentTarget; button.disabled = true;
+  const button = e.currentTarget; button.disabled = true; button.classList.add('spinning');
   try { await refreshQuota(); } catch (_) { showToast('额度查询暂不可用，保留上次采样'); }
-  finally { button.disabled = false; }
+  finally { button.disabled = false; button.classList.remove('spinning'); }
 });
 window.addEventListener('claude-seat-usage', () => readQuotaCache().catch(() => {}));
 readQuotaCache().catch(() => {});
@@ -3578,7 +3578,14 @@ function claudeCaptainSeatId() {
 // collapsed sidebar, in the popover under the top-bar gauge (#quotaPopList).
 function renderQuotaBar() {
   const items = QuotaCore.items(config.claudeSeats);
-  const summaries = items.map(({ provider, seat }) => QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId()));
+  const captainSeatId = claudeCaptainSeatId();
+  const summaries = items.map(({ provider, seat }) => QuotaCore.summary(config.quotas, provider, Date.now(), seat, captainSeatId));
+  // HH:MM, with MM-DD when the time is not within the next/last 24 hours.
+  const clock = (t) => {
+    const d = new Date(t), pad = (v) => String(v).padStart(2, '0');
+    return `${Math.abs(t - Date.now()) > 86400000 ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const NAMES = { Claude: 'Claude', Codex: 'ChatGPT', Cursor: 'Grok 4.7', Antigravity: 'Gemini' };
   for (const [bar, prefix] of [[document.getElementById('quotaBar'), 'quota-tip'], [document.getElementById('quotaPopList'), 'quota-pop-tip']]) {
     for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
     for (const [index, { provider, seat, key }] of items.entries()) {
@@ -3592,21 +3599,41 @@ function renderQuotaBar() {
         item.tabIndex = 0; // keyboard users can inspect the same tooltip; a click focuses and so pins it
         const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
         icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
-        const label = document.createElement('span'); label.className = 'quota-label';
-        const name = document.createElement('span'); name.className = 'quota-name';
-        const sampled = document.createElement('span'); sampled.className = 'quota-sampled';
+        const name = document.createElement('span'); name.className = 'quota-name'; name.setAttribute('aria-hidden', 'true');
+        const values = document.createElement('span'); values.className = 'quota-values';
         const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `${prefix}-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
         item.setAttribute('aria-describedby', tip.id);
-        item.append(icon, name, label, sampled, tip); bar.append(item);
+        item.append(icon, name, values, tip); bar.append(item);
       }
       const q = summaries[index];
-      const detail = q.detail + (seat ? ClaudeSeats.warmupDetail(seat.id) : '');
-      item.dataset.state = q.state;
-      item.setAttribute('aria-label', detail);
+      // Account = provider icon + flag only; the seat's full name stays in the tooltip.
+      const flag = seat && seat.id !== 'default' ? (seat.name.match(/\p{Regional_Indicator}{2}/u)?.[0] || seat.name.slice(0, 2)) : '';
+      const captain = seat && seat.id === captainSeatId;
+      const name = item.querySelector('.quota-name');
+      name.textContent = seat ? flag : NAMES[provider];
+      if (captain) name.insertAdjacentHTML('beforeend', `<span class="quota-captain">${ICONS.crown}</span>`);
+      // Right side: the 5-hour remaining %, or a status dot + recovery time while exhausted.
+      const values = item.querySelector('.quota-values');
+      const recovery = q.recoveryAt ? `↻${clock(q.recoveryAt)}` : '↻--:--';
+      if (q.out) {
+        const dot = document.createElement('span'); dot.className = 'quota-dot'; dot.setAttribute('aria-hidden', 'true');
+        const time = document.createElement('span'); time.className = 'quota-recovery'; time.textContent = recovery;
+        values.replaceChildren(dot, time);
+      } else {
+        const value = document.createElement('span');
+        const v = q.fiveHour;
+        value.className = `quota-value${v !== null && v <= 20 ? ' low' : ''}`;
+        // Whole percents keep the column aligned; the tooltip keeps the exact value.
+        value.textContent = v === null ? '—' : v < 1 ? '<1%' : `${Math.round(v)}%`;
+        values.replaceChildren(value);
+      }
+      const sampled = q.sampledAt ? `采样 ${clock(q.sampledAt)}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
+      const detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + (seat ? ClaudeSeats.warmupDetail(seat.id) : '');
+      const brief = [q.out && (q.recoveryAt ? `${clock(q.recoveryAt)} 恢复` : '恢复时间未知'),
+        q.fiveHour !== null && `5 小时剩余 ${q.fiveHour}%`, q.weekly !== null && `每周剩余 ${q.weekly}%`].filter(Boolean).join('，');
+      item.dataset.state = q.out ? 'exhausted' : q.state;
+      item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
       item.title = detail;
-      item.querySelector('.quota-label').textContent = q.displayLabel;
-      item.querySelector('.quota-name').textContent = q.name || (provider === 'Codex' ? 'ChatGPT' : provider);
-      item.querySelector('.quota-sampled').textContent = q.sampleLabel || '';
       item.querySelector('.quota-tooltip').textContent = detail;
       if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
     }
@@ -3614,7 +3641,7 @@ function renderQuotaBar() {
   }
   // The collapsed-sidebar gauge takes the colour of the provider closest to running out.
   const rank = { warning: 1, danger: 2, exhausted: 2 };
-  const worst = summaries.reduce((w, q) => (rank[q.state] || 0) > (rank[w] || 0) ? q.state : w, 'normal');
+  const worst = summaries.map((q) => q.out ? 'exhausted' : q.state).reduce((w, st) => (rank[st] || 0) > (rank[w] || 0) ? st : w, 'normal');
   const rail = document.getElementById('quotaRailBtn');
   if (rail) rail.dataset.state = worst;
 }

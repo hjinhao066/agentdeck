@@ -242,8 +242,42 @@ test('official success overrides a recent bound screen and supplies the reset fo
   const priorError = {};
   Q.observe(priorError, bind(Q.screen('Claude', 'Usage limit reached', [], now)), now);
   Q.observe(priorError, api, now + 1);
-  assert.equal(priorError[Q.seatKey(seat.id)].blocked.resetAt, now + 3600000);
-  assert.equal(Q.summary(priorError, 'Claude', now + 3600000, seat).state, 'normal');
+  // The newer official sample has room in both windows, so the older error is cleared.
+  assert.equal(priorError[Q.seatKey(seat.id)].blocked, undefined);
+  assert.equal(Q.summary(priorError, 'Claude', now + 1, seat).state, 'normal');
+});
+
+test('a newer official sample with room clears an older screen error; a newer 0% sample stays exhausted', () => {
+  const seats = Q.claudeSeats([{ id: 'us', configDir: '~/.claude-us' }, { id: 'cn', configDir: '~/.claude-cn' }]), store = {};
+  const official = (seat, at, five, week) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: five, resetText: new Date(now + 2 * 3600000).toISOString() },
+    { key: 'weekly', remaining: week, resetText: new Date(now + 5 * 86400000).toISOString() }] }, at),
+    seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: `${seat.id}-account`, credentialKey: `${seat.id}-cred` });
+  const error = (seat, at) => ({ ...Q.screen('Claude', "You've hit your limit", [], at), seatId: seat.id, configDir: seat.configDir, sourceColumnId: `${seat.id}-col` });
+  for (const seat of seats) {
+    Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: seat.id, at: now - 11 * 60000, identityOnly: true, configDir: seat.configDir, accountKey: `${seat.id}-account`, credentialKey: `${seat.id}-cred` }, now);
+    Q.observe(store, error(seat, now - 10 * 60000), now);
+    assert.equal(Q.summary(store, 'Claude', now, seat).state, 'exhausted');
+  }
+  // Stored state from an older build already holds the stale error next to the newer sample.
+  const persisted = JSON.parse(JSON.stringify(store));
+  Q.observe(store, official(seats[0], now, 93, 48), now);
+  Q.observe(store, official(seats[1], now, 0, 82), now);
+  const us = Q.summary(store, 'Claude', now, seats[0]), cn = Q.summary(store, 'Claude', now, seats[1]);
+  assert.equal(store['Claude:us'].blocked, undefined);
+  assert.equal(us.state, 'normal');
+  assert.deepEqual([us.fiveHour, us.weekly], [93, 48]);
+  assert.equal(cn.state, 'exhausted');
+  assert.equal(cn.recoveryAt, now + 2 * 3600000);
+  const text = Q.text(store, now, seats);
+  assert.doesNotMatch(text.split('\n')[0], /已用尽/);
+  assert.match(text.split('\n')[1], /已用尽/);
+  // Summary applies the same rule to a persisted error that observe never cleared.
+  persisted['Claude:us'].sample = official(seats[0], now, 93, 48);
+  assert.equal(Q.summary(persisted, 'Claude', now, seats[0]).state, 'normal');
+  // An error after the official sample is newer and still counts.
+  Q.observe(store, error(seats[0], now + 1000), now + 1000);
+  assert.equal(Q.summary(store, 'Claude', now + 1000, seats[0]).state, 'exhausted');
 });
 
 
@@ -320,4 +354,32 @@ test('official slot samples survive first identity observation but older samples
   assert.equal(Q.summary(restored, 'Claude', now + 2, seat).label, '未知');
   Q.observe(restored, { ...sample, at: now + 3 }, now + 3);
   assert.equal(Q.summary(restored, 'Claude', now + 3, seat).label, '80%');
+});
+
+test('any exhausted window (5-hour or weekly) shows exhausted with the recovery time for Gemini, ChatGPT and Claude', () => {
+  const store = {}, hour = 3600000;
+  Q.observe(store, Q.cacheAntigravity({ model: 'gemini-3.8-flash-high', quota: {
+    'gemini-5h': { remaining_fraction: 0.975, reset_time: new Date(now + 3 * hour).toISOString() },
+    'gemini-weekly': { remaining_fraction: 0, reset_time: new Date(now + 40 * hour).toISOString() } } }, now), now);
+  const gemini = Q.summary(store, 'Antigravity', now);
+  assert.deepEqual([gemini.out, gemini.statusText, gemini.fiveHour, gemini.recoveryAt], [true, '已用尽', 97.5, now + 40 * hour]);
+  // ChatGPT weekly rounded to 0% without the server's exhausted flag still counts as used up.
+  Q.observe(store, Q.codexServer({ rateLimits: { limitId: 'codex',
+    primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: Math.round((now + 2 * hour) / 1000) },
+    secondary: { usedPercent: 99.97, windowDurationMins: 10080, resetsAt: Math.round((now + 50 * hour) / 1000) } } }, now), now);
+  const codex = Q.summary(store, 'Codex', now);
+  assert.deepEqual([codex.out, codex.fiveHour, codex.recoveryAt], [true, 88, now + 50 * hour]);
+  const seat = { id: 'us', name: '🇺🇸 US', configDir: '~/.claude-us' };
+  Q.observe(store, { ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 64, resetText: new Date(now + hour).toISOString() },
+    { key: 'weekly', remaining: 0, resetText: new Date(now + 30 * hour).toISOString() }] }, now),
+    seatId: 'us', configDir: seat.configDir, accountBound: true, accountKey: 'us-account', credentialKey: 'us-cred' }, now);
+  const claude = Q.summary(store, 'Claude', now, seat);
+  assert.deepEqual([claude.out, claude.fiveHour, claude.recoveryAt], [true, 64, now + 30 * hour]);
+  // Both windows with room: not exhausted, 5-hour % is shown.
+  Q.observe(store, Q.codexServer({ rateLimits: { limitId: 'codex',
+    primary: { usedPercent: 59, windowDurationMins: 300, resetsAt: Math.round((now + 2 * hour) / 1000) },
+    secondary: { usedPercent: 30, windowDurationMins: 10080, resetsAt: Math.round((now + 50 * hour) / 1000) } } }, now + 1000), now + 1000);
+  const ok = Q.summary(store, 'Codex', now + 1000);
+  assert.deepEqual([ok.out, ok.fiveHour, ok.recoveryAt, ok.statusText], [false, 41, null, '正常']);
 });

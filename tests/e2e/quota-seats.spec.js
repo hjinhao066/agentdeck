@@ -28,29 +28,29 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 test('each Claude seat keeps its own windows and reset times, marks the real Captain seat and survives reload', async () => {
-  await expect(seat('us').locator('.quota-label')).toHaveText(/5h 19% ↻.* · 7d 91% ↻/, { timeout: 20000 });
-  await expect(seat('us').locator('.quota-name')).toHaveText('🇺🇸 US · 队长');
-  await expect(seat('cn').locator('.quota-label')).toHaveText('未知');
+  await expect(seat('us').locator('.quota-values')).toHaveText('19%', { timeout: 20000 });
+  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
+  await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
   await expect(seat('cn')).toHaveAttribute('title', /7d 无数据 ↻未知/);
 
   await page.evaluate(() => { config.activeClaudeSeatId = 'cn'; renderQuotaBar(); });
-  await expect(seat('us').locator('.quota-name')).toHaveText('🇺🇸 US · 队长'); // Switching the next seat is not switching the running Captain.
+  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/); // Switching the next seat is not switching the running Captain.
   // The same shared footer cannot populate the other seat.
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'quota-data\r'));
   await page.waitForTimeout(1800);
-  await expect(seat('cn').locator('.quota-label')).toHaveText('未知');
+  await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
   writeCache('cn', [65, 30]);
   await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
-  await expect(seat('cn').locator('.quota-label')).toHaveText(/5h 65% ↻.* · 7d 30% ↻/);
+  await expect(seat('cn').locator('.quota-values')).toHaveText('65%');
   await expect(seat('cn')).toHaveAttribute('title', /5h 65% ↻.*7d 30% ↻/s);
-  await expect(seat('us').locator('.quota-label')).toHaveText(/5h 19% ↻.* · 7d 91% ↻/);
+  await expect(seat('us').locator('.quota-values')).toHaveText('19%');
 
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'exhausted\r'));
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   await expect(seat('us')).toHaveAttribute('data-state', 'warning');
   await page.evaluate(() => flushConfig());
   await page.reload();
-  await expect(seat('us').locator('.quota-name')).toHaveText('🇺🇸 US · 队长');
+  await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   await expect(seat('us')).toHaveAttribute('title', /us\*\*\*@example.com/);
   const text = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
@@ -60,8 +60,8 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await page.evaluate(() => window.deck.ptyInput('us-column', 'statusline\r'));
   await expect.poll(async () => {
     await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
-    return seat('us').locator('.quota-label').textContent();
-  }, { timeout: 20000 }).toMatch(/5h 83% ↻.* · 7d 59% ↻/);
+    return seat('us').locator('.quota-values').textContent();
+  }, { timeout: 20000 }).toBe('83%');
   await expect(seat('us')).toHaveAttribute('title', /会话状态行/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   const after = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
@@ -70,7 +70,11 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   // Top bar tooltip, keyboard popover and board-cli quota share one summary.
   for (const id of ['us', 'cn']) {
     const title = await seat(id).getAttribute('title');
-    expect(after.split('\n')).toContain(title.replace(/\n/g, ' · '));
+    // The panel adds a status/sample-time header line above the shared summary.
+    expect(title).toMatch(/^状态：(正常|快用完|已用尽|未知) · /);
+    // Seat warmup lines follow the shared summary only in the panel tooltip.
+    const summary = title.split('\n').slice(1).join(' · ');
+    expect(after.split('\n').some((line) => line.startsWith('Claude / ') && summary.startsWith(line))).toBe(true);
     await expect(seat(id).getByRole('tooltip', { includeHidden: true })).toHaveText(title);
   }
 
