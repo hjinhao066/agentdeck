@@ -267,6 +267,14 @@ class MobileWebServer {
     const credential = this.credential(req, prefixed);
     // An explicit wrong credential must never fall back to a valid cookie.
     if (req.headers.authorization !== undefined && !credential) return this.unauthorized(res, this.loginBan(context.ip) || this.failedLogin(context.ip));
+    // Unauthenticated capability probe so the phone can tell a current machine
+    // that needs a login from an older build, which answers 401 to every path.
+    // Fixed, non-sensitive fields only; no hostname, token, device or app data.
+    if (req.method === 'GET' && route === '/api/info') {
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath'],
+        machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform },
+        appVersion: this.machine.appVersion });
+    }
     if (route === '/login' && req.method === 'POST') {
       const ban = this.loginBan(context.ip);
       if (ban) return this.unauthorized(res, ban);

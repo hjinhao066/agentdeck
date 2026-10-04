@@ -380,3 +380,36 @@ test('login item registration is supported on macOS and Windows only', () => {
   assert.equal(supportsLoginItem('win32'), true);
   for (const platform of ['linux', 'freebsd', '', undefined, null]) assert.equal(supportsLoginItem(platform), false);
 });
+
+test('api/info is an unauthenticated, fixed, non-sensitive probe that respects prefix, host and method rules and never counts as a login failure', async (t) => {
+  const m = await start(t, '/win/', 'Windows');
+  const response = await get(m, 'api/info');
+  assert.equal(response.status, 200);
+  assert.equal(response.headers['cache-control'], 'no-store');
+  assert.equal(response.headers['set-cookie'], undefined);
+  const body = JSON.parse(response.text);
+  assert.deepEqual(body, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'],
+    machine: { id: 'win', label: 'Windows', platform: 'win32' }, appVersion: '1.1.4' });
+  for (const secret of [m.status.token, 'OWENJH', 'captain']) assert.ok(!response.text.includes(secret), secret);
+  // Same answer with a cookie, and the probe ignores query-free credentials entirely.
+  const { cookie } = await login(m);
+  assert.deepEqual(JSON.parse((await get(m, 'api/info', { Cookie: cookie })).text), body);
+  // Prefix, host, method and URL rules still apply.
+  assert.equal((await raw(m.status, '/api/info')).status, 404);
+  assert.equal((await get(m, 'api/info', { Host: 'other.example' })).status, 403);
+  assert.equal((await get(m, 'api/info', { 'X-Forwarded-For': '1.1.1.1, 2.2.2.2' })).status, 403);
+  assert.equal((await raw(m.status, '/win/api/info?token=x', { headers: {} })).status, 400);
+  assert.equal((await post(m, 'api/info', {})).status, 401);
+  assert.equal((await get(m, 'api/info/')).status, 401);
+  // Unlimited probes never ban the caller; an explicit wrong credential still counts.
+  for (let i = 0; i < LOGIN_LIMITS.perIp * 3; i++) assert.equal((await get(m, 'api/info')).status, 200);
+  assert.equal((await post(m, 'login', { token: m.status.token })).status, 200);
+  assert.equal((await get(m, 'api/info', { Authorization: 'Bearer wrong' })).status, 401);
+  // Other machine reports its own identity; a legacy unprefixed loopback client is 'local'.
+  const mac = await start(t, '/mac/', 'Mac');
+  assert.equal(JSON.parse((await get(mac, 'api/info')).text).machine.id, 'mac');
+  const local = machine();
+  t.after(() => local.server.close());
+  const status = await local.server.configure({ enabled: true, port: 0 });
+  assert.equal(JSON.parse((await raw(status, '/api/info', { proxy: false })).text).machine.id, 'local');
+});

@@ -126,6 +126,12 @@ aria-label、键盘焦点、44px 点击面积；复制成功短暂变勾。深�
 | --- | --- | --- |
 | GET | `api/snapshot` | `{apiVersion:2, machine:{id,label,platform,hostname,appVersion}, now, csrfToken, captain:{id,title,status,turns}, sessions, boardVersion}`；一次返回手机总台每 5 秒需要的数据 |
 
+| GET | `api/info` | **无需登录**的能力探测：`{app:'agentdeck', apiVersion:2, capabilities:['snapshot','basePath'], machine:{id,label,platform}, appVersion}`；不含 hostname、token 或任何会话数据 |
+
+手机总台的判定：先请求 `api/info`。200＝新版（再请求 `api/snapshot`，401 即需要登录）；401 或 404＝旧版，
+旧版对前缀路径一律回 401，所以应显示「需要升级 AgentDeck」而不是登录框。`api/info` 仍受前缀、Host、
+Origin 和代理校验约束，不计入登录失败次数。
+
 `machine.id` 是前缀名（`win`），无前缀时为 `local`。`boardVersion` 是看板文件名、大小、mtime 的 16 位哈希，
 不含任何卡片内容，只在看板文件变化时改变，读取失败时为空字符串。`csrfToken` 与 `GET api/auth` 相同。
 
