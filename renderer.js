@@ -504,7 +504,9 @@ function buildChrome() {
   // Shown only while the sidebar is collapsed.
   const expandBtn = railBtn(ICONS.panelLeft, '展开侧边栏', () => setNavCollapsed(false));
   expandBtn.id = 'navExpandBtn';
-  tbLeft.append(expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
+  const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
+  boardBtn.id = 'boardViewBtn';
+  tbLeft.append(expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()), boardBtn);
 
   // Column widths: free (each column keeps its own width, drag the edges) or
   // N equal columns filling the deck; more than N keep that width and scroll.
@@ -525,11 +527,9 @@ function buildChrome() {
   tbSplit.after(globalViewBtn);
   applyFit();
 
-  const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
-  boardBtn.id = 'boardViewBtn';
   const sideBtn = railBtn(ICONS.panelRight, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle());
   sideBtn.id = 'sideToggleBtn';
-  tbRight.append(railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast()), boardBtn, sideBtn);
+  tbRight.append(railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast()), sideBtn);
 
   const brand = document.createElement('span');
   brand.className = 'nav-brand';

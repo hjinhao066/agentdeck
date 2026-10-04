@@ -12,9 +12,10 @@
   const DRAG_PX = 4;
   const FIT_MIN = 0.72;
   let host = null;
-  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, nodesEl, emptyEl, zoomLabel, archBtn;
+  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn;
   let mode = 'crew';
   let showArchived = false;
+  let showReturn = false;
   let lastSig = '';
   let lastMap = null;
   let lay = null;
@@ -138,19 +139,25 @@
     }
   }
   const MARK = { dispatch: 'cmArrowOut', review: 'cmArrowReview', ok: 'cmArrowBack', question: 'cmArrowBackBad', failed: 'cmArrowBackBad' };
+  function setShowReturn(v) { showReturn = !!v; saved().showReturn = showReturn; host.save(); redrawEdges(); }
   function drawEdges() {
     edgesEl.innerHTML = '<defs>' + Object.values(MARK).filter((v, i, a) => a.indexOf(v) === i).map((id) =>
       `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>`).join('') + '</defs>';
     const list = C.routes(lastMap, lay, NODE);
     // returns underneath, then reviews, dispatch on top
     ['return', 'review', 'dispatch'].forEach((type) => list.filter((r) => r.type === type).forEach((r) => {
-      svg('path', { class: 'cm-edge ' + r.cls, d: rounded(r.points), 'marker-end': `url(#${MARK[type === 'return' ? r.kind : type]})`, 'data-from': r.from, 'data-to': r.to });
+      const cl = 'cm-edge ' + r.cls + (type === 'return' && showReturn ? ' show' : '');
+      svg('path', { class: cl, d: rounded(r.points), 'marker-end': `url(#${MARK[type === 'return' ? r.kind : type]})`, 'data-from': r.from, 'data-to': r.to });
       if (type === 'return') chevrons(r.points, r.cls);
     }));
+  }
+  function redrawEdges() { if (lay) drawEdges(); }
     zonesEl.innerHTML = '';
-    lay.groups.forEach((g) => {
+    lay.groups.forEach((g, i) => {
       const group = el('section', 'cm-project' + (g.collapsed ? ' collapsed' : ''));
       group.dataset.project = g.key;
+      group.dataset.colorIndex = 'c' + (i % 5);
+      group.classList.add(`project-color-${i % 5}`);
       group.setAttribute('aria-label', g.name);
       place(group, g);
       const head = el('div', 'cm-project-head');
@@ -262,10 +269,13 @@
     archBtn.hidden = !map.archivedCount;
     archBtn.classList.toggle('on', showArchived);
     archBtn.title = showArchived ? `收起已归档（${map.archivedCount}）` : `显示已归档（${map.archivedCount}）`;
+    returnBtn.classList.toggle('on', showReturn);
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; lay = null; return; }
-    lay = C.applyPositions(C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects }), saved().positions, map.captain.id);
+    const vpWidth = vpEl.clientWidth;
+    const maxW = vpWidth > 800 ? vpWidth * 0.95 : 0;
+    lay = C.applyPositions(C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: maxW }), saved().positions, map.captain.id);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';
     drawEdges();
@@ -315,6 +325,7 @@
   function init(h) {
     host = h;
     host.config.crewMap = C.normalizeSaved(host.config.crewMap);
+    showReturn = host.config.crewMap.showReturn || false;
     viewEl = document.getElementById('boardView');
     rootEl = document.getElementById('crewMap');
     vpEl = rootEl.querySelector('.cm-viewport');
@@ -325,6 +336,7 @@
     emptyEl = rootEl.querySelector('.cm-empty');
     zoomLabel = rootEl.querySelector('[data-cm="zoom"]');
     archBtn = rootEl.querySelector('[data-cm="archived"]');
+    returnBtn = rootEl.querySelector('[data-cm="return"]');
     const on = (name, fn) => rootEl.querySelector(`[data-cm="${name}"]`).addEventListener('click', fn);
     on('archived', () => setShowArchived(!showArchived));
     on('out', () => view && zoomCenter(1 / 1.2));
@@ -332,6 +344,8 @@
     on('zoom', () => view && zoomCenter(1 / view.scale));
     on('fit', fit);
     on('relayout', relayout);
+    on('return', () => setShowReturn(!showReturn));
+    returnBtn.classList.toggle('on', showReturn);
     vpEl.addEventListener('pointerdown', (e) => { if (view) startPan(e); });
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -341,5 +355,5 @@
     setMode(host.config.crewMap.mode);
   }
 
-  window.CrewMap = { init, render, refresh, fit, relayout, mode: () => mode, setMode, setShowArchived, lastMap: () => lastMap, view: () => view && { ...view }, layout: () => lay };
+  window.CrewMap = { init, render, refresh, fit, relayout, mode: () => mode, setMode, setShowArchived, setShowReturn, lastMap: () => lastMap, view: () => view && { ...view }, layout: () => lay };
 })();

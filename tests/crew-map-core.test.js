@@ -218,8 +218,8 @@ test('saved positions win over the layout; saved state is checked on load', () =
   assert.equal(box.moved, true);
   assert.deepEqual([lay.captain.x, lay.captain.y], [5, 6]);
   const s = C.normalizeSaved({ mode: 'canvas', positions: { a: { x: 1.4, y: 2 }, b: { x: NaN, y: 1 } }, view: { x: 1, y: 2, scale: 99 } });
-  assert.deepEqual(s, { mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {} });
-  assert.deepEqual(C.normalizeSaved(null), { mode: 'crew', positions: {}, view: null, collapsedProjects: {} });
+  assert.deepEqual(s, { mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false });
+  assert.deepEqual(C.normalizeSaved(null), { mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false });
 });
 
 // '' when no straight stretch of one line lies on a stretch of another line

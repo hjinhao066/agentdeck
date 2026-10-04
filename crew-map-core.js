@@ -188,34 +188,58 @@
 
   // One Captain above side-by-side projects. Workers always occupy the first
   // row, declared reviewers the second; successful projects start folded.
+  // Multi-row layout: if maxWidth is set, wrap projects to next row if needed.
   function layout(map, opts) {
-    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40, fold: false, collapsedProjects: {}, ...opts };
+    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40, fold: false, collapsedProjects: {}, maxWidth: 0, ...opts };
     const pos = new Map(), groups = [];
     const shown = new Set(map.nodes.map((n) => n.id));
     const rowY = (r) => o.pad + o.captainH + o.fanY + 52 + (r - 1) * (o.nodeH + o.gapY);
-    let x = o.pad, fold = null;
-    map.projects.forEach((p) => {
+
+    // Calculate width for each project
+    const projectSizes = map.projects.map((p) => {
       const collapsed = typeof o.collapsedProjects[p.key] === 'boolean' ? o.collapsedProjects[p.key] : p.completed;
       const nodes = p.nodes.filter((n) => shown.has(n.id));
       const workers = nodes.filter((n) => !n.review), reviewers = nodes.filter((n) => n.review);
       const hasFold = o.fold && !p.key;
       const count = Math.max(workers.length + (hasFold ? 1 : 0), reviewers.length, 1);
       const w = collapsed ? 320 : count * o.nodeW + (count - 1) * o.gapX + 88;
-      const y = rowY(1) - 52;
       const h = collapsed ? 48 : 52 + o.nodeH + (reviewers.length ? o.gapY + o.nodeH : 0) + 54;
-      const group = { ...p, x, y, w, h, collapsed };
+      return { w, h, collapsed, workers: workers, reviewers: reviewers, hasFold, p };
+    });
+
+    // Multi-row layout: wrap at maxWidth
+    let x = o.pad, y = rowY(1) - 52, maxRowWidth = 0;
+    let groupRowIndex = 0;
+    let rowGroups = [], fold = null;
+
+    projectSizes.forEach((ps, idx) => {
+      const p = ps.p;
+      const nextX = x + ps.w + o.clusterGap;
+      const shouldWrap = o.maxWidth && nextX - o.pad > o.maxWidth && x > o.pad;
+
+      if (shouldWrap) {
+        groupRowIndex++;
+        x = o.pad;
+        y += (ps.h || 200) + 80;
+      }
+
+      const group = { ...p, x, y, w: ps.w, h: ps.h, collapsed: ps.collapsed };
       groups.push(group);
-      if (!collapsed) {
-        [workers, reviewers].forEach((row, r) => {
-          const start = hasFold && r === 0 ? x + 44 : x + (w - row.length * o.nodeW - Math.max(0, row.length - 1) * o.gapX) / 2;
+
+      if (!ps.collapsed) {
+        [ps.workers, ps.reviewers].forEach((row, r) => {
+          const start = ps.hasFold && r === 0 ? x + 44 : x + (ps.w - row.length * o.nodeW - Math.max(0, row.length - 1) * o.gapX) / 2;
           row.forEach((n, i) => pos.set(n.id, { x: start + i * (o.nodeW + o.gapX), y: rowY(r + 1), w: o.nodeW, h: o.nodeH, row: r + 1, project: p.key }));
         });
-        if (hasFold) fold = { x: x + w - o.nodeW - 44, y: rowY(1) + o.nodeH / 2 - 16, w: 150, h: 32 };
+        if (ps.hasFold) fold = { x: x + ps.w - o.nodeW - 44, y: rowY(1) + o.nodeH / 2 - 16, w: 150, h: 32 };
       }
-      x += w + o.clusterGap;
+
+      x = nextX;
+      maxRowWidth = Math.max(maxRowWidth, x);
     });
+
     const returnCount = map.edges.filter((e) => e.type === 'return').length;
-    const width = Math.max(o.pad + o.captainW, x - (groups.length ? o.clusterGap : 0)) + o.pad + returnCount * 7;
+    const width = Math.max(o.pad + o.captainW, maxRowWidth - (groups.length ? o.clusterGap : 0)) + o.pad + returnCount * 7;
     const captain = map.captain ? { x: (width - o.captainW) / 2, y: o.pad, w: o.captainW, h: o.captainH, row: 0 } : null;
     return { captain, nodes: pos, groups, fold, rowY, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
   }
@@ -344,7 +368,7 @@
     return out;
   }
 
-  // Saved state of the map: { mode, positions: { id: {x,y} }, view: { x, y, scale } }.
+  // Saved state of the map: { mode, positions: { id: {x,y} }, view: { x, y, scale }, showReturn, collapsedProjects }.
   function normalizeSaved(raw) {
     const s = raw && typeof raw === 'object' ? raw : {};
     const positions = {};
@@ -357,7 +381,7 @@
     const view = v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.scale)
       ? { x: v.x, y: v.y, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.scale)) } : null;
     const collapsedProjects = Object.fromEntries(Object.entries(s.collapsedProjects || {}).slice(0, 500).filter(([key, value]) => key.length <= 120 && typeof value === 'boolean'));
-    return { mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects };
+    return { mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn };
   }
   const MIN_SCALE = 0.3, MAX_SCALE = 1.6;
 
