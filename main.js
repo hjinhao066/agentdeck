@@ -1323,7 +1323,9 @@ app.on('before-quit', () => {
     // kill() only signals the shell. The master fd stays open and keeps
     // the process alive after will-quit, so Playwright never sees the exit.
     try { p.kill(); } catch (_) {}
-    try { if (typeof p.destroy === 'function') p.destroy(); } catch (_) {}
+    // Windows destroy() calls kill() again; closing one ConPTY twice corrupts
+    // the native heap. POSIX still needs destroy() to release its master fd.
+    try { if (!isWin && typeof p.destroy === 'function') p.destroy(); } catch (_) {}
 
     removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit

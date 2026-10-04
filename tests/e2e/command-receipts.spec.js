@@ -212,7 +212,9 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
   expect(reason).toMatch(/启动失败|终端进程退出/);
   expect(fs.existsSync(file)).toBe(false);
   const previous = workerEnv().AGENTDECK_RECEIPT_TOKEN;
+  const electronProcess = app.process();
   await closeElectron(app); app = null;
+  expect(electronProcess.exitCode).toBe(0);
   expect(fs.existsSync(path.join(dir, 'submit-worker.json'))).toBe(false);
   // Simulate a file left by an abnormal exit, then start the isolated app again.
   fs.writeFileSync(path.join(dir, 'stale.json'), '{}', { mode: 0o600 });

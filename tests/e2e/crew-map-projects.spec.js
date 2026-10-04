@@ -153,7 +153,7 @@ test('real authenticated new CLI stores project/reviews, rejects unknown targets
 test('new at the concurrency limit retains project/reviews in queue and applies them when the slot opens', async () => {
   await page.evaluate(() => {
     // Isolated stand-ins for occupied slots: no agent launches and no real data.
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < MainCore.MAX_ACTIVE; i++) {
       const id = 'busy-' + i;
       columns.push({ id, title: id, captainCrew: true });
       MainSession.state().tasks.push({ id: 'slot-' + i, colId: id, status: 'working', sentAt: Date.now(), gen: 1 });
