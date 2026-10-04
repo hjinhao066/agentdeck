@@ -182,13 +182,13 @@ function listen() {
     // Real agent TUIs disable the console's cooked input/echo. In ConPTY the
     // cooked echo otherwise scrolls long Captain briefings through the screen
     // and leaves them in later replies even after the stand-in redraws.
-    if (process.stdin.isTTY) process.stdin.setRawMode(true);
-    readline.createInterface({ input: process.stdin, terminal: false }).on('line', (line) => {
-    if (!line.trim() && !lines.length) return;
-    lines.push(line);
-    clearTimeout(timer);
-    timer = setTimeout(answer, 250);
-    });
+    // No output stream: readline handles raw editing keys without echoing them.
+    readline.createInterface({ input: process.stdin, terminal: true }).on('line', (line) => {
+      if (!line.trim() && !lines.length) return;
+      lines.push(line);
+      clearTimeout(timer);
+      timer = setTimeout(answer, 250);
+    }).on('SIGINT', () => process.exit(0));
   }
 }
 function start() {
