@@ -1,0 +1,318 @@
+# AgentDeck 三端入口：一个站点，按路径分流。适用于 Caddy 2.6.x（指令名是 basicauth，不是 basic_auth）。
+#
+#   /            静态总台（/srv/agentdeck-hub，无数据、无密钥）
+#   /machines.json 同上
+#   /mac/*       127.0.0.1:43122（Mac 的 SSH 反向隧道）
+#   /win/*       127.0.0.1:43123（Windows 的 SSH 反向隧道）
+#
+# 本文件只含这一个站点段落，由 install-caddy-site.sh 放进 /etc/caddy/Caddyfile，
+# 只替换 BEGIN/END 标记之间的内容，不动其他站点。口令哈希不在这里：
+# 由下面 import 的 /etc/caddy/agentdeck-basicauth.caddy 提供（脚本从现有站点段落里原样取出，不打印）。
+#
+# 路径前缀不剥掉（用 handle，不是 handle_path）：AgentDeck 自己校验并去掉前缀。
+
+# BEGIN agentdeck-three-ends (managed by deploy/vps; do not edit between markers)
+agentdeck.18-139-28-180.sslip.io {
+	# 第一层：全站 basicauth，覆盖静态总台、/mac/*、/win/*，也覆盖 404 路径。
+	import /etc/caddy/agentdeck-basicauth.caddy
+
+	# 访问日志不记 URI、请求头、响应头、登录用户名。
+	log {
+		output file /var/log/caddy/agentdeck-access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+				resp_headers delete
+				user_id delete
+			}
+		}
+	}
+
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		Cache-Control no-store
+	}
+
+	route {
+		# route 保证下面严格按书写顺序执行（裸 handle 会按匹配器特异度重排，守卫会跑到代理后面）。
+		# 含 ./、../ 或 // 的路径一律 404（用 expression 匹配原始路径；path_regexp 看到的是清理后的路径，拦不住）。Caddy 按"清理后"的路径选后端，却把原始路径转给后端，
+		# 两者不一致会让后端看到 /mac/../win/... 这种含糊路径；浏览器本来就不会发这种路径。
+		@ambiguous expression {http.request.orig_uri.path}.matches('//|(^|/)\\.\\.?(/|$)')
+		respond @ambiguous 404
+
+		# 代理段：去掉 Authorization，覆盖 Host / X-Forwarded-*，X-Forwarded-For 只放连接 IP。
+		# 目标不可达时（隧道断开）3 秒内失败，由 handle_errors 统一返回 502 {"offline":true}。
+		#
+		# 放行规则（四个 reverse_proxy 一致，只有登录/登出多一条 Set-Cookie 放行）：
+		#   - 只放行状态码 2xx/4xx/5xx 且 Content-Type 恰好是 application/json（或带参数）的响应；
+		#     3xx、1xx、304 一律换成 403 {"error":"blocked"}，后端不能用跳转把总台的 fetch 引到另一台机器。
+		#   - 两条 Content-Type 是「或」：不能写成 application/json*，那会把 application/json<script> 也放出去。
+		#   - Set-Cookie 只有 POST /<前缀>/login、/<前缀>/logout 才放行，且必须是本机的 cookie 名；
+		#     其余路径带 Set-Cookie 的响应一律 403（Caddy 2.6 没法逐条核对多个 Set-Cookie 的值，只能缩小到这两个路径）。
+		#   - header_down 只在 copy_response 抄响应时生效，拦下来的那一支（handle_response 兜底）自己再写头。
+		#     sandbox 让文档变成不透明源，读不到同源的另一个前缀；default-src 'none' 让脚本跑不起来。
+		handle /mac/* {
+			@mac_auth {
+				method POST
+				path /mac/login /mac/logout
+			}
+			handle @mac_auth {
+				reverse_proxy 127.0.0.1:43122 {
+					header_up -Authorization
+					header_up -Forwarded
+					header_up -X-Real-IP
+					header_up Host agentdeck.18-139-28-180.sslip.io
+					header_up X-Forwarded-Proto https
+					header_up X-Forwarded-For {remote_host}
+					transport http {
+						dial_timeout 3s
+					}
+
+					# 响应头强制盖成最严；跳转、刷新、清站点数据、下载、跨域放行这类头一律删掉，后端不能借它们影响同源的别的前缀。
+					header_down Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+					header_down X-Content-Type-Options nosniff
+					header_down X-Frame-Options DENY
+					header_down Cross-Origin-Resource-Policy same-origin
+					header_down Cache-Control no-store
+					header_down Content-Type "application/json; charset=utf-8"
+					header_down -Location
+					header_down -Refresh
+					header_down -Clear-Site-Data
+					header_down -Content-Disposition
+					header_down -Link
+					header_down -Access-Control-Allow-Origin
+					header_down -Access-Control-Allow-Credentials
+					header_down -Service-Worker-Allowed
+
+					@mac_json {
+						status 2xx 4xx 5xx
+						header Content-Type application/json
+						header Content-Type application/json;*
+						header !Set-Cookie
+					}
+					@mac_cookie {
+						status 2xx 4xx 5xx
+						header Content-Type application/json
+						header Content-Type application/json;*
+						header Set-Cookie __Secure-agentdeck_mac=*
+					}
+					handle_response @mac_json {
+						copy_response
+					}
+					handle_response @mac_cookie {
+						copy_response
+					}
+					# 非 JSON、没有 Content-Type、状态码不在 2xx/4xx/5xx、或 Set-Cookie 不是本机 cookie：整段换成 JSON。
+					# 用 403 而不是 502，避免和隧道断开时的 {"offline":true} 混在一起。
+					handle_response {
+						header Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+						header X-Content-Type-Options nosniff
+						header X-Frame-Options DENY
+						header Cross-Origin-Resource-Policy same-origin
+						header Cache-Control no-store
+						header Content-Type "application/json; charset=utf-8"
+						respond `{"error":"blocked"}` 403
+					}
+				}
+			}
+			handle {
+				reverse_proxy 127.0.0.1:43122 {
+					header_up -Authorization
+					header_up -Forwarded
+					header_up -X-Real-IP
+					header_up Host agentdeck.18-139-28-180.sslip.io
+					header_up X-Forwarded-Proto https
+					header_up X-Forwarded-For {remote_host}
+					transport http {
+						dial_timeout 3s
+					}
+
+					# 响应头强制盖成最严；跳转、刷新、清站点数据、下载、跨域放行这类头一律删掉，后端不能借它们影响同源的别的前缀。
+					header_down Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+					header_down X-Content-Type-Options nosniff
+					header_down X-Frame-Options DENY
+					header_down Cross-Origin-Resource-Policy same-origin
+					header_down Cache-Control no-store
+					header_down Content-Type "application/json; charset=utf-8"
+					header_down -Location
+					header_down -Refresh
+					header_down -Clear-Site-Data
+					header_down -Content-Disposition
+					header_down -Link
+					header_down -Access-Control-Allow-Origin
+					header_down -Access-Control-Allow-Credentials
+					header_down -Service-Worker-Allowed
+
+					@mac_json {
+						status 2xx 4xx 5xx
+						header Content-Type application/json
+						header Content-Type application/json;*
+						header !Set-Cookie
+					}
+					handle_response @mac_json {
+						copy_response
+					}
+					# 非 JSON、没有 Content-Type、状态码不在 2xx/4xx/5xx、或带任何 Set-Cookie：整段换成 JSON，不把后端页面交给浏览器。
+					handle_response {
+						header Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+						header X-Content-Type-Options nosniff
+						header X-Frame-Options DENY
+						header Cross-Origin-Resource-Policy same-origin
+						header Cache-Control no-store
+						header Content-Type "application/json; charset=utf-8"
+						respond `{"error":"blocked"}` 403
+					}
+				}
+			}
+		}
+
+		handle /win/* {
+			@win_auth {
+				method POST
+				path /win/login /win/logout
+			}
+			handle @win_auth {
+				reverse_proxy 127.0.0.1:43123 {
+					header_up -Authorization
+					header_up -Forwarded
+					header_up -X-Real-IP
+					header_up Host agentdeck.18-139-28-180.sslip.io
+					header_up X-Forwarded-Proto https
+					header_up X-Forwarded-For {remote_host}
+					transport http {
+						dial_timeout 3s
+					}
+
+					# 响应头强制盖成最严；跳转、刷新、清站点数据、下载、跨域放行这类头一律删掉，后端不能借它们影响同源的别的前缀。
+					header_down Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+					header_down X-Content-Type-Options nosniff
+					header_down X-Frame-Options DENY
+					header_down Cross-Origin-Resource-Policy same-origin
+					header_down Cache-Control no-store
+					header_down Content-Type "application/json; charset=utf-8"
+					header_down -Location
+					header_down -Refresh
+					header_down -Clear-Site-Data
+					header_down -Content-Disposition
+					header_down -Link
+					header_down -Access-Control-Allow-Origin
+					header_down -Access-Control-Allow-Credentials
+					header_down -Service-Worker-Allowed
+
+					@win_json {
+						status 2xx 4xx 5xx
+						header Content-Type application/json
+						header Content-Type application/json;*
+						header !Set-Cookie
+					}
+					@win_cookie {
+						status 2xx 4xx 5xx
+						header Content-Type application/json
+						header Content-Type application/json;*
+						header Set-Cookie __Secure-agentdeck_win=*
+					}
+					handle_response @win_json {
+						copy_response
+					}
+					handle_response @win_cookie {
+						copy_response
+					}
+					# 非 JSON、没有 Content-Type、状态码不在 2xx/4xx/5xx、或 Set-Cookie 不是本机 cookie：整段换成 JSON。
+					# 用 403 而不是 502，避免和隧道断开时的 {"offline":true} 混在一起。
+					handle_response {
+						header Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+						header X-Content-Type-Options nosniff
+						header X-Frame-Options DENY
+						header Cross-Origin-Resource-Policy same-origin
+						header Cache-Control no-store
+						header Content-Type "application/json; charset=utf-8"
+						respond `{"error":"blocked"}` 403
+					}
+				}
+			}
+			handle {
+				reverse_proxy 127.0.0.1:43123 {
+					header_up -Authorization
+					header_up -Forwarded
+					header_up -X-Real-IP
+					header_up Host agentdeck.18-139-28-180.sslip.io
+					header_up X-Forwarded-Proto https
+					header_up X-Forwarded-For {remote_host}
+					transport http {
+						dial_timeout 3s
+					}
+
+					# 响应头强制盖成最严；跳转、刷新、清站点数据、下载、跨域放行这类头一律删掉，后端不能借它们影响同源的别的前缀。
+					header_down Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+					header_down X-Content-Type-Options nosniff
+					header_down X-Frame-Options DENY
+					header_down Cross-Origin-Resource-Policy same-origin
+					header_down Cache-Control no-store
+					header_down Content-Type "application/json; charset=utf-8"
+					header_down -Location
+					header_down -Refresh
+					header_down -Clear-Site-Data
+					header_down -Content-Disposition
+					header_down -Link
+					header_down -Access-Control-Allow-Origin
+					header_down -Access-Control-Allow-Credentials
+					header_down -Service-Worker-Allowed
+
+					@win_json {
+						status 2xx 4xx 5xx
+						header Content-Type application/json
+						header Content-Type application/json;*
+						header !Set-Cookie
+					}
+					handle_response @win_json {
+						copy_response
+					}
+					# 非 JSON、没有 Content-Type、状态码不在 2xx/4xx/5xx、或带任何 Set-Cookie：整段换成 JSON，不把后端页面交给浏览器。
+					handle_response {
+						header Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+						header X-Content-Type-Options nosniff
+						header X-Frame-Options DENY
+						header Cross-Origin-Resource-Policy same-origin
+						header Cache-Control no-store
+						header Content-Type "application/json; charset=utf-8"
+						respond `{"error":"blocked"}` 403
+					}
+				}
+			}
+		}
+
+		# 其余一律是静态总台。安全头在这里加，总台不用内联脚本和样式。
+		handle {
+			root * /srv/agentdeck-hub
+			header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+			file_server {
+				hide .*
+			}
+		}
+	}
+
+	# Caddy 自己产生的错误：隧道不可达统一给手机一个 502 {"offline":true}；
+	# 其余（401 要求登录、静态 404）保持原状态码和空响应体，只补齐安全头。
+	# 后端自己返回的 4xx/5xx（含 AgentDeck 的 JSON 401）不经过这里，原样透传。
+	handle_errors {
+		header -Server
+		header Cache-Control no-store
+		header X-Content-Type-Options nosniff
+		@offline expression {http.error.status_code} in [502, 503, 504]
+		handle @offline {
+			header Content-Type application/json
+			respond `{"offline":true}` 502
+		}
+		handle {
+			respond "" {http.error.status_code}
+		}
+	}
+}
+# END agentdeck-three-ends
