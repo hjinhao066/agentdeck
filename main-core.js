@@ -78,9 +78,13 @@
     }
     return '';
   }
-  function contextResetEvidence(provider, before, after, output) {
+  function contextResetEvidence(provider, before, after, output, platform) {
     // Only output received AFTER a submitted reset command, never scrollback.
-    const text = String(output || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n');
+    // ConPTY redraws rows with cursor positioning instead of newline bytes.
+    // Keep column-one row boundaries before stripping styling; horizontal
+    // positioning within a row must not turn quoted text into a success line.
+    const rows = platform === 'win32' ? String(output || '').replace(/\x1b\[(?:\d*|\d*;(?:0|1)?)[Hf]/g, '\n') : String(output || '');
+    const text = rows.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n');
     if (/(?:unknown|unrecognized|unsupported) (?:slash )?command|(?:failed|could not|cannot) (?:to )?(?:clear|start|open)|not available|unavailable|try again|cancelled|canceled/i.test(text)) return false;
     const old = contextTokens(before), used = contextTokens(after);
     if (old !== null && used !== null && used < old / 2) return true;
@@ -598,6 +602,22 @@
     return !base || SHELL_NAMES.test(base);
   }
 
+  function afterReplay(screen, platform) {
+    if (platform !== 'win32') {
+      const text = String(screen || '');
+      const sep = text.lastIndexOf('以上为上次会话的输出');
+      if (sep < 0) return text;
+      const nl = text.indexOf('\n', sep);
+      return nl >= 0 ? text.slice(nl + 1) : '';
+    }
+    const lines = String(screen || '').split('\n');
+    let from = 0;
+    lines.forEach((line, i) => {
+      if (/^\s*── 上次输出回放[，；]|以上为上次会话的输出/.test(line)) from = i + 1;
+    });
+    return lines.slice(from).join('\n');
+  }
+
   // ConPTY has no foreground-process name. Ignore old agent chrome above the
   // latest PowerShell prompt, including prompts wrapped across terminal rows.
   function windowsAgentOutput(screen) {
@@ -641,7 +661,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

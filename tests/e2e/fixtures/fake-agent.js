@@ -34,7 +34,8 @@ if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
   }));
 }
 // A TUI redraws the current screen; old prompts must not look like a live menu.
-process.stdout.write('\x1b[?1049h');
+const delayedStart = process.argv.includes('--delayed-start');
+if (!delayedStart) process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 const captainStatusline = process.argv.includes('--captain-statusline');
 let model = captainStatusline ? 'Opus 5.5' : 'Fake';
@@ -96,7 +97,12 @@ function answer() {
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
   if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
-  if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
+  if (/ask me/.test(text)) {
+    // Redraw the confirmation like the other TUI replies. Raw input has no
+    // console echo to separate this turn from the previous input box/footer.
+    process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n\nProceed with the change? (y/n) ');
+    return;
+  }
   if (first === 'gemini confirmation regression') {
     process.stdout.write('\x1b[2J\x1b[HThinking: waiting for confirmation\n⠋ Working\nAntigravity\n');
     setTimeout(() => {
@@ -123,7 +129,11 @@ function answer() {
   if (text.includes('AgentDeck 约定') && !process.argv.includes('--screen-only')) {
     const args = [process.env.AGENTDECK_BOARD_CLI, 'complete', '--result', 'stand-in finished ' + first.slice(0, 30)];
     if (process.env.AGENTDECK_DEMO_FILE) args.push('--files', process.env.AGENTDECK_DEMO_FILE);
-    require('child_process').execFile(process.execPath, args, (error) => { if (error) process.stderr.write('Receipt submission failed\n'); });
+    require('child_process').execFile(process.execPath, args, (error, stdout, stderr) => {
+      if (process.env.AGENTDECK_TEST_RECEIPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_RECEIPTS_FILE,
+        JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, code: error?.code || 0, stdout, stderr }) + '\n');
+      if (error) process.stderr.write('Receipt submission failed\n');
+    });
   }
   if (process.argv.includes('--screen-only')) out += '\n  【回执】\n  摘要：screen template must be ignored\n  文件：无\n';
   process.stdout.write(out);
@@ -178,14 +188,21 @@ function listen() {
       }
       if (incoming.includes('\x03')) process.exit(0);
     });
-  } else readline.createInterface({ input: process.stdin }).on('line', (line) => {
-    if (!line.trim() && !lines.length) return;
-    lines.push(line);
-    clearTimeout(timer);
-    timer = setTimeout(answer, 250);
-  });
+  } else {
+    // Real agent TUIs disable the console's cooked input/echo. In ConPTY the
+    // cooked echo otherwise scrolls long Captain briefings through the screen
+    // and leaves them in later replies even after the stand-in redraws.
+    // No output stream: readline handles raw editing keys without echoing them.
+    readline.createInterface({ input: process.stdin, terminal: true }).on('line', (line) => {
+      if (!line.trim() && !lines.length) return;
+      lines.push(line);
+      clearTimeout(timer);
+      timer = setTimeout(answer, 250);
+    }).on('SIGINT', () => process.exit(0));
+  }
 }
 function start() {
+  if (delayedStart) process.stdout.write('\x1b[?1049h');
   console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
@@ -197,4 +214,5 @@ if (process.argv.includes('--trust-dialog')) {
   process.stdout.write('Do you trust the contents of this directory?\n  ▶ [a] Trust this workspace\n    [q] Quit\n  Use arrow keys to navigate, Enter to select\n');
   process.stdin.setRawMode(true);
   process.stdin.once('data', () => { process.stdin.setRawMode(false); process.stdin.removeAllListeners('data'); process.stdin.pause(); process.stdout.write('\x1b[2J\x1b[H'); start(); });
-} else start();
+} else if (delayedStart) setTimeout(start, 6000);
+else start();

@@ -4,6 +4,25 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const M = require('../main-core');
 
+test('replayed TUI chrome is excluded until fresh output follows the current replay separator', () => {
+  for (const separator of [
+    '── 上次输出回放，进程已结束──',
+    '── 上次输出回放，进程已结束（模型上下文将通过 CLI 恢复）──',
+    '── 上次输出回放；此栏未绑定模型会话，本次将新开对话 ──',
+    '以上为上次会话的输出',
+  ]) {
+    const replay = 'Claude Code\n✻ Doing…\nProceed? (y/n)\n' + separator;
+    assert.equal(M.afterReplay(replay, 'win32'), '');
+    assert.equal(M.afterReplay(replay + '\nPS C:\\test>', 'win32'), 'PS C:\\test>');
+    assert.equal(M.afterReplay(replay + '\nClaude Code\n❯', 'win32'), 'Claude Code\n❯');
+    assert.equal(M.terminalActivity(M.afterReplay(replay, 'win32')), '');
+  }
+  assert.equal(M.afterReplay('Claude Code\n✻ Doing…', 'win32'), 'Claude Code\n✻ Doing…');
+  const current = 'Claude Code\n── 上次输出回放，进程已结束──\nPS C:\\test>';
+  assert.equal(M.afterReplay(current, 'darwin'), current);
+  assert.equal(M.afterReplay('old\n以上为上次会话的输出\nlive', 'darwin'), 'live');
+});
+
 test('context tokens come from an explicit used/total status, not percentages or session quotas', () => {
   for (const [footer, used] of [
     ['Context: 29% · 290k/1000k | Session: 8%', 290000],
@@ -472,6 +491,17 @@ test('manual reset requires fresh success evidence, including low-context clear 
   }
   assert.equal(M.contextResetEvidence('Codex', '98% context left', '101% context left', ''), false);
   assert.equal(M.contextResetEvidence('Claude', 'Context: 290k/1000k', 'Context: 145k/1000k', ''), false);
+});
+
+test('manual reset preserves ConPTY row boundaries without accepting horizontal quoted success text', () => {
+  // Captured Windows stand-in reset: ConPTY goes straight from the success
+  // text to the input rule using CUP, with no newline between them.
+  const packet = '\x1b[H\x1b[?25h\x1b[?25l⏺ (no content)\x1b[3;1H────────────────\r\n> \r\n────────────────\x1b[33m\r\nContext: 23%\x1b[m';
+  assert.equal(M.contextResetEvidence('Claude', 'Context: 23%', 'Context: 23%', packet, 'win32'), true);
+  assert.equal(M.contextResetEvidence('Claude', 'Context: 23%', 'Context: 23%', packet, 'darwin'), false);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1H⏺ Conversation cleared\x1b[3;1H────', 'win32'), true);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1HUser: \x1b[1;7HConversation cleared\x1b[3;1H────', 'win32'), false);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1H⏺ Conversation cleared\x1b[3;1HFailed to start new session', 'win32'), false);
 });
 
 

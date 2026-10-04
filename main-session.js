@@ -427,7 +427,7 @@
     if (!op.confirmed) {
       if (Date.now() - op.since > 60_000) { contextReset = null; return; }
       if (!op.submitted) return;
-      if (M.contextResetEvidence(op.provider, op.before, footerText(entry, op.provider), op.output)) {
+      if (M.contextResetEvidence(op.provider, op.before, footerText(entry, op.provider), op.output, host.platform)) {
         op.confirmed = true;
         archiveSnapshot(op.col, op.snapshot);
       } else return;

@@ -619,6 +619,17 @@ against source and once against the packaged app. With `--test-user-data=<dir>` 
 Skills page scans `<dir>/skills-home` instead of the real home folder, so tests
 never list or edit the user's own skills.
 
+Windows E2E shell probes run script files rather than inline `node -e` code,
+so PowerShell cannot reinterpret JavaScript quotes or Windows path backslashes.
+The stand-in agent uses raw input like a real TUI. ConPTY may convert alternate
+screen switches to redraws; peek tests check real PTY output and the xterm
+alternate buffer separately. A ConPTY terminal name is not a foreground-process
+name, so shell readiness is verified by the command's output.
+The first automatic prompt in a Windows terminal waits for 500 ms of quiet TUI
+output, avoiding startup input loss. Later prompts keep the existing delivery checks.
+ConPTY reset evidence, replay filtering and deck navigation fixes apply only on
+Windows; macOS keeps its existing reset, status and navigation behavior.
+
 Security boundaries: the renderer is sandboxed with a restrictive CSP and no
 Node integration. Main IPC accepts only the deck's local main frame. Session
 identifiers are validated before file access. Session replay is capped at 200k

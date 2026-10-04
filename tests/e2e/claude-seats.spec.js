@@ -46,7 +46,7 @@ async function launch() {
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 你是 AgentDeck'), captainId), { timeout: 20000 }).toBe(true);
   await idle(captainId);
 }
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
   profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-seats-e2e-')));
   home = path.join(profile, 'seats-home');
   for (const dir of ['.claude', '.claude-us']) {
@@ -66,12 +66,28 @@ test.beforeEach(async () => {
     mainSession: { colId: cn, cmd: FAKE, gen: 1, crewMarked: true, tasks: [], pending: [], inflight: [], waitlist: [] },
     captainRelayCodex: { name: 'ChatGPT', command: FAKE + ' --provider=codex --board-probe --archive-fail' },
   }));
-  await launch();
+  try {
+    await launch();
+  } catch (error) {
+    const state = await page.evaluate(() => typeof terms === 'undefined' ? [] : [...terms].map(([id, e]) => ({
+      id, screen: dumpScreen(e.term), lastScreen: e.lastScreen, state: e.state,
+      alive: e.alive, sending: e.sendingPrompt, injecting: e.injecting,
+      typing: e.typing, inputBox: visibleInputBox(e), composing: userComposing(id),
+      turns: ChatUI.turnsOf(id),
+    })));
+    await testInfo.attach('seat-launch-state', { body: JSON.stringify({ state,
+      prompts: capture('prompt-columns.jsonl') }, null, 2), contentType: 'application/json' });
+    throw error;
+  }
 });
 test.afterEach(async () => {
   if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
   if (application) await closeApplication();
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
+});
+test('fresh Captain receives its complete multiline briefing after input is ready', async () => {
+  const expected = await page.evaluate(() => MainCore.instructions(env.platform));
+  expect(promptsFor(cn)).toContain(expected);
 });
 test('rotation exposes current seat and masked emails; an unlogged seat cannot replace Captain', async () => {
   await page.locator('.claude-seat-rotate').click();
@@ -274,6 +290,11 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   expect(await page.evaluate(() => window.deck.ptyIsAlive('seat-worker'))).toBe(true);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).filter(r => r.colId === 'seat-worker')).toHaveLength(1);
   expect(fs.readFileSync(path.join(home, '.claude/.credentials.json'), 'utf8')).toBe(before);
+  // The new seat must finish its continuation briefing before a direct TUI
+  // command; otherwise readline batches /model into that first prompt.
+  const fresh = await page.evaluate(() => config.mainSession.colId);
+  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('用户刚清空了你的模型上下文。')), { timeout: 20000 }).toBe(true);
+  await idle(fresh);
   await page.evaluate(() => { window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'); window.deck.ptyInput('seat-worker', '/model Opus 5.5\r'); });
   await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');
   await expect(page.locator('.colnav-item[data-col-id="seat-worker"] .agent-model-label')).toHaveText('Opus 5.5');

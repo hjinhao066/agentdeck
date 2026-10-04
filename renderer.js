@@ -2494,7 +2494,10 @@ function sendWhenReady(col, text, opts) {
       const cursorReady = isCursor && AGENT_IDLE_RE.test(entry.lastScreen || '') && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
       // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
       const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000));
-      if (idle && ready && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
+      // ConPTY can show a fresh TUI before its startup input has settled.
+      // Typing immediately can lose the prompt's leading bytes before the CLI reads them.
+      const settled = env.platform !== 'win32' || entry.hasWorked || quiet >= 500;
+      if (idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         if (o.guardUserInput && userComposing(col.id)) { setTimeout(check, 500); return; }
         const sent = await ChatUI.sendPrompt(col, typeof text === 'function' ? text() : text, null, o);   // a long prompt goes out as a file
@@ -2672,6 +2675,23 @@ function syncNav() {
   SidePane.onFocusChange();
 }
 
+function scrollColumnInDeck(wrap, center = false) {
+  if (env.platform !== 'win32') {
+    wrap.scrollIntoView(center ? { behavior: 'instant', inline: 'center', block: 'nearest' } : { inline: 'nearest', block: 'nearest' });
+    return;
+  }
+  const deck = deckEl.getBoundingClientRect();
+  const column = wrap.getBoundingClientRect();
+  // scrollIntoView also scrolls hidden ancestors (including the document),
+  // which can pull the sidebar outside the window on Windows.
+  let delta = 0;
+  if (center) delta = column.left - deck.left + (column.width - deckEl.clientWidth) / 2;
+  else if (column.left < deck.left && column.right > deck.right) return;
+  else if (column.left < deck.left) delta = column.width <= deckEl.clientWidth ? column.left - deck.left : column.right - deck.right;
+  else if (column.right > deck.right) delta = column.width <= deckEl.clientWidth ? column.right - deck.right : column.left - deck.left;
+  deckEl.scrollLeft += delta;
+}
+
 function jumpToColumn(col) {
   const t = terms.get(col.id);
   if (!t) return;
@@ -2690,7 +2710,7 @@ function jumpToColumn(col) {
   ChatUI.setMode(col.id, 'term');
   isUserScrollingDeck = true;
   clearTimeout(userScrollTimeout);
-  t.wrap.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
+  scrollColumnInDeck(t.wrap, true);
   lastValidDeckScrollLeft = deckEl.scrollLeft;
   focusColumnInput(col.id); focusedId = col.id;
   userScrollTimeout = setTimeout(() => { isUserScrollingDeck = false; }, 350);
@@ -3658,14 +3678,10 @@ setInterval(() => {
     // below the separator is live, so classification must not
     // see the replayed part. Once real output scrolls the separator out of the
     // 40-line window this is a no-op.
-    const sep = text.lastIndexOf('以上为上次会话的输出');
-    if (sep >= 0) {
-      const nl = text.indexOf('\n', sep);
-      text = nl >= 0 ? text.slice(nl + 1) : '';
-    }
+    text = MainCore.afterReplay(text, env.platform);
     entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
     if (entry.alive) {
-      let st = classify(statusScreen(entry.term), entry);
+      let st = classify(env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term), entry);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
@@ -3779,7 +3795,7 @@ function focusColumnByIndex(idx) {
   if (!t) return;
   Pages.hide();
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
-  focusColumnInput(col.id); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav();
+  focusColumnInput(col.id); focusedId = col.id; scrollColumnInDeck(t.wrap); syncNav();
 }
 document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos

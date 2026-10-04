@@ -25,7 +25,11 @@ test.beforeAll(async () => {
   // Export the Captain capability through its real PTY, never through page IPC.
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
-  const exportEnv = `node -e 'require("fs").writeFileSync(${JSON.stringify(controlFile)}, JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}))'`;
+  // Run a file so PowerShell's native argument quoting cannot strip the JS
+  // quotes or reinterpret the backslashes in a Windows path.
+  const exportScript = path.join(profile, 'export-control.js');
+  fs.writeFileSync(exportScript, `require('fs').writeFileSync(process.argv[2], JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}));`);
+  const exportEnv = `node "${exportScript}" "${controlFile}"`;
   await page.evaluate(([id, c]) => window.deck.ptyInput(id, c + '\r'), [captain, exportEnv]);
   await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
 });
