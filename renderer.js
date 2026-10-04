@@ -594,7 +594,7 @@ function buildChrome() {
   expandBtn.setAttribute('aria-label', expandBtn.title);
   boardBtn.setAttribute('aria-label', boardBtn.title);
   // The sidebar holds the quota rows; while it is collapsed this icon opens them.
-  const quotaBtn = railBtn(ICONS.gauge, '额度详情', () => toggleQuotaPop());
+  const quotaBtn = railBtn(ICONS.gauge, '订阅额度', () => toggleQuotaPop());
   quotaBtn.id = 'quotaRailBtn';
   quotaBtn.setAttribute('aria-label', quotaBtn.title);
   quotaBtn.setAttribute('aria-haspopup', 'dialog');
@@ -3275,15 +3275,18 @@ ChatUI.init(deckHost);
 Pages.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
 renderQuotaBar();
-async function readQuotaCache() {
-  const samples = await window.deck.quotaLocal();
+function applyQuotaSamples(samples) {
   let changed = false;
   for (const sample of samples) changed = QuotaCore.observe(config.quotas, sample) || changed;
   if (changed) saveConfig();
   renderQuotaBar();
 }
+async function readQuotaCache() { applyQuotaSamples(await window.deck.quotaLocal()); }
 async function refreshQuota(seatId) { applyQuotaSamples(await window.deck.quotaRefresh(seatId)); }
 window.deck.onQuotaUpdated(applyQuotaSamples);
+window.addEventListener('claude-seat-changed', (e) => {
+  if (e.detail?.seatId !== 'chatgpt') refreshQuota(e.detail?.seatId).catch(() => {});
+});
 document.getElementById('quotaRefresh').addEventListener('click', async (e) => {
   const button = e.currentTarget; button.disabled = true;
   try { await refreshQuota(); } catch (_) { showToast('额度查询暂不可用，保留上次采样'); }
@@ -3592,6 +3595,7 @@ setInterval(() => {
       if (signature !== entry.lastQuotaObservation) {
         entry.lastQuotaObservation = signature;
         if (QuotaCore.observe(config.quotas, sample)) saveConfig();
+        if (sample?.provider === 'Claude' && sample.exhausted) refreshQuota(sample.seatId).catch(() => {});
       }
     }
 

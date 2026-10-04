@@ -19,11 +19,12 @@ Sampling happens on startup, about every five minutes, refresh-button clicks, an
 new CLI exhaustion observations for the affected seat. Concurrent requests for a
 seat share one in-flight query. Failures leave previous numbers and their sample
 time intact, and include a safe failure reason. After three consecutive failures,
-fresh screen/local numeric observations may replace the API sample. Without a
-fallback sample, the last API numbers remain visible. Reset timestamps already
+the last successful API remaining percentages and reset times stay visible,
+alongside the original sampling time and `数据已旧`. Screen/local fallback cannot
+replace these values or stamp a redraw as a fresh API sample. Reset timestamps already
 passed are marked as awaiting a new sample; this does not invent a new window.
 Isolated Electron test profiles never query real Keychain entries or the API.
-Windows currently retains the existing local/screen fallback.
+Windows uses the existing per-directory credential-file reader and bound cache/screen sources.
 
 ## Stable integration fields
 
@@ -41,17 +42,23 @@ Its `sample.windows` contains:
 | `label` | Display label `5 小时` / `每周`; not an integration key |
 
 Sample metadata: `at` is the last **successful** sample's Unix milliseconds;
-`source` is `官方用量接口`; `confidence` is `高（官方采样）`; `official` is true;
-`seatId` and `configDir` identify the configured seat. `credentialKey` is a
-nonsecret hash of the Keychain **service name**, identifying the credential slot;
-it is not an account/token hash. The existing `accountKey` is the masked profile
-identity reader's email fingerprint, and is kept separate.
+`source` is `Claude OAuth usage`; `confidence` is `高（服务端采样）`; `official` is true;
+`seatId` and `configDir` identify the configured seat. `accountKey` is the
+profile account-ID fingerprint (with the existing email migration fallback).
+The account and directory are verified again after a request and before cache
+writes or sample publication. Unbound or mismatched samples remain unknown.
 
 `officialStatus.failures`, `.checkedAt`, `.failure` live beside `.sample` on the
 store entry. `checkedAt` is the last attempt's time; never use it as sample time.
-A new successful API sample sets failures to zero, replaces old error latches and
-rebuilds `blocked` from exhausted windows. `blocked.resetAt` is the latest reset of
+A new successful API sample sets failures to zero and rebuilds numeric exhaustion
+from the new windows. Genuine CLI exhaustion stays latched until its reset or
+an explicit resume observation. `blocked.resetAt` is the latest reset of
 exhausted windows (both windows must recover before a seat is usable).
+
+Compact statusline `5h N%` / `7d N%` values mean remaining; they are never
+interpreted as used. `Session:` / `Weekly:` legacy used-percent cards and native
+`% used` cards keep their explicit used semantics. Configured seats still reject
+shared/unbound footer numbers.
 
 For captain switching/preheating, read
 `sample.windows.find(w => w.key === 'fiveHour').remaining` and `.resetAt`, with
@@ -64,7 +71,8 @@ Each PTY is bound to its seat's credential service at birth. CN clears
 `CLAUDE_CONFIG_DIR`; US sets the absolute directory before creating the shell.
 Inherited OAuth/API overrides are cleared. The launch wrapper reasserts the seat
 after shell profiles, so Claude (and its child daemon) selects storage/socket
-namespace from the intended configuration directory before startup. AgentDeck
+namespace from the intended configuration directory before startup. This checks
+the launch environment; it does not inspect an already running daemon socket. AgentDeck
 never reconfigures an already started Claude daemon or copies its tokens.
 
 A legacy spawn without a seat ID resolves the configured active seat. Repeated

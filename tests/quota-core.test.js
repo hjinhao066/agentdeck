@@ -4,14 +4,14 @@ const assert = require('node:assert/strict');
 const Q = require('../quota-core');
 const now = Date.parse('2026-10-03T23:00:00Z');
 
-test('Claude percentages are consumed quota, context is ignored, resets are per window', () => {
+test('Claude Session/Weekly percentages are used; compact footers are remaining, context is ignored, resets are per window', () => {
   const q = Q.screen('Claude', '', ['Context: 99% | Session: 81% | Reset: 2hr 10m', 'Weekly: 9% | Reset: 3d 10hr'], now);
   assert.deepEqual(q.windows.map((w) => [w.label, w.remaining, w.resetAt]), [['5 小时', 19, now + 7800000], ['每周', 91, now + 295200000]]);
   const lone = Q.screen('Claude', '', ['Session: 26%', 'Weekly Reset: 16hr'], now);
   assert.equal(lone.windows[0].resetAt, null);
   assert.equal(Q.screen('Claude', 'The response discusses Session: 90% and Weekly: 90%.', [], now).windows.length, 0);
   assert.equal(Q.screen('Claude', '', ['Context: 99%'], now).windows.length, 0);
-  assert.deepEqual(Q.screen('Claude', '', ['Opus 5.5 · context 20%   5h 17% · 7d 2%'], now).windows.map((w) => w.remaining), [83, 98]);
+  assert.deepEqual(Q.screen('Claude', '', ['Opus 5.5 · context 20%   5h 17% · 7d 2%'], now).windows.map((w) => w.remaining), [17, 2]);
 });
 
 test('Claude /usage and Codex /status accept explicit used/left semantics', () => {
@@ -134,10 +134,10 @@ test('Claude seats isolate percentages and exhaustion; missing/stale windows sta
   const store = {};
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20, weeklyUsage: 30 }, now), seatId: 'east', configDir: '~/.claude', accountBound: true, accountKey: 'east-account' }, now);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 100, sessionResetAt: new Date(now + 3600000).toISOString() }, now), seatId: 'west', configDir: '~/.claude-west', accountBound: true, accountKey: 'west-account' }, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[0], 'east').displayLabel, '5h 80% · 7d 70%');
+  assert.equal(Q.summary(store, 'Claude', now, seats[0], 'east').displayLabel, '5h 80% ↻未知 · 7d 70% ↻未知');
   assert.match(Q.summary(store, 'Claude', now, seats[0], 'east').detail, /当前队长使用此席位/);
   assert.equal(Q.summary(store, 'Claude', now, seats[1]).label, '已用尽');
-  assert.match(Q.summary(store, 'Claude', now, seats[1]).detail, /每周：未知/);
+  assert.match(Q.summary(store, 'Claude', now, seats[1]).detail, /7d 无数据/);
   assert.equal(Q.summary(store, 'Claude', now + Q.FRESH_MS + 1, seats[0]).label, '未知');
   assert.equal(Q.summary(store, 'Claude', now, { ...seats[0], configDir: '~/.different' }).label, '未知');
   assert.equal(Q.text(store, now, seats).split('\n').length, 5);
@@ -154,10 +154,10 @@ test('a fresh numeric cache replaces a newer screen without quota numbers', () =
   const store = {};
   Q.observe(store, Q.screen('Claude', 'Claude Code', [], now), now);
   Q.observe(store, Q.cacheClaude({ sessionUsage: 46, weeklyUsage: 5 }, now - 60000), now);
-  assert.equal(Q.summary(store, 'Claude', now).displayLabel, '5h 54% · 7d 95%');
+  assert.equal(Q.summary(store, 'Claude', now).displayLabel, '5h 54% ↻未知 · 7d 95% ↻未知');
   // A subsequent redraw without numbers must keep the known fresh windows.
   Q.observe(store, Q.screen('Claude', 'Claude Code', [], now + 1000), now + 1000);
-  assert.equal(Q.summary(store, 'Claude', now + 1000).displayLabel, '5h 54% · 7d 95%');
+  assert.equal(Q.summary(store, 'Claude', now + 1000).displayLabel, '5h 54% ↻未知 · 7d 95% ↻未知');
 });
 
 
@@ -171,15 +171,15 @@ test('configured Claude seats discard shared screen numbers and persisted unboun
   assert.doesNotMatch(Q.text(store, now, seats), /剩余 53/);
   Q.observe(store, { ...shared, seatId: 'cn', configDir: '~/.claude', exhausted: true, resetText: '9:20 PM', resetAt: now + 3600000, sourceColumnId: 'cn-captain' }, now);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 47, weeklyUsage: 45 }, now - 1000), seatId: 'us', configDir: '~/.claude-us', accountBound: true, accountKey: 'us-account' }, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 53% · 7d 55%');
+  assert.equal(Q.summary(store, 'Claude', now, seats[1]).displayLabel, '5h 53% ↻未知 · 7d 55% ↻未知');
   const cn = Q.summary(store, 'Claude', now, seats[0]);
   assert.equal(cn.label, '已用尽');
-  assert.match(cn.detail, /恢复/);
+  assert.match(cn.detail, /已用尽 ↻/);
   assert.match(cn.detail, /报错会话：cn-captain/);
   assert.doesNotMatch(cn.detail, /剩余 53|剩余 55/);
   assert.match(Q.text(store, now, seats), /Claude \/ 🇨🇳 CN：已用尽/);
   Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 20 }, now), seatId: 'cn', configDir: '~/.claude', accountBound: true, accountKey: 'cn-account' }, now);
-  assert.match(Q.summary(store, 'Claude', now, seats[0]).detail, /5 小时剩余 80/);
+  assert.match(Q.summary(store, 'Claude', now, seats[0]).detail, /5h 80% ↻/);
 });
 
 
@@ -208,4 +208,36 @@ test('exhaustion binds to the erroring session seat and clears itself after its 
   assert.doesNotMatch(Q.text(store, later, seats), /已用尽/);
   Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'us', configDir: '~/.claude-us', identityOnly: true, at: later }, later);
   assert.equal(store['Claude:us'].blocked, undefined);
+});
+
+test('compact Claude footers retain remaining semantics and local reset clocks; explicit used footers stay unknown', () => {
+  const fiveHour = new Date(now + 2 * 3600000), weekly = new Date(now + 4 * 86400000);
+  const pad = (n) => String(n).padStart(2, '0');
+  const clock = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const q = Q.screen('Claude', '', [`5h 91% ↻${clock(fiveHour)} · 7d 90% ↻${pad(weekly.getMonth() + 1)}-${pad(weekly.getDate())} ${clock(weekly)}`], now);
+  assert.deepEqual(q.windows.map((w) => [w.used, w.remaining, w.resetAt]), [[9, 91, fiveHour.getTime()], [10, 90, weekly.getTime()]]);
+  for (const remaining of [0, 2, 17, 91, 100]) {
+    const w = Q.screen('Claude', '', [`5h ${remaining}%`], now).windows[0];
+    assert.equal(w.remaining, remaining);
+    assert.equal(w.exhausted, remaining === 0);
+  }
+  assert.equal(Q.screen('Claude', '', ['5h 9% used · 7d已用 10%'], now).windows.length, 0);
+  assert.deepEqual(Q.screen('Claude', '', ['5h剩余 91% · 7d remaining 90%'], now).windows.map((w) => w.remaining), [91, 90]);
+});
+
+test('official success overrides a recent bound screen and supplies the reset for a genuine unknown-reset error', () => {
+  const seat = { id: 'cn', configDir: '~/.claude' }, store = {};
+  const bind = (q) => ({ ...q, seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: 'offline-cn' });
+  Q.observe(store, bind(Q.screen('Claude', '', ['5h 17% · 7d 2%'], now)), now);
+  const api = bind(Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [{ key: 'fiveHour', remaining: 91, resetText: new Date(now + 3600000).toISOString() }, { key: 'weekly', remaining: 90 }] }, now + 1));
+  Q.observe(store, api, now + 1);
+  assert.equal(store[Q.seatKey(seat.id)].sample.official, true);
+  assert.match(Q.summary(store, 'Claude', now + 1, seat).displayLabel, /5h 91% ↻.*7d 90%/);
+  Q.observe(store, bind(Q.screen('Claude', 'Usage limit reached', [], now + 2)), now + 2);
+  assert.equal(store[Q.seatKey(seat.id)].blocked.resetAt, now + 3600000);
+  const priorError = {};
+  Q.observe(priorError, bind(Q.screen('Claude', 'Usage limit reached', [], now)), now);
+  Q.observe(priorError, api, now + 1);
+  assert.equal(priorError[Q.seatKey(seat.id)].blocked.resetAt, now + 3600000);
+  assert.equal(Q.summary(priorError, 'Claude', now + 3600000, seat).state, 'normal');
 });

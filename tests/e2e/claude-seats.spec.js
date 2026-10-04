@@ -6,6 +6,8 @@ const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --quot
 let application, page, profile, home;
 const cn = 'seat-captain';
 async function closeApplication() {
+  // Close renderer windows before quitting Electron; keep its normal quit hooks.
+  for (const window of application.windows()) await window.close();
   await application.close();
 }
 async function screenshot(name) {
@@ -217,6 +219,7 @@ test('terminal draft also blocks Relay without discarding typing', async () => {
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
   expect(await page.evaluate(() => config.mainSession.colId)).toBe(cn);
   expect(await page.evaluate((id) => terms.get(id).typing.draft, cn)).toContain('half typed terminal input');
+
 });
 test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and returns to CN', async () => {
   test.setTimeout(120000);

@@ -229,7 +229,13 @@
       store[key] = out;
       return before !== JSON.stringify(out);
     }
-    if (next.official) out.officialStatus = { failures: 0, checkedAt: next.at };
+    if (next.official) {
+      out.officialStatus = { failures: 0, checkedAt: next.at };
+      if (out.blocked && !out.blocked.resetAt) {
+        const resets = next.windows.filter((w) => w.resetAt > now && (w.exhausted || w.key === 'fiveHour')).map((w) => w.resetAt);
+        if (resets.length) out.blocked = { ...out.blocked, resetAt: Math.max(...resets) };
+      }
+    }
     // Failed queries never grant screen/cache numbers authority over the last
     // successful official sample. Still retain genuine CLI exhaustion errors.
     if (previous.sample?.official && !next.official) {
@@ -261,7 +267,7 @@
     if (next.official || !old || (hasNumbers && !old.windows?.length) || (next.at >= old.at && (hasNumbers || !old.windows?.length)) ||
       (hasNumbers && next.source === '会话屏幕' && now - old.at < FRESH_MS && old.source !== '会话屏幕') || now - old.at > FRESH_MS) {
       // A fresh screen with numbers wins over a fallback cache until stale.
-      if (!(old?.source === '会话屏幕' && old.windows?.length && now - old.at < FRESH_MS && next.source !== '会话屏幕')) out.sample = next;
+      if (next.official || !(old?.source === '会话屏幕' && old.windows?.length && now - old.at < FRESH_MS && next.source !== '会话屏幕')) out.sample = next;
     }
     store[key] = out;
     return before !== JSON.stringify(out);
@@ -272,7 +278,7 @@
     const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir);
     const fresh = sample && trusted && now - sample.at <= freshMs(sample);
     const retained = trusted && !!sample?.official;
-    const stale = retained && (!fresh || entry.officialStatus?.failures >= 3);
+    const stale = retained && (!fresh || entry.officialStatus?.failures >= 3 || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
     const windows = retained ? sample.windows || [] : fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
     const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
     const remaining = windows.length ? Math.min(...windows.map((w) => w.remaining)) : null;
@@ -284,10 +290,10 @@
       return `${weekly ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`;
     };
     const recovery = blocked?.resetAt || Math.max(0, ...windows.filter((w) => w.exhausted && w.resetAt > now).map((w) => w.resetAt));
-    const claudeWindow = (w) => {
+    const claudeWindow = (w, showBlock = true) => {
       const isWeekly = w.label === '每周';
-      const isBlocked = w.exhausted && w.resetAt > now || !isWeekly && !!blocked && !windows.some((v) => v.exhausted && v.label === '每周');
-      const reset = !isWeekly && blocked ? recovery || w.resetAt : w.resetAt;
+      const isBlocked = showBlock && (w.exhausted && w.resetAt > now || !isWeekly && !!blocked && !windows.some((v) => v.exhausted && v.label === '每周'));
+      const reset = showBlock && !isWeekly && blocked ? recovery || w.resetAt : w.resetAt;
       return `${isWeekly ? '7d' : '5h'} ${isBlocked ? '已用尽' : w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%`} ↻${reset ? clock(reset, isWeekly) : w.resetText || '未知'}`;
     };
     const details = windows.map((w) => provider === 'Claude' ? claudeWindow(w) : `${w.label}剩余 ${w.remaining === 0 && !w.exhausted ? '<0.1' : w.remaining}%；重置 ${w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText || '未知'}`);
@@ -299,13 +305,14 @@
     if (sample?.note) details.push(sample.note);
     if (provider === 'Codex' && !windows.some((w) => w.label === '5 小时') && !sample?.note) details.push('5 小时：无新鲜数字');
     if (blocked) details.push(provider === 'Claude' ? `已用尽 ↻${recovery ? clock(recovery, recovery - now > 86400000) : blocked.resetText || '未知'}` : `已用尽；恢复 ${blocked.resetAt ? new Date(blocked.resetAt).toLocaleString() : blocked.resetText || '时间未知'}`);
+    if (provider === 'Claude' && blocked && windows.length) details.push(`上次采样：${windows.map((w) => claudeWindow(w, false)).join(' · ')}；采样 ${new Date(sample.at).toLocaleString()}`);
     if (blocked?.sourceColumnId) details.push(`报错会话：${blocked.sourceColumnId}`);
     if (!windows.length && !blocked) details.push(state === 'normal' ? '未观察到额度用尽；无法取得数字' : '无新鲜额度信息；等待会话/缓存更新');
     if (entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；连续 ${entry.officialStatus.failures} 次${entry.officialStatus.failures >= 3 ? '，保留上次成功采样（数据已旧）' : '，保留上次数字'}`);
     if (retained && windows.some((w) => w.resetAt <= now)) details.push('窗口重置时间已过，等待新采样（显示上次数字）');
     const evidence = retained ? sample : blocked || sample;
     if (evidence) details.push(`来源：${evidence.source}；${blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；采样 ${new Date(evidence.at).toLocaleString()}${stale ? '（数据已旧）' : !fresh && (!blocked || retained) ? '（已过期）' : ''}`);
-    const displayLabel = provider === 'Claude' && windows.length ? windows.map(claudeWindow).join(' · ') : provider === 'Claude' && blocked ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'}` : label;
+    const displayLabel = provider === 'Claude' && windows.length ? (blocked && !windows.some((w) => w.label === '5 小时') ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'} · ` : '') + windows.map((w) => claudeWindow(w)).join(' · ') : provider === 'Claude' && blocked ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'}` : label;
     const sampleLabel = provider === 'Claude' && (fresh || retained) ? `采样 ${stale ? new Date(sample.at).toLocaleString() : new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}${stale ? '（数据已旧）' : ''}` : '';
     return { provider, state, label, displayLabel, sampleLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }

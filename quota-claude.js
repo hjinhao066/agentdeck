@@ -5,6 +5,7 @@ const fs = require('fs/promises');
 const https = require('https');
 const { execFile } = require('child_process');
 const os = require('os');
+const { createHash } = require('crypto');
 const S = require('./claude-seats-core');
 const M = require('./claude-seats-main');
 const Q = require('./quota-core');
@@ -48,7 +49,7 @@ function officialUsage(data, seat, service, at) {
       exhausted: w.utilization === 100, resetAt, resetText: new Date(resetAt).toISOString() };
   });
   return { provider: 'Claude', scope: 'claude', seatId: seat.id, configDir: seat.configDir,
-    credentialKey: require('crypto').createHash('sha256').update(service).digest('hex').slice(0, 16),
+    credentialKey: createHash('sha256').update(service).digest('hex').slice(0, 16),
     at, source: Q.CLAUDE_OAUTH_SOURCE, confidence: '高（官方采样）', official: true, windows };
 }
 function requestUsage(token, get = https.get, timeoutMs = 8000) {
@@ -80,7 +81,7 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
         res.on('end', () => {
           try {
             const data = JSON.parse(body), at = Date.now();
-            const windows = officialUsage(data, { id: 'default' }, '', at).windows.map((w) => ({ key: w.key, remaining: w.remaining, resetText: w.resetText }));
+            const windows = officialUsage(data, { id: 'default' }, '', at).windows.map((w) => ({ key: w.key, remaining: 100 - w.used, resetText: w.resetText }));
             finish({ at, source: Q.CLAUDE_OAUTH_SOURCE, windows });
           } catch (_) { finish(); }
         });
@@ -112,14 +113,21 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
   const entries = new Map();
   let stopped = false;
   function sync() {
-    const seats = S.normalize(getSeats());
+    const services = new Set();
+    const seats = S.normalize(getSeats()).filter((seat) => {
+      try {
+        const service = M.credentialLocation(seat, home).keychainService;
+        if (services.has(service)) return false;
+        services.add(service); return true;
+      } catch (_) { return false; }
+    });
     for (const [id, entry] of entries) if (!seats.some((s) => s.id === id && s.configDir === entry.seat.configDir)) entries.delete(id);
     for (const seat of seats) if (!entries.has(seat.id)) entries.set(seat.id, { seat, due: 0, usage: M.readUsage(seat, home), failures: 0 });
     return entries;
   }
   async function tick({ force = false, seatId } = {}) {
     if (stopped) return;
-    await Promise.all([...sync().values()].filter((entry) => !seatId || entry.seat.id === seatId).filter((entry, i, entries) => entries.findIndex((other) => M.credentialLocation(other.seat, home).dir === M.credentialLocation(entry.seat, home).dir) === i).map((entry) => {
+    await Promise.all([...sync().values()].filter((entry) => !seatId || entry.seat.id === seatId).map((entry) => {
       if (entry.pending) return entry.pending;
       if (!force && now() < entry.due) return;
       entry.due = now() + INTERVAL_MS;

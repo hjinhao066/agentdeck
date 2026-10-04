@@ -314,7 +314,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-icon { display: flex; flex: 0 0 auto; }
 .quota-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
 .quota-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.quota-item[data-state="normal"] .quota-label { color: var(--text); }
+.quota-item[data-state="normal"] { color: var(--text); }
 .quota-item[data-state="warning"], .quota-item[data-state="warning"] .quota-label { color: #d99426; }
 .quota-item[data-state="danger"], .quota-item[data-state="exhausted"],
 .quota-item[data-state="danger"] .quota-label, .quota-item[data-state="exhausted"] .quota-label { color: #e46464; }

@@ -18,7 +18,13 @@ test.beforeAll(async () => {
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterAll(async () => {
+  if (app) {
+    for (const window of app.windows()) await window.close();
+    await app.close();
+  }
+  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+});
 const seat = id => page.locator(`#quotaBar [data-seat-id="${id}"]`);
 const shots = process.env.AGENTDECK_QUOTA_SHOTS;
 async function screenshot(name) {
@@ -60,20 +66,25 @@ test('usage colors contrast with both sidebar backgrounds by at least 4.5:1', as
     for (const ratio of contrast) expect(ratio).toBeGreaterThanOrEqual(4.5);
   }
 });
-test('failed sample persists original windows/time across reload; collapsed sidebar exposes quota details', async () => {
+test('three failed samples retain windows, resets and stale sample time across reload and collapsed sidebar', async () => {
   const before = await page.evaluate(() => config.quotas['Claude:cn'].sample.at);
   await page.evaluate(() => {
     const at = Date.now();
-    QuotaCore.observe(config.quotas, { provider: 'Claude', scope: 'claude', seatId: 'cn', configDir: '~/.claude', at,
-      failureOnly: true, failures: 1, checkedAt: at, failure: '网络查询失败' });
+    for (let failures = 1; failures <= 3; failures++) QuotaCore.observe(config.quotas, { provider: 'Claude', scope: 'claude', seatId: 'cn', configDir: '~/.claude', at,
+      failureOnly: true, failures, checkedAt: at, failure: '网络查询失败' });
+    QuotaCore.observe(config.quotas, { ...QuotaCore.screen('Claude', '', ['5h 91% ↻02:50 · 7d 90% ↻10-07 03:00'], at), seatId: 'cn', configDir: '~/.claude' });
     flushConfig(); renderQuotaBar();
   });
   await page.reload();
-  await expect(seat('cn')).toHaveAttribute('title', /保留上次数字/);
+  await expect(seat('cn')).toHaveAttribute('title', /连续 3 次.*数据已旧/s);
   expect(await page.evaluate(() => config.quotas['Claude:cn'].sample.at)).toBe(before);
+  await expect(seat('cn').locator('.quota-sampled')).toContainText('数据已旧');
+  await expect(seat('cn').locator('.quota-label')).toHaveText(/5h 91% ↻\d\d:\d\d · 7d 90% ↻\d\d-\d\d \d\d:\d\d/);
   await page.locator('#navCollapseBtn').click();
-  await page.getByRole('button', { name: '额度详情', exact: true }).click();
+  await page.getByRole('button', { name: '订阅额度', exact: true }).click();
   await expect(page.locator('#quotaPop')).toBeVisible();
-  await expect(seat('cn').locator('.quota-label')).toContainText('5h 91% ↻');
+  const popupSeat = page.locator('#quotaPopList [data-seat-id="cn"]');
+  await expect(popupSeat.locator('.quota-label')).toContainText('5h 91% ↻');
+  await expect(popupSeat.locator('.quota-sampled')).toContainText('数据已旧');
   await screenshot('official-usage-collapsed');
 });

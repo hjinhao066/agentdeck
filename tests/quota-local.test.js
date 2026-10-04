@@ -154,11 +154,11 @@ test('two seats with bound data each show their own numbers; an unattributable l
     M.writeUsage(seats[1], home, S.footerUsage(['Opus 5.5   5h剩余 83% · 7d剩余 59%'], now));
     [cn, us] = await summaries();
     assert.equal(cn.label, '未知');
-    assert.equal(us.displayLabel, '5h 83% · 7d 59%');
+    assert.equal(us.displayLabel, '5h 83% ↻未知 · 7d 59% ↻未知');
     assert.match(us.detail, /会话状态行/);
     M.writeUsage(seats[0], home, S.usage('Current session\n  10% used\n  Resets 11pm\nCurrent week (all models)\n  40% used\n', now));
     [cn, us] = await summaries();
-    assert.equal(cn.displayLabel, '5h 90% · 7d 60%');
-    assert.equal(us.displayLabel, '5h 83% · 7d 59%');
+    assert.match(cn.displayLabel, /5h 90% ↻\d\d:\d\d · 7d 60% ↻未知/);
+    assert.equal(us.displayLabel, '5h 83% ↻未知 · 7d 59% ↻未知');
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });

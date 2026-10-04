@@ -213,10 +213,10 @@ test('valid keychain credentials do not require profile email; failures name the
   assert.equal(valid.maskedEmail, '');
   const unavailable = await M.seatInfo(us, home, 'darwin', async () => ({ present: false, authReason: '无法核实钥匙串' }));
   assert.equal(unavailable.loginReason, '');
-  assert.equal(unavailable.authReason, '无法核实钥匙串');
+  assert.equal(unavailable.authReason, 'US（us）：无法核实钥匙串');
   const expired = await M.seatInfo(us, home, 'darwin', async () => ({ present: false, loginReason: '访问令牌已过期且没有刷新令牌' }));
   assert.equal(expired.id, 'us');
-  assert.match(expired.loginReason, /没有刷新令牌/);
+  assert.match(expired.loginReason, /US（us）.*没有刷新令牌/);
 });
 test('credential checks allow Claude to refresh expired access; no login prompt for access denial', async () => {
   const read = (oauth, error) => M.credentialStatus('seat-service', (file, args, options, cb) => {
