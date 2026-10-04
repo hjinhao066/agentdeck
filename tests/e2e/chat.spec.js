@@ -277,6 +277,7 @@ test('a long saved conversation keeps every turn; the view loads older ones on r
 });
 
 test('history survives quitting and relaunching: an unfinished turn, a raw terminal turn, all old turns, an archived chat', async () => {
+  test.setTimeout(120000);
   // a new turn on the long chat
   await focusChat('chat-3');
   const long = page.locator('.column[data-col-id="chat-3"]');
@@ -295,6 +296,9 @@ test('history survives quitting and relaunching: an unfinished turn, a raw termi
   // an ordinary archive keeps the conversation under the same id
   const before0 = await turns('chat-0');
   expect(before0.map((t) => t.user)).toContain('hello chat view');
+  // Ordinary archive protects terminals with output in the last minute.
+  // Wait for the stand-in to become eligible, just as the user must.
+  await expect.poll(() => page.evaluate(() => Date.now() - terms.get('chat-0').lastOutputAt), { timeout: 65000 }).toBeGreaterThanOrEqual(60000);
   await page.evaluate(() => archiveColumn(columns.find((c) => c.id === 'chat-0')));
   await expect(page.locator('.column[data-col-id="chat-0"]')).toHaveCount(0);
   const before2 = await turns('chat-2');

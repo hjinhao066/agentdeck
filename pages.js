@@ -63,6 +63,7 @@
     (actions || []).forEach((a) => right.appendChild(a));
     const close = el('button', 'page-close');
     close.type = 'button'; close.title = '关闭 (Esc)'; close.innerHTML = host.ICONS.close;
+    close.setAttribute('aria-label', close.title);
     close.addEventListener('click', hide);
     right.appendChild(close);
     head.append(titles, right);
@@ -119,7 +120,9 @@
       }
       main.appendChild(meta);
       const actions = el('div', 'sched-actions');
-      actions.append(btn('立即运行', () => runManually(s.id)), btn('编辑', () => openEditor(s)));
+      const edit = btn('', () => openEditor(s), 'tool-action');
+      edit.title = '编辑定时任务'; edit.setAttribute('aria-label', edit.title); edit.innerHTML = host.ICONS.edit;
+      actions.append(btn('立即运行', () => runManually(s.id)), edit);
       card.append(sw, main, actions);
       box.appendChild(card);
     });

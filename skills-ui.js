@@ -121,8 +121,10 @@
   function render(frame, h) {
     host = h;
     if (!st.loaded && !st.loading && !st.error) load(true);
+    const reload = btn('', load, 'tool-action');
+    reload.title = st.loading ? '刷新中…' : '刷新'; reload.setAttribute('aria-label', reload.title); reload.innerHTML = host.ICONS.reset;
     const body = frame('Skills', '本机各个 agent 的技能。共享正本在 ~/.agents/skills，各工具通过链接使用它；编辑共享正本，所有链接到它的工具都会看到修改。',
-      [btn(st.loading ? '刷新中…' : '刷新', load)]);
+      [reload]);
     body.parentElement.classList.add('page-wide');
     ui = {};
     if (!st.loaded) {

@@ -118,6 +118,8 @@ test('a very long prompt is not cut: it goes to the agent as a file', async () =
 test('a new plain session opens in terminal mode, and an agent shows its status lines in chat mode', async () => {
   const id = await page.evaluate(() => addAndFocusColumn().id);
   const col = page.locator(`.column[data-col-id="${id}"]`);
+  // New columns focus after mounting; that initial navigation opens terminal mode.
+  await expect.poll(() => page.evaluate(() => focusedId)).toBe(id);
   await expect(col).not.toHaveClass(/chat-mode/);
   await col.locator('.view-toggle').click();
   await expect(col).toHaveClass(/chat-mode/);
@@ -205,12 +207,15 @@ test('dragging a session into a folder moves its column, and the order persists'
 });
 
 test('archive keeps the conversation; restore brings the session back with it', { tag: '@smoke' }, async () => {
+  test.setTimeout(120000);
   await page.evaluate((id) => { jumpToColumn(columns.find((c) => c.id === id)); ChatUI.setMode(id, 'chat'); }, 'ws-a');
   const col = page.locator('.column[data-col-id="ws-a"]');
   await col.locator('.composer textarea').click();
   await col.locator('.composer textarea').fill('remember the archive drill');
   await col.locator('.composer textarea').press('Enter');
   await expect(col.locator('.reply').last()).toContainText('GOT remember the archive drill', { timeout: 20000 });
+  // A finished reply alone does not bypass the recent-output archive guard.
+  await expect.poll(() => page.evaluate(() => Date.now() - terms.get('ws-a').lastOutputAt), { timeout: 65000 }).toBeGreaterThanOrEqual(60000);
   await col.hover();
   await col.locator('.secondary .icon-btn').first().click();   // archive
   await expect(col).toHaveCount(0);

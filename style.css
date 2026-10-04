@@ -626,6 +626,9 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
   transition: background .12s ease, border-color .12s ease;
 }
 .btn:hover { background: var(--icon-hover-bg); }
+.btn.tool-action { width: 32px; padding: 0; }
+.tool-action svg { width: 16px; height: 16px; }
+.tool-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .btn.primary { background: var(--primary-bg); color: var(--primary-fg); border-color: transparent; }
 .btn.primary:hover { filter: brightness(0.92); background: var(--primary-bg); }
 

@@ -193,7 +193,7 @@
             <p id="boardInspectorMeta"></p>
           </div>
           <div class="board-inspector-actions">
-            <button class="btn" id="boardInspectorRename">Rename</button>
+            <button class="btn tool-action" id="boardInspectorRename" type="button" title="重命名" aria-label="重命名"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 5 5-13 13H3v-5L16 3zM13 6l5 5"/></svg></button>
             <button class="btn" id="boardInspectorSendTask" hidden>Send task</button>
             <button class="btn" id="boardInspectorOpenPage">Terminal page</button>
           </div>
@@ -265,7 +265,7 @@
     </label>
     <p class="hint" id="linkSafetyHint">Creating a link never merges terminal context or sends history. Only the message above is sent.</p>
     <div class="row link-dialog-actions">
-      <button class="btn danger" id="linkRemove" hidden>Remove link</button>
+      <button class="btn danger tool-action" id="linkRemove" type="button" title="删除连线" aria-label="删除连线" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
       <span class="row-spacer"></span>
       <button class="btn" id="linkCancel">Cancel</button>
       <button class="btn primary" id="linkSave">Save relationship</button>
@@ -384,7 +384,7 @@
     <label class="sd-check"><input type="checkbox" id="sdEnabled" checked /> 启用</label>
     <p class="sd-error" id="sdError" hidden></p>
     <div class="row">
-      <button class="btn danger" id="sdDelete" type="button" hidden>删除</button>
+      <button class="btn danger tool-action" id="sdDelete" type="button" title="删除定时任务" aria-label="删除定时任务" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
       <span class="row-spacer"></span>
       <button class="btn" id="sdCancel" type="button">取消</button>
       <button class="btn primary" id="sdSave" type="button">保存</button>

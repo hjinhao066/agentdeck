@@ -47,6 +47,7 @@
     });
     $('sideClose').innerHTML = host.ICONS.panelRight;
     $('sideClose').title = '收起右侧栏 (⌘\\)';
+    $('sideClose').setAttribute('aria-label', $('sideClose').title);
     sbBack.innerHTML = host.ICONS.left;
     sbFwd.innerHTML = host.ICONS.right;
 
@@ -72,6 +73,7 @@
       if (document.activeElement !== sbUrl && s.url) sbUrl.value = s.url;
       sbBack.disabled = !s.canGoBack; sbFwd.disabled = !s.canGoForward;
       sbReload.textContent = loading ? '✕' : '⟳';
+      sbReload.title = loading ? '停止加载' : '刷新'; sbReload.setAttribute('aria-label', sbReload.title);
       sbEmpty.hidden = !!s.url;
     });
 
