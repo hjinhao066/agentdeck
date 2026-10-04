@@ -23,7 +23,7 @@ test('infers known agents and resolves commands', () => {
   assert.equal(BoardCore.commandForAgent('agy'), 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   assert.equal(BoardCore.commandForAgent('grok'), 'grok --permission-mode bypassPermissions');
   assert.equal(BoardCore.commandForAgent('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
-  assert.equal(BoardCore.commandForAgent('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(BoardCore.commandForAgent('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
   assert.equal(BoardCore.commandForAgent('gemini'), 'gemini --yolo');
   assert.equal(BoardCore.commandForAgent('grok', 'custom-agent'), 'custom-agent');
 });
@@ -53,7 +53,7 @@ test('upgrades legacy default commands while preserving custom commands and conf
   assert.equal(BoardCore.upgradeLegacyCommand('cursor'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(BoardCore.upgradeLegacyCommand('cursor-agent'), 'cursor-agent --force --model claude-opus-5-5-high');
   assert.equal(BoardCore.upgradeLegacyCommand('claude'), 'claude --dangerously-skip-permissions --effort high');
-  assert.equal(BoardCore.upgradeLegacyCommand('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(BoardCore.upgradeLegacyCommand('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
   assert.equal(BoardCore.upgradeLegacyCommand('gemini'), 'gemini --yolo');
 
   // custom commands remain completely untouched

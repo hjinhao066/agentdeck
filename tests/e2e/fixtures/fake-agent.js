@@ -13,6 +13,7 @@ if (process.env.AGENTDECK_TEST_SEATS_ENV_FILE) {
 }
 if (process.env.AGENTDECK_TEST_RECEIPT_ENV_DIR) {
   require('fs').writeFileSync(require('path').join(process.env.AGENTDECK_TEST_RECEIPT_ENV_DIR, process.env.AGENTDECK_COL_ID + '.json'), JSON.stringify({
+    AGENTDECK_TERMINAL_ID: process.env.AGENTDECK_TERMINAL_ID,
     AGENTDECK_RECEIPT_TOKEN: process.env.AGENTDECK_RECEIPT_TOKEN,
     AGENTDECK_CONTROL_DIR: process.env.AGENTDECK_CONTROL_DIR,
     AGENTDECK_BOARD_CLI: process.env.AGENTDECK_BOARD_CLI,

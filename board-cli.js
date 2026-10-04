@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { readCredentials } = require('./board-credentials');
 
 function fail(message, code = 1) {
   process.stderr.write(`[AgentDeck Board] ${message}\n`);
@@ -39,9 +40,16 @@ function sleep(ms) {
 }
 
 async function request(command, waitForCompletion) {
-  const controlDir = process.env.AGENTDECK_CONTROL_DIR;
+  // The standalone copy knows its profile directory even when a shell policy
+  // removes CONTROL_DIR. Never discover another profile or terminal's file.
+  const controlDir = process.env.AGENTDECK_CONTROL_DIR ||
+    (path.basename(__filename) === 'agentdeck-board.js' && path.basename(__dirname) === 'tools' ? path.dirname(__dirname) : '');
   const submission = ['complete', 'ask', 'progress', 'session-exit'].includes(command.action);
-  const token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN || (command.action === 'main-new' && process.env.AGENTDECK_RECEIPT_TOKEN);
+  let token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN || (command.action === 'main-new' && process.env.AGENTDECK_RECEIPT_TOKEN);
+  if (!token) {
+    const credentials = readCredentials(controlDir, process.env.AGENTDECK_TERMINAL_ID);
+    if (credentials) token = (submission && credentials.receiptToken) || credentials.controlToken || (command.action === 'main-new' && credentials.receiptToken);
+  }
   if (!controlDir || !token) {
     fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
   }

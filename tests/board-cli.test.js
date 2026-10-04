@@ -12,7 +12,7 @@ const cli = path.join(__dirname, '..', 'board-cli.js');
 function runCli(args, env) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [cli, ...args], {
-      env: { ...process.env, ...env },
+      env: { ...process.env, AGENTDECK_RECEIPT_TOKEN: '', AGENTDECK_TERMINAL_ID: '', ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
@@ -240,7 +240,7 @@ test('briefing sends a read-only Captain request and prints the full static inst
   const instructions = require('../main-core').instructions(process.platform);
   const requests = [];
   const server = setInterval(() => {
-    for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
       const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
       fs.unlinkSync(path.join(dir, 'requests', file));
       requests.push(request);

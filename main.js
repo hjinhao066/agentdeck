@@ -194,6 +194,7 @@ function shellArgs() {
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
+const { clearCredentials, removeCredentials, writeCredentials } = require('./board-credentials');
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -253,6 +254,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
   }
   let p;
   try {
+    writeCredentials(boardControlDir, id, receiptToken, token);
     p = pty.spawn(shellFile(), shellArgs(), {
       name: 'xterm-256color',
       cols: cols || 80,
@@ -266,6 +268,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
   } catch (err) {
     managedSessions.delete(id);
     receiptSessions.delete(id);
+    removeCredentials(boardControlDir, id);
     // Spawn can fail (fd exhaustion, bad shell). Surface it in the column
     // instead of throwing inside the IPC handler and crashing the main process.
     send('pty:data', { id, data: `\r\n[AgentDeck] shell 启动失败: ${err.message}\r\n` });
@@ -281,6 +284,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
       ptys.delete(id);
       managedSessions.delete(id);
       receiptSessions.delete(id);
+      removeCredentials(boardControlDir, id);
       if (notifications) notifications.cancel(id);
       // Keep the frozen buffer until the column is explicitly removed. It lets
       // a renderer reload still show an exited terminal's useful final output.
@@ -304,6 +308,7 @@ function killPty(id, keepReplay) {
   ptyBuffers.delete(id);
   managedSessions.delete(id);
   receiptSessions.delete(id);
+  removeCredentials(boardControlDir, id);
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
 }
 
@@ -414,6 +419,8 @@ function setupBoardControl() {
         try { fs.unlinkSync(path.join(dir, file)); } catch (_) {}
       }
     }
+    clearCredentials(boardControlDir);
+    for (const file of ['board-credentials.js', 'security.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
   } catch (err) {
@@ -1106,6 +1113,7 @@ app.on('before-quit', () => {
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);
   for (const [id, p] of ptys) {
     try { p.kill(); } catch (_) {}
+    removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }
 });

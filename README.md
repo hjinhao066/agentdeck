@@ -368,7 +368,7 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`
   (Antigravity's effort is the model id's suffix, `-low|-medium|-high`; given
   `--effort` beside such an id it silently runs a different model), `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
-  never `agent`, which other tools also install), `codex --dangerously-bypass-approvals-and-sandbox`.
+  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`.
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -476,6 +476,23 @@ to avoid bypassing this policy. Child terminals export
 known Windows `~/.claude/hooks/claude-popup.ps1`, `node scripts/migrate-popup-hook.js`
 backs up and adds the guard without affecting terminals outside AgentDeck.
 The bundled xterm does not play audio for terminal BEL.
+
+### Codex receipt environment
+
+AgentDeck adds `--no-daemon` to Codex launches, including custom commands and
+restored sessions. A shared Codex app server uses its own process environment
+and can lose the current terminal's receipt/control channel variables. Embedded
+servers inherit the column environment. This does not edit Codex user settings.
+
+The bridge still prefers environment credentials. If a shell policy filters the
+tokens, it reads `board-control/credentials/<terminal-id>.json` for the explicit
+`AGENTDECK_TERMINAL_ID` only. The standalone bridge can locate its own profile
+without `CONTROL_DIR`; it never searches other profiles or guesses an identity.
+Files are private (0600, directory 0700 on POSIX), rotate when a PTY starts, and
+are removed on spawn failure, PTY exit, archive/kill, quit and the next app startup.
+Workers retain submission-only capabilities; only the Captain has control access.
+These capabilities route trusted local processes and are not an OS sandbox.
+Already running Codex sessions must be relaunched to adopt the new launch flags.
 
 ## Development and builds
 
