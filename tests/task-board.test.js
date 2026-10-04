@@ -183,7 +183,7 @@ test('dispatcher question/crash update the card; a delegated worker is never cha
   store.dispatch({ id: c.id, session_id: 'dispatcher-1' });
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-1', question: 'Needs clarification?' }).card.status, 'needs_user');
   store.dispatch({ id: c.id, session_id: 'dispatcher-2' });
-  assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-2', failed: 'quota exhausted' }).card.flag, 'quota');
+  assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-2', failed: 'quota exhausted', source: 'automatic' }).card.flag, 'quota');
   store.dispatch({ id: c.id, session_id: 'dispatcher-3' }); bind(c.id);
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-3', failed: 'old dispatcher quit' }).ignored, true);
   assert.equal(store.list()[0].session_id, 'worker');
@@ -261,6 +261,7 @@ test('move preserves live execution/review/dispatcher fences and heartbeat never
         bind(c.id, 'held2', 'worker-held2'); event(c.id, 'failed', 'Still broken', 'held2', 'worker-held2');
       }
     }
+    store.sessions = () => [{ id: 'worker-' + state }, { id: 'worker-held2' }, { id: 'dispatch-' + state }];
     const before = store.list().find((x) => x.id === c.id);
     const moved = store.move({ id: c.id, status: 'doing' }).card;
     assert.equal(moved.session_id, before.session_id); assert.equal(moved.dispatch_session_id, before.dispatch_session_id);
@@ -309,7 +310,7 @@ test('archived and failed legacy attempts can bind anew; live reviewers and just
 
 test('resource failures in execution and review preserve the failure streak and never hold or count rework', (t) => {
   const { store, add, bind, event } = fixture(t);
-  for (const [reason, source, kind] of [['RESOURCE_EXHAUSTED: quota exhausted', 'quota', 'quota'], ['API Error: 401 Unauthorized', 'process', 'auth'], ['Not logged in. Please run /login', 'command', 'auth'], ['429 Too many requests', 'command', 'rate_limit']]) {
+  for (const [reason, source, kind] of [['RESOURCE_EXHAUSTED: quota exhausted', 'quota', 'quota'], ['API Error: 401 Unauthorized', 'process', 'auth'], ['Not logged in. Please run /login', 'automatic', 'auth'], ['429 Too many requests', 'process', 'rate_limit']]) {
     const c = add({ verify: true }); bind(c.id); event(c.id, 'failed', 'Real defect');
     bind(c.id, 'execution2'); event(c.id, 'complete', 'Fixed', 'execution2');
     for (let i = 0; i < 2; i++) {
@@ -330,7 +331,7 @@ test('dispatcher resource receipts do not hold; real dispatcher crashes do, and 
   const starts = []; new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan(); assert.equal(starts[0].key, key);
   for (let i = 0; i < 2; i++) {
     store.dispatch({ id: c.id, session_id: 'quota-' + i });
-    const failed = store.dispatcherReceipt({ id: c.id, session_id: 'quota-' + i, failed: 'Not logged in', source: 'command' }).card;
+    const failed = store.dispatcherReceipt({ id: c.id, session_id: 'quota-' + i, failed: 'Not logged in', source: 'quota' }).card;
     assert.equal(failed.flag, 'quota'); assert.equal(failed.consecutive_failures, 0);
   }
   for (let i = 0; i < 2; i++) {
@@ -346,4 +347,54 @@ test('a pending heartbeat claim loses to a manual binding or a newer claim', (t)
   const h = new TaskHeartbeat(store, { onStart: (i) => { starts.push(i); return false; } }); h.scan();
   bind(c.id); h.scan(); assert.equal(starts.length, 1);
   assert.equal(store.list()[0].dispatch_claim.delivered, true);
+});
+
+for (const reason of ['Rate limit handling test fails in api.js', 'Unauthorized access test still failing',
+  'Limit reached check broken', 'npm test 失败\n401 Unauthorized']) {
+  test(`command failure counts toward held without resource classification: ${reason}`, (t) => {
+    const { store, add, bind, event } = fixture(t); const c = add({ verify: true });
+    bind(c.id); event(c.id, 'complete', 'Ready for review');
+    for (let i = 1; i <= 2; i++) {
+      if (i === 2) { bind(c.id, 'repair'); event(c.id, 'complete', 'Reworked', 'repair'); }
+      bind(c.id, 'review-' + i, 'reviewer');
+      const failed = event(c.id, 'failed', reason, 'review-' + i, 'reviewer').card;
+      assert.equal(failed.resource_failure, null);
+      assert.equal(failed.consecutive_failures, i); assert.equal(failed.rework_count, i);
+      assert.equal(failed.flag, i === 2 ? 'held' : 'failed');
+    }
+    assert.throws(() => store.claim({ id: c.id }), /held/);
+  });
+}
+
+test('closed missing workers release occupancy on done to doing; unknown open attempts stay fenced', (t) => {
+  const { store, add, bind, event } = fixture(t); const c = add();
+  bind(c.id); event(c.id, 'complete', 'Done on another machine');
+  assert.equal(store.occupied(store.list()[0]), false);
+  const moved = store.move({ id: c.id, status: 'doing' }).card;
+  assert.equal(moved.session_id, null); assert.equal(moved.attempt_id, null);
+  const starts = []; new TaskHeartbeat(store, { onStart: (input) => starts.push(input) }).scan();
+  assert.equal(starts.length, 1);
+  const open = add(); bind(open.id, 'open', 'remote-worker');
+  assert.equal(store.occupied(store.list().find((card) => card.id === open.id)), true);
+  assert.equal(store.move({ id: open.id, status: 'doing' }).card.session_id, 'remote-worker');
+});
+
+test('heartbeat reads session config once per scan and refreshes it on the next scan', (t) => {
+  const { store, add } = fixture(t); const starts = []; let reads = 0;
+  const cards = [add(), add(), add()];
+  cards.forEach((c) => store.move({ id: c.id, status: 'doing' }));
+  store.sessions = () => { reads++; return reads === 1 ? [] : [{ id: 'new-worker', boardId: cards[0].id }]; };
+  const h = new TaskHeartbeat(store, { onStart: (input) => { starts.push(input); return false; } });
+  h.scan(); assert.equal(reads, 1); assert.equal(starts.length, 3);
+  h.scan(); assert.equal(reads, 2); assert.equal(starts.length, 5);
+  assert.equal(h.pending.has(cards[0].id), false);
+});
+
+test('a finished unarchived worker reports occupancy rather than active execution', (t) => {
+  const { store, add, bind, event } = fixture(t); const c = add();
+  bind(c.id); event(c.id, 'complete', 'Done');
+  store.sessions = () => [{ id: 'worker', boardId: c.id, active: false }];
+  store.move({ id: c.id, status: 'todo' });
+  assert.equal(store.activeAttempt(store.list()[0]), false);
+  assert.equal(store.claim({ id: c.id, newEntry: true }).occupied, true);
 });

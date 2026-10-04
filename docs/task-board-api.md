@@ -77,7 +77,7 @@ unsubscribe();
 | `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；移入 doing 时保留未归档会话作为占用标记并检查前置；其他移动清除绑定 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
 | `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
-| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | `Promise<{card, dispatcher:'captain'} \| {ignored: true, card?}>`；只通知队长，不开调度会话 |
+| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | `Promise<{card, dispatcher:'captain'} \| {ignored: true, card?, occupied?: true}>`；只通知队长，不开调度会话；occupied 表示未归档会话占用 |
 | `reorder(id, anchor = {})` | 可选 before 或 after 卡片 ID，只接受同项目锚点，两者不可同时提供；无锚点放项目末尾 | `Promise<{card, notices}>`；只改 order，必要时重排项目内序号 |
 | `answer(id, reply)` | 非空答案，必须已有队长 | 通知队长；需要你的卡回到 doing，活跃会话保留绑定，无绑定时认领并通知队长 |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
@@ -166,7 +166,7 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 | 执行 complete | verify=true → review，否则 done；记录第一句结果 |
 | ask | needs_user；写第一句问题，完整问题仍给队长 |
 | 普通 complete --failed / 崩溃 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
-| 额度用尽 / 未登录 / 限流（执行、审查或调度） | doing + quota，保留连续失败计数，不计返工、不触发 held；失败原因给队长 |
+| quota/process/automatic 来源的额度用尽 / 未登录 / 限流（执行、审查或调度） | doing + quota，保留连续失败计数，不计返工、不触发 held；失败原因给队长。command 的失败文案不做资源分类，照常累计失败 |
 | 所有前置 done | 后续 todo 的 blocked 自动清除，可开始（不会偷偷启动） |
 | review 卡片 new --task-id | 绑定审查会话；审查期间仍 review |
 | 审查 complete | done，清除连续失败次数 |
@@ -205,6 +205,9 @@ Claude 席位判断；已用尽时不开 PTY，显示「额度用尽，稍后自
 开工事件、重复文件通知均不启动调度。同一卡片同一次开始只认领一次；退出重开
 保留 delivered 标记，尚未送出的本机认领在有队长后接续。再次开始必须先回 todo，
 再通过 startCard 或移入 doing。历史迁移卡已标认领完成，避免重复派旧活。
+已关闭的尝试若本机找不到旧会话（已删除或在另一台电脑），移回 doing 时清除旧绑定；
+尚未关闭且本机未知的会话继续保留占用。心跳单次扫描复用一份会话配置，下次扫描重新读取。
+拖到进行中遇到旧会话占用时，界面提示队长检查未归档会话，不再声称有队员正在做。
 日志通过已有主进程诊断日志（系统临时目录 `agentdeck-notify.log`）记录
 `task-board start claimed`、卡片 ID、项目和认领键，
 不记录卡片正文或能力 token；无变化不调用模型、不产生日志。

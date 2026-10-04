@@ -11,6 +11,8 @@ vm.runInContext(source.slice(source.indexOf('const WORKING_RE'), source.indexOf(
   source.slice(source.indexOf('function statusScreen'), source.indexOf('// Format elapsed ms')), context);
 const { classify, statusScreen } = context;
 const cursorCmd = 'cursor-agent --force --model grok-4.7-high-fast';
+const codexIdle = ['─ Worked for 34m 29s • 12:52 ─', '› Ask Codex to do anything',
+  'GPT-6.1-Sol high · ~ · 修复僵尸调度会话派卡', '? for shortcuts  ⚠ 3 · f2'].join('\n');
 // Status/footer tails of the three 1.1.3 live captures (2026-10-04):
 // muu4l1ja3s6j5n = updating, muu4nwrxhvh0tp = waiting-shell, muu4opao63zjp4 = thinking.
 // Unrelated tool output is omitted and the working directory is replaced by ~.
@@ -176,4 +178,27 @@ test('a narrow Cursor screen: wrapped idle prompt reads idle, a busy one reads w
   assert.equal(classify('  → Add a follow-up   ctrl+c to\n    stop', { hasWorked: true }, cmd), 'working');
   // unwrapped behaviour of the accepted Cursor status work is unchanged
   assert.equal(classify('⠋ Thinking…\n\n→ Add a follow-up', { hasWorked: true }, cmd), 'done');
+});
+
+test('Codex completed divider excludes historical busy evidence from status and delivery readiness', () => {
+  for (const stale of ['◦ Working (11m 27s • esc to interrupt)', '✻ Doing…', 'press up to edit queued messages',
+    'API Error: 401 Unauthorized', 'Proceed? (y/n)', '• Thinking…']) {
+    const screen = stale + '\n' + codexIdle;
+    assert.equal(classify(screen, { state: 'working', hasWorked: true }, 'codex'), 'done', stale);
+    assert.equal(MainCore.terminalActivity(screen, 'codex'), '', stale);
+    assert.equal(MainCore.resourceReceipt(screen, 'codex'), null, stale);
+    assert.equal(context.terminalIdle({ cmd: 'codex' }, { alive: true, state: 'done', lastScreen: screen }), true, stale);
+    for (const width of [26, 45, 80]) {
+      const rows = screen.split('\n').flatMap((line) => (line.match(new RegExp(`.{1,${width}}`, 'gu')) || [''])
+        .map((text, i) => i ? { text } : text));
+      assert.equal(classify(statusScreen(terminal(rows)), { hasWorked: true }, 'codex'), 'done', `${stale} width=${width}`);
+    }
+  }
+  assert.equal(classify(codexIdle, { hasWorked: true }, 'codex'), 'done');
+  for (const live of busy) {
+    assert.equal(classify(codexIdle + '\n' + live, { hasWorked: true }, 'codex'), 'working', live);
+  }
+  assert.equal(classify(codexIdle + '\nAPI Error: 401 Unauthorized', { hasWorked: true }, 'codex'), 'quota');
+  assert.equal(classify(codexIdle + '\nProceed? (y/n)', { hasWorked: true }, 'codex'), 'input');
+  assert.equal(classify(busy[0] + '\n› Ask Codex to do anything\n? for shortcuts', { hasWorked: true }, 'codex'), 'working');
 });

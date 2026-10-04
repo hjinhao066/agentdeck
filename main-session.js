@@ -114,7 +114,7 @@
     const claimed = heartbeat
       ? { card: (await window.TaskBoard.list()).find((c) => c.id === id) }
       : await boardRequest('claim', { id, ...(notice ? { newEntry: true } : {}) });
-    if (claimed.ignored) return { card: claimed.card, ignored: true };
+    if (claimed.ignored) return { card: claimed.card, ignored: true, occupied: claimed.occupied };
     if (!claimed.card || !claimed.card.dispatch_claim || claimed.card.dispatch_claim.delivered || heartbeat && claimed.card.dispatch_claim.key !== heartbeat.key) return { ignored: true };
     const key = claimed.card.dispatch_claim.key;
     if (state()?.waitlist.some((w) => w.metadata?.boardId === id)) {
@@ -881,7 +881,7 @@
         const entry = host.terms.get(caller.id);
         // The exit command may beat the status tick; read the current terminal.
         const screen = entry?.term ? host.dumpScreen(entry.term, 40) : entry?.lastScreen;
-        const receipt = { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process', ...M.resourceReceipt(screen) };
+        const receipt = { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process', ...M.resourceReceipt(screen, caller.cmd) };
         await recordReceiptForBoard(task, receipt);
         settle(task, receipt, true);
       } else { task.endedAt = Date.now(); task.processEnded = true; update(task); }
@@ -929,14 +929,14 @@
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
       if (task.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(task.status)) continue;
-      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen) }); continue; }
+      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen, col?.cmd) }); continue; }
       const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
       if (entry.state === 'quota' || activity === 'quota') {
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
         if (task.status === 'queued' && col?.lastReceipt?.source === 'quota') continue;
         if (task.status === 'asking') task.status = 'working';
-        settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen) });
+        settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen, col?.cmd) });
         continue;
       }
       if (task.status === 'queued') {

@@ -258,13 +258,35 @@ test('Captain held/completed moves never open a dispatcher and new binds stale a
   await command(['complete', '--result', 'Done'], fresh.env);
 });
 
+test('Codex completed screen releases ordinary tell and tell --now after a Captain card move', async () => {
+  const c = await add('Codex idle rework');
+  const w = await worker(c.id, 'Codex completed stand-in', FAKE + ' --codex-completed --interruptible');
+  await expect.poll(() => page.evaluate((id) => terms.get(id).state, w.session)).toBe('done');
+  await command(['complete', '--result', 'First execution finished'], w.env);
+  for (const now of [false, true]) {
+    await command(['task', 'move', '--id', c.id, '--status', 'doing']);
+    expect((await card(c.id)).session_id).toBe(w.session);
+    const ledger = await command(['ledger']);
+    expect(ledger.split('\n').find((line) => line.startsWith(w.session))).toContain('已完成');
+    const message = now ? 'Immediate Codex rework delivered' : 'Ordinary Codex rework delivered';
+    await command(['tell', '--to', w.session, '--message', message, ...(now ? ['--now'] : [])]);
+    await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), w.session), { timeout: 15000 }).toContain('GOT ' + message);
+    await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, w.session)).toBe('working');
+    await expect.poll(() => page.evaluate((id) => terms.get(id).state, w.session)).toBe('done');
+    expect((await card(c.id)).attempt_closed).toBe(false);
+    await command(['complete', '--result', 'Rework finished'], w.env);
+    expect((await card(c.id)).status).toBe('done');
+  }
+});
+
 test('quota/login/throttle receipts preserve real failure count through repeated replacements', async () => {
   const c = await add('Resource errors do not hold'); const initial = await worker(c.id);
   await command(['complete', '--result', 'Failed test', '--failed', 'Assertion failed'], initial.env);
   expect((await card(c.id)).consecutive_failures).toBe(1);
   for (const reason of ['Not logged in. Please run /login', '429 Too many requests', 'RESOURCE_EXHAUSTED: quota exhausted']) {
     const w = await worker(c.id, 'Resource replacement');
-    await command(['complete', '--result', 'Provider unavailable', '--failed', reason], w.env);
+    await page.evaluate(([id, reason]) => MainSession.onTick(id, { ...terms.get(id), state: 'quota', lastScreen: reason }), [w.session, reason]);
+    await expect.poll(async () => (await card(c.id)).flag).toBe('quota');
     const failed = await card(c.id); expect(failed.flag).toBe('quota'); expect(failed.consecutive_failures).toBe(1); expect(failed.rework_count).toBe(0);
   }
   const w = await worker(c.id, 'Real defect'); await command(['complete', '--result', 'Broken', '--failed', 'Missing assertion'], w.env);
@@ -294,7 +316,7 @@ test('exhausted automatic dispatch waits without a PTY, resumes once, and yields
     await expect.poll(() => fs.existsSync(path.join(envDir, dispatcher + '.json'))).toBe(true);
     await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, dispatcher)).toBe('working');
     expect(await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length)).toBe(before + 1);
-    await command(['complete', '--result', 'No work delegated', '--failed', 'Not logged in'], JSON.parse(fs.readFileSync(path.join(envDir, dispatcher + '.json'), 'utf8')));
+    await page.evaluate((id) => MainSession.onTick(id, { ...terms.get(id), state: 'quota', lastScreen: 'Not logged in' }), dispatcher);
     await expect.poll(async () => (await card(c.id)).flag).toBe('quota'); expect((await card(c.id)).consecutive_failures).toBe(0);
 
     await page.evaluate(() => { config.quotas.Antigravity.blocked.resetAt = Date.now() + 600000; });

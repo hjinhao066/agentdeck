@@ -106,10 +106,11 @@ test('internal exit reports queue durably without waiting on a quitting renderer
 
 test('quota/login/throttle failures are classified from errors, with ordinary defect counterexamples', () => {
   for (const [line, kind] of [['Error: Quota exceeded', 'quota'], ["You've hit your usage limit", 'quota'], ['API Error: 401 Unauthorized', 'auth'], ['Not logged in. Please run /login', 'auth'], ['Error: rate_limit_error', 'rate_limit'], ['请求被限流', 'rate_limit']]) {
-    assert.equal(M.resourceFailure(line), kind, line); assert.equal(M.terminalActivity(line), 'quota', line);
+    assert.equal(M.resourceFailure(line, 'automatic'), kind, line); assert.equal(M.terminalActivity(line), 'quota', line);
   }
-  for (const line of ['Test failed: quota exceeded message was missing', 'I will test quota exceeded handling', 'Authentication test assertion failed', 'exit 7', 'Missing login button', 'Unexpected HTTP response']) assert.equal(M.resourceFailure(line), '', line);
+  for (const line of ['Test failed: quota exceeded message was missing', 'I will test quota exceeded handling', 'Authentication test assertion failed', 'exit 7', 'Missing login button', 'Unexpected HTTP response']) assert.equal(M.resourceFailure(line, 'automatic'), '', line);
   assert.equal(M.resourceFailure('provider unavailable', 'quota'), 'quota');
+  for (const source of ['command', '', 'review']) assert.equal(M.resourceFailure('401 Unauthorized\n429 Too many requests\nQuota exceeded', source), '', source);
   assert.equal(M.terminalActivity('Not logged in\n→ Working ctrl+c to stop'), 'working');
 });
 

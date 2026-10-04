@@ -286,7 +286,8 @@
       if (status !== card.status) {
         if (status === 'doing' && (card.status === 'todo' || card.status === 'needs_user')) {
           const result = await api().requestStart(card.id);
-          host.showToast(result && result.ignored ? '这张卡已经在派活或有队员在做了' : `已通知队长安排「${card.title}」`);
+          host.showToast(result && result.ignored ? result.occupied ? '这张卡仍有关联的未归档会话，请队长检查并安排' : '这张卡的派活请求已经处理，请队长检查并安排' : `已通知队长安排「${card.title}」`);
+          if (result && result.ignored) { await refresh(); return; }
         } else await api().move(card.id, status, card.updated);
         announce(`「${card.title}」已移到${U.labelOf(status)}`);
       }

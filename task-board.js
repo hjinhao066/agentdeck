@@ -153,19 +153,22 @@ class TaskStore {
       cards.push(card); return { card, notices: [] };
     });
   }
-  sessionOpen(id) {
-    return !!id && this.sessions().find((s) => s.id === id)?.archived !== true;
+  sessionOpen(id, attemptClosed = false, sessions = this.sessions()) {
+    if (!id) return false;
+    const session = sessions.find((s) => s.id === id);
+    return session ? !session.archived : !attemptClosed;
   }
-  occupied(card) {
-    return this.sessionOpen(card.session_id) || this.sessionOpen(card.dispatch_session_id) ||
-      this.sessions().some((s) => !s.archived && (s.boardId === card.id || s.dispatcherCardId === card.id));
+  occupied(card, sessions = this.sessions()) {
+    return this.sessionOpen(card.session_id, card.attempt_closed, sessions) || this.sessionOpen(card.dispatch_session_id, false, sessions) ||
+      sessions.some((s) => !s.archived && (s.boardId === card.id || s.dispatcherCardId === card.id));
   }
   activeAttempt(card) {
-    const session = this.sessions().find((s) => s.id === card.session_id);
-    return (card.session_id && this.sessionOpen(card.session_id) && !card.attempt_closed &&
+    const sessions = this.sessions();
+    const session = sessions.find((s) => s.id === card.session_id);
+    return (card.session_id && this.sessionOpen(card.session_id, card.attempt_closed, sessions) && !card.attempt_closed &&
       !session?.failed && !(session?.lastReceipt?.failed && !session.active) &&
       !['failed', 'quota', 'held'].includes(card.flag) && !/:failed:/.test(card.last_event || '')) ||
-      this.sessions().some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
+      sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
   }
   failure(card, attempt, reason, rework, source = '') {
     if (card.last_failure_attempt === attempt) return;
@@ -199,8 +202,9 @@ class TaskStore {
       // Keep unarchived sessions as an occupancy fence, including a finished
       // worker which the Captain may tell to rework. A reviewer rejection ends
       // its old attempt, so late receipts cannot undo the rejection.
-      if (input.status !== 'doing' || !this.sessionOpen(card.session_id)) { card.session_id = null; card.attempt_id = null; }
-      if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id)) card.dispatch_session_id = null;
+      const sessions = this.sessions();
+      if (input.status !== 'doing' || !this.sessionOpen(card.session_id, card.attempt_closed, sessions)) { card.session_id = null; card.attempt_id = null; }
+      if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id, false, sessions)) card.dispatch_session_id = null;
       if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
       card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
       if (input.status !== 'doing') card.dispatch_claim = null;
@@ -319,11 +323,11 @@ class TaskStore {
       return { card, captain: card.important === true || card.start_previous_status === 'needs_user' || card.flag === 'failed' || !card.detail.trim(), notices: [] };
     });
   }
-  claim(input) {
+  claim(input, sessions = this.sessions()) {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
       if (card.status === 'review') throw new Error('Card needs verification. Use new --task-id for a reviewer, or task move to doing to reject it.');
-      if (this.occupied(card)) return { card, ignored: true, notices: [] };
+      if (this.occupied(card, sessions)) return { card, ignored: true, occupied: true, notices: [] };
       if (card.dispatch_claim && !input.newEntry) return { card, ignored: true, notices: [] };
       if (input.updated && input.updated !== card.updated) return { card, ignored: true, notices: [] };
       card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: false, created: new Date().toISOString() };

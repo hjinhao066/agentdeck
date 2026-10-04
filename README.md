@@ -61,6 +61,9 @@ the middle:
   even during silent background tools. Wrapped rows are joined; old scrollback
   and replayed output do not keep a finished session yellow. Once the busy
   indicator disappears, the existing two-tick debounce permits green.
+  Codex's `Worked for …` divider followed by its ready prompt excludes prior
+  turn indicators above that divider; new busy or confirmation rows below it
+  still block delivery. Ordinary `tell` and `tell --now` use this same readiness.
   Cursor's `→ Add a follow-up … ctrl+c to stop` input row is busy evidence;
   only its ready input row can end a submitted turn, including during silent
   initialization. Its ready row also clears obsolete tool indicators above it.

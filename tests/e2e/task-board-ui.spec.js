@@ -510,3 +510,20 @@ test('Escape restores sidebar focus and keyboard column navigation closes the ov
   }
   expect(errors).toEqual([]);
 });
+
+test('dragging a card with only a finished old worker gives an accurate occupancy notice', async () => {
+  await launch();
+  await page.evaluate(async () => {
+    columns.find((c) => c.id === 'w-ui').boardId = 'p-ui';
+    await window.deck.saveConfig({ ...config, columns });
+    await TaskBoard.move('p-ui', 'todo');
+  });
+  await page.locator('#taskBoardBtn').click();
+  const card = page.locator('.tbv-card[data-card-id="p-ui"]');
+  await expect(card).toBeVisible();
+  const doing = await center(page.locator('.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="doing"]'));
+  await drag(card, doing.x, doing.y + 30);
+  await expect(page.locator('#toast')).toContainText('仍有关联的未归档会话，请队长检查并安排');
+  expect(readCard('p-ui').status).toBe('todo');
+  expect(await captainNotices()).toEqual([]);
+});
