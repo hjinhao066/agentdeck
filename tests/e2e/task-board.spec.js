@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -51,7 +52,7 @@ test.beforeAll(async () => {
   await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
   captainEnv = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterAll(async () => { if (app) await closeElectron(app); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 test.afterEach(async ({}, info) => {
   if (info.status === info.expectedStatus) return;
   await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
@@ -266,6 +267,22 @@ test('queued new keeps card binding and project review targets until delivery, a
   const reviewer = await worker(c.id, 'Final review'); await command(['complete', '--result', 'Verified'], reviewer.env);
   expect((await card(c.id)).status).toBe('done');
   await page.evaluate(() => TaskBoard.settings('captain'));
+});
+
+test('Captain tell restores and rebinds the archived original session after moving its card back to doing', async () => {
+  const c = await add('Archived original worker'); const w = await worker(c.id);
+  await command(['complete', '--result', 'First execution done'], w.env);
+  await command(['archive', '--id', w.session]);
+  await command(['task', 'move', '--id', c.id, '--status', 'doing']);
+  expect((await card(c.id)).session_id).toBe(w.session);
+  expect((await card(c.id)).attempt_id).toBe(null);
+  expect(await command(['tell', '--to', w.session, '--message', 'Continue the original task'])).toContain('已恢复');
+  await expect.poll(async () => (await card(c.id)).attempt_id).toBeTruthy();
+  await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, w.session), { timeout: 30000 }).toBe('working');
+  const envFile = path.join(envDir, w.session + '.json');
+  await expect.poll(() => JSON.parse(fs.readFileSync(envFile, 'utf8')).AGENTDECK_RECEIPT_TOKEN).not.toBe(w.env.AGENTDECK_RECEIPT_TOKEN);
+  await command(['complete', '--result', 'Restored task done'], JSON.parse(fs.readFileSync(envFile, 'utf8')));
+  expect((await card(c.id)).status).toBe('done');
 });
 
 test('a synced JSON conflict cannot swallow a command receipt; its transition retries after the file is resolved', async () => {

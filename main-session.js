@@ -1172,12 +1172,12 @@
         const text = window.BoardCore.cleanText(message.message, 2_000_000);
         if (!text) throw new Error('tell 需要 --message。');
         let col = findTarget(message.to);
+        let restored = false;
         if (!col) {
           const old = archivedCrew(message.to);
           if (old) {
             col = host.restoreArchived(old.id, false, true);
-            dispatch(col, text, host.columnLabel(col));
-            return { done: true, result: `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。` };
+            restored = true;
           }
         }
         if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
@@ -1201,7 +1201,7 @@
           await handle({ action: 'main-stop', to: col.id, keepQueued: true }, caller);
         }
         dispatch(col, text, host.columnLabel(col));
-        return { done: true, result: message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
+        return { done: true, result: restored ? `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。` : message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
       }
       case 'main-answer': {
         const col = findTarget(message.to);
