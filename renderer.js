@@ -3263,6 +3263,12 @@ const deckHost = {
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
+  quotaStates: () => {
+    const now = Date.now();
+    const seats = QuotaCore.claudeSeats(config.claudeSeats);
+    const captainSeat = seats.find((s) => s.id === claudeCaptainSeatId()) || null;
+    return Object.fromEntries(QuotaCore.PROVIDERS.map((provider) => [provider, QuotaCore.summary(config.quotas, provider, now, provider === 'Claude' ? captainSeat : null, claudeCaptainSeatId()).state]));
+  },
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
 };
@@ -3544,6 +3550,13 @@ setInterval(() => {
           st = 'working';
         }
       }
+      const openTurn = window.ChatUI && ChatUI.openTurn ? ChatUI.openTurn(id) : null;
+      st = MainCore.displayedSessionState(st, {
+        turnOpen: !!(openTurn && openTurn.turn && !openTurn.turn.done),
+        turnStartedAt: openTurn && openTurn.startedAt || 0,
+        lastOutputAt: entry.lastOutputAt || 0,
+        now: Date.now(),
+      });
       entry.state = st;
       setDot(entry, st);
       maybeNotifyState(id, entry, st);

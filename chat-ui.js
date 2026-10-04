@@ -1261,5 +1261,6 @@
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
     addCard, updateCard, retireChat, snapshotForHandoff, turnsOf, captainArchives, captainSnapshot, archiveCaptainSnapshot,
+    openTurn: (id) => pending.get(id) || null,
   };
 })();

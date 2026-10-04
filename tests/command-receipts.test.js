@@ -32,6 +32,7 @@ test('submission schema rejects invalid results and files instead of silently cu
   }
   assert.deepEqual(M.commandReceipt({ result: 'ok', files: ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a'] }).files, ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a']);
   for (const command of ['complete --result', 'ask --question', 'progress --message']) assert.ok(M.RECEIPT_CONTRACT.includes(command));
+  assert.match(M.RECEIPT_CONTRACT, /中途汇报或暂停用 progress，不要用 complete/);
   assert.ok(M.RECEIPT_CONTRACT.includes('$env:AGENTDECK_BOARD_CLI'));
 });
 

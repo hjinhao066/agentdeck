@@ -175,7 +175,20 @@ class TaskStore {
       card.status = input.status;
       if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
       if (input.status === 'done') card.consecutive_failures = 0;
-      card.session_id = null; card.attempt_id = null; card.dispatch_session_id = null; card.archived = false;
+      // Moving back to doing keeps the execution session. Clearing it made the
+      // heartbeat open another dispatcher on top of the worker already running.
+      const resumeSession = input.resume_session_id ? idValue(input.resume_session_id) : '';
+      const keepSession = input.status === 'doing' && (card.session_id || resumeSession);
+      if (keepSession) {
+        if (!card.session_id) card.session_id = resumeSession;
+        card.attempt_id = 'resume-' + crypto.randomUUID();
+        card.attempt_closed = true;
+        card.dispatch_session_id = null;
+        if (card.dispatch_claim) card.dispatch_claim.delivered = true;
+      } else {
+        card.session_id = null; card.attempt_id = null; card.dispatch_session_id = null;
+      }
+      card.archived = false;
       if (input.status !== 'doing') card.dispatch_claim = null;
       touch(card);
       return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
@@ -264,7 +277,7 @@ class TaskStore {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
       if (card.status === 'review') throw new Error('Card needs verification. Use new --task-id for a reviewer, or task move to doing to reject it.');
-      if (card.session_id && !card.attempt_closed || card.dispatch_session_id) return { card, ignored: true, notices: [] };
+      if (card.session_id || card.dispatch_session_id) return { card, ignored: true, notices: [] };
       if (card.dispatch_claim && !input.newEntry) return { card, ignored: true, notices: [] };
       if (input.updated && input.updated !== card.updated) return { card, ignored: true, notices: [] };
       card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: false, created: new Date().toISOString() };
@@ -286,8 +299,10 @@ class TaskStore {
       if (card.dispatch_session_id !== input.session_id) return { card, ignored: true, notices: [] };
       const notices = [];
       if (input.failed) {
-        this.failure(card, input.session_id, text(input.failed, 'dispatcher failure', true), false);
-        notices.push(`卡片 ${card.id} 调度失败：${input.failed}${card.flag === 'held' ? '；连续失败 2 次，已挂起。' : ''}`);
+        // The dispatcher's own quota or crash is not the worker failing. Counting
+        // it held cards whose real session was still running.
+        card.latest_receipt = sentence(text(input.failed, 'dispatcher failure', true));
+        notices.push(`卡片 ${card.id} 调度失败：${input.failed}；未计入连续失败，卡片不挂起。`);
       } else {
         card.status = 'needs_user';
         card.latest_receipt = sentence(input.question || '调度已结束，尚未派出执行会话');

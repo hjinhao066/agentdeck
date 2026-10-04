@@ -192,6 +192,30 @@ test('a worker question is read out and handed to 队长, not the user', () => {
   assert.equal(M.parseReceipt('【提问】\n问题：x\n后来想通了\n【回执】\n摘要：done').question, '');
 });
 
+test('dispatcher prefers Cursor Grok and skips an exhausted agent for the next known quota', () => {
+  const grok = 'cursor-agent --force --model grok-4.7-high-fast';
+  assert.equal(M.pickDispatcher({}).cmd, grok);
+  assert.equal(M.pickDispatcher({ Cursor: 'unknown' }).cmd, grok);
+  assert.equal(M.pickDispatcher({ Cursor: 'normal' }).provider, 'Cursor');
+  assert.equal(M.pickDispatcher({ Cursor: 'exhausted', Codex: 'normal' }).cmd, 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
+  assert.equal(M.pickDispatcher({ Cursor: 'exhausted', Codex: 'unknown', Claude: 'warning' }).provider, 'Claude');
+  assert.equal(M.pickDispatcher({ Cursor: 'exhausted', Codex: 'exhausted', Claude: 'unknown', Antigravity: 'exhausted' }), null);
+  assert.equal(M.pickDispatcher({ Cursor: 'exhausted', Antigravity: 'normal' }).provider, 'Antigravity');
+  assert.match(M.RECEIPT_CONTRACT, /中途汇报或暂停用 progress，不要用 complete/);
+});
+
+test('a session that received a new instruction is working while that turn is still producing output', () => {
+  const now = 1_000_000;
+  const running = { turnOpen: true, turnStartedAt: now - 20_000, lastOutputAt: now - 500, now };
+  assert.equal(M.displayedSessionState('done', running), 'working');
+  assert.equal(M.displayedSessionState('plain', running), 'working');
+  assert.equal(M.displayedSessionState('done', { ...running, lastOutputAt: now - 8000 }), 'done');
+  assert.equal(M.displayedSessionState('done', { turnOpen: true, turnStartedAt: now - 1000, lastOutputAt: now - 5000, now }), 'working');
+  assert.equal(M.displayedSessionState('input', running), 'input');
+  assert.equal(M.displayedSessionState('quota', running), 'quota');
+  assert.equal(M.displayedSessionState('done', { turnOpen: false, turnStartedAt: now - 1000, lastOutputAt: now - 100, now }), 'done');
+});
+
 test('shells are recognized by name or full path; agents are not shells', () => {
   for (const n of ['zsh', '-zsh', '/bin/zsh', '/opt/homebrew/bin/fish', 'C:\\\\Windows\\\\System32\\\\cmd.exe', 'pwsh.exe', '']) assert.equal(M.isShellProcess(n), true, n);
   for (const n of ['node', 'claude', '/usr/local/bin/agy', 'grok', 'codex', 'gemini', 'python3']) assert.equal(M.isShellProcess(n), false, n);

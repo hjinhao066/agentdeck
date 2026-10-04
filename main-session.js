@@ -117,15 +117,38 @@
       await boardRequest('dispatched', { id, key });
       return { card, dispatcher: 'captain' };
     }
+    const worker = liveWorker(id);
+    if (worker) {
+      await boardRequest('dispatched', { id, key });
+      return { card, dispatcher: 'existing', session_id: worker.id };
+    }
     if (freeSlots() <= 0) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话无空位，请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
+    const choice = M.pickDispatcher(host.quotaStates ? host.quotaStates() : {});
+    if (!choice) {
+      boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度模型额度已用尽，没有下一个可用的，请队长安排。`);
+      await boardRequest('dispatched', { id, key });
+      return { card, dispatcher: 'captain' };
+    }
     const sessionId = 'c-dispatch-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     await boardRequest('dispatch', { id, session_id: sessionId });
     const cli = M.boardCli(host.platform);
     const prompt = M.dispatcherInstructions(host.platform, card);
-    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd: window.BoardCore.commandForAgent('agy'), captainCrew: true, project: card.project, dispatcherCardId: id }, true);
+    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd: choice.cmd, captainCrew: true, project: card.project, dispatcherCardId: id }, true);
     dispatch(col, prompt + `\n整理后用 ${cli} new --task-id ${id} --project ${JSON.stringify(card.project)} --title "标题" --task "整理后的任务" --agent … 派出去，然后 complete 说明派给谁。拿不准就 ask 交队长。`, '调度：' + card.title);
     await boardRequest('dispatched', { id, key });
+    if (choice.provider !== 'Cursor') boardNotice(`卡片 ${card.id} 的调度员改用 ${choice.provider}：Cursor Grok 额度已用尽。`);
     return { card, dispatcher: 'gemini', session_id: col.id };
+  }
+  // An execution column that is still up, or was just given a follow-up, already
+  // owns the card. Opening a dispatcher beside it only burns another quota.
+  function liveWorker(cardId) {
+    const s = state();
+    return host.columns().find((c) => {
+      if (!c || c.isMain || c.dispatcherCardId || c.boardId !== cardId) return false;
+      const alive = !!host.terms.get(c.id)?.alive;
+      const told = !!s && s.tasks.some((t) => t.colId === c.id && ['queued', 'working', 'quota', 'input', 'asking'].includes(t.status));
+      return alive || told;
+    }) || null;
   }
   window.TaskBoard = {
     onChange: (callback) => window.deck.onTasksChanged(callback),
@@ -663,11 +686,14 @@
     }
     const dispatcher = host.columns().find((c) => c.id === task.colId && c.dispatcherCardId);
     const delegatedQueue = dispatcher && state()?.waitlist.some((w) => w.metadata?.boardId === dispatcher.dispatcherCardId);
-    if (dispatcher && !delegatedQueue) window.deck.taskBoard('dispatcherReceipt', { id: dispatcher.dispatcherCardId, session_id: dispatcher.id, failed: receipt.failed || '', question: receipt.question || '' }).then((result) => {
-      if (receipt.failed) {
-        if (result.card?.flag === 'held' && !result.ignored) boardNotice(`卡片 ${dispatcher.dispatcherCardId} 连续失败 2 次，已挂起。`);
-      } else for (const notice of result.notices || []) boardNotice(notice);
-    }, (error) => host.showToast(error.message));
+    if (dispatcher && !delegatedQueue) {
+      // A failed dispatcher must leave the sidebar. Quota screens stay "busy",
+      // so this archive is explicit rather than the idle auto-archive.
+      if (receipt.failed) host.archiveColumn(dispatcher, { quiet: true, captain: true });
+      window.deck.taskBoard('dispatcherReceipt', { id: dispatcher.dispatcherCardId, session_id: dispatcher.id, failed: receipt.failed || '', question: receipt.question || '' }).then((result) => {
+        for (const notice of result.notices || []) boardNotice(notice);
+      }, (error) => host.showToast(error.message));
+    }
     task.receipt = receipt;
     task.status = receipt.question ? 'asking' : receipt.failed ? 'failed' : receipt.explicit ? 'done' : 'stopped';
     task.doneAt = Date.now();
@@ -900,12 +926,23 @@
   }
 
   // ---- commands from the main session's terminal (board-cli) ----
+  function sessionState(col, entry) {
+    if (!entry) return 'plain';
+    if (!entry.alive) return 'exited';
+    const open = window.ChatUI && window.ChatUI.openTurn ? window.ChatUI.openTurn(col.id) : null;
+    return M.displayedSessionState(entry.state || 'plain', {
+      turnOpen: !!(open && open.turn && !open.turn.done),
+      turnStartedAt: open && open.startedAt || 0,
+      lastOutputAt: entry.lastOutputAt || 0,
+      now: Date.now(),
+    });
+  }
   function ledgerRows() {
     const folders = new Map((host.config.folders || []).map((f) => [f.id, f.name]));
     return host.columns().filter((c) => !c.isMain).map((c) => {
       const entry = host.terms.get(c.id);
       return {
-        id: c.id, title: host.columnLabel(c), state: entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain',
+        id: c.id, title: host.columnLabel(c), state: sessionState(c, entry),
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };
@@ -1053,8 +1090,14 @@
         }
         if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         if (col.boardId) {
-          const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === col.boardId);
-          if (card && (card.attempt_closed || !card.session_id)) {
+          let card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === col.boardId);
+          // A pause reported with complete leaves the card done. Continuing the
+          // same session moves it back; the captain does not task move by hand.
+          if (card && !card.archived && (card.status === 'done' || card.flag === 'held')) {
+            await boardRequest('move', { id: card.id, status: 'doing', resume_session_id: col.id });
+            card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === col.boardId);
+          }
+          if (card && !card.archived && (card.attempt_closed || !card.session_id)) {
             await boardRequest('bind', { id: card.id, project: card.project, session_id: col.id, attempt_id: message.id,
               assignee: { agent: window.BoardCore.inferAgentType(col.cmd), model: col.cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
             col.boardAttempt = message.id;

@@ -80,7 +80,7 @@
     '（AgentDeck 约定）这是队长派给你的活：直接干完，不要停下来等用户确认。',
     '做完运行：node "$AGENTDECK_BOARD_CLI" complete --result "一到三句话结果" [--files 路径1,路径2] [--failed "原因"]',
     '需要队长拍板运行：node "$AGENTDECK_BOARD_CLI" ask --question "一两句话说清要队长决定什么"，然后停下，队长会回复你。',
-    '长任务可运行：node "$AGENTDECK_BOARD_CLI" progress --message "当前进度"。',
+    '中途汇报或暂停用 progress，不要用 complete：node "$AGENTDECK_BOARD_CLI" progress --message "当前进度"。complete 只在这件活做完时使用。',
     '命令在 agent 的 shell/Bash 工具里执行；Windows PowerShell 把 $AGENTDECK_BOARD_CLI 写成 $env:AGENTDECK_BOARD_CLI。',
     '文件用完整落盘路径，多个路径用逗号分隔；没做成时加 --failed，成功时不加。回执必须通过命令提交，屏幕上的【回执】/【提问】文字不算提交。',
     '回执里不要贴文件正文。',
@@ -136,6 +136,41 @@
   // reads it as $env:NAME, POSIX shells as $NAME.
   function boardCli(platform) {
     return platform === 'win32' ? 'node "$env:AGENTDECK_BOARD_CLI"' : 'node "$AGENTDECK_BOARD_CLI"';
+  }
+
+  // Automatic dispatch prefers Cursor Grok. An exhausted choice yields to the
+  // next provider that has a known remaining quota. Unknown is not available,
+  // and the preferred agent is still used when its quota has not been observed.
+  const DISPATCHER_CANDIDATES = Object.freeze([
+    Object.freeze({ provider: 'Cursor', cmd: 'cursor-agent --force --model grok-4.7-high-fast' }),
+    Object.freeze({ provider: 'Codex', cmd: 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna' }),
+    Object.freeze({ provider: 'Claude', cmd: 'claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high' }),
+    Object.freeze({ provider: 'Antigravity', cmd: 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high' }),
+  ]);
+  function pickDispatcher(states) {
+    const list = DISPATCHER_CANDIDATES.map((c) => {
+      const value = states && states[c.provider];
+      return typeof value === 'string' && value ? value : 'unknown';
+    });
+    if (list[0] !== 'exhausted') return { provider: DISPATCHER_CANDIDATES[0].provider, cmd: DISPATCHER_CANDIDATES[0].cmd };
+    const index = list.findIndex((state, i) => i > 0 && state !== 'exhausted' && state !== 'unknown');
+    if (index < 0) return null;
+    return { provider: DISPATCHER_CANDIDATES[index].provider, cmd: DISPATCHER_CANDIDATES[index].cmd };
+  }
+
+  // Ledger and the sidebar read the terminal classifier. A new instruction can
+  // be running while that classifier still sees the previous idle footer.
+  function displayedSessionState(classified, info) {
+    const state = classified || 'plain';
+    const turn = info || {};
+    if (!turn.turnOpen || state === 'working' || state === 'input' || state === 'quota' || state === 'exited') return state;
+    const now = turn.now || 0;
+    const started = turn.turnStartedAt || 0;
+    const outputAt = turn.lastOutputAt || 0;
+    const outputAfter = started > 0 && outputAt > started + 200;
+    if (outputAfter && now - outputAt < 5000) return 'working';
+    if (!outputAfter && started > 0 && now - started < 8000) return 'working';
+    return state;
   }
 
   function dispatcherInstructions(platform, card) {
@@ -587,7 +622,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, DISPATCHER_CANDIDATES, pickDispatcher, displayedSessionState, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

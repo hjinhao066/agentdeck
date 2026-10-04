@@ -104,17 +104,17 @@ test('process and quota events update data automatically and a stale execution c
 
 test('Gemini is default; its stand-in can delegate only this card once, while important or unclear cards go to Captain', async () => {
   expect(await page.evaluate(() => TaskBoard.settings().dispatcher)).toBe('gemini');
+  expect(await page.evaluate(() => MainCore.pickDispatcher({ Cursor: 'normal' }).cmd)).toBe('cursor-agent --force --model grok-4.7-high-fast');
   // Substitute only the dispatcher executable. All permissions and board
   // commands still travel through real PTYs and authenticated request files.
   await page.evaluate((fake) => {
-    window.testOriginalAgentCommand = BoardCore.commandForAgent;
-    window.testDispatcherCommand = BoardCore.commandForAgent('agy');
-    BoardCore.commandForAgent = (agent, ...args) => agent === 'agy' ? fake : window.testOriginalAgentCommand(agent, ...args);
+    window.testOriginalPickDispatcher = MainCore.pickDispatcher;
+    MainCore.pickDispatcher = () => ({ provider: 'Cursor', cmd: fake });
   }, FAKE);
   const c = await add('Gemini dispatch');
   const started = await page.evaluate((id) => TaskBoard.startCard(id), c.id);
   expect(started.dispatcher).toBe('gemini');
-  expect(await page.evaluate(() => window.testDispatcherCommand)).toContain('gemini-3.8-flash-high');
+  expect(await page.evaluate((id) => columns.find((c) => c.id === id).cmd, started.session_id)).toContain('fake-agent.js');
   await expect.poll(() => fs.existsSync(path.join(envDir, started.session_id + '.json'))).toBe(true);
   const env = JSON.parse(fs.readFileSync(path.join(envDir, started.session_id + '.json'), 'utf8'));
   const other = await add('Other card');
@@ -147,7 +147,7 @@ test('Gemini is default; its stand-in can delegate only this card once, while im
   expect((await page.evaluate((id) => TaskBoard.startCard(id), important.id)).dispatcher).toBe('captain');
   const unclear = await add('Unclear', false, '');
   expect((await page.evaluate((id) => TaskBoard.startCard(id), unclear.id)).dispatcher).toBe('captain');
-  await page.evaluate(() => { BoardCore.commandForAgent = window.testOriginalAgentCommand; TaskBoard.settings('captain'); });
+  await page.evaluate(() => { MainCore.pickDispatcher = window.testOriginalPickDispatcher; TaskBoard.settings('captain'); });
 });
 
 test('external JSON start edges notify once, quiet edits do not dispatch, and settings persist', async () => {

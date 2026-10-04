@@ -108,6 +108,17 @@ function answer() {
   process.stdout.write('\x1b[2J\x1b[H');
   process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
   if (first === 'empty reply regression') { box(); return; }
+  if (process.argv.includes('--hold') && /hold open/.test(text)) {
+    process.stdout.write('\x1b[2J\x1b[H');
+    let step = 0;
+    const tick = () => {
+      step += 1;
+      process.stdout.write(`model still running step ${step}\n`);
+      setTimeout(tick, 400);
+    };
+    tick();
+    return;
+  }
   if ((process.argv.includes('--interruptible') || process.argv.includes('--quota-probe')) && /keep working|wait for quota/.test(first)) {
     process.stdout.write(first.includes('quota') ? "You've hit your limit · resets 5pm (America/Los_Angeles)\n" : '✻ Doing…\nPress up to edit queued messages\n');
     box();
