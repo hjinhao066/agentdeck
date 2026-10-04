@@ -13,7 +13,10 @@ const DEVICE_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const LOGIN_LIMITS = { perIp: 5, global: 30, windowMs: 10 * 60 * 1000, banMs: 15 * 60 * 1000 };
 // Uploaded images: one per request, re-checked by file signature. The id is
 // the server-generated file name, so a request can never name a path.
-const IMAGE_LIMITS = { bytes: 4 * 1024 * 1024, perMessage: 6, keepMs: 30 * 24 * 60 * 60 * 1000 };
+// The directory as a whole is capped too: past the cap, images older than a
+// day make room (oldest first); if that is not enough the upload is refused.
+const IMAGE_LIMITS = { bytes: 4 * 1024 * 1024, perMessage: 6, keepMs: 30 * 24 * 60 * 60 * 1000,
+  maxFiles: 200, maxTotalBytes: 200 * 1024 * 1024, evictAfterMs: 24 * 60 * 60 * 1000 };
 const IMAGE_ID = /^[a-f0-9]{32}\.(jpg|png|gif|webp)$/;
 const IMAGE_TYPES = { jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
 const ASSETS = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
@@ -60,6 +63,7 @@ class MobileWebServer {
   constructor({ getSessions, getTasks, getOutput, getCaptain, sendCaptain, saveSettings, uploadDir = '', now = Date.now }) {
     this.sources = { getSessions, getTasks, getOutput, getCaptain, sendCaptain, saveSettings };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
+    this.uploading = Promise.resolve();
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
@@ -203,15 +207,33 @@ class MobileWebServer {
   }
   // Uploads older than a month are stale: the conversation only shows the
   // latest turns, and images the user removed before sending are never used.
-  async sweepUploads() {
-    if (!this.uploadDir) return;
+  // Runs at start and before every upload. Returns whether `incoming` more
+  // bytes fit under the directory caps after the clean-up.
+  async sweepUploads(incoming = 0) {
+    if (!this.uploadDir) return false;
+    let kept = [];
     try {
       for (const name of await fs.readdir(this.uploadDir)) {
         if (!IMAGE_ID.test(name)) continue;
-        const file = path.join(this.uploadDir, name);
-        if (this.now() - (await fs.lstat(file)).mtimeMs > IMAGE_LIMITS.keepMs) await fs.unlink(file);
+        const file = path.join(this.uploadDir, name), stat = await fs.lstat(file);
+        if (this.now() - stat.mtimeMs > IMAGE_LIMITS.keepMs) await fs.unlink(file);
+        else kept.push({ file, size: stat.size, time: stat.mtimeMs });
       }
     } catch (_) { /* Nothing uploaded yet. */ }
+    const over = () => kept.length + (incoming ? 1 : 0) > IMAGE_LIMITS.maxFiles || kept.reduce((sum, entry) => sum + entry.size, incoming) > IMAGE_LIMITS.maxTotalBytes;
+    kept.sort((a, b) => a.time - b.time);
+    while (over() && kept.length && this.now() - kept[0].time > IMAGE_LIMITS.evictAfterMs) {
+      try { await fs.unlink(kept[0].file); } catch (_) { /* Already gone. */ }
+      kept = kept.slice(1);
+    }
+    return !over();
+  }
+  async storeUpload(data, kind) {
+    if (!await this.sweepUploads(data.length)) return null;
+    const id = crypto.randomBytes(16).toString('hex') + '.' + kind;
+    await fs.mkdir(this.uploadDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(this.uploadDir, id), data, { mode: 0o600, flag: 'wx' });
+    return id;
   }
   // Only a server-generated name that is a regular file directly inside the
   // upload directory resolves; anything else (paths, links, other files) is null.
@@ -341,9 +363,12 @@ class MobileWebServer {
       const kind = imageKind(data);
       if (!kind) return this.json(res, 415, { error: 'Only JPEG, PNG, GIF or WebP images are accepted.' });
       if (!this.writeCredential(req, res)) return;
-      const id = crypto.randomBytes(16).toString('hex') + '.' + kind;
-      await fs.mkdir(this.uploadDir, { recursive: true, mode: 0o700 });
-      await fs.writeFile(path.join(this.uploadDir, id), data, { mode: 0o600, flag: 'wx' });
+      // One upload at a time checks and fills the directory, so parallel
+      // requests cannot pass the cap together.
+      const turn = this.uploading.then(() => this.storeUpload(data, kind));
+      this.uploading = turn.catch(() => {});
+      const id = await turn;
+      if (!id) return this.json(res, 507, { error: 'Image storage is full. Try again tomorrow.' });
       return this.json(res, 200, { id });
     }
     if (req.method === 'GET' && url.pathname === '/api/image') {

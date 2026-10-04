@@ -583,7 +583,27 @@ test('images picked or pasted on the phone upload, send with the text and reach 
   await expect(sent).toHaveCount(3, { timeout: 15000 });
   await expect.poll(() => sent.evaluateAll((images) => images.every((image) => image.complete && image.naturalWidth > 0))).toBe(true);
   expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // Loaded images never push the newest reply out of view: still at the bottom.
+  const gap = () => mobile.locator('#captain-turns').evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+  expect(await gap()).toBeLessThanOrEqual(1);
   await screenshot('images-sent');
+  // A single image (a tall screenshot) is the common case and behaves the same,
+  // right after sending, once it has loaded, and after the next refreshes.
+  const [single] = await Promise.all([mobile.waitForEvent('filechooser'), attach.click()]);
+  await single.setFiles([{ name: 'one.png', mimeType: 'image/png', buffer: shot }]);
+  await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(1);
+  await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
+  const one = mobile.locator('#captain-turns .captain-turn').last().locator('.sent-image img');
+  await expect(one).toHaveCount(1, { timeout: 25000 });
+  expect(await gap()).toBeLessThanOrEqual(1);
+  await expect.poll(() => one.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
+  expect(await one.evaluate((image) => image.naturalHeight > image.naturalWidth)).toBe(true);
+  expect(await gap()).toBeLessThanOrEqual(1);
+  await expect(mobile.locator('#captain-turns .captain-turn').last()).toBeInViewport({ ratio: 1 });
+  for (let i = 0; i < 2; i++) await Promise.all([mobile.waitForResponse((response) => response.url() === url + '/api/captain' && response.ok()), mobile.getByRole('button', { name: '刷新', exact: true }).click()]);
+  expect(await gap()).toBeLessThanOrEqual(1);
+  await screenshot('image-single-sent');
+  ids.push(...stored().filter((id) => !ids.includes(id)));
   // Refused uploads: no login, no CSRF, wrong origin, not an image, too large.
   const png = { 'Content-Type': 'application/octet-stream', Origin: url };
   const { csrfToken } = await (await mobile.request.get(url + '/api/auth')).json();
@@ -598,6 +618,6 @@ test('images picked or pasted on the phone upload, send with the text and reach 
   expect((await mobile.request.post(url + '/api/upload', { data: Buffer.concat([shot, Buffer.alloc(4 * 1024 * 1024)]), headers: { ...png, 'X-CSRF-Token': csrfToken } })).status()).toBe(413);
   expect((await mobile.request.get(url + '/api/image?id=../config.json')).status()).toBe(400);
   expect((await post('/api/captain', { message: '看图', images: ['../config.json'] })).status()).toBe(400);
-  expect(stored().length).toBe(4);
+  expect(stored().length).toBe(5);
   if (process.platform !== 'win32') for (const id of stored()) expect(fs.statSync(path.join(uploads, id)).mode & 0o777).toBe(0o600);
 });

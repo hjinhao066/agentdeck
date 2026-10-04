@@ -61,7 +61,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .attention-chip .chip-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .attention-chip .chip-state { color: var(--orange); white-space: nowrap; }
 
-.notice { flex: none; margin: 8px 12px 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: var(--secondary); background: var(--raised); overflow-wrap: anywhere; }
+.notice { flex: none; margin: 8px 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: var(--secondary); background: var(--raised); overflow-wrap: anywhere; }
 .notice.error { border-color: var(--red); color: var(--red); }
 
 .views { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -78,8 +78,10 @@ h1, h2, h3, h4, p { margin: 0; }
 .sent-images { align-self: flex-end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 86%; }
 .sent-images + .user-message { margin-top: 6px; }
 .sent-image { display: block; border-radius: 14px; overflow: hidden; background: var(--soft); border: 1px solid var(--line); }
+/* Fixed sizes: an image that loads late must not change the height of the
+   conversation, or the newest reply slides out of view. */
 .sent-image img { display: block; width: 104px; height: 104px; object-fit: cover; }
-.sent-image:only-child img { width: auto; height: auto; max-width: min(220px, 62vw); max-height: 240px; min-width: 64px; min-height: 64px; }
+.sent-image:only-child img { width: 168px; height: 168px; }
 .sent-image:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .chat-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.65; }
@@ -126,10 +128,13 @@ h1, h2, h3, h4, p { margin: 0; }
 .composer { flex: none; padding: 6px 10px 6px; background: var(--bg); }
 .send-status { font-size: 12px; color: var(--muted); padding: 0 8px 6px; overflow-wrap: anywhere; }
 .send-status:empty { display: none; }
-.attachments { display: flex; gap: 8px; padding: 8px 4px 8px; overflow-x: auto; scrollbar-width: none; }
+/* Padding leaves room for the remove buttons and their focus rings. */
+.attachments { --thumb: 72px; display: flex; gap: 8px; padding: 14px 14px 8px 4px; overflow-x: auto; scrollbar-width: none; }
+/* Keyboard up: smaller thumbnails keep the conversation readable. */
+.keyboard-open .attachments { --thumb: 48px; gap: 14px; }
 .attachments::-webkit-scrollbar { display: none; }
-.attachment { position: relative; flex: none; width: 72px; height: 72px; }
-.attachment img { display: block; width: 72px; height: 72px; object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: var(--soft); }
+.attachment { position: relative; flex: none; width: var(--thumb); height: var(--thumb); }
+.attachment img { display: block; width: var(--thumb); height: var(--thumb); object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: var(--soft); }
 .attachment[data-state="uploading"] img { opacity: .6; }
 .attachment[data-state="failed"] img { opacity: .35; border-color: var(--red); }
 .upload-track { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--text) 25%, transparent); overflow: hidden; }
@@ -139,7 +144,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .attachment-remove::before { content: ""; position: absolute; inset: 11px; border-radius: 50%; background: var(--text); }
 .attachment-remove svg { position: relative; width: 12px; height: 12px; stroke-width: 2.6; }
 .attachment-remove:hover:not(:disabled) { background: transparent; color: var(--bg); }
-.attachment-retry { position: absolute; top: 14px; left: 14px; color: var(--red); }
+.attachment-retry { position: absolute; top: calc((var(--thumb) - 44px) / 2); left: calc((var(--thumb) - 44px) / 2); color: var(--red); }
 .attachment-retry:hover:not(:disabled) { background: transparent; color: var(--red); }
 .composer-box { display: flex; align-items: flex-end; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 24px; background: var(--raised); }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--orange) 55%, var(--line)); }
@@ -147,6 +152,9 @@ h1, h2, h3, h4, p { margin: 0; }
 /* Six lines at most, and never more than 30% of the visible height, so the
    composer stays small when the soft keyboard shrinks the viewport. */
 textarea { flex: 1; min-width: 0; height: var(--composer-min); min-height: var(--composer-min); max-height: min(calc(var(--composer-line) * 6 + 20px), calc(var(--app-height, 100dvh) * .3)); resize: none; margin: 0; padding: 10px 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 16px; line-height: var(--composer-line); overflow-y: auto; }
+/* With the keyboard up there is less room: four lines, so images plus a long
+   draft still leave the conversation visible. */
+.keyboard-open textarea { max-height: min(calc(var(--composer-line) * 4 + 20px), calc(var(--app-height, 100dvh) * .3)); }
 textarea:focus-visible { outline: 0; }
 textarea::placeholder { color: var(--muted); }
 textarea:disabled { opacity: .6; }

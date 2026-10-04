@@ -635,3 +635,37 @@ test('without an upload directory the upload route does not exist', async (t) =>
   assert.equal((await request(f.status, '/api/upload', { method: 'POST', body: PNG, headers: { 'Content-Type': 'application/octet-stream', Origin: f.status.url, ...f.auth } })).status, 404);
   assert.equal((await request(f.status, '/api/image?id=' + '0'.repeat(32) + '.png', { headers: f.auth })).status, 404);
 });
+
+test('the upload directory is capped: day-old images make room, otherwise the upload is refused', async (t) => {
+  const limits = { ...IMAGE_LIMITS };
+  t.after(() => Object.assign(IMAGE_LIMITS, limits));
+  const f = await startUploads(t);
+  IMAGE_LIMITS.maxFiles = 3;
+  const ids = [];
+  for (let i = 0; i < 3; i++) ids.push(JSON.parse((await f.upload(PNG)).text).id);
+  // Full of today's images: refused with a clear status, nothing removed.
+  const refused = await f.upload(PNG);
+  assert.equal(refused.status, 507);
+  assert.match(refused.text, /storage is full/);
+  assert.deepEqual((await f.stored()).sort(), [...ids].sort());
+  // Parallel uploads cannot slip past the cap together.
+  assert.deepEqual((await Promise.all([f.upload(PNG), f.upload(PNG), f.upload(PNG)])).map((r) => r.status), [507, 507, 507]);
+  // Two images are more than a day old: the oldest one is dropped, only as many as needed.
+  const age = (id, hours) => { const time = new Date(Date.now() - hours * 60 * 60 * 1000); return fsp.utimes(nodePath.join(f.uploadDir, id), time, time); };
+  await age(ids[0], 30); await age(ids[1], 50);
+  const next = await f.upload(PNG);
+  assert.equal(next.status, 200);
+  assert.deepEqual((await f.stored()).sort(), [ids[0], ids[2], JSON.parse(next.text).id].sort());
+  // The byte cap works the same way.
+  IMAGE_LIMITS.maxFiles = 200; IMAGE_LIMITS.maxTotalBytes = PNG.length * 3;
+  assert.equal((await f.upload(PNG)).status, 200);
+  assert.ok(!(await f.stored()).includes(ids[0]));
+  assert.equal((await f.upload(PNG)).status, 507);
+  assert.equal((await f.stored()).length, 3);
+  // Expired images are cleared on upload too, not only at start.
+  const old = new Date(Date.now() - IMAGE_LIMITS.keepMs - 60_000);
+  for (const name of await f.stored()) await fsp.utimes(nodePath.join(f.uploadDir, name), old, old);
+  IMAGE_LIMITS.maxTotalBytes = limits.maxTotalBytes;
+  assert.equal((await f.upload(PNG)).status, 200);
+  assert.equal((await f.stored()).length, 1);
+});

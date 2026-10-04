@@ -334,7 +334,9 @@
           images.forEach((id, i) => {
             const open = node('a', 'sent-image'), img = node('img');
             open.href = '/api/image?id=' + id; open.target = '_blank'; open.rel = 'noopener noreferrer';
-            img.src = open.href; img.alt = '你发的图片 ' + (i + 1); img.loading = 'lazy';
+            img.src = open.href; img.alt = '你发的图片 ' + (i + 1);
+            // Old images are cleared from the desktop after a while.
+            img.addEventListener('error', () => { open.remove(); if (!strip.childElementCount) strip.remove(); });
             open.append(img); strip.append(open);
           });
           row.append(strip);
@@ -405,6 +407,7 @@
     // A worker's output is a page inside the sessions tab.
     tabs.forEach((tab) => { if (tab.dataset.view === (view === 'output' ? 'sessions' : view)) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current'); });
     $('back').hidden = view !== 'output';
+    $('refresh').hidden = view === 'more';
     $('copy').hidden = view !== 'output';
     updateHeading(); updateComposer(); renderAttention();
     if (view === 'captain') toBottom($('captain-turns'));
@@ -503,7 +506,7 @@
       let id;
       try { id = JSON.parse(request.responseText).id; } catch (_) { /* Reported below. */ }
       if (request.status === 200 && imageId.test(id)) { item.state = 'done'; item.id = id; renderAttachments(); }
-      else failed(request.status === 413 ? '图片太大，没能上传。' : request.status === 415 ? '这种图片格式不支持。' : '图片上传失败，可重试。');
+      else failed(request.status === 413 ? '图片太大，没能上传。' : request.status === 415 ? '这种图片格式不支持。' : request.status === 507 ? '桌面端存手机图片的空间满了（最近一天传得太多），请明天再发图。' : '图片上传失败，可重试。');
     });
     request.addEventListener('error', () => failed('网络中断，图片没传上去，可重试。'));
     request.addEventListener('abort', () => {});
@@ -512,11 +515,11 @@
   async function addImages(files) {
     const images = [...files].filter((file) => /^image\//.test(file.type) || /\.(?:heic|heif)$/i.test(file.name));
     if (!images.length) return;
-    const room = MAX_IMAGES - attachments.length;
-    if (images.length > room) notice('一次最多发 ' + MAX_IMAGES + ' 张图片，多出的没有添加。', true);
-    for (const file of images.slice(0, Math.max(0, room))) {
+    for (const file of images) {
       try {
-        const item = { ...await prepare(file) };
+        const item = await prepare(file);
+        // Counted after decoding, so two quick picks cannot both use the same room.
+        if (attachments.length >= MAX_IMAGES) { notice('一次最多发 ' + MAX_IMAGES + ' 张图片，多出的没有添加。', true); break; }
         attachments.push(item);
         upload(item);
       } catch (_) { notice('有一张图片读不出来（这台设备不支持该格式），请换成截图、JPEG 或 PNG。', true); }
@@ -541,7 +544,7 @@
       const remove = iconButton('close', '移除图片', () => {
         if (item.request) item.request.abort();
         attachments = attachments.filter((other) => other !== item);
-        renderAttachments(); $('message').focus({ preventScroll: true });
+        renderAttachments();
       });
       remove.classList.add('attachment-remove'); chip.append(remove);
       box.append(chip);
