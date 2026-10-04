@@ -294,3 +294,88 @@ test('local rotation notices remain notices after durable chat normalization', (
   assert.equal(chat.turns[0].reply, 'CN → US；额度低；2026-10-03');
   assert.equal(chat.turns[0].done, true);
 });
+
+// ---- turn work (steps) and finish time: optional, backward compatible ----
+test('extractSteps keeps the tool calls and notes before the final reply, one line each', () => {
+  const steps = C.extractSteps(claudeScreen, 'fix the bug in app.js');
+  assert.ok(steps.length >= 2);
+  assert.ok(steps.some((s) => /^Read\(app\.js\) ⎿ Read 120 lines$/.test(s)));
+  assert.ok(steps.every((s) => !s.includes('\n') && s.length <= 300));
+  // the final reply is not repeated in the steps
+  const reply = C.extractReply(claudeScreen, 'fix the bug in app.js', 80);
+  assert.ok(!steps.some((s) => reply.startsWith(s)));
+  assert.deepEqual(C.extractSteps(['> hi', 'plain output, no bullets'], 'hi'), []);
+});
+
+test('capSteps keeps at most 40 of the newest lines within 8KB of UTF-8', () => {
+  const many = Array.from({ length: 60 }, (_, i) => 'step ' + i);
+  const kept = C.capSteps(many);
+  assert.equal(kept.length, C.MAX_STEPS);
+  assert.equal(kept[0], 'step 20');
+  assert.equal(kept.at(-1), 'step 59');
+  const wide = Array.from({ length: 40 }, () => '中'.repeat(300));   // 900 bytes each
+  const fit = C.capSteps(wide);
+  assert.ok(Buffer.byteLength(fit.join(''), 'utf8') <= C.MAX_STEP_BYTES);
+  assert.equal(fit.length, 9);
+  assert.deepEqual(C.capSteps('nope'), []);
+  assert.deepEqual(C.capSteps([1, null, '  a  b ', '']), ['a b']);
+});
+
+test('normalizeChat reads old turns unchanged and new turns with end and steps', () => {
+  const old = { id: 'o1', ts: 1000, user: 'q', reply: 'a', done: true, atts: [] };
+  const fresh = { id: 'n1', ts: 1000, end: 61000, user: 'q', reply: 'a', done: true, atts: [], steps: ['Bash(ls) ⎿ a.js'] };
+  const chat = C.normalizeChat({ turns: [old, fresh] }, 'c');
+  assert.deepEqual(chat.turns[0], { id: 'o1', ts: 1000, user: 'q', reply: 'a', done: true, atts: [] });
+  assert.equal(chat.turns[1].end, 61000);
+  assert.deepEqual(chat.turns[1].steps, ['Bash(ls) ⎿ a.js']);
+  // bad or oversized values are dropped or capped, never trusted
+  const bad = C.normalizeChat({ turns: [{ user: 'q', end: 'soon', steps: 'Bash(ls)' }, { user: 'q', end: -5, steps: [] },
+    { user: 'q', steps: Array.from({ length: 99 }, (_, i) => 'x'.repeat(500) + i) }] }, 'c');
+  assert.equal('end' in bad.turns[0], false);
+  assert.equal('steps' in bad.turns[0], false);
+  assert.equal('end' in bad.turns[1], false);
+  assert.equal('steps' in bad.turns[1], false);
+  assert.ok(bad.turns[2].steps.length <= C.MAX_STEPS);
+  assert.ok(Buffer.byteLength(bad.turns[2].steps.join(''), 'utf8') <= C.MAX_STEP_BYTES);
+  // a round trip keeps the new fields (and an older app simply ignores them)
+  assert.deepEqual(C.normalizeChat(JSON.parse(JSON.stringify(chat)), 'c'), chat);
+});
+
+test('editsFromSteps sums Claude and Codex file edits per path', () => {
+  const edits = C.editsFromSteps([
+    'Update(notes/plan.md) ⎿ Added 12 lines, removed 3 lines',
+    'Write(docs/new.md) ⎿ Wrote 140 lines to docs/new.md',
+    'Update(src/a.js) ⎿ Updated src/a.js with 2 additions and 1 removal',
+    'Edited src/a.js (+5 -2)',
+    'Edited 3 files (+9 -1)',
+    'Bash(npm test) ⎿ ok',
+    'Reading the plan first.',
+  ]);
+  assert.deepEqual(edits, [
+    { path: 'notes/plan.md', add: 12, del: 3 },
+    { path: 'docs/new.md', add: 140, del: 0 },
+    { path: 'src/a.js', add: 7, del: 3 },
+  ]);
+  assert.deepEqual(C.editsFromSteps(undefined), []);
+  assert.equal(C.isToolStep('Bash(npm test) ⎿ ok'), true);
+  assert.equal(C.isToolStep('Reading the plan first.'), false);
+});
+
+test('fmtDuration and turnTimeLabel read like the chat header', () => {
+  assert.equal(C.fmtDuration(5000), '5秒');
+  assert.equal(C.fmtDuration((18 * 60 + 43) * 1000), '18分43秒');
+  assert.equal(C.fmtDuration((2 * 3600 + 5 * 60) * 1000), '2小时05分');
+  const now = new Date(2026, 9, 4, 12, 0).getTime();   // Sunday
+  assert.equal(C.turnTimeLabel(new Date(2026, 9, 4, 9, 5).getTime(), now), '今天 09:05');
+  assert.equal(C.turnTimeLabel(new Date(2026, 9, 3, 21, 46).getTime(), now), '昨天 21:46');
+  assert.equal(C.turnTimeLabel(new Date(2026, 9, 2, 21, 46).getTime(), now), '周五 21:46');
+  assert.equal(C.turnTimeLabel(new Date(2026, 8, 1, 8, 0).getTime(), now), '9月1日 08:00');
+  assert.equal(C.turnTimeLabel(new Date(2025, 8, 1, 8, 0).getTime(), now), '2025年9月1日 08:00');
+  assert.equal(C.turnTimeLabel(0, now), '');
+});
+
+test('code fences carry their language for the chat code bar', () => {
+  assert.ok(C.renderMarkdown('```bash\necho hi\n```').includes('<code data-lang="bash">'));
+  assert.ok(C.renderMarkdown('```\nplain\n```').includes('<code data-lang="">'));
+  assert.ok(!C.renderMarkdown('```"><img>\nx\n```').includes('<img>'));
+});
