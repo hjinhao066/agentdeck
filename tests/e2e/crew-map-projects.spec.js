@@ -135,7 +135,8 @@ test('real authenticated new CLI stores project/reviews, rejects unknown targets
     const state = await page.evaluate((id) => {
       const e = terms.get(id);
       return { screen: e && dumpScreen(e.term), state: e?.state, lastScreen: e?.lastScreen,
-        sending: e?.sendingPrompt, typing: e?.typing,
+        sending: e?.sendingPrompt, injecting: e?.injecting, typing: e?.typing,
+        alive: e?.alive, inputBox: e && visibleInputBox(e), composing: userComposing(id),
         tasks: MainSession.state().tasks.filter(t => t.colId === id), turns: ChatUI.turnsOf(id) };
     }, reviewerId);
     const file = path.join(profile, 'received.jsonl');
