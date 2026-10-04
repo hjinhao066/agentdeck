@@ -129,7 +129,7 @@ test.describe('Equal-split layout regression with active raw-terminal column', (
   }
 
   for (const count of [2, 5]) {
-    test(`compact test: equal ${count}-split layout geometry holds with raw terminal`, async () => {
+    test(`compact test: equal ${count}-split layout geometry holds with raw terminal`, count === 2 ? { tag: '@smoke' } : {}, async () => {
       await launchWithCols(count, count);
 
       await page.evaluate(() => ChatUI.setMode('col-0', 'term'));

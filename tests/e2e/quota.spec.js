@@ -32,7 +32,7 @@ test.afterAll(async () => {
 });
 const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"]${provider === 'Claude' ? '[data-seat-id="cn"]' : ''}`);
 
-test('passive live screens show remaining quota, provider icons and accessible details', async () => {
+test('passive live screens show remaining quota, provider icons and accessible details', { tag: '@smoke' }, async () => {
   await expect(badge('Claude').locator('.quota-label')).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-label')).toHaveText('未知');
   await expect(badge('Codex').locator('.quota-label')).toHaveText('8%');

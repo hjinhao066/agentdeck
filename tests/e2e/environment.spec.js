@@ -29,7 +29,7 @@ test('independent PTYs keep CLI history and let statusline output reach the foot
   }
 });
 
-test('a test instance renders normally but stays invisible and click-through on the desktop', async () => {
+test('a test instance renders normally but stays invisible and click-through on the desktop', { tag: '@smoke' }, async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-env-'));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns: [] }));
   const env = { ...process.env };

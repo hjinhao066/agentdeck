@@ -544,12 +544,23 @@ older downloader does not pull in the vulnerable HTTP cache dependency chain.
 
 ```sh
 npm test
+npm run test:smoke
 npm run test:e2e
 npm audit
 npm start
 npm run dist:win
 npm run dist:mac
 ```
+
+### 发版流程
+
+全量 `npm run test:e2e` 大约 191 项，单线程要 30 分钟以上，本机内存紧时还会超时。小版本不要拿它当发版门禁。
+
+- **功能分支**：只跑 `npm test`，再加上和这次改动相关的 E2E spec。不要在功能分支上跑全量 E2E。
+- **发版**（小版本打包前）：跑 `npm test` 和 `npm run test:smoke`。冒烟复用现有用例，用 Playwright 标签 `@smoke` 标出，不另抄一份测试。命令是 `playwright test --grep @smoke --workers=1`，单 worker，目标 5 分钟内。覆盖：应用能启动并显示主界面；队长用 board-cli `new` / `tell` 派活且队员收到；队员回执回到队长；会话归档后能恢复；终端能显示输出；额度区能显示；任务看板能打开。
+- **全量**：`npm run test:e2e` 夜里跑，或换一台机器跑。冒烟通过不能代替全量。
+
+冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
 Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
