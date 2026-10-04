@@ -1,0 +1,11 @@
+ ⠘⠆ Thinking  85.75k tokens
+    Tip: Use /run-everything to skip all 
+  approvals.
+
+                                                
+  → Add a follow-up              ctrl+c to stop 
+                                                
+
+  Grok 4.7 256K High    · 59.1%  Run Everything
+  Fast
+  ~

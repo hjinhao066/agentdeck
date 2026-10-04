@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const path = require('path');
 const vm = require('vm');
 const MainCore = require('../main-core');
 const source = fs.readFileSync(require.resolve('../renderer.js'), 'utf8');
@@ -9,6 +10,30 @@ const context = vm.createContext({ MainCore });
 vm.runInContext(source.slice(source.indexOf('const WORKING_RE'), source.indexOf('function setDot')) +
   source.slice(source.indexOf('function statusScreen'), source.indexOf('// Format elapsed ms')), context);
 const { classify, statusScreen } = context;
+const cursorCmd = 'cursor-agent --force --model grok-4.7-high-fast';
+// Status/footer tails of the three 1.1.3 live captures (2026-10-04):
+// muu4l1ja3s6j5n = updating, muu4nwrxhvh0tp = waiting-shell, muu4opao63zjp4 = thinking.
+// Unrelated tool output is omitted and the working directory is replaced by ~.
+const cursorSamples = ['updating', 'waiting-shell', 'thinking'];
+for (const name of cursorSamples) {
+  test(`real Cursor Grok screen: ${name} stays working at different column widths`, () => {
+    const screen = fs.readFileSync(path.join(__dirname, 'fixtures/cursor-live', `${name}.txt`), 'utf8');
+    assert.equal(MainCore.terminalActivity(screen, cursorCmd), 'working');
+    // xterm hard-wraps at cell boundaries; these samples contain no wide cells.
+    for (const width of [26, 30, 45, 80]) {
+      const rows = screen.split('\n').flatMap((line) => {
+        const chunks = line.match(new RegExp(`.{1,${width}}`, 'gu')) || [''];
+        return chunks.map((text, i) => i ? { text } : text);
+      });
+      const live = statusScreen(terminal(rows));
+      assert.equal(MainCore.cursorActivity(live), 'working', `width=${width}`);
+      for (const state of ['done', 'working']) {
+        assert.equal(classify(live, { state, hasWorked: true, lastOutputAt: 1 }, cursorCmd), 'working');
+      }
+    }
+  });
+}
+
 const busy = [
   '◦ Working (11m 27s • esc to interrupt) · 1 background terminal',
   '✻ Contemplating… (11m 27s · esc to interrupt · ↓ 1.2k tokens)',
