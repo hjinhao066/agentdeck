@@ -128,3 +128,18 @@ test('archive rechecks the live terminal and open turns instead of trusting a st
   ctx.archiveColumn(col, { captain: true, quiet: true });
   assert.equal(detached, 2, 'explicit Captain archive remains authorized');
 });
+
+test('a narrow Cursor screen: wrapped idle prompt reads idle, a busy one reads working', () => {
+  const wrapped = ['', '  → Plan, search, build', '    anything', '', '  Claude      Run Everything', '  Opus 5.5', '  ~'];
+  const cmd = 'cursor-agent --force --model claude-opus-5-5-high';
+  assert.equal(classify(wrapped.join('\n'), { hasWorked: false }, cmd), 'plain');
+  assert.equal(classify(wrapped.join('\n'), { hasWorked: true }, cmd), 'done');
+  for (const row of ['  ⠋ Reading…', '  ⠰⠳ Grepping  32.91k tokens', '  Running…', '  Editing...']) {
+    const screen = [row, ...wrapped].join('\n');
+    assert.equal(classify(screen, { hasWorked: true }, cmd), 'working', row);
+    assert.equal(classify(screen, { hasWorked: false }, cmd), 'working', row);
+  }
+  assert.equal(classify('  → Add a follow-up   ctrl+c to\n    stop', { hasWorked: true }, cmd), 'working');
+  // unwrapped behaviour of the accepted Cursor status work is unchanged
+  assert.equal(classify('⠋ Thinking…\n\n→ Add a follow-up', { hasWorked: true }, cmd), 'done');
+});

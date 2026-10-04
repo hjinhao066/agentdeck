@@ -578,17 +578,31 @@
 
   // Cursor keeps the input visible while tools run. Its stop hint shares the
   // prompt row, and completed tool/spinner rows may remain above that prompt.
+  // A narrow column makes Cursor wrap the prompt text onto indented rows
+  // ("→ Plan, search, build" / "    anything"): only those rows are joined to
+  // the prompt, never the rest of the screen.
+  const CURSOR_PROMPT = /^(?:Add a follow-up(?: — \/plan to review and build)?|Plan, search, build anything|Build anything)$/i;
+  // A live busy row: spinner glyph, "Reading…", a token counter or a stop/interrupt hint.
+  const CURSOR_BUSY = /^\s*[│┃]?\s*[◦●•✻✽✳✶✢✺∴*·⠀-⣿]+\s*\S|\b(?:Thinking|Reading|Editing|Running|Working|Grepping|Searching|Writing|Generating|Planning|Responding|Doing)(?:…|\.\.\.)|\besc to (?:interrupt|cancel)\b|\bctrl\+c to stop\b|[↑↓]\s*[\d.]+k?\s+tokens/im;
   function cursorActivity(screen) {
-    const lines = String(screen || '').split('\n').filter((line) => line.trim()).slice(-6);
+    const lines = String(screen || '').split('\n').filter((line) => line.trim()).slice(-10);
     for (let i = lines.length - 1; i >= 0; i--) {
-      const row = /^\s*[│┃]?\s*→\s*(.*?)[│┃]?\s*$/.exec(lines[i]);
+      const row = /^(\s*)[│┃]?\s*→\s*(.*?)[│┃]?\s*$/.exec(lines[i]);
       if (!row) continue;
-      if (/\bctrl\+c to stop\s*$/i.test(row[1])) return 'working';
-      if (/^(?:Add a follow-up(?: — \/plan to review and build)?|Plan, search, build anything|Build anything)\s*$/i.test(row[1])) return 'idle';
-      return '';
+      const indent = row[1].length;
+      const rest = [row[2].trim()];
+      for (let j = i + 1; j < lines.length && j <= i + 3 && /^\s*/.exec(lines[j])[0].length > indent + 1 && !/^\s*[│┃]?\s*→/.test(lines[j]); j++) rest.push(lines[j].replace(/[│┃]\s*$/, '').trim());
+      const text = rest.join(' ').replace(/\s+/g, ' ').trim();
+      if (/\bctrl\+c to stop\s*$/i.test(text)) return 'working';
+      if (!CURSOR_PROMPT.test(text)) return '';
+      // a wrapped prompt is read less trustingly: any busy row on the screen wins
+      if (rest.length > 1 && lines.slice(0, i).some((line) => CURSOR_BUSY.test(line))) return '';
+      return 'idle';
     }
     return '';
   }
+
+  const cursorBusy = (screen) => String(screen || '').split('\n').filter((line) => line.trim()).slice(-10).some((line) => CURSOR_BUSY.test(line));
 
   function terminalActivity(screen, cmd) {
     const lines = String(screen || '').split('\n').slice(-20);
@@ -681,6 +695,6 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
-    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, MAX_SUMMARY, MAX_HISTORY,
   };
 });
