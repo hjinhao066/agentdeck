@@ -24,7 +24,7 @@ were left running. Quota probes made no inference requests.
   the actual `mainSession.colId` column's `claudeSeatId`, not
   `activeClaudeSeatId` (the next-launch preference). Legacy untagged columns
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
-- Each item shows `5h …% · 7d …%` in the top bar, both reset timestamps in its
+- Each item shows `5h …% · 7d …%` in the sidebar quota block, both reset timestamps in its
   tooltip, model and masked account. Missing windows say `无数据`; if neither
   window can be read, show `未登录/无数据`. A welcome/model banner alone cannot
   prove Claude quota or login. An explicit exhausted error remains visible

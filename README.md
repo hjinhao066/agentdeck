@@ -45,13 +45,21 @@ the middle:
   ordinary session; dropping a session on the 队长 row (or 交给队长后台)
   hands it back. Sessions the 队长 only `tell`s something keep their place.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
-  top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
+  top bar picks 自由 (the free-layout icon: per-column widths) or 2–5 equal
+  columns. The top bar holds only 架构图, sidebar toggle, 新对话, the width
+  switch, the chat/terminal switch and the right-pane toggle; 广播 is in the
+  sidebar footer. It never wraps: when space runs short the width switch
+  shrinks to the active choice plus a menu, and the sidebar is capped so the
+  deck keeps at least 360px. Terminal output
   stays within its assigned column width, including when switching views or zooming.
   Scroll up in a terminal or conversation to pause following output. New output
   preserves your reading position and shows 有新内容 ↓ at the bottom; click it
   or scroll to the bottom to resume following.
-- **Subscription quota**: compact provider icons in the top bar show remaining
-  percentages (the lowest known window), or 正常 / 已用尽 / 未知. Hover or focus for
+- **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
+  one row per provider (icon, name, remaining percentage — the lowest known
+  window — or 正常 / 已用尽 / 未知). With the sidebar collapsed, a gauge icon in
+  the top bar (tinted by the provider closest to running out) opens the same
+  rows in a popover. Hover, click or focus a row for
   each window, reset time, model, masked account, source, confidence and sample time.
   Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
   Claude shows a separate item per `claudeSeats` configuration, with both
