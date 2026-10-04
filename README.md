@@ -470,6 +470,19 @@ or moved to the foreground. Worker questions and receipts go to the Captain.
 - macOS requires notification permission and a signed application. OS Focus /
   Do Not Disturb can suppress banners. See the [Electron native notification API](https://www.electronjs.org/docs/latest/api/notification).
 
+Settings → **Bark 本机密钥文件路径（barkKeyFile）** saves only a local path,
+for example `~/.secrets/bark-key.txt`; the file contains only the device key.
+An empty path disables phone alerts. The authenticated Captain can send
+`node "$AGENTDECK_BOARD_CLI" notify-user --message "需要你亲自操作"` for a local
+alert, adding `--urgent` for Bark (`critical`, volume 4, `minuet`).
+`node "$AGENTDECK_BOARD_CLI" notify-user --test` sends a **【测试】** Bark alert
+with `critical`, volume **3**, and `minuet`; use `--test` alone.
+On Windows PowerShell use `$env:AGENTDECK_BOARD_CLI`.
+Workers cannot use this command. Phone alerts require Bark's critical-alert
+permission and are independent of local notification/sound toggles. Missing or
+invalid key files return a setup hint; network errors are redacted. Tests use
+isolated profiles and a fake transport, never the real key or phone.
+
 The legacy watch-ai bridge is disabled, including with `AGENTDECK_LEGACY_WATCH=1`,
 to avoid bypassing this policy. Child terminals export
 `AGENTDECK_NATIVE_NOTIFICATIONS=1`; external hooks must honor that guard. For the

@@ -77,3 +77,34 @@ test('HTTP/API/network/timeout/JSON errors are redacted and do not cancel the lo
     }
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('explicit test sends fixed marked critical/3/minuet without trusting the supplied body', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-bark-test-'));
+  try {
+    const h = harness(); h.config.barkKeyFile = path.join(dir, 'key');
+    fs.writeFileSync(h.config.barkKeyFile, 'fake_test_key');
+    assert.match(await h.notify({ urgent: true, test: true, message: 'untrusted body' }), /Bark 紧急提醒已发送/);
+    assert.deepEqual(JSON.parse(h.calls[0][1].body), { device_key: 'fake_test_key',
+      title: '【测试】队长', body: '【测试】AgentDeck Bark 通知（critical，音量 3）。',
+      level: 'critical', volume: 3, sound: 'minuet' });
+    for (const extra of [{ test: 'true', urgent: true }, { test: true }, { test: true, urgent: true, callerId: 'crew' }]) {
+      await assert.rejects(h.notify(extra));
+    }
+    assert.equal(h.calls.length, 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('tilde key paths expand in the main-process sender without exposing the key', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-bark-tilde-'));
+  t.mock.method(os, 'homedir', () => dir);
+  try {
+    fs.mkdirSync(path.join(dir, '.secrets'));
+    fs.writeFileSync(path.join(dir, '.secrets', 'bark-key.txt'), 'fake_tilde_key');
+    const h = harness(); h.config.barkKeyFile = '~/.secrets/bark-key.txt';
+    const result = await h.notify({ urgent: true, test: true });
+    assert.match(result, /Bark 紧急提醒已发送/);
+    assert.ok(!result.includes('fake_tilde_key'));
+    assert.equal(JSON.parse(h.calls[0][1].body).device_key, 'fake_tilde_key');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

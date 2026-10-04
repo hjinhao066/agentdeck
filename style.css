@@ -1763,3 +1763,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .notify-setting select { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 #notificationSettings .rail-btn { min-width: 36px; min-height: 36px; }
 #notificationSettings :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.bark-key-setting { display: block; margin: 16px 0 8px; font-size: 14px; }
+#barkKeyFile { width: 100%; box-sizing: border-box; padding: 10px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }

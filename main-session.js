@@ -915,6 +915,10 @@
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
+      case 'main-notify-user':
+        if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
+        return { done: true, visible: host.captainColumnVisible(caller.id),
+          turnId: message.test ? message.id : host.terms.get(caller.id)?.captainTurnId || message.id };
       case 'main-briefing':
         return { done: true, result: M.instructions(host.platform, undefined, s.legacyReceiptInjection === true) };
       case 'main-quota':
