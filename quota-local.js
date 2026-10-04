@@ -2,6 +2,7 @@
 // Only quota/model fields and masked account identity leave this module.
 const fs = require('fs/promises');
 const path = require('path');
+const crypto = require('crypto');
 const Q = require('./quota-core');
 const { accountIdentity } = require('./quota-codex');
 async function tail(file, limit) {
@@ -25,7 +26,12 @@ async function readLocal(home, codexHome = path.join(home, '.codex'), now = Date
     const profile = path.resolve(dir) === path.join(home, '.claude') ? path.join(home, '.claude.json') : path.join(dir, '.claude.json');
     try {
       if ((await fs.stat(profile)).size <= 2 * 1024 * 1024) {
-        identity = accountIdentity(JSON.parse(await fs.readFile(profile, 'utf8')).oauthAccount?.emailAddress);
+        const account = JSON.parse(await fs.readFile(profile, 'utf8')).oauthAccount;
+        identity = accountIdentity(account?.emailAddress);
+        if (typeof account?.accountUuid === 'string' && account.accountUuid) {
+          identity.legacyAccountKey = identity.accountKey;
+          identity.accountKey = crypto.createHash('sha256').update(account.accountUuid).digest('hex').slice(0, 16);
+        }
         if (identity.account) observations.push({ provider: 'Claude', scope: 'claude', at: now, identityOnly: true, ...seatInfo, ...identity });
       }
     } catch (_) {}
@@ -40,11 +46,16 @@ async function readLocal(home, codexHome = path.join(home, '.codex'), now = Date
           if (!real.startsWith(root + path.sep)) continue; // Never follow a cache linked to another seat.
         }
         const data = await tail(file, 16384), parsed = JSON.parse(data.text);
+        // Directory locality alone is insufficient after /login replaces the
+        // account in that directory. Unbound legacy caches remain unknown.
+        if (seat.id !== 'default' && (!identity.accountKey || parsed.accountKey !== identity.accountKey || path.resolve(parsed.configDir || '.') !== path.resolve(dir))) continue;
         // feat/claude-seats records /usage with the original observation time.
         // Copying/touching that cache must not refresh an old percentage/reset.
         const at = Array.isArray(parsed.windows) ? parsed.at : data.at;
         const q = Number.isFinite(at) ? Q.cacheClaude(parsed, at) : null;
-        if (q && now - q.at <= Q.freshMs(q) && (!latest || q.at > latest.at)) latest = { ...q, ...seatInfo, ...identity, source: q.source === Q.CLAUDE_OAUTH_SOURCE || seat.id === 'default' && file === caches.at(-1) ? q.source : 'Claude 席位本地用量缓存' };
+        if (q && now - q.at <= Q.freshMs(q) && (!latest || q.at > latest.at)) latest = seat.id === 'default'
+          ? { ...q, ...seatInfo, ...identity, accountBound: false, source: file === caches.at(-1) ? q.source : 'Claude 席位本地用量缓存' }
+          : { ...q, ...seatInfo, ...identity, accountBound: true, source: q.source === Q.CLAUDE_OAUTH_SOURCE ? q.source : `Claude 席位用量（${parsed.source === 'Claude 会话状态行' ? '会话状态行' : '/usage'}）`, confidence: q.source === Q.CLAUDE_OAUTH_SOURCE ? q.confidence : '高（按账号 ID 归属）' };
       } catch (_) {}
     }
     if (latest) observations.push(latest);

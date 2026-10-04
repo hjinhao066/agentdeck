@@ -214,7 +214,7 @@ function bufferAppend(id, data) {
   boundedAppend(buf, data, PTY_BUFFER_MAX);
 }
 
-function spawnPty(id, cwd, cols, rows, managed, seatId) {
+function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   if (!validId(id) || ptys.size >= 100) return;
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
@@ -232,7 +232,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
       let cfg = {};
       try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
       catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const seat = ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
+      const seat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
       if (!seat) throw new Error('席位不存在');
       terminalEnv = seatEnvironment(terminalEnv, seat, tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME);
     } catch (_) {
@@ -687,8 +687,10 @@ app.whenReady().then(() => {
   const configPath = path.join(app.getPath('userData'), 'config.json');
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
-    getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId });
+    getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
+    onUsageRecorded: () => { quotaRead = null; } });
   if (!tudArg) {
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
     const refresh = () => claudeQuotaRefresh.tick().catch(() => {});
@@ -749,9 +751,8 @@ app.whenReady().then(() => {
   }; });
 
   // Test profiles never read the user's quota caches or conversation logs.
-  let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   handleMain('quota:local', async () => {
-    if (tudArg) return [];
+    if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
     await claudeQuotaRefresh?.tick();
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
@@ -766,7 +767,7 @@ app.whenReady().then(() => {
     }
     return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || [])]);
   });
-  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId }) => spawnPty(id, cwd, cols, rows, !!managed, seatId));
+  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
   onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);

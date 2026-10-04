@@ -8,9 +8,9 @@ function harness(state = {}, sendBark) {
   ], quotas: {} }, calls = [], writes = [];
   const check = createQuotaLowBark({ state, saveState: (s) => writes.push(JSON.parse(JSON.stringify(s))),
     sendBark: (alert) => { calls.push(alert); return sendBark ? sendBark(alert) : Promise.resolve({ ok: true }); } });
-  const sample = (remaining, { id = 'cn', at = NOW, resetAt = NOW + 3600000, label = '5 小时', accountKey } = {}) => {
+  const sample = (remaining, { id = 'cn', at = NOW, resetAt = NOW + 3600000, label = '5 小时', accountKey = 'hash-' + id } = {}) => {
     config.quotas[`Claude:${id}`] = { scope: 'claude', configDir: `/${id}`, accountKey,
-      sample: { at, windows: [{ label, remaining, resetAt }] } };
+      sample: { at, accountBound: true, accountKey, configDir: `/${id}`, windows: [{ label, remaining, resetAt }] } };
   };
   return { config, state, calls, writes, sample, check: (now = NOW) => check(config, now) };
 }
@@ -54,7 +54,7 @@ test('relative reset drift and first discovery of reset time do not send again',
   h.sample(1, { at: NOW + 1 }); await h.check();
   h.sample(0, { at: NOW + 2, resetAt: NOW + 3600002 }); await h.check();
   assert.equal(h.calls.length, 1);
-  assert.equal(h.state['seat:/cn'].resetAt, NOW + 3600000);
+  assert.equal(h.state['account:hash-cn'].resetAt, NOW + 3600000);
 });
 test('unknown, malformed, weekly-only, stale, future and expired samples never send', async () => {
   for (const remaining of [null, undefined, NaN, -1, 101, '2']) {
@@ -83,7 +83,7 @@ test('persist before network; in-flight and unsuccessful deliveries never flood 
   let finish;
   const h = harness({}, () => new Promise((resolve) => { finish = resolve; }));
   h.sample(2); const pending = h.check();
-  assert.equal(h.writes[0]['seat:/cn'].notified, true);
+  assert.equal(h.writes[0]['account:hash-cn'].notified, true);
   await h.check(); assert.equal(h.calls.length, 1);
   finish({ ok: false }); await pending; await h.check(); assert.equal(h.calls.length, 1);
 });
@@ -98,4 +98,40 @@ test('settings defaults and explicit overrides', async () => {
   assert.deepEqual(settings({ thresholdPercent: -2, volume: 11 }), settings());
   const h = harness(); h.config.claudeQuotaAlert = { thresholdPercent: 5, volume: 1 };
   h.sample(5); await h.check(); assert.equal(h.calls[0].volume, 1);
+});
+
+test('configured seats never alert or rearm from unbound, missing or mismatched identity and directory', async () => {
+  const mutations = [
+    (entry) => { delete entry.sample.accountBound; },
+    (entry) => { entry.sample.accountBound = false; },
+    (entry) => { delete entry.sample.accountKey; },
+    (entry) => { delete entry.accountKey; },
+    (entry) => { entry.sample.accountKey = 'other-account'; },
+    (entry) => { entry.sample.configDir = '/other'; },
+    (entry) => { delete entry.sample.configDir; },
+  ];
+  for (const mutate of mutations) {
+    const h = harness(); h.sample(1); mutate(h.config.quotas['Claude:cn']);
+    await h.check(); assert.equal(h.calls.length, 0); assert.equal(h.writes.length, 0);
+    h.sample(1); await h.check(); assert.equal(h.calls.length, 1);
+    const before = JSON.stringify(h.state);
+    h.sample(90, { at: NOW + 1 }); mutate(h.config.quotas['Claude:cn']);
+    await h.check(); assert.equal(JSON.stringify(h.state), before);
+    h.sample(1, { at: NOW + 2 }); await h.check(); assert.equal(h.calls.length, 1);
+  }
+});
+test('learning a proven account identity migrates an existing directory latch without alerting twice', async () => {
+  const h = harness({ 'seat:/cn': { at: NOW - 1, resetAt: NOW + 3600000, notified: true } });
+  h.sample(1); await h.check();
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.state['seat:/cn'], undefined);
+  assert.equal(h.state['account:hash-cn'].notified, true);
+});
+test('bound OAuth samples use the same thirty-minute freshness as quota summaries', async () => {
+  const h = harness(); h.sample(1, { at: NOW - 20 * 60000 });
+  h.config.quotas['Claude:cn'].sample.source = 'Claude OAuth usage';
+  await h.check(); assert.equal(h.calls.length, 1);
+  const expired = harness(); expired.sample(1, { at: NOW - 31 * 60000 });
+  expired.config.quotas['Claude:cn'].sample.source = 'Claude OAuth usage';
+  await expired.check(); assert.equal(expired.calls.length, 0);
 });

@@ -362,7 +362,7 @@
     mode = next === 'canvas' ? 'canvas' : 'crew';
     saved().mode = mode;
     viewEl.dataset.mode = mode;
-    viewEl.querySelectorAll('.board-mode button').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
+    viewEl.querySelectorAll('.board-mode button[data-mode]').forEach((b) => b.classList.toggle('active', b.dataset.mode === mode));
     viewEl.querySelector('.board-kicker').textContent = mode === 'crew' ? '队长 · 实时' : 'Live orchestration';
     viewEl.querySelector('.board-toolbar h1').textContent = mode === 'crew' ? '终端架构图' : 'Conductor Board';
     host.save();
@@ -399,7 +399,7 @@
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
     vpEl.addEventListener('wheel', onWheel, { passive: false });
-    viewEl.querySelectorAll('.board-mode button').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+    viewEl.querySelectorAll('.board-mode button[data-mode]').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
     new ResizeObserver(() => { if (host.visible() && vpEl.clientWidth && !drag) render(); }).observe(vpEl);
     setMode(host.config.crewMap.mode);
   }

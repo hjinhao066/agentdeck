@@ -3,8 +3,6 @@
 A Windows/macOS multi-column terminal app for running AI agents side by side.
 Each column has its own shell, output history and input. The Conductor Board
 adds explicit task relationships without taking control of manual terminals.
-Toolbar controls wrap onto additional rows when the sidebar or right pane
-leaves too little room, keeping view controls and quota tooltips reachable.
 
 ## Layout
 
@@ -47,7 +45,12 @@ the middle:
   ordinary session; dropping a session on the 队长 row (or 交给队长后台)
   hands it back. Sessions the 队长 only `tell`s something keep their place.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
-  top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
+  top bar picks 自由 (the free-layout icon: per-column widths) or 2–5 equal
+  columns. The top bar holds only 架构图, sidebar toggle, 新对话, the width
+  switch, the chat/terminal switch and the right-pane toggle; 广播 is in the
+  sidebar footer. It never wraps: when space runs short the width switch
+  shrinks to the active choice plus a menu, and the sidebar is capped so the
+  deck keeps at least 360px. Terminal output
   stays within its assigned column width, including when switching views or zooming.
   Scroll up in a terminal or conversation to pause following output. New output
   preserves your reading position and shows 有新内容 ↓ at the bottom; click it
@@ -58,8 +61,11 @@ the middle:
   even during silent background tools. Wrapped rows are joined; old scrollback
   and replayed output do not keep a finished session yellow. Once the busy
   indicator disappears, the existing two-tick debounce permits green.
-- **Subscription quota**: compact provider icons in the top bar show remaining
-  percentages (the lowest known window), or 正常 / 已用尽 / 未知. Hover or focus for
+- **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
+  one row per provider (icon, name, remaining percentage — the lowest known
+  window — or 正常 / 已用尽 / 未知). With the sidebar collapsed, a gauge icon in
+  the top bar (tinted by the provider closest to running out) opens the same
+  rows in a popover. Hover, click or focus a row for
   each window, reset time, model, masked account, source, confidence and sample time.
   Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
   Claude shows a separate item per `claudeSeats` configuration, with both
@@ -124,11 +130,12 @@ skipped.
 
 ## 队长 (Captain)
 
-任务看板数据、CLI、自动流转及未来界面的读写入口见
+任务看板数据、CLI、自动流转及界面的读写入口见
 [任务看板接口说明](docs/task-board-api.md)。正本是 `~/.agents/boards/tasks/<项目名>.json`；
 `new --task-id ... --project ...` 绑定卡片，命令回执自动流转，文件监听和每 60 秒巡检
 发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
-此分支只提供数据及接口，不添加看板界面。
+看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：按项目分泳道、
+按状态分五列，点卡片跳到对应会话；架构图只画正在跑的会话，看板列出全部任务。
 
 队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸 两个独立 Claude 席位，
 或 ChatGPT（Codex GPT-6.1 Sol）：

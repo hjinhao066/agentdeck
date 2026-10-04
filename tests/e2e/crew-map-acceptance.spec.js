@@ -98,7 +98,8 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
     expect(await page.locator('.cm-edges .cm-edge.dispatch').count()).toBe(10);
     expect(await page.locator('.cm-edges .cm-edge.review').count()).toBe(scenario === 'A' ? 4 : 0);
     const toolbar = await page.locator('#tbLeft > button').evaluateAll((nodes) => nodes.filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.id));
-    expect(toolbar.slice(0, 3)).toEqual(['boardViewBtn', 'taskBoardBtn', 'navCollapseBtn']);
+    expect(toolbar.slice(0, 2)).toEqual(['boardViewBtn', 'navCollapseBtn']);
+    await expect(page.locator('#navTop #taskBoardBtn')).toBeVisible();
     evidence.push({ scenario, width, height, theme, ...g });
     await screenshot(`${scenario}-${width}x${height}-${theme}`);
   }
@@ -154,6 +155,6 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
   await page.locator('#navCollapseBtn').click();
   await expect(page.locator('#boardViewBtn')).toBeVisible();
   const collapsedToolbar = await page.locator('#tbLeft > button').evaluateAll((nodes) => nodes.filter((n) => getComputedStyle(n).display !== 'none').map((n) => n.id));
-  expect(collapsedToolbar.slice(0, 3)).toEqual(['boardViewBtn', 'taskBoardBtn', 'navExpandBtn']);
+  expect(collapsedToolbar.slice(0, 3)).toEqual(['boardViewBtn', 'navExpandBtn', 'quotaRailBtn']);
   expect(errors).toEqual([]);
 });

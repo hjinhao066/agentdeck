@@ -248,3 +248,40 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
   expect(promptsFor(id).some((p) => p.startsWith('把当前进度写进'))).toBe(false);
   await expect.poll(() => page.evaluate(() => AgentInfo.resolveAgentInfo(MainSession.mainCol(), terms.get(config.mainSession.colId)).provider), { timeout: 20000 }).toBe('Claude');
 });
+
+
+test('sidebar flags follow Captain Relay immediately while workers retain their seat and directory', async () => {
+  const captainFlag = () => page.locator('.captain-item .agent-seat-label');
+  const workerFlag = page.locator('[data-col-id="seat-worker"] .agent-seat-label');
+  await expect(captainFlag()).toHaveText('🇨🇳');
+  await expect(workerFlag).toHaveText('🇨🇳');
+  await expect(captainFlag()).toHaveAttribute('title', '当前账号：CN · ~/.claude');
+  await expect(captainFlag()).toHaveAttribute('aria-label', '当前账号：CN · ~/.claude');
+  await page.evaluate(() => window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'));
+  await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');
+  await idle(cn);
+  const before = fs.readFileSync(path.join(home, '.claude/.credentials.json'), 'utf8');
+  expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(true);
+  await expect(captainFlag()).toHaveText('🇺🇸');
+  await expect(captainFlag()).toHaveAttribute('title', '当前账号：US · ~/.claude-us');
+  await expect(workerFlag).toHaveText('🇨🇳');
+  expect(await page.evaluate(() => columns.find(c => c.id === 'seat-worker').claudeConfigDir)).toBe('~/.claude');
+  expect(await page.evaluate(() => window.deck.ptyIsAlive('seat-worker'))).toBe(true);
+  expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).filter(r => r.colId === 'seat-worker')).toHaveLength(1);
+  expect(fs.readFileSync(path.join(home, '.claude/.credentials.json'), 'utf8')).toBe(before);
+  await page.evaluate(() => { window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'); window.deck.ptyInput('seat-worker', '/model Opus 5.5\r'); });
+  await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');
+  await expect(page.locator('.colnav-item[data-col-id="seat-worker"] .agent-model-label')).toHaveText('Opus 5.5');
+  await captainFlag().focus();
+  await screenshot('seat-flags-dark');
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+  await screenshot('seat-flags-light');
+  // Reopening a worker after a directory edit must retain its original login.
+  const id = await page.evaluate(() => {
+    config.claudeSeats.find(s => s.id === 'cn').configDir = '~/.claude-new';
+    return respawnColumn(columns.find(c => c.id === 'seat-worker')).id;
+  });
+  await expect.poll(() => capture('seat-env.jsonl')).toContain(id);
+  expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find(r => r.colId === id).configDir).toBe(null);
+  await expect(page.locator(`[data-col-id="${id}"] .agent-seat-label`)).toHaveAttribute('title', '当前账号：CN · ~/.claude');
+});
