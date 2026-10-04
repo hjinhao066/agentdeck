@@ -159,10 +159,10 @@
   function redrawEdges() { if (lay) drawEdges(); }
   function drawGroups() {
     zonesEl.innerHTML = '';
-    lay.groups.forEach((g, i) => {
+    lay.groups.forEach((g) => {
       const group = el('section', 'cm-project' + (g.collapsed ? ' collapsed' : ''));
       group.dataset.project = g.key;
-      group.style.setProperty('--project-hue', String((210 + i * 137.508) % 360));
+      group.style.setProperty('--project-hue', String(C.projectHue(g.key)));
       group.setAttribute('aria-label', g.name);
       place(group, g);
       const head = el('div', 'cm-project-head');
