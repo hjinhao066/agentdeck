@@ -239,10 +239,24 @@ test('队长\'s Codex commands always run without confirmation prompts, never wi
   for (const cmd of ['codex --dangerously-bypass-approvals-and-sandbox', 'codex -m gpt-6-luna --yolo', 'codex --yolo']) assert.equal(C(cmd), cmd, cmd);
 });
 
-test('队长 cannot hand work to Claude 4.x or Haiku in any CLI', () => {
-  for (const cmd of ['agy --dangerously-skip-permissions --model claude-sonnet-4-6', 'agy --model claude-opus-4-6-thinking',
-    'claude --model haiku', 'claude --model=claude-haiku-4-5', 'claude --model claude-sonnet-4-5-20250929',
-    'cursor-agent --force --model sonnet-4.6-thinking', 'claude --model "claude-3-5-sonnet"']) {
+test('agy can use its tested legacy models while every other CLI still rejects old Claude models', () => {
+  for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium']) {
+    assert.equal(M.checkCommand(`agy --dangerously-skip-permissions --model ${id}`).cmd,
+      `agy --dangerously-skip-permissions --model ${id}`, id);
+  }
+  for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6-thinking']) {
+    for (const cmd of [`claude --model ${id}`, `cursor-agent --force --model ${id}`, `codex --model ${id}`]) {
+      const r = M.checkCommand(cmd);
+      assert.ok(r.error && !r.cmd, cmd);
+      assert.match(r.error, /gemini-3\.8-flash-high[\s\S]*claude-opus-5-5-high/, 'says what to use instead');
+    }
+  }
+  assert.equal(M.checkCommand('cursor-agent --model gpt-oss-120b-medium').cmd,
+    'cursor-agent --model gpt-oss-120b-medium');
+  for (const cmd of ['agy --model haiku', 'agy --model claude-haiku-4-5', 'agy --model claude-sonnet-4-5-20250929',
+    'agy --model claude-opus-4-5', 'claude --model haiku', 'claude --model=claude-haiku-4-5',
+    'claude --model claude-sonnet-4-5-20250929', 'cursor-agent --force --model sonnet-4.6-thinking',
+    'codex --model claude-3-5-sonnet', 'claude --model "claude-3-5-sonnet"']) {
     const r = M.checkCommand(cmd);
     assert.ok(r.error && !r.cmd, cmd);
     assert.match(r.error, /gemini-3\.8-flash-high[\s\S]*claude-opus-5-5-high/, 'says what to use instead');
@@ -405,6 +419,11 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /--model claude-opus-5-5 --effort high/);
   assert.ok(!text.includes('默认模型是 Opus'));
   assert.match(text, /开工后用 peek 看状态行确认模型/);
+  assert.match(text, /claude-sonnet-4-6/);
+  assert.match(text, /claude-opus-4-6-thinking/);
+  assert.match(text, /gpt-oss-120b-medium/);
+  assert.match(text, /agy 绝不能加 --effort/);
+  assert.match(text, /Gemini 周额度用尽时/);
   assert.match(text, /用户交代的任务默认先记进/);
   assert.match(text, /鸡毛蒜皮/);
   assert.match(text, /截图真的落盘/);

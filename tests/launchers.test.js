@@ -168,17 +168,17 @@ test('队长 knows the providers, only verified models, and the routing preferen
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [
+    'claude-opus-4-6-thinking',
     'claude-opus-5-5', 'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
-    'claude-opus-5-5-xhigh', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-max',
-    'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
+    'claude-opus-5-5-xhigh', 'claude-sonnet-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high',
+    'claude-sonnet-5-5-max', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
     'gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'grok-4.7-high-fast',
   ]);
-  // the old Claude models are named only to forbid them
-  assert.match(text, /不要用 Claude 4\.x 和 Haiku[^\n]*new 会直接拒绝/);
+  assert.match(text, /Claude Code、Cursor、Codex 命令仍禁止 Claude 4\.x 和 Haiku/);
   // Antigravity has no 5.5 models
   const agyLine = text.split('\n').find((l) => l.includes('Antigravity：'));
   assert.ok(!/5-5|5\.5/.test(agyLine));
-  assert.match(agyLine, /只用 Gemini 3\.8 Flash，绝不用 Gemini 3\.1 Pro/);
+  assert.match(agyLine, /claude-sonnet-4-6[^\n]*claude-opus-4-6-thinking[^\n]*gpt-oss-120b-medium/);
   assert.ok(!text.includes('gemini-3.1-pro-high'));
   // who gets what
   const route = (needle) => text.split('\n').find((l) => l.startsWith('   - ') && l.includes(needle)) || '';
@@ -186,7 +186,8 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(route('重要代码'), /Sonnet 5\.5[^\n]*核心改动/);
   assert.match(route('批量写代码'), /GPT-6\.1 Sol[^\n]*写测试[^\n]*CI/);
   assert.match(route('简单的轻量代码'), /GPT-6 Luna/);
-  assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*放开用/);
+  assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*不用 Gemini 3\.1 Pro/);
+  assert.match(route('检索、整理'), /Gemini 周额度用尽时[^\n]*GPT-OSS[^\n]*Sonnet 4\.6[^\n]*Opus 4\.6/);
   assert.match(route('脏活'), /Cursor Grok 4\.7[^\n]*抓数据/);
   assert.match(text, /Claude Code：[^\n]*--model claude-opus-5-5 --effort high[^\n]*--model claude-sonnet-5-5[^\n]*开工后用 peek/);
   assert.match(text, /Cursor CLI：[^\n]*1–2 分钟可能没有任何输出[^\n]*别急着判定卡死/);
@@ -230,8 +231,8 @@ test('队长 picks the effort: simple medium, ordinary code high, complex or fai
   // Antigravity's tier is the model id's suffix, never --effort (it would switch models)
   const agy = lines.find((l) => l.includes('Antigravity：'));
   assert.match(agy, /gemini-3\.8-flash-low、gemini-3\.8-flash-medium、gemini-3\.8-flash-high/);
-  assert.match(agy, /不要加 --effort/);
-  assert.match(M.instructions(), /Antigravity 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max），不能加 --effort/);
+  assert.match(agy, /绝对不要给 agy 加 --effort/);
+  assert.match(M.instructions(), /Antigravity 的 Gemini Flash 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max）/);
 });
 
 test('队长 instructions call the board CLI the way the column\'s shell reads env vars', () => {
