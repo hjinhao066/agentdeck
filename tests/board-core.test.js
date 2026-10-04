@@ -183,3 +183,10 @@ test('new auto-positioned nodes avoid a saved freeform card', () => {
   assert.equal(positioned.nodes[0].y, 40);
   assert.ok(positioned.nodes[1].y > 196);
 });
+
+test('session project and review metadata normalize without losing independent terminal roles', () => {
+  const normalized = BoardCore.normalizeColumn({ id: 'r', role: 'manual', project: ' 项目\n一 ', reviews: ['a', 'a', 'b', '../bad', null] });
+  assert.equal(normalized.project, '项目 一');
+  assert.deepEqual(normalized.reviews, ['a', 'b']);
+  assert.equal(normalized.managed, false);
+});

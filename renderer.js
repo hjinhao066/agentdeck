@@ -147,6 +147,8 @@ if (saved) {
       manualTitle: c.manualTitle !== undefined ? !!c.manualTitle : isManualTitle(c.title),
       taskId: c.taskId || newTaskId(),
       role: c.role || 'manual',
+      project: c.project,
+      reviews: c.reviews,
       parentTaskId: c.parentTaskId,
       taskTitle: c.taskTitle,
       taskPrompt: c.taskPrompt,
@@ -529,12 +531,16 @@ function buildChrome() {
 
   const collapseBtn = railBtn(ICONS.panelLeft, '收起侧边栏', () => setNavCollapsed(true));
   collapseBtn.id = 'navCollapseBtn';
-  head.appendChild(collapseBtn);
+  collapseBtn.setAttribute('aria-label', collapseBtn.title);
 
   // Shown only while the sidebar is collapsed.
   const expandBtn = railBtn(ICONS.panelLeft, '展开侧边栏', () => setNavCollapsed(false));
   expandBtn.id = 'navExpandBtn';
-  tbLeft.append(expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
+  const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
+  boardBtn.id = 'boardViewBtn';
+  expandBtn.setAttribute('aria-label', expandBtn.title);
+  boardBtn.setAttribute('aria-label', boardBtn.title);
+  tbLeft.append(boardBtn, collapseBtn, expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
 
   // Column widths: free (each column keeps its own width, drag the edges) or
   // N equal columns filling the deck; more than N keep that width and scroll.
@@ -555,11 +561,9 @@ function buildChrome() {
   tbSplit.after(globalViewBtn);
   applyFit();
 
-  const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
-  boardBtn.id = 'boardViewBtn';
   const sideBtn = railBtn(ICONS.panelRight, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle());
   sideBtn.id = 'sideToggleBtn';
-  tbRight.append(railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast()), boardBtn, sideBtn);
+  tbRight.append(railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast()), sideBtn);
 
   const brand = document.createElement('span');
   brand.className = 'nav-brand';
@@ -3614,7 +3618,6 @@ CrewMap.init({
   columns: () => columns,
   mainCol: () => MainSession.mainCol(),
   mainState: () => MainSession.state(),
-  turnsOf: (id) => ChatUI.turnsOf(id) || [],
   activityLine: lastActivityLine,
   agentInfo: (col, entry) => window.AgentInfo.resolveAgentInfo(col, entry || null, null),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar'),

@@ -118,7 +118,7 @@
       '2. 和别的会话打交道，只用下面这些终端命令：',
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
-      `   ${cli} new --title "一句话标题" --task "任务正文" [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
+      `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
       `   ${cli} stop --id 会话id                 发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
       `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
@@ -130,6 +130,8 @@
       '3. 先弄懂再派活：用户交代任务时，如果表述不清、模棱两可、你没完全理解，先问清楚；想到更好的办法或有建议，也先提出来和用户讨论。直到确认自己完全理解、有把握把活做好，才把任务拆开派下去。别人能拍板的技术细节（用哪个模型、怎么实现、怎么拆）自己决定，不拿去问用户。',
       '4. 派活单步原则：一个会话一次只派一件活！绝对不要在会话正在忙碌（working）时连续向其追加多件任务。如果用户一条消息里有几件互不依赖的事，或者一个复杂大任务能拆解，拆开分别交给不同的会话并行跑。同一件活的补充和修改用 tell 发回原会话，只转发新指令，不要把文件正文再贴一遍；用户要改方向、放弃正在做的，用 tell --replace --now，只有用户明确要停才用 stop。',
       '5. 界面类的活要写明图标规则：派任何带界面的活，任务正文里必须写明——复制、删除、编辑等常见工具动作用图标按钮（复制=两个重叠方框、删除=垃圾桶、编辑=铅笔），配 tooltip 和无障碍名称，不用「复制」这类文字按钮。其他模型默认不会这样做，不写就会做成文字按钮。',
+      '   大项目由你直接拆块派给正式会话，不层层外包；同一项目的会话用同一个 --project "项目名"，审查会话用 --reviews 会话id[,会话id] 明确标明审谁，结果收回你这里。',
+      '   派活时说明：Claude 会话默认不要自己开 Claude 子 agent（费额度）；Codex/Gemini 会话可以开子 agent。',
       '6. 用户没点名目录时不要传 --cwd；点名了就传那个目录。',
       '7. 派完马上用一两句话告诉用户交给了哪个会话，不要等结果；用户可以接着派活。',
       legacyReceiptInjection
@@ -514,6 +516,8 @@
     return rows.map((r) => {
       let line = `${r.id}  「${oneLine(r.title, 60)}」  ${statusLabel(r.state)}`;
       if (r.folder) line += `  文件夹:${oneLine(r.folder, 30)}`;
+      if (r.project) line += `  项目:${oneLine(r.project, 120)}`;
+      if (r.reviews && r.reviews.length) line += `  审查:${r.reviews.join(',')}`;
       if (r.receipt) {
         const compact = modelReceipt(r.receipt);
         line += `\n    回执：${compact.summary}` + (compact.files.length ? `\n    文件：${compact.files.join('；')}` : '') + (compact.more ? '\n    其余见 read' : '');

@@ -109,6 +109,11 @@ again with the current provider, model and effort instructions.
   control capability token those commands need. Every column has a separate
   submission-only token, so a worker can report its own task without controlling
   any session.
+- Use `new --project "项目名"` to group sessions on the terminal architecture
+  map and `--reviews id1,id2` to declare exactly which sessions a reviewer checks.
+  One Captain directly assigns work, workers sit above reviewers, and completed
+  projects fold into a summary. Project chevrons save your fold/expand choice.
+  These remain real sessions that you can open and speak to directly.
 - New sessions it opens use the same launch command as the 队长 (Claude: bypass
   permissions) unless it picks another with `--agent claude|agy|cursor|grok|codex` or a full
   `--command`. Its instructions list the providers and the models their CLIs report

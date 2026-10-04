@@ -85,6 +85,8 @@
     const role = normalizeRole(c.role);
     return {
       ...c,
+      project: cleanText(c.project, 120).replace(/\s+/g, ' '),
+      reviews: [...new Set((Array.isArray(c.reviews) ? c.reviews : []).filter((id) => typeof id === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(id)))],
       taskId: cleanText(c.taskId, 160) || cleanText(c.id, 160),
       displayTitle: cleanText(c.displayTitle, 200),
       role,

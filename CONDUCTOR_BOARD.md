@@ -12,11 +12,15 @@ described below is the second tab (**自由画布**). The map is a read-only
 projection of 队长's ledger sources: `config.mainSession.tasks`, the live columns
 and `config.archived` (`crew-map-core.js` builds, lays out and routes it,
 `crew-map.js` draws it; no new IPC). Its own state is `config.crewMap`
-(`mode`, dragged card `positions`, and the pan/zoom `view`), checked on load.
+(`mode`, dragged card `positions`, project offsets `projectPositions`, pan/zoom
+`view`, `showReturn`, and `collapsedProjects`), checked on load. The entry is the
+leftmost top-bar icon, directly beside the sidebar collapse/expand icon.
 
 - It is a canvas: drag empty space to pan, Cmd/Ctrl+wheel or pinch to zoom,
   drag a card to move it. The corner controls zoom, fit, re-run the automatic
-  layout (clearing dragged positions) and show/hide archived sessions.
+  layout (**整理**, clearing card/project positions and fitting the window) and
+  show/hide archived sessions. Opening or resizing automatically fits all visible
+  nodes; manual card/project positions survive refresh, reopening and reload.
 - Three kinds of line, each with its own port and arrow direction:
   **派出** (accent) leaves the bottom of 队长 and enters a session's top, or a
   review session's left side down the gap beside what it reviews; **审查**
@@ -24,18 +28,36 @@ and `config.archived` (`crew-map-core.js` builds, lays out and routes it,
   **收回** (green, red for a question or a failure) leaves a session's
   bottom-right, runs under everything and up the right edge into 队长's right
   side. A reviewed session's result goes back through its review. Lines nest
-  so no two share a stretch (unit-tested).
-- Layout by state, left to right: 排队 / 待补充, then 干活中, then finished work
-  on a quiet panel. Sessions linked by reviews stay together; a review sits one
-  row below what it reviews. Fit shows the open work; finished work is a pan away
-  when there is no room.
-- A session reads as a **review** when its title or the prompts it was given
-  match 审查/审核/复核/评审/验收/review/audit and name other, earlier sessions by
-  id, by title or by a file from their receipt.
+  in the automatic layout (unit-tested). Return lines and their chevrons are
+  hidden by default; returned cards carry **✓ 已交回**. The legend icon toggles
+  return lines, with its pressed state and preference saved.
+- Projects appear side by side in named groups (unmarked sessions go in **其他**).
+  Soft theme-aware backgrounds and borders distinguish projects. There is one
+  real Captain above them. The viewport chooses a grid: both projects and workers
+  wrap into rows as needed, including a large ungrouped crew. Declared reviewers
+  sit below their workers; lower-row dispatch lines use card gutters. Dragging a
+  project background/header moves its cards and cables together.
+- Open a session with `new --title "接口" --task "实现接口" --project "客户门户"`.
+  A reviewer uses the same project and explicit session ids:
+  `new --title "审查" --task "检查结果" --project "客户门户" --reviews id1,id2`.
+  Only those ids get review lines; titles, file mentions and prompt text do not
+  infer relationships. Unknown ids and the Captain's id are refused. Targets
+  can be archived sessions. Review metadata and project names survive waiting
+  for a concurrency slot, task-card pruning, archive/restore and relaunch.
+- Each group has a chevron icon with a tooltip, accessible name and keyboard
+  control. Projects whose sessions all succeeded (`done`) start as a single
+  summary row; failed, stopped and waiting projects stay open. A user's explicit
+  fold/expand choice is saved in `config.crewMap.collapsedProjects`.
 - Cards show title, agent/model, state and the newest receipt, refreshed on the
-  status tick; no relationship labels (the lines carry that). Clicking a card
-  opens its real column (an archived one is restored first). Archived sessions
-  fold into a `+ N 个已归档` pill, except one a live review still links to.
+  status tick. Fixed card slots show at most two full title lines and two full
+  receipt lines, ellipsizing excess text. Controls use icons with tooltips,
+  accessible names and keyboard focus. Clicking opens the real session (an archived one is restored),
+  where the user can talk directly to its agent. Hidden archived work remains
+  available through the archive control; completed projects retain their summary.
+- The Captain directly splits a project into sessions and collects their
+  reviewed results. Its briefing asks it to use one `--project` for that work
+  and `--reviews` for reviewers, and to tell Claude sessions not to launch
+  Claude sub-agents by default; Codex/Gemini sessions may use sub-agents.
 
 ## Terminal roles
 

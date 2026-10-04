@@ -197,6 +197,7 @@ test('peek sends the id and default or requested row count and prints only live 
 
 test('Captain stop/archive and tell flags use the authenticated request channel', async () => {
   for (const [args, expected] of [
+    [['new', '--title', 'Review', '--task', 'Inspect', '--project', '登录项目', '--reviews', 'worker-a, worker-b,worker-a'], { action: 'main-new', title: 'Review', task: 'Inspect', project: '登录项目', reviews: ['worker-a', 'worker-b'] }],
     [['stop', '--id', 'worker'], { action: 'main-stop', to: 'worker' }],
     [['archive', '--id', 'worker'], { action: 'main-archive', to: 'worker' }],
     [['tell', '--to', 'worker', '--message', 'new plan', '--replace', '--now'], { action: 'main-tell', to: 'worker', message: 'new plan', replace: true, now: true }],
@@ -212,7 +213,7 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
     }
     assert.ok(request);
     assert.equal(request.token, 'test-token');
-    for (const [key, value] of Object.entries(expected)) assert.equal(request[key], value);
+    for (const [key, value] of Object.entries(expected)) assert.deepEqual(request[key], value);
     fs.writeFileSync(path.join(dir, 'responses', `${request.id}.json`), JSON.stringify({ done: true, result: 'done' }));
     assert.equal((await running).code, 0);
     fs.rmSync(dir, { recursive: true, force: true });
@@ -221,5 +222,13 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
     const r = await runCli([action, '--id'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
     assert.notEqual(r.code, 0);
     assert.match(r.stderr, /requires --id/);
+  }
+});
+
+test('new rejects empty project names and malformed review declarations before requesting', async () => {
+  for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a']]) {
+    const result = await runCli(['new', '--title', 'Review', '--task', 'Inspect', ...options], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /new --(project|reviews) requires/);
   }
 });

@@ -11,8 +11,6 @@
 
   const STATUS_LABEL = { working: '干活中', input: '待补充', queued: '排队', done: '已完成', failed: '失败', stopped: '已停下', idle: '空闲' };
   const ACTIVE = ['working', 'input', 'queued'];
-  // A session whose title (or the work it was given) reads as a review.
-  const REVIEW_RE = /审查|审核|复核|复查|评审|核查|验收|review|audit/i;
   const MAX_LINE = 140;
 
   const oneLine = (s, max = MAX_LINE) => {
@@ -58,23 +56,16 @@
     return '';
   }
 
-  // Review links: a session reads as a review (REVIEW_RE on its title or the
-  // work it was given), and that work names other sessions by id, by title or
-  // by a file from their receipt. Only sessions that got work earlier count.
-  function detectReviews(nodes, prompts) {
-    const edges = [];
-    const reviewers = new Set();
+  // Only declared session ids make review links; prose and titles never do.
+  function detectReviews(nodes) {
+    const ids = new Set(nodes.map((n) => n.id));
+    const edges = [], reviewers = new Set();
     nodes.forEach((n) => {
-      const text = String(prompts[n.id] || '');
-      if (!REVIEW_RE.test(n.title) && !REVIEW_RE.test(text)) return;
-      const targets = nodes.filter((o) => {
-        if (o.id === n.id || !(o.firstSentAt <= n.lastSentAt)) return false;
-        if (o.id.length >= 6 && new RegExp('(^|[^A-Za-z0-9_-])' + o.id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^A-Za-z0-9_-])').test(text)) return true;
-        if (o.title.length >= 4 && text.includes(o.title)) return true;
-        return o.files.some((f) => f.length > 4 && text.includes(f));
+      if (!n.reviews.length) return;
+      reviewers.add(n.id);
+      [...new Set(n.reviews)].forEach((id) => {
+        if (id !== n.id && ids.has(id)) edges.push({ from: id, to: n.id, type: 'review' });
       });
-      if (REVIEW_RE.test(n.title) || targets.length) reviewers.add(n.id);
-      targets.forEach((o) => edges.push({ from: o.id, to: n.id, type: 'review' }));
     });
     return { edges, reviewers };
   }
@@ -83,7 +74,7 @@
   //   captain: { id, title, alive, state, provider, model } | null,
   //   columns: [{ id, title, alive, state, live, provider, model, lastReceipt, captainCrew }],
   //   archived: [{ id, title, provider, model, lastReceipt, captainCrew, archivedAt }],
-  //   tasks: config.mainSession.tasks, prompts: { colId: text it was given }, showArchived
+  //   tasks: config.mainSession.tasks, showArchived
   // }
   function buildCrewMap(input) {
     const tasks = (Array.isArray(input.tasks) ? input.tasks : []).filter((t) => t && typeof t === 'object');
@@ -96,7 +87,13 @@
       byCol.get(t.colId).push(t);
     });
     // sessions 队长 opened keep their place even after their task cards are pruned
-    (input.columns || []).forEach((c) => { if (c.captainCrew && !byCol.has(c.id)) byCol.set(c.id, []); });
+    [...(input.columns || []), ...(input.archived || [])].forEach((c) => { if (c.captainCrew && !byCol.has(c.id)) byCol.set(c.id, []); });
+    // Explicit review targets can also be user-opened sessions without task cards.
+    [...(input.columns || []), ...(input.archived || []), ...tasks].forEach((c) => {
+      (Array.isArray(c.reviews) ? c.reviews : []).forEach((id) => {
+        if ((live.has(id) || archived.has(id)) && !byCol.has(id)) byCol.set(id, []);
+      });
+    });
 
     const all = [];
     byCol.forEach((list, colId) => {
@@ -105,26 +102,30 @@
       const isArchived = !live.has(colId);
       const latest = list[list.length - 1] || null;
       const term = isArchived ? null : col;
-      const { status, detail } = nodeStatus(latest, term);
+      const remembered = !latest && col.lastReceipt ? { status: col.lastReceipt.failed ? 'failed' : col.lastReceipt.explicit ? 'done' : 'stopped', receipt: col.lastReceipt } : null;
+      const { status, detail } = nodeStatus(latest || remembered, term);
       const sent = list.map((t) => t.sentAt || 0);
       all.push({
         id: colId, kind: 'worker', title: oneLine(col.title, 120) || 'Terminal',
+        project: oneLine(col.project ?? (latest && latest.project), 120),
+        reviews: Array.isArray(col.reviews) ? col.reviews : (latest && Array.isArray(latest.reviews) ? latest.reviews : []),
         provider: col.provider || '', model: col.model || '',
         status, statusLabel: STATUS_LABEL[status], detail,
-        line: receiptLine(latest, col.lastReceipt),
+        line: receiptLine(latest || remembered, col.lastReceipt),
         live: !isArchived && status === 'working' ? oneLine(col.live, 90) : '',
         archived: isArchived, review: false, taskCount: list.length,
         firstSentAt: sent.length ? Math.min(...sent) : 0,
         lastSentAt: sent.length ? Math.max(...sent) : 0,
         ts: Math.max(latest ? latest.doneAt || latest.startedAt || latest.sentAt || 0 : 0, col.archivedAt || 0),
         files: latest && latest.receipt && Array.isArray(latest.receipt.files) ? latest.receipt.files.map(String) : [],
-        returned: returnKind(latest, col.lastReceipt),
+        returned: returnKind(latest || remembered, col.lastReceipt),
       });
     });
     // work waiting for a free slot has no terminal yet
     tasks.filter((t) => !t.colId && t.status === 'waiting').forEach((t) => {
       all.push({
         id: 'wait:' + t.id, kind: 'waiting', title: oneLine(t.title, 120) || '排队中的活',
+        project: oneLine(t.project, 120), reviews: Array.isArray(t.reviews) ? t.reviews : [],
         provider: '', model: '', status: 'queued', statusLabel: STATUS_LABEL.queued, detail: '等空位',
         line: '', live: '', archived: false, review: false, taskCount: 1,
         firstSentAt: t.sentAt || 0, lastSentAt: t.sentAt || 0, ts: t.sentAt || 0, files: [], returned: '',
@@ -132,13 +133,22 @@
     });
     all.sort((a, b) => a.firstSentAt - b.firstSentAt || (a.id < b.id ? -1 : 1));
 
-    const reviews = detectReviews(all.filter((n) => n.kind === 'worker'), input.prompts || {});
+    const reviews = detectReviews(all);
     all.forEach((n) => { n.review = reviews.reviewers.has(n.id); });
+
+    const projects = new Map();
+    all.forEach((n) => {
+      if (!projects.has(n.project)) projects.set(n.project, { key: n.project, name: n.project || '其他', nodes: [], counts: {} });
+      const p = projects.get(n.project);
+      p.nodes.push(n);
+      p.counts[n.status] = (p.counts[n.status] || 0) + 1;
+    });
+    projects.forEach((p) => { p.completed = p.nodes.every((n) => n.status === 'done'); });
 
     // An archived session a visible review still links to stays (faded): the chain stays whole.
     const current = new Set(all.filter((n) => !n.archived).map((n) => n.id));
     const linked = new Set(reviews.edges.filter((e) => current.has(e.from) || current.has(e.to)).flatMap((e) => [e.from, e.to]));
-    const visible = all.filter((n) => input.showArchived || !n.archived || linked.has(n.id));
+    const visible = all.filter((n) => input.showArchived || !n.archived || linked.has(n.id) || projects.get(n.project).completed);
     const shown = new Set(visible.map((n) => n.id));
     const captainId = input.captain ? input.captain.id : '';
     const review = reviews.edges.filter((e) => shown.has(e.from) && shown.has(e.to));
@@ -164,7 +174,7 @@
       };
     }
     return {
-      captain, nodes: visible, edges, counts,
+      captain, nodes: visible, edges, counts, projects: [...projects.values()].sort((a, b) => !a.key - !b.key),
       archivedCount: all.filter((n) => n.archived).length,
       hiddenArchived: all.length - visible.length,
     };
@@ -176,95 +186,77 @@
     return order.filter((s) => counts[s]).map((s) => `${counts[s]} ${STATUS_LABEL[s]}`).join(' · ') || '还没有派出去的活';
   }
 
-  // Where a session sits, left to right: work waiting on something
-  // (排队 / 待补充), then work in progress, then finished work set apart.
-  const ZONE = { queued: 0, input: 0, working: 1 };
-  // Sessions joined by review links stay together as one cluster: the
-  // reviewed sessions on a row, each review one row below what it reviews.
-  function clusters(map) {
-    const parent = new Map(map.nodes.map((n) => [n.id, n.id]));
-    const find = (x) => (parent.get(x) === x ? x : (parent.set(x, find(parent.get(x))), parent.get(x)));
-    map.edges.filter((e) => e.type === 'review' && parent.has(e.from) && parent.has(e.to)).forEach((e) => parent.set(find(e.from), find(e.to)));
-    const groups = new Map();
-    map.nodes.forEach((n, i) => {
-      const k = find(n.id);
-      if (!groups.has(k)) groups.set(k, { nodes: [], first: i });
-      groups.get(k).nodes.push(n);
-    });
-    return [...groups.values()].map((g) => ({
-      nodes: g.nodes, first: g.first,
-      zone: Math.min(2, ...g.nodes.map((n) => (n.archived ? 2 : ZONE[n.status] ?? 2))),
-    })).sort((a, b) => a.zone - b.zone || a.first - b.first);
-  }
-
+  // Pack projects into shelves and wrap sessions within each project. Review
+  // sessions get their own rows below workers; every coordinate is group-local.
   function layout(map, opts) {
-    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, zoneGap: 88, fanY: 100, gapY: 80, pad: 40, fold: false, ...opts };
-    const reviewOf = new Map();
-    map.edges.filter((e) => e.type === 'review').forEach((e) => {
-      if (!reviewOf.has(e.to)) reviewOf.set(e.to, []);
-      reviewOf.get(e.to).push(e.from);
-    });
-    const depth = new Map();
-    const depthOf = (id, seen) => {
-      if (depth.has(id)) return depth.get(id);
-      if (seen.has(id)) return 1;   // a review cycle: stop at the first level
-      seen.add(id);
-      const targets = reviewOf.get(id) || [];
-      const d = targets.length ? 1 + Math.max(...targets.map((t) => depthOf(t, seen))) : 1;
-      depth.set(id, d);
-      return d;
-    };
-    map.nodes.forEach((n) => depthOf(n.id, new Set()));
-    const rowY = (r) => o.pad + (r === 0 ? 0 : o.captainH + o.fanY + (r - 1) * (o.nodeH + o.gapY));
-    const step = o.nodeW + o.gapX;
-    const pos = new Map();
-    const groups = clusters(map);
-    let x = o.pad;
-    let prevZone = null;
-    let rows = 1;
-    const boxes = [];
-    groups.forEach((g) => {
-      if (prevZone !== null) x += g.zone !== prevZone ? o.zoneGap : o.clusterGap;
-      prevZone = g.zone;
-      const x0 = x;
-      let right = x0;
-      g.nodes.filter((n) => depth.get(n.id) === 1).forEach((n, i) => {
-        pos.set(n.id, { x: x0 + i * step, y: rowY(1), w: o.nodeW, h: o.nodeH, row: 1, zone: g.zone });
-        right = Math.max(right, x0 + i * step + o.nodeW);
-      });
-      const maxD = Math.max(...g.nodes.map((n) => depth.get(n.id)));
-      for (let d = 2; d <= maxD; d++) {
-        let nextFree = x0;
-        g.nodes.filter((n) => depth.get(n.id) === d).forEach((n) => {
-          const xs = (reviewOf.get(n.id) || []).map((t) => pos.get(t)).filter(Boolean).map((p) => p.x + p.w / 2);
-          const want = xs.length ? (Math.min(...xs) + Math.max(...xs)) / 2 - o.nodeW / 2 : nextFree;
-          const nx = Math.max(nextFree, want);
-          pos.set(n.id, { x: nx, y: rowY(d), w: o.nodeW, h: o.nodeH, row: d, zone: g.zone });
-          nextFree = nx + step;
-          right = Math.max(right, nx + o.nodeW);
-        });
-        rows = Math.max(rows, d);
+    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40, fold: false, collapsedProjects: {}, maxWidth: 0, columnsPerProject: Infinity, ...opts };
+    const pos = new Map(), groups = [];
+    const shown = new Set(map.nodes.map((n) => n.id));
+    let x = o.pad, y = o.pad + o.captainH + o.fanY, shelfH = 0, right = 0, fold = null;
+    map.projects.forEach((p) => {
+      const collapsed = typeof o.collapsedProjects[p.key] === 'boolean' ? o.collapsedProjects[p.key] : p.completed;
+      const nodes = p.nodes.filter((n) => shown.has(n.id));
+      let workers = nodes.filter((n) => !n.review);
+      const reviewers = nodes.filter((n) => n.review), hasFold = o.fold && !p.key;
+      const count = Math.max(workers.length + (hasFold ? 1 : 0), reviewers.length, 1);
+      const cols = Math.max(1, Math.min(count, o.columnsPerProject, o.maxWidth ? Math.floor((o.maxWidth - 88 + o.gapX) / (o.nodeW + o.gapX)) : count));
+      // Reviewed outputs sit next to the review row, avoiding cables through
+      // intervening cards when the worker grid wraps.
+      if (workers.length > cols && reviewers.length) {
+        const targets = new Set(reviewers.flatMap((n) => n.reviews));
+        workers = [...workers.filter((n) => !targets.has(n.id)), ...workers.filter((n) => targets.has(n.id))];
       }
-      boxes.push({ x0, x1: right, zone: g.zone });
-      x = right;
+      const rows = [];
+      const chunk = (list) => { for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols)); };
+      chunk([...workers, ...(hasFold ? [null] : [])]);
+      chunk(reviewers);
+      const w = collapsed ? 320 : cols * o.nodeW + (cols - 1) * o.gapX + 88;
+      const h = collapsed ? 56 : 52 + Math.max(1, rows.length) * o.nodeH + Math.max(0, rows.length - 1) * o.gapY + 28;
+      if (o.maxWidth && x > o.pad && x + w > o.pad + o.maxWidth) {
+        x = o.pad;
+        y += shelfH + o.clusterGap;
+        shelfH = 0;
+      }
+      const g = { ...p, x, y, w, h, collapsed };
+      groups.push(g);
+      if (!collapsed) rows.forEach((row, r) => {
+        const start = x + (w - row.length * o.nodeW - Math.max(0, row.length - 1) * o.gapX) / 2;
+        row.forEach((n, i) => {
+          const bx = start + i * (o.nodeW + o.gapX), by = y + 52 + r * (o.nodeH + o.gapY);
+          if (n) pos.set(n.id, { x: bx, y: by, anchorY: by, w: o.nodeW, h: o.nodeH, row: r + 1, project: p.key });
+          else fold = { x: bx, y: by + o.nodeH / 2 - 16, w: 150, h: 32, project: p.key };
+        });
+      });
+      right = Math.max(right, x + w);
+      x += w + o.clusterGap;
+      shelfH = Math.max(shelfH, h);
     });
-    let fold = null;
-    if (o.fold) {
-      if (boxes.length) x += prevZone === 2 ? o.clusterGap : o.zoneGap;
-      fold = { x, y: rowY(1) + o.nodeH / 2 - 16, w: 150, h: 32 };
-      x += fold.w;
-    }
-    // 队长 centers over the work still open; over everything when all is finished
-    const open = boxes.filter((b) => b.zone < 2);
-    const span = open.length ? [open[0].x0, open[open.length - 1].x1] : boxes.length ? [boxes[0].x0, boxes[boxes.length - 1].x1] : [o.pad, o.pad + o.captainW];
-    const captain = map.captain ? { x: Math.max(o.pad, (span[0] + span[1]) / 2 - o.captainW / 2), y: rowY(0), w: o.captainW, h: o.captainH, row: 0 } : null;
-    return { captain, nodes: pos, fold, rows, rowY, openSpan: open.length ? [open[0].x0, open[open.length - 1].x1] : null, width: Math.max(x, captain ? captain.x + captain.w : 0) + o.pad, height: rowY(rows) + o.nodeH + o.pad };
+    const returnCount = map.edges.filter((e) => e.type === 'return').length;
+    const width = Math.max(o.pad + o.captainW, right) + o.pad + returnCount * 7;
+    const captain = map.captain ? { x: (width - o.captainW) / 2, y: o.pad, w: o.captainW, h: o.captainH, row: 0 } : null;
+    const rowY = (r) => o.pad + o.captainH + o.fanY + 52 + (r - 1) * (o.nodeH + o.gapY);
+    return { captain, nodes: pos, groups, fold, rowY, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
   }
 
-  // Saved node positions ({ id: { x, y } }, 队长 under its own id) win over the layout.
-  function applyPositions(lay, positions, captainId) {
+  function constrainPosition(lay, box, p) {
+    const g = lay.groups.find((g) => g.key === box.project);
+    if (!g) return p;
+    return { x: Math.max(g.x + 20, Math.min(g.x + g.w - box.w - 20, p.x)), y: Math.max(box.anchorY - 12, Math.min(box.anchorY + 12, p.y)) };
+  }
+
+  function translateProject(lay, key, dx, dy) {
+    const g = lay.groups.find((g) => g.key === key);
+    if (!g) return;
+    g.x += dx; g.y += dy;
+    lay.nodes.forEach((b) => { if (b.project === key) { b.x += dx; b.y += dy; b.anchorY += dy; } });
+    if (lay.fold && lay.fold.project === key) { lay.fold.x += dx; lay.fold.y += dy; }
+  }
+
+  // Manual project offsets and card positions survive refresh/reopen until 整理.
+  function applyPositions(lay, positions, captainId, projectPositions = {}) {
     const p = positions || {};
     const ok = (v) => v && Number.isFinite(v.x) && Number.isFinite(v.y);
+    lay.groups.forEach((g) => { if (ok(projectPositions[g.key])) translateProject(lay, g.key, projectPositions[g.key].x, projectPositions[g.key].y); });
     lay.nodes.forEach((box, id) => { if (ok(p[id])) Object.assign(box, { x: p[id].x, y: p[id].y, moved: true }); });
     if (lay.captain && captainId && ok(p[captainId])) Object.assign(lay.captain, { x: p[captainId].x, y: p[captainId].y, moved: true });
     return lay;
@@ -289,7 +281,7 @@
   // leaves a session's bottom-right corner, runs under everything and up the
   // right edge into 队长's right side, so out and back never share a stretch.
   function routes(map, lay, opts) {
-    const o = { clusterGap: 64, lane: 7, ...opts };
+    const o = { clusterGap: 64, gapX: 24, lane: 7, ...opts };
     const cap = lay.captain;
     const out = [];
     if (!cap) return out;
@@ -304,10 +296,10 @@
     // ---- 派出 ----
     const dispatch = map.edges.filter((e) => e.type === 'dispatch' && box(e.to)).map((e) => {
       const b = box(e.to);
-      const side = reviewOf.has(e.to);
+      const side = status.get(e.to).review || b.row > 1;
       // a review session is entered from the left, down the gap left of what it reviews
-      const targets = side ? reviewOf.get(e.to).map(box) : [];
-      const lx = side ? Math.min(b.x, ...targets.map((t) => t.x)) - o.clusterGap / 2 : 0;
+      const targets = status.get(e.to).review ? (reviewOf.get(e.to) || []).map(box) : [];
+      const lx = side ? Math.min(b.x, ...targets.map((t) => t.x)) - (status.get(e.to).review ? o.clusterGap : o.gapX) / 2 : 0;
       return { e, b, side, lx, hx: side ? lx : b.x + b.w / 2 };
     }).sort((a, b) => a.hx - b.hx);
     const fanW = Math.min(cap.w - 48, Math.max(0, dispatch.length - 1) * 18);
@@ -378,7 +370,7 @@
     return out;
   }
 
-  // Saved state of the map: { mode, positions: { id: {x,y} }, view: { x, y, scale } }.
+  // Saved state of the map: { mode, positions: { id: {x,y} }, view: { x, y, scale }, showReturn, collapsedProjects }.
   function normalizeSaved(raw) {
     const s = raw && typeof raw === 'object' ? raw : {};
     const positions = {};
@@ -390,15 +382,17 @@
     const v = s.view && typeof s.view === 'object' ? s.view : null;
     const view = v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.scale)
       ? { x: v.x, y: v.y, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.scale)) } : null;
-    return { mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view };
+    const collapsedProjects = Object.fromEntries(Object.entries(s.collapsedProjects || {}).slice(0, 500).filter(([key, value]) => key.length <= 120 && typeof value === 'boolean'));
+    const projectPositions = Object.fromEntries(Object.entries(s.projectPositions || {}).slice(0, 500).filter(([key, p]) => key.length <= 120 && p && Number.isFinite(p.x) && Number.isFinite(p.y)).map(([key, p]) => [key, { x: Math.round(p.x), y: Math.round(p.y) }]));
+    return { projectPositions, mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn };
   }
   const MIN_SCALE = 0.3, MAX_SCALE = 1.6;
 
   // A change in anything but the live activity line rebuilds the map.
   function signature(map) {
-    const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0].join('\u0001');
-    return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived].join('\u0002');
+    const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0, x.project || '', (x.reviews || []).join(',')].join('\u0001');
+    return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${summaryLine(p.counts)}`)].join('\u0002');
   }
 
-  return { STATUS_LABEL, ACTIVE, REVIEW_RE, MIN_SCALE, MAX_SCALE, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, clusters, layout, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
 });
