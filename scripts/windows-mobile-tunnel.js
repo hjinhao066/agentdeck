@@ -418,7 +418,6 @@ function createWindowsPlan(input) {
     '-o', 'StrictHostKeyChecking=yes',
     '-o', 'UserKnownHostsFile=' + quoteOpenSshConfigPath(config.knownHostsFile),
     '-o', 'ExitOnForwardFailure=yes',
-    '-o', 'ClearAllForwardings=yes',
     '-o', 'ConnectTimeout=10',
     '-o', 'ServerAliveInterval=15',
     '-o', 'ServerAliveCountMax=3',
@@ -476,7 +475,8 @@ function assertPrivateKeyAcl(text, identityFile, windowsUser) {
     if (lower.includes(token.toLowerCase())) throw new Error('The private key ACL still names another principal.');
   }
   const aceLines = body.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.includes(':('));
-  if (aceLines.length !== 1 || !aceLines[0].includes(windowsUser + ':(R)')) {
+  // icacls prints the computer name in its own case (owenJH\\name), whoami and tunnel.json may differ.
+  if (aceLines.length !== 1 || !aceLines[0].toLowerCase().includes(windowsUser.toLowerCase() + ':(r)')) {
     throw new Error('The private key must grant only the installing user read access.');
   }
 }
