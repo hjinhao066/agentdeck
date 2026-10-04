@@ -8,7 +8,7 @@ const MainCore = require('../main-core');
 const source = fs.readFileSync(require.resolve('../renderer.js'), 'utf8');
 const context = vm.createContext({ MainCore });
 vm.runInContext(source.slice(source.indexOf('const WORKING_RE'), source.indexOf('function setDot')) +
-  source.slice(source.indexOf('function statusScreen'), source.indexOf('// Format elapsed ms')), context);
+  source.slice(source.indexOf('function termLine'), source.indexOf('// Format elapsed ms')), context);
 const { classify, statusScreen } = context;
 const cursorCmd = 'cursor-agent --force --model grok-4.7-high-fast';
 const codexIdle = ['─ Worked for 34m 29s • 12:52 ─', '› Ask Codex to do anything',
@@ -130,7 +130,7 @@ test('archive rechecks the live terminal and open turns instead of trusting a st
     cancelManagedRequests() {}, releaseManagedSubtree() {}, detachColumn: () => detached++,
     saveConfig() {}, renderColNav() {}, renderBoardGraph() {} });
   vm.runInContext(source.slice(source.indexOf('const WORKING_RE'), source.indexOf('function setDot')) +
-    source.slice(source.indexOf('function statusScreen'), source.indexOf('// Format elapsed ms')) +
+    source.slice(source.indexOf('function termLine'), source.indexOf('// Format elapsed ms')) +
     source.slice(source.indexOf('function archiveColumn'), source.indexOf('// quiet: 队长 bringing back')), ctx);
   const archive = () => ctx.archiveColumn(col, { quiet: true });
   archive(); assert.equal(detached, 0, 'live stop footer protects a quiet green terminal');
