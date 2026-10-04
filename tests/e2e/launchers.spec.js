@@ -55,7 +55,7 @@ test('only a blank session offers the agents, with their real launch commands', 
   await expect(launcher('ln-blank').nth(1)).toHaveAttribute('data-cmd', 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high');
   await expect(launcher('ln-blank').nth(2)).toHaveAttribute('data-cmd', 'grok --permission-mode bypassPermissions');
   await expect(launcher('ln-blank').nth(3)).toHaveAttribute('data-cmd', 'cursor-agent --force --model claude-opus-5-5-high');
-  await expect(launcher('ln-blank').nth(4)).toHaveAttribute('data-cmd', 'codex --dangerously-bypass-approvals-and-sandbox');
+  await expect(launcher('ln-blank').nth(4)).toHaveAttribute('data-cmd', 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
   await expect.poll(() => agentUp('ln-agent'), { timeout: 20000 }).toBe(true);
   await expect(launcher('ln-agent')).toHaveCount(0);
 });

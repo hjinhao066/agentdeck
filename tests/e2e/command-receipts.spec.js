@@ -33,7 +33,7 @@ test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(p
 
 function cli(args, env) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.resolve(__dirname, '../../board-cli.js'), ...args], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [env.AGENTDECK_BOARD_CLI || path.resolve(__dirname, '../../board-cli.js'), ...args], { env: { ...process.env, AGENTDECK_RECEIPT_TOKEN: '', AGENTDECK_CONTROL_TOKEN: '', AGENTDECK_TERMINAL_ID: '', AGENTDECK_CONTROL_DIR: '', ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', (c) => { stdout += c; }); child.stderr.on('data', (c) => { stderr += c; });
     child.on('close', (code) => resolve({ code, stdout, stderr }));
@@ -146,4 +146,67 @@ test('quota exhausted at startup fails the unsent task instead of leaving it que
   expect(task.receipt.failed).toContain("You've hit your usage limit");
   expect(task.startedAt).toBeUndefined();
   expect(await page.evaluate((id) => ChatUI.turnsOf(id).length, task.colId)).toBe(0);
+});
+
+const filteredEnv = (env) => ({ ...env, AGENTDECK_RECEIPT_TOKEN: '', AGENTDECK_CONTROL_TOKEN: '', AGENTDECK_CONTROL_DIR: '' });
+
+test('filtered tokens use private per-terminal credentials for progress, ask and complete without granting worker control', async () => {
+  const env = filteredEnv(workerEnv());
+  await dispatch('filtered command environment');
+  expect((await cli(['progress', '--message', 'filtered progress'], env)).code).toBe(0);
+  expect((await cli(['ask', '--question', 'filtered question'], env)).code).toBe(0);
+  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).status)).toBe('asking');
+  expect((await cli(['complete', '--result', 'filtered completed'], env)).code).toBe(0);
+  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.summary)).toBe('filtered completed');
+  expect((await cli(['ledger'], env)).code).toBe(1);
+  expect((await cli(['new', '--title', 'Forbidden', '--task', 'no worker control'], env)).stderr).toContain('cannot control');
+  expect((await cli(['complete', '--result', 'no identity'], { ...env, AGENTDECK_TERMINAL_ID: '' })).code).toBe(1);
+  const captain = await page.evaluate(() => MainSession.mainCol().id);
+  expect((await cli(['ledger'], { ...env, AGENTDECK_TERMINAL_ID: captain })).code).toBe(0);
+  expect((await cli(['receipts'], { ...env, AGENTDECK_TERMINAL_ID: captain })).stdout).toContain('filtered completed');
+  expect(await page.evaluate(() => columns.some((c) => c.title === 'Forbidden'))).toBe(false);
+});
+
+test('archive revokes credentials and restore rotates them; filtered receipts work after restoration', async () => {
+  const previous = workerEnv();
+  const credentialFile = path.join(profile, 'board-control', 'credentials', 'submit-worker.json');
+  await page.evaluate(() => MainSession.handle({ action: 'main-archive', to: 'submit-worker' }, MainSession.mainCol()));
+  await expect.poll(() => fs.existsSync(credentialFile)).toBe(false);
+  expect((await cli(['complete', '--result', 'archived'], filteredEnv(previous))).code).toBe(1);
+  await page.evaluate(() => restoreArchived('submit-worker', false, true));
+  await expect.poll(() => workerEnv().AGENTDECK_RECEIPT_TOKEN !== previous.AGENTDECK_RECEIPT_TOKEN).toBe(true);
+  expect(workerEnv().control).toBe(false);
+  await dispatch('restored command environment');
+  expect((await cli(['complete', '--result', 'stale token'], previous)).stderr).toContain('not conductor-managed');
+  expect((await cli(['progress', '--message', 'restored progress'], filteredEnv(workerEnv()))).code).toBe(0);
+  expect((await cli(['ask', '--question', 'restored question'], filteredEnv(workerEnv()))).code).toBe(0);
+  expect((await cli(['complete', '--result', 'restored completed'], filteredEnv(workerEnv()))).code).toBe(0);
+  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.summary)).toBe('restored completed');
+});
+
+test('PTY startup failure and quit revoke credentials; app restart removes crash leftovers', async () => {
+  const dir = path.join(profile, 'board-control', 'credentials');
+  const file = path.join(dir, 'spawn-failure.json');
+  const badCwd = path.join(profile, 'not-a-directory');
+  fs.writeFileSync(badCwd, 'a file cannot be a shell cwd');
+  const reason = await page.evaluate((cwd) => new Promise((resolve) => {
+    window.deck.onPtyExit((id, reason) => { if (id === 'spawn-failure') resolve(reason); });
+    window.deck.ptySpawn('spawn-failure', cwd, 80, 24, false);
+  }), badCwd);
+  expect(reason).toMatch(/启动失败|终端进程退出/);
+  expect(fs.existsSync(file)).toBe(false);
+  const previous = workerEnv().AGENTDECK_RECEIPT_TOKEN;
+  await app.close(); app = null;
+  expect(fs.existsSync(path.join(dir, 'submit-worker.json'))).toBe(false);
+  // Simulate a file left by an abnormal exit, then start the isolated app again.
+  fs.writeFileSync(path.join(dir, 'stale.json'), '{}', { mode: 0o600 });
+  const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
+  delete env.ELECTRON_RUN_AS_NODE;
+  app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
+  page = await app.firstWindow();
+  await expect.poll(() => workerEnv().AGENTDECK_RECEIPT_TOKEN !== previous).toBe(true);
+  expect(fs.existsSync(path.join(dir, 'stale.json'))).toBe(false);
+  await dispatch('after app restart');
+  expect((await cli(['complete', '--result', 'restarted completed'], filteredEnv(workerEnv()))).code).toBe(0);
 });
