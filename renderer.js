@@ -44,6 +44,8 @@ const ICONS = {
   restore: S('<path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13"/>'),
   trash: S('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
   panelLeft: S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>'),
+  freeLayout: S('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v4M12 16v4"/><path d="M7 12h10"/><path d="m9 10-2 2 2 2M15 10l2 2-2 2"/>'),
+  gauge: S('<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>'),
   panelRight: S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>'),
   arrowUp: S('<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>'),
   stop: '<svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>',
@@ -71,7 +73,7 @@ const DEFAULT_FIT_COLS = env.platform === 'win32' ? 4 : 3;
 const FIT_COLS_CHOICES = [2, 3, 4, 5];
 // Left panel (toolbar + column list): draggable width + collapse-to-icons.
 // Collapsing hides it completely (Cursor style); the top bar then shows its toggle.
-const NAV_DEFAULT_W = 252, NAV_MIN_W = 200, NAV_MAX_W = 420;
+const NAV_DEFAULT_W = 252, NAV_MIN_W = 200, NAV_MAX_W = 420, CENTER_MIN_W = 360;
 
 const TERM_THEME = {
   dark:  { background: '#141414', foreground: '#e6e6e6', cursor: '#4b9bff', selectionBackground: 'rgba(75,155,255,0.35)' },
@@ -591,22 +593,42 @@ function buildChrome() {
   const tasksBtn = railBtn(ICONS.tasks, '任务看板', () => TaskBoardUI.toggle());
   tasksBtn.id = 'taskBoardBtn';
   tasksBtn.setAttribute('aria-label', tasksBtn.title);
-  tbLeft.append(boardBtn, tasksBtn, collapseBtn, expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
+  // The sidebar holds the quota rows; while it is collapsed this icon opens them.
+  const quotaBtn = railBtn(ICONS.gauge, '订阅额度', () => toggleQuotaPop());
+  quotaBtn.id = 'quotaRailBtn';
+  quotaBtn.setAttribute('aria-label', quotaBtn.title);
+  quotaBtn.setAttribute('aria-haspopup', 'dialog');
+  quotaBtn.setAttribute('aria-expanded', 'false');
+  const newChatBtn = railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn());
+  newChatBtn.setAttribute('aria-label', newChatBtn.title);
+  tbLeft.append(boardBtn, tasksBtn, collapseBtn, expandBtn, quotaBtn, newChatBtn);
 
   // Column widths: free (each column keeps its own width, drag the edges) or
   // N equal columns filling the deck; more than N keep that width and scroll.
   const free = document.createElement('button');
   free.type = 'button'; free.className = 'split-btn'; free.dataset.cols = '0';
-  free.textContent = '自由'; free.title = '自由宽度：每列保持自己的宽度，拖列边调整';
+  free.innerHTML = ICONS.freeLayout; free.title = '自由宽度：每列保持自己的宽度，拖列边调整';
+  free.setAttribute('aria-label', '自由宽度');
   free.onclick = () => { config.fitWindow = false; applyFit(); };
   tbSplit.appendChild(free);
   FIT_COLS_CHOICES.forEach((n) => {
     const item = document.createElement('button');
     item.type = 'button'; item.className = 'split-btn'; item.dataset.cols = String(n);
     item.textContent = String(n); item.title = n + ' 列均分屏幕';
+    item.setAttribute('aria-label', item.title);
     item.onclick = () => { config.fitCols = n; config.fitWindow = true; applyFit(); };
     tbSplit.appendChild(item);
   });
+  // When the top bar runs out of room only the active choice stays, plus this menu.
+  const splitMenu = document.createElement('button');
+  splitMenu.type = 'button'; splitMenu.id = 'tbSplitMenu'; splitMenu.className = 'split-btn';
+  splitMenu.innerHTML = ICONS.chevDown; splitMenu.title = '列宽：自由或均分';
+  splitMenu.setAttribute('aria-label', splitMenu.title); splitMenu.setAttribute('aria-haspopup', 'menu');
+  splitMenu.onclick = () => Sidebar.openMenu(splitMenu, [
+    { label: '自由宽度', checked: !config.fitWindow, run: () => { config.fitWindow = false; applyFit(); } },
+    ...FIT_COLS_CHOICES.map((n) => ({ label: n + ' 列均分', checked: config.fitWindow && fitCols() === n, run: () => { config.fitCols = n; config.fitWindow = true; applyFit(); } })),
+  ]);
+  tbSplit.appendChild(splitMenu);
   const globalViewBtn = railBtn('', '', () => ChatUI.toggleGlobalMode());
   globalViewBtn.id = 'globalViewToggle';
   tbSplit.after(globalViewBtn);
@@ -614,7 +636,8 @@ function buildChrome() {
 
   const sideBtn = railBtn(ICONS.panelRight, '右侧栏：预览 / 终端 / 浏览器 (Cmd+\\)', () => SidePane.toggle());
   sideBtn.id = 'sideToggleBtn';
-  tbRight.append(railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast()), sideBtn);
+  sideBtn.setAttribute('aria-label', sideBtn.title);
+  tbRight.append(sideBtn);
 
   const brand = document.createElement('span');
   brand.className = 'nav-brand';
@@ -623,7 +646,9 @@ function buildChrome() {
   themeBtn.id = 'themeBtn';
   const settingsBtn = railBtn(ICONS.gear, '设置', openNotificationSettings);
   settingsBtn.id = 'settingsBtn'; settingsBtn.setAttribute('aria-label', '设置');
-  bottom.append(brand, settingsBtn, themeBtn,
+  const broadcastBtn = railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast());
+  broadcastBtn.id = 'broadcastBtn';
+  bottom.append(brand, broadcastBtn, settingsBtn, themeBtn,
     railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()),
     railBtn(ICONS.reset, '恢复默认布局', () => {
       if (!confirm('恢复默认布局？现有对话的终端会关闭，对话记录会删掉。已归档的不受影响。')) return;
@@ -638,7 +663,38 @@ function buildChrome() {
       const w = defaultColWidth(); columns.forEach((c) => { c.width = w; }); // equal slices
       saveConfig(); render(true);
     }));
+  // Every icon-only button in the sidebar footer gets the tooltip as its accessible name.
+  bottom.querySelectorAll('.rail-btn').forEach((b) => { if (!b.hasAttribute('aria-label')) b.setAttribute('aria-label', b.title); });
 }
+// Compact the layout switch only while the full one would not fit.
+function fitTopBar() {
+  const bar = document.getElementById('topBar');
+  bar.classList.remove('tb-compact');
+  if (bar.scrollWidth > bar.clientWidth) bar.classList.add('tb-compact');
+}
+new ResizeObserver(() => fitTopBar()).observe(document.getElementById('topBar'));
+function toggleQuotaPop(open) {
+  const pop = document.getElementById('quotaPop');
+  const btn = document.getElementById('quotaRailBtn');
+  const show = open ?? pop.hidden;
+  if (show) {
+    const r = btn.getBoundingClientRect();
+    pop.style.left = Math.max(8, r.left) + 'px';
+    pop.style.top = (r.bottom + 6) + 'px';
+  }
+  pop.hidden = !show;
+  btn.classList.toggle('on', show);
+  btn.setAttribute('aria-expanded', String(show));
+}
+document.addEventListener('mousedown', (e) => {
+  const pop = document.getElementById('quotaPop');
+  if (!pop.hidden && !pop.contains(e.target) && !e.target.closest('#quotaRailBtn')) toggleQuotaPop(false);
+}, true);
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape' || document.getElementById('quotaPop').hidden) return;
+  e.preventDefault(); e.stopPropagation();
+  toggleQuotaPop(false); document.getElementById('quotaRailBtn').focus();
+}, true);
 function applyFit() {
   document.querySelectorAll('#tbSplit .split-btn').forEach((b) => {
     const n = Number(b.dataset.cols);
@@ -668,7 +724,8 @@ function syncChromeState() {
 
 // ---- Left panel width + collapse ----
 function applyNavWidth() {
-  const w = config.navCollapsed ? 0 : (config.navWidth || NAV_DEFAULT_W);
+  // A wide sidebar never squeezes the deck below the room its top bar needs.
+  const w = config.navCollapsed ? 0 : Math.max(NAV_MIN_W, Math.min(config.navWidth || NAV_DEFAULT_W, window.innerWidth - CENTER_MIN_W));
   colNavEl.style.flex = '0 0 ' + w + 'px';
   colNavEl.style.width = w + 'px';
 }
@@ -676,6 +733,7 @@ function setNavCollapsed(v) {
   config.navCollapsed = v;
   colNavEl.classList.toggle('collapsed', v);
   document.body.classList.toggle('nav-collapsed', v);
+  if (!v) toggleQuotaPop(false);
   applyNavWidth();
   saveConfig();
   fitAll(); // deck width changed
@@ -691,7 +749,7 @@ function attachNavResize(handle) {
     let rawW = startW; // where the pointer actually wants the edge, unclamped
     const onMove = (ev) => {
       rawW = startW + (ev.clientX - startX);
-      const w = Math.max(NAV_MIN_W, Math.min(NAV_MAX_W, rawW));
+      const w = Math.max(NAV_MIN_W, Math.min(NAV_MAX_W, rawW, window.innerWidth - CENTER_MIN_W));
       colNavEl.style.flex = '0 0 ' + w + 'px';
       colNavEl.style.width = w + 'px';
     };
@@ -3225,6 +3283,7 @@ readQuotaCache().catch(() => {});
 setInterval(() => readQuotaCache().catch(() => {}), 30000);
 syncChromeState();
 window.addEventListener('resize', () => {
+  applyNavWidth();
   if (activeView === 'board') renderBoardGraph();
   else { updateColumnStyles(); fitAll(); }
 });
@@ -3389,38 +3448,47 @@ function claudeCaptainSeatId() {
   if (!captain || (captain.agentProvider !== 'Claude' && !/\bclaude\b/i.test(captain.cmd || ''))) return null;
   return QuotaCore.seatForColumn(captain, QuotaCore.claudeSeats(config.claudeSeats))?.id || null;
 }
+// Quota rows live at the bottom of the sidebar (#quotaBar) and, for the
+// collapsed sidebar, in the popover under the top-bar gauge (#quotaPopList).
 function renderQuotaBar() {
-  const bar = document.getElementById('quotaBar');
   const items = QuotaCore.items(config.claudeSeats);
-  for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
-  for (const [index, { provider, seat, key }] of items.entries()) {
-    let item = bar.querySelector(`[data-quota-key="${key}"]`);
-    if (!item) {
-      item = document.createElement('span');
-      item.className = 'quota-item'; item.dataset.provider = provider;
-      item.dataset.quotaKey = key;
-      if (seat) item.dataset.seatId = seat.id;
-      item.setAttribute('role', 'group');
-      item.tabIndex = 0; // keyboard users can inspect the same tooltip
-      const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
-      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
-      const label = document.createElement('span'); label.className = 'quota-label';
-      const name = document.createElement('span'); name.className = 'quota-name';
-      const sampled = document.createElement('span'); sampled.className = 'quota-sampled';
-      const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
-      item.setAttribute('aria-describedby', tip.id);
-      item.append(icon, name, label, sampled, tip); bar.append(item);
+  const summaries = items.map(({ provider, seat }) => QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId()));
+  for (const [bar, prefix] of [[document.getElementById('quotaBar'), 'quota-tip'], [document.getElementById('quotaPopList'), 'quota-pop-tip']]) {
+    for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
+    for (const [index, { provider, seat, key }] of items.entries()) {
+      let item = bar.querySelector(`[data-quota-key="${key}"]`);
+      if (!item) {
+        item = document.createElement('span');
+        item.className = 'quota-item'; item.dataset.provider = provider;
+        item.dataset.quotaKey = key;
+        if (seat) item.dataset.seatId = seat.id;
+        item.setAttribute('role', 'group');
+        item.tabIndex = 0; // keyboard users can inspect the same tooltip; a click focuses and so pins it
+        const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
+        icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
+        const label = document.createElement('span'); label.className = 'quota-label';
+        const name = document.createElement('span'); name.className = 'quota-name';
+        const sampled = document.createElement('span'); sampled.className = 'quota-sampled';
+        const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `${prefix}-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
+        item.setAttribute('aria-describedby', tip.id);
+        item.append(icon, name, label, sampled, tip); bar.append(item);
+      }
+      const q = summaries[index];
+      item.dataset.state = q.state;
+      item.setAttribute('aria-label', q.detail);
+      item.title = q.detail;
+      item.querySelector('.quota-label').textContent = q.displayLabel;
+      item.querySelector('.quota-name').textContent = q.name || (provider === 'Codex' ? 'ChatGPT' : provider);
+      item.querySelector('.quota-sampled').textContent = q.sampleLabel || '';
+      item.querySelector('.quota-tooltip').textContent = q.detail;
+      if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
     }
-    const q = QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId());
-    item.dataset.state = q.state;
-    item.setAttribute('aria-label', q.detail);
-    item.title = q.detail;
-    item.querySelector('.quota-label').textContent = q.displayLabel;
-    item.querySelector('.quota-name').textContent = q.name;
-    item.querySelector('.quota-sampled').textContent = q.sampleLabel;
-    item.querySelector('.quota-tooltip').textContent = q.detail;
-    if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
   }
+  // The collapsed-sidebar gauge takes the colour of the provider closest to running out.
+  const rank = { warning: 1, danger: 2, exhausted: 2 };
+  const worst = summaries.reduce((w, q) => (rank[q.state] || 0) > (rank[w] || 0) ? q.state : w, 'normal');
+  const rail = document.getElementById('quotaRailBtn');
+  if (rail) rail.dataset.state = worst;
 }
 setInterval(() => {
   let attn = 0;

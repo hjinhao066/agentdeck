@@ -579,5 +579,5 @@
     listEl.addEventListener('scroll', closeMenu, { passive: true });
   }
 
-  window.Sidebar = { init, render, markPage, refreshTimes, touchTime, createFolder, closeMenu, ago, refreshCrew };
+  window.Sidebar = { init, render, markPage, refreshTimes, touchTime, createFolder, closeMenu, openMenu, ago, refreshCrew };
 })();

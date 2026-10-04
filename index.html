@@ -35,6 +35,10 @@
     <div id="navHead"></div>
     <div id="navTop"></div>
     <div id="navList"></div>
+    <section id="navQuota" aria-labelledby="navQuotaTitle">
+      <div id="navQuotaTitle" class="nq-title">额度</div>
+      <div id="quotaBar" role="group" aria-label="订阅剩余额度"></div>
+    </section>
     <div id="navBottom"></div>
     <div id="navResizer" title="拖动调整宽度"></div>
   </nav>
@@ -43,9 +47,12 @@
     <div id="tbLeft"></div>
     <div id="tbSplit" role="group" aria-label="列宽：自由或均分"></div>
     <span class="tb-spacer"></span>
-    <div id="quotaBar" role="group" aria-label="订阅剩余额度"></div>
     <div id="tbRight"></div>
   </header>
+  <div id="quotaPop" role="dialog" aria-label="订阅剩余额度" hidden>
+    <div class="nq-title">额度</div>
+    <div id="quotaPopList" role="group" aria-label="订阅剩余额度"></div>
+  </div>
   <div id="centerBody">
   <div id="deck"></div>
   <section id="pageView" hidden></section>
@@ -344,7 +351,7 @@
     <div class="help-section">界面</div>
     <div class="help-grid">
       <span>左右滑动</span><span>中间区域两指左右滑动，在各个对话之间切换（每个对话就是一个真实终端）</span>
-      <span>顶部「自由 2 3 4 5」</span><span>自由宽度，或把屏幕均分成 2～5 列；对话更多时同样宽度继续往右滑</span>
+      <span>顶部列宽切换（自由图标、2 3 4 5）</span><span>自由宽度，或把屏幕均分成 2～5 列；对话更多时同样宽度继续往右滑</span>
       <span>左栏</span><span>点对话跳过去；拖动排序、拖进文件夹、拖到「已归档」；右键或 ⋯ 有重命名、移到文件夹、归档</span>
       <span>文件夹</span><span>「文件夹」旁的按钮新建；中间的顺序跟左栏一致，文件夹里的排在前面</span>
       <span>归档</span><span>结束这个对话的终端，对话记录和最后的输出保留；在「已归档」里点一下恢复</span>

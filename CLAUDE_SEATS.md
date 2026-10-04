@@ -89,7 +89,7 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存不能
 每席位本地缓存为 `<configDir>/agentdeck-usage.json`，不建符号链接。被动捕获 Claude
 原生 `/usage` 面板中的 5 小时/每周剩余与重置文本，记录产生它的列的席位。
 上下文百分比、费用、共享 statusline 的百分比都不会写为额度。没有实际数据时
-返回 null，顶栏应显示未知；不能据此推断账号尚有额度或账号用尽。
+返回 null，额度区应显示未知；不能据此推断账号尚有额度或账号用尽。
 
 ```json
 {
@@ -106,7 +106,7 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存不能
 `deck.claudeSeatUsage(seatId)` 返回经过白名单过滤的用量。
 `deck.claudeSeats()` 返回配置目录、打码邮箱、登录凭据存在状态及 usagePath，
 不返回账号原始邮箱或凭据。`claude-seat-changed` 事件的 detail 是 `{seatId}`，
-供顶栏立即刷新。1.0.0 的 quota-bar 已合入，同一配置的 CN/US 各显示独立顶栏项目；无真实数据时显示未知。Relay 不发送模型消息或用量 slash 命令。
+供额度区立即刷新。1.0.0 的 quota-bar 已合入，同一配置的 CN/US 各显示独立一行（1.1.x 起额度从顶栏移到侧边栏底部）；无真实数据时显示未知。Relay 不主动发送用量查询。
 
 ### 1.1.1 独立额度刷新
 

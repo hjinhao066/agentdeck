@@ -237,7 +237,7 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
   flex: 0 0 44px; display: flex; align-items: center; gap: 2px;
   padding: 0 8px 0 14px; border-top: 1px solid var(--hairline);
 }
-.nav-brand { flex: 1; font-size: 12.5px; font-weight: 600; color: var(--text-2); letter-spacing: -0.01em; }
+.nav-brand { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--text-2); letter-spacing: -0.01em; }
 #navBottom .rail-btn { width: 28px; height: 28px; }
 #navBottom .rail-btn svg { width: 15px; height: 15px; }
 
@@ -291,10 +291,13 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 /* ===== Center: top bar + deck ===== */
 #center { flex: 1; min-width: 0; height: 100%; display: flex; flex-direction: column; background: var(--app-bg); }
 #topBar {
-  flex: 0 0 40px; display: flex; align-items: center; gap: 8px;
+  flex: 0 0 40px; display: flex; align-items: center; gap: 8px; min-width: 0;
   padding: 0 8px 0 10px; border-bottom: 1px solid var(--hairline);
+  white-space: nowrap; overflow: hidden; container-type: inline-size;
   -webkit-app-region: drag;
 }
+#topBar > * { flex-shrink: 0; }
+#topBar > .tb-spacer { flex-shrink: 1; min-width: 0; }
 #topBar button { -webkit-app-region: no-drag; }
 #tbLeft { display: flex; align-items: center; gap: 2px; }
 #navExpandBtn, body.nav-collapsed #navCollapseBtn { display: none; }
@@ -302,30 +305,59 @@ body.nav-collapsed #navExpandBtn { display: inline-flex; }
 body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .tb-spacer { flex: 1; }
 #tbRight { display: flex; align-items: center; gap: 2px; }
-#quotaBar { display: flex; gap: 3px; flex-shrink: 0; -webkit-app-region: no-drag; }
-.quota-item { position: relative; display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 0 5px; border-radius: 5px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.quota-icon { display: flex; }
-.quota-sampled { color: var(--muted); font-size: 10px; }
+/* Quota rows: a compact block at the bottom of the sidebar (one row per
+   provider / Claude seat). The same rows show in #quotaPop while collapsed. */
+#navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; }
+.nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+#quotaBar, #quotaPopList { display: flex; flex-direction: column; gap: 1px; }
+.quota-item { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; min-height: 24px; padding: 0 6px; border-radius: 6px; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: default; white-space: nowrap; }
+.quota-icon { display: flex; flex: 0 0 auto; }
+.quota-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
+.quota-label { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.quota-item[data-state="normal"] .quota-label { color: var(--text); }
+.quota-item[data-state="warning"], .quota-item[data-state="warning"] .quota-label { color: #d99426; }
+.quota-item[data-state="danger"], .quota-item[data-state="exhausted"],
+.quota-item[data-state="danger"] .quota-label, .quota-item[data-state="exhausted"] .quota-label { color: #e46464; }
+.quota-item:hover, .quota-item:focus-visible, .quota-item:focus { background: var(--icon-hover-bg); outline: none; }
+.quota-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+/* Details open beside the row (over the deck), never inside the narrow sidebar. */
+.quota-tooltip { display: none; position: absolute; left: calc(100% + 10px); bottom: 0; width: max-content; max-width: min(420px, 70vw); padding: 9px 12px; z-index: 100; white-space: pre-wrap; background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 8px; box-shadow: var(--shadow-pop); pointer-events: none; font-size: 12px; line-height: 1.6; }
+.quota-item:hover .quota-tooltip, .quota-item:focus .quota-tooltip { display: block; }
+#colNav { z-index: 30; } /* lets the quota details overlap the deck */
+#quotaPop { position: fixed; z-index: 60; width: 260px; padding: 8px; background: var(--elev); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-pop); -webkit-app-region: no-drag; }
+#quotaPop[hidden] { display: none; }
+#quotaPop .quota-tooltip { top: 0; bottom: auto; }
+/* Gauge icon: only while the sidebar is collapsed; tinted by the provider closest to running out. */
+#quotaRailBtn { display: none; position: relative; }
+body.nav-collapsed #quotaRailBtn { display: inline-flex; }
+#quotaRailBtn[data-state="warning"] { color: #d99426; }
+#quotaRailBtn[data-state="danger"], #quotaRailBtn[data-state="exhausted"] { color: #e46464; }
+.quota-sampled { color: var(--muted); font-size: 10px; flex: 0 0 auto; }
 .quota-sampled:empty { display: none; }
-.quota-item[data-state="normal"] { color: var(--text); }
-.quota-item[data-state="warning"] { color: #d99426; }
-.quota-item[data-state="danger"], .quota-item[data-state="exhausted"] { color: #e46464; }
-.quota-item:hover, .quota-item:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
-.quota-tooltip { display: none; position: absolute; top: calc(100% + 7px); right: 0; width: max-content; max-width: min(420px, 80vw); padding: 9px 12px; z-index: 100; white-space: pre-wrap; background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 8px; box-shadow: var(--shadow-pop); pointer-events: none; line-height: 1.6; }
-.quota-item:hover .quota-tooltip, .quota-item:focus-visible .quota-tooltip { display: block; }
-@media (max-width: 850px) { #quotaBar { gap: 0; } .quota-item { padding: 0 3px; } }
 #tbSplit {
   display: inline-flex; align-items: center; gap: 1px; padding: 2px;
   background: var(--pill-bg); border-radius: 8px;
 }
 .split-btn {
-  min-width: 28px; height: 24px; padding: 0 8px;
+  display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
+  min-width: 28px; height: 24px; padding: 0 8px; white-space: nowrap;
   border: none; border-radius: 6px; background: transparent; color: var(--muted);
   font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; cursor: pointer;
   transition: background .12s ease, color .12s ease;
 }
 .split-btn:hover { color: var(--text); }
 .split-btn.active { background: var(--elev); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.25), 0 0 0 1px var(--hairline); }
+.split-btn svg { width: 15px; height: 15px; display: block; }
+#tbSplitMenu { display: none; min-width: 22px; padding: 0 4px; }
+#tbSplitMenu svg { width: 13px; height: 13px; }
+#topBar.tb-compact #tbSplit .split-btn:not(.active):not(#tbSplitMenu) { display: none; }
+#topBar.tb-compact #tbSplitMenu { display: inline-flex; }
+/* Narrow deck: tighten spacing instead of wrapping or overlapping. */
+@container (max-width: 460px) {
+  #tbLeft, #tbRight { gap: 0; }
+  #topBar .rail-btn { width: 28px; }
+  .split-btn { min-width: 24px; padding: 0 6px; }
+}
 :root[data-theme="light"] .split-btn.active { box-shadow: 0 1px 2px rgba(0,0,0,.10), 0 0 0 1px var(--hairline); }
 #centerBody { flex: 1; min-height: 0; position: relative; display: flex; }
 
