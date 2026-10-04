@@ -61,7 +61,7 @@ test('startup low quotas send once per account; relaunch and renderer replay do 
 });
 test('live Claude seat footer triggers inclusively, deduplicates and rearms after recovery', async () => {
   await launch();
-  const badge = page.locator('#quotaBar [data-quota-key="Claude:us"] .quota-values');
+  const badge = page.locator('#quotaBar [data-quota-key="Claude:us"] [data-window="5h"] .quota-pct');
   await expect(badge).toHaveText('19%', { timeout: 20000 });
   expect(await alerts()).toHaveLength(0);
   await expect.poll(() => page.evaluate(() => terms.get('us')?.lastScreen || ''), { timeout: 20000 }).toContain('Claude Code');

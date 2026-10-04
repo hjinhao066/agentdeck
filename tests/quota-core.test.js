@@ -389,6 +389,7 @@ test('sidebar row value: 5-hour %, else weekly %, else 正常 when nothing is ex
   Q.observe(weeklyOnly, Q.cacheCodex({ type: 'event_msg', timestamp: new Date(now).toISOString(), payload: { type: 'token_count', rate_limits: { limit_id: 'codex', primary: { used_percent: 85, window_minutes: 10080, resets_at: now / 1000 + 86400 }, secondary: null } } }), now);
   const codex = Q.summary(weeklyOnly, 'Codex', now);
   assert.deepEqual([codex.shortText, codex.shortRemaining, codex.fiveHour, codex.weekly, codex.out], ['周 15%', 15, null, 15, false]);
+  assert.deepEqual(codex.cells.map((c) => c.key), ['7d']);
   const both = {};
   Q.observe(both, Q.screen('Codex', '│ 5-hour limit: [████] 8% left (resets 23:59)\n│ Weekly limit: 60% left (resets 2026-10-07T10:00:00Z)\n', [], now), now);
   assert.equal(Q.summary(both, 'Codex', now).shortText, '8%');
@@ -396,6 +397,7 @@ test('sidebar row value: 5-hour %, else weekly %, else 正常 when nothing is ex
   Q.observe(grok, Q.screen('Cursor', 'Welcome', [], now, 'grok-4.7-high-fast'), now);
   const sampled = Q.summary(grok, 'Cursor', now);
   assert.deepEqual([sampled.shortText, sampled.shortRemaining, sampled.state], ['正常', null, 'normal']);
+  assert.deepEqual(sampled.cells, []);
   // Truly unknown (never sampled, or a stale numberless sample) is the only dash.
   assert.equal(Q.summary({}, 'Cursor', now).shortText, '—');
   assert.equal(Q.summary({}, 'Codex', now).shortText, '—');
@@ -403,4 +405,26 @@ test('sidebar row value: 5-hour %, else weekly %, else 正常 when nothing is ex
   // Exhaustion still wins: the renderer shows the recovery time instead of this value.
   Q.observe(grok, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now + 1, 'grok-4.7-high-fast'), now + 1);
   assert.equal(Q.summary(grok, 'Cursor', now + 1).out, true);
+});
+
+test('panel cells list only the windows a provider really has, with their own reset times', () => {
+  const hour = 3600000, store = {};
+  Q.observe(store, Q.screen('Claude', '', ['Session: 81% | Reset: 2hr', 'Weekly: 9% | Reset: 3d'], now), now);
+  assert.deepEqual(Q.summary(store, 'Claude', now).cells, [
+    { key: '5h', remaining: 19, out: false, resetAt: now + 2 * hour }, { key: '7d', remaining: 91, out: false, resetAt: now + 72 * hour }]);
+  // Weekly-only: no 5h placeholder cell; the shared fallback still names it as weekly.
+  Q.observe(store, Q.codexServer({ rateLimits: { limitId: 'codex', secondary: { usedPercent: 30, windowDurationMins: 10080, resetsAt: Math.round((now + 50 * hour) / 1000) } } }, now), now);
+  const weekly = Q.summary(store, 'Codex', now);
+  assert.deepEqual(weekly.cells, [{ key: '7d', remaining: 70, out: false, resetAt: now + 50 * hour }]);
+  assert.equal(weekly.shortText, '周 70%');
+  // Status-only providers have no cells at all; the row shows 正常 / 已用尽 instead of a dash.
+  Q.observe(store, Q.screen('Cursor', 'ready', [], now, 'grok-4.7'), now);
+  const grok = Q.summary(store, 'Cursor', now);
+  assert.deepEqual([grok.cells, grok.shortText, grok.state, grok.out], [[], '正常', 'normal', false]);
+  Q.observe(store, Q.screen('Cursor', 'Usage limit reached. Resets in 3h', [], now + 1, 'grok-4.7'), now + 1);
+  const out = Q.summary(store, 'Cursor', now + 1);
+  assert.deepEqual([out.cells, out.out, out.recoveryAt], [[], true, now + 1 + 3 * hour]);
+  // An exhausted 5h window is marked on its own cell and keeps the weekly cell readable.
+  Q.observe(store, Q.screen('Claude', '', ['Session: 100% | Reset: 1hr', 'Weekly: 40% | Reset: 3d'], now + 2), now + 2);
+  assert.deepEqual(Q.summary(store, 'Claude', now + 2).cells.map((c) => [c.key, c.out, c.remaining]), [['5h', true, 0], ['7d', false, 60]]);
 });

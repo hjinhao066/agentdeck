@@ -170,7 +170,7 @@ test('a proven reset warms once in the background and shows its log and next res
   expect(Number.isFinite(Date.parse(log[0].time))).toBe(true);
   await refresh();
   const seat = page.locator('#quotaBar [data-seat-id="cn"]');
-  await expect(seat).toHaveAttribute('title', /已预热 · 下次重置 \d{2}:\d{2}/);
+  await expect(seat).toHaveAttribute('data-detail', /已预热 · 下次重置 \d{2}:\d{2}/);
   await expect(seat).toHaveAttribute('aria-describedby', 'quota-tip-Claude-cn');
   await seat.focus();
   await expect(seat.getByRole('tooltip')).toBeVisible();
@@ -229,7 +229,7 @@ test('official quota fields warm the matching seat without native cache or accou
   await tick([{ ok: true, provenNative: true, resetAt: nextReset }]);
   expect((await runs()).map((run) => run.seatId)).toEqual(['us']);
   await refresh();
-  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('title', /已预热 · 下次重置/);
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-detail', /已预热 · 下次重置/);
   await workerPreserved(1);
 });
 
@@ -266,6 +266,6 @@ test('two failed requests abandon the same reset window, including across isolat
   expect(await runs()).toHaveLength(1);
   expect(records('quota-warmup.log').map((r) => [r.attempt, r.outcome])).toEqual([[1, 'failed'], [2, 'failed']]);
   await refresh();
-  await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('title', /预热失败 · 本窗口已放弃/);
+  await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('data-detail', /预热失败 · 本窗口已放弃/);
   await expect(page.locator('.column')).toHaveCount(1);
 });

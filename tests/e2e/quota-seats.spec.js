@@ -28,10 +28,10 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 test('each Claude seat keeps its own windows and reset times, marks the real Captain seat and survives reload', async () => {
-  await expect(seat('us').locator('.quota-values')).toHaveText('19%', { timeout: 20000 });
+  await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
   await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
-  await expect(seat('cn')).toHaveAttribute('title', /7d 无数据 ↻未知/);
+  await expect(seat('cn')).toHaveAttribute('data-detail', /7d 无数据 ↻未知/);
 
   await page.evaluate(() => { config.activeClaudeSeatId = 'cn'; renderQuotaBar(); });
   await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/); // Switching the next seat is not switching the running Captain.
@@ -41,9 +41,9 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
   writeCache('cn', [65, 30]);
   await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
-  await expect(seat('cn').locator('.quota-values')).toHaveText('65%');
-  await expect(seat('cn')).toHaveAttribute('title', /5h 65% ↻.*7d 30% ↻/s);
-  await expect(seat('us').locator('.quota-values')).toHaveText('19%');
+  await expect(seat('cn').locator('[data-window="5h"] .quota-pct')).toHaveText('65%');
+  await expect(seat('cn')).toHaveAttribute('data-detail', /5h 65% ↻.*7d 30% ↻/s);
+  await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('19%');
 
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'exhausted\r'));
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
@@ -52,7 +52,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await page.reload();
   await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
-  await expect(seat('us')).toHaveAttribute('title', /us\*\*\*@example.com/);
+  await expect(seat('us')).toHaveAttribute('data-detail', /us\*\*\*@example.com/);
   const text = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
   expect(text).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*上次采样：5h 65%/);
   expect(text).toMatch(/Claude \/ 🇺🇸 US：19%[^\n]*5h 19%/);
@@ -60,22 +60,24 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await page.evaluate(() => window.deck.ptyInput('us-column', 'statusline\r'));
   await expect.poll(async () => {
     await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
-    return seat('us').locator('.quota-values').textContent();
+    return seat('us').locator('[data-window="5h"] .quota-pct').textContent();
   }, { timeout: 20000 }).toBe('83%');
-  await expect(seat('us')).toHaveAttribute('title', /会话状态行/);
+  await expect(seat('us')).toHaveAttribute('data-detail', /会话状态行/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   const after = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
   expect(after).toMatch(/Claude \/ 🇺🇸 US：59%[^\n]*5h 83%/);
   expect(after).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*上次采样：5h 65%/);
   // Top bar tooltip, keyboard popover and board-cli quota share one summary.
   for (const id of ['us', 'cn']) {
-    const title = await seat(id).getAttribute('title');
+    const title = await seat(id).getAttribute('data-detail');
     // The panel adds a status/sample-time header line above the shared summary.
     expect(title).toMatch(/^状态：(正常|快用完|已用尽|未知) · /);
     // Seat warmup lines follow the shared summary only in the panel tooltip.
     const summary = title.split('\n').slice(1).join(' · ');
     expect(after.split('\n').some((line) => line.startsWith('Claude / ') && summary.startsWith(line))).toBe(true);
-    await expect(seat(id).getByRole('tooltip', { includeHidden: true })).toHaveText(title);
+    // The visible tooltip is the short version: no config dir, source or model.
+    await expect(seat(id).getByRole('tooltip', { includeHidden: true })).not.toContainText(/配置目录|来源|模型/);
+    await expect(seat(id)).not.toHaveAttribute('title');
   }
 
   await seat('us').focus();

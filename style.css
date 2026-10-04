@@ -309,26 +309,64 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
    provider / Claude seat). The same rows show in #quotaPop while collapsed. */
 #navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; }
 .nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
-#quotaBar, #quotaPopList { display: flex; flex-direction: column; gap: 1px; }
-.quota-item { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; height: 22px; padding: 0 6px; border-radius: 5px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
+#quotaBar, #quotaPopList { display: flex; flex-direction: column; gap: 1px; container-type: inline-size; }
+.quota-item { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; height: 26px; padding: 0 6px; border-radius: 6px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
 .quota-icon { display: flex; flex: 0 0 auto; color: var(--text-2); }
 .quota-name { display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 0; color: var(--text-2); line-height: 1; }
 .quota-item[data-seat-id] .quota-name { font-size: 13px; }
 .quota-captain { display: inline-flex; color: #e0a91c; }
 .quota-captain svg { width: 11px; height: 11px; }
-/* Right-aligned gauge column: monospace digits so every row lines up. */
-.quota-values { display: inline-flex; align-items: center; gap: 5px; margin-left: auto; flex: 0 0 auto; font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 11px; font-variant-numeric: tabular-nums; }
-.quota-value { min-width: 4ch; text-align: right; }
-.quota-value.low { color: var(--quota-low); }
-.quota-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--st-input); }
-.quota-recovery { color: var(--quota-out); }
+
+/* Two fixed columns (5h, 7d) so the numbers line up down the panel. A window the
+   provider does not have leaves its column empty; status-only rows span both. */
+.quota-values { display: grid; grid-template-columns: repeat(2, var(--quota-cell-w, 68px)); column-gap: 8px; align-items: center; margin-left: auto; flex: 0 0 auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.quota-cell { position: relative; display: flex; align-items: baseline; gap: 3px; height: 20px; line-height: 17px; }
+.quota-cell[data-window="5h"] { grid-column: 1; }
+.quota-cell[data-window="7d"] { grid-column: 2; }
+.quota-key { color: var(--text-2); font-size: 9.5px; }
+.quota-pct { min-width: 3.3ch; color: var(--text); font-weight: 600; text-align: right; }
+.quota-reset { margin-left: auto; color: var(--text-2); font-size: 10px; }
+.quota-meter { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; border-radius: 1px; background: var(--quota-track); overflow: hidden; }
+.quota-meter::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--pct, 0%); border-radius: 1px; background: var(--quota-fill); }
+[data-level="low"] > .quota-pct, [data-level="low"] > .qt-pct { color: var(--quota-low); }
+[data-level="danger"] > .quota-pct, [data-level="out"] > .quota-pct, [data-level="danger"] > .qt-pct, [data-level="out"] > .qt-pct { color: var(--quota-out); }
+[data-level="out"] > .quota-reset { color: var(--quota-out); }
+[data-level="low"] > .quota-meter::after { background: var(--quota-low-fill); }
+[data-level="danger"] > .quota-meter::after { background: var(--quota-out-fill); }
+[data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 45%, transparent); }
+.quota-status { grid-column: 1 / -1; justify-self: end; display: inline-flex; align-items: baseline; gap: 5px; color: var(--text-2); }
+.quota-status[data-window="5h"] { grid-column: 1; justify-self: stretch; }
+.quota-status[data-level="ok"]::before { content: ""; align-self: center; width: 5px; height: 5px; border-radius: 50%; background: var(--st-done); }
+.quota-status[data-level="out"] .quota-status-text { color: var(--quota-out); font-weight: 600; }
+.quota-item[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 9%, transparent); }
+/* Too narrow for the reset times: keep the two remaining percentages only. */
+@container (max-width: 227px) {
+  .quota-values { --quota-cell-w: 41px; column-gap: 6px; }
+  .quota-cell > .quota-reset, .quota-status[data-window] > .quota-reset { display: none; }
+}
 .quota-item:hover, .quota-item:focus-visible, .quota-item:focus { background: var(--icon-hover-bg); outline: none; }
 .quota-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
-/* Details open beside the row (over the deck), never inside the narrow sidebar. */
-.quota-tooltip { display: none; position: absolute; left: calc(100% + 10px); bottom: 0; width: max-content; max-width: min(420px, 70vw); padding: 9px 12px; z-index: 100; white-space: pre-wrap; background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 8px; box-shadow: var(--shadow-pop); pointer-events: none; font-size: 12px; line-height: 1.6; }
-.quota-item:hover .quota-tooltip, .quota-item:focus .quota-tooltip { display: block; }
+
+.quota-tooltip { display: none; flex-direction: column; gap: 6px; position: absolute; left: calc(100% + 10px); bottom: 0; width: max-content; max-width: min(380px, 70vw); padding: 10px 12px; z-index: 100; white-space: normal; background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-pop); pointer-events: none; font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; }
+.quota-item:hover .quota-tooltip, .quota-item:focus .quota-tooltip { display: flex; }
+.qt-head { display: flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
+.qt-captain { display: inline-flex; align-items: center; gap: 3px; color: var(--text-2); font-size: 11px; font-weight: 500; }
+.qt-captain svg { width: 11px; height: 11px; color: #e0a91c; }
+.qt-badge { margin-left: auto; padding: 0 7px; border-radius: 999px; background: var(--pill-bg); color: var(--text-2); font-size: 10.5px; font-weight: 600; line-height: 18px; }
+.qt-badge[data-state="warning"] { background: color-mix(in srgb, var(--quota-low-fill) 16%, transparent); color: var(--quota-low); }
+.qt-badge[data-state="danger"], .qt-badge[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 16%, transparent); color: var(--quota-out); }
+.qt-window { display: grid; grid-template-columns: 3.2em 5.4em 48px auto; align-items: center; column-gap: 8px; white-space: nowrap; }
+.qt-key { color: var(--muted); }
+.qt-pct { font-weight: 600; }
+.qt-window > .quota-meter { position: relative; height: 4px; border-radius: 2px; }
+.qt-window > .quota-meter::after { border-radius: 2px; }
+.qt-reset, .qt-note, .qt-plan { color: var(--text-2); }
+.qt-note.out { color: var(--quota-out); }
+.qt-window + .qt-plan, .qt-note + .qt-plan { padding-top: 6px; border-top: 1px solid var(--hairline); }
+.qt-foot { color: var(--muted); font-size: 10.5px; }
+.qt-foot.stale { color: var(--quota-low); }
 #colNav { z-index: 30; } /* lets the quota details overlap the deck */
-#quotaPop { position: fixed; z-index: 60; width: 260px; padding: 8px; background: var(--elev); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-pop); -webkit-app-region: no-drag; }
+#quotaPop { position: fixed; z-index: 60; width: 272px; padding: 8px; background: var(--elev); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-pop); -webkit-app-region: no-drag; }
 #quotaPop[hidden] { display: none; }
 #quotaPop .quota-tooltip { top: 0; bottom: auto; }
 /* Gauge icon: only while the sidebar is collapsed; tinted by the provider closest to running out. */
@@ -1972,9 +2010,9 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #quotaRefresh.spinning svg { animation: quota-spin .9s linear infinite; }
 @keyframes quota-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { #quotaRefresh.spinning svg { animation: none; } }
-:root { --quota-low: #d99426; --quota-out: #e46464; }
-:root[data-theme="dark"] { --quota-low: #f4cc77; --quota-out: #ffb4aa; }
-:root[data-theme="light"] { --quota-low: #765000; --quota-out: #a02020; }
+:root { --quota-low: #d99426; --quota-out: #e46464; --quota-low-fill: #d99426; --quota-out-fill: #e46464; --quota-track: rgba(128, 128, 128, 0.2); --quota-fill: rgba(128, 128, 128, 0.75); }
+:root[data-theme="dark"] { --quota-low: #f4cc77; --quota-out: #ffb4aa; --quota-low-fill: #e0a437; --quota-out-fill: #f07167; --quota-track: rgba(255, 255, 255, 0.1); --quota-fill: rgba(255, 255, 255, 0.5); }
+:root[data-theme="light"] { --quota-low: #765000; --quota-out: #a02020; --quota-low-fill: #c98a1b; --quota-out-fill: #d04a44; --quota-track: rgba(0, 0, 0, 0.09); --quota-fill: rgba(0, 0, 0, 0.42); }
 
 .quota-heading { display: flex; align-items: center; justify-content: space-between; }
 .perpetual-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }
