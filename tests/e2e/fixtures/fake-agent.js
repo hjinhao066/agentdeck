@@ -31,6 +31,8 @@ process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 const captainStatusline = process.argv.includes('--captain-statusline');
 let model = captainStatusline ? 'Opus 5.5' : 'Fake';
 let contextUsed = 23000;
+const codex = process.argv.includes('--codex-reset');
+let resetMenu = false;
 function box() {
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
   process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
@@ -43,7 +45,7 @@ function box() {
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
   // Keep a recognizable provider footer after replies, like a real TUI. Narrow
   // ConPTY columns can wrap the longer permission line across several rows.
-  process.stdout.write('Claude Code\n');
+  process.stdout.write(codex ? 'OpenAI Codex\n' : 'Claude Code\n');
 }
 let lines = [];
 let timer = null;
@@ -54,6 +56,23 @@ function answer() {
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   if (process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text }) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
+  if (resetMenu) {
+    resetMenu = false;
+    process.stdout.write('\x1b[2J\x1b[H');
+    if (first === 'y') { contextUsed = 23000; process.stdout.write('OpenAI Codex (v0.160.0)\n'); }
+    else process.stdout.write('Cancelled\n');
+    box(); return;
+  }
+  if (/^\/(?:clear|new|reset)(?:\s|$)/.test(first) && process.argv.includes('--manual-reset')) {
+    process.stdout.write('\x1b[2J\x1b[H');
+    if (process.argv.includes('--reset-fail')) { process.stdout.write('Failed to start new session\n'); box(); return; }
+    if (first === '/new' && process.argv.includes('--reset-menu')) {
+      resetMenu = true; process.stdout.write('Do you trust the contents of this directory? (y/n)\n'); return;
+    }
+    contextUsed = 23000;
+    process.stdout.write(codex ? 'OpenAI Codex (v0.160.0)\n' : '⏺ Conversation cleared\n');
+    box(); return;
+  }
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
   if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
@@ -138,7 +157,7 @@ function listen() {
   });
 }
 function start() {
-  console.log('Welcome to Claude Code (test stand-in)');
+  console.log(codex ? 'Welcome to Codex (test stand-in)' : 'Welcome to Claude Code (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
   listen();

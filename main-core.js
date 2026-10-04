@@ -19,6 +19,24 @@
   const MAX_PATH = 500;
   const TOKEN_SAVER_DEFAULT = 150_000;
   const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档';
+  const REBRIEF_NOTE = '先跑 ledger、读看板里的队长交接再接续。';
+  function contextResetCommand(provider, text) {
+    if (typeof text !== 'string' || /[\r\n]/.test(text)) return false;
+    const commands = provider === 'Claude' ? '(?:clear|reset|new)' : provider === 'Codex' ? '(?:clear|new)' : '';
+    return !!commands && new RegExp('^/' + commands + '(?:[ \\t]+[^\\r\\n]+)?$').test(text.trim());
+  }
+  function contextResetEvidence(provider, before, after, output) {
+    // Only output received AFTER a submitted reset command, never scrollback.
+    const text = String(output || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n');
+    if (/(?:unknown|unrecognized|unsupported) (?:slash )?command|(?:failed|could not|cannot) (?:to )?(?:clear|start|open)|not available|unavailable|try again/i.test(text)) return false;
+    const old = contextTokens(before), used = contextTokens(after);
+    if (old !== null && used !== null && used < old / 2) return true;
+    if (/^\s*(?:[⏺⎿•]\s*)?(?:(?:conversation|context) cleared|cleared (?:conversation|context)|\(no content\))\s*[.!]?\s*$/im.test(text)) return true;
+    // /new can keep scrollback. A freshly emitted startup header confirms the
+    // new TUI context; opening/cancelling its workspace picker alone does not.
+    const header = provider === 'Claude' ? /(?:Welcome to Claude Code|Claude Code v\d)/ : /(?:OpenAI Codex \(v[\d.]|Welcome to Codex)/;
+    return header.test(text);
+  }
   function tokenSaverSettings(value) {
     return { enabled: value?.enabled !== false, threshold: Number.isInteger(value?.threshold) && value.threshold > 0 ? value.threshold : TOKEN_SAVER_DEFAULT };
   }
@@ -124,6 +142,7 @@
       `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
       `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话，只在用户追问细节时用；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
       `   ${cli} read --id captain-history --find "关键词" [--turns 3]   跨全部清空前的队长记录搜索，按需读取简短结果`,
+      `   ${cli} briefing   只读当前版本的队长提示词全文；用户说「你是队长」时先读它，再跑 ledger、读看板里的队长交接`,
       `   ${cli} peek --id 会话id [--lines 40]   只读查看终端实时屏幕/最近输出（去颜色，最多1000行）；不发任何输入，也不会恢复已归档的会话。需要检查进度或诊断卡住时才用，比 read 省上下文`,
       `   ${cli} receipts [--wait] [--timeout 秒]  取回还没看过的回执；--wait 阻塞等回执/提问，超时输出空并退出，省略 timeout 就一直等`,
       `   ${cli} answer --to 会话id --key y|n|1|2|3|enter|esc   回答停在确认或权限提示上的会话`,
@@ -537,7 +556,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

@@ -341,7 +341,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }

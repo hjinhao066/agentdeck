@@ -304,7 +304,7 @@ function makePromptTracker(col) {
       typing.lastKeyAt = Date.now();
       if (ch === '\r' || ch === '\n') {
         if (inPaste) buf += ' ';
-        else { const line = buf.trim(); buf = ''; typing.unknown = false; maybeAutoName(col, line); ChatUI.onSubmitted(col, line); }
+        else { const line = buf.trim(); const uncertain = typing.unknown; buf = ''; typing.unknown = false; maybeAutoName(col, line); ChatUI.onSubmitted(col, line, uncertain); }
         i++;
         continue;
       }
@@ -402,7 +402,7 @@ function toggleZoom(id) {
 
 window.deck.onPtyData((id, data) => {
   const t = terms.get(id);
-  if (t) { t.lastOutputAt = Date.now(); t.term.write(data); }
+  if (t) { t.lastOutputAt = Date.now(); MainSession.onOutput(id, data); t.term.write(data); }
 });
 window.deck.onPtyExit((id, reason) => {
   const t = terms.get(id);
@@ -2977,12 +2977,12 @@ window.deck.onBoardCommand((message) => {
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || message.action === 'main-quota' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response, message.action === 'main-receipts');
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-peek' || message.action === 'main-quota') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;
