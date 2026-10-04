@@ -3282,6 +3282,7 @@ async function readQuotaCache() {
   renderQuotaBar();
 }
 window.addEventListener('claude-seat-usage', () => readQuotaCache().catch(() => {}));
+for (const id of ['quotaRefresh', 'quotaPopRefresh']) document.getElementById(id).addEventListener('click', () => { readQuotaCache().catch(() => {}); });
 readQuotaCache().catch(() => {});
 setInterval(() => readQuotaCache().catch(() => {}), 30000);
 syncChromeState();
@@ -3451,6 +3452,24 @@ function claudeCaptainSeatId() {
   if (!captain || (captain.agentProvider !== 'Claude' && !/\bclaude\b/i.test(captain.cmd || ''))) return null;
   return QuotaCore.seatForColumn(captain, QuotaCore.claudeSeats(config.claudeSeats))?.id || null;
 }
+function paintQuotaLabel(el, q) {
+  el.replaceChildren();
+  if (!q.pools) { el.textContent = q.displayLabel; return; }
+  q.pools.forEach((pool, i) => {
+    if (i) el.append(document.createTextNode(' · '));
+    const span = document.createElement('span');
+    span.className = 'quota-pool' + (pool.exhausted ? ' is-exhausted' : '');
+    span.textContent = pool.text;
+    el.append(span);
+  });
+  if (q.resetLabel) {
+    el.append(document.createTextNode(' '));
+    const reset = document.createElement('span');
+    reset.className = 'quota-reset';
+    reset.textContent = q.resetLabel;
+    el.append(reset);
+  }
+}
 // Quota rows live at the bottom of the sidebar (#quotaBar) and, for the
 // collapsed sidebar, in the popover under the top-bar gauge (#quotaPopList).
 function renderQuotaBar() {
@@ -3480,7 +3499,7 @@ function renderQuotaBar() {
       item.dataset.state = q.state;
       item.setAttribute('aria-label', q.detail);
       item.title = q.detail;
-      item.querySelector('.quota-label').textContent = q.displayLabel;
+      paintQuotaLabel(item.querySelector('.quota-label'), q);
       item.querySelector('.quota-name').textContent = q.name || (provider === 'Codex' ? 'ChatGPT' : provider);
       item.querySelector('.quota-sampled').textContent = q.sampleLabel || '';
       item.querySelector('.quota-tooltip').textContent = q.detail;

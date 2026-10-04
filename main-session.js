@@ -1021,6 +1021,8 @@
         const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : s.cmd));
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;
+        const poolBlock = window.QuotaCore.cursorLaunchBlock(cmd, host.config.quotas);
+        if (poolBlock) throw new Error(poolBlock);
         const cwd = window.BoardCore.cleanText(message.cwd, 1000);
         if (metadata.boardId) {
           const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === metadata.boardId);

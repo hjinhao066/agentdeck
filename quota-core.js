@@ -188,6 +188,43 @@
     const model = typeof data.model === 'string' ? data.model : data.model?.id;
     return windows.length ? { provider: 'Antigravity', scope: 'gemini', model: modelScope('Antigravity', model) ? modelName(model) : 'Gemini（共享分组）', at, source: 'agy 本地状态行快照', confidence: '中（可选 CLI 调试快照）', windows } : null;
   }
+  function cursorPoolPair(sample) {
+    const windows = sample?.windows || [];
+    const grok = windows.find((w) => w.key === 'cursorModels');
+    const other = windows.find((w) => w.key === 'otherModels');
+    if (!grok || !other || percent(grok.used) === null || percent(other.used) === null || percent(grok.remaining) === null || percent(other.remaining) === null) return null;
+    return { grok, other };
+  }
+  function monthDay(t) {
+    const d = new Date(t), pad = (v) => String(v).padStart(2, '0');
+    return `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+  function poolPercent(w) { return w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%`; }
+  function poolStillOut(w, now) { return !!w.exhausted && (!w.resetAt || w.resetAt > now); }
+  function cursorModelId(cmd) {
+    const words = String(cmd || '').trim().match(/(?:"[^"]*"|'[^']*'|\S+)/g) || [];
+    if (!words.length) return '';
+    const program = words[0].replace(/^['"]|['"]$/g, '').split(/[\\/]/).pop();
+    if (program !== 'cursor-agent') return '';
+    for (let i = 1; i < words.length; i++) {
+      const eq = /^--model=(.*)$/.exec(words[i].replace(/^['"]|['"]$/g, ''));
+      const raw = eq ? eq[1] : words[i] === '--model' ? words[++i] : '';
+      if (!raw) continue;
+      return String(raw).replace(/^['"]|['"]$/g, '');
+    }
+    return '';
+  }
+  // Other Models (Cursor's api pool) is what claude-* draws from. Unknown is not a block.
+  function cursorLaunchBlock(cmd, store, now = Date.now()) {
+    const id = cursorModelId(cmd);
+    if (!/^claude-/i.test(id)) return '';
+    const saved = store && store.Cursor;
+    const sample = saved && saved.scope === SCOPES.Cursor && saved.sample && saved.sample.official ? saved.sample : null;
+    const pair = cursorPoolPair(sample);
+    if (!pair || !poolStillOut(pair.other, now)) return '';
+    const when = pair.other.resetAt ? `，↻${monthDay(pair.other.resetAt)} 重置` : '';
+    return `该池已用尽：Cursor 的 Other Models 剩余 0%${when}。请改用 cursor-agent --force --model grok-4.7-high-fast，不要再派 ${id}。`;
+  }
   function observe(store, next, now = Date.now()) {
     if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || now - next.at > freshMs(next)) return false;
     if (next.scope !== SCOPES[next.provider]) return false;
@@ -206,11 +243,31 @@
       previous = { ...previous, sample: { ...previous.sample, windows: [] } };
       if (previous.blocked?.numeric) delete previous.blocked;
     }
+    // A screen or cache line must not replace, or even annotate over, the two official pools.
+    if (next.provider === 'Cursor' && previous.sample?.official && !next.official && !next.failureOnly && !next.identityOnly) return false;
     const out = { ...previous };
     if (out.blocked?.resetAt && out.blocked.resetAt <= Math.max(now, next.at)) delete out.blocked; // past its reset time
     out.scope = next.scope;
     for (const key of ['account', 'accountKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
     if (next.identityOnly) {
+      store[key] = out;
+      return before !== JSON.stringify(out);
+    }
+    if (next.provider === 'Cursor' && next.failureOnly) {
+      out.officialStatus = {
+        failures: Number.isFinite(next.failures) ? next.failures : 1,
+        checkedAt: Number.isFinite(next.checkedAt) ? next.checkedAt : next.at,
+        failure: String(next.failure || '用量接口暂不可用').replace(/[\u0000-\u001f]/g, '').slice(0, 120),
+      };
+      store[key] = out;
+      return before !== JSON.stringify(out);
+    }
+    if (next.provider === 'Cursor' && next.official) {
+      const pools = cursorPoolPair(next);
+      if (!pools) return false;
+      out.officialStatus = { failures: 0, checkedAt: next.at };
+      out.sample = { ...next, windows: [pools.grok, pools.other] };
+      delete out.blocked;
       store[key] = out;
       return before !== JSON.stringify(out);
     }
@@ -242,19 +299,23 @@
   function summary(store, provider, now = Date.now(), seat = null, captainSeatId = null) {
     const saved = store[seat ? seatKey(seat.id) : provider] || {};
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
+    const pair = provider === 'Cursor' && sample?.official ? cursorPoolPair(sample) : null;
     const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir);
     const fresh = sample && trusted && now - sample.at <= freshMs(sample);
-    const windows = fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
-    const blocked = entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
-    const remaining = windows.length ? Math.min(...windows.map((w) => w.remaining)) : null;
-    const exhausted = !!blocked || windows.some((w) => w.exhausted);
+    const windows = pair ? [pair.grok, pair.other] : fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
+    const blocked = pair ? null : entry.blocked && (!entry.blocked.numeric || trusted) && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
+    const scored = pair ? windows.filter((w) => !w.resetAt || w.resetAt > now) : windows;
+    const remaining = (pair ? scored : windows).length ? Math.min(...(pair ? scored : windows).map((w) => w.remaining)) : null;
+    const exhausted = pair ? scored.some((w) => w.exhausted) : !!blocked || windows.some((w) => w.exhausted);
     const state = exhausted ? 'exhausted' : remaining !== null ? (remaining <= 10 ? 'danger' : remaining <= 20 ? 'warning' : 'normal') : provider !== 'Claude' && fresh && !sample.windows?.length && !entry.blocked ? 'normal' : 'unknown';
-    const label = exhausted ? '已用尽' : remaining !== null ? (remaining === 0 ? '<0.1%' : `${remaining}%`) : provider === 'Claude' ? '未知' : state === 'normal' ? '正常' : '未知';
+    let label = exhausted ? '已用尽' : remaining !== null ? (remaining === 0 ? '<0.1%' : `${remaining}%`) : provider === 'Claude' ? '未知' : state === 'normal' ? '正常' : '未知';
     const details = windows.map((w) => `${w.label}剩余 ${w.remaining === 0 && !w.exhausted ? '<0.1' : w.remaining}%；重置 ${w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText || '未知'}`);
     details.unshift(`模型：${entry.model || ({ Claude: 'Claude（账号共享额度）', Codex: 'Codex（账号共享额度）', Cursor: 'Grok 4.7', Antigravity: 'Gemini（共享分组）' }[provider])}；账号：${entry.account || (seat ? '未识别（此席位）' : '未识别（本机当前登录）')}`);
     if (seat) details.unshift(`席位：${seat.name}（${seat.id}）${seat.id === captainSeatId ? '；当前队长使用此席位' : ''}；配置目录：${seat.configDir}`);
     if (provider === 'Claude') for (const name of ['5 小时', '每周']) if (!windows.some((w) => w.label === name)) details.push(`${name}：未知；重置 未知`);
-    if (provider === 'Cursor') details.push('仅统计 Grok 4.7；Cursor Models 池百分比暂不可可靠取得');
+    if (provider === 'Cursor' && !pair) details.push('仅统计 Grok 4.7；Cursor Models 池百分比暂不可可靠取得');
+    if (provider === 'Cursor' && entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；保留上次数字`);
+    if (pair && windows.some((w) => w.resetAt && w.resetAt <= now)) details.push('重置时间已过，等待新采样（显示上次数字）');
     if (provider === 'Antigravity') details.push('仅统计 Gemini 分组；不含 agy Claude / 第三方额度');
     if (sample?.note) details.push(sample.note);
     if (provider === 'Codex' && !windows.some((w) => w.label === '5 小时') && !sample?.note) details.push('5 小时：无新鲜数字');
@@ -264,13 +325,26 @@
     if (!windows.length && !blocked) details.push(state === 'normal' ? '未观察到额度用尽；无法取得数字' : '无新鲜额度信息；等待会话/缓存更新');
     const evidence = blocked || sample;
     if (evidence) details.push(`来源：${evidence.source}；${blocked ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；${evidence.source === CLAUDE_OAUTH_SOURCE && !evidence.windows?.length ? '查询' : '采样'} ${new Date(evidence.at).toLocaleString()}${!fresh && !blocked ? '（已过期）' : ''}`);
-    const displayLabel = provider === 'Claude' && windows.length ? (exhausted ? '已用尽 · ' : '') + ['5 小时', '每周'].map((name, i) => {
+    let displayLabel = provider === 'Claude' && windows.length ? (exhausted ? '已用尽 · ' : '') + ['5 小时', '每周'].map((name, i) => {
       const w = windows.find((w) => w.label === name);
       return `${i ? '7d' : '5h'} ${w ? w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%` : '无数据'}`;
     }).join(' · ') : label;
-    const sampleLabel = provider === 'Claude' && fresh ? `${sample.windows?.length ? '采样' : '查询'} ${new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}` : '';
-    return { provider, state, label, displayLabel, sampleLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    let pools = null, resetLabel = '';
+    if (pair) {
+      const resetAt = pair.grok.resetAt || pair.other.resetAt;
+      pools = [
+        { text: `Grok ${poolPercent(pair.grok)}`, exhausted: poolStillOut(pair.grok, now) },
+        { text: `其他 ${poolPercent(pair.other)}`, exhausted: poolStillOut(pair.other, now) },
+      ];
+      resetLabel = resetAt ? `↻${monthDay(resetAt)}` : '';
+      displayLabel = `${pools.map((p) => p.text).join(' · ')}${resetLabel ? ` ${resetLabel}` : ''}`;
+      label = displayLabel;
+    }
+    const sampleLabel = pair && (entry.officialStatus?.failure || now - sample.at > FRESH_MS)
+      ? `采样 ${new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}`
+      : provider === 'Claude' && fresh ? `${sample.windows?.length ? '采样' : '查询'} ${new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}` : '';
+    return { provider, state, label, displayLabel, sampleLabel, pools, resetLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text, cursorLaunchBlock };
 });

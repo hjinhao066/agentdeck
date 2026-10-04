@@ -119,7 +119,7 @@
     'Gemini 3.8 Flash：检索、整理、中文写作、简单到中等代码（Antigravity，放开用，不消耗 Claude 额度；不用 Gemini 3.1 Pro）。',
     'Cursor Grok 4.7：脏活、抓数据、外部信息采集（cursor-agent --force --model grok-4.7-high-fast）。',
     '数据抓取兜底：网上的数据抓不到时，不要盲目手写无头爬虫死磕，先找 GitHub 现成工具、OpenCLI、agent-reach 技能；若仍抓不到再考虑调度 Muse.ai 或 ChatGPT 浏览器（computer use）。',
-    '额度轮换：quota 只读本机会话/缓存的被动观测，注意采样时间和可信度，未知不代表可用。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
+    '额度轮换：quota 会给出 Cursor 两个池的剩余百分比和采样时间；「其他」为 0 时，new 用 cursor-agent 的 claude-* 会直接拒绝并提示该池已用尽，改派 grok-4.7-high-fast。未知不代表可用。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
   ];
   // Effort tiers, lowest first. Cursor takes the tier as the model id's suffix
   // and lists exactly these ids for Opus and Sonnet.

@@ -51,6 +51,7 @@
       "quota-codex.js",
       "quota-low-bark.js",
       "quota-claude.js",
+      "quota-cursor.js",
       "chat-ui.js",
       "sidebar-core.js",
       "sidebar.js",

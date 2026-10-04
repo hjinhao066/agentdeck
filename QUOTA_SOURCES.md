@@ -140,13 +140,17 @@ were left running. Quota probes made no inference requests.
   reads `/api/usage-summary`, using
   [Cursor.app's local auth database](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Cursor/CursorAppAuth.swift).
   Researched the read-only `state.vscdb` key names: auth/profile keys exist,
-  but no usage cache key was found. A **one-time read-only research probe**
-  authenticated in memory with this app token, sent it only to
-  `https://cursor.com/api/usage-summary` and printed response field types only.
-  The response contains `individualUsage.plan.{used,limit,remaining,
-  autoPercentUsed,apiPercentUsed,totalPercentUsed}` and `onDemand`; it exposes
-  **no identified Cursor Models/Grok 4.7 pool**. No credentials or raw response
-  were saved. Production code does not read this DB or call this endpoint.
+  but no usage cache key was found. Cursor's installed settings UI
+  (`auto-spillover-ui.ts`) labels `autoPercentUsed` as **Cursor Models**
+  (Grok / Composer) and `apiPercentUsed` as **Other Models**. The desktop
+  client loads both from `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage`
+  and shows `Math.round` of each (values between 0 and 1 become 1). The same
+  numbers are on `GET https://cursor.com/api/usage-summary`. Reset is
+  `billingCycleEnd`. `cursor-agent` has no usage command. Production reads the
+  access token read-only from `state.vscdb` (`cursorAuth/accessToken`), calls
+  only `GetCurrentPeriodUsage`, and never logs or stores the token. Polling is
+  at most once every 10 minutes. A failed poll keeps the previous numbers and
+  their sample time.
 - CodexBar's [`get-sand-usage-status`](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Cursor/CursorSandUsage.swift)
   reports **Grok Bot**, not Cursor CLI's Grok 4.7 model pool.
   [Official Grok Bot billing](https://cursor.com/help/grok-bot/plans) describes
@@ -155,10 +159,10 @@ were left running. Quota probes made no inference requests.
   requires team/Enterprise Admin API credentials. The
   [official Admin API](https://docs.cursor.com/en/account/teams/admin-api)
   is for organization/team metrics; it is not an individual CLI quota reader.
-- The installed Cursor CLI contains usage-policy RPC definitions, but no
-  verified public individual-model quota contract or reusable numeric local
-  cache was established. **Keep observed Grok status; do not show an overall,
-  Claude, Grok Bot or guessed percentage.**
+- The installed Cursor CLI has no usage/status command and no numeric local
+  cache. Grok Bot's weekly allowance is a different product and is not shown.
+  Screen observations still apply only to Grok 4.7; they do not replace the
+  two official pool percentages.
 
 ## Observation and privacy behavior
 

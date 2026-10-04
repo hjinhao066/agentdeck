@@ -18,11 +18,12 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const { createCursorUsageReader } = require('./quota-cursor');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
 let sidePane = null;
-let claudeQuotaRefresh = null, claudeQuotaTimer = null;
+let claudeQuotaRefresh = null, claudeQuotaTimer = null, cursorUsage = null;
 let pendingFocusColumn = null;
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
@@ -692,6 +693,7 @@ app.whenReady().then(() => {
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
     onUsageRecorded: () => { quotaRead = null; } });
   if (!tudArg) {
+    cursorUsage = createCursorUsageReader();
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
     const refresh = () => claudeQuotaRefresh.tick().catch(() => {});
     refresh();
@@ -754,6 +756,7 @@ app.whenReady().then(() => {
   handleMain('quota:local', async () => {
     if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
     await claudeQuotaRefresh?.tick();
+    const cursorSample = cursorUsage ? await cursorUsage.read() : null;
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
@@ -765,7 +768,7 @@ app.whenReady().then(() => {
       quotaRead = Promise.all([readLocalQuota(os.homedir(), process.env.CODEX_HOME, Date.now(), quotaSeatConfig), codexQuotaRead])
         .then(([local, codex]) => codex ? [...local, codex] : local).catch(() => []);
     }
-    return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || [])]);
+    return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || []), ...(cursorSample ? [cursorSample] : [])]);
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
