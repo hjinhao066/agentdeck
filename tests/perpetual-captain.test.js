@@ -331,6 +331,51 @@ test('earlier-reset rotations keep the ten-minute return cooldown', () => {
   assert.equal(choose({ state, currentId: 'us', seats: reversed, now: NOW + 1000 }), null);
   assert.equal(choose({ state, currentId: 'us', seats: reversed, now: NOW + P.COOLDOWN_MS }).targetId, 'cn');
 });
+test('earlier-reset requires at least ten minutes of useful advancement', () => {
+  const cn = quota('cn', 80, { resetAt: NOW + 5 * 3600000, weeklyTrusted: true, weeklyRemaining: 60 });
+  const us = quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 60 });
+  for (const advance of [0, 247, 305, 600, 60000, 599999]) {
+    assert.equal(choose({ seats: [cn, { ...us, resetAt: cn.resetAt - advance }] }), null, `${advance}ms`);
+  }
+  for (const advance of [600000, 600001, 1800000]) {
+    assert.equal(choose({ seats: [cn, { ...us, resetAt: cn.resetAt - advance }] }).reason, 'earlier-reset');
+  }
+  // Low quota still uses its existing fallback even when both resets align.
+  assert.equal(choose({ seats: [{ ...cn, remaining: 3 }, { ...us, resetAt: cn.resetAt }] }).reason, 'threshold');
+});
+test('aligned reset windows stay put despite fresh jitter after every cooldown for three hours', () => {
+  const resetAt = NOW + 5 * 3600000, noise = [[247, 0], [-300, 300], [300, -300], [0, 0], [0, 247]];
+  let state = {}, currentId = 'cn', switches = 0;
+  for (let tick = 0; tick < 360; tick++) {
+    const now = NOW + tick * 30000;
+    const seats = ['cn', 'us'].map((id, index) => quota(id, 90, { remainingAt: now,
+      resetAt: resetAt + noise[tick % noise.length][index], weeklyTrusted: true, weeklyRemaining: 50 }));
+    const decision = P.decide({ state, currentId, seats, now });
+    if (decision) {
+      state = P.recordSwitch(state, { fromId: currentId, ...decision });
+      currentId = decision.targetId; switches++;
+    }
+  }
+  assert.equal(switches, 0);
+  assert.equal(currentId, 'cn');
+});
+test('a materially earlier jittered window gets one rotation across three hours', () => {
+  let state = {}, currentId = 'cn', switches = 0;
+  for (let tick = 0; tick < 360; tick++) {
+    const now = NOW + tick * 30000, jitter = tick % 2 ? -300 : 300;
+    const seats = ['cn', 'us'].map((id, index) => quota(id, 90, { remainingAt: now,
+      resetAt: NOW + 5 * 3600000 - index * 1800000 + (index ? -jitter : jitter),
+      weeklyTrusted: true, weeklyRemaining: 50 }));
+    const decision = P.decide({ state, currentId, seats, now });
+    if (decision) {
+      assert.equal(decision.reason, 'earlier-reset');
+      state = P.recordSwitch(state, { fromId: currentId, ...decision });
+      currentId = decision.targetId; switches++;
+    }
+  }
+  assert.equal(switches, 1);
+  assert.equal(currentId, 'us');
+});
 test('weekly low quota is never a Relay destination, including the old low-five-hour fallback', () => {
   assert.equal(choose({ seats: [quota('cn', 2), quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 3 })] }), null);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 0 })] }).targetId, P.CODEX_ID);
