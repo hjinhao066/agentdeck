@@ -89,6 +89,8 @@
     }
     const foot = el('div', 'tbv-foot');
     const tags = el('div', 'tbv-tags');
+    const conflict = window.FleetUI && window.FleetUI.conflictText(c);
+    if (conflict) { const tag = el('span', 'tbv-tag conflict', '冲突'); tag.title = conflict; tags.append(tag); }
     if (c.flag === 'failed') tags.append(el('span', 'tbv-tag failed', '失败'));
     if (item.waitLabel) { const w = el('span', 'tbv-tag wait', item.waitLabel); w.title = item.waitLabel; tags.append(w); }
     if (item.parallel) tags.append(el('span', 'tbv-tag parallel', '可并行'));

@@ -82,7 +82,7 @@ function loadDevice(file) {
 }
 function summaryOf(turns) {
   const first = Array.isArray(turns) ? turns[0] || {} : {};
-  const text = first.prompt || first.text || first.content || '';
+  const text = first.prompt || first.user || first.text || first.content || '';
   return clip(typeof text === 'string' ? text : '', 200);
 }
 

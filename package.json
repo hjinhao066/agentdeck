@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "TweetDeck-style multi-column deck for terminal AI agents",
   "main": "main.js",
   "scripts": {
@@ -59,6 +59,10 @@
       "main-core.js",
       "main-session.js",
       "task-board.js",
+      "shared-store.js",
+      "sync-server.js",
+      "sync-client.js",
+      "fleet-ui.js",
       "task-heartbeat.js",
       "claude-seats-core.js",
       "claude-seats-main.js",

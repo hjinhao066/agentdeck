@@ -91,7 +91,7 @@ function registerSideIpc(ctx) {
     if (!chat || typeof chat !== 'object' || !validId(id)) return;
     let ok = false;
     try { ok = saveChat(chatDir(), id, chat); } catch (_) {}
-    if (ok) { refused.delete(id); return; }
+    if (ok) { refused.delete(id); if (typeof ctx.onChatSaved === 'function') ctx.onChatSaved(id, chat); return; }
     if (refused.has(id)) return;
     refused.add(id);
     send('toast', { text: '这个对话的记录没能保存（太大或写入失败），之前存下的记录还在。' });

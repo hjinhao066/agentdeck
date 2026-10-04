@@ -576,4 +576,32 @@ and GitHub synchronization after every completed change.
 
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
 
+## Two-machine sync (1.2.0)
+
+Mac and Windows each run AgentDeck and talk to one sync service (the existing
+VPS, reached over WireGuard). The app heartbeats every sync round, every 10
+seconds, and the service marks a machine offline 45 seconds after its last
+heartbeat, which covers shutdown and sleep. Task cards, their fields, and
+saved captain transcripts are shared; a change is visible on the other side
+within a minute. Edits to different fields of the same card merge. Edits to
+the same field stay as two copies and the card shows 冲突. The sidebar section
+两机 shows online/offline, the last-seen time, and any sync error.
+
+The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
+to the WireGuard address when it is deployed; the default listen address is
+loopback. Each desktop keeps its settings in `userData/fleet.json` (not the
+deck `config.json`, which the window rewrites):
+
+```json
+{ "baseUrl": "https://sync.example", "tokenFile": "/absolute/path/to/token" }
+```
+
+The token file contains only the token. It is not committed, not passed on the
+command line, and not written into logs or task JSON. `~/.agents` git sync is
+unchanged and is not the live channel. This build does not choose which
+computer runs a task, move work off a sleeping machine, or switch captains
+from a phone. Cards and sessions carry `deviceId` for those later steps.
+
+
+
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.

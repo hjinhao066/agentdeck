@@ -104,7 +104,7 @@ button { font: inherit; }
   -webkit-app-region: drag;
 }
 body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
-#navHead .rail-btn, #navTop, #navList, #navBottom, .nav-results { -webkit-app-region: no-drag; }
+#navHead .rail-btn, #navTop, #navList, #navBottom, #fleetStatus, .nav-results { -webkit-app-region: no-drag; }
 
 .rail-btn {
   -webkit-app-region: no-drag;
@@ -307,6 +307,20 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 #tbRight { display: flex; align-items: center; gap: 2px; }
 /* Quota rows: a compact block at the bottom of the sidebar (one row per
    provider / Claude seat). The same rows show in #quotaPop while collapsed. */
+#fleetStatus { flex: 0 0 auto; max-height: 168px; overflow: auto; padding: 6px 8px 4px; border-top: 1px solid var(--hairline); }
+.fleet-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.fleet-row { display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 6px; color: var(--text-2); font-size: 11.5px; }
+.fleet-dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.fleet-row.online .fleet-dot { background: #2f8a4a; box-shadow: none; }
+.fleet-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-state { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.fleet-row.online .fleet-state { color: var(--text); }
+.fleet-notice, .fleet-history { margin: 2px 6px 0; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.fleet-notice.error { color: #c4473a; }
+.fleet-notice.warn { color: #9a6a00; }
+:root:not([data-theme="light"]) .fleet-notice.error { color: #f08a7e; }
+:root:not([data-theme="light"]) .fleet-notice.warn { color: #e8b44f; }
+.fleet-history { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; }
 .nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
 #quotaBar, #quotaPopList { display: flex; flex-direction: column; gap: 1px; }
@@ -1927,9 +1941,11 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .tbv-tag.wait { color: #9a6a00; border-color: rgba(214,153,34,.45); background: rgba(214,153,34,.10); }
 .tbv-tag.parallel { color: #23793f; border-color: rgba(47,138,74,.40); background: rgba(47,138,74,.10); }
 .tbv-tag.failed { color: #c4473a; border-color: rgba(196,71,58,.40); background: rgba(196,71,58,.08); }
+.tbv-tag.conflict { color: #9a3412; border-color: rgba(196,71,58,.45); background: rgba(196,71,58,.10); }
 :root:not([data-theme="light"]) .tbv-tag.wait { color: #e8b44f; }
 :root:not([data-theme="light"]) .tbv-tag.parallel { color: #6cc98a; }
 :root:not([data-theme="light"]) .tbv-tag.failed { color: #f08a7e; }
+:root:not([data-theme="light"]) .tbv-tag.conflict { color: #f0b4a8; }
 .tbv-time { margin-left: auto; flex: 0 0 auto; font-size: 11px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
 
 .tbv-empty-board { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 24px; text-align: center; color: var(--muted); font-size: 13px; }
