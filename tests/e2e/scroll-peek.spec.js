@@ -147,9 +147,15 @@ test('the copied peek CLI returns fresh ANSI-free rows without moving or writing
   expect(result.result).toContain('LIVE_ROW_0127');
   expect(await page.evaluate((id) => config.boardResponses[id], result.requestId)).toBeUndefined();
   await input(worker, 'alt\r');
+  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), worker)).toContain('ALTERNATE_LIVE_SCREEN');
+  // ConPTY converts the child's alternate screen into screen redraws instead
+  // of forwarding its buffer-switch sequence. Exercise xterm's alternate
+  // buffer explicitly as well, so peek's live-buffer assertion stays universal.
+  await page.evaluate((id) => new Promise((resolve) => terms.get(id).term.write('\x1b[?1049h\x1b[2J\x1b[HALTERNATE_LIVE_SCREEN\r\n', resolve)), worker);
   await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker)).toBe('alternate');
   expect((await peek([])).stdout.trim()).toBe('ALTERNATE_LIVE_SCREEN');
   await input(worker, 'normal\r');
+  await page.evaluate((id) => new Promise((resolve) => terms.get(id).term.write('\x1b[?1049l', resolve)), worker);
   await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker)).toBe('normal');
   await input(worker, 'emit 900\r');
   await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), worker)).toContain('LIVE_ROW_1027');
