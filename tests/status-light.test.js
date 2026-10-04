@@ -128,3 +128,12 @@ test('archive rechecks the live terminal and open turns instead of trusting a st
   ctx.archiveColumn(col, { captain: true, quiet: true });
   assert.equal(detached, 2, 'explicit Captain archive remains authorized');
 });
+
+test('the whole "→ … ctrl+c to stop" row counts as busy for every provider, not only Cursor', () => {
+  const row = '→ Add a follow-up              ctrl+c to stop';
+  for (const cmd of ['', 'claude', 'codex', 'agy', 'cursor-agent', 'gemini']) {
+    assert.equal(MainCore.terminalActivity(row, cmd), 'working', cmd || '(no command)');
+    assert.equal(MainCore.terminalActivity('│ ' + row + ' │', cmd), 'working', cmd + ' boxed');
+  }
+  assert.equal(MainCore.terminalActivity('The docs say ctrl+c to stop.', 'claude'), '');
+});
