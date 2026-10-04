@@ -72,8 +72,17 @@ function answer() {
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
   if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
   if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
+  if (first === 'gemini confirmation regression') {
+    process.stdout.write('\x1b[2J\x1b[HThinking: waiting for confirmation\n⠋ Working\nAntigravity\n');
+    setTimeout(() => {
+      process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n⏺ GOT ' + first + '\n');
+      box();
+    }, 4500);
+    return;
+  }
   process.stdout.write('\x1b[2J\x1b[H');
   process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
+  if (first === 'empty reply regression') { box(); return; }
   if ((process.argv.includes('--interruptible') || process.argv.includes('--quota-probe')) && /keep working|wait for quota/.test(first)) {
     process.stdout.write(first.includes('quota') ? "You've hit your limit · resets 5pm (America/Los_Angeles)\n" : '✻ Doing…\nPress up to edit queued messages\n');
     box();
