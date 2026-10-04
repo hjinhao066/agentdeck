@@ -5,6 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
+const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = require('./board-credentials');
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createQuotaLowBark } = require('./quota-low-bark');
@@ -197,7 +198,6 @@ function shellArgs() {
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
-const { clearCredentials, removeCredentials, writeCredentials } = require('./board-credentials');
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -257,7 +257,6 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   }
   let p;
   try {
-    writeCredentials(boardControlDir, id, receiptToken, token);
     p = pty.spawn(shellFile(), shellArgs(), {
       name: 'xterm-256color',
       cols: cols || 80,
@@ -278,6 +277,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     send('pty:exit', { id, reason: `shell 启动失败: ${err.message}` });
     return;
   }
+  try { writeCredentials(boardControlDir, id, receiptToken, token, ttyFromPty(p)); }
+  catch (_) { removeCredentials(boardControlDir, id); }
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a

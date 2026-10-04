@@ -119,6 +119,9 @@ test('Codex app launches bypass shell wrappers without duplicating their --yolo 
   assert.equal(B.launchInput(cmd, 'linux'), '\x15command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox\r');
   assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" --no-daemon resume --last --yolo');
   assert.equal(B.shellLaunchCommand(cmd, 'win32'), cmd);
+  assert.equal(B.shellLaunchCommand('codex --no-daemon --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
+  assert.equal(B.shellLaunchCommand('/opt/bin/codex --yolo', 'darwin'), '/opt/bin/codex --no-daemon --yolo');
+  assert.equal(B.shellLaunchCommand('command "codex" --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
   for (const custom of ['node fake-agent.js', './codex-wrapper.sh']) {
     assert.equal(B.shellLaunchCommand(custom, 'darwin'), custom);
   }
@@ -174,7 +177,7 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.ok(text.includes('claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high'));
   assert.ok(text.includes('cursor-agent --force --model grok-4.7-high-fast'));
   // Codex: --agent codex (default GPT-6.1 Sol) or the Luna command; the bypass flag is named only to forbid writing it
-  assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*不要手动拼接 --dangerously-bypass-approvals-and-sandbox/);
+  assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*--dangerously-bypass-approvals-and-sandbox[^\n]*--no-daemon[^\n]*不要手动拼接/);
   assert.ok(!text.includes(B.commandForAgent('codex')), 'no ready-made codex command with the flag to copy');
   assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex \| --command/);
   // only models the CLIs listed on the owner's accounts

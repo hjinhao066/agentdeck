@@ -224,7 +224,7 @@ test('队长\'s Antigravity commands carry the effort in the model id, never --e
   assert.equal(C('/opt/bin/agy --effort medium'), '/opt/bin/agy --model gemini-3.8-flash-medium');
   // already right, or not Antigravity: untouched
   for (const cmd of ['agy --dangerously-skip-permissions --model gemini-3.8-flash-medium', 'claude --dangerously-skip-permissions --effort high',
-    'cursor-agent --force --model claude-sonnet-5-5-high', 'codex --dangerously-bypass-approvals-and-sandbox', '']) {
+    'cursor-agent --force --model claude-sonnet-5-5-high', 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox', '']) {
     assert.equal(C(cmd), cmd, cmd);
   }
 });
@@ -232,11 +232,14 @@ test('队长\'s Antigravity commands carry the effort in the model id, never --e
 test('队长\'s Codex commands always run without confirmation prompts, never with the flag twice', () => {
   const C = (cmd) => M.checkCommand(cmd).cmd;
   // GPT-6 Luna: `codex -m gpt-6-luna` would otherwise stop at the first approval
-  assert.equal(C('codex -m gpt-6-luna'), 'codex --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  assert.equal(C('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
-  assert.equal(C('/opt/bin/codex -m gpt-6-luna'), '/opt/bin/codex --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  // already has one of the two spellings (a duplicate fails to start)
-  for (const cmd of ['codex --dangerously-bypass-approvals-and-sandbox', 'codex -m gpt-6-luna --yolo', 'codex --yolo']) assert.equal(C(cmd), cmd, cmd);
+  assert.equal(C('codex -m gpt-6-luna'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
+  assert.equal(C('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(C('/opt/bin/codex -m gpt-6-luna'), '/opt/bin/codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
+  // already has one of the two spellings (a duplicate fails to start); --no-daemon is still added once
+  assert.equal(C('codex --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(C('codex -m gpt-6-luna --yolo'), 'codex --no-daemon -m gpt-6-luna --yolo');
+  assert.equal(C('codex --yolo'), 'codex --no-daemon --yolo');
+  assert.equal(C('codex --no-daemon --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
 });
 
 test('队长 cannot hand work to Claude 4.x or Haiku in any CLI', () => {

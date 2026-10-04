@@ -82,6 +82,8 @@
     '需要队长拍板运行：node "$AGENTDECK_BOARD_CLI" ask --question "一两句话说清要队长决定什么"，然后停下，队长会回复你。',
     '长任务可运行：node "$AGENTDECK_BOARD_CLI" progress --message "当前进度"。',
     '命令在 agent 的 shell/Bash 工具里执行；Windows PowerShell 把 $AGENTDECK_BOARD_CLI 写成 $env:AGENTDECK_BOARD_CLI。',
+    '提交回执的那条命令不要 unset、覆盖或清掉 AGENTDECK_ 开头的变量，也不要改用仓库里的 board-cli.js。隔离测试要清这些变量时，只在子进程里清。',
+    '变量如果是空的，node 会把空路径当成空脚本，退出码仍是 0，但回执并没有提交。凭据同时写在当前终端的私有文件里；用 AgentDeck 提供的 board-cli，变量被清掉时它会按当前终端认回自己的凭据。别的终端认不到这份凭据。',
     '文件用完整落盘路径，多个路径用逗号分隔；没做成时加 --failed，成功时不加。回执必须通过命令提交，屏幕上的【回执】/【提问】文字不算提交。',
     '回执里不要贴文件正文。',
   ].join('\n');
@@ -108,7 +110,7 @@
     'Cursor CLI：cursor-agent --force --model grok-4.7-high-fast　主要用 Grok 4.7 跑脏活和数据抓取。Cursor 会话刚开的头 1–2 分钟可能没有任何输出，属于正常初始化，别急着判定卡死。',
     'Claude Code：claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high　每次开 Claude 小弟必须显式写 --model claude-opus-5-5 或 --model claude-sonnet-5-5，并显式写 --effort；本机默认模型不是 Opus，不写可能跑成别的模型。开工后用 peek 看状态行确认模型，不符就修正命令重新派活。Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。',
     '不要用 Claude 4.x 和 Haiku 这些旧模型（包括 Antigravity 里的 Claude Sonnet 4.6、Claude Opus 4.6）：用户不要，new 会直接拒绝。',
-    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数 AgentDeck 会自动补齐，不要手动拼接 --dangerously-bypass-approvals-and-sandbox，避免参数重复导致启动失败。',
+    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon AgentDeck 会自动补齐，不要手动拼接，避免参数重复导致启动失败。',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
   const ROUTING = [
@@ -282,8 +284,10 @@
     // Codex hands out autonomous work like every other agent: no confirmation prompts.
     // Added unless a bypass flag (or its --yolo alias) is already there, since a duplicate fails to start.
     if (programName(words[0]) === 'codex') {
-      const bypass = words.some((w) => /^(?:--yolo|--dangerously-bypass-approvals-and-sandbox)$/.test(w));
-      return { cmd: bypass ? source : [words[0], '--dangerously-bypass-approvals-and-sandbox', ...words.slice(1)].join(' ') };
+      const extra = [];
+      if (!words.includes('--no-daemon')) extra.push('--no-daemon');
+      if (!words.some((w) => /^(?:--yolo|--dangerously-bypass-approvals-and-sandbox)$/.test(w))) extra.push('--dangerously-bypass-approvals-and-sandbox');
+      return { cmd: extra.length ? [words[0], ...extra, ...words.slice(1)].join(' ') : source };
     }
     if (programName(words[0]) !== 'agy') return { cmd: source };
     const out = [words[0]];
