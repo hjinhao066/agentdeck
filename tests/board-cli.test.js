@@ -223,3 +223,28 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
     assert.match(r.stderr, /requires --id/);
   }
 });
+
+
+test('briefing sends a read-only Captain request and prints the full static instructions', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-briefing-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const instructions = require('../main-core').instructions(process.platform);
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file));
+      requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: instructions }));
+    }
+  }, 20);
+  try {
+    const result = await runCli(['briefing'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
+    assert.equal(result.code, 0); assert.equal(result.stdout, instructions + '\n');
+    assert.equal(requests.length, 1); assert.equal(requests[0].action, 'main-briefing');
+    assert.equal(requests[0].message, undefined);
+    const denied = await runCli(['briefing'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: '', AGENTDECK_RECEIPT_TOKEN: 'worker-test' });
+    assert.equal(denied.code, 1); assert.match(denied.stderr, /Only conductor-managed terminals/);
+    assert.equal(requests.length, 1);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});

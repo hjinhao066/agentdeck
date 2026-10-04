@@ -230,8 +230,9 @@
     }
   }
 
-  function footerText(entry) {
-    return (window.ChatUI.readFooter(entry.term) || []).map((row) => row.map((s) => s.text).join('')).join('\n');
+  function footerText(entry, provider) {
+    const footer = (window.ChatUI.readFooter(entry.term) || []).map((row) => row.map((s) => s.text).join('')).join('\n');
+    return footer || (provider === 'Codex' ? M.codexContextFooter(host.dumpScreen(entry.term)) : '');
   }
   function archiveSnapshot(col, snapshot) {
     const retired = window.ChatUI.archiveCaptainSnapshot(col.id, snapshot);
@@ -247,29 +248,40 @@
   }
   // Called before the submitted command can erase the TUI. Typing a slash,
   // Ctrl+L, quoted commands, worker commands and shell commands never arm it.
-  function onContextCommand(col, text) {
-    if (!isMain(col)) return;
+  function onContextCommand(col, text, submitted = true) {
+    if (!isMain(col) || !col.cmd) return;
     const entry = host.terms.get(col.id);
     if (!entry?.alive || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || M.terminalActivity(entry.lastScreen)) return;
     const provider = window.AgentInfo.inferProvider(col.cmd, entry.lastScreen);
-    if (!M.contextResetCommand(provider, text)) return;
+    if (!M.contextResetCommand(provider, text)) {
+      if (contextReset && !contextReset.confirmed) contextReset = null;
+      return;
+    }
     cancelTokenSaving();
-    contextReset = { col, entry, provider, before: footerText(entry), output: '', since: Date.now(),
-      snapshot: window.ChatUI.captainSnapshot(col.id), confirmed: false, sending: false };
+    contextReset = { col, entry, provider, before: footerText(entry, provider), output: '', since: Date.now(),
+      snapshot: window.ChatUI.captainSnapshot(col.id), text, submitted, confirmed: false, sending: false };
+  }
+  function onContextCommandSent(col, text) {
+    if (contextReset?.col === col && contextReset.text === text) {
+      contextReset.submitted = true;
+      contextReset.output = '';
+      contextReset.since = Date.now();
+    }
   }
   function onOutput(id, data) {
-    if (contextReset?.col.id === id && !contextReset.confirmed) contextReset.output = (contextReset.output + data).slice(-16000);
+    if (contextReset?.col.id === id && contextReset.submitted && !contextReset.confirmed) contextReset.output = (contextReset.output + data).slice(-16000);
   }
   function contextResetTick(entry) {
     const op = contextReset;
     if (!op) return;
     if (mainCol() !== op.col || entry !== op.entry || !entry.alive) { contextReset = null; return; }
     if (!op.confirmed) {
-      if (M.contextResetEvidence(op.provider, op.before, footerText(entry), op.output)) {
+      if (Date.now() - op.since > 60_000) { contextReset = null; return; }
+      if (!op.submitted) return;
+      if (M.contextResetEvidence(op.provider, op.before, footerText(entry, op.provider), op.output)) {
         op.confirmed = true;
         archiveSnapshot(op.col, op.snapshot);
-      } else if (Date.now() - op.since > 60_000) { contextReset = null; return; }
-      else return;
+      } else return;
     }
     if (op.sending || briefing || delivering || entry.sendingPrompt || entry.state !== 'done' || M.terminalActivity(entry.lastScreen) ||
       Date.now() - (entry.lastOutputAt || 0) < 3000 || host.userComposing(op.col.id)) return;
@@ -906,7 +918,7 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, openSettings, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onOutput, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),

@@ -274,7 +274,7 @@ function makePromptTracker(col) {
   // without us seeing it (history recall, Tab), until Enter or ^C/^U.
   // lastKeyAt: the user's last real key, never xterm's automatic replies.
   const typing = { draft: '', unknown: false, lastKeyAt: 0 };
-  const RECALL = '\t\x07\x10\x0e\x12\x16\x19';
+  const RECALL = '\t\x07\x10\x0e\x12\x16\x19\x01\x02\x04\x05\x06\x0b\x0f\x14\x17';
   const track = (d) => {
     for (let i = 0; i < d.length; ) {
       const ch = d[i];
@@ -295,7 +295,7 @@ function makePromptTracker(col) {
         else if (/^\x1b(?:\[|O)(?:[\d;]*)([A-DHF~])$/.test(escape)) {
           // cursor and editing keys (not focus, mouse or query replies)
           typing.lastKeyAt = Date.now();
-          if (/[AB]$/.test(escape)) typing.unknown = true;   // Up/Down recall history
+          typing.unknown = true;   // history or cursor edits make the rebuilt line uncertain
         } else if (/^\x1b[^\[O\]]$/.test(escape)) { typing.lastKeyAt = Date.now(); typing.unknown = true; }   // Alt/Meta combos
         escape = '';
         continue;
@@ -303,8 +303,8 @@ function makePromptTracker(col) {
       if (ch === '\x1b') { escape = ch; i++; continue; }
       typing.lastKeyAt = Date.now();
       if (ch === '\r' || ch === '\n') {
-        if (inPaste) buf += ' ';
-        else { const line = buf.trim(); const uncertain = typing.unknown; buf = ''; typing.unknown = false; maybeAutoName(col, line); ChatUI.onSubmitted(col, line, uncertain); }
+        if (inPaste) buf += '\n';
+        else { const line = buf.trim(); const uncertain = typing.unknown || /[\r\n]/.test(buf); buf = ''; typing.unknown = false; maybeAutoName(col, line); ChatUI.onSubmitted(col, line, uncertain); }
         i++;
         continue;
       }
@@ -312,7 +312,7 @@ function makePromptTracker(col) {
       if (ch === '\x03' || ch === '\x15') { buf = ''; typing.unknown = false; i++; continue; }  // ^C / ^U clear the line
       if (ch < ' ') { if (RECALL.includes(ch)) typing.unknown = true; i++; continue; }
       buf += ch;
-      if (buf.length > 2000) buf = buf.slice(-2000);
+      if (buf.length > 2000) { buf = buf.slice(-2000); typing.unknown = true; }
       i++;
     }
     typing.draft = buf.trim();

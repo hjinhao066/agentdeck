@@ -686,7 +686,7 @@ app.whenReady().then(() => {
 
   onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
     const action = pendingBoardCommands.get(requestId)?.command.action;
-    const verbatim = action === 'main-peek' || action === 'main-receipts';
+    const verbatim = action === 'main-peek' || action === 'main-receipts' || action === 'main-briefing';
     pendingBoardCommands.delete(requestId);
     if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {

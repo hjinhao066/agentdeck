@@ -25,17 +25,31 @@
     const commands = provider === 'Claude' ? '(?:clear|reset|new)' : provider === 'Codex' ? '(?:clear|new)' : '';
     return !!commands && new RegExp('^/' + commands + '(?:[ \\t]+[^\\r\\n]+)?$').test(text.trim());
   }
+  // Codex has no ruled input box. Read only rows below its last visible prompt,
+  // so status-like text quoted in the conversation is never reset evidence.
+  function codexContextFooter(screen) {
+    const rows = String(screen || '').split('\n');
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (/^\s*›(?:\s|$)/.test(rows[i])) return rows.slice(i + 1).join('\n');
+    }
+    return '';
+  }
   function contextResetEvidence(provider, before, after, output) {
     // Only output received AFTER a submitted reset command, never scrollback.
     const text = String(output || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n');
-    if (/(?:unknown|unrecognized|unsupported) (?:slash )?command|(?:failed|could not|cannot) (?:to )?(?:clear|start|open)|not available|unavailable|try again/i.test(text)) return false;
+    if (/(?:unknown|unrecognized|unsupported) (?:slash )?command|(?:failed|could not|cannot) (?:to )?(?:clear|start|open)|not available|unavailable|try again|cancelled|canceled/i.test(text)) return false;
     const old = contextTokens(before), used = contextTokens(after);
     if (old !== null && used !== null && used < old / 2) return true;
     if (/^\s*(?:[⏺⎿•]\s*)?(?:(?:conversation|context) cleared|cleared (?:conversation|context)|\(no content\))\s*[.!]?\s*$/im.test(text)) return true;
-    // /new can keep scrollback. A freshly emitted startup header confirms the
-    // new TUI context; opening/cancelling its workspace picker alone does not.
-    const header = provider === 'Claude' ? /(?:Welcome to Claude Code|Claude Code v\d)/ : /(?:OpenAI Codex \(v[\d.]|Welcome to Codex)/;
-    return header.test(text);
+    // Codex's footer reports remaining context rather than used tokens.
+    // A startup header alone is a repaint, not evidence of a fresh context.
+    if (provider === 'Codex') {
+      const left = (footer) => /\b(\d{1,3})% context left\b/i.exec(String(footer || ''));
+      const previous = left(before), current = left(after);
+      if (previous && current && Number(current[1]) <= 100 &&
+          100 - Number(current[1]) < (100 - Number(previous[1])) / 2) return true;
+    }
+    return false;
   }
   function tokenSaverSettings(value) {
     return { enabled: value?.enabled !== false, threshold: Number.isInteger(value?.threshold) && value.threshold > 0 ? value.threshold : TOKEN_SAVER_DEFAULT };
@@ -142,7 +156,7 @@
       `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
       `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话，只在用户追问细节时用；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
       `   ${cli} read --id captain-history --find "关键词" [--turns 3]   跨全部清空前的队长记录搜索，按需读取简短结果`,
-      `   ${cli} briefing   只读当前版本的队长提示词全文；用户说「你是队长」时先读它，再跑 ledger、读看板里的队长交接`,
+      `   ${cli} briefing   只读当前版本的队长提示词全文；用户说「你是队长」时先跑 ledger 验证身份，再读本命令和看板里的队长交接`,
       `   ${cli} peek --id 会话id [--lines 40]   只读查看终端实时屏幕/最近输出（去颜色，最多1000行）；不发任何输入，也不会恢复已归档的会话。需要检查进度或诊断卡住时才用，比 read 省上下文`,
       `   ${cli} receipts [--wait] [--timeout 秒]  取回还没看过的回执；--wait 阻塞等回执/提问，超时输出空并退出，省略 timeout 就一直等`,
       `   ${cli} answer --to 会话id --key y|n|1|2|3|enter|esc   回答停在确认或权限提示上的会话`,
@@ -556,7 +570,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });

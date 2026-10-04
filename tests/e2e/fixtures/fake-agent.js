@@ -34,6 +34,10 @@ let contextUsed = 23000;
 const codex = process.argv.includes('--codex-reset');
 let resetMenu = false;
 function box() {
+  if (codex) {
+    process.stdout.write(`OpenAI Codex\n\n› Ask Codex to do anything\n\n  ⏎ send   ⌃J newline   ${100 - Math.round(contextUsed / 10000)}% context left\n`);
+    return;
+  }
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
   process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
   const extra = process.env.AGENTDECK_TEST_LONG_STATUS ? ' | Total: 211.5M | Cost: $35.33 | Weekly: 13.0% | LastField: complete' : '';
@@ -45,7 +49,7 @@ function box() {
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
   // Keep a recognizable provider footer after replies, like a real TUI. Narrow
   // ConPTY columns can wrap the longer permission line across several rows.
-  process.stdout.write(codex ? 'OpenAI Codex\n' : 'Claude Code\n');
+  process.stdout.write('Claude Code\n');
 }
 let lines = [];
 let timer = null;
@@ -59,18 +63,19 @@ function answer() {
   if (resetMenu) {
     resetMenu = false;
     process.stdout.write('\x1b[2J\x1b[H');
-    if (first === 'y') { contextUsed = 23000; process.stdout.write('OpenAI Codex (v0.160.0)\n'); }
+    if (first === 'y') { contextUsed = 0; process.stdout.write('OpenAI Codex (v0.160.0)\n'); }
     else process.stdout.write('Cancelled\n');
     box(); return;
   }
   if (/^\/(?:clear|new|reset)(?:\s|$)/.test(first) && process.argv.includes('--manual-reset')) {
     process.stdout.write('\x1b[2J\x1b[H');
+    if (process.argv.includes('--reset-redraw')) { process.stdout.write(codex ? 'OpenAI Codex (v0.160.0)\n' : 'Claude Code v2.1.0\n'); box(); return; }
     if (process.argv.includes('--reset-fail')) { process.stdout.write('Failed to start new session\n'); box(); return; }
     if (first === '/new' && process.argv.includes('--reset-menu')) {
       resetMenu = true; process.stdout.write('Do you trust the contents of this directory? (y/n)\n'); return;
     }
-    contextUsed = 23000;
-    process.stdout.write(codex ? 'OpenAI Codex (v0.160.0)\n' : '⏺ Conversation cleared\n');
+    contextUsed = codex ? 0 : 23000;
+    process.stdout.write(codex ? 'OpenAI Codex (v0.160.0)\n' : process.argv.includes('--no-content-reset') ? '⏺ (no content)\n' : '⏺ Conversation cleared\n');
     box(); return;
   }
   if (first.startsWith('/model ')) model = first.slice(7).trim();

@@ -841,7 +841,7 @@
       const paths = (atts || []).map(host.shellQuote).join(' ');
       const body = paths ? paths + (prompt ? ' ' + prompt : '') : prompt;
       const text = (o.prefix || '') + body + (o.suffix || '');
-      if (!o.silent && window.MainSession) window.MainSession.onContextCommand(col, text);
+      if (!o.silent && window.MainSession) window.MainSession.onContextCommand(col, text, false);
       // display/displayAtts: what the bubble shows when it differs from what is typed
       const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text);
       // bracketed paste keeps multi-line text one prompt; the CR goes separately so
@@ -858,6 +858,7 @@
         await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
         if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
       } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
+      if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
       entry.state = 'working';
       entry.hasWorked = true;
@@ -899,7 +900,7 @@
     const entry = host.terms.get(col.id);
     if (!entry || entry.state === 'input' || C.isPromptAnswer(line)) return;
     if (C.isSecretPrompt(cursorRow(entry.term))) return;
-    if (!uncertain && window.MainSession) window.MainSession.onContextCommand(col, line);
+    if (window.MainSession) window.MainSession.onContextCommand(col, uncertain ? '' : line);
     beginTurn(col, line);
   }
   function cursorRow(term) {
