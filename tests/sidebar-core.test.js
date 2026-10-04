@@ -154,3 +154,8 @@ test('sidebar text size restores defaults for invalid settings and clamps its in
   assert.equal(S.normalizeFontSize(-1), 10);
   assert.equal(S.normalizeFontSize(32), 20);
 });
+
+test('Hermes hub link is the https console address the main process will open', () => {
+  assert.match(S.HERMES_HUB_URL, /^https:\/\/hub\.18-139-28-180\.sslip\.io\/$/);
+  assert.match(S.HERMES_HUB_URL, /^https?:\/\//i); // same guard as main's open-external
+});

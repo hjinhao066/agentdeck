@@ -714,7 +714,9 @@ function buildChrome() {
   settingsBtn.id = 'settingsBtn'; settingsBtn.setAttribute('aria-label', '设置');
   const broadcastBtn = railBtn(ICONS.send, '广播：同一条输入发给所有对话 (Cmd+B)', () => toggleBroadcast());
   broadcastBtn.id = 'broadcastBtn';
-  bottom.append(brand, broadcastBtn, settingsBtn, themeBtn,
+  const hermesBtn = railBtn(ICONS.globe, '打开 Hermes 网页总台（系统浏览器）', () => window.deck.openExternal(SidebarCore.HERMES_HUB_URL));
+  hermesBtn.id = 'hermesHubBtn';
+  bottom.append(brand, broadcastBtn, hermesBtn, settingsBtn, themeBtn,
     railBtn(ICONS.help, '快捷键与使用提示 (Cmd+/)', () => toggleHelp()),
     railBtn(ICONS.reset, '恢复默认布局', () => {
       if (!confirm('恢复默认布局？现有对话的终端会关闭，对话记录会删掉。已归档的不受影响。')) return;

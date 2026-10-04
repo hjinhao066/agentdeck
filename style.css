@@ -250,6 +250,7 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 .nav-brand { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; font-weight: 600; color: var(--text-2); letter-spacing: -0.01em; }
 #navBottom .rail-btn { width: 28px; height: 28px; }
 #navBottom .rail-btn svg { width: 15px; height: 15px; }
+#hermesHubBtn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Drag handle on the sidebar's right edge */
 #navResizer {
