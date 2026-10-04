@@ -66,12 +66,37 @@ const unsubscribe = TaskBoard.onChange(() => refreshFromTaskBoard());
 unsubscribe();
 ```
 
+| 方法 | 参数与默认值 | 返回值 |
+| --- | --- | --- |
+| `list(filter = {})` | 可选 `project`、`status`、`archived`；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
+| `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
+| `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
+| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；清除旧会话绑定，移入 doing 时检查前置 |
+| `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
+| `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
+| `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
+| `onChange(callback)` | 文件变化通知；回调不接收卡片正文 | 同步返回取消订阅函数 |
+
+`add` 忽略输入中的初始状态、会话绑定和 order；需建卡后通过对应接口修改。
+ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题和说明最多各
+2,000,000 个 JavaScript 字符。order 必须为非负有限数，布尔字段不接受字符串。
+卡片没有颜色字段，界面按 project 关联现有项目色板。
+
 读返回数组；修改返回 `{card, notices}`，归档返回 `{cards, notices}`。
 `startCard` 返回 `{card, dispatcher, session_id?}`，重复开始返回 `{ignored:true}`。
 修改接口 reject 时由界面展示错误，重新读卡片后重试；不要先乐观覆盖文件。
-`onChange` 只提示重新读取，不携带正文或路径。首次打开界面先 `list()`，再订阅。
+`onChange` 只提示重新读取，不携带正文或路径，不保证每次写入都有独立通知。
+首次打开界面先订阅，再 `list()`；刷新时串行处理或丢弃旧请求结果，避免较早的
+读取覆盖较新的视图。离开页面取消订阅。启动返回的 card 是调度过程中的快照，
+后续绑定和 delivered 标记以重新 `list()` 为准。
 底层固定桥 `deck.taskBoard(op,input)` 的内部 `bind/event/claim/dispatch/dispatched/dispatcherReceipt/identity`
 留给会话层使用，界面不要直接调用。
+
+常见错误包括过期 updated、非法项目名或字段、找不到卡片、前置未完成、卡片
+已绑定活跃会话、本机写锁占用、共享 JSON 冲突、未创建队长。校验失败不会覆盖
+有问题的文件；写锁占用可稍后重试，过期编辑需重新读取并让用户重做该次编辑，冲突
+需先解决共享文件。不要把失败请求当作派活成功。`startCard` 的 ignored 表示
+本次没有新派活；held 只能由队长明确移回 todo/doing 解挂。
 
 ## 命令
 
@@ -89,6 +114,8 @@ node "$AGENTDECK_BOARD_CLI" task archive --done --project agentdeck
 ```
 
 add 返回 JSON 对象（含 card），list 返回 JSON 数组，move/archive 返回 JSON 对象。
+CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 参数；
+这些操作使用界面接口。task list 不含归档卡，含归档查询使用 `list({archived:true})`。
 不裁剪列表或说明。`--project` 无卡片时仅为会话项目元数据；有 `--task-id` 时必须
 匹配卡片项目，省略则从卡片继承。重复请求不会重新派活，旧会话/旧尝试的回执
 不会改当前卡。`new` 排队时保留关联，真正开会话时再次校验前置和 held 状态。
@@ -146,3 +173,19 @@ important=true、空 detail、需要用户澄清、已有失败的卡片交队�
 不会随软件启动重复迁移。MD 后续出现新格式或任务时，用 task add 建卡。
 代码测试使用临时目录，Electron `--test-user-data` 的任务库在该 profile/tasks，
 不读写用户的正本。
+
+## 验证范围
+
+功能分支运行完整单测及三个相关 Electron spec，串行使用一个 worker：
+
+```sh
+npm test
+npm run test:e2e -- tests/e2e/task-board.spec.js tests/e2e/command-receipts.spec.js tests/e2e/captain.spec.js --workers=1
+npm audit
+```
+
+task-board spec 覆盖依赖解锁、回执原文、两轮验收挂起、异常退出/额度失败、
+旧会话回执、Gemini 单卡权限和排队、外部原子写入、认领去重、设置持久化、
+同步冲突后流转重试。其 Gemini 可执行文件替换为 stand-in；它验证调度入口与
+权限，不代表已实测真实 Gemini 模型或两台机器同时同步。全量 E2E 留给合并
+main 时运行；本分支验证不包含打包运行、安装或物理 Windows 设备。
