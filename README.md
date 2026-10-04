@@ -45,6 +45,12 @@ the middle:
   Scroll up in a terminal or conversation to pause following output. New output
   preserves your reading position and shows 有新内容 ↓ at the bottom; click it
   or scroll to the bottom to resume following.
+- **Session status dots** read each terminal’s entire current screen every 1.5 s,
+  including unfocused and backstage sessions. Codex Working, Claude thinking/interrupt,
+  Gemini/agy timed cancel spinners and Cursor busy indicators keep the dot yellow
+  even during silent background tools. Wrapped rows are joined; old scrollback
+  and replayed output do not keep a finished session yellow. Once the busy
+  indicator disappears, the existing two-tick debounce permits green.
 - **Subscription quota**: compact provider icons in the top bar show remaining
   percentages (the lowest known window), or 正常 / 已用尽 / 未知. Hover or focus for
   each window, reset time, model, masked account, source, confidence and sample time.
@@ -393,7 +399,8 @@ new terminal, so an agent launching the app cannot disable independent CLI histo
 
 Only the Captain alerts the user: when a reply finishes and stays quiet for 12
 seconds, or when its terminal stops at a confirmation/input prompt. Completion
-is still a screen/quiet-output heuristic; a silent tool can look idle. Workers
+is still a screen/quiet-output heuristic when no recognized busy indicator is
+present; a live busy indicator keeps the turn open even without new output. Workers
 never create notifications, popups, sounds or Dock badges, including while peeked
 or moved to the foreground. Worker questions and receipts go to the Captain.
 
