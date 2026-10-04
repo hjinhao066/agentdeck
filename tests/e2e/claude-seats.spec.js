@@ -28,17 +28,13 @@ async function launch() {
   const saved = JSON.parse(fs.readFileSync(path.join(profile, 'config.json')));
   const captainId = saved.mainSession.colId;
   const promptCount = promptsFor(captainId).length;
-  const env = { ...process.env, AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'), AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'prompt-columns.jsonl'), AGENTDECK_TEST_RAW_INPUT_FILE: path.join(profile, 'raw-input.jsonl'), AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
+  const env = { ...process.env, AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'), AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'prompt-columns.jsonl'), AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  await application.evaluate(({ ipcMain }, file) => {
-    const fs = process.getBuiltinModule('fs');
-    ipcMain.on('pty:input', (_event, input) => fs.appendFileSync(file, JSON.stringify(input) + '\n'));
-  }, path.join(profile, 'pty-input.jsonl'));
   const count = saved.columns.length;
   await expect(page.locator('.column.chat-mode')).toHaveCount(count);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code|Codex CLI/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(count);
@@ -76,8 +72,7 @@ test.beforeEach(async ({}, testInfo) => {
       turns: ChatUI.turnsOf(id),
     })));
     await testInfo.attach('seat-launch-state', { body: JSON.stringify({ state,
-      prompts: capture('prompt-columns.jsonl'), raw: capture('raw-input.jsonl'),
-      ptyInput: capture('pty-input.jsonl') }, null, 2), contentType: 'application/json' });
+      prompts: capture('prompt-columns.jsonl') }, null, 2), contentType: 'application/json' });
     throw error;
   }
 });
