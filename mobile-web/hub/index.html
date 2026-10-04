@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <title>AgentDeck 总台</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="core.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app">
+    <header class="app-header">
+      <button id="back" class="icon-button" type="button" title="返回会话列表" aria-label="返回会话列表" hidden></button>
+      <div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong id="brand-title">AgentDeck</strong><span id="brand-caption" class="brand-caption">总台</span></div>
+      <div class="header-actions">
+        <button id="refresh" class="icon-button" type="button" title="刷新全部电脑" aria-label="刷新全部电脑"></button>
+        <button id="theme" class="icon-button" type="button" title="切换主题" aria-label="切换主题"></button>
+        <button id="logout-all" class="icon-button" type="button" title="全部退出：在这部手机上退出所有已登录的电脑" aria-label="全部退出：在这部手机上退出所有已登录的电脑"></button>
+      </div>
+    </header>
+    <div id="machine-bar" class="machine-bar" role="group" aria-label="选择电脑"></div>
+    <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <main id="main">
+      <section id="overview-view" class="view" aria-label="总览">
+        <div id="machine-cards" class="stack"></div>
+      </section>
+      <section id="captain-view" class="view captain-view" aria-label="队长对话" hidden>
+        <div class="captain-head"><h1 id="captain-title"></h1><span id="captain-status"></span></div>
+        <div id="captain-turns" class="turns" role="region" aria-label="队长对话记录" tabindex="0"></div>
+        <form id="message-form" class="composer">
+          <div class="target-row"><span id="target-label" class="target-label">发给</span><div id="target" class="segmented" role="group" aria-labelledby="target-label"></div></div>
+          <label class="sr-only" for="message">给队长的消息</label>
+          <div class="composer-box">
+            <textarea id="message" name="message" rows="2" maxlength="8000" aria-describedby="send-hint"></textarea>
+            <div class="composer-actions">
+              <button id="clear" class="icon-button" type="button" title="清空草稿" aria-label="清空草稿" disabled></button>
+              <button id="send" class="icon-button send-button" type="submit" aria-describedby="send-hint" disabled></button>
+            </div>
+          </div>
+          <p id="send-hint" class="send-hint" role="status" aria-live="polite"></p>
+        </form>
+      </section>
+      <section id="sessions-view" class="view" aria-label="会话列表" hidden>
+        <div id="session-groups" class="stack"></div>
+      </section>
+      <section id="board-view" class="view" aria-label="任务看板" hidden>
+        <p id="board-sources" class="board-sources"></p>
+        <div id="board-filters" class="chips" role="group" aria-label="按状态筛选"></div>
+        <div id="projects" class="stack"></div>
+        <p class="board-foot">两台电脑通过 git 每 30 分钟同步一次看板，这里最多有约 30 分钟延迟。看板只读。</p>
+      </section>
+      <section id="output-view" class="view" aria-label="队员输出" hidden>
+        <div class="output-toolbar"><div class="output-names"><p id="output-machine" class="eyebrow"></p><h1 id="output-title"></h1></div><button id="copy" class="icon-button" type="button" title="复制输出" aria-label="复制输出"></button></div>
+        <pre id="output-text" class="output" tabindex="0"></pre>
+      </section>
+    </main>
+    <nav class="navigation" aria-label="主导航">
+      <button type="button" data-view="overview" aria-current="page"><span class="nav-icon" aria-hidden="true"></span><span>总览</span></button>
+      <button type="button" data-view="captain"><span class="nav-icon" aria-hidden="true"></span><span>队长</span></button>
+      <button type="button" data-view="sessions"><span class="nav-icon" aria-hidden="true"></span><span>会话</span></button>
+      <button type="button" data-view="board"><span class="nav-icon" aria-hidden="true"></span><span>看板</span></button>
+    </nav>
+  </div>
+</body>
+</html>
