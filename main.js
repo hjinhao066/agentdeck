@@ -33,7 +33,7 @@ if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 // Test profiles must never write the user's shared board.
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined);
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatcherReceipt', 'identity', 'reopenCheckpoint'].includes(payload.op)) throw new Error('Invalid task board operation.');
   return taskStore[payload.op](payload.input || {});
 });
 
@@ -1131,7 +1131,27 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); });
 });
 
-app.on('before-quit', () => {
+// Ask the page to mark in-flight crew as paused before the PTYs are killed.
+// A crash skips this; the next launch still resumes whatever was left open.
+let parkStage = 'idle';
+let finishPark = null;
+onMain('park-for-restart-done', () => { const done = finishPark; finishPark = null; if (done) done(); });
+app.on('before-quit', (event) => {
+  if (parkStage === 'parking') { event.preventDefault(); return; }
+  if (parkStage !== 'done') {
+    event.preventDefault();
+    parkStage = 'parking';
+    const finish = () => {
+      if (parkStage === 'done') return;
+      parkStage = 'done';
+      finishPark = null;
+      app.quit();
+    };
+    finishPark = finish;
+    setTimeout(finish, 1500);
+    send('park-for-restart');
+    return;
+  }
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
   if (notifications) notifications.dispose();

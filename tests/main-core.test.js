@@ -289,7 +289,7 @@ test('a finished background session is archived only after 10 quiet minutes with
   assert.equal(M.archivable(s, 'a', now - 9 * min, now), false, 'something happened in it since');
   assert.equal(M.archivable({ ...s, pending: [{ colId: 'a' }] }, 'a', 0, now), false, '队长 has not seen the receipt');
   assert.equal(M.archivable({ ...s, inflight: [{ colId: 'a' }] }, 'a', 0, now), false);
-  for (const status of ['queued', 'working', 'input', 'asking']) {
+  for (const status of ['queued', 'working', 'paused', 'input', 'asking']) {
     assert.equal(M.archivable({ ...s, tasks: [...s.tasks, { colId: 'a', status, sentAt: 0 }] }, 'a', 0, now), false, status);
   }
   assert.equal(M.archivable(s, 'nobody', 0, now), false, 'never one 队长 gave no work');

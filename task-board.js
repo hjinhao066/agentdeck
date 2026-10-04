@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 
+const { isSafetyCheckpoint } = require('./restart-resume');
 const STATUSES = ['todo', 'doing', 'review', 'needs_user', 'done'];
 function projectName(value) {
   if (typeof value !== 'string' || !value.trim() || value !== value.trim() || value.length > 120 || /[<>:"/\\|?*\x00-\x1f]/.test(value) || /[. ]$/.test(value) || /^(?:\.|\.\.|con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value)) throw new Error('Invalid project name (must be a portable filename).');
@@ -175,8 +176,14 @@ class TaskStore {
       card.status = input.status;
       if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
       if (input.status === 'done') card.consecutive_failures = 0;
-      card.session_id = null; card.attempt_id = null; card.dispatch_session_id = null; card.archived = false;
-      if (input.status !== 'doing') card.dispatch_claim = null;
+      // A safe-stop receipt used to mark the card done. Moving it back to
+      // doing cleared the worker that is still on the job, and the heartbeat
+      // then opened a new dispatcher. Keep that binding.
+      const keepBound = input.status === 'doing' && !wasReview && card.session_id && isSafetyCheckpoint(card.latest_receipt);
+      if (keepBound) card.attempt_closed = false;
+      else { card.session_id = null; card.attempt_id = null; card.dispatch_session_id = null; }
+      card.archived = false;
+      if (input.status !== 'doing' || !keepBound) card.dispatch_claim = null;
       touch(card);
       return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
     });
@@ -236,10 +243,18 @@ class TaskStore {
       if (input.type === 'fallback') { card.status = 'needs_user'; card.latest_receipt = '已结束，未提交回执'; }
       if (input.type === 'complete') {
         card.latest_receipt = sentence(text(input.message, 'result', true));
-        card.status = card.review_session || !card.verify ? 'done' : 'review';
-        card.flag = null; card.attempt_closed = true;
-        // Passing execution is not a passed verification; retain review failures.
-        if (card.status === 'done') card.consecutive_failures = 0;
+        // "Stopped at a safe point" is a pause, not a result. Closing the card
+        // makes the next tell fail with "Card is archived, held or done".
+        if (!card.review_session && isSafetyCheckpoint(input.message)) {
+          card.status = 'doing';
+          card.flag = null;
+          card.attempt_closed = false;
+        } else {
+          card.status = card.review_session || !card.verify ? 'done' : 'review';
+          card.flag = null; card.attempt_closed = true;
+          // Passing execution is not a passed verification; retain review failures.
+          if (card.status === 'done') card.consecutive_failures = 0;
+        }
       }
       if (input.type === 'failed') {
         const reason = text(input.message, 'failure', true);
@@ -294,6 +309,19 @@ class TaskStore {
         if (!input.question) notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
       }
       card.dispatch_session_id = null; touch(card); return { card, notices };
+    });
+  }
+  reopenCheckpoint(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (card.review_session || !card.session_id || !isSafetyCheckpoint(card.latest_receipt)) return { card, ignored: true, notices: [] };
+      if (card.status === 'doing' && card.attempt_closed === false) return { card, ignored: true, notices: [] };
+      card.status = 'doing';
+      card.flag = null;
+      card.attempt_closed = false;
+      card.archived = false;
+      touch(card);
+      return { card, notices: [] };
     });
   }
   identity(input) {

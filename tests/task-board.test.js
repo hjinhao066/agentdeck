@@ -188,6 +188,37 @@ test('dispatcher question/crash update the card; a delegated worker is never cha
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-3', failed: 'old dispatcher quit' }).ignored, true);
   assert.equal(store.list()[0].session_id, 'worker');
 });
+test('a safe-stop complete stays in progress so resume is not rejected and no second dispatcher starts', (t) => {
+  const { store, add, bind, event, root } = fixture(t);
+  const card = add(); bind(card.id);
+  const paused = event(card.id, 'complete', '已停在安全点并推送，等待续派');
+  assert.equal(paused.card.status, 'doing');
+  assert.equal(paused.card.attempt_closed, false);
+  assert.equal(paused.card.session_id, 'worker');
+  assert.throws(() => bind(card.id, 'a2'), /active execution/);
+  assert.equal(event(card.id, 'complete', '功能已做完并推送').card.status, 'done');
+  const file = path.join(root, 'tasks', '测试项目.json');
+  const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const stuck = doc.cards[0];
+  stuck.status = 'done'; stuck.attempt_closed = true; stuck.session_id = 'worker'; stuck.attempt_id = 'a1';
+  stuck.latest_receipt = '已停在安全点并推送，等待续派';
+  fs.writeFileSync(file, JSON.stringify(doc));
+  const reopened = store.reopenCheckpoint({ id: card.id });
+  assert.equal(reopened.card.status, 'doing');
+  assert.equal(reopened.card.session_id, 'worker');
+  assert.equal(reopened.card.attempt_closed, false);
+  const starts = [];
+  const heartbeat = new TaskHeartbeat(store, { onStart: (input) => starts.push(input) });
+  heartbeat.scan();
+  assert.equal(store.move({ id: card.id, status: 'doing' }).card.session_id, 'worker');
+  heartbeat.scan();
+  assert.equal(starts.length, 0);
+  const finished = add(); bind(finished.id, 'fin');
+  event(finished.id, 'complete', '功能已做完并推送', 'fin');
+  assert.equal(store.move({ id: finished.id, status: 'doing' }).card.session_id, null);
+  heartbeat.scan();
+  assert.equal(starts.length, 1);
+});
 test('migration reads only the three requested Markdown sources, preserves originals and skips existing JSON', (t) => {
   const { root } = fixture(t);
   const sources = {

@@ -67,7 +67,7 @@
     const chars = Array.from(summary), files = receipt.files || [];
     return { summary: chars.slice(0, 300).join(''), files: files.slice(0, 5), more: chars.length > 300 || files.length > 5 };
   }
-  const STATUS = { plain: '未开始', working: '干活中', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
+  const STATUS = { plain: '未开始', working: '干活中', quota: '额度用尽/等待', input: '等你回复', paused: '停在安全点', done: '已完成', exited: '已退出' };
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
   const oneLine = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max);
@@ -325,7 +325,7 @@
 
   // Background sessions with work still out: the latest card for the column
   // is not finished (a question waits on 队长 too). Each holds a slot.
-  const OPEN = ['queued', 'working', 'quota', 'input', 'asking'];
+  const OPEN = ['queued', 'working', 'paused', 'quota', 'input', 'asking'];
   function latestTasks(tasks) {
     const latest = new Map();
     (Array.isArray(tasks) ? tasks : []).forEach((t) => { if (t && t.colId) latest.set(t.colId, t); });

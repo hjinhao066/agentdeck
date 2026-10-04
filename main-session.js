@@ -163,7 +163,11 @@
     s.fresh = !!s.fresh;
     s.legacyReceiptInjection = s.legacyReceiptInjection === true;
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
-    s.tasks.forEach((t) => { delete t.boardRetrying; });
+    s.tasks.forEach((t) => {
+      delete t.boardRetrying;
+      // The new process is not up yet. Don't record the previous quit as a failure.
+      if (window.RestartResume && window.RestartResume.holdsAcrossRestart(t)) t.restartHold = true;
+    });
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
     // the column was closed while the app was down
     if (!host.columns().some((c) => c.id === s.colId && c.isMain)) host.config.mainSession = null;
@@ -573,7 +577,7 @@
   function supersede(task) {
     const s = state();
     s.tasks.forEach((t) => {
-      if (t === task || t.colId !== task.colId || !['working', 'quota', 'input', 'asking'].includes(t.status)) return;
+      if (t === task || t.colId !== task.colId || !['working', 'paused', 'quota', 'input', 'asking'].includes(t.status)) return;
       t.receipt = { summary: '后来又给这个会话发了新指令，结果看后面的卡片。', files: [], images: [], failed: '', explicit: true };
       t.status = 'done';
       t.doneAt = Date.now();
@@ -781,6 +785,21 @@
       return response;
     }
     const receipt = M.commandReceipt(message);
+    if (message.action === 'complete' && !receipt.failed && window.RestartResume.isSafetyCheckpoint(receipt.summary)) {
+      receipt.checkpoint = true;
+      task.progress = receipt.summary;
+      if (caller) caller.progress = receipt.summary;
+      task.endedAt = 0;
+      task.doneAt = 0;
+      task.status = 'paused';
+      task.restartHold = true;
+      task.receipt = receipt;
+      if (caller && !receipt.question) caller.lastReceipt = { ...receipt, ts: Date.now() };
+      await recordReceiptForBoard(task, receipt);
+      push(task, { summary: receipt.summary, files: receipt.files, failed: '', source: 'checkpoint' });
+      update(task);
+      return response;
+    }
     await recordReceiptForBoard(task, receipt);
     // A real submission may follow a question or the no-receipt notice. Replace
     // an unread automatic notice so the Captain sees the authoritative result.
@@ -791,6 +810,94 @@
     }
     settle(task, receipt, true);
     return response;
+  }
+
+  // Cold start vs hot reload. pendingResume holds columns whose new process
+  // is coming up; a tick must not call that "the terminal exited".
+  const pendingResume = new Set();
+  const resumedCols = new Set();
+  let resumeTimer = null;
+  let resumeDeadline = 0;
+  function latestTask(colId) {
+    const s = state();
+    let found = null;
+    if (s) for (const t of s.tasks) if (t.colId === colId) found = t;
+    return found;
+  }
+  function notePtySurvived(col) {
+    if (!col) return;
+    pendingResume.delete(col.id);
+    const task = latestTask(col.id);
+    if (task) delete task.restartHold;
+  }
+  function noteColdColumn(col) {
+    const R = window.RestartResume;
+    if (!col || !R) return;
+    if (col.isMain || !col.captainCrew || !col.cmd) {
+      const unrelated = latestTask(col.id);
+      if (unrelated) delete unrelated.restartHold;
+      return;
+    }
+    const task = latestTask(col.id);
+    if (!task) return;
+    if (R.isCheckpointClosure(task)) {
+      task.status = 'paused';
+      task.doneAt = 0;
+      task.endedAt = 0;
+      task.restartHold = true;
+      const boardId = task.boardId || col.boardId;
+      if (boardId) window.deck.taskBoard('reopenCheckpoint', { id: boardId }).catch(() => {});
+    }
+    if (!R.shouldResume(task)) return;
+    task.restartHold = true;
+    if (!resumeDeadline) resumeDeadline = Date.now() + 30000;
+    pendingResume.add(col.id);
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(flushResume, 600);
+  }
+  function flushResume() {
+    const s = state();
+    if (!s) return;
+    let waiting = false;
+    for (const id of [...pendingResume]) {
+      if (resumedCols.has(id)) { pendingResume.delete(id); continue; }
+      const col = host.columns().find((c) => c.id === id && c.captainCrew && !c.isMain && c.cmd);
+      const current = latestTask(id);
+      const entry = host.terms.get(id);
+      if (!col || !current || !window.RestartResume.shouldResume(current)) { pendingResume.delete(id); continue; }
+      if (!col.boardId && current.boardId) { col.boardId = current.boardId; col.boardAttempt = current.boardAttempt || ''; }
+      if (!entry || !entry.alive) {
+        if (resumeDeadline && Date.now() > resumeDeadline) { pendingResume.delete(id); delete current.restartHold; }
+        else waiting = true;
+        continue;
+      }
+      pendingResume.delete(id);
+      resumedCols.add(id);
+      dispatch(col, window.RestartResume.resumeMessage(current.title || host.columnLabel(col)), '重启后续上');
+    }
+    if (waiting) resumeTimer = setTimeout(flushResume, 400);
+    save();
+  }
+  function parkForRestart() {
+    const s = state();
+    const R = window.RestartResume;
+    if (!s || !R) return;
+    for (const plan of R.planPark(host.columns(), s.tasks)) {
+      const task = latestTask(plan.id);
+      const col = host.columns().find((c) => c.id === plan.id);
+      if (!task || !col) continue;
+      task.status = 'paused';
+      task.restartHold = true;
+      task.doneAt = 0;
+      task.endedAt = 0;
+      task.receipt = { summary: '重启前停在安全点，重启后会自动续上', files: [], images: [], failed: '', explicit: true, checkpoint: true, source: 'restart' };
+      col.lastReceipt = { ...task.receipt, ts: Date.now() };
+      const entry = host.terms.get(col.id);
+      if (entry && entry.alive && !entry.sendingPrompt && entry.state !== 'working' && entry.state !== 'quota' && entry.state !== 'input') {
+        try { host.sendWhenReady(col, plan.message, { silent: true, guardUserInput: true, timeout: 800, onGiveUp: () => {} }); } catch (_) {}
+      }
+    }
+    save();
   }
 
   // ---- heartbeat: called for every column on the 1.5s status loop ----
@@ -806,7 +913,13 @@
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
       if (task.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(task.status)) continue;
-      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process' }); continue; }
+      if (task.restartHold && entry.alive && !pendingResume.has(id)) delete task.restartHold;
+      if (!entry.alive) {
+        if (task.restartHold) continue;
+        if (task.status === 'asking') task.status = 'working';
+        settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process' });
+        continue;
+      }
       const activity = M.terminalActivity(entry.lastScreen);
       if (entry.state === 'quota' || activity === 'quota') {
         // Follow-ups queued after the failure still wait for the provider to
@@ -905,7 +1018,8 @@
     return host.columns().filter((c) => !c.isMain).map((c) => {
       const entry = host.terms.get(c.id);
       return {
-        id: c.id, title: host.columnLabel(c), state: entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain',
+        id: c.id, title: host.columnLabel(c),
+        state: window.RestartResume.ledgerState(entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain', !!(entry && entry.alive), latestTask(c.id)),
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };
@@ -1054,7 +1168,9 @@
         if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         if (col.boardId) {
           const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === col.boardId);
-          if (card && (card.attempt_closed || !card.session_id)) {
+          if (card && card.session_id && window.RestartResume.isSafetyCheckpoint(card.latest_receipt) && (card.status === 'done' || card.attempt_closed)) {
+            await boardRequest('reopenCheckpoint', { id: card.id });
+          } else if (card && (card.attempt_closed || !card.session_id)) {
             await boardRequest('bind', { id: card.id, project: card.project, session_id: col.id, attempt_id: message.id,
               assignee: { agent: window.BoardCore.inferAgentType(col.cmd), model: col.cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
             col.boardAttempt = message.id;
@@ -1133,6 +1249,7 @@
 
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
+    noteColdColumn, notePtySurvived, parkForRestart,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),

@@ -58,6 +58,7 @@
       "pages.js",
       "main-core.js",
       "main-session.js",
+      "restart-resume.js",
       "task-board.js",
       "task-heartbeat.js",
       "claude-seats-core.js",

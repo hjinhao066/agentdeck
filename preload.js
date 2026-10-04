@@ -89,6 +89,8 @@ contextBridge.exposeInMainWorld('deck', {
   // Fixed shared task store; no caller-selected paths or arbitrary IPC.
   taskBoard: (op, input) => ipcRenderer.invoke('task-board:request', { op, input }),
   onTaskStart: (cb) => ipcRenderer.on('task-board:start', (_e, m) => cb(m)),
+  onParkForRestart: (cb) => ipcRenderer.on('park-for-restart', () => cb()),
+  parkForRestartDone: () => ipcRenderer.send('park-for-restart-done'),
   onTasksChanged: (cb) => {
     const listener = () => cb();
     ipcRenderer.on('task-board:changed', listener);

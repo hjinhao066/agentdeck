@@ -71,7 +71,7 @@ unsubscribe();
 | `list(filter = {})` | 可选 `project`、`status`、`archived`；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
 | `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
 | `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
-| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；清除旧会话绑定，移入 doing 时检查前置 |
+| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；通常清除旧会话绑定。停在安全点被标成完成后移回 doing 时保留原会话，避免再开一个调度会话。移入 doing 时检查前置 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
 | `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
@@ -148,7 +148,7 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 | 事件 | 结果 |
 | --- | --- |
 | 指令真正送到执行会话 | doing；排队不会假装已开工 |
-| 执行 complete | verify=true → review，否则 done；记录第一句结果 |
+| 执行 complete | verify=true → review，否则 done；记录第一句结果。内容是停在安全点（还没做完，只是等重启后续）时保持原状态，不关闭这次尝试，会话绑定保留，tell 续派不会被拒绝 |
 | ask | needs_user；写第一句问题，完整问题仍给队长 |
 | complete --failed / 崩溃 / 额度用尽 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
 | 所有前置 done | 后续 todo 的 blocked 自动清除，可开始（不会偷偷启动） |

@@ -1859,6 +1859,7 @@ function buildColumn(col, isFresh) {
     const reconnect = async () => {
       const alive = await window.deck.ptyIsAlive(col.id);
       if (alive) {
+        MainSession.notePtySurvived(col);
         // Hot-reload path: pty survived, replay its buffered output and resize.
         const replay = await window.deck.ptyReplay(col.id);
         if (replay) {
@@ -1873,6 +1874,8 @@ function buildColumn(col, isFresh) {
         // Fresh spawn. If the previous app run left a saved session for this
         // column, replay it first so the agent's history survives a restart.
         const saved = await window.deck.ptySaved(col.id);
+        col.coldSpawned = true;
+        MainSession.noteColdColumn(col);
 
         const plan = window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
         const { launch, resumedAgent, showLegacyWarning } = plan;
@@ -3269,6 +3272,12 @@ const deckHost = {
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
 MainSession.init(deckHost);
+if (window.deck.onParkForRestart) {
+  window.deck.onParkForRestart(() => {
+    try { MainSession.parkForRestart(); } catch (_) {}
+    try { window.deck.parkForRestartDone(); } catch (_) {}
+  });
+}
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
@@ -3503,7 +3512,7 @@ setInterval(() => {
     // below the separator is live, so classification must not
     // see the replayed part. Once real output scrolls the separator out of the
     // 40-line window this is a no-op.
-    const sep = text.lastIndexOf('以上为上次会话的输出');
+    const sep = Math.max(text.lastIndexOf('以上为上次会话的输出'), text.lastIndexOf('上次输出回放'));
     if (sep >= 0) {
       const nl = text.indexOf('\n', sep);
       text = nl >= 0 ? text.slice(nl + 1) : '';
