@@ -36,7 +36,8 @@ Windows 可用 `$env:CLAUDE_CONFIG_DIR="$env:USERPROFILE\.claude-us"; claude aut
 遇到已有不同内容拒绝覆盖。未来新增共享文件后可重跑脚本。
 
 `.claude.json` 含 `oauthAccount`，必须独立；首次只复制其中的 projects（信任与
-项目级配置）和本地 mcpServers。之后这些全局 MCP 定义变更需人工同步这两个字段，
+项目级配置）、本地 mcpServers 和已完成的 UI 引导标记；不复制权限绕过确认。
+旧 US 配置已登录却缺少引导标记时，重跑准备脚本只补缺失标记，保留该账号及其他配置。之后这些全局 MCP 定义变更需人工同步这两个字段，
 不能链接整个 `.claude.json`。云连接器和 MCP 的 OAuth 每账号各授权一次。
 凭据文件、用量缓存、运行时缓存、进程锁不共享。
 

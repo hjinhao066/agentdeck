@@ -50,6 +50,22 @@ test('setup refuses conflicts without replacing files or existing login', (t) =>
   assert.equal(fs.readFileSync(path.join(us, 'projects'), 'utf8'), 'keep');
   assert.ok(!fs.existsSync(path.join(us, '.claude.json')));
 });
+test('setup carries onboarding for an authenticated US profile without copying CN identity or permissions', (t) => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, lastOnboardingVersion: '2.1.288', oauthAccount: { emailAddress: 'cn@example.test' }, bypassPermissionsModeAccepted: true }));
+  const { us } = setup(home), file = path.join(us, '.claude.json');
+  const initial = JSON.parse(fs.readFileSync(file));
+  assert.equal(initial.hasCompletedOnboarding, true);
+  assert.equal(initial.oauthAccount, undefined);
+  assert.equal(initial.bypassPermissionsModeAccepted, undefined);
+  const loggedIn = { oauthAccount: { emailAddress: 'us@example.test' }, keep: 'local' };
+  fs.writeFileSync(file, JSON.stringify(loggedIn));
+  setup(home);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file)), { ...loggedIn, hasCompletedOnboarding: true, lastOnboardingVersion: '2.1.288' });
+  fs.writeFileSync(file, JSON.stringify({ ...loggedIn, hasCompletedOnboarding: false }));
+  setup(home);
+  assert.equal(JSON.parse(fs.readFileSync(file)).hasCompletedOnboarding, false);
+});
 test('default cn leaves config env unset, us uses its own service and removes overrides', (t) => {
   const home = fixture(t), [cn, us] = S.normalize();
   const before = { CLAUDE_CONFIG_DIR: '/elsewhere', CLAUDE_SECURESTORAGE_CONFIG_DIR: '/other', CLAUDE_CODE_OAUTH_TOKEN: 'test-override', ANTHROPIC_API_KEY: 'test-override', ANTHROPIC_AUTH_TOKEN: 'test-override', AGENTDECK_COL_ID: 'col', PATH: '/bin' };

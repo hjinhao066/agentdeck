@@ -16,7 +16,7 @@ function setup(home = os.homedir()) {
     try { if (fs.lstatSync(path.join(us, name)).isSymbolicLink()) throw new Error('US登录文件不能是符号链接'); }
     catch (e) { if (e.code !== 'ENOENT') throw e; }
   }
-  // Check everything before changing anything. Existing login files stay intact.
+  // Check everything before changing anything. Credential files and existing account fields stay intact.
   for (const name of SHARED) {
     const target = path.join(us, name), source = path.join(cn, name);
     if (!fs.existsSync(source)) continue;
@@ -36,14 +36,24 @@ function setup(home = os.homedir()) {
     }
   }
   // .claude.json includes oauthAccount: linking/copying it whole breaks isolation.
-  // Seed only project trust and local MCP definitions, without account metadata.
+  // Seed project trust, local MCP definitions and UI onboarding, without account metadata.
   const global = path.join(us, '.claude.json');
+  let original = {};
+  try { original = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')); } catch (_) {}
   if (!fs.existsSync(global)) {
-    let original = {};
-    try { original = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')); } catch (_) {}
     const seed = {};
-    for (const key of ['projects', 'mcpServers']) if (original[key]) seed[key] = original[key];
+    for (const key of ['projects', 'mcpServers', 'hasCompletedOnboarding', 'lastOnboardingVersion']) if (original[key]) seed[key] = original[key];
     fs.writeFileSync(global, JSON.stringify(seed, null, 2), { mode: 0o600, flag: 'wx' });
+  } else {
+    // auth status can succeed while a previously seeded profile still enters
+    // the first-run login chooser. Carry only missing UI onboarding markers.
+    const existing = JSON.parse(fs.readFileSync(global, 'utf8'));
+    if (existing.oauthAccount && existing.hasCompletedOnboarding === undefined && original.hasCompletedOnboarding === true) {
+      existing.hasCompletedOnboarding = true;
+      if (typeof original.lastOnboardingVersion === 'string') existing.lastOnboardingVersion = original.lastOnboardingVersion;
+      fs.writeFileSync(global + '.tmp', JSON.stringify(existing, null, 2), { mode: 0o600 });
+      fs.renameSync(global + '.tmp', global);
+    }
   }
   return { cn, us, shared: SHARED.filter((name) => fs.existsSync(path.join(cn, name))) };
 }
