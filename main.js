@@ -223,6 +223,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId) {
       terminalEnv = seatEnvironment(terminalEnv, seat, tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME);
     } catch (_) {
       managedSessions.delete(id);
+      receiptSessions.delete(id);
       send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
       send('pty:exit', { id });
       return;

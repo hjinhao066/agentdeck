@@ -1,6 +1,6 @@
 # Claude 席位与Relay
 
-设置（侧边栏底部齿轮）中的席位列表是名称和目录的唯一配置源。CN/US/Relay 是统一配置的名称，之后仍可在同一处修改；历史会话按稳定 id 记席位，不按名称记。
+设置（侧边栏底部齿轮 → Claude 席位与 Relay → 席位设置）中的席位列表是名称和目录的唯一配置源。CN/US/Relay 是统一配置的名称，之后仍可在同一处修改；历史会话按稳定 id 记席位，不按名称记。
 
 ```json
 {
@@ -15,7 +15,7 @@
 ```
 
 CN是中国 Google 邮箱的 Claude 订阅，US是美国 Google 邮箱的订阅。
-只在本机读取账号元数据，界面只接收打码邮箱，不接收凭据。本机已只读核对，现有登录是 CN，US 尚待首次登录。
+只在本机读取账号元数据，界面只接收打码邮箱，不接收凭据。本机已用真实 CLI 只读核对，CN 和 US 都已登录 Pro；账号元数据和凭据位置独立。
 没有配置时按上述默认值迁移；每列的 `claudeSeatId` 持久保存。
 
 ## 首次准备（macOS）
@@ -73,11 +73,11 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 包含会话 id、任务状态和短回执，并指向私有 userData/chats 下完整对话。
 回到应用时仍携带最近一次Relay的看板路径。
 
-`feat/captain-token-saver` 尚未合入此分支，保留接口：
-`MainSession.checkpointForSeatSwitch(snapshot): Promise<absoluteBoardPath>`。
-有该接口时复用其已确认的看板存档；没有时使用 `seats:checkpoint` 的本地
-持久存档。额度已经用尽时，不能要求旧账号再生成一次存档回复。合并 token-saver
-时应让自动清上下文与 `pauseForSeatSwitch(true)` 共用互斥状态。
+已接入 1.0.0 的 token-saver：`MainSession.checkpointForSeatSwitch(snapshot)`
+与自动省上下文共用互斥状态。空闲 Claude 队长复用 `ARCHIVE_PROMPT`，只接受
+完整、未中断且严格为「已存档」的回复；Relay 不发送 `/clear`。失败、取消或
+五分钟超时都保留原队长。忙碌、额度耗尽、已退出或 Codex 队长直接使用本地
+持久存档；每条路径都先保存完整对话和本地接续看板，再允许重开 PTY。
 
 ## 与 feat/quota-bar 的数据约定
 
@@ -105,11 +105,11 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存不能
 `deck.claudeSeatUsage(seatId)` 返回经过白名单过滤的用量。
 `deck.claudeSeats()` 返回配置目录、打码邮箱、登录凭据存在状态及 usagePath，
 不返回账号原始邮箱或凭据。`claude-seat-changed` 事件的 detail 是 `{seatId}`，
-供顶栏立即刷新。此分支不实现 quota-bar 的顶栏或主动用量查询。
+供顶栏立即刷新。1.0.0 的 quota-bar 已合入，同一配置的 CN/US 各显示独立顶栏项目；无真实数据时显示未知。Relay 不主动发送用量查询。
 
 ## 验证边界
 
 测试使用独立 userData、假 agent 和独立席位目录，不运行真实 AI 模型，也不读取
-真实登录凭据。真实双账号登录及额度须在用户完成US首次登录后验收。不得用
-自动测试代替用户登录。源码 E2E 不重启现役应用；本任务禁止打包/安装，因此
+真实登录凭据。用户已完成 US 首次登录；真实双账号切换另用显式授权的独立原生 CLI smoke 验收，
+与模拟账号 E2E 的结果分别记录。不得用自动测试代替用户登录。源码 E2E 不重启现役应用；本任务禁止打包/安装，因此
 没有打包版或 Windows 实机验收。

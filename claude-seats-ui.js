@@ -184,7 +184,10 @@
   }
   function init(h) {
     host = h;
-    document.getElementById('navBottom').append(button(GEAR, '设置 · 席位', openSettings));
+    document.getElementById('claudeSeatsSettings').innerHTML = GEAR;
+    document.getElementById('claudeSeatsSettings').addEventListener('click', () => {
+      document.getElementById('notificationSettings').close(); openSettings();
+    });
     refresh().catch(() => {});
     setInterval(() => refresh().catch(() => {}), 30_000);
   }

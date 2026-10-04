@@ -158,9 +158,36 @@
     banner.querySelector('span').textContent = text;
   }
   function cancelTokenSaving() {
+    if (tokenSaving?.relay) {
+      clearTimeout(tokenSaving.timer);
+      tokenSaving.reject(new Error('Relay存档已取消'));
+    }
     tokenSaving = null;
     tokenSaverPaused = true;
     saverBanner('');
+  }
+
+  async function checkpointForSeatSwitch(snapshot) {
+    cancelTokenSaving();
+    const col = mainCol(), entry = host.terms.get(col?.id);
+    const idle = entry?.alive && entry.state === 'done' && !briefing && !delivering &&
+      !entry.sendingPrompt && !entry.injecting && !host.userComposing(col.id) &&
+      !M.terminalActivity(entry.lastScreen) && !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
+    if (idle && window.AgentInfo.inferProvider(col.cmd, entry.lastScreen) === 'Claude') {
+      await new Promise((resolve, reject) => {
+        const op = { colId: col.id, entry, relay: true, resolve, reject };
+        tokenSaving = op;
+        op.timer = setTimeout(() => {
+          if (tokenSaving === op) saverFailed('Relay未收到存档确认');
+        }, 5 * 60_000);
+        saverBanner('Relay正在存进度看板，等待「已存档」');
+        saverSend(op, M.ARCHIVE_PROMPT, 'archiving', false, (turn) => { op.turnId = turn?.id; });
+      });
+    }
+    // Busy/quota/exited/Codex Captains cannot be asked for another model turn.
+    // Persist a fresh full snapshot in every path, before the old PTY is killed.
+    if (mainCol() !== col || host.userComposing(col.id)) throw new Error('队长或输入已变更');
+    return window.deck.captainCheckpoint({ ...snapshot, chat: window.ChatUI.snapshotForHandoff(col.id), tasks: state().tasks });
   }
   function saverFailed(message) {
     cancelTokenSaving();
@@ -633,7 +660,12 @@
     if (colId === s.colId) {
       host.captainTurnDone(colId, turn);
       if (tokenSaving?.phase === 'archiving' && turn.id === tokenSaving.turnId) {
-        if (!turn.interrupted && String(turn.reply || '').trim() === '已存档') { tokenSaving.phase = 'archived'; tokenSaving.since = Date.now(); }
+        if (!turn.interrupted && String(turn.reply || '').trim() === '已存档') {
+          if (tokenSaving.relay) {
+            const op = tokenSaving;
+            clearTimeout(op.timer); tokenSaving = null; saverBanner(''); op.resolve();
+          } else { tokenSaving.phase = 'archived'; tokenSaving.since = Date.now(); }
+        }
         else saverFailed('队长没有只回复「已存档」，未清空上下文');
       }
       if (s.inflight.length || s.fresh) {
@@ -859,7 +891,7 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, openSettings, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),

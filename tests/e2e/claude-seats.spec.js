@@ -2,7 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --quota-probe`;
+const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --quota-probe --token-saver`;
 let application, page, profile, home;
 const cn = 'seat-captain';
 async function closeApplication() {
@@ -61,13 +61,13 @@ test.afterEach(async () => {
 test('rotation exposes current seat and masked emails; an unlogged seat cannot replace Captain', async () => {
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：CN');
-  await expect(page.locator('[data-seat-id="cn"]')).toHaveAttribute('title', 'CN · c***@example.test');
-  await expect(page.locator('[data-seat-id="us"]')).toHaveAttribute('title', 'US · u***@example.test');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"]')).toHaveAttribute('title', 'CN · c***@example.test');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toHaveAttribute('title', 'US · u***@example.test');
   await screenshot('relay-cn-us-chatgpt');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
   fs.unlinkSync(path.join(home, '.claude-us', '.credentials.json'));
   await page.locator('.claude-seat-rotate').click();
-  await expect(page.locator('[data-seat-id="us"]')).toBeDisabled();
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toBeDisabled();
   expect(await page.evaluate(() => config.mainSession.colId)).toBe(cn);
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
 });
@@ -98,6 +98,7 @@ test('rotation checkpoints first, retains workers/receipts, briefs continuation 
   expect(records.find((r) => r.colId === id).configDir).toBe(path.join(home, '.claude-us'));
   expect(records.find((r) => r.colId === next).configDir).toBe(path.join(home, '.claude-us'));
   expect(records.every((r) => !r.authOverridePresent)).toBe(true);
+  expect(capture('prompts.jsonl')).not.toContain('"/clear"');
   expect(records.filter((r) => r.colId === 'seat-worker')).toHaveLength(1);
   const restored = await page.evaluate(() => restoreArchived('seat-legacy-archived', false, true).id);
   expect(await page.evaluate((i) => columns.find((c) => c.id === i).claudeSeatId, restored)).toBe('cn');
@@ -108,11 +109,47 @@ test('rotation checkpoints first, retains workers/receipts, briefs continuation 
   expect(await page.evaluate(() => config.activeClaudeSeatId)).toBe('us');
   expect(await page.evaluate(() => columns.find((c) => c.id === 'seat-worker').claudeSeatId)).toBe('cn');
 });
+test('failed Relay archive acknowledgement preserves the original Captain', async () => {
+  await expect.poll(() => page.evaluate(() => terms.get(config.mainSession.colId).state)).toBe('done');
+  await expect.poll(() => page.evaluate(() => ChatUI.turnsOf(config.mainSession.colId).every((t) => t.done))).toBe(true);
+  await page.evaluate(() => { MainCore.ARCHIVE_PROMPT = 'invalid archive confirmation'; });
+  expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
+  expect(await page.evaluate(() => config.mainSession.colId)).toBe(cn);
+  expect(await page.evaluate(() => window.deck.ptyIsAlive(config.mainSession.colId))).toBe(true);
+  expect(capture('prompts.jsonl')).toContain('invalid archive confirmation');
+  expect(capture('prompts.jsonl')).not.toContain('"/clear"');
+});
+test('cancelling Relay archive preserves the original Captain and never clears it', async () => {
+  await expect.poll(() => page.evaluate(() => terms.get(config.mainSession.colId).state)).toBe('done');
+  await expect.poll(() => page.evaluate(() => ChatUI.turnsOf(config.mainSession.colId).every((t) => t.done))).toBe(true);
+  await page.evaluate(() => {
+    MainCore.ARCHIVE_PROMPT = 'keep working';
+    window.relayResult = ClaudeSeats.switchSeat('us');
+  });
+  await page.locator('.captain-token-saving button').click();
+  expect(await page.evaluate(() => window.relayResult)).toBe(false);
+  expect(await page.evaluate(() => config.mainSession.colId)).toBe(cn);
+  expect(await page.evaluate(() => window.deck.ptyIsAlive(config.mainSession.colId))).toBe(true);
+  expect(capture('prompts.jsonl')).not.toContain('"/clear"');
+});
 test('checkpoint write failure keeps the old Captain alive and selected', async () => {
   fs.writeFileSync(path.join(home, '.agents'), 'block checkpoint directory');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
   expect(await page.evaluate(() => [config.mainSession.colId, config.activeClaudeSeatId])).toEqual([cn, 'cn']);
   expect(await page.evaluate(() => window.deck.ptyIsAlive(config.mainSession.colId))).toBe(true);
+});
+test('Relay archive timeout preserves the original Captain', async () => {
+  await expect.poll(() => page.evaluate(() => terms.get(config.mainSession.colId).state)).toBe('done');
+  await expect.poll(() => page.evaluate(() => ChatUI.turnsOf(config.mainSession.colId).every((t) => t.done))).toBe(true);
+  await page.evaluate(() => {
+    MainCore.ARCHIVE_PROMPT = 'keep working';
+    const realTimeout = window.setTimeout;
+    window.setTimeout = (fn, ms, ...args) => realTimeout(fn, ms === 5 * 60_000 ? 2000 : ms, ...args);
+  });
+  expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
+  expect(await page.evaluate(() => config.mainSession.colId)).toBe(cn);
+  expect(await page.evaluate(() => window.deck.ptyIsAlive(config.mainSession.colId))).toBe(true);
+  expect(capture('prompts.jsonl')).not.toContain('"/clear"');
 });
 test('unsent composer text is preserved and blocks rotation', async () => {
   const composer = page.locator(`.column[data-col-id="${cn}"] .composer textarea`);
@@ -133,7 +170,8 @@ test('quota banner switches once and preserves the interrupted Captain turn', as
   expect(retired.turns.some((t) => t.user === 'wait for quota' && t.interrupted)).toBe(true);
 });
 test('settings rename all placeholders in one config and survive renderer reload', async () => {
-  await page.locator('#navBottom button[aria-label="设置 · 席位"]').click();
+  await page.locator('#settingsBtn').click();
+  await page.locator('#claudeSeatsSettings').click();
   const settings = page.locator('#claudeSeatSettings');
   await screenshot('seat-settings');
   await settings.locator('input').nth(0).fill('交班');
@@ -146,7 +184,7 @@ test('settings rename all placeholders in one config and survive renderer reload
   await expect(page.locator('.claude-seat-rotate')).toBeEnabled({ timeout: 20000 });
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：甲席');
-  await expect(page.locator('[data-seat-id="us"]')).toContainText('乙席');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toContainText('乙席');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
   await page.locator(`.column[data-col-id="${cn}"] .composer textarea`).fill('keep draft');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
@@ -172,13 +210,14 @@ test('terminal draft also blocks Relay without discarding typing', async () => {
 test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and returns to CN', async () => {
   test.setTimeout(120000);
   await page.locator('.claude-seat-rotate').click();
-  await expect(page.locator('[data-seat-id="chatgpt"]')).toHaveAttribute('title', 'ChatGPT · Codex GPT-6.1 Sol');
-  await page.locator('[data-seat-id="chatgpt"]').click();
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="chatgpt"]')).toHaveAttribute('title', 'ChatGPT · Codex GPT-6.1 Sol');
+  await page.locator('#claudeSeatMenu button[data-seat-id="chatgpt"]').click();
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId)).toBe('chatgpt');
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((i) => /Codex CLI/.test(terms.get(i)?.lastScreen || ''), id), { timeout: 20000 }).toBe(true);
   await expect.poll(() => capture('prompts.jsonl'), { timeout: 20000 }).toContain('读看板继续');
   async function board(args, expected) {
+    await expect.poll(() => page.evaluate((i) => { const e = terms.get(i); return e?.state === 'done' && !e.sendingPrompt && !e.injecting && ChatUI.turnsOf(i).every((t) => t.done); }, id), { timeout: 20000 }).toBe(true);
     await page.evaluate(([i, a]) => window.deck.ptyInput(i, 'BOARD ' + JSON.stringify(a) + '\r'), [id, args]);
     await expect.poll(() => page.evaluate((i) => dumpScreen(terms.get(i).term).replace(/\n/g, ''), id), { timeout: 20000 }).toContain(expected);
   }
@@ -192,7 +231,7 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：ChatGPT');
   await screenshot('chatgpt-captain-relay');
-  await page.locator('[data-seat-id="cn"]').click();
+  await page.locator('#claudeSeatMenu button[data-seat-id="cn"]').click();
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId)).toBe('cn');
   await expect.poll(() => page.evaluate(() => AgentInfo.resolveAgentInfo(MainSession.mainCol(), terms.get(config.mainSession.colId)).provider), { timeout: 20000 }).toBe('Claude');
 });
