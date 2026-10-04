@@ -37,11 +37,14 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude').locator('[data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
 
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
-  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('—');
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('——');
   await expect(badge('Codex').locator('.quota-values')).toContainText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider)).toHaveAttribute('data-state', 'normal');
-  // No number but nothing exhausted reads 正常, never a dash.
-  for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider).locator('.quota-values')).toHaveText('正常');
+  // No number: both cells read — over an empty bar; 正常 moves into the details.
+  for (const provider of ['Cursor', 'Antigravity']) {
+    await expect(badge(provider).locator('.quota-values')).toHaveText('——');
+    await expect(badge(provider).getByRole('tooltip', { includeHidden: true })).toContainText('未见用尽');
+  }
   // Codex that reports only the weekly window shows that number, marked as weekly.
   await page.evaluate(() => {
     window.codexQuotaBackup = JSON.stringify(config.quotas.Codex);
@@ -50,7 +53,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
     config.quotas.Codex = entry; renderQuotaBar();
   });
   await expect(badge('Codex').locator('[data-window="7d"] .quota-pct')).toHaveText('15%');
-  await expect(badge('Codex').locator('[data-window="5h"]')).toHaveCount(0);
+  await expect(badge('Codex').locator('[data-window="5h"] .quota-none')).toHaveText('—');
   await expect(badge('Codex').locator('.quota-values')).not.toHaveText(/^[—–-]$/);
   expect(await page.evaluate(() => QuotaCore.summary(config.quotas, 'Codex', Date.now()).shortText)).toBe('周 15%');
   const shots = process.env.AGENTDECK_QUOTA_SHOTS;
@@ -82,9 +85,9 @@ test('passive live screens show remaining quota, provider icons and accessible d
   expect(binding.key).toBe(binding.expected);
 
   // Every account stays on one compact row: no wrapping, no clipped name or value.
-  for (const box of await page.locator('#quotaBar .quota-item').evaluateAll((els) => els.map((e) => [e.getBoundingClientRect().height, e.scrollWidth <= e.clientWidth]))) expect(box).toEqual([26, true]);
+  for (const box of await page.locator('#quotaBar .quota-item').evaluateAll((els) => els.map((e) => [e.getBoundingClientRect().height, e.scrollWidth <= e.clientWidth]))) expect(box).toEqual([30, true]);
   // Default width shows each window's reset time; the narrowest sidebar keeps just the two percentages.
-  const fits = () => page.locator('#quotaBar .quota-item').evaluateAll((els) => els.every((e) => e.scrollWidth <= e.clientWidth && e.querySelector('.quota-values').getBoundingClientRect().left >= e.querySelector('.quota-name').getBoundingClientRect().right));
+  const fits = () => page.locator('#quotaBar .quota-item').evaluateAll((els) => els.every((e) => e.scrollWidth <= e.clientWidth && e.querySelector('.quota-cell').getBoundingClientRect().left >= e.querySelector('.quota-name').getBoundingClientRect().right));
   await expect(badge('Claude').locator('[data-window="5h"] .quota-reset')).toBeVisible();
   await expect(badge('Claude').locator('[data-window="7d"] .quota-pct')).toHaveText('91%');
   await page.evaluate(() => { config.navWidth = 200; applyNavWidth(); });
@@ -99,9 +102,10 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await badge('Claude').focus();
   await expect(badge('Claude').getByRole('tooltip')).toBeVisible();
   await expect(badge('Claude').getByRole('tooltip')).toContainText('剩余 91%');
-  // One tooltip only: no native title duplicating it, and no config dir / source / model noise.
+  // One tooltip only: no native title duplicating it; source and confidence yes, config dir / model no.
   await expect(badge('Claude')).not.toHaveAttribute('title');
-  await expect(badge('Claude').getByRole('tooltip')).not.toContainText(/配置目录|来源|模型/);
+  await expect(badge('Claude').getByRole('tooltip')).toContainText(/来源.*可信度/);
+  await expect(badge('Claude').getByRole('tooltip')).not.toContainText(/配置目录|模型/);
   await expect(badge('Cursor')).toHaveAttribute('aria-label', /^Grok 4\.7：/);
   await expect(badge('Antigravity')).toHaveAttribute('aria-label', /^Gemini：/);
   await expect(badge('Claude').locator('.quota-name')).toHaveText('🇨🇳');
