@@ -383,3 +383,24 @@ test('any exhausted window (5-hour or weekly) shows exhausted with the recovery 
   const ok = Q.summary(store, 'Codex', now + 1000);
   assert.deepEqual([ok.out, ok.fiveHour, ok.recoveryAt, ok.statusText], [false, 41, null, '正常']);
 });
+
+test('sidebar row value: 5-hour %, else weekly %, else 正常 when nothing is exhausted, else dash', () => {
+  const weeklyOnly = {};
+  Q.observe(weeklyOnly, Q.cacheCodex({ type: 'event_msg', timestamp: new Date(now).toISOString(), payload: { type: 'token_count', rate_limits: { limit_id: 'codex', primary: { used_percent: 85, window_minutes: 10080, resets_at: now / 1000 + 86400 }, secondary: null } } }), now);
+  const codex = Q.summary(weeklyOnly, 'Codex', now);
+  assert.deepEqual([codex.shortText, codex.shortRemaining, codex.fiveHour, codex.weekly, codex.out], ['周 15%', 15, null, 15, false]);
+  const both = {};
+  Q.observe(both, Q.screen('Codex', '│ 5-hour limit: [████] 8% left (resets 23:59)\n│ Weekly limit: 60% left (resets 2026-10-07T10:00:00Z)\n', [], now), now);
+  assert.equal(Q.summary(both, 'Codex', now).shortText, '8%');
+  const grok = {};
+  Q.observe(grok, Q.screen('Cursor', 'Welcome', [], now, 'grok-4.7-high-fast'), now);
+  const sampled = Q.summary(grok, 'Cursor', now);
+  assert.deepEqual([sampled.shortText, sampled.shortRemaining, sampled.state], ['正常', null, 'normal']);
+  // Truly unknown (never sampled, or a stale numberless sample) is the only dash.
+  assert.equal(Q.summary({}, 'Cursor', now).shortText, '—');
+  assert.equal(Q.summary({}, 'Codex', now).shortText, '—');
+  assert.equal(Q.summary(grok, 'Cursor', now + Q.FRESH_MS + 1).shortText, '—');
+  // Exhaustion still wins: the renderer shows the recovery time instead of this value.
+  Q.observe(grok, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now + 1, 'grok-4.7-high-fast'), now + 1);
+  assert.equal(Q.summary(grok, 'Cursor', now + 1).out, true);
+});

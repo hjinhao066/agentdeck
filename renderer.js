@@ -3657,10 +3657,10 @@ function renderQuotaBar() {
         values.replaceChildren(dot, time);
       } else {
         const value = document.createElement('span');
-        const v = q.fiveHour;
+        const v = q.shortRemaining;
         value.className = `quota-value${v !== null && v <= 20 ? ' low' : ''}`;
         // Whole percents keep the column aligned; the tooltip keeps the exact value.
-        value.textContent = v === null ? '—' : v < 1 ? '<1%' : `${Math.round(v)}%`;
+        value.textContent = q.shortText;
         values.replaceChildren(value);
       }
       const sampled = q.sampledAt ? `采样 ${clock(q.sampledAt)}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';

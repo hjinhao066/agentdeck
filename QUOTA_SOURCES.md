@@ -26,7 +26,8 @@ were left running. Quota probes made no inference requests.
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
 - Each item is one compact row in the sidebar quota block: provider icon, seat flag
   (plus a crown on the seat the running Captain uses), and the right-aligned 5-hour
-  remaining %. An exhausted row shows a red dot and `↻HH:MM` recovery instead. The
+  remaining % (or `周 N%` when only the weekly window exists, `正常` when nothing is
+  exhausted but no number is available, `—` only when truly unknown). An exhausted row shows a red dot and `↻HH:MM` recovery instead. The
   weekly %, both resets, sample time, model and masked account live in the tooltip
   and the row's aria-label. Missing windows say `无数据`; if neither
   window can be read, show `未知` (never 未登录: the masked account still shows). A welcome/model banner alone cannot
