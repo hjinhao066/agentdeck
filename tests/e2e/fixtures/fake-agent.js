@@ -203,10 +203,12 @@ function listen() {
 }
 function start() {
   if (delayedStart) process.stdout.write('\x1b[?1049h');
+  // ConPTY can deliver a prompt as soon as the provider header is visible.
+  // Enter raw mode and install input handlers before advertising readiness.
+  listen();
   console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
-  listen();
 }
 // --trust-dialog: like Cursor in a folder it has not seen, a dialog comes first and
 // nothing is accepted until Enter picks "Trust this workspace".
