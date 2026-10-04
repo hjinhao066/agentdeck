@@ -30,7 +30,7 @@ CADDY_BIN=$PWD/caddy node --test --test-concurrency=1 tests/vps-caddy.test.js te
 
 测试做了什么：
 
-- `vps-caddy`：本机起临时 Caddy（`admin off`，只监听回环）+ 两个假后端。验证无口令全 401；`/` 返回总台和 CSP 等安全头；`/mac/*`、`/win/*` 各转各的、前缀和查询串原样；Host / X-Forwarded-* 被覆盖、Authorization 被去掉；含糊路径（`..`、`//`）404；一台后端停掉或挂起时另一台和总台不受影响，停掉的返回 `502 {"offline":true}`；访问日志没有 URI、请求头、口令、cookie；用真 Chromium 验证两台的 `__Secure-agentdeck_mac`（Path=/mac/）和 `__Secure-agentdeck_win`（Path=/win/）只发给各自的前缀。
+- `vps-caddy`：本机起临时 Caddy（`admin off`，只监听回环）+ 两个假后端。验证无口令全 401；`/` 返回总台和 CSP 等安全头；`/mac/*`、`/win/*` 各转各的、前缀和查询串原样；Host / X-Forwarded-* 被覆盖、Authorization 被去掉；含糊路径（`..`、`//`）404；一台后端停掉或挂起时另一台和总台不受影响，停掉的返回 `502 {"offline":true}`；访问日志没有 URI、请求头、口令、cookie；用真 Chromium 验证两台的 `__Secure-agentdeck_mac`（Path=/mac/）和 `__Secure-agentdeck_win`（Path=/win/）只发给各自的前缀。另外：`GET /mac/api/info` 和 `GET /win/api/info`（免机器登录的探测，仍要入口口令）原样转发；前缀上每个响应的 CSP 被盖成 `default-src 'none'; sandbox`，并带 `nosniff`；HTML / JS / SVG / 没有 Content-Type / 给另一台种 cookie 的响应换成 `403 {"error":"blocked"}`；假后端在 `/win/` 下返回带脚本的 HTML 时，Chromium 里这份文档读不到 `/mac/api/snapshot`。
 - `vps-sshd`：本机起真 OpenSSH（非特权），装上本包的片段和 authorized_keys 选项：Windows 密钥能占自己的端口并真能通流量；占不了 Mac 的端口；非回环、本地转发、执行命令、未登记密钥都被拒。片段和密钥选项两层各自单独也挡得住。
 - `vps-scripts`：真脚本 + 真 `caddy validate` + 假系统命令，覆盖备份、只换一段、重复运行、回滚（含期间别的站点被改）、校验失败/reload 失败自动还原、公钥校验、总台发布与回滚。
 
@@ -74,11 +74,14 @@ CADDY_BIN=$PWD/caddy node --test --test-concurrency=1 tests/vps-caddy.test.js te
 - **Caddy**：`./rollback-caddy-site.sh`（默认用最新备份，也可传备份目录）。它只把 BEGIN/END 之间换回安装前的旧段落，不整份覆盖 Caddyfile，期间别的站点的改动保留；先 `caddy validate` 通过才写入并 reload。口令文件、日志文件、总台目录保留（无害）。
 - **总台**：`deploy-hub.sh rollback admin@<vps>:/srv`（指回上一个版本）。
 - **Windows 账号**：`./tunnel-account.sh remove`（删片段和账号，`sshd -t` 后 reload；Mac 账号不动）。
+- **每台电脑的 `endpoint.json`**：把 `basePath` 和 `label` **一起删掉**。Mac 是 `~/.config/agentdeck-remote/endpoint.json` 里的 `/mac/` 和 `Mac`，Windows 是 `%USERPROFILE%\.config\agentdeck-remote\endpoint.json` 里的 `/win/` 和 `Windows`。只删其中一个不算回滚：留下 `basePath` 而 `label` 不合法时网页服务会拒绝启动，只留下 `label` 也还是半套配置。两个字段一起删除后，在那台电脑的设置页关掉再打开网页服务，才回到没有前缀的旧行为。
 - 手工回滚：备份目录里有安装前的整份 `Caddyfile` 仅供对照，**不要整份覆盖**回去。
 
 ## 设计说明和已知限制
 
 - **前缀不剥**：用 `handle`，不是 `handle_path`。AgentDeck 自己校验前缀，Caddy 配错也到不了别的机器的路由。
+- **前缀响应一律盖头，非 JSON 直接拦**：`/mac/` 和 `/win/` 同源，cookie 的 Path 挡不住一台被攻陷。它在 `/win/` 下返回的 HTML 可以去读 `/mac/api/snapshot`，拿走 CSRF token 再给 Mac 派活。所以这两个前缀的每个响应都覆盖成 `Content-Security-Policy: default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`，外加 `X-Content-Type-Options: nosniff`（后端自己带的宽松 CSP 会被换掉）。只放行 `Content-Type` 恰好是 `application/json` 或 `application/json;…`（例如 `charset=utf-8`）的响应；`Set-Cookie` 只能没有，或者以本机 cookie 名开头（`__Secure-agentdeck_mac` / `__Secure-agentdeck_win`）。HTML、JS、SVG、纯文本、没有 Content-Type、以及给另一台种 cookie，都换成 `403 {"error":"blocked"}`，不把后端的页面交给浏览器。这不是隧道断开：断开仍然是 `502 {"offline":true}`。`GET <前缀>/api/info` 是 JSON，照常转发；入口 basicauth 仍然盖住它，机器侧的免登录由 AgentDeck 自己决定。
+- **Set-Cookie 匹配的限度**：Caddy 2.6 的响应头匹配是「这个头的任一值命中即可」。同一条响应里如果既有本机 cookie、又夹带另一条 `Set-Cookie`，夹带的那条挡不住。服务端只认已登记的哈希，夹带的 cookie 登不上，最多把用户踢下线。
 - **含糊路径一律 404**：Caddy 按"清理后"的路径选后端，却把原始路径转给后端；`/mac/../win/…` 会因此被送到 Windows 那台。所以 Caddyfile 在 `route` 里先拦含 `./`、`../`、`//` 的路径（要用 `expression` 匹配原始路径，`path_regexp` 拦不住）。浏览器本来不会发这种路径。
 - **大小写与编码**：Caddy 的路径匹配不区分大小写，`/MAC/…`、`/%6dac/…` 会原样转给 Mac；由 AgentDeck 自己的前缀校验（区分大小写、校验原始路径）拒绝。块 A 的校验必须基于原始路径。
 - **`/mac`、`/win`（不带斜杠）**：落到总台静态页，返回 404；总台只使用带斜杠的前缀。

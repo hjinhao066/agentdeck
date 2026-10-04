@@ -60,6 +60,45 @@ agentdeck.18-139-28-180.sslip.io {
 				transport http {
 					dial_timeout 3s
 				}
+
+				# 前缀下只该有 JSON。header_down 只在 copy_response 抄响应时生效，拦下来的那一支要自己再写头。
+				# sandbox 让这份文档变成不透明源，读不到同源的 /win/*；default-src 'none' 让脚本跑不起来。
+				# 两条 Content-Type 是「或」：恰好 application/json，或带参数（application/json; charset=utf-8）。
+				# 不能写成 application/json*，那会把 application/json<script> 也放出去。
+				header_down Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+				header_down X-Content-Type-Options nosniff
+				header_down X-Frame-Options DENY
+				header_down Cross-Origin-Resource-Policy same-origin
+				header_down Cache-Control no-store
+				header_down Content-Type "application/json; charset=utf-8"
+
+				@mac_json {
+					header Content-Type application/json
+					header Content-Type application/json;*
+					header !Set-Cookie
+				}
+				@mac_cookie {
+					header Content-Type application/json
+					header Content-Type application/json;*
+					header Set-Cookie __Secure-agentdeck_mac=*
+				}
+				handle_response @mac_json {
+					copy_response
+				}
+				handle_response @mac_cookie {
+					copy_response
+				}
+				# 非 JSON、没有 Content-Type、或 Set-Cookie 不是本机 cookie：整段换成 JSON，不把后端页面交给浏览器。
+				# 用 403 而不是 502，避免和隧道断开时的 {"offline":true} 混在一起。
+				handle_response {
+					header Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+					header X-Content-Type-Options nosniff
+					header X-Frame-Options DENY
+					header Cross-Origin-Resource-Policy same-origin
+					header Cache-Control no-store
+					header Content-Type "application/json; charset=utf-8"
+					respond `{"error":"blocked"}` 403
+				}
 			}
 		}
 
@@ -73,6 +112,40 @@ agentdeck.18-139-28-180.sslip.io {
 				header_up X-Forwarded-For {remote_host}
 				transport http {
 					dial_timeout 3s
+				}
+
+				# 与 /mac/* 同一套：只放行本机 JSON，响应头强制盖成最严。sandbox 读不到同源的 /mac/*。
+				header_down Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+				header_down X-Content-Type-Options nosniff
+				header_down X-Frame-Options DENY
+				header_down Cross-Origin-Resource-Policy same-origin
+				header_down Cache-Control no-store
+				header_down Content-Type "application/json; charset=utf-8"
+
+				@win_json {
+					header Content-Type application/json
+					header Content-Type application/json;*
+					header !Set-Cookie
+				}
+				@win_cookie {
+					header Content-Type application/json
+					header Content-Type application/json;*
+					header Set-Cookie __Secure-agentdeck_win=*
+				}
+				handle_response @win_json {
+					copy_response
+				}
+				handle_response @win_cookie {
+					copy_response
+				}
+				handle_response {
+					header Content-Security-Policy "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+					header X-Content-Type-Options nosniff
+					header X-Frame-Options DENY
+					header Cross-Origin-Resource-Policy same-origin
+					header Cache-Control no-store
+					header Content-Type "application/json; charset=utf-8"
+					respond `{"error":"blocked"}` 403
 				}
 			}
 		}

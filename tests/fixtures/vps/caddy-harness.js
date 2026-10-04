@@ -58,10 +58,30 @@ class FakeMachine {
       const record = { method: req.method, url: req.url, headers: req.headers, rawHeaders: req.rawHeaders, body: Buffer.concat(chunks).toString('utf8') };
       this.requests.push(record);
       if (this.mode === 'hang') return; // accept, never answer (half-open tunnel after sleep)
+      if (this.scripted) {
+        const scripted = this.scripted;
+        this.scripted = null;
+        res.writeHead(scripted.status || 200, scripted.headers || {});
+        res.end(scripted.body == null ? '' : scripted.body);
+        return;
+      }
+      // Hostile headers on purpose: Caddy must overwrite them. charset matches AgentDeck's json().
       const send = (status, body, extra = {}) => {
-        res.writeHead(status, { 'Content-Type': 'application/json', ...extra });
+        res.writeHead(status, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Security-Policy': "default-src * 'unsafe-inline' 'unsafe-eval'",
+          'X-Content-Type-Options': 'sniff',
+          ...extra,
+        });
         res.end(JSON.stringify(body));
       };
+      const pathOnly = req.url.split('?')[0];
+      if (pathOnly === `${this.cookiePath}api/info`) {
+        if (req.method !== 'GET') return send(401, { error: 'Unauthorized.' });
+        const label = this.name === 'mac' ? 'Mac' : 'Windows';
+        const platform = this.name === 'mac' ? 'darwin' : 'win32';
+        return send(200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'], machine: { id: this.name, label, platform } });
+      }
       if (req.url.startsWith(`${this.cookiePath}login`)) {
         const value = crypto.randomBytes(8).toString('hex');
         return send(200, { machine: this.name, loggedIn: true },
@@ -106,7 +126,11 @@ async function startStack(caddy, { hubDir } = {}) {
   const caddyfile = path.join(dir, 'Caddyfile');
   fs.writeFileSync(caddyfile, `{\n\tadmin off\n\tauto_https off\n}\n${body}`);
   const validate = spawnSync(caddy.bin, ['validate', '--config', caddyfile, '--adapter', 'caddyfile'], { encoding: 'utf8' });
-  if (validate.status !== 0) throw new Error(`caddy validate failed: ${validate.stderr}`);
+  if (validate.status !== 0) {
+    await mac.stop(); await win.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+    throw new Error(`caddy validate failed: ${validate.stderr}`);
+  }
   const child = spawn(caddy.bin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], { stdio: ['ignore', 'ignore', 'pipe'] });
   let stderr = '';
   child.stderr.on('data', (c) => { stderr += c; });

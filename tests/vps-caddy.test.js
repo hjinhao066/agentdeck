@@ -14,6 +14,13 @@ const skip = caddy ? false : 'caddy binary not found (set CADDY_BIN)';
 if (caddy && !caddy.version.startsWith('v2.6.')) console.warn(`# note: tests written for Caddy 2.6.x (VPS runs 2.6.2), found ${caddy.version}`);
 
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
+// Forced onto every /mac/* and /win/* response, including ones Caddy replaces.
+const PREFIX_CSP = "default-src 'none'; sandbox; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+const single = (headers, name) => {
+  const value = headers[name];
+  assert.ok(!Array.isArray(value), `${name} must be one header, got ${JSON.stringify(value)}`);
+  return value;
+};
 const wipe = (...machines) => machines.forEach((m) => { m.requests.length = 0; m.mode = 'ok'; });
 
 test('Caddy 分流与前缀', { skip }, async (t) => {
@@ -33,7 +40,7 @@ test('Caddy 分流与前缀', { skip }, async (t) => {
 
   await t.test('没有 basicauth（或口令错误）时，所有路径都 401，后端收不到任何请求', async () => {
     wipe(s.mac, s.win);
-    const paths = ['/', '/index.html', '/machines.json', '/app.js', '/mac/', '/mac/api/snapshot', '/win/', '/win/api/snapshot',
+    const paths = ['/', '/index.html', '/machines.json', '/app.js', '/mac/', '/mac/api/snapshot', '/mac/api/info', '/win/', '/win/api/snapshot', '/win/api/info',
       '/win/login', '/mac', '/win', '/nope', '/.secret', '/mac/../win/api/snapshot', '//mac/api/snapshot', '/MAC/api/snapshot'];
     for (const p of paths) {
       for (const method of ['GET', 'POST', 'HEAD', 'OPTIONS']) {
@@ -157,6 +164,62 @@ test('Caddy 分流与前缀', { skip }, async (t) => {
     }
   });
 
+  await t.test('前缀上的 JSON 被盖成 sandbox CSP；GET api/info 免机器登录放行，入口口令仍然要', async () => {
+    for (const [prefix, machine, label, platform] of [['/mac/', s.mac, 'Mac', 'darwin'], ['/win/', s.win, 'Windows', 'win32']]) {
+      wipe(machine);
+      const snap = await req(`${prefix}api/snapshot`);
+      assert.equal(snap.status, 200);
+      assert.equal(single(snap.headers, 'content-security-policy'), PREFIX_CSP);
+      assert.equal(single(snap.headers, 'x-content-type-options'), 'nosniff');
+      assert.equal(snap.headers['x-frame-options'], 'DENY');
+      assert.equal(snap.headers['cross-origin-resource-policy'], 'same-origin');
+      assert.match(snap.headers['content-type'], /^application\/json/);
+      assert.equal(machine.requests[0].headers.cookie, undefined);
+      const info = await req(`${prefix}api/info`);
+      assert.equal(info.status, 200);
+      assert.deepEqual(info.json, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'], machine: { id: machine.name, label, platform } });
+      assert.equal(info.headers['set-cookie'], undefined);
+      assert.equal(single(info.headers, 'content-security-policy'), PREFIX_CSP);
+      assert.equal(machine.requests.at(-1).headers.cookie, undefined, 'api/info does not need a device cookie');
+      const posted = await req(`${prefix}api/info`, { method: 'POST' });
+      assert.equal(posted.status, 401);
+      assert.deepEqual(posted.json, { error: 'Unauthorized.' });
+      assert.equal(single(posted.headers, 'content-security-policy'), PREFIX_CSP);
+    }
+    wipe(s.mac, s.win);
+    assert.equal((await req('/mac/api/info', { auth: false })).status, 401);
+    assert.equal((await req('/win/api/info', { auth: false })).status, 401);
+    assert.equal(s.mac.requests.length + s.win.requests.length, 0, 'basicauth still covers the probe');
+  });
+
+  await t.test('非 JSON、缺 Content-Type、或给另一台种 cookie 的响应被换成 blocked，后端页面到不了浏览器', async () => {
+    const html = '<!doctype html><script>fetch("/mac/api/snapshot")</script>';
+    const cases = [
+      ['html', { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': "script-src 'unsafe-inline'" }, html],
+      ['js', { 'Content-Type': 'text/javascript' }, 'fetch("/mac/api/snapshot")'],
+      ['svg', { 'Content-Type': 'image/svg+xml' }, '<svg xmlns="http://www.w3.org/2000/svg"></svg>'],
+      ['none', {}, html],
+      ['plain', { 'Content-Type': 'text/plain' }, html],
+      ['foreign-cookie', { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': '__Secure-agentdeck_mac=deadbeefdeadbeef; Path=/mac/; HttpOnly; Secure; SameSite=Strict' }, '{"ok":true}'],
+    ];
+    for (const [name, headers, body] of cases) {
+      s.win.scripted = { status: 200, headers, body };
+      const r = await req('/win/pwn');
+      assert.equal(r.status, 403, name);
+      assert.equal(r.text, '{"error":"blocked"}', name);
+      assert.equal(single(r.headers, 'content-security-policy'), PREFIX_CSP, name);
+      assert.equal(single(r.headers, 'x-content-type-options'), 'nosniff', name);
+      assert.match(r.headers['content-type'], /^application\/json/, name);
+      assert.ok(!r.text.includes('<script') && !r.text.includes('deadbeef'), name);
+      assert.equal(r.headers['set-cookie'], undefined, name);
+    }
+    // The other direction: Mac must not be allowed to plant the Windows cookie either.
+    s.mac.scripted = { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': '__Secure-agentdeck_win=deadbeefdeadbeef; Path=/win/; Secure' }, body: '{"ok":true}' };
+    const planted = await req('/mac/pwn');
+    assert.equal(planted.status, 403);
+    assert.equal(planted.headers['set-cookie'], undefined);
+  });
+
   await t.test('一台离线：它的前缀 502 {"offline":true}，另一台和总台照常', async () => {
     wipe(s.mac, s.win);
     await s.win.stop();
@@ -260,4 +323,65 @@ test('浏览器级 cookie 隔离：两台各自的 cookie 只发给各自的前�
   assert.ok(s.mac.requests.every((r) => !(r.headers.cookie || '').includes('_win=')), 'Mac never received the Windows cookie');
   assert.ok(s.win.requests.every((r) => !(r.headers.cookie || '').includes('_mac=')), 'Windows never received the Mac cookie');
   assert.ok(s.mac.requests.length >= 3 && s.win.requests.length >= 3);
+});
+
+test('被攻陷的前缀返回带脚本的 HTML 时，浏览器读不到另一台的接口', { skip }, async (t) => {
+  let chromium;
+  try { ({ chromium } = require('@playwright/test')); } catch { return t.skip('@playwright/test not installed'); }
+  const s = await H.startStack(caddy);
+  let browser;
+  t.after(async () => { if (browser) await browser.close(); await s.stop(); s.cleanup(); });
+  try { browser = await chromium.launch(); } catch (e) { return t.skip(`chromium unavailable: ${e.message.split('\n')[0]}`); }
+  const auth = 'Basic ' + Buffer.from(`${H.AUTH_USER}:${H.AUTH_PASS}`).toString('base64');
+  const context = await browser.newContext({ extraHTTPHeaders: { Authorization: auth } });
+  const page = await context.newPage();
+  await page.goto(`${s.siteAddress}/`);
+  // The hub itself is allowed to read both machines. Log in so a stolen same-origin fetch would carry the device cookie.
+  const hubRead = await page.evaluate(async () => {
+    const login = await fetch('/mac/login', { method: 'POST', credentials: 'same-origin' });
+    const snap = await fetch('/mac/api/snapshot', { credentials: 'include' });
+    return { login: login.status, body: await snap.text() };
+  });
+  assert.equal(hubRead.login, 200);
+  assert.match(hubRead.body, /"machine":"mac"/);
+
+  const attack = `<!doctype html><html><head><title>pwn</title></head><body><script>
+    fetch('/mac/api/snapshot', { credentials: 'include' }).then(async (r) => {
+      const text = await r.text();
+      document.title = 'STOLEN:' + text.slice(0, 160);
+    }).catch((e) => { document.title = 'ERR:' + (e && e.name); });
+  </script></body></html>`;
+  s.mac.requests.length = 0;
+  s.win.scripted = {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': "default-src * 'unsafe-inline' 'unsafe-eval'; script-src * 'unsafe-inline'",
+      'X-Content-Type-Options': 'sniff',
+    },
+    body: attack,
+  };
+  const resp = await page.goto(`${s.siteAddress}/win/pwn`, { waitUntil: 'commit' });
+  const body = await resp.text();
+  assert.equal(resp.status(), 403);
+  assert.equal(body, '{"error":"blocked"}');
+  assert.equal(resp.headers()['content-security-policy'], PREFIX_CSP);
+  assert.equal(resp.headers()['x-content-type-options'], 'nosniff');
+  assert.ok(!body.includes('<script') && !body.includes('STOLEN'));
+  await page.waitForTimeout(400);
+  assert.equal(await page.title(), '', 'the attacker script did not run');
+  assert.ok(!s.mac.requests.some((r) => r.url.includes('/api/snapshot')), 'the HTML never fetched Mac');
+
+  // Even from the document the browser actually committed, a same-origin read of /mac/ must fail.
+  s.mac.requests.length = 0;
+  const read = await page.evaluate(async () => {
+    try {
+      const r = await fetch('/mac/api/snapshot', { credentials: 'include' });
+      return { ok: true, status: r.status, body: await r.text(), origin: location.origin };
+    } catch (e) {
+      return { ok: false, error: String(e && e.name || e), message: String(e && e.message || e), origin: location.origin };
+    }
+  });
+  assert.ok(!(read.ok && read.body.includes('"machine":"mac"')), `pwn document read Mac: ${JSON.stringify(read)}`);
+  assert.ok(!s.mac.requests.some((r) => r.url.startsWith('/mac/api/snapshot') && r.headers.cookie), 'Mac cookie was not presented by the pwn document');
 });
