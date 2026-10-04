@@ -12,6 +12,8 @@
   const MAX_FOLDERS = 100;
   const MAX_ARCHIVED = 500;
   const FONT_DEFAULT = 13;
+  // Hermes web console (private, owner-only); opened in the system browser.
+  const HERMES_HUB_URL = 'https://hub.18-139-28-180.sslip.io/';
   function normalizeFontSize(size) {
     return typeof size === 'number' && Number.isFinite(size) ? Math.max(10, Math.min(20, size)) : FONT_DEFAULT;
   }
@@ -151,7 +153,7 @@
   }
 
   return {
-    MAX_FOLDERS, FONT_DEFAULT, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
+    MAX_FOLDERS, FONT_DEFAULT, HERMES_HUB_URL, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
     orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, normalizeArchived,
   };
 });
