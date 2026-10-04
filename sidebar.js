@@ -104,8 +104,14 @@
     return head;
   }
 
+  let renderDepth = 0;
   function render() {
-    if (!host) return;
+    if (!host || renderDepth > 1) return;
+    renderDepth++;
+    try { renderBody(); }
+    finally { renderDepth--; }
+  }
+  function renderBody() {
     closeMenu();
     const navItems = host.navItems;
     navItems.clear();
@@ -212,6 +218,7 @@
     return item;
   }
   // Indented sessions, folded by the Captain's arrow; counts stay on its row.
+  // Members are grouped by model: one header each, then a single line per person.
   function crewBlock(crew, counts) {
     const open = !!host.config.crewOpen;
     const box = el('div', 'nav-group nav-crew');
@@ -219,32 +226,121 @@
     box.dataset.crew = '1';
     box.id = 'captainCrewList';
     box.hidden = !open;
-    const order = crewOrder(crew);
+    const waiting = waitlist();
+    const groups = open ? SC.crewModelGroups(crew.map(memberIdentity)) : [];
     if (open) {
       const byId = new Map(crew.map((c) => [c.id, c]));
-      order.running.forEach((id) => box.appendChild(sessionRow(byId.get(id))));
-      // work 队长 handed out that waits for a free slot (no session yet)
-      waitlist().forEach((w) => {
-        const item = el('div', 'colnav-item crew-waiting');
-        item.title = window.MainSession.queueTitle();
-        item.append(el('span', 'cn-dot plain'), el('span', 'cn-text', null), el('span', 'cn-meta', '等空位'));
-        item.querySelector('.cn-text').appendChild(sessionLabel(w.title));
-        box.appendChild(item);
-      });
-      order.finished.forEach((id) => box.appendChild(sessionRow(byId.get(id))));
+      const collapsed = collapsedModels();
+      groups.forEach((g) => box.appendChild(modelGroup(g, byId, collapsed.has(g.key))));
+      if (waiting.length) box.appendChild(waitGroup(waiting));
     } else {
       crew.forEach((col) => host.navItems.set(col.id, { el: null, dot: null, label: null, sub: null, meta: null }));
     }
-    crewHead = { counts, ids: crew.map((c) => c.id), open, shown: orderKey(order) };
+    crewHead = { counts, ids: crew.map((c) => c.id), open, shown: crewShownKey(groups, waiting) };
     refreshCrew();
     return box;
   }
   const waitlist = () => window.MainSession.state()?.waitlist || [];
-  function crewOrder(crew) {
-    const items = crew.map((c) => ({ id: c.id, state: host.terms.get(c.id)?.state, lastActive: host.lastTurnTs(c.id) }));
-    return window.MainCore.crewOrder(items, window.MainSession.state()?.tasks);
+  function memberIdentity(col) {
+    const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
+    const info = window.AgentInfo && window.AgentInfo.resolveAgentInfo(col, entry, entry && entry.lastScreen);
+    const shell = !info || info.isShell || !info.provider;
+    const label = shell ? '' : (info.shortModel || info.model || '');
+    const seat = !shell && info.seat && (info.seat.id === 'us' || info.seat.id === 'cn') ? info.seat.id : '';
+    return {
+      id: col.id,
+      label,
+      iconProvider: !shell && window.AgentInfo ? window.AgentInfo.iconProviderFor(label, info.provider) : '',
+      seat,
+      working: !!(entry && entry.state === 'working'),
+      lastActive: host.lastTurnTs(col.id) || 0,
+    };
   }
-  const orderKey = (order) => [...order.running, '|' + waitlist().length + (window.MainSession.memoryHeld() ? ':mem' : ''), ...order.finished].join(',');
+  function collapsedModels() {
+    return new Set(SC.normalizeCollapsedModels(host.config.crewModelsCollapsed));
+  }
+  function toggleModel(key) {
+    const list = SC.normalizeCollapsedModels(host.config.crewModelsCollapsed);
+    const at = list.indexOf(key);
+    if (at >= 0) list.splice(at, 1);
+    else list.push(key);
+    host.config.crewModelsCollapsed = list;
+    host.saveConfig();
+    render();
+  }
+  function crewShownKey(groups, waiting) {
+    const held = window.MainSession.memoryHeld() ? ':mem' : '';
+    return groups.map((g) => g.key + ':' + g.working + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => w.title || '').join(',') + held;
+  }
+  function cssId(key) {
+    return String(key).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80);
+  }
+  function modelGroup(g, byId, collapsed) {
+    const wrap = el('div', 'crew-model-block');
+    const head = el('div', 'crew-model');
+    head.dataset.modelKey = g.key;
+    const verb = collapsed ? '展开' : '收起';
+    const fold = iconButton(collapsed ? 'chevRight' : 'chevDown', verb + ' ' + g.label, () => toggleModel(g.key), 'crew-model-fold');
+    fold.setAttribute('aria-expanded', String(!collapsed));
+    const itemsId = 'crewModel-' + cssId(g.key);
+    fold.setAttribute('aria-controls', itemsId);
+    const icon = el('span', 'crew-model-icon');
+    icon.setAttribute('aria-hidden', 'true');
+    if (g.iconProvider && window.AgentInfo) {
+      icon.dataset.iconProvider = String(g.iconProvider).toLowerCase();
+      icon.innerHTML = window.AgentInfo.PROVIDER_ICONS[g.iconProvider] || '';
+    }
+    const name = el('span', 'crew-model-name agent-model-label', g.label);
+    name.title = g.flag ? g.label + ' ' + g.flag : g.label;
+    const stat = el('span', 'crew-model-stat');
+    const dotMark = el('span', 'crew-model-dot', '·');
+    dotMark.setAttribute('aria-hidden', 'true');
+    const countText = g.working + ' 干活中 · ' + g.ids.length + ' 个';
+    const count = el('span', 'crew-model-count' + (g.working ? ' busy' : ''), String(g.working));
+    count.title = countText;
+    count.setAttribute('aria-label', g.label + '：' + countText);
+    stat.append(dotMark, count);
+    head.append(fold, icon, name);
+    if (g.flag) {
+      const flag = el('span', 'agent-seat-label crew-model-flag', g.flag);
+      const seatName = g.seat === 'us' ? 'US' : 'CN';
+      flag.title = '当前账号：' + seatName;
+      flag.setAttribute('aria-label', flag.title);
+      flag.setAttribute('role', 'img');
+      head.appendChild(flag);
+    }
+    head.appendChild(stat);
+    head.addEventListener('click', (e) => { if (!e.target.closest('button')) toggleModel(g.key); });
+    const items = el('div', 'crew-model-items');
+    items.id = itemsId;
+    items.hidden = collapsed;
+    if (!collapsed) g.ids.forEach((id) => items.appendChild(sessionRow(byId.get(id), { crew: true })));
+    else g.ids.forEach((id) => host.navItems.set(id, { el: null, dot: null, label: null, sub: null, meta: null }));
+    wrap.append(head, items);
+    return wrap;
+  }
+  function waitGroup(waiting) {
+    const wrap = el('div', 'crew-model-block');
+    const head = el('div', 'crew-model crew-model-wait');
+    const name = el('span', 'crew-model-name', '排队');
+    const stat = el('span', 'crew-model-stat');
+    const dotMark = el('span', 'crew-model-dot', '·');
+    dotMark.setAttribute('aria-hidden', 'true');
+    const count = el('span', 'crew-model-count', String(waiting.length));
+    count.title = waiting.length + ' 排队';
+    count.setAttribute('aria-label', count.title);
+    stat.append(dotMark, count);
+    head.append(name, stat);
+    wrap.appendChild(head);
+    waiting.forEach((w) => {
+      const item = el('div', 'colnav-item crew-waiting');
+      item.title = window.MainSession.queueTitle();
+      item.append(el('span', 'cn-dot plain'), el('span', 'cn-text'), el('span', 'cn-meta', '等空位'));
+      item.querySelector('.cn-text').appendChild(sessionLabel(w.title));
+      wrap.appendChild(item);
+    });
+    return wrap;
+  }
   // Tooltip of the one-line 队长 row: counts, last activity, live status line.
   function captainTip(counts) {
     if (!captainHead) return;
@@ -273,7 +369,8 @@
     // (not in the middle of a drag or a rename)
     if (crewHead.open && !document.body.classList.contains('reordering') && !listEl.querySelector('[contenteditable="true"]')) {
       const cols = crewHead.ids.map((id) => host.columns().find((c) => c.id === id)).filter(Boolean);
-      if (orderKey(crewOrder(cols)) !== crewHead.shown) { render(); return; }
+      const waiting = waitlist();
+      if (crewShownKey(SC.crewModelGroups(cols.map(memberIdentity)), waiting) !== crewHead.shown) { render(); return; }
     }
     const text = [n.working && `${n.working} 干活中`, n.quota && `${n.quota} 额度用尽/等待`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, n.failed && `${n.failed} 失败`, supplement && `${supplement} 待补充`, waiting && `${waiting} 排队`]
       .filter(Boolean).join(' · ') || `${crewHead.ids.length} 个`;
@@ -328,15 +425,16 @@
     return box;
   }
 
-  function sessionRow(col) {
-    const item = el('div', 'colnav-item');
+  function sessionRow(col, opts) {
+    const crew = !!(opts && opts.crew);
+    const item = el('div', 'colnav-item' + (crew ? ' crew-member' : ''));
     item.dataset.colId = col.id;
     const badge = el('span', 'agent-badge cn-badge');
     badge.hidden = true;
     const dot = el('span', 'cn-dot');
     const text = el('span', 'cn-text');
     const label = sessionLabel(host.columnLabel(col));
-    // live activity line, only shown while the agent works or waits on you
+    // Live activity stays in the tooltip for crew rows; other lists still show it.
     const sub = el('span', 'cn-sub');
     text.append(label, sub);
     const meta = el('span', 'cn-meta', ago(host.lastTurnTs(col.id)));
@@ -345,15 +443,25 @@
       iconButton('archive', '归档', () => host.archiveColumn(col)),
       iconButton('more', '更多', (e) => sessionMenu(col, label, e.currentTarget), 'nav-more'),
     );
-    item.append(badge, dot, text, meta, actions);
+    item.append(dot, text, meta, actions);
+    if (!crew) item.insertBefore(badge, dot);
     attachDrag(item, col);
     label.addEventListener('dblclick', (e) => {
       e.preventDefault(); e.stopPropagation();
       inlineEdit(label, host.columnLabel(col), (v) => host.renameSession(col, v));
     });
     item.addEventListener('contextmenu', (e) => { e.preventDefault(); sessionMenu(col, label, { x: e.clientX, y: e.clientY }); });
-    host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge });
-    if (window.AgentInfo) {
+    const syncTip = crew ? (line) => {
+      const title = host.columnLabel(col);
+      const output = String(line || '').trim();
+      const tip = output ? title + '\n' + output : title;
+      item.title = tip;
+      label.title = tip;
+      label.setAttribute('aria-label', title);
+    } : null;
+    if (syncTip) syncTip('');
+    host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge: crew ? null : badge, syncTip });
+    if (!crew && window.AgentInfo) {
       const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
       const info = window.AgentInfo.resolveAgentInfo(col, entry, entry?.lastScreen);
       window.AgentInfo.renderBadge(badge, info, 'sidebar');
@@ -520,7 +628,10 @@
   function clearDrop() {
     listEl.querySelectorAll('.drop-before, .drop-after, .drop-into').forEach((n) => n.classList.remove('drop-before', 'drop-after', 'drop-into'));
   }
-  function rowsOf(group) { return [...group.querySelectorAll(':scope > .colnav-item')]; }
+  function rowsOf(group) {
+    const sel = group.dataset && group.dataset.crew ? '.colnav-item' : ':scope > .colnav-item';
+    return [...group.querySelectorAll(sel)];
+  }
   function dropTargetAt(x, y, srcId) {
     const over = document.elementFromPoint(x, y);
     if (!over || !listEl.contains(over)) return null;
@@ -543,6 +654,8 @@
       if (beforeId === srcId) return { kind: 'noop' };
       return { kind: 'move', crew, folderId, beforeId, el: row, cls: after ? 'drop-after' : 'drop-before' };
     }
+    const modelHead = over.closest('.crew-model');
+    if (modelHead && listEl.contains(modelHead)) return { kind: 'move', crew: true, beforeId: null, el: modelHead, cls: 'drop-into' };
     const fhead = over.closest('.nav-folder-head');
     if (fhead) return { kind: 'move', folderId: fhead.dataset.folderId, beforeId: null, el: fhead, cls: 'drop-into' };
     const section = over.closest('.nav-section');

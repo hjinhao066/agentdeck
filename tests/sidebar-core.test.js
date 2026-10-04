@@ -129,6 +129,25 @@ test('activity subtitles discard TUI controls and keep actual progress', () => {
 });
 
 
+test('crew members group by model, busiest group first, recent activity inside the group', () => {
+  const groups = S.crewModelGroups([
+    { id: 'a', label: 'Opus 5.5', iconProvider: 'Claude', seat: 'us', working: true, lastActive: 10 },
+    { id: 'b', label: 'Opus 5.5', iconProvider: 'Claude', seat: 'us', working: false, lastActive: 50 },
+    { id: 'c', label: 'Opus 5.5', iconProvider: 'Claude', seat: 'cn', working: true, lastActive: 5 },
+    { id: 'd', label: 'Grok 4.7', iconProvider: 'Grok', seat: '', working: true, lastActive: 1 },
+    { id: 'e', label: 'Grok 4.7', iconProvider: 'Grok', seat: '', working: true, lastActive: 40 },
+    { id: 'f', label: '', iconProvider: '', seat: '', working: false, lastActive: 3 },
+    { id: 'g', label: 'Opus 5.5', iconProvider: 'Claude', seat: 'us', working: true, lastActive: 50 },
+  ]);
+  assert.deepEqual(groups.map((g) => [g.label, g.seat, g.flag, g.working, g.ids]), [
+    ['Opus 5.5', 'us', '🇺🇸', 2, ['b', 'g', 'a']],
+    ['Grok 4.7', '', '', 2, ['e', 'd']],
+    ['Opus 5.5', 'cn', '🇨🇳', 1, ['c']],
+    ['未识别', '', '', 0, ['f']],
+  ]);
+  assert.equal(S.normalizeCollapsedModels([' Opus 5.5\u001fus ', ' Opus 5.5\u001fus ', '', 3, 'x'.repeat(200)]).length, 1);
+});
+
 test('sidebar text size restores defaults for invalid settings and clamps its independent range', () => {
   for (const value of [undefined, null, '16', NaN, Infinity, -Infinity]) assert.equal(S.normalizeFontSize(value), 13);
   assert.equal(S.normalizeFontSize(16), 16);

@@ -112,7 +112,7 @@ let config = {
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
-  folders: [], archived: [], schedules: [], navArchivedOpen: false,
+  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
   concurrencyCap: MainCore.concurrencyCap(),
 };
@@ -152,6 +152,7 @@ if (saved) {
   }));
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
+  config.crewModelsCollapsed = SidebarCore.normalizeCollapsedModels(saved.crewModelsCollapsed);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
@@ -3778,6 +3779,7 @@ setInterval(() => {
     if (nav && nav.sub && !config.navCollapsed) {
       const line = entry.alive ? (entry.state === 'quota' ? '额度用尽/等待' : lastActivityLine(text)) : '已退出';
       if (nav.sub.textContent !== line) nav.sub.textContent = line;
+      if (nav.syncTip) nav.syncTip(line);
     }
   });
   syncNav(); // mirror status dots + active highlight into the sidebar

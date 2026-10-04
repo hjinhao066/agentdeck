@@ -1483,40 +1483,72 @@ body.linking-board .board-port.out::before {
 }
 .captain-fold { width: 24px; height: 24px; }
 .captain-fold:disabled { opacity: .35; cursor: default; pointer-events: none; }
-.nav-crew .colnav-item { padding-left: 30px; }
-/* Keep the task title full-width; identity, time and actions get their own row. */
-.nav-crew .colnav-item {
-  display: grid; grid-template-columns: 7px minmax(0, 1fr) auto;
-  column-gap: 8px; row-gap: 4px; padding-top: 6px; padding-bottom: 6px;
-}
 .colnav-item.captain-item, .nav-crew { flex-shrink: 0; }
-.nav-crew .colnav-item .cn-text { display: contents; }
-.nav-crew .colnav-item .cn-dot { grid-column: 1; grid-row: 1; }
-.nav-crew .colnav-item .cn-label {
-  grid-column: 2 / -1; grid-row: 1; white-space: normal;
-  overflow: visible; overflow-wrap: anywhere; line-height: 1.45;
+/* One model header, then one line per member: dot, title, time. */
+.nav-crew .crew-model-block { min-width: 0; }
+.crew-model {
+  display: flex; align-items: center; gap: 4px; flex-wrap: nowrap;
+  min-height: 28px; margin: 2px 4px 0 20px; padding: 0 4px 0 0;
+  border-radius: 7px; color: var(--text-2); cursor: pointer; user-select: none;
 }
-/* One line only: a long session title ends in an ellipsis instead of wrapping. */
+.crew-model:hover { background: var(--icon-hover-bg); color: var(--text); }
+.crew-model-fold { width: 24px; height: 24px; flex: 0 0 24px; }
+.crew-model-icon {
+  width: 14px; height: 14px; flex: 0 0 14px;
+  display: inline-flex; align-items: center; justify-content: center; color: var(--text-2);
+}
+.crew-model-icon svg { width: 14px; height: 14px; display: block; }
+.crew-model-icon[data-icon-provider="claude"] { color: #d97706; }
+.crew-model-icon[data-icon-provider="cursor"] { color: #0097b8; }
+.crew-model-icon[data-icon-provider="grok"] { color: var(--text); }
+.crew-model-icon[data-icon-provider="codex"] { color: #0d8a6a; }
+.crew-model-icon[data-icon-provider="antigravity"] { color: #3b82f6; }
+.crew-model-name, .crew-model .agent-model-label {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: calc(12px * var(--sidebar-scale, 1)); font-weight: 600; color: var(--text); max-width: none;
+}
+.crew-model-flag { flex: 0 0 auto; }
+.crew-model-stat {
+  margin-left: auto; flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px;
+  color: var(--muted); font-size: calc(11px * var(--sidebar-scale, 1));
+}
+.crew-model-count {
+  min-width: 16px; height: 16px; padding: 0 5px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+  color: var(--muted); background: var(--pill-bg);
+}
+.crew-model-count.busy { color: var(--st-done); background: color-mix(in srgb, var(--st-done) 16%, transparent); }
+.crew-model-wait { cursor: default; padding-left: 28px; }
+.crew-model-wait:hover { background: transparent; color: var(--text-2); }
+.nav-crew .colnav-item {
+  position: relative;
+  display: flex; align-items: center; flex-wrap: nowrap; gap: 8px;
+  min-height: 28px; padding: 2px 6px 2px 46px;
+}
+.nav-crew .colnav-item .cn-text {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: row; align-items: center;
+}
+.nav-crew .colnav-item .cn-dot { flex: 0 0 auto; }
 .nav-crew .colnav-item .cn-label {
-  min-width: 0; max-width: 100%;
-  font-size: calc(12.5px * var(--sidebar-scale, 1));
+  flex: 1 1 auto; min-width: 0; max-width: 100%;
+  font-size: calc(12.5px * var(--sidebar-scale, 1)); line-height: 1.35;
   display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   overflow-wrap: normal; word-break: normal;
 }
 .nav-crew .cn-label[contenteditable="true"] {
   display: block; overflow: visible; white-space: normal; text-overflow: clip;
 }
-.nav-crew .cn-badge {
-  grid-column: 2; grid-row: 2; justify-self: start; min-width: 0;
-  max-width: 100%; margin-right: 0;
+.nav-crew .cn-badge, .nav-crew .cn-sub { display: none !important; }
+.nav-crew .cn-meta { flex: 0 0 auto; }
+.nav-crew .colnav-item .cn-actions {
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; opacity: 0; pointer-events: none;
 }
-.captain-item .cn-badge .agent-model-label, .nav-crew .cn-badge .agent-model-label { max-width: 96px; min-width: 0; }
-.nav-crew .cn-meta, .nav-crew .cn-actions { grid-column: -2; grid-row: 2; }
-.nav-crew .colnav-item .cn-actions { display: inline-flex; opacity: 0; pointer-events: none; }
 .nav-crew .colnav-item:hover .cn-actions, .nav-crew .colnav-item:focus-within .cn-actions { opacity: 1; pointer-events: auto; }
-.nav-crew .colnav-item:focus-within .cn-meta { display: none; }
+.nav-crew .colnav-item:hover .cn-meta, .nav-crew .colnav-item:focus-within .cn-meta { display: inline; visibility: hidden; }
 .nav-crew .nav-ibtn { width: 24px; height: 24px; }
-.nav-crew .cn-sub { grid-column: 2 / -1; grid-row: 3; }
+.captain-item .cn-badge .agent-model-label, .nav-crew .cn-badge .agent-model-label { max-width: 96px; min-width: 0; }
 /* 队长's row is a single line: [fold][crown][dot] 队长 … [count][model][switch].
    Counts, last activity and the live status line are in its tooltip. */
 .colnav-item.captain-item {

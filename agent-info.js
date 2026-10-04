@@ -301,6 +301,15 @@
     };
   }
 
+  function iconProviderFor(model, provider) {
+    const name = model || '';
+    if (/^(?:Opus|Sonnet|Haiku)\b/i.test(name)) return 'Claude';
+    if (/^Grok\b/i.test(name)) return 'Grok';
+    if (/^(?:GPT-|o[13]\b)/i.test(name)) return 'Codex';
+    if (/^(?:Gemini\b|Flash\b|Pro\b)/i.test(name)) return 'Antigravity';
+    return provider || '';
+  }
+
   function renderBadge(badgeEl, info, context) {
     if (!badgeEl) return;
     if (!info || !info.provider || info.isShell) {
@@ -321,11 +330,7 @@
     badgeEl.dataset.infoKey = info.key;
 
     const model = info.shortModel || '';
-    let iconProvider = info.provider;
-    if (/^(?:Opus|Sonnet|Haiku)\b/i.test(model)) iconProvider = 'Claude';
-    else if (/^Grok\b/i.test(model)) iconProvider = 'Grok';
-    else if (/^(?:GPT-|o[13]\b)/i.test(model)) iconProvider = 'Codex';
-    else if (/^(?:Gemini\b|Flash\b|Pro\b)/i.test(model)) iconProvider = 'Antigravity';
+    const iconProvider = iconProviderFor(model, info.provider);
 
     const iconSvg = PROVIDER_ICONS[iconProvider] || '';
     const labelText = info.shortModel || '';
@@ -386,6 +391,7 @@
     inferProvider,
     extractModel,
     shortModelName,
+    iconProviderFor,
     extractEffort,
     formatTooltip,
     resolveAgentInfo,
