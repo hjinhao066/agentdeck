@@ -545,9 +545,10 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox,
-    extractSteps, capSteps, isToolStep, editsFromSteps, fmtDuration, turnTimeLabel, MAX_STEPS, MAX_STEP_BYTES, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
+    // a turn's work and timing in the chat view
+    extractSteps, capSteps, isToolStep, editsFromSteps, fmtDuration, turnTimeLabel, MAX_STEPS, MAX_STEP_BYTES,
   };
 });

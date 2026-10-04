@@ -144,7 +144,7 @@
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false, openProc: new Set(), allSteps: new Set(), openEdits: new Set() };
+    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
     scroll.addEventListener('scroll', () => {
       v.following = nearBottom(scroll);
       if (v.following) newContent.hidden = true;
@@ -348,6 +348,8 @@
 
   // ---- the work before a reply: "处理了 18分43秒 ›", folded by default ----
   const PROC_TAIL = 8;
+  // Which folds a column has open (turn ids), kept across re-renders.
+  const opened = (v, key) => v[key] || (v[key] = new Set());
   function processRow(v, turn) {
     const open = pending.get(v.id);
     if (!turn.done) {
@@ -368,15 +370,15 @@
     chev.innerHTML = host.ICONS.chevRight;
     toggle.append(el('span', 'proc-label', label), chev);
     const body = el('div', 'proc-body');
-    const expanded = v.openProc.has(turn.id);
+    const expanded = opened(v, 'openProc').has(turn.id);
     toggle.setAttribute('aria-expanded', String(expanded));
     toggle.title = expanded ? '收起过程' : '展开过程（工具调用、命令）';
     proc.classList.toggle('open', expanded);
     body.hidden = !expanded;
     if (expanded) fillProcess(v, turn, body);
     toggle.addEventListener('click', () => {
-      const now = !v.openProc.has(turn.id);
-      if (now) v.openProc.add(turn.id); else v.openProc.delete(turn.id);
+      const now = !opened(v, 'openProc').has(turn.id);
+      if (now) opened(v, 'openProc').add(turn.id); else opened(v, 'openProc').delete(turn.id);
       toggle.setAttribute('aria-expanded', String(now));
       toggle.title = now ? '收起过程' : '展开过程（工具调用、命令）';
       proc.classList.toggle('open', now);
@@ -397,7 +399,7 @@
       body.appendChild(note);
       return;
     }
-    const all = v.allSteps.has(turn.id) || steps.length <= PROC_TAIL;
+    const all = opened(v, 'allSteps').has(turn.id) || steps.length <= PROC_TAIL;
     if (!all) {
       const more = el('button', 'proc-more');
       more.type = 'button';
@@ -405,7 +407,7 @@
       chev.innerHTML = host.ICONS.chevRight;
       more.append(`前面 ${steps.length - PROC_TAIL} 条消息`, chev);
       more.title = '展开更早的过程';
-      more.addEventListener('click', () => { v.allSteps.add(turn.id); fillProcess(v, turn, body); });
+      more.addEventListener('click', () => { opened(v, 'allSteps').add(turn.id); fillProcess(v, turn, body); });
       body.appendChild(more);
     }
     (all ? steps : steps.slice(-PROC_TAIL)).forEach((step) => {
@@ -521,14 +523,14 @@
     chev.innerHTML = host.ICONS.chevRight;
     head.append(ico, text, chev);
     const list = el('div', 'ec-list');
-    const open = v.openEdits.has(turn.id);
+    const open = opened(v, 'openEdits').has(turn.id);
     list.hidden = !open;
     card.classList.toggle('open', open);
     head.setAttribute('aria-expanded', String(open));
     head.title = '展开 / 收起改动的文件';
     head.addEventListener('click', () => {
-      const now = !v.openEdits.has(turn.id);
-      if (now) v.openEdits.add(turn.id); else v.openEdits.delete(turn.id);
+      const now = !opened(v, 'openEdits').has(turn.id);
+      if (now) opened(v, 'openEdits').add(turn.id); else opened(v, 'openEdits').delete(turn.id);
       list.hidden = !now;
       card.classList.toggle('open', now);
       head.setAttribute('aria-expanded', String(now));
