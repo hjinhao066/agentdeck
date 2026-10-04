@@ -11,6 +11,11 @@ const path = require('path');
 // Set AGENTDECK_SCREENSHOT_DIR to keep PNGs.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const shots = process.env.AGENTDECK_SCREENSHOT_DIR;
+// Keep pending-release fixtures ahead of the runtime when its version is bumped.
+const appVersion = require('../../package.json').version;
+const [major, minor, patch] = appVersion.split('.').map(Number);
+const targetVersion = `${major}.${minor}.${patch + 1}`;
+const laterVersion = `${major}.${minor + 1}.0`;
 let application, page, profile;
 test.describe.configure({ mode: 'serial' });
 
@@ -22,17 +27,17 @@ function seed(dir) {
     assignee: null, session_id: null, latest_receipt: '', verify: false, rework_count: 0, created: at(600), updated: at(30), archived: false, ...extra });
   const boards = {
     agentdeck: [
-      card('agentdeck', 'v-112', '重启 AgentDeck 后自动续派队员（1.1.2）', 'done'),
-      card('agentdeck', 'v-row', '侧边栏队长行并成一行 + 切换账号按钮重做；架构图右侧「版本进度」面板，标题很长时用省略号收尾', 'doing', { detail: '看整体进度。1.1.3' }),
-      card('agentdeck', 'v-font', 'Cmd 加号/减号放大缩小字体', 'done', { detail: '用户：按 Cmd+ 字变大，框不变。1.1.3' }),
-      card('agentdeck', 'v-draft', '对话页和终端页草稿同步', 'done', { detail: '1.1.3', archived: true }),
-      card('agentdeck', 'v-label', '左下角显示版本号', 'review', { version: '1.1.3' }),
-      card('agentdeck', 'v-release', '1.1.3 发版：版本号 + 额度面板一行化 + 侧边栏队长行', 'todo'),
-      card('agentdeck', 'v-next', '1.2.0：派活指定 Mac/Windows', 'todo'),
-      card('agentdeck', 'v-lookalike', '迁移脚本 1.1.30 兼容', 'todo'),
-      card('agentdeck', 'v-old', '旧版说明 1.1.3', 'todo', { archived: true }),
+      card('agentdeck', 'v-112', `重启 AgentDeck 后自动续派队员（${appVersion}）`, 'done'),
+      card('agentdeck', 'v-row', '侧边栏队长行并成一行 + 切换账号按钮重做；架构图右侧「版本进度」面板，标题很长时用省略号收尾', 'doing', { detail: `看整体进度。${targetVersion}` }),
+      card('agentdeck', 'v-font', 'Cmd 加号/减号放大缩小字体', 'done', { detail: `用户：按 Cmd+ 字变大，框不变。${targetVersion}` }),
+      card('agentdeck', 'v-draft', '对话页和终端页草稿同步', 'done', { detail: targetVersion, archived: true }),
+      card('agentdeck', 'v-label', '左下角显示版本号', 'review', { version: targetVersion }),
+      card('agentdeck', 'v-release', `${targetVersion} 发版：版本号 + 额度面板一行化 + 侧边栏队长行`, 'todo'),
+      card('agentdeck', 'v-next', `${laterVersion}：派活指定 Mac/Windows`, 'todo'),
+      card('agentdeck', 'v-lookalike', `迁移脚本 ${targetVersion}0 兼容`, 'todo'),
+      card('agentdeck', 'v-old', `旧版说明 ${targetVersion}`, 'todo', { archived: true }),
     ],
-    hermes: [card('hermes', 'h-113', 'Hermes 1.1.3 升级', 'todo')],
+    hermes: [card('hermes', 'h-113', `Hermes ${targetVersion} 升级`, 'todo')],
   };
   fs.mkdirSync(dir, { recursive: true });
   for (const [project, cards] of Object.entries(boards)) fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ version: 1, project, cards }, null, 2));
@@ -142,9 +147,9 @@ test('版本进度 icon button next to 架构图 lists the next version\'s cards
   await page.keyboard.press('Enter');
   await expect(panel).toBeVisible();
   await expect(btn).toHaveAttribute('aria-expanded', 'true');
-  await expect(panel.locator('.vp-heading')).toHaveText('v1.1.3 进度');
+  await expect(panel.locator('.vp-heading')).toHaveText(`v${targetVersion} 进度`);
   const titles = ['侧边栏队长行并成一行 + 切换账号按钮重做；架构图右侧「版本进度」面板，标题很长时用省略号收尾',
-    'Cmd 加号/减号放大缩小字体', '对话页和终端页草稿同步', '左下角显示版本号', '1.1.3 发版：版本号 + 额度面板一行化 + 侧边栏队长行'];
+    'Cmd 加号/减号放大缩小字体', '对话页和终端页草稿同步', '左下角显示版本号', `${targetVersion} 发版：版本号 + 额度面板一行化 + 侧边栏队长行`];
   await expect(panel.locator('.vp-title')).toHaveText(titles);
   await expect(panel.locator('.vp-item.done .vp-title')).toHaveText([titles[1], titles[2]]);
   await expect(panel.locator('.vp-status')).toHaveText(['进行中', '完成', '完成', '待验收', '待办']);

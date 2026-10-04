@@ -128,7 +128,7 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await expect(card.locator('.task-summary')).toContainText('stand-in finished please write the report');
   await expect(card.locator('.att')).toHaveAttribute('title', demoFile);
   expect(await page.evaluate((i) => columns.find((c) => c.id === i).lastReceipt.files, child)).toEqual([demoFile]);
-  await expect(head).toContainText('1 完成');
+  await expect(head).toHaveAttribute('title', /1 完成/);
   // The terminal is the default view; open chat explicitly to use its card.
   await page.evaluate((id) => ChatUI.setMode(id, 'chat'), mainId);
   // clicking the card's title opens it right after the Captain
@@ -638,6 +638,9 @@ test('screen receipts and questions never settle tasks; only ended turns get a t
 
 test('receipts ride along with the next message to the Captain, not in its bubble', async () => {
   expect(await page.evaluate(() => config.mainSession.pending.length)).toBeGreaterThan(0);
+  // Select the Captain before opening chat; clicking an unfocused column switches to its terminal.
+  await page.locator('.captain-item').click();
+  await page.locator(`.column[data-col-id="${mainId}"] .view-toggle`).click();
   const box = page.locator(`.column[data-col-id="${mainId}"] .composer textarea`);
   await box.click();
   await page.keyboard.type('status please');
@@ -831,6 +834,7 @@ test('after a restart the Captain row is still pinned and shows its saved conver
   await expect(col).not.toHaveClass(/chat-mode/);
   await expect(col.locator('.chat-scroll > .turn .task-card.st-done', { hasText: 'Worker y' })).toHaveCount(1);
   // the conversation from before the clear, from its saved file, read-only
+  await col.locator('.view-toggle').click();
   const turnsBefore = await page.evaluate((i) => ChatUI.turnsOf(i).length, id);
   await col.locator('.retired-toggle').click();
   const seg = col.locator(`.retired-chat[data-chat-id="${oldCaptainId}"]`);
