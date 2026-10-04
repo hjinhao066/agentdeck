@@ -51,16 +51,59 @@ test('project filter keeps one project (any spelling); 全部 keeps all; archive
   assert.ok(!U.projects(cards).some((p) => p.key === 'old'));
 });
 
-test('sort by updated is newest first; sort by order follows project/order/id', () => {
+test('cards always show in task order (project/order/id), whatever their update time', () => {
   const cards = [
     card('x1', { project: 'b', order: 0, updated: '2026-10-01T10:00:00Z' }),
     card('x2', { project: 'a', order: 2, updated: '2026-10-03T10:00:00Z' }),
     card('x3', { project: 'a', order: 1, updated: '2026-10-02T10:00:00Z' }),
     card('x0', { project: 'a', order: 1, updated: '2026-10-02T10:00:00Z' }),
+    card('x4', { project: 'a', order: 1.5 }),
   ];
-  assert.deepEqual(ids(column(U.buildBoard(cards, { sort: 'updated' }), 'todo')), ['x2', 'x0', 'x3', 'x1']);
-  assert.deepEqual(ids(column(U.buildBoard(cards, { sort: 'order' }), 'todo')), ['x0', 'x3', 'x2', 'x1']);
-  assert.deepEqual(ids(column(U.buildBoard(cards, { sort: 'bogus' }), 'todo')), ['x2', 'x0', 'x3', 'x1'], 'unknown sort falls back to updated');
+  assert.deepEqual(ids(column(U.buildBoard(cards), 'todo')), ['x0', 'x3', 'x4', 'x2', 'x1']);
+});
+
+test('lanes follow the saved lane order, new projects go after by name; the overview keeps every project', () => {
+  const cards = [card('a', { project: 'alpha', status: 'doing' }), card('b', { project: 'beta', status: 'needs_user' }), card('c', { project: 'gamma', status: 'done' }), card('d', { project: 'delta' })];
+  assert.deepEqual(U.buildBoard(cards).lanes.map((l) => l.key), ['alpha', 'beta', 'delta', 'gamma']);
+  const board = U.buildBoard(cards, { laneOrder: ['Gamma', 'gone', 'beta'], project: 'beta' });
+  assert.deepEqual(board.projects.map((p) => p.key), ['gamma', 'beta', 'alpha', 'delta']);
+  assert.deepEqual(board.lanes.map((l) => l.key), ['beta']);
+  assert.deepEqual(board.projects.map((p) => [p.open, p.counts.needs_user, p.counts.done]), [[0, 0, 1], [1, 1, 0], [1, 0, 0], [1, 0, 0]]);
+  assert.equal(U.buildBoard(cards).open, 3);
+  assert.deepEqual(U.moveLane(['a', 'b', 'c'], 'c', 'a'), ['c', 'a', 'b']);
+  assert.deepEqual(U.moveLane(['a', 'b', 'c'], 'a', null), ['b', 'c', 'a']);
+  assert.deepEqual(U.moveLane(['a', 'b', 'c'], 'b', 'b'), ['a', 'c', 'b'], 'an anchor that is the lane itself means last');
+});
+
+test('需要你: only a real question is shown; internal wording and stale results are not questions', () => {
+  const ask = (extra) => card('q', { status: 'needs_user', ...extra });
+  assert.equal(U.userQuestion(ask({ latest_receipt: '密码最短 8 位还是 12 位？', last_event: 'a1:ask:command:abc' })), '密码最短 8 位还是 12 位？');
+  assert.equal(U.userQuestion(ask({ latest_receipt: '用哪个配色？' })), '用哪个配色？', 'a dispatcher question has no event key');
+  assert.equal(U.userQuestion(ask({ latest_receipt: '已结束，未提交回执', last_event: 'a1:fallback::x' })), '');
+  assert.equal(U.userQuestion(ask({ latest_receipt: '调度已结束，尚未派出执行会话' })), '');
+  assert.equal(U.userQuestion(ask({ latest_receipt: '' })), '');
+  assert.equal(U.userQuestion(ask({ latest_receipt: '已完成，限流 10 次/分钟。', last_event: 'a1:complete:command:abc' })), '', 'an old result is not a question');
+  assert.equal(U.userQuestion(ask({ user_question: ' 选 A 还是 B？ ', latest_receipt: '已结束，未提交回执' })), '选 A 还是 B？');
+  assert.equal(U.userQuestion(card('d', { status: 'doing', latest_receipt: '进度如何？' })), '', 'only 需要你 cards carry a question');
+  assert.equal(U.buildBoard([ask({ latest_receipt: '选哪个？' })]).lanes[0].columns[3].cards[0].question, '选哪个？');
+  assert.equal(U.receiptText({ latest_receipt: '已结束，未提交回执' }), '队员停下了，但没有交结果。');
+  assert.equal(U.receiptText({ latest_receipt: '调度已结束，尚未派出执行会话' }), '这件事还没有派给队员。');
+  assert.equal(U.receiptText({ latest_receipt: '模板已合并。' }), '模板已合并。');
+});
+
+test('drop anchors, status steps and file paths', () => {
+  assert.deepEqual(U.dropAnchor(['a', 'b', 'c'], 'c', 0), { before: 'a' });
+  assert.deepEqual(U.dropAnchor(['a', 'b', 'c'], 'a', 2), { after: 'c' });
+  assert.equal(U.dropAnchor(['a', 'b', 'c'], 'b', 1), null, 'dropped where it already is');
+  assert.deepEqual(U.dropAnchor(['a', 'b'], 'x', 1), { before: 'b' }, 'a card from another column');
+  assert.deepEqual(U.dropAnchor(['a', 'b'], 'x', 9), { after: 'b' });
+  assert.equal(U.dropAnchor([], 'x', 0), null);
+  assert.equal(U.stepStatus('todo', 1), 'doing');
+  assert.equal(U.stepStatus('todo', -1), null);
+  assert.equal(U.stepStatus('done', 1), null);
+  assert.equal(U.labelOf('needs_user'), '需要你');
+  assert.deepEqual(U.filePaths('见 /Users/a/reports/x/receipt.md，以及 ~/agentdeck/main.js。C:\\a\\b.txt；a/b 和 http://x.com/a/b 不算', ['/x/y', '/Users/a/reports/x/receipt.md']),
+    ['/Users/a/reports/x/receipt.md', '~/agentdeck/main.js', 'C:\\a\\b.txt', '/x/y']);
 });
 
 test('dependencies: unfinished prerequisites read 等 X 完成, met ones are parallel', () => {

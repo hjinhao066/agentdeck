@@ -206,6 +206,30 @@ class TaskStore {
       touch(card); return { card, notices: [] };
     });
   }
+  // Drag-to-reorder: put a card right before/after another card of the same
+  // project (no anchor = end of the project). Only `order` changes; a midpoint
+  // keeps every other card untouched, and the project is renumbered only when
+  // no number fits between the two neighbours.
+  reorder(input) {
+    if (input.before != null && input.after != null) throw new Error('Use either before or after.');
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      const anchorId = input.before != null ? input.before : input.after;
+      const anchor = anchorId != null ? this.find(docs, anchorId) : null;
+      if (anchor && (anchor === card || anchor.project !== card.project)) throw new Error('Cards can only be reordered inside their own project.');
+      const byOrder = (a, b) => a.order - b.order || a.id.localeCompare(b.id);
+      const all = docs.get(card.project).doc.cards.slice().sort(byOrder);
+      const rest = all.filter((c) => c !== card);
+      const index = anchor ? rest.indexOf(anchor) + (input.before != null ? 0 : 1) : rest.length;
+      if (all.indexOf(card) === index) return { card, notices: [] };
+      const prev = rest[index - 1], next = rest[index];
+      const order = !next ? prev.order + 1 : !prev ? next.order / 2 : (prev.order + next.order) / 2;
+      rest.splice(index, 0, card);
+      if ((!prev || order > prev.order) && (!next || order < next.order)) { card.order = order; touch(card); }
+      else rest.forEach((c, i) => { if (c.order !== i) { c.order = i; touch(c); } });
+      return { card, notices: [] };
+    });
+  }
   bind(input) {
     idValue(input.session_id); idValue(input.attempt_id);
     return this.mutate((docs) => {
