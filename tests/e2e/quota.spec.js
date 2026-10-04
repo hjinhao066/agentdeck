@@ -45,6 +45,21 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：未识别/);
   // The isolated profile is barred from reading the user's real quota caches.
   expect(await page.evaluate(() => window.deck.quotaLocal())).toEqual([]);
+  // Quota tracks Grok on Cursor, while model badges already choose that family.
+  for (const [provider, family] of [['Codex', 'codex'], ['Cursor', 'grok']]) {
+    const svg = badge(provider).locator('.quota-icon svg');
+    await expect(svg).toHaveAttribute('fill', 'currentColor');
+    await expect(svg).toHaveAttribute('width', '13');
+    await expect(svg).toHaveAttribute('height', '13');
+    await expect(svg.locator('path')).toHaveCount(provider === 'Codex' ? 1 : 2);
+    const sidebar = page.locator(`.colnav-item[data-col-id="quota-${provider}"] [data-icon-provider="${family}"] svg`);
+    await expect(sidebar).toBeVisible();
+    expect(await svg.evaluate((el) => el.outerHTML)).toBe(await sidebar.evaluate((el) => el.outerHTML));
+    expect(await svg.evaluate((el) => getComputedStyle(el).fill)).toBe(await badge(provider).evaluate((el) => getComputedStyle(el).color));
+  }
+  await page.evaluate(() => document.activeElement?.blur());
+  await page.mouse.move(500, 400);
+  if (process.env.AGENTDECK_ICON_SHOT) await page.locator('#quotaBar').screenshot({ path: process.env.AGENTDECK_ICON_SHOT });
 });
 
 test('Claude-model limits never exhaust Gemini or Grok 4.7; screenshots use simulated data', async () => {

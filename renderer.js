@@ -110,6 +110,7 @@ let config = {
   captainTokenSaver: MainCore.tokenSaverSettings(),
 };
 const saved = window.deck.loadConfig();
+config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
@@ -487,7 +488,7 @@ function applyTheme(theme) {
   saveConfig();
 }
 
-// ---- Terminal and chat font size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
+// ---- Text size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
 const FONT_MIN = 8, FONT_MAX = 32, FONT_DEFAULT = 13;
 // The chat view follows the same size: it scales with the terminal font.
 function applyChatZoom() {
@@ -514,8 +515,28 @@ function fontSizeDelta(e) {
   if (k === '0') return 0;
   return null;
 }
+function applySidebarFontSize() {
+  document.getElementById('colNav').style.setProperty('--sidebar-scale', String(config.sidebarFontSize / SidebarCore.FONT_DEFAULT));
+}
+applySidebarFontSize();
+let contentFontFocus = false;
+// Clicking non-focusable chrome also changes the shortcut's target; tabbing
+// back to a terminal/composer changes it back. Native menus share this scope.
+for (const event of ['pointerdown', 'focusin']) document.addEventListener(event, (e) => {
+  contentFontFocus = !!e.target.closest('.xterm, .composer, .chat-scroll');
+}, true);
+function adjustTextSize(delta) {
+  if (contentFontFocus) {
+    setFontSize(delta === 0 ? FONT_DEFAULT : config.fontSize + delta);
+  } else {
+    config.sidebarFontSize = SidebarCore.normalizeFontSize(delta === 0 ? SidebarCore.FONT_DEFAULT : config.sidebarFontSize + delta);
+    applySidebarFontSize();
+    saveConfig();
+    showToast(`侧边栏字号 ${Math.round(config.sidebarFontSize / SidebarCore.FONT_DEFAULT * 100)}%`);
+  }
+}
 window.deck.onFontSize((delta) => {
-  if (delta === -1 || delta === 0 || delta === 1) setFontSize(delta === 0 ? FONT_DEFAULT : config.fontSize + delta);
+  if (delta === -1 || delta === 0 || delta === 1) adjustTextSize(delta);
 });
 
 // ---- Window chrome: sidebar head, top bar over the deck, sidebar footer ----
@@ -3346,7 +3367,7 @@ function renderQuotaBar() {
       item.setAttribute('role', 'group');
       item.tabIndex = 0; // keyboard users can inspect the same tooltip
       const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
-      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider];
+      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
       const label = document.createElement('span'); label.className = 'quota-label';
       const name = document.createElement('span'); name.className = 'quota-name';
       const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
@@ -3533,12 +3554,12 @@ document.addEventListener('keydown', (e) => {
   }
   if (handled) { e.preventDefault(); e.stopPropagation(); }
 }, true);
-// Font size works everywhere, including inside a terminal: capture phase runs
+// Text size works everywhere, including inside a terminal: capture phase runs
 // before xterm's own handlers, so Ctrl+- never reaches the pty as ^_.
 document.addEventListener('keydown', (e) => {
   const zd = fontSizeDelta(e);
   if (zd === null) return;
-  setFontSize(zd === 0 ? FONT_DEFAULT : config.fontSize + zd);
+  adjustTextSize(zd);
   e.preventDefault();
   e.stopPropagation();
 }, true);

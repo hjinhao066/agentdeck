@@ -34,6 +34,11 @@ the middle:
   lines. The Captain row keeps its full height when the list scrolls. Activity
   subtitles show progress/status text, filtering out terminal shortcut hints
   and settings such as `Thinking: xhigh`.
+  ⌘+/⌘−/⌘0 (Ctrl on Windows/Linux) grow, shrink and reset sidebar text when
+  focus or the most recent click is outside the terminal/chat content. Titles,
+  model labels and status text scale together from 77% to 154%; this size is
+  saved independently of terminal/chat text and survives restart. In a terminal
+  or chat, the same shortcuts still adjust terminal/chat text instead.
   Their columns keep running at a normal size but sit outside the deck, and their
   popups are left to the 队长. Opening one (from that list or a task card) shows it right after the 队长 until you move on to another
   column. 拉到前台 in its menu, or dragging it into a folder or 对话, makes it an
