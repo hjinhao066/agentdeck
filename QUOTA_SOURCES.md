@@ -13,8 +13,11 @@ were left running. Quota probes made no inference requests.
 
 ## Claude seat contract (with `feat/claude-seats`)
 
-- Configuration: `claudeSeats: [{id: 'east', name: '东席', configDir:
-  '~/.claude'}, {id: 'west', name: '西席', configDir: '~/.claude-west'}]`.
+- Configuration: `claudeSeats: [{id: 'us', name: '🇺🇸 US', configDir:
+  '~/.claude'}, {id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude-cn'}]`.
+  Names and directories are configurable; these paths are examples, not a migration.
+  The final directories come from `feat/claude-seats`. IDs `us` / `cn` receive
+  🇺🇸 / 🇨🇳 flags without duplicating a flag already present in the name.
   No configuration falls back to **one** `~/.claude` item (`default`). Never
   create a second seat or presume a login in this quota feature.
 - `column.claudeSeatId` binds a live screen to its seat. The Captain badge uses
