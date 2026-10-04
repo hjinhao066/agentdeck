@@ -35,19 +35,31 @@ function seatEnvironment(env, seat, home) {
   else result.CLAUDE_CONFIG_DIR = loc.dir;
   return result;
 }
-function hasKeychain(service) {
-  // No -w/-g: check metadata only, never fetch a password into the renderer.
-  return new Promise((resolve) => execFile('security', ['find-generic-password', '-s', service],
-    { timeout: 2000 }, (error) => resolve(!error)));
+function credentialStatus(service, execFileImpl = execFile) {
+  return new Promise((resolve) => execFileImpl('security', ['find-generic-password', '-s', service, '-w'],
+    { timeout: 2000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      if (error) return resolve({ present: false, loginReason: error.code === 44 ? '此席位没有登录凭据' : '', authReason: '无法核实此席位钥匙串，请检查钥匙串访问权限' });
+      try {
+        const oauth = JSON.parse(stdout).claudeAiOauth;
+        const access = typeof oauth?.accessToken === 'string' && !!oauth.accessToken;
+        const refresh = typeof oauth?.refreshToken === 'string' && !!oauth.refreshToken;
+        const expired = Number.isFinite(oauth?.expiresAt) && oauth.expiresAt <= Date.now();
+        const valid = (access && !expired) || refresh;
+        resolve({ present: valid, loginReason: valid ? '' : expired ? '此席位访问令牌已过期且没有刷新令牌' : '此席位没有可用的 OAuth 凭据' });
+      } catch (_) { resolve({ present: false, loginReason: '此席位凭据格式无效' }); }
+    }));
 }
-async function seatInfo(seat, home, platform = process.platform, keychain = hasKeychain) {
+async function seatInfo(seat, home, platform = process.platform, keychain = credentialStatus) {
   const loc = credentialLocation(seat, home);
   let email = '';
   try {
     if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) email = S.maskEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
   } catch (_) {}
-  const present = !!email && (fs.existsSync(loc.credentialsPath) || (platform === 'darwin' && await keychain(loc.keychainService)));
-  return { ...seat, configDir: loc.dir, maskedEmail: email, loggedIn: !!email && !!present, usagePath: loc.usagePath };
+  const status = platform === 'darwin' ? await keychain(loc.keychainService) : fs.existsSync(loc.credentialsPath);
+  const present = typeof status === 'object' ? status.present : !!status;
+  return { ...seat, configDir: loc.dir, maskedEmail: email, loggedIn: !!present,
+    loginReason: typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
+    authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
 }
 const USAGE_SOURCES = ['Claude /usage', 'Claude 会话状态行'];
 function sanitizeUsage(value) {
@@ -102,9 +114,9 @@ function checkpoint(home, userData, payload) {
   fs.renameSync(board + '.tmp', board);
   return board;
 }
-function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, onUsageRecorded = () => {} }) {
+function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, platform = process.platform, onUsageRecorded = () => {} }) {
   const find = (id) => { const seat = S.normalize(getSeats()).find((s) => s.id === id); if (!seat) throw new Error('席位不存在'); return seat; };
-  handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home))));
+  handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home, platform))));
   handleMain('seats:validate', (_e, { seats }) => {
     const normalized = S.normalize(seats);
     if (!Array.isArray(seats) || normalized.length !== seats.length) throw new Error('席位列表无效');
@@ -123,4 +135,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
     writeUsage(seat, home, usage); onUsageRecorded(); return true;
   });
 }
-module.exports = { directory, credentialLocation, seatEnvironment, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };

@@ -77,10 +77,10 @@
       const b = node('button', 'seat-choice');
       const icon = node('span', 'seat-account-icon', seat.icon);
       if (seat.id === 'chatgpt') icon.innerHTML = window.AgentInfo.PROVIDER_ICONS.Codex;
-      b.append(icon, node('span', '', `${seat.name}${selected ? ' · 当前' : seat.loggedIn ? '' : ' · 未登录'}`));
+      b.append(icon, node('span', '', `${seat.name}${selected ? ' · 当前' : seat.loggedIn ? '' : seat.loginReason ? ' · 需登录' : ' · 待核实'}`));
       b.type = 'button'; b.dataset.seatId = seat.id;
       b.setAttribute('aria-pressed', String(selected));
-      b.title = seat.id === 'chatgpt' ? `${seat.name} · Codex GPT-6.1 Sol` : `${seat.name} · ${seat.maskedEmail || '尚未登录'}`;
+      b.title = seat.id === 'chatgpt' ? `${seat.name} · Codex GPT-6.1 Sol` : `${seat.name} · ${seat.loginReason || seat.authReason || seat.maskedEmail || '已登录'}`;
       b.disabled = !seat.loggedIn || selected;
       b.addEventListener('click', async () => { d.close(); await switchSeat(seat.id); });
       d.append(b);
@@ -131,7 +131,7 @@
     try {
       await refresh();
       const target = id === 'chatgpt' ? { id, loggedIn: true } : seats.find((s) => s.id === id);
-      if (!target?.loggedIn) { host.showToast('这个席位尚未登录，请先在普通终端登录一次'); return false; }
+      if (!target?.loggedIn) { host.showToast(`${target?.name || id}：${target?.loginReason || target?.authReason || '席位不存在'}${target?.loginReason ? '，请在此席位配置目录下登录' : ''}`); return false; }
       if (window.MainSession.mainCol() !== col || hasDraft(col)) return false;
       // Token-saver integration point. The sibling branch can plug in its
       // confirmed board archive; quota exhaustion uses the durable local fallback.

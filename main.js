@@ -12,7 +12,7 @@ const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
-const { seatEnvironment, registerSeatsIpc } = require('./claude-seats-main');
+const { seatEnvironment, credentialLocation, registerSeatsIpc } = require('./claude-seats-main');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
@@ -194,6 +194,7 @@ function shellArgs() {
   return ['-NoLogo', '-NoExit', '-EncodedCommand', b64];
 }
 
+const ptySeats = new Map();
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
@@ -220,6 +221,23 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   // alerts and persistent plaintext terminal output in a shared directory.
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
+  const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  let selectedSeat, binding;
+  try {
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; }
+    selectedSeat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === (seatId || cfg.activeClaudeSeatId || 'cn'));
+    if (!selectedSeat) throw new Error('席位不存在');
+    binding = credentialLocation(selectedSeat, seatHome).keychainService;
+  } catch (_) {
+    send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
+    send('pty:exit', { id }); return;
+  }
+  if (ptys.has(id)) {
+    if (ptySeats.get(id) === binding) return;
+    killPty(id, true);
+  }
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   const receiptToken = crypto.randomBytes(24).toString('hex');
@@ -227,22 +245,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
   let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
-  if (seatId) {
-    try {
-      let cfg = {};
-      try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
-      catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const seat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
-      if (!seat) throw new Error('席位不存在');
-      terminalEnv = seatEnvironment(terminalEnv, seat, tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME);
-    } catch (_) {
-      managedSessions.delete(id);
-      receiptSessions.delete(id);
-      send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
-      send('pty:exit', { id });
-      return;
-    }
-  }
+  terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
   // Never inherit an outer deck's managed capability into an independent shell.
   for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_RECEIPT_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
   terminalEnv.AGENTDECK_RECEIPT_TOKEN = receiptToken;
@@ -285,6 +288,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     if (ptys.get(id) === p) {
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
+      ptySeats.delete(id);
       managedSessions.delete(id);
       receiptSessions.delete(id);
       removeCredentials(boardControlDir, id);
@@ -295,6 +299,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     }
   });
   ptys.set(id, p);
+  ptySeats.set(id, binding);
 }
 
 function send(channel, payload) {
@@ -688,12 +693,12 @@ app.whenReady().then(() => {
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
-  registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
+  registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
     onUsageRecorded: () => { quotaRead = null; } });
   if (!tudArg) {
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
-    const refresh = () => claudeQuotaRefresh.tick().catch(() => {});
+    const refresh = () => claudeQuotaRefresh.tick().then(() => send('quota:updated', claudeQuotaRefresh.samples())).catch(() => {});
     refresh();
     claudeQuotaTimer = setInterval(refresh, 30000);
     claudeQuotaTimer.unref();
@@ -766,6 +771,13 @@ app.whenReady().then(() => {
         .then(([local, codex]) => codex ? [...local, codex] : local).catch(() => []);
     }
     return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || [])]);
+  });
+  handleMain('quota:refresh', async (_e, { seatId } = {}) => {
+    if (tudArg) return [];
+    if (seatId && !ClaudeSeatsCore.normalize(seatConfig().claudeSeats).some((s) => s.id === seatId)) throw new Error('席位不存在');
+    await claudeQuotaRefresh.tick({ force: true, seatId });
+    quotaRead = null;
+    return claudeQuotaRefresh.samples().filter((s) => !seatId || s.seatId === seatId);
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
