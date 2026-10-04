@@ -463,7 +463,8 @@
     }
     launchNote(id, `正在启动 ${label}…`, false);
     const before = window.BoardCore.launchErrors(entry.lastScreen, cmd);
-    window.deck.ptyInput(id, window.BoardCore.launchInput(cmd, host.platform));
+    const launch = host.seatLaunchCommand ? host.seatLaunchCommand(col, window.BoardCore.shellLaunchCommand(cmd, host.platform)) : window.BoardCore.shellLaunchCommand(cmd, host.platform);
+    window.deck.ptyInput(id, (host.platform === 'win32' ? '\x1b[1;5F\x1b[1;5H' : '\x15') + launch + '\r');
     const started = Date.now();
     const finish = (ok, note) => {
       launching.delete(id);
@@ -1041,14 +1042,29 @@
   // 队长's context is cleared: its conversation stays saved under the old id
   // (readable with `read --id`), the respawned column starts an empty one.
   // Call before the terminal goes away so an open turn keeps what it has.
-  function retireChat(id) {
-    finalizeTurn(id);
+  function snapshotForHandoff(id) {
+    const chat = JSON.parse(JSON.stringify(chatFor(id)));
+    const open = pending.get(id), entry = host.terms.get(id);
+    if (open) {
+      const turn = chat.turns.find((t) => t.id === open.turn.id);
+      if (turn) {
+        if (entry) turn.reply = C.extractReply(readLines(entry.term, open.marker), open.sent, entry.term.cols);
+        turn.interrupted = true;
+      }
+    }
+    chat.captainArchive = true;
+    return chat;
+  }
+  function retireChat(id, options) {
+    if (options?.interrupted && pending.has(id)) {
+      chats.set(id, snapshotForHandoff(id));
+    } else finalizeTurn(id);
     forget(id);
     const chat = chats.get(id);
-    if (!chat || !chat.turns.length) { chats.delete(id); window.deck.chatDelete(id); return null; }
+    if (!chat || (!chat.turns.length && !options?.interrupted)) { chats.delete(id); window.deck.chatDelete(id); return null; }
     chat.captainArchive = true;
     saveNow(id);
-    return { turns: chat.turns.length, from: chat.turns[0].ts || 0, to: chat.turns[chat.turns.length - 1].ts || 0 };
+    return { turns: chat.turns.length, from: chat.turns[0]?.ts || 0, to: chat.turns[chat.turns.length - 1]?.ts || 0 };
   }
   const turnsOf = (id) => (chats.get(id) || { turns: [] }).turns;
   const captainArchives = () => [...chats.values()].filter((c) => c.captainArchive);
@@ -1215,6 +1231,6 @@
     focusSearch, reveal, lastTurnTs, artifactSources, readFooter,
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
-    addCard, updateCard, retireChat, turnsOf, captainArchives,
+    addCard, updateCard, retireChat, snapshotForHandoff, turnsOf, captainArchives,
   };
 })();

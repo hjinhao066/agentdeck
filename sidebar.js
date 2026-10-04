@@ -164,6 +164,7 @@
     text.append(label, sub);
     const meta = el('span', 'cn-meta', ago(host.lastTurnTs(col.id)));
     item.append(badge, iconEl('crown', 'cn-crown'), dot, text, meta);
+    if (window.ClaudeSeats) item.appendChild(window.ClaudeSeats.rotationButton(col));
     item.addEventListener('click', () => selectCaptain(col));
     item.addEventListener('contextmenu', (e) => {
       e.preventDefault();

@@ -300,13 +300,14 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令')?.id)).toBeTruthy();
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '合并指令').id);
   await expect.poll(() => screen(child)).toContain('Doing…');
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
   for (const message of ['merge alpha', 'merge beta', 'merge gamma']) {
     await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
     await expect.poll(() => screen(mainId)).toContain('待补充');
   }
   // The stand-in finishes its current operation; the three additions arrive as one prompt.
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
-  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('merge alpha')).length).toBe(1);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('merge alpha')).length, { timeout: 20000 }).toBe(1);
   const merged = capturedPrompts().find((p) => p.startsWith('merge alpha'));
   expect(merged).toContain('merge alpha\n\nmerge beta\n\nmerge gamma');
   expect(merged.split('（AgentDeck 约定）')).toHaveLength(2);
@@ -314,6 +315,8 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i).at(-1)?.status, child), { timeout: 30000 }).toBe('done');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --now --message "keep working replace probe"`);
   await expect.poll(() => screen(child)).toContain('keep working replace probe');
+  // Echo is visible before the next status tick marks the worker busy.
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
   for (const message of ['discard alpha', 'discard beta']) {
     await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "${message}"`);
     await expect.poll(() => screen(mainId)).toContain('待补充');
@@ -321,15 +324,16 @@ test('tell batches supplements once; replace drops older queued work; now interr
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --message "replacement only"`);
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
   await page.evaluate((i) => window.deck.ptyInput(i, '\x1b'), child);
-  await expect.poll(() => capturedPrompts().some((p) => p.startsWith('replacement only'))).toBe(true);
+  await expect.poll(() => capturedPrompts().some((p) => p.startsWith('replacement only')), { timeout: 20000 }).toBe(true);
   expect(capturedPrompts().some((p) => /^(discard alpha|discard beta)/.test(p))).toBe(false);
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('done');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "keep working now probe"`);
   await expect.poll(() => screen(child)).toContain('keep working now probe');
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "discard with now"`);
   await expect.poll(() => screen(mainId)).toContain('待补充');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --replace --now --message "urgent replacement"`);
-  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('urgent replacement')).length).toBe(1);
+  await expect.poll(() => capturedPrompts().filter((p) => p.startsWith('urgent replacement')).length, { timeout: 20000 }).toBe(1);
   expect(capturedPrompts().some((p) => p.startsWith('discard with now'))).toBe(false);
   expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
   await run(mainId, `clear; node "${CLI}" archive --id ${child}`);

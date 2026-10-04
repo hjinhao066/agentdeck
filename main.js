@@ -9,6 +9,8 @@ const { createNotifications } = require('./notifications');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
+const ClaudeSeatsCore = require('./claude-seats-core');
+const { seatEnvironment, registerSeatsIpc } = require('./claude-seats-main');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
@@ -196,7 +198,7 @@ function bufferAppend(id, data) {
   boundedAppend(buf, data, PTY_BUFFER_MAX);
 }
 
-function spawnPty(id, cwd, cols, rows, managed) {
+function spawnPty(id, cwd, cols, rows, managed, seatId) {
   if (!validId(id) || ptys.size >= 100) return;
   // Internal notifications replace watch-ai spools by default, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
@@ -208,7 +210,22 @@ function spawnPty(id, cwd, cols, rows, managed) {
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
-  const terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  if (seatId) {
+    try {
+      let cfg = {};
+      try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
+      catch (e) { if (e.code !== 'ENOENT') throw e; }
+      const seat = ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
+      if (!seat) throw new Error('席位不存在');
+      terminalEnv = seatEnvironment(terminalEnv, seat, tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME);
+    } catch (_) {
+      managedSessions.delete(id);
+      send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
+      send('pty:exit', { id });
+      return;
+    }
+  }
   // Never inherit an outer deck's managed capability into an independent shell.
   for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
   terminalEnv.AGENTDECK_NATIVE_NOTIFICATIONS = '1';
@@ -623,6 +640,10 @@ app.whenReady().then(() => {
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
   const configPath = path.join(app.getPath('userData'), 'config.json');
+  const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
+  registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
+    getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId });
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
     catch (_) { e.returnValue = null; }
@@ -639,7 +660,7 @@ app.whenReady().then(() => {
     platform: process.platform, home: HOME, legacyWatch: process.env.AGENTDECK_LEGACY_WATCH === '1',
   }; });
 
-  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed }) => spawnPty(id, cwd, cols, rows, !!managed));
+  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId }) => spawnPty(id, cwd, cols, rows, !!managed, seatId));
   onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
   onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);

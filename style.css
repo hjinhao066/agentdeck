@@ -1649,3 +1649,24 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-key-head.review { fill: var(--cm-review); }
 .cm-key-head.back { fill: var(--cm-back); }
 .cm-legend-note { margin-left: auto; }
+/* Claude seats: account switching stays local to the Captain. */
+.seat-icon { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.seat-icon svg { width: 17px; height: 17px; }
+.seat-icon:hover { color: var(--text); background: var(--icon-hover-bg); }
+.seat-icon:focus-visible, .seat-choice:focus-visible { outline: 2px solid #d98645; outline-offset: 2px; }
+.seat-icon:disabled { opacity: .4; cursor: default; }
+.seat-dialog { width: min(460px, 80vw); max-height: 80vh; overflow-y: auto; }
+.seat-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.seat-dialog-head h3 { margin: 0; }
+.seat-current { color: var(--muted); margin: 12px 0; }
+.seat-choice { display: block; width: 100%; padding: 12px; margin: 8px 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); text-align: left; cursor: pointer; }
+.seat-choice[aria-pressed="true"] { border-color: #d98645; }
+.seat-choice:disabled { cursor: default; opacity: .65; }
+.seat-account-icon { display: inline-flex; width: 28px; align-items: center; justify-content: flex-start; vertical-align: middle; font-size: 19px; }
+.seat-account-icon svg { width: 18px; height: 18px; }
+.seat-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+.seat-setting-row { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+.seat-field { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.seat-field input { width: 100%; box-sizing: border-box; }
+.seat-help { font-size: 12px; line-height: 1.6; color: var(--muted); }
+.seat-quota-banner { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; flex-shrink: 0; color: #d98645; background: rgba(217,134,69,.1); font-size: 12px; }

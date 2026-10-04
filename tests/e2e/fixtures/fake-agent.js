@@ -4,6 +4,13 @@
 // carrying the AgentDeck receipt contract gets a 【回执】 block back; "ask me"
 // makes it stop at a y/n question like a permission prompt.
 const readline = require('readline');
+const provider = process.argv.includes('--provider=codex') ? 'Codex CLI' : 'Claude Code';
+if (process.env.AGENTDECK_TEST_SEATS_ENV_FILE) {
+  require('fs').appendFileSync(process.env.AGENTDECK_TEST_SEATS_ENV_FILE, JSON.stringify({
+    colId: process.env.AGENTDECK_COL_ID, configDir: process.env.CLAUDE_CONFIG_DIR || null,
+    authOverridePresent: ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_SECURESTORAGE_CONFIG_DIR'].some((key) => !!process.env[key]),
+  }) + '\n');
+}
 if (process.env.AGENTDECK_TEST_CONTROL_ENV_FILE && process.env.AGENTDECK_CONTROL_TOKEN) {
   require('fs').writeFileSync(process.env.AGENTDECK_TEST_CONTROL_ENV_FILE, JSON.stringify({
     AGENTDECK_CONTROL_DIR: process.env.AGENTDECK_CONTROL_DIR,
@@ -30,7 +37,7 @@ function box() {
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
   // Keep a recognizable provider footer after replies, like a real TUI. Narrow
   // ConPTY columns can wrap the longer permission line across several rows.
-  process.stdout.write('Claude Code\n');
+  process.stdout.write(provider + '\n');
 }
 let lines = [];
 let timer = null;
@@ -40,11 +47,17 @@ function answer() {
   // Test-only capture verifies delivery before ConPTY wraps/redraws the screen.
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
+  if (process.argv.includes('--board-probe') && first.startsWith('BOARD ')) {
+    const args = JSON.parse(first.slice(6));
+    const result = require('child_process').spawnSync(process.execPath, [process.env.AGENTDECK_BOARD_CLI, ...args], { encoding: 'utf8', timeout: 15000 });
+    process.stdout.write('\x1b[2J\x1b[H\n⏺ BOARD RESULT\n' + (result.stdout || result.stderr || 'no result') + '\n');
+    box(); return;
+  }
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
   process.stdout.write('\x1b[2J\x1b[H');
   process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
-  if (process.argv.includes('--interruptible') && /keep working|wait for quota/.test(first)) {
+  if ((process.argv.includes('--interruptible') || process.argv.includes('--quota-probe')) && /keep working|wait for quota/.test(first)) {
     process.stdout.write(first.includes('quota') ? "You've hit your limit · resets 5pm (America/Los_Angeles)\n" : '✻ Doing…\nPress up to edit queued messages\n');
     box();
     return;
@@ -109,7 +122,7 @@ function listen() {
   });
 }
 function start() {
-  console.log('Welcome to Claude Code (test stand-in)');
+  console.log('Welcome to ' + provider + ' (test stand-in)');
   box();
   listen();
 }
