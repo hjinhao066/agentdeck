@@ -10,7 +10,7 @@ test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-e2e-'));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,
-    claudeSeats: [{ id: 'default', name: 'Claude', configDir: '~/.claude' }],
+    claudeSeats: [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }],
     columns: ['Claude', 'Codex', 'Cursor', 'Antigravity'].map((p) => ({ id: `quota-${p}`, taskId: `task-${p}`, title: `${p} stand-in`, cmd: `node "${FAKE}" ${p}`, cwd: profile, width: 600, role: 'manual' })),
   }));
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
