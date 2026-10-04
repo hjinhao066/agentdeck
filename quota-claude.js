@@ -4,6 +4,7 @@
 const fs = require('fs/promises');
 const https = require('https');
 const { execFile } = require('child_process');
+const os = require('os');
 const S = require('./claude-seats-core');
 const M = require('./claude-seats-main');
 const Q = require('./quota-core');
@@ -20,7 +21,8 @@ async function readCredentials(seat, home, platform = process.platform, exec = e
   if (platform === 'darwin') {
     raw = await new Promise((resolve) => {
       // Capture stdout in memory; never use a shell, log stderr or return errors.
-      exec('/usr/bin/security', ['find-generic-password', '-s', loc.keychainService, '-w'],
+      const account = /^[a-zA-Z0-9._-]+$/.test(os.userInfo().username) ? os.userInfo().username : 'claude-code-user';
+      exec('/usr/bin/security', ['find-generic-password', '-a', account, '-s', loc.keychainService, '-w'],
         { timeout: 2000, maxBuffer: MAX_BYTES, encoding: 'utf8' }, (error, stdout) => resolve(error ? null : stdout));
     });
   }
@@ -94,28 +96,30 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
   function sync() {
     const seats = S.normalize(getSeats());
     for (const [id, entry] of entries) if (!seats.some((s) => s.id === id && s.configDir === entry.seat.configDir)) entries.delete(id);
-    for (const seat of seats) if (!entries.has(seat.id)) entries.set(seat.id, { seat, due: 0,
-      usage: { at: now(), source: Q.CLAUDE_OAUTH_SOURCE, windows: [] } });
+    for (const seat of seats) if (!entries.has(seat.id)) entries.set(seat.id, { seat, due: 0, usage: M.readUsage(seat, home) });
     return entries;
   }
   async function tick() {
     if (stopped) return;
-    await Promise.all([...sync().values()].map(async (entry) => {
-      if (entry.busy || now() < entry.due) return;
-      entry.busy = true; entry.due = now() + INTERVAL_MS;
-      let value = null;
-      try { value = await read(entry.seat, home); } catch (_) {}
-      if (!stopped && entries.get(entry.seat.id) === entry) {
-        // Whitelist again before persistence/IPC; a failed seat is explicitly
-        // unknown and cannot resurrect its old cache or exhaustion latch.
-        try { entry.usage = M.sanitizeUsage({ ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE, windows: value?.windows || [] }); }
-        catch (_) { entry.usage = { at: now(), source: Q.CLAUDE_OAUTH_SOURCE, windows: [] }; }
-        try { write(entry.seat, home, entry.usage); } catch (_) {}
-      }
-      entry.busy = false;
+    await Promise.all([...sync().values()].map((entry) => {
+      if (entry.pending) return entry.pending;
+      if (now() < entry.due) return;
+      entry.due = now() + INTERVAL_MS;
+      entry.pending = (async () => {
+        let value = null;
+        try { value = await read(entry.seat, home); } catch (_) {}
+        if (!stopped && entries.get(entry.seat.id) === entry) {
+          // Whitelist again before persistence/IPC; a failed seat is explicitly
+          // unknown and cannot resurrect its old cache or exhaustion latch.
+          try { entry.usage = M.sanitizeUsage({ ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE, windows: value?.windows || [] }); }
+          catch (_) { entry.usage = { at: now(), source: Q.CLAUDE_OAUTH_SOURCE, windows: [] }; }
+          try { write(entry.seat, home, entry.usage); } catch (_) {}
+        }
+      })().finally(() => { entry.pending = null; });
+      return entry.pending;
     }));
   }
-  return { tick, samples: () => stopped ? [] : [...sync().values()].map(({ seat, usage }) => ({ ...Q.cacheClaude(usage, usage.at), seatId: seat.id, configDir: seat.configDir })),
+  return { tick, samples: () => stopped ? [] : [...sync().values()].filter(({ usage }) => usage).map(({ seat, usage }) => ({ ...Q.cacheClaude(usage, usage.at), seatId: seat.id, configDir: seat.configDir })),
     dispose: () => { stopped = true; entries.clear(); } };
 }
 module.exports = { INTERVAL_MS, readCredentials, requestUsage, readSeat, createRefresh };

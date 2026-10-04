@@ -25,8 +25,9 @@ test('each seat reads its own credential store; expired/missing/symlinked auth c
   const services = [];
   const keychain = (bin, args, opts, cb) => {
     assert.equal(bin, '/usr/bin/security'); assert.equal(args.at(-1), '-w');
+    assert.equal(args[1], '-a'); assert.equal(args[2], os.userInfo().username);
     assert.equal(opts.timeout, 2000); assert.equal(opts.maxBuffer, 65536);
-    services.push(args[2]); cb(null, credential('fake-keychain-' + services.length));
+    services.push(args[4]); cb(null, credential('fake-keychain-' + services.length));
   };
   assert.equal(await C.readCredentials(cn, home, 'darwin', keychain), 'fake-keychain-1');
   assert.equal(await C.readCredentials(us, home, 'darwin', keychain), 'fake-keychain-2');
@@ -103,12 +104,29 @@ test('refresh coalesces concurrent ticks, does not apply removed seats, and tole
   const home = fixture(t); let seats = S.normalize(), release, reads = 0;
   const poller = C.createRefresh({ home, getSeats: () => seats, read: () => { reads++; return new Promise(r => { release = r; }); }, write: () => { throw new Error('read-only'); } });
   seats = [seats[0]];
-  const pending = poller.tick(); await poller.tick(); assert.equal(reads, 1);
-  seats = [S.normalize()[1]]; poller.samples(); release({ windows: [{ key: 'weekly', remaining: 90 }] }); await pending;
-  assert.deepEqual(poller.samples().map(s => [s.seatId, s.windows.length]), [['us', 0]]);
+  const pending = poller.tick(), concurrent = poller.tick(); assert.equal(reads, 1);
+  seats = [S.normalize()[1]]; poller.samples(); release({ windows: [{ key: 'weekly', remaining: 90 }] }); await Promise.all([pending, concurrent]);
+  assert.deepEqual(poller.samples(), []);
   poller.dispose(); assert.deepEqual(poller.samples(), []); await poller.tick(); assert.equal(reads, 1);
   const badDisk = C.createRefresh({ home, getSeats: () => seats, read: async () => ({ windows: [{ key: 'weekly', remaining: 90 }] }), write: () => { throw new Error('read-only'); } });
   await badDisk.tick(); assert.equal(badDisk.samples()[0].windows[0].remaining, 90); badDisk.dispose();
+});
+test('startup keeps real cached windows and concurrent quota readers wait for the first actual result', async (t) => {
+  const home = fixture(t), seats = S.normalize(), now = Date.now(), releases = new Map();
+  M.writeUsage(seats[0], home, { at: now - 1000, source: Q.CLAUDE_OAUTH_SOURCE, windows: [{ key: 'fiveHour', remaining: 45 }] });
+  const poller = C.createRefresh({ home, getSeats: () => seats, now: () => now, read: (seat) => new Promise(resolve => releases.set(seat.id, resolve)) });
+  t.after(() => poller.dispose());
+  assert.deepEqual(poller.samples().map(s => [s.seatId, s.windows[0].remaining]), [['cn', 45]]);
+  const startup = poller.tick();
+  let settled = false;
+  const quotaRead = poller.tick().then(() => { settled = true; return poller.samples(); });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  assert.equal(releases.size, 2);
+  assert.deepEqual(poller.samples().map(s => [s.seatId, s.windows[0].remaining]), [['cn', 45]]);
+  for (const [id, resolve] of releases) resolve({ windows: [{ key: 'fiveHour', remaining: id === 'cn' ? 40 : 80 }, { key: 'weekly', remaining: 60 }] });
+  await startup;
+  assert.deepEqual((await quotaRead).map(s => [s.seatId, s.windows.length]), [['cn', 2], ['us', 2]]);
 });
 test('server samples replace stale screen/exhaustion; failure and missing windows cannot retain or resurrect old percentages', () => {
   const seat = S.normalize()[0], store = {}, now = Date.now();

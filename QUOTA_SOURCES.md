@@ -74,7 +74,7 @@ were left running. Quota probes made no inference requests.
   confirms that usage requests can be rate limited; this implementation makes
   no immediate retries and explicitly shows unknown on failure.
 - Authentication is read in memory from each seat's existing dedicated
-  Keychain service or credentials file using `credentialLocation`; inherited
+  Keychain service (with the current OS username, as Claude Code does) or credentials file using `credentialLocation`; inherited
   auth environment variables are not used. The token is sent only as the
   standard authentication header to the fixed Anthropic HTTPS origin. No raw
   auth, response, stderr or error detail is logged/saved/returned to the page.

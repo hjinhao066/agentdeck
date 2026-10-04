@@ -692,8 +692,9 @@ app.whenReady().then(() => {
 
   // Test profiles never read the user's quota caches or conversation logs.
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
-  handleMain('quota:local', () => {
+  handleMain('quota:local', async () => {
     if (tudArg) return [];
+    await claudeQuotaRefresh?.tick();
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
