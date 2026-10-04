@@ -277,8 +277,10 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     send('pty:exit', { id, reason: `shell 启动失败: ${err.message}` });
     return;
   }
-  try { writeCredentials(boardControlDir, id, receiptToken, token, ttyFromPty(p)); }
-  catch (_) { removeCredentials(boardControlDir, id); }
+  // A bad cwd exits before the next turn of the event loop. Listen first;
+  // writing the tty credential does disk I/O and would miss that exit.
+  const tty = ttyFromPty(p);
+  ptys.set(id, p);
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
@@ -295,7 +297,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
       send('pty:exit', { id, reason: `终端进程退出（exit ${exitCode}${signal ? `，signal ${signal}` : ''}）` });
     }
   });
-  ptys.set(id, p);
+  try { writeCredentials(boardControlDir, id, receiptToken, token, tty); }
+  catch (_) { removeCredentials(boardControlDir, id); }
 }
 
 function send(channel, payload) {
@@ -1141,9 +1144,16 @@ app.on('before-quit', () => {
   // (the periodic flush already covers crashes that skip this handler).
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);
   for (const [id, p] of ptys) {
+    // kill() only signals the shell. The master fd stays open and keeps
+    // the process alive after will-quit, so Playwright never sees the exit.
     try { p.kill(); } catch (_) {}
+    try { if (typeof p.destroy === 'function') p.destroy(); } catch (_) {}
     removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }
+  ptys.clear();
 });
+// before-quit already removed credentials and closed PTY masters. Exit
+// immediately so inspector sockets cannot keep quit waiting.
+app.on('will-quit', () => { app.exit(0); });
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });
