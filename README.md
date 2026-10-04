@@ -108,11 +108,12 @@ skipped.
 
 ## 队长 (Captain)
 
-任务看板数据、CLI、自动流转及未来界面的读写入口见
+任务看板数据、CLI、自动流转及界面的读写入口见
 [任务看板接口说明](docs/task-board-api.md)。正本是 `~/.agents/boards/tasks/<项目名>.json`；
 `new --task-id ... --project ...` 绑定卡片，命令回执自动流转，文件监听和每 60 秒巡检
 发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
-此分支只提供数据及接口，不添加看板界面。
+看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：按项目分泳道、
+按状态分五列，点卡片跳到对应会话；架构图只画正在跑的会话，看板列出全部任务。
 
 队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸 两个独立 Claude 席位，
 或 ChatGPT（Codex GPT-6.1 Sol）：

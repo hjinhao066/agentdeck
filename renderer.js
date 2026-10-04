@@ -26,6 +26,7 @@ const ICONS = {
   down:  S('<polyline points="6 9 12 15 18 9"/>'),
   help:  S('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
   side:  S('<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/>'),
+  tasks: S('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/><path d="M5.5 8h1.5M11 8h2M11 11.5h2M17 8h1.5"/>'),
   board: S('<rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M6 9v3h12V9M12 12v3"/>'),
   newChat: S('<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a1 1 0 0 1 3 3l-9 9a2 2 0 0 1-.85.5l-2.87.84a.5.5 0 0 1-.62-.62l.84-2.87a2 2 0 0 1 .5-.85z"/>'),
   search: S('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
@@ -584,7 +585,10 @@ function buildChrome() {
   boardBtn.id = 'boardViewBtn';
   expandBtn.setAttribute('aria-label', expandBtn.title);
   boardBtn.setAttribute('aria-label', boardBtn.title);
-  tbLeft.append(boardBtn, collapseBtn, expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
+  const tasksBtn = railBtn(ICONS.tasks, '任务看板', () => TaskBoardUI.toggle());
+  tasksBtn.id = 'taskBoardBtn';
+  tasksBtn.setAttribute('aria-label', tasksBtn.title);
+  tbLeft.append(boardBtn, tasksBtn, collapseBtn, expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
 
   // Column widths: free (each column keeps its own width, drag the edges) or
   // N equal columns filling the deck; more than N keep that width and scroll.
@@ -651,7 +655,12 @@ function syncChromeState() {
   const side = document.getElementById('sideToggleBtn');
   if (side) side.classList.toggle('on', SidePane.isOpen() && activeView !== 'board');
   const board = document.getElementById('boardViewBtn');
-  if (board) board.classList.toggle('on', activeView === 'board');
+  if (board) board.classList.toggle('on', activeView === 'board' && !TaskBoardUI.isOpen());
+  const tasks = document.getElementById('taskBoardBtn');
+  if (tasks) {
+    tasks.classList.toggle('on', TaskBoardUI.isOpen());
+    tasks.setAttribute('aria-pressed', String(TaskBoardUI.isOpen()));
+  }
 }
 
 // ---- Left panel width + collapse ----
@@ -768,6 +777,7 @@ function selectBoardNode(columnId, focusTerminal) {
 }
 
 function showView(view) {
+  TaskBoardUI.close();
   activeView = view === 'board' ? 'board' : 'terminals';
   config.activeView = activeView;
   SidePane.onViewChange();
@@ -2537,6 +2547,7 @@ function jumpToColumn(col) {
   }
   if (activeView === 'board') showView('terminals');
   Pages.hide(); // a Schedule/Artifacts page would cover the column
+  TaskBoardUI.close(); // so would the task board
   peekColumn(col);
   // While zoomed, jumping re-zooms onto the target instead of focusing a hidden column.
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
@@ -3179,7 +3190,8 @@ const deckHost = {
   addAndFocusColumn, removeCol, archiveColumn, restoreArchived, deleteArchived, moveSession, removeFolder,
   renameSession: (col, title) => setColumnDisplayTitle(col, title),
   lastTurnTs: (id) => ChatUI.lastTurnTs(id),
-  togglePage: (name) => { if (activeView === 'board') showView('terminals'); Pages.toggle(name); },
+  togglePage: (name) => { if (activeView === 'board') showView('terminals'); TaskBoardUI.close(); Pages.toggle(name); },
+  toggleTaskBoard: () => TaskBoardUI.toggle(),
   showSideTerminal: () => SidePane.show('terminal', true),
   // Schedule
   createSession, sendWhenReady,
@@ -3695,6 +3707,40 @@ CrewMap.init({
     whenMounted(col, () => setTimeout(() => jumpToColumn(col), 40));
   },
 });
+// 任务看板 covers whichever view is showing; opening it hides any page. The
+// crew map's 架构图 / 自由画布 / 任务看板 tabs and the board's own tabs switch
+// between the two: the map shows the sessions running now, the board every task.
+function openTaskSession(id) {
+  let col = columns.find((c) => c.id === id);
+  if (!col && (config.archived || []).some((a) => a.id === id)) col = restoreArchived(id, false);
+  if (!col) return;
+  TaskBoardUI.close();
+  showView('terminals');
+  whenMounted(col, () => setTimeout(() => jumpToColumn(col), 40));
+}
+TaskBoardUI.init({
+  showToast,
+  session: (id) => {
+    const col = columns.find((c) => c.id === id);
+    if (col) return { label: columnLabel(col), col };
+    const archived = (config.archived || []).find((a) => a.id === id);
+    return archived ? { label: columnLabel(archived), col: null } : null;
+  },
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar'),
+  openSession: openTaskSession,
+  showBoard: (mode) => {
+    TaskBoardUI.close();
+    if (activeView !== 'board') showView('board');
+    if (CrewMap.mode() !== mode) CrewMap.setMode(mode);
+  },
+  onToggle: (isOpen) => {
+    if (isOpen) Pages.hide();
+    Sidebar.markPage(isOpen ? 'tasks' : null);
+    syncChromeState();
+  },
+  focusToggle: () => { const b = document.getElementById('taskBoardBtn'); if (b) b.focus(); },
+});
+document.getElementById('boardTasksTab').addEventListener('click', () => TaskBoardUI.open());
 // View restoration comes last because showView() closes the search/broadcast
 // overlays, whose DOM bindings are initialized just above.
 showView(config.activeView);
