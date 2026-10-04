@@ -23,7 +23,7 @@ async function geometry() {
     const viewport = rect(document.querySelector('.cm-viewport'));
     const nodes = [...document.querySelectorAll('.cm-node')].map((n) => ({ id: n.dataset.nodeId, ...rect(n) }));
     const groups = [...document.querySelectorAll('.cm-project')].map((n) => ({ id: n.dataset.project, ...rect(n), color: getComputedStyle(n).backgroundColor, border: getComputedStyle(n).borderColor }));
-    const texts = [...document.querySelectorAll('.cm-node')].flatMap((card) => [...card.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-live, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: card.dataset.nodeId, cls: n.className, ...rect(n), parent: rect(card), lineHeight: parseFloat(getComputedStyle(n).lineHeight), localHeight: n.offsetHeight, clamp: getComputedStyle(n).webkitLineClamp })));
+    const texts = [...document.querySelectorAll('.cm-node')].flatMap((card) => [...card.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-live, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: card.dataset.nodeId, cls: n.className, captain: card.classList.contains('kind-captain'), ...rect(n), parent: rect(card), lineHeight: parseFloat(getComputedStyle(n).lineHeight), localHeight: n.offsetHeight, clamp: getComputedStyle(n).webkitLineClamp })));
     return { viewport, nodes, groups, texts, scale: CrewMap.view().scale };
   });
 }
@@ -40,7 +40,7 @@ async function assertLayout() {
   }
   for (const t of g.texts) {
     expect(t.bottom, `${t.id} ${t.cls} fits card`).toBeLessThanOrEqual(t.parent.bottom - 2);
-    if (['cm-title', 'cm-line'].includes(t.cls)) {
+    if (['cm-title', 'cm-line'].includes(t.cls) && !t.captain) {
       expect(t.clamp).toBe('2');
       expect(t.localHeight).toBe(t.lineHeight * 2);
     }

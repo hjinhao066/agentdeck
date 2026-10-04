@@ -1727,7 +1727,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-project.collapsed .cm-project-head { border-radius: 16px; }
 .cm-project-name { display: inline-flex; align-items: center; gap: 9px; min-width: 0; font-size: 15px; font-weight: 650; letter-spacing: 0.01em; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cm-project-name::before { content: ""; flex: 0 0 auto; width: 3px; height: 14px; border-radius: 2px; background: var(--project-color); box-shadow: 0 0 10px var(--project-color); }
-.cm-project-summary { color: var(--cm-text-dim); font-family: var(--mono); font-size: 10.5px; font-variant-numeric: tabular-nums; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-project-summary { color: var(--text-2); font-family: var(--mono); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cm-project-toggle { pointer-events: auto; flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 8px; background: transparent; color: var(--cm-text-dim); cursor: pointer; }
 .cm-project-toggle:hover { color: var(--text); background: hsl(var(--project-hue) 70% 60% / 0.14); }
 .cm-project-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
@@ -1816,6 +1816,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 /* 队长: the core — a soft halo that breathes, and a faint outer ring */
 .cm-node.kind-captain {
   overflow: visible; --st-c: var(--cm-core);
+  padding: 8px 14px 8px; gap: 2px; justify-content: center;
   border-color: color-mix(in srgb, var(--cm-core) 45%, transparent);
   background: radial-gradient(120% 140% at 50% 0%, color-mix(in srgb, var(--cm-core) 14%, var(--cm-glass)), var(--cm-glass-2) 70%);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--cm-core) 12%, transparent), inset 0 1px 0 color-mix(in srgb, var(--cm-core) 40%, transparent), 0 18px 40px rgba(0, 0, 0, 0.45);
@@ -1831,8 +1832,15 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   -webkit-mask: linear-gradient(90deg, #000 0 18%, transparent 30% 70%, #000 82%); mask: linear-gradient(90deg, #000 0 18%, transparent 30% 70%, #000 82%);
 }
 @keyframes cm-core { 0%, 100% { opacity: 0.55; transform: scale(1); } 50% { opacity: 1; transform: scale(1.035); } }
-.cm-node.kind-captain .cm-title { font-size: 16px; letter-spacing: 0.04em; }
-.cm-node.kind-captain .cm-line { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--cm-core) 55%, var(--text-2)); }
+.cm-node.kind-captain .cm-title {
+  font-size: 15px; line-height: 20px; letter-spacing: 0.04em;
+  flex: 0 0 20px; min-height: 20px; -webkit-line-clamp: 1;
+}
+.cm-node.kind-captain .cm-line {
+  font-family: var(--mono); font-size: 17px; font-weight: 650; line-height: 24px; letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums; color: color-mix(in srgb, var(--cm-core) 28%, var(--text));
+  flex: 0 0 24px; min-height: 24px; -webkit-line-clamp: 1;
+}
 .cm-node.kind-waiting { background: transparent; box-shadow: none; }
 .cm-node.archived { opacity: 0.45; border-style: dashed; box-shadow: none; }
 .cm-node.archived:hover { opacity: 0.85; }

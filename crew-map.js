@@ -8,7 +8,7 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 240, nodeH: 176, captainW: 340, captainH: 140, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, pad: 40 };
+  const NODE = { nodeW: 240, nodeH: 176, captainW: 420, captainH: 96, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, pad: 40 };
   const DRAG_PX = 4;
   let host = null;
   let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn;

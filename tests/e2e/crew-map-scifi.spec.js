@@ -79,7 +79,11 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   await expect(page.locator('.cm-edges .cm-edge.review')).toHaveCount(2);
   for (const st of ['working', 'done', 'failed']) expect(await page.locator(`.cm-node[data-status="${st}"]`).count()).toBeGreaterThan(0);
   await shot(process.env.ARCH_SCIFI_SHOT_PREFIX ? process.env.ARCH_SCIFI_SHOT_PREFIX + '-dark-1920' : 'dark-1920');
-  if (process.env.ARCH_SCIFI_BEFORE) return;
+  if (process.env.ARCH_SCIFI_BEFORE) {
+    await open(1920, 1080, 'light');
+    await shot((process.env.ARCH_SCIFI_SHOT_PREFIX || 'before') + '-light-1920');
+    return;
+  }
 
   // One trunk leaves 队长; every dispatch line starts at that single port.
   await expect(page.locator('.cm-edges .cm-bus.trunk')).toHaveCount(1);
