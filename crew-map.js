@@ -212,7 +212,7 @@
   // project shelves and session rows participate (including an ungrouped crew).
   function autoLayout(map) {
     let best, score = -1;
-    const count = Math.max(1, ...map.projects.map((p) => p.nodes.length));
+    const count = Math.max(1, ...map.projects.filter((p) => !p.quiet).map((p) => p.nodes.length));
     for (let cols = 1; cols <= count; cols++) for (const targetScale of [1, 0.85, 0.7, 0.55]) {
       const candidate = C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, columnsPerProject: cols, maxWidth: (vpEl.clientWidth - 48) / targetScale });
       const scale = Math.min(1, vpEl.clientWidth / candidate.width, (vpEl.clientHeight - 60) / candidate.height);
@@ -329,9 +329,11 @@
     nodesEl.appendChild(card(map.captain, lay.captain));
     map.nodes.forEach((n) => { if (lay.nodes.has(n.id)) nodesEl.appendChild(card(n, lay.nodes.get(n.id))); });
     if (lay.fold) {
-      const fold = el('button', 'cm-fold', `+ ${map.hiddenArchived} 个已归档`);
+      const fold = el('button', 'cm-fold');
       fold.type = 'button';
-      fold.title = '已归档的会话默认折起来；点开淡显出来';
+      fold.title = `显示 ${map.hiddenArchived} 个已归档`;
+      fold.setAttribute('aria-label', fold.title);
+      fold.innerHTML = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="4" rx="1"/><path d="M5 8v11a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8"/><path d="M10 12h4"/></svg>';
       place(fold, lay.fold);
       fold.addEventListener('click', () => setShowArchived(true));
       nodesEl.appendChild(fold);

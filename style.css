@@ -1678,11 +1678,14 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-live { font-family: var(--mono); font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; height: 16px; line-height: 16px; }
 .cm-foot { flex: 0 0 auto; font-size: 10.5px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 16px; line-height: 16px; margin-top: auto; display: flex; align-items: center; justify-content: space-between; }
 .cm-fold {
-  position: absolute; z-index: 2; padding: 0 14px;
-  border: 1px dashed var(--border); border-radius: 999px;
-  background: var(--card-head); color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap;
+  position: absolute; z-index: 2; width: 32px; height: 32px; padding: 0;
+  display: grid; place-items: center;
+  border: 1px dashed var(--border); border-radius: 8px;
+  background: var(--card-head); color: var(--muted); cursor: pointer;
 }
-.cm-fold:hover { color: var(--text); border-color: var(--accent); }
+.cm-fold svg { width: 15px; height: 15px; display: block; }
+.cm-fold:hover { color: var(--text); border-color: var(--accent); background: var(--icon-hover-bg); }
+.cm-fold:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .cm-empty {
   position: absolute; left: 40px; top: 32px; max-width: 460px;
   display: flex; flex-direction: column; gap: 6px; color: var(--muted); font-size: 13px; line-height: 1.5;

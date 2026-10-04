@@ -176,7 +176,11 @@ test('projects stay side by side; states do not move workers into another group 
 });
 
 test('the review chain lays out top-down and its lines never share a stretch', () => {
-  const map = reviewScenario();
+  const map = reviewScenario({ tasks: [
+    task('k1', 'c3001', 'asking', 1, { receipt: { question: '用哪个库？', files: [] } }),
+    task('k2', 'c3002', 'done', 2, { receipt: { summary: 'ok', files: ['/demo/register.js'] } }),
+    task('k3', 'c3003', 'done', 3, { receipt: { summary: '审查通过', files: [] } }),
+  ] });
   const lay = C.layout(map, { collapsedProjects: { '': false } });
   const r = lay.nodes.get('c3003'), a = lay.nodes.get('c3001'), b = lay.nodes.get('c3002');
   assert.ok(r.y > a.y && a.y === b.y && lay.captain.y < a.y);
@@ -210,7 +214,11 @@ test('a busier map: no two lines run on top of each other', () => {
 });
 
 test('saved positions win over the layout; saved state is checked on load', () => {
-  const map = reviewScenario();
+  const map = reviewScenario({ tasks: [
+    task('k1', 'c3001', 'asking', 1, { receipt: { question: '用哪个库？', files: [] } }),
+    task('k2', 'c3002', 'done', 2, { receipt: { summary: 'ok', files: ['/demo/register.js'] } }),
+    task('k3', 'c3003', 'done', 3, { receipt: { summary: '审查通过', files: [] } }),
+  ] });
   const lay = C.applyPositions(C.layout(map, { collapsedProjects: { '': false } }), { c3003: { x: 900, y: 40 }, cap: { x: 5, y: 6 }, junk: { x: 'a' } }, 'cap');
   const box = lay.nodes.get('c3003');
   assert.deepEqual([box.x, box.y], [900, 40]);
@@ -241,17 +249,20 @@ function noSharedStretch(routes) {
 }
 
 
-test('completed projects fold to a summary, including archived sessions; failed/stopped do not', () => {
+test('finished projects leave the map; a failure stays and still counts on its header', () => {
   const map = C.buildCrewMap({ captain, columns: [col('b', 'bad', { project: '失败' }), col('s', 'stop', { project: '停下' })],
     archived: [{ id: 'a', title: 'old', captainCrew: true, project: '完成' }],
     tasks: [task('a', 'a', 'done', 1), task('b', 'b', 'failed', 2), task('s', 's', 'stopped', 3)] });
   const lay = C.layout(map);
-  assert.equal(lay.groups.find((g) => g.key === '完成').collapsed, true);
+  assert.equal(lay.groups.some((g) => g.key === '完成' || g.key === '停下'), false);
   assert.equal(lay.nodes.has('a'), false);
+  assert.equal(lay.nodes.has('s'), false);
   assert.equal(lay.nodes.has('b'), true);
-  assert.equal(lay.nodes.has('s'), true);
-  assert.equal(C.routes(map, lay).some((r) => r.from === 'a' || r.to === 'a'), false);
-  assert.equal(C.layout(map, { collapsedProjects: { '完成': false } }).nodes.has('a'), true);
+  assert.equal(C.summaryLine(map.projects.find((g) => g.key === '失败').counts), '1 失败');
+  assert.equal(C.summaryLine(map.projects.find((g) => g.key === '停下').counts), '1 已停下');
+  assert.equal(C.routes(map, lay).some((r) => r.from === 'a' || r.to === 'a' || r.from === 's'), false);
+  // a saved "keep open" flag does not bring a finished project back
+  assert.equal(C.layout(map, { collapsedProjects: { '完成': false } }).nodes.has('a'), false);
   const saved = C.normalizeSaved({ collapsedProjects: { '完成': false, '失败': true, junk: 'yes' } });
   assert.deepEqual(saved.collapsedProjects, { '完成': false, '失败': true });
 });
@@ -279,7 +290,8 @@ test('archived project summaries survive task pruning; declared user-opened targ
     { id: 'old', title: 'old', captainCrew: true, project: '完成', lastReceipt: { summary: '成功', explicit: true } },
   ] });
   assert.equal(archivedMap.projects[0].completed, true);
-  assert.equal(C.layout(archivedMap).groups[0].collapsed, true);
+  assert.equal(archivedMap.projects[0].quiet, true);
+  assert.equal(C.layout(archivedMap).groups.length, 0);
   const failedMap = C.buildCrewMap({ captain, columns: [], tasks: [], showArchived: true, archived: [
     { id: 'failed', title: 'failed', captainCrew: true, project: '失败', lastReceipt: { failed: '检查失败', explicit: true } },
   ] });
@@ -291,7 +303,7 @@ test('archived project summaries survive task pruning; declared user-opened targ
 });
 
 test('multiple projects keep separate routes and reserve space for a busy return bus', () => {
-  const columns = Array.from({ length: 15 }, (_, i) => col('w' + i, 'worker ' + i, { project: i < 8 ? 'A' : 'B' }));
+  const columns = Array.from({ length: 15 }, (_, i) => col('w' + i, 'worker ' + i, { project: i < 8 ? 'A' : 'B', state: i === 0 || i === 8 ? 'working' : 'done' }));
   columns.push(col('r', 'review', { project: 'A', reviews: ['w0', 'w1', 'w2'] }));
   const map = C.buildCrewMap({ captain, columns, tasks: columns.map((c, i) => task('t' + i, c.id, 'done', i + 1, { receipt: { summary: 'ok', explicit: true } })) });
   const lay = C.layout(map, { collapsedProjects: { A: false, B: false } });
@@ -328,4 +340,90 @@ test('project wrapping uses the tallest previous shelf and moves cards with thei
   assert.deepEqual(saved.projectPositions, { B: { x: 80, y: 30 } });
   const restored = C.applyPositions(C.layout(map, { maxWidth: 400 }), {}, 'cap', saved.projectPositions);
   assert.deepEqual(restored.nodes.get('b'), lay.nodes.get('b'));
+});
+
+test('a project box is omitted when every session is done, stopped, or archived, and returns when work resumes', () => {
+  const finished = C.buildCrewMap({
+    captain,
+    columns: [col('a', 'done live', { project: '空项目' }), col('b', 'stopped live', { project: '空项目' })],
+    archived: [{ id: 'c', title: 'archived', captainCrew: true, project: '空项目', archivedAt: 4 }],
+    tasks: [task('a', 'a', 'done', 1), task('b', 'b', 'stopped', 2), task('c', 'c', 'done', 3)],
+  });
+  assert.equal(finished.projects[0].quiet, true);
+  assert.equal(C.summaryLine(finished.projects[0].counts), '2 已完成 · 1 已停下');
+  const hidden = C.layout(finished);
+  assert.equal(hidden.groups.length, 0);
+  assert.equal(hidden.nodes.size, 0);
+  assert.ok(hidden.captain && Number.isFinite(hidden.height));
+  assert.equal(C.routes(finished, hidden).length, 0);
+
+  const asking = C.buildCrewMap({ captain, columns: [col('a', 'ask', { project: '空项目' })], tasks: [task('a', 'a', 'asking', 1, { receipt: { question: '继续吗？' } })] });
+  assert.equal(C.layout(asking).groups.map((g) => g.name).join(), '空项目');
+  const waiting = C.buildCrewMap({ captain, columns: [], tasks: [task('q', '', 'waiting', 1, { title: '排队的活', project: '空项目' })] });
+  assert.equal(waiting.projects[0].quiet, false);
+  assert.equal(C.layout(waiting).nodes.has('wait:q'), true);
+
+  const resumed = C.buildCrewMap({
+    captain,
+    columns: [col('a', 'again', { project: '空项目', state: 'working' }), col('b', 'old', { project: '空项目' })],
+    tasks: [task('a', 'a', 'working', 5), task('b', 'b', 'done', 1, { receipt: { summary: '上次做完了' } }), task('c', 'c', 'stopped', 2)],
+    archived: [{ id: 'c', title: 'archived', captainCrew: true, project: '空项目', archivedAt: 4 }],
+  });
+  const box = C.layout(resumed).groups.find((g) => g.key === '空项目');
+  assert.ok(box && !box.collapsed);
+  assert.equal(C.summaryLine(box.counts), '1 干活中 · 1 已完成 · 1 已停下');
+  assert.equal(C.layout(resumed).nodes.has('a'), true);
+  assert.equal(C.layout(resumed).nodes.has('b'), true);
+});
+
+test('project names that differ only by case share one box, labeled with the most common spelling', () => {
+  const map = C.buildCrewMap({
+    captain,
+    columns: [
+      col('a', 'one', { project: 'agentdeck', state: 'working' }),
+      col('b', 'two', { project: 'agentdeck', state: 'working' }),
+      col('c', 'three', { project: 'AgentDeck', state: 'working' }),
+      col('d', 'four', { project: 'AGENTDECK' }),
+      col('e', 'five', { project: 'AgentDeck' }),
+    ],
+    tasks: [
+      task('a', 'a', 'working', 1), task('b', 'b', 'working', 2), task('c', 'c', 'working', 3),
+      task('d', 'd', 'done', 4), task('e', 'e', 'stopped', 5),
+    ],
+  });
+  assert.equal(map.projects.length, 1);
+  assert.equal(map.projects[0].key, 'agentdeck');
+  assert.equal(map.projects[0].name, 'agentdeck');
+  assert.equal(C.summaryLine(map.projects[0].counts), '3 干活中 · 1 已完成 · 1 已停下');
+  const lay = C.layout(map);
+  assert.deepEqual(lay.groups.map((g) => g.name), ['agentdeck']);
+  assert.equal(lay.nodes.size, 5);
+  lay.nodes.forEach((box) => assert.equal(box.project, 'agentdeck'));
+
+  const tie = C.buildCrewMap({
+    captain,
+    columns: [col('a', 'a', { project: 'AgentDeck', state: 'working' }), col('b', 'b', { project: 'agentdeck', state: 'working' })],
+    tasks: [task('a', 'a', 'working', 1), task('b', 'b', 'working', 2)],
+  });
+  assert.equal(tie.projects[0].name, 'AgentDeck');
+
+  const base = C.layout(map);
+  const moved = C.applyPositions(C.layout(map), {}, 'cap', { AgentDeck: { x: 30, y: 12 } });
+  assert.equal(moved.groups[0].x, base.groups[0].x + 30);
+  assert.equal(moved.groups[0].y, base.groups[0].y + 12);
+  assert.equal(C.layout(map, { collapsedProjects: { AGENTDECK: true } }).groups[0].collapsed, true);
+});
+
+test('a live review does not leave a finished project box up for an archived target', () => {
+  const map = C.buildCrewMap({
+    captain,
+    columns: [col('r', '审查', { project: '进行中', state: 'working', reviews: ['old'] })],
+    archived: [{ id: 'old', title: '旧实现', captainCrew: true, project: '已收尾', archivedAt: 2 }],
+    tasks: [task('old', 'old', 'done', 1, { receipt: { summary: 'ok' } }), task('r', 'r', 'working', 2)],
+  });
+  const lay = C.layout(map);
+  assert.equal(lay.groups.some((g) => g.name === '已收尾'), false);
+  assert.equal(lay.nodes.has('old'), false);
+  assert.equal(map.nodes.some((n) => n.id === 'old'), true);
+  assert.ok(lay.groups.some((g) => g.name === '进行中'));
 });

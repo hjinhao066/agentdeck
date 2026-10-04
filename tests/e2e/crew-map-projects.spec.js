@@ -78,27 +78,47 @@ test('two project groups contain 3 workers + 1 declared reviewer and 2 workers, 
   await shot('two-projects-expanded.png');
 });
 
-test('successful projects default to one summary row; toggle is accessible and persists across reload', async () => {
+test('a project box disappears once every session is finished, and comes back when one works again', async () => {
   await page.evaluate(() => {
-    MainSession.state().tasks.find((t) => t.colId === 'b1').status = 'done';
+    const b1 = MainSession.state().tasks.find((t) => t.colId === 'b1');
+    b1.status = 'done';
+    b1.receipt = { summary: '已完成并验证', files: [], explicit: true };
     CrewMap.refresh();
   });
-  await expect(group('报表服务')).toHaveClass(/collapsed/);
-  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('2 已完成');
+  await expect(group('报表服务')).toHaveCount(0);
   await expect(node('b1')).toHaveCount(0);
-  const toggle = group('报表服务').getByRole('button', { name: '展开项目：报表服务' });
-  await expect(toggle).toHaveAttribute('title', '展开项目：报表服务');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await shot('completed-project-collapsed.png');
+  await expect(node('b2')).toHaveCount(0);
+  await expect(group('客户门户').locator('.cm-project-summary')).toContainText('干活中');
+  await page.evaluate(() => {
+    const b1 = MainSession.state().tasks.find((t) => t.colId === 'b1');
+    b1.status = 'working';
+    b1.receipt = null;
+    CrewMap.refresh();
+  });
+  await expect(group('报表服务')).toBeVisible();
+  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('1 干活中 · 1 已完成');
+  await expect(node('b1')).toBeVisible();
+  await shot('project-returns-when-working.png');
+});
+
+test('project collapse is an icon button and persists across reload', async () => {
+  const toggle = group('报表服务').locator('.cm-project-toggle');
+  await expect(toggle.locator('svg')).toHaveCount(1);
+  expect((await toggle.innerText()).trim()).toBe('');
+  await expect(toggle).toHaveAttribute('aria-label', '折叠项目：报表服务');
+  await expect(toggle).toHaveAttribute('title', '折叠项目：报表服务');
   await toggle.focus();
   await page.keyboard.press('Enter');
-  await expect(node('b1')).toBeVisible();
-  await expect.poll(() => page.evaluate(async () => (await window.deck.loadConfig()).crewMap.collapsedProjects['报表服务'])).toBe(false);
+  await expect(group('报表服务')).toHaveClass(/collapsed/);
+  await expect(node('b1')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(async () => (await window.deck.loadConfig()).crewMap.collapsedProjects['报表服务'])).toBe(true);
   await page.reload();
   await page.evaluate(() => showView('board'));
-  await expect(group('报表服务')).not.toHaveClass(/collapsed/);
+  await expect(group('报表服务')).toHaveClass(/collapsed/);
   await expect(node('r1')).toHaveClass(/review/);
   expect(await page.evaluate(() => columns.find((c) => c.id === 'r1').reviews)).toEqual(['a1', 'a2']);
+  await group('报表服务').getByRole('button', { name: '展开项目：报表服务' }).click();
+  await expect(node('b1')).toBeVisible();
   await group('报表服务').getByRole('button', { name: '折叠项目：报表服务' }).click();
   await expect(group('报表服务')).toHaveClass(/collapsed/);
   await group('报表服务').getByRole('button', { name: '展开项目：报表服务' }).click();

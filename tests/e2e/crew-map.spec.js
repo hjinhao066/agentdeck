@@ -74,7 +74,12 @@ test('the board opens on the map: 队长 on top, a line to each session, review 
   const y = (id) => page.locator(`.cm-node[data-node-id="${id}"]`).evaluate((n) => n.offsetTop);
   expect(await y('c2003')).toBeGreaterThan(await y('c2001'));
   await expect(page.locator('.cm-node[data-node-id="c1999"]')).toHaveCount(0);
-  await page.locator('.cm-fold').click();
+  const fold = page.locator('.cm-fold');
+  await expect(fold).toHaveAttribute('aria-label', '显示 1 个已归档');
+  await expect(fold).toHaveAttribute('title', '显示 1 个已归档');
+  await expect(fold.locator('svg')).toHaveCount(1);
+  expect((await fold.innerText()).trim()).toBe('');
+  await fold.click();
   await expect(page.locator('.cm-node.archived[data-node-id="c1999"]')).toBeVisible();
   await page.locator('[data-cm="archived"]').click();
   await expect(page.locator('.cm-node[data-node-id="c1999"]')).toHaveCount(0);

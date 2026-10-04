@@ -11,6 +11,10 @@
 
   const STATUS_LABEL = { working: '干活中', input: '待补充', queued: '排队', done: '已完成', failed: '失败', stopped: '已停下', idle: '空闲' };
   const ACTIVE = ['working', 'input', 'queued'];
+  // A project box stays up while any live session is working, waiting, asking,
+  // failed, or still idle. Done, stopped, and archived sessions do not.
+  const KEEPS_PROJECT = new Set([...ACTIVE, 'failed', 'idle']);
+  const keepsProject = (n) => !n.archived && KEEPS_PROJECT.has(n.status);
   const MAX_LINE = 140;
 
   const oneLine = (s, max = MAX_LINE) => {
@@ -136,18 +140,36 @@
     const reviews = detectReviews(all);
     all.forEach((n) => { n.review = reviews.reviewers.has(n.id); });
 
-    const projects = new Map();
+    // "AgentDeck" and "agentdeck" are one project. The label is the spelling
+    // used most often; a tie keeps the spelling that showed up first.
+    const folded = new Map();
     all.forEach((n) => {
-      if (!projects.has(n.project)) projects.set(n.project, { key: n.project, name: n.project || '其他', nodes: [], counts: {} });
-      const p = projects.get(n.project);
+      const raw = n.project || '';
+      const id = raw.toLowerCase();
+      if (!folded.has(id)) folded.set(id, { key: raw, name: raw || '其他', nodes: [], counts: {}, spellings: new Map() });
+      const p = folded.get(id);
       p.nodes.push(n);
       p.counts[n.status] = (p.counts[n.status] || 0) + 1;
+      if (raw) p.spellings.set(raw, (p.spellings.get(raw) || 0) + 1);
     });
-    projects.forEach((p) => { p.completed = p.nodes.every((n) => n.status === 'done'); });
+    folded.forEach((p) => {
+      let best = '', bestN = -1;
+      p.spellings.forEach((n, spelling) => { if (n > bestN) { best = spelling; bestN = n; } });
+      if (best) { p.key = best; p.name = best; }
+      p.nodes.forEach((n) => { n.project = p.key; });
+      delete p.spellings;
+    });
+    const projects = new Map();
+    folded.forEach((p) => projects.set(p.key, p));
 
     // An archived session a visible review still links to stays (faded): the chain stays whole.
     const current = new Set(all.filter((n) => !n.archived).map((n) => n.id));
     const linked = new Set(reviews.edges.filter((e) => current.has(e.from) || current.has(e.to)).flatMap((e) => [e.from, e.to]));
+    projects.forEach((p) => {
+      p.completed = p.nodes.every((n) => n.status === 'done');
+      // Nothing left to watch: the whole frame goes away instead of an empty box.
+      p.quiet = !p.nodes.some((n) => keepsProject(n));
+    });
     const visible = all.filter((n) => input.showArchived || !n.archived || linked.has(n.id) || projects.get(n.project).completed);
     const shown = new Set(visible.map((n) => n.id));
     const captainId = input.captain ? input.captain.id : '';
@@ -194,7 +216,8 @@
     const shown = new Set(map.nodes.map((n) => n.id));
     let x = o.pad, y = o.pad + o.captainH + o.fanY, shelfH = 0, right = 0, fold = null;
     map.projects.forEach((p) => {
-      const collapsed = typeof o.collapsedProjects[p.key] === 'boolean' ? o.collapsedProjects[p.key] : p.completed;
+      if (p.quiet) return;
+      const collapsed = collapsedChoice(o.collapsedProjects, p.key, p.completed);
       const nodes = p.nodes.filter((n) => shown.has(n.id));
       let workers = nodes.filter((n) => !n.review);
       const reviewers = nodes.filter((n) => n.review), hasFold = o.fold && !p.key;
@@ -224,18 +247,35 @@
         row.forEach((n, i) => {
           const bx = start + i * (o.nodeW + o.gapX), by = y + 52 + r * (o.nodeH + o.gapY);
           if (n) pos.set(n.id, { x: bx, y: by, anchorY: by, w: o.nodeW, h: o.nodeH, row: r + 1, project: p.key });
-          else fold = { x: bx, y: by + o.nodeH / 2 - 16, w: 150, h: 32, project: p.key };
+          else fold = { x: bx, y: by + o.nodeH / 2 - 16, w: 32, h: 32, project: p.key };
         });
       });
       right = Math.max(right, x + w);
       x += w + o.clusterGap;
       shelfH = Math.max(shelfH, h);
     });
-    const returnCount = map.edges.filter((e) => e.type === 'return').length;
+    const returnCount = map.edges.filter((e) => e.type === 'return' && pos.has(e.from)).length;
     const width = Math.max(o.pad + o.captainW, right) + o.pad + returnCount * 7;
     const captain = map.captain ? { x: (width - o.captainW) / 2, y: o.pad, w: o.captainW, h: o.captainH, row: 0 } : null;
     const rowY = (r) => o.pad + o.captainH + o.fanY + 52 + (r - 1) * (o.nodeH + o.gapY);
-    return { captain, nodes: pos, groups, fold, rowY, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
+    const bottoms = groups.map((g) => g.y + g.h);
+    return { captain, nodes: pos, groups, fold, rowY, width, height: Math.max(o.pad + o.captainH, ...bottoms, 0) + o.pad + returnCount * 7 };
+  }
+
+  // Saved collapse/offset keys follow the project spelling. A case variant still matches.
+  function collapsedChoice(saved, key, completed) {
+    if (saved && typeof saved[key] === 'boolean') return saved[key];
+    const lower = String(key).toLowerCase();
+    const hit = saved && Object.keys(saved).find((k) => k.toLowerCase() === lower && typeof saved[k] === 'boolean');
+    return hit ? saved[hit] : !!completed;
+  }
+  function savedPoint(map, key) {
+    const ok = (v) => v && Number.isFinite(v.x) && Number.isFinite(v.y);
+    if (!map || typeof map !== 'object') return null;
+    if (ok(map[key])) return map[key];
+    const lower = String(key).toLowerCase();
+    const hit = Object.keys(map).find((k) => k.toLowerCase() === lower && ok(map[k]));
+    return hit ? map[hit] : null;
   }
 
   function constrainPosition(lay, box, p) {
@@ -256,7 +296,7 @@
   function applyPositions(lay, positions, captainId, projectPositions = {}) {
     const p = positions || {};
     const ok = (v) => v && Number.isFinite(v.x) && Number.isFinite(v.y);
-    lay.groups.forEach((g) => { if (ok(projectPositions[g.key])) translateProject(lay, g.key, projectPositions[g.key].x, projectPositions[g.key].y); });
+    lay.groups.forEach((g) => { const off = savedPoint(projectPositions, g.key); if (off) translateProject(lay, g.key, off.x, off.y); });
     lay.nodes.forEach((box, id) => { if (ok(p[id])) Object.assign(box, { x: p[id].x, y: p[id].y, moved: true }); });
     if (lay.captain && captainId && ok(p[captainId])) Object.assign(lay.captain, { x: p[captainId].x, y: p[captainId].y, moved: true });
     return lay;
@@ -391,7 +431,7 @@
   // A change in anything but the live activity line rebuilds the map.
   function signature(map) {
     const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0, x.project || '', (x.reviews || []).join(',')].join('\u0001');
-    return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${summaryLine(p.counts)}`)].join('\u0002');
+    return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.name}:${p.completed}:${p.quiet ? 1 : 0}:${summaryLine(p.counts)}`)].join('\u0002');
   }
 
   return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
