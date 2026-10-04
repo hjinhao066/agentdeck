@@ -141,6 +141,7 @@
 
   // ---- cards ----
   function dotState(c) {
+    if (c.flag === 'quota') return ['failed', '额度 / 登录 / 限流'];
     if (c.flag === 'failed') return ['failed', '失败'];
     if (c.flag === 'held') return ['held', '已挂起，等队长放行'];
     const session = c.session_id ? host.session(c.session_id) : null;
@@ -165,6 +166,7 @@
     const [state, stateLabel] = dotState(c);
     const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel;
     row.append(dot, el('h3', 'tbv-title', c.title));
+    if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') row.append(el('span', 'tbv-tag held', '挂起'));
     if (item.waitLabel) { const w = el('span', 'tbv-tag wait', '等前置'); w.title = item.waitLabel; row.append(w); }
@@ -512,6 +514,7 @@
     const top = el('header', 'tbv-d-top');
     const crumb = el('div', 'tbv-d-crumb');
     crumb.append(el('span', 'tbv-dot'), el('span', 'tbv-d-project', lane.name), el('span', 'tbv-d-status', U.labelOf(c.status)));
+    if (c.flag === 'quota') crumb.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
     if (c.flag === 'failed') crumb.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') crumb.append(el('span', 'tbv-tag held', '挂起'));
     const close = iconButton('tbv-d-close', ICON.close, '关闭详情 (Esc)');

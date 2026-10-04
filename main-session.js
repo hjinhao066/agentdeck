@@ -99,6 +99,8 @@
     }
   }
   const startingCards = new Map();
+  const quotaStarts = new Map();
+  const commandQuota = (cmd) => window.QuotaCore.commandQuota(host.config.quotas, cmd, host.config.claudeSeats, host.config.activeClaudeSeatId);
   // `notice(card)`: the words for 队长 when the user asked for the start on the
   // task board itself; such a start never opens a dispatcher session.
   async function startCard(id, heartbeat, notice) {
@@ -115,7 +117,12 @@
     if (claimed.ignored) return { card: claimed.card, ignored: true };
     if (!claimed.card || !claimed.card.dispatch_claim || claimed.card.dispatch_claim.delivered || heartbeat && claimed.card.dispatch_claim.key !== heartbeat.key) return { ignored: true };
     const key = claimed.card.dispatch_claim.key;
-    const { card, captain } = await boardRequest('dispatch', { id });
+    if (state()?.waitlist.some((w) => w.metadata?.boardId === id)) {
+      await boardRequest('dispatched', { id, key }); quotaStarts.delete(id);
+      return { card: claimed.card, ignored: true };
+    }
+    const { card, captain, ignored } = await boardRequest('dispatch', { id });
+    if (ignored) { await boardRequest('dispatched', { id, key }); quotaStarts.delete(id); return { card, ignored: true }; }
     if (notice) { boardNotice(notice(card)); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
     if (window.TaskBoard.settings().dispatcher !== 'gemini' || captain) {
       boardNotice(`用户要开始卡片 ${card.id}「${card.title}」${captain ? '（需要队长判断）' : ''}。项目：${card.project}。`);
@@ -123,11 +130,19 @@
       return { card, dispatcher: 'captain' };
     }
     if (freeSlots() <= 0) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话无空位，请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
+    const cmd = window.BoardCore.commandForAgent('agy');
+    if (commandQuota(cmd)?.out) {
+      const waiting = await boardRequest('dispatchWait', { id, key, message: '已排队：额度用尽，稍后自动开调度会话。' });
+      if (!waiting.ignored) quotaStarts.set(id, { id, key });
+      return { card: waiting.card, queued: true };
+    }
+    quotaStarts.delete(id);
     const sessionId = 'c-dispatch-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    await boardRequest('dispatch', { id, session_id: sessionId });
+    const reserved = await boardRequest('dispatch', { id, session_id: sessionId });
+    if (reserved.ignored) return { card: reserved.card, ignored: true };
     const cli = M.boardCli(host.platform);
     const prompt = M.dispatcherInstructions(host.platform, card);
-    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd: window.BoardCore.commandForAgent('agy'), captainCrew: true, project: card.project, dispatcherCardId: id }, true);
+    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd, captainCrew: true, project: card.project, dispatcherCardId: id }, true);
     dispatch(col, prompt + `\n整理后用 ${cli} new --task-id ${id} --project ${JSON.stringify(card.project)} --title "标题" --task "整理后的任务" --agent … 派出去，然后 complete 说明派给谁。拿不准就 ask 交队长。`, '调度：' + card.title);
     await boardRequest('dispatched', { id, key });
     return { card, dispatcher: 'gemini', session_id: col.id };
@@ -687,6 +702,7 @@
     }
     const task = addTask(null, title);
     Object.assign(task, metadata);
+    if (commandQuota(cmd)?.out) task.waitReason = '额度用尽，稍后自动开';
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
     save();
   }
@@ -705,7 +721,11 @@
       const active = M.activeCrew(s.tasks, crewIds()).size;
       await M.fillQueue({
         cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
-        take: () => (state() === s ? s.waitlist.shift() : null),
+        take: () => {
+          if (state() !== s) return null;
+          const index = s.waitlist.findIndex((w) => !commandQuota(w.cmd)?.out);
+          return index < 0 ? null : s.waitlist.splice(index, 1)[0];
+        },
         open: async (w) => {
           const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
           if (!task || state() !== s) return;
@@ -756,7 +776,7 @@
     }
     const dispatcher = host.columns().find((c) => c.id === task.colId && c.dispatcherCardId);
     const delegatedQueue = dispatcher && state()?.waitlist.some((w) => w.metadata?.boardId === dispatcher.dispatcherCardId);
-    if (dispatcher && !delegatedQueue) window.deck.taskBoard('dispatcherReceipt', { id: dispatcher.dispatcherCardId, session_id: dispatcher.id, failed: receipt.failed || '', question: receipt.question || '' }).then((result) => {
+    if (dispatcher && !delegatedQueue) window.deck.taskBoard('dispatcherReceipt', { id: dispatcher.dispatcherCardId, session_id: dispatcher.id, failed: receipt.failed || '', question: receipt.question || '', source: receipt.source }).then((result) => {
       if (receipt.failed) {
         if (result.card?.flag === 'held' && !result.ignored) boardNotice(`卡片 ${dispatcher.dispatcherCardId} 连续失败 2 次，已挂起。`);
       } else for (const notice of result.notices || []) boardNotice(notice);
@@ -858,7 +878,10 @@
       if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
       if (message.code !== 0) {
         if (task.status === 'asking') task.status = 'working';
-        const receipt = { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process' };
+        const entry = host.terms.get(caller.id);
+        // The exit command may beat the status tick; read the current terminal.
+        const screen = entry?.term ? host.dumpScreen(entry.term, 40) : entry?.lastScreen;
+        const receipt = { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process', ...M.resourceReceipt(screen) };
         await recordReceiptForBoard(task, receipt);
         settle(task, receipt, true);
       } else { task.endedAt = Date.now(); task.processEnded = true; update(task); }
@@ -893,20 +916,27 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
-    if (id === s.colId) { retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return; }
+    if (id === s.colId) {
+      for (const [cardId, input] of quotaStarts) {
+        if (!commandQuota(window.BoardCore.commandForAgent('agy'))?.out) {
+          quotaStarts.delete(cardId);
+          startCard(cardId, input).catch((error) => host.showToast(error.message));
+        }
+      }
+      retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return;
+    }
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
       if (task.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(task.status)) continue;
-      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process' }); continue; }
+      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen) }); continue; }
       const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
       if (entry.state === 'quota' || activity === 'quota') {
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
         if (task.status === 'queued' && col?.lastReceipt?.source === 'quota') continue;
         if (task.status === 'asking') task.status = 'working';
-        const reason = String(entry.lastScreen || '').split('\n').filter((line) => M.terminalActivity(line) === 'quota').join('\n');
-        settle(task, { summary: '', files: [], images: [], failed: '额度用尽' + (reason ? '：' + reason.trim() : '，agent 无法继续当前任务'), explicit: true, source: 'quota' });
+        settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen) });
         continue;
       }
       if (task.status === 'queued') {
@@ -1057,7 +1087,7 @@
         return { done: true, result: host.quotaText() };
       case 'main-task': {
         if (!['add', 'list', 'move', 'archive'].includes(message.op)) throw new Error('Invalid task operation.');
-        const result = await boardRequest(message.op, message.input);
+        const result = await boardRequest(message.op, { ...message.input, ...(message.op === 'move' ? { suppressDispatch: true } : {}) });
         return { done: true, result: JSON.stringify(result, null, 2) };
       }
       case 'main-stop':
@@ -1187,10 +1217,11 @@
         const pressure = await readMemoryPressure();
         const wasHold = memoryHold;
         memoryHold = pressure.critical;
-        if (pressure.critical || s.waitlist.length || freeSlots() <= 0) {
+        const quotaHeld = commandQuota(cmd)?.out;
+        if (quotaHeld || pressure.critical || s.waitlist.length || freeSlots() <= 0) {
           await enqueue(title, cmd, cwd, message.id, task, metadata);
           if (wasHold !== memoryHold) refreshWaitingNotes();
-          const result = pressure.critical
+          const result = quotaHeld ? `已排队：额度用尽，稍后自动开新会话「${title}」。` : pressure.critical
             ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
             : `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。`;
           return { done: true, result };
@@ -1267,7 +1298,7 @@
     card.appendChild(head);
     if (task.status === 'input') card.appendChild(el('div', 'task-note', '停在确认提示上，已交给队长判断；队长拿不准会来问你。'));
     if (task.status === 'queued') card.appendChild(el('div', 'task-note', '追加给还在忙的会话，等它空下来就发过去。'));
-    if (task.status === 'waiting') card.appendChild(el('div', 'task-note', M.queueNote(M.MAX_ACTIVE, memoryHold)));
+    if (task.status === 'waiting') card.appendChild(el('div', 'task-note', task.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold)));
     if (task.progress && !task.receipt) card.appendChild(el('div', 'task-summary', task.progress));
     const r = task.receipt;
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));

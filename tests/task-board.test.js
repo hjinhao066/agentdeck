@@ -82,9 +82,9 @@ test('Captain rejection, process failure and quota failure deduplicate attempts 
   assert.equal(failed.card.flag, 'held'); assert.equal(failed.card.rework_count, 1);
   const q = add(); bind(q.id, 'quota'); event(q.id, 'failed', 'RESOURCE_EXHAUSTED', 'quota', 'worker', 'quota');
   const repeated = event(q.id, 'failed', 'usage limit', 'quota', 'worker', 'process');
-  assert.equal(repeated.card.consecutive_failures, 1);
+  assert.equal(repeated.card.consecutive_failures, 0);
   bind(q.id, 'retry'); assert.equal(event(q.id, 'complete', 'late', 'quota').ignored, true);
-  assert.equal(event(q.id, 'failed', 'failed again', 'retry').card.flag, 'held');
+  assert.equal(event(q.id, 'failed', 'failed again', 'retry').card.flag, 'failed');
 });
 test('fallback never declares success and an authoritative late completion wins', (t) => {
   const { add, bind, event } = fixture(t); const c = add(); bind(c.id);
@@ -183,7 +183,7 @@ test('dispatcher question/crash update the card; a delegated worker is never cha
   store.dispatch({ id: c.id, session_id: 'dispatcher-1' });
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-1', question: 'Needs clarification?' }).card.status, 'needs_user');
   store.dispatch({ id: c.id, session_id: 'dispatcher-2' });
-  assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-2', failed: 'quota exhausted' }).card.flag, 'failed');
+  assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-2', failed: 'quota exhausted' }).card.flag, 'quota');
   store.dispatch({ id: c.id, session_id: 'dispatcher-3' }); bind(c.id);
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-3', failed: 'old dispatcher quit' }).ignored, true);
   assert.equal(store.list()[0].session_id, 'worker');
@@ -246,4 +246,104 @@ test('reorder renumbers when no number fits between neighbours and rejects other
   assert.throws(() => store.reorder({ id: 'a', before: 'a' }), /own project/);
   assert.throws(() => store.reorder({ id: 'a', before: 'b', after: 'c' }), /either/);
   assert.throws(() => store.reorder({ id: 'missing' }), /Unknown task/);
+});
+
+test('move preserves live execution/review/dispatcher fences and heartbeat never re-dispatches them', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  for (const state of ['working', 'done', 'held', 'review', 'dispatcher']) {
+    const c = add({ verify: state === 'review' });
+    if (state === 'dispatcher') store.dispatch({ id: c.id, session_id: 'dispatch-' + state });
+    else {
+      bind(c.id, state, 'worker-' + state); event(c.id, 'started', '', state, 'worker-' + state);
+      if (state === 'done' || state === 'review') event(c.id, 'complete', 'Done', state, 'worker-' + state);
+      if (state === 'held') {
+        event(c.id, 'failed', 'Broken', state, 'worker-' + state);
+        bind(c.id, 'held2', 'worker-held2'); event(c.id, 'failed', 'Still broken', 'held2', 'worker-held2');
+      }
+    }
+    const before = store.list().find((x) => x.id === c.id);
+    const moved = store.move({ id: c.id, status: 'doing' }).card;
+    assert.equal(moved.session_id, before.session_id); assert.equal(moved.dispatch_session_id, before.dispatch_session_id);
+    const starts = []; new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan();
+    assert.equal(starts.length, 0, state); assert.equal(store.claim({ id: c.id }).ignored, true);
+    assert.equal(store.dispatch({ id: c.id, session_id: 'duplicate' }).ignored, true);
+    if (state === 'working') assert.throws(() => bind(c.id, 'replacement'), /active execution/);
+    if (['done', 'held', 'review'].includes(state)) assert.equal(bind(c.id, 'replacement-' + state).card.session_id, 'worker');
+  }
+});
+
+test('Captain move consumes start edge before a subsequent new, even without a session', (t) => {
+  const { store, add, bind } = fixture(t); const c = add();
+  store.move({ id: c.id, status: 'done' });
+  const moved = store.move({ id: c.id, status: 'doing', suppressDispatch: true }).card;
+  assert.equal(moved.dispatch_claim.delivered, true);
+  const starts = []; new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan();
+  assert.equal(starts.length, 0); assert.equal(bind(c.id).card.session_id, 'worker');
+  const unbound = add(); store.move({ id: unbound.id, status: 'doing' });
+  new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan();
+  assert.equal(starts.length, 1, 'ordinary external starts still dispatch');
+});
+
+test('archived and failed legacy attempts can bind anew; live reviewers and just-created associated workers cannot', (t) => {
+  const { store, add, bind, event, root } = fixture(t);
+  const archived = add(); bind(archived.id); event(archived.id, 'started');
+  store.sessions = () => [{ id: 'worker', archived: true }];
+  assert.equal(bind(archived.id, 'fresh', 'fresh-worker').card.attempt_id, 'fresh');
+  store.sessions = () => [];
+  const failed = add(); bind(failed.id); event(failed.id, 'failed', 'Broken');
+  // Old board versions sometimes failed to close the attempt.
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards.find((c) => c.id === failed.id).attempt_closed = false; fs.writeFileSync(file, JSON.stringify(doc));
+  assert.equal(bind(failed.id, 'retry').card.attempt_id, 'retry');
+  const failedSession = add(); bind(failedSession.id, 'legacy-session');
+  store.sessions = () => [{ id: 'worker', lastReceipt: { failed: 'quota exhausted' } }];
+  assert.equal(bind(failedSession.id, 'new-session-attempt').card.attempt_id, 'new-session-attempt');
+  store.sessions = () => [{ id: 'worker', active: true, boardId: failedSession.id, lastReceipt: { failed: 'old quota error' } }];
+  assert.throws(() => bind(failedSession.id, 'duplicate-new-session'), /active execution/);
+  const orphan = add(); store.sessions = () => [{ id: 'just-created', boardId: orphan.id, active: true }];
+  assert.equal(store.claim({ id: orphan.id }).ignored, true);
+  assert.throws(() => bind(orphan.id), /active execution/);
+  store.sessions = () => [{ id: 'just-created', boardId: orphan.id, active: true, archived: true }];
+  assert.equal(bind(orphan.id).card.session_id, 'worker');
+});
+
+test('resource failures in execution and review preserve the failure streak and never hold or count rework', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  for (const [reason, source, kind] of [['RESOURCE_EXHAUSTED: quota exhausted', 'quota', 'quota'], ['API Error: 401 Unauthorized', 'process', 'auth'], ['Not logged in. Please run /login', 'command', 'auth'], ['429 Too many requests', 'command', 'rate_limit']]) {
+    const c = add({ verify: true }); bind(c.id); event(c.id, 'failed', 'Real defect');
+    bind(c.id, 'execution2'); event(c.id, 'complete', 'Fixed', 'execution2');
+    for (let i = 0; i < 2; i++) {
+      const attempt = 'resource-' + i; bind(c.id, attempt, 'reviewer');
+      const failed = event(c.id, 'failed', reason, attempt, 'reviewer', source).card;
+      assert.equal(failed.flag, 'quota'); assert.equal(failed.resource_failure, kind);
+      assert.equal(failed.consecutive_failures, 1); assert.equal(failed.rework_count, 0);
+      assert.equal(event(c.id, 'failed', 'process exited', attempt, 'reviewer', 'process').card.consecutive_failures, 1);
+    }
+    bind(c.id, 'real-defect'); assert.equal(event(c.id, 'failed', 'Assertion failed', 'real-defect').card.flag, 'held');
+  }
+});
+
+test('dispatcher resource receipts do not hold; real dispatcher crashes do, and pending quota claims are durable', (t) => {
+  const { store, add } = fixture(t); const c = add(); const key = store.claim({ id: c.id }).card.dispatch_claim.key;
+  store.dispatchWait({ id: c.id, key, message: '额度用尽，稍后自动开' });
+  assert.equal(store.list()[0].dispatch_claim.delivered, false);
+  const starts = []; new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan(); assert.equal(starts[0].key, key);
+  for (let i = 0; i < 2; i++) {
+    store.dispatch({ id: c.id, session_id: 'quota-' + i });
+    const failed = store.dispatcherReceipt({ id: c.id, session_id: 'quota-' + i, failed: 'Not logged in', source: 'command' }).card;
+    assert.equal(failed.flag, 'quota'); assert.equal(failed.consecutive_failures, 0);
+  }
+  for (let i = 0; i < 2; i++) {
+    store.dispatch({ id: c.id, session_id: 'crash-' + i });
+    store.dispatcherReceipt({ id: c.id, session_id: 'crash-' + i, failed: 'exit 7', source: 'process' });
+  }
+  assert.equal(store.list()[0].flag, 'held');
+});
+
+test('a pending heartbeat claim loses to a manual binding or a newer claim', (t) => {
+  const { store, add, bind } = fixture(t); const c = add(); const starts = [];
+  store.move({ id: c.id, status: 'doing' });
+  const h = new TaskHeartbeat(store, { onStart: (i) => { starts.push(i); return false; } }); h.scan();
+  bind(c.id); h.scan(); assert.equal(starts.length, 1);
+  assert.equal(store.list()[0].dispatch_claim.delivered, true);
 });

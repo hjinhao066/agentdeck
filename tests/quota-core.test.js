@@ -428,3 +428,18 @@ test('panel cells list only the windows a provider really has, with their own re
   Q.observe(store, Q.screen('Claude', '', ['Session: 100% | Reset: 1hr', 'Weekly: 40% | Reset: 3d'], now + 2), now + 2);
   assert.deepEqual(Q.summary(store, 'Claude', now + 2).cells.map((c) => [c.key, c.out, c.remaining]), [['5h', true, 0], ['7d', false, 60]]);
 });
+
+test('opening gates use the selected provider and Claude seat, clear at reset and allow unknown observations', () => {
+  const seats = [{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }];
+  const store = { 'Claude:cn': { scope: 'claude', configDir: '~/.claude', blocked: { at: now, resetAt: now + 1000 } }, Antigravity: { scope: 'gemini', blocked: { at: now, resetAt: now + 1000 } } };
+  assert.equal(Q.commandQuota(store, 'claude --model opus', seats, 'cn', now).out, true);
+  assert.equal(Q.commandQuota(store, 'claude --model opus', seats, 'us', now).out, false);
+  assert.equal(Q.commandQuota(store, 'claude', seats, 'cn', now + 1001).out, false);
+  assert.equal(Q.commandQuota(store, 'agy --model gemini-3.8-flash-high', seats, 'cn', now).out, true);
+  assert.equal(Q.commandQuota(store, 'agy --model gemini-3.8-flash-high', seats, 'cn', now + 1001).out, false);
+  assert.equal(Q.commandQuota(store, 'codex', seats, 'cn', now).out, false);
+  assert.equal(Q.commandQuota(store, 'cursor-agent --model grok-4.7-high-fast', seats, 'cn', now).out, false);
+  assert.equal(Q.commandQuota(store, 'cursor-agent --model claude-opus-5-5', seats, 'cn', now), null);
+  assert.equal(Q.commandQuota(store, 'agy --model claude-opus-5-5', seats, 'cn', now), null);
+  assert.equal(Q.commandQuota(store, 'node fake-agent.js', seats, 'cn', now), null);
+});

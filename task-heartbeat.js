@@ -32,9 +32,10 @@ class TaskHeartbeat {
       }
       const ids = new Set(cards.map((c) => c.id));
       for (const id of this.previous.keys()) if (!ids.has(id)) this.previous.delete(id);
+      const current = this.pending.size ? this.store.list() : cards;
       for (const [id, key] of this.pending) {
-        const card = cards.find((c) => c.id === id);
-        if (!card || card.dispatch_claim?.delivered || card.status !== 'doing') { this.pending.delete(id); continue; }
+        const card = current.find((c) => c.id === id);
+        if (!card || card.dispatch_claim?.key !== key || card.dispatch_claim.delivered || card.status !== 'doing' || card.flag || this.store.occupied(card)) { this.pending.delete(id); continue; }
         if (!this.delivering?.has(key)) {
           if (!this.delivering) this.delivering = new Set();
           this.delivering.add(key);

@@ -59,7 +59,7 @@ function seed(dir, big) {
   };
   if (big) {
     // the size the user really has: 5 projects, 40 cards still open, one project far busier than the rest
-    for (let i = 0; i < 11; i++) boards.agentdeck.push(card('agentdeck', 'a-doing' + i, `进行中的任务 ${i + 1}：一个比较长的标题用来检查一行放不下时会不会撑高卡片`, 'doing', { updated: at(4 + i) }));
+    for (let i = 0; i < 11; i++) boards.agentdeck.push(card('agentdeck', 'a-doing' + i, `进行中的任务 ${i + 1}：一个比较长的标题用来检查一行放不下时会不会撑高卡片`, 'doing', { updated: at(4 + i), ...(i === 0 ? { flag: 'quota', resource_failure: 'quota' } : {}) }));
     for (let i = 0; i < 4; i++) boards.agentdeck.push(card('agentdeck', 'a-todo' + i, `排着队的任务 ${i + 1}`, 'todo'));
     for (let i = 0; i < 5; i++) boards.agentdeck.push(card('agentdeck', 'a-done' + i, `做完的任务 ${i + 1}`, 'done'));
     boards['hermes-music'] = [0, 1, 2, 3, 4, 5].map((i) => card('hermes-music', 'm-' + i, `音乐页任务 ${i + 1}`, i < 3 ? 'doing' : 'todo'));
@@ -74,7 +74,14 @@ const readCard = (id) => fs.readdirSync(path.join(profile, 'tasks')).filter((n) 
 // What 队长 has been told through the receipt channel (waiting or already handed over).
 const captainNotices = () => page.evaluate(() => [...config.mainSession.pending, ...config.mainSession.inflight].filter((p) => p.title === '任务看板').map((p) => p.summary));
 const cellIds = (project, status) => page.locator(`.tbv-lane[data-project="${project}"] .tbv-cell[data-status="${status}"] .tbv-card`).evaluateAll((n) => n.map((x) => x.dataset.cardId));
-const center = async (locator) => { const b = await locator.boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+// A task-store refresh replaces lane nodes. Re-resolve the locator when a
+// measurement races that repaint instead of dereferencing a detached node.
+async function bounds(locator) {
+  let box;
+  await expect.poll(async () => { box = await locator.boundingBox(); return box; }).not.toBeNull();
+  return box;
+}
+const center = async (locator) => { const b = await bounds(locator); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
 // A real pointer drag: press on `from`, move in steps to (x, y), optionally stop before releasing.
 async function drag(from, x, y, { release = true } = {}) {
   const a = await center(from);
@@ -93,7 +100,9 @@ async function launch(big = false) {
   const workers = [column('w-login', '登录权限', '客户门户'), column('w-ui', '工作台界面', '客户门户'), column('w-ask', '密码策略', '客户门户'), column('w-report', '导出报表', '报表服务'), column('w-deck', '看板打磨', 'AgentDeck')];
   const states = ['working', 'done', 'working', 'working', 'failed'];
   const now = Date.now();
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'gemini' },
+  // Large read-only fixtures have unbound doing cards. Route their heartbeat
+  // notices to the stand-in Captain so they never launch a real provider CLI.
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
     columns: [{ ...column('cap', '队长', ''), isMain: true, captainCrew: false }, ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '',
@@ -251,6 +260,7 @@ test('compact board: five projects and forty open cards fit one screen; folds, f
 
 test('drag and keyboard: reorder inside a column is saved, a drop on 进行中 only tells 队长, lanes reorder', async () => {
   await launch();
+  await page.evaluate(() => TaskBoard.settings('gemini'));
   await resize(1440, 900);
   const columnIds = await page.evaluate(() => columns.map((c) => c.id));
   await page.locator('#taskBoardBtn').click();
@@ -331,7 +341,7 @@ test('drag and keyboard: reorder inside a column is saved, a drop on 进行中 o
   const lanes = () => page.locator('.tbv-lane').evaluateAll((n) => n.map((x) => x.dataset.project));
   expect(await lanes()).toEqual(['agentdeck', '报表服务', '客户门户'].sort((a, b) => a.localeCompare(b)));
   const first = (await lanes())[0], last = (await lanes())[2];
-  const firstBox = await page.locator(`.tbv-lane[data-project="${first}"]`).boundingBox();
+  const firstBox = await bounds(page.locator(`.tbv-lane[data-project="${first}"]`));
   await drag(page.locator(`.tbv-lane[data-project="${last}"] .tbv-lane-name`), firstBox.x + 60, firstBox.y + 2);
   await expect.poll(lanes).toEqual([last, first, (await lanes()).find((k) => k !== first && k !== last)]);
   const order = await lanes();

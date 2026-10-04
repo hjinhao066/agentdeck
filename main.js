@@ -54,9 +54,17 @@ function requestMobile(op, input) {
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 // Test profiles must never write the user's shared board.
-const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined);
+const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => {
+  const file = path.join(app.getPath('userData'), 'config.json');
+  const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+  return [...(cfg.columns || []).map((c) => {
+    const status = cfg.mainSession?.tasks?.findLast((t) => t.colId === c.id)?.status;
+    return { ...c, active: ['queued', 'working', 'quota', 'input', 'asking'].includes(status), failed: ['failed', 'stopped'].includes(status) };
+  }),
+    ...(cfg.archived || []).map((c) => ({ ...c, archived: true }))];
+} });
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');
   return taskStore[payload.op](payload.input || {});
 });
 

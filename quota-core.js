@@ -367,7 +367,18 @@
     const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
     return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, cells, account: entry.account || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
+  function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
+    const cmd = String(command || '').trim();
+    const bin = cmd.match(/^(claude|codex|cursor-agent|agy|antigravity|gemini)(?:\s|$)/i)?.[1]?.toLowerCase();
+    const provider = { claude: 'Claude', codex: 'Codex', 'cursor-agent': 'Cursor', agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Antigravity' }[bin];
+    if (!provider) return null;
+    const model = cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || '';
+    if (provider === 'Antigravity' && model && !modelScope(provider, model) || provider === 'Cursor' && !modelScope(provider, model)) return null;
+    const seatList = claudeSeats(seats);
+    const seat = provider === 'Claude' ? seatList.find((s) => s.id === activeSeatId) || seatForColumn({ cmd }, seatList) : null;
+    return summary(store || {}, provider, now, seat);
+  }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text };
 
 });

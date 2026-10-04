@@ -93,12 +93,21 @@ test('verification rejects twice, reports held and refuses further automatic wor
 test('process and quota events update data automatically and a stale execution cannot complete its reviewer', async () => {
   const quotaCard = await add('Quota failure'); const q = await worker(quotaCard.id);
   await page.evaluate((id) => MainSession.onTick(id, { ...terms.get(id), alive: true, state: 'quota', lastScreen: 'RESOURCE_EXHAUSTED: quota exhausted' }), q.session);
-  await expect.poll(async () => (await card(quotaCard.id)).flag).toBe('failed');
+  await expect.poll(async () => (await card(quotaCard.id)).flag).toBe('quota');
   expect((await card(quotaCard.id)).latest_receipt).toContain('RESOURCE_EXHAUSTED');
   const crash = await add('Process failure'); const w = await worker(crash.id);
   await command(['session-exit', '--code', '7'], w.env);
   await expect.poll(async () => (await card(crash.id)).flag).toBe('failed');
   expect((await card(crash.id)).latest_receipt).toContain('exit 7');
+  const auth = await add('Login failure exits before status tick'); const a = await worker(auth.id);
+  await page.evaluate((id) => new Promise((resolve) => terms.get(id).term.write('\r\nAPI Error: 401 Unauthorized\r\n', resolve)), a.session);
+  await command(['session-exit', '--code', '1'], a.env);
+  await expect.poll(async () => (await card(auth.id)).flag).toBe('quota'); expect((await card(auth.id)).resource_failure).toBe('auth');
+  expect((await card(auth.id)).consecutive_failures).toBe(0);
+  const rapid = await add('Rate limit PTY exit'); const r = await worker(rapid.id);
+  await page.evaluate((id) => MainSession.onTick(id, { ...terms.get(id), alive: false, state: 'exited', lastScreen: '429 Too many requests', exitReason: 'exit 1' }), r.session);
+  await expect.poll(async () => (await card(rapid.id)).resource_failure).toBe('rate_limit');
+  expect((await card(rapid.id)).consecutive_failures).toBe(0);
   const stale = await add('stale worker', true); const old = await worker(stale.id);
   await command(['complete', '--result', 'Execution done'], old.env); const review = await worker(stale.id, 'Reviewer');
   await command(['complete', '--result', 'Old late result'], old.env);
@@ -217,4 +226,114 @@ test('a synced JSON conflict cannot swallow a command receipt; its transition re
   } finally { fs.writeFileSync(file, raw); }
   await expect.poll(async () => (await card(c.id)).status, { timeout: 15000 }).toBe('done');
   expect((await card(c.id)).latest_receipt).toBe('原始结果🙂完整保留。');
+});
+
+test('Captain held/completed moves never open a dispatcher and new binds stale archived/failed attempts', async () => {
+  await page.evaluate(() => TaskBoard.settings('gemini'));
+  const c = await add('Held rework fence');
+  const first = await worker(c.id); await command(['complete', '--result', 'Broken', '--failed', 'Assertion failed'], first.env);
+  const second = await worker(c.id); await command(['complete', '--result', 'Broken again', '--failed', 'Assertion still failed'], second.env);
+  expect((await card(c.id)).flag).toBe('held');
+  const dispatchers = () => page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length);
+  const count = await dispatchers();
+  await command(['task', 'move', '--id', c.id, '--status', 'doing']);
+  expect((await card(c.id)).session_id).toBe(second.session);
+  expect((await card(c.id)).dispatch_claim.delivered).toBe(true);
+  const repair = await worker(c.id, 'Captain repair'); await command(['complete', '--result', 'Fixed'], repair.env);
+  await command(['task', 'move', '--id', c.id, '--status', 'doing']);
+  expect((await card(c.id)).session_id).toBe(repair.session);
+  const rework = await worker(c.id, 'Completed rework'); await command(['complete', '--result', 'Fixed again'], rework.env);
+  expect(await dispatchers()).toBe(count);
+
+  const stale = await add('Archived legacy attempt'); const old = await worker(stale.id);
+  await command(['archive', '--id', old.session]);
+  // Reproduce a pre-fix card which still points to its archived open attempt.
+  const file = path.join(profile, 'tasks', 'e2e.json'), doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const item = doc.cards.find((x) => x.id === stale.id);
+  item.status = 'doing'; item.flag = null; item.session_id = old.session; item.attempt_id = 'legacy'; item.attempt_closed = false;
+  fs.writeFileSync(file, JSON.stringify(doc));
+  const fresh = await worker(stale.id, 'Fresh after archive');
+  expect((await card(stale.id)).session_id).toBe(fresh.session);
+  expect((await cli(['new', '--task-id', stale.id, '--title', 'Duplicate live worker', '--task', 'test', '--command', FAKE])).code).toBe(1);
+  await command(['complete', '--result', 'Done'], fresh.env);
+});
+
+test('quota/login/throttle receipts preserve real failure count through repeated replacements', async () => {
+  const c = await add('Resource errors do not hold'); const initial = await worker(c.id);
+  await command(['complete', '--result', 'Failed test', '--failed', 'Assertion failed'], initial.env);
+  expect((await card(c.id)).consecutive_failures).toBe(1);
+  for (const reason of ['Not logged in. Please run /login', '429 Too many requests', 'RESOURCE_EXHAUSTED: quota exhausted']) {
+    const w = await worker(c.id, 'Resource replacement');
+    await command(['complete', '--result', 'Provider unavailable', '--failed', reason], w.env);
+    const failed = await card(c.id); expect(failed.flag).toBe('quota'); expect(failed.consecutive_failures).toBe(1); expect(failed.rework_count).toBe(0);
+  }
+  const w = await worker(c.id, 'Real defect'); await command(['complete', '--result', 'Broken', '--failed', 'Missing assertion'], w.env);
+  expect((await card(c.id)).flag).toBe('held');
+});
+
+test('exhausted automatic dispatch waits without a PTY, resumes once, and yields to a Captain new', async () => {
+  const setup = async () => page.evaluate((fake) => {
+    window.quotaTestCommand = BoardCore.commandForAgent; window.quotaTestGate = QuotaCore.commandQuota; window.quotaTestStore = config.quotas;
+    BoardCore.commandForAgent = (agent, ...args) => agent === 'agy' ? fake : window.quotaTestCommand(agent, ...args);
+    QuotaCore.commandQuota = (store, cmd, ...args) => window.quotaTestGate(store, cmd === fake ? 'agy --model gemini-3.8-flash-high' : cmd, ...args);
+    config.quotas = { Antigravity: { scope: 'gemini', blocked: { at: Date.now(), resetAt: Date.now() + 600000 } } };
+    TaskBoard.settings('gemini');
+  }, FAKE);
+  await setup();
+  try {
+    const before = await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length);
+    const c = await add('Deferred dispatcher');
+    expect(await page.evaluate((id) => TaskBoard.startCard(id), c.id)).toMatchObject({ queued: true });
+    expect((await card(c.id)).dispatch_wait).toContain('额度用尽，稍后自动开');
+    expect((await card(c.id)).dispatch_session_id).toBeFalsy(); expect((await card(c.id)).dispatch_claim.delivered).toBe(false);
+    expect(await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length)).toBe(before);
+    await page.evaluate(() => { config.quotas.Antigravity.blocked.resetAt = Date.now() - 1; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
+    await expect.poll(async () => (await card(c.id)).dispatch_session_id).toBeTruthy();
+    expect((await card(c.id)).dispatch_wait).toBeNull(); expect((await card(c.id)).latest_receipt).toBe('');
+    const dispatcher = (await card(c.id)).dispatch_session_id;
+    await expect.poll(() => fs.existsSync(path.join(envDir, dispatcher + '.json'))).toBe(true);
+    await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, dispatcher)).toBe('working');
+    expect(await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length)).toBe(before + 1);
+    await command(['complete', '--result', 'No work delegated', '--failed', 'Not logged in'], JSON.parse(fs.readFileSync(path.join(envDir, dispatcher + '.json'), 'utf8')));
+    await expect.poll(async () => (await card(c.id)).flag).toBe('quota'); expect((await card(c.id)).consecutive_failures).toBe(0);
+
+    await page.evaluate(() => { config.quotas.Antigravity.blocked.resetAt = Date.now() + 600000; });
+    const takeover = await add('Captain takes deferred card');
+    expect(await page.evaluate((id) => TaskBoard.startCard(id), takeover.id)).toMatchObject({ queued: true });
+    const manual = await worker(takeover.id, 'Captain immediate worker', FAKE + ' --worker');
+    expect((await card(takeover.id)).dispatch_claim.delivered).toBe(true);
+    await page.evaluate(() => { config.quotas.Antigravity.blocked.resetAt = Date.now() - 1; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
+    expect((await card(takeover.id)).session_id).toBe(manual.session); expect((await card(takeover.id)).dispatch_session_id).toBeFalsy();
+    expect(await page.evaluate(() => columns.filter((c) => c.dispatcherCardId).length)).toBe(before + 1);
+    await command(['complete', '--result', 'Captain worker done'], manual.env);
+  } finally {
+    await page.evaluate(() => { BoardCore.commandForAgent = window.quotaTestCommand; QuotaCore.commandQuota = window.quotaTestGate; config.quotas = window.quotaTestStore; TaskBoard.settings('captain'); });
+  }
+});
+
+test('new selected Claude seat queues at quota and the queue opens after recovery without blocking other providers', async () => {
+  await page.evaluate((fake) => {
+    window.queueQuotaGate = QuotaCore.commandQuota; window.queueQuotaStore = config.quotas;
+    const seat = QuotaCore.claudeSeats(config.claudeSeats).find((s) => s.id === config.activeClaudeSeatId);
+    config.quotas = { [QuotaCore.seatKey(seat.id)]: { scope: 'claude', configDir: seat.configDir, blocked: { at: Date.now(), resetAt: Date.now() + 600000 } } };
+    QuotaCore.commandQuota = (store, cmd, ...args) => window.queueQuotaGate(store, cmd === fake ? 'claude --model sonnet' : cmd, ...args);
+  }, FAKE);
+  try {
+    const c = await add('Quota queued worker');
+    expect(await command(['new', '--task-id', c.id, '--title', 'Wait at quota', '--task', 'test', '--command', FAKE])).toContain('额度用尽，稍后自动开');
+    expect((await card(c.id)).session_id).toBeFalsy();
+    const other = await add('Other provider can proceed');
+    expect(await command(['new', '--task-id', other.id, '--title', 'Available provider', '--task', 'test', '--command', FAKE + ' --worker'])).toContain('已排队');
+    await page.evaluate(() => MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)));
+    await expect.poll(async () => (await card(other.id)).session_id).toBeTruthy();
+    expect((await card(c.id)).session_id).toBeFalsy();
+    await page.evaluate(() => { for (const q of Object.values(config.quotas)) q.blocked.resetAt = Date.now() - 1; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
+    await expect.poll(async () => (await card(c.id)).session_id).toBeTruthy();
+    for (const id of [c.id, other.id]) {
+      const session = (await card(id)).session_id;
+      await expect.poll(() => fs.existsSync(path.join(envDir, session + '.json'))).toBe(true);
+      await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, session)).toBe('working');
+      await command(['complete', '--result', 'Quota queue test done'], JSON.parse(fs.readFileSync(path.join(envDir, session + '.json'), 'utf8')));
+    }
+  } finally { await page.evaluate(() => { QuotaCore.commandQuota = window.queueQuotaGate; config.quotas = window.queueQuotaStore; }); }
 });

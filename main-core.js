@@ -604,10 +604,20 @@
 
   const cursorBusy = (screen) => String(screen || '').split('\n').filter((line) => line.trim()).slice(-10).some((line) => CURSOR_BUSY.test(line));
 
+  function resourceFailure(reason, source = '') {
+    for (const raw of String(reason || '').split('\n')) {
+      const line = raw.trim().replace(/^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?/i, '');
+      if (/^(?:额度用尽|配额(?:用尽|耗尽)|RESOURCE_EXHAUSTED\b|quota (?:exceeded|exhausted)|(?:you have )?exceeded your usage limit|you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|individual quota reached|you['’]?(?:re| are) out of (?:extra )?usage|continuing (?:automatically at|at|shortly).*esc to cancel)/i.test(line)) return 'quota';
+      if (/^(?:429\b|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b|被限流|请求被限流)/i.test(line)) return 'rate_limit';
+      if (/^(?:401\b|unauthorized\b|(?:you['’]?(?:re| are) )?not (?:logged|signed) in\b|authentication(?:_error| (?:required|failed))\b|login required\b|please (?:(?:log|sign) in\b|run \/login\b)|未登录|尚未登录|请先登录)/i.test(line)) return 'auth';
+    }
+    return source === 'quota' ? 'quota' : '';
+  }
   function terminalActivity(screen, cmd) {
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
     lines.forEach((line, i) => {
+      if (resourceFailure(line)) quota = i;
       if (/^[│⏺⎿✻✽●!⚠>\s]*(?:(?:API |request )?error:\s*)?(?:429\b[^\n]*(?:rate[_ -]?limit|too many requests)|rate[_ -]?limit(?:_error|ed)?\b|too many requests\b)/i.test(line)) quota = i;
       if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:error:\s*)?(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|individual quota reached|(?:you have )?(?:exceeded your usage limit|quota exhausted)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
       if (/^\s*[⏺⎿✻✽●!⚠]*\s*(?:you['’]?(?:ve| have) hit your (?:(?:usage|session|weekly) )?limit|(?:usage |weekly |session )?limit (?:reached|exceeded)|you['’]?(?:re| are) out of (?:extra )?usage|(?:error:?\s*)?(?:usage limit|quota|resource_exhausted)(?:\s|:|\b).*?(?:exceeded|exhausted|reached)|continuing (?:automatically at|at|shortly).*esc to cancel)\b/i.test(line)) quota = i;
@@ -622,6 +632,12 @@
     if (cursor === 'idle' && /\bcursor-agent\b/i.test(cmd || '')) return '';
     if (working >= 0 || queued) return 'working';
     return '';
+  }
+  function resourceReceipt(screen) {
+    if (terminalActivity(screen) !== 'quota') return null;
+    const reason = String(screen || '').split('\n').filter((line) => terminalActivity(line) === 'quota').join('\n').trim();
+    const label = { auth: '未登录', rate_limit: '请求被限流' }[resourceFailure(reason)] || '额度用尽';
+    return { failed: label + (reason ? '：' + reason : '，agent 无法继续当前任务'), source: 'quota' };
   }
 
   function statusLabel(state) { return STATUS[state] || STATUS.plain; }
@@ -694,7 +710,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, MAX_SUMMARY, MAX_HISTORY,
   };
 });

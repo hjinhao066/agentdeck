@@ -3,6 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
+const { resourceFailure } = require('./main-core');
 
 const STATUSES = ['todo', 'doing', 'review', 'needs_user', 'done'];
 function projectName(value) {
@@ -33,8 +34,9 @@ function newCard(input, now = new Date().toISOString()) {
 }
 
 class TaskStore {
-  constructor(dir = path.join(os.homedir(), '.agents', 'boards', 'tasks')) {
+  constructor(dir = path.join(os.homedir(), '.agents', 'boards', 'tasks'), { sessions = () => [] } = {}) {
     this.dir = path.resolve(dir);
+    this.sessions = sessions;
     // A local cross-process lock lives outside the synced repository.
     this.lock = path.join(os.tmpdir(), 'agentdeck-tasks-' + crypto.createHash('sha256').update(this.dir).digest('hex') + '.lock');
   }
@@ -54,7 +56,7 @@ class TaskStore {
     const ids = new Set();
     for (const { doc } of docs.values()) for (const card of doc.cards) {
       idValue(card.id);
-      if (ids.has(card.id) || card.project !== doc.project || !STATUSES.includes(card.status) || ![null, 'failed', 'blocked', 'held'].includes(card.flag) || !Array.isArray(card.depends_on)) throw new Error('Invalid or duplicate card in synced task boards.');
+      if (ids.has(card.id) || card.project !== doc.project || !STATUSES.includes(card.status) || ![null, 'failed', 'blocked', 'held', 'quota'].includes(card.flag) || !Array.isArray(card.depends_on)) throw new Error('Invalid or duplicate card in synced task boards.');
       if (typeof card.title !== 'string' || !card.title.trim() || typeof card.detail !== 'string' || typeof card.verify !== 'boolean' || typeof card.archived !== 'boolean' || !Number.isFinite(card.order) || card.order < 0 || !Number.isInteger(card.rework_count) || card.rework_count < 0 || typeof card.updated !== 'string') throw new Error('Invalid card fields in synced task boards.');
       ids.add(card.id);
     }
@@ -151,9 +153,28 @@ class TaskStore {
       cards.push(card); return { card, notices: [] };
     });
   }
-  failure(card, attempt, reason, rework) {
+  sessionOpen(id) {
+    return !!id && this.sessions().find((s) => s.id === id)?.archived !== true;
+  }
+  occupied(card) {
+    return this.sessionOpen(card.session_id) || this.sessionOpen(card.dispatch_session_id) ||
+      this.sessions().some((s) => !s.archived && (s.boardId === card.id || s.dispatcherCardId === card.id));
+  }
+  activeAttempt(card) {
+    const session = this.sessions().find((s) => s.id === card.session_id);
+    return (card.session_id && this.sessionOpen(card.session_id) && !card.attempt_closed &&
+      !session?.failed && !(session?.lastReceipt?.failed && !session.active) &&
+      !['failed', 'quota', 'held'].includes(card.flag) && !/:failed:/.test(card.last_event || '')) ||
+      this.sessions().some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
+  }
+  failure(card, attempt, reason, rework, source = '') {
     if (card.last_failure_attempt === attempt) return;
     card.last_failure_attempt = attempt;
+    card.resource_failure = resourceFailure(reason, source) || null;
+    if (card.resource_failure) {
+      card.status = 'doing'; card.flag = 'quota'; card.latest_receipt = sentence(reason);
+      return;
+    }
     card.consecutive_failures = (card.consecutive_failures || 0) + 1;
     if (rework) card.rework_count++;
     card.status = 'doing';
@@ -175,8 +196,16 @@ class TaskStore {
       card.status = input.status;
       if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
       if (input.status === 'done') card.consecutive_failures = 0;
-      card.session_id = null; card.attempt_id = null; card.dispatch_session_id = null; card.archived = false;
+      // Keep unarchived sessions as an occupancy fence, including a finished
+      // worker which the Captain may tell to rework. A reviewer rejection ends
+      // its old attempt, so late receipts cannot undo the rejection.
+      if (input.status !== 'doing' || !this.sessionOpen(card.session_id)) { card.session_id = null; card.attempt_id = null; }
+      if (input.status !== 'doing' || !this.sessionOpen(card.dispatch_session_id)) card.dispatch_session_id = null;
+      if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
+      card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
       if (input.status !== 'doing') card.dispatch_claim = null;
+      // CLI moves are Captain decisions, not requests for an automatic model.
+      if (input.suppressDispatch && input.status === 'doing') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: new Date().toISOString() };
       touch(card);
       return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
     });
@@ -236,11 +265,14 @@ class TaskStore {
       const card = this.find(docs, input.id); this.ready(docs, card);
       if (input.project && input.project !== card.project) throw new Error('--project differs from the card project.');
       if (card.attempt_id === input.attempt_id) return { card, notices: [] };
-      if (card.session_id && !card.attempt_closed) throw new Error('Card already has an active execution or verification session.');
+      if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       const review = card.status === 'review';
+      if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
       Object.assign(card, { session_id: input.session_id, attempt_id: input.attempt_id, assignee: input.assignee,
-        review_session: review, attempt_closed: false, last_event: null, dispatch_session_id: null });
+        review_session: review, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_wait: null, resource_failure: null });
+      card.flag = null;
+      if (card.dispatch_claim) card.dispatch_claim.delivered = true;
       touch(card);
       return { card, notices: [] };
     });
@@ -261,13 +293,13 @@ class TaskStore {
       if (input.type === 'complete') {
         card.latest_receipt = sentence(text(input.message, 'result', true));
         card.status = card.review_session || !card.verify ? 'done' : 'review';
-        card.flag = null; card.attempt_closed = true;
+        card.flag = null; card.resource_failure = null; card.attempt_closed = true;
         // Passing execution is not a passed verification; retain review failures.
         if (card.status === 'done') card.consecutive_failures = 0;
       }
       if (input.type === 'failed') {
         const reason = text(input.message, 'failure', true);
-        this.failure(card, input.attempt_id, reason, card.review_session === true);
+        this.failure(card, input.attempt_id, reason, card.review_session === true, input.source);
         card.attempt_closed = true;
         notices.push(`卡片 ${card.id} 失败：${reason}${card.flag === 'held' ? '；连续失败 2 次，已挂起，不再自动重试。' : ''}`);
       }
@@ -278,8 +310,11 @@ class TaskStore {
   dispatch(input) {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
-      if (card.session_id && !card.attempt_closed || card.dispatch_session_id) throw new Error('Card is already being executed or dispatched.');
-      if (input.session_id) card.dispatch_session_id = idValue(input.session_id);
+      if (this.occupied(card)) return { card, ignored: true, notices: [] };
+      if (input.session_id) {
+        if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
+        card.dispatch_session_id = idValue(input.session_id); card.dispatch_wait = null;
+      }
       if (input.session_id) touch(card);
       return { card, captain: card.important === true || card.start_previous_status === 'needs_user' || card.flag === 'failed' || !card.detail.trim(), notices: [] };
     });
@@ -288,7 +323,7 @@ class TaskStore {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
       if (card.status === 'review') throw new Error('Card needs verification. Use new --task-id for a reviewer, or task move to doing to reject it.');
-      if (card.session_id && !card.attempt_closed || card.dispatch_session_id) return { card, ignored: true, notices: [] };
+      if (this.occupied(card)) return { card, ignored: true, notices: [] };
       if (card.dispatch_claim && !input.newEntry) return { card, ignored: true, notices: [] };
       if (input.updated && input.updated !== card.updated) return { card, ignored: true, notices: [] };
       card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: false, created: new Date().toISOString() };
@@ -304,13 +339,22 @@ class TaskStore {
       return { card, notices: [] };
     });
   }
+  dispatchWait(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (card.dispatch_claim?.key !== input.key || card.dispatch_claim.delivered || this.occupied(card)) return { card, ignored: true, notices: [] };
+      const message = text(input.message, 'dispatch wait', true);
+      if (card.dispatch_wait !== message) { card.dispatch_wait = message; card.latest_receipt = message; touch(card); }
+      return { card, notices: [] };
+    });
+  }
   dispatcherReceipt(input) {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id);
       if (card.dispatch_session_id !== input.session_id) return { card, ignored: true, notices: [] };
       const notices = [];
       if (input.failed) {
-        this.failure(card, input.session_id, text(input.failed, 'dispatcher failure', true), false);
+        this.failure(card, input.session_id, text(input.failed, 'dispatcher failure', true), false, input.source);
         notices.push(`卡片 ${card.id} 调度失败：${input.failed}${card.flag === 'held' ? '；连续失败 2 次，已挂起。' : ''}`);
       } else {
         card.status = 'needs_user';

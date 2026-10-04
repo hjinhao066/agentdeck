@@ -103,3 +103,20 @@ test('internal exit reports queue durably without waiting on a quitting renderer
     assert.equal(fs.existsSync(path.join(dir, 'responses')), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('quota/login/throttle failures are classified from errors, with ordinary defect counterexamples', () => {
+  for (const [line, kind] of [['Error: Quota exceeded', 'quota'], ["You've hit your usage limit", 'quota'], ['API Error: 401 Unauthorized', 'auth'], ['Not logged in. Please run /login', 'auth'], ['Error: rate_limit_error', 'rate_limit'], ['请求被限流', 'rate_limit']]) {
+    assert.equal(M.resourceFailure(line), kind, line); assert.equal(M.terminalActivity(line), 'quota', line);
+  }
+  for (const line of ['Test failed: quota exceeded message was missing', 'I will test quota exceeded handling', 'Authentication test assertion failed', 'exit 7', 'Missing login button', 'Unexpected HTTP response']) assert.equal(M.resourceFailure(line), '', line);
+  assert.equal(M.resourceFailure('provider unavailable', 'quota'), 'quota');
+  assert.equal(M.terminalActivity('Not logged in\n→ Working ctrl+c to stop'), 'working');
+});
+
+test('resource screen evidence survives a rapid process exit, but old errors followed by work do not mask crashes', () => {
+  for (const [screen, label] of [['API Error: 401 Unauthorized', '未登录'], ['429 Too many requests', '请求被限流'], ['RESOURCE_EXHAUSTED: quota exhausted', '额度用尽']]) {
+    const receipt = M.resourceReceipt(screen);
+    assert.equal(receipt.source, 'quota'); assert.ok(receipt.failed.startsWith(label));
+  }
+  for (const screen of ['Assertion failed', 'Quota exceeded\n→ Running tests ctrl+c to stop', 'Not logged in\nusage limit reset']) assert.equal(M.resourceReceipt(screen), null);
+});
