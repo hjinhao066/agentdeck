@@ -105,6 +105,7 @@ let config = {
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
   perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
+  quotaWarmup: QuotaWarmupCore.normalizeSettings(),
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
   captainTokenSaver: MainCore.tokenSaverSettings(),
@@ -115,6 +116,7 @@ config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas
 if (saved) {
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
   config.perpetualCaptain = PerpetualCaptainCore.normalizeSettings(saved.perpetualCaptain);
+  config.quotaWarmup = QuotaWarmupCore.normalizeSettings(saved.quotaWarmup);
   config.perpetualCaptainState = PerpetualCaptainCore.normalizeState(saved.perpetualCaptainState);
   if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
   config.captainRelayLabel = typeof saved.captainRelayLabel === 'string' ? saved.captainRelayLabel.slice(0, 80) : 'Relay';
@@ -3336,11 +3338,12 @@ function renderQuotaBar() {
     }
     const q = QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId());
     item.dataset.state = q.state;
-    item.setAttribute('aria-label', q.detail);
-    item.title = q.detail;
+    const detail = q.detail + (seat ? ClaudeSeats.warmupDetail(seat.id) : '');
+    item.setAttribute('aria-label', detail);
+    item.title = detail;
     item.querySelector('.quota-label').textContent = q.displayLabel;
     item.querySelector('.quota-name').textContent = q.name;
-    item.querySelector('.quota-tooltip').textContent = q.detail;
+    item.querySelector('.quota-tooltip').textContent = detail;
     if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
   }
 }

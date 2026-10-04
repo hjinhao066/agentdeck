@@ -126,6 +126,9 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   expect(firstArchive.captainArchive).toBe(true);
   await expect.poll(() => promptsFor(usId).some((p) => p.includes('briefing') && p.includes('读看板继续') && p.includes('重挂恰好一个后台 receipts --wait --timeout 300')), { timeout: 20000 }).toBe(true);
   await idle(usId);
+  // CN's still-running worker consumes its reserve after the threshold Relay.
+  // Only actual exhaustion of both seats can send the Captain to Codex.
+  await nativeUsage(WORKER, 0);
   await page.evaluate((id) => sendWhenReady(columns.find((c) => c.id === id), 'wait for quota', { guardUserInput: true }), usId);
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('chatgpt');
   const codexId = await captainId();

@@ -99,9 +99,14 @@ skipped.
 先存进度看板，再重开队长读看板继续，运行中的队员保持原席位。
 侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。默认开启「永动机」：
 当前 Claude 的可信 5 小时剩余 ≤3% 或真实限流时，在队长空闲后自动接力
-另一个 Claude 席位；两个席位不可用则交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。
+另一个 Claude 席位；两个席位都用尽才交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。
 设置可关闭或改阈值。每次轮换留横幅、对话记录及普通 Bark 提醒，10 分钟内不回切同一目标。
 首次第二账号登录、凭据隔离和 quota-bar 数据接口见 [CLAUDE_SEATS.md](CLAUDE_SEATS.md)。
+
+席位设置默认开启「额度窗口预热」：有账号及目录归属证明的 5 小时窗口重置约
+一分钟后，CN/US 没有 Claude 会话占用时，后台用 Sonnet 5.5 / low 发送一个字母请求。
+每个窗口成功一次，失败最多重试一次；未知重置时间不发送。请求不创建可见列或队员，
+额度详情显示已预热及 CLI 原生返回的下次重置时间。席位开始普通会话会取消预热子进程。
 
 One standing column, opened from the sidebar entry 队长 (creating it the first
 time, with the agent you pick; afterwards it only returns to it). Once created it

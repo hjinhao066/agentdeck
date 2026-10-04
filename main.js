@@ -11,12 +11,17 @@ const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
-const { seatEnvironment, registerSeatsIpc } = require('./claude-seats-main');
+const QuotaCore = require('./quota-core');
+const { seatEnvironment, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { createWarmupService } = require('./quota-warmup-service');
+const { createQuotaWarmupRunner } = require('./quota-warmup-main');
+const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
+let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
 let pendingFocusColumn = null;
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
@@ -208,6 +213,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   // alerts and persistent plaintext terminal output in a shared directory.
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
   if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
+  if (seatId) quotaWarmup?.cancel(seatId);
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   const receiptToken = crypto.randomBytes(24).toString('hex');
@@ -668,6 +674,28 @@ app.whenReady().then(() => {
   registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
     getColumn: (id) => seatConfig().columns?.find((c) => c.id === id) });
+  quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
+  if (tudArg) { app.testWarmupRuns = []; app.testWarmupResults = []; }
+  quotaWarmup = createWarmupService({
+    stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
+    logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
+    getSettings: () => seatConfig().quotaWarmup,
+    getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome),
+      quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome },
+      tudArg ? async () => [] : undefined),
+    run: tudArg ? async (seat) => {
+      // Isolated UI tests can supply deterministic results from the Electron
+      // harness; no test profile is allowed to call a real account.
+      app.testWarmupRuns.push({ seatId: seat.id, configDir: seat.configDir });
+      return app.testWarmupResults.shift() || { ok: false, status: 'test-disabled' };
+    } : (seat, options) => quotaWarmupRunner.run(seat, options),
+  });
+  handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
+  if (tudArg) app.testQuotaWarmup = quotaWarmup;
+  quotaWarmupTimer = setInterval(() => quotaWarmup.tick().catch(() => {}), 30_000);
+  quotaWarmupTimer.unref();
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
@@ -690,6 +718,7 @@ app.whenReady().then(() => {
   onMain('save-config', (_e, cfg) => {
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
+    if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
@@ -1070,6 +1099,8 @@ app.whenReady().then(() => {
 });
 
 app.on('before-quit', () => {
+  clearInterval(quotaWarmupTimer);
+  quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it

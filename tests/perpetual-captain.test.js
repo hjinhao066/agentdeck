@@ -40,12 +40,26 @@ test('an actual rate-limit error triggers relay without numeric usage', () => {
   assert.equal(choose({ state, seats: [unknown('cn'), unknown('us')] }).targetId, 'us');
   assert.equal(choose({ state, seats: [unknown('cn'), unknown('us')] }).reason, 'quota-exhausted');
 });
-test('two exhausted or low Claude seats relay to Codex and exhausted alternates are skipped', () => {
+test('two actually exhausted Claude seats relay to Codex', () => {
   let state = exhausted({}, 'cn'); state = exhausted(state, 'us');
   assert.equal(choose({ state, seats: [unknown('cn'), unknown('us')] }).targetId, P.CODEX_ID);
   assert.equal(choose({ state, seats: [unknown('cn'), unknown('us')] }).reason, 'claude-unavailable');
-  assert.equal(choose({ seats: [quota('cn', 3), quota('us', 2)] }).targetId, P.CODEX_ID);
-  assert.equal(choose({ seats: [quota('cn', 3), { ...unknown('us'), loggedIn: false }] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0)] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ state: exhausted({}, 'us'), seats: [quota('cn', 0), unknown('us')] }).targetId, P.CODEX_ID);
+});
+test('low positive percentages or an unknown unlogged seat do not count as two exhausted Claude seats', () => {
+  assert.equal(choose({ seats: [quota('cn', 3), quota('us', 2)] }), null);
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 2)] }), null);
+  assert.equal(choose({ seats: [quota('cn', 3), { ...unknown('us'), loggedIn: false }] }), null);
+  assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn'), { ...unknown('us'), loggedIn: false }] }), null);
+  assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn')] }), null);
+});
+test('a persisted trusted zero proves exhaustion until its reset, then the Claude seat becomes usable', () => {
+  let state = P.observe({}, { seatId: 'cn', at: NOW, remaining: 0, trusted: true, resetAt: NOW + 3600_000 }, NOW);
+  state = exhausted(state, 'us', NOW, NOW + 7200_000);
+  const seats = [unknown('cn'), unknown('us')];
+  assert.equal(choose({ state, currentId: 'us', seats, now: NOW + P.FRESH_MS + 1 }).targetId, P.CODEX_ID);
+  assert.equal(choose({ state, currentId: 'us', seats, now: NOW + 3600_000 }).targetId, 'cn');
 });
 test('busy turns, drafts, briefing and an in-progress switch never auto relay', () => {
   for (const guard of ['busy', 'draft', 'briefing', 'switching']) {

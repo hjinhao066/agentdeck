@@ -59,6 +59,7 @@ contextBridge.exposeInMainWorld('deck', {
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   claudeSeatUsage: (seatId) => ipcRenderer.invoke('seats:usage', { seatId }),
+  claudeWarmupStatus: () => ipcRenderer.invoke('seats:warmup-status'),
   recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
   captainRelayNotify: (colId, message) => ipcRenderer.invoke('captain:relay-notify', { colId, message }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),

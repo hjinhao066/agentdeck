@@ -1736,6 +1736,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #notificationSettings :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .perpetual-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }
-#perpetualEnabled[aria-pressed="true"] { color: var(--accent); background: var(--icon-hover-bg); }
+#perpetualEnabled[aria-pressed="true"], #quotaWarmupEnabled[aria-pressed="true"] { color: var(--accent); background: var(--icon-hover-bg); }
 .captain-relay-notice { margin: 12px 8px; padding: 10px 12px; border-left: 2px solid var(--accent); color: var(--muted); font-size: 12px; line-height: 1.6; }
 .perpetual-relay-banner { white-space: normal; line-height: 1.5; }

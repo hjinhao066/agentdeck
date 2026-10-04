@@ -1,0 +1,90 @@
+'use strict';
+const fs = require('fs');
+const path = require('path');
+const W = require('./quota-warmup-core');
+const Q = require('./quota-core');
+
+function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSeat, occupied, run, now = Date.now }) {
+  let state;
+  try { state = W.normalizeState(JSON.parse(fs.readFileSync(stateFile, 'utf8'))); }
+  catch (_) { state = W.normalizeState(); }
+  state = W.recoverRunning(state, now());
+  let stopped = false, ticking = false;
+  const inflight = new Map();
+  const persist = () => {
+    fs.mkdirSync(path.dirname(stateFile), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(stateFile + '.tmp', JSON.stringify(state), { mode: 0o600 });
+    fs.renameSync(stateFile + '.tmp', stateFile);
+  };
+  const dirKey = (dir) => {
+    const key = String(dir || '').replace(/\\/g, '/').replace(/\/$/, '');
+    return process.platform === 'win32' || /^(?:[a-z]:\/|\/\/)/i.test(key) ? key.toLowerCase() : key;
+  };
+  const identityMatches = (info, d) => info?.accountKey === d.accountKey && dirKey(info?.configDir) === dirKey(d.configDir);
+  async function sample() {
+    const result = [];
+    for (const seat of getSeats().filter((s) => ['cn', 'us'].includes(s.id))) {
+      let info;
+      try { info = await readSeat(seat); } catch (_) { continue; }
+      // Consume the same quota structure as the bar/Relay, plus the existing
+      // seat-bound native cache. The API reader is owned by the quota feature.
+      const records = [info?.quota?.sample, info?.usage].filter((record) => record?.accountBound &&
+        record.accountKey === info.accountKey && [seat.configDir, info.configDir].some((dir) => dirKey(dir) === dirKey(record.configDir)) &&
+        Number.isFinite(record.at) && (!record.seatId || record.seatId === seat.id));
+      const samples = records.map((record) => {
+        const w = record.windows?.find((w) => w.key === 'fiveHour' || w.label === '5 小时');
+        const resetAt = Number.isFinite(w?.resetAt) && w.resetAt > 0 ? w.resetAt : w ? Q.resetTime(w.resetText, record.at) : null;
+        return { at: record.at, resetAt };
+      }).filter((s) => s.resetAt).sort((a, b) => b.at - a.at);
+      const sample = samples[0];
+      state = W.observe(state, { seatId: seat.id, accountKey: info?.accountKey, configDir: info?.configDir,
+        resetAt: sample?.resetAt, at: sample?.at, proven: !!sample }, now());
+      if (info?.accountKey && info?.configDir) result.push({ ...seat, ...info });
+    }
+    return result;
+  }
+  async function tick() {
+    if (stopped || ticking || !W.normalizeSettings(getSettings()).enabled) return;
+    ticking = true;
+    try {
+      const seats = await sample();
+      const busy = await occupied(seats);
+      const d = W.decide({ settings: getSettings(), state,
+        seats: seats.map((s) => ({ ...s, occupied: busy.has(s.id) })), now: now() });
+      if (!d || stopped || !W.normalizeSettings(getSettings()).enabled) { persist(); return; }
+      const seat = getSeats().find((s) => s.id === d.seatId);
+      const fresh = seat && await readSeat(seat);
+      if (!seat || !identityMatches(fresh, d) || (await occupied(seats)).has(d.seatId)) return;
+      if (stopped || !W.normalizeSettings(getSettings()).enabled) return;
+      // Claim durably before spawning: crashes cannot turn a window into
+      // unlimited attempts. A new normal session can abort only this child.
+      state = W.begin(state, d); persist();
+      const controller = new AbortController(); inflight.set(d.seatId, controller);
+      let result;
+      try { result = await run(seat, { signal: controller.signal }); }
+      catch (_) { result = { success: false, reason: 'execution-failed' }; }
+      finally { inflight.delete(d.seatId); }
+      const configuredAfter = getSeats().find((s) => s.id === d.seatId);
+      const after = configuredAfter ? await readSeat(configuredAfter).catch(() => null) : null;
+      const matched = identityMatches(after, d);
+      const success = matched && result?.ok === true && !controller.signal.aborted;
+      state = W.finish(state, { ...d, success, newResetAt: success ? result.resetAt : null,
+        provenNative: success && result.provenNative === true }, now());
+      persist();
+      fs.appendFileSync(logFile, JSON.stringify({ seat: seat.name, seatId: seat.id,
+        time: new Date(now()).toISOString(), attempt: d.attempt, outcome: success ? 'warmed' : 'failed',
+        reason: success ? '' : controller.signal.aborted ? 'seat-in-use' : matched ? 'request-failed' : 'identity-changed',
+        newResetAt: success && result.provenNative ? result.resetAt || null : null }) + '\n', { mode: 0o600 });
+    } finally { ticking = false; }
+  }
+  return {
+    tick,
+    cancel: (seatId) => inflight.get(seatId)?.abort(),
+    snapshot: async () => {
+      const seats = await sample();
+      return seats.map((s) => ({ seatId: s.id, ...state.seats[s.id] }));
+    },
+    dispose: () => { stopped = true; for (const controller of inflight.values()) controller.abort(); },
+  };
+}
+module.exports = { createWarmupService };

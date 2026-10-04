@@ -123,7 +123,8 @@
     const at = time(seat.remainingAt);
     const trusted = seat.trusted === true && percent(seat.remaining) !== null && at && at <= now + 60_000 && now - at <= FRESH_MS && (!time(seat.resetAt) || seat.resetAt > now);
     const low = trusted ? seat.remaining <= threshold : !!state.lowAt && state.lowRemaining <= threshold;
-    const exhausted = !!state.exhaustedAt || (seat.exhausted === true && (!time(seat.exhaustedResetAt) || seat.exhaustedResetAt > now));
+    const numericExhausted = trusted ? seat.remaining === 0 : !!state.lowAt && state.lowRemaining === 0;
+    const exhausted = !!state.exhaustedAt || numericExhausted || (seat.exhausted === true && (!time(seat.exhaustedResetAt) || seat.exhaustedResetAt > now));
     const lastMove = Math.max(state.enteredAt || 0, state.leftAt || 0);
     return { state, trusted, low, exhausted, available: seat.loggedIn === true && !low && !exhausted,
       cooling: !!lastMove && now - lastMove < COOLDOWN_MS };
@@ -148,6 +149,9 @@
     // A healthy seat in its cooldown is temporarily unavailable, not exhausted.
     // Stay put until it can be used rather than hopping through Codex.
     if (claude.some(({ available }) => available)) return null;
+    // A low positive quota or an unknown login is not evidence of exhaustion.
+    // Codex is the fallback only after both Claude seats are actually exhausted.
+    if (claude.length < 2 || claude.some(({ exhausted }) => !exhausted)) return null;
     const codex = state.seats[CODEX_ID] || {};
     const codexMove = Math.max(codex.enteredAt || 0, codex.leftAt || 0);
     if (codexMove && now - codexMove < COOLDOWN_MS) return null;
