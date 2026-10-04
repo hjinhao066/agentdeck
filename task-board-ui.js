@@ -12,22 +12,23 @@
 (function () {
   'use strict';
   const U = window.TaskBoardUICore;
-  const CELL_LIMIT = 6;       // cards a cell shows before folding the rest
+  const CELL_LIMIT = 3;       // cards a cell shows before folding the rest
   const svg = (d) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
   const ICON = {
     chevron: svg('<path d="m6 9 6 6 6-6"/>'),
+    alert: svg('<path d="M12 8v5M12 16.5v.01"/><circle cx="12" cy="12" r="9"/>'),
     close: svg('<path d="M6 6l12 12M18 6 6 18"/>'),
     terminal: svg('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
     copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
     check: svg('<path d="m5 12 5 5 9-10"/>'),
   };
   let host = null;
-  let viewEl, projectsEl, gridEl, headsEl, lanesEl, scrollEl, statusEl, summaryEl, emptyEl, refreshBtn, detailEl, liveEl;
+  let alertEl, viewEl, projectsEl, gridEl, headsEl, lanesEl, scrollEl, statusEl, summaryEl, emptyEl, refreshBtn, detailEl, liveEl;
   let open = false;
   let cards = [];
   let board = null;
   let filter = { project: U.ALL };
-  let prefs = { laneOrder: [], collapsed: {}, doneOpen: false };
+  let prefs = { laneOrder: [], collapsed: {}, doneOpen: false, completedOpen: false };
   const expanded = new Set(); // "lane/status" cells showing every card
   let detailId = null;
   let detailKey = '';
@@ -58,7 +59,7 @@
 
   function setStatus(text) { statusEl.textContent = text || ''; statusEl.hidden = !text; }
   function announce(text) { liveEl.textContent = ''; liveEl.textContent = text; }
-  function savePrefs() { host.savePrefs({ laneOrder: prefs.laneOrder.slice(), collapsed: { ...prefs.collapsed }, doneOpen: !!prefs.doneOpen }); }
+  function savePrefs() { host.savePrefs({ laneOrder: prefs.laneOrder.slice(), collapsed: { ...prefs.collapsed }, doneOpen: !!prefs.doneOpen, completedOpen: !!prefs.completedOpen }); }
   function friendly(error) {
     const m = String((error && error.message) || error || '');
     if (/Predecessor cards/.test(m)) return '它前面的任务还没做完';
@@ -134,9 +135,9 @@
   }
   function toggleDone() { prefs.doneOpen = !prefs.doneOpen; savePrefs(); focusAfter = '.tbv-head[data-status="done"]'; render(); }
 
-  // An empty column keeps a slim drop target; the folded 完成 column only a count.
+  // Every group shares one column grid; the folded 完成 column is only a count.
   function gridTemplate() {
-    return board.columns.map((c) => c.key === 'done' && !prefs.doneOpen ? '88px' : c.count ? 'minmax(140px, 1fr)' : 'minmax(78px, .45fr)').join(' ');
+    return board.columns.map((c) => c.key === 'done' && !prefs.doneOpen ? '92px' : 'minmax(168px, 1fr)').join(' ');
   }
 
   // ---- cards ----
@@ -164,23 +165,29 @@
     node.setAttribute('aria-keyshortcuts', 'Enter Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown');
     const row = el('div', 'tbv-row');
     const [state, stateLabel] = dotState(c);
-    const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel;
-    row.append(dot, el('h3', 'tbv-title', c.title));
+    // The dot only tells whether a doing card is really being worked on; the column already names every other status.
+    if (c.status === 'doing') { const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel; row.append(dot); }
+    row.append(el('h3', 'tbv-title', c.title));
     if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') row.append(el('span', 'tbv-tag held', '挂起'));
-    if (item.waitLabel) { const w = el('span', 'tbv-tag wait', '等前置'); w.title = item.waitLabel; row.append(w); }
-    const when = el('time', 'tbv-time', U.formatUpdated(c.updated).replace(/\s|钟?前$/g, ''));
-    if (c.updated) when.dateTime = c.updated;
-    row.append(when);
     node.append(row);
     if (c.status === 'needs_user') {
       const q = el('p', 'tbv-question', item.question || '队长还没把问题整理出来');
       if (!item.question) q.classList.add('none');
       node.append(q);
+    } else {
+      const act = U.activity(c, item.waitLabel);
+      if (act.text) node.append(el('p', 'tbv-activity' + (act.tone ? ' ' + act.tone : ''), act.text));
     }
     const session = c.session_id ? host.session(c.session_id) : null;
     const who = session ? session.label : U.ownerLabel(c, null);
+    const meta = el('div', 'tbv-meta');
+    meta.append(el('span', 'tbv-who', who));
+    const when = el('time', 'tbv-time', U.formatUpdated(c.updated));
+    if (c.updated) when.dateTime = c.updated;
+    meta.append(when);
+    node.append(meta);
     node.title = [c.title, item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
     node.setAttribute('aria-label', `${c.title}，${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
     node.addEventListener('click', () => { if (suppressClick) return; openDetail(c.id); });
@@ -193,6 +200,7 @@
     const cell = el('div', 'tbv-cell');
     cell.dataset.status = col.key;
     cell.dataset.lane = lane.key;
+    cell.dataset.label = col.label;
     cell.setAttribute('aria-label', `${lane.name} · ${col.label}，${col.cards.length} 张`);
     if (col.key === 'done' && !prefs.doneOpen) {
       cell.classList.add('folded');
@@ -213,13 +221,19 @@
       more.setAttribute('aria-expanded', String(all));
       const chev = el('span', 'tbv-chev'); chev.innerHTML = ICON.chevron;
       if (all) { more.title = '收起'; more.setAttribute('aria-label', `收起 ${lane.name} · ${col.label}`); more.classList.add('open'); more.append(chev); }
-      else more.append(el('span', null, `还有 ${col.cards.length - CELL_LIMIT} 张`), chev);
+      else more.append(el('span', null, U.moreLabel(col.cards.length - CELL_LIMIT)), chev);
       more.onclick = () => { if (all) expanded.delete(key); else expanded.add(key); focusAfter = `.tbv-more[data-cell="${escapeId(key)}"]`; render(); };
       cell.append(more);
     }
     return cell;
   }
 
+  function toggleLane(lane, collapsed) {
+    if (collapsed) delete prefs.collapsed[lane.key]; else prefs.collapsed[lane.key] = true;
+    savePrefs(); focusAfter = `.tbv-lane[data-project="${escapeId(lane.key)}"] .tbv-lane-toggle`; render();
+  }
+  // The group bar spans the board: arrow, colour dot, name, unfinished count on
+  // the left, per-status counts (需要你 in red) on the right. A click folds it.
   function renderLane(lane) {
     const collapsed = !filter.project && !!prefs.collapsed[lane.key];
     const section = el('section', 'tbv-lane' + (collapsed ? ' collapsed' : ''));
@@ -230,14 +244,13 @@
     const toggle = iconButton('tbv-lane-toggle', ICON.chevron, `${collapsed ? '展开' : '收起'} ${lane.name}（Alt+↑/↓ 调整项目先后）`);
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.disabled = !!filter.project;
-    toggle.onclick = () => { prefs.collapsed[lane.key] = !collapsed; if (!prefs.collapsed[lane.key]) delete prefs.collapsed[lane.key]; savePrefs(); focusAfter = `.tbv-lane[data-project="${escapeId(lane.key)}"] .tbv-lane-toggle`; render(); };
     toggle.addEventListener('keydown', (e) => laneKey(e, lane));
     const counts = el('div', 'tbv-lane-counts');
-    if (collapsed) {
-      U.COLUMNS.filter((c) => lane.counts[c.key]).forEach((c) => { const n = el('span', 'tbv-lane-n', `${c.label} ${lane.counts[c.key]}`); n.dataset.status = c.key; counts.append(n); });
-    } else counts.append(el('span', 'tbv-lane-n', lane.open ? `${lane.open} 件没做完` : '都做完了'));
-    head.append(toggle, el('span', 'tbv-dot'), el('h2', 'tbv-lane-name', lane.name), counts);
-    head.title = filter.project ? lane.name : `${lane.name}：拖动可调整项目先后`;
+    U.COLUMNS.filter((c) => lane.counts[c.key]).forEach((c) => { const n = el('span', 'tbv-lane-n', `${c.label} `); n.dataset.status = c.key; n.append(el('b', null, String(lane.counts[c.key]))); counts.append(n); });
+    const left = el('span', 'tbv-lane-open', lane.open ? `${lane.open} 件待完成` : '都做完了');
+    head.append(toggle, el('span', 'tbv-dot'), el('h2', 'tbv-lane-name', lane.name), left, counts);
+    head.title = filter.project ? lane.name : `${lane.name}：点一下${collapsed ? '展开' : '收起'}，拖动可调整项目先后`;
+    if (!filter.project) head.addEventListener('click', (e) => { if (suppressClick) return; toggleLane(lane, collapsed); });
     head.addEventListener('pointerdown', (e) => startLaneDrag(e, section, lane));
     section.append(head);
     if (!collapsed) {
@@ -246,6 +259,42 @@
       section.append(cells);
     }
     return section;
+  }
+
+  // 已完成的 Agent: projects with nothing left to do, one folded bar.
+  function renderFinished() {
+    const open = !!prefs.completedOpen;
+    const bar = el('button', 'tbv-lane-head tbv-finished');
+    bar.type = 'button'; bar.setAttribute('aria-expanded', String(open));
+    bar.title = open ? '收起已完成的 Agent' : '展开已完成的 Agent';
+    const chev = el('span', 'tbv-icon tbv-lane-toggle'); chev.innerHTML = ICON.chevron;
+    const counts = el('div', 'tbv-lane-counts');
+    const n = el('span', 'tbv-lane-n', '已完成 '); n.dataset.status = 'done'; n.append(el('b', null, String(board.finishedDone))); counts.append(n);
+    bar.append(chev, el('span', 'tbv-dot done'), el('h2', 'tbv-lane-name', '已完成的 Agent'), el('span', 'tbv-lane-open', `${board.finished.length} 个 · ${open ? '收起' : '展开查看'}`), counts);
+    bar.onclick = () => { prefs.completedOpen = !open; savePrefs(); focusAfter = '.tbv-finished'; render(); };
+    return bar;
+  }
+
+  // The 需要你 reminder: one slim bar above the board, a click opens the first question.
+  function renderAlert() {
+    const items = board.alerts;
+    alertEl.hidden = !items.length;
+    if (!items.length) { alertEl.onclick = null; return; }
+    const first = items[0];
+    alertEl.innerHTML = '';
+    alertEl.dataset.cardId = first.card.id;
+    const dot = el('span', 'tbv-alert-dot'); dot.innerHTML = ICON.alert;
+    const go = el('span', 'tbv-alert-go', '处理'); const chev = el('span', 'tbv-chev'); chev.innerHTML = ICON.chevron; go.append(chev);
+    alertEl.append(dot, el('strong', 'tbv-alert-n', `${items.length} 件需要你`), el('span', 'tbv-alert-title', `${first.name} · ${first.card.title}`), el('span', 'tbv-alert-q', first.question || '队长还没把问题整理出来'), go);
+    const label = `${items.length} 件需要你，先看「${first.card.title}」`;
+    alertEl.title = label; alertEl.setAttribute('aria-label', label);
+    alertEl.onclick = () => openDetail(first.card.id);
+  }
+
+  function setAll(open) {
+    board.projects.forEach((p) => { if (open) delete prefs.collapsed[p.key]; else prefs.collapsed[p.key] = true; });
+    prefs.completedOpen = open;
+    savePrefs(); announce(open ? '已展开全部分组' : '已收起全部分组'); render();
   }
 
   function render() {
@@ -259,7 +308,12 @@
     renderHeads();
     gridEl.style.setProperty('--tbv-cols', gridTemplate());
     lanesEl.innerHTML = '';
-    board.lanes.forEach((lane) => lanesEl.append(renderLane(lane)));
+    board.active.forEach((lane) => lanesEl.append(renderLane(lane)));
+    if (board.finished.length) {
+      lanesEl.append(renderFinished());
+      if (prefs.completedOpen) board.finished.forEach((lane) => lanesEl.append(renderLane(lane)));
+    }
+    renderAlert();
     const needs = board.columns.find((c) => c.key === 'needs_user').count;
     summaryEl.textContent = board.total ? `${board.open} 件没做完${needs ? ` · ${needs} 件需要你` : ''}` : '';
     emptyEl.hidden = board.total > 0;
@@ -591,7 +645,7 @@
     viewEl.hidden = !open;
     if (open) {
       const saved = host.prefs() || {};
-      prefs = { laneOrder: Array.isArray(saved.laneOrder) ? saved.laneOrder.slice() : [], collapsed: { ...(saved.collapsed || {}) }, doneOpen: !!saved.doneOpen };
+      prefs = { laneOrder: Array.isArray(saved.laneOrder) ? saved.laneOrder.slice() : [], collapsed: { ...(saved.collapsed || {}) }, doneOpen: !!saved.doneOpen, completedOpen: !!saved.completedOpen };
       // subscribe first, then list (docs/task-board-api.md)
       if (api() && api().onChange) unsubscribe = api().onChange(() => refresh());
       render();
@@ -619,6 +673,9 @@
     summaryEl = viewEl.querySelector('.tbv-summary');
     emptyEl = viewEl.querySelector('.tbv-empty-board');
     refreshBtn = viewEl.querySelector('.tbv-refresh');
+    alertEl = viewEl.querySelector('.tbv-alert');
+    viewEl.querySelector('.tbv-expand-all').onclick = () => { if (board) setAll(true); };
+    viewEl.querySelector('.tbv-collapse-all').onclick = () => { if (board) setAll(false); };
     detailEl = viewEl.querySelector('.tbv-detail');
     liveEl = viewEl.querySelector('.tbv-live');
     refreshBtn.onclick = () => refresh();

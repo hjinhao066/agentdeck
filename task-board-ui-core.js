@@ -164,8 +164,26 @@
     const laneList = project ? all.filter((l) => l.key === project) : all;
     const columns = COLUMNS.map((c) => ({ ...c, count: laneList.reduce((n, l) => n + l.counts[c.key], 0) }));
     const total = laneList.reduce((n, l) => n + l.total, 0);
-    return { columns, lanes: laneList, projects: all.map((l) => ({ key: l.key, name: l.name, total: l.total, open: l.open, counts: l.counts })), project, total, open: total - columns.find((c) => c.key === 'done').count };
+    // A project with nothing left to do goes to the folded 已完成的 Agent group
+    // (unless the user picked it by name).
+    const finished = project ? [] : laneList.filter((l) => l.total > 0 && l.open === 0);
+    const active = laneList.filter((l) => !finished.includes(l));
+    const alerts = laneList.flatMap((l) => l.columns.find((c) => c.key === 'needs_user').cards.map((item) => ({ card: item.card, question: item.question, lane: l.key, name: l.name })));
+    return { columns, lanes: laneList, active, finished, finishedDone: finished.reduce((n, l) => n + l.counts.done, 0), alerts, projects: all.map((l) => ({ key: l.key, name: l.name, total: l.total, open: l.open, counts: l.counts })), project, total, open: total - columns.find((c) => c.key === 'done').count };
   }
+
+  // The one line of recent news a card shows under its title: why it failed,
+  // what it waits on, the latest receipt, else the first line of its brief.
+  function activity(card, waitText) {
+    const firstLine = (t) => String(t || '').trim().split(/\r?\n/)[0].trim();
+    if (card.flag === 'failed' || card.flag === 'quota') return { text: firstLine(receiptText(card)) || (card.flag === 'quota' ? '额度、登录或限流问题' : '执行失败，没有写明原因'), tone: 'failed' };
+    if (waitText) return { text: waitText, tone: 'wait' };
+    const receipt = firstLine(receiptText(card));
+    if (receipt) return { text: receipt, tone: '' };
+    return { text: firstLine(card.detail), tone: 'quiet' };
+  }
+  // The fold button's wording: how many cards are still hidden.
+  function moreLabel(hidden) { return `展开剩余 ${hidden} 项`; }
 
   function formatUpdated(iso, now = Date.now()) {
     const t = time(iso);
@@ -194,5 +212,5 @@
     return m && m !== 'default' ? String(m) : '';
   }
 
-  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, userQuestion, receiptText, filePaths, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
+  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, userQuestion, receiptText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
 });
