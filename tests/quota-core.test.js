@@ -191,3 +191,21 @@ test('account ID migration retains genuine exhaustion but never promotes legacy 
   Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'cn', configDir: seat.configDir, identityOnly: true, at: now, accountKey: 'other-account-id', legacyAccountKey: 'old-email-key' }, now);
   assert.equal(Q.summary(store, 'Claude', now, seat).label, '未知');
 });
+
+test('exhaustion binds to the erroring session seat and clears itself after its reset time', () => {
+  const seats = Q.claudeSeats([{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }]), store = {};
+  const column = { claudeSeatId: 'us', claudeConfigDir: '~/.claude-us' };
+  const seat = Q.seatForColumn(column, seats);
+  const error = Q.screen('Claude', "You've hit your session limit · resets in 2h", [], now);
+  Q.observe(store, { ...error, seatId: seat.id, configDir: seat.configDir, sourceColumnId: 'us-captain' }, now);
+  assert.equal(Q.summary(store, 'Claude', now, seats[1]).label, '已用尽');
+  assert.match(Q.summary(store, 'Claude', now, seats[1]).detail, /报错会话：us-captain/);
+  assert.equal(Q.summary(store, 'Claude', now, seats[0]).label, '未知');
+  // A column whose pinned directory no longer matches the seat cannot exhaust it.
+  assert.equal(Q.seatForColumn({ claudeSeatId: 'cn', claudeConfigDir: '~/.claude-old' }, seats), null);
+  const later = now + 2 * 3600000 + 1;
+  assert.equal(Q.summary(store, 'Claude', later, seats[1]).label, '未知');
+  assert.doesNotMatch(Q.text(store, later, seats), /已用尽/);
+  Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: 'us', configDir: '~/.claude-us', identityOnly: true, at: later }, later);
+  assert.equal(store['Claude:us'].blocked, undefined);
+});

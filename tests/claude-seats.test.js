@@ -159,3 +159,35 @@ test('usage IPC refuses to attribute an old session to a reconfigured seat', (t)
   assert.throws(() => handlers['seats:record-usage'](null, { seatId: 'cn', configDir: '~/.claude', usage: { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 53 }] } }), /目录已变更/);
   assert.equal(fs.existsSync(path.join(home, '.claude-new')), false);
 });
+
+test('per-session statusline numbers are recorded under the session account; shared statusline formats are not', (t) => {
+  const home = fixture(t); setup(home);
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'cn-id' } }));
+  fs.writeFileSync(path.join(home, '.claude-us/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test', accountUuid: 'us-id' } }));
+  const footer = S.footerUsage(['ʕ•ᴥ•ʔ  Opus 5.5 · high   5h剩余 83% · 7d剩余 59%', '██░░ 20%  ⎇ main'], 1234);
+  assert.deepEqual(footer.windows.map((w) => [w.key, w.remaining]), [['fiveHour', 83], ['weekly', 59]]);
+  assert.deepEqual(S.footerUsage(['Opus 5.5  5h剩 7% 7d剩 0%']).windows.map((w) => w.remaining), [7, 0]);
+  // ccstatusline (machine-wide cache) and used-percent footers are never attributed to a seat.
+  assert.equal(S.footerUsage(['Session: 47% | Weekly: 45%']), null);
+  assert.equal(S.footerUsage(['Opus 5.5 · context 20%   5h 17% · 7d 2%']), null);
+  M.writeUsage(S.normalize()[1], home, footer);
+  const saved = JSON.parse(fs.readFileSync(M.credentialLocation(S.normalize()[1], home).usagePath, 'utf8'));
+  assert.equal(saved.source, 'Claude 会话状态行');
+  assert.equal(saved.configDir, path.join(home, '.claude-us'));
+  assert.equal(M.readUsage(S.normalize()[1], home).windows[0].remaining, 83);
+  assert.equal(M.readUsage(S.normalize()[0], home), null);
+  assert.equal(M.sanitizeUsage({ ...footer, source: 'forged' }).source, 'Claude /usage');
+});
+
+test('the seat flag follows a Captain Relay immediately while workers keep their own seat', () => {
+  const AgentInfo = require('../agent-info');
+  const config = { claudeSeats: S.normalize(), activeClaudeSeatId: 'cn' };
+  const captain = { isMain: true, cmd: 'claude --model claude-opus-5-5' }, worker = { cmd: 'claude --model claude-opus-5-5' };
+  S.bindColumn(captain, config); S.bindColumn(worker, config);
+  assert.deepEqual(AgentInfo.resolveAgentInfo(captain, null).seat, { id: 'cn', configDir: '~/.claude' });
+  // MainSession.clearContext on Relay: only the replacement Captain adopts the new seat.
+  captain.claudeSeatId = 'us'; delete captain.claudeConfigDir; config.activeClaudeSeatId = 'us';
+  S.bindColumn(captain, config);
+  assert.deepEqual(AgentInfo.resolveAgentInfo(captain, null).seat, { id: 'us', configDir: '~/.claude-us' });
+  assert.deepEqual(AgentInfo.resolveAgentInfo(worker, null).seat, { id: 'cn', configDir: '~/.claude' });
+});

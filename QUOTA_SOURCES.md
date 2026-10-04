@@ -6,7 +6,7 @@ were left running. Quota probes made no inference requests.
 
 | Item | What it displays | Account/model tooltip | Source and confidence |
 | --- | --- | --- | --- |
-| Claude seats | One item per configured seat: 5-hour + weekly remaining %, independent resets, actual running Captain seat; missing data = 未登录/无数据 | Observed model; masked email from that seat profile | That seat’s dedicated status footer / already visible `/usage` / local quota cache. CLI high, optional cache medium. |
+| Claude seats | One item per configured seat: 5-hour + weekly remaining %, independent resets, actual running Captain seat; missing or unattributable data = 未知 | Observed model; masked email from that seat profile | Account-bound `agentdeck-usage.json` only: an already visible `/usage`, or the session's own per-session statusline (`5h剩余 X% · 7d剩余 Y%`, computed from Claude Code's stdin `rate_limits`), recorded with the seat's account-ID fingerprint and directory. Shared ccstatusline (`Session:/Weekly:`) and legacy unbound caches are never used. |
 | Codex / ChatGPT | Every server-reported 300-minute / 10080-minute window; no inferred 5-hour number | Observed model, account-shared Codex bucket; masked email from official `account/read` | Official read-only `account/rateLimits/read`, local JSONL `event_msg.token_count.rate_limits`, already visible `/status`. High for the server's sample. |
 | Cursor / **Grok 4.7** | Normal/exhausted/unknown from **Grok 4.7 sessions only**, with reset when shown. Percentage currently unavailable | Grok 4.7 (including effort/fast variant when observed); masked current CLI profile email | Selected-model screen. Normal is low confidence: only no error observed. Explicit exhaustion is high confidence for that session. Claude/other-model errors are ignored by this top-bar item. |
 | Antigravity / **Gemini** | `gemini-5h` and `gemini-weekly` remaining %, resets; selected Gemini screen status as fallback | Gemini model when observed, otherwise Gemini shared group; masked snapshot email | Optional `~/.gemini/antigravity-cli/agy_statusline_debug.json`. Medium: optional CLI debug snapshot, not a documented public contract. **Never consumes `3p-*` Claude quota.** |
@@ -26,7 +26,7 @@ were left running. Quota probes made no inference requests.
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
 - Each item shows `5h …% · 7d …%` in the top bar, both reset timestamps in its
   tooltip, model and masked account. Missing windows say `无数据`; if neither
-  window can be read, show `未登录/无数据`. A welcome/model banner alone cannot
+  window can be read, show `未知` (never 未登录: the masked account still shows). A welcome/model banner alone cannot
   prove Claude quota or login. An explicit exhausted error remains visible
   even if an older numeric footer still shows a positive percentage.
 - Confirmed by inspecting the sibling branch's `claude-seats-main.js`:

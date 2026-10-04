@@ -39,7 +39,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
   await expect(badge('Claude')).toHaveAttribute('aria-label', /5 小时剩余 19%；重置/);
-  await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位本地用量缓存/);
+  await expect(badge('Claude')).toHaveAttribute('title', /来源：Claude 席位用量（\/usage）；高（按账号 ID 归属）/);
   await expect(badge('Claude').locator('svg')).toBeVisible();
   await badge('Claude').focus();
   await expect(badge('Claude').getByRole('tooltip')).toBeVisible();

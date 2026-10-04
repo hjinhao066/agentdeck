@@ -49,12 +49,13 @@ async function seatInfo(seat, home, platform = process.platform, keychain = hasK
   const present = !!email && (fs.existsSync(loc.credentialsPath) || (platform === 'darwin' && await keychain(loc.keychainService)));
   return { ...seat, configDir: loc.dir, maskedEmail: email, loggedIn: !!email && !!present, usagePath: loc.usagePath };
 }
+const USAGE_SOURCES = ['Claude /usage', 'Claude 会话状态行'];
 function sanitizeUsage(value) {
   if (!value || !Number.isFinite(value.at) || !Array.isArray(value.windows)) throw new Error('无效用量记录');
   const windows = value.windows.filter((w) => ['fiveHour', 'weekly'].includes(w?.key) && Number.isFinite(w.remaining) && w.remaining >= 0 && w.remaining <= 100)
     .slice(0, 2).map((w) => ({ key: w.key, remaining: w.remaining, resetText: String(w.resetText || '').slice(0, 100) }));
   if (!windows.length) throw new Error('没有实际用量数据');
-  return { at: value.at, source: 'Claude /usage', windows };
+  return { at: value.at, source: USAGE_SOURCES.includes(value.source) ? value.source : 'Claude /usage', windows };
 }
 function usageAccountKey(loc) {
   if (fs.statSync(loc.metadataPath).size > 2 * 1024 * 1024) throw new Error('账号元数据过大');

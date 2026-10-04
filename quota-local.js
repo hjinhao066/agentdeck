@@ -53,7 +53,9 @@ async function readLocal(home, codexHome = path.join(home, '.codex'), now = Date
         // Copying/touching that cache must not refresh an old percentage/reset.
         const at = Array.isArray(parsed.windows) ? parsed.at : data.at;
         const q = Number.isFinite(at) ? Q.cacheClaude(parsed, at) : null;
-        if (q && now - q.at <= Q.FRESH_MS && (!latest || q.at > latest.at)) latest = { ...q, ...seatInfo, ...identity, accountBound: seat.id !== 'default', source: seat.id === 'default' && file === caches.at(-1) ? q.source : 'Claude 席位本地用量缓存' };
+        if (q && now - q.at <= Q.FRESH_MS && (!latest || q.at > latest.at)) latest = seat.id === 'default'
+          ? { ...q, ...seatInfo, ...identity, accountBound: false, source: file === caches.at(-1) ? q.source : 'Claude 席位本地用量缓存' }
+          : { ...q, ...seatInfo, ...identity, accountBound: true, source: `Claude 席位用量（${parsed.source === 'Claude 会话状态行' ? '会话状态行' : '/usage'}）`, confidence: '高（按账号 ID 归属）' };
       } catch (_) {}
     }
     if (latest) observations.push(latest);

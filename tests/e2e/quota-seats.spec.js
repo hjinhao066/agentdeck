@@ -54,6 +54,23 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   const text = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
   expect(text).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*5 小时剩余 65/);
   expect(text).toMatch(/Claude \/ 🇺🇸 US：19%[^\n]*5 小时剩余 19/);
+  // The Captain's own statusline is recorded under its seat's account only.
+  await page.evaluate(() => window.deck.ptyInput('us-column', 'statusline\r'));
+  await expect.poll(async () => {
+    await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
+    return seat('us').locator('.quota-label').textContent();
+  }, { timeout: 20000 }).toBe('5h 83% · 7d 59%');
+  await expect(seat('us')).toHaveAttribute('title', /会话状态行/);
+  await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
+  const after = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
+  expect(after).toMatch(/Claude \/ 🇺🇸 US：59%[^\n]*5 小时剩余 83/);
+  expect(after).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*5 小时剩余 65/);
+  // Top bar tooltip, keyboard popover and board-cli quota share one summary.
+  for (const id of ['us', 'cn']) {
+    const title = await seat(id).getAttribute('title');
+    expect(after.split('\n')).toContain(title.replace(/\n/g, ' · '));
+    await expect(seat(id).getByRole('tooltip', { includeHidden: true })).toHaveText(title);
+  }
   await seat('us').focus();
   await expect(seat('us').getByRole('tooltip')).toBeVisible();
   await page.waitForTimeout(1800);

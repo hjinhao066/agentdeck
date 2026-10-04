@@ -84,7 +84,7 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 
 读取同一个 `config.claudeSeats`，勿按显示名称索引账号。主进程可使用
 `credentialLocation(seat, home)` 取得 metadataPath、credentialsPath、keychainService、
-usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第三方会话状态行不能归属于两个席位，屏幕百分比不进入配置席位的额度摘要；用尽报错和恢复时间仍按报错会话的绑定席位保留，并记录 `sourceColumnId` 供浮层和 quota 命令追溯。
+usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第三方会话状态行不能归属于两个席位，屏幕百分比不进入配置席位的额度摘要。唯一例外是会话自己的状态行「5h剩余 X% · 7d剩余 Y%」：它由该 Claude 会话标准输入里的 `rate_limits` 计算，属于该会话登录的账号；AgentDeck 只在该列自己的状态行变化时，按该列绑定的席位目录写入 `agentdeck-usage.json`（来源「Claude 会话状态行」，带账号指纹和目录），状态行不含重置时间，所以重置显示未知；用尽报错和恢复时间仍按报错会话的绑定席位保留，并记录 `sourceColumnId` 供浮层和 quota 命令追溯；过了恢复时间自动清除。
 
 每席位本地缓存为 `<configDir>/agentdeck-usage.json`，不建符号链接。被动捕获 Claude
 原生 `/usage` 面板中的 5 小时/每周剩余与重置文本，记录产生它的列的席位。

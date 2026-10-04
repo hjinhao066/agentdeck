@@ -199,6 +199,7 @@
       if (previous.blocked?.numeric) delete previous.blocked;
     }
     const out = { ...previous };
+    if (out.blocked?.resetAt && out.blocked.resetAt <= Math.max(now, next.at)) delete out.blocked; // past its reset time
     out.scope = next.scope;
     for (const key of ['account', 'accountKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
     if (next.identityOnly) {

@@ -167,6 +167,16 @@
         window.deck.recordClaudeSeatUsage(seatId, usage, col.claudeConfigDir).catch(() => { recorded.delete(seatId); });
       }
     }
+    // Keyed per column: an idle session's unchanged statusline is never
+    // re-stamped as a fresh sample of its seat.
+    const footer = entry.alive && isClaude(col) && S.footerUsage((entry.footerLines || []).map((line) => line.map((s) => s.text).join('')));
+    if (footer && col.claudeSeatId && col.claudeConfigDir) {
+      const key = col.claudeSeatId + ':' + JSON.stringify(footer.windows);
+      if (recorded.get(col.id) !== key) {
+        recorded.set(col.id, key);
+        window.deck.recordClaudeSeatUsage(col.claudeSeatId, footer, col.claudeConfigDir).catch(() => { recorded.delete(col.id); });
+      }
+    }
     if (!col.isMain || !entry.wrap) return;
     let banner = entry.wrap.querySelector('.seat-quota-banner');
     if (entry.state !== 'quota') { if (banner) banner.remove(); return; }

@@ -131,3 +131,34 @@ test('relogin metadata cannot reassign an old cache; copied and unbound caches a
     assert.deepEqual((await readLocal(home, undefined, now, seats)).filter(q => q.windows).map(q => q.seatId), ['us']);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('two seats with bound data each show their own numbers; an unattributable legacy cache stays unknown', async () => {
+  const Q = require('../quota-core'), S = require('../claude-seats-core');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quota-two-seats-')), now = Date.now();
+  const seats = [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }];
+  try {
+    for (const seat of seats) fs.mkdirSync(path.join(home, seat.configDir.slice(2)));
+    fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'cn-id' } }));
+    fs.writeFileSync(path.join(home, '.claude-us/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test', accountUuid: 'us-id' } }));
+    // Legacy caches written before attribution: same numbers in both, no account.
+    for (const seat of seats) fs.writeFileSync(path.join(home, seat.configDir.slice(2), 'agentdeck-usage.json'), JSON.stringify({ at: now, source: 'Claude /usage', windows: [{ key: 'fiveHour', remaining: 53 }, { key: 'weekly', remaining: 55 }] }));
+    const summaries = async () => {
+      const store = {};
+      for (const sample of await readLocal(home, undefined, now, seats)) Q.observe(store, sample, now);
+      return Q.claudeSeats(seats).map((seat) => Q.summary(store, 'Claude', now, seat, 'us'));
+    };
+    let [cn, us] = await summaries();
+    assert.equal(cn.label, '未知'); assert.equal(us.label, '未知');
+    assert.doesNotMatch(cn.detail + us.detail, /剩余 5[35]/);
+    assert.match(us.detail, /账号：us\*\*\*@example\.test/);
+    M.writeUsage(seats[1], home, S.footerUsage(['Opus 5.5   5h剩余 83% · 7d剩余 59%'], now));
+    [cn, us] = await summaries();
+    assert.equal(cn.label, '未知');
+    assert.equal(us.displayLabel, '5h 83% · 7d 59%');
+    assert.match(us.detail, /会话状态行/);
+    M.writeUsage(seats[0], home, S.usage('Current session\n  10% used\n  Resets 11pm\nCurrent week (all models)\n  40% used\n', now));
+    [cn, us] = await summaries();
+    assert.equal(cn.displayLabel, '5h 90% · 7d 60%');
+    assert.equal(us.displayLabel, '5h 83% · 7d 59%');
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});

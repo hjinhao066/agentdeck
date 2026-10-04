@@ -68,5 +68,17 @@
     }
     return result.windows.length ? result : null;
   }
-  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, CODEX_COMMAND, CLAUDE_COMMAND };
+  function footerUsage(rows, now = Date.now()) {
+    // "5h剩余 83% · 7d剩余 59%" is rendered by the statusline from this
+    // session's own stdin rate_limits, so it belongs to the session's login.
+    // ccstatusline "Session:/Weekly:" reads a machine-wide cache: never here.
+    const text = Array.isArray(rows) ? rows.join('\n') : '';
+    const windows = [];
+    for (const [key, name] of [['fiveHour', '5h'], ['weekly', '7d']]) {
+      const m = text.match(new RegExp('(?:^|[\\s·|│])' + name + '剩余?\\s*(\\d+(?:\\.\\d+)?)%'));
+      if (m && Number(m[1]) <= 100) windows.push({ key, remaining: Number(m[1]), resetText: '' });
+    }
+    return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
+  }
+  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, CODEX_COMMAND, CLAUDE_COMMAND };
 });
