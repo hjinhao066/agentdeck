@@ -27,7 +27,7 @@ async function waitForShell(id) {
 }
 
 async function launch() {
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'received-prompts.jsonl') };
+  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'received-prompts.jsonl'), AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received-columns.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -687,7 +687,6 @@ test('clearing the Captain resets only its model context: work, receipts and que
   }, FAKE);
   await expect.poll(() => page.evaluate((i) => terms.get(i).state, oldCaptainId), { timeout: 20000 }).toBe('input');
   expect(await page.evaluate(() => config.mainSession.inflight.length)).toBeGreaterThan(0);
-  const captureStart = capturedPrompts().length;
   const messages = [];
   const spy = (d) => messages.push(d.message());
   page.on('dialog', spy);
@@ -715,7 +714,7 @@ test('clearing the Captain resets only its model context: work, receipts and que
   await expect(page.locator(`.column[data-col-id="${fresh}"] .task-card.st-input`, { hasText: 'Worker x' })).toHaveCount(1);
 
   // a fresh agent gets the default instructions again, plus where the old conversation is
-  const received = () => capturedPrompts().slice(captureStart).join('\n');
+  const received = () => fs.readFileSync(path.join(profile, 'received-columns.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter((p) => p.colId === fresh).map((p) => p.text).join('\n');
   await expect.poll(received, { timeout: 30000 }).toContain('claude-opus-5-5-max');
   await expect.poll(received, { timeout: 15000 }).toContain(`read --id ${oldCaptainId}`);
   // then the question reaches it by itself

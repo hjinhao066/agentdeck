@@ -52,6 +52,7 @@ function answer() {
   lines = [];
   // Test-only capture verifies delivery before ConPTY wraps/redraws the screen.
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
+  if (process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text }) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
