@@ -147,6 +147,20 @@ test.describe('Equal-split layout regression with active raw-terminal column', (
 
       expect(maxW - minW).toBeLessThanOrEqual(2);
       expect(Math.abs(last.colWidths[0] - expected)).toBeLessThanOrEqual(2);
+      await test.step('an unfocused column view toggle follows its visible label in both directions', async () => {
+        const col = page.locator('.column[data-col-id="col-0"]');
+        const toggle = col.locator('.view-toggle');
+        await page.evaluate(() => ChatUI.setMode('col-0', 'chat'));
+        await page.locator('.colnav-item[data-col-id="col-1"]').click();
+        await expect(col).toHaveClass(/chat-mode/);
+        await expect(toggle).toHaveText('终端');
+        await toggle.click();
+        await expect(col).not.toHaveClass(/chat-mode/);
+        await page.locator('.colnav-item[data-col-id="col-1"]').click();
+        await expect(toggle).toHaveText('对话');
+        await toggle.click();
+        await expect(col).toHaveClass(/chat-mode/);
+      });
     });
   }
 

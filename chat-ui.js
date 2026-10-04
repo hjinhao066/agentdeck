@@ -45,7 +45,7 @@
   }
 
   // ---- view mode ----
-  // New columns follow the global choice; their own toggle stays independent.
+  // The per-column mode overrides the current global choice.
   function modeOf(col) {
     return C.normalizeViewMode(col.view || host.config.globalViewMode);
   }

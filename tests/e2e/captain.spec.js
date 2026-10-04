@@ -138,6 +138,23 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   // and it goes back once you move on
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
+  await test.step('new allows verified agy legacy models without starting a real model', async () => {
+    const commands = await page.evaluate(async () => {
+      const createSession = deckHost.createSession, commands = [];
+      // Exercise the real new gate, then intercept before any PTY starts.
+      deckHost.createSession = (col) => { commands.push(col.cmd); throw new Error('smoke-intercept-session'); };
+      try {
+        for (const model of ['claude-sonnet-4-6', 'claude-opus-4-6-thinking']) {
+          try {
+            await MainSession.handle({ action: 'main-new', id: `smoke-${model}`, title: model, task: 'stand-in only',
+              command: `agy --model ${model} --effort high` }, MainSession.mainCol());
+          } catch (error) { if (error.message !== 'smoke-intercept-session') throw error; }
+        }
+      } finally { deckHost.createSession = createSession; }
+      return commands;
+    });
+    expect(commands).toEqual(['agy --model claude-sonnet-4-6', 'agy --model claude-opus-4-6-thinking']);
+  });
 });
 
 test('tell, ledger and read from the Captain terminal; a worker stuck on a confirmation goes to the Captain', { tag: '@smoke' }, async () => {
@@ -194,10 +211,10 @@ test('a session the Captain only told something keeps its place; its own session
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
 });
 
-test('new refuses Claude 4.x and Haiku before any session starts, and says what to use', async () => {
+test('new refuses unapproved old Claude models before any session starts, and says what to use', async () => {
   const before = await page.evaluate(() => columns.length);
-  await run(mainId, `clear; node "${CLI}" new --title "旧模型" --task "x" --command "agy --model claude-sonnet-4-6"`);
-  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('用户不用 claude-sonnet-4-6');
+  await run(mainId, `clear; node "${CLI}" new --title "旧模型" --task "x" --command "agy --model claude-sonnet-4-5-20250929"`);
+  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('用户不用 claude-sonnet-4-5-20250929');
   await expect.poll(() => screen(mainId)).toContain('gemini-3.8-flash-high');
   expect(await page.evaluate(() => columns.length)).toBe(before);
 });

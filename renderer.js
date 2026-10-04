@@ -2021,7 +2021,7 @@ function buildColumn(col, isFresh) {
     // Buttons/grip/inline-rename keep their own behavior.
     wrap.addEventListener('mousedown', (e) => {
       if (e.target.closest('.icon-btn') || e.target.closest('.grip') || e.target.closest('[contenteditable="true"]')) return;
-      if (focusedId !== col.id) ChatUI.setMode(col.id, 'term');
+      if (focusedId !== col.id && !e.target.closest('.view-toggle')) ChatUI.setMode(col.id, 'term');
       if (!ChatUI.onColumnMouseDown(col, e)) { term.focus(); focusedId = col.id; syncNav(); }
     });
 
@@ -2527,7 +2527,7 @@ function createSession(c, background) {
   if (!background) whenMounted(col, () => jumpToColumn(col));
   return col;
 }
-// 队长: always the first column; its view follows the global choice.
+// 队长: always the first column; opens in terminal view.
 function createMain(c) {
   if (zoomedId) { zoomedId = null; updateColumnStyles(); }
   Pages.hide();
