@@ -637,3 +637,24 @@ test('persistable strips basePath and label so config.json never holds them, and
   assert.equal(source.match(/cfg\.mobileWeb = persistable\(mobileSettings\)/g)?.length, 1);
   assert.ok(!/mobileWeb:\s*(?:settings|mobileSettings)\b/.test(source) && !/cfg\.mobileWeb = (?!persistable)/.test(source), 'no other write of mobile settings into config');
 });
+
+test('phone images work under a prefix: upload, view and send use the prefixed routes and the machine cookie, and unprefixed public routes stay 404', async (t) => {
+  const uploadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-multi-upload-'));
+  t.after(() => fs.rmSync(uploadDir, { recursive: true, force: true }));
+  const sent = [];
+  const m = await start(t, '/mac/', 'Mac', {}, { uploadDir, sendCaptain: (message, images) => sent.push([message, images.length]) });
+  const { cookie, csrf } = await login(m);
+  const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360f8cfc0000003010100c9fe92ef0000000049454e44ae426082', 'hex');
+  const headers = { 'Content-Type': 'application/octet-stream', Origin: PUBLIC_ORIGIN, Cookie: cookie, 'X-CSRF-Token': csrf };
+  assert.equal((await raw(m.status, '/api/upload', { method: 'POST', headers, body: PNG })).status, 404, 'unprefixed public upload is not this machine\'s route');
+  const upload = await raw(m.status, '/mac/api/upload', { method: 'POST', headers, body: PNG });
+  assert.equal(upload.status, 200);
+  const { id } = JSON.parse(upload.text);
+  assert.equal((await raw(m.status, '/mac/api/upload', { method: 'POST', headers: { ...headers, 'X-CSRF-Token': '0'.repeat(64) }, body: PNG })).status, 403);
+  assert.equal((await raw(m.status, '/mac/api/image?id=' + id, { headers: { Cookie: cookie } })).status, 200);
+  assert.equal((await raw(m.status, '/mac/api/image?id=' + id)).status, 401);
+  assert.equal((await raw(m.status, '/api/image?id=' + id, { headers: { Cookie: cookie } })).status, 404);
+  const send = await post(m, 'api/captain', { message: 'pic', images: [id] }, { Cookie: cookie, 'X-CSRF-Token': csrf });
+  assert.equal(send.status, 200);
+  assert.deepEqual(sent, [['pic', 1]]);
+});
