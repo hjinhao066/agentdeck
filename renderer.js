@@ -2548,8 +2548,9 @@ function scrollColumnInDeck(wrap, center = false) {
   // which can pull the sidebar outside the window on Windows.
   let delta = 0;
   if (center) delta = column.left - deck.left + (column.width - deckEl.clientWidth) / 2;
-  else if (column.left < deck.left) delta = column.left - deck.left;
-  else if (column.right > deck.right) delta = column.right - deck.right;
+  else if (column.left < deck.left && column.right > deck.right) return;
+  else if (column.left < deck.left) delta = column.width <= deckEl.clientWidth ? column.left - deck.left : column.right - deck.right;
+  else if (column.right > deck.right) delta = column.width <= deckEl.clientWidth ? column.right - deck.right : column.left - deck.left;
   deckEl.scrollLeft += delta;
 }
 
