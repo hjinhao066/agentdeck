@@ -1,16 +1,19 @@
 // Offline TUI stand-in. No real CLI, provider request or credential access.
 const readline = require('readline');
 const provider = process.argv[2];
+const west = process.argv[3] === 'west';
+let westData = false;
 process.stdout.write('\x1b[?1049h');
-function draw(exhausted = false, suffix = '') {
+function draw(exhausted = false, suffix = '', otherModel = false) {
   process.stdout.write('\x1b[2J\x1b[H');
   const headings = { Claude: 'Claude Code', Codex: 'OpenAI Codex', Cursor: 'Cursor Agent', Antigravity: 'AGY CLI' };
   process.stdout.write(headings[provider] + '\n');
   if (exhausted) process.stdout.write((provider === 'Antigravity' ? 'Individual quota reached\nResets in 2h 30m' : 'Error: You have exceeded your usage limit. Resets in 1h') + '\n' + suffix);
   process.stdout.write('\n' + '─'.repeat(50) + '\n> \n' + '─'.repeat(50) + '\n');
-  if (provider === 'Claude') process.stdout.write('Context: 99% | Session: 81% | Reset: 2hr 10m\nWeekly: 9% | Weekly Reset: 3d\n');
+  if (provider === 'Claude' && (!west || westData)) process.stdout.write(west ? 'Session: 35% | Reset: 1h\nWeekly: 70% | Weekly Reset: 4d\n' : 'Context: 99% | Session: 81% | Reset: 2hr 10m\nWeekly: 9% | Weekly Reset: 3d\n');
   if (provider === 'Codex') process.stdout.write('5-hour limit: 8% left (resets 23:59)\nWeekly limit: 60% left (resets 2026-10-07T10:00:00Z)\n');
-  process.stdout.write(headings[provider] + '\n');
+  const models = { Claude: 'claude-opus-5-5-high', Codex: 'gpt-6.1-sol', Cursor: 'grok-4.7-high-fast', Antigravity: 'gemini-3.8-flash-high' };
+  process.stdout.write('Model: ' + (otherModel ? 'claude-opus-5-5-high' : models[provider]) + '\n' + headings[provider] + '\n');
 }
 draw();
-readline.createInterface({ input: process.stdin }).on('line', (line) => draw(line.startsWith('exhausted'), line === 'exhausted-redraw' ? 'unrelated redraw\n' : ''));
+readline.createInterface({ input: process.stdin }).on('line', (line) => { if (line === 'quota-data') westData = true; draw(line.startsWith('exhausted') || line === 'claude-exhausted', line === 'exhausted-redraw' ? 'unrelated redraw\n' : '', line === 'claude-exhausted'); });

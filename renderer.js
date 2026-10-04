@@ -105,6 +105,8 @@ let config = {
 const saved = window.deck.loadConfig();
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
+if (Array.isArray(saved?.claudeSeats)) config.claudeSeats = QuotaCore.claudeSeats(saved.claudeSeats);
+if (saved?.activeClaudeSeatId) config.activeClaudeSeatId = saved.activeClaudeSeatId;
 if (saved) {
   config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
   if (saved.theme) config.theme = saved.theme;
@@ -154,6 +156,8 @@ if (saved) {
       agentProvider: c.agentProvider,
       agentModel: c.agentModel,
       agentEffort: c.agentEffort,
+      claudeSeatId: c.claudeSeatId,
+      claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       // Relaunch follows the saved global choice; local overrides last this run.
@@ -3096,7 +3100,7 @@ const deckHost = {
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
   createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
-  quotaText: () => QuotaCore.text(config.quotas),
+  quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
@@ -3209,28 +3213,40 @@ function maybeNotifyState(id, entry, st) {
   }
 }
 let lastAttnCount = -1;
+function claudeCaptainSeatId() {
+  const captain = columns.find((c) => c.id === config.mainSession?.colId);
+  if (!captain || (captain.agentProvider !== 'Claude' && !/\bclaude\b/i.test(captain.cmd || ''))) return null;
+  return QuotaCore.seatForColumn(captain, QuotaCore.claudeSeats(config.claudeSeats))?.id || null;
+}
 function renderQuotaBar() {
   const bar = document.getElementById('quotaBar');
-  for (const provider of QuotaCore.PROVIDERS) {
-    let item = bar.querySelector(`[data-provider="${provider}"]`);
+  const items = QuotaCore.items(config.claudeSeats);
+  for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
+  for (const [index, { provider, seat, key }] of items.entries()) {
+    let item = bar.querySelector(`[data-quota-key="${key}"]`);
     if (!item) {
       item = document.createElement('span');
       item.className = 'quota-item'; item.dataset.provider = provider;
+      item.dataset.quotaKey = key;
+      if (seat) item.dataset.seatId = seat.id;
       item.setAttribute('role', 'group');
       item.tabIndex = 0; // keyboard users can inspect the same tooltip
       const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
       icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider];
       const label = document.createElement('span'); label.className = 'quota-label';
-      const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}`; tip.setAttribute('role', 'tooltip');
+      const name = document.createElement('span'); name.className = 'quota-name';
+      const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
       item.setAttribute('aria-describedby', tip.id);
-      item.append(icon, label, tip); bar.append(item);
+      item.append(icon, name, label, tip); bar.append(item);
     }
-    const q = QuotaCore.summary(config.quotas, provider);
+    const q = QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId());
     item.dataset.state = q.state;
     item.setAttribute('aria-label', q.detail);
     item.title = q.detail;
-    item.querySelector('.quota-label').textContent = q.label;
+    item.querySelector('.quota-label').textContent = q.displayLabel;
+    item.querySelector('.quota-name').textContent = q.name;
     item.querySelector('.quota-tooltip').textContent = q.detail;
+    if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
   }
 }
 setInterval(() => {
@@ -3322,8 +3338,13 @@ setInterval(() => {
       const col = columns.find((c) => c.id === id);
       const provider = AgentInfo.inferProvider(col?.cmd, text) || entry.detectedProvider;
       const footer = (entry.footerLines || []).map((line) => line.map((s) => s.text).join(''));
-      const sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt);
-      const signature = sample && JSON.stringify([provider, sample.windows.map((w) => [w.label, w.remaining, w.resetText]), sample.exhausted, sample.resumed, sample.resetText]);
+      const model = AgentInfo.extractModel(MainCore.afterContract(text), '', footer) || col?.agentModel || AgentInfo.extractModel('', col?.cmd);
+      let sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt, model);
+      if (sample && provider === 'Claude') {
+        const seat = QuotaCore.seatForColumn(col, QuotaCore.claudeSeats(config.claudeSeats));
+        sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir } : null;
+      }
+      const signature = sample && JSON.stringify([provider, sample.seatId, sample.model, sample.windows.map((w) => [w.label, w.remaining, w.resetText]), sample.exhausted, sample.resumed, sample.resetText]);
       // Redrawing unrelated text must not move a relative reset forward or
       // make an unchanged percentage appear freshly sampled.
       if (signature !== entry.lastQuotaObservation) {

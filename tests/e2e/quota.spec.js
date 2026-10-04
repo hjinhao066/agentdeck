@@ -27,7 +27,7 @@ test.afterAll(async () => {
 const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"]`);
 
 test('passive live screens show remaining quota, provider icons and accessible details', async () => {
-  await expect(badge('Claude').locator('.quota-label')).toHaveText('19%', { timeout: 20000 });
+  await expect(badge('Claude').locator('.quota-label')).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
   await expect(badge('Codex').locator('.quota-label')).toHaveText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider).locator('.quota-label')).toHaveText('正常');
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
@@ -38,8 +38,46 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await badge('Claude').focus();
   await expect(badge('Claude').getByRole('tooltip')).toBeVisible();
   await expect(badge('Claude').getByRole('tooltip')).toContainText('每周剩余 91%');
+  await expect(badge('Cursor').locator('.quota-name')).toHaveText('Grok 4.7');
+  await expect(badge('Antigravity').locator('.quota-name')).toHaveText('Gemini');
+  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：未识别/);
   // The isolated profile is barred from reading the user's real quota caches.
   expect(await page.evaluate(() => window.deck.quotaLocal())).toEqual([]);
+});
+
+test('Claude-model limits never exhaust Gemini or Grok 4.7; screenshots use simulated data', async () => {
+  for (const p of ['Cursor', 'Antigravity']) {
+    await page.evaluate((p) => window.deck.ptyInput(`quota-${p}`, 'claude-exhausted\r'), p);
+    await expect.poll(() => page.evaluate((p) => terms.get(`quota-${p}`).lastScreen, p)).toContain('Model: claude-opus-5-5-high');
+    await page.waitForTimeout(1800);
+    await expect(badge(p).locator('.quota-label')).toHaveText('正常');
+    await page.evaluate((p) => window.deck.ptyInput(`quota-${p}`, 'normal\r'), p);
+    await expect.poll(() => page.evaluate((p) => terms.get(`quota-${p}`).lastScreen, p)).toContain(p === 'Cursor' ? 'Model: grok-4.7' : 'Model: gemini-3.8');
+  }
+  await page.evaluate(() => document.activeElement.blur());
+  await expect.poll(() => page.evaluate(() => columns.find(c => c.id === 'quota-Antigravity').agentModel)).toBe('gemini-3.8-flash-high');
+  await page.evaluate(() => {
+    const at = Date.now();
+    QuotaCore.observe(config.quotas, { ...QuotaCore.cacheAntigravity({ model: 'gemini-3.8-flash-high', quota: {
+      'gemini-5h': { remaining_fraction: 0.75, reset_time: new Date(at + 7200000).toISOString() },
+      'gemini-weekly': { remaining_fraction: 0.58, reset_time: new Date(at + 86400000).toISOString() },
+      '3p-5h': { remaining_fraction: 0 }, '3p-weekly': { remaining_fraction: 0 },
+    } }, at), account: 'de***@example.com', accountKey: 'demo-gemini' });
+    for (const provider of ['Claude', 'Codex', 'Cursor']) QuotaCore.observe(config.quotas, { provider, scope: QuotaCore.SCOPES[provider], at, identityOnly: true, account: 'de***@example.com', accountKey: 'demo-' + provider });
+    renderQuotaBar();
+  });
+  await expect(badge('Antigravity').locator('.quota-label')).toHaveText('58%');
+  await expect(badge('Antigravity')).toHaveAttribute('title', /Gemini 5 小时剩余 75%/);
+  await badge('Antigravity').hover();
+  const shots = process.env.AGENTDECK_QUOTA_SHOTS;
+  if (shots) {
+    fs.mkdirSync(shots, { recursive: true });
+    await page.screenshot({ path: path.join(shots, 'quota-gemini-dark.png') });
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'light'; });
+    await page.screenshot({ path: path.join(shots, 'quota-gemini-light.png') });
+    await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+    fs.writeFileSync(path.join(shots, 'README.md'), '# Screenshot data\n\nAll quota numbers and masked accounts in these screenshots are simulated offline fixtures, not this Mac’s live usage. Gemini is 75% (5-hour) / 58% (weekly) while agy Claude pools are exhausted; Cursor observes Grok 4.7 only. quota-dark/light show simulated exhaustion afterward.\n');
+  }
 });
 
 test('Cursor and agy errors latch provider-wide through normal redraw and reload; recovery time is stable', async () => {
@@ -76,7 +114,7 @@ test('Captain quota CLI returns four lines and changes no tasks, receipts or cac
   // Node writes UTF-8 on both platforms; PowerShell 5 redirection writes UTF-16.
   const command = `node -e "require('fs').writeFileSync(process.argv[1],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}))" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
-  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude：19%[^\n]*\nCodex：8%[^\n]*\nCursor：已用尽[^\n]*\nAntigravity：已用尽/);
+  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ Claude：19%[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
   expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(4);
   expect(await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]))).toBe(before);
   // A worker doesn't have the Captain capability, even for this read-only command.

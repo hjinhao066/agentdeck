@@ -47,6 +47,7 @@
       "agent-info.js",
       "quota-core.js",
       "quota-local.js",
+      "quota-codex.js",
       "chat-ui.js",
       "sidebar-core.js",
       "sidebar.js",

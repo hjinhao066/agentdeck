@@ -37,12 +37,18 @@ the middle:
   Scroll up in a terminal or conversation to pause following output. New output
   preserves your reading position and shows 有新内容 ↓ at the bottom; click it
   or scroll to the bottom to resume following.
-- **Subscription quota**: four compact provider icons in the top bar show remaining
+- **Subscription quota**: compact provider icons in the top bar show remaining
   percentages (the lowest known window), or 正常 / 已用尽 / 未知. Hover or focus for
-  each window, reset time, source, confidence and sample time. Remaining ≤20% is
+  each window, reset time, model, masked account, source, confidence and sample time.
+  Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
+  Claude shows a separate item per `claudeSeats` configuration, with both
+  5-hour/weekly percentages, resets in the tooltip, and the running Captain’s
+  seat marked. No configuration shows one `~/.claude` item; missing seat usage
+  says 未登录/无数据. Remaining ≤20% is
   amber and ≤10% is red. AgentDeck passively reads live TUI screens first, then
-  known local quota caches every 30 seconds; it sends no slash commands or API
-  requests. Missing/15-minute-old data is unknown, never an invented percentage.
+  known local quota caches every 30 seconds. Codex additionally uses the official
+  read-only account/rateLimits/read RPC once per minute without model turns.
+  It sends no slash commands. Missing/15-minute-old data is unknown, never an invented percentage.
   See [quota sources and limits](QUOTA_SOURCES.md).
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
@@ -118,7 +124,7 @@ again with the current provider, model and effort instructions.
   what to use instead.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
-  AgentDeck cannot read live quotas; the 队长 switches
+  The 队长 can read observed subscription quotas with `quota` and switches
   provider when a worker reports a limit. At most 15 background sessions work at
   once: a further `new` waits (its card says 等空位, the only thing called 排队) and starts by itself, oldest
   first, when one finishes. A finished background session is archived after 10

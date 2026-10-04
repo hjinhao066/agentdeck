@@ -1,69 +1,154 @@
-# Passive subscription quota
+# Subscription quota sources and model scope
 
-Research on this Mac, 2026-10-03. No credentials were printed, no provider
-endpoint was called and no input was sent to an existing session. The installed
-AgentDeck and real agent processes were left running. Research selected only
-quota fields; authentication files were not opened.
+Verified on this Mac, 2026-10-03. No tokens, credentials, raw authentication
+responses or conversations were printed. The installed app and its terminals
+were left running. Quota probes made no inference requests.
 
-| Provider | Screen source (preferred) | Local fallback | Confidence |
+| Item | What it displays | Account/model tooltip | Source and confidence |
 | --- | --- | --- | --- |
-| Claude Code | Dedicated footer `Session: …%`, `Weekly: …%`, associated `Reset:` / `Weekly Reset:`; custom `5h …% · 7d …%`; native `/usage` cards if the user already opened one | `~/.cache/ccstatusline/usage.json`: `sessionUsage`, `sessionResetAt`, `weeklyUsage`, `weeklyResetAt` | Screen: high for what CLI displays. Cache: medium, third-party and optional. Percentages are **used**, so display 100 − used. |
-| Codex | An already visible `/status` card: `5-hour limit: …% left`, `Weekly limit: …% left` (also explicit `% used`) | `$CODEX_HOME/sessions/YYYY/MM/DD/*.jsonl`, default `~/.codex`; `event_msg` / `token_count` / `rate_limits` with `used_percent`, `window_minutes`, `resets_at` | High for a server-reported sample; not a live account query. Identify windows by 300/10080 minutes, not primary/secondary order. |
-| Cursor | Provider heading for “正常”; anchored usage-limit errors for “已用尽”, with a reset when present | No reliable subscription percentage cache found in the local CLI/config paths inspected | “正常” is low confidence: only no exhaustion seen. Explicit exhaustion is high confidence for that error, not for unrelated models. No percentage is invented. |
-| Antigravity (`agy`) | Provider heading, `Individual quota reached` / `Resets in …`, plus supported usage-limit errors | Optional `~/.gemini/antigravity-cli/agy_statusline_debug.json`, **only** `quota.{gemini-5h,gemini-weekly,3p-5h,3p-weekly}.{remaining_fraction,reset_time}` and file mtime leave the reader | Medium: an optional CLI debug snapshot, not a stable public API. Gemini and third-party windows remain separately labelled. No snapshot → normal/exhausted/unknown from observed screens. |
+| Claude seats | One item per configured seat: 5-hour + weekly remaining %, independent resets, actual running Captain seat; missing data = 未登录/无数据 | Observed model; masked email from that seat profile | That seat’s dedicated status footer / already visible `/usage` / local quota cache. CLI high, optional cache medium. |
+| Codex / ChatGPT | Every server-reported 300-minute / 10080-minute window; no inferred 5-hour number | Observed model, account-shared Codex bucket; masked email from official `account/read` | Official read-only `account/rateLimits/read`, local JSONL `event_msg.token_count.rate_limits`, already visible `/status`. High for the server's sample. |
+| Cursor / **Grok 4.7** | Normal/exhausted/unknown from **Grok 4.7 sessions only**, with reset when shown. Percentage currently unavailable | Grok 4.7 (including effort/fast variant when observed); masked current CLI profile email | Selected-model screen. Normal is low confidence: only no error observed. Explicit exhaustion is high confidence for that session. Claude/other-model errors are ignored by this top-bar item. |
+| Antigravity / **Gemini** | `gemini-5h` and `gemini-weekly` remaining %, resets; selected Gemini screen status as fallback | Gemini model when observed, otherwise Gemini shared group; masked snapshot email | Optional `~/.gemini/antigravity-cli/agy_statusline_debug.json`. Medium: optional CLI debug snapshot, not a documented public contract. **Never consumes `3p-*` Claude quota.** |
 
-Local findings: Claude's configured status script currently consumes the native
-`rate_limits.five_hour` / `seven_day` fields and renders `5h` / `7d`; saved
-session screens also contained the older Session/Reset form. The ccstatusline
-cache is present. Recent Codex logs contained **only a weekly primary window**,
-so a 5-hour number cannot be inferred. agy's debug snapshot contains all four
-quota groups above, with numeric fractions and ISO reset timestamps. Cursor's
-installed source contains usage-policy RPC definitions, but that does not
-establish a reusable local cache. AgentDeck does not invoke those RPCs.
+## Claude seat contract (with `feat/claude-seats`)
 
-References: [Claude status line documentation](https://code.claude.com/docs/en/statusline)
-documents rate-limit percentages and Unix reset timestamps;
-[Codex rate-limit tests](https://github.com/openai/codex/blob/main/codex-rs/app-server/tests/suite/v2/rate_limits.rs)
-and [status card implementation](https://github.com/openai/codex/blob/main/codex-rs/tui/src/status/card.rs)
-describe server samples and the TUI;
-[Cursor CLI parameters](https://docs.cursor.com/en/cli/reference/parameters)
-describe `status` as authentication status. The agy schema above was observed
-locally; it is not claimed to be a documented compatibility contract.
+- Configuration: `claudeSeats: [{id: 'east', name: '东席', configDir:
+  '~/.claude'}, {id: 'west', name: '西席', configDir: '~/.claude-west'}]`.
+  No configuration falls back to **one** `~/.claude` item (`default`). Never
+  create a second seat or presume a login in this quota feature.
+- `column.claudeSeatId` binds a live screen to its seat. The Captain badge uses
+  the actual `mainSession.colId` column's `claudeSeatId`, not
+  `activeClaudeSeatId` (the next-launch preference). Legacy untagged columns
+  bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
+- Each item shows `5h …% · 7d …%` in the top bar, both reset timestamps in its
+  tooltip, model and masked account. Missing windows say `无数据`; if neither
+  window can be read, show `未登录/无数据`. A welcome/model banner alone cannot
+  prove Claude quota or login. An explicit exhausted error remains visible
+  even if an older numeric footer still shows a positive percentage.
+- Confirmed by inspecting the sibling branch's `claude-seats-main.js`:
+  **`<configDir>/agentdeck-usage.json`** is its canonical snapshot:
+  `{at, source: 'Claude /usage', windows: [{key: 'fiveHour'|'weekly',
+  remaining, resetText}]}`. The quota reader consumes it directly. Relative
+  resets use the original `at`; touching/copying a file never refreshes it.
+- Also support per-directory `usage-cache.json`, `usage.json`, and
+  `.cache/ccstatusline/usage.json`: ccstatusline's `sessionUsage/weeklyUsage`
+  or native `five_hour/seven_day.utilization|used_percentage` with
+  `resets_at` (including a `rate_limits` wrapper). Reads are capped at 16 KB.
+  Pick the newest valid fresh snapshot for each seat; never add two caches'
+  windows or guess a missing denominator.
+- Configured seats **never** use `~/.cache/ccstatusline/usage.json`, which can
+  be shared by status scripts. Only the unconfigured legacy single item keeps
+  that fallback. Configured-seat cache paths must resolve inside that seat's
+  directory; a symlink to another seat's cache is ignored. No login attempt or
+  real seat switch is made by this feature.
+- Quota state is independent under `config.quotas['Claude:<seatId>']` (legacy
+  default: `Claude`). Seat config-directory/account changes discard old state.
+  Captain `quota` returns one line per seat plus three other providers.
+- Profile identity is `<configDir>/.claude.json`'s
+  `oauthAccount.emailAddress`, except the default directory uses the CLI's
+  existing `~/.claude.json`. Only a masked label and comparison hash leave
+  the reader; no credential/keychain read is needed for this feature. An
+  absent quota is labelled with the combined “未登录/无数据” without guessing
+  whether the account is signed in.
 
-## Behavior and limits
+## Research and integration decisions
 
-- Read live rows below the input box and dedicated usage/status card rows. Never
-  interpret Context %, token counts, cost or conversational mentions as quota.
-  Ignore restored output above AgentDeck's replay separator and task-contract echoes.
-- Fresh screen numbers win over cache numbers for 15 minutes. Cache polling is
-  every 30 seconds; every sample exposes its source and time. Unchanged screen
-  observations are not stamped fresh on every redraw. Caches are bounded async
-  reads (Claude 16 KB, agy 64 KB, up to 8 recent Codex tails of 1 MB each in the
-  current/previous daily folders), not recursive history scans.
-- The top number is the lowest known remaining window; tooltip lists every
-  known window. This is conservative across agy's Gemini/third-party pools,
-  even when the model being considered uses another pool. Unknown windows are
-  not silently filled in. Unknown/no active session is labelled 未知. 正常 means
-  only no quota error observed, never a guarantee that a new task will succeed.
-- A detected exhaustion persists in `config.quotas` across session removal and
-  app/renderer restart. A redraw/another normal session cannot clear it. A known
-  reset expires the block into unknown until fresh data arrives; no automatic
-  100% is assigned. An unknown reset stays blocked until an explicit CLI reset
-  message. A numeric-zero block can also clear on a newer positive quota sample.
-- Relative durations, local clocks and clocks with IANA zones are converted to an
-  absolute time at observation. Unsupported zones/date formats are retained as
-  time-shaped text; no expiration is guessed.
-  Repeated unchanged errors do not move a relative reset forward.
-- Quota exhaustion blocks normal automatic delivery through the existing
-  session quota state. `quota` itself is Captain-only, read-only, returns one
-  line per provider and does not consume receipts or cache a board response.
-  Captain instructions suggest checking it before delegation. Provider switching
-  remains a Captain decision; this change does not automatically create tasks.
-- This feature aggregates by provider and assumes the machine's current login.
-  Separate accounts/config directories are not identified without credentials.
-  A per-model exhaustion conservatively marks its provider exhausted. Account
-  switching with an unknown-reset block needs a new explicit reset observation.
-- No credentials/settings/auth files are read by the implementation. agy's
-  snapshot and Codex logs may contain identity or conversation data, but only
-  allowlisted quota fields are returned to the renderer. Test profiles disable
-  all real local-cache reads; E2Es use offline stand-ins and isolated userData.
+### Codex / ChatGPT 5-hour gap
+
+- [Official app-server protocol](https://learn.chatgpt.com/docs/app-server)
+  documents `account/read`, `account/rateLimits/read` and
+  `account/rateLimits/updated`. `usedPercent`, `windowDurationMins`, `resetsAt`
+  describe each window. `rateLimitsByLimitId.codex` is selected explicitly;
+  review/premium/other buckets must not be presented as shared Codex quota.
+- [kimbyungsu/codex-usage-monitor](https://github.com/kimbyungsu/codex-usage-monitor/blob/main/src/usageService.ts)
+  uses those official read RPCs. [CodexBar](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/UsageFetcher.swift)
+  independently uses `account/rateLimits/read`; its alternate
+  [OAuth usage fetcher](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Codex/CodexOAuth/CodexOAuthUsageFetcher.swift)
+  queries the private `/wham/usage` endpoint. Prefer the official RPC; do not
+  extract OAuth credentials or add a duplicate private API integration.
+- **Integrated**: a short-lived `codex app-server`, initialized over stdio,
+  calls only `account/read` (`refreshToken: false`) and
+  `account/rateLimits/read`. No `thread/start`, `turn/start`, login or reset
+  redemption. The CLI handles its own authentication. Poll at most once per
+  minute, with an 8-second timeout and 1 MB stdout cap, silent stderr/errors,
+  direct executable (no shell), and kill only this new child on completion.
+  Missing/unsupported CLI or API-key login falls back to existing local/screen
+  observations. Test profiles never start this client.
+- **Real Mac result**: both recent JSONL events and the official RPC return
+  only a `primary` 10080-minute weekly window; `secondary` is null. The RPC
+  sample was **28% used / 72% remaining** during research. No 300-minute window
+  was returned. Tooltip says “5 小时：服务端未提供，无法取得数字”. If a future
+  response contains 300 minutes, it is already supported. `primary` does not
+  automatically mean five hours.
+- [ccusage](https://github.com/ccusage/ccusage/blob/main/docs/guide/index.md)
+  reports local token usage and estimated cost; these are not an authoritative
+  subscription denominator. [AIPulse's own explanation](https://github.com/ccusage/ccusage/discussions/944)
+  uses historical token peaks as a Claude proxy and uses Codex's existing
+  JSONL rate limits for Codex. Neither creates a missing official 5-hour
+  window. No token-based quota estimates were integrated.
+
+### Cursor Grok 4.7 percentage gap
+
+- [Cursor's official model/pricing docs](https://cursor.com/docs/models-and-pricing)
+  distinguish **Cursor Models** (Grok 4.7/4.6/4.5, Composer) from **Other
+  Models** (including Claude), with separate monthly billing pools. A Claude
+  exhaustion or an undifferentiated overall percentage is not Grok quota.
+- [CodexBar's Cursor integration](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Cursor/CursorStatusProbe+UsageSummary.swift)
+  reads `/api/usage-summary`, using
+  [Cursor.app's local auth database](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Cursor/CursorAppAuth.swift).
+  Researched the read-only `state.vscdb` key names: auth/profile keys exist,
+  but no usage cache key was found. A **one-time read-only research probe**
+  authenticated in memory with this app token, sent it only to
+  `https://cursor.com/api/usage-summary` and printed response field types only.
+  The response contains `individualUsage.plan.{used,limit,remaining,
+  autoPercentUsed,apiPercentUsed,totalPercentUsed}` and `onDemand`; it exposes
+  **no identified Cursor Models/Grok 4.7 pool**. No credentials or raw response
+  were saved. Production code does not read this DB or call this endpoint.
+- CodexBar's [`get-sand-usage-status`](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Cursor/CursorSandUsage.swift)
+  reports **Grok Bot**, not Cursor CLI's Grok 4.7 model pool.
+  [Official Grok Bot billing](https://cursor.com/help/grok-bot/plans) describes
+  its separate weekly included allowance. It was rejected for this item.
+- [ofershap/cursor-usage-tracker](https://github.com/ofershap/cursor-usage-tracker)
+  requires team/Enterprise Admin API credentials. The
+  [official Admin API](https://docs.cursor.com/en/account/teams/admin-api)
+  is for organization/team metrics; it is not an individual CLI quota reader.
+- The installed Cursor CLI contains usage-policy RPC definitions, but no
+  verified public individual-model quota contract or reusable numeric local
+  cache was established. **Keep observed Grok status; do not show an overall,
+  Claude, Grok Bot or guessed percentage.**
+
+## Observation and privacy behavior
+
+- Live dedicated footers/cards only: Context %, token counts, cost and prose
+  about quota never become quota. Restored output and task-contract echoes are
+  excluded. Unknown model identity on Cursor/agy is ignored until a selected
+  model is identified; it is never presumed to be Grok/Gemini.
+- Remaining = 100 minus explicit used %. Headline is the lowest fresh window
+  **within the selected pool**, not across agy Gemini/Claude. Missing windows
+  are never filled. “正常” means only no observed exhaustion, not guaranteed
+  availability. Missing/15-minute-old data is unknown.
+- An exhaustion persists until its reset, an explicit reset observation or
+  (for numeric zeros) a newer positive sample. Old provider-wide state from
+  the first quota-bar version has no model scope and is discarded, preventing
+  persisted Claude failures from poisoning Gemini/Grok. Known account changes
+  clear that provider's old sample/block; unidentifiable logins cannot be
+  reliably distinguished.
+- Account tooltip uses the current profile, not a per-terminal authentication
+  guarantee: Claude per-seat `oauthAccount.emailAddress` as above, Cursor
+  `authInfo.email` in `.cursor/cli-config.json`, agy snapshot `email`, Codex
+  official account email. Only masked labels plus an email hash for change
+  detection leave the main process. Profile JSON is size capped; no raw
+  settings/auth data reaches IPC. Configured Claude directories are supported per seat; alternate directories
+  for other providers remain unsupported and are not falsely identified.
+- Local fallback reads are bounded: Claude 16 KB, agy 64 KB, up to eight 1 MB
+  Codex tails from current/previous daily folders. Only allowlisted quota,
+  model and masked identity fields leave the reader. Local polling is 30 s.
+- Captain-only `quota` remains read-only; it neither changes tasks nor consumes
+  receipts. The existing per-session exhausted state still blocks automatic
+  delivery into that exhausted session, even when its model is intentionally
+  excluded from the selected top-bar pool.
+- New screenshots under `~/reports/agentdeck-quota-bar/screenshots-v2/` use
+  **simulated offline fixtures**, including all percentages and demo accounts;
+  they are not screenshots of this Mac's live quota. E2E profiles disable all
+  real cache/profile/RPC reads and use stand-ins only.

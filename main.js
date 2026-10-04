@@ -10,6 +10,7 @@ const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const { readLocal: readLocalQuota } = require('./quota-local');
+const { readCodex: readCodexQuota } = require('./quota-codex');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
@@ -624,11 +625,13 @@ app.whenReady().then(() => {
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
   const configPath = path.join(app.getPath('userData'), 'config.json');
+  let quotaSeatConfig;
   onMain('load-config-sync', (e) => {
-    try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; }
+    try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
+    quotaSeatConfig = cfg?.claudeSeats;
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
     try {
@@ -641,12 +644,19 @@ app.whenReady().then(() => {
   }; });
 
   // Test profiles never read the user's quota caches or conversation logs.
-  let quotaRead = null, quotaReadAt = 0;
+  let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
   handleMain('quota:local', () => {
     if (tudArg) return [];
-    if (!quotaRead || Date.now() - quotaReadAt >= 30000) {
+    const seatsKey = JSON.stringify(quotaSeatConfig || null);
+    if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
+      quotaSeatsKey = seatsKey;
       quotaReadAt = Date.now();
-      quotaRead = readLocalQuota(os.homedir(), process.env.CODEX_HOME).catch(() => []);
+      if (!codexQuotaRead || Date.now() - codexQuotaAt >= 60000) {
+        codexQuotaAt = Date.now();
+        codexQuotaRead = readCodexQuota(ENV);
+      }
+      quotaRead = Promise.all([readLocalQuota(os.homedir(), process.env.CODEX_HOME, Date.now(), quotaSeatConfig), codexQuotaRead])
+        .then(([local, codex]) => codex ? [...local, codex] : local).catch(() => []);
     }
     return quotaRead;
   });
