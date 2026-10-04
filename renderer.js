@@ -2432,7 +2432,7 @@ function sendWhenReady(col, text, opts) {
       const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000));
       // ConPTY can show a fresh TUI before its startup input has settled.
       // Typing immediately can lose the prompt's leading bytes before the CLI reads them.
-      const settled = env.platform !== 'win32' || quiet >= 500;
+      const settled = env.platform !== 'win32' || entry.hasWorked || quiet >= 500;
       if (idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         if (o.guardUserInput && userComposing(col.id)) { setTimeout(check, 500); return; }
