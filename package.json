@@ -48,6 +48,7 @@
       "quota-core.js",
       "quota-local.js",
       "quota-codex.js",
+      "quota-claude.js",
       "chat-ui.js",
       "sidebar-core.js",
       "sidebar.js",

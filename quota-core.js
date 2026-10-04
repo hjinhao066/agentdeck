@@ -7,6 +7,8 @@
   'use strict';
   const PROVIDERS = ['Claude', 'Codex', 'Cursor', 'Antigravity'];
   const FRESH_MS = 15 * 60_000;
+  const CLAUDE_OAUTH_SOURCE = 'Claude OAuth usage';
+  const freshMs = (sample) => sample?.source === CLAUDE_OAUTH_SOURCE ? 30 * 60_000 : FRESH_MS;
   const SCOPES = { Claude: 'claude', Codex: 'codex', Cursor: 'grok-4.7', Antigravity: 'gemini' };
   const NAMES = { Claude: 'Claude', Codex: 'Codex / ChatGPT', Cursor: 'Cursor / Grok 4.7', Antigravity: 'Antigravity / Gemini' };
   function claudeSeats(value) {
@@ -151,7 +153,8 @@
     const native = data.rate_limits || data;
     const windows = Array.isArray(data.windows) ? data.windows.slice(0, 2).map((w) => ['fiveHour', 'weekly'].includes(w?.key) && percent(w.remaining) !== null ? windowValue(w.key === 'fiveHour' ? '5 小时' : '每周', 100 - w.remaining, w.resetText, at) : null).filter(Boolean)
       : [windowValue('5 小时', data.sessionUsage ?? native.five_hour?.utilization ?? native.five_hour?.used_percentage, data.sessionResetAt ?? native.five_hour?.resets_at, at), windowValue('每周', data.weeklyUsage ?? native.seven_day?.utilization ?? native.seven_day?.used_percentage, data.weeklyResetAt ?? native.seven_day?.resets_at, at)].filter(Boolean);
-    return windows.length ? { provider: 'Claude', scope: 'claude', at, source: 'ccstatusline 本地缓存', confidence: '中（第三方缓存）', windows } : null;
+    const oauth = data.source === CLAUDE_OAUTH_SOURCE;
+    return windows.length || oauth ? { provider: 'Claude', scope: 'claude', at, source: oauth ? CLAUDE_OAUTH_SOURCE : 'ccstatusline 本地缓存', confidence: oauth ? windows.length ? '高（服务端采样）' : '未知（刷新未取得数据）' : '中（第三方缓存）', windows } : null;
   }
   function cacheCodex(event) {
     if (event?.type !== 'event_msg' || event.payload?.type !== 'token_count') return null;
@@ -186,7 +189,7 @@
     return windows.length ? { provider: 'Antigravity', scope: 'gemini', model: modelScope('Antigravity', model) ? modelName(model) : 'Gemini（共享分组）', at, source: 'agy 本地状态行快照', confidence: '中（可选 CLI 调试快照）', windows } : null;
   }
   function observe(store, next, now = Date.now()) {
-    if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || now - next.at > FRESH_MS) return false;
+    if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || now - next.at > freshMs(next)) return false;
     if (next.scope !== SCOPES[next.provider]) return false;
     const key = next.provider === 'Claude' ? seatKey(next.seatId) : next.provider;
     const before = JSON.stringify(store[key] || {});
@@ -200,6 +203,17 @@
       store[key] = out;
       return before !== JSON.stringify(out);
     }
+    // The independent poll is authoritative, including failure/missing windows.
+    // An older cache/screen must not override a newer server read or failure.
+    if (next.provider === 'Claude' && next.source === CLAUDE_OAUTH_SOURCE) {
+      if (next.at < (previous.sample?.at || 0) || next.at < (previous.blocked?.at || 0)) return false;
+      out.sample = next;
+      delete out.blocked;
+      store[key] = out;
+      return before !== JSON.stringify(out);
+    }
+    if (previous.sample?.source === CLAUDE_OAUTH_SOURCE && now - previous.sample.at <= freshMs(previous.sample) &&
+      (next.at <= previous.sample.at || !previous.sample.windows?.length)) return false;
     // A quota error latches across redraws, session deletion and app restart.
     if (next.exhausted && (!previous.blocked || next.at > previous.blocked.at)) out.blocked = { at: next.at, resetAt: next.resetAt, resetText: next.resetText, source: next.source };
     if (next.resumed && next.at > (out.blocked?.at || 0)) delete out.blocked;
@@ -222,7 +236,7 @@
   function summary(store, provider, now = Date.now(), seat = null, captainSeatId = null) {
     const saved = store[seat ? seatKey(seat.id) : provider] || {};
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
-    const fresh = sample && now - sample.at <= FRESH_MS;
+    const fresh = sample && now - sample.at <= freshMs(sample);
     const windows = fresh ? (sample.windows || []).filter((w) => !w.resetAt || w.resetAt > now) : [];
     const blocked = entry.blocked && (!entry.blocked.resetAt || entry.blocked.resetAt > now) ? entry.blocked : null;
     const remaining = windows.length ? Math.min(...windows.map((w) => w.remaining)) : null;
@@ -240,13 +254,14 @@
     if (blocked) details.push(`已用尽；恢复 ${blocked.resetAt ? new Date(blocked.resetAt).toLocaleString() : blocked.resetText || '时间未知'}`);
     if (!windows.length && !blocked) details.push(state === 'normal' ? '未观察到额度用尽；无法取得数字' : '无新鲜额度信息；等待会话/缓存更新');
     const evidence = blocked || sample;
-    if (evidence) details.push(`来源：${evidence.source}；${blocked ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；采样 ${new Date(evidence.at).toLocaleString()}${!fresh && !blocked ? '（已过期）' : ''}`);
+    if (evidence) details.push(`来源：${evidence.source}；${blocked ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；${evidence.source === CLAUDE_OAUTH_SOURCE && !evidence.windows?.length ? '查询' : '采样'} ${new Date(evidence.at).toLocaleString()}${!fresh && !blocked ? '（已过期）' : ''}`);
     const displayLabel = provider === 'Claude' && windows.length ? (exhausted ? '已用尽 · ' : '') + ['5 小时', '每周'].map((name, i) => {
       const w = windows.find((w) => w.label === name);
       return `${i ? '7d' : '5h'} ${w ? w.remaining === 0 && !w.exhausted ? '<0.1%' : `${w.remaining}%` : '无数据'}`;
     }).join(' · ') : label;
-    return { provider, state, label, displayLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    const sampleLabel = provider === 'Claude' && fresh ? `${sample.windows?.length ? '采样' : '查询'} ${new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}` : '';
+    return { provider, state, label, displayLabel, sampleLabel, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, EXHAUSTED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
 });

@@ -3323,9 +3323,10 @@ function renderQuotaBar() {
       icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider];
       const label = document.createElement('span'); label.className = 'quota-label';
       const name = document.createElement('span'); name.className = 'quota-name';
+      const sampled = document.createElement('span'); sampled.className = 'quota-sampled';
       const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
       item.setAttribute('aria-describedby', tip.id);
-      item.append(icon, name, label, tip); bar.append(item);
+      item.append(icon, name, label, sampled, tip); bar.append(item);
     }
     const q = QuotaCore.summary(config.quotas, provider, Date.now(), seat, claudeCaptainSeatId());
     item.dataset.state = q.state;
@@ -3333,6 +3334,7 @@ function renderQuotaBar() {
     item.title = q.detail;
     item.querySelector('.quota-label').textContent = q.displayLabel;
     item.querySelector('.quota-name').textContent = q.name;
+    item.querySelector('.quota-sampled').textContent = q.sampleLabel;
     item.querySelector('.quota-tooltip').textContent = q.detail;
     if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
   }
