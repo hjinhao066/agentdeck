@@ -123,3 +123,14 @@ changed or counted as new regressions. No additional failures were observed.
 Synthetic dark/light screenshots are in the local `quota-panel/` directory;
 percentages, reset columns and narrow sidebar layout were visually reviewed.
 `npm audit` reports zero vulnerabilities.
+
+## Follow-up: Cursor narrow readiness
+
+Integrated accepted `origin/fix/cursor-claude-ready` at `7629479`.
+The only conflict was the end of tests/status-light.test.js; retain both the
+provider-neutral stop-hint regression and the incoming narrow-screen tests.
+Unit tests **505/505**. Cursor narrow readiness and status light E2E initially
+passed 7 and failed 1: the ledger assertion read the previous completed state
+before the 1.5-second status tick. Wait for the real working state before
+submitting the receipt; the complete repeated batch passed **8/8**.
+This correction changes only the test's synchronization, not the runtime guard.

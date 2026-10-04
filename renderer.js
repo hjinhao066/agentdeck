@@ -492,7 +492,18 @@ const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
 const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)/im;
-const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|Build anything|Plan, search, build anything|Add a follow-up|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
+const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|\bBuild anything\b|\bPlan, search, build anything\b|\bAdd a follow-up\b|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
+// Can this column take a prompt now? Busy beats idle. Cursor's prompt row is
+// read by MainCore.cursorActivity, which also copes with a wrapped prompt.
+function terminalIdle(col, entry) {
+  if (!entry || !entry.alive || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota') return false;
+  if (MainCore.terminalActivity(entry.lastScreen, col.cmd)) return false;
+  if (/\bcursor-agent\b/i.test(col.cmd || '')) {
+    const live = MainCore.cursorActivity(entry.lastScreen);
+    return live === 'idle' || (live !== 'working' && !MainCore.cursorBusy(entry.lastScreen) && AGENT_IDLE_RE.test(entry.lastScreen || ''));
+  }
+  return !WORKING_RE.test(entry.lastScreen || '') && AGENT_IDLE_RE.test(entry.lastScreen || '');
+}
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
 function classify(text, entry, cmd) {
   const activity = MainCore.terminalActivity(text, cmd);
@@ -504,7 +515,7 @@ function classify(text, entry, cmd) {
     if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
     return entry?.hasWorked ? 'done' : 'plain';
   }
-  if (WORKING_RE.test(text)) return 'working';
+  if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
   // After submission, an unrecognised/empty Cursor screen is initialization
   // or work without a ready prompt, never evidence that the turn finished.
@@ -1507,8 +1518,7 @@ function whenTerminalReady(col, callback, waitingLabel, initialDelay) {
     const entry = terms.get(originalId);
     // A raw shell is ready as soon as its PTY exists. Agent TUIs must expose a
     // recognizable idle prompt; permission/trust input never receives a task.
-    const ready = entry && entry.alive && (!col.cmd ||
-      (entry.state !== 'input' && AGENT_IDLE_RE.test(entry.lastScreen || '')));
+    const ready = entry && entry.alive && (!col.cmd || terminalIdle(col, entry));
     if (ready) {
       promptQueueIds.delete(queueId);
       callback();
@@ -2517,7 +2527,7 @@ function sendWhenReady(col, text, opts) {
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)
       // once interactive. Never inject before bracketedPasteMode is enabled on the terminal,
       // and do not fall back to quiet inference for known Cursor CLI.
-      const cursorReady = isCursor && AGENT_IDLE_RE.test(entry.lastScreen || '') && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
+      const cursorReady = isCursor && terminalIdle(col, entry) && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
       // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
       const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000));
       // ConPTY can show a fresh TUI before its startup input has settled.

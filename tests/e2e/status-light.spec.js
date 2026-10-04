@@ -99,6 +99,7 @@ test('command completion is reflected in ledger while live busy evidence still p
   await page.evaluate(() => { columns.find((c) => c.id === 'silent-worker').cmd = 'cursor-agent --force'; });
   await page.evaluate(() => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: 'busy cursor rows=80' }, MainSession.mainCol()));
   await expect.poll(() => page.evaluate(() => MainCore.cursorActivity(statusScreen(terms.get('silent-worker').term)))).toBe('working');
+  await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state)).toBe('working');
   await page.evaluate(() => MainSession.submit({ action: 'complete', result: 'stand-in assignment finished' }, columns.find((c) => c.id === 'silent-worker')));
   const ledger = await page.evaluate(() => MainSession.handle({ action: 'main-ledger' }, MainSession.mainCol()));
   expect(ledger.result).toMatch(/silent-worker[^\n]*已完成[^\n]*终端:干活中/);
