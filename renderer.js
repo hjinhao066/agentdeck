@@ -590,9 +590,6 @@ function buildChrome() {
   boardBtn.id = 'boardViewBtn';
   expandBtn.setAttribute('aria-label', expandBtn.title);
   boardBtn.setAttribute('aria-label', boardBtn.title);
-  const tasksBtn = railBtn(ICONS.tasks, '任务看板', () => TaskBoardUI.toggle());
-  tasksBtn.id = 'taskBoardBtn';
-  tasksBtn.setAttribute('aria-label', tasksBtn.title);
   // The sidebar holds the quota rows; while it is collapsed this icon opens them.
   const quotaBtn = railBtn(ICONS.gauge, '订阅额度', () => toggleQuotaPop());
   quotaBtn.id = 'quotaRailBtn';
@@ -601,7 +598,7 @@ function buildChrome() {
   quotaBtn.setAttribute('aria-expanded', 'false');
   const newChatBtn = railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn());
   newChatBtn.setAttribute('aria-label', newChatBtn.title);
-  tbLeft.append(boardBtn, tasksBtn, collapseBtn, expandBtn, quotaBtn, newChatBtn);
+  tbLeft.append(boardBtn, collapseBtn, expandBtn, quotaBtn, newChatBtn);
 
   // Column widths: free (each column keeps its own width, drag the edges) or
   // N equal columns filling the deck; more than N keep that width and scroll.
@@ -714,7 +711,7 @@ function syncChromeState() {
   const side = document.getElementById('sideToggleBtn');
   if (side) side.classList.toggle('on', SidePane.isOpen() && activeView !== 'board');
   const board = document.getElementById('boardViewBtn');
-  if (board) board.classList.toggle('on', activeView === 'board');
+  if (board) board.classList.toggle('on', activeView === 'board' && !TaskBoardUI.isOpen());
   const tasks = document.getElementById('taskBoardBtn');
   if (tasks) {
     tasks.classList.toggle('on', TaskBoardUI.isOpen());
@@ -3254,6 +3251,7 @@ const deckHost = {
   renameSession: (col, title) => setColumnDisplayTitle(col, title),
   lastTurnTs: (id) => ChatUI.lastTurnTs(id),
   togglePage: (name) => { if (activeView === 'board') showView('terminals'); TaskBoardUI.close(); Pages.toggle(name); },
+  toggleTaskBoard: () => TaskBoardUI.toggle(),
   showSideTerminal: () => SidePane.show('terminal', true),
   // Schedule
   createSession, sendWhenReady,
@@ -3802,15 +3800,40 @@ CrewMap.init({
     whenMounted(col, () => setTimeout(() => jumpToColumn(col), 40));
   },
 });
-// 任务看板 covers whichever view is showing; opening it hides any page.
+// 任务看板 covers whichever view is showing; opening it hides any page. The
+// crew map's 架构图 / 自由画布 / 任务看板 tabs and the board's own tabs switch
+// between the two: the map shows the sessions running now, the board every task.
+function openTaskSession(id) {
+  let col = columns.find((c) => c.id === id);
+  if (!col && (config.archived || []).some((a) => a.id === id)) col = restoreArchived(id, false);
+  if (!col) return;
+  TaskBoardUI.close();
+  showView('terminals');
+  whenMounted(col, () => setTimeout(() => jumpToColumn(col), 40));
+}
 TaskBoardUI.init({
-  sessionLabel: (id) => {
-    const col = columns.find((c) => c.id === id) || (config.archived || []).find((a) => a.id === id);
-    return col ? columnLabel(col) : null;
+  showToast,
+  session: (id) => {
+    const col = columns.find((c) => c.id === id);
+    if (col) return { label: columnLabel(col), col };
+    const archived = (config.archived || []).find((a) => a.id === id);
+    return archived ? { label: columnLabel(archived), col: null } : null;
   },
-  onToggle: (isOpen) => { if (isOpen) Pages.hide(); syncChromeState(); },
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar'),
+  openSession: openTaskSession,
+  showBoard: (mode) => {
+    TaskBoardUI.close();
+    if (activeView !== 'board') showView('board');
+    if (CrewMap.mode() !== mode) CrewMap.setMode(mode);
+  },
+  onToggle: (isOpen) => {
+    if (isOpen) Pages.hide();
+    Sidebar.markPage(isOpen ? 'tasks' : null);
+    syncChromeState();
+  },
   focusToggle: () => { const b = document.getElementById('taskBoardBtn'); if (b) b.focus(); },
 });
+document.getElementById('boardTasksTab').addEventListener('click', () => TaskBoardUI.open());
 // View restoration comes last because showView() closes the search/broadcast
 // overlays, whose DOM bindings are initialized just above.
 showView(config.activeView);

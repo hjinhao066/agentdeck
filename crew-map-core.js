@@ -396,9 +396,10 @@
 
   // The project palette shared by the crew map and the task board: a golden-angle
   // step keyed by the project name, so one project keeps one colour in every
-  // view no matter which other projects are on screen. '' (其他) is the base hue.
+  // view no matter which other projects are on screen. Case and surrounding
+  // spaces do not count (AgentDeck = agentdeck). '' (其他) is the base hue.
   function projectHue(key) {
-    const name = String(key == null ? '' : key);
+    const name = String(key == null ? '' : key).trim().toLowerCase();
     if (!name) return 210;
     let h = 0x811c9dc5;
     for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
