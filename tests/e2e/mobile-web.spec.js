@@ -887,3 +887,53 @@ test('images picked or pasted on the phone upload, send with the text and reach 
   expect(stored().length).toBe(5);
   if (process.platform !== 'win32') for (const id of stored()) expect(fs.statSync(path.join(uploads, id)).mode & 0o777).toBe(0o600);
 });
+
+test('the reload icon reloads the whole page and keeps the unsent text and finished images', async () => {
+  await launch(); await login();
+  await desktop.locator('#notificationSettingsClose').click();
+  const reload = mobile.locator('#reload'), refresh = mobile.locator('#refresh');
+  // An icon button next to refresh, with a different icon, a name, a tooltip and a 44px target.
+  await expect(mobile.getByRole('button', { name: '重新加载页面', exact: true })).toBeVisible();
+  await expect(reload).toHaveAttribute('title', '重新加载页面');
+  await expect(reload).toHaveText('');
+  expect(await reload.evaluate((el) => el.nextElementSibling?.id)).toBe('refresh');
+  expect(await reload.locator('svg').innerHTML()).not.toBe(await refresh.locator('svg').innerHTML());
+  const box = await reload.boundingBox();
+  expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
+  expect((await mobile.locator('.app-header').boundingBox()).height).toBeLessThanOrEqual(60);
+  for (const theme of ['dark', 'light']) {
+    await mobile.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    await screenshot(`reload-${theme}`);
+  }
+  // Reachable from the keyboard: Shift+Tab from refresh lands on it.
+  await refresh.focus();
+  await mobile.keyboard.press('Shift+Tab');
+  await expect(reload).toBeFocused();
+  // It stays on every page, including More where refresh is hidden.
+  await tab('更多').click();
+  await expect(reload).toBeVisible();
+  await expect(refresh).toBeHidden();
+  await tab('对话').click();
+  // A draft with text and an uploaded image survives the reload.
+  const [chooser] = await Promise.all([mobile.waitForEvent('filechooser'), mobile.getByRole('button', { name: '添加图片', exact: true }).click()]);
+  await chooser.setFiles([{ name: 'draft.png', mimeType: 'image/png', buffer: await mobile.screenshot() }]);
+  await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(1);
+  await mobile.getByLabel('给队长的消息').fill('重新加载前写的草稿\n第二行');
+  await mobile.evaluate(() => { window.beforeReload = true; });
+  await Promise.all([mobile.waitForEvent('load'), reload.click()]);
+  expect(await mobile.evaluate(() => window.beforeReload)).toBeUndefined();
+  await expect(mobile.locator('#captain-view')).toBeVisible();
+  await expect(mobile.getByLabel('给队长的消息')).toHaveValue('重新加载前写的草稿\n第二行');
+  await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(1);
+  expect(await mobile.locator('.attachment img').evaluate((img) => img.complete && img.naturalWidth > 0)).toBe(true);
+  // The saved copy is used once; a second reload does not bring it back after sending.
+  expect(await mobile.evaluate(() => sessionStorage.getItem('agentdeck-mobile-draft'))).toBeNull();
+  await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
+  await expect(mobile.locator('#send-status')).toContainText('已排队');
+  await expect.poll(() => captures().some((text) => text.endsWith('第二行')), { timeout: 25000 }).toBe(true);
+  expect(captures().find((text) => text.endsWith('第二行'))).toMatch(/mobile-uploads[\\/][a-f0-9]{32}\.png/);
+  await Promise.all([mobile.waitForEvent('load'), reload.click()]);
+  await expect(mobile.locator('#captain-view')).toBeVisible();
+  await expect(mobile.getByLabel('给队长的消息')).toHaveValue('');
+  await expect(mobile.locator('.attachment')).toHaveCount(0);
+});

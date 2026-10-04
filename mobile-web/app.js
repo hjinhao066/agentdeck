@@ -20,6 +20,8 @@
     crown: '<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>',
     gauge: '<path d="M4 18a9 9 0 1 1 16 0"/><path d="m12 13 4-5"/><circle cx="12" cy="13" r="1.2"/>',
     chevron: '<path d="m9 6 6 6-6 6"/>',
+    // A page with one arrow: tells reloading the page apart from refresh's two arrows.
+    reload: '<rect x="2.5" y="2.5" width="19" height="19" rx="4"/><path d="M17.4 12a5.4 5.4 0 1 1-5.4-5.4c1.5 0 3 .6 4 1.6l1.4 1.4"/><path d="M17.4 6.6v3h-3"/>',
   };
   // The desktop's provider marks (agent-info.js PROVIDER_ICONS), so both ends show the same icons.
   const providerIcons = {
@@ -57,7 +59,7 @@
     applyTheme(savedTheme);
     try { localStorage.setItem('agentdeck-mobile-theme', savedTheme); } catch (_) { /* Keep the choice for this page. */ }
   });
-  ['refresh', 'copy', 'send', 'back'].forEach((name) => { $(name).innerHTML = svg(name); });
+  ['refresh', 'reload', 'copy', 'send', 'back'].forEach((name) => { $(name).innerHTML = svg(name); });
   $('menu').innerHTML = svg('sidebar');
   $('drawer-close').innerHTML = svg('close');
   $('quota-refresh').innerHTML = svg('refresh');
@@ -824,6 +826,26 @@
   });
   $('copy').addEventListener('click', () => copyText($('copy'), $('outputText').textContent, '复制输出'));
   $('refresh').addEventListener('click', refresh);
+  // Reloading the whole page picks up a newer AgentDeck page. The unsent text
+  // and finished image uploads ride along in this tab's session storage.
+  const DRAFT_KEY = 'agentdeck-mobile-draft';
+  $('reload').addEventListener('click', () => {
+    const draft = { text: $('message').value, images: attachments.filter((item) => item.state === 'done').map((item) => ({ id: item.id, thumb: item.thumb })) };
+    try {
+      if (draft.text || draft.images.length) sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+    } catch (_) { notice('浏览器不让保存草稿，没有重新加载；请先发出或复制草稿。', true); return; }
+    window.location.reload();
+  });
+  try {
+    const draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) || 'null');
+    sessionStorage.removeItem(DRAFT_KEY);
+    if (draft && typeof draft.text === 'string') { $('message').value = draft.text.slice(0, 8000); fitComposer(); }
+    if (Array.isArray(draft?.images)) {
+      attachments = draft.images.filter((image) => imageId.test(image?.id) && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(image.thumb)).slice(0, MAX_IMAGES)
+        .map((image) => ({ state: 'done', id: image.id, thumb: image.thumb }));
+      renderAttachments();
+    }
+  } catch (_) { /* No saved draft, or storage is unavailable. */ }
   $('back').addEventListener('click', () => showView(outputFrom));
   tabs.forEach((tab) => tab.addEventListener('click', () => tab.dataset.view === 'sessions' ? openDrawer() : showView(tab.dataset.view)));
   $('logout').addEventListener('click', async () => {
