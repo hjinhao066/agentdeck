@@ -80,10 +80,10 @@ test('all raw terminals hold scrollback during output and input, then follow on 
     await expect(col(id).locator('.terminal-new-content')).toBeVisible();
     await col(id).locator('.terminal-new-content').click();
     await expect(col(id).locator('.terminal-new-content')).toBeHidden();
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
     await input(id, 'emit 5\r');
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), id)).toContain('LIVE_ROW_0115');
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
     await page.evaluate((id) => terms.get(id).term.scrollLines(-10), id);
     await input(id, 'emit 5\r');
     await expect(col(id).locator('.terminal-new-content')).toBeVisible();
@@ -91,7 +91,7 @@ test('all raw terminals hold scrollback during output and input, then follow on 
     await expect(col(id).locator('.terminal-new-content')).toBeHidden();
     await input(id, 'emit 5\r');
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), id)).toContain('LIVE_ROW_0125');
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
   }
 });
 

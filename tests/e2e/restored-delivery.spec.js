@@ -21,6 +21,7 @@ test('restored work waits for a fresh TUI, then reaches the agent exactly once',
     app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
       args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
     page = await app.firstWindow();
+    await expect(page.locator('.column.is-main')).toBeVisible();
     await expect.poll(() => page.evaluate(() => terms.get('cap')?.lastScreen || ''), { timeout: 20000 }).toContain('Claude Code');
     await page.evaluate(([command, cwd]) => MainSession.handle({ action: 'main-new', id: 'restore-probe',
       title: 'Restore probe', task: 'initial task', command, cwd }, MainSession.mainCol()), [FAKE, profile]);
@@ -46,6 +47,7 @@ test('restored work waits for a fresh TUI, then reaches the agent exactly once',
   } catch (error) {
     if (page && !page.isClosed()) {
       const state = await page.evaluate(i => {
+        if (typeof terms === 'undefined') return { rendererReady: false };
         const e = terms.get(i);
         return { screen: e && dumpScreen(e.term), lastScreen: e?.lastScreen, state: e?.state,
           typing: e?.typing, sending: e?.sendingPrompt, injecting: e?.injecting,
