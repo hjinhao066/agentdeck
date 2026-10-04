@@ -258,7 +258,7 @@ function setColumnDisplayTitle(col, value) {
   const t = terms.get(col.id);
   if (t && t.titleEl) t.titleEl.textContent = label;
   const nav = navItems.get(col.id);
-  if (nav && nav.label) nav.label.textContent = label;
+  applyNavTitle(nav && nav.label, label);
   if (label !== requested) showToast(`Title already used. Renamed to “${label}”.`);
   saveConfig();
   renderBoardGraph();
@@ -2551,13 +2551,20 @@ function respawnColumn(col, opts) {
 // ---- Column sidebar (list of columns: click to jump, double-click to rename) ----
 // One source of truth for a column's name so the header title and the sidebar
 // entry never drift: rename in either place flows through here.
+function applyNavTitle(labelEl, text) {
+  if (!labelEl) return;
+  if (labelEl.textContent !== text) labelEl.textContent = text;
+  if (labelEl.title !== text) labelEl.title = text;
+  if (labelEl.getAttribute('aria-label') !== text) labelEl.setAttribute('aria-label', text);
+}
+
 function setColumnTitle(col, title) {
   col.title = title;
   const t = terms.get(col.id);
   const label = columnLabel(col);
   if (t && t.titleEl && t.titleEl.textContent !== label) t.titleEl.textContent = label;
   const nav = navItems.get(col.id);
-  if (nav && nav.label && nav.label.textContent !== label) nav.label.textContent = label;
+  applyNavTitle(nav && nav.label, label);
   saveConfig();
   renderBoardGraph();
 }

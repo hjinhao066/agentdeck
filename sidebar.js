@@ -20,6 +20,13 @@
     if (text != null) n.textContent = text;
     return n;
   }
+  // Visually one line; the tooltip and accessible name keep the full title.
+  function sessionLabel(text) {
+    const label = el('span', 'cn-label', text);
+    label.title = text;
+    label.setAttribute('aria-label', text);
+    return label;
+  }
   function iconEl(name, cls) {
     const s = el('span', 'ico' + (cls ? ' ' + cls : ''));
     s.innerHTML = host.ICONS[name] || '';
@@ -216,7 +223,7 @@
         const item = el('div', 'colnav-item crew-waiting');
         item.title = '同时干活的会话满了，有空位就自动开';
         item.append(el('span', 'cn-dot plain'), el('span', 'cn-text', null), el('span', 'cn-meta', '等空位'));
-        item.querySelector('.cn-text').appendChild(el('span', 'cn-label', w.title));
+        item.querySelector('.cn-text').appendChild(sessionLabel(w.title));
         box.appendChild(item);
       });
       order.finished.forEach((id) => box.appendChild(sessionRow(byId.get(id))));
@@ -305,8 +312,7 @@
     badge.hidden = true;
     const dot = el('span', 'cn-dot');
     const text = el('span', 'cn-text');
-    const label = el('span', 'cn-label', host.columnLabel(col));
-    label.title = '双击重命名';
+    const label = sessionLabel(host.columnLabel(col));
     // live activity line, only shown while the agent works or waits on you
     const sub = el('span', 'cn-sub');
     text.append(label, sub);
@@ -338,7 +344,7 @@
     item.title = '点击恢复到对话列表';
     item.append(
       iconEl('archive', 'nav-archived-ico'),
-      el('span', 'cn-label', host.columnLabel(a)),
+      sessionLabel(host.columnLabel(a)),
       el('span', 'cn-meta', ago(a.archivedAt)),
     );
     const actions = el('span', 'cn-actions');
