@@ -8,9 +8,8 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40 };
+  const NODE = { nodeW: 240, nodeH: 176, captainW: 340, captainH: 140, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, pad: 40 };
   const DRAG_PX = 4;
-  const FIT_MIN = 0.72;
   let host = null;
   let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn;
   let mode = 'crew';
@@ -97,6 +96,12 @@
     const liveLine = el('div', 'cm-live', node.live ? '▸ ' + node.live : '');
     liveLine.hidden = !node.live;
     const foot = el('div', 'cm-foot', node.kind === 'captain' || node.kind === 'waiting' ? '' : ago(node.ts));
+    foot.hidden = node.kind === 'captain' || node.kind === 'waiting';
+    if (node.returned) {
+      const returned = el('span', 'cm-returned', '✓ 已交回');
+      returned.title = '结果已交回队长';
+      foot.appendChild(returned);
+    }
     n.append(top, title, line, liveLine, foot);
     n.title = node.kind === 'waiting' ? node.title
       : `${node.title}\n${node.line || ''}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`.trim();
@@ -139,7 +144,7 @@
     }
   }
   const MARK = { dispatch: 'cmArrowOut', review: 'cmArrowReview', ok: 'cmArrowBack', question: 'cmArrowBackBad', failed: 'cmArrowBackBad' };
-  function setShowReturn(v) { showReturn = !!v; saved().showReturn = showReturn; host.save(); redrawEdges(); }
+  function setShowReturn(v) { showReturn = !!v; saved().showReturn = showReturn; returnBtn.setAttribute('aria-pressed', String(showReturn)); returnBtn.classList.toggle('on', showReturn); host.save(); redrawEdges(); fit(); }
   function drawEdges() {
     edgesEl.innerHTML = '<defs>' + Object.values(MARK).filter((v, i, a) => a.indexOf(v) === i).map((id) =>
       `<marker id="${id}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"></path></marker>`).join('') + '</defs>';
@@ -148,16 +153,16 @@
     ['return', 'review', 'dispatch'].forEach((type) => list.filter((r) => r.type === type).forEach((r) => {
       const cl = 'cm-edge ' + r.cls + (type === 'return' && showReturn ? ' show' : '');
       svg('path', { class: cl, d: rounded(r.points), 'marker-end': `url(#${MARK[type === 'return' ? r.kind : type]})`, 'data-from': r.from, 'data-to': r.to });
-      if (type === 'return') chevrons(r.points, r.cls);
+      if (type === 'return' && showReturn) chevrons(r.points, r.cls);
     }));
   }
   function redrawEdges() { if (lay) drawEdges(); }
+  function drawGroups() {
     zonesEl.innerHTML = '';
     lay.groups.forEach((g, i) => {
       const group = el('section', 'cm-project' + (g.collapsed ? ' collapsed' : ''));
       group.dataset.project = g.key;
-      group.dataset.colorIndex = 'c' + (i % 5);
-      group.classList.add(`project-color-${i % 5}`);
+      group.style.setProperty('--project-hue', String((210 + i * 137.508) % 360));
       group.setAttribute('aria-label', g.name);
       place(group, g);
       const head = el('div', 'cm-project-head');
@@ -174,6 +179,8 @@
         render();
       });
       head.append(toggle, el('span', 'cm-project-name', g.name), el('span', 'cm-project-summary', C.summaryLine(g.counts)));
+      head.title = '拖动：移动项目和其中的卡片';
+      group.addEventListener('pointerdown', (e) => startProjectDrag(e, group, g));
       group.appendChild(head);
       zonesEl.appendChild(group);
     });
@@ -185,18 +192,34 @@
     zoomLabel.textContent = Math.round(view.scale * 100) + '%';
   }
   function saveView() { saved().view = { ...view }; host.save(); }
-  // Fit the project groups; wider maps still pan so cards remain readable.
+  // Fit actual bounds, including manual moves and optional return cables.
   function fit() {
     if (!lay) return;
-    const w = vpEl.clientWidth, h = vpEl.clientHeight;
-    const span = [0, lay.width];
-    const sw = span[1] - span[0];
-    // never so small the cards stop being readable: wider maps pan instead
-    const scale = Math.max(FIT_MIN, Math.min(1, (w - 32) / sw, (h - 24) / lay.height));
-    const x = sw * scale <= w ? (w - sw * scale) / 2 - span[0] * scale : -span[0] * scale;
-    view = { scale, x: Math.round(x), y: 12 };
+    const boxes = [lay.captain, ...lay.groups, ...lay.nodes.values(), lay.fold].filter(Boolean);
+    const points = showReturn ? C.routes(lastMap, lay, NODE).flatMap((r) => r.points) : [];
+    const left = Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 24;
+    const top = Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 24;
+    const right = Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 24;
+    const bottom = Math.max(...boxes.map((b) => b.y + b.h), ...points.map((p) => p[1])) + 24;
+    const w = vpEl.clientWidth, h = vpEl.clientHeight - 60;
+    const scale = Math.min(1, w / (right - left), h / (bottom - top));
+    view = { scale, x: (w - (right - left) * scale) / 2 - left * scale, y: (h - (bottom - top) * scale) / 2 - top * scale };
     applyView();
     saveView();
+  }
+
+  // Choose the grid which displays the largest cards in this viewport. Both
+  // project shelves and session rows participate (including an ungrouped crew).
+  function autoLayout(map) {
+    let best, score = -1;
+    const count = Math.max(1, ...map.projects.map((p) => p.nodes.length));
+    for (let cols = 1; cols <= count; cols++) for (const targetScale of [1, 0.85, 0.7, 0.55]) {
+      const candidate = C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, columnsPerProject: cols, maxWidth: (vpEl.clientWidth - 48) / targetScale });
+      const scale = Math.min(1, vpEl.clientWidth / candidate.width, (vpEl.clientHeight - 60) / candidate.height);
+      const quality = scale - candidate.width * candidate.height * 1e-10;
+      if (quality > score) { score = quality; best = candidate; }
+    }
+    return best;
   }
   function zoomAt(cx, cy, factor) {
     const scale = Math.min(C.MAX_SCALE, Math.max(C.MIN_SCALE, view.scale * factor));
@@ -211,6 +234,12 @@
     if (e.button !== 0) return;
     e.stopPropagation();
     drag = { kind: 'card', n, node, box, sx: e.clientX, sy: e.clientY, x0: box.x, y0: box.y, moved: false, id: e.pointerId };
+    n.setPointerCapture(e.pointerId);
+  }
+  function startProjectDrag(e, n, group) {
+    if (e.button !== 0 || e.target.closest('.cm-project-toggle')) return;
+    e.stopPropagation();
+    drag = { kind: 'project', n, group, sx: e.clientX, sy: e.clientY, dx: 0, dy: 0, moved: false, id: e.pointerId };
     n.setPointerCapture(e.pointerId);
   }
   function startPan(e) {
@@ -229,6 +258,16 @@
       applyView();
       return;
     }
+    if (drag.kind === 'project') {
+      const dxNext = Math.round(dx / view.scale), dyNext = Math.round(dy / view.scale);
+      C.translateProject(lay, drag.group.key, dxNext - drag.dx, dyNext - drag.dy);
+      drag.dx = dxNext; drag.dy = dyNext;
+      place(drag.n, drag.group);
+      lay.nodes.forEach((b, id) => { if (b.project === drag.group.key) place(nodesEl.querySelector(`[data-node-id="${CSS.escape(id)}"]`), b); });
+      if (lay.fold && lay.fold.project === drag.group.key) place(nodesEl.querySelector('.cm-fold'), lay.fold);
+      drawEdges();
+      return;
+    }
     drag.n.classList.add('dragging');
     Object.assign(drag.box, C.constrainPosition(lay, drag.box, { x: Math.round(drag.x0 + dx / view.scale), y: Math.round(drag.y0 + dy / view.scale) }));
     place(drag.n, drag.box);
@@ -241,6 +280,13 @@
     vpEl.classList.remove('panning');
     if (!d.moved) return;
     if (d.kind === 'pan') { saveView(); return; }
+    if (d.kind === 'project') {
+      const old = saved().projectPositions[d.group.key] || { x: 0, y: 0 };
+      saved().projectPositions[d.group.key] = { x: old.x + d.dx, y: old.y + d.dy };
+      lay.nodes.forEach((b, id) => { if (b.project === d.group.key && saved().positions[id]) saved().positions[id] = { x: b.x, y: b.y }; });
+      host.save();
+      return;
+    }
     d.n.classList.remove('dragging');
     d.n.dataset.dragged = '1';   // the click that ends a drag does not open the column
     setTimeout(() => { delete d.n.dataset.dragged; }, 0);
@@ -268,29 +314,17 @@
     lastSig = C.signature(map) + '|' + showArchived;
     archBtn.hidden = !map.archivedCount;
     archBtn.classList.toggle('on', showArchived);
+    archBtn.setAttribute('aria-pressed', String(showArchived));
     archBtn.title = showArchived ? `收起已归档（${map.archivedCount}）` : `显示已归档（${map.archivedCount}）`;
+    archBtn.setAttribute('aria-label', archBtn.title);
     returnBtn.classList.toggle('on', showReturn);
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; lay = null; return; }
-    const vpWidth = vpEl.clientWidth, vpHeight = vpEl.clientHeight;
-    const w = vpWidth - 32, h = vpHeight - 24;
-    // Smart layout: iterate to find maxWidth that fits at FIT_MIN scale
-    let maxW = vpWidth > 800 ? vpWidth * 0.95 : 0;
-    let attempt = 0;
-    while (attempt < 5) {
-      lay = C.layout(map, { ...NODE, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: maxW });
-      // Check if it fits at minimum scale
-      const canFitWidth = (lay.width - 0) * C.MIN_SCALE <= w;
-      const canFitHeight = lay.height * C.MIN_SCALE <= h;
-      if (canFitWidth && canFitHeight) break;
-      // If too wide, try narrower maxWidth to force wrapping
-      maxW = Math.max(NODE.nodeW + NODE.gapX + 88, maxW * 0.8);
-      attempt++;
-    }
-    lay = C.applyPositions(lay, saved().positions, map.captain.id);
+    lay = C.applyPositions(autoLayout(map), saved().positions, map.captain.id, saved().projectPositions);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';
+    drawGroups();
     drawEdges();
     nodesEl.appendChild(card(map.captain, lay.captain));
     map.nodes.forEach((n) => { if (lay.nodes.has(n.id)) nodesEl.appendChild(card(n, lay.nodes.get(n.id))); });
@@ -302,7 +336,7 @@
       fold.addEventListener('click', () => setShowArchived(true));
       nodesEl.appendChild(fold);
     }
-    if (!view) { if (saved().view) { view = { ...saved().view }; applyView(); } else fit(); }
+    fit();
   }
 
   // Every status tick: a structural change rebuilds, the rest updates text in place.
@@ -322,7 +356,7 @@
   }
 
   function setShowArchived(v) { showArchived = !!v; render(); }
-  function relayout() { saved().positions = {}; host.save(); render(); fit(); }
+  function relayout() { saved().positions = {}; saved().projectPositions = {}; host.save(); render(); }
 
   function setMode(next) {
     mode = next === 'canvas' ? 'canvas' : 'crew';
@@ -350,11 +384,12 @@
     zoomLabel = rootEl.querySelector('[data-cm="zoom"]');
     archBtn = rootEl.querySelector('[data-cm="archived"]');
     returnBtn = rootEl.querySelector('[data-cm="return"]');
+    returnBtn.setAttribute('aria-pressed', String(showReturn));
     const on = (name, fn) => rootEl.querySelector(`[data-cm="${name}"]`).addEventListener('click', fn);
     on('archived', () => setShowArchived(!showArchived));
     on('out', () => view && zoomCenter(1 / 1.2));
     on('in', () => view && zoomCenter(1.2));
-    on('zoom', () => view && zoomCenter(1 / view.scale));
+    on('reset', () => view && zoomCenter(1 / view.scale));
     on('fit', fit);
     on('relayout', relayout);
     on('return', () => setShowReturn(!showReturn));
@@ -365,6 +400,7 @@
     window.addEventListener('pointercancel', onUp);
     vpEl.addEventListener('wheel', onWheel, { passive: false });
     viewEl.querySelectorAll('.board-mode button').forEach((b) => b.addEventListener('click', () => setMode(b.dataset.mode)));
+    new ResizeObserver(() => { if (host.visible() && vpEl.clientWidth && !drag) render(); }).observe(vpEl);
     setMode(host.config.crewMap.mode);
   }
 

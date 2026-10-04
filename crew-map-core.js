@@ -186,76 +186,78 @@
     return order.filter((s) => counts[s]).map((s) => `${counts[s]} ${STATUS_LABEL[s]}`).join(' · ') || '还没有派出去的活';
   }
 
-  // One Captain above side-by-side projects. Workers always occupy the first
-  // row, declared reviewers the second; successful projects start folded.
-  // Multi-row layout: if maxWidth is set, wrap projects to next row if needed.
+  // Pack projects into shelves and wrap sessions within each project. Review
+  // sessions get their own rows below workers; every coordinate is group-local.
   function layout(map, opts) {
-    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40, fold: false, collapsedProjects: {}, maxWidth: 0, ...opts };
+    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40, fold: false, collapsedProjects: {}, maxWidth: 0, columnsPerProject: Infinity, ...opts };
     const pos = new Map(), groups = [];
     const shown = new Set(map.nodes.map((n) => n.id));
-    const rowY = (r) => o.pad + o.captainH + o.fanY + 52 + (r - 1) * (o.nodeH + o.gapY);
-
-    // Calculate width for each project
-    const projectSizes = map.projects.map((p) => {
+    let x = o.pad, y = o.pad + o.captainH + o.fanY, shelfH = 0, right = 0, fold = null;
+    map.projects.forEach((p) => {
       const collapsed = typeof o.collapsedProjects[p.key] === 'boolean' ? o.collapsedProjects[p.key] : p.completed;
       const nodes = p.nodes.filter((n) => shown.has(n.id));
-      const workers = nodes.filter((n) => !n.review), reviewers = nodes.filter((n) => n.review);
-      const hasFold = o.fold && !p.key;
+      let workers = nodes.filter((n) => !n.review);
+      const reviewers = nodes.filter((n) => n.review), hasFold = o.fold && !p.key;
       const count = Math.max(workers.length + (hasFold ? 1 : 0), reviewers.length, 1);
-      const w = collapsed ? 320 : count * o.nodeW + (count - 1) * o.gapX + 88;
-      const h = collapsed ? 48 : 52 + o.nodeH + (reviewers.length ? o.gapY + o.nodeH : 0) + 54;
-      return { w, h, collapsed, workers: workers, reviewers: reviewers, hasFold, p };
-    });
-
-    // Multi-row layout: wrap at maxWidth
-    let x = o.pad, y = rowY(1) - 52, maxRowWidth = 0;
-    let groupRowIndex = 0;
-    let rowGroups = [], fold = null;
-
-    projectSizes.forEach((ps, idx) => {
-      const p = ps.p;
-      const nextX = x + ps.w + o.clusterGap;
-      const shouldWrap = o.maxWidth && nextX - o.pad > o.maxWidth && x > o.pad;
-
-      if (shouldWrap) {
-        groupRowIndex++;
+      const cols = Math.max(1, Math.min(count, o.columnsPerProject, o.maxWidth ? Math.floor((o.maxWidth - 88 + o.gapX) / (o.nodeW + o.gapX)) : count));
+      // Reviewed outputs sit next to the review row, avoiding cables through
+      // intervening cards when the worker grid wraps.
+      if (workers.length > cols && reviewers.length) {
+        const targets = new Set(reviewers.flatMap((n) => n.reviews));
+        workers = [...workers.filter((n) => !targets.has(n.id)), ...workers.filter((n) => targets.has(n.id))];
+      }
+      const rows = [];
+      const chunk = (list) => { for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols)); };
+      chunk([...workers, ...(hasFold ? [null] : [])]);
+      chunk(reviewers);
+      const w = collapsed ? 320 : cols * o.nodeW + (cols - 1) * o.gapX + 88;
+      const h = collapsed ? 56 : 52 + Math.max(1, rows.length) * o.nodeH + Math.max(0, rows.length - 1) * o.gapY + 28;
+      if (o.maxWidth && x > o.pad && x + w > o.pad + o.maxWidth) {
         x = o.pad;
-        y += (ps.h || 200) + 80;
+        y += shelfH + o.clusterGap;
+        shelfH = 0;
       }
-
-      const group = { ...p, x, y, w: ps.w, h: ps.h, collapsed: ps.collapsed };
-      groups.push(group);
-
-      if (!ps.collapsed) {
-        [ps.workers, ps.reviewers].forEach((row, r) => {
-          const start = ps.hasFold && r === 0 ? x + 44 : x + (ps.w - row.length * o.nodeW - Math.max(0, row.length - 1) * o.gapX) / 2;
-          row.forEach((n, i) => pos.set(n.id, { x: start + i * (o.nodeW + o.gapX), y: rowY(r + 1), w: o.nodeW, h: o.nodeH, row: r + 1, project: p.key }));
+      const g = { ...p, x, y, w, h, collapsed };
+      groups.push(g);
+      if (!collapsed) rows.forEach((row, r) => {
+        const start = x + (w - row.length * o.nodeW - Math.max(0, row.length - 1) * o.gapX) / 2;
+        row.forEach((n, i) => {
+          const bx = start + i * (o.nodeW + o.gapX), by = y + 52 + r * (o.nodeH + o.gapY);
+          if (n) pos.set(n.id, { x: bx, y: by, anchorY: by, w: o.nodeW, h: o.nodeH, row: r + 1, project: p.key });
+          else fold = { x: bx, y: by + o.nodeH / 2 - 16, w: 150, h: 32, project: p.key };
         });
-        if (ps.hasFold) fold = { x: x + ps.w - o.nodeW - 44, y: rowY(1) + o.nodeH / 2 - 16, w: 150, h: 32 };
-      }
-
-      x = nextX;
-      maxRowWidth = Math.max(maxRowWidth, x);
+      });
+      right = Math.max(right, x + w);
+      x += w + o.clusterGap;
+      shelfH = Math.max(shelfH, h);
     });
-
     const returnCount = map.edges.filter((e) => e.type === 'return').length;
-    const width = Math.max(o.pad + o.captainW, maxRowWidth - (groups.length ? o.clusterGap : 0)) + o.pad + returnCount * 7;
+    const width = Math.max(o.pad + o.captainW, right) + o.pad + returnCount * 7;
     const captain = map.captain ? { x: (width - o.captainW) / 2, y: o.pad, w: o.captainW, h: o.captainH, row: 0 } : null;
+    const rowY = (r) => o.pad + o.captainH + o.fanY + 52 + (r - 1) * (o.nodeH + o.gapY);
     return { captain, nodes: pos, groups, fold, rowY, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
   }
 
-  // Dragging stays inside the session's project and its worker/review row.
   function constrainPosition(lay, box, p) {
     const g = lay.groups.find((g) => g.key === box.project);
     if (!g) return p;
-    return { x: Math.max(g.x + 20, Math.min(g.x + g.w - box.w - 20, p.x)), y: Math.max(lay.rowY(box.row) - 12, Math.min(lay.rowY(box.row) + 12, p.y)) };
+    return { x: Math.max(g.x + 20, Math.min(g.x + g.w - box.w - 20, p.x)), y: Math.max(box.anchorY - 12, Math.min(box.anchorY + 12, p.y)) };
   }
 
-  // Saved node positions ({ id: { x, y } }, 队长 under its own id) win over the layout.
-  function applyPositions(lay, positions, captainId) {
+  function translateProject(lay, key, dx, dy) {
+    const g = lay.groups.find((g) => g.key === key);
+    if (!g) return;
+    g.x += dx; g.y += dy;
+    lay.nodes.forEach((b) => { if (b.project === key) { b.x += dx; b.y += dy; b.anchorY += dy; } });
+    if (lay.fold && lay.fold.project === key) { lay.fold.x += dx; lay.fold.y += dy; }
+  }
+
+  // Manual project offsets and card positions survive refresh/reopen until 整理.
+  function applyPositions(lay, positions, captainId, projectPositions = {}) {
     const p = positions || {};
     const ok = (v) => v && Number.isFinite(v.x) && Number.isFinite(v.y);
-    lay.nodes.forEach((box, id) => { if (ok(p[id])) Object.assign(box, constrainPosition(lay, box, p[id]), { moved: true }); });
+    lay.groups.forEach((g) => { if (ok(projectPositions[g.key])) translateProject(lay, g.key, projectPositions[g.key].x, projectPositions[g.key].y); });
+    lay.nodes.forEach((box, id) => { if (ok(p[id])) Object.assign(box, { x: p[id].x, y: p[id].y, moved: true }); });
     if (lay.captain && captainId && ok(p[captainId])) Object.assign(lay.captain, { x: p[captainId].x, y: p[captainId].y, moved: true });
     return lay;
   }
@@ -279,7 +281,7 @@
   // leaves a session's bottom-right corner, runs under everything and up the
   // right edge into 队长's right side, so out and back never share a stretch.
   function routes(map, lay, opts) {
-    const o = { clusterGap: 64, lane: 7, ...opts };
+    const o = { clusterGap: 64, gapX: 24, lane: 7, ...opts };
     const cap = lay.captain;
     const out = [];
     if (!cap) return out;
@@ -294,10 +296,10 @@
     // ---- 派出 ----
     const dispatch = map.edges.filter((e) => e.type === 'dispatch' && box(e.to)).map((e) => {
       const b = box(e.to);
-      const side = status.get(e.to).review;
+      const side = status.get(e.to).review || b.row > 1;
       // a review session is entered from the left, down the gap left of what it reviews
-      const targets = side ? (reviewOf.get(e.to) || []).map(box) : [];
-      const lx = side ? Math.min(b.x, ...targets.map((t) => t.x)) - o.clusterGap / 2 : 0;
+      const targets = status.get(e.to).review ? (reviewOf.get(e.to) || []).map(box) : [];
+      const lx = side ? Math.min(b.x, ...targets.map((t) => t.x)) - (status.get(e.to).review ? o.clusterGap : o.gapX) / 2 : 0;
       return { e, b, side, lx, hx: side ? lx : b.x + b.w / 2 };
     }).sort((a, b) => a.hx - b.hx);
     const fanW = Math.min(cap.w - 48, Math.max(0, dispatch.length - 1) * 18);
@@ -381,7 +383,8 @@
     const view = v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.scale)
       ? { x: v.x, y: v.y, scale: Math.min(MAX_SCALE, Math.max(MIN_SCALE, v.scale)) } : null;
     const collapsedProjects = Object.fromEntries(Object.entries(s.collapsedProjects || {}).slice(0, 500).filter(([key, value]) => key.length <= 120 && typeof value === 'boolean'));
-    return { mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn };
+    const projectPositions = Object.fromEntries(Object.entries(s.projectPositions || {}).slice(0, 500).filter(([key, p]) => key.length <= 120 && p && Number.isFinite(p.x) && Number.isFinite(p.y)).map(([key, p]) => [key, { x: Math.round(p.x), y: Math.round(p.y) }]));
+    return { projectPositions, mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn };
   }
   const MIN_SCALE = 0.3, MAX_SCALE = 1.6;
 
@@ -391,5 +394,5 @@
     return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${summaryLine(p.counts)}`)].join('\u0002');
   }
 
-  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
 });

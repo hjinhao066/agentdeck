@@ -212,14 +212,14 @@ test('a busier map: no two lines run on top of each other', () => {
 test('saved positions win over the layout; saved state is checked on load', () => {
   const map = reviewScenario();
   const lay = C.applyPositions(C.layout(map, { collapsedProjects: { '': false } }), { c3003: { x: 900, y: 40 }, cap: { x: 5, y: 6 }, junk: { x: 'a' } }, 'cap');
-  const box = lay.nodes.get('c3003'), group = lay.groups[0];
-  assert.ok(box.x + box.w <= group.x + group.w);
-  assert.ok(box.y > lay.nodes.get('c3001').y);
+  const box = lay.nodes.get('c3003');
+  assert.deepEqual([box.x, box.y], [900, 40]);
+  // A refresh/resize must not clamp an existing manual position.
   assert.equal(box.moved, true);
   assert.deepEqual([lay.captain.x, lay.captain.y], [5, 6]);
-  const s = C.normalizeSaved({ mode: 'canvas', positions: { a: { x: 1.4, y: 2 }, b: { x: NaN, y: 1 } }, view: { x: 1, y: 2, scale: 99 } });
-  assert.deepEqual(s, { mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false });
-  assert.deepEqual(C.normalizeSaved(null), { mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false });
+  const s = C.normalizeSaved({ projectPositions: {}, mode: 'canvas', positions: { a: { x: 1.4, y: 2 }, b: { x: NaN, y: 1 } }, view: { x: 1, y: 2, scale: 99 } });
+  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false });
+  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false });
 });
 
 // '' when no straight stretch of one line lies on a stretch of another line
@@ -298,4 +298,34 @@ test('multiple projects keep separate routes and reserve space for a busy return
   const routes = C.routes(map, lay);
   assert.equal(noSharedStretch(routes), '');
   routes.forEach((r) => r.points.forEach(([x, y]) => assert.ok(x >= 0 && x <= lay.width && y >= 0 && y <= lay.height, `${r.type}: ${x},${y} outside canvas`)));
+});
+
+test('ten ungrouped sessions wrap into a contained grid without overlapping nodes', () => {
+  const columns = Array.from({ length: 10 }, (_, i) => col('w' + i, 'worker', { state: 'working' }));
+  const map = C.buildCrewMap({ captain, columns, tasks: [] });
+  const lay = C.layout(map, { maxWidth: 1100, columnsPerProject: 4 });
+  assert.equal(new Set([...lay.nodes.values()].map((b) => b.y)).size, 3);
+  assert.ok(lay.width <= 1200);
+  const boxes = [...lay.nodes.values()];
+  boxes.forEach((a, i) => boxes.slice(i + 1).forEach((b) => assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y)));
+  const g = lay.groups[0];
+  boxes.forEach((b) => assert.ok(b.x >= g.x && b.y >= g.y + 48 && b.x + b.w <= g.x + g.w && b.y + b.h <= g.y + g.h));
+});
+
+test('project wrapping uses the tallest previous shelf and moves cards with their own group', () => {
+  const columns = [col('a', 'a', { project: 'A', state: 'working' }), col('r', 'r', { project: 'A', reviews: ['a'], state: 'working' }), col('b', 'b', { project: 'B', state: 'working' })];
+  const map = C.buildCrewMap({ captain, columns, tasks: [] });
+  const lay = C.layout(map, { maxWidth: 400 });
+  const [a, b] = lay.groups;
+  assert.ok(b.y > a.y + a.h);
+  assert.ok(lay.nodes.get('b').y >= b.y + 48);
+  const old = { ...lay.nodes.get('b') };
+  C.translateProject(lay, 'B', 80, 30);
+  assert.equal(lay.nodes.get('b').x, old.x + 80);
+  assert.equal(lay.nodes.get('b').y, old.y + 30);
+  assert.equal(lay.nodes.get('a').project, 'A');
+  const saved = C.normalizeSaved({ projectPositions: { B: { x: 80, y: 30 }, bad: { x: NaN, y: 0 } } });
+  assert.deepEqual(saved.projectPositions, { B: { x: 80, y: 30 } });
+  const restored = C.applyPositions(C.layout(map, { maxWidth: 400 }), {}, 'cap', saved.projectPositions);
+  assert.deepEqual(restored.nodes.get('b'), lay.nodes.get('b'));
 });

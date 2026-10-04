@@ -499,14 +499,16 @@ function buildChrome() {
 
   const collapseBtn = railBtn(ICONS.panelLeft, '收起侧边栏', () => setNavCollapsed(true));
   collapseBtn.id = 'navCollapseBtn';
-  head.appendChild(collapseBtn);
+  collapseBtn.setAttribute('aria-label', collapseBtn.title);
 
   // Shown only while the sidebar is collapsed.
   const expandBtn = railBtn(ICONS.panelLeft, '展开侧边栏', () => setNavCollapsed(false));
   expandBtn.id = 'navExpandBtn';
   const boardBtn = railBtn(ICONS.board, '终端架构图 (Cmd+Shift+B)', () => showView(activeView === 'board' ? 'terminals' : 'board'));
   boardBtn.id = 'boardViewBtn';
-  tbLeft.append(expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()), boardBtn);
+  expandBtn.setAttribute('aria-label', expandBtn.title);
+  boardBtn.setAttribute('aria-label', boardBtn.title);
+  tbLeft.append(boardBtn, collapseBtn, expandBtn, railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn()));
 
   // Column widths: free (each column keeps its own width, drag the edges) or
   // N equal columns filling the deck; more than N keep that width and scroll.
