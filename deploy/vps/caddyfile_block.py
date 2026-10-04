@@ -7,13 +7,16 @@
   restore  --caddyfile F --old OLD --out OUT
            Put OLD back in place of the managed region (empty OLD removes it).
   auth     --caddyfile F --address A --out AUTH
-           Copy the basicauth directive of site A into AUTH as a site-wide `basicauth { ... }`.
+           Copy the basicauth directive of site A into AUTH as a site-wide `basicauth { ... }`. The directive
+           may be inline or in a file the site imports (`import FILE`, FILE holding only that block).
            Credentials are never printed.
 
 Refuses (exit 2) instead of guessing: address missing/duplicated/combined with other addresses,
-unbalanced braces, more than one managed region, basicauth with a matcher or unknown arguments.
+unbalanced braces, more than one managed region, basicauth with a matcher or unknown arguments,
+an import that is a glob/snippet/has arguments, an imported auth file with other directives in it.
 """
 import argparse
+import os
 import re
 import sys
 
@@ -145,29 +148,21 @@ def cmd_restore(a):
     print("restored previous block" if old else "removed managed block")
 
 
-def cmd_auth(a):
-    lines = read_lines(a.caddyfile)
-    region = managed_region(lines)
-    # Prefer an already-managed block's directive (it imports the auth file, so use the old backup there).
-    site = find_site(lines, a.address) if not region else None
-    if site is None:
-        raise Refuse("no plain site block for the address (is it already managed?)")
-    start, end = site
-    depths = line_depths(lines)
-    found = []
-    for i in range(start + 1, end):
-        if depths[i] == 1:
-            m = re.match(r"^\s*(basicauth|basic_auth)\b(.*?)\{\s*(?:#.*)?$", lines[i].rstrip("\r\n"))
-            if m:
-                found.append((i, m.group(2).split()))
-    if len(found) != 1:
-        raise Refuse(f"expected exactly one basicauth directive in the existing block, found {len(found)}")
-    i, args = found[0]
+BASICAUTH_RE = re.compile(r"^\s*(basicauth|basic_auth)\b(.*?)\{\s*(?:#.*)?$")
+
+
+def basicauth_lines(lines, depths, lo, hi, depth):
+    return [i for i in range(lo, hi) if depths[i] == depth and BASICAUTH_RE.match(lines[i].rstrip("\r\n"))]
+
+
+def basicauth_entries(lines, depths, i):
+    """The credential lines of the basicauth block opening at line i. Never printed."""
+    args = BASICAUTH_RE.match(lines[i].rstrip("\r\n")).group(2).split()
     if args not in ([], ["*"], ["bcrypt"], ["*", "bcrypt"]):
         raise Refuse("basicauth has a path matcher or custom arguments; create the auth file by hand")
     entries = []
     j = i + 1
-    while j < len(lines) and depths[j] >= 2:
+    while j < len(lines) and depths[j] > depths[i]:
         text = lines[j].strip()
         if text == "}":
             break
@@ -178,6 +173,47 @@ def cmd_auth(a):
         j += 1
     if not entries:
         raise Refuse("basicauth block has no entries")
+    return entries
+
+
+def imported_basicauth(caddyfile, line):
+    """For a site-level `import FILE`: the basicauth entries if FILE holds exactly that one block, else []."""
+    tokens = line.split("#", 1)[0].split()
+    if len(tokens) != 2 or re.search(r"[*?\[{]", tokens[1]) or "/" not in tokens[1]:
+        raise Refuse("the site uses an import with arguments, a glob or a snippet name; create the auth file by hand")
+    path = os.path.join(os.path.dirname(os.path.abspath(caddyfile)), tokens[1])
+    if not os.path.isfile(path):
+        raise Refuse("an imported file of the site is missing or not a regular file")
+    lines = read_lines(path)
+    depths = line_depths(lines)
+    found = basicauth_lines(lines, depths, 0, len(lines), 0)
+    if not found:
+        return []
+    if len(found) != 1:
+        raise Refuse("an imported file holds more than one basicauth directive")
+    start, end = found[0], block_end(lines, depths, found[0])
+    if any(l.strip() and not l.strip().startswith("#") for k, l in enumerate(lines) if k < start or k > end):
+        raise Refuse("an imported file holds basicauth together with other directives; create the auth file by hand")
+    return [basicauth_entries(lines, depths, start)]
+
+
+def cmd_auth(a):
+    lines = read_lines(a.caddyfile)
+    region = managed_region(lines)
+    # Prefer an already-managed block's directive (it imports the auth file, so use the old backup there).
+    site = find_site(lines, a.address) if not region else None
+    if site is None:
+        raise Refuse("no plain site block for the address (is it already managed?)")
+    start, end = site
+    depths = line_depths(lines)
+    # Inline `basicauth { ... }`, or `import FILE` where FILE is just that block (how the live site is written).
+    found = [basicauth_entries(lines, depths, i) for i in basicauth_lines(lines, depths, start + 1, end, 1)]
+    for i in range(start + 1, end):
+        if depths[i] == 1 and re.match(r"^\s*import\b", lines[i]):
+            found += imported_basicauth(a.caddyfile, lines[i].strip())
+    if len(found) != 1:
+        raise Refuse(f"expected exactly one basicauth directive in the existing block, found {len(found)}")
+    entries = found[0]
     write(a.out, "basicauth {\n" + "".join(f"\t{e}\n" for e in entries) + "}\n")
     print(f"extracted {len(entries)} basicauth entr{'y' if len(entries) == 1 else 'ies'} (not shown)")
 
