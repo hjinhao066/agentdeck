@@ -20,13 +20,16 @@ if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
 // A TUI redraws the current screen; old prompts must not look like a live menu.
 process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));
-let model = 'Fake';
+const captainStatusline = process.argv.includes('--captain-statusline');
+let model = captainStatusline ? 'Opus 5.5' : 'Fake';
 function box() {
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
   process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
   const extra = process.env.AGENTDECK_TEST_LONG_STATUS ? ' | Total: 211.5M | Cost: $35.33 | Weekly: 13.0% | LastField: complete' : '';
   process.stdout.write('\x1b[33mContext: 23%\x1b[0m | \x1b[31mSession: 26.0%\x1b[0m' + extra + '\n');
-  process.stdout.write('\x1b[36mModel: ' + model + ' | Weekly Reset: 16hr\x1b[0m\n');
+  process.stdout.write('\x1b[36m' + (captainStatusline
+    ? 'ヽ(=^･ω･^=)ﾉ ' + model + ' · xhigh · think 5h 13% · 7d 1%'
+    : 'Model: ' + model + ' | Weekly Reset: 16hr') + '\x1b[0m\n');
   process.stdout.write('\x1b[35m⏵⏵ bypass permissions on\x1b[0m (shift+tab to cycle)\n');
   // Keep a recognizable provider footer after replies, like a real TUI. Narrow
   // ConPTY columns can wrap the longer permission line across several rows.
@@ -52,6 +55,7 @@ function answer() {
   let out = '\n⏺ GOT ' + first.slice(-40) + '\n  wrote ' + process.env.AGENTDECK_DEMO_FILE + '\n';
   if (text.includes('AgentDeck 约定')) out += '\n  【回执】\n  摘要：stand-in finished ' + first.slice(0, 30) + '\n  文件：' + process.env.AGENTDECK_DEMO_FILE + '\n';
   process.stdout.write(out);
+  if (captainStatusline) process.stdout.write('Delegate report:\nGPT-6.1-Sol high · ~\nModel: gpt-6-luna\nModel: claude-sonnet-5-5\n');
   box();
 }
 function listen() {

@@ -10,7 +10,7 @@ The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
 - **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
-  then the 队长 row (once the Captain exists) with a folded 后台 row for the
+  then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
@@ -20,16 +20,21 @@ the middle:
   deck columns until you open one.
   The 队长 row is pinned: clicking it selects the Captain and shows its saved
   conversation; it cannot be dragged, put in a folder, archived or deleted from the list.
-  Sessions the 队长 opens with `new` run in the background: one 后台 row under
-  it shows live counts (干活中 / 停在确认 / 完成 / 排队) and unfolds into the list:
+  Sessions the 队长 opens with `new` run in the background: the arrow at the far
+  left of its row unfolds the indented list without selecting the Captain.
+  Clicking the Captain row still opens its conversation. Muted counts below it
+  stay visible even when folded (干活中 / 停在确认 / 完成 / 失败 / 排队).
+  The list shows
   work in progress on top (in the order it was handed out), then work waiting
   for a slot, then finished sessions, most recently finished first; it re-sorts
   as work starts and finishes.
+  Captain and worker titles occupy their own full-width line and wrap in narrow
+  sidebars; model badges and timestamps/actions sit below the title.
   Their columns keep running at a normal size but sit outside the deck, and their
   popups are left to the 队长. Opening one (from that list, a task card or a
   notification) shows it right after the 队长 until you move on to another
   column. 拉到前台 in its menu, or dragging it into a folder or 对话, makes it an
-  ordinary session; dropping a session on the 队长 or 后台 row (or 交给队长后台)
+  ordinary session; dropping a session on the 队长 row (or 交给队长后台)
   hands it back. Sessions the 队长 only `tell`s something keep their place.
 - **Center**: the deck. Two-finger swipe left/right pages between sessions; the
   top bar picks 自由 (per-column widths) or 2–5 equal columns. Terminal output
@@ -128,7 +133,7 @@ again with the current provider, model and effort instructions.
   asks "Do you trust this workspace?" in a folder it has not seen), nothing is
   typed into the dialog; the 队长 is sent its text once and answers with
   `answer --key enter`, after which the task goes in.
-  New sessions appear under the Captain's folded 后台 row and get the task as
+  New sessions appear under the Captain's folding arrow and get the task as
   their first message; opening one reveals its column temporarily. The app
   appends a contract: finish without waiting on the user, ask the
   队长 with 【提问】 when unsure, and end with a short 【回执】 (summary, file paths,
@@ -253,7 +258,12 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   instance, Cursor remains Cursor even when running Claude or Gemini models).
   The last confirmed provider, model and effort are saved with the session and
   restored after relaunch; saved chat replies and prior terminal output are
-  checked when recovering older sessions. Model families such as Grok, GPT-6
+  checked when recovering older sessions without a known agent launch command.
+  The launch command fixes the tool identity; the actual TUI footer (including
+  Claude's custom Opus/Sonnet statusline) supplies the live model. Model examples
+  above that footer and cached models belonging to another tool are ignored;
+  the launch model is used when no valid live or saved model is available.
+  Model families such as Grok, GPT-6
   Luna and Meta Muse Spark appear in the label even when Cursor is the launching
   tool. Full provider, model and effort appear in the tooltip; plain shells
   display no fake model.

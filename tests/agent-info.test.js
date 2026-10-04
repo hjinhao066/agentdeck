@@ -281,3 +281,46 @@ test('model identity does not trust command arguments, typed model requests or p
   assert.equal(AgentInfo.extractEffort('grok-4.7-high-fast', '', ''), 'high');
   assert.equal(AgentInfo.extractEffort('Opus 5.5', 'claude --effort high', 'Thinking: xhigh'), 'xhigh');
 });
+
+test('Claude Captain uses its own statusline instead of delegated Codex output or poisoned cache', () => {
+  const col = { cmd: 'claude --dangerously-skip-permissions --effort high', agentProvider: 'Claude', agentModel: 'GPT-6.1-Sol high' };
+  const footer = ['ヽ(=^･ω･^=)ﾉ Opus 5.5 · xhigh · think 5h 13% · 7d 1%'];
+  const screen = 'GPT-6.1-Sol high · ~\nModel: gpt-6-luna\n' + footer[0];
+  const info = AgentInfo.resolveAgentInfo(col, null, screen, footer, ['Model: gpt-6.1-sol']);
+  assert.equal(info.provider, 'Claude');
+  assert.equal(info.shortModel, 'Opus 5.5');
+  assert.equal(info.effort, 'xhigh');
+  const entry = { footerLines: [[{ text: footer[0].slice(0, 14) }, { text: footer[0].slice(14) }]] };
+  assert.equal(AgentInfo.resolveAgentInfo(col, entry, screen, entry.footerLines).shortModel, 'Opus 5.5');
+  assert.equal(AgentInfo.resolveAgentInfo(col, null, screen).shortModel, 'Opus 5.5');
+  assert.equal(AgentInfo.resolveAgentInfo(col, null, 'Model: gpt-6.1-sol').rawModel, null);
+});
+
+test('launch model beats conversation metadata and mismatched saved session identity', () => {
+  for (const cmd of ['claude --model claude-opus-5-5', 'claude --model="claude-opus-5-5"', "claude -m 'claude-opus-5-5'"]) {
+    const col = { cmd, agentProvider: 'Codex', agentModel: 'gpt-6.1-sol', agentEffort: 'max' };
+    const info = AgentInfo.resolveAgentInfo(col, null, 'Model: gpt-6-luna', ['Context: 23%'], ['Model: claude-sonnet-5-5']);
+    assert.equal(info.provider, 'Claude');
+    assert.equal(info.shortModel, 'Opus 5.5');
+    assert.equal(info.effort, null);
+  }
+});
+
+test('actual footer wins over model examples in the reply and allows Claude model switching', () => {
+  const col = { cmd: 'claude --model claude-opus-5-5' };
+  const screen = 'Model: claude-sonnet-5-5\nGPT-6.1-Sol high · ~';
+  assert.equal(AgentInfo.resolveAgentInfo(col, null, screen, ['Context: 23%']).shortModel, 'Opus 5.5');
+  assert.equal(AgentInfo.resolveAgentInfo(col, null, screen, ['Opus 5.5 · high · Claude Max']).shortModel, 'Opus 5.5');
+  const switched = AgentInfo.resolveAgentInfo(col, null, screen, ['Model: claude-sonnet-5-5 | Weekly Reset: 16hr']);
+  assert.equal(switched.shortModel, 'Sonnet 5.5');
+});
+
+test('single-provider tools reject foreign models, Cursor and Antigravity support multiple model families', () => {
+  for (const cmd of ['claude --model claude-opus-5-5', 'grok --model grok-4.7']) {
+    const fallback = AgentInfo.resolveAgentInfo({ cmd }, null, 'Model: gpt-6.1-sol', ['GPT-6.1-Sol high · ~']);
+    assert.equal(fallback.shortModel, AgentInfo.shortModelName(AgentInfo.extractModel('', cmd)));
+  }
+  assert.equal(AgentInfo.resolveAgentInfo({ cmd: 'codex --model gpt-6-luna' }, null, 'Model: claude-opus-5-5').shortModel, 'GPT-6 Luna');
+  assert.equal(AgentInfo.resolveAgentInfo({ cmd: 'cursor-agent --model claude-opus-5-5-high' }, null, 'Model: gpt-6.1-sol').shortModel, 'GPT-6.1 Sol');
+  assert.equal(AgentInfo.resolveAgentInfo({ cmd: 'agy --model gemini-3.8-flash-high' }, null, 'Model: claude-sonnet-4-6').shortModel, 'Sonnet 4.6');
+});
