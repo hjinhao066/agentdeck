@@ -123,6 +123,37 @@ were left running. Quota probes made no inference requests.
 
 ## Observation and privacy behavior
 
+### Claude low-quota phone alerts
+
+- Reuses the Bark sender from `origin/feat/captain-notify` (`0a850e0`), extracted
+  as `createBarkSender` in `notify-user.js`; the Captain helper keeps its existing
+  behavior. This branch does not add the `notify-user` board command or its UI.
+- Local settings: `claudeQuotaAlert: {thresholdPercent: 2, volume: 3}`. No new
+  interface is required. `barkKeyFile` remains the existing absolute (or `~/`)
+  local file path holding only the Bark device key. No configured path means
+  no delivery. The key is read privately and sent only in the body of an HTTPS
+  POST to `https://api.day.app/push`; errors never expose it.
+- Only fresh, numeric Claude **5-hour** windows can trigger, inclusively at the
+  threshold. The message identifies the seat by name and CN/US ID and includes
+  its reset timestamp/text when available. All sends use `level=critical` and
+  the configured volume (default 3), regardless of desktop sound preferences.
+- Startup checks the saved fresh sample; subsequent checks use the same
+  `save-config` path as top-bar live/cache observations. Sampling remains the
+  existing 1.5-second screen loop / 30-second local-cache poll.
+- `userData/quota-bark-state.json` stores delivery latches independently from
+  renderer settings. Known account hashes deduplicate across seats; without
+  identity, the seat configuration directory is the fallback. Learning identity
+  is not a reset. Unknown/stale/missing windows never clear a latch. A newer
+  sample above the threshold rearms it; a post-reset sample rearms it even
+  without an observed recovery. Relative reset drift does not create a new window.
+- Persist before sending to prevent concurrent saves/restarts from flooding.
+  Each window makes at most one delivery attempt; network/invalid-key failures
+  show a redacted notice and are not automatically retried. A crash between
+  persistence and delivery can lose that attempt. Unidentifiable account switches
+  cannot be reliably distinguished until identity or recovery is sampled.
+- Test profiles replace Bark HTTP with an offline recorder (without the key).
+  Relevant specs: `quota-low-bark.spec.js`, `quota.spec.js`, `claude-seats.spec.js`.
+
 - Live dedicated footers/cards only: Context %, token counts, cost and prose
   about quota never become quota. Restored output and task-contract echoes are
   excluded. Unknown model identity on Cursor/agy is ignored until a selected

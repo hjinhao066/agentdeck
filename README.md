@@ -54,6 +54,11 @@ the middle:
   read-only account/rateLimits/read RPC once per minute without model turns.
   It sends no slash commands. Missing/15-minute-old data is unknown, never an invented percentage.
   See [quota sources and limits](QUOTA_SOURCES.md).
+  Claude 5-hour remaining ≤2% also sends a Bark phone alert (`critical`, volume 3),
+  naming the CN/US seat and reset time when available. It uses the existing
+  `barkKeyFile` setting and sends once until a newer sample recovers above the
+  threshold or belongs to a reset window, including across app restarts.
+  Unknown/stale quota and weekly-only exhaustion do not trigger it.
 - **Right pane** (collapsible, ⌘\\): 预览, 终端 and 浏览器 tabs.
 - **Archive** stops the session's terminal but keeps its conversation and last
   output; restoring replays that output and relaunches the agent. New Claude and

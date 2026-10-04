@@ -6,6 +6,8 @@ const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
 const { createNotifications } = require('./notifications');
+const { createBarkSender } = require('./notify-user');
+const { createQuotaLowBark } = require('./quota-low-bark');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
@@ -662,6 +664,35 @@ app.whenReady().then(() => {
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
+  const quotaAlertPath = path.join(app.getPath('userData'), 'quota-bark-state.json');
+  let quotaAlertState = {};
+  try {
+    if (fs.statSync(quotaAlertPath).size <= 65536) {
+      const value = JSON.parse(fs.readFileSync(quotaAlertPath, 'utf8'));
+      if (value && typeof value === 'object' && !Array.isArray(value)) quotaAlertState = value;
+    }
+  } catch (_) {}
+  if (tudArg) app.testQuotaAlerts = [];
+  const sendQuotaBark = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      // Test profiles never contact Bark or retain even a stand-in device key.
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testQuotaAlerts.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  const quotaLowBark = createQuotaLowBark({ state: quotaAlertState, sendBark: sendQuotaBark,
+    saveState: (value) => {
+      fs.writeFileSync(quotaAlertPath + '.tmp', JSON.stringify(value), { mode: 0o600 });
+      fs.renameSync(quotaAlertPath + '.tmp', quotaAlertPath);
+    } });
+  const checkQuotaBark = () => {
+    try {
+      quotaLowBark(notificationConfig).then((results) => {
+        for (const result of results) if (!result.ok) send('toast', { text: result.message });
+      }).catch(() => send('toast', { text: '额度 Bark 提醒失败，请检查本机配置。' }));
+    } catch (_) { send('toast', { text: '额度 Bark 去重记录无法保存，未发送提醒。' }); }
+  };
+  checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
@@ -676,6 +707,7 @@ app.whenReady().then(() => {
       fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), 'utf-8');
       fs.renameSync(configPath + '.tmp', configPath);
     } catch (_) {}
+    checkQuotaBark();
   });
   onMain('env-info-sync', (e) => { e.returnValue = {
     platform: process.platform, home: HOME,
