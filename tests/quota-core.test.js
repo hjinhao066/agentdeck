@@ -355,3 +355,31 @@ test('official slot samples survive first identity observation but older samples
   Q.observe(restored, { ...sample, at: now + 3 }, now + 3);
   assert.equal(Q.summary(restored, 'Claude', now + 3, seat).label, '80%');
 });
+
+test('any exhausted window (5-hour or weekly) shows exhausted with the recovery time for Gemini, ChatGPT and Claude', () => {
+  const store = {}, hour = 3600000;
+  Q.observe(store, Q.cacheAntigravity({ model: 'gemini-3.8-flash-high', quota: {
+    'gemini-5h': { remaining_fraction: 0.975, reset_time: new Date(now + 3 * hour).toISOString() },
+    'gemini-weekly': { remaining_fraction: 0, reset_time: new Date(now + 40 * hour).toISOString() } } }, now), now);
+  const gemini = Q.summary(store, 'Antigravity', now);
+  assert.deepEqual([gemini.out, gemini.statusText, gemini.fiveHour, gemini.recoveryAt], [true, '已用尽', 97.5, now + 40 * hour]);
+  // ChatGPT weekly rounded to 0% without the server's exhausted flag still counts as used up.
+  Q.observe(store, Q.codexServer({ rateLimits: { limitId: 'codex',
+    primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: Math.round((now + 2 * hour) / 1000) },
+    secondary: { usedPercent: 99.97, windowDurationMins: 10080, resetsAt: Math.round((now + 50 * hour) / 1000) } } }, now), now);
+  const codex = Q.summary(store, 'Codex', now);
+  assert.deepEqual([codex.out, codex.fiveHour, codex.recoveryAt], [true, 88, now + 50 * hour]);
+  const seat = { id: 'us', name: '🇺🇸 US', configDir: '~/.claude-us' };
+  Q.observe(store, { ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 64, resetText: new Date(now + hour).toISOString() },
+    { key: 'weekly', remaining: 0, resetText: new Date(now + 30 * hour).toISOString() }] }, now),
+    seatId: 'us', configDir: seat.configDir, accountBound: true, accountKey: 'us-account', credentialKey: 'us-cred' }, now);
+  const claude = Q.summary(store, 'Claude', now, seat);
+  assert.deepEqual([claude.out, claude.fiveHour, claude.recoveryAt], [true, 64, now + 30 * hour]);
+  // Both windows with room: not exhausted, 5-hour % is shown.
+  Q.observe(store, Q.codexServer({ rateLimits: { limitId: 'codex',
+    primary: { usedPercent: 59, windowDurationMins: 300, resetsAt: Math.round((now + 2 * hour) / 1000) },
+    secondary: { usedPercent: 30, windowDurationMins: 10080, resetsAt: Math.round((now + 50 * hour) / 1000) } } }, now + 1000), now + 1000);
+  const ok = Q.summary(store, 'Codex', now + 1000);
+  assert.deepEqual([ok.out, ok.fiveHour, ok.recoveryAt, ok.statusText], [false, 41, null, '正常']);
+});

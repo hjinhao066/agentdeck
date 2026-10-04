@@ -3612,7 +3612,7 @@ function renderQuotaBar() {
       // Right side: the 5-hour remaining %, or a status dot + recovery time while exhausted.
       const values = item.querySelector('.quota-values');
       const recovery = q.recoveryAt ? `↻${clock(q.recoveryAt)}` : '↻--:--';
-      if (q.state === 'exhausted') {
+      if (q.out) {
         const dot = document.createElement('span'); dot.className = 'quota-dot'; dot.setAttribute('aria-hidden', 'true');
         const time = document.createElement('span'); time.className = 'quota-recovery'; time.textContent = recovery;
         values.replaceChildren(dot, time);
@@ -3626,9 +3626,9 @@ function renderQuotaBar() {
       }
       const sampled = q.sampledAt ? `采样 ${clock(q.sampledAt)}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
       const detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + (seat ? ClaudeSeats.warmupDetail(seat.id) : '');
-      const brief = [q.state === 'exhausted' && (q.recoveryAt ? `${clock(q.recoveryAt)} 恢复` : '恢复时间未知'),
+      const brief = [q.out && (q.recoveryAt ? `${clock(q.recoveryAt)} 恢复` : '恢复时间未知'),
         q.fiveHour !== null && `5 小时剩余 ${q.fiveHour}%`, q.weekly !== null && `每周剩余 ${q.weekly}%`].filter(Boolean).join('，');
-      item.dataset.state = q.state;
+      item.dataset.state = q.out ? 'exhausted' : q.state;
       item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
       item.title = detail;
       item.querySelector('.quota-tooltip').textContent = detail;
@@ -3638,7 +3638,7 @@ function renderQuotaBar() {
   }
   // The collapsed-sidebar gauge takes the colour of the provider closest to running out.
   const rank = { warning: 1, danger: 2, exhausted: 2 };
-  const worst = summaries.reduce((w, q) => (rank[q.state] || 0) > (rank[w] || 0) ? q.state : w, 'normal');
+  const worst = summaries.map((q) => q.out ? 'exhausted' : q.state).reduce((w, st) => (rank[st] || 0) > (rank[w] || 0) ? st : w, 'normal');
   const rail = document.getElementById('quotaRailBtn');
   if (rail) rail.dataset.state = worst;
 }

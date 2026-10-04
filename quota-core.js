@@ -347,9 +347,13 @@
     const sampleLabel = provider === 'Claude' && (fresh || retained) ? `采样 ${stale ? new Date(sample.at).toLocaleString() : new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}${stale ? '（数据已旧）' : ''}` : '';
     // Compact panel fields: the two remaining percentages, or the recovery time while exhausted.
     const pick = (re) => windows.find((w) => re.test(w.label))?.remaining ?? null;
-    const statusText = { exhausted: '已用尽', danger: '快用完', warning: '快用完', normal: '正常' }[state] || '未知';
+    // Any live window at 0% (5-hour or weekly) makes the account unusable until the latest such reset.
+    const empty = windows.filter((w) => (w.exhausted || w.remaining <= 0) && (!w.resetAt || w.resetAt > now));
+    const out = exhausted || empty.length > 0;
+    const outAt = recovery || (empty.length && empty.every((w) => w.resetAt) ? Math.max(...empty.map((w) => w.resetAt)) : null);
+    const statusText = out ? '已用尽' : { danger: '快用完', warning: '快用完', normal: '正常' }[state] || '未知';
     const sampledAt = (fresh || retained) ? sample.at : evidence?.at || null;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour: pick(/5 小时$/), weekly: pick(/每周$/), recoveryAt: exhausted && recovery || null, sampledAt, stale: !!stale, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour: pick(/5 小时$/), weekly: pick(/每周$/), out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
   return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
