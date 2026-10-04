@@ -3,9 +3,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 任务看板 page: sidebar entry, crew-map tab, lanes × status columns, card →
-// session. Real renderer, isolated userData (cards in <profile>/tasks), PTYs
-// running only the stand-in TUI. Set AGENTDECK_TASK_BOARD_SHOTS to keep PNGs.
+// 任务看板 page: sidebar entry, crew-map tab, compact lanes × status columns,
+// drag / keyboard moves, the card detail drawer and the 需要你 answer box, plus
+// the crew map's 队长 numbers. Real renderer, isolated userData (cards in
+// <profile>/tasks), PTYs running only the stand-in TUI. Set
+// AGENTDECK_TASK_BOARD_SHOTS to keep PNGs.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const shots = process.env.AGENTDECK_TASK_BOARD_SHOTS;
 let application, page, profile;
@@ -21,7 +23,7 @@ async function resize(width, height) {
   await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
 }
 
-function seed(dir) {
+function seed(dir, big) {
   const now = Date.now();
   const at = (min) => new Date(now - min * 60_000).toISOString();
   let order = 0;
@@ -31,10 +33,12 @@ function seed(dir) {
   const boards = {
     '客户门户': [
       card('客户门户', 'p-login', '实现客户登录和多租户权限验证，包含跨项目访问边界及所有错误处理与重试提示', 'doing', { session_id: 'w-login', assignee: claude, updated: at(3) }),
-      card('客户门户', 'p-ui', '构建数据工作台界面', 'review', { session_id: 'w-ui', assignee: { agent: 'codex', model: 'GPT-5.5' }, latest_receipt: '已完成实现、单元测试和端到端验证，长段中文回执在卡片里最多显示两行，超出的部分用省略号收尾。', updated: at(12) }),
+      card('客户门户', 'p-ui', '构建数据工作台界面', 'review', { session_id: 'w-ui', assignee: { agent: 'codex', model: 'GPT-5.5' }, latest_receipt: '已完成实现、单元测试和端到端验证。', updated: at(12) }),
       card('客户门户', 'p-sso', '接入企业 SSO', 'todo', { depends_on: ['p-login'], flag: 'blocked', updated: at(50) }),
       card('客户门户', 'p-copy', '整理登录页文案', 'todo', { updated: at(80) }),
-      card('客户门户', 'p-ask', '确认密码策略', 'needs_user', { session_id: 'w-ask', assignee: claude, latest_receipt: '需要你决定：密码最短 8 位还是 12 位？', updated: at(5) }),
+      card('客户门户', 'p-faq', '补充常见问题', 'todo', { updated: at(85) }),
+      card('客户门户', 'p-ask', '确认密码策略', 'needs_user', { session_id: 'w-ask', attempt_id: 'att-ask', attempt_closed: false, last_event: 'att-ask:ask:command:abc', assignee: claude,
+        detail: '密码策略要和安全规范一致，规范在 /Users/demo/docs/security/password-policy.md 。', latest_receipt: '密码最短 8 位还是 12 位？', updated: at(5) }),
       card('客户门户', 'p-done', '登录接口限流', 'done', { assignee: claude, latest_receipt: '完成，限流 10 次/分钟。', updated: at(240) }),
       card('客户门户', 'p-old', '旧版登录页', 'done', { archived: true, updated: at(9000) }),
     ],
@@ -43,6 +47,7 @@ function seed(dir) {
       card('报表服务', 'r-migrate', '同步迁移数据和历史记录', 'review', { session_id: 'w-gone', flag: 'failed', rework_count: 2, latest_receipt: '测试环境缺少数据访问权限，请队长处理后再继续运行迁移验证。', updated: at(20) }),
       card('报表服务', 'r-filter', '实现报告筛选和查询接口', 'todo', { updated: at(90) }),
       card('报表服务', 'r-held', '报表权限复核', 'todo', { flag: 'held', updated: at(400) }),
+      card('报表服务', 'r-lost', '核对上月对账单', 'needs_user', { latest_receipt: '已结束，未提交回执', last_event: 'att-old:fallback::abc', updated: at(40) }),
       card('报表服务', 'r-done1', '报表模板', 'done', { latest_receipt: '模板已合并。', updated: at(1500) }),
       card('报表服务', 'r-done2', '导出 CSV', 'done', { updated: at(3000) }),
     ],
@@ -51,21 +56,47 @@ function seed(dir) {
       card('agentdeck', 'a-notes', '更新使用说明', 'todo', { depends_on: ['a-board', 'p-login', 'r-export'], flag: 'blocked', updated: at(100) }),
     ],
   };
+  if (big) {
+    // the size the user really has: 5 projects, 40 cards still open, one project far busier than the rest
+    for (let i = 0; i < 11; i++) boards.agentdeck.push(card('agentdeck', 'a-doing' + i, `进行中的任务 ${i + 1}：一个比较长的标题用来检查一行放不下时会不会撑高卡片`, 'doing', { updated: at(4 + i) }));
+    for (let i = 0; i < 4; i++) boards.agentdeck.push(card('agentdeck', 'a-todo' + i, `排着队的任务 ${i + 1}`, 'todo'));
+    for (let i = 0; i < 5; i++) boards.agentdeck.push(card('agentdeck', 'a-done' + i, `做完的任务 ${i + 1}`, 'done'));
+    boards['hermes-music'] = [0, 1, 2, 3, 4, 5].map((i) => card('hermes-music', 'm-' + i, `音乐页任务 ${i + 1}`, i < 3 ? 'doing' : 'todo'));
+    boards['type4me-windows'] = [0, 1, 2, 3, 4, 5].map((i) => card('type4me-windows', 't-' + i, `Windows 输入法任务 ${i + 1}`, ['doing', 'doing', 'todo', 'todo', 'review', 'needs_user'][i], i === 5 ? { latest_receipt: '默认用微软还是豆包语音？' } : {}));
+  }
   fs.mkdirSync(dir, { recursive: true });
   for (const [project, cards] of Object.entries(boards)) fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ version: 1, project, cards }, null, 2));
+  return Object.values(boards).flat().filter((c) => !c.archived);
+}
+const readCard = (id) => fs.readdirSync(path.join(profile, 'tasks')).filter((n) => n.endsWith('.json'))
+  .flatMap((n) => JSON.parse(fs.readFileSync(path.join(profile, 'tasks', n), 'utf8')).cards).find((c) => c.id === id);
+// What 队长 has been told through the receipt channel (waiting or already handed over).
+const captainNotices = () => page.evaluate(() => [...config.mainSession.pending, ...config.mainSession.inflight].filter((p) => p.title === '任务看板').map((p) => p.summary));
+const cellIds = (project, status) => page.locator(`.tbv-lane[data-project="${project}"] .tbv-cell[data-status="${status}"] .tbv-card`).evaluateAll((n) => n.map((x) => x.dataset.cardId));
+const center = async (locator) => { const b = await locator.boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
+// A real pointer drag: press on `from`, move in steps to (x, y), optionally stop before releasing.
+async function drag(from, x, y, { release = true } = {}) {
+  const a = await center(from);
+  await page.mouse.move(a.x, a.y);
+  await page.mouse.down();
+  await page.mouse.move(a.x + 8, a.y + 8, { steps: 2 });
+  await page.mouse.move(x, y, { steps: 8 });
+  if (release) await page.mouse.up();
 }
 
-async function launch() {
+let seeded = [];
+async function launch(big = false) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-task-board-ui-'));
-  seed(path.join(profile, 'tasks'));
+  seeded = seed(path.join(profile, 'tasks'), big);
   const column = (id, title, project) => ({ id, title, displayTitle: title, manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true, project });
   const workers = [column('w-login', '登录权限', '客户门户'), column('w-ui', '工作台界面', '客户门户'), column('w-ask', '密码策略', '客户门户'), column('w-report', '导出报表', '报表服务'), column('w-deck', '看板打磨', 'AgentDeck')];
-  const states = ['working', 'done', 'working', 'working', 'working'];
+  const states = ['working', 'done', 'working', 'working', 'failed'];
   const now = Date.now();
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'gemini' },
     columns: [{ ...column('cap', '队长', ''), isMain: true, captainCrew: false }, ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
-      tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '', receipt: null })) },
+      tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '',
+        receipt: states[i] === 'failed' ? { summary: '', files: [], failed: '额度用尽' } : states[i] === 'done' ? { summary: '已完成。', files: [] } : null })) },
   }));
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
@@ -79,135 +110,362 @@ async function launch() {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(6);
 }
 test.afterEach(async () => {
-  if (application) await application.close();
+  // Closing can stall on a loaded machine; the profile is disposable, so do not wait for it.
+  if (application) {
+    const child = application.process();
+    await Promise.race([application.close().catch(() => {}), new Promise((done) => setTimeout(done, 8000))]);
+    try { child.kill('SIGKILL'); } catch (_) {}
+  }
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
   application = null;
 });
 
-// Nothing in the toolbars overlaps or wraps, every card sits inside its cell
-// without touching its neighbours, and card text stays inside the card.
-async function assertBoardLayout() {
+// Nothing in the toolbars overlaps, the column heads sit over their cells,
+// every card stays inside its cell on one line (需要你 adds its question), and
+// every tool action is an icon button with a tooltip, a name and a real target.
+async function assertBoardLayout(minCard) {
   const g = await page.evaluate(() => {
     const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const shown = (n) => !n.hidden && getComputedStyle(n).display !== 'none' && n.getBoundingClientRect().width > 0;
-    const rows = ['.tbv-toolbar .tbv-heading', '.tbv-toolbar .board-toolbar-actions', '.tbv-filters'].map((s) => document.querySelector('#taskBoardView ' + s));
-    const bars = ['.tbv-toolbar .board-toolbar-actions', '.tbv-filters'].map((s) => [...document.querySelector('#taskBoardView ' + s).children].filter(shown).map((n) => ({ cls: n.className || n.tagName, ...rect(n) })));
-    const cells = [...document.querySelectorAll('.tbv-cell')].map((cell) => ({ cell: rect(cell), cards: [...cell.children].map((card) => ({ id: card.dataset.cardId, ...rect(card),
-      parts: [...card.querySelectorAll('.tbv-title, .tbv-owner, .tbv-receipt, .tbv-foot, .tbv-tag, .tbv-time')].filter(shown).map((p) => ({ cls: p.className, ...rect(p), lh: parseFloat(getComputedStyle(p).lineHeight) })) })) }));
-    const heads = [...document.querySelectorAll('.tbv-head')].map(rect);
-    const firstCells = [...document.querySelectorAll('.tbv-lane:first-child .tbv-cell')].map(rect);
-    return { view: rect(document.getElementById('taskBoardView')), rows: rows.map(rect), bars, cells, heads, firstCells };
+    const bar = [...document.querySelector('#taskBoardView .tbv-filters').children].filter(shown).map((n) => ({ cls: n.className, ...rect(n) }));
+    const cells = [...document.querySelectorAll('.tbv-cell')].map((cell) => ({ cell: rect(cell), cards: [...cell.querySelectorAll('.tbv-card')].map((card) => ({ id: card.dataset.cardId, status: card.dataset.status, ...rect(card),
+      parts: [...card.querySelectorAll('.tbv-title, .tbv-question, .tbv-tag, .tbv-time')].filter(shown).map((p) => ({ cls: p.className, ...rect(p) })) })) }));
+    const icons = [...document.querySelectorAll('#taskBoardView .tbv-icon')].filter(shown).map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, svg: !!n.querySelector('svg'), text: n.textContent.trim(), w: n.getBoundingClientRect().width, h: n.getBoundingClientRect().height }));
+    return { view: rect(document.getElementById('taskBoardView')), bar, cells, icons, heads: [...document.querySelectorAll('.tbv-head')].map(rect),
+      firstCells: [...document.querySelectorAll('.tbv-lane:not(.collapsed) .tbv-cells')].slice(0, 1).flatMap((c) => [...c.children].map(rect)) };
   });
   const overlaps = (a, b) => a.x < b.right - 1 && a.right > b.x + 1 && a.y < b.bottom - 1 && a.bottom > b.y + 1;
-  for (const bar of g.bars) for (let i = 0; i < bar.length; i++) {
-    expect(bar[i].height, bar[i].cls + ' single line').toBeLessThanOrEqual(34);
-    expect(bar[i].right, bar[i].cls + ' inside window').toBeLessThanOrEqual(g.view.right);
-    for (const b of bar.slice(i + 1)) expect(overlaps(bar[i], b), `${bar[i].cls}/${b.cls} overlap`).toBe(false);
+  for (let i = 0; i < g.bar.length; i++) {
+    expect(g.bar[i].height, g.bar[i].cls + ' single line').toBeLessThanOrEqual(34);
+    expect(g.bar[i].right, g.bar[i].cls + ' inside window').toBeLessThanOrEqual(g.view.right);
+    for (const b of g.bar.slice(i + 1)) expect(overlaps(g.bar[i], b), `${g.bar[i].cls}/${b.cls} overlap`).toBe(false);
   }
-  expect(overlaps(g.rows[0], g.rows[1]), 'title and view switch overlap').toBe(false);
-  // header columns line up with the lane columns
-  g.heads.forEach((h, i) => { expect(Math.abs(h.x - g.firstCells[i].x)).toBeLessThanOrEqual(1); expect(Math.abs(h.width - g.firstCells[i].width)).toBeLessThanOrEqual(1); });
+  g.firstCells.forEach((c, i) => { expect(Math.abs(g.heads[i].x - c.x), 'head over its column').toBeLessThanOrEqual(1); expect(Math.abs(g.heads[i].width - c.width)).toBeLessThanOrEqual(1); });
   for (const { cell, cards } of g.cells) for (let i = 0; i < cards.length; i++) {
     const c = cards[i];
-    expect(c.width, c.id + ' readable width').toBeGreaterThanOrEqual(170);
+    expect(c.width, c.id + ' readable width').toBeGreaterThanOrEqual(minCard);
+    expect(c.height, c.id + ' compact').toBeLessThanOrEqual(c.status === 'needs_user' ? 72 : 32);
     expect(c.x).toBeGreaterThanOrEqual(cell.x - 0.5); expect(c.right).toBeLessThanOrEqual(cell.right + 0.5);
     for (const d of cards.slice(i + 1)) expect(overlaps(c, d), `${c.id}/${d.id} overlap`).toBe(false);
-    for (const p of c.parts) {
-      expect(p.right, `${c.id} ${p.cls} fits`).toBeLessThanOrEqual(c.right - 1);
-      expect(p.bottom, `${c.id} ${p.cls} fits`).toBeLessThanOrEqual(c.bottom - 1);
-      if (/tbv-(title|receipt)/.test(p.cls)) expect(p.height, `${c.id} ${p.cls} at most two lines`).toBeLessThanOrEqual(p.lh * 2 + 0.5);
-      if (/tbv-(owner|foot)$/.test(p.cls)) expect(p.height, `${c.id} ${p.cls} one line`).toBeLessThanOrEqual(22);
-    }
+    for (const p of c.parts) { expect(p.right, `${c.id} ${p.cls} fits`).toBeLessThanOrEqual(c.right - 1); expect(p.bottom, `${c.id} ${p.cls} fits`).toBeLessThanOrEqual(c.bottom - 1); }
   }
-  const icons = await page.evaluate(() => [...document.querySelectorAll('#taskBoardView .tbv-icon')].map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, svg: !!n.querySelector('svg'), text: n.textContent.trim(), w: n.getBoundingClientRect().width })));
-  expect(icons.length).toBe(2); // close and refresh; no write actions
-  for (const b of icons) { expect(b.label).toBeTruthy(); expect(b.title).toBeTruthy(); expect(b.svg).toBe(true); expect(b.text).toBe(''); expect(b.w).toBeGreaterThanOrEqual(28); }
+  expect(g.icons.length).toBeGreaterThanOrEqual(3);
+  for (const b of g.icons) { expect(b.label).toBeTruthy(); expect(b.title).toBeTruthy(); expect(b.svg).toBe(true); expect(b.text).toBe(''); expect(b.w).toBeGreaterThanOrEqual(28); expect(b.h).toBeGreaterThanOrEqual(28); }
 }
 
-test('sidebar entry, crew-map tab and the board: lanes, columns, colours, layout at two sizes and both themes', async () => {
-  await launch();
-  const originals = Object.fromEntries(fs.readdirSync(path.join(profile, 'tasks')).map((name) => [name, fs.readFileSync(path.join(profile, 'tasks', name), 'utf8')]));
+test('compact board: five projects and forty open cards fit one screen; folds, filter and layout at three sizes', async () => {
+  await launch(true);
+  const open = seeded.filter((c) => c.status !== 'done');
+  expect(open.length).toBe(40);
   const entry = page.locator('#navTop .nav-row[data-nav="tasks"]');
-  for (const [width, height] of [[1440, 900], [1280, 800]]) for (const theme of ['dark', 'light']) {
-    const tag = `${width}x${height}-${theme}`;
-    await resize(width, height);
-    await page.evaluate((t) => applyTheme(t), theme);
-    if (await page.locator('#taskBoardView').isVisible()) await page.keyboard.press('Escape');
-    await page.evaluate(() => { showView('terminals'); document.activeElement.blur(); });
-
-    // 1) sidebar: 任务看板 sits with 队长 / search as a first-level entry
-    await expect(entry).toBeVisible();
-    await expect(entry).toHaveText('任务看板');
-    expect(await entry.locator('svg').count()).toBe(1);
-    const order = await page.locator('#navTop > *').evaluateAll((n) => n.map((x) => x.dataset.nav || x.id));
-    expect(order.slice(0, 4)).toEqual(['new', 'captain', 'tasks', 'navSearchSlot']);
-    await screenshot(`1-sidebar-${tag}`);
-
-    // 2) the board, from the sidebar
-    await entry.click();
-    await expect(page.locator('#taskBoardView')).toBeVisible();
-    await expect(entry).toHaveClass(/active/);
-    await expect(page.locator('.tbv-head .tbv-head-label')).toHaveText(['待办', '进行中', '待验收', '需要你', '完成']);
-    await expect(page.locator('.tbv-head .tbv-count')).toHaveText(['5', '3', '2', '1', '3']);
-    await expect(page.locator('.tbv-lane-name')).toHaveText(['agentdeck', '报表服务', '客户门户'].sort((a, b) => a.localeCompare(b)));
-    await expect(page.locator('.tbv-card')).toHaveCount(14);
-    await expect(page.locator('.tbv-card[data-card-id="p-old"]')).toHaveCount(0);
-    await expect(page.locator('.tbv-card[data-card-id="r-migrate"] .tbv-tag.failed')).toHaveText('失败');
-    await expect(page.locator('.tbv-card[data-card-id="p-ui"] .tbv-receipt')).toContainText('已完成实现');
-    await expect(page.locator('.tbv-card[data-card-id="p-login"] .tbv-owner-name')).toHaveText('登录权限');
-    await expect(page.locator('.tbv-card[data-card-id="r-migrate"]')).not.toHaveClass(/linked/);
-    await expect(page.locator('.tbv-card[data-card-id="p-copy"] .tbv-owner-name')).toHaveText('未派活');
-    await expect(page.locator('.tbv-card[data-card-id="r-migrate"] .tbv-owner-name')).toHaveText('会话已关闭');
-    // at the two standard sizes all five columns fit without sideways scrolling
-    expect(await page.evaluate(() => { const s = document.querySelector('.tbv-scroll'); return s.scrollWidth <= s.clientWidth; })).toBe(true);
-    // one palette: the board lane, the crew map project (session project spelt 'AgentDeck') and the hue function agree
-    const hues = await page.evaluate(() => [...document.querySelectorAll('.tbv-lane')].map((l) => [l.dataset.project, l.style.getPropertyValue('--project-hue'), String(CrewMapCore.projectHue(l.dataset.project))]));
-    for (const [, set, expected] of hues) expect(set).toBe(expected);
-    await assertBoardLayout();
-    await screenshot(`2-board-${tag}`);
-
-    // 3) 架构图 tab inside the board goes to the crew map; its 任务看板 tab comes back
-    await page.locator('#taskBoardView .board-mode button[data-view="crew"]').click();
-    await expect(page.locator('#taskBoardView')).toBeHidden();
-    await expect(page.locator('#crewMap')).toBeVisible();
-    await expect(page.locator('#boardView .board-mode button')).toHaveText(['架构图', '自由画布', '任务看板']);
-    await expect(page.locator('#boardView .board-mode button[data-mode="crew"]')).toHaveClass(/active/);
-    const mapHue = await page.evaluate(() => [...document.querySelectorAll('.cm-project')].find((g) => g.dataset.project === 'AgentDeck')?.style.getPropertyValue('--project-hue'));
-    expect(mapHue).toBe(hues.find(([key]) => key === 'agentdeck')[1]);
-    await screenshot(`3-crewmap-tab-${tag}`);
-    await page.locator('#boardTasksTab').click();
-    await expect(page.locator('#taskBoardView')).toBeVisible();
-    await expect(page.locator('#boardViewBtn')).not.toHaveClass(/\bon\b/);
-    await page.keyboard.press('Escape');
-    await expect(page.locator('#taskBoardView')).toBeHidden();
-    await expect(page.locator('#crewMap')).toBeVisible();
-    await expect(entry).not.toHaveClass(/active/);
-  }
-
-  // narrow window: nothing overlaps, the five columns scroll sideways at a readable width
-  await page.evaluate(() => showView('terminals'));
-  await resize(980, 700);
+  await resize(1440, 900);
+  await expect(entry).toHaveText('任务看板');
+  expect((await page.locator('#navTop > *').evaluateAll((n) => n.map((x) => x.dataset.nav || x.id))).slice(0, 4)).toEqual(['new', 'captain', 'tasks', 'navSearchSlot']);
   await entry.click();
-  await assertBoardLayout();
-  expect(await page.evaluate(() => { const s = document.querySelector('.tbv-scroll'); return s.scrollWidth > s.clientWidth; })).toBe(true);
-  // the deck toolbar's width buttons stay on one line too
-  for (const h of await page.locator('#tbSplit .split-btn').evaluateAll((n) => n.map((b) => b.getBoundingClientRect().height))) expect(h).toBeLessThanOrEqual(26);
-  await screenshot('4-board-980x700-light');
+  await expect(page.locator('#taskBoardView')).toBeVisible();
+  await expect(page.locator('.tbv-head .tbv-head-label')).toHaveText(['待办', '进行中', '待验收', '需要你', '完成']);
+  await expect(page.locator('.tbv-head .tbv-count')).toHaveText(['15', '19', '3', '3', '8']);
+  await expect(page.locator('.tbv-lane')).toHaveCount(5);
+  await expect(page.locator('.tbv-summary')).toHaveText('40 件没做完 · 3 件需要你');
+  await expect(page.locator('.tbv-card[data-card-id="p-old"]')).toHaveCount(0);
 
-  // project filter, then clicking a card opens its session
-  await page.locator('#tbvProject').selectOption('报表服务');
-  await expect(page.locator('.tbv-lane')).toHaveCount(1);
-  await expect(page.locator('.tbv-lane[data-project="报表服务"] .tbv-card')).toHaveCount(6);
-  await expect(page.locator('#taskBoardView .tbv-archive, #taskBoardView [draggable="true"], #taskBoardView input, #taskBoardView textarea')).toHaveCount(0);
-  await page.locator('#tbvProject').selectOption('');
-  await page.locator('.tbv-card[data-card-id="r-export"]').click();
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate((t) => applyTheme(t), theme);
+    // one screen: no scrolling either way, every project and its 进行中 / 需要你 cards on it
+    const fit = await page.evaluate(() => {
+      const s = document.querySelector('.tbv-scroll'), view = s.getBoundingClientRect();
+      const inView = (n) => { const r = n.getBoundingClientRect(); return r.top >= view.top - 1 && r.bottom <= view.bottom + 1 && r.left >= view.left - 1 && r.right <= view.right + 1; };
+      return { v: s.scrollHeight <= s.clientHeight + 1, h: s.scrollWidth <= s.clientWidth + 1,
+        lanes: [...document.querySelectorAll('.tbv-lane')].map(inView),
+        cards: [...document.querySelectorAll('.tbv-cell[data-status="doing"] .tbv-card, .tbv-cell[data-status="needs_user"] .tbv-card, .tbv-more')].map(inView) };
+    });
+    expect(fit.v, 'no vertical scroll').toBe(true); expect(fit.h, 'no horizontal scroll').toBe(true);
+    expect(fit.lanes).toEqual([true, true, true, true, true]);
+    expect(fit.cards.length).toBeGreaterThan(15); expect(fit.cards.every(Boolean)).toBe(true);
+    await assertBoardLayout(150);
+    await screenshot(`1-board-1440x900-${theme}`);
+  }
+  await page.evaluate(() => applyTheme('dark'));
+  // one palette: the board lanes, the overview chips and the crew map's hue function agree
+  const hues = await page.evaluate(() => [...document.querySelectorAll('.tbv-lane, .tbv-chip[data-project]:not([data-project=""])')].map((l) => [l.style.getPropertyValue('--project-hue'), String(CrewMapCore.projectHue(l.dataset.project))]));
+  expect(hues.length).toBe(10);
+  for (const [set, expected] of hues) expect(set).toBe(expected);
+
+  // the busy cell folds to six cards and says how many more; 完成 is only a count
+  const busy = page.locator('.tbv-lane[data-project="agentdeck"] .tbv-cell[data-status="doing"]');
+  await expect(busy.locator('.tbv-card')).toHaveCount(6);
+  await expect(busy.locator('.tbv-more')).toHaveText('还有 6 张');
+  await busy.locator('.tbv-more').click();
+  await expect(busy.locator('.tbv-card')).toHaveCount(12);
+  await expect(busy.locator('.tbv-more')).toHaveAttribute('aria-label', /收起/);
+  await busy.locator('.tbv-more').click();
+  await expect(busy.locator('.tbv-card')).toHaveCount(6);
+  await expect(page.locator('.tbv-cell[data-status="done"] .tbv-card')).toHaveCount(0);
+  await expect(page.locator('.tbv-lane[data-project="agentdeck"] .tbv-done-count')).toHaveText('5');
+  await page.locator('.tbv-head[data-status="done"]').click();
+  await expect(page.locator('.tbv-cell[data-status="done"] .tbv-card')).toHaveCount(8);
+  await expect(page.locator('.tbv-head[data-status="done"]')).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.tbv-cell[data-status="done"] .tbv-card')).toHaveCount(0);
+
+  // a lane folds to one row of counts and stays folded after the board is reopened
+  const lane = page.locator('.tbv-lane[data-project="agentdeck"]');
+  await lane.locator('.tbv-lane-toggle').click();
+  await expect(lane).toHaveClass(/collapsed/);
+  await expect(lane.locator('.tbv-card')).toHaveCount(0);
+  await expect(lane.locator('.tbv-lane-n')).toHaveText(['待办 5', '进行中 12', '完成 5']);
+  expect((await lane.boundingBox()).height).toBeLessThanOrEqual(40);
+  await expect.poll(() => page.evaluate(() => config.taskBoardView)).toEqual({ laneOrder: [], collapsed: { agentdeck: true }, doneOpen: false });
+  await page.keyboard.press('Escape');
   await expect(page.locator('#taskBoardView')).toBeHidden();
-  await expect.poll(() => page.evaluate(() => [activeView, focusedId])).toEqual(['terminals', 'w-report']);
-  for (const [name, raw] of Object.entries(originals)) expect(fs.readFileSync(path.join(profile, 'tasks', name), 'utf8')).toBe(raw);
+  await entry.click();
+  await expect(lane).toHaveClass(/collapsed/);
+  await lane.locator('.tbv-lane-toggle').click();
+  await expect(lane.locator('.tbv-card')).toHaveCount(11);
+
+  // overview strip: counts per project, a click shows only that project (everything, unfolded)
+  const chip = page.locator('.tbv-chip[data-project="agentdeck"]');
+  await expect(chip.locator('.tbv-chip-n.doing')).toHaveText('12');
+  await expect(page.locator('.tbv-chip[data-project="客户门户"] .tbv-chip-n.needs')).toHaveText('1');
+  await chip.click();
+  await expect(page.locator('.tbv-lane')).toHaveCount(1);
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  await expect(busy.locator('.tbv-card')).toHaveCount(12);
+  await chip.click();
+  await expect(page.locator('.tbv-lane')).toHaveCount(5);
+
+  // 架构图 tab inside the board goes to the crew map; its 任务看板 tab comes back
+  await page.locator('#taskBoardView .board-mode button[data-view="crew"]').click();
+  await expect(page.locator('#taskBoardView')).toBeHidden();
+  await expect(page.locator('#crewMap')).toBeVisible();
+  await page.locator('#boardTasksTab').click();
+  await expect(page.locator('#taskBoardView')).toBeVisible();
+
+  // narrow window: project names move above their cells, cards stay readable, nothing overlaps
+  await resize(980, 700);
+  await page.evaluate(() => applyTheme('light'));
+  await assertBoardLayout(110);
+  const narrow = await page.evaluate(() => { const l = document.querySelector('.tbv-lane'); return { head: l.querySelector('.tbv-lane-head').getBoundingClientRect().bottom, cells: l.querySelector('.tbv-cells').getBoundingClientRect().top, view: document.getElementById('taskBoardView').getBoundingClientRect().right, win: innerWidth }; });
+  expect(narrow.head).toBeLessThanOrEqual(narrow.cells + 1);
+  expect(narrow.view).toBeLessThanOrEqual(narrow.win);
+  for (const h of await page.locator('#tbSplit .split-btn').evaluateAll((n) => n.map((b) => b.getBoundingClientRect().height))) expect(h).toBeLessThanOrEqual(26);
+  await screenshot('2-board-980x700-light');
   expect(errors).toEqual([]);
 });
 
-test('the board stays read-only and opens with no cards', async () => {
+test('drag and keyboard: reorder inside a column is saved, a drop on 进行中 only tells 队长, lanes reorder', async () => {
+  await launch();
+  await resize(1440, 900);
+  const columnIds = await page.evaluate(() => columns.map((c) => c.id));
+  await page.locator('#taskBoardBtn').click();
+  const card = (id) => page.locator(`.tbv-card[data-card-id="${id}"]`);
+  await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-copy', 'p-faq']);
+
+  // while dragging: a ghost follows the pointer and a line shows where the card lands
+  const top = await center(card('p-sso'));
+  await drag(card('p-faq'), top.x, top.y - 6, { release: false });
+  await expect(page.locator('.tbv-ghost')).toHaveCount(1);
+  await expect(page.locator('.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="todo"]')).toHaveClass(/drop-target/);
+  expect(await page.locator('.tbv-drop').evaluate((n) => n.nextElementSibling.dataset.cardId)).toBe('p-sso');
+  await screenshot('3-dragging-1440x900-dark');
+  // Escape drops the drag without changing anything
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(page.locator('.tbv-ghost, .tbv-drop')).toHaveCount(0);
+  await expect(page.locator('#taskBoardView')).toBeVisible();
+  expect(await cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-copy', 'p-faq']);
+
+  // reorder inside the column: saved in the shared file, still there after reopening
+  await drag(card('p-faq'), top.x, top.y - 6);
+  await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-faq', 'p-sso', 'p-copy']);
+  expect(readCard('p-faq').order).toBeLessThan(readCard('p-sso').order);
+  expect(readCard('p-faq').status).toBe('todo');
+  await expect(page.locator('.tbv-detail')).toBeHidden(); // a drag is not a click
+  const below = await center(card('p-copy'));
+  await drag(card('p-faq'), below.x, below.y + 9);
+  await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-copy', 'p-faq']);
+  await drag(card('p-copy'), top.x, top.y - 6);
+  await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-copy', 'p-sso', 'p-faq']);
+  await page.keyboard.press('Escape');
+  await page.locator('#taskBoardBtn').click();
+  await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-copy', 'p-sso', 'p-faq']);
+
+  // 待办 → 进行中: the card moves and 队长 is told which one; no session is opened for it
+  const doing = await center(page.locator('.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="doing"]'));
+  await drag(card('p-copy'), doing.x, doing.y + 30);
+  await expect.poll(() => cellIds('客户门户', 'doing')).toContain('p-copy');
+  await expect.poll(captainNotices).toEqual(['用户在任务看板把卡片 p-copy「整理登录页文案」拖到了「进行中」，请安排队员开始做这件事。项目：客户门户。']);
+  await expect.poll(() => readCard('p-copy').dispatch_claim?.delivered).toBe(true);
+  expect(readCard('p-copy').status).toBe('doing');
+  // a card whose prerequisite is unfinished stays put and says why
+  await drag(card('p-sso'), doing.x, doing.y + 30);
+  await expect(page.locator('#toast')).toContainText('它前面的任务还没做完');
+  await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-faq']);
+  // a card cannot leave its project: a drop on another lane does nothing
+  const other = await center(page.locator('.tbv-lane[data-project="报表服务"] .tbv-cell[data-status="doing"]'));
+  await drag(card('p-faq'), other.x, other.y);
+  expect(readCard('p-faq').status).toBe('todo');
+  expect(readCard('p-faq').project).toBe('客户门户');
+
+  // keyboard: Alt+↓ reorders, Alt+→ changes status (and tells 队长), focus stays on the card
+  await card('r-filter').focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect.poll(() => cellIds('报表服务', 'todo')).toEqual(['r-held', 'r-filter']);
+  await expect(card('r-filter')).toBeFocused();
+  await page.keyboard.press('Alt+ArrowUp');
+  await expect.poll(() => cellIds('报表服务', 'todo')).toEqual(['r-filter', 'r-held']);
+  await expect(card('r-filter')).toBeFocused();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect.poll(() => cellIds('报表服务', 'doing')).toContain('r-filter');
+  await expect(card('r-filter')).toBeFocused();
+  await expect.poll(async () => (await captainNotices()).some((n) => n.includes('r-filter「实现报告筛选和查询接口」拖到了「进行中」'))).toBe(true);
+  await expect(page.locator('.tbv-live')).toHaveText('「实现报告筛选和查询接口」已移到进行中');
+  // 待验收 → 完成 goes through the normal move
+  await card('p-ui').focus();
+  await page.keyboard.press('Alt+ArrowRight'); // 需要你
+  await expect.poll(() => readCard('p-ui').status).toBe('needs_user');
+  await page.keyboard.press('Alt+ArrowRight'); // 完成 (the folded column opens to show it)
+  await expect.poll(() => readCard('p-ui').status).toBe('done');
+  await expect(card('p-ui')).toBeVisible();
+  // nothing above opened a session behind 队长's back
+  expect(await page.evaluate(() => columns.map((c) => c.id))).toEqual(columnIds);
+  expect((await captainNotices()).length).toBe(2);
+
+  // lanes: drag a project above another, or Alt+↑/↓ on its fold button; the order is remembered
+  const lanes = () => page.locator('.tbv-lane').evaluateAll((n) => n.map((x) => x.dataset.project));
+  expect(await lanes()).toEqual(['agentdeck', '报表服务', '客户门户'].sort((a, b) => a.localeCompare(b)));
+  const first = (await lanes())[0], last = (await lanes())[2];
+  const firstBox = await page.locator(`.tbv-lane[data-project="${first}"]`).boundingBox();
+  await drag(page.locator(`.tbv-lane[data-project="${last}"] .tbv-lane-name`), firstBox.x + 60, firstBox.y + 2);
+  await expect.poll(lanes).toEqual([last, first, (await lanes()).find((k) => k !== first && k !== last)]);
+  const order = await lanes();
+  await expect.poll(() => page.evaluate(() => config.taskBoardView.laneOrder)).toEqual(order);
+  await page.locator(`.tbv-lane[data-project="${last}"] .tbv-lane-toggle`).focus();
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect.poll(lanes).toEqual([order[1], order[0], order[2]]);
+  await expect(page.locator(`.tbv-lane[data-project="${last}"] .tbv-lane-toggle`)).toBeFocused();
+  await expect(page.locator(`.tbv-lane[data-project="${last}"]`)).not.toHaveClass(/collapsed/);
+  await page.keyboard.press('Escape');
+  await page.locator('#taskBoardBtn').click();
+  await expect.poll(lanes).toEqual([order[1], order[0], order[2]]);
+  expect(errors).toEqual([]);
+});
+
+test('需要你: the card shows the question, the drawer takes an answer and sends it to 队长', async () => {
+  await launch();
+  await resize(1440, 900);
+  const columnIds = await page.evaluate(() => columns.map((c) => c.id));
+  await page.locator('#taskBoardBtn').click();
+  const card = (id) => page.locator(`.tbv-card[data-card-id="${id}"]`);
+  const detail = page.locator('.tbv-detail');
+  await expect(card('p-ask').locator('.tbv-question')).toHaveText('密码最短 8 位还是 12 位？');
+  // a card that landed in 需要你 without a question says so, never the internal wording
+  await expect(card('r-lost').locator('.tbv-question')).toHaveText('队长还没把问题整理出来');
+  await expect(page.locator('#taskBoardView')).not.toContainText('未提交回执');
+
+  // any card opens the drawer: title, who has it, latest receipt, description
+  await card('p-login').click();
+  await expect(detail).toBeVisible();
+  await expect(detail.locator('.tbv-d-title')).toHaveText(/实现客户登录和多租户权限验证/);
+  await expect(detail.locator('.tbv-d-who-name')).toHaveText('登录权限');
+  await expect(detail.locator('.tbv-d-label')).toHaveText(['谁在做', '最近回执', '说明', '移到']);
+  await expect(detail.locator('.tbv-ask, textarea')).toHaveCount(0);
+  await expect(card('p-login')).toHaveClass(/selected/);
+  await assertBoardLayout(120);
+  // Escape closes the drawer first and hands focus back to the card
+  await page.keyboard.press('Escape');
+  await expect(detail).toBeHidden();
+  await expect(page.locator('#taskBoardView')).toBeVisible();
+  await expect(card('p-login')).toBeFocused();
+
+  // no question yet: the drawer says so and still lets the user tell 队长 what to do
+  await page.keyboard.press('Tab');
+  await card('r-lost').focus();
+  await page.keyboard.press('Enter');
+  await expect(detail.locator('.tbv-ask-label')).toHaveText('需要你决定');
+  await expect(detail.locator('.tbv-ask-question')).toHaveText('队长还没把问题整理出来');
+  await expect(detail).not.toContainText('未提交回执');
+  await expect(detail.locator('.tbv-d-text').first()).toHaveText('队员停下了，但没有交结果。');
+  await expect(detail.locator('textarea')).toBeFocused();
+  await page.keyboard.type('先不对了，下个月一起核。');
+  await page.keyboard.press('Meta+Enter');
+  await expect(page.locator('#toast')).toContainText('答案已发给队长');
+  await expect.poll(() => readCard('r-lost').status).toBe('doing');
+  await expect.poll(() => readCard('r-lost').dispatch_claim?.delivered).toBe(true);
+  expect(await captainNotices()).toEqual(['用户在任务看板回答了卡片 r-lost「核对上月对账单」（项目：报表服务）。用户的答案：先不对了，下个月一起核。\n请按这个答案继续推进这张卡片。']);
+
+  // a real question: on top of the drawer, with the answer box under it
+  await card('p-ask').click();
+  await expect(detail).toHaveAttribute('data-card-id', 'p-ask');
+  await expect(detail.locator('.tbv-ask-question')).toHaveText('密码最短 8 位还是 12 位？');
+  const order = await detail.locator('.tbv-d-body > *').evaluateAll((n) => n.map((x) => x.className.split(' ')[0]));
+  expect(order.slice(0, 2)).toEqual(['tbv-d-title', 'tbv-ask']);
+  await expect(detail.locator('.tbv-send')).toHaveText('发送答案');
+  await expect(detail.locator('.tbv-d-label')).toHaveText(['谁在做', '说明', '相关文件', '移到']);
+  // related file: shown with a copy icon that turns into a tick
+  await expect(detail.locator('.tbv-d-file')).toHaveText('/Users/demo/docs/security/password-policy.md');
+  const copy = detail.locator('.tbv-d-files .tbv-copy');
+  await expect(copy).toHaveAttribute('aria-label', '复制路径');
+  await copy.click();
+  await expect(copy).toHaveClass(/ok/);
+  expect(await page.evaluate(() => window.deck.clipboardRead())).toBe('/Users/demo/docs/security/password-policy.md');
+  // an empty answer is not sent; a refresh in between keeps what was typed
+  await detail.locator('.tbv-send').click();
+  expect((await captainNotices()).length).toBe(1);
+  await detail.locator('textarea').fill('12 位，并且要有数字。');
+  await page.locator('.tbv-refresh').click();
+  await expect(detail.locator('textarea')).toHaveValue('12 位，并且要有数字。');
+  await screenshot('4-needs-you-1440x900-dark');
+  await page.evaluate(() => applyTheme('light'));
+  await screenshot('4-needs-you-1440x900-light');
+  await page.evaluate(() => applyTheme('dark'));
+  await detail.locator('.tbv-send').click();
+  await expect.poll(captainNotices).toHaveLength(2);
+  expect((await captainNotices())[1]).toBe('用户在任务看板回答了卡片 p-ask「确认密码策略」（项目：客户门户）。问题：密码最短 8 位还是 12 位？\n用户的答案：12 位，并且要有数字。\n请按这个答案继续推进这张卡片。');
+  // the card is back in 进行中 and still belongs to the session that asked
+  await expect.poll(() => readCard('p-ask').status).toBe('doing');
+  expect(readCard('p-ask').session_id).toBe('w-ask');
+  await expect(detail.locator('.tbv-d-status')).toHaveText('进行中');
+  await expect(detail.locator('.tbv-ask, textarea')).toHaveCount(0);
+  await expect(page.locator('.tbv-head[data-status="needs_user"] .tbv-count')).toHaveText('0');
+  expect(await page.evaluate(() => columns.map((c) => c.id))).toEqual(columnIds);
+
+  // 移到 in the drawer is the same move as a drag; the terminal icon opens the session
+  await detail.locator('.tbv-d-moves button[data-status="needs_user"]').click();
+  await expect.poll(() => readCard('p-ask').status).toBe('needs_user');
+  const go = detail.locator('.tbv-d-open');
+  await expect(go).toHaveAttribute('aria-label', '打开「密码策略」的终端');
+  await card('r-export').click();
+  await detail.locator('.tbv-d-open').click();
+  await expect(page.locator('#taskBoardView')).toBeHidden();
+  await expect.poll(() => page.evaluate(() => [activeView, focusedId])).toEqual(['terminals', 'w-report']);
+  expect(errors).toEqual([]);
+});
+
+test('crew map: 队长 shows how many sessions are working as the big number in a box no taller than its content', async () => {
+  await launch();
+  await resize(1440, 900);
+  await page.evaluate(() => { showView('board'); if (CrewMap.mode() !== 'crew') CrewMap.setMode('crew'); });
+  const captain = page.locator('.cm-node.kind-captain');
+  await expect(captain.locator('.cm-stat')).toHaveText(['3干活中', '1失败', '1已完成']);
+  const g = await captain.evaluate((n) => {
+    const size = (s) => parseFloat(getComputedStyle(n.querySelector(s)).fontSize);
+    const box = n.getBoundingClientRect(), scale = box.height / n.offsetHeight;
+    const inner = [...n.querySelectorAll('.cm-top, .cm-stats, .cm-stat')].map((x) => x.getBoundingClientRect());
+    return { height: n.offsetHeight, working: size('.cm-stat[data-status="working"] b'), failed: size('.cm-stat[data-status="failed"] b'), title: size('.cm-title'),
+      slack: (box.bottom - Math.max(...inner.map((r) => r.bottom))) / scale, inside: inner.every((r) => r.right <= box.right && r.bottom <= box.bottom) };
+  });
+  expect(g.working).toBeGreaterThanOrEqual(30);
+  expect(g.working).toBeGreaterThan(g.failed);
+  expect(g.failed).toBeGreaterThan(g.title);
+  expect(g.height).toBeLessThanOrEqual(100);
+  expect(g.inside).toBe(true);
+  expect(g.slack, 'no empty band under the numbers').toBeLessThanOrEqual(16);
+  await screenshot('5-crewmap-captain-1440x900-dark');
+  expect(errors).toEqual([]);
+});
+
+test('the board opens with no cards', async () => {
   await launch();
   fs.rmSync(path.join(profile, 'tasks'), { recursive: true, force: true });
   await page.locator('#navTop .nav-row[data-nav="tasks"]').click();
@@ -225,16 +483,19 @@ test('the board stays read-only and opens with no cards', async () => {
 test('external archival of the selected project immediately restores all remaining project lanes', async () => {
   await launch();
   await page.locator('#taskBoardBtn').click();
-  await page.locator('#tbvProject').selectOption('报表服务');
+  await page.locator('.tbv-chip[data-project="报表服务"]').click();
   await expect(page.locator('.tbv-lane')).toHaveCount(1);
+  await page.locator('.tbv-card[data-card-id="r-export"]').click();
+  await expect(page.locator('.tbv-detail')).toBeVisible();
   const file = path.join(profile, 'tasks', '报表服务.json');
   const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
   doc.cards.forEach((c) => { c.archived = true; });
   fs.writeFileSync(file + '.remote.tmp', JSON.stringify(doc));
   fs.renameSync(file + '.remote.tmp', file);
-  await expect(page.locator('#tbvProject')).toHaveValue('');
+  await expect(page.locator('.tbv-chip[data-project=""]')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.tbv-lane')).toHaveCount(2);
-  await expect(page.locator('.tbv-card')).toHaveCount(8);
+  await expect(page.locator('.tbv-chip')).toHaveCount(3);
+  await expect(page.locator('.tbv-detail')).toBeHidden(); // its card is gone
   await page.locator('#boardViewBtn').click();
   await expect(page.locator('#taskBoardView')).toBeHidden();
   await expect(page.locator('#crewMap')).toBeVisible();
@@ -245,7 +506,7 @@ test('Escape restores sidebar focus and keyboard column navigation closes the ov
   await launch();
   const originalIds = await page.evaluate(() => columns.map((c) => c.id));
   await page.locator('#taskBoardBtn').click();
-  await expect(page.locator('#tbvProject')).toBeFocused();
+  await expect(page.locator('#taskBoardView')).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(page.locator('#taskBoardView')).toBeHidden();
   await expect(page.locator('#taskBoardBtn')).toBeFocused();

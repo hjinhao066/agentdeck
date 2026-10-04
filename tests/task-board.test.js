@@ -203,3 +203,47 @@ test('migration reads only the three requested Markdown sources, preserves origi
   assert.deepEqual(initialCards('hermes-savings-v2', sources['hermes-savings-v2']).map((c) => c.id), initialCards('hermes-savings-v2', sources['hermes-savings-v2']).map((c) => c.id));
   assert.equal(new TaskStore(path.join(root, 'tasks')).list().some((c) => /VPS/.test(c.title)), false);
 });
+test('reorder places a card before/after a sibling, persists, and leaves other cards untouched', (t) => {
+  const { store, add } = fixture(t);
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((id) => add({ id, title: id }));
+  const order = () => store.list({ project: '测试项目' }).map((x) => x.id);
+  assert.deepEqual(order(), ['a', 'b', 'c', 'd']);
+  store.reorder({ id: 'd', before: 'b' });
+  assert.deepEqual(order(), ['a', 'd', 'b', 'c']);
+  const after = store.list();
+  for (const x of [a, b, c]) assert.equal(after.find((y) => y.id === x.id).updated, x.updated, 'neighbours are not rewritten');
+  assert.notEqual(after.find((y) => y.id === 'd').updated, d.updated);
+  store.reorder({ id: 'a', after: 'c' });
+  assert.deepEqual(order(), ['d', 'b', 'c', 'a']);
+  store.reorder({ id: 'c', before: 'd' });
+  assert.deepEqual(order(), ['c', 'd', 'b', 'a']);
+  store.reorder({ id: 'c' });
+  assert.deepEqual(order(), ['d', 'b', 'a', 'c'], 'no anchor = end of the project');
+  assert.deepEqual(new TaskStore(store.dir).list().map((x) => x.id), ['d', 'b', 'a', 'c'], 'order survives a fresh read');
+  // already in place: nothing is written
+  const before = store.list().find((x) => x.id === 'b').updated;
+  store.reorder({ id: 'b', after: 'd' });
+  assert.equal(store.list().find((x) => x.id === 'b').updated, before);
+  // status and session binding are not touched by a reorder
+  store.move({ id: 'b', status: 'doing' });
+  store.reorder({ id: 'b' });
+  assert.equal(store.list().find((x) => x.id === 'b').status, 'doing');
+});
+test('reorder renumbers when no number fits between neighbours and rejects other projects', (t) => {
+  const { store, add } = fixture(t);
+  ['a', 'b', 'c'].forEach((id) => add({ id, title: id }));
+  const other = add({ id: 'x', project: 'other' });
+  // equal orders (as hand-written or migrated boards may have): ids break the tie
+  for (const id of ['a', 'b', 'c']) { const card = store.list().find((x) => x.id === id); store.update({ id, updated: card.updated, patch: { order: 0 } }); }
+  store.reorder({ id: 'c', before: 'b' });
+  const cards = store.list({ project: '测试项目' });
+  assert.deepEqual(cards.map((x) => x.id), ['a', 'c', 'b']);
+  assert.deepEqual(cards.map((x) => x.order), [0, 1, 2]);
+  store.reorder({ id: 'b', before: 'a' });
+  assert.deepEqual(store.list({ project: '测试项目' }).map((x) => x.id), ['b', 'a', 'c']);
+  assert.ok(store.list().every((x) => Number.isFinite(x.order) && x.order >= 0));
+  assert.throws(() => store.reorder({ id: 'a', before: other.id }), /own project/);
+  assert.throws(() => store.reorder({ id: 'a', before: 'a' }), /own project/);
+  assert.throws(() => store.reorder({ id: 'a', before: 'b', after: 'c' }), /either/);
+  assert.throws(() => store.reorder({ id: 'missing' }), /Unknown task/);
+});

@@ -1,6 +1,7 @@
 // Pure helpers behind the 任务看板 view: project swimlanes (one per project,
-// case-insensitive) crossed with the five status columns, project filter, the
-// two sort orders and dependency/parallel marks. Cards come
+// case-insensitive, in the user's order) crossed with the five status columns,
+// the project overview, drag/drop targets, the 需要你 question and
+// dependency/parallel marks. Cards come
 // from TaskBoard.list (docs/task-board-api.md). No DOM: runs in the page and
 // in tests.
 (function (root, factory) {
@@ -19,7 +20,6 @@
     { key: 'needs_user', label: '需要你' },
     { key: 'done', label: '完成' },
   ];
-  const SORTS = ['updated', 'order'];
   const ALL = '';
 
   const time = (iso) => { const t = Date.parse(iso || ''); return Number.isFinite(t) ? t : 0; };
@@ -54,16 +54,12 @@
     return key ? cards.filter((c) => projectKey(c.project) === key) : cards.slice();
   }
 
-  // 'order' is the data layer's task order (project/order/id); 'updated' is
-  // newest first, ties falling back to task order.
+  // Cards always show in the data layer's task order (project/order/id): that
+  // is the order the user arranges by dragging, so it must not jump around.
   function byOrder(a, b) {
     return projectKey(a.project).localeCompare(projectKey(b.project)) || (a.order || 0) - (b.order || 0) || String(a.id).localeCompare(String(b.id));
   }
-  function sortCards(cards, sort) {
-    const list = cards.slice();
-    if (sort === 'updated') return list.sort((a, b) => time(b.updated) - time(a.updated) || byOrder(a, b));
-    return list.sort(byOrder);
-  }
+  function sortCards(cards) { return cards.slice().sort(byOrder); }
 
   // Unfinished prerequisites, resolved against every card we can see (archived
   // ones included, since dependencies may point at archived done cards). A
@@ -87,30 +83,88 @@
     return '等' + (names.length > 2 ? names.slice(0, 2).join('、') + ` 等 ${names.length} 项` : names.join('、')) + '完成';
   }
 
-  // The whole board for one render: visible (non-archived) cards of the chosen
-  // project as one lane per project, each lane split into the five columns,
-  // each cell sorted, each card decorated. `columns` carries the totals.
+  // What the user is being asked, as one sentence, or '' when a card sits in
+  // 需要你 without a real question (a session that ended without a receipt, a
+  // dispatcher that gave up, a card moved there by hand with only an old
+  // result on it). The board then says so instead of showing internal wording.
+  const NOT_A_QUESTION = [/^已结束，未提交回执/, /^调度已结束/];
+  function userQuestion(card) {
+    if (!card || card.status !== 'needs_user') return '';
+    if (typeof card.user_question === 'string' && card.user_question.trim()) return card.user_question.trim();
+    const text = String(card.latest_receipt || '').trim();
+    if (!text || NOT_A_QUESTION.some((re) => re.test(text))) return '';
+    if (/:(?:complete|failed|fallback):/.test(card.last_event || '')) return '';
+    return text;
+  }
+  // The latest receipt in the user's words; internal wording is translated.
+  function receiptText(card) {
+    const text = String((card && card.latest_receipt) || '').trim();
+    if (/^已结束，未提交回执/.test(text)) return '队员停下了，但没有交结果。';
+    if (/^调度已结束/.test(text)) return '这件事还没有派给队员。';
+    return text;
+  }
+
+  // Absolute / home-relative file paths mentioned in a text, in first-seen order.
+  function filePaths(...texts) {
+    const found = [];
+    const re = /(?<![\w:/.\\-])(?:~|[A-Za-z]:)?[\\/](?:[^\s"'`<>|，。；、！？（）()\[\]{}:]+[\\/])+[^\s"'`<>|，。；、！？（）()\[\]{}:]*[^\s"'`<>|，。；、！？（）()\[\]{}:.,;]/g;
+    texts.forEach((text) => {
+      (Array.isArray(text) ? text : String(text || '').match(re) || []).forEach((p) => { if (typeof p === 'string' && p && !found.includes(p)) found.push(p); });
+    });
+    return found.slice(0, 20);
+  }
+
+  // Lanes in the user's own order (dragged), unknown projects after them by name.
+  function orderLanes(lanes, laneOrder) {
+    const rank = new Map((Array.isArray(laneOrder) ? laneOrder : []).map((k, i) => [projectKey(k), i]));
+    return lanes.slice().sort((a, b) => (rank.has(a.key) ? rank.get(a.key) : Infinity) - (rank.has(b.key) ? rank.get(b.key) : Infinity) || a.name.localeCompare(b.name));
+  }
+  // The lane order after dropping `key` before `beforeKey` (null = last).
+  function moveLane(keys, key, beforeKey) {
+    const rest = keys.filter((k) => k !== key);
+    const at = beforeKey == null ? -1 : rest.indexOf(beforeKey);
+    rest.splice(at < 0 ? rest.length : at, 0, key);
+    return rest;
+  }
+  // Where a card dropped at `index` among a cell's cards goes, as the anchor
+  // TaskBoard.reorder takes. null: the cell holds no other card, or the card
+  // is already there, so there is nothing to reorder.
+  function dropAnchor(ids, id, index) {
+    const rest = ids.filter((x) => x !== id);
+    const at = Math.max(0, Math.min(rest.length, index));
+    if (!rest.length || ids.indexOf(id) === at && ids.length === rest.length + 1) return null;
+    return at < rest.length ? { before: rest[at] } : { after: rest[rest.length - 1] };
+  }
+  function stepStatus(status, dir) {
+    const i = COLUMNS.findIndex((c) => c.key === status) + dir;
+    return i >= 0 && i < COLUMNS.length ? COLUMNS[i].key : null;
+  }
+  function labelOf(status) { const c = COLUMNS.find((x) => x.key === status); return c ? c.label : ''; }
+
+  // The whole board for one render: every project as one lane (the user's lane
+  // order), each lane split into the five columns in task order, each card
+  // decorated. `projects` is the overview strip (always every project, with
+  // per-status counts); `lanes` are the ones shown for the chosen project.
   function buildBoard(allCards, opts = {}) {
-    const sort = SORTS.includes(opts.sort) ? opts.sort : 'updated';
     const index = new Map(allCards.map((c) => [c.id, c]));
     const live = allCards.filter((c) => !c.archived);
-    const all = projects(allCards);
+    const names = projects(allCards);
     const requestedProject = projectKey(opts.project);
-    const project = all.some((p) => p.key === requestedProject) ? requestedProject : ALL;
-    const shown = sortCards(filterProject(live, project), sort);
-    const names = new Map(all.map((p) => [p.key, p.name]));
-    const lanes = new Map();
-    shown.forEach((card) => {
-      const key = projectKey(card.project);
-      if (!lanes.has(key)) lanes.set(key, { key, name: names.get(key) || card.project || '其他', total: 0, columns: COLUMNS.map((c) => ({ ...c, cards: [] })) });
-      const lane = lanes.get(key);
+    const project = names.some((p) => p.key === requestedProject) ? requestedProject : ALL;
+    const lanes = new Map(names.map((p) => [p.key, { key: p.key, name: p.name, total: 0, open: 0, counts: Object.fromEntries(COLUMNS.map((c) => [c.key, 0])), columns: COLUMNS.map((c) => ({ ...c, cards: [] })) }]));
+    sortCards(live).forEach((card) => {
+      const lane = lanes.get(projectKey(card.project));
       const waits = waitsOn(card, index);
-      lane.columns.find((c) => c.key === columnOf(card)).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits) });
-      lane.total++;
+      const status = columnOf(card);
+      lane.columns.find((c) => c.key === status).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits), question: userQuestion(card) });
+      lane.counts[status]++; lane.total++;
+      if (status !== 'done') lane.open++;
     });
-    const laneList = [...lanes.values()].sort((a, b) => a.name.localeCompare(b.name));
-    const columns = COLUMNS.map((c) => ({ ...c, count: laneList.reduce((n, l) => n + l.columns.find((x) => x.key === c.key).cards.length, 0) }));
-    return { columns, lanes: laneList, projects: all, project, total: shown.length };
+    const all = orderLanes([...lanes.values()], opts.laneOrder);
+    const laneList = project ? all.filter((l) => l.key === project) : all;
+    const columns = COLUMNS.map((c) => ({ ...c, count: laneList.reduce((n, l) => n + l.counts[c.key], 0) }));
+    const total = laneList.reduce((n, l) => n + l.total, 0);
+    return { columns, lanes: laneList, projects: all.map((l) => ({ key: l.key, name: l.name, total: l.total, open: l.open, counts: l.counts })), project, total, open: total - columns.find((c) => c.key === 'done').count };
   }
 
   function formatUpdated(iso, now = Date.now()) {
@@ -140,5 +194,5 @@
     return m && m !== 'default' ? String(m) : '';
   }
 
-  return { COLUMNS, SORTS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, formatUpdated, ownerLabel, modelLabel };
+  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, userQuestion, receiptText, filePaths, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
 });
