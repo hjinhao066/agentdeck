@@ -359,6 +359,27 @@ test('environment launch prefixes identify providers and preserve complete model
   }
 });
 
+test('Claude seat comes only from env prefixes before the program name', () => {
+  const prefixed = 'env FOO="CLAUDE_CONFIG_DIR=/Users/jinhao/.claude" CLAUDE_CONFIG_DIR=/Users/jinhao/.claude-us claude --model claude-sonnet-5-5 -- "CLAUDE_CONFIG_DIR=/Users/jinhao/.claude"';
+  assert.deepEqual(AgentInfo.resolveAgentInfo({ cmd: prefixed }, null).seat, { id: 'us', configDir: '/Users/jinhao/.claude-us' });
+  assert.equal(AgentInfo.commandSetsClaudeConfigDir(prefixed), true);
+
+  const quotedOnly = { cmd: 'claude --model claude-sonnet-5-5 -- "CLAUDE_CONFIG_DIR=/Users/jinhao/.claude-us"', claudeSeatId: 'cn', claudeConfigDir: '~/.claude' };
+  assert.deepEqual(AgentInfo.resolveAgentInfo(quotedOnly, null).seat, { id: 'cn', configDir: '~/.claude' });
+  assert.equal(AgentInfo.commandSetsClaudeConfigDir(quotedOnly.cmd), false);
+
+  const last = 'CLAUDE_CONFIG_DIR=/Users/jinhao/.claude CLAUDE_CONFIG_DIR="/Users/jinhao/.claude-us" claude';
+  assert.deepEqual(AgentInfo.resolveAgentInfo({ cmd: last }, null).seat, { id: 'us', configDir: '/Users/jinhao/.claude-us' });
+  const cleared = 'CLAUDE_CONFIG_DIR=/Users/jinhao/.claude-us CLAUDE_CONFIG_DIR=/tmp/custom claude';
+  assert.equal(AgentInfo.resolveAgentInfo({ cmd: cleared, claudeSeatId: 'cn', claudeConfigDir: '~/.claude' }, null).seat.id, 'cn');
+  assert.equal(AgentInfo.commandSetsClaudeConfigDir(cleared), true);
+
+  assert.equal(AgentInfo.commandSetsClaudeConfigDir('export CLAUDE_CONFIG_DIR=/tmp/.claude-us claude'), false);
+  assert.equal(AgentInfo.commandSetsClaudeConfigDir('"export CLAUDE_CONFIG_DIR=/tmp/.claude-us" claude'), false);
+  assert.equal(AgentInfo.commandSetsClaudeConfigDir('env -u CLAUDE_CONFIG_DIR claude'), false);
+  assert.equal(AgentInfo.commandSetsClaudeConfigDir('env --unset=CLAUDE_CONFIG_DIR claude --model sonnet'), false);
+});
+
 test('family-only live and cached Claude labels retain the launch version', () => {
   const col = { cmd: 'env CLAUDE_CONFIG_DIR=/Users/jinhao/.claude-us claude --model claude-sonnet-5-5',
     agentProvider: 'Claude', agentModel: 'Sonnet', claudeSeatId: 'cn', claudeConfigDir: '~/.claude' };

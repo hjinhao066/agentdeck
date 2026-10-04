@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { resolveBoardAuth, controllingTerminal } = require('./board-credentials');
+const AgentInfo = require('./agent-info');
 
 
 function fail(message, code = 1) {
@@ -286,6 +287,7 @@ async function main() {
     for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
     if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id such as us or cn.');
+    if (typeof args.seat === 'string' && typeof args.command === 'string' && AgentInfo.commandSetsClaudeConfigDir(args.command)) fail('new --seat cannot be combined with CLAUDE_CONFIG_DIR in --command.');
     const response = await request({
       action: 'main-new', title, task,
       project: typeof args.project === 'string' ? args.project.trim() : '',

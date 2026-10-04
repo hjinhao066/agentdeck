@@ -1210,6 +1210,7 @@
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
         const custom = window.BoardCore.cleanText(message.command, 1000);
+        if (seat && custom && window.AgentInfo.commandSetsClaudeConfigDir(custom)) throw new Error('不能同时指定 --seat 和带 CLAUDE_CONFIG_DIR 的 --command。');
         const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : nativeCaptain(s.cmd) ? window.BoardCore.commandForAgent('codex') : s.cmd));
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;

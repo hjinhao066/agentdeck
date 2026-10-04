@@ -47,26 +47,36 @@
   const INTERPRETERS = new Set(['node', 'nodejs', 'python', 'python3', 'ruby', 'perl', 'deno', 'bun']);
   const PROVIDER_BY_BIN = { 'cursor-agent': 'Cursor', claude: 'Claude', agy: 'Antigravity', antigravity: 'Antigravity', gemini: 'Antigravity', grok: 'Grok', codex: 'Codex', chatgpt: 'Codex' };
 
-  // Skip `env`, its flags, NAME=value assignments, and the `command` builtin
-  // so `env CLAUDE_CONFIG_DIR=~/.claude-us claude --model …` is still Claude.
-  function programAt(command) {
-    const tokens = commandTokens(command);
+  // Assignments and `env` flags that apply to the program, stopping at its name.
+  // A later quoted argument is not an environment prefix.
+  function prefixBeforeProgram(tokens) {
     let i = 0;
-    const skipAssign = () => { while (i < tokens.length && isAssignment(tokens[i])) i++; };
-    skipAssign();
+    const assignments = [];
+    const takeAssign = () => {
+      while (i < tokens.length && isAssignment(tokens[i])) assignments.push(tokens[i++]);
+    };
+    takeAssign();
     if (unquoteToken(tokens[i]) === 'env') {
       i++;
       while (i < tokens.length) {
         const word = unquoteToken(tokens[i]);
         if (word === '--') { i++; break; }
-        if (isAssignment(tokens[i])) { i++; continue; }
+        if (isAssignment(tokens[i])) { assignments.push(tokens[i++]); continue; }
         if (word === '-u' || word === '--unset' || word === '-C' || word === '--chdir' || word === '-S' || word === '--split-string') { i += 2; continue; }
         if (/^--(?:unset|chdir|split-string)=/.test(word)) { i++; continue; }
         if (word === '-i' || word === '-0' || word === '-v' || word === '--ignore-environment' || word === '-') { i++; continue; }
         break;
       }
-      skipAssign();
+      takeAssign();
     }
+    return { index: i, assignments };
+  }
+
+  // Skip `env`, its flags, NAME=value assignments, and the `command` builtin
+  // so `env CLAUDE_CONFIG_DIR=~/.claude-us claude --model …` is still Claude.
+  function programAt(command) {
+    const tokens = commandTokens(command);
+    let i = prefixBeforeProgram(tokens).index;
     if (unquoteToken(tokens[i]) === 'command') i++;
     const token = tokens[i] || null;
     const raw = token ? unquoteToken(token) : '';
@@ -74,18 +84,30 @@
     return { token, name, lower: name.toLowerCase() };
   }
 
+  function claudeConfigDirValue(token) {
+    const match = /^CLAUDE_CONFIG_DIR=(.*)$/.exec(unquoteToken(token));
+    if (!match) return null;
+    let dir = match[1];
+    if (dir.length >= 2 && ((dir.startsWith('"') && dir.endsWith('"')) || (dir.startsWith("'") && dir.endsWith("'")))) dir = dir.slice(1, -1);
+    return dir;
+  }
+
+  // True when an env/VAR=value prefix before the program sets CLAUDE_CONFIG_DIR.
+  function commandSetsClaudeConfigDir(command) {
+    return prefixBeforeProgram(commandTokens(command)).assignments.some((token) => claudeConfigDirValue(token) != null);
+  }
+
   function seatFromCommand(command) {
-    for (const token of commandTokens(command)) {
-      const raw = unquoteToken(token);
-      const match = /^(?:export\s+)?CLAUDE_CONFIG_DIR=(.*)$/.exec(raw);
-      if (!match) continue;
-      let dir = match[1];
-      if (dir.length >= 2 && ((dir.startsWith('"') && dir.endsWith('"')) || (dir.startsWith("'") && dir.endsWith("'")))) dir = dir.slice(1, -1);
+    let seat = null;
+    for (const token of prefixBeforeProgram(commandTokens(command)).assignments) {
+      const dir = claudeConfigDirValue(token);
+      if (dir == null) continue;
       const base = dir.replace(/\\/g, '/').replace(/\/+$/, '').split('/').pop();
-      if (base === '.claude-us') return { id: 'us', configDir: dir };
-      if (base === '.claude') return { id: 'cn', configDir: dir };
+      if (base === '.claude-us') seat = { id: 'us', configDir: dir };
+      else if (base === '.claude') seat = { id: 'cn', configDir: dir };
+      else seat = null;
     }
-    return null;
+    return seat;
   }
 
   // A status line that only says "Sonnet" has no version. The launch id does.
@@ -492,6 +514,7 @@
     PROVIDER_ICONS,
     stripAnsi,
     inferProvider,
+    commandSetsClaudeConfigDir,
     extractModel,
     shortModelName,
     iconProviderFor,

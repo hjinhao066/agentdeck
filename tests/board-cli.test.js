@@ -253,6 +253,25 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
   }
 });
 
+test('new rejects --seat combined with CLAUDE_CONFIG_DIR in --command before requesting', async () => {
+  for (const command of [
+    'env CLAUDE_CONFIG_DIR=/tmp/.claude-us claude --model claude-sonnet-5-5',
+    'CLAUDE_CONFIG_DIR="~/.claude" claude',
+    'env FOO=bar CLAUDE_CONFIG_DIR=/tmp/.claude-us claude --note "CLAUDE_CONFIG_DIR=/tmp/.claude"',
+  ]) {
+    const result = await runCli(['new', '--title', 'T', '--task', 'do it', '--seat', 'us', '--command', command], {
+      AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '',
+    });
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /cannot be combined with CLAUDE_CONFIG_DIR/);
+  }
+  const quotedArg = await runCli(['new', '--title', 'T', '--task', 'do it', '--seat', 'us', '--command', 'claude --note "CLAUDE_CONFIG_DIR=/tmp/.claude-us"'], {
+    AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '',
+  });
+  assert.equal(quotedArg.code, 1);
+  assert.match(quotedArg.stderr, /Only conductor-managed terminals/);
+});
+
 test('new rejects empty project names and malformed review declarations before requesting', async () => {
   for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a']]) {
     const result = await runCli(['new', '--title', 'Review', '--task', 'Inspect', ...options], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
