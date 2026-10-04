@@ -42,6 +42,110 @@
   const isMainId = (id) => !!(state() && state().colId === id && mainCol());
   function save() { host.saveConfig(); }
 
+  function boardNotice(message) {
+    const s = state();
+    if (!s) throw new Error('请先创建队长，再开始卡片。');
+    s.pending.push({ taskId: 'board-' + Date.now(), colId: s.colId, title: '任务看板', ts: Date.now(), summary: message, source: 'command' });
+    save();
+  }
+  async function boardRequest(op, input) {
+    const result = await window.deck.taskBoard(op, input);
+    for (const notice of result.notices || []) boardNotice(notice);
+    return result;
+  }
+  let boardWrites = Promise.resolve();
+  function boardEvent(task, type, message = '', source = '') {
+    if (!task.boardId) return Promise.resolve();
+    const input = { id: task.boardId, session_id: task.colId, attempt_id: task.boardAttempt, type, message, source };
+    const write = boardWrites.catch(() => {}).then(() => window.deck.taskBoard('event', input)).then((result) => {
+      // The normal receipt already carries the complete failure reason. Only
+      // the extra no-retry decision needs a separate board notice.
+      if (result.card?.flag === 'held' && !result.ignored) boardNotice(`卡片 ${task.boardId} 连续失败 2 次，已挂起，不再自动重试。`);
+      return result;
+    });
+    boardWrites = write;
+    return write;
+  }
+  function autoBoardEvent(task, type, message = '', source = '') {
+    if (!task.boardId) return;
+    const event = { type, message, source };
+    task.pendingBoardEvent = event;
+    boardEvent(task, type, message, source).then(() => {
+      if (task.pendingBoardEvent === event) { delete task.pendingBoardEvent; save(); }
+    }, (error) => host.showToast('看板写入失败，稍后重试：' + error.message));
+  }
+  function receiptBoardEvent(task, receipt) {
+    return boardEvent(task, receipt.failed ? 'failed' : receipt.question ? 'ask' : receipt.source === 'fallback' ? 'fallback' : 'complete', receipt.failed || receipt.question || receipt.summary, receipt.source || 'automatic');
+  }
+  async function recordReceiptForBoard(task, receipt) {
+    try { await receiptBoardEvent(task, receipt); }
+    catch (error) {
+      // A git conflict must not swallow an authenticated worker receipt. Keep
+      // the transition in private config and retry when the shared file recovers.
+      task.pendingBoardEvent = { type: receipt.failed ? 'failed' : receipt.question ? 'ask' : 'complete', message: receipt.failed || receipt.question || receipt.summary, source: receipt.source || 'automatic' };
+      boardNotice(`卡片 ${task.boardId} 的回执已收到；看板写入待重试：${error.message}`);
+      save();
+    }
+  }
+  function retryBoardWrites(s) {
+    for (const task of s.tasks) {
+      if (!task.pendingBoardEvent || task.boardRetrying) continue;
+      task.boardRetrying = true;
+      const e = task.pendingBoardEvent;
+      boardEvent(task, e.type, e.message, e.source).then(() => { if (task.pendingBoardEvent === e) delete task.pendingBoardEvent; }, () => {}).finally(() => { delete task.boardRetrying; save(); });
+    }
+  }
+  const startingCards = new Map();
+  async function startCard(id, heartbeat) {
+    if (startingCards.has(id)) return startingCards.get(id);
+    const start = startCardOnce(id, heartbeat);
+    startingCards.set(id, start);
+    try { return await start; } finally { startingCards.delete(id); }
+  }
+  async function startCardOnce(id, heartbeat) {
+    if (!mainCol()) throw new Error('请先创建队长，再开始卡片。');
+    const claimed = heartbeat
+      ? { card: (await window.TaskBoard.list()).find((c) => c.id === id) }
+      : await boardRequest('claim', { id });
+    if (claimed.ignored) return { card: claimed.card, ignored: true };
+    if (!claimed.card || !claimed.card.dispatch_claim || claimed.card.dispatch_claim.delivered || heartbeat && claimed.card.dispatch_claim.key !== heartbeat.key) return { ignored: true };
+    const key = claimed.card.dispatch_claim.key;
+    const { card, captain } = await boardRequest('dispatch', { id });
+    if (window.TaskBoard.settings().dispatcher !== 'gemini' || captain) {
+      boardNotice(`用户要开始卡片 ${card.id}「${card.title}」${captain ? '（需要队长判断）' : ''}。项目：${card.project}。`);
+      await boardRequest('dispatched', { id, key });
+      return { card, dispatcher: 'captain' };
+    }
+    if (freeSlots() <= 0) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话无空位，请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
+    const sessionId = 'c-dispatch-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    await boardRequest('dispatch', { id, session_id: sessionId });
+    const cli = M.boardCli(host.platform);
+    const prompt = M.dispatcherInstructions(host.platform, card);
+    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd: window.BoardCore.commandForAgent('agy'), captainCrew: true, project: card.project, dispatcherCardId: id }, true);
+    dispatch(col, prompt + `\n整理后用 ${cli} new --task-id ${id} --project ${JSON.stringify(card.project)} --title "标题" --task "整理后的任务" --agent … 派出去，然后 complete 说明派给谁。拿不准就 ask 交队长。`, '调度：' + card.title);
+    await boardRequest('dispatched', { id, key });
+    return { card, dispatcher: 'gemini', session_id: col.id };
+  }
+  window.TaskBoard = {
+    onChange: (callback) => window.deck.onTasksChanged(callback),
+    list: (filter = {}) => window.deck.taskBoard('list', filter),
+    add: (input) => boardRequest('add', input),
+    update: (id, patch, updated) => boardRequest('update', { id, patch, updated }),
+    move: (id, status, updated) => boardRequest('move', { id, status, updated }),
+    archiveDone: (project) => boardRequest('archive', { done: true, ...(project ? { project } : {}) }),
+    startCard,
+    settings: (dispatcher) => {
+      if (dispatcher !== undefined) {
+        if (!['captain', 'gemini'].includes(dispatcher)) throw new Error('dispatcher must be captain or gemini.');
+        host.config.taskBoard = { dispatcher }; save();
+      }
+      return { dispatcher: host.config.taskBoard?.dispatcher || 'gemini' };
+    },
+  };
+  window.deck.onTaskStart((input) => {
+    if (mainCol()) startCard(input.id, input).catch((error) => host.showToast('看板调度暂未发出：' + error.message));
+  });
+
   function normalize() {
     host.config.captainHistory = M.normalizeHistory(host.config.captainHistory);
     const s = host.config.mainSession;
@@ -58,6 +162,7 @@
     s.fresh = !!s.fresh;
     s.legacyReceiptInjection = s.legacyReceiptInjection === true;
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
+    s.tasks.forEach((t) => { delete t.boardRetrying; });
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
     // the column was closed while the app was down
     if (!host.columns().some((c) => c.id === s.colId && c.isMain)) host.config.mainSession = null;
@@ -296,6 +401,7 @@
       colId: col ? col.id : '', title: String(title || host.columnLabel(col)).slice(0, 120), gen: s.gen,
       status: col ? 'queued' : 'waiting', sentAt: Date.now(), turnId: '', receipt: null,
       project: col ? col.project || '' : '', reviews: col ? col.reviews || [] : [],
+      boardId: col?.boardId || '', boardAttempt: col?.boardAttempt || '',
     };
     s.tasks.push(task);
     if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length - MAX_TASKS);
@@ -333,6 +439,7 @@
           if (t === last) { t.turnId = turn ? turn.id : ''; t.startedAt = Date.now(); }
           else { t.doneAt = Date.now(); t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], images: [], failed: '', explicit: true }; }
           update(t);
+          if (t === last) autoBoardEvent(t, 'started');
         });
       },
       onGiveUp: () => {
@@ -369,13 +476,19 @@
   // ---- background sessions: at most M.MAX_ACTIVE at work, the rest wait ----
   const crewIds = () => new Set(host.columns().filter((c) => c.captainCrew && !c.isMain).map((c) => c.id));
   const freeSlots = () => M.MAX_ACTIVE - M.activeCrew(state().tasks, crewIds()).size;
-  function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
-    const col = host.createSession({ title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true, ...metadata }, true);
+  async function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
+    const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    if (metadata.boardId) {
+      await boardRequest('bind', { id: metadata.boardId, project: metadata.project, session_id: id, attempt_id: requestId,
+        assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
+    }
+    const col = host.createSession({ ...metadata, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
+    if (waiting) { waiting.boardId = metadata.boardId || ''; waiting.boardAttempt = requestId; }
     dispatch(col, text, title, waiting);
     return col;
   }
   // A queued request keeps its text in config.json; a long one goes to a file first.
-  async function enqueue(title, cmd, cwd, requestId, text, metadata) {
+  async function enqueue(title, cmd, cwd, requestId, text, metadata = {}) {
     const s = state();
     let body = text;
     if (body.length > 8000) {
@@ -386,20 +499,27 @@
     }
     const task = addTask(null, title);
     Object.assign(task, metadata);
-    s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, ...metadata });
+    s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
     save();
   }
   // Start waiting work as slots free up, oldest first.
-  function pump() {
+  let pumping = false;
+  async function pump() {
     const s = state();
-    if (!s || !s.waitlist.length) return;
-    let free = freeSlots();
-    while (free-- > 0 && s.waitlist.length) {
-      const w = s.waitlist.shift();
-      const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
-      if (task) openSession(w.title, w.cmd, w.cwd, w.requestId, w.task, task, { project: w.project || '', reviews: w.reviews || [] });
-    }
-    save();
+    if (!s || !s.waitlist.length || pumping) return;
+    pumping = true;
+    try {
+      let free = freeSlots();
+      while (free-- > 0 && s.waitlist.length) {
+        const w = s.waitlist.shift();
+        const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
+        if (task) {
+          try { await openSession(w.title, w.cmd, w.cwd, w.requestId, w.task, task, w.metadata || { project: w.project || '', reviews: w.reviews || [] }); }
+          catch (error) { settle(task, { failed: error.message, summary: '', files: [], explicit: true }); }
+        }
+      }
+      save();
+    } finally { pumping = false; }
   }
   // A finished background session is archived once 队长 has its receipt and
   // nothing happened for M.ARCHIVE_AFTER; never one you are looking at.
@@ -428,8 +548,19 @@
   }
   // A receipt arrived: record it on the column (the ledger), show it, queue it for the model.
   const CLOSED = ['done', 'failed', 'stopped', 'asking'];
-  function settle(task, receipt) {
+  function settle(task, receipt, boardRecorded = false) {
     if (CLOSED.includes(task.status)) return;
+    if (task.boardId && !boardRecorded) {
+      const type = receipt.failed ? 'failed' : receipt.question ? 'ask' : receipt.source === 'fallback' ? 'fallback' : 'complete';
+      autoBoardEvent(task, type, receipt.failed || receipt.question || receipt.summary, receipt.source || 'automatic');
+    }
+    const dispatcher = host.columns().find((c) => c.id === task.colId && c.dispatcherCardId);
+    const delegatedQueue = dispatcher && state()?.waitlist.some((w) => w.metadata?.boardId === dispatcher.dispatcherCardId);
+    if (dispatcher && !delegatedQueue) window.deck.taskBoard('dispatcherReceipt', { id: dispatcher.dispatcherCardId, session_id: dispatcher.id, failed: receipt.failed || '', question: receipt.question || '' }).then((result) => {
+      if (receipt.failed) {
+        if (result.card?.flag === 'held' && !result.ignored) boardNotice(`卡片 ${dispatcher.dispatcherCardId} 连续失败 2 次，已挂起。`);
+      } else for (const notice of result.notices || []) boardNotice(notice);
+    }, (error) => host.showToast(error.message));
     task.receipt = receipt;
     task.status = receipt.question ? 'asking' : receipt.failed ? 'failed' : receipt.explicit ? 'done' : 'stopped';
     task.doneAt = Date.now();
@@ -517,7 +648,7 @@
 
   // Authenticated submissions bind to the most recent instruction actually
   // sent to this column, never to an unsent supplement or another worker.
-  function submit(message, caller) {
+  async function submit(message, caller) {
     const s = state();
     if (!s || isMain(caller)) return null;
     const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit'));
@@ -528,7 +659,9 @@
       if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
       if (message.code !== 0) {
         if (task.status === 'asking') task.status = 'working';
-        settle(task, { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process' });
+        const receipt = { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process' };
+        await recordReceiptForBoard(task, receipt);
+        settle(task, receipt, true);
       } else { task.endedAt = Date.now(); task.processEnded = true; update(task); }
       return response;
     }
@@ -541,6 +674,7 @@
       return response;
     }
     const receipt = M.commandReceipt(message);
+    await recordReceiptForBoard(task, receipt);
     // A real submission may follow a question or the no-receipt notice. Replace
     // an unread automatic notice so the Captain sees the authoritative result.
     if (['asking', 'stopped', 'failed'].includes(task.status)) {
@@ -548,7 +682,7 @@
       s.pending = s.pending.filter((p) => p.taskId !== task.id);
       task.status = 'working';
     }
-    settle(task, receipt);
+    settle(task, receipt, true);
     return response;
   }
 
@@ -560,7 +694,7 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
-    if (id === s.colId) { tokenSaverTick(entry); if (!tokenSaving) deliver(entry); pump(); return; }
+    if (id === s.colId) { retryBoardWrites(s); tokenSaverTick(entry); if (!tokenSaving) deliver(entry); pump(); return; }
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
@@ -668,10 +802,15 @@
   // Resolves to the response payload, or rejects with a message for the caller.
   async function handle(message, caller) {
     const s = state();
-    if (!s || !caller || !isMain(caller)) throw new Error('只有队长可以用这个命令。');
+    if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
       case 'main-quota':
         return { done: true, result: host.quotaText() };
+      case 'main-task': {
+        if (!['add', 'list', 'move', 'archive'].includes(message.op)) throw new Error('Invalid task operation.');
+        const result = await boardRequest(message.op, message.input);
+        return { done: true, result: JSON.stringify(result, null, 2) };
+      }
       case 'main-stop':
       case 'main-archive': {
         const id = String(message.to || '').trim();
@@ -756,7 +895,7 @@
         for (const id of reviews) {
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
-        const metadata = { project, reviews };
+        const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
@@ -765,13 +904,21 @@
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;
         const cwd = window.BoardCore.cleanText(message.cwd, 1000);
+        if (metadata.boardId) {
+          const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === metadata.boardId);
+          if (!card) throw new Error('找不到卡片：' + metadata.boardId);
+          if (metadata.project && metadata.project !== card.project) throw new Error('--project differs from the card project.');
+          metadata.project = card.project;
+          if (s.waitlist.some((w) => w.metadata?.boardId === card.id && w.requestId !== message.id)) throw new Error('这张卡片已经在排队。');
+          if (card.archived || card.flag === 'held' || card.flag === 'blocked' || card.status === 'done') throw new Error('卡片尚不可开始，请检查前置任务或显式移回待办。');
+        }
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
         // past the limit (or behind work already waiting): queue it, oldest first
         if (s.waitlist.length || freeSlots() <= 0) {
           await enqueue(title, cmd, cwd, message.id, task, metadata);
           return { done: true, result: `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。` };
         }
-        const col = openSession(title, cmd, cwd, message.id, task, undefined, metadata);
+        const col = await openSession(title, cmd, cwd, message.id, task, null, metadata);
         return { done: true, result: `已开新会话 ${col.id}「${title}」，任务会在它准备好后发过去。` };
       }
       case 'main-tell': {
@@ -787,6 +934,14 @@
           }
         }
         if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
+        if (col.boardId) {
+          const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === col.boardId);
+          if (card && (card.attempt_closed || !card.session_id)) {
+            await boardRequest('bind', { id: card.id, project: card.project, session_id: col.id, attempt_id: message.id,
+              assignee: { agent: window.BoardCore.inferAgentType(col.cmd), model: col.cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
+            col.boardAttempt = message.id;
+          }
+        }
         const entry = host.terms.get(col.id);
         if (entry && entry.state === 'input' && !message.now) throw new Error(`「${host.columnLabel(col)}」停在确认提示上：有把握就用 answer 回答它，没把握就请用户去那一列处理。`);
         // a bare shell with no agent to start would run the text as commands

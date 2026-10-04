@@ -94,6 +94,12 @@ skipped.
 
 ## 队长 (Captain)
 
+任务看板数据、CLI、自动流转及未来界面的读写入口见
+[任务看板接口说明](docs/task-board-api.md)。正本是 `~/.agents/boards/tasks/<项目名>.json`；
+`new --task-id ... --project ...` 绑定卡片，命令回执自动流转，文件监听和每 60 秒巡检
+发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
+此分支只提供数据及接口，不添加看板界面。
+
 One standing column, opened from the sidebar entry 队长 (creating it the first
 time, with the agent you pick; afterwards it only returns to it). Once created it
 also has its own pinned row at the top of the session list. There is only ever

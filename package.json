@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "TweetDeck-style multi-column deck for terminal AI agents",
   "main": "main.js",
   "scripts": {
@@ -55,6 +55,8 @@
       "pages.js",
       "main-core.js",
       "main-session.js",
+      "task-board.js",
+      "task-heartbeat.js",
       "crew-map-core.js",
       "crew-map.js",
       "side-pane.js",

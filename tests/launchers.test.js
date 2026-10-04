@@ -195,7 +195,7 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(text, /quota.*只读各家订阅额度/);
   assert.match(text, /派活前可跑 quota，避开已用尽或快用尽/);
   // progress boards, concurrency, scraping fallbacks and stuck-session patience
-  assert.match(text, /13\. [^\n]*开工先跑 ledger，再看 ~\/\.agents\/boards\/ 里进行中的看板[^\n]*顺手把对应看板里那几行改掉/);
+  assert.match(text, /13\. 开工先跑 ledger 和 task list[^\n]*tasks\/<项目名>\.json[^\n]*状态由程序随命令回执自动改/);
   assert.match(text, /14\. [^\n]*sysctl vm\.swapusage[^\n]*free 剩不到 1GB 就少开/);
   assert.match(text, /GitHub 现成工具、OpenCLI、agent-reach[^\n]*Muse\.ai 或 ChatGPT 浏览器/);
   assert.match(text, /3\. 先弄懂再派活：[^\n]*表述不清、模棱两可、你没完全理解，先问清楚[^\n]*更好的办法[^\n]*有把握把活做好，才把任务拆开派下去[^\n]*自己决定，不拿去问用户/);

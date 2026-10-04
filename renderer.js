@@ -128,6 +128,7 @@ if (saved) {
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
+  if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher)) config.taskBoard = { dispatcher: saved.taskBoard.dispatcher };
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
@@ -147,7 +148,6 @@ if (saved) {
       manualTitle: c.manualTitle !== undefined ? !!c.manualTitle : isManualTitle(c.title),
       taskId: c.taskId || newTaskId(),
       role: c.role || 'manual',
-      project: c.project,
       reviews: c.reviews,
       parentTaskId: c.parentTaskId,
       taskTitle: c.taskTitle,
@@ -173,6 +173,10 @@ if (saved) {
       folderId: typeof c.folderId === 'string' ? c.folderId : null,
       isMain: !!c.isMain,
       captainCrew: !!c.captainCrew,
+      project: typeof c.project === 'string' ? c.project : '',
+      boardId: typeof c.boardId === 'string' ? c.boardId : '',
+      boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
+      dispatcherCardId: typeof c.dispatcherCardId === 'string' ? c.dispatcherCardId : '',
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
   }
@@ -2950,7 +2954,7 @@ function createManagedChild(message, caller) {
   return child;
 }
 
-window.deck.onBoardCommand((message) => {
+window.deck.onBoardCommand(async (message) => {
   const cached = config.boardResponses[message.id];
   if (cached) {
     window.deck.boardRespond({ requestId: message.id, ...cached });
@@ -2970,7 +2974,7 @@ window.deck.onBoardCommand((message) => {
   const caller = columns.find((col) => col.id === message.callerId);
   if (['complete', 'ask', 'progress', 'session-exit'].includes(message.action) && caller) {
     try {
-      const response = MainSession.submit(message, caller);
+      const response = await MainSession.submit(message, caller);
       if (response) { respondBoard(message.id, response); return; }
       if (message.action === 'session-exit') { respondBoard(message.id, { done: true }); return; }
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
@@ -2982,7 +2986,7 @@ window.deck.onBoardCommand((message) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
         if (message.action === 'main-peek' || message.action === 'main-quota' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response, message.action === 'main-receipts');
+        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-task');
       },
       (error) => {
         const response = { done: true, error: error.message };
@@ -3236,6 +3240,10 @@ function updateAgentIdentityBadge(id, entry, screenText) {
     col.agentProvider = info.provider;
     if (info.rawModel) col.agentModel = info.rawModel;
     if (info.effort) col.agentEffort = info.effort;
+    if (col.boardId && info.rawModel) window.deck.taskBoard('identity', {
+      id: col.boardId, session_id: col.id, attempt_id: col.boardAttempt,
+      agent: BoardCore.inferAgentType(col.cmd), model: info.rawModel,
+    }).catch((error) => showToast('看板模型信息未更新：' + error.message));
     saveConfig();
   }
 }

@@ -11,6 +11,8 @@ const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
+const { TaskStore } = require('./task-board');
+const { TaskHeartbeat } = require('./task-heartbeat');
 let mainWindow = null;
 let notifications = null;
 let sidePane = null;
@@ -21,6 +23,12 @@ let pendingFocusColumn = null;
 // end-to-end test deck can run alongside the real one without touching it.
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
+// Test profiles must never write the user's shared board.
+const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined);
+handleMain('task-board:request', (_event, payload) => {
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  return taskStore[payload.op](payload.input || {});
+});
 
 // Every privileged channel belongs exclusively to the local deck main frame.
 // Native notifications are created here, never in a page.
@@ -334,14 +342,17 @@ function processBoardRequests() {
         writeBoardResponse(request.id, { done: true, error: 'Control request rejected: terminal is not conductor-managed.' });
         continue;
       }
-      if (submitOnly && !['complete', 'ask', 'progress', 'session-exit'].includes(action)) {
+      let dispatchCard;
+      try { dispatchCard = action === 'main-new' && submitOnly && taskStore.list().find((c) => c.dispatch_session_id === caller[0] && c.id === request.boardId); }
+      catch (error) { writeBoardResponse(request.id, { done: true, error: error.message }); continue; }
+      if (submitOnly && !dispatchCard && !['complete', 'ask', 'progress', 'session-exit'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: 'Receipt capability allows only complete, ask and progress; it cannot control other sessions.' });
         continue;
       }
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -350,7 +361,7 @@ function processBoardRequests() {
         writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
         continue;
       }
-      const command = { ...request, callerId: caller[0], submitOnly: !!submitOnly };
+      const command = { ...request, callerId: caller[0], submitOnly: !!submitOnly, dispatcherCardId: dispatchCard ? dispatchCard.id : '' };
       // Do not discard an authenticated request while the renderer is loading.
       // It stays here until the renderer acknowledges it with board:response;
       // board:ready replays pending commands after a hot reload.
@@ -389,6 +400,13 @@ function setupBoardControl() {
     nlog(`board-control setup failed: ${err.message}`);
   }
   setInterval(processBoardRequests, 250);
+  const heartbeat = new TaskHeartbeat(taskStore, { log: nlog, onStart: (input) => {
+    if (!boardRendererReady) return false;
+    send('task-board:start', input);
+    return false; // Renderer acknowledges through the durable dispatched marker.
+  }, onChange: () => send('task-board:changed', {}) });
+  heartbeat.start();
+  app.once('before-quit', () => heartbeat.close());
 }
 
 // Session replays: each column's recent output is saved here and written back
@@ -686,7 +704,7 @@ app.whenReady().then(() => {
 
   onMain('board:response', (_e, { requestId, done, result, error, childId, snapshot }) => {
     const action = pendingBoardCommands.get(requestId)?.command.action;
-    const verbatim = action === 'main-peek' || action === 'main-receipts';
+    const verbatim = action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-task';
     pendingBoardCommands.delete(requestId);
     if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
