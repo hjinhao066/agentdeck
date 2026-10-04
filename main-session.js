@@ -208,7 +208,7 @@
     // A turn open at shutdown cannot acknowledge these items after relaunch.
     s.pending = [...s.inflight, ...s.pending];
     s.inflight = [];
-    s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((text) => typeof text === 'string' && text.trim() && text.length <= 8000) : [];
+    s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((m) => typeof m === 'string' ? m.trim() && m.length <= 8000 : mobileImages(m?.atts).length && typeof m.text === 'string' && m.text.length <= 8000) : [];
     s.fresh = !!s.fresh;
     s.legacyReceiptInjection = s.legacyReceiptInjection === true && !nativeCaptain(s.cmd);
     s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
@@ -1023,23 +1023,27 @@
   }
 
   // ---- commands from the main session's terminal (board-cli) ----
-  function sendMessage(message) {
+  // Images sent from the phone travel as attachment paths, like a pasted screenshot.
+  function mobileImages(atts) { return Array.isArray(atts) ? atts.filter((p) => typeof p === 'string' && p && p.length <= 2000).slice(0, 6) : []; }
+  function sendMessage(message, images) {
     const col = mainCol();
     if (!col || !host.terms.get(col.id)?.alive) throw new Error('请先在 AgentDeck 创建并启动队长。');
-    if (typeof message !== 'string' || !message.trim() || message.length > 8000) throw new Error('消息须为 1–8000 个字符。');
+    const atts = mobileImages(images);
+    if (typeof message !== 'string' || !(message.trim() || atts.length) || message.length > 8000) throw new Error('消息须为 1–8000 个字符。');
     const s = state();
     s.mobileMessages ||= [];
     if (s.mobileMessages.length >= 20) throw new Error('队长已有 20 条消息等待送达，请稍后再发。');
-    s.mobileMessages.push(message);
+    s.mobileMessages.push(atts.length ? { text: message, atts } : message);
     host.flushConfig();
     deliverMobile();
   }
   function deliverMobile() {
     const col = mainCol(), s = state();
     if (mobileDelivery || !col || !s?.mobileMessages?.length || briefing === col.id || seatChanging || tokenSaving || contextReset) return;
-    const delivery = { col, s }, message = s.mobileMessages[0];
+    const delivery = { col, s }, head = s.mobileMessages[0];
     mobileDelivery = delivery;
-    host.sendWhenReady(col, message, {
+    host.sendWhenReady(col, typeof head === 'string' ? head : head.text, {
+      atts: typeof head === 'string' ? null : mobileImages(head.atts),
       guardUserInput: true, requireIdle: true, userInitiated: true,
       cancelled: () => {
         const cancelled = mobileDelivery !== delivery || mainCol() !== col || state() !== s;

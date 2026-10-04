@@ -2538,7 +2538,7 @@ function sendWhenReady(col, text, opts) {
       if (idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         if (o.guardUserInput && userComposing(col.id)) { setTimeout(check, 500); return; }
-        const sent = await ChatUI.sendPrompt(col, typeof text === 'function' ? text() : text, null, o);   // a long prompt goes out as a file
+        const sent = await ChatUI.sendPrompt(col, typeof text === 'function' ? text() : text, o.atts || null, o);   // a long prompt goes out as a file
         if (sent && o.onSent) o.onSent(sent === true ? null : sent);
         if (sent) return;
         if (o.onDeferred) o.onDeferred();
@@ -3229,9 +3229,11 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
       result = col ? { id: col.id, title: columnLabel(col), status: entry?.state || 'idle',
         turns: ChatUI.turnsOf(col.id).slice(-20).map((turn) => ({ id: turn.id, ts: turn.ts,
           user: String(turn.user || '').slice(-8000), reply: String(turn.reply || '').slice(-16000),
+          // Only images the phone uploaded, by server id; other attachment paths stay private.
+          images: (turn.atts || []).map((p) => /[\\/]mobile-uploads[\\/]([a-f0-9]{32}\.(?:jpg|png|gif|webp))$/.exec(p)?.[1]).filter(Boolean),
           done: !!turn.done, interrupted: !!turn.interrupted })) } : { turns: [], status: 'unavailable' };
     } else if (op === 'captain') {
-      MainSession.sendMessage(input?.message);
+      MainSession.sendMessage(input?.message, input?.images);
       result = { queued: true };
     } else throw new Error('未知网页操作。');
     window.deck.mobileRespond({ requestId: id, result });

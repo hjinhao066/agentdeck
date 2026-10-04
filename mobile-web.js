@@ -11,12 +11,31 @@ const COOKIE = 'agentdeck_mobile';
 const REMOTE_COOKIE = '__Host-agentdeck_mobile';
 const DEVICE_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const LOGIN_LIMITS = { perIp: 5, global: 30, windowMs: 10 * 60 * 1000, banMs: 15 * 60 * 1000 };
+// Uploaded images: one per request, re-checked by file signature. The id is
+// the server-generated file name, so a request can never name a path.
+// The directory as a whole is capped too: past the cap, images older than a
+// day make room (oldest first); if that is not enough the upload is refused.
+const IMAGE_LIMITS = { bytes: 4 * 1024 * 1024, perMessage: 6, keepMs: 30 * 24 * 60 * 60 * 1000,
+  maxFiles: 200, maxTotalBytes: 200 * 1024 * 1024, evictAfterMs: 24 * 60 * 60 * 1000 };
+const IMAGE_ID = /^[a-f0-9]{32}\.(jpg|png|gif|webp)$/;
+const IMAGE_TYPES = { jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
 const ASSETS = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
 
 function matches(value, expected) {
   if (typeof value !== 'string' || typeof expected !== 'string') return false;
   const a = Buffer.from(value), b = Buffer.from(expected);
   return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+// The real type comes from the leading bytes; the client's file name and
+// Content-Type are never consulted.
+function imageKind(data) {
+  const starts = (bytes, offset = 0) => data.length >= offset + bytes.length && bytes.every((byte, i) => data[offset + i] === byte);
+  if (starts([0xff, 0xd8, 0xff])) return 'jpg';
+  if (starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'png';
+  if (starts([0x47, 0x49, 0x46, 0x38]) && (data[4] === 0x37 || data[4] === 0x39) && data[5] === 0x61) return 'gif';
+  if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return 'webp';
+  return null;
 }
 
 function hash(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
@@ -41,8 +60,10 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, sendCaptain, saveSettings, now = Date.now }) {
+  constructor({ getSessions, getTasks, getOutput, getCaptain, sendCaptain, saveSettings, uploadDir = '', now = Date.now }) {
     this.sources = { getSessions, getTasks, getOutput, getCaptain, sendCaptain, saveSettings };
+    this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
+    this.uploading = Promise.resolve();
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
@@ -105,6 +126,7 @@ class MobileWebServer {
         server.listen(port, '127.0.0.1', () => { server.removeListener('error', reject); resolve(); });
       });
       this.server = server;
+      this.sweepUploads();
     } catch (err) {
       this.error = err.code === 'EADDRINUSE' ? 'Local port is already in use.' : 'Could not start local web service.';
     }
@@ -183,21 +205,62 @@ class MobileWebServer {
     if (ban) res.setHeader('Retry-After', Math.ceil(ban / 1000));
     return this.json(res, ban ? 429 : 401, { error: ban ? 'Too many login attempts. Try again later.' : 'Unauthorized.' });
   }
-  async body(req) {
-    if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) throw { status: 415 };
+  // Uploads older than a month are stale: the conversation only shows the
+  // latest turns, and images the user removed before sending are never used.
+  // Runs at start and before every upload. Returns whether `incoming` more
+  // bytes fit under the directory caps after the clean-up.
+  async sweepUploads(incoming = 0) {
+    if (!this.uploadDir) return false;
+    let kept = [];
+    try {
+      for (const name of await fs.readdir(this.uploadDir)) {
+        if (!IMAGE_ID.test(name)) continue;
+        const file = path.join(this.uploadDir, name), stat = await fs.lstat(file);
+        if (this.now() - stat.mtimeMs > IMAGE_LIMITS.keepMs) await fs.unlink(file);
+        else kept.push({ file, size: stat.size, time: stat.mtimeMs });
+      }
+    } catch (_) { /* Nothing uploaded yet. */ }
+    const over = () => kept.length + (incoming ? 1 : 0) > IMAGE_LIMITS.maxFiles || kept.reduce((sum, entry) => sum + entry.size, incoming) > IMAGE_LIMITS.maxTotalBytes;
+    kept.sort((a, b) => a.time - b.time);
+    while (over() && kept.length && this.now() - kept[0].time > IMAGE_LIMITS.evictAfterMs) {
+      try { await fs.unlink(kept[0].file); } catch (_) { /* Already gone. */ }
+      kept = kept.slice(1);
+    }
+    return !over();
+  }
+  async storeUpload(data, kind) {
+    if (!await this.sweepUploads(data.length)) return null;
+    const id = crypto.randomBytes(16).toString('hex') + '.' + kind;
+    await fs.mkdir(this.uploadDir, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(this.uploadDir, id), data, { mode: 0o600, flag: 'wx' });
+    return id;
+  }
+  // Only a server-generated name that is a regular file directly inside the
+  // upload directory resolves; anything else (paths, links, other files) is null.
+  async imageFile(id) {
+    if (!this.uploadDir || typeof id !== 'string' || !IMAGE_ID.test(id)) return null;
+    const file = path.join(this.uploadDir, id);
+    try { return (await fs.lstat(file)).isFile() ? file : null; } catch (_) { return null; }
+  }
+  async read(req, type, limit) {
+    if (!type.test(req.headers['content-type'] || '')) throw { status: 415 };
     const chunks = await new Promise((resolve, reject) => {
       let size = 0, oversized = false;
       const parts = [];
       req.on('data', (chunk) => {
         size += chunk.length;
-        if (size > 65_536) { oversized = true; parts.length = 0; }
+        if (size > limit) { oversized = true; parts.length = 0; }
         else if (!oversized) parts.push(chunk);
       });
       req.once('end', () => oversized ? reject({ status: 413 }) : resolve(parts));
       req.once('error', () => reject({ status: 400 }));
     });
+    return Buffer.concat(chunks);
+  }
+  async body(req) {
+    const data = await this.read(req, /^application\/json(?:\s*;|$)/i, 65_536);
     try {
-      const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      const value = JSON.parse(data.toString('utf8'));
       if (!value || Array.isArray(value) || typeof value !== 'object') throw new Error();
       return value;
     } catch (_) { throw { status: 400 }; }
@@ -283,15 +346,41 @@ class MobileWebServer {
     if (req.method === 'POST' && url.pathname === '/api/captain') {
       let body;
       try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
-      if (Object.keys(body).some((key) => key !== 'message') || typeof body.message !== 'string' || !body.message.trim() || body.message.length > 8000 || /\x00/.test(body.message)) return this.json(res, 400, { error: 'Message required (maximum 8000 characters).' });
+      const images = body.images === undefined ? [] : body.images;
+      if (!Array.isArray(images) || images.length > IMAGE_LIMITS.perMessage || new Set(images).size !== images.length || images.some((id) => typeof id !== 'string' || !IMAGE_ID.test(id))) return this.json(res, 400, { error: `Images must be at most ${IMAGE_LIMITS.perMessage} uploaded image ids.` });
+      if (Object.keys(body).some((key) => key !== 'message' && key !== 'images') || typeof body.message !== 'string' || !(body.message.trim() || images.length) || body.message.length > 8000 || /\x00/.test(body.message)) return this.json(res, 400, { error: 'Message required (maximum 8000 characters).' });
+      const files = await Promise.all(images.map((id) => this.imageFile(id)));
+      if (files.includes(null)) return this.json(res, 400, { error: 'Image not found. Upload it again.' });
       // Body uploads can outlive desktop revocation. Resolve the current device
       // and CSRF secret again immediately before queuing a command.
       if (!this.writeCredential(req, res)) return;
-      await this.sources.sendCaptain(body.message);
+      await this.sources.sendCaptain(body.message, files);
       return this.json(res, 200, { queued: true });
+    }
+    if (req.method === 'POST' && url.pathname === '/api/upload' && this.uploadDir) {
+      let data;
+      try { data = await this.read(req, /^application\/octet-stream$/i, IMAGE_LIMITS.bytes); } catch (err) { return this.json(res, err.status || 400, { error: err.status === 413 ? 'Image too large.' : 'Invalid request.' }); }
+      const kind = imageKind(data);
+      if (!kind) return this.json(res, 415, { error: 'Only JPEG, PNG, GIF or WebP images are accepted.' });
+      if (!this.writeCredential(req, res)) return;
+      // One upload at a time checks and fills the directory, so parallel
+      // requests cannot pass the cap together.
+      const turn = this.uploading.then(() => this.storeUpload(data, kind));
+      this.uploading = turn.catch(() => {});
+      const id = await turn;
+      if (!id) return this.json(res, 507, { error: 'Image storage is full. Try again tomorrow.' });
+      return this.json(res, 200, { id });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/image') {
+      const id = url.searchParams.get('id'), file = await this.imageFile(id);
+      if (!file) return this.json(res, IMAGE_ID.test(id || '') ? 404 : 400, { error: 'Image not found.' });
+      const data = await fs.readFile(file);
+      // Ids are random and their content never changes, so the device may keep them.
+      res.writeHead(200, { 'Content-Type': IMAGE_TYPES[IMAGE_ID.exec(id)[1]], 'Content-Disposition': 'inline', 'Cache-Control': 'private, max-age=86400, immutable' });
+      return res.end(data);
     }
     return this.json(res, 404, { error: 'Not found.' });
   }
 }
 
-module.exports = { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS };
+module.exports = { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS };

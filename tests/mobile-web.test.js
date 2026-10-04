@@ -469,3 +469,203 @@ test('logout persistence failure returns a generic 500 and closes the service wi
   assert.equal(server.credential({ headers: { authorization: `Bearer ${status.token}` } }), null);
   assert.ok(!logout.text.includes('private'));
 });
+
+// ---- image upload ----
+const fsp = require('node:fs/promises');
+const os = require('node:os');
+const nodePath = require('node:path');
+const { IMAGE_LIMITS } = require('../mobile-web');
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.from('png body')]);
+const SAMPLES = {
+  jpg: Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.from('jpeg body')]),
+  png: PNG,
+  gif: Buffer.from('GIF89a gif body'),
+  webp: Buffer.concat([Buffer.from('RIFF'), Buffer.from([4, 0, 0, 0]), Buffer.from('WEBPVP8 ')]),
+};
+async function startUploads(t, options = {}) {
+  const uploadDir = await fsp.mkdtemp(nodePath.join(os.tmpdir(), 'agentdeck-upload-test-'));
+  t.after(() => fsp.rm(uploadDir, { recursive: true, force: true }));
+  const f = await start(t, {}, { uploadDir, ...options });
+  f.uploadDir = uploadDir;
+  f.upload = (body, headers = {}) => request(f.status, '/api/upload', { method: 'POST', body,
+    headers: { 'Content-Type': 'application/octet-stream', Origin: f.status.url, ...f.auth, ...headers } });
+  f.stored = () => fsp.readdir(uploadDir).catch(() => []);
+  return f;
+}
+
+test('image upload requires login, CSRF and the same origin, and writes nothing when refused', async (t) => {
+  const f = await startUploads(t);
+  const { status } = f;
+  const send = (headers) => request(status, '/api/upload', { method: 'POST', body: PNG, headers: { 'Content-Type': 'application/octet-stream', ...headers } });
+  assert.equal((await send({ Origin: status.url })).status, 401);
+  assert.equal((await send({ Origin: status.url, Authorization: f.auth.Authorization })).status, 403);
+  assert.equal((await send({ Origin: status.url, Authorization: f.auth.Authorization, 'X-CSRF-Token': 'wrong' })).status, 403);
+  assert.equal((await send({ Origin: 'https://other.example', ...f.auth })).status, 403);
+  assert.equal((await send({ ...f.auth })).status, 403);
+  // A remembered device cookie alone is not enough either.
+  const login = await post(status, '/login', { token: status.token });
+  const Cookie = login.headers['set-cookie'][0].split(';')[0];
+  assert.equal((await send({ Origin: status.url, Cookie })).status, 403);
+  const csrf = JSON.parse((await request(status, '/api/auth', { headers: { Cookie } })).text).csrfToken;
+  assert.equal((await send({ Origin: status.url, Cookie, 'X-CSRF-Token': csrf })).status, 200);
+  assert.equal((await f.stored()).length, 1);
+  assert.equal((await request(status, '/api/upload', { headers: f.auth })).status, 404);
+});
+
+test('image upload trusts only the file signature, limits size and never uses a client name', async (t) => {
+  const f = await startUploads(t);
+  // Not an image, whatever the request claims.
+  assert.equal((await f.upload(Buffer.from('<script>alert(1)</script>'))).status, 415);
+  assert.equal((await f.upload(Buffer.from('#!/bin/sh\nrm -rf ~\n'), { 'X-File-Name': 'photo.png' })).status, 415);
+  assert.equal((await f.upload(Buffer.alloc(0))).status, 415);
+  // HEIC is converted on the phone; the raw container is refused here.
+  assert.equal((await f.upload(Buffer.concat([Buffer.from([0, 0, 0, 0x18]), Buffer.from('ftypheic')]))).status, 415);
+  assert.equal((await f.upload(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'))).status, 415);
+  // The declared type is not what decides: only raw bytes are read.
+  assert.equal((await f.upload(PNG, { 'Content-Type': 'image/png' })).status, 415);
+  assert.equal((await f.upload(PNG, { 'Content-Type': 'application/json' })).status, 415);
+  assert.equal((await f.upload(Buffer.concat([PNG, Buffer.alloc(IMAGE_LIMITS.bytes)]))).status, 413);
+  assert.deepEqual(await f.stored(), []);
+  for (const [kind, data] of Object.entries(SAMPLES)) {
+    const response = await f.upload(data, { 'X-File-Name': '../../evil.sh', 'Content-Disposition': 'attachment; filename="../../evil.sh"' });
+    assert.equal(response.status, 200);
+    const { id } = JSON.parse(response.text);
+    assert.match(id, new RegExp('^[a-f0-9]{32}\\.' + kind + '$'));
+    const file = nodePath.join(f.uploadDir, id);
+    assert.deepEqual(await fsp.readFile(file), data);
+    if (process.platform !== 'win32') assert.equal((await fsp.stat(file)).mode & 0o777, 0o600);
+  }
+  const names = await f.stored();
+  assert.equal(names.length, 4);
+  assert.ok(names.every((name) => /^[a-f0-9]{32}\.(jpg|png|gif|webp)$/.test(name)));
+  assert.equal(new Set(names).size, 4);
+});
+
+test('uploaded images are served only to a logged-in device and only by server id', async (t) => {
+  const f = await startUploads(t);
+  const { status } = f;
+  const { id } = JSON.parse((await f.upload(PNG)).text);
+  assert.equal((await request(status, '/api/image?id=' + id)).status, 401);
+  assert.equal((await request(status, '/api/image?id=' + id, { headers: { Authorization: 'Bearer wrong' } })).status, 401);
+  const image = await request(status, '/api/image?id=' + id, { headers: f.auth });
+  assert.equal(image.status, 200);
+  assert.equal(image.headers['content-type'], 'image/png');
+  assert.equal(image.headers['x-content-type-options'], 'nosniff');
+  assert.equal(image.text, PNG.toString('utf8'));
+  // Anything that is not a server id is refused before touching the disk.
+  await fsp.writeFile(nodePath.join(f.uploadDir, '..', 'outside.png'), PNG).catch(() => {});
+  for (const bad of ['../outside.png', '..%2Foutside.png', '%2e%2e%2f' + id, '/etc/passwd', id + '/..', 'a.png', id.toUpperCase(), id + '%00', '']) {
+    assert.equal((await request(status, '/api/image?id=' + bad, { headers: f.auth })).status, 400, bad);
+  }
+  await fsp.rm(nodePath.join(f.uploadDir, '..', 'outside.png'), { force: true });
+  assert.equal((await request(status, '/api/image', { headers: f.auth })).status, 400);
+  assert.equal((await request(status, '/api/image?id=' + '0'.repeat(32) + '.png', { headers: f.auth })).status, 404);
+  // A link planted under a valid-looking name is not followed.
+  if (process.platform !== 'win32') {
+    const planted = 'f'.repeat(32) + '.png';
+    await fsp.symlink('/etc/hosts', nodePath.join(f.uploadDir, planted));
+    assert.equal((await request(status, '/api/image?id=' + planted, { headers: f.auth })).status, 404);
+    assert.equal((await post(status, '/api/captain', { message: '看图', images: [planted] }, f.auth)).status, 400);
+  }
+});
+
+test('a Captain message carries uploaded images as paths inside the upload directory', async (t) => {
+  const sent = [];
+  const f = await startUploads(t, { sendCaptain: (message, files) => sent.push({ message, files }) });
+  const { status } = f;
+  const ids = [];
+  for (let i = 0; i < IMAGE_LIMITS.perMessage + 1; i++) ids.push(JSON.parse((await f.upload(PNG)).text).id);
+  const send = (body) => post(status, '/api/captain', body, f.auth);
+  assert.equal((await send({ message: '看这两张', images: ids.slice(0, 2) })).status, 200);
+  assert.equal((await send({ message: '', images: ids.slice(2, 3) })).status, 200);
+  assert.equal((await send({ message: '只有文字' })).status, 200);
+  assert.deepEqual(sent, [
+    { message: '看这两张', files: ids.slice(0, 2).map((id) => nodePath.join(f.uploadDir, id)) },
+    { message: '', files: [nodePath.join(f.uploadDir, ids[2])] },
+    { message: '只有文字', files: [] },
+  ]);
+  for (const body of [
+    { message: '', images: [] }, { message: '   ' },
+    { message: '太多', images: ids },
+    { message: '重复', images: [ids[0], ids[0]] },
+    { message: '不存在', images: ['0'.repeat(32) + '.png'] },
+    { message: '路径', images: ['../../etc/passwd'] },
+    { message: '路径', images: [nodePath.join(f.uploadDir, ids[0])] },
+    { message: '类型', images: ids[0] }, { message: '类型', images: [42] },
+    { message: '多余字段', images: [ids[0]], to: 'worker' },
+  ]) assert.equal((await send(body)).status, 400, JSON.stringify(body));
+  assert.equal(sent.length, 3);
+  assert.equal((await post(status, '/api/captain', { message: '看图', images: [ids[0]] }, { Authorization: f.auth.Authorization })).status, 403);
+});
+
+test('device revocation during an upload leaves no file behind', async (t) => {
+  const f = await startUploads(t);
+  const { server, status } = f;
+  const arrived = new Promise((resolve) => server.server.once('request', resolve));
+  let req;
+  const response = new Promise((resolve, reject) => {
+    req = http.request(status.url + '/api/upload', { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': PNG.length, Origin: status.url, ...f.auth } }, (res) => { res.resume(); res.on('end', () => resolve(res.statusCode)); });
+    req.on('error', reject);
+    req.write(PNG.subarray(0, 4));
+  });
+  await arrived;
+  await server.revokeDevices();
+  req.end(PNG.subarray(4));
+  assert.equal(await response, 401);
+  assert.deepEqual(await f.stored(), []);
+});
+
+test('uploads older than a month are swept when the service starts; other files are left alone', async (t) => {
+  const uploadDir = await fsp.mkdtemp(nodePath.join(os.tmpdir(), 'agentdeck-upload-test-'));
+  t.after(() => fsp.rm(uploadDir, { recursive: true, force: true }));
+  const stale = 'a'.repeat(32) + '.jpg', fresh = 'b'.repeat(32) + '.png';
+  for (const name of [stale, fresh, 'notes.txt']) await fsp.writeFile(nodePath.join(uploadDir, name), PNG);
+  const old = new Date(Date.now() - IMAGE_LIMITS.keepMs - 60_000);
+  await fsp.utimes(nodePath.join(uploadDir, stale), old, old);
+  await fsp.utimes(nodePath.join(uploadDir, 'notes.txt'), old, old);
+  const f = fixture({ uploadDir });
+  t.after(() => f.server.close());
+  await f.server.configure({ enabled: true, port: 0 });
+  await f.server.sweepUploads();
+  assert.deepEqual((await fsp.readdir(uploadDir)).sort(), [fresh, 'notes.txt']);
+});
+
+test('without an upload directory the upload route does not exist', async (t) => {
+  const f = await start(t);
+  assert.equal((await request(f.status, '/api/upload', { method: 'POST', body: PNG, headers: { 'Content-Type': 'application/octet-stream', Origin: f.status.url, ...f.auth } })).status, 404);
+  assert.equal((await request(f.status, '/api/image?id=' + '0'.repeat(32) + '.png', { headers: f.auth })).status, 404);
+});
+
+test('the upload directory is capped: day-old images make room, otherwise the upload is refused', async (t) => {
+  const limits = { ...IMAGE_LIMITS };
+  t.after(() => Object.assign(IMAGE_LIMITS, limits));
+  const f = await startUploads(t);
+  IMAGE_LIMITS.maxFiles = 3;
+  const ids = [];
+  for (let i = 0; i < 3; i++) ids.push(JSON.parse((await f.upload(PNG)).text).id);
+  // Full of today's images: refused with a clear status, nothing removed.
+  const refused = await f.upload(PNG);
+  assert.equal(refused.status, 507);
+  assert.match(refused.text, /storage is full/);
+  assert.deepEqual((await f.stored()).sort(), [...ids].sort());
+  // Parallel uploads cannot slip past the cap together.
+  assert.deepEqual((await Promise.all([f.upload(PNG), f.upload(PNG), f.upload(PNG)])).map((r) => r.status), [507, 507, 507]);
+  // Two images are more than a day old: the oldest one is dropped, only as many as needed.
+  const age = (id, hours) => { const time = new Date(Date.now() - hours * 60 * 60 * 1000); return fsp.utimes(nodePath.join(f.uploadDir, id), time, time); };
+  await age(ids[0], 30); await age(ids[1], 50);
+  const next = await f.upload(PNG);
+  assert.equal(next.status, 200);
+  assert.deepEqual((await f.stored()).sort(), [ids[0], ids[2], JSON.parse(next.text).id].sort());
+  // The byte cap works the same way.
+  IMAGE_LIMITS.maxFiles = 200; IMAGE_LIMITS.maxTotalBytes = PNG.length * 3;
+  assert.equal((await f.upload(PNG)).status, 200);
+  assert.ok(!(await f.stored()).includes(ids[0]));
+  assert.equal((await f.upload(PNG)).status, 507);
+  assert.equal((await f.stored()).length, 3);
+  // Expired images are cleared on upload too, not only at start.
+  const old = new Date(Date.now() - IMAGE_LIMITS.keepMs - 60_000);
+  for (const name of await f.stored()) await fsp.utimes(nodePath.join(f.uploadDir, name), old, old);
+  IMAGE_LIMITS.maxTotalBytes = limits.maxTotalBytes;
+  assert.equal((await f.upload(PNG)).status, 200);
+  assert.equal((await f.stored()).length, 1);
+});

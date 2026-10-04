@@ -76,6 +76,7 @@ async function launch() {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, permissions: ['clipboard-read', 'clipboard-write'] });
   mobile = await context.newPage();
 }
+const tab = (name) => mobile.locator('#tabbar').getByRole('button', { name });
 async function login() {
   const response = await mobile.goto(url);
   expect(response.status()).toBe(401);
@@ -85,11 +86,11 @@ async function login() {
   await expect(mobile.getByRole('alert')).toContainText('token 不正确');
   await mobile.getByLabel('登录 token').fill(token);
   await mobile.getByRole('button', { name: '登录', exact: true }).click();
-  await expect(mobile.getByRole('button', { name: '打开会话列表', exact: true })).toBeVisible();
+  await expect(tab('对话')).toHaveAttribute('aria-current', 'page');
   const cookies = await mobile.context().cookies();
   expect(cookies.find((c) => c.name === 'agentdeck_mobile')).toMatchObject({ httpOnly: true, sameSite: 'Strict' });
   await mobile.reload();
-  await expect(mobile.getByRole('button', { name: '打开会话列表', exact: true })).toBeVisible();
+  await expect(mobile.locator('#tabbar')).toBeVisible();
   await expect(mobile.locator('#captain-view')).toBeVisible();
   await expect(mobile.locator('#captain-turns')).toContainText('外出期间请检查队员的执行情况。');
 }
@@ -152,13 +153,29 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(mobile.locator('#attention .attention-chip')).toHaveText(['手机网页端 · 界面实现停在确认']);
   expect((await mobile.locator('#attention').boundingBox()).height).toBeLessThanOrEqual(60);
+  // The same session is counted on the sessions tab, and listed first there.
+  await expect(mobile.locator('#sessions-badge')).toHaveText('1');
+  await expect(mobile.locator('.tab[data-view="sessions"]')).toHaveAttribute('aria-label', '会话，1 个等你处理');
   await screenshot('attention');
   await mobile.locator('#attention .attention-chip').click();
   await expect(mobile.locator('#output-view')).toBeVisible();
-  await mobile.getByRole('button', { name: '返回队长对话', exact: true }).click();
+  await expect(tab(/会话/)).toHaveAttribute('aria-current', 'page');
+  // Back returns to where the output was opened from.
+  await mobile.getByRole('button', { name: '返回', exact: true }).click();
+  await expect(mobile.locator('#captain-view')).toBeVisible();
+  await tab(/会话/).click();
+  await expect(mobile.locator('#attention')).toBeHidden();
+  await expect(mobile.locator('#view-meta')).toHaveText('1 个等你处理');
+  await expect(mobile.locator('#sessions .session-row').first()).toContainText('手机网页端 · 界面实现');
+  await expect(mobile.locator('#sessions .session-row').first().locator('.row-tag')).toHaveText('停在确认');
+  await expect(mobile.locator('#sessions .session-row')).toHaveCount(2);
+  await screenshot('sessions-badge');
+  await tab('对话').click();
   await mobile.unroute('**/api/sessions');
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   await expect(mobile.locator('#attention')).toBeHidden();
+  await expect(mobile.locator('#sessions-badge')).toBeHidden();
+  await expect(mobile.locator('.tab[data-view="sessions"]')).toHaveAttribute('aria-label', '会话');
   // Lost connection: explicit state, draft kept, sending blocked until it recovers.
   await mobile.route('**/api/**', (route) => route.abort());
   await mobile.getByLabel('给队长的消息').fill('断线时写的草稿');
@@ -182,8 +199,9 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     await mobile.evaluate((value) => { localStorage.setItem('agentdeck-mobile-theme', value); }, theme);
     await mobile.reload();
     // Set via the public theme control if the app uses a different storage key.
-    if (await mobile.locator('html').getAttribute('data-theme') !== theme) await mobile.getByRole('button', { name: '切换主题', exact: true }).click();
+    if (await mobile.locator('html').getAttribute('data-theme') !== theme) { await tab('更多').click(); await mobile.getByRole('switch', { name: '深色模式' }).click(); await tab('对话').click(); }
     await expect(mobile.locator('html')).toHaveAttribute('data-theme', theme);
+    await expect(mobile.locator('#theme')).toHaveAttribute('aria-checked', String(theme === 'dark'));
     await expect(mobile.locator('#captain-turns')).toContainText('队长测试回复：');
     expect(await mobile.evaluate(() => window.captainInjected)).toBeUndefined();
     // Minimal Markdown built with textContent only: bold, lists, code, http(s) links.
@@ -243,6 +261,17 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
       expect(sendBounds.height).toBeGreaterThanOrEqual(44);
       expect(sendBounds.y + sendBounds.height).toBeLessThanOrEqual(height);
       expect(sendBounds.y + sendBounds.height).toBeGreaterThan(height - 80);
+      // The tab bar is pinned to the bottom edge, below the composer, with
+      // four labelled tabs of at least 44px each.
+      const bar = await mobile.locator('#tabbar').boundingBox();
+      expect(Math.round(bar.y + bar.height)).toBe(height);
+      expect(bar.width).toBe(width);
+      expect(sendBounds.y + sendBounds.height).toBeLessThanOrEqual(bar.y);
+      await expect(mobile.locator('#tabbar .tab-label')).toHaveText(['对话', '会话', '看板', '更多']);
+      for (const box of await mobile.locator('#tabbar .tab').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().toJSON()))) {
+        expect(box.width).toBeGreaterThanOrEqual(44); expect(box.height).toBeGreaterThanOrEqual(44);
+      }
+      expect(await mobile.locator('#tabbar').evaluate((el) => getComputedStyle(el).backgroundColor === getComputedStyle(document.body).backgroundColor)).toBe(true);
       expect((await mobile.locator('.app-header').boundingBox()).height).toBeLessThanOrEqual(60);
       await mobile.getByLabel('给队长的消息').fill('请核对手机竖屏布局，\n并汇总测试结果，\n再附上截图。');
       expect((await mobile.locator('#message').boundingBox()).height).toBeGreaterThan(composer.height + 20);
@@ -260,26 +289,48 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
     await mobile.unroute('**/api/**');
     await mobile.getByRole('button', { name: '刷新', exact: true }).click();
     await expect(mobile.locator('#title-dot')).not.toHaveAttribute('data-status', 'offline');
-    // Soft keyboard open: the composer stays within 30% of what is visible.
+    // Soft keyboard open (a text field has focus and the visible height
+    // shrinks): the tab bar hides, the composer sits on the keyboard and stays
+    // within 30% of what is visible.
+    await mobile.getByLabel('给队长的消息').focus();
     await mobile.setViewportSize({ width: 390, height: 420 });
-    await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeGreaterThan(420 - 80);
+    await expect(mobile.locator('#tabbar')).toBeHidden();
+    await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeGreaterThan(420 - 20);
     // Wait for the shell to refit the shorter viewport before measuring the composer.
     await expect.poll(() => mobile.locator('#send').boundingBox().then((b) => b.y + b.height)).toBeLessThanOrEqual(420);
     await mobile.getByLabel('给队长的消息').fill(Array.from({ length: 12 }, (_, i) => '第 ' + (i + 1) + ' 行').join('\n'));
     expect((await mobile.locator('#message').boundingBox()).height).toBeLessThanOrEqual(420 * 0.3 + 1);
     expect((await mobile.locator('#captain-turns').boundingBox()).height).toBeGreaterThanOrEqual(150);
+    await mobile.getByLabel('给队长的消息').fill('键盘弹起时的草稿');
+    await screenshot(`keyboard-${theme}`);
     await mobile.getByLabel('给队长的消息').fill('');
+    // Keyboard closed again: the tab bar comes back.
     await mobile.setViewportSize({ width: 390, height: 844 });
-    await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
+    await mobile.getByLabel('给队长的消息').blur();
+    await expect(mobile.locator('#tabbar')).toBeVisible();
+    // A short window alone is not a keyboard: without focus the tab bar stays.
+    await mobile.setViewportSize({ width: 390, height: 420 });
+    await expect(mobile.locator('#tabbar')).toBeVisible();
+    await mobile.setViewportSize({ width: 390, height: 844 });
+    // Tabs: one page each, the current one marked, no second navigation.
+    await expect(mobile.locator('#drawer, #menu')).toHaveCount(0);
+    await tab(/会话/).click();
+    await expect(tab(/会话/)).toHaveAttribute('aria-current', 'page');
+    await expect(mobile.locator('#tabbar [aria-current="page"]')).toHaveCount(1);
+    await expect(mobile.locator('#view-title')).toHaveText('会话');
+    await expect(mobile.locator('#message-form')).toBeHidden();
     await expect(mobile.getByText('会话与看板已完成，正在核对竖屏布局。')).toBeVisible();
-    await expect(mobile.locator('.app-header')).toHaveJSProperty('inert', true);
     await screenshot(`sessions-${theme}`);
-    await mobile.locator('#open-board').click();
+    await tab('看板').click();
+    await expect(tab('看板')).toHaveAttribute('aria-current', 'page');
     await expect(mobile.getByText('核对深浅主题')).toBeVisible();
     await expect(mobile.getByText('资料整理', { exact: true })).toBeVisible();
     await screenshot(`board-${theme}`);
-    await mobile.getByRole('button', { name: '返回队长对话', exact: true }).click();
-    await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
+    await tab('更多').click();
+    await expect(mobile.locator('#view-title')).toHaveText('更多');
+    await expect(mobile.getByRole('button', { name: '退出此设备', exact: true })).toBeVisible();
+    await screenshot(`more-${theme}`);
+    await tab(/会话/).click();
     await mobile.getByRole('button', { name: '手机网页端 · 界面实现', exact: true }).click();
     await expect(mobile.locator('#outputText')).toContainText('window.mobileInjected');
     expect(await mobile.evaluate(() => window.mobileInjected)).toBeUndefined();
@@ -297,7 +348,9 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
       expect(button.label).toBeTruthy(); expect(button.title).toBeTruthy();
     }
     await mobile.setViewportSize({ width: 390, height: 844 });
-    await mobile.getByRole('button', { name: '返回队长对话', exact: true }).click();
+    await mobile.getByRole('button', { name: '返回', exact: true }).click();
+    await expect(mobile.locator('#sessions-view')).toBeVisible();
+    await tab('对话').click();
     await mobile.getByRole('button', { name: '复制队长回复', exact: true }).last().click();
     await expect(mobile.getByRole('button', { name: '已复制', exact: true })).toHaveAttribute('title', '已复制');
     expect(await mobile.evaluate(() => navigator.clipboard.readText())).toContain('竖屏布局测试回复');
@@ -306,7 +359,7 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
   expect(persisted.mobileWeb.enabled).toBe(true); expect(persisted.mobileWeb.token === token).toBe(true);
   await restartDesktop();
   expect((await mobile.goto(url)).status()).toBe(200);
-  await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
+  await tab(/会话/).click();
   await expect(mobile.getByText('会话与看板已完成，正在核对竖屏布局。')).toBeVisible();
   await desktop.getByRole('button', { name: '设置', exact: true }).click();
   await desktop.locator('#mobileWebEnabled').uncheck();
@@ -365,7 +418,7 @@ test('mobile message waits for desktop draft, goes only to Captain; forbidden co
   expect(delivered).toEqual([{ colId: 'mobile-captain', text: message }]);
   await expect(mobile.locator('#captain-turns')).toContainText(message, { timeout: 15000 });
   // Replying from a worker's page still goes only to the Captain, naming the worker.
-  await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
+  await tab(/会话/).click();
   await mobile.getByRole('button', { name: '手机网页端 · 界面实现', exact: true }).click();
   await mobile.getByLabel('给队长的消息').fill('可以继续');
   await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
@@ -396,14 +449,20 @@ test('accepted mobile messages survive a blocked delivery attempt and isolated a
   const message = '重启后继续送达的手机消息';
   const oldAuth = await (await mobile.request.get(url + '/api/auth')).json();
   expect((await post('/api/captain', { message })).ok()).toBe(true);
-  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mainSession.mobileMessages).toEqual([message]);
+  // A queued message with an image keeps its file path across the restart too.
+  const upload = await mobile.request.post(url + '/api/upload', { data: await mobile.screenshot(), headers: { 'Content-Type': 'application/octet-stream', Origin: url, 'X-CSRF-Token': oldAuth.csrfToken } });
+  const image = path.join(profile, 'mobile-uploads', (await upload.json()).id);
+  expect((await post('/api/captain', { message: '重启后带图送达', images: [path.basename(image)] })).ok()).toBe(true);
+  const queued = [message, { text: '重启后带图送达', atts: [image] }];
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mainSession.mobileMessages).toEqual(queued);
   // Simulate the existing channel's timeout callback; accepted text must stay
   // durable rather than being discarded when one delivery attempt gives up.
   await desktop.evaluate(() => mobileDeliveryOptions.onGiveUp());
-  expect(await desktop.evaluate(() => MainSession.state().mobileMessages)).toEqual([message]);
+  expect(await desktop.evaluate(() => MainSession.state().mobileMessages)).toEqual(queued);
   expect(captures().includes(message)).toBe(false);
   await restartDesktop();
   await expect.poll(() => captures().filter((t) => t === message).length, { timeout: 25000 }).toBe(1);
+  await expect.poll(() => captures().filter((t) => t === image + ' 重启后带图送达').length, { timeout: 25000 }).toBe(1);
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mainSession.mobileMessages).toEqual([]);
   expect(await desktop.evaluate((text) => ChatUI.turnsOf('mobile-captain').some((t) => t.user === text), message)).toBe(true);
   const freshMessage = '重启后手机页面继续发送新指令';
@@ -421,7 +480,7 @@ test('accepted mobile messages survive a blocked delivery attempt and isolated a
 test('device logout and desktop revocation reject remembered devices and rotate the login token', async () => {
   await launch(); await login();
   expect((await mobile.request.post(url + '/logout', { headers: { Origin: url } })).status()).toBe(403);
-  await mobile.getByRole('button', { name: '打开会话列表', exact: true }).click();
+  await tab('更多').click();
   await mobile.getByRole('button', { name: '退出此设备', exact: true }).click();
   await expect(mobile.getByLabel('登录 token')).toBeVisible();
   expect((await mobile.request.get(url + '/api/sessions')).status()).toBe(401);
@@ -440,4 +499,156 @@ test('device logout and desktop revocation reject remembered devices and rotate 
   await mobile.getByLabel('登录 token').fill(restored.token);
   await mobile.getByRole('button', { name: '登录', exact: true }).click();
   await expect(mobile.locator('#captain-turns')).toContainText('队长测试回复：');
+});
+
+test('images picked or pasted on the phone upload, send with the text and reach the Captain as files', async () => {
+  await launch(); await login();
+  await desktop.locator('#notificationSettingsClose').click();
+  const uploads = path.join(profile, 'mobile-uploads');
+  const stored = () => fs.existsSync(uploads) ? fs.readdirSync(uploads) : [];
+  const shot = await mobile.screenshot();
+  const attach = mobile.getByRole('button', { name: '添加图片', exact: true });
+  await expect(attach).toHaveAttribute('title', '添加图片');
+  await expect(mobile.locator('#image-input')).toHaveAttribute('accept', 'image/*');
+  await expect(mobile.locator('#image-input')).toHaveAttribute('multiple', '');
+  // The icon button opens the system picker (photo library or camera on a phone).
+  const [chooser] = await Promise.all([mobile.waitForEvent('filechooser'), attach.click()]);
+  expect(chooser.isMultiple()).toBe(true);
+  await chooser.setFiles([{ name: '../../IMG 0001.png', mimeType: 'image/png', buffer: shot }, { name: 'IMG_0002.png', mimeType: 'image/png', buffer: shot }]);
+  await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(2);
+  await expect(mobile.locator('#send')).toBeEnabled();   // images alone can be sent
+  // Client file names never reach the disk.
+  expect(stored().length).toBe(2);
+  expect(stored().every((name) => /^[a-f0-9]{32}\.png$/.test(name))).toBe(true);
+  // Remove one by its icon button.
+  const remove = mobile.getByRole('button', { name: '移除图片', exact: true });
+  await expect(remove.first()).toHaveAttribute('title', '移除图片');
+  await remove.first().click();
+  await expect(mobile.locator('.attachment')).toHaveCount(1);
+  // Paste a large image into the message box: it is shrunk to a JPEG first.
+  const paste = (width, height) => mobile.evaluate(async ([w, h]) => {
+    const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
+    const context = canvas.getContext('2d'), pixels = context.createImageData(w, h);
+    for (let i = 0; i < pixels.data.length; i++) pixels.data[i] = i % 4 === 3 ? 255 : Math.random() * 255;
+    context.putImageData(pixels, 0, 0);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const data = new DataTransfer(); data.items.add(new File([blob], 'pasted.png', { type: 'image/png' }));
+    document.getElementById('message').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    return blob.size;
+  }, [width, height]);
+  expect(await paste(2400, 1200)).toBeGreaterThan(800 * 1024);
+  await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(2);
+  const shrunk = stored().find((name) => name.endsWith('.jpg'));
+  expect(shrunk).toBeTruthy();
+  expect(fs.statSync(path.join(uploads, shrunk)).size).toBeLessThan(800 * 1024);
+  expect(await mobile.evaluate(async (id) => { const bitmap = await createImageBitmap(await (await fetch('/api/image?id=' + id)).blob()); return [bitmap.width, bitmap.height]; }, shrunk)).toEqual([1600, 800]);
+  // A failed upload says so, blocks sending and can be retried.
+  await mobile.route('**/api/upload', (route) => route.abort());
+  await paste(40, 40);
+  await expect(mobile.locator('.attachment[data-state="failed"]')).toHaveCount(1);
+  await expect(mobile.locator('#send-status')).toContainText('可重试');
+  await expect(mobile.locator('#send')).toBeDisabled();
+  const buttons = await mobile.locator('#message-form .icon-button').evaluateAll((elements) => elements.map((button) => {
+    const bounds = button.getBoundingClientRect();
+    return { width: bounds.width, height: bounds.height, label: button.getAttribute('aria-label'), title: button.title, text: button.textContent };
+  }));
+  expect(buttons.map((button) => button.label).sort()).toEqual(['添加图片', '移除图片', '移除图片', '移除图片', '给队长发送消息', '重试上传'].sort());
+  for (const button of buttons) {
+    expect(button.width).toBeGreaterThanOrEqual(44); expect(button.height).toBeGreaterThanOrEqual(44);
+    expect(button.title).toBeTruthy(); expect(button.text).toBe('');
+  }
+  await mobile.getByLabel('给队长的消息').fill('看下这三张截图');
+  await screenshot('images-thumbs');
+  // Remove and retry never share a point, keyboard down or up, and each keeps
+  // a 44px target; the retry icon's centre belongs to retry.
+  const targets = () => mobile.locator('.attachment').evaluateAll((chips) => chips.flatMap((chip) => [...chip.querySelectorAll('.icon-button')].map((button) => {
+    const box = button.getBoundingClientRect(), icon = button.querySelector('svg').getBoundingClientRect();
+    const x = icon.left + icon.width / 2, y = icon.top + icon.height / 2;
+    return { label: button.getAttribute('aria-label'), left: box.left, top: box.top, right: box.right, bottom: box.bottom, x, y, hit: document.elementFromPoint(x, y)?.closest('button') === button };
+  })));
+  const separate = async () => {
+    const boxes = await targets();
+    expect(boxes.map((box) => box.label)).toEqual(['移除图片', '移除图片', '重试上传', '移除图片']);
+    for (const box of boxes) {
+      expect(box.right - box.left).toBeGreaterThanOrEqual(44); expect(box.bottom - box.top).toBeGreaterThanOrEqual(44);
+      expect(box.hit).toBe(true);
+      for (const other of boxes) if (other !== box) expect(box.left < other.right && other.left < box.right && box.top < other.bottom && other.top < box.bottom).toBe(false);
+    }
+    return boxes.find((box) => box.label === '重试上传');
+  };
+  await separate();
+  await mobile.setViewportSize({ width: 390, height: 420 });
+  await expect(mobile.locator('#tabbar')).toBeHidden();
+  await expect.poll(() => mobile.locator('.attachment[data-state="done"]').first().evaluate((chip) => chip.getBoundingClientRect().width)).toBe(48);
+  expect(await mobile.locator('.attachments').evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  const retry = await separate();
+  await screenshot('images-failed-keyboard');
+  // Keyboard up: a tap on the centre of the retry icon retries; it must not remove.
+  await mobile.unroute('**/api/upload');
+  await mobile.touchscreen.tap(retry.x, retry.y);
+  await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(3);
+  await expect(mobile.locator('.attachment')).toHaveCount(3);
+  // The tap left the message box focused, so nothing moved under the finger.
+  await expect(mobile.getByLabel('给队长的消息')).toBeFocused();
+  await expect(mobile.locator('#tabbar')).toBeHidden();
+  await mobile.setViewportSize({ width: 390, height: 844 });
+  await expect(mobile.locator('#tabbar')).toBeVisible();
+  expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  const ids = stored();
+  expect(ids.length).toBe(4);   // three attached, one removed before sending
+  // Sent together with the text; the Captain's terminal receives the saved
+  // files as paths in front of the message, like a screenshot pasted on the desktop.
+  await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
+  await expect(mobile.locator('#send-status')).toContainText('已排队');
+  await expect(mobile.locator('.attachment')).toHaveCount(0);
+  await expect(mobile.getByLabel('给队长的消息')).toHaveValue('');
+  await expect.poll(() => captures().some((text) => text.endsWith(' 看下这三张截图')), { timeout: 25000 }).toBe(true);
+  const typed = captures().find((text) => text.endsWith(' 看下这三张截图'));
+  const sentIds = ids.filter((id) => typed.includes(path.join(uploads, id)));
+  expect(sentIds.length).toBe(3);
+  for (const id of sentIds) expect(fs.statSync(path.join(uploads, id)).isFile()).toBe(true);
+  const turn = await desktop.evaluate(() => ChatUI.turnsOf('mobile-captain').find((t) => t.user === '看下这三张截图'));
+  expect(turn.atts.map((file) => path.basename(file)).sort()).toEqual([...sentIds].sort());
+  // The phone shows its own images as thumbnails in the conversation.
+  const sent = mobile.locator('#captain-turns .captain-turn').filter({ hasText: '看下这三张截图' }).locator('.sent-image img');
+  await expect(sent).toHaveCount(3, { timeout: 15000 });
+  await expect.poll(() => sent.evaluateAll((images) => images.every((image) => image.complete && image.naturalWidth > 0))).toBe(true);
+  expect(await mobile.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  // Loaded images never push the newest reply out of view: still at the bottom.
+  const gap = () => mobile.locator('#captain-turns').evaluate((el) => Math.round(el.scrollHeight - el.scrollTop - el.clientHeight));
+  expect(await gap()).toBeLessThanOrEqual(1);
+  await screenshot('images-sent');
+  // A single image (a tall screenshot) is the common case and behaves the same,
+  // right after sending, once it has loaded, and after the next refreshes.
+  const [single] = await Promise.all([mobile.waitForEvent('filechooser'), attach.click()]);
+  await single.setFiles([{ name: 'one.png', mimeType: 'image/png', buffer: shot }]);
+  await expect(mobile.locator('.attachment[data-state="done"]')).toHaveCount(1);
+  await mobile.getByRole('button', { name: '给队长发送消息', exact: true }).click();
+  const one = mobile.locator('#captain-turns .captain-turn').last().locator('.sent-image img');
+  await expect(one).toHaveCount(1, { timeout: 25000 });
+  expect(await gap()).toBeLessThanOrEqual(1);
+  await expect.poll(() => one.evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
+  expect(await one.evaluate((image) => image.naturalHeight > image.naturalWidth)).toBe(true);
+  expect(await gap()).toBeLessThanOrEqual(1);
+  await expect(mobile.locator('#captain-turns .captain-turn').last()).toBeInViewport({ ratio: 1 });
+  for (let i = 0; i < 2; i++) await Promise.all([mobile.waitForResponse((response) => response.url() === url + '/api/captain' && response.ok()), mobile.getByRole('button', { name: '刷新', exact: true }).click()]);
+  expect(await gap()).toBeLessThanOrEqual(1);
+  await screenshot('image-single-sent');
+  ids.push(...stored().filter((id) => !ids.includes(id)));
+  // Refused uploads: no login, no CSRF, wrong origin, not an image, too large.
+  const png = { 'Content-Type': 'application/octet-stream', Origin: url };
+  const { csrfToken } = await (await mobile.request.get(url + '/api/auth')).json();
+  const anonymous = await browser.newContext();
+  expect((await anonymous.request.post(url + '/api/upload', { data: shot, headers: { ...png, 'X-CSRF-Token': csrfToken } })).status()).toBe(401);
+  expect((await anonymous.request.get(url + '/api/image?id=' + sentIds[0])).status()).toBe(401);
+  await anonymous.close();
+  expect((await mobile.request.post(url + '/api/upload', { data: shot, headers: png })).status()).toBe(403);
+  expect((await mobile.request.post(url + '/api/upload', { data: shot, headers: { ...png, 'X-CSRF-Token': 'wrong-csrf' } })).status()).toBe(403);
+  expect((await mobile.request.post(url + '/api/upload', { data: shot, headers: { ...png, Origin: 'https://other.example', 'X-CSRF-Token': csrfToken } })).status()).toBe(403);
+  expect((await mobile.request.post(url + '/api/upload', { data: Buffer.from('<script>alert(1)</script>'), headers: { ...png, 'X-CSRF-Token': csrfToken } })).status()).toBe(415);
+  expect((await mobile.request.post(url + '/api/upload', { data: Buffer.concat([shot, Buffer.alloc(4 * 1024 * 1024)]), headers: { ...png, 'X-CSRF-Token': csrfToken } })).status()).toBe(413);
+  expect((await mobile.request.get(url + '/api/image?id=../config.json')).status()).toBe(400);
+  expect((await post('/api/captain', { message: '看图', images: ['../config.json'] })).status()).toBe(400);
+  expect(stored().length).toBe(5);
+  if (process.platform !== 'win32') for (const id of stored()) expect(fs.statSync(path.join(uploads, id)).mode & 0o777).toBe(0o600);
 });

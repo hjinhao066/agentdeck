@@ -759,7 +759,9 @@ app.whenReady().then(async () => {
     getTasks: () => taskStore.list(),
     getOutput: (id) => requestMobile('output', { id }),
     getCaptain: () => requestMobile('captain-history'),
-    sendCaptain: (message) => requestMobile('captain', { message }),
+    sendCaptain: (message, images) => requestMobile('captain', { message, images }),
+    // Like pasted screenshots, phone images reach the Captain as file paths.
+    uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
     saveSettings: (settings) => {
       mobileSettings = settings;
       if (mobileInitializing && !settings.enabled) return;
