@@ -131,7 +131,7 @@ test('Captain arrow folds without selecting it; live counts stay visible, its ro
   await expect(counts).toHaveText('3 干活中');
 });
 
-test('worker titles use two full-width lines above metadata at default, minimum and wide sidebar widths', async ({}, testInfo) => {
+test('worker titles stay one full-width line above metadata at default, minimum and wide sidebar widths', async ({}, testInfo) => {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 760));
   for (const width of [252, 200, 420]) {
     await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
@@ -150,7 +150,8 @@ test('worker titles use two full-width lines above metadata at default, minimum 
         const m = meta.getBoundingClientRect();
         return { titleWidth: l.width, modelBelow: b.top >= l.bottom,
           timeBelow: getComputedStyle(meta).display === 'none' || m.top >= l.bottom,
-          contained: l.right <= r.right, clamped: getComputedStyle(label).webkitLineClamp === '2',
+          contained: l.right <= r.right,
+          clamped: getComputedStyle(label).whiteSpace === 'nowrap' && getComputedStyle(label).textOverflow === 'ellipsis' && getComputedStyle(label).overflow === 'hidden',
           lines: l.height / parseFloat(getComputedStyle(label).lineHeight),
           fontSize: parseFloat(getComputedStyle(label).fontSize),
           navFontSize: parseFloat(getComputedStyle(document.querySelector('.nav-row')).fontSize) };
@@ -158,7 +159,7 @@ test('worker titles use two full-width lines above metadata at default, minimum 
       expect(await check()).toMatchObject({ modelBelow: true, timeBelow: true, contained: true, clamped: true });
       const layout = await check();
       expect(layout.titleWidth).toBeGreaterThan(120);
-      expect(layout.lines).toBeLessThanOrEqual(2.01);
+      expect(layout.lines).toBeLessThanOrEqual(1.35);
       expect(layout.fontSize).toBe(12.5);
       expect(layout.fontSize).toBeLessThan(layout.navFontSize);
       await row.hover();
