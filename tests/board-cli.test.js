@@ -280,9 +280,10 @@ test('notify-user routes local, urgent and fixed test requests without key data'
   ]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-notify-cli-'));
     fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+    fs.writeFileSync(path.join(dir, 'requests', 'unpublished.json.123.tmp'), '{');
     const requests = [];
     const server = setInterval(() => {
-      for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+      for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
         const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
         fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
         fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: 'sent' }));
@@ -291,6 +292,7 @@ test('notify-user routes local, urgent and fixed test requests without key data'
     try {
       const r = await runCli(['notify-user', ...args], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
       assert.equal(r.code, 0); assert.equal(r.stdout, 'sent\n'); assert.equal(requests.length, 1);
+      assert.equal(fs.readFileSync(path.join(dir, 'requests', 'unpublished.json.123.tmp'), 'utf8'), '{');
       const { id, token, createdAt, ...payload } = requests[0];
       assert.equal(token, 'captain-test'); assert.deepEqual(payload, { action: 'main-notify-user', ...expected });
     } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
