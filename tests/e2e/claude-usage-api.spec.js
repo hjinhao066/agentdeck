@@ -38,9 +38,10 @@ async function screenshot(name) {
 }
 test('all Claude surfaces use remaining percentages and resets; icons refresh without dropping values', async () => {
   await expect(seat('cn').locator('[data-window="5h"] .quota-pct')).toHaveText('91%');
-  // An exhausted window shows 用尽 and its recovery time in place of the percentage.
+  // An exhausted window shows ⊘ and its recovery time in place of the percentage (never 0%).
   await expect(seat('us')).toHaveAttribute('data-state', 'exhausted');
-  await expect(seat('us').locator('[data-level="out"] .quota-pct')).toHaveText('用尽');
+  await expect(seat('us').locator('[data-level="out"] .quota-ban svg')).toBeVisible();
+  await expect(seat('us').locator('[data-level="out"] .quota-pct')).toHaveCount(0);
   await expect(seat('us').locator('[data-level="out"] .quota-reset')).toHaveText(/^\d\d:\d\d$/);
   await expect(seat('us')).toHaveAttribute('aria-label', /已用尽，\d\d:\d\d（[^）]+后）恢复/);
   await expect(seat('cn')).toHaveAttribute('data-detail', /Claude OAuth usage/);

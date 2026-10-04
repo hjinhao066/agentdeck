@@ -372,7 +372,8 @@
     if (entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；连续 ${entry.officialStatus.failures} 次${entry.officialStatus.failures >= 3 ? '，保留上次成功采样（数据已旧）' : '，保留上次数字'}`);
     if (retained && windows.some((w) => w.resetAt <= now)) details.push('窗口重置时间已过，等待新采样（显示上次数字）');
     const evidence = retained ? sample : blocked || sample;
-    if (evidence) details.push(`来源：${evidence.source}；${blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；采样 ${new Date(evidence.at).toLocaleString()}${stale ? '（数据已旧）' : !fresh && (!blocked || retained) ? '（已过期）' : ''}`);
+    const confidence = evidence ? (blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence) : '';
+    if (evidence) details.push(`来源：${evidence.source}；${confidence}；采样 ${new Date(evidence.at).toLocaleString()}${stale ? '（数据已旧）' : !fresh && (!blocked || retained) ? '（已过期）' : ''}`);
     const displayLabel = provider === 'Claude' && windows.length ? (blocked && !windows.some((w) => w.label === '5 小时') ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'} · ` : '') + windows.map((w) => claudeWindow(w)).join(' · ') : provider === 'Claude' && blocked ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'}` : label;
     const sampleLabel = provider === 'Claude' && (fresh || retained) ? `采样 ${stale ? new Date(sample.at).toLocaleString() : new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}${stale ? '（数据已旧）' : ''}` : '';
     // Compact panel fields: the two remaining percentages, or the recovery time while exhausted.
@@ -395,7 +396,7 @@
     const fiveHour = pick(/5 小时$/), weekly = pick(/每周$/);
     const shortRemaining = fiveHour ?? weekly;
     const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, cells, account: entry.account || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, cells, account: entry.account || '', source: evidence?.source || '', confidence: confidence || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
     const cmd = String(command || '').trim();

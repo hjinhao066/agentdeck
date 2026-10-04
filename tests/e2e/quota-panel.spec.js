@@ -1,0 +1,163 @@
+// Sidebar quota panel layout: 5h/7d named once, % + reset over a thin bar, ⊘ for used up,
+// — for no number, brand icons, and every long explanation in the hover/focus details.
+// All numbers and accounts are injected offline fixtures; the only agent is the stand-in.
+const { test, expect, _electron: electron } = require('@playwright/test');
+const fs = require('fs'), os = require('os'), path = require('path');
+const ROOT = path.resolve(__dirname, '../..'), FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
+let app, page, profile;
+const row = (key) => page.locator(`#quotaBar [data-quota-key="${key}"]`);
+const cell = (key, w) => row(key).locator(`[data-window="${w}"]`);
+test.beforeAll(async () => {
+  profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-panel-'));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    theme: 'dark', fitWindow: true, fitCols: 2,
+    claudeSeats: [{ id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude-cn' }, { id: 'us', name: '🇺🇸 US', configDir: '~/.claude' }],
+    activeClaudeSeatId: 'us', mainSession: { colId: 'us-column', tasks: [], pending: [] },
+    columns: [{ id: 'us-column', title: '队长', claudeSeatId: 'us', isMain: true, cmd: `node "${FAKE}" Claude us`, cwd: profile, width: 600, role: 'manual' }],
+  }));
+  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
+  page = await app.firstWindow();
+  await expect(page.locator('.column')).toHaveCount(1);
+});
+test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+
+test('compact quota rows: header once, used-up / low / no-data cells, brand icons and full details on hover', async () => {
+  await page.evaluate(() => {
+    const at = Date.now(), H = 3600000, D = 24 * H;
+    const seat = (id, dir, w5, w7) => ({ scope: 'claude', account: `${id}***@example.com`, accountKey: `k-${id}`, configDir: dir,
+      sample: { provider: 'Claude', scope: 'claude', seatId: id, at, accountBound: true, accountKey: `k-${id}`, configDir: dir, source: 'Claude 席位用量（/usage）', confidence: '高（按账号 ID 归属）',
+        windows: [{ key: 'fiveHour', label: '5 小时', remaining: w5[0], used: 100 - w5[0], exhausted: w5[0] <= 0, resetAt: at + w5[1] }, { key: 'weekly', label: '每周', remaining: w7[0], used: 100 - w7[0], exhausted: w7[0] <= 0, resetAt: at + w7[1] }] } });
+    config.quotas = {
+      'Claude:cn': seat('cn', '~/.claude-cn', [0, 2 * H + 20 * 60000], [64, 3 * D]),
+      'Claude:us': seat('us', '~/.claude', [88, 4 * H + 50 * 60000], [18, 5 * D]),
+      Codex: { scope: QuotaCore.SCOPES.Codex, account: 'gp***@example.com', sample: { provider: 'Codex', scope: QuotaCore.SCOPES.Codex, at, source: 'Codex 本地 rate_limits', confidence: '高（服务端采样）', windows: [{ key: 'weekly', label: '每周', remaining: 10, used: 90, exhausted: false, resetAt: at + 5 * D }] } },
+      Cursor: { scope: QuotaCore.SCOPES.Cursor, sample: { provider: 'Cursor', scope: QuotaCore.SCOPES.Cursor, at, source: '会话屏幕', confidence: '低（仅未见用尽报错）', windows: [] } },
+      Antigravity: { scope: QuotaCore.SCOPES.Antigravity, account: 'ge***@example.com', blocked: { at, resetAt: at + H + 39 * 60000, resetText: 'in 1h 39m', source: '会话屏幕' }, sample: { provider: 'Antigravity', scope: QuotaCore.SCOPES.Antigravity, at, source: '会话屏幕', confidence: '高（CLI 显示）', windows: [] } },
+    };
+    renderQuotaBar();
+  });
+  // 1. "5h" / "7d" appear once, in the header; rows carry only values.
+  await expect(page.locator('#quotaBar .quota-cols')).toHaveCount(1);
+  await expect(page.locator('#quotaBar .quota-cols')).toHaveText('5h7d');
+  for (const text of await page.locator('#quotaBar .quota-item .quota-values').allInnerTexts()) expect(text).not.toMatch(/5h|7d|用尽|正常/);
+  // Normal and low cells: % + reset time over a bar; ≤20% is yellow, ≤10% red.
+  await expect(cell('Claude:us', '5h').locator('.quota-pct')).toHaveText('88%');
+  await expect(cell('Claude:us', '5h').locator('.quota-reset')).toHaveText(/^\d\d:\d\d$/);
+  await expect(cell('Claude:us', '7d')).toHaveAttribute('data-level', 'low');
+  await expect(cell('Claude:us', '7d').locator('.quota-reset')).toHaveText(/^周[日一二三四五六]$/);
+  await expect(cell('Codex', '7d')).toHaveAttribute('data-level', 'danger');
+  await expect(cell('Codex', '7d').locator('.quota-pct')).toHaveText('10%');
+  // 2. Used up: ⊘ + reset time in red, no 0%, and the whole row tinted.
+  for (const key of ['Claude:cn', 'Antigravity']) {
+    await expect(row(key)).toHaveAttribute('data-state', 'exhausted');
+    await expect(cell(key, '5h')).toHaveAttribute('data-level', 'out');
+    await expect(cell(key, '5h').locator('.quota-ban svg')).toBeVisible();
+    await expect(cell(key, '5h').locator('.quota-pct')).toHaveCount(0);
+    await expect(cell(key, '5h')).toHaveText(/^\d\d:\d\d$/);
+    expect(await row(key).evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  }
+  // No number: — over an empty bar.
+  for (const [key, w] of [['Codex', '5h'], ['Cursor', '5h'], ['Cursor', '7d'], ['Antigravity', '7d']]) {
+    await expect(cell(key, w)).toHaveText('—');
+    await expect(cell(key, w).locator('.quota-meter')).toHaveAttribute('style', '--pct: 0%;');
+  }
+  // 5. Claude rows are icon + flag (+ crown on the Captain's seat); others icon + name.
+  await expect(row('Claude:cn').locator('.quota-name')).toHaveText('🇨🇳');
+  await expect(row('Claude:us').locator('.quota-name')).toHaveText('🇺🇸');
+  await expect(row('Claude:us').locator('.quota-captain svg')).toBeVisible();
+  await expect(row('Claude:cn').locator('.quota-captain')).toHaveCount(0);
+  for (const [key, name] of [['Codex', 'ChatGPT'], ['Cursor', 'Grok 4.7'], ['Antigravity', 'Gemini']]) await expect(row(key).locator('.quota-name')).toHaveText(name);
+  // 4. Columns line up under the header, and 5h starts right after the widest name.
+  const geo = await page.evaluate(() => {
+    const items = [...document.querySelectorAll('#quotaBar .quota-item')];
+    const x = (e) => Math.round(e.getBoundingClientRect().left);
+    return { head: [...document.querySelectorAll('#quotaBar .quota-col')].map(x),
+      cells: ['5h', '7d'].map((w) => [...new Set(items.map((i) => x(i.querySelector(`[data-window="${w}"]`))))]),
+      gap: Math.round(Math.min(...items.map((i) => i.querySelector('[data-window="5h"]').getBoundingClientRect().left)) - Math.max(...items.map((i) => i.querySelector('.quota-label').getBoundingClientRect().right))),
+      fits: items.every((i) => i.scrollWidth <= i.clientWidth), heights: [...new Set(items.map((i) => i.getBoundingClientRect().height))] };
+  });
+  expect(geo.cells.map((c) => c.length)).toEqual([1, 1]);
+  expect(geo.head).toEqual(geo.cells.map((c) => c[0]));
+  expect(geo.gap).toBeLessThanOrEqual(1);
+  expect(geo.fits).toBe(true);
+  expect(geo.heights).toEqual([30]);
+  // 6. Brand colours: Claude orange, ChatGPT green, Gemini gradient, Grok neutral — in both themes.
+  for (const theme of ['dark', 'light']) {
+    await page.evaluate((t) => applyTheme(t), theme);
+    const colors = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('#quotaBar .quota-item')].map((i) => [i.dataset.quotaKey, getComputedStyle(i.querySelector('.quota-icon')).color])));
+    const rgb = (c) => c.match(/\d+/g).map(Number);
+    const [cr, cg, cb] = rgb(colors['Claude:cn']), [gr, gg, gb] = rgb(colors.Codex);
+    expect(cr > cg && cg > cb).toBe(true);
+    expect(gg > gr && gg > gb).toBe(true);
+    expect(await row('Antigravity').locator('.quota-icon path').evaluate((e) => getComputedStyle(e).fill)).toContain('quotaGeminiGradient');
+    expect(colors.Cursor).toBe(await row('Cursor').evaluate((e) => getComputedStyle(e).color));
+  }
+  await page.evaluate(() => applyTheme('dark'));
+  // 7. Refresh stays an icon button with a tooltip and an accessible name.
+  const refresh = page.locator('#quotaRefresh');
+  await expect(refresh).toHaveAttribute('aria-label', '刷新额度');
+  await expect(refresh).toHaveAttribute('title', '刷新额度');
+  await expect(refresh).toHaveText('');
+  expect(await refresh.evaluate((e) => { const r = e.getBoundingClientRect(); return r.width >= 24 && r.height >= 24; })).toBe(true);
+  // 3. Hover / keyboard focus shows the full explanation; the row is labelled and described by it.
+  const tip = row('Claude:cn').getByRole('tooltip');
+  await expect(row('Claude:cn')).toHaveAttribute('aria-describedby', 'quota-tip-Claude-cn');
+  await expect(row('Claude:cn')).toHaveAttribute('aria-label', /^🇨🇳 CN：已用尽，.*5 小时剩余 0%.*每周剩余 64%/);
+  await row('Claude:cn').focus();
+  await expect(tip).toBeVisible();
+  for (const text of ['账号', 'cn***@example.com', '席位', '🇨🇳 CN', '5 小时', '已用尽', '每周', '剩余 64%', '来源', 'Claude 席位用量（/usage）', '采样', '可信度', '高（按账号 ID 归属）']) await expect(tip).toContainText(text);
+  await expect(tip).toContainText(/每周剩余 64%\d\d-\d\d 周[日一二三四五六] \d\d:\d\d（3 天后）重置/);
+  await expect(row('Antigravity').getByRole('tooltip', { includeHidden: true })).toContainText(/已用尽，预计 \d\d:\d\d（1 小时 39 分后）恢复/);
+  await expect(row('Cursor').getByRole('tooltip', { includeHidden: true })).toContainText('未见用尽，此来源不提供百分比');
+  await page.evaluate(() => document.activeElement?.blur());
+
+  const shots = process.env.AGENTDECK_QUOTA_SHOTS;
+  if (shots) {
+    fs.mkdirSync(shots, { recursive: true });
+    await page.mouse.move(900, 300);
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate((t) => applyTheme(t), theme);
+      await page.waitForTimeout(150);
+      await page.locator('#navQuota').screenshot({ path: path.join(shots, `after-panel-${theme}.png`) });
+      await page.screenshot({ path: path.join(shots, `after-window-${theme}.png`) });
+    }
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate((t) => applyTheme(t), theme);
+      await row('Claude:cn').hover();
+      await expect(tip).toBeVisible();
+      await page.screenshot({ path: path.join(shots, `after-tooltip-${theme}.png`) });
+      await page.mouse.move(900, 300);
+    }
+    await page.evaluate(() => applyTheme('dark'));
+  }
+  // Narrowest sidebar: the reset times give way, the percentages and bars stay, nothing clips.
+  await page.evaluate(() => { config.navWidth = 200; applyNavWidth(); });
+  await expect(cell('Claude:us', '5h').locator('.quota-reset')).toBeHidden();
+  await expect(cell('Claude:us', '7d').locator('.quota-pct')).toBeVisible();
+  expect(await page.locator('#quotaBar .quota-item').evaluateAll((els) => els.every((e) => e.scrollWidth <= e.clientWidth))).toBe(true);
+  await page.evaluate(() => { config.navWidth = 252; applyNavWidth(); });
+  await expect(cell('Claude:us', '5h').locator('.quota-reset')).toBeVisible();
+});
+
+test('sidebar bottom row: settings is a standard gear icon button sized like its neighbours', async () => {
+  const settings = page.locator('#settingsBtn');
+  await expect(settings).toHaveAttribute('aria-label', '设置');
+  await expect(settings).toHaveAttribute('title', '设置');
+  // A gear: toothed rim path plus a hub circle, same stroke and box as the theme button.
+  await expect(settings.locator('svg path')).toHaveCount(1);
+  await expect(settings.locator('svg circle')).toHaveAttribute('r', '3');
+  expect(await settings.locator('svg path').getAttribute('d')).toMatch(/^M12\.22 2h-\.44/);
+  const box = (sel) => page.locator(sel).evaluate((e) => { const s = e.querySelector('svg'); const r = s.getBoundingClientRect(); return [e.getBoundingClientRect().width, r.width, r.height, s.getAttribute('stroke-width')]; });
+  expect(await box('#settingsBtn')).toEqual(await box('#themeBtn'));
+  const shots = process.env.AGENTDECK_QUOTA_SHOTS;
+  if (shots) {
+    await page.mouse.move(900, 300);
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate((t) => applyTheme(t), theme);
+      await page.waitForTimeout(150);
+      await page.locator('#navBottom').screenshot({ path: path.join(shots, `after-bottom-buttons-${theme}.png`) });
+    }
+    await page.evaluate(() => applyTheme('dark'));
+  }
+});

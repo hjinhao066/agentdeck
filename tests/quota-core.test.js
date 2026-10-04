@@ -538,3 +538,14 @@ test('resourceError ignores resource words in ordinary replies, code and grep ou
     }
   }
 });
+
+test('summary exposes the evidence source and confidence for the panel details', () => {
+  const store = {};
+  Q.observe(store, Q.screen('Codex', '', [], now), now);
+  const q = Q.summary(store, 'Codex', now);
+  assert.equal(q.source, '会话屏幕');
+  assert.equal(q.confidence, '低（仅未见用尽报错）');
+  assert.match(q.detail, /来源：会话屏幕；低（仅未见用尽报错）；/);
+  const empty = Q.summary({}, 'Cursor', now);
+  assert.deepEqual([empty.source, empty.confidence], ['', '']);
+});

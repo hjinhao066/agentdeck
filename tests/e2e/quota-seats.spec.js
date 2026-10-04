@@ -75,8 +75,9 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
     // Seat warmup lines follow the shared summary only in the panel tooltip.
     const summary = title.split('\n').slice(1).join(' · ');
     expect(after.split('\n').some((line) => line.startsWith('Claude / ') && summary.startsWith(line))).toBe(true);
-    // The visible tooltip is the short version: no config dir, source or model.
-    await expect(seat(id).getByRole('tooltip', { includeHidden: true })).not.toContainText(/配置目录|来源|模型/);
+    // The visible tooltip names source and confidence, but no config dir or model.
+    await expect(seat(id).getByRole('tooltip', { includeHidden: true })).toContainText(/来源.*可信度/);
+    await expect(seat(id).getByRole('tooltip', { includeHidden: true })).not.toContainText(/配置目录|模型/);
     await expect(seat(id)).not.toHaveAttribute('title');
   }
 
