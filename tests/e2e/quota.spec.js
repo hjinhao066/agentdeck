@@ -40,6 +40,18 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('—');
   await expect(badge('Codex').locator('.quota-values')).toContainText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider)).toHaveAttribute('data-state', 'normal');
+  // No number but nothing exhausted reads 正常, never a dash.
+  for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider).locator('.quota-values')).toHaveText('正常');
+  // Codex that reports only the weekly window shows that number, marked as weekly.
+  await page.evaluate(() => {
+    window.codexQuotaBackup = JSON.stringify(config.quotas.Codex);
+    const entry = JSON.parse(window.codexQuotaBackup), at = Date.now();
+    entry.sample = { ...entry.sample, at, windows: [{ key: 'weekly', label: '每周', used: 85, remaining: 15, exhausted: false, resetAt: at + 86400000, resetText: '' }] };
+    config.quotas.Codex = entry; renderQuotaBar();
+  });
+  await expect(badge('Codex').locator('.quota-values')).toHaveText('周 15%');
+  await page.evaluate(() => { config.quotas.Codex = JSON.parse(window.codexQuotaBackup); renderQuotaBar(); });
+  await expect(badge('Codex').locator('.quota-values')).toContainText('8%');
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
   await expect(badge('Claude')).toHaveAttribute('aria-label', /快用完，5 小时剩余 19%，每周剩余 91%/);

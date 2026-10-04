@@ -353,7 +353,12 @@
     const outAt = recovery || (empty.length && empty.every((w) => w.resetAt) ? Math.max(...empty.map((w) => w.resetAt)) : null);
     const statusText = out ? '已用尽' : { danger: '快用完', warning: '快用完', normal: '正常' }[state] || '未知';
     const sampledAt = (fresh || retained) ? sample.at : evidence?.at || null;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour: pick(/5 小时$/), weekly: pick(/每周$/), out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    // Sidebar row value: 5-hour %, else weekly % (e.g. Codex reports only the weekly window), else 正常 when nothing
+    // is exhausted but no number exists (Grok), else — when truly unknown.
+    const fiveHour = pick(/5 小时$/), weekly = pick(/每周$/);
+    const shortRemaining = fiveHour ?? weekly;
+    const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
   return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
