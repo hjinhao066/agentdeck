@@ -2600,6 +2600,19 @@ function syncNav() {
   SidePane.onFocusChange();
 }
 
+function scrollColumnInDeck(wrap, center = false) {
+  const deck = deckEl.getBoundingClientRect();
+  const column = wrap.getBoundingClientRect();
+  // scrollIntoView also scrolls hidden ancestors (including the document),
+  // which can pull the sidebar outside the window on Windows.
+  let delta = 0;
+  if (center) delta = column.left - deck.left + (column.width - deckEl.clientWidth) / 2;
+  else if (column.left < deck.left && column.right > deck.right) return;
+  else if (column.left < deck.left) delta = column.width <= deckEl.clientWidth ? column.left - deck.left : column.right - deck.right;
+  else if (column.right > deck.right) delta = column.width <= deckEl.clientWidth ? column.right - deck.right : column.left - deck.left;
+  deckEl.scrollLeft += delta;
+}
+
 function jumpToColumn(col) {
   const t = terms.get(col.id);
   if (!t) return;
@@ -2617,7 +2630,7 @@ function jumpToColumn(col) {
   // scrolling, otherwise focusin arms that guard and snaps the deck back.
   isUserScrollingDeck = true;
   clearTimeout(userScrollTimeout);
-  t.wrap.scrollIntoView({ behavior: 'instant', inline: 'center', block: 'nearest' });
+  scrollColumnInDeck(t.wrap, true);
   lastValidDeckScrollLeft = deckEl.scrollLeft;
   focusColumnInput(col.id); focusedId = col.id;
   userScrollTimeout = setTimeout(() => { isUserScrollingDeck = false; }, 350);
@@ -3622,7 +3635,7 @@ function focusColumnByIndex(idx) {
   if (!t) return;
   Pages.hide();
   if (zoomedId && zoomedId !== col.id) { zoomedId = col.id; updateColumnStyles(); fitAll(); }
-  focusColumnInput(col.id); focusedId = col.id; t.wrap.scrollIntoView({ inline: 'nearest', block: 'nearest' }); syncNav();
+  focusColumnInput(col.id); focusedId = col.id; scrollColumnInDeck(t.wrap); syncNav();
 }
 document.addEventListener('keydown', (e) => {
   if (!e.metaKey || e.ctrlKey || e.altKey) return; // only plain Cmd combos

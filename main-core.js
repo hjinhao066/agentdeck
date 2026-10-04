@@ -36,7 +36,11 @@
   }
   function contextResetEvidence(provider, before, after, output) {
     // Only output received AFTER a submitted reset command, never scrollback.
-    const text = String(output || '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n');
+    // ConPTY redraws rows with cursor positioning instead of newline bytes.
+    // Keep column-one row boundaries before stripping styling; horizontal
+    // positioning within a row must not turn quoted text into a success line.
+    const text = String(output || '').replace(/\x1b\[(?:\d*|\d*;(?:0|1)?)[Hf]/g, '\n')
+      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/\r/g, '\n');
     if (/(?:unknown|unrecognized|unsupported) (?:slash )?command|(?:failed|could not|cannot) (?:to )?(?:clear|start|open)|not available|unavailable|try again|cancelled|canceled/i.test(text)) return false;
     const old = contextTokens(before), used = contextTokens(after);
     if (old !== null && used !== null && used < old / 2) return true;

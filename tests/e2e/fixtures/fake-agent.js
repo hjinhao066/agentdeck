@@ -96,7 +96,12 @@ function answer() {
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
   if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
-  if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
+  if (/ask me/.test(text)) {
+    // Redraw the confirmation like the other TUI replies. Raw input has no
+    // console echo to separate this turn from the previous input box/footer.
+    process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n\nProceed with the change? (y/n) ');
+    return;
+  }
   if (first === 'gemini confirmation regression') {
     process.stdout.write('\x1b[2J\x1b[HThinking: waiting for confirmation\n⠋ Working\nAntigravity\n');
     setTimeout(() => {
@@ -178,12 +183,18 @@ function listen() {
       }
       if (incoming.includes('\x03')) process.exit(0);
     });
-  } else readline.createInterface({ input: process.stdin }).on('line', (line) => {
-    if (!line.trim() && !lines.length) return;
-    lines.push(line);
-    clearTimeout(timer);
-    timer = setTimeout(answer, 250);
-  });
+  } else {
+    // Real agent TUIs disable the console's cooked input/echo. In ConPTY the
+    // cooked echo otherwise scrolls long Captain briefings through the screen
+    // and leaves them in later replies even after the stand-in redraws.
+    // No output stream: readline handles raw editing keys without echoing them.
+    readline.createInterface({ input: process.stdin, terminal: true }).on('line', (line) => {
+      if (!line.trim() && !lines.length) return;
+      lines.push(line);
+      clearTimeout(timer);
+      timer = setTimeout(answer, 250);
+    }).on('SIGINT', () => process.exit(0));
+  }
 }
 function start() {
   console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');

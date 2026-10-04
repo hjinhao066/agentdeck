@@ -42,7 +42,11 @@ test.beforeAll(async () => {
   await page.evaluate((cwd) => MainSession.create('', cwd), profile);
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
-  const exportEnv = `node -e 'require("fs").writeFileSync(${JSON.stringify(controlFile)}, JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}))'`;
+  // A script file keeps Windows PowerShell/native argument parsing out of the
+  // capability export; the environment still comes from the Captain's real PTY.
+  const exportScript = path.join(profile, 'export-control.cjs');
+  fs.writeFileSync(exportScript, `require("fs").writeFileSync(${JSON.stringify(controlFile)}, JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}));`);
+  const exportEnv = `node "${exportScript}"`;
   await page.evaluate(([id, cmd]) => window.deck.ptyInput(id, cmd + '\r'), [captain, exportEnv]);
   await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
   captainEnv = JSON.parse(fs.readFileSync(controlFile, 'utf8'));

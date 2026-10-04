@@ -130,11 +130,15 @@ test('Captain quota CLI returns both Claude seats and changes no tasks, receipts
   await page.locator('#mdCwd').fill(profile);
   await page.locator('#mdCreate').click();
   const id = await page.evaluate(() => config.mainSession.colId);
-  await expect.poll(() => page.evaluate((id) => window.deck.ptyForeground(id), id)).toMatch(/^(?:zsh|bash|sh|powershell|pwsh|cmd)$/i);
+  await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), id)).toBe(true);
   const before = await page.evaluate(() => JSON.stringify([config.mainSession.tasks, config.mainSession.pending, config.boardResponses]));
   const output = path.join(profile, 'quota.txt');
   // Node writes UTF-8 on both platforms; PowerShell 5 redirection writes UTF-16.
-  const command = `node -e "require('fs').writeFileSync(process.argv[1],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}))" "${output}"`;
+  // ConPTY's process property is the terminal name, not the foreground shell.
+  // The output file proves that the real shell ran the CLI with its capability.
+  const script = path.join(profile, 'read-quota.js');
+  fs.writeFileSync(script, `require('fs').writeFileSync(process.argv[2],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}));`);
+  const command = `node "${script}" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
   await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未知[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
   expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(5);

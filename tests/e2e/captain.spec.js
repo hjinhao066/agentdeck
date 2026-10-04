@@ -19,8 +19,9 @@ async function waitForShell(id) {
   if (process.platform === 'win32') {
     await expect.poll(() => page.evaluate((i) => {
       const t = terms.get(i);
-      return MainCore.isWindowsShellPrompt(t?.term ? dumpScreen(t.term) : (t?.lastScreen || ''));
-    }, id), { timeout: 15000 }).toBe(true);
+      const screen = t?.term ? dumpScreen(t.term) : (t?.lastScreen || '');
+      return MainCore.isWindowsShellPrompt(screen) ? '[PowerShell ready]' : screen;
+    }, id), { timeout: 15000 }).toBe('[PowerShell ready]');
   } else {
     await expect.poll(() => page.evaluate((i) => window.deck.ptyForeground(i), id), { timeout: 15000 }).not.toBe('node');
   }
@@ -182,6 +183,8 @@ test('a session the Captain only told something keeps its place; its own session
   expect(await page.evaluate((i) => [columns.find((c) => c.id === i).captainCrew, deckColumns().some((c) => c.id === i)], child)).toEqual([false, true]);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await expect(page.locator(`.column[data-col-id="${child}"]`)).not.toHaveClass(/backstage/);
+  // Column navigation must only scroll the deck, never move the sidebar off-screen.
+  expect(await page.locator('#colNav').evaluate((el) => el.getBoundingClientRect().left)).toBe(0);
   // With no crew, the disabled arrow must still let a drop reach the Captain row.
   await expect(page.locator('.captain-item .captain-fold')).toBeDisabled();
   await drag(page.locator(`.colnav-item[data-col-id="${child}"]`), page.locator('.colnav-item.captain-item'));
@@ -532,9 +535,18 @@ test('keys typed while a receipt is being entered are held and follow it; the bo
   const read = (screenText) => page.evaluate(async (text) => {
     const entry = terms.get('cap-y');
     entry.typing.lastKeyAt = 0; entry.typing.unknown = false; entry.typing.draft = '';
-    entry.term.reset();
-    await new Promise((resolve) => entry.term.write(text, resolve));
-    return userComposing('cap-y');
+    // Synthetic screens must not reset the live xterm independently of
+    // ConPTY's screen, which would corrupt subsequent shell redraws.
+    const live = entry.term;
+    const probe = new Terminal({ cols: live.cols, rows: live.rows });
+    try {
+      entry.term = probe;
+      await new Promise((resolve) => probe.write(text, resolve));
+      return userComposing('cap-y');
+    } finally {
+      entry.term = live;
+      probe.dispose();
+    }
   }, screenText);
   const rule = '─'.repeat(30);
   expect(await read(`⏺ done\r\n${rule}\r\n> half a sentence\r\n${rule}\r\n`)).toBe(true);
@@ -548,7 +560,6 @@ test('keys typed while a receipt is being entered are held and follow it; the bo
   })).toBe(true);
   await page.evaluate(() => { terms.get('cap-y').typing.lastKeyAt = 0; });
   expect(await page.evaluate(() => userComposing('cap-y'))).toBe(false);
-  await page.evaluate(() => terms.get('cap-y').term.reset());
 });
 
 test('screen receipts and questions never settle tasks; only ended turns get a three-minute fallback', async () => {
@@ -627,9 +638,15 @@ test('receipts ride along with the next message to the Captain, not in its bubbl
 
 test('only the Captain holds control: other columns get no token and are refused', async () => {
   await run('cap-y', 'ask nothing');   // wakes the stand-in; harmless
+  // Finish the stand-in's delayed reply before interrupting it.
+  await expect.poll(() => screen('cap-y'), { timeout: 15000 }).toContain('GOT ask nothing');
   await page.evaluate(() => window.deck.ptyInput('cap-y', '\x03'));    // leave the stand-in
   await waitForShell('cap-y');
-  await run('cap-y', 'clear; node -e "console.log(\'TOKEN=\' + (process.env.AGENTDECK_CONTROL_TOKEN || \'none\'))"');
+  const probe = path.join(profile, 'worker-token.js');
+  const result = path.join(profile, 'worker-token.txt');
+  fs.writeFileSync(probe, `const value = 'TOKEN=' + (process.env.AGENTDECK_CONTROL_TOKEN || 'none'); require('fs').writeFileSync(process.argv[2], value); console.log(value);`);
+  await run('cap-y', `clear; node "${probe}" "${result}"`);
+  await expect.poll(() => fs.existsSync(result) ? fs.readFileSync(result, 'utf8') : '', { timeout: 15000 }).toBe('TOKEN=none');
   await expect.poll(() => screen('cap-y'), { timeout: 15000 }).toContain('TOKEN=none');
   const refused = await page.evaluate(() => MainSession.handle({ action: 'main-ledger' }, columns.find((c) => c.id === 'cap-x'))
     .then(() => 'allowed', (e) => e.message));
@@ -724,6 +741,13 @@ test('clearing the Captain resets only its model context: work, receipts and que
   const text = received();
   expect(text.indexOf('claude-opus-5-5-max')).toBeLessThan(text.indexOf('向你提问：用 SQLite 可以吗'));
 
+  // The carried confirmation excerpt makes the stand-in ask for permission
+  // too. Answer it like a user; receipts must wait while this prompt is live.
+  await expect.poll(() => page.evaluate((i) => terms.get(i).state, fresh), { timeout: 15000 }).toBe('input');
+  await run(fresh, 'y');
+  await expect.poll(() => screen(fresh), { timeout: 15000 }).toContain('GOT y');
+  await expect.poll(() => page.evaluate((i) => terms.get(i).state, fresh), { timeout: 15000 }).toBe('done');
+
   // the task queued before the clear finishes now, and its receipt reaches the new Captain
   await run('cap-y', `clear; ${FAKE}`);
   const doneCard = page.locator(`.column[data-col-id="${fresh}"] .task-card`, { hasText: 'Worker y' });
@@ -786,9 +810,12 @@ test('after a restart the conversation from before the clear is still listed and
   // Old files remain searchable even after their compact ledger metadata drops
   // out of the list. This runs after loading the chats from disk again.
   await page.evaluate(() => { config.captainHistory = []; });
-  await run(id, `clear; node "${CLI}" read --id captain-history --find "status please" --turns 1`);
-  await expect.poll(() => screen(id), { timeout: 15000 }).toContain(`记录：${oldCaptainId}`);
-  expect(await screen(id)).toContain('用户：status please');
+  // The previous read contains the same record; wait for its screen to clear
+  // before checking the fallback, so old output cannot satisfy its assertions.
+  await run(id, 'clear');
+  await expect.poll(() => screen(id), { timeout: 15000 }).not.toContain(`记录：${oldCaptainId}`);
+  await run(id, `node "${CLI}" read --id captain-history --find "status please" --turns 1`);
+  await expect.poll(() => screen(id), { timeout: 15000 }).toMatch(new RegExp(`记录：${oldCaptainId}.*用户：status please`));
 });
 
 test('after a restart the Captain row is still pinned and shows its saved conversation, older ones read-only', async () => {

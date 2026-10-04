@@ -269,6 +269,11 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   expect(await page.evaluate(() => window.deck.ptyIsAlive('seat-worker'))).toBe(true);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).filter(r => r.colId === 'seat-worker')).toHaveLength(1);
   expect(fs.readFileSync(path.join(home, '.claude/.credentials.json'), 'utf8')).toBe(before);
+  // The new seat must finish its continuation briefing before a direct TUI
+  // command; otherwise readline batches /model into that first prompt.
+  const fresh = await page.evaluate(() => config.mainSession.colId);
+  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('用户刚清空了你的模型上下文。')), { timeout: 20000 }).toBe(true);
+  await idle(fresh);
   await page.evaluate(() => { window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'); window.deck.ptyInput('seat-worker', '/model Opus 5.5\r'); });
   await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');
   await expect(page.locator('.colnav-item[data-col-id="seat-worker"] .agent-model-label')).toHaveText('Opus 5.5');
