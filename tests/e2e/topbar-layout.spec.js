@@ -36,7 +36,7 @@ test.beforeAll(async () => {
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
-  await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-values')).toHaveText('19%', { timeout: 20000 });
+  await expect(page.locator('#quotaBar [data-seat-id="cn"] [data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('—');
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(page.locator('#quotaBar [data-provider="Codex"] .quota-values')).toContainText('8%');
@@ -105,7 +105,7 @@ test('details open beside a quota row on hover and on click', async () => {
   await row.hover();
   const tip = row.getByRole('tooltip');
   await expect(tip).toBeVisible();
-  await expect(tip).toContainText('↻');
+  await expect(tip).toContainText('重置');
   const [rowBox, tipBox, nav] = await Promise.all([row.boundingBox(), tip.boundingBox(), page.locator('#colNav').boundingBox()]);
   expect(tipBox.x).toBeGreaterThanOrEqual(nav.x + nav.width);
   expect(tipBox.y + tipBox.height).toBeLessThanOrEqual(rowBox.y + rowBox.height + 1);

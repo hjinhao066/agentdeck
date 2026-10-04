@@ -353,12 +353,19 @@
     const outAt = recovery || (empty.length && empty.every((w) => w.resetAt) ? Math.max(...empty.map((w) => w.resetAt)) : null);
     const statusText = out ? '已用尽' : { danger: '快用完', warning: '快用完', normal: '正常' }[state] || '未知';
     const sampledAt = (fresh || retained) ? sample.at : evidence?.at || null;
-    // Sidebar row value: 5-hour %, else weekly % (e.g. Codex reports only the weekly window), else 正常 when nothing
-    // is exhausted but no number exists (Grok), else — when truly unknown.
+    // Panel cells: one per known window in 5h → 7d order; a provider without windows shows its status alone.
+    const weeklyOut = windows.some((w) => /每周$/.test(w.label) && w.exhausted);
+    const cells = [[/5 小时$/, '5h'], [/每周$/, '7d']].map(([re, key]) => {
+      const w = windows.find((v) => re.test(v.label));
+      if (!w) return null;
+      const cellOut = ((w.exhausted || w.remaining <= 0) && (!w.resetAt || w.resetAt > now)) || (key === '5h' && !!blocked && !weeklyOut);
+      return { key, remaining: w.remaining, out: cellOut, resetAt: (cellOut && key === '5h' && blocked ? recovery || w.resetAt : w.resetAt) || null };
+    }).filter(Boolean);
+    // Shared fallback for a row that has no 5-hour cell to show: weekly % (Codex), 正常 (Grok), else — when truly unknown.
     const fiveHour = pick(/5 小时$/), weekly = pick(/每周$/);
     const shortRemaining = fiveHour ?? weekly;
     const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, cells, account: entry.account || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
   return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };

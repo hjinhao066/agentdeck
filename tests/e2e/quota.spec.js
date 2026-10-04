@@ -34,7 +34,7 @@ test.afterAll(async () => {
 const badge = (provider) => page.locator(`#quotaBar [data-provider="${provider}"]${provider === 'Claude' ? '[data-seat-id="cn"]' : ''}`);
 
 test('passive live screens show remaining quota, provider icons and accessible details', { tag: '@smoke' }, async () => {
-  await expect(badge('Claude').locator('.quota-values')).toHaveText('19%', { timeout: 20000 });
+  await expect(badge('Claude').locator('[data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
 
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('—');
@@ -49,14 +49,29 @@ test('passive live screens show remaining quota, provider icons and accessible d
     entry.sample = { ...entry.sample, at, windows: [{ key: 'weekly', label: '每周', used: 85, remaining: 15, exhausted: false, resetAt: at + 86400000, resetText: '' }] };
     config.quotas.Codex = entry; renderQuotaBar();
   });
-  await expect(badge('Codex').locator('.quota-values')).toHaveText('周 15%');
+  await expect(badge('Codex').locator('[data-window="7d"] .quota-pct')).toHaveText('15%');
+  await expect(badge('Codex').locator('[data-window="5h"]')).toHaveCount(0);
+  await expect(badge('Codex').locator('.quota-values')).not.toHaveText(/^[—–-]$/);
+  expect(await page.evaluate(() => QuotaCore.summary(config.quotas, 'Codex', Date.now()).shortText)).toBe('周 15%');
+  const shots = process.env.AGENTDECK_QUOTA_SHOTS;
+  if (shots) {
+    fs.mkdirSync(shots, { recursive: true });
+    await page.evaluate(() => document.activeElement?.blur());
+    await page.mouse.move(800, 400);
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate((theme) => applyTheme(theme), theme);
+      await page.locator('#navQuota').screenshot({ path: path.join(shots, `quota-weekly-grok-${theme}.png`) });
+      await page.screenshot({ path: path.join(shots, `quota-window-${theme}.png`) });
+    }
+    await page.evaluate(() => applyTheme('dark'));
+  }
   await page.evaluate(() => { config.quotas.Codex = JSON.parse(window.codexQuotaBackup); renderQuotaBar(); });
   await expect(badge('Codex').locator('.quota-values')).toContainText('8%');
   await expect(badge('Claude')).toHaveAttribute('data-state', 'warning');
   await expect(badge('Codex')).toHaveAttribute('data-state', 'danger');
-  await expect(badge('Claude')).toHaveAttribute('aria-label', /快用完，5 小时剩余 19%，每周剩余 91%/);
-  await expect(badge('Claude')).toHaveAttribute('title', /^状态：快用完 · 采样 \d\d:\d\d\n/);
-  await expect(badge('Claude')).toHaveAttribute('title', /来源：(Claude 席位用量（\/usage）；高（按账号 ID 归属）|Claude 席位本地用量缓存；高（原生用量及账号归属已验证）)/);
+  await expect(badge('Claude')).toHaveAttribute('aria-label', /快用完，5 小时剩余 19%[^，]*，每周剩余 91%/);
+  await expect(badge('Claude')).toHaveAttribute('data-detail', /^状态：快用完 · 采样 \d\d:\d\d\n/);
+  await expect(badge('Claude')).toHaveAttribute('data-detail', /来源：(Claude 席位用量（\/usage）；高（按账号 ID 归属）|Claude 席位本地用量缓存；高（原生用量及账号归属已验证）)/);
 
   const binding = await page.evaluate(async () => {
     const sample = config.quotas['Claude:cn'].sample;
@@ -67,15 +82,30 @@ test('passive live screens show remaining quota, provider icons and accessible d
   expect(binding.key).toBe(binding.expected);
 
   // Every account stays on one compact row: no wrapping, no clipped name or value.
-  for (const box of await page.locator('#quotaBar .quota-item').evaluateAll((els) => els.map((e) => [e.getBoundingClientRect().height, e.scrollWidth <= e.clientWidth]))) expect(box).toEqual([22, true]);
+  for (const box of await page.locator('#quotaBar .quota-item').evaluateAll((els) => els.map((e) => [e.getBoundingClientRect().height, e.scrollWidth <= e.clientWidth]))) expect(box).toEqual([26, true]);
+  // Default width shows each window's reset time; the narrowest sidebar keeps just the two percentages.
+  const fits = () => page.locator('#quotaBar .quota-item').evaluateAll((els) => els.every((e) => e.scrollWidth <= e.clientWidth && e.querySelector('.quota-values').getBoundingClientRect().left >= e.querySelector('.quota-name').getBoundingClientRect().right));
+  await expect(badge('Claude').locator('[data-window="5h"] .quota-reset')).toBeVisible();
+  await expect(badge('Claude').locator('[data-window="7d"] .quota-pct')).toHaveText('91%');
+  await page.evaluate(() => { config.navWidth = 200; applyNavWidth(); });
+  await expect(badge('Claude').locator('[data-window="5h"] .quota-reset')).toBeHidden();
+  await expect(badge('Claude').locator('[data-window="5h"] .quota-pct')).toBeVisible();
+  await expect(badge('Claude').locator('[data-window="7d"] .quota-pct')).toBeVisible();
+  expect(await fits()).toBe(true);
+  await page.evaluate(() => { config.navWidth = 252; applyNavWidth(); });
+  await expect(badge('Claude').locator('[data-window="5h"] .quota-reset')).toBeVisible();
+  expect(await fits()).toBe(true);
   await expect(badge('Claude').locator('svg')).toBeVisible();
   await badge('Claude').focus();
   await expect(badge('Claude').getByRole('tooltip')).toBeVisible();
-  await expect(badge('Claude').getByRole('tooltip')).toContainText('7d 91% ↻');
+  await expect(badge('Claude').getByRole('tooltip')).toContainText('剩余 91%');
+  // One tooltip only: no native title duplicating it, and no config dir / source / model noise.
+  await expect(badge('Claude')).not.toHaveAttribute('title');
+  await expect(badge('Claude').getByRole('tooltip')).not.toContainText(/配置目录|来源|模型/);
   await expect(badge('Cursor')).toHaveAttribute('aria-label', /^Grok 4\.7：/);
   await expect(badge('Antigravity')).toHaveAttribute('aria-label', /^Gemini：/);
   await expect(badge('Claude').locator('.quota-name')).toHaveText('🇨🇳');
-  await expect(badge('Claude')).toHaveAttribute('title', /模型：claude-opus-5-5-high；账号：cn?\*\*\*@example.test/);
+  await expect(badge('Claude')).toHaveAttribute('data-detail', /模型：claude-opus-5-5-high；账号：cn?\*\*\*@example.test/);
   // The isolated profile is barred from reading the user's real quota caches.
   expect((await page.evaluate(() => window.deck.quotaLocal())).filter(q => q.windows).map(q => q.seatId)).toEqual(['cn']);
   // Quota tracks Grok on Cursor, while model badges already choose that family.
@@ -117,8 +147,8 @@ test('Claude-model limits never exhaust Gemini or Grok 4.7; screenshots use simu
     for (const provider of ['Claude', 'Codex', 'Cursor']) QuotaCore.observe(config.quotas, { provider, scope: QuotaCore.SCOPES[provider], at, identityOnly: true, account: 'de***@example.com', accountKey: 'demo-' + provider });
     renderQuotaBar();
   });
-  await expect(badge('Antigravity').locator('.quota-values')).toHaveText('75%');
-  await expect(badge('Antigravity')).toHaveAttribute('title', /Gemini 5 小时剩余 75%/);
+  await expect(badge('Antigravity').locator('[data-window="5h"] .quota-pct')).toHaveText('75%');
+  await expect(badge('Antigravity')).toHaveAttribute('data-detail', /Gemini 5 小时剩余 75%/);
   await badge('Antigravity').hover();
   const shots = process.env.AGENTDECK_QUOTA_SHOTS;
   if (shots) {
@@ -135,8 +165,8 @@ test('Cursor and agy errors latch provider-wide through normal redraw and reload
   for (const p of ['Cursor', 'Antigravity']) await page.evaluate((p) => window.deck.ptyInput(`quota-${p}`, 'exhausted\r'), p);
   for (const p of ['Cursor', 'Antigravity']) {
     await expect(badge(p)).toHaveAttribute('data-state', 'exhausted');
-    await expect(badge(p).locator('.quota-recovery')).toHaveText(/^↻/);
-    await expect(badge(p)).toHaveAttribute('title', /恢复.*来源：会话屏幕/s);
+    await expect(badge(p).locator('.quota-values [data-level="out"] .quota-reset')).toHaveText(/\d/);
+    await expect(badge(p)).toHaveAttribute('data-detail', /恢复.*来源：会话屏幕/s);
     await expect.poll(() => page.evaluate((p) => terms.get(`quota-${p}`).state, p)).toBe('quota');
   }
   const resetAt = await page.evaluate(() => config.quotas.Antigravity.blocked.resetAt);

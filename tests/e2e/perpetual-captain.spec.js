@@ -315,7 +315,7 @@ test('the idle current Captain renews its expired window before switching to the
   const id = await captainId();
   await expect(page.locator(`.column[data-col-id="${id}"] .perpetual-relay-banner`)).toContainText('快到期');
   await page.evaluate(async () => { await ClaudeSeats.refresh(); renderQuotaBar(); });
-  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('title', /正在用.*US/);
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-detail', /正在用.*US/);
 });
 
 test('official low quotas do not fall back to Codex, and changed identities reject the old slot sample before rotation', async () => {

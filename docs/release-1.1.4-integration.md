@@ -110,3 +110,16 @@ chat plus chat-redesign **22/22**, all E2E sequential with one worker.
 Task board synthetic dark/light screenshots are in `task-board-v2/` under the
 existing local report directory. The compact board and answer drawer were
 visually reviewed. README and the task board API now describe v2's write actions.
+
+## Follow-up: quota panel
+
+Integrated `origin/feat/quota-panel` at `a38396b` with no merge conflicts,
+retaining the previously integrated quota-chatgpt-grok fix.
+Unit tests **499/499**. Serial E2E batches: display/seat/tooltip/Bark/topbar
+**16 passed**; warmup **5 passed, 2 failed**; Captain rotation **4 passed, 1 failed**.
+The three failures exactly match the Captain's accepted main-branch baseline:
+quota-warmup.spec.js:182 and :215, perpetual-captain.spec.js:124. They were not
+changed or counted as new regressions. No additional failures were observed.
+Synthetic dark/light screenshots are in the local `quota-panel/` directory;
+percentages, reset columns and narrow sidebar layout were visually reviewed.
+`npm audit` reports zero vulnerabilities.

@@ -65,11 +65,11 @@ test.afterEach(async () => { if (app) await app.close(); if (profile) fs.rmSync(
 test('both idle seats show independent fresh windows, resets and visible sample times without sending any prompt', async () => {
   await app.evaluate(() => globalThis.seatRefreshTest.poller.tick());
   await page.evaluate(() => readQuotaCache());
-  await expect(seat('cn').locator('.quota-values')).toHaveText('75%');
-  await expect(seat('us').locator('.quota-values')).toHaveText('40%');
+  await expect(seat('cn').locator('[data-window="5h"] .quota-pct')).toHaveText('75%');
+  await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('40%');
   for (const id of ['cn', 'us']) {
-    await expect(seat(id)).toHaveAttribute('title', /^状态：正常 · 采样 \d\d:\d\d\n/);
-    await expect(seat(id)).toHaveAttribute('title', /5h \d+% ↻.*7d \d+% ↻.*Claude OAuth usage.*采样/s);
+    await expect(seat(id)).toHaveAttribute('data-detail', /^状态：正常 · 采样 \d\d:\d\d\n/);
+    await expect(seat(id)).toHaveAttribute('data-detail', /5h \d+% ↻.*7d \d+% ↻.*Claude OAuth usage.*采样/s);
   }
   if (process.env.AGENTDECK_REFRESH_SHOTS) {
     fs.mkdirSync(process.env.AGENTDECK_REFRESH_SHOTS, { recursive: true });
@@ -91,23 +91,23 @@ test('one-seat authentication failure emits no new authoritative sample; previou
   expect(failed).toMatchObject({ failureOnly: true, failures: 1, at });
   expect(failed.windows).toBeUndefined();
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, at);
-  await expect(seat('cn').locator('.quota-values')).toHaveText('75%');
+  await expect(seat('cn').locator('[data-window="5h"] .quota-pct')).toHaveText('75%');
   await expect(seat('us')).toHaveAttribute('data-state', 'normal');
-  await expect(seat('us').locator('.quota-values')).toHaveText('40%');
-  await expect(seat('us')).toHaveAttribute('title', /5h 40% ↻[\s\S]*7d 90% ↻[\s\S]*查询失败：[\s\S]*连续 1 次[\s\S]*保留上次数字[\s\S]*数据已旧/);
+  await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('40%');
+  await expect(seat('us')).toHaveAttribute('data-detail', /5h 40% ↻[\s\S]*7d 90% ↻[\s\S]*查询失败：[\s\S]*连续 1 次[\s\S]*保留上次数字[\s\S]*数据已旧/);
   expect(await page.evaluate(() => config.quotas['Claude:us'].sample.at)).toBe(at - 31 * 60000);
   await page.reload();
   await expect(page.locator('#quotaBar [data-seat-id]')).toHaveCount(2);
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, at);
   await expect(seat('us')).toHaveAttribute('data-state', 'normal');
-  await expect(seat('us')).toHaveAttribute('title', /数据已旧/);
+  await expect(seat('us')).toHaveAttribute('data-detail', /数据已旧/);
   const later = await app.evaluate(async () => {
     const state = globalThis.seatRefreshTest;
     state.at += 15 * 60000; state.failUs = false; await state.poller.tick(); return state.at;
   });
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, later);
-  await expect(seat('us').locator('.quota-values')).toHaveText('40%');
-  await expect(seat('us')).not.toHaveAttribute('title', /数据已旧|查询失败/);
+  await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('40%');
+  await expect(seat('us')).not.toHaveAttribute('data-detail', /数据已旧|查询失败/);
   expect(await page.evaluate(() => config.quotas['Claude:us'].sample.at)).toBe(later);
   expect(await app.evaluate(() => globalThis.seatRefreshTest.calls.slice().sort())).toEqual(['cn', 'cn', 'cn', 'us', 'us', 'us']);
   expect(await page.evaluate(() => config.mainSession.colId)).toBe('captain');

@@ -67,14 +67,16 @@ the middle:
   `ledger` marks an assignment complete after its command receipt and shows a
   separate terminal status if that agent is still running or waiting.
 - **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
-  one row per provider (icon, name, remaining percentage — the lowest known
-  window — or 正常 / 已用尽 / 未知). With the sidebar collapsed, a gauge icon in
+  one row per provider (icon, name, separate 5-hour/weekly percentages, reset
+  times and thin bars; only the windows the source reports are shown). With no
+  numbers it shows 正常 / 已用尽 / 未知. With the sidebar collapsed, a gauge icon in
   the top bar (tinted by the provider closest to running out) opens the same
   rows in a popover. Hover, click or focus a row for
-  each window, reset time, model, masked account, source, confidence and sample time.
+  each window, reset time, masked account, sample time and Captain rotation plan
+  in one tooltip; model/source diagnostics stay in the row's data-detail.
   Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
   Claude shows a separate item per `claudeSeats` configuration, with both
-  5-hour/weekly percentages, resets in the tooltip, and the running Captain’s
+  5-hour/weekly percentages and resets, and the running Captain’s
   seat marked. No configuration shows one `~/.claude` item; missing seat usage
   says 未登录/无数据. Remaining ≤20% is
   amber and ≤10% is red. AgentDeck passively reads live TUI screens first, then

@@ -3628,12 +3628,30 @@ function claudeCaptainSeatId() {
 function renderQuotaBar() {
   const items = QuotaCore.items(config.claudeSeats);
   const captainSeatId = claudeCaptainSeatId();
-  const summaries = items.map(({ provider, seat }) => QuotaCore.summary(config.quotas, provider, Date.now(), seat, captainSeatId));
-  // HH:MM, with MM-DD when the time is not within the next/last 24 hours.
-  const clock = (t) => {
-    const d = new Date(t), pad = (v) => String(v).padStart(2, '0');
-    return `${Math.abs(t - Date.now()) > 86400000 ? `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` : ''}${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const captainProvider = columns.find((c) => c.id === config.mainSession?.colId)?.agentProvider;
+  const now = Date.now();
+  const summaries = items.map(({ provider, seat }) => QuotaCore.summary(config.quotas, provider, now, seat, captainSeatId));
+  const pad = (v) => String(v).padStart(2, '0');
+  const hm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const day = (d) => '周' + '日一二三四五六'[d.getDay()];
+  // Row: HH:MM inside the next 24 hours, then the weekday, then MM-DD past a week.
+  const shortReset = (t) => {
+    const d = new Date(t), gap = t - now;
+    return gap <= 86400000 ? hm(d) : gap < 6 * 86400000 ? day(d) : `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
+  // Tooltip: the exact time plus how long that is from now.
+  const longReset = (t) => {
+    const d = new Date(t), mins = Math.max(1, Math.round((t - now) / 60000));
+    const left = mins < 60 ? `${mins} 分钟` : mins < 1440 ? `${Math.floor(mins / 60)} 小时${mins % 60 ? ` ${mins % 60} 分` : ''}` : `${Math.floor(mins / 1440)} 天`;
+    return `${t - now <= 86400000 ? '' : t - now < 6 * 86400000 ? day(d) + ' ' : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} `}${hm(d)}（${left}后）`;
+  };
+  const level = (c) => c.out ? 'out' : c.remaining <= 10 ? 'danger' : c.remaining <= 20 ? 'low' : 'ok';
+  // Whole percents keep the columns aligned.
+  const pct = (c) => c.out ? '用尽' : c.remaining < 1 ? '<1%' : `${Math.round(c.remaining)}%`;
+  const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; if (text !== undefined) n.textContent = text; return n; };
+  // Unchanged content keeps its nodes: the periodic re-render must not disturb a hovered row.
+  const fill = (box, nodes) => { const next = el('span', ''); next.append(...nodes); if (next.innerHTML !== box.innerHTML) box.replaceChildren(...next.childNodes); };
+  const meter = (c) => { const m = el('span', 'quota-meter'); m.setAttribute('aria-hidden', 'true'); m.style.setProperty('--pct', `${c.out ? 0 : Math.max(2, Math.min(100, c.remaining))}%`); return m; };
   const NAMES = { Claude: 'Claude', Codex: 'ChatGPT', Cursor: 'Grok 4.7', Antigravity: 'Gemini' };
   for (const [bar, prefix] of [[document.getElementById('quotaBar'), 'quota-tip'], [document.getElementById('quotaPopList'), 'quota-pop-tip']]) {
     for (const item of [...bar.children]) if (!items.some((q) => q.key === item.dataset.quotaKey)) item.remove();
@@ -3657,33 +3675,64 @@ function renderQuotaBar() {
       const q = summaries[index];
       // Account = provider icon + flag only; the seat's full name stays in the tooltip.
       const flag = seat && seat.id !== 'default' ? (seat.name.match(/\p{Regional_Indicator}{2}/u)?.[0] || seat.name.slice(0, 2)) : '';
-      const captain = seat && seat.id === captainSeatId;
+      const captain = seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider;
       const name = item.querySelector('.quota-name');
-      name.textContent = seat ? flag : NAMES[provider];
-      if (captain) name.insertAdjacentHTML('beforeend', `<span class="quota-captain">${ICONS.crown}</span>`);
-      // Right side: the 5-hour remaining %, or a status dot + recovery time while exhausted.
+      const crown = el('span', 'quota-captain'); crown.innerHTML = ICONS.crown;
+      fill(name, [seat ? flag : NAMES[provider], ...(captain ? [crown] : [])]);
+      const state = q.out ? 'exhausted' : q.state;
+      const recovery = q.recoveryAt > now ? q.recoveryAt : null;
+      // Right side: one cell per window the provider really has (5h, 7d), each with its
+      // remaining % and reset time; a provider without windows shows its status alone.
       const values = item.querySelector('.quota-values');
-      const recovery = q.recoveryAt ? `↻${clock(q.recoveryAt)}` : '↻--:--';
-      if (q.out) {
-        const dot = document.createElement('span'); dot.className = 'quota-dot'; dot.setAttribute('aria-hidden', 'true');
-        const time = document.createElement('span'); time.className = 'quota-recovery'; time.textContent = recovery;
-        values.replaceChildren(dot, time);
-      } else {
-        const value = document.createElement('span');
-        const v = q.shortRemaining;
-        value.className = `quota-value${v !== null && v <= 20 ? ' low' : ''}`;
-        // Whole percents keep the column aligned; the tooltip keeps the exact value.
-        value.textContent = q.shortText;
-        values.replaceChildren(value);
+      const row = (q.cells || []).map((c) => {
+        const cell = el('span', 'quota-cell'); cell.dataset.window = c.key; cell.dataset.level = level(c);
+        cell.append(el('span', 'quota-key', c.key), el('span', 'quota-pct', pct(c)));
+        if (c.resetAt > now) cell.append(el('span', 'quota-reset', shortReset(c.resetAt)));
+        cell.append(meter(c));
+        return cell;
+      });
+      // No cell for a window the provider does not have (weekly-only Codex keeps its 7d cell).
+      // With no cells at all, shortText is 正常 or —; never a placeholder dash for Grok.
+      if (!row.length || (q.out && !q.cells.some((c) => c.out))) {
+        const status = el('span', 'quota-status');
+        const fallback = !row.length && !q.out ? q.shortText : null;
+        status.dataset.level = q.out ? 'out' : fallback && fallback !== '—' ? 'ok' : 'none';
+        status.append(el('span', 'quota-status-text', q.out ? '已用尽' : (fallback || '—')));
+        if (q.out && recovery) status.append(el('span', 'quota-reset', shortReset(recovery)));
+        if (row.length) status.dataset.window = '5h';
+        row.unshift(status);
       }
-      const sampled = q.sampledAt ? `采样 ${clock(q.sampledAt)}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
-      const detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + (seat ? ClaudeSeats.warmupDetail(seat.id) : '');
-      const brief = [q.out && (q.recoveryAt ? `${clock(q.recoveryAt)} 恢复` : '恢复时间未知'),
-        q.fiveHour !== null && `5 小时剩余 ${q.fiveHour}%`, q.weekly !== null && `每周剩余 ${q.weekly}%`].filter(Boolean).join('，');
-      item.dataset.state = q.out ? 'exhausted' : q.state;
+      fill(values, row);
+      // One tooltip: the windows, who is using the seat and when it rotates; diagnostics stay in data-detail.
+      const tip = item.querySelector('.quota-tooltip');
+      const head = el('span', 'qt-head');
+      head.append(el('span', 'qt-name', seat ? seat.name : NAMES[provider]));
+      if (captain) { const who = el('span', 'qt-captain'); who.innerHTML = ICONS.crown; who.append('队长在用'); head.append(who); }
+      const badge = el('span', 'qt-badge', q.statusText); badge.dataset.state = state; head.append(badge);
+      const lines = q.cells.map((c) => {
+        const line = el('span', 'qt-window'); line.dataset.level = level(c);
+        line.append(el('span', 'qt-key', c.key === '5h' ? '5 小时' : '7 天'), el('span', 'qt-pct', c.out ? '已用尽' : `剩余 ${pct(c)}`), meter(c),
+          el('span', 'qt-reset', c.resetAt > now ? `${longReset(c.resetAt)}重置` : '重置时间未知'));
+        return line;
+      });
+      if (q.out && !q.cells.some((c) => c.out)) lines.unshift(el('span', 'qt-note out', recovery ? `预计 ${longReset(recovery)}恢复` : '恢复时间未知'));
+      else if (!q.cells.length) lines.push(el('span', 'qt-note', state === 'normal' ? '未见用尽，此来源不提供百分比' : '暂无额度数据，等待下次采样'));
+      const warm = seat ? ClaudeSeats.warmupDetail(seat.id) : '';
+      if (seat) {
+        // warmupDetail = optional warm-up line + the rotation plan, whose first part repeats who is in use.
+        const parts = warm.split('\n').filter(Boolean), plan = parts.pop().split(' · ').slice(1);
+        if (plan.length) lines.push(el('span', 'qt-plan', `自动切换：${plan.join('；')}`));
+        if (parts.length) lines.push(el('span', 'qt-plan', parts.join('；')));
+      }
+      const sampled = q.sampledAt ? `采样 ${Math.abs(q.sampledAt - now) > 86400000 ? `${pad(new Date(q.sampledAt).getMonth() + 1)}-${pad(new Date(q.sampledAt).getDate())} ` : ''}${hm(new Date(q.sampledAt))}${q.stale ? '（数据已旧）' : ''}` : '暂无采样';
+      const foot = el('span', `qt-foot${q.stale ? ' stale' : ''}`, [q.account, sampled].filter(Boolean).join(' · '));
+      fill(tip, [head, ...lines, foot]);
+      const brief = [q.out && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
+        ...q.cells.map((c) => `${c.key === '5h' ? '5 小时' : '每周'}剩余 ${c.remaining}%${c.resetAt > now ? `（${shortReset(c.resetAt)} 重置）` : ''}`)].filter(Boolean).join('，');
+      item.dataset.state = state;
       item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
-      item.title = detail;
-      item.querySelector('.quota-tooltip').textContent = detail;
+      // Config dir, model, source and sampling evidence: kept for diagnosis, never shown on hover.
+      item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;
       if (bar.children[index] !== item) bar.insertBefore(item, bar.children[index] || null);
     }
 

@@ -25,11 +25,16 @@ were left running. Quota probes made no inference requests.
   `activeClaudeSeatId` (the next-launch preference). Legacy untagged columns
   bind only to the `~/.claude` seat; unknown explicit seat IDs are ignored.
 - Each item is one compact row in the sidebar quota block: provider icon, seat flag
-  (plus a crown on the seat the running Captain uses), and the right-aligned 5-hour
-  remaining % (or `周 N%` when only the weekly window exists, `正常` when nothing is
-  exhausted but no number is available, `—` only when truly unknown). An exhausted row shows a red dot and `↻HH:MM` recovery instead. The
-  weekly %, both resets, sample time, model and masked account live in the tooltip
-  and the row's aria-label. Missing windows say `无数据`; if neither
+  (plus a crown on the seat the running Captain uses), then one cell per window the
+  source actually reports, in 5-hour then weekly order. A cell shows the remaining %,
+  its reset time and a thin bar; a window that does not exist leaves that column empty
+  rather than a dash. A sidebar too narrow for the reset times keeps the percentages
+  only. With no window number the row uses the shared fallback: `正常` when nothing is
+  exhausted (Grok 4.7), `—` only when truly unknown. Weekly-only Codex keeps the 7-day
+  cell (the fallback text is still `周 N%`). An exhausted row with no numeric window
+  shows 已用尽 and the recovery time. One tooltip lists the windows, whether the
+  captain is using the seat and the rotation plan; config dir, model and source stay
+  on `data-detail`. Missing windows say `无数据` in that detail; if neither
   window can be read, show `未知` (never 未登录: the masked account still shows). A welcome/model banner alone cannot
   prove Claude quota or login. An explicit exhausted error remains visible
   even if an older numeric footer still shows a positive percentage, but a **newer**
