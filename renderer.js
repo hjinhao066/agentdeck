@@ -104,6 +104,7 @@ let config = {
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
+  claudeQuotaAlert: { thresholdPercent: 2, volume: 3 }, barkKeyFile: '',
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
   captainTokenSaver: MainCore.tokenSaverSettings(),
@@ -112,6 +113,10 @@ const saved = window.deck.loadConfig();
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
+  if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
+  if (saved.claudeQuotaAlert && typeof saved.claudeQuotaAlert === 'object') {
+    config.claudeQuotaAlert = { ...config.claudeQuotaAlert, ...saved.claudeQuotaAlert };
+  }
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
   config.captainRelayLabel = typeof saved.captainRelayLabel === 'string' ? saved.captainRelayLabel.slice(0, 80) : 'Relay';
   config.activeClaudeSeatId = ClaudeSeatsCore.active({ ...saved, claudeSeats: config.claudeSeats }).id;

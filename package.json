@@ -48,6 +48,7 @@
       "quota-core.js",
       "quota-local.js",
       "quota-codex.js",
+      "quota-low-bark.js",
       "chat-ui.js",
       "sidebar-core.js",
       "sidebar.js",
@@ -70,6 +71,7 @@
       "vendor/**",
       "security.js",
       "notifications.js",
+      "notify-user.js",
       "notification-policy.js"
     ],
     "mac": {
