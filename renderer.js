@@ -3297,7 +3297,7 @@ function renderQuotaBar() {
       item.setAttribute('role', 'group');
       item.tabIndex = 0; // keyboard users can inspect the same tooltip
       const icon = document.createElement('span'); icon.className = 'quota-icon'; icon.setAttribute('aria-hidden', 'true');
-      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider];
+      icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
       const label = document.createElement('span'); label.className = 'quota-label';
       const name = document.createElement('span'); name.className = 'quota-name';
       const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `quota-tip-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
