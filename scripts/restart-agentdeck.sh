@@ -17,8 +17,8 @@ BACKUPS="${AGENTDECK_BACKUPS:-$HOME/Library/Caches/AgentDeck-install-backups}"
 LOG="${AGENTDECK_LOG:-$HOME/Library/Logs/AgentDeck-restart.log}"
 OPEN="${AGENTDECK_OPEN:-open}"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-DMG="$HERE/dist/AgentDeck-1.0.0-arm64.dmg"
-SHA=3fb0e16e1705fbba49c7228a7222ab830f0b1cc44143720c3f39c1c02eba707e
+DMG="$HERE/dist/AgentDeck-1.1.0-arm64.dmg"
+SHA=bc5f2b84b5cdfb29c1fb180eeae5817d2070fcfb09bfbc45e8b9a7e61b2eab4f
 GO=0; CHILD=0
 while [ $# -gt 0 ]; do
   case "$1" in
