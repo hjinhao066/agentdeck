@@ -31,6 +31,7 @@ test('sshd 片段：生产端口写死 43123、只允许 remote 转发、无 she
   const conf = fs.readFileSync(path.join(VPS, 'sshd_agentdeck-tunnel-win.conf'), 'utf8');
   assert.match(conf, /^Match User agentdeck-tunnel-win$/m);
   assert.match(conf, /^\tPermitListen 127\.0\.0\.1:43123$/m);
+  assert.match(conf, /^\tPermitOpen none$/m);
   assert.ok(!/43122/.test(conf.replace(/^#.*$/gm, '')), 'the Mac port never appears in the Windows account config');
   assert.equal(authOptsTemplate(), 'restrict,port-forwarding,permitlisten="127.0.0.1:43123"');
 
@@ -45,6 +46,7 @@ test('sshd 片段：生产端口写死 43123、只允许 remote 转发、无 she
     .split('\n').filter(Boolean).map((l) => { const i = l.indexOf(' '); return [l.slice(0, i), l.slice(i + 1)]; }));
   const win = eff('agentdeck-tunnel-win');
   assert.equal(win.permitlisten, '127.0.0.1:43123');
+  assert.equal(win.permitopen, 'none');
   assert.equal(win.allowtcpforwarding, 'remote');
   assert.equal(win.allowstreamlocalforwarding, 'no');
   assert.equal(win.gatewayports, 'no');
@@ -60,7 +62,9 @@ test('sshd 片段：生产端口写死 43123、只允许 remote 转发、无 she
   const other = eff('someoneelse');
   assert.notEqual(other.maxsessions, '0');
   assert.equal(other.permitlisten, 'any');
+  assert.equal(other.permitopen, 'any');
   assert.equal(other.forcecommand, 'none');
+  assert.deepEqual(eff('root'), other, 'root is configured exactly like any other user: the Match block does not leak');
 });
 
 test('真 sshd：Windows 的密钥只能占 Windows 的端口，抢不了 Mac 的，别的一概不行', { skip }, async (t) => {

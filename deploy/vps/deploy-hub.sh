@@ -26,13 +26,24 @@ split_target() { # sets HOST (maybe empty) and PARENT
   [ -n "$PARENT" ] || die "empty target path"
   case "$PARENT" in /*) ;; *) die "target path must be absolute: $PARENT" ;; esac
 }
+# POSIX single-quote quoting: understood by any login shell that sshd may run the command through
+# (printf %q would emit $'...' for control characters, which only bash understands).
+shq() {
+  local rest="$1" out="'" q="'" head
+  while [[ "$rest" == *"$q"* ]]; do
+    head="${rest%%"$q"*}"
+    out="$out$head'\\''"
+    rest="${rest#*"$q"}"
+  done
+  printf '%s' "$out$rest'"
+}
 # Run a shell snippet on the target. $1 is the snippet; extra args become $1.. inside it. stdin passes through.
 on_target() {
   if [ -n "$HOST" ]; then
     local cmd
-    cmd="bash -c $(printf '%q' "set -euo pipefail
+    cmd="bash -c $(shq "set -euo pipefail
 $1") bash"
-    local a; for a in "${@:2}"; do cmd="$cmd $(printf '%q' "$a")"; done
+    local a; for a in "${@:2}"; do cmd="$cmd $(shq "$a")"; done
     ssh -o BatchMode=yes -o StrictHostKeyChecking=yes "$HOST" "$cmd"
   else
     bash -c "set -euo pipefail

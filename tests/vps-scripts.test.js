@@ -127,7 +127,7 @@ function caddyEnv(d, extra = {}) {
   fs.mkdirSync(path.join(d, 'log'), { recursive: true });
   const reloads = path.join(d, 'reloads');
   const reloadScript = path.join(d, 'reload.sh');
-  fs.writeFileSync(reloadScript, `#!/bin/sh\necho x >> "${reloads}"\nif [ -n "$RELOAD_FAIL_FIRST" ] && [ "$(wc -l < "${reloads}")" -le 1 ]; then exit 1; fi\n`, { mode: 0o755 });
+  fs.writeFileSync(reloadScript, `#!/bin/sh\necho x >> "${reloads}"\nif [ -n "$RELOAD_FAIL_FIRST" ] && [ "$(wc -l < "${reloads}")" -le 1 ]; then exit 1; fi\nif [ -n "$RELOAD_FAIL_AT" ] && [ "$(wc -l < "${reloads}")" -eq "$RELOAD_FAIL_AT" ]; then exit 1; fi\n`, { mode: 0o755 });
   return {
     CADDYFILE: path.join(d, 'Caddyfile'), AGENTDECK_AUTH_FILE: path.join(d, 'agentdeck-basicauth.caddy'),
     AGENTDECK_LOG_FILE: path.join(d, 'log', 'agentdeck-access.log'), AGENTDECK_HUB_ROOT: path.join(d, 'hub'),
@@ -193,6 +193,100 @@ test('install-caddy-site.sh：重复运行结果不变，口令文件不被覆�
   assert.match(read(path.join(d, 'agentdeck-basicauth.caddy')), /b{53}/, 'existing auth file kept');
 });
 
+const MANAGED_RE = /^# BEGIN agentdeck-three-ends/m;
+const backupDirs = (d) => fs.readdirSync(path.join(d, 'backups')).filter((f) => /^20/.test(f)).sort();
+
+test('重复安装不新建托管段落的备份：默认回滚仍还原到最初的原始段落，且不是空操作', { skip: skipCaddy }, (t) => {
+  const d = tmp(t); fs.writeFileSync(path.join(d, 'Caddyfile'), ORIGINAL);
+  const env = caddyEnv(d);
+  const install = () => { const r = run(path.join(VPS, 'install-caddy-site.sh'), [], env); assert.equal(r.status, 0, r.stdout + r.stderr); return r; };
+  install();
+  const [first] = backupDirs(d);
+  const again = install(); // same second on purpose
+  install();
+  assert.match(again.stdout, /already the managed one/);
+  assert.deepEqual(backupDirs(d), [first], 'a re-install over our own block creates no backup');
+  assert.equal(read(path.join(d, 'backups', first, 'old-block.caddy')), OLD_BLOCK, 'the original-block backup is never overwritten');
+  assert.ok(MANAGED_RE.test(read(path.join(d, 'Caddyfile'))));
+
+  const rb = run(path.join(VPS, 'rollback-caddy-site.sh'), [], env);
+  assert.equal(rb.status, 0, rb.stdout + rb.stderr);
+  assert.equal(read(path.join(d, 'Caddyfile')), ORIGINAL, 'default rollback restores the original block, not the managed one');
+  assert.ok(!MANAGED_RE.test(read(path.join(d, 'Caddyfile'))));
+  assert.equal(reloadCount(d), 4);
+});
+
+test('安装、回滚、再安装、再回滚在同一秒内：备份目录不复用，默认回滚选最近的原始段落备份', { skip: skipCaddy }, (t) => {
+  const d = tmp(t); fs.writeFileSync(path.join(d, 'Caddyfile'), ORIGINAL);
+  // Freeze the clock the scripts use for backup names, so "same second" is guaranteed rather than lucky.
+  const bin = path.join(d, 'bin'); fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'date'), `#!/bin/sh\ncase "$*" in *%Y%m%dT%H%M%SZ*) echo 20260101T000000Z ;; *) exec /bin/date "$@" ;; esac\n`, { mode: 0o755 });
+  const env = caddyEnv(d, { PATH: `${bin}:${process.env.PATH}` });
+  const ok = (script) => { const r = run(path.join(VPS, script), [], env); assert.equal(r.status, 0, r.stdout + r.stderr); };
+  ok('install-caddy-site.sh'); ok('rollback-caddy-site.sh');
+  assert.equal(read(path.join(d, 'Caddyfile')), ORIGINAL);
+  // Someone edits the original block between the two installs: the second backup must hold the edited block.
+  const edited = ORIGINAL.replace('127.0.0.1:43122 {', '127.0.0.1:43999 {');
+  fs.writeFileSync(path.join(d, 'Caddyfile'), edited);
+  ok('install-caddy-site.sh');
+  const dirs = backupDirs(d);
+  assert.deepEqual(dirs, ['20260101T000000Z', '20260101T000000Z-01'], 'two backups in the same second, none overwritten');
+  assert.equal(read(path.join(d, 'backups', dirs[0], 'old-block.caddy')), OLD_BLOCK);
+  assert.equal(read(path.join(d, 'backups', dirs[1], 'old-block.caddy')), OLD_BLOCK.replace('127.0.0.1:43122 {', '127.0.0.1:43999 {'));
+  ok('rollback-caddy-site.sh');
+  assert.equal(read(path.join(d, 'Caddyfile')), edited, 'the newest original backup wins');
+});
+
+test('rollback-caddy-site.sh：备份里是托管段落就拒绝，不改 Caddyfile、不 reload、不报成功', { skip: skipCaddy }, (t) => {
+  const d = tmp(t); fs.writeFileSync(path.join(d, 'Caddyfile'), ORIGINAL);
+  const env = caddyEnv(d);
+  assert.equal(run(path.join(VPS, 'install-caddy-site.sh'), [], env).status, 0);
+  const installed = read(path.join(d, 'Caddyfile'));
+  const managedBlock = installed.slice(installed.indexOf('# BEGIN agentdeck-three-ends'), installed.indexOf('# END agentdeck-three-ends') + '# END agentdeck-three-ends\n'.length);
+  // A backup written by an older script version: its old-block is the managed region itself (and newer than the real one).
+  const bad = path.join(d, 'backups', '29990101T000000Z');
+  fs.mkdirSync(bad, { recursive: true });
+  fs.writeFileSync(path.join(bad, 'old-block.caddy'), managedBlock);
+  const reloadsBefore = reloadCount(d);
+
+  const explicit = run(path.join(VPS, 'rollback-caddy-site.sh'), [bad], env);
+  assert.notEqual(explicit.status, 0);
+  assert.match(explicit.stderr, /managed agentdeck-three-ends block/);
+  assert.ok(!/rolled back/.test(explicit.stdout + explicit.stderr));
+  assert.equal(read(path.join(d, 'Caddyfile')), installed);
+  assert.equal(reloadCount(d), reloadsBefore);
+
+  // Default pick skips the newer managed backup and still reaches the original one.
+  const dflt = run(path.join(VPS, 'rollback-caddy-site.sh'), [], env);
+  assert.equal(dflt.status, 0, dflt.stdout + dflt.stderr);
+  assert.equal(read(path.join(d, 'Caddyfile')), ORIGINAL);
+
+  // Only managed backups left: refuse instead of pretending.
+  fs.writeFileSync(path.join(d, 'Caddyfile'), installed);
+  fs.rmSync(path.join(d, 'backups'), { recursive: true });
+  fs.mkdirSync(bad, { recursive: true });
+  fs.writeFileSync(path.join(bad, 'old-block.caddy'), managedBlock);
+  const none = run(path.join(VPS, 'rollback-caddy-site.sh'), [], env);
+  assert.notEqual(none.status, 0);
+  assert.match(none.stderr, /no backup of the original block/);
+  assert.equal(read(path.join(d, 'Caddyfile')), installed);
+});
+
+test('重复安装时 reload 失败：恢复到上一版托管段落，原始备份不动', { skip: skipCaddy }, (t) => {
+  const d = tmp(t); fs.writeFileSync(path.join(d, 'Caddyfile'), ORIGINAL);
+  const env = caddyEnv(d);
+  assert.equal(run(path.join(VPS, 'install-caddy-site.sh'), [], env).status, 0);
+  const installed = read(path.join(d, 'Caddyfile'));
+  // Make the next install different so the failed reload has something to undo: change the snippet via the hub path.
+  const hub2 = { ...env, AGENTDECK_HUB_ROOT: path.join(d, 'hub2') };
+  const r = run(path.join(VPS, 'install-caddy-site.sh'), [], { ...hub2, RELOAD_FAIL_AT: '2' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /rolled back/);
+  assert.equal(read(path.join(d, 'Caddyfile')), installed, 'previous managed block put back');
+  assert.equal(backupDirs(d).length, 1);
+  assert.equal(reloadCount(d), 3);
+});
+
 test('install-caddy-site.sh：现有 Caddyfile 校验不过、口令取不出、reload 失败，都不留下半成品', { skip: skipCaddy }, (t) => {
   // 1. invalid existing config: refuse, change nothing
   let d = tmp(t);
@@ -236,7 +330,20 @@ function tunnelFixture(t) {
   stub('userdel', `echo "userdel $*" >> "${log}"; rm -f "${d}/.user"`);
   stub('chown', `echo "chown $*" >> "${log}"`);
   stub('systemctl', `echo "systemctl $*" >> "${log}"`);
-  stub('sshd', `echo "sshd $*" >> "${log}"\ncase "$1" in -t) [ -z "$STUB_SSHD_FAIL" ] ;; -T) printf 'permitlisten 127.0.0.1:43123\\nallowtcpforwarding remote\\nmaxsessions 0\\ngatewayports no\\n' ;; esac`);
+  stub('pkill', `echo "pkill $*" >> "${log}"`);
+  // `sshd -T` answers per user like the real thing: the Mac account is limited to 43122, Windows to 43123, root to nothing.
+  // STUB_MAC_PERMITLISTEN / STUB_WIN_NO_OPEN / STUB_ROOT_LEAK simulate a bad VPS.
+  stub('sshd', `echo "sshd $*" >> "${log}"
+case "$1" in
+  -t) [ -z "$STUB_SSHD_FAIL" ] ;;
+  -T)
+    user="$(echo "$*" | sed -n 's/.*user=\\([^,]*\\).*/\\1/p')"
+    case "$user" in
+      agentdeck-tunnel-win) printf 'permitlisten 127.0.0.1:43123\\nallowtcpforwarding remote\\nmaxsessions 0\\ngatewayports no\\n'; [ -n "$STUB_WIN_NO_OPEN" ] || echo 'permitopen none' ;;
+      agentdeck-tunnel) echo "permitlisten \${STUB_MAC_PERMITLISTEN:-127.0.0.1:43122}" ;;
+      root) printf 'permitlisten any\\nmaxsessions 10\\n'; if [ -n "$STUB_ROOT_LEAK" ] && grep -qs 'PermitOpen none' "${d}/root/etc/ssh/sshd_config.d/agentdeck-tunnel-win.conf"; then echo 'permitopen none'; fi ;;
+    esac ;;
+esac`);
   const env = { PATH: `${bin}:${process.env.PATH}`, AGENTDECK_ROOT: path.join(d, 'root'), SSHD_BIN: path.join(bin, 'sshd') };
   fs.mkdirSync(path.join(d, 'root', 'etc', 'ssh'), { recursive: true });
   const key = (name) => { const f = path.join(d, name); run('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'win-test', '-f', f]); return f; };
@@ -269,7 +376,7 @@ test('tunnel-account.sh create：--dry-run 什么都不建；sshd -t 失败时�
   const dry = run(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub', '--dry-run'], f.env);
   assert.equal(dry.status, 0, dry.stderr);
   assert.match(dry.stdout, /\[dry-run\]/);
-  assert.equal(f.logText(), '');
+  assert.deepEqual(f.logText().split('\n').filter((l) => l && !l.startsWith('sshd -T ')), [], 'dry-run only reads (sshd -T); it changes nothing');
   assert.ok(!fs.existsSync(path.join(root, 'etc/ssh/sshd_config.d/agentdeck-tunnel-win.conf')));
 
   const bad = run(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub'], { ...f.env, STUB_SSHD_FAIL: '1' });
@@ -302,6 +409,63 @@ test('tunnel-account.sh create：私钥、多行、非 ed25519、带选项的行
   assert.ok(!fs.existsSync(path.join(root, 'var/lib')));
 });
 
+test('tunnel-account.sh create：Mac 账号没被 sshd 限在 127.0.0.1:43122 就拒绝，什么都不建（含 --dry-run）', (t) => {
+  const f = tunnelFixture(t); const root = f.env.AGENTDECK_ROOT; const key = f.key('k');
+  for (const [name, value] of [['no limit', 'any'], ['wrong port', '127.0.0.1:43123'], ['both ports', '127.0.0.1:43122 127.0.0.1:43123'], ['other host', '0.0.0.0:43122']]) {
+    for (const extra of [[], ['--dry-run']]) {
+      const r = run(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub', ...extra], { ...f.env, STUB_MAC_PERMITLISTEN: value });
+      assert.notEqual(r.status, 0, `${name} ${extra}`);
+      assert.match(r.stderr, /not limited to 127\.0\.0\.1:43122/, name);
+      assert.ok(r.stderr.includes(`effective: permitlisten ${value}`), name);
+    }
+  }
+  const cmds = f.logText().split('\n').filter(Boolean);
+  assert.ok(cmds.every((c) => c.startsWith('sshd -T ')), `only read-only sshd -T ran: ${cmds.join(' | ')}`);
+  assert.ok(!fs.existsSync(path.join(root, 'etc/ssh/sshd_config.d/agentdeck-tunnel-win.conf')) && !fs.existsSync(path.join(root, 'var')));
+  // Properly limited: proceeds, and the Mac check ran before the first change.
+  const ok = run(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub'], f.env);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /Mac account agentdeck-tunnel is limited to 127\.0\.0\.1:43122/);
+  const all = f.logText().split('\n').filter(Boolean);
+  assert.ok(all.findIndex((c) => /sshd -T .*user=agentdeck-tunnel,/.test(c)) < all.findIndex((c) => c.startsWith('useradd ')));
+});
+
+test('tunnel-account.sh create：生效设置不符或 root 的设置变了，恢复旧片段、不 reload', (t) => {
+  const f = tunnelFixture(t); const root = f.env.AGENTDECK_ROOT; const key = f.key('k');
+  const conf = path.join(root, 'etc/ssh/sshd_config.d/agentdeck-tunnel-win.conf');
+  const create = (env) => run(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub'], { ...f.env, ...env });
+  // first install, effective settings wrong (PermitOpen not applied): the new drop-in is removed
+  let r = create({ STUB_WIN_NO_OPEN: '1' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /permitopen is not none/);
+  assert.match(r.stderr, /previous drop-in put back/);
+  assert.ok(!fs.existsSync(conf));
+  assert.ok(!/systemctl reload/.test(f.logText()));
+  // a previous drop-in exists: it comes back byte for byte (the old code deleted it)
+  fs.mkdirSync(path.dirname(conf), { recursive: true });
+  fs.writeFileSync(conf, '# previous drop-in\n');
+  r = create({ STUB_WIN_NO_OPEN: '1' });
+  assert.notEqual(r.status, 0);
+  assert.equal(read(conf), '# previous drop-in\n');
+  // the Match block leaks to root (e.g. an older OpenSSH): refuse, previous drop-in back, no reload
+  r = create({ STUB_ROOT_LEAK: '1' });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /effective sshd settings of user root/);
+  assert.equal(read(conf), '# previous drop-in\n');
+  assert.ok(!/systemctl reload/.test(f.logText()), 'never reloaded a drop-in that failed a check');
+  fs.rmSync(conf);
+  r = create({ STUB_ROOT_LEAK: '1' });
+  assert.notEqual(r.status, 0);
+  assert.ok(!fs.existsSync(conf));
+  // everything fine: installed and reloaded, root compared before and after
+  r = create({});
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal((f.logText().match(/^sshd -T .*user=root,/gm) || []).length, 10, 'root is read before and after each of the five attempts');
+  assert.equal(fs.readdirSync(path.join(root, 'var/backups/agentdeck-three-ends')).length, 5, 'five runs, five distinct backup dirs even within one second (a reused dir would restore a stale drop-in)');
+  assert.ok(/systemctl reload/.test(f.logText()));
+  assert.match(read(conf), /^\tPermitOpen none$/m);
+});
+
 test('tunnel-account.sh remove：删片段和账号，sshd -t 后 reload，不碰 Mac 账号', (t) => {
   const f = tunnelFixture(t); const root = f.env.AGENTDECK_ROOT; const key = f.key('k');
   assert.equal(run(path.join(VPS, 'tunnel-account.sh'), ['create', '--pubkey', key + '.pub'], f.env).status, 0);
@@ -311,6 +475,7 @@ test('tunnel-account.sh remove：删片段和账号，sshd -t 后 reload，不�
   assert.ok(!fs.existsSync(path.join(root, 'etc/ssh/sshd_config.d/agentdeck-tunnel-win.conf')));
   const cmds = f.logText().split('\n');
   assert.ok(cmds.includes('userdel -r agentdeck-tunnel-win'));
+  assert.ok(cmds.indexOf('pkill -KILL -u agentdeck-tunnel-win') >= 0 && cmds.indexOf('pkill -KILL -u agentdeck-tunnel-win') < cmds.indexOf('userdel -r agentdeck-tunnel-win'), 'sessions are ended before userdel, which fails while the tunnel is up');
   assert.ok(cmds.indexOf('sshd -t') < cmds.findIndex((c) => /^systemctl reload ssh/.test(c)));
   assert.ok(!/agentdeck-tunnel( |$)/.test(f.logText()), 'Mac account untouched');
 });
@@ -387,4 +552,22 @@ test('deploy-hub.sh：远程目标（host:path）走 ssh，引用与流水线正
   assert.match(read(path.join(parent, 'agentdeck-hub', 'index.html')), /hub placeholder/);
   assert.ok(read(calls).split('\n').filter(Boolean).every((h) => h === 'admin@vps.example'));
   assert.equal(run(path.join(VPS, 'deploy-hub.sh'), ['list', `admin@vps.example:${parent}`], env).status, 0);
+});
+
+test('deploy-hub.sh：远端登录 shell 不是 bash 也能跑（引用用 POSIX 单引号，不含 $\'...\'）', { skip: ['/bin/dash', '/usr/bin/dash'].find((p) => fs.existsSync(p)) ? false : 'dash not found' }, (t) => {
+  const dash = ['/bin/dash', '/usr/bin/dash'].find((p) => fs.existsSync(p));
+  const d = tmp(t);
+  const parent = path.join(d, "srv it's\tdir with $HOME and `id`"); fs.mkdirSync(parent);
+  const bin = path.join(d, 'bin'); fs.mkdirSync(bin);
+  const calls = path.join(d, 'ssh.log');
+  // fake ssh: the remote command string goes through dash (not bash), like a VPS account whose login shell is /bin/sh
+  fs.writeFileSync(path.join(bin, 'ssh'), `#!/bin/bash\nwhile [ "\${1#-}" != "$1" ]; do shift 2; done\nshift\nprintf '%s\\n' "$1" >> "${calls}"\nexec ${dash} -c "$1"\n`, { mode: 0o755 });
+  const env = { PATH: `${bin}:${process.env.PATH}` };
+  const src = path.join(d, 'hub'); fs.cpSync(path.join(__dirname, 'fixtures', 'vps', 'hub'), src, { recursive: true });
+  const target = `admin@vps.example:${parent}`;
+  const r = run(path.join(VPS, 'deploy-hub.sh'), ['push', src, target], { ...env, DEPLOY_HUB_TIMESTAMP: '20260101T000001Z' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(read(path.join(parent, 'agentdeck-hub', 'index.html')), /hub placeholder/);
+  assert.equal(run(path.join(VPS, 'deploy-hub.sh'), ['list', target], env).status, 0);
+  assert.ok(!read(calls).includes("$'"), 'no bash-only $\'...\' quoting in what is sent to the remote shell');
 });

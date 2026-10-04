@@ -220,6 +220,89 @@ test('Caddy 分流与前缀', { skip }, async (t) => {
     assert.equal(planted.headers['set-cookie'], undefined);
   });
 
+  await t.test('前缀上的 3xx/304 被换成 403 blocked，Location 到不了浏览器，另一台收不到任何请求', async () => {
+    const targets = { '/win/': ['/mac/api/snapshot', s.win, s.mac], '/mac/': ['/win/api/snapshot', s.mac, s.win] };
+    for (const [prefix, [location, machine, other]] of Object.entries(targets)) {
+      for (const status of [300, 301, 302, 303, 307, 308]) {
+        for (const contentType of ['application/json', 'text/html', undefined]) {
+          wipe(machine, other);
+          machine.scripted = { status, headers: { ...(contentType ? { 'Content-Type': contentType } : {}), Location: location, Refresh: `0; url=${location}` }, body: '{}' };
+          for (const method of ['GET', 'POST']) {
+            const r = await req(`${prefix}api/captain`, { method, body: method === 'POST' ? '{}' : undefined });
+            const label = `${prefix} ${method} ${status} ${contentType}`;
+            assert.equal(r.status, 403, label);
+            assert.equal(r.text, '{"error":"blocked"}', label);
+            assert.equal(r.headers.location, undefined, label);
+            assert.equal(r.headers.refresh, undefined, label);
+            assert.equal(single(r.headers, 'content-security-policy'), PREFIX_CSP, label);
+            machine.scripted = { status, headers: { ...(contentType ? { 'Content-Type': contentType } : {}), Location: location }, body: '{}' };
+          }
+          machine.scripted = null;
+          assert.equal(other.requests.length, 0, `${prefix} ${status}: the other machine never saw a request`);
+        }
+      }
+    }
+    // 304 has no body and no Content-Type, so it can never be a JSON answer: blocked too (the hub must not rely on conditional requests).
+    s.win.scripted = { status: 304, headers: {} };
+    const notModified = await req('/win/api/snapshot');
+    assert.equal(notModified.status, 403);
+    assert.equal(notModified.text, '{"error":"blocked"}');
+    // Own JSON statuses still pass through: 200, 401 and 500 (also covered above); a 2xx without a body is fine too.
+    s.win.scripted = { status: 204, headers: { 'Content-Type': 'application/json' } };
+    assert.equal((await req('/win/api/snapshot')).status, 204);
+  });
+
+  await t.test('JSON 响应里的 Location、Refresh、Clear-Site-Data、Content-Disposition、Link、CORS 头被删掉；Set-Cookie 之外的正常头照常', async () => {
+    const hostile = { Location: '/mac/api/snapshot', Refresh: '0; url=https://evil.example/', 'Clear-Site-Data': '"cookies", "storage"', 'Content-Disposition': 'attachment; filename=x.html',
+      Link: '</mac/api/snapshot>; rel=preload', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Credentials': 'true', 'Service-Worker-Allowed': '/' };
+    for (const [prefix, machine] of [['/mac/', s.mac], ['/win/', s.win]]) {
+      for (const status of [200, 201, 401, 403, 404, 500]) {
+        machine.scripted = { status, headers: { 'Content-Type': 'application/json; charset=utf-8', ...hostile }, body: '{"keep":"me"}' };
+        const r = await req(`${prefix}api/x`);
+        assert.equal(r.status, status, `${prefix} ${status}`);
+        assert.deepEqual(r.json, { keep: 'me' }, `${prefix} ${status}`);
+        for (const name of Object.keys(hostile)) assert.equal(r.headers[name.toLowerCase()], undefined, `${prefix} ${status} must not carry ${name}`);
+        assert.equal(single(r.headers, 'content-security-policy'), PREFIX_CSP);
+      }
+    }
+  });
+
+  await t.test('Set-Cookie 只在 POST login/logout 放行：其他路径、其他方法、别台的 cookie 名一律 blocked，夹带不进来', async () => {
+    const own = (machine, extra = '') => `${machine.cookieName}=${'a'.repeat(64)}; Path=${machine.cookiePath}; HttpOnly; Secure; SameSite=Strict; Max-Age=60${extra}`;
+    for (const [prefix, machine, other] of [['/win/', s.win, s.mac], ['/mac/', s.mac, s.win]]) {
+      // Own cookie on a path that is not login/logout, or not POST: blocked, no cookie reaches the browser.
+      for (const [method, p] of [['GET', 'api/snapshot'], ['POST', 'api/captain'], ['GET', 'login'], ['POST', 'login/'], ['POST', 'login/x'], ['POST', 'logoutx'], ['POST', 'api/login'], ['GET', 'logout']]) {
+        machine.scripted = { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': own(machine) }, body: '{}' };
+        const r = await req(`${prefix}${p}`, { method });
+        assert.equal(r.status, 403, `${method} ${prefix}${p}`);
+        assert.equal(r.headers['set-cookie'], undefined, `${method} ${prefix}${p}`);
+        assert.equal(r.text, '{"error":"blocked"}');
+      }
+      // Login/logout with the other machine's cookie name, or a bomb cookie alone: blocked.
+      for (const p of ['login', 'logout']) {
+        for (const cookie of [own(other), `bomb=${'x'.repeat(4000)}; Path=/; Secure`, `${machine.cookieName}x=1; Path=/`]) {
+          machine.scripted = { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': cookie }, body: '{}' };
+          const r = await req(`${prefix}${p}`, { method: 'POST' });
+          assert.equal(r.status, 403, `${prefix}${p} ${cookie.slice(0, 40)}`);
+          assert.equal(r.headers['set-cookie'], undefined);
+        }
+      }
+      // The two real paths: own cookie passes verbatim; a failed login (401, no cookie) passes with the app's own body.
+      for (const p of ['login', 'logout']) {
+        machine.scripted = { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': own(machine) }, body: '{"ok":true}' };
+        const r = await req(`${prefix}${p}`, { method: 'POST' });
+        assert.equal(r.status, 200, `${prefix}${p}`);
+        assert.deepEqual([].concat(r.headers['set-cookie']), [own(machine)]);
+        assert.equal(single(r.headers, 'content-security-policy'), PREFIX_CSP);
+      }
+      machine.scripted = { status: 401, headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: '{"error":"Unauthorized."}' };
+      const denied = await req(`${prefix}login`, { method: 'POST', body: '{"token":"x"}' });
+      assert.equal(denied.status, 401);
+      assert.deepEqual(denied.json, { error: 'Unauthorized.' });
+      assert.equal(denied.headers['set-cookie'], undefined);
+    }
+  });
+
   await t.test('一台离线：它的前缀 502 {"offline":true}，另一台和总台照常', async () => {
     wipe(s.mac, s.win);
     await s.win.stop();
@@ -384,4 +467,43 @@ test('被攻陷的前缀返回带脚本的 HTML 时，浏览器读不到另一�
   });
   assert.ok(!(read.ok && read.body.includes('"machine":"mac"')), `pwn document read Mac: ${JSON.stringify(read)}`);
   assert.ok(!s.mac.requests.some((r) => r.url.startsWith('/mac/api/snapshot') && r.headers.cookie), 'Mac cookie was not presented by the pwn document');
+});
+
+test('被攻陷的前缀返回 3xx 指向另一台时，总台的 fetch 拿到 403，另一台收不到请求', { skip }, async (t) => {
+  let chromium;
+  try { ({ chromium } = require('@playwright/test')); } catch { return t.skip('@playwright/test not installed'); }
+  const s = await H.startStack(caddy);
+  let browser;
+  t.after(async () => { if (browser) await browser.close(); await s.stop(); s.cleanup(); });
+  try { browser = await chromium.launch(); } catch (e) { return t.skip(`chromium unavailable: ${e.message.split('\n')[0]}`); }
+  const auth = 'Basic ' + Buffer.from(`${H.AUTH_USER}:${H.AUTH_PASS}`).toString('base64');
+  const context = await browser.newContext({ extraHTTPHeaders: { Authorization: auth } });
+  const page = await context.newPage();
+  await page.goto(`${s.siteAddress}/`);
+  const call = (route, method, redirect) => page.evaluate(async ([r, m, red]) => {
+    try {
+      const res = await fetch(r, { method: m, credentials: 'same-origin', redirect: red, headers: { 'X-CSRF-Token': 'mac-token' }, body: m === 'POST' ? '{"message":"x"}' : undefined });
+      return { status: res.status, redirected: res.redirected, url: res.url, body: await res.text() };
+    } catch (e) { return { error: String(e && e.name || e) }; }
+  }, [route, method, redirect]);
+  assert.equal((await call('/mac/login', 'POST', 'follow')).status, 200, 'logged in to Mac, so a followed redirect would carry the Mac cookie');
+  for (const status of [302, 303, 307, 308]) {
+    for (const method of ['GET', 'POST']) {
+      s.mac.requests.length = 0;
+      s.win.scripted = { status, headers: { 'Content-Type': 'application/json', Location: '/mac/api/captain' }, body: '{}' };
+      const r = await call('/win/api/captain', method, 'follow');
+      assert.equal(r.status, 403, `${status} ${method}: ${JSON.stringify(r)}`);
+      assert.equal(r.redirected, false);
+      assert.equal(r.body, '{"error":"blocked"}');
+      assert.equal(s.mac.requests.length, 0, `${status} ${method}: Mac must see nothing`);
+    }
+  }
+  // The hub's own reads keep working through the same path: Windows JSON, Windows 401, and the unauthenticated probe.
+  s.win.scripted = null;
+  const ok = await call('/win/api/snapshot', 'GET', 'error');
+  assert.equal(ok.status, 200);
+  assert.equal(JSON.parse(ok.body).machine, 'win');
+  assert.equal((await call('/win/api/info', 'GET', 'error')).status, 200);
+  s.win.scripted = { status: 401, headers: { 'Content-Type': 'application/json; charset=utf-8' }, body: '{"error":"Unauthorized."}' };
+  assert.equal((await call('/win/api/snapshot', 'GET', 'error')).status, 401);
 });

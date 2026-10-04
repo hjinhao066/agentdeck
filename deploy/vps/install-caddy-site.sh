@@ -7,6 +7,7 @@
 # Only the block for the AgentDeck address is replaced (first run) or the BEGIN/END region (later runs);
 # every other site stays byte-for-byte. The entry basicauth hash is taken from the existing block into
 # /etc/caddy/agentdeck-basicauth.caddy and is never printed. Roll back with rollback-caddy-site.sh.
+# Re-running is safe: our own block is replaced in place and the original-block backup is kept.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -59,14 +60,27 @@ say "plan: replace $OLD_LINES existing line(s) of the $ADDRESS block; all other 
 if [ "$MODE" = check ]; then say "check only: no files were changed"; exit 0; fi
 
 # 4. Back up first, then create the auth file / log file, validate the real thing, write, reload.
-TS="$(date -u +%Y%m%dT%H%M%SZ)"
-BDIR="$BACKUP_ROOT/$TS"
-( umask 077; mkdir -p "$BACKUP_ROOT" "$BDIR" )
-chmod 0700 "$BACKUP_ROOT" "$BDIR"
-cp -p "$CADDYFILE" "$BDIR/Caddyfile"
-cp "$TMP/old-block.caddy" "$BDIR/old-block.caddy"; chmod 0600 "$BDIR/old-block.caddy"
-{ echo "created_utc=$TS"; echo "caddyfile=$CADDYFILE"; echo "auth_file_created=$AUTH_CREATED"; } > "$BDIR/STATE"
-say "backup: $BDIR (root-only; the old block holds the entry hash)"
+# A re-install replaces our own block: the original-block backup from the first install is what rollback needs,
+# so no new backup is made (a "backup" of the managed block would make the default rollback a silent no-op).
+# Backup dirs are never reused: two installs in the same second get distinct directories.
+if grep -q "$MANAGED_BEGIN_RE" "$TMP/old-block.caddy"; then
+  RESTORE_OLD="$TMP/old-block.caddy"
+  say "backup: none needed, the existing block is already the managed one (rollback keeps using the original-block backup)"
+else
+  TS="$(date -u +%Y%m%dT%H%M%SZ)"
+  ( umask 077; mkdir -p "$BACKUP_ROOT" ); chmod 0700 "$BACKUP_ROOT"
+  BDIR="$BACKUP_ROOT/$TS"; N=0
+  until ( umask 077; mkdir "$BDIR" ) 2>/dev/null; do
+    N=$((N + 1)); [ "$N" -le 99 ] || die "cannot create a backup directory under $BACKUP_ROOT"
+    BDIR="$BACKUP_ROOT/$TS-$(printf '%02d' "$N")"
+  done
+  chmod 0700 "$BDIR"
+  cp -p "$CADDYFILE" "$BDIR/Caddyfile"
+  cp "$TMP/old-block.caddy" "$BDIR/old-block.caddy"; chmod 0600 "$BDIR/old-block.caddy"
+  { echo "created_utc=$TS"; echo "caddyfile=$CADDYFILE"; echo "auth_file_created=$AUTH_CREATED"; } > "$BDIR/STATE"
+  RESTORE_OLD="$BDIR/old-block.caddy"
+  say "backup: $BDIR (root-only; the old block holds the entry hash)"
+fi
 
 if [ "$AUTH_CREATED" = 1 ]; then
   ( umask 077; cp "$TMP/auth.caddy" "$AUTH_FILE" )
@@ -84,7 +98,7 @@ say "Caddyfile updated"
 
 if ! $RELOAD_CMD; then
   say "reload FAILED; restoring the previous block" >&2
-  python3 "$BLOCK_PY" restore --caddyfile "$CADDYFILE" --old "$BDIR/old-block.caddy" --out "$TMP/Caddyfile.restored"
+  python3 "$BLOCK_PY" restore --caddyfile "$CADDYFILE" --old "$RESTORE_OLD" --out "$TMP/Caddyfile.restored"
   cat "$TMP/Caddyfile.restored" > "$CADDYFILE"
   $RELOAD_CMD || say "reload after restore also failed: check 'journalctl -u caddy' now" >&2
   die "install aborted and rolled back"

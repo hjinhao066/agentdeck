@@ -57,12 +57,21 @@ validate_caddyfile() { # $1 = file
   fi
 }
 
-latest_backup() {
+# A backup whose old-block is already our own BEGIN/END region came from a re-install; rolling back to it does nothing.
+MANAGED_BEGIN_RE='^# BEGIN agentdeck-three-ends'
+backup_is_managed() { grep -q "$MANAGED_BEGIN_RE" "$1/old-block.caddy"; }
+
+# Newest backup that holds the block as it was before AgentDeck (or an empty block: the site did not exist).
+latest_original_backup() {
   [ -d "$BACKUP_ROOT" ] || return 1
   local d
-  d="$(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '20*' | sort | tail -n 1)"
-  [ -n "$d" ] || return 1
-  printf '%s\n' "$d"
+  while IFS= read -r d; do
+    [ -f "$d/old-block.caddy" ] || continue
+    if backup_is_managed "$d"; then continue; fi
+    printf '%s\n' "$d"
+    return 0
+  done < <(find "$BACKUP_ROOT" -mindepth 1 -maxdepth 1 -type d -name '20*' | sort -r)
+  return 1
 }
 
 # Make a file holding credentials readable only by root and the Caddy service user.
