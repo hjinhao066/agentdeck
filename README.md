@@ -61,6 +61,9 @@ the middle:
   even during silent background tools. Wrapped rows are joined; old scrollback
   and replayed output do not keep a finished session yellow. Once the busy
   indicator disappears, the existing two-tick debounce permits green.
+  Codex's `Worked for …` divider followed by its ready prompt excludes prior
+  turn indicators above that divider; new busy or confirmation rows below it
+  still block delivery. Ordinary `tell` and `tell --now` use this same readiness.
   Cursor's `→ Add a follow-up … ctrl+c to stop` input row is busy evidence;
   only its ready input row can end a submitted turn, including during silent
   initialization. Its ready row also clears obsolete tool indicators above it.
@@ -150,6 +153,9 @@ skipped.
 [任务看板接口说明](docs/task-board-api.md)。正本是 `~/.agents/boards/tasks/<项目名>.json`；
 `new --task-id ... --project ...` 绑定卡片，命令回执自动流转，文件监听和每 60 秒巡检
 发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
+队长 `task move` 回 doing 不自动开调度员；未归档的关联会话阻止重复自动调度。
+额度/登录/限流失败不累计连续失败；开新会话前检查所选 provider/Claude 席位额度，
+已用尽的任务排队到额度恢复，显示「额度用尽，稍后自动开」。
 看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：按项目分泳道、
 按状态分五列，完成列默认收起；项目可折叠、拖动排序，卡片可在列内排序或拖到其他状态。
 拖到「进行中」会通知队长安排；点卡片打开详情抽屉，「需要你」可直接回答并交给队长继续推进，

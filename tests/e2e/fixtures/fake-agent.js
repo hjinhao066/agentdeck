@@ -43,6 +43,12 @@ let contextUsed = 23000;
 const codex = process.argv.includes('--codex-reset');
 let resetMenu = false;
 function box() {
+  if (process.argv.includes('--codex-completed')) {
+    process.stdout.write('◦ Working (11m 27s • esc to interrupt)\n' +
+      '─ Worked for 34m 29s • 12:52 ─\n› Ask Codex to do anything\n' +
+      'GPT-6.1-Sol high · ~ · 修复僵尸调度会话派卡\n? for shortcuts  ⚠ 3 · f2\n');
+    return;
+  }
   if (codex) {
     process.stdout.write(`OpenAI Codex\n\n› Ask Codex to do anything\n\n  ⏎ send   ⌃J newline   ${100 - Math.round(contextUsed / 10000)}% context left\n`);
     return;

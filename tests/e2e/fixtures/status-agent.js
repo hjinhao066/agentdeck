@@ -35,6 +35,11 @@ process.stdin.on('data', (data) => {
   timer = setTimeout(() => {
     const text = lines.join('\n'); lines = [];
     const provider = /busy (codex|claude|agy|cursor)/.exec(text)?.[1];
+    if (/ordinary resource text/.test(text)) {
+      lastProvider = '';
+      draw('Rate limit handling test fails in api.js\r\nUnauthorized access test still failing\r\nLimit reached check broken');
+      return;
+    }
     if (/silent startup/.test(text)) { process.stdout.write('\x1b[2J\x1b[H'); return; }
     if (provider) lastProvider = provider;
     // Windows Node may retain the original stdout.rows after a PTY resize.

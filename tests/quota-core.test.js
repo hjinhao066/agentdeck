@@ -428,3 +428,67 @@ test('panel cells list only the windows a provider really has, with their own re
   Q.observe(store, Q.screen('Claude', '', ['Session: 100% | Reset: 1hr', 'Weekly: 40% | Reset: 3d'], now + 2), now + 2);
   assert.deepEqual(Q.summary(store, 'Claude', now + 2).cells.map((c) => [c.key, c.out, c.remaining]), [['5h', true, 0], ['7d', false, 60]]);
 });
+
+test('opening gates use the selected provider and Claude seat, clear at reset and allow unknown observations', () => {
+  const seats = [{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }];
+  const store = { 'Claude:cn': { scope: 'claude', configDir: '~/.claude', blocked: { at: now, resetAt: now + 1000 } }, Antigravity: { scope: 'gemini', blocked: { at: now, resetAt: now + 1000 } } };
+  assert.equal(Q.commandQuota(store, 'claude --model opus', seats, 'cn', now).out, true);
+  assert.equal(Q.commandQuota(store, 'claude --model opus', seats, 'us', now).out, false);
+  assert.equal(Q.commandQuota(store, 'claude', seats, 'cn', now + 1001).out, false);
+  assert.equal(Q.commandQuota(store, 'agy --model gemini-3.8-flash-high', seats, 'cn', now).out, true);
+  assert.equal(Q.commandQuota(store, 'agy --model gemini-3.8-flash-high', seats, 'cn', now + 1001).out, false);
+  assert.equal(Q.commandQuota(store, 'codex', seats, 'cn', now).out, false);
+  assert.equal(Q.commandQuota(store, 'cursor-agent --model grok-4.7-high-fast', seats, 'cn', now).out, false);
+  assert.equal(Q.commandQuota(store, 'cursor-agent --model claude-opus-5-5', seats, 'cn', now), null);
+  assert.equal(Q.commandQuota(store, 'agy --model claude-opus-5-5', seats, 'cn', now), null);
+  assert.equal(Q.commandQuota(store, 'node fake-agent.js', seats, 'cn', now), null);
+});
+
+test('resourceError recognizes each CLI\'s native quota, rate-limit and login messages', () => {
+  for (const [line, kind] of [
+    // Claude
+    ["You've hit your session limit · resets 9:20pm", 'quota'], ['Usage limit reached · limit resets 3:10pm', 'quota'],
+    ["You've hit your limit ∙ resets 5pm", 'quota'], ['Claude AI usage limit reached|1760000000', 'quota'],
+    ['5-hour limit reached ∙ resets 3pm', 'quota'], ['Opus weekly limit reached ∙ resets Mon 9am', 'quota'],
+    ["⎿ You're out of extra usage · resets 3am", 'quota'], ['Credit balance is too low', 'quota'],
+    ['Not logged in · Please run /login', 'auth'], ['Invalid API key · Please run /login', 'auth'],
+    ['OAuth token has expired · Please run /login', 'auth'], ['API Error: 401 Unauthorized', 'auth'],
+    // Codex
+    ["You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:10 PM.", 'quota'],
+    ["You've hit your usage limit. To get more access now, send a request to your admin or try again at 5pm.", 'quota'],
+    ["■ You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again in 2h", 'quota'],
+    ['stream error: exceeded retry limit, last status: 429 Too Many Requests', 'rate_limit'], ['Not signed in. Run codex login', 'auth'],
+    // Cursor
+    ["Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY.", 'auth'],
+    ["Error: Not logged in. Please run 'cursor-agent login'", 'auth'], ["You've hit your usage limit for Grok 4.7", 'quota'],
+    ['Authentication failed: token expired', 'auth'],
+    // agy / Gemini
+    ['Individual quota reached', 'quota'], ["Quota exceeded for quota metric 'Generate Content API requests per minute'", 'quota'],
+    ['✕ [API Error: You have exhausted your capacity on this model. Your quota will reset after 2h.]', 'quota'],
+    ['RESOURCE_EXHAUSTED: quota exhausted', 'quota'], ['Please log in to continue.', 'auth'],
+    // shared
+    ['Rate limited. Retrying in 5s…', 'rate_limit'], ['Rate limit reached. Resets in 1h', 'rate_limit'], ['429 Too many requests', 'rate_limit'],
+  ]) {
+    for (const decorated of [line, '⏺ ' + line, '│ ' + line + ' │']) assert.equal(Q.resourceError(decorated), kind, decorated);
+  }
+});
+
+test('resourceError ignores resource words in ordinary replies, code and grep output', () => {
+  for (const line of [
+    // live false alarm: a review session's grep pattern on screen
+    'RATE_LIMITED\\|function resourceError', 'grep -n "RATE_LIMITED\\|function resourceError" quota-core.js', 'RATE_LIMITED|function resourceError',
+    'RESOURCE_EXHAUSTED\\|rate_limit_error', 'Usage limit reached|function foo', 'const RATE_LIMITED = new RegExp(',
+    'Rate limit', 'Unauthorized', 'Limit reached', 'Invalid API key',
+    'Rate limit handling test fails in api.js', 'Rate limit reached check is broken', 'Rate limited. The retry test passes now',
+    'Unauthorized access test still failing', '401 Unauthorized access test still failing', '429 Too many requests test fails',
+    'Limit reached check broken', 'Usage limit reached check broken', 'Usage limit reached. I fixed the test', 'Quota exhausted handling test fails',
+    'Not logged in handling is fixed', 'Not logged in. Run the tests again', 'Authentication required flow reviewed', 'Please log in page now has a button',
+    "if (/You've hit your limit/.test(line)) return 'quota';", "'Usage limit reached. Resets in 3h', 'quota'],",
+    'quota-core.js:47:  const EXHAUSTED = /^(?:you hit your limit', "tests/a.test.js:88: assert.equal(kind('Not logged in · Please run /login'), 'auth')",
+  ]) {
+    for (const decorated of [line, '⏺ ' + line, '│ ' + line + ' │']) {
+      assert.equal(Q.resourceError(decorated), '', decorated);
+      assert.equal(Q.screen('Claude', decorated, []).exhausted, false, decorated);
+    }
+  }
+});

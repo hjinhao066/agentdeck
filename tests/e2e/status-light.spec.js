@@ -95,6 +95,15 @@ test('Cursor startup silence cannot finish a submitted turn', async () => {
   }
 });
 
+test('ordinary resource words on a worker screen do not fail its assignment or hold its status at quota', async () => {
+  await page.evaluate((cmd) => { columns.find((c) => c.id === 'silent-worker').cmd = cmd; }, statusAgent);
+  await page.evaluate(() => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: 'ordinary resource text' }, MainSession.mainCol()));
+  await expect.poll(() => page.evaluate(() => statusScreen(terms.get('silent-worker').term)), { timeout: 15000 }).toContain('Unauthorized access test still failing');
+  await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 15000 }).toBe('done');
+  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).status)).toBe('working');
+  expect(await page.evaluate(() => MainCore.resourceReceipt(statusScreen(terms.get('silent-worker').term)))).toBeNull();
+});
+
 test('command completion is reflected in ledger while live busy evidence still prevents automatic archive', async () => {
   await page.evaluate(() => { columns.find((c) => c.id === 'silent-worker').cmd = 'cursor-agent --force'; });
   await page.evaluate(() => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: 'busy cursor rows=80' }, MainSession.mainCol()));
