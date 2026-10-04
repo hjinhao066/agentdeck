@@ -101,6 +101,8 @@ let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
   boardResponses: {}, boardPositions: {}, globalViewMode: 'chat',
+  claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
+  captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false,
@@ -109,9 +111,15 @@ let config = {
 const saved = window.deck.loadConfig();
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
-if (Array.isArray(saved?.claudeSeats)) config.claudeSeats = QuotaCore.claudeSeats(saved.claudeSeats);
-if (saved?.activeClaudeSeatId) config.activeClaudeSeatId = saved.activeClaudeSeatId;
 if (saved) {
+  config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
+  config.captainRelayLabel = typeof saved.captainRelayLabel === 'string' ? saved.captainRelayLabel.slice(0, 80) : 'Relay';
+  config.activeClaudeSeatId = ClaudeSeatsCore.active({ ...saved, claudeSeats: config.claudeSeats }).id;
+  if (saved.captainRelayCodex && typeof saved.captainRelayCodex === 'object') config.captainRelayCodex = {
+    name: typeof saved.captainRelayCodex.name === 'string' ? saved.captainRelayCodex.name.slice(0, 80) : 'ChatGPT',
+    command: typeof saved.captainRelayCodex.command === 'string' ? saved.captainRelayCodex.command : ClaudeSeatsCore.CODEX_COMMAND,
+  };
+  if (typeof saved.captainRelayClaudeCommand === 'string') config.captainRelayClaudeCommand = saved.captainRelayClaudeCommand;
   config.captainNotifications = NotificationPolicy.normalizeSettings(saved.captainNotifications);
   config.globalViewMode = ChatCore.normalizeViewMode(saved.globalViewMode);
   if (saved.theme) config.theme = saved.theme;
@@ -120,7 +128,9 @@ if (saved) {
   // widths from the old, narrower sidebar fall back to the new default
   if (saved.navWidth) config.navWidth = saved.navWidth < NAV_MIN_W ? NAV_DEFAULT_W : Math.min(NAV_MAX_W, saved.navWidth);
   config.folders = SidebarCore.normalizeFolders(saved.folders);
-  config.archived = SidebarCore.normalizeArchived(saved.archived);
+  config.archived = SidebarCore.normalizeArchived(saved.archived).map((c) => ({ ...c,
+    claudeSeatId: config.claudeSeats.some((s) => s.id === c.claudeSeatId) ? c.claudeSeatId : config.activeClaudeSeatId,
+  }));
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
@@ -164,7 +174,6 @@ if (saved) {
       agentProvider: c.agentProvider,
       agentModel: c.agentModel,
       agentEffort: c.agentEffort,
-      claudeSeatId: c.claudeSeatId,
       claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
@@ -177,9 +186,14 @@ if (saved) {
       boardId: typeof c.boardId === 'string' ? c.boardId : '',
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
       dispatcherCardId: typeof c.dispatcherCardId === 'string' ? c.dispatcherCardId : '',
+      claudeSeatId: config.claudeSeats.some((s) => s.id === c.claudeSeatId) ? c.claudeSeatId : config.activeClaudeSeatId,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
     }));
   }
+}
+function seatLaunchCommand(col, command) {
+  const seat = config.claudeSeats.find((s) => s.id === col.claudeSeatId) || ClaudeSeatsCore.active(config);
+  return ClaudeSeatsCore.launchCommand(command, seat, env.home, env.platform);
 }
 // Once: sessions 队长 opened before they were marked go under it too.
 if (config.mainSession && !config.mainSession.crewMarked) {
@@ -1791,14 +1805,14 @@ function buildColumn(col, isFresh) {
           });
         }
         // 队长 gets a control token too; the columns it drives never do.
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, col.claudeSeatId || config.activeClaudeSeatId);
 
         if (launch) {
           // Capture the id: if the user edits the column within 700ms,
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
           const spawnId = col.id;
-          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(BoardCore.shellLaunchCommand(launch, env.platform), env.platform) + '\r'); }, 700);
+          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, BoardCore.shellLaunchCommand(launch, env.platform)), env.platform) + '\r'); }, 700);
         }
         if (!isFresh && col.role !== 'manual' && !col.taskCompleted) {
           // A cold restart killed the old CLI caller. Re-deliver managed
@@ -2339,7 +2353,7 @@ function sendWhenReady(col, text, opts) {
 function addColumn(c) {
   const col = BoardCore.normalizeColumn({
     id: newId(), taskId: newTaskId(), width: defaultColWidth(), cwd: '',
-    role: 'manual', relationship: 'Independent manual terminal', view: config.globalViewMode, ...c,
+    role: 'manual', relationship: 'Independent manual terminal', view: config.globalViewMode, claudeSeatId: config.activeClaudeSeatId, ...c,
   });
   insertColumn(col, true); // brand-new column: never auto-resume
   return col;
@@ -3122,7 +3136,7 @@ setNavCollapsed(config.navCollapsed); // sets class + width
 attachNavResize(document.getElementById('navResizer'));
 applyTheme(config.theme);
 const deckHost = {
-  columns: () => columns, terms, config, saveConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName,
+  columns: () => columns, terms, config, saveConfig, flushConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName, seatLaunchCommand,
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
   clipboardWrite: (text) => window.deck.clipboardWrite(text),
   platform: env.platform,
@@ -3152,6 +3166,7 @@ const deckHost = {
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
 MainSession.init(deckHost);
+ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
@@ -3394,6 +3409,7 @@ setInterval(() => {
 
     ChatUI.onTick(id, entry, text);
     MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
+    ClaudeSeats.onTick(id, entry, text);
 
     // A restarted terminal replays the PREVIOUS run's output above a
     // separator. It is excluded from status classification, but remains the

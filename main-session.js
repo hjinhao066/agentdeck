@@ -194,6 +194,7 @@
   // Receipts wait until the instructions are in: briefing is the column whose
   // brief has not gone out yet.
   let briefing = '';
+  let seatChanging = false;
   function brief(col, note) {
     if (!col.cmd) return;   // a bare shell would run them as commands
     const id = col.id;
@@ -262,9 +263,36 @@
     banner.querySelector('span').textContent = text;
   }
   function cancelTokenSaving() {
+    if (tokenSaving?.relay) {
+      clearTimeout(tokenSaving.timer);
+      tokenSaving.reject(new Error('Relay存档已取消'));
+    }
     tokenSaving = null;
     tokenSaverPaused = true;
     saverBanner('');
+  }
+
+  async function checkpointForSeatSwitch(snapshot) {
+    cancelTokenSaving();
+    const col = mainCol(), entry = host.terms.get(col?.id);
+    const idle = entry?.alive && entry.state === 'done' && !briefing && !delivering &&
+      !entry.sendingPrompt && !entry.injecting && !host.userComposing(col.id) &&
+      !M.terminalActivity(entry.lastScreen) && !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
+    if (idle && window.AgentInfo.inferProvider(col.cmd, entry.lastScreen) === 'Claude') {
+      await new Promise((resolve, reject) => {
+        const op = { colId: col.id, entry, relay: true, resolve, reject };
+        tokenSaving = op;
+        op.timer = setTimeout(() => {
+          if (tokenSaving === op) saverFailed('Relay未收到存档确认');
+        }, 5 * 60_000);
+        saverBanner('Relay正在存进度看板，等待「已存档」');
+        saverSend(op, M.ARCHIVE_PROMPT, 'archiving', false, (turn) => { op.turnId = turn?.id; });
+      });
+    }
+    // Busy/quota/exited/Codex Captains cannot be asked for another model turn.
+    // Persist a fresh full snapshot in every path, before the old PTY is killed.
+    if (mainCol() !== col || host.userComposing(col.id)) throw new Error('队长或输入已变更');
+    return window.deck.captainCheckpoint({ ...snapshot, chat: window.ChatUI.snapshotForHandoff(col.id), tasks: state().tasks });
   }
   function saverFailed(message) {
     cancelTokenSaving();
@@ -336,14 +364,15 @@
   // Its agent restarts fresh and is briefed again. Work out in other columns,
   // unread receipts and questions carry over to the new context; the old
   // conversation stays saved under the old column id for `read --id`.
-  function clearContext() {
+  function clearContext(options) {
+    const rotation = options && options.seatId && options.checkpointPath;
     const col = mainCol();
     const s = state();
     if (!col || !s) return;
     const entry = host.terms.get(col.id);
     const busy = !!entry && entry.alive && (entry.state === 'working' || entry.state === 'input');
     const kept = '\n\n派出去的活不会中断；没处理的回执和提问留给清空后的队长；之前的对话存在本机，不会删除，队长需要时按需读取。';
-    if (!confirm(busy
+    if (!rotation && !confirm(busy
       ? '队长现在正在回复（或停在确认提示上）。清空会打断它这一轮，这一轮没说完的不会再有。\n确定现在清空队长的模型上下文吗？' + kept
       : '只清空队长的模型上下文：队长重新启动，重新读一遍默认说明。' + kept)) return;
     cancelTokenSaving();
@@ -351,7 +380,7 @@
     const requeue = s.inflight;
     s.inflight = [];
     const oldId = col.id;
-    const retired = window.ChatUI.retireChat(oldId);
+    const retired = window.ChatUI.retireChat(oldId, { interrupted: !!rotation });
     if (retired) {
       host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { id: oldId, ...retired, clearedAt: Date.now() }]);
     }
@@ -370,17 +399,26 @@
         push(t, { question: t.receipt.question });
       }
     });
-    col.cmd = M.freshCommand(col.cmd);
+    col.cmd = M.freshCommand(rotation && options.command ? options.command : col.cmd);
+    if (rotation) {
+      col.claudeSeatId = options.seatId;
+      host.config.activeClaudeSeatId = options.seatId;
+      s.seatCheckpoint = options.checkpointPath;
+      s.relayTargetId = options.relayTargetId || options.seatId;
+    }
     delete col.modelSessionId;
     s.cmd = col.cmd;
+    if (rotation) { delete col.agentProvider; delete col.agentModel; delete col.agentEffort; }
     const fresh = host.respawnColumn(col, { freshChat: true });   // new id, new shell, new token
     s.colId = fresh.id;
     s.fresh = true;
     carried.forEach((t) => window.ChatUI.addCard(s.colId, t));
     save();
     window.Sidebar.render();
-    brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status))));
-    host.showToast('队长的模型上下文已清空；派出去的活、回执和之前的对话都还在');
+    brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status)))
+      + (rotation ? `\n读看板继续：${options.checkpointPath}` : ''));
+    host.showToast(rotation ? `已${host.config.captainRelayLabel || 'Relay'}；进度看板、队员和回执已保留` : '队长的模型上下文已清空；派出去的活、回执和之前的对话都还在');
+    return fresh;
   }
 
   // ---- handing out work ----
@@ -694,7 +732,7 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
-    if (id === s.colId) { retryBoardWrites(s); tokenSaverTick(entry); if (!tokenSaving) deliver(entry); pump(); return; }
+    if (id === s.colId) { retryBoardWrites(s); if (!seatChanging) { tokenSaverTick(entry); if (!tokenSaving) deliver(entry); pump(); } return; }
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
@@ -758,7 +796,12 @@
     if (colId === s.colId) {
       host.captainTurnDone(colId, turn);
       if (tokenSaving?.phase === 'archiving' && turn.id === tokenSaving.turnId) {
-        if (!turn.interrupted && String(turn.reply || '').trim() === '已存档') { tokenSaving.phase = 'archived'; tokenSaving.since = Date.now(); }
+        if (!turn.interrupted && String(turn.reply || '').trim() === '已存档') {
+          if (tokenSaving.relay) {
+            const op = tokenSaving;
+            clearTimeout(op.timer); tokenSaving = null; saverBanner(''); op.resolve();
+          } else { tokenSaving.phase = 'archived'; tokenSaving.since = Date.now(); }
+        }
         else saverFailed('队长没有只回复「已存档」，未清空上下文');
       }
       if (s.inflight.length || s.fresh) {
@@ -1010,13 +1053,14 @@
     host = h;
     normalize();
     initDialog();
-    if (mainCol()) brief(mainCol());
+    if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? `读看板继续：${state().seatCheckpoint}` : '');
   }
 
   window.MainSession = {
-    init, open, create, clearContext, openSettings, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),
+    pauseForSeatSwitch: (value) => { seatChanging = !!value; },
   };
 })();

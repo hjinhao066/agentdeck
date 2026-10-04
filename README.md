@@ -104,6 +104,12 @@ skipped.
 发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
 此分支只提供数据及接口，不添加看板界面。
 
+队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸 两个独立 Claude 席位，
+或 ChatGPT（Codex GPT-6.1 Sol）：
+先存进度看板，再重开队长读看板继续，运行中的队员保持原席位。
+侧边栏底部齿轮统一配置席位名称、目录和Relay名称。
+首次第二账号登录、凭据隔离和 quota-bar 数据接口见 [CLAUDE_SEATS.md](CLAUDE_SEATS.md)。
+
 One standing column, opened from the sidebar entry 队长 (creating it the first
 time, with the agent you pick; afterwards it only returns to it). Once created it
 also has its own pinned row at the top of the session list. There is only ever

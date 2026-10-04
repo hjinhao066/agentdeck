@@ -177,6 +177,7 @@
     counts.hidden = !hasCrew;
     counts.setAttribute('aria-live', 'polite');
     item.append(fold, badge, iconEl('crown', 'cn-crown'), dot, text, meta, counts);
+    if (window.ClaudeSeats) item.appendChild(window.ClaudeSeats.rotationButton(col));
     item.addEventListener('click', () => selectCaptain(col));
     item.addEventListener('contextmenu', (e) => {
       e.preventDefault();
