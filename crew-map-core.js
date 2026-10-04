@@ -394,5 +394,16 @@
     return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${summaryLine(p.counts)}`)].join('\u0002');
   }
 
-  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
+  // The project palette shared by the crew map and the task board: a golden-angle
+  // step keyed by the project name, so one project keeps one colour in every
+  // view no matter which other projects are on screen. '' (其他) is the base hue.
+  function projectHue(key) {
+    const name = String(key == null ? '' : key);
+    if (!name) return 210;
+    let h = 0x811c9dc5;
+    for (let i = 0; i < name.length; i++) { h ^= name.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+    return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
+  }
+
+  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, nestRanks, normalizeSaved, signature, summaryLine };
 });

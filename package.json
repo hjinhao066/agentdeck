@@ -59,6 +59,8 @@
       "task-heartbeat.js",
       "crew-map-core.js",
       "crew-map.js",
+      "task-board-ui-core.js",
+      "task-board-ui.js",
       "side-pane.js",
       "side-main.js",
       "skills-core.js",

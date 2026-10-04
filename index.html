@@ -44,6 +44,20 @@
   <div id="centerBody">
   <div id="deck"></div>
   <section id="pageView" hidden></section>
+  <section id="taskBoardView" hidden aria-label="任务看板">
+    <header class="tbv-toolbar">
+      <h1>任务看板</h1>
+      <label class="tbv-filter"><span>项目</span><select id="tbvProject" aria-label="按项目筛选"></select></label>
+      <div class="tbv-sort" role="group" aria-label="排序">
+        <button type="button" class="split-btn" data-sort="updated" title="最近更新的在前">按更新时间</button>
+        <button type="button" class="split-btn" data-sort="order" title="项目内的任务顺序">按任务顺序</button>
+      </div>
+      <span class="tb-spacer"></span>
+      <button type="button" class="rail-btn tbv-close" title="关闭任务看板 (Esc)" aria-label="关闭任务看板"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </header>
+    <div class="tbv-status" role="status" hidden></div>
+    <div class="tbv-cols"></div>
+  </section>
   <section id="boardView" hidden aria-label="Conductor Board">
     <header class="board-toolbar">
       <div>
@@ -423,6 +437,8 @@
   <script src="main-session.js"></script>
   <script src="crew-map-core.js"></script>
   <script src="crew-map.js"></script>
+  <script src="task-board-ui-core.js"></script>
+  <script src="task-board-ui.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>
