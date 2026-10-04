@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
   saveConfig: (cfg) => ipcRenderer.send('save-config', cfg),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
+  memoryPressure: () => ipcRenderer.invoke('memory-pressure'),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
   clipboardWrite: (t) => clipboard.writeText(t),
   clipboardRead: () => clipboard.readText(),

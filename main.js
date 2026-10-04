@@ -18,6 +18,7 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const { createMemoryPressure } = require('./memory-pressure');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
@@ -64,6 +65,8 @@ function handleMain(channel, handler) {
     return handler(event, payload);
   });
 }
+const memoryPressure = createMemoryPressure({ platform: process.platform, execFile });
+handleMain('memory-pressure', () => memoryPressure.read());
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app

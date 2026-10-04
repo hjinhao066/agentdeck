@@ -27,6 +27,10 @@
     <label for="csThreshold">上下文阈值（k tokens，默认 150）</label>
     <input id="csThreshold" type="number" min="1" step="1" required />
     <p class="hint">仅 Claude Code 队长空闲且输入框为空时执行：存看板 → 收到「已存档」→ /clear → 重发提示词并读看板继续。顶部可取消后续步骤。</p>
+    <h3>并发上限</h3>
+    <label for="concurrencyCap">同时干活的会话数（5–50，默认 30）</label>
+    <input id="concurrencyCap" type="number" min="5" max="50" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="concurrencyCapNote" />
+    <p id="concurrencyCapNote" class="hint">同时最多几个会话干活，超出的自动排队</p>
     <button id="csSave" class="btn primary" type="button">保存设置</button>
     <h3>Claude 席位与 Relay</h3>
     <button id="claudeSeatsSettings" class="seat-icon" type="button" title="席位设置" aria-label="席位设置"></button>

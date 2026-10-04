@@ -208,7 +208,9 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(text, /派活前可跑 quota，避开已用尽或快用尽/);
   // progress boards, concurrency, scraping fallbacks and stuck-session patience
   assert.match(text, /13\. 开工先跑 ledger 和 task list[^\n]*tasks\/<项目名>\.json[^\n]*状态由程序随命令回执自动改/);
-  assert.match(text, /14\. [^\n]*sysctl vm\.swapusage[^\n]*free 剩不到 1GB 就少开/);
+  assert.match(text, /14\. [^\n]*内存压力等级[^\n]*不要因为 swap 用了几个 G 就少开[^\n]*kern\.memorystatus_vm_pressure_level[^\n]*全量 E2E/);
+  assert.ok(!text.includes('vm.swapusage'));
+  assert.ok(!text.includes('剩不到 1GB'));
   assert.match(text, /GitHub 现成工具、OpenCLI、agent-reach[^\n]*Muse\.ai 或 ChatGPT 浏览器/);
   assert.match(text, /3\. 先弄懂再派活：[^\n]*表述不清、模棱两可、你没完全理解，先问清楚[^\n]*更好的办法[^\n]*有把握把活做好，才把任务拆开派下去[^\n]*自己决定，不拿去问用户/);
   assert.match(text, /4\. 派活单步原则：一个会话一次只派一件活/);

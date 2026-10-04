@@ -9,8 +9,52 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  // Sessions 队长 lets work at once (owner's choice); more `new` calls wait.
-  const MAX_ACTIVE = 15;
+  // How many sessions may work at once. Settings store 5–50 (default 30).
+  // MAX_ACTIVE is the live number (copied from settings on load); tests may assign it.
+  const CONCURRENCY_DEFAULT = 30;
+  const CONCURRENCY_MIN = 5;
+  const CONCURRENCY_MAX = 50;
+  const MAX_ACTIVE = CONCURRENCY_DEFAULT;
+  function concurrencyCap(value) {
+    if (value == null || value === '') return CONCURRENCY_DEFAULT;
+    const n = typeof value === 'number' ? value : Number(value);
+    if (!Number.isInteger(n)) return CONCURRENCY_DEFAULT;
+    if (n < CONCURRENCY_MIN) return CONCURRENCY_MIN;
+    if (n > CONCURRENCY_MAX) return CONCURRENCY_MAX;
+    return n;
+  }
+  function shownCap(cap) {
+    return Number.isInteger(cap) && cap > 0 ? cap : CONCURRENCY_DEFAULT;
+  }
+  // level is the kernel pressure rank: 1 normal, 2 warning, 4 critical, null if unknown.
+  // Only critical pauses. Warning still opens. A missing rank (Windows) follows the cap.
+  function admission({ cap, active, waiting, level } = {}) {
+    const limit = shownCap(cap);
+    const busy = Number.isInteger(active) && active > 0 ? active : 0;
+    const queued = Number.isInteger(waiting) && waiting > 0 ? waiting : 0;
+    const paused = level === 4;
+    const free = Math.max(0, limit - busy);
+    return { limit, free, start: paused ? 0 : Math.min(free, queued), paused };
+  }
+  async function fillQueue(options = {}) {
+    const decision = admission(options);
+    const started = [];
+    if (!decision.paused && typeof options.take === 'function') {
+      for (let i = 0; i < decision.start; i++) {
+        const item = options.take();
+        if (item == null) break;
+        started.push(item);
+        if (typeof options.open === 'function') await options.open(item);
+      }
+    }
+    return { ...decision, started };
+  }
+  function queueNote(cap, held) {
+    return held ? '内存吃紧，稍后自动开' : `同时最多 ${shownCap(cap)} 个会话干活，前面有空位就自动开会话开始做。`;
+  }
+  function queueTitle(cap, held) {
+    return held ? '内存吃紧，稍后自动开' : `同时最多 ${shownCap(cap)} 个会话干活，有空位就自动开`;
+  }
   // A finished background session is archived after this long with nothing new.
   const ARCHIVE_AFTER = 10 * 60_000;
   const MAX_SUMMARY = 400;
@@ -150,14 +194,15 @@
   }
 
   // Static briefing; reset notes are delivered separately after submission.
-  function instructions(platform, note, legacyReceiptInjection = false) {
+  function instructions(platform, note, legacyReceiptInjection = false, cap) {
     const cli = boardCli(platform);
     const bashCli = boardCli('darwin'); // Bash tool uses POSIX env syntax, including on Windows.
+    const limit = concurrencyCap(cap);
     return [
       '你是 AgentDeck 的「队长」：常驻的总负责人。你听懂用户要什么，把活派给各个会话（deck 里的列，也就是你的队员），再把简短回执告诉用户。',
       '',
       '规则：',
-      '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。只有两件事你自己做：读写进度看板（见第 13 条），以及只读的 sysctl vm.swapusage（见第 14 条）。',
+      '1. 不要在这一列里改文件、跑任务或写实现过程。实际工作都交给别的会话。只有两件事你自己做：读写进度看板（见第 13 条），以及 macOS 上只读的 sysctl -n kern.memorystatus_vm_pressure_level（见第 14 条）。不要因为 swap 用了几个 G 就少开。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
       `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 额外发 Bark。仅必须用户亲自登录/授权或确认付款时使用；测试用 notify-user --test（【测试】，critical，音量 3）。`,
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
@@ -185,10 +230,10 @@
         : `8. 回执走后台通道，不经过你的输入框，也不附在用户消息里。开工后立即用 Claude Code 的 Bash 工具（run_in_background: true）运行 ${bashCli} receipts --wait --timeout 300（Bash 中用 POSIX 环境变量写法，包括 Windows）；始终保持恰好一个后台监听，不要在终端输入框里运行它，不要重复挂多个。命令有未读回执/提问就输出【AgentDeck 新回执】并退出，Bash 的后台完成通知会唤醒你；读取该任务的输出，处理完立即再用 run_in_background: true 挂一个。超时空输出也立即重挂；恢复会话或清空上下文后先检查是否已有监听，只在没有时启动。若当前工具不支持后台完成通知，明确告知用户并用 receipts 按需读取，不能改用输入框注入。看完用一两句话告诉用户结果；需要接着做的，直接派下去。回答用几句话，不要把别的会话的全文、长日志或文件正文搬进来。`,
       '9. 队员向你提问、或停在确认/权限提示时，你来拿主意：有把握就用 tell 或 answer 回复它，让它接着干；没把握，或者涉及删除数据、花钱、对外发布这类不可逆的事，再请用户决定，并说清要用户决定什么。',
       '10. 判断会话卡没卡先用 peek，至少等 5 分钟！会话启动、复杂分析或大模型深度思考时，终端可能数分钟内没有完整文本输出，这完全正常，绝对不要急着判定会话卡死；排查状态优先使用轻量 peek 察看终端滚动尾部，至少观察 5 分钟以上再做介入或重试。',
-      `11. 你开的会话在后台跑，用户平时看不到它们，靠你的汇报了解进度。同一时间最多 ${MAX_ACTIVE} 个会话在干活：再 new 会自动排队，有空位时 AgentDeck 自动开新会话并把任务发过去，不用你重派。用 tell 给还在忙的会话追加指令会标记为「待补充」，等它空下来自动执行。`,
+      `11. 你开的会话在后台跑，用户平时看不到它们，靠你的汇报了解进度。同一时间最多 ${limit} 个会话在干活：再 new 会自动排队，有空位时 AgentDeck 自动开新会话并把任务发过去，不用你重派。用 tell 给还在忙的会话追加指令会标记为「待补充」，等它空下来自动执行。`,
       `12. 做完的会话没有新指令 ${ARCHIVE_AFTER / 60_000} 分钟后会自动归档（终端关掉，对话保留）；以后用 tell 发给它会自动恢复。`,
       '13. 开工先跑 ledger 和 task list。用户交代的任务默认先记进看板，用 task add 记入 ~/.agents/boards/tasks/<项目名>.json（鸡毛蒜皮可直接做）；new 必须带 --task-id 卡片id、--project 项目名。状态由程序随命令回执自动改，不花 token 挪卡。需要验收就建卡时 --verify：执行回执后进 review，再 new --task-id 同一卡片开审查会话；通过 complete 进 done，不通过 complete --failed 回 doing 返工。也可 task move 回 doing 驳回；连续失败两次 held，先由队长决定，不自动重试。Markdown 看板是迁移来源和项目背景，不再靠编辑它驱动状态。不要写密钥和长日志。',
-      `14. 并发上限 ${MAX_ACTIVE}，按 swap 把控：一次要开好几个会话之前，在终端跑 sysctl vm.swapusage（Mac），free 剩不到 1GB 就少开，等有会话收工再开；上限始终是 ${MAX_ACTIVE} 个并发。Windows 没有这个命令，就按 ledger 里干活的会话数把控，宁可少开，绝不把宿主机内存跑崩。`,
+      `14. 并发上限 ${limit}（设置里的同时干活上限）。把控看内存压力等级，不要看 swap 还剩多少：压缩和 swap 增长都属正常，不要因为 swap 用了几个 G 就少开。macOS 可只读 sysctl -n kern.memorystatus_vm_pressure_level（1 正常、2 警告照常开、4 危急先别开）。危急时自动开新会话会暂停，排队卡片写「内存吃紧，稍后自动开」，压力下来后自动补位，不用重派。Windows 没有这个指标，只按上限和 ledger 里干活的会话数把控。真正要避免的是多组全量 E2E 同时跑。`,
       '15. 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。ledger 和旧回执超出摘要 300 字或 5 个文件路径的部分用 read 按需查；命令回执保持原样，提交摘要要简短，不要整段重读旧对话。',
       '16. 重要的活完成后，派 Gemini 3.8 Flash（agy --dangerously-skip-permissions --model gemini-3.8-flash-high）验收：文件确实存在、测试真的通过、截图真的落盘。验收不通过，把具体问题打回原队员，最多返工 2 轮；仍不通过，队长换更强模型或自己处理，最后才找用户。验收通过再汇报。',
       '17. 提示词正文保持静态，不拼时间或看板内容。开工或清空上下文后，读看板继续；实时状态用 ledger、quota、peek 按需读取。',
@@ -587,7 +632,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, terminalActivity,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, MAX_SUMMARY, MAX_HISTORY,
   };
 });
