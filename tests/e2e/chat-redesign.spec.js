@@ -76,6 +76,7 @@ test.beforeAll(async () => {
   });
   page = await application.firstWindow();
   page.on('pageerror', (e) => errors.push(e.message));
+  page.on('dialog', (d) => d.accept());
   await page.setViewportSize({ width: 1180, height: 940 });
   await expect.poll(() => page.evaluate((i) => typeof terms !== 'undefined' && terms.has(i), ID), { timeout: 20000 }).toBe(true);
   await page.evaluate((i) => ChatUI.setMode(i, 'chat'), ID);
@@ -157,7 +158,6 @@ test('a saved new turn shows how long it worked, its folded work, and its cards'
   await expect(edits.locator('.ec-file')).toHaveCount(3);
   await expect(edits.locator('.ec-file').first()).toContainText('DESIGN-SPEC.md');
   // a .md path in the reply previews in the side pane
-  console.log('DEBUG', await turn.locator('.msg.assistant').evaluate((n) => n.outerHTML.replace(/<svg.*?<\/svg>/g, '')), errors);
   await turn.locator('.reply .chat-link', { hasText: 'DESIGN-SPEC.md' }).click();
   await expect(page.locator('#sidePane .pv-md h1')).toHaveText('Design spec');
 });
@@ -173,7 +173,10 @@ test('reply actions are icon buttons with labels, focus rings and room to click;
     expect(w).toBeGreaterThanOrEqual(28); expect(h).toBeGreaterThanOrEqual(28);
   }
   expect(labels.map((l) => l[0])).toEqual(['复制回复', '分享：把这一轮的问与答复制成 Markdown', '在终端里查看']);
-  await tools.first().focus();
+  // keyboard focus (Tab) shows the ring
+  await tools.nth(1).focus();
+  await page.keyboard.press('Shift+Tab');
+  await expect(tools.first()).toBeFocused();
   expect(await tools.first().evaluate((b) => getComputedStyle(b).outlineStyle)).toBe('solid');
   // copy and share go to an in-page spy, never the real clipboard
   const result = await page.evaluate((i) => {
@@ -183,7 +186,7 @@ test('reply actions are icon buttons with labels, focus rings and room to click;
     try {
       const bs = document.querySelectorAll(`.column[data-col-id="${i}"] .turn:nth-child(2) .msg.assistant > .msg-tools .msg-tool`);
       bs[0].click(); bs[1].click();
-      return { got, check: bs[0].innerHTML === ICONS.check && bs[0].classList.contains('done') };
+      return { got, check: bs[0].querySelector('polyline')?.getAttribute('points') === '20 6 9 17 4 12' && bs[0].classList.contains('done') };
     } finally { deckHost.clipboardWrite = original; }
   }, ID);
   expect(result.check).toBe(true);
@@ -219,14 +222,11 @@ test('a live turn records its finish time and work, then renders the same way', 
 test('dark and light themes', async () => {
   await page.evaluate(() => { if (!document.getElementById('sidePane').hidden) SidePane.toggle(); });
   await expect(page.locator('#sidePane')).toBeHidden();
-  // open the saved turn's work and files so the screenshot shows them
   const saved = col().locator('.turn').nth(1);
-  await expect(saved.locator('.proc-body')).toBeVisible();
-  await page.evaluate((i) => {
+  const scrollTo = (n) => page.evaluate(([i, k]) => {
     const s = document.querySelector(`.column[data-col-id="${i}"] .chat-scroll`);
-    const t = s.querySelectorAll('.turn')[1];
-    s.scrollTop = t.offsetTop - s.offsetTop - 8;
-  }, ID);
+    s.scrollTop = k < 0 ? 0 : s.querySelectorAll('.turn')[k].offsetTop - s.offsetTop - 8;
+  }, [ID, n]);
   for (const theme of ['dark', 'light']) {
     await page.evaluate((t) => applyTheme(t), theme);
     const colors = await page.evaluate((i) => {
@@ -235,7 +235,16 @@ test('dark and light themes', async () => {
     }, ID);
     expect(colors.bubble).not.toBe(colors.page);
     expect(colors.text).not.toBe(colors.page);
+    // overview: the work folded, only the replies showing
+    if (await saved.locator('.proc-body').isVisible()) await saved.locator('.proc-toggle').click();
+    if (await saved.locator('.ec-list').isVisible()) await saved.locator('.ec-head').click();
+    await scrollTo(-1);
     await screenshot(`chat-redesign-${theme}`);
+    // the same turn with its work and changed files opened
+    await saved.locator('.proc-toggle').click();
+    await saved.locator('.ec-head').click();
+    await scrollTo(1);
+    await screenshot(`chat-redesign-${theme}-expanded`);
   }
   await page.evaluate(() => applyTheme('dark'));
 });

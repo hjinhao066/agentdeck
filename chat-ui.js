@@ -277,7 +277,8 @@
     text.split('\n').forEach((line, i) => {
       if (i) parent.appendChild(document.createTextNode('\n'));
       let last = 0;
-      for (const m of host.findLinks(line)) {
+      // in reading order: findLinks lists URLs before paths
+      for (const m of host.findLinks(line).sort((a, b) => a.start - b.start)) {
         if (m.start < last) continue;
         parent.append(line.slice(last, m.start));
         const a = el('a', 'chat-link', m.text);
@@ -415,8 +416,9 @@
         ico.innerHTML = host.ICONS.terminal;
         row.appendChild(ico);
       }
-      const text = el('span', 'step-text');
-      linkify(text, step, v.id);
+      // tool lines stay plain: a path there runs into the command's output
+      const text = el('span', 'step-text', tool ? step : null);
+      if (!tool) linkify(text, step, v.id);
       row.appendChild(text);
       body.appendChild(row);
     });

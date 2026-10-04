@@ -1077,7 +1077,7 @@ body.linking-board .board-port.out::before {
   max-height: 8.4em; overflow: hidden; cursor: pointer;
 }
 .msg.user.expanded .bubble { max-height: 50vh; overflow-y: auto; cursor: auto; }
-.msg.assistant { align-self: stretch; padding: 0 2px; margin-top: 6px; }
+.msg.assistant { align-self: stretch; padding: 0 2px; }
 .reply {
   font-size: 14px; line-height: 1.7; word-break: break-word;
   color: var(--text); user-select: text;
@@ -1177,7 +1177,7 @@ body.linking-board .board-port.out::before {
 
 /* icon-only actions: tooltip via title, aria-label, 28px target, focus ring */
 .msg-tools { display: flex; align-items: center; gap: 2px; height: 28px; margin-top: 8px; }
-.user-tools { justify-content: flex-end; margin-top: 4px; opacity: 0; transition: opacity 0.12s ease; }
+.user-tools { justify-content: flex-end; margin-top: 2px; opacity: 0; transition: opacity 0.12s ease; }
 .msg.user:hover .user-tools, .user-tools:focus-within { opacity: 1; }
 .msg-tool, .icon-btn {
   flex: 0 0 auto; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
@@ -1678,8 +1678,6 @@ body.linking-board .board-port.out::before {
 .task-failed { color: var(--st-input); }
 .task-note { color: var(--muted); font-size: 12px; }
 .task-files { display: flex; flex-wrap: wrap; gap: 6px; }
-/* copy / edit under your own message */
-.user-tools { justify-content: flex-end; margin-top: 2px; height: 24px; }
 
 body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 
