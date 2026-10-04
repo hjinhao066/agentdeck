@@ -91,6 +91,30 @@ test('fallback never declares success and an authoritative late completion wins'
   assert.equal(event(c.id, 'fallback').card.status, 'needs_user');
   assert.equal(event(c.id, 'complete', 'actual result').card.status, 'done');
 });
+test('moving a bound card back to doing keeps its session for Captain tell and never dispatches it again', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  for (const state of ['working', 'review', 'done', 'needs_user', 'failed']) {
+    const card = add({ verify: state === 'review' }); bind(card.id);
+    if (state === 'review' || state === 'done') event(card.id, 'complete', 'First execution');
+    if (state === 'needs_user') event(card.id, 'ask', 'Question');
+    if (state === 'failed') event(card.id, 'failed', 'Quota exhausted');
+    const starts = [], heartbeat = new TaskHeartbeat(store, { onStart: (input) => starts.push(input) });
+    heartbeat.scan();
+    const moved = store.move({ id: card.id, status: 'doing' }).card;
+    assert.equal(moved.session_id, 'worker', state);
+    assert.equal(moved.attempt_id, null, state);
+    assert.equal(moved.attempt_closed, true, state);
+    assert.equal(moved.rework_count, state === 'review' ? 1 : 0);
+    heartbeat.scan(); heartbeat.scan();
+    assert.equal(starts.length, 0, state);
+    assert.equal(store.claim({ id: card.id }).ignored, true, state);
+    assert.throws(() => store.dispatch({ id: card.id, session_id: 'unexpected-dispatcher' }), /already/);
+    assert.equal(event(card.id, 'complete', 'Late old result').ignored, true, state);
+    bind(card.id, 'tell-' + state);
+    assert.equal(event(card.id, 'started', '', 'tell-' + state).card.status, 'doing');
+    assert.equal(event(card.id, 'complete', 'Reworked', 'tell-' + state).card.status, state === 'review' ? 'review' : 'done');
+  }
+});
 test('runtime model identity fills default models without allowing a stale session to change the reviewer', (t) => {
   const { store, add, bind, event } = fixture(t); const c = add({ verify: true }); bind(c.id);
   store.identity({ id: c.id, session_id: 'worker', attempt_id: 'a1', agent: 'codex', model: 'gpt-6.1-sol' });
@@ -149,6 +173,17 @@ test('external completion persists dependent unlocks in the shared JSON without 
   assert.equal(dependent.flag, null); assert.equal(dependent.status, 'todo'); assert.equal(starts.length, 0);
   const raw = fs.readFileSync(path.join(root, 'tasks', 'dependent.json'), 'utf8'); heartbeat.scan();
   assert.equal(fs.readFileSync(path.join(root, 'tasks', 'dependent.json'), 'utf8'), raw);
+});
+test('a pending heartbeat start is cancelled when the Captain binds and reopens the original session', (t) => {
+  const { store, add, bind, event } = fixture(t); const card = add();
+  let starts = 0;
+  const heartbeat = new TaskHeartbeat(store, { onStart: () => { starts++; return false; } });
+  store.move({ id: card.id, status: 'doing' });
+  heartbeat.scan();
+  assert.equal(starts, 1); assert.equal(heartbeat.pending.has(card.id), true);
+  bind(card.id); event(card.id, 'complete', 'Finished');
+  store.move({ id: card.id, status: 'doing' }); heartbeat.scan();
+  assert.equal(starts, 1); assert.equal(heartbeat.pending.has(card.id), false);
 });
 test('watcher detects atomic rename and polling catches edits when watcher is unavailable', async (t) => {
   const { store, add, root } = fixture(t); const a = add(); const starts = [];

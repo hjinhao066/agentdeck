@@ -111,7 +111,7 @@
       ? { card: (await window.TaskBoard.list()).find((c) => c.id === id) }
       : await boardRequest('claim', { id });
     if (claimed.ignored) return { card: claimed.card, ignored: true };
-    if (!claimed.card || !claimed.card.dispatch_claim || claimed.card.dispatch_claim.delivered || heartbeat && claimed.card.dispatch_claim.key !== heartbeat.key) return { ignored: true };
+    if (!claimed.card || claimed.card.session_id || claimed.card.dispatch_session_id || !claimed.card.dispatch_claim || claimed.card.dispatch_claim.delivered || heartbeat && claimed.card.dispatch_claim.key !== heartbeat.key) return { ignored: true };
     const key = claimed.card.dispatch_claim.key;
     const { card, captain } = await boardRequest('dispatch', { id });
     if (window.TaskBoard.settings().dispatcher !== 'gemini' || captain) {
@@ -120,14 +120,21 @@
       return { card, dispatcher: 'captain' };
     }
     if (freeSlots() <= 0) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话无空位，请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
+    const candidate = window.QuotaCore.dispatcherCandidate(host.config.quotas, Date.now(), host.config.claudeSeats);
+    if (!candidate) {
+      boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，没有已知还有额度的调度模型，请队长安排。`);
+      await boardRequest('dispatched', { id, key });
+      return { card, dispatcher: 'captain' };
+    }
     const sessionId = 'c-dispatch-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     await boardRequest('dispatch', { id, session_id: sessionId });
     const cli = M.boardCli(host.platform);
     const prompt = M.dispatcherInstructions(host.platform, card);
-    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd: window.BoardCore.commandForAgent('agy'), captainCrew: true, project: card.project, dispatcherCardId: id }, true);
+    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd: candidate.command || window.BoardCore.commandForAgent(candidate.agent),
+      claudeSeatId: candidate.claudeSeatId, claudeConfigDir: candidate.claudeConfigDir, captainCrew: true, project: card.project, dispatcherCardId: id }, true);
     dispatch(col, prompt + `\n整理后用 ${cli} new --task-id ${id} --project ${JSON.stringify(card.project)} --title "标题" --task "整理后的任务" --agent … 派出去，然后 complete 说明派给谁。拿不准就 ask 交队长。`, '调度：' + card.title);
     await boardRequest('dispatched', { id, key });
-    return { card, dispatcher: 'gemini', session_id: col.id };
+    return { card, dispatcher: candidate.agent === 'agy' ? 'gemini' : candidate.agent, session_id: col.id };
   }
   window.TaskBoard = {
     onChange: (callback) => window.deck.onTasksChanged(callback),

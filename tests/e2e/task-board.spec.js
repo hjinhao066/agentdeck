@@ -114,6 +114,10 @@ test('Gemini is default; its stand-in can delegate only this card once, while im
     window.testOriginalAgentCommand = BoardCore.commandForAgent;
     window.testDispatcherCommand = BoardCore.commandForAgent('agy');
     BoardCore.commandForAgent = (agent, ...args) => agent === 'agy' ? fake : window.testOriginalAgentCommand(agent, ...args);
+    window.testOriginalQuotas = config.quotas;
+    config.quotas = {};
+    const now = Date.now();
+    QuotaCore.observe(config.quotas, QuotaCore.cacheAntigravity({ quota: { 'gemini-5h': { remaining_fraction: 0.8 } } }, now), now);
   }, FAKE);
   const c = await add('Gemini dispatch');
   const started = await page.evaluate((id) => TaskBoard.startCard(id), c.id);
@@ -151,7 +155,53 @@ test('Gemini is default; its stand-in can delegate only this card once, while im
   expect((await page.evaluate((id) => TaskBoard.startCard(id), important.id)).dispatcher).toBe('captain');
   const unclear = await add('Unclear', false, '');
   expect((await page.evaluate((id) => TaskBoard.startCard(id), unclear.id)).dispatcher).toBe('captain');
-  await page.evaluate(() => { BoardCore.commandForAgent = window.testOriginalAgentCommand; TaskBoard.settings('captain'); });
+  await page.evaluate(() => { BoardCore.commandForAgent = window.testOriginalAgentCommand; config.quotas = window.testOriginalQuotas; TaskBoard.settings('captain'); });
+});
+
+test('automatic dispatch skips exhausted Gemini and Claude CN, pins available seats and falls back to Captain without quota evidence', async () => {
+  await page.evaluate((fake) => {
+    window.testQuotaDispatchBackup = { command: BoardCore.commandForAgent, quotas: config.quotas, dispatcher: TaskBoard.settings().dispatcher };
+    window.testQuotaAgentCalls = [];
+    BoardCore.commandForAgent = (agent) => { window.testQuotaAgentCalls.push(agent); return fake; };
+    TaskBoard.settings('gemini');
+  }, FAKE);
+  try {
+    for (const available of ['codex', 'us', 'none']) {
+      const c = await add('Quota routing ' + available);
+      const result = await page.evaluate(async ([id, available]) => {
+        const now = Date.now(); config.quotas = {}; window.testQuotaAgentCalls = [];
+        QuotaCore.observe(config.quotas, QuotaCore.cacheAntigravity({ quota: { 'gemini-weekly': { remaining_fraction: 0 } } }, now), now);
+        const cn = config.claudeSeats.find((s) => s.id === 'cn');
+        QuotaCore.observe(config.quotas, { ...QuotaCore.screen('Claude', "You've hit your limit", [], now), seatId: cn.id, configDir: cn.configDir }, now);
+        if (available === 'codex') QuotaCore.observe(config.quotas, QuotaCore.cacheCodex({ type: 'event_msg', timestamp: new Date(now).toISOString(), payload: { type: 'token_count', rate_limits: { primary: { used_percent: 20, window_minutes: 300 } } } }), now);
+        if (available === 'us') {
+          const us = config.claudeSeats.find((s) => s.id === 'us');
+          QuotaCore.observe(config.quotas, { ...QuotaCore.cacheClaude({ sessionUsage: 20, weeklyUsage: 10 }, now), seatId: us.id, configDir: us.configDir, accountKey: 'test-us', accountBound: true }, now);
+        }
+        const before = columns.length, started = await TaskBoard.startCard(id);
+        const col = columns.find((c) => c.id === started.session_id);
+        return { started, added: columns.length - before, calls: window.testQuotaAgentCalls, seatId: col?.claudeSeatId, configDir: col?.claudeConfigDir };
+      }, [c.id, available]);
+      expect(result.started.dispatcher).toBe(available === 'none' ? 'captain' : available === 'us' ? 'claude' : 'codex');
+      expect(result.added).toBe(available === 'none' ? 0 : 1);
+      expect(result.calls).toEqual(available === 'none' ? [] : [available === 'us' ? 'claude' : 'codex']);
+      if (available === 'us') {
+        expect(result.seatId).toBe('us'); expect(result.configDir).toBe('~/.claude-us');
+      }
+      if (available === 'none') {
+        expect((await card(c.id)).dispatch_session_id).toBeFalsy();
+        expect(await page.evaluate((id) => config.mainSession.pending.some((p) => p.summary?.includes(id) && p.summary.includes('没有已知还有额度')), c.id)).toBe(true);
+      } else {
+        await expect.poll(() => fs.existsSync(path.join(envDir, result.started.session_id + '.json'))).toBe(true);
+        const env = JSON.parse(fs.readFileSync(path.join(envDir, result.started.session_id + '.json'), 'utf8'));
+        const w = await worker(c.id, 'Quota-selected dispatcher worker', FAKE, env);
+        await command(['complete', '--result', 'Delegated'], env);
+        await command(['complete', '--result', 'Worker done'], w.env);
+      }
+    }
+  } finally {
+    await page.evaluate(() => { const b = window.testQuotaDispatchBackup; BoardCore.commandForAgent = b.command; config.quotas = b.quotas; TaskBoard.settings(b.dispatcher); });
+  }
 });
 
 test('external JSON start edges notify once, quiet edits do not dispatch, and settings persist', async () => {
@@ -195,14 +245,27 @@ test('queued new keeps card binding and project review targets until delivery, a
   await expect.poll(() => fs.existsSync(path.join(envDir, id + '.json'))).toBe(true);
   const env = JSON.parse(fs.readFileSync(path.join(envDir, id + '.json'), 'utf8'));
   await command(['complete', '--result', 'First execution'], env);
+  const before = await page.evaluate(() => {
+    TaskBoard.settings('gemini');
+    const now = Date.now();
+    QuotaCore.observe(config.quotas, QuotaCore.cacheAntigravity({ quota: { 'gemini-5h': { remaining_fraction: 0.8 } } }, now), now);
+    return columns.length;
+  });
   await command(['task', 'move', '--id', c.id, '--status', 'doing']);
   expect((await card(c.id)).rework_count).toBe(1);
+  expect((await card(c.id)).session_id).toBe(id);
+  expect(await page.evaluate((id) => TaskBoard.startCard(id), c.id)).toMatchObject({ ignored: true });
+  await command(['complete', '--result', 'Stale execution receipt'], env);
+  expect((await card(c.id)).status).toBe('doing');
+  expect(await page.evaluate(() => columns.length)).toBe(before);
+  expect((await card(c.id)).dispatch_session_id).toBeFalsy();
   await command(['tell', '--to', id, '--message', 'Fix the review issue'], captainEnv);
   await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, id), { timeout: 30000 }).toBe('working');
   await command(['complete', '--result', 'Reworked'], env);
   expect((await card(c.id)).status).toBe('review');
   const reviewer = await worker(c.id, 'Final review'); await command(['complete', '--result', 'Verified'], reviewer.env);
   expect((await card(c.id)).status).toBe('done');
+  await page.evaluate(() => TaskBoard.settings('captain'));
 });
 
 test('a synced JSON conflict cannot swallow a command receipt; its transition retries after the file is resolved', async () => {

@@ -34,7 +34,7 @@ class TaskHeartbeat {
       for (const id of this.previous.keys()) if (!ids.has(id)) this.previous.delete(id);
       for (const [id, key] of this.pending) {
         const card = cards.find((c) => c.id === id);
-        if (!card || card.dispatch_claim?.delivered || card.status !== 'doing') { this.pending.delete(id); continue; }
+        if (!card || card.session_id || card.dispatch_session_id || card.dispatch_claim?.delivered || card.status !== 'doing') { this.pending.delete(id); continue; }
         if (!this.delivering?.has(key)) {
           if (!this.delivering) this.delivering = new Set();
           this.delivering.add(key);

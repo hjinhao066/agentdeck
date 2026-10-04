@@ -383,3 +383,74 @@ test('any exhausted window (5-hour or weekly) shows exhausted with the recovery 
   const ok = Q.summary(store, 'Codex', now + 1000);
   assert.deepEqual([ok.out, ok.fiveHour, ok.recoveryAt, ok.statusText], [false, 41, null, '正常']);
 });
+
+test('automatic dispatch prefers available Gemini, skips exhausted Gemini and Claude CN, and pins the available Claude seat', () => {
+  const seats = Q.claudeSeats([{ id: 'cn', configDir: '~/.claude' }, { id: 'us', configDir: '~/.claude-us' }]), store = {};
+  const claude = (seat, remaining) => ({ ...Q.cacheClaude({ sessionUsage: 100 - remaining, weeklyUsage: 25 }, now),
+    seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: `${seat.id}-account` });
+  Q.observe(store, claude(seats[0], 0), now);
+  Q.observe(store, claude(seats[1], 75), now);
+  const gemini = (remaining, at) => Q.cacheAntigravity({ quota: { 'gemini-5h': { remaining_fraction: remaining }, 'gemini-weekly': { remaining_fraction: 0.8 } } }, at);
+  Q.observe(store, gemini(0.8, now), now);
+  assert.deepEqual(Q.dispatcherCandidate(store, now, seats), { provider: 'Antigravity', agent: 'agy' });
+  Q.observe(store, gemini(0, now + 1), now + 1);
+  assert.deepEqual(Q.dispatcherCandidate(store, now + 1, seats), {
+    provider: 'Claude', agent: 'claude', claudeSeatId: 'us', claudeConfigDir: '~/.claude-us',
+  });
+  // Room in the five-hour window cannot bypass an exhausted weekly window.
+  Q.observe(store, Q.codexServer({ rateLimits: { limitId: 'codex', primary: { usedPercent: 5, windowDurationMins: 300 },
+    secondary: { usedPercent: 99.97, windowDurationMins: 10080 } } }, now + 1), now + 1);
+  assert.equal(Q.dispatcherCandidate(store, now + 1, seats).claudeSeatId, 'us');
+  Q.observe(store, Q.codexServer({ rateLimits: { limitId: 'codex', primary: { usedPercent: 95, windowDurationMins: 300 },
+    secondary: { usedPercent: 20, windowDurationMins: 10080 } } }, now + 2), now + 2);
+  assert.deepEqual(Q.dispatcherCandidate(store, now + 2, seats), { provider: 'Codex', agent: 'codex' });
+});
+
+test('automatic dispatch hands unknown, stale, exhausted and untrusted quota to the Captain', () => {
+  const seats = Q.claudeSeats([{ id: 'cn', configDir: '~/.claude' }]);
+  assert.equal(Q.dispatcherCandidate({}, now, seats), null);
+  const store = {};
+  Q.observe(store, Q.screen('Antigravity', 'Ready', [], now, 'gemini-3.8-flash-high'), now);
+  Q.observe(store, Q.screen('Codex', 'Ready', [], now), now);
+  Q.observe(store, Q.screen('Cursor', 'Ready', [], now, 'grok-4.7-high-fast'), now);
+  assert.equal(Q.summary(store, 'Antigravity', now).state, 'normal');
+  assert.equal(Q.dispatcherCandidate(store, now, seats), null);
+  const positive = Q.cacheAntigravity({ quota: { 'gemini-5h': { remaining_fraction: 0.9 } } }, now);
+  Q.observe(store, positive, now);
+  assert.equal(Q.dispatcherCandidate(store, now + Q.FRESH_MS + 1, seats), null);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 5 }, now), seatId: 'cn', configDir: seats[0].configDir }, now);
+  assert.equal(Q.dispatcherCandidate(store, now + 1, seats)?.agent, 'agy');
+  delete store.Antigravity;
+  assert.equal(Q.dispatcherCandidate(store, now, seats), null);
+  Q.observe(store, { ...Q.cacheClaude({ sessionUsage: 5 }, now), seatId: 'cn', configDir: seats[0].configDir,
+    accountBound: true, accountKey: 'cn-account' }, now);
+  Q.observe(store, { ...Q.screen('Claude', "You've hit your limit", [], now + 1), seatId: 'cn', configDir: seats[0].configDir }, now + 1);
+  assert.equal(Q.dispatcherCandidate(store, now + 1, seats), null);
+});
+
+test('automatic dispatch rejects retained official quota after expiry, reset or repeated query failure', () => {
+  const seat = { id: 'us', configDir: '~/.claude-us' }, seats = [seat];
+  const sample = { ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 80, resetText: new Date(now + 3600000).toISOString() },
+    { key: 'weekly', remaining: 60, resetText: new Date(now + 86400000).toISOString() }] }, now),
+    seatId: seat.id, configDir: seat.configDir, accountBound: true, accountKey: 'us-account', credentialKey: 'us-cred' };
+  const store = {};
+  Q.observe(store, sample, now);
+  assert.equal(Q.dispatcherCandidate(store, now + Q.FRESH_MS + 1, seats).claudeSeatId, 'us');
+  assert.equal(Q.dispatcherCandidate(store, now + Q.freshMs(sample) + 1, seats), null);
+  assert.equal(Q.dispatcherCandidate(store, now + 3600001, seats), null);
+  store[Q.seatKey(seat.id)].officialStatus = { failures: 3, failure: 'unavailable' };
+  assert.equal(Q.dispatcherCandidate(store, now + 1, seats), null);
+});
+
+test('automatic dispatch uses the quota-scoped Cursor Grok command for the last available provider', () => {
+  const store = {};
+  // Cursor samples can carry known numbers from an adapter; only Grok 4.7 belongs to this pool.
+  Q.observe(store, { provider: 'Cursor', scope: 'grok-4.7', at: now, source: '会话屏幕',
+    windows: [{ label: '5 小时', remaining: 70, exhausted: false, resetAt: now + 3600000 }] }, now);
+  assert.deepEqual(Q.dispatcherCandidate(store, now), {
+    provider: 'Cursor', agent: 'cursor', command: 'cursor-agent --force --model grok-4.7-high-fast',
+  });
+  Q.observe(store, Q.screen('Cursor', 'Error: You have exceeded your usage limit', [], now + 1, 'grok-4.7-high-fast'), now + 1);
+  assert.equal(Q.dispatcherCandidate(store, now + 1), null);
+});

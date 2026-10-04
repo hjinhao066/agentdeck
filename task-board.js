@@ -175,7 +175,9 @@ class TaskStore {
       card.status = input.status;
       if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
       if (input.status === 'done') card.consecutive_failures = 0;
-      card.session_id = null; card.attempt_id = null; card.dispatch_session_id = null; card.archived = false;
+      // Keep the original session for Captain tell, but invalidate its old turn.
+      if (input.status !== 'doing') card.session_id = null;
+      card.attempt_id = null; card.attempt_closed = true; card.dispatch_session_id = null; card.archived = false;
       if (input.status !== 'doing') card.dispatch_claim = null;
       touch(card);
       return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
@@ -254,7 +256,7 @@ class TaskStore {
   dispatch(input) {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
-      if (card.session_id && !card.attempt_closed || card.dispatch_session_id) throw new Error('Card is already being executed or dispatched.');
+      if (card.session_id || card.dispatch_session_id) throw new Error('Card is already bound to a session or being dispatched.');
       if (input.session_id) card.dispatch_session_id = idValue(input.session_id);
       if (input.session_id) touch(card);
       return { card, captain: card.important === true || card.start_previous_status === 'needs_user' || card.flag === 'failed' || !card.detail.trim(), notices: [] };
@@ -264,7 +266,7 @@ class TaskStore {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
       if (card.status === 'review') throw new Error('Card needs verification. Use new --task-id for a reviewer, or task move to doing to reject it.');
-      if (card.session_id && !card.attempt_closed || card.dispatch_session_id) return { card, ignored: true, notices: [] };
+      if (card.session_id || card.dispatch_session_id) return { card, ignored: true, notices: [] };
       if (card.dispatch_claim && !input.newEntry) return { card, ignored: true, notices: [] };
       if (input.updated && input.updated !== card.updated) return { card, ignored: true, notices: [] };
       card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: false, created: new Date().toISOString() };

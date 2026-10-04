@@ -355,7 +355,22 @@
     const sampledAt = (fresh || retained) ? sample.at : evidence?.at || null;
     return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour: pick(/5 小时$/), weekly: pick(/每周$/), out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
+  function dispatcherCandidate(store, now = Date.now(), seats) {
+    const candidates = [
+      { provider: 'Antigravity', agent: 'agy' },
+      { provider: 'Codex', agent: 'codex' },
+      ...claudeSeats(seats).map((seat) => ({ provider: 'Claude', agent: 'claude', seat })),
+      { provider: 'Cursor', agent: 'cursor', command: 'cursor-agent --force --model grok-4.7-high-fast' },
+    ];
+    for (const { provider, agent, seat, command } of candidates) {
+      const quota = summary(store, provider, now, seat);
+      // A fresh screen without an error is not proof of available quota.
+      if (quota.out || quota.stale || quota.state === 'unknown' || !(quota.fiveHour > 0 || quota.weekly > 0)) continue;
+      return { provider, agent, ...(command ? { command } : {}), ...(seat ? { claudeSeatId: seat.id, claudeConfigDir: seat.configDir } : {}) };
+    }
+    return null;
+  }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, dispatcherCandidate, text };
 
 });

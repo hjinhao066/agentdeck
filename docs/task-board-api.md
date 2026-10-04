@@ -3,7 +3,9 @@
 本层不创建界面。界面作者直接调用 `window.TaskBoard`，所有文件读写通过
 受主页面校验的 preload IPC 到主进程；页面不持有 Node、任意 IPC 或可选文件路径。
 默认 `dispatcher=gemini`，可改回 `captain`。自动流转和心跳均不调用模型；
-只有明确开始卡片时，Gemini 调度模式会开模型会话。
+只有明确开始未绑定会话的卡片时，Gemini 调度模式才可能开模型会话：
+优先 Gemini，其次 Codex、配置的 Claude 席位、Cursor Grok 4.7；只选择新鲜额度数字大于零且未用尽的候选。
+额度用尽、未知或过期时跳过，没有候选则通知队长安排。
 
 ## 文件与字段
 
@@ -71,7 +73,7 @@ unsubscribe();
 | `list(filter = {})` | 可选 `project`、`status`、`archived`；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
 | `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
 | `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
-| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；清除旧会话绑定，移入 doing 时检查前置 |
+| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；移入 doing 时检查前置、保留 session_id 并关闭旧执行轮次，由队长 tell 原会话；移入其他状态清除绑定 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
 | `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
@@ -83,7 +85,8 @@ ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题�
 卡片没有颜色字段，界面按 project 关联现有项目色板。
 
 读返回数组；修改返回 `{card, notices}`，归档返回 `{cards, notices}`。
-`startCard` 返回 `{card, dispatcher, session_id?}`，重复开始返回 `{ignored:true}`。
+`startCard` 返回 `{card, dispatcher, session_id?}`，dispatcher 是 gemini/codex/claude/cursor/captain；
+重复开始或卡片已有 session_id 返回 `{ignored:true}`。
 修改接口 reject 时由界面展示错误，重新读卡片后重试；不要先乐观覆盖文件。
 `onChange` 只提示重新读取，不携带正文或路径，不保证每次写入都有独立通知。
 首次打开界面先订阅，再 `list()`；刷新时串行处理或丢弃旧请求结果，避免较早的
