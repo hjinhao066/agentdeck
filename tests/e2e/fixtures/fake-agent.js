@@ -4,6 +4,7 @@
 // carrying the AgentDeck receipt contract submits through board-cli; "ask me"
 // makes it stop at a y/n question like a permission prompt.
 const readline = require('readline');
+const { Writable } = require('stream');
 const provider = process.argv.includes('--provider=codex') ? 'Codex CLI' : 'Claude Code';
 if (process.env.AGENTDECK_TEST_SEATS_ENV_FILE) {
   require('fs').appendFileSync(process.env.AGENTDECK_TEST_SEATS_ENV_FILE, JSON.stringify({
@@ -204,11 +205,10 @@ function listen() {
       if (incoming.includes('\x03')) process.exit(0);
     });
   } else {
-    // Real agent TUIs disable the console's cooked input/echo. In ConPTY the
-    // cooked echo otherwise scrolls long Captain briefings through the screen
-    // and leaves them in later replies even after the stand-in redraws.
-    // No output stream: readline handles raw editing keys without echoing them.
-    readline.createInterface({ input: process.stdin, terminal: true }).on('line', (line) => {
+    // Real agent TUIs disable cooked echo. ConPTY otherwise reprints the whole
+    // prompt into the screen, so a later reply is no longer exactly「已存档」.
+    const sink = new Writable({ write(_chunk, _enc, cb) { cb(); } });
+    readline.createInterface({ input: process.stdin, output: sink, terminal: true }).on('line', (line) => {
       if (!line.trim() && !lines.length) return;
       lines.push(line);
       clearTimeout(timer);

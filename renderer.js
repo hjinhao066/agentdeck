@@ -2249,6 +2249,12 @@ function openLink(m, event, colId, cont) {
 // Quote a path for the shell: leave simple paths bare, single-quote anything
 // with spaces or special characters (escaping embedded single quotes).
 function shellQuote(p) {
+  // Windows paths use backslashes. POSIX single quotes would be typed literally
+  // into the agent, so a bare simple path stays bare and spaces use cmd quotes.
+  if (env.platform === 'win32') {
+    if (/^[A-Za-z0-9_./:@%+,=\\-]+$/.test(p)) return p;
+    return '"' + p.replace(/"/g, '""') + '"';
+  }
   if (/^[A-Za-z0-9_./:@%+,=-]+$/.test(p)) return p;
   return "'" + p.replace(/'/g, "'\\''") + "'";
 }
@@ -2504,7 +2510,14 @@ function removeFolder(folderId) {
 async function agentInForeground(col, allowShell) {
   if (allowShell && !col.cmd) return true;
   const entry = terms.get(col.id);
-  if (env.platform === 'win32') return !!entry && AGENT_IDLE_RE.test(MainCore.windowsAgentOutput(entry.lastScreen));
+  if (env.platform === 'win32') {
+    if (!entry) return false;
+    const screen = MainCore.windowsAgentOutput(entry.lastScreen);
+    // A narrow ConPTY wraps "Plan, search, build anything" across rows. The
+    // idle regex wants that phrase intact; cursorActivity already joins it.
+    if (AGENT_IDLE_RE.test(screen)) return true;
+    return /\bcursor-agent\b/i.test(col.cmd || '') && MainCore.cursorActivity(screen) === 'idle';
+  }
   try {
     return !MainCore.isShellProcess(await window.deck.ptyForeground(col.id));
   } catch (_) { return false; }
@@ -3482,6 +3495,9 @@ window.addEventListener('dragover', (e) => e.preventDefault());
 window.addEventListener('drop', (e) => e.preventDefault());
 
 // Read terminal screens for status, reply extraction and Captain readiness.
+function termLine(line, trimRight) {
+  return (line ? line.translateToString(trimRight) : '').replace(/\r/g, '');
+}
 function dumpScreen(term, count = 40) {
   const buf = term.buffer.active;
   // Fresh/tall terminals have many blank rows below the cursor. Starting at
@@ -3490,13 +3506,17 @@ function dumpScreen(term, count = 40) {
   const floor = Math.max(0, end - Math.max(term.rows, count));
   while (end > floor) {
     const line = buf.getLine(end - 1);
-    if (line && line.translateToString(true).trim()) break;
+    if (line && termLine(line, true).trim()) break;
     end--;
   }
   const lines = [];
   for (let i = Math.max(0, end - count); i < end; i++) {
     const ln = buf.getLine(i);
-    lines.push(ln ? ln.translateToString(true) : '');
+    const text = termLine(ln, true);
+    // Soft wrap is one logical line. A narrow Windows column otherwise splits
+    // "Model: CompactModel" and quota phrases across rows.
+    if (ln?.isWrapped && lines.length) lines[lines.length - 1] += text;
+    else lines.push(text);
   }
   return lines.join('\n');
 }
@@ -3508,7 +3528,7 @@ function statusScreen(term) {
   const lines = [];
   for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
     const line = buf.getLine(y);
-    const text = line ? line.translateToString(false) : '';
+    const text = termLine(line, false);
     if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
     else lines.push(text);
   }

@@ -604,9 +604,10 @@
 
   const cursorBusy = (screen) => String(screen || '').split('\n').filter((line) => line.trim()).slice(-10).some((line) => CURSOR_BUSY.test(line));
 
+  function plainScreen(screen) { return String(screen || '').replace(/\r/g, ''); }
   function resourceFailure(reason, source = '') {
     if (!['quota', 'process', 'automatic'].includes(source)) return '';
-    for (const raw of String(reason || '').split('\n')) {
+    for (const raw of plainScreen(reason).split('\n')) {
       // resourceReceipt adds a localized label before the native error. Remove
       // only that generated prefix, only for an authenticated quota receipt.
       const line = source === 'quota' ? raw.replace(/^(?:未登录|请求被限流|额度用尽)[:：]/, '') : raw;

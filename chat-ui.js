@@ -870,7 +870,7 @@
     const top = buf.baseY;
     const rows = [];
     for (let r = 0; r < term.rows; r++) rows.push(buf.getLine(top + r));
-    const text = rows.map((ln) => (ln ? ln.translateToString(true) : ''));
+    const text = rows.map((ln) => (ln ? ln.translateToString(true) : '').replace(/\r/g, ''));
     let end = text.length - 1;
     while (end >= 0 && !text[end].trim()) end--;
     let rule = -1;
@@ -960,7 +960,7 @@
     for (let i = from; i < buf.length; i++) {
       const ln = buf.getLine(i);
       if (!ln) continue;
-      const text = ln.translateToString(true);
+      const text = ln.translateToString(true).replace(/\r/g, '');
       if (ln.isWrapped && lines.length) lines[lines.length - 1] += text; else lines.push(text);
     }
     return lines;
