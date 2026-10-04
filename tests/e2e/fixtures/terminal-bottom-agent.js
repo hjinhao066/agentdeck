@@ -13,5 +13,8 @@ function draw() {
   process.stdout.write(screen);
 }
 process.stdout.on('resize', draw);
+// Node on Windows does not receive SIGWINCH; refresh the actual ConPTY size
+// so the existing resize event redraws the stand-in after a native resize.
+if (process.platform === 'win32') setInterval(() => process.stdout._refreshSize(), 100);
 process.stdin.on('data', draw);
 draw();

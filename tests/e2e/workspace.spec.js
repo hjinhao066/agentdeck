@@ -82,13 +82,13 @@ test('pasted images stay as attachments when the text is deleted, and go out as 
   await page.evaluate((p) => ChatUI.attach('ws-b', p), shot);
   const ta = col.locator('.composer textarea');
   await ta.click();
-  await page.keyboard.type('look at this');
-  await page.keyboard.press('ControlOrMeta+A');
-  await page.keyboard.press('Backspace');
+  await ta.pressSequentially('look at this');
+  await ta.press('ControlOrMeta+A');
+  await ta.press('Backspace');
   await expect(ta).toHaveValue('');
   await expect(col.locator('.cp-atts .att-thumb img')).toHaveAttribute('src', /^data:image\/png/);
-  await page.keyboard.type('what is in the picture');
-  await page.keyboard.press('Enter');
+  await ta.pressSequentially('what is in the picture');
+  await ta.press('Enter');
   await expect(col.locator('.cp-atts')).toBeHidden();
   await expect(col.locator('.msg.user .bubble-atts .att-thumb')).toHaveCount(1);
   await expect(col.locator('.msg.user .bubble').last()).toHaveText('what is in the picture');
@@ -206,8 +206,8 @@ test('dragging a session into a folder moves its column, and the order persists'
 test('archive keeps the conversation; restore brings the session back with it', { tag: '@smoke' }, async () => {
   const col = page.locator('.column[data-col-id="ws-a"]');
   await col.locator('.composer textarea').click();
-  await page.keyboard.type('remember the archive drill');
-  await page.keyboard.press('Enter');
+  await col.locator('.composer textarea').fill('remember the archive drill');
+  await col.locator('.composer textarea').press('Enter');
   await expect(col.locator('.reply').last()).toContainText('GOT remember the archive drill', { timeout: 20000 });
   await col.hover();
   await col.locator('.secondary .icon-btn').first().click();   // archive

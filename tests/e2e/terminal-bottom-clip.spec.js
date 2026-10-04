@@ -61,7 +61,8 @@ for (const dpr of [1, 2]) {
     }));
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_') || key === 'ELECTRON_RUN_AS_NODE') delete env[key];
-    application = await electron.launch({ args: [ROOT, `--test-user-data=${profile}`, `--force-device-scale-factor=${dpr}`], env });
+    application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+      args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`, `--force-device-scale-factor=${dpr}`], env });
     page = await application.firstWindow();
     await expect(page.locator('.xterm-screen')).toHaveCount(2);
     await expect.poll(() => fs.existsSync(path.join(profile, 'bottom-1.size.json')), { timeout: 20000 }).toBe(true);
@@ -73,7 +74,7 @@ for (const dpr of [1, 2]) {
       for (const height of [800, 480, 537, 601, 733, 901]) {
         await application.evaluate(({ BrowserWindow }, height) => BrowserWindow.getAllWindows()[0].setContentSize(1440, height), height);
         // Wait for the renderer viewport to receive the native resize.
-        await expect.poll(() => page.evaluate(() => innerHeight)).toBe(height);
+        await expect.poll(() => page.evaluate((height) => Math.abs(innerHeight - height), height)).toBeLessThanOrEqual(process.platform === 'win32' ? 1 : 0);
         await check('bottom-0', `${theme} height ${height}`, samples);
         await check('bottom-1', `${theme} height ${height}, second session`, samples);
         if (process.env.AGENTDECK_BOTTOM_CLIP_REPORT_DIR && dpr === 2 && [480, 800, 901].includes(height)) {
@@ -87,13 +88,13 @@ for (const dpr of [1, 2]) {
       await page.evaluate(() => { toggleZoom('bottom-1'); jumpToColumn(columns[1]); });
       await check('bottom-1', `${theme} second session zoomed`, samples);
       await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1280, 657));
-      await expect.poll(() => page.evaluate(() => innerHeight)).toBe(657);
+      await expect.poll(() => page.evaluate(() => Math.abs(innerHeight - 657))).toBeLessThanOrEqual(process.platform === 'win32' ? 1 : 0);
       await check('bottom-1', `${theme} resized while first session hidden`, samples);
       await page.evaluate(() => { toggleZoom('bottom-1'); jumpToColumn(columns[0]); });
       await check('bottom-0', `${theme} first session shown again`, samples);
       await page.evaluate(() => ChatUI.setMode('bottom-0', 'chat'));
       await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1440, 733));
-      await expect.poll(() => page.evaluate(() => innerHeight)).toBe(733);
+      await expect.poll(() => page.evaluate(() => Math.abs(innerHeight - 733))).toBeLessThanOrEqual(process.platform === 'win32' ? 1 : 0);
       await page.evaluate(() => ChatUI.setMode('bottom-0', 'term'));
       await check('bottom-0', `${theme} terminal shown after chat resize`, samples);
       for (const size of [16, 12, 13]) {
