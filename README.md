@@ -120,7 +120,7 @@ again with the current provider, model and effort instructions.
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
-  receipts | answer | peek | quota | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
+  receipts | answer | peek | quota | briefing | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
   control capability token those commands need. Every column has a separate
   submission-only token, so a worker can report its own task without controlling
@@ -257,8 +257,10 @@ and both its chat composer (including attachments) and terminal input are empty:
 4. Once the live usage drops below half the previous usage and the Captain is
    idle again, AgentDeck resends its instructions with `读看板继续`.
 
-No terminal is restarted. The column, local conversation, workers, task cards and
-unread receipts stay in place. Every send rechecks the idle and user-input guards.
+No terminal is restarted. The column, workers, task cards and unread receipts
+stay in place. The conversation before `/clear` is checkpointed into a separate
+read-only Captain history file; it is not sent back into the model context. Every
+send rechecks the idle and user-input guards.
 New user messages cancel the remaining steps. The cancellation icon also stops
 the next steps, but cannot undo a command already being submitted. Cancellation
 or failure pauses automatic retries until usage falls back to the threshold
@@ -268,6 +270,40 @@ and acknowledgement; AgentDeck does not inspect or independently verify the boar
 
 The Captain's instructions also require: `不读大文件正文，只看报告的结论段；查进度优先 peek`.
 Use `read` only for details needed from a saved worker reply.
+
+When you submit a reset yourself, AgentDeck also rebriefs the Captain:
+
+- Claude: `/clear`, `/reset`, `/new`; Codex: `/clear`, `/new`, including a
+  single-line name. Both the composer and commands typed in the raw terminal
+  are observed. Other providers, worker columns and bare shells are excluded.
+- A submitted command arms a candidate for 60 seconds. Success requires a newly
+  emitted `Conversation cleared`, `Context cleared` or `(no content)` line,
+  used/total footer tokens falling below half their previous value, or Codex's
+  native `% context left` footer showing the same drop in used context. A startup
+  title or screen repaint alone is insufficient. Failures and cancelled workspace
+  pickers do not confirm a reset; a new unrelated submission drops an unconfirmed
+  candidate. Low-context Claude clears can be confirmed by
+  `(no content)` even when no numeric decrease is available.
+- On confirmation, the pre-command conversation is saved to Captain history
+  without replacing the column or PTY. Unread receipts, questions and live task
+  cards carry over. The current instructions are sent once, followed by
+  `先跑 ledger、读看板里的队长交接再接续。` The delivery waits for an idle
+  agent, three seconds of quiet output, and empty composer/terminal input,
+  including attachments, and rechecks these guards when sending.
+- Raw terminal history recall, Tab completion and cursor edits make the tracked
+  command uncertain and are deliberately excluded. Multiline pastes, quoted
+  slash commands and Ctrl+L never arm detection. If a CLI gives no success line
+  and no measurable footer decrease (for example an already empty Codex context),
+  automatic rebriefing cannot confirm the reset. Use `briefing` as the fallback.
+
+`node "$AGENTDECK_BOARD_CLI" briefing` prints the complete current Captain
+instructions, with original newlines. It is read-only: it does not send input,
+consume receipts or save the response to config. Only the Captain capability can
+use it. When the user says `你是队长`, first run `ledger` to verify that this
+terminal is the Captain, then read `briefing` and the board's Captain handoff. An
+installed version that returns
+`Unknown action` for `briefing` needs this feature integrated and installed; a
+source branch alone does not change the running app.
 
 The queue verification and command semantics are documented in
 [Captain control report](docs/captain-control-report.md).

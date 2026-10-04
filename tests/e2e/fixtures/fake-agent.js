@@ -38,7 +38,13 @@ process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 const captainStatusline = process.argv.includes('--captain-statusline');
 let model = captainStatusline ? 'Opus 5.5' : 'Fake';
 let contextUsed = 23000;
+const codex = process.argv.includes('--codex-reset');
+let resetMenu = false;
 function box() {
+  if (codex) {
+    process.stdout.write(`OpenAI Codex\n\n› Ask Codex to do anything\n\n  ⏎ send   ⌃J newline   ${100 - Math.round(contextUsed / 10000)}% context left\n`);
+    return;
+  }
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));
   process.stdout.write('\n' + '─'.repeat(w) + '\n> \n' + '─'.repeat(w) + '\n');
   const extra = process.env.AGENTDECK_TEST_LONG_STATUS ? ' | Total: 211.5M | Cost: $35.33 | Weekly: 13.0% | LastField: complete' : '';
@@ -66,6 +72,24 @@ function answer() {
     const args = JSON.parse(first.slice(6));
     const result = require('child_process').spawnSync(process.execPath, [process.env.AGENTDECK_BOARD_CLI, ...args], { encoding: 'utf8', timeout: 15000 });
     process.stdout.write('\x1b[2J\x1b[H\n⏺ BOARD RESULT\n' + (result.stdout || result.stderr || 'no result') + '\n');
+    box(); return;
+  }
+  if (resetMenu) {
+    resetMenu = false;
+    process.stdout.write('\x1b[2J\x1b[H');
+    if (first === 'y') { contextUsed = 0; process.stdout.write('OpenAI Codex (v0.160.0)\n'); }
+    else process.stdout.write('Cancelled\n');
+    box(); return;
+  }
+  if (/^\/(?:clear|new|reset)(?:\s|$)/.test(first) && process.argv.includes('--manual-reset')) {
+    process.stdout.write('\x1b[2J\x1b[H');
+    if (process.argv.includes('--reset-redraw')) { process.stdout.write(codex ? 'OpenAI Codex (v0.160.0)\n' : 'Claude Code v2.1.0\n'); box(); return; }
+    if (process.argv.includes('--reset-fail')) { process.stdout.write('Failed to start new session\n'); box(); return; }
+    if (first === '/new' && process.argv.includes('--reset-menu')) {
+      resetMenu = true; process.stdout.write('Do you trust the contents of this directory? (y/n)\n'); return;
+    }
+    contextUsed = codex ? 0 : 23000;
+    process.stdout.write(codex ? 'OpenAI Codex (v0.160.0)\n' : process.argv.includes('--no-content-reset') ? '⏺ (no content)\n' : '⏺ Conversation cleared\n');
     box(); return;
   }
   if (first.startsWith('/model ')) model = first.slice(7).trim();
@@ -161,7 +185,7 @@ function listen() {
   });
 }
 function start() {
-  console.log('Welcome to ' + provider + ' (test stand-in)');
+  console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
   listen();

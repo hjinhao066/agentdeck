@@ -422,3 +422,39 @@ test('Captain explains one-level projects, declared review targets and provider 
   assert.match(ledger, /项目:网站/);
   assert.match(ledger, /审查:a,b/);
 });
+
+
+test('manual reset commands require a single exact provider command', () => {
+  for (const provider of ['Claude', 'Codex']) {
+    for (const command of ['/clear', '/new', ' /new named session  ']) assert.equal(M.contextResetCommand(provider, command), true);
+    for (const command of ['clear', 'please /clear', '/clear-all', '/clear\n', '/new name\nmore', '\x1b[2J', '"/clear"']) {
+      assert.equal(M.contextResetCommand(provider, command), false, command);
+    }
+  }
+  assert.equal(M.contextResetCommand('Claude', '/reset'), true);
+  for (const provider of ['Codex', 'Cursor', 'Antigravity', 'shell', '']) assert.equal(M.contextResetCommand(provider, '/reset'), false);
+});
+
+test('manual reset requires fresh success evidence, including low-context clear without a numeric decrease', () => {
+  for (const output of ['⏺ Conversation cleared\n', 'Cleared context.\n', '\x1b[32m⏺ (no content)\x1b[0m\r\n']) {
+    assert.equal(M.contextResetEvidence('Claude', 'Context: 23%', 'Context: 23%', output), true);
+  }
+  assert.equal(M.contextResetEvidence('Claude', 'Context: 290k/1000k', 'Context: 23k/1000k', ''), true);
+  assert.equal(M.contextResetEvidence('Codex', '98% context left', '100% context left', 'OpenAI Codex (v0.160.0)'), true);
+  for (const output of ['Welcome to Claude Code', 'Claude Code v2.1.0', 'OpenAI Codex (v0.160.0)', 'Do you trust the contents of this directory? (y/n)', 'User: Conversation cleared', '> /new Conversation cleared']) {
+    assert.equal(M.contextResetEvidence('Claude', 'Context: 23%', 'Context: 23%', output), false, output);
+    assert.equal(M.contextResetEvidence('Codex', '98% context left', '98% context left', output), false, output);
+  }
+  for (const output of ['Unknown slash command', 'Failed to start new session', 'Cancelled', 'Canceled', 'clear not available']) {
+    assert.equal(M.contextResetEvidence('Codex', 'Context: 290k/1000k', 'Context: 23k/1000k', output), false, output);
+  }
+  assert.equal(M.contextResetEvidence('Codex', '98% context left', '101% context left', ''), false);
+  assert.equal(M.contextResetEvidence('Claude', 'Context: 290k/1000k', 'Context: 145k/1000k', ''), false);
+});
+
+
+test('Codex reset evidence reads its native footer below the prompt, never a quoted status', () => {
+  assert.equal(M.codexContextFooter('• example 100% context left\n› Ask Codex to do anything\n\n  ⏎ send   98% context left'), '\n  ⏎ send   98% context left');
+  assert.equal(M.codexContextFooter('• 100% context left'), '');
+  assert.equal(M.codexContextFooter('› old prompt\n100% context left\n› current prompt\n98% context left'), '98% context left');
+});

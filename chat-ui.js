@@ -846,6 +846,7 @@
       // Automatic work replaces any manual notification eligibility, even for
       // silent sends. Arm a user turn only after its Enter actually goes out.
       host.manualPromptSent(col.id, null, false);
+      if (!o.silent && window.MainSession) window.MainSession.onContextCommand(col, text, false);
       // display/displayAtts: what the bubble shows when it differs from what is typed
       const turn = o.silent ? null : beginTurn(col, o.display != null ? o.display : prompt, o.displayAtts || atts, text);
       // bracketed paste keeps multi-line text one prompt; the CR goes separately so
@@ -862,6 +863,7 @@
         await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
         if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
       } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
+      if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
@@ -900,10 +902,11 @@
   }
 
   // A line submitted straight in the terminal (typed, or via the side pane).
-  function onSubmitted(col, line) {
+  function onSubmitted(col, line, uncertain = false) {
     const entry = host.terms.get(col.id);
     if (!entry || entry.state === 'input' || C.isPromptAnswer(line)) return;
     if (C.isSecretPrompt(cursorRow(entry.term))) return;
+    if (window.MainSession) window.MainSession.onContextCommand(col, uncertain ? '' : line);
     const turn = beginTurn(col, line);
     host.manualPromptSent(col.id, turn, true);
   }
@@ -1075,6 +1078,24 @@
   }
   const turnsOf = (id) => (chats.get(id) || { turns: [] }).turns;
   const captainArchives = () => [...chats.values()].filter((c) => c.captainArchive);
+  function captainSnapshot(id) {
+    finalizeTurn(id);
+    return JSON.parse(JSON.stringify(chatFor(id).turns));
+  }
+  // Split the saved conversation without replacing its live column or PTY.
+  // Keep task cards and any messages submitted after the reset boundary.
+  function archiveCaptainSnapshot(id, snapshot) {
+    if (!snapshot?.length) return null;
+    const archiveId = 'captain-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    const chat = { ...C.emptyChat(archiveId), captainArchive: true, turns: snapshot };
+    chats.set(archiveId, chat);
+    saveNow(archiveId);
+    const retired = new Set(snapshot.filter((t) => t.kind !== 'task').map((t) => t.id));
+    chatFor(id).turns = chatFor(id).turns.filter((t) => !retired.has(t.id));
+    saveNow(id);
+    renderChat(id, true);
+    return { id: archiveId, turns: snapshot.length, from: snapshot[0].ts || 0, to: snapshot.at(-1).ts || 0 };
+  }
 
   function lastTurnTs(id) {
     const turns = (chats.get(id) || { turns: [] }).turns;
@@ -1239,6 +1260,6 @@
     hasDraft: (id) => { const v = views.get(id); return !!v && (!!v.ta.value || v.atts.length > 0); },
     attach: (id, path) => { const v = views.get(id); if (v) addAttachment(v, path); },
     attachmentChip: (path, colId) => attachmentChip(path, colId, null),
-    addCard, updateCard, retireChat, snapshotForHandoff, turnsOf, captainArchives,
+    addCard, updateCard, retireChat, snapshotForHandoff, turnsOf, captainArchives, captainSnapshot, archiveCaptainSnapshot,
   };
 })();

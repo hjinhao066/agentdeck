@@ -13,6 +13,7 @@
   const dispatches = new Map();  // one delivery loop per session; additions merge until submission
   let tokenSaving = null;
   let tokenSaverPaused = false;  // cancel/failure: no retry until usage falls below the threshold
+  let contextReset = null;
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -302,6 +303,7 @@
     op.phase = phase;
     op.since = Date.now();
     const col = mainCol();
+    if (text === '/clear') op.snapshot = window.ChatUI.captainSnapshot(col.id);
     host.sendWhenReady(col, text, {
       silent, guardUserInput: true, requireIdle: true, timeout: 5 * 60_000,
       // A paste/Enter already in progress stays atomic; cancelling stops the
@@ -352,12 +354,77 @@
       saverBanner('看板已存档，正在发送 /clear');
       saverSend(op, '/clear', 'clearing', true, () => { op.phase = 'cleared'; });
     } else if (op.phase === 'cleared' && used !== null && used < op.used / 2) {
+      archiveSnapshot(col, op.snapshot);
       saverBanner('上下文已清空，正在重发队长提示词');
-      saverSend(op, M.instructions(host.platform, '读看板继续', state()?.legacyReceiptInjection === true), 'briefing', true, () => {
+      saverSend(op, M.instructions(host.platform, undefined, state()?.legacyReceiptInjection === true) + '\n\n读看板继续。' + M.REBRIEF_NOTE, 'briefing', true, () => {
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
       });
     }
+  }
+
+  function footerText(entry, provider) {
+    const footer = (window.ChatUI.readFooter(entry.term) || []).map((row) => row.map((s) => s.text).join('')).join('\n');
+    return footer || (provider === 'Codex' ? M.codexContextFooter(host.dumpScreen(entry.term)) : '');
+  }
+  function archiveSnapshot(col, snapshot) {
+    const retired = window.ChatUI.archiveCaptainSnapshot(col.id, snapshot);
+    if (retired) host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { ...retired, clearedAt: Date.now() }]);
+    const s = state();
+    s.pending = [...s.inflight, ...s.pending].slice(-50);
+    s.inflight = [];
+    delete col.modelSessionId;
+    col.cmd = M.freshCommand(col.cmd);
+    s.cmd = col.cmd;
+    s.fresh = true;
+    save();
+  }
+  // Called before the submitted command can erase the TUI. Typing a slash,
+  // Ctrl+L, quoted commands, worker commands and shell commands never arm it.
+  function onContextCommand(col, text, submitted = true) {
+    if (!isMain(col) || !col.cmd) return;
+    const entry = host.terms.get(col.id);
+    if (!entry?.alive || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || M.terminalActivity(entry.lastScreen)) return;
+    const provider = window.AgentInfo.inferProvider(col.cmd, entry.lastScreen);
+    if (!M.contextResetCommand(provider, text)) {
+      if (contextReset && !contextReset.confirmed) contextReset = null;
+      return;
+    }
+    cancelTokenSaving();
+    contextReset = { col, entry, provider, before: footerText(entry, provider), output: '', since: Date.now(),
+      snapshot: window.ChatUI.captainSnapshot(col.id), text, submitted, confirmed: false, sending: false };
+  }
+  function onContextCommandSent(col, text) {
+    if (contextReset?.col === col && contextReset.text === text) {
+      contextReset.submitted = true;
+      contextReset.output = '';
+      contextReset.since = Date.now();
+    }
+  }
+  function onOutput(id, data) {
+    if (contextReset?.col.id === id && contextReset.submitted && !contextReset.confirmed) contextReset.output = (contextReset.output + data).slice(-16000);
+  }
+  function contextResetTick(entry) {
+    const op = contextReset;
+    if (!op) return;
+    if (mainCol() !== op.col || entry !== op.entry || !entry.alive) { contextReset = null; return; }
+    if (!op.confirmed) {
+      if (Date.now() - op.since > 60_000) { contextReset = null; return; }
+      if (!op.submitted) return;
+      if (M.contextResetEvidence(op.provider, op.before, footerText(entry, op.provider), op.output)) {
+        op.confirmed = true;
+        archiveSnapshot(op.col, op.snapshot);
+      } else return;
+    }
+    if (op.sending || briefing || delivering || entry.sendingPrompt || entry.state !== 'done' || M.terminalActivity(entry.lastScreen) ||
+      Date.now() - (entry.lastOutputAt || 0) < 3000 || host.userComposing(op.col.id)) return;
+    op.sending = true;
+    host.sendWhenReady(op.col, M.instructions(host.platform, undefined, state()?.legacyReceiptInjection === true) + '\n\n' + M.REBRIEF_NOTE, {
+      silent: true, guardUserInput: true, requireIdle: true,
+      cancelled: () => contextReset !== op && !entry.injecting,
+      onSent: () => { if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
+      onGiveUp: () => { if (contextReset === op) { contextReset = null; host.showToast('队长提示词没发出去；可在队长终端运行 briefing 读取'); } },
+    });
   }
 
   // ---- manual clear: only 队长's model context starts over ----
@@ -375,6 +442,7 @@
     if (!rotation && !confirm(busy
       ? '队长现在正在回复（或停在确认提示上）。清空会打断它这一轮，这一轮没说完的不会再有。\n确定现在清空队长的模型上下文吗？' + kept
       : '只清空队长的模型上下文：队长重新启动，重新读一遍默认说明。' + kept)) return;
+    contextReset = null;
     cancelTokenSaving();
     // receipts typed in but not answered yet go to the new context again
     const requeue = s.inflight;
@@ -732,7 +800,7 @@
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
-    if (id === s.colId) { retryBoardWrites(s); if (!seatChanging) { tokenSaverTick(entry); if (!tokenSaving) deliver(entry); pump(); } return; }
+    if (id === s.colId) { retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) deliver(entry); pump(); } return; }
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
     for (const task of s.tasks) {
@@ -847,6 +915,8 @@
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
+      case 'main-briefing':
+        return { done: true, result: M.instructions(host.platform, undefined, s.legacyReceiptInjection === true) };
       case 'main-quota':
         return { done: true, result: host.quotaText() };
       case 'main-task': {
@@ -1057,7 +1127,7 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     isMain, isMainId, mainCol, state,
     history: () => host.config.captainHistory || [],
     exists: () => !!mainCol(),

@@ -102,6 +102,7 @@ function usage() {
     '  task archive --done [--project "Project"]\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
     '  quota                                    passive subscription status, one provider per line\n' +
+    '  briefing                                 current Captain instructions, read-only\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
@@ -297,8 +298,8 @@ async function main() {
     return;
   }
 
-  if (action === 'quota') {
-    const response = await request({ action: 'main-quota' }, false);
+  if (action === 'quota' || action === 'briefing') {
+    const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);
     return;
   }
