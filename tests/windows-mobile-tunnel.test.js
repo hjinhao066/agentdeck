@@ -132,9 +132,10 @@ test('paths with brackets, spaces, apostrophes, and ampersands stay literal', ()
   win.assertPs1UsesLiteralPath(plan.ps1);
   assert.match(plan.ps1, /\$IdentityFile = 'C:\\Users\\example\\云端硬盘\\\[01\] AI\\.config\\agentdeck-remote\\tunnel_ed25519'/);
   assert.match(plan.ps1, /\$BackoffSeconds = 10/);
+  assert.match(plan.ps1, /\$BackoffCapSeconds = 300/);
   assert.match(plan.ps1, /CreateNoWindow = \$true/);
   assert.match(plan.ps1, /while \(\$true\)/);
-  assert.ok(plan.ps1.indexOf('WaitForExit') < plan.ps1.indexOf('Start-Sleep -Seconds $BackoffSeconds'));
+  assert.ok(plan.ps1.indexOf('WaitForExit') < plan.ps1.indexOf('Start-Sleep -Seconds $delay'));
   assert.doesNotMatch(plan.ps1, /Start-Process|taskkill|Stop-Process|AgentDeck\.exe|2>&1|cmd\.exe/);
   assert.match(plan.argumentString, /"C:\\Users\\example\\云端硬盘\\\[01\] AI\\.config\\agentdeck-remote\\tunnel_ed25519"/);
 
@@ -155,6 +156,73 @@ test('paths with brackets, spaces, apostrophes, and ampersands stay literal', ()
   assert.doesNotMatch(ampersand.taskXml, /A&B/);
 });
 
+function parseWindowsCommandLine(cmd) {
+  const args = [];
+  let i = 0;
+  while (i < cmd.length) {
+    while (i < cmd.length && (cmd[i] === ' ' || cmd[i] === '\t')) i++;
+    if (i >= cmd.length) break;
+    let arg = '';
+    let inQuote = false;
+    while (i < cmd.length) {
+      let backslashes = 0;
+      while (i < cmd.length && cmd[i] === '\\') { backslashes++; i++; }
+      if (i < cmd.length && cmd[i] === '"') {
+        arg += '\\'.repeat(Math.floor(backslashes / 2));
+        if (backslashes % 2 === 1) arg += '"';
+        else if (inQuote && i + 1 < cmd.length && cmd[i + 1] === '"') { arg += '"'; i++; }
+        else inQuote = !inQuote;
+        i++;
+        continue;
+      }
+      arg += '\\'.repeat(backslashes);
+      if (i >= cmd.length) break;
+      if (!inQuote && (cmd[i] === ' ' || cmd[i] === '\t')) break;
+      arg += cmd[i];
+      i++;
+    }
+    args.push(arg);
+  }
+  return args;
+}
+
+function dequoteOpenSsh(value) {
+  assert.equal(value[0], '"');
+  assert.equal(value[value.length - 1], '"');
+  let out = '';
+  for (let i = 1; i < value.length - 1; i++) {
+    if (value[i] === '\\') {
+      i++;
+      assert.ok(i < value.length - 1);
+      out += value[i];
+      continue;
+    }
+    out += value[i];
+  }
+  return out;
+}
+
+test('UserKnownHostsFile survives Windows and OpenSSH parsing when the path has spaces, Chinese, and brackets', () => {
+  assert.deepEqual(parseWindowsCommandLine('a b'), ['a', 'b']);
+  assert.deepEqual(parseWindowsCommandLine('"a b"'), ['a b']);
+  assert.deepEqual(parseWindowsCommandLine('"say \\"hi\\""'), ['say "hi"']);
+  assert.equal(dequoteOpenSsh('"C:\\\\Users\\\\a b"'), 'C:\\Users\\a b');
+  const plan = win.createWindowsPlan(config());
+  const argv = parseWindowsCommandLine(plan.argumentString);
+  const option = argv.find((arg) => arg.startsWith('UserKnownHostsFile='));
+  const parsed = dequoteOpenSsh(option.slice('UserKnownHostsFile='.length));
+  assert.equal(parsed, plan.knownHostsFile);
+  assert.match(parsed, /云端硬盘/);
+  assert.match(parsed, /\[01\] AI/);
+  assert.equal(argv[argv.indexOf('-i') + 1], plan.identityFile);
+  assert.ok(argv.includes('StrictHostKeyChecking=yes'));
+  assert.ok(argv.includes('ExitOnForwardFailure=yes'));
+  const quoted = win.createWindowsPlan(config({ directory: 'C:\\Users\\O\'Brien\\.config\\agentdeck-remote' }));
+  const quotedArgv = parseWindowsCommandLine(quoted.argumentString);
+  const quotedOption = quotedArgv.find((arg) => arg.startsWith('UserKnownHostsFile='));
+  assert.equal(dequoteOpenSsh(quotedOption.slice('UserKnownHostsFile='.length)), quoted.knownHostsFile);
+});
+
 test('the logon task is hidden through wscript and is not started', () => {
   const plan = win.createWindowsPlan(config());
   assert.match(plan.vbs, /WScript\.Shell/);
@@ -171,6 +239,7 @@ test('the logon task is hidden through wscript and is not started', () => {
   assert.match(plan.taskXml, /<LogonType>InteractiveToken<\/LogonType>/);
   assert.match(plan.taskXml, /<RunLevel>LeastPrivilege<\/RunLevel>/);
   assert.match(plan.taskXml, /<WakeToRun>false<\/WakeToRun>/);
+  assert.match(plan.taskXml, /<StartWhenAvailable>false<\/StartWhenAvailable>/);
   assert.doesNotMatch(plan.taskXml, /<Password>/);
   assert.deepEqual(plan.registerTask.args.slice(0, 3), ['/Create', '/TN', '\\AgentDeck-Mobile-Tunnel-Win']);
   assert.equal(plan.registerTask.args.includes('/Run'), false);
@@ -203,16 +272,154 @@ test('uninstall removes the task and scripts, not the key', () => {
   assert.deepEqual(plan.endTask.slice(0, 4), ['C:\\Windows\\System32\\schtasks.exe', '/End', '/TN', '\\AgentDeck-Mobile-Tunnel-Win']);
   assert.deepEqual(plan.deleteTask.slice(1, 5), ['/Delete', '/TN', '\\AgentDeck-Mobile-Tunnel-Win', '/F']);
   assert.deepEqual(plan.removeFiles.map((file) => path.win32.basename(file)), [
-    'agentdeck-tunnel.ps1', 'agentdeck-tunnel-hidden.vbs', 'AgentDeck-Mobile-Tunnel-Win.xml',
+    'agentdeck-tunnel.ps1', 'agentdeck-tunnel-hidden.vbs', 'AgentDeck-Mobile-Tunnel-Win.xml', 'endpoint.json',
   ]);
   assert.ok(plan.keepFiles.some((file) => file.endsWith('\\tunnel_ed25519')));
-  assert.ok(plan.keepFiles.some((file) => file.endsWith('\\endpoint.json')));
+  assert.equal(plan.keepFiles.some((file) => file.endsWith('\\endpoint.json')), false);
   assert.throws(() => win.assertRemovable(directory, path.win32.join(directory, 'tunnel_ed25519')), /unexpected file/);
   assert.throws(() => win.applyUninstall(plan, {
     platform: 'darwin',
     execFileSync() { throw new Error('exec called'); },
     fs,
   }), /Refusing/);
+});
+
+test('uninstall still deletes files when the scheduled task is already gone', () => {
+  const plan = win.windowsUninstallPlan(directory);
+  const removed = [];
+  const calls = [];
+  win.applyUninstall(plan, {
+    platform: 'win32',
+    execFileSync(_file, args) {
+      calls.push(args.join(' '));
+      const err = new Error('ERROR: The system cannot find the file specified.');
+      err.stderr = err.message;
+      throw err;
+    },
+    fs: { rmSync(file) { removed.push(file); } },
+  });
+  assert.deepEqual(removed, plan.removeFiles);
+  assert.ok(calls.some((line) => line.includes('/Delete')));
+  const denied = [];
+  assert.throws(() => win.applyUninstall(plan, {
+    platform: 'win32',
+    execFileSync(_file, args) {
+      if (args.includes('/Delete')) throw new Error('Access is denied.');
+    },
+    fs: { rmSync(file) { denied.push(file); } },
+  }), /Could not delete the scheduled task/);
+  assert.deepEqual(denied, plan.removeFiles);
+});
+
+test('uninstall does not need a complete tunnel.json', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ad-win-uninstall-'));
+  const out = path.join(root, 'out');
+  const home = 'C:\\Users\\example';
+  const fallback = home + '\\.config\\agentdeck-remote';
+  const run = (configPath) => {
+    const logs = [];
+    const result = win.runCli({
+      platform: 'win32', dryRun: true, uninstall: true, config: configPath, out, windowsUser: '', apply: false,
+    }, {
+      platform: 'win32',
+      homedir: home,
+      fs,
+      execFileSync() { throw new Error('exec called'); },
+      log(line) { logs.push(line); },
+    });
+    return { result, logs, plan: JSON.parse(fs.readFileSync(path.join(out, 'uninstall-plan.json'), 'utf8')) };
+  };
+  const missing = run(path.join(root, 'missing.json'));
+  assert.equal(missing.result.mode, 'dry-run-uninstall');
+  assert.equal(missing.plan.directory, fallback);
+  const broken = path.join(root, 'broken.json');
+  fs.writeFileSync(broken, '{');
+  assert.equal(run(broken).plan.directory, fallback);
+  const secret = 'super-secret-value';
+  const partial = path.join(root, 'partial.json');
+  fs.writeFileSync(partial, JSON.stringify({ host: 'not a host', password: secret }));
+  const partialRun = run(partial);
+  assert.equal(partialRun.plan.directory, fallback);
+  assert.equal(JSON.stringify(partialRun.logs).includes(secret), false);
+  const onlyDir = path.join(root, 'dir-only.json');
+  const explicit = 'C:\\Users\\other\\.config\\agentdeck-remote';
+  fs.writeFileSync(onlyDir, JSON.stringify({ directory: explicit }));
+  assert.equal(run(onlyDir).plan.directory, explicit);
+  assert.ok(run(onlyDir).plan.removeFiles.some((file) => file.endsWith('\\endpoint.json')));
+  assert.throws(() => win.runCli({
+    platform: 'win32', dryRun: true, uninstall: true, config: partial, out, windowsUser: '', apply: false,
+  }, {
+    platform: 'darwin',
+    homedir: os.homedir(),
+    fs,
+    execFileSync() { throw new Error('exec called'); },
+    log() {},
+  }), /directory/);
+});
+
+test('backoff grows to a cap and authentication failures do not retry quickly', () => {
+  let current = win.BACKOFF_INITIAL;
+  const delays = [];
+  for (let i = 0; i < 8; i++) {
+    const step = win.advanceBackoff(current, {});
+    delays.push(step.delay);
+    current = step.next;
+  }
+  assert.deepEqual(delays, [10, 20, 40, 80, 160, 300, 300, 300]);
+  const fatal = win.advanceBackoff(10, { fatal: true });
+  assert.equal(fatal.delay, win.BACKOFF_CAP);
+  assert.equal(fatal.next, win.BACKOFF_CAP);
+  assert.equal(win.advanceBackoff(300, { established: true }).delay, 10);
+  const plan = win.createWindowsPlan(config());
+  assert.match(plan.ps1, /Authentication failed/);
+  assert.match(plan.ps1, /\$BackoffSeconds = \$BackoffCapSeconds/);
+  assert.match(plan.ps1, /\[Math\]::Min\(\$BackoffCapSeconds, \$BackoffSeconds \* 2\)/);
+  assert.match(plan.ps1, /\$LogMaxBytes = 65536/);
+  assert.match(plan.ps1, /\[System\.IO\.File\]::Move\(\$LogPath, \$rotated\)/);
+  assert.match(plan.ps1, /Get-Item -LiteralPath \$LogPath/);
+});
+
+test('a bad icacls readback aborts before the task is registered', () => {
+  const plan = win.createWindowsPlan(config());
+  const key = 'A'.repeat(68);
+  const good = plan.identityFile + ' EXAMPLEPC\\example:(R)\r\nSuccessfully processed 1 files; Failed processing 0 files\r\n';
+  win.assertPrivateKeyAcl(good, plan.identityFile, plan.windowsUser);
+  assert.throws(() => win.assertPrivateKeyAcl(good.replace('example:(R)', 'example:(R)\r\nBUILTIN\\Administrators:(F)'), plan.identityFile, plan.windowsUser), /another principal|only the installing user/);
+  assert.throws(() => win.assertPrivateKeyAcl(plan.identityFile + ' EXAMPLEPC\\example:(I)(R)\r\n', plan.identityFile, plan.windowsUser), /inherit/);
+  const calls = [];
+  const io = {
+    dryRun: false,
+    platform: 'win32',
+    fs: {
+      mkdirSync() {},
+      statSync() { return { isFile: () => true }; },
+      readFileSync(file) {
+        if (String(file).endsWith('.pub')) return 'ssh-ed25519 ' + key + ' agentdeck-tunnel-win\n';
+        return '18.139.28.180 ssh-ed25519 ' + key + '\n';
+      },
+      writeFileSync() {},
+    },
+    execFileSync(file, args) {
+      calls.push(args.join(' '));
+      if (String(file).endsWith('whoami.exe')) return 'EXAMPLEPC\\example';
+      if (String(file).endsWith('icacls.exe') && args.length === 1) return plan.identityFile + ' BUILTIN\\Administrators:(F)\r\n';
+      return '';
+    },
+  };
+  assert.throws(() => win.applyWindows(plan, io), /another principal|only the installing user|inherit/);
+  assert.equal(calls.some((line) => line.includes('/Create')), false);
+  calls.length = 0;
+  io.execFileSync = (file, args) => {
+    calls.push([file, args]);
+    if (String(file).endsWith('whoami.exe')) return 'EXAMPLEPC\\example';
+    if (String(file).endsWith('icacls.exe') && args.length === 1) return good;
+    if (String(file).endsWith('schtasks.exe')) return '';
+    return '';
+  };
+  const applied = win.applyWindows(plan, io);
+  assert.equal(applied.mode, 'applied');
+  assert.ok(calls.some((cmd) => cmd[0].endsWith('icacls.exe') && cmd[1].length === 1));
+  assert.equal(calls.filter((cmd) => cmd[0].endsWith('schtasks.exe') && cmd[1].includes('/Run')).length, 0);
 });
 
 test('known_hosts and public key checks accept one pinned line and nothing secret', () => {
@@ -295,6 +502,7 @@ test('the CLI dry-run prints the SSH parameters and does not clear parent env', 
   const uninstallPlan = JSON.parse(fs.readFileSync(path.join(uninstallOut, 'uninstall-plan.json'), 'utf8'));
   assert.equal(uninstallPlan.agentDeckTouched, false);
   assert.ok(uninstallPlan.keepFiles.some((file) => file.endsWith('tunnel_ed25519')));
+  assert.ok(uninstallPlan.removeFiles.some((file) => file.endsWith('endpoint.json')));
   assert.equal(process.env.AGENTDECK_BOARD_CLI, boardCli);
   liveUnchanged();
 });
@@ -316,5 +524,9 @@ test('installer sources keep macOS and Windows side effects apart', () => {
   assert.match(doc, /卸载/);
   assert.match(doc, /wscript\.exe/);
   assert.match(doc, /不启动/);
+  assert.match(doc, /LogonTrigger/);
+  assert.match(doc, /Windows 真机上线前必测清单/);
   assert.doesNotMatch(doc, /PRIVATE KEY/);
+  assert.doesNotMatch(winSrc, /0o600/);
+  assert.match(installSrc, /0o600/);
 });

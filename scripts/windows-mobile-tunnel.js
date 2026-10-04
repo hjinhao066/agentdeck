@@ -17,7 +17,7 @@ const SCHTASKS = 'C:\\Windows\\System32\\schtasks.exe';
 const WHOAMI = 'C:\\Windows\\System32\\whoami.exe';
 const POWERSHELL = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
 const WSCRIPT = 'C:\\Windows\\System32\\wscript.exe';
-const REMOVABLE = ['agentdeck-tunnel.ps1', 'agentdeck-tunnel-hidden.vbs', 'AgentDeck-Mobile-Tunnel-Win.xml'];
+const REMOVABLE = ['agentdeck-tunnel.ps1', 'agentdeck-tunnel-hidden.vbs', 'AgentDeck-Mobile-Tunnel-Win.xml', 'endpoint.json'];
 const ALLOWED_FIELDS = new Set([
   'host', 'user', 'identityFile', 'knownHostsFile', 'localPort', 'remotePort',
   'publicOrigin', 'basePath', 'label', 'windowsUser', 'directory',
@@ -28,16 +28,31 @@ const PATH_CMDLETS = [
   'Set-Item', 'Test-Path',
 ];
 const REMOVE_SIDS = ['*S-1-5-18', '*S-1-5-32-544', '*S-1-1-0', '*S-1-5-32-545', '*S-1-5-11'];
+const BACKOFF_INITIAL = 10;
+const BACKOFF_CAP = 300;
+const LOG_MAX_BYTES = 65536;
 
 const SUPERVISOR_BODY = [
   'function Write-TunnelLog([string]$Message) {',
   '  try {',
+  '    if (Test-Path -LiteralPath $LogPath) {',
+  '      if ((Get-Item -LiteralPath $LogPath).Length -ge $LogMaxBytes) {',
+  '        $rotated = $LogPath + \'.1\'',
+  '        if (Test-Path -LiteralPath $rotated) { [System.IO.File]::Delete($rotated) }',
+  '        [System.IO.File]::Move($LogPath, $rotated)',
+  '      }',
+  '    }',
   '    $line = (Get-Date -Format \'yyyy-MM-ddTHH:mm:ssK\') + \' \' + $Message',
   '    Add-Content -LiteralPath $LogPath -Value $line -Encoding utf8',
   '  } catch { }',
   '}',
+  'function Test-Unrecoverable([string]$Text) {',
+  '  return $Text -match \'Permission denied|Authentication failed|Too many authentication failures|Host key verification failed|Bad permissions|invalid format|Load key|UNPROTECTED PRIVATE\'',
+  '}',
   'while ($true) {',
   '  $proc = $null',
+  '  $err = \'\'',
+  '  $startedAt = Get-Date',
   '  try {',
   '    if (-not (Test-Path -LiteralPath $SshExe)) { Write-TunnelLog \'ssh.exe missing\' }',
   '    elseif (-not (Test-Path -LiteralPath $IdentityFile)) { Write-TunnelLog \'identity missing\' }',
@@ -57,7 +72,6 @@ const SUPERVISOR_BODY = [
   '      $outTask = $proc.StandardOutput.ReadToEndAsync()',
   '      $errTask = $proc.StandardError.ReadToEndAsync()',
   '      $proc.WaitForExit()',
-  '      $err = \'\'',
   '      if ($errTask.Result) { $err = [string]$errTask.Result }',
   '      [void]$outTask.Result',
   '      if ($err.Length -gt 4000) { $err = $err.Substring(0, 4000) }',
@@ -69,7 +83,15 @@ const SUPERVISOR_BODY = [
   '  } finally {',
   '    if ($null -ne $proc) { try { $proc.Dispose() } catch { } }',
   '  }',
-  '  Start-Sleep -Seconds $BackoffSeconds',
+  '  $elapsed = ((Get-Date) - $startedAt).TotalSeconds',
+  '  if ($elapsed -ge 30) { $BackoffSeconds = ' + BACKOFF_INITIAL + ' }',
+  '  if (Test-Unrecoverable $err) {',
+  '    $BackoffSeconds = $BackoffCapSeconds',
+  '    Write-TunnelLog \'unrecoverable ssh error; waiting at the cap\'',
+  '  }',
+  '  $delay = $BackoffSeconds',
+  '  $BackoffSeconds = [Math]::Min($BackoffCapSeconds, $BackoffSeconds * 2)',
+  '  Start-Sleep -Seconds $delay',
   '}',
   '',
 ].join('\r\n');
@@ -103,6 +125,20 @@ function parseArgs(argv) {
 
 function psSingleQuote(value) {
   return '\'' + String(value).replace(/'/g, '\'\'') + '\'';
+}
+
+function quoteOpenSshConfigPath(filePath) {
+  // OpenSSH splits an unquoted option value on whitespace, then treats a
+  // backslash inside double quotes as an escape. Quote the path and double
+  // its backslashes so the original Windows path comes back out.
+  return '"' + String(filePath).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+}
+
+function advanceBackoff(current, options = {}) {
+  let seconds = current;
+  if (options.established) seconds = BACKOFF_INITIAL;
+  if (options.fatal) seconds = BACKOFF_CAP;
+  return { delay: seconds, next: Math.min(BACKOFF_CAP, seconds * 2) };
 }
 
 function quoteWindowsProcessArg(value) {
@@ -257,13 +293,16 @@ function renderPs1(plan) {
   const lines = [
     '#requires -Version 5.1',
     '# AgentDeck Windows SSH tunnel supervisor.',
-    '# After ssh exits, wait 10 seconds and connect again. No window. Does not start, stop, or restart AgentDeck.',
+    '# After ssh exits, wait and connect again. The wait starts at ' + BACKOFF_INITIAL + ' seconds and doubles up to ' + BACKOFF_CAP + '.',
+    '# Authentication and host-key failures stay at the cap. No window. Does not start, stop, or restart AgentDeck.',
     '$ErrorActionPreference = \'Continue\'',
     '$SshExe = ' + psSingleQuote(plan.sshExe),
     '$IdentityFile = ' + psSingleQuote(plan.identityFile),
     '$KnownHostsFile = ' + psSingleQuote(plan.knownHostsFile),
     '$LogPath = ' + psSingleQuote(plan.logPath),
-    '$BackoffSeconds = 10',
+    '$BackoffSeconds = ' + BACKOFF_INITIAL,
+    '$BackoffCapSeconds = ' + BACKOFF_CAP,
+    '$LogMaxBytes = ' + LOG_MAX_BYTES,
     '$Arguments = ' + psSingleQuote(plan.argumentString),
     '',
     SUPERVISOR_BODY,
@@ -309,7 +348,7 @@ function buildTaskXml(plan) {
     '    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>',
     '    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>',
     '    <AllowHardTerminate>true</AllowHardTerminate>',
-    '    <StartWhenAvailable>true</StartWhenAvailable>',
+    '    <StartWhenAvailable>false</StartWhenAvailable>',
     '    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>',
     '    <AllowStartOnDemand>true</AllowStartOnDemand>',
     '    <Enabled>true</Enabled>',
@@ -337,9 +376,12 @@ function buildTaskXml(plan) {
 
 function assertSupervisor(plan) {
   assertPs1UsesLiteralPath(plan.ps1);
-  if (!plan.ps1.includes('$BackoffSeconds = 10')) throw new Error('The supervisor must wait 10 seconds.');
+  if (!plan.ps1.includes('$BackoffSeconds = ' + BACKOFF_INITIAL)) throw new Error('The supervisor must start at the initial backoff.');
+  if (!plan.ps1.includes('$BackoffCapSeconds = ' + BACKOFF_CAP)) throw new Error('The supervisor must cap the backoff.');
+  if (!plan.ps1.includes('Authentication failed') || !plan.ps1.includes('$BackoffSeconds = $BackoffCapSeconds')) throw new Error('Unrecoverable ssh errors must wait at the cap.');
+  if (!plan.ps1.includes('$LogMaxBytes = ' + LOG_MAX_BYTES) || !plan.ps1.includes('[System.IO.File]::Move')) throw new Error('The error log must rotate.');
   const waitAt = plan.ps1.indexOf('WaitForExit');
-  const sleepAt = plan.ps1.indexOf('Start-Sleep -Seconds $BackoffSeconds');
+  const sleepAt = plan.ps1.indexOf('Start-Sleep -Seconds $delay');
   if (waitAt < 0 || sleepAt < waitAt) throw new Error('Sleep must happen after ssh exits.');
   if (!plan.ps1.includes('CreateNoWindow = $true')) throw new Error('ssh must be started without a window.');
   if (/Start-Process|taskkill|Stop-Process|AgentDeck\.exe|2>&1|Invoke-Expression|\biex\b|cmd\.exe/i.test(plan.ps1)) {
@@ -374,7 +416,7 @@ function createWindowsPlan(input) {
     '-o', 'PasswordAuthentication=no',
     '-o', 'NumberOfPasswordPrompts=0',
     '-o', 'StrictHostKeyChecking=yes',
-    '-o', 'UserKnownHostsFile=' + config.knownHostsFile,
+    '-o', 'UserKnownHostsFile=' + quoteOpenSshConfigPath(config.knownHostsFile),
     '-o', 'ExitOnForwardFailure=yes',
     '-o', 'ClearAllForwardings=yes',
     '-o', 'ConnectTimeout=10',
@@ -415,8 +457,28 @@ function windowsApplyCommands(plan, options = {}) {
   const commands = [{ file: WHOAMI, args: [] }];
   if (!options.identityExists) commands.push(plan.keygen);
   for (const cmd of plan.icacls) commands.push({ file: cmd[0], args: cmd.slice(1) });
+  commands.push({ file: ICACLS, args: [plan.identityFile] });
   commands.push(plan.registerTask);
   return commands;
+}
+
+function assertPrivateKeyAcl(text, identityFile, windowsUser) {
+  const body = String(text).replace(/^\uFEFF/, '');
+  if (!body.includes(identityFile)) throw new Error('icacls did not report the private key.');
+  if (/\(I\)/.test(body)) throw new Error('The private key still inherits permissions.');
+  if (/Failed processing\s+[1-9]/i.test(body)) throw new Error('icacls reported a failure.');
+  const forbidden = [
+    'NT AUTHORITY\\SYSTEM', 'BUILTIN\\Administrators', 'Everyone', 'BUILTIN\\Users',
+    'NT AUTHORITY\\Authenticated Users', 'S-1-5-18', 'S-1-5-32-544', 'S-1-1-0', 'S-1-5-32-545', 'S-1-5-11',
+  ];
+  const lower = body.toLowerCase();
+  for (const token of forbidden) {
+    if (lower.includes(token.toLowerCase())) throw new Error('The private key ACL still names another principal.');
+  }
+  const aceLines = body.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.includes(':('));
+  if (aceLines.length !== 1 || !aceLines[0].includes(windowsUser + ':(R)')) {
+    throw new Error('The private key must grant only the installing user read access.');
+  }
 }
 
 function windowsUninstallPlan(directory) {
@@ -427,7 +489,7 @@ function windowsUninstallPlan(directory) {
     endTask: [SCHTASKS, '/End', '/TN', TASK_NAME],
     deleteTask: [SCHTASKS, '/Delete', '/TN', TASK_NAME, '/F'],
     removeFiles,
-    keepFiles: ['tunnel_ed25519', 'tunnel_ed25519.pub', 'known_hosts', 'endpoint.json', 'tunnel.json', 'tunnel-error.log']
+    keepFiles: ['tunnel_ed25519', 'tunnel_ed25519.pub', 'known_hosts', 'tunnel.json', 'tunnel-error.log', 'tunnel-error.log.1']
       .map((name) => path.win32.join(dir, name)),
   };
 }
@@ -464,7 +526,8 @@ function publicView(plan) {
       removeFiles: uninstall.removeFiles,
       keepFiles: uninstall.keepFiles,
     },
-    reconnectSeconds: 10,
+    backoff: { initialSeconds: BACKOFF_INITIAL, capSeconds: BACKOFF_CAP },
+    logMaxBytes: LOG_MAX_BYTES,
     agentDeckTouched: false,
     keyGenerated: false,
     taskStarted: false,
@@ -476,7 +539,7 @@ function writeArtifacts(dir, artifacts, fs) {
   fs.mkdirSync(dir, { recursive: true });
   for (const [name, body] of Object.entries(artifacts)) {
     if (!/^[\w.-]+$/.test(name)) throw new Error('Unexpected artifact name.');
-    fs.writeFileSync(path.join(dir, name), body, { mode: 0o600 });
+    fs.writeFileSync(path.join(dir, name), body);
   }
 }
 
@@ -502,6 +565,7 @@ function applyWindows(plan, io) {
   if (!existsFile(io.fs, plan.identityFile)) hiddenExec(io, plan.keygen.file, plan.keygen.args);
   if (!existsFile(io.fs, plan.identityFile)) throw new Error('The identity file was not created.');
   for (const cmd of plan.icacls) hiddenExec(io, cmd[0], cmd.slice(1));
+  assertPrivateKeyAcl(String(hiddenExec(io, ICACLS, [plan.identityFile])), plan.identityFile, plan.windowsUser);
   assertPinnedKnownHosts(io.fs.readFileSync(plan.knownHostsFile, 'utf8'), plan.host);
   const publicKey = assertPublicKeyLine(io.fs.readFileSync(plan.publicKeyFile, 'utf8'));
   writeArtifacts(plan.directory, renderWindowsArtifacts(plan), io.fs);
@@ -509,15 +573,46 @@ function applyWindows(plan, io) {
   return { mode: 'applied', publicKey };
 }
 
+function taskAlreadyGone(err) {
+  const message = String(err && (err.stderr || err.message) || '');
+  return /cannot find the file specified|does not exist|无法找到|找不到|不存在/i.test(message);
+}
+
 function applyUninstall(plan, io) {
   if (io.platform !== 'win32') throw new Error('Refusing to change the Windows tunnel on this operating system.');
   const exec = (cmd) => hiddenExec(io, cmd[0], cmd.slice(1));
   try { exec(plan.endTask); } catch (_) {}
-  try { exec(plan.deleteTask); } catch (_) { throw new Error('Could not delete the scheduled task.'); }
+  let deleteError = null;
+  try { exec(plan.deleteTask); } catch (err) {
+    if (!taskAlreadyGone(err)) deleteError = err;
+  }
+  const rmErrors = [];
   for (const file of plan.removeFiles) {
     assertRemovable(plan.directory, file);
-    io.fs.rmSync(file, { force: true });
+    try { io.fs.rmSync(file, { force: true }); } catch (_) { rmErrors.push(file); }
   }
+  if (deleteError) throw new Error('Could not delete the scheduled task.');
+  if (rmErrors.length) throw new Error('Could not remove every tunnel file.');
+}
+
+function readUninstallDirectory(configPath, io) {
+  try {
+    const stat = io.fs.statSync(configPath);
+    if (!stat.isFile() || stat.size > 65536) return '';
+    const parsed = JSON.parse(io.fs.readFileSync(configPath, 'utf8'));
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed) && typeof parsed.directory === 'string') return parsed.directory;
+  } catch (_) {}
+  return '';
+}
+
+function resolveUninstallDirectory(args, io) {
+  const configPath = args.config || (io.platform === 'win32'
+    ? path.win32.join(io.homedir, '.config', 'agentdeck-remote', 'tunnel.json')
+    : '');
+  const fromFile = configPath ? readUninstallDirectory(configPath, io) : '';
+  if (fromFile) return assertDirectory(fromFile);
+  if (io.platform === 'win32') return assertDirectory(path.win32.join(io.homedir, '.config', 'agentdeck-remote'));
+  throw new Error('Uninstall needs a directory. On Windows the default is %USERPROFILE%\\.config\\agentdeck-remote.');
 }
 
 function loadInput(configPath, args, io) {
@@ -556,18 +651,8 @@ function runCli(args, io) {
     throw new Error('Refusing to register the Windows tunnel on this operating system. Re-run with --dry-run.');
   }
   if (args.dryRun && !args.out) throw new Error('Pass --out for dry-run.');
-  let configPath = args.config;
-  if (!configPath) {
-    if (args.dryRun || io.platform !== 'win32') throw new Error('Pass --config pointing at a private tunnel.json.');
-    configPath = path.win32.join(io.homedir, '.config', 'agentdeck-remote', 'tunnel.json');
-  }
-  let input = loadInput(configPath, args, io);
-  if (!input.directory) {
-    if (!args.dryRun && io.platform === 'win32') input = { ...input, directory: path.win32.join(io.homedir, '.config', 'agentdeck-remote') };
-    else throw new Error('tunnel.json must include directory.');
-  }
   if (args.uninstall) {
-    const plan = windowsUninstallPlan(normalizeConfig(input).directory);
+    const plan = windowsUninstallPlan(resolveUninstallDirectory(args, io));
     if (!args.dryRun) {
       applyUninstall(plan, io);
       log('Windows tunnel task removed. AgentDeck was not started, stopped, or restarted.');
@@ -575,6 +660,7 @@ function runCli(args, io) {
     }
     writeArtifacts(args.out, {
       'uninstall-plan.json': Buffer.from(JSON.stringify({
+        directory: plan.directory,
         endTask: plan.endTask,
         deleteTask: plan.deleteTask,
         removeFiles: plan.removeFiles,
@@ -589,6 +675,16 @@ function runCli(args, io) {
       'AgentDeck was not started, stopped, or restarted.',
     ].join('\n'));
     return { mode: 'dry-run-uninstall' };
+  }
+  let configPath = args.config;
+  if (!configPath) {
+    if (args.dryRun || io.platform !== 'win32') throw new Error('Pass --config pointing at a private tunnel.json.');
+    configPath = path.win32.join(io.homedir, '.config', 'agentdeck-remote', 'tunnel.json');
+  }
+  let input = loadInput(configPath, args, io);
+  if (!input.directory) {
+    if (!args.dryRun && io.platform === 'win32') input = { ...input, directory: path.win32.join(io.homedir, '.config', 'agentdeck-remote') };
+    else throw new Error('tunnel.json must include directory.');
   }
   const plan = createWindowsPlan(input);
   if (args.dryRun) {
@@ -607,7 +703,13 @@ module.exports = {
   WINDOWS_USER,
   parseArgs,
   psSingleQuote,
+  BACKOFF_INITIAL,
+  BACKOFF_CAP,
+  LOG_MAX_BYTES,
+  quoteOpenSshConfigPath,
+  advanceBackoff,
   quoteWindowsProcessArg,
+  assertPrivateKeyAcl,
   xmlEscape,
   assertDirectory,
   assertPs1UsesLiteralPath,
