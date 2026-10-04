@@ -14,7 +14,11 @@
     const seats = (Array.isArray(value) ? value : []).slice(0, 8).filter((s) => {
       if (!s || !/^[a-zA-Z0-9_-]{1,40}$/.test(s.id) || ids.has(s.id) || typeof s.configDir !== 'string' || !s.configDir.trim() || /[\x00-\x1f]/.test(s.configDir)) return false;
       ids.add(s.id); return true;
-    }).map((s) => ({ id: s.id, name: String(s.name || s.id).slice(0, 80), configDir: s.configDir.trim() }));
+    }).map((s) => {
+      const flag = { us: '🇺🇸', cn: '🇨🇳' }[s.id];
+      const name = String(s.name || (flag ? s.id.toUpperCase() : s.id)).slice(0, 80);
+      return { id: s.id, name: flag && !name.includes(flag) ? `${flag} ${name}` : name, configDir: s.configDir.trim() };
+    });
     return seats.length ? seats : [{ id: 'default', name: 'Claude', configDir: '~/.claude' }];
   }
   function seatKey(id) { return id && id !== 'default' ? `Claude:${id}` : 'Claude'; }
@@ -136,7 +140,7 @@
     let reset = '';
     if (exhausted) {
       const m = lines.slice(error, error + 4).join(' ').match(/(?:resets?\s*(?:(?:in|at|:)\s*)?|try again (?:in|at)\s+)([^│\n]+)/i);
-      const raw = m ? m[1].trim().replace(/[.)]+$/, '') : '';
+      const raw = m ? m[1].trim().replace(/\.+$/, '') : '';
       // Only time-shaped text can be retained/displayed from an error line.
       const safe = raw.match(/^(?:\d{4}-\d\d-\d\dT[\d:.+Z-]+|(?:\d+(?:\.\d+)?\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\s*)+|\d{1,2}(?::\d{2})?\s*(?:am|pm)?(?:\s*\([A-Za-z_\/]+\))?)/i);
       reset = safe ? safe[0].trim().slice(0, 100) : '';

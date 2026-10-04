@@ -1,7 +1,7 @@
 // Offline TUI stand-in. No real CLI, provider request or credential access.
 const readline = require('readline');
 const provider = process.argv[2];
-const west = process.argv[3] === 'west';
+const west = process.argv[3] === 'cn';
 let westData = false;
 process.stdout.write('\x1b[?1049h');
 function draw(exhausted = false, suffix = '', otherModel = false) {

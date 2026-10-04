@@ -143,6 +143,7 @@ test('Claude seats isolate percentages and exhaustion; missing/stale windows sta
   assert.equal(Q.text(store, now, seats).split('\n').length, 5);
   assert.equal(Q.claudeSeats()[0].configDir, '~/.claude');
   assert.equal(Q.claudeSeats().length, 1);
+  assert.deepEqual(Q.claudeSeats([{ id: 'us', name: 'US', configDir: '~/.custom-us' }, { id: 'cn', name: '🇨🇳 CN', configDir: '~/.custom-cn' }]).map(s => [s.id, s.name, s.configDir]), [['us', '🇺🇸 US', '~/.custom-us'], ['cn', '🇨🇳 CN', '~/.custom-cn']]);
   assert.equal(Q.seatForColumn({ claudeSeatId: 'west' }, seats).id, 'west');
   assert.equal(Q.seatForColumn({ cmd: 'CLAUDE_CONFIG_DIR="~/.claude-west" claude' }, seats).id, 'west');
   assert.equal(Q.seatForColumn({ claudeSeatId: 'unknown' }, seats), null);
