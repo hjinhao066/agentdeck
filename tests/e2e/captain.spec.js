@@ -109,9 +109,11 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await run(mainId, `node "${CLI}" new --title "写周报" --task "please write the report" --command "${FAKE.replace(/"/g, '')}"`);
   await expect.poll(() => page.evaluate(() => columns.some((c) => c.displayTitle === '写周报'))).toBe(true);
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
-  // it runs in the background: a folded 后台 row under the Captain, not a deck column
-  const head = page.locator('.colnav-item.captain-item + .nav-crew .crew-head');
-  await expect(head).toContainText('后台');
+  // it runs in the background: counts and a folding arrow on the Captain row
+  const head = page.locator('.captain-item .crew-counts');
+  await expect(head).not.toContainText('后台');
+  await expect(page.locator('.nav-crew .crew-head')).toHaveCount(0);
+  await expect(page.locator('.captain-item .captain-fold')).toHaveAttribute('aria-expanded', 'false');
   await expect(page.locator(`.nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(0);
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
   expect(await page.evaluate((i) => deckColumns().some((c) => c.id === i), child)).toBe(false);
@@ -161,8 +163,8 @@ test('tell, ledger and read from the Captain terminal; a worker stuck on a confi
 test('a session the Captain only told something keeps its place; its own sessions leave and come back by drag', async () => {
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
   const crew = (id) => page.locator(`.nav-crew .colnav-item[data-col-id="${id}"]`);
-  // unfolding 后台 lists them
-  await page.locator('.nav-crew .crew-head').click();
+  // the Captain arrow unfolds its crew
+  await page.locator('.captain-item .captain-fold').click();
   await expect(crew(child)).toHaveCount(1);
   await expect(crew('cap-x')).toHaveCount(0);
   await expect(page.locator('.nav-group:not(.nav-crew) .colnav-item[data-col-id="cap-x"]')).toHaveCount(1);
@@ -180,6 +182,8 @@ test('a session the Captain only told something keeps its place; its own session
   expect(await page.evaluate((i) => [columns.find((c) => c.id === i).captainCrew, deckColumns().some((c) => c.id === i)], child)).toEqual([false, true]);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await expect(page.locator(`.column[data-col-id="${child}"]`)).not.toHaveClass(/backstage/);
+  // With no crew, the disabled arrow must still let a drop reach the Captain row.
+  await expect(page.locator('.captain-item .captain-fold')).toBeDisabled();
   await drag(page.locator(`.colnav-item[data-col-id="${child}"]`), page.locator('.colnav-item.captain-item'));
   await expect(crew(child)).toHaveCount(1);
   expect(await page.evaluate(() => [...deckEl.querySelectorAll('.column')][1].dataset.colId)).toBe(child);
@@ -208,11 +212,11 @@ test('past the limit new work waits for a slot; finished background sessions are
     await expect(card('乙')).toHaveClass(/st-waiting/);
     await expect(card('乙')).toContainText('等空位');
     expect(await col('乙')).toBe(null);
-    await expect(page.locator('.nav-crew .crew-head')).toContainText('1 排队');
+    await expect(page.locator('.captain-item .crew-counts')).toContainText('1 排队');
     // unfolded: work in progress on top, then what waits for a slot, finished ones below
     const a0 = await col('甲');
     const keep0 = await col('写周报');
-    if (!(await page.evaluate(() => !!config.crewOpen))) await page.locator('.nav-crew .crew-head').click();
+    if (!(await page.evaluate(() => !!config.crewOpen))) await page.locator('.captain-item .captain-fold').click();
     await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('.nav-crew > .colnav-item')]
       .map((r) => r.dataset.colId || 'waiting:' + r.querySelector('.cn-label').textContent)))
       .toEqual([a0, 'waiting:乙', keep0]);
@@ -271,7 +275,7 @@ test('Captain stop interrupts a busy worker, cancels supplements; archive ends i
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "cancel this supplement"`);
   await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.filter((t) => t.colId === i && t.status === 'queued').length, child)).toBe(1);
-  await expect(page.locator('.nav-crew .crew-head')).toContainText('1 待补充');
+  await expect(page.locator('.captain-item .crew-counts')).toContainText('1 待补充');
   await run(mainId, `clear; node "${CLI}" stop --id ${child}`);
   await expect.poll(() => screen(child)).toContain('Interrupted by Esc');
   expect(await page.evaluate((i) => window.deck.ptyIsAlive(i), child)).toBe(true);
@@ -343,7 +347,7 @@ test('quota wait stays waiting, not working/completed; queued work waits and res
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('quota');
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '额度等待' }).last();
   await expect(card.locator('.task-status')).toHaveText('额度用尽/等待');
-  await expect(page.locator('.nav-crew .crew-head')).toContainText('额度用尽/等待');
+  await expect(page.locator('.captain-item .crew-counts')).toContainText('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" ledger`);
   await expect.poll(() => screen(mainId)).toContain('额度用尽/等待');
   await run(mainId, `clear; node "${CLI}" tell --to ${child} --message "after quota"`);
@@ -775,7 +779,7 @@ test('after a restart the Captain row is still pinned and shows its saved conver
   expect(await page.evaluate(() => [columns.filter((c) => c.isMain).length, deckEl.querySelector('.column').dataset.colId])).toEqual([1, id]);
   // the sessions it opened are still in its background
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
-  await expect(page.locator('.colnav-item.captain-item + .nav-crew .crew-head')).toHaveCount(1);
+  await expect(page.locator('.captain-item .crew-counts')).toHaveCount(1);
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
   await page.locator('.colnav-item[data-col-id="cap-y"]').click();
   await page.evaluate((i) => ChatUI.setMode(i, 'term'), id);
