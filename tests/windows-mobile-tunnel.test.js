@@ -398,6 +398,8 @@ test('a bad icacls readback aborts before the task is registered', () => {
   win.assertPrivateKeyAcl(good, plan.identityFile, plan.windowsUser);
   assert.throws(() => win.assertPrivateKeyAcl(good.replace('example:(R)', 'example:(R)\r\nBUILTIN\\Administrators:(F)'), plan.identityFile, plan.windowsUser), /another principal|only the installing user/);
   assert.throws(() => win.assertPrivateKeyAcl(plan.identityFile + ' EXAMPLEPC\\example:(I)(R)\r\n', plan.identityFile, plan.windowsUser), /inherit/);
+  // icacls echoes the computer name in its own case (owenJH\\hjinh while tunnel.json says OWENJH\\hjinh).
+  win.assertPrivateKeyAcl(plan.identityFile + ' ' + plan.windowsUser.replace(/^[^\\]+/, (pc) => pc.toLowerCase()) + ':(R)\r\n', plan.identityFile, plan.windowsUser);
   const calls = [];
   const io = {
     dryRun: false,
