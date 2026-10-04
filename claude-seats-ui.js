@@ -3,6 +3,8 @@
   const S = window.ClaudeSeatsCore, P = window.PerpetualCaptainCore;
   const svg = (body) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
   const ROTATE = svg('<path d="M20 7h-5V2M4 17h5v5"/><path d="M20 7a9 9 0 0 0-15-3M4 17a9 9 0 0 0 15 3"/>');
+  // Switch account: two opposing arrows, clearer than the refresh-like cycle.
+  const SWAP = svg('<path d="M7 4 3 8l4 4"/><path d="M3 8h14"/><path d="m17 12 4 4-4 4"/><path d="M21 16H7"/>');
   const GEAR = svg('<circle cx="12" cy="12" r="3"/><path d="m9 3 6 0 1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1Z"/>');
   let host, seats = [], warmups = [], switching = false, retryAt = 0;
   const POWER = svg('<path d="M12 2v10"/><path d="M6 5a9 9 0 1 0 12 0"/>');
@@ -36,7 +38,7 @@
     return host.userComposing(col.id) || !!wrap?.querySelector('.composer textarea')?.value.trim() || !!wrap?.querySelector('.cp-atts')?.children.length;
   }
   function rotationButton(col) {
-    const b = button(ROTATE, label(), openMenu);
+    const b = button(SWAP, label(), openMenu);
     b.classList.add('claude-seat-rotate');
     b.disabled = switching;
     b.setAttribute('aria-haspopup', 'dialog');
