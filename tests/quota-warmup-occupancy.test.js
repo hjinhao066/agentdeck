@@ -14,7 +14,8 @@ const check = (columns, rows = [], ptys = new Map(columns.map((c, i) => [c.id, {
 const birth = 'Sun Oct  4 02:20:34 2026';
 const bornRow = (pid, ppid, comm = 'claude', procStart = birth) => ({ ...row(pid, ppid, comm), procStart });
 function registry(t) {
-  const home = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'agentdeck-occupancy-'));
+  // Match async realpath's native spelling, including Windows short-name aliases.
+  const home = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'agentdeck-occupancy-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const fixtureSeats = seats.map((seat) => ({ ...seat, configDir: seat.configDir.replace('~', home) }));
   fixtureSeats.forEach((seat) => fs.mkdirSync(path.join(seat.configDir, 'sessions'), { recursive: true }));

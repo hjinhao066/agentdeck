@@ -40,8 +40,9 @@ async function launch(flags = '', restart = false) {
   await expect(page.locator('.column.is-main')).toHaveCount(1, { timeout: 20000 });
   await expect.poll(() => briefs().length, { timeout: 20000 }).toBe(previousBriefs + 1);
   await ready();
+  await page.evaluate(() => ChatUI.setMode('rebrief-captain', 'chat'));
 }
-async function send(text) { await composer().fill(text); await composer().press('Enter'); await expect.poll(() => prompts().includes(text)).toBe(true); await ready(); }
+async function send(text) { await page.evaluate(() => ChatUI.setMode('rebrief-captain', 'chat')); await composer().fill(text); await composer().press('Enter'); await expect.poll(() => prompts().includes(text)).toBe(true); await ready(); }
 async function raw(text) {
   await page.evaluate(() => ChatUI.setMode('rebrief-captain', 'term'));
   const terminal = page.locator('.column.is-main .xterm-helper-textarea');

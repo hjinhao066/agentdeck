@@ -193,6 +193,7 @@ test('Cursor provider is preserved across model switches and updates header + si
 });
 
 test('status footer extends full width and clips overflow without CSS ellipsis', async () => {
+  await page.evaluate(() => ChatUI.setMode('col-agent', 'chat'));
   // The stand-in does not repaint on resize like a real TUI. Ask it to redraw
   // after the earlier terminal/chat switches so ConPTY has a complete screen.
   await page.evaluate(() => window.deck.ptyInput('col-agent', 'redraw footer\r'));
