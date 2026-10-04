@@ -43,7 +43,7 @@ async function launch() {
   await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 你是 AgentDeck'), captainId), { timeout: 20000 }).toBe(true);
   await idle(captainId);
 }
-test.beforeEach(async () => {
+test.beforeEach(async ({}, testInfo) => {
   profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-seats-e2e-')));
   home = path.join(profile, 'seats-home');
   for (const dir of ['.claude', '.claude-us']) {
@@ -62,7 +62,19 @@ test.beforeEach(async () => {
     mainSession: { colId: cn, cmd: FAKE, gen: 1, crewMarked: true, tasks: [], pending: [], inflight: [], waitlist: [] },
     captainRelayCodex: { name: 'ChatGPT', command: FAKE + ' --provider=codex --board-probe --archive-fail' },
   }));
-  await launch();
+  try {
+    await launch();
+  } catch (error) {
+    const state = await page.evaluate(() => [...terms].map(([id, e]) => ({
+      id, screen: dumpScreen(e.term), lastScreen: e.lastScreen, state: e.state,
+      alive: e.alive, sending: e.sendingPrompt, injecting: e.injecting,
+      typing: e.typing, inputBox: visibleInputBox(e), composing: userComposing(id),
+      turns: ChatUI.turnsOf(id),
+    })));
+    await testInfo.attach('seat-launch-state', { body: JSON.stringify({ state,
+      prompts: capture('prompt-columns.jsonl') }, null, 2), contentType: 'application/json' });
+    throw error;
+  }
 });
 test.afterEach(async () => {
   if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
