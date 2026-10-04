@@ -670,16 +670,18 @@
     return null;
   }
   function attachDrag(item, col) {
-    item.addEventListener('mousedown', (e) => {
+    // Pointer events on the window, same as the task board. Playwright's mouse
+    // path on Windows Electron never delivers the document mousemove that used
+    // to start `reordering`, so a drag never left the row it started on.
+    item.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || e.target.closest('button')) return;
       const label = item.querySelector('.cn-label');
       if (label && label.isContentEditable) return;
-      e.preventDefault();
       closeMenu();
-      const startX = e.clientX, startY = e.clientY;
-      let dragging = false;
-      let drop = null;
+      const pointerId = e.pointerId, startX = e.clientX, startY = e.clientY;
+      let dragging = false, drop = null, ended = false;
       const onMove = (ev) => {
+        if (ev.pointerId !== pointerId) return;
         if (!dragging) {
           if (Math.abs(ev.clientX - startX) < 4 && Math.abs(ev.clientY - startY) < 4) return;
           dragging = true;
@@ -694,23 +696,33 @@
         if (ev.clientY < r.top + 24) listEl.scrollTop -= 12;
         else if (ev.clientY > r.bottom - 24) listEl.scrollTop += 12;
       };
-      const onUp = () => {
-        document.removeEventListener('mousemove', onMove);
-        document.removeEventListener('mouseup', onUp);
+      const stop = () => {
+        if (ended) return;
+        ended = true;
+        window.removeEventListener('pointermove', onMove, true);
+        window.removeEventListener('pointerup', onUp, true);
+        window.removeEventListener('pointercancel', onCancel, true);
         document.body.classList.remove('reordering');
         item.classList.remove('cn-dragging');
         clearDrop();
-        if (!dragging) { host.jumpToColumn(col); return; }
+      };
+      const onUp = (ev) => {
+        if (ev.pointerId !== pointerId) return;
+        const moved = dragging, target = drop;
+        stop();
+        if (!moved) { host.jumpToColumn(col); return; }
         // the click that ends a drag must not toggle the (re-rendered) folder under it
-        const swallow = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+        const swallow = (click) => { click.stopPropagation(); click.preventDefault(); };
         listEl.addEventListener('click', swallow, { capture: true, once: true });
         setTimeout(() => listEl.removeEventListener('click', swallow, { capture: true }), 0);
-        if (!drop || drop.kind === 'noop') return;
-        if (drop.kind === 'archive') host.archiveColumn(col);
-        else host.moveSession(col.id, { crew: drop.crew, folderId: drop.folderId, beforeId: drop.beforeId });
+        if (!target || target.kind === 'noop') return;
+        if (target.kind === 'archive') host.archiveColumn(col);
+        else host.moveSession(col.id, { crew: target.crew, folderId: target.folderId, beforeId: target.beforeId });
       };
-      document.addEventListener('mousemove', onMove);
-      document.addEventListener('mouseup', onUp);
+      const onCancel = (ev) => { if (ev.pointerId === pointerId) stop(); };
+      window.addEventListener('pointermove', onMove, true);
+      window.addEventListener('pointerup', onUp, true);
+      window.addEventListener('pointercancel', onCancel, true);
     });
   }
 

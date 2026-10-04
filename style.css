@@ -2146,7 +2146,9 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-return-toggle:hover, .cm-return-toggle.on { color: var(--cm-done); background: color-mix(in srgb, var(--cm-done) 12%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   .cm-pulse, .cm-edge.review, .cm-node.st-working::after, .cm-node.kind-captain::before, #crewMap .cm-ico svg, #crewMap .cm-ico::after { animation: none; }
-  .cm-node.st-working::after, .cm-pulse, #crewMap .cm-ico::after { display: none; }
+  /* display:none on the scan line makes Chromium report animationName as "" */
+  .cm-pulse, #crewMap .cm-ico::after { display: none; }
+  .cm-node.st-working::after { opacity: 0; }
   .cm-node { transition: none; }
 }
 /* Claude seats: account switching stays local to the Captain. */
