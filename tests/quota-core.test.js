@@ -473,6 +473,52 @@ test('resourceError recognizes each CLI\'s native quota, rate-limit and login me
   }
 });
 
+test('resourceError strips every TUI\'s leading glyph, including the Codex bullet', () => {
+  for (const [line, kind] of [
+    ['Not logged in · Please run /login', 'auth'], ['Usage limit reached · limit resets 3:10pm', 'quota'],
+    ["You've hit your session limit · resets 9:20pm", 'quota'],
+    ["You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:10 PM.", 'quota'],
+    ["You've hit your usage limit. To get more access now, send a request to your admin or try again at 5pm.", 'quota'],
+    ["Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY.", 'auth'], ['Rate limit reached. Resets in 1h', 'rate_limit'],
+  ]) {
+    for (const glyph of ['•', '■', '⚠', '⚠️', '✗', '✘', '⏺', '⎿', '✻', '✳', '✶', '✢', '●', '◦', '◆', '⬢', '✦', '✕', '✖', 'ℹ', '│ •']) {
+      assert.equal(Q.resourceError(glyph + ' ' + line), kind, glyph + ' ' + line);
+    }
+  }
+  // the glyph alone never turns ordinary text into an error
+  for (const line of ['• Rate limit handling test fails in api.js', '• RATE_LIMITED\\|function resourceError', '• 修复了 Usage limit reached 的识别', '• Ran npm test']) {
+    assert.equal(Q.resourceError(line), '', line);
+  }
+});
+
+test('resourceError accepts only the CLI\'s own reset, retry or login text after a separator', () => {
+  for (const [line, kind] of [
+    ["You've hit your session limit · resets 9:20pm (America/Los_Angeles)", 'quota'], ["You've hit your session limit · resets Oct 5 at 3pm", 'quota'],
+    ["You've hit your limit · resets 3pm · /upgrade to increase your usage limit", 'quota'], ["You've hit your limit · resets in 2h", 'quota'],
+    ['Claude usage limit reached. Your limit will reset at 3pm (America/New_York).', 'quota'], ["You've hit your usage limit. Try again in 2h", 'quota'],
+    ["You've hit your usage limit for gpt-5-codex. Switch to another model now, or try again at 3pm.", 'quota'],
+    // a native sentence cut by the terminal width is still native
+    ["You've hit your usage limit. To get more access now, send a request to your", 'quota'],
+    ['Not logged in · Run /login', 'auth'], ['Please run /login', 'auth'], ["Please run 'cursor-agent login' first.", 'auth'],
+  ]) assert.equal(Q.resourceError(line), kind, line);
+  for (const line of [
+    // receipts that open with the full native message and keep talking
+    'Usage limit reached · limit resets 3:10pm 的识别已补测试', 'Not logged in · Please run /login 的提示已补测试', 'Not logged in · Please run /login，已补测试',
+    "You've hit your session limit · resets 9pm 已能识别", "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage 的识别已补", 'Authentication failed: 已补测试',
+    'Usage limit reached · limit resets 3:10pm is now detected', 'Usage limit reached. Resets in 3h is now detected',
+    'Not logged in · tests pass', 'Not logged in · see /login', "You've hit your session limit · fixed", "You've hit your limit. Fixed in 9d09317",
+    "You've hit your limit — tests now pass", "You've reached your limit on retries; fixing", 'You have exceeded your limit - see test 3',
+    "You've hit your usage limit. Visit the docs", 'Authentication required. Please see section 3', 'Invalid API key. Please see the docs',
+    'Not logged in. Please run the test suite', 'Please run login tests', 'Please run the login tests',
+    'RATE_LIMITED\\|const AUTH \\|function', 'grep -n "RATE_LIMITED\\|const AUTH \\|function" quota-core.js',
+  ]) {
+    for (const decorated of [line, '• ' + line, '⏺ ' + line, '│ ' + line + ' │']) {
+      assert.equal(Q.resourceError(decorated), '', decorated);
+      assert.equal(Q.screen('Claude', decorated, []).exhausted, false, decorated);
+    }
+  }
+});
+
 test('resourceError ignores resource words in ordinary replies, code and grep output', () => {
   for (const line of [
     // live false alarm: a review session's grep pattern on screen
