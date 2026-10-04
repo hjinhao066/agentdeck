@@ -33,7 +33,7 @@ test('sidebar footer shows the runtime version with accessible build details', a
   const label = page.locator('#navBottom .nav-brand');
   const details = [`AgentDeck v${info.version}`, info.build].filter(Boolean).join(' · ');
 
-  await expect(label).toHaveText(`v${info.version}`);
+  await expect(label).toHaveText(`V${info.version}`);
   await expect(label).toHaveAttribute('title', details);
   await expect(label).toHaveAttribute('aria-label', details);
   expect(info.version).toMatch(/^\d+\.\d+\.\d+/);

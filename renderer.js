@@ -693,7 +693,7 @@ function buildChrome() {
 
   const brand = document.createElement('span');
   brand.className = 'nav-brand';
-  brand.textContent = `v${env.version}`;
+  brand.textContent = `V${env.version}`;
   const versionDetails = [`AgentDeck v${env.version}`, env.build].filter(Boolean).join(' · ');
   brand.title = versionDetails;
   brand.setAttribute('aria-label', versionDetails);
