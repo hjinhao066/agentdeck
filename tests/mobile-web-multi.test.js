@@ -7,7 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { MobileWebServer, LOGIN_LIMITS, boardVersionOf, supportsLoginItem } = require('../mobile-web');
+const { MobileWebServer, LOGIN_LIMITS, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint, persistable } = require('../mobile-web');
 const PUBLIC_ORIGIN = 'https://agentdeck.18-139-28-180.sslip.io';
 const PROXY = { Host: new URL(PUBLIC_ORIGIN).host, 'X-Forwarded-Proto': 'https', 'X-Forwarded-For': '203.0.113.7' };
 
@@ -54,7 +54,7 @@ async function login(m) {
 }
 
 test('basePath must be one lowercase path segment with slashes and label must be short plain text; invalid values never start or persist', async (t) => {
-  for (const basePath of ['mac', '/mac', '/', '//', '/a/b/', '/Mac/', '/mac /', '/../', '/mac%2f/', '/' + 'a'.repeat(33) + '/', 7, {}, ['/mac/']]) {
+  for (const basePath of ['mac', '/mac', '/', '//', '/a/b/', '/Mac/', '/mac /', '/../', '/mac%2f/', '/' + 'a'.repeat(33) + '/', 7, 0, null, false, true, {}, ['/mac/']]) {
     const m = machine();
     t.after(() => m.server.close());
     const result = await m.server.configure({ enabled: true, port: 0, publicOrigin: PUBLIC_ORIGIN, basePath });
@@ -62,7 +62,7 @@ test('basePath must be one lowercase path segment with slashes and label must be
     assert.equal(result.error, 'Invalid base path.');
     assert.equal(m.saved.length, 0);
   }
-  for (const label of ['x'.repeat(33), 'a\nb', 'a\0b', '<b>', 7, {}]) {
+  for (const label of ['x'.repeat(33), 'a\nb', 'a\0b', '<b>', 7, 0, null, false, {}]) {
     const m = machine();
     t.after(() => m.server.close());
     const result = await m.server.configure({ enabled: true, port: 0, publicOrigin: PUBLIC_ORIGIN, basePath: '/win/', label });
@@ -70,9 +70,6 @@ test('basePath must be one lowercase path segment with slashes and label must be
     assert.equal(result.error, 'Invalid machine label.');
     assert.equal(m.saved.length, 0);
   }
-  const noBase = machine();
-  t.after(() => noBase.server.close());
-  assert.equal((await noBase.server.configure({ enabled: true, port: 0, label: 'Windows' })).error, 'Invalid machine label.');
   const ok = await start(t, '/win/', 'Windows');
   assert.equal(ok.status.basePath, '/win/');
   assert.equal(ok.status.label, 'Windows');
@@ -389,8 +386,8 @@ test('api/info is an unauthenticated, fixed, non-sensitive probe that respects p
   assert.equal(response.headers['set-cookie'], undefined);
   const body = JSON.parse(response.text);
   assert.deepEqual(body, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'],
-    machine: { id: 'win', label: 'Windows', platform: 'win32' }, appVersion: '1.1.4' });
-  for (const secret of [m.status.token, 'OWENJH', 'captain']) assert.ok(!response.text.includes(secret), secret);
+    machine: { id: 'win', label: 'Windows', platform: 'win32' } });
+  for (const secret of [m.status.token, 'OWENJH', '1.1.4', 'captain']) assert.ok(!response.text.includes(secret), secret);
   // Same answer with a cookie, and the probe ignores query-free credentials entirely.
   const { cookie } = await login(m);
   assert.deepEqual(JSON.parse((await get(m, 'api/info', { Cookie: cookie })).text), body);
@@ -412,4 +409,211 @@ test('api/info is an unauthenticated, fixed, non-sensitive probe that respects p
   t.after(() => local.server.close());
   const status = await local.server.configure({ enabled: true, port: 0 });
   assert.equal(JSON.parse((await raw(status, '/api/info', { proxy: false })).text).machine.id, 'local');
+});
+
+test('basePath null, false or 0 refuse to start like any malformed prefix; only undefined and the empty string mean the legacy mode', async (t) => {
+  for (const basePath of [null, false, 0, NaN, true]) {
+    const m = machine();
+    t.after(() => m.server.close());
+    const result = await m.server.configure({ enabled: true, port: 0, publicOrigin: PUBLIC_ORIGIN, basePath });
+    assert.equal(result.enabled, false, String(basePath));
+    assert.equal(result.error, 'Invalid base path.');
+    assert.equal(m.saved.length, 0);
+  }
+  for (const basePath of [undefined, '']) {
+    const m = machine();
+    t.after(() => m.server.close());
+    const result = await m.server.configure({ enabled: true, port: 0, publicOrigin: PUBLIC_ORIGIN, basePath });
+    assert.equal(result.enabled, true, result.error);
+    assert.equal(result.basePath, undefined);
+    assert.equal(m.saved.at(-1).basePath, undefined);
+  }
+});
+
+test('a label without a base path is ignored with a warning and the legacy mode starts normally', async (t) => {
+  for (const label of ['Windows', '<b>', 7, null]) {
+    const m = machine();
+    t.after(() => m.server.close());
+    const result = await m.server.configure({ enabled: true, port: 0, label });
+    assert.equal(result.enabled, true, String(label));
+    assert.equal(result.error, '');
+    assert.equal(result.warning, 'Machine label ignored without a base path.');
+    assert.equal(result.label, undefined);
+    assert.equal(m.saved.at(-1).label, undefined);
+    assert.equal((await raw(result, '/api/info', { proxy: false })).status, 200);
+    assert.equal(JSON.parse((await raw(result, '/api/info', { proxy: false })).text).machine.label, 'Windows', 'label comes from the platform');
+    const again = await m.server.configure({ enabled: true, port: 0 });
+    assert.equal(again.warning, undefined, 'the warning does not outlive the configuration that caused it');
+  }
+  const none = machine();
+  t.after(() => none.server.close());
+  assert.equal((await none.server.configure({ enabled: true, port: 0 })).warning, undefined);
+});
+
+test('reconfiguring without a basePath or label returns to the legacy mode instead of keeping the previous prefix', async (t) => {
+  const m = await start(t, '/win/', 'Windows');
+  assert.equal(m.status.basePath, '/win/');
+  assert.equal(m.saved.at(-1).label, 'Windows');
+  const status = await m.server.configure({ enabled: true, port: 0, publicOrigin: PUBLIC_ORIGIN, token: m.status.token });
+  assert.equal(status.enabled, true, status.error);
+  assert.equal(status.basePath, undefined);
+  assert.equal(status.label, undefined);
+  assert.equal(m.saved.at(-1).basePath, undefined);
+  assert.equal(m.saved.at(-1).label, undefined);
+  assert.equal(JSON.parse((await raw(status, '/api/info')).text).machine.id, 'local');
+  assert.equal((await raw(status, '/win/api/info')).status, 401, 'no prefix route exists any more');
+  assert.equal((await raw(status, '/win/api/snapshot', { headers: { ...PROXY, Authorization: `Bearer ${status.token}` } })).status, 404);
+  // The login page and legacy cookie scheme are back for the public host too.
+  assert.equal((await raw(status, '/')).status, 401);
+  const response = await raw(status, '/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: PUBLIC_ORIGIN }, body: JSON.stringify({ token: status.token }) });
+  assert.equal(response.status, 200);
+  assert.match(response.headers['set-cookie'][0], /^__Host-agentdeck_mobile=[a-f0-9]{64}; HttpOnly; Secure; SameSite=Strict; Path=\/;/);
+});
+
+test('machine labels reject control, bidirectional, zero-width, separator, quote and angle-bracket characters and overlong names', async (t) => {
+  const bad = ['\u200b', 'a\u200bb', 'a\u200cb', 'a\u200db', 'a\u2060b', '\ufeffa', 'a\u180eb', '\u200e', '\u200f', '\u202a', '\u202e', 'a\u2066b', 'a\u2069b', '\u061cA',
+    'a\u0085b', 'a\x7fb', 'a\tb', 'a\rb', 'a\u2028b', 'a\u2029b', '"x"', "a'b", 'a`b', '\u201cx\u201d', '\u2018x\u2019', '<b>', 'a>b', '\uff1cb\uff1e',
+    ' lead', 'trail ', ' ', '\u{1F600}'.repeat(33), 'x'.repeat(33)];
+  for (const label of bad) {
+    const m = machine();
+    t.after(() => m.server.close());
+    const result = await m.server.configure({ enabled: true, port: 0, publicOrigin: PUBLIC_ORIGIN, basePath: '/win/', label });
+    assert.equal(result.enabled, false, JSON.stringify(label));
+    assert.equal(result.error, 'Invalid machine label.');
+    assert.equal(m.saved.length, 0);
+  }
+  for (const label of ['Windows', 'Work PC', 'Mac-2', '办公室电脑', 'x'.repeat(32), '\u{1F600}'.repeat(32), 'Dell (office)']) {
+    const m = await start(t, '/win/', label);
+    assert.equal(m.status.label, label);
+  }
+});
+
+test('a non-Mac, non-Windows machine without a label reports a fixed generic name, never its hostname', async (t) => {
+  const m = await start(t, '/box/', undefined, {}, { machine: { platform: 'linux', hostname: 'private-host.local', appVersion: '9.9.9' } });
+  assert.equal(m.status.label, 'AgentDeck');
+  const info = await get(m, 'api/info');
+  assert.equal(JSON.parse(info.text).machine.label, 'AgentDeck');
+  assert.ok(!info.text.includes('private-host'));
+  assert.ok(!info.text.includes('9.9.9'));
+});
+
+test('api/info reports exactly app, apiVersion, capabilities and machine: no exact app version or hostname', async (t) => {
+  const m = await start(t, '/win/', 'Windows');
+  const response = await get(m, 'api/info');
+  const body = JSON.parse(response.text);
+  assert.deepEqual(Object.keys(body).sort(), ['apiVersion', 'app', 'capabilities', 'machine']);
+  assert.deepEqual(Object.keys(body.machine).sort(), ['id', 'label', 'platform']);
+  for (const leak of ['1.1.4', 'appVersion', 'OWENJH', 'hostname']) assert.ok(!response.text.includes(leak), leak);
+});
+
+test('HEAD on api/info is never answered as the probe: 401 without credentials, 404 with them, and never a body', async (t) => {
+  const m = await start(t, '/win/', 'Windows');
+  const anonymous = await raw(m.status, '/win/api/info', { method: 'HEAD', headers: {} });
+  assert.equal(anonymous.status, 401);
+  assert.equal(anonymous.text, '');
+  const { cookie } = await login(m);
+  const authed = await raw(m.status, '/win/api/info', { method: 'HEAD', headers: { Cookie: cookie } });
+  assert.equal(authed.status, 404);
+  assert.equal(authed.text, '');
+  assert.equal((await raw(m.status, '/api/info', { method: 'HEAD' })).status, 404, 'prefix is still required');
+  const local = machine();
+  t.after(() => local.server.close());
+  const status = await local.server.configure({ enabled: true, port: 0 });
+  const legacy = await raw(status, '/api/info', { method: 'HEAD', proxy: false });
+  assert.equal(legacy.status, 401);
+  assert.equal(legacy.text, '');
+});
+
+test('backslashes and dot segments are normalized before the prefix check, so they reach the same routes and never another machine', async (t) => {
+  const m = await start(t, '/win/', 'Windows');
+  const id = async (route) => { const r = await raw(m.status, route, { headers: {} }); return r.status === 200 ? JSON.parse(r.text).machine.id : r.status; };
+  for (const route of ['/win\\api/info', '\\win/api/info', '\\win\\api\\info', '/x/../win/api/info', '/win/x/../api/info', '/win/./api/info', '/win/x/..\\api/info']) {
+    assert.equal(await id(route), 'win', route);
+  }
+  // A protocol-relative path would change the host, so it is an invalid URL rather than a route.
+  for (const route of ['//win/api/info', '//x/win/api/info']) assert.equal((await raw(m.status, route, { headers: { Authorization: `Bearer ${m.status.token}` } })).status, 400, route);
+  assert.equal(await id('/win\\'), 401, 'a backslash after the prefix is the prefix root, which is still unauthenticated');
+  // Everything that normalizes outside /win/ is a plain 404, even with valid credentials.
+  const auth = { Authorization: `Bearer ${m.status.token}` };
+  for (const route of ['/win/../mac/api/info', '/win/../api/info', '/win', '/WIN/api/info', '/win%2fapi/info', '/win%2Fapi%2Finfo', '/%77in/api/info', '/win/%2e%2e/mac/api/info']) {
+    assert.equal(await id(route), 404, route);
+    assert.equal((await raw(m.status, route, { headers: auth })).status, 404, route);
+  }
+});
+
+test('a duplicated device cookie under a prefix is rejected, as is a duplicated bearer or an ambiguous pair', async (t) => {
+  const m = await start(t, '/win/', 'Windows');
+  const { cookie } = await login(m);
+  const second = await login(m);
+  const status = (cookieHeader) => get(m, 'api/snapshot', { Cookie: cookieHeader }).then((r) => r.status);
+  assert.equal(await status(cookie), 200);
+  assert.equal(await status(`${cookie}; ${cookie}`), 401, 'the same cookie twice');
+  assert.equal(await status(`${cookie}; ${second.cookie}`), 401, 'two valid cookies of the same name');
+  assert.equal(await status(`${second.cookie};${cookie}`), 401);
+  assert.equal(await status(`${cookie}; __Secure-agentdeck_win=${'0'.repeat(64)}`), 401, 'a valid cookie plus an injected same-name one');
+  assert.equal(await status(`__Secure-agentdeck_win=${'0'.repeat(64)}; ${cookie}`), 401);
+  assert.equal(await status(`${cookie}; agentdeck_mobile=${'0'.repeat(64)}; __Host-agentdeck_mobile=${'0'.repeat(64)}`), 200, 'legacy cookie names are not this machine\'s cookie');
+});
+
+test('cookie names of /win/ and /win-2/ never mix: a cookie of one is invisible to the other even when both are sent', async (t) => {
+  const a = await start(t, '/win/', 'Windows');
+  const b = await start(t, '/win-2/', 'Windows 2');
+  const loginA = await login(a), loginB = await login(b);
+  assert.match(loginA.setCookie, /^__Secure-agentdeck_win=[a-f0-9]{64}; .*Path=\/win\/;/);
+  assert.match(loginB.setCookie, /^__Secure-agentdeck_win-2=[a-f0-9]{64}; .*Path=\/win-2\/;/);
+  const code = (m, cookieHeader) => get(m, 'api/snapshot', { Cookie: cookieHeader }).then((r) => r.status);
+  assert.equal(await code(a, loginB.cookie), 401);
+  assert.equal(await code(b, loginA.cookie), 401);
+  for (const header of [`${loginA.cookie}; ${loginB.cookie}`, `${loginB.cookie}; ${loginA.cookie}`]) {
+    assert.equal(await code(a, header), 200, header.slice(0, 40));
+    assert.equal(await code(b, header), 200, header.slice(0, 40));
+  }
+  // A cookie whose name merely starts with the other machine's name is not it.
+  assert.equal(await code(a, `__Secure-agentdeck_win-2=${loginA.cookie.split('=')[1]}`), 401);
+  assert.equal(await code(b, `__Secure-agentdeck_win=${loginB.cookie.split('=')[1]}`), 401);
+});
+
+test('readEndpoint tolerates a missing, malformed or non-object endpoint.json and reads a valid one', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-endpoint-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'endpoint.json');
+  assert.deepEqual(readEndpoint(file), {});
+  for (const text of ['', '{', 'not json']) { fs.writeFileSync(file, text); assert.deepEqual(readEndpoint(file), {}, JSON.stringify(text)); }
+  fs.writeFileSync(file, 'null');
+  assert.equal(readEndpoint(file), null);
+  assert.deepEqual(withEndpoint({ enabled: true }, readEndpoint(file)), { enabled: true }, 'a null document is the legacy mode, not a crash');
+  fs.writeFileSync(file, JSON.stringify({ publicOrigin: PUBLIC_ORIGIN, basePath: '/win/', label: 'Windows' }));
+  assert.deepEqual(readEndpoint(file), { publicOrigin: PUBLIC_ORIGIN, basePath: '/win/', label: 'Windows' });
+});
+
+test('withEndpoint takes basePath and label only from endpoint.json, never from previously saved settings, and passes malformed values on', () => {
+  const stale = { enabled: true, port: 43121, token: 'a'.repeat(64), basePath: '/old/', label: 'Old', devices: [] };
+  const legacy = withEndpoint(stale, {});
+  assert.deepEqual(legacy, { enabled: true, port: 43121, token: 'a'.repeat(64), devices: [] }, 'removing the prefix from endpoint.json drops the saved one');
+  assert.ok(!('basePath' in legacy) && !('label' in legacy));
+  assert.deepEqual(withEndpoint(stale, { basePath: '/win/', label: 'Windows' }), { ...legacy, basePath: '/win/', label: 'Windows' });
+  assert.equal(withEndpoint(stale, { basePath: '/mac/' }).label, undefined, 'a stale saved label never rides along with a new prefix');
+  assert.equal(withEndpoint(stale, { basePath: null }).basePath, null, 'malformed prefix reaches configure, which refuses it');
+  assert.equal(withEndpoint(stale, { basePath: false }).basePath, false);
+  assert.equal(withEndpoint(stale, { basePath: '' }).basePath, '');
+  assert.equal(withEndpoint({ ...stale, publicOrigin: 'https://kept.example' }, { publicOrigin: PUBLIC_ORIGIN }).publicOrigin, 'https://kept.example', 'a configured origin wins');
+  assert.equal(withEndpoint(stale, { publicOrigin: PUBLIC_ORIGIN }).publicOrigin, PUBLIC_ORIGIN);
+  assert.equal(withEndpoint(stale, { publicOrigin: 7 }).publicOrigin, undefined);
+  assert.equal(stale.basePath, '/old/', 'the input is not mutated');
+});
+
+test('persistable strips basePath and label so config.json never holds them, and main.js persists only through it', async (t) => {
+  const settings = { enabled: true, port: 1, token: 'b'.repeat(64), publicOrigin: PUBLIC_ORIGIN, basePath: '/win/', label: 'Windows', devices: [{ hash: 'c'.repeat(64), expiresAt: 5 }] };
+  const stored = persistable(settings);
+  assert.deepEqual(stored, { enabled: true, port: 1, token: 'b'.repeat(64), publicOrigin: PUBLIC_ORIGIN, devices: [{ hash: 'c'.repeat(64), expiresAt: 5 }] });
+  assert.equal(settings.basePath, '/win/');
+  // What the server itself hands to saveSettings round-trips through the same stripping.
+  const m = await start(t, '/win/', 'Windows');
+  assert.equal(m.saved.at(-1).basePath, '/win/');
+  const json = JSON.stringify(persistable(m.saved.at(-1)));
+  assert.ok(!json.includes('basePath') && !json.includes('label') && !json.includes('/win/'));
+  const source = fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8');
+  assert.equal(source.match(/mobileWeb: persistable\(settings\)/g)?.length, 1);
+  assert.equal(source.match(/cfg\.mobileWeb = persistable\(mobileSettings\)/g)?.length, 1);
+  assert.ok(!/mobileWeb:\s*(?:settings|mobileSettings)\b/.test(source) && !/cfg\.mobileWeb = (?!persistable)/.test(source), 'no other write of mobile settings into config');
 });

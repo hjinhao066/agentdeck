@@ -26,7 +26,7 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore } = require('./task-board');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
-const { MobileWebServer, boardVersionOf, supportsLoginItem } = require('./mobile-web');
+const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
 let mainWindow = null;
 let notifications = null;
@@ -746,18 +746,8 @@ app.whenReady().then(async () => {
   // come from endpoint.json on every (re)configure and are never kept in
   // config.json, so a rollback is one edit to endpoint.json. A malformed prefix
   // is passed on as-is so the service refuses to start rather than ignoring it.
-  const readEndpoint = () => {
-    try { return JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json'), 'utf8')); } catch (_) { return {}; }
-  };
-  const withEndpoint = (settings) => {
-    const { basePath, label, ...rest } = settings;
-    if (tudArg) return settings;
-    const endpoint = readEndpoint();
-    if (!rest.publicOrigin && typeof endpoint.publicOrigin === 'string') rest.publicOrigin = endpoint.publicOrigin;
-    if (endpoint.basePath !== undefined) rest.basePath = endpoint.basePath;
-    if (endpoint.label !== undefined) rest.label = endpoint.label;
-    return rest;
-  };
+  const endpointFile = path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json');
+  const withEndpoint = (settings) => tudArg ? settings : withEndpointSettings(settings, readEndpoint(endpointFile));
   mobileSettings = withEndpoint(mobileSettings);
   const loginItemMessage = process.platform === 'win32' ? '请在 Windows 设置的「启动」应用中允许 AgentDeck 自动启动。' : '请在 macOS 登录项中允许 AgentDeck 自动启动。';
   let mobileInitializing = true;
@@ -773,8 +763,7 @@ app.whenReady().then(async () => {
     saveSettings: (settings) => {
       mobileSettings = settings;
       if (mobileInitializing && !settings.enabled) return;
-      const { basePath, label, ...persisted } = settings;
-      notificationConfig = { ...seatConfig(), mobileWeb: persisted };
+      notificationConfig = { ...seatConfig(), mobileWeb: persistable(settings) };
       fs.writeFileSync(configPath + '.tmp', JSON.stringify(notificationConfig, null, 2), { mode: 0o600 });
       fs.chmodSync(configPath + '.tmp', 0o600);
       fs.renameSync(configPath + '.tmp', configPath);
@@ -904,7 +893,7 @@ app.whenReady().then(async () => {
     catch (_) { e.returnValue = null; }
   });
   onMain('save-config', (_e, cfg) => {
-    { const { basePath, label, ...persisted } = mobileSettings; cfg.mobileWeb = persisted; }
+    cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
     if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);

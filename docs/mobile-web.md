@@ -102,10 +102,14 @@ aria-label、键盘焦点、44px 点击面积；复制成功短暂变勾。深�
 { "publicOrigin": "https://your-private-entry.example", "basePath": "/win/", "label": "Windows" }
 ```
 
-- `basePath`：一段小写字母/数字/连字符，前后各一个 `/`，例如 `/mac/`、`/win/`。空或不写＝旧行为，逐字节不变。
-  每次在设置页开关网页服务时重新读取，不需要重启应用；它不写进 `config.json`，回滚只需改回空再关开一次。
-  格式不合法时服务拒绝启动并在设置中提示，不会悄悄退回无前缀。
-- `label`：手机总台里显示的名称（最长 32 字符，无控制字符和 `<>`），必须与 `basePath` 一起设置；不写则按平台显示 Mac / Windows。
+- `basePath`：一段小写字母/数字/连字符，前后各一个 `/`，例如 `/mac/`、`/win/`。不写或写成空字符串＝旧行为，逐字节不变。
+  每次在设置页开关网页服务时重新读取 `endpoint.json`，**以本次读到的内容为准**，不沿用上一次的值，不需要重启应用；
+  它不写进 `config.json`。回滚：删掉（或清空）`basePath` 与 `label`，再在设置页关开一次网页服务即可回到旧模式，无需重启应用。
+  只有「不写」和 `""` 算无前缀；`null`、`false`、`0`、数字、格式不合法的字符串一律让服务拒绝启动并在设置中提示，不会悄悄退回无前缀。
+- `label`：手机总台里显示的名称，1–32 个字符，不能含控制符、双向控制符、零宽字符、行/段分隔符、引号（`"` `'` `` ` `` 及弯引号）和尖括号，
+  首尾不能是空白；只在设置了 `basePath` 时生效。不写则按平台显示 Mac / Windows，其它平台显示固定的 `AgentDeck`（绝不回退成主机名）。
+  无 `basePath` 时 `label` 被忽略：服务照常以旧模式启动（保证回滚时本机登录不断），仅在 `status.warning` 与日志里记一条警告。
+  有 `basePath` 而 `label` 不合法时拒绝启动。
 - 桌面设置页只读显示「手机入口中的名称：Windows · /win/」。
 
 配置了 `basePath` 后：
@@ -126,7 +130,7 @@ aria-label、键盘焦点、44px 点击面积；复制成功短暂变勾。深�
 | --- | --- | --- |
 | GET | `api/snapshot` | `{apiVersion:2, machine:{id,label,platform,hostname,appVersion}, now, csrfToken, captain:{id,title,status,turns}, sessions, boardVersion}`；一次返回手机总台每 5 秒需要的数据 |
 
-| GET | `api/info` | **无需登录**的能力探测：`{app:'agentdeck', apiVersion:2, capabilities:['snapshot','basePath'], machine:{id,label,platform}, appVersion}`；不含 hostname、token 或任何会话数据 |
+| GET | `api/info` | **无需登录**的能力探测：`{app:'agentdeck', apiVersion:2, capabilities:['snapshot','basePath'], machine:{id,label,platform}}`；不含 hostname、精确版本号、token 或任何会话数据（需要版本号请在登录后读 `api/snapshot`）。只响应 GET，HEAD 不当探测处理 |
 
 手机总台的判定：先请求 `api/info`。200＝新版（再请求 `api/snapshot`，401 即需要登录）；401 或 404＝旧版，
 旧版对前缀路径一律回 401，所以应显示「需要升级 AgentDeck」而不是登录框。`api/info` 仍受前缀、Host、

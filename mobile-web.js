@@ -12,7 +12,11 @@ const COOKIE = 'agentdeck_mobile';
 const REMOTE_COOKIE = '__Host-agentdeck_mobile';
 const MACHINE_COOKIE_PREFIX = '__Secure-agentdeck_';
 const BASE_PATH = /^\/[a-z0-9][a-z0-9-]{0,31}\/$/;
-const LABEL = /^[^\x00-\x1f\x7f<>]{1,32}$/;
+// Letters, digits, punctuation and inner spaces only: no control, format
+// (zero-width, bidirectional), line/paragraph separator, quote or angle-bracket
+// characters, and no leading/trailing space. Length counts code points.
+const LABEL = /^(?!\s)(?!.*\s$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}<>\uFF1C\uFF1E"'`\u00AB\u00BB\u2018-\u201F]{1,32}$/u;
+const GENERIC_LABEL = 'AgentDeck';
 const API_VERSION = 2;
 const LOGIN_ITEM_PLATFORMS = ['darwin', 'win32'];
 const DEVICE_LIFETIME = 30 * 24 * 60 * 60 * 1000;
@@ -28,6 +32,26 @@ function matches(value, expected) {
 // Login-item registration is shared by the platforms whose Electron
 // `openAtLogin` can restore the private web service after a user login.
 function supportsLoginItem(platform) { return LOGIN_ITEM_PLATFORMS.includes(platform); }
+
+// endpoint.json is the only source of the path prefix and name: they are taken
+// from it on every (re)configure and never kept in config.json. Absent keys mean
+// the legacy unprefixed mode; a malformed value is passed on so configure refuses
+// to start instead of silently falling back.
+function withEndpoint(settings, endpoint) {
+  const { basePath, label, ...rest } = settings;
+  if (endpoint === null || typeof endpoint !== 'object') endpoint = {};
+  if (!rest.publicOrigin && typeof endpoint.publicOrigin === 'string') rest.publicOrigin = endpoint.publicOrigin;
+  if (endpoint.basePath !== undefined) rest.basePath = endpoint.basePath;
+  if (endpoint.label !== undefined) rest.label = endpoint.label;
+  return rest;
+}
+function readEndpoint(file) {
+  try { return JSON.parse(fsSync.readFileSync(file, 'utf8')); } catch (_) { return {}; }
+}
+function persistable(settings) {
+  const { basePath, label, ...rest } = settings;
+  return rest;
+}
 
 // A short digest of board file names, sizes and mtimes; never any card text.
 function boardVersionOf(dir) {
@@ -68,6 +92,7 @@ class MobileWebServer {
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
+    this.warning = '';
     this.pending = Promise.resolve();
     this.storage = Promise.resolve();
     this.now = now;
@@ -80,6 +105,7 @@ class MobileWebServer {
     const enabled = !!this.server?.listening;
     return { enabled, url: enabled ? `http://127.0.0.1:${port}` : '', publicUrl: enabled ? this.settings.publicOrigin : '', publicOrigin: this.settings.publicOrigin,
       token: this.settings.token, port, deviceCount: this.settings.devices.filter((device) => device.expiresAt > this.now()).length, error: this.error,
+      ...(this.warning ? { warning: this.warning } : {}),
       ...(this.settings.basePath ? { basePath: this.settings.basePath, label: this.machineLabel() } : {}) };
   }
   configure(settings = {}) {
@@ -103,24 +129,34 @@ class MobileWebServer {
   async applySettings(value) {
     await this.close();
     this.error = '';
+    this.warning = '';
     const next = { ...this.settings, ...value };
     const port = next.port;
     const origin = publicOrigin(next.publicOrigin);
     const token = typeof next.token === 'string' ? next.token : '';
-    const basePath = next.basePath === undefined || next.basePath === '' ? '' : next.basePath;
-    const label = next.label === undefined || next.label === '' ? '' : next.label;
+    // Prefix and label come only from this call, never from the previous
+    // settings, so removing them from endpoint.json returns to the legacy mode
+    // without restarting the app. Only undefined/'' mean "none"; null, false, 0
+    // and every other non-string are invalid and refuse to start.
+    const basePath = value.basePath === undefined || value.basePath === '' ? '' : value.basePath;
+    let label = value.label === undefined || value.label === '' ? '' : value.label;
+    const validBase = basePath === '' || (typeof basePath === 'string' && BASE_PATH.test(basePath));
+    const validLabel = label === '' || (typeof label === 'string' && LABEL.test(label));
+    // Without a prefix the label is meaningless. Ignore it so a rollback that
+    // removes only basePath still lets the local login start, and say so.
+    if (basePath === '' && label !== '') { label = ''; this.warning = 'Machine label ignored without a base path.'; console.warn('[mobile-web] ' + this.warning); }
     if (token !== this.settings.token) this.csrfSecret = crypto.randomBytes(32);
     this.settings = { enabled: next.enabled === true, token, port, publicOrigin: origin || '',
-      ...(typeof basePath === 'string' && BASE_PATH.test(basePath) ? { basePath } : {}),
-      ...(basePath && typeof label === 'string' && LABEL.test(label) ? { label } : {}),
+      ...(basePath && validBase ? { basePath } : {}),
+      ...(basePath && label && validLabel ? { label } : {}),
       devices: (!this.settings.token || token === this.settings.token) && Array.isArray(next.devices) ? next.devices.filter((device) => device && /^[a-f0-9]{64}$/.test(device.hash) && Number.isSafeInteger(device.expiresAt) && device.expiresAt > this.now()).slice(-20).map((device) => ({ hash: device.hash, expiresAt: device.expiresAt })) : [] };
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
       this.error = 'Invalid local port.';
       return this.status();
     }
     if (origin === null) { this.error = 'Public origin must be an HTTPS origin without a path.'; return this.status(); }
-    if (basePath && (typeof basePath !== 'string' || !BASE_PATH.test(basePath))) { this.error = 'Invalid base path.'; return this.status(); }
-    if (label && (!basePath || typeof label !== 'string' || !LABEL.test(label))) { this.error = 'Invalid machine label.'; return this.status(); }
+    if (!validBase) { this.error = 'Invalid base path.'; return this.status(); }
+    if (basePath && !validLabel) { this.error = 'Invalid machine label.'; return this.status(); }
     if (token && !/^[a-f0-9]{64}$/.test(token)) { this.error = 'Invalid login token.'; return this.status(); }
     try {
       if (this.settings.enabled && !this.settings.token) this.settings.token = crypto.randomBytes(32).toString('hex');
@@ -150,7 +186,7 @@ class MobileWebServer {
   }
   machineLabel() {
     if (this.settings.label) return this.settings.label;
-    return this.machine.platform === 'darwin' ? 'Mac' : this.machine.platform === 'win32' ? 'Windows' : this.machine.hostname;
+    return this.machine.platform === 'darwin' ? 'Mac' : this.machine.platform === 'win32' ? 'Windows' : GENERIC_LABEL;
   }
   // Public requests through a machine prefix get a per-machine cookie name and
   // Path, so the browser never sends one machine's device cookie to another.
@@ -269,11 +305,11 @@ class MobileWebServer {
     if (req.headers.authorization !== undefined && !credential) return this.unauthorized(res, this.loginBan(context.ip) || this.failedLogin(context.ip));
     // Unauthenticated capability probe so the phone can tell a current machine
     // that needs a login from an older build, which answers 401 to every path.
-    // Fixed, non-sensitive fields only; no hostname, token, device or app data.
+    // Fixed, non-sensitive fields only; no hostname, exact app version, token,
+    // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
       return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath'],
-        machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform },
-        appVersion: this.machine.appVersion });
+        machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
       const ban = this.loginBan(context.ip);
@@ -363,4 +399,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS, boardVersionOf, supportsLoginItem };
+module.exports = { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable };
