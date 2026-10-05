@@ -224,3 +224,62 @@ test('activity line: failure reason, hold, wait, receipt, run state, then the br
   assert.deepEqual(U.activity(c({ status: 'todo', detail: '' })), { text: '', tone: 'quiet' });
   assert.equal(U.moreLabel(6), '展开剩余 6 项');
 });
+
+test('dependency lines: one per shown card and unfinished live prerequisite, toned by how the prerequisite is doing', () => {
+  const cards = [
+    card('run', { status: 'doing' }), card('check', { status: 'review' }), card('ask', { status: 'needs_user' }), card('broken', { status: 'doing', flag: 'failed' }),
+    card('nofunds', { status: 'review', flag: 'quota' }), card('parked', { status: 'doing', flag: 'held' }), card('later'), card('finished', { status: 'done' }),
+    card('gone', { status: 'doing', archived: true }), card('far', { project: 'Other', status: 'doing' }),
+    card('w', { order: 9, depends_on: ['run', 'check', 'ask', 'broken', 'nofunds', 'parked', 'later', 'finished', 'gone', 'missing', 'far'] }),
+  ];
+  const board = U.buildBoard(cards);
+  assert.deepEqual(board.links.map((l) => [l.from, l.tone]), [['run', 'flow'], ['check', 'flow'], ['ask', 'stuck'], ['broken', 'stuck'], ['nofunds', 'stuck'], ['parked', 'idle'], ['later', 'idle'], ['far', 'flow']],
+    'a finished prerequisite needs no line; an archived or unknown one has nowhere to start');
+  assert.ok(board.links.every((l) => l.to === 'w'));
+  // each line knows where its prerequisite sits, for when that card is folded away
+  assert.deepEqual(board.links.filter((l) => l.from === 'far' || l.from === 'check').map((l) => [l.lane, l.status]), [['agentdeck', 'review'], ['other', 'doing']]);
+  // only the shown project's cards draw lines, but they still reach into other projects
+  assert.deepEqual(U.buildBoard(cards, { project: 'other' }).links, []);
+  assert.deepEqual(U.buildBoard([...cards, card('w2', { project: 'Other', depends_on: ['run'] })], { project: 'other' }).links, [{ from: 'run', to: 'w2', lane: 'agentdeck', status: 'doing', tone: 'flow' }]);
+  assert.deepEqual(U.buildBoard([card('a'), card('b', { status: 'doing' })]).links, []);
+});
+
+test('a dependency line leaves the prerequisite, runs down the gap beside its column and enters the waiting card', () => {
+  const todo = { x: 20, y: 100, w: 200, h: 60 }, doing = { x: 230, y: 300, w: 200, h: 40 }, review = { x: 440, y: 100, w: 200, h: 60 };
+  // the prerequisite is to the right: out of its left side, down the gap, into the waiting card's right side
+  let r = U.linkRoute(doing, todo, 10);
+  assert.deepEqual(r.points, [[230, 320], [225, 320], [225, 130], [220, 130]]);
+  assert.equal(r.length, 200);
+  assert.equal(r.d, 'M230 320 L227.5 320 Q225 320 225 317.5 L225 132.5 Q225 130 222.5 130 L220 130', 'corners are rounded, never more than half a segment');
+  // to the left: out of its right side
+  assert.deepEqual(U.linkRoute(todo, doing, 10).points, [[220, 130], [225, 130], [225, 320], [230, 320]]);
+  // level with each other: one straight line across the gap
+  r = U.linkRoute(review, todo, 10);
+  assert.deepEqual(r.points, [[440, 130], [220, 130]]);
+  assert.equal(r.d, 'M440 130 L220 130');
+  // in one column: a bracket in the gap on the left
+  const below = { x: 20, y: 240, w: 200, h: 60 };
+  r = U.linkRoute(below, todo, 10);
+  assert.deepEqual(r.points, [[20, 270], [15, 270], [15, 130], [20, 130]]);
+  assert.equal(r.length, 150);
+  // lines to different cards sharing a gap fan out a little, and stay inside the gap however many there are
+  assert.deepEqual([0, 1, 2, 9].map((slot) => U.linkRoute(below, todo, 10, slot).points[1][0]), [15, 13.5, 12, 12]);
+  assert.deepEqual([0, 1, 5].map((slot) => U.linkRoute(doing, todo, 10, slot).points[1][0]), [225, 223.5, 222]);
+  assert.equal(U.linkRoute(todo, doing, 10, 2).points[1][0], 228);
+  // every point is on a card edge or in the gap, and the path is made of right angles
+  for (const [a, b] of [[doing, todo], [todo, doing], [below, todo], [review, doing]]) {
+    const p = U.linkRoute(a, b, 10).points;
+    for (let i = 1; i < p.length; i++) assert.ok(p[i][0] === p[i - 1][0] || p[i][1] === p[i - 1][1]);
+  }
+  assert.equal(U.roundedPath([[0, 0], [100, 0], [100, 100]], 7), 'M0 0 L93 0 Q100 0 100 7 L100 100');
+});
+
+test('progress meter: the share done (never rounded up to finished) and a segment per status that has cards', () => {
+  const columns = (counts) => U.COLUMNS.map((c) => ({ ...c, count: counts[c.key] || 0 }));
+  assert.deepEqual(U.progress(columns({ todo: 9, doing: 9, review: 4, needs_user: 2, done: 14 })), { total: 38, done: 14, percent: 36,
+    segments: [{ key: 'done', label: '完成', count: 14 }, { key: 'review', label: '待验收', count: 4 }, { key: 'doing', label: '进行中', count: 9 }, { key: 'needs_user', label: '需要你', count: 2 }, { key: 'todo', label: '待办', count: 9 }] });
+  assert.equal(U.progress(columns({ doing: 1, done: 199 })).percent, 99, '199 of 200 is not 100%');
+  assert.equal(U.progress(columns({ done: 3 })).percent, 100);
+  assert.deepEqual(U.progress(columns({})), { total: 0, done: 0, percent: 0, segments: [] });
+  assert.deepEqual(U.progress(U.buildBoard([card('a'), card('b', { status: 'done' })]).columns).segments.map((s) => s.key), ['done', 'todo']);
+});
