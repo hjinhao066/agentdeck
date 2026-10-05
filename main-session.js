@@ -525,8 +525,12 @@
     const said = (id) => window.ChatUI.turnsOf(id).filter((t) => t.kind !== 'task' && t.kind !== 'notice' && String(t.user || '').trim())
       .map((t) => ({ ts: t.ts, text: String(t.user).slice(0, 4000), sourceId: id,
         ...(/（全文 \d+ 字，见附件）$/.test(t.user) && /prompt-[\w-]+\.txt$/.test(String((t.atts || []).at(-1) || '')) ? { longFile: t.atts.at(-1) } : {}) }));
+    // The user's last words may be several Captains back (a night of automatic Relays).
     let userTurns = said(col.id);
-    if (userTurns.length < 8 && previousId && previousId !== col.id) userTurns = [...said(previousId), ...userTurns];
+    for (const past of [...(host.config.captainHistory || [])].reverse().slice(0, 8)) {
+      if (userTurns.length >= 8) break;
+      if (past.id !== col.id) userTurns = [...said(past.id), ...userTurns];
+    }
     const rotation = window.PerpetualCaptainCore ? window.PerpetualCaptainCore.normalizeSettings(host.config.perpetualCaptain) : null;
     return {
       colId: col.id, reason, now: Date.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, cli: M.boardCli(host.platform),

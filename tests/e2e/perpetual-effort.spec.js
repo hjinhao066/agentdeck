@@ -114,3 +114,66 @@ test('Relay revokes the old Captain and listener, preserves independent tokens, 
   expect(replacement.stdout).toContain('handoff-protected-receipt');
   expect(await page.evaluate(() => config.mainSession.pending.length)).toBe(0);
 });
+
+test('after a Relay the new Captain reads the handoff through the CLI; a second listener replaces the first; a command past its deadline is not run', async () => {
+  test.setTimeout(120000);
+  const controlDir = path.join(profile, 'board-control');
+  const old = JSON.parse(fs.readFileSync(credentialsFile(CAPTAIN), 'utf8'));
+  const oldEnv = { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: old.controlToken };
+  // work that is still out at the moment of the Relay
+  await page.evaluate((id) => {
+    config.mainSession.tasks = [{ id: 'k-open', colId: id, title: '交接时还在跑的活', status: 'working', gen: 1, sentAt: Date.now(), startedAt: Date.now() }];
+    flushConfig();
+  }, INDEPENDENT);
+  expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(true);
+  const newId = await page.evaluate(() => config.mainSession.colId);
+  await expect.poll(() => fs.existsSync(credentialsFile(newId))).toBe(true);
+  const fresh = JSON.parse(fs.readFileSync(credentialsFile(newId), 'utf8'));
+  const env = { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: fresh.controlToken };
+  const boards = path.join(profile, 'seats-home', '.agents', 'boards');
+  const file = path.join(boards, 'agentdeck-captain-handoff.md');
+  // written before the old terminal was replaced, from the state at that moment
+  const written = fs.readFileSync(file, 'utf8');
+  expect(written).toContain('触发：席位 Relay'); expect(written).toContain(`上任会话：${CAPTAIN}`);
+  expect(written).toContain('交接时还在跑的活'); expect(written).toContain('队长代次 gen 1 → 2');
+  // the Captain's own notes file exists as an empty template and is not the app's to fill
+  expect(fs.readFileSync(path.join(boards, 'agentdeck-captain-decisions.md'), 'utf8')).toContain('## 暂停/取消/暂不启动');
+
+  // on demand: the same text from the live state, for the new Captain only
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).mainSession.colId, { timeout: 15000 }).toBe(newId);
+  const live = await cli(['handoff'], env).done;
+  expect(live.stderr).toBe(''); expect(live.code).toBe(0);
+  expect(live.stdout).toContain('# AgentDeck 队长交接'); expect(live.stdout).toContain('触发：队长运行 handoff');
+  expect(live.stdout).toContain(`上任会话：${CAPTAIN}`); expect(live.stdout).toContain('交接时还在跑的活');
+  expect(live.stdout).toBe(fs.readFileSync(file, 'utf8') + '\n');
+  const refused = await cli(['handoff'], oldEnv).done;
+  expect(refused.code).toBe(1); expect(refused.stderr).toContain('Control request rejected');
+  expect((await cli(['handoff'], { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: fresh.receiptToken }).done).code).toBe(1);
+
+  // two listeners in the new Captain's terminal: the later one keeps the channel
+  const first = cli(['receipts', '--wait', '--timeout', '60'], env);
+  await page.waitForTimeout(2500);
+  const second = cli(['receipts', '--wait', '--timeout', '60'], env);
+  const replaced = await first.done;
+  expect(replaced.code).toBe(0); expect(replaced.stdout).toContain('已有更新的回执监听在运行'); expect(replaced.stdout).toContain('不要为它重挂');
+  await page.evaluate((id) => {
+    config.mainSession.pending.push({ taskId: 'after-replace', colId: id, title: '换监听之后的回执', ts: Date.now(), summary: 'reaches-the-one-listener', files: [] });
+    flushConfig();
+  }, INDEPENDENT);
+  const delivered = await second.done;
+  expect(delivered.code).toBe(0); expect(delivered.stdout).toContain('reaches-the-one-listener'); expect(delivered.stdout).not.toContain('已有更新的回执监听');
+  expect(await page.evaluate(() => config.mainSession.pending.length)).toBe(0);
+
+  // a command the CLI has already given up on is refused instead of opening a session late
+  const columnsBefore = await page.evaluate(() => columns.length);
+  const requestId = `${Date.now()}-late-${Math.random().toString(16).slice(2, 10)}`;
+  const request = { id: requestId, token: fresh.controlToken, createdAt: Date.now() - 31000, deadline: Date.now() - 1000,
+    action: 'main-new', title: '迟到的派活', task: '不该被执行', command: FAKE, project: '', reviews: [], agent: '', cwd: '', boardId: '' };
+  fs.writeFileSync(path.join(controlDir, 'requests', requestId + '.json.tmp'), JSON.stringify(request));
+  fs.renameSync(path.join(controlDir, 'requests', requestId + '.json.tmp'), path.join(controlDir, 'requests', requestId + '.json'));
+  const responseFile = path.join(controlDir, 'responses', requestId + '.json');
+  await expect.poll(() => fs.existsSync(responseFile), { timeout: 15000 }).toBe(true);
+  expect(JSON.parse(fs.readFileSync(responseFile, 'utf8')).error).toContain('没有执行');
+  expect(await page.evaluate(() => columns.length)).toBe(columnsBefore);
+  expect(await page.evaluate(() => config.mainSession.tasks.some((t) => t.title === '迟到的派活'))).toBe(false);
+});
