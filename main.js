@@ -14,6 +14,7 @@ const { createQuotaLowBark } = require('./quota-low-bark');
 const { registerSideIpc } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
+const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
@@ -227,6 +228,13 @@ function shellArgs() {
   return ['-NoLogo', '-NoExit', '-EncodedCommand', b64];
 }
 
+const codexLauncher = createCodexLauncher({ shell: shellFile(), env: ENV });
+const ptyLaunchDirs = new Map();
+handleMain('pty:prepare-launch', async (_event, { id, command }) => {
+  if (!ptys.has(id) || typeof command !== 'string' || command.length > 1000 || /[\x00-\x1f\x7f]/.test(command)) throw new Error('Invalid launch command');
+  return codexLauncher.prepare(command, ptyLaunchDirs.get(id));
+});
+
 const ptySeats = new Map();
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
@@ -320,6 +328,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   // writing the tty credential does disk I/O and would miss that exit.
   const tty = ttyFromPty(p);
   ptys.set(id, p);
+  ptyLaunchDirs.set(id, dir);
   ptySeats.set(id, binding);
   p.onData((data) => { const sequence = bufferAppend(id, data); send('pty:data', { id, data, sequence }); });
   p.onExit(({ exitCode, signal }) => {
@@ -328,6 +337,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     if (ptys.get(id) === p) {
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
+      ptyLaunchDirs.delete(id);
       ptySeats.delete(id);
       managedSessions.delete(id);
       receiptSessions.delete(id);
@@ -353,6 +363,7 @@ function killPty(id, keepReplay) {
   if (keepReplay) writeSession(id, ptyBuffers.get(id));
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
+  ptyLaunchDirs.delete(id);
   ptyBuffers.delete(id);
   ptySeats.delete(id);
   managedSessions.delete(id);

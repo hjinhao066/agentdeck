@@ -228,6 +228,10 @@ test('Windows agent detection discards stale chrome and recognizes wrapped shell
   const codexChrome = 'OpenAI Codex\n› Ask Codex to do anything\n  100% context left';
   assert.equal(M.windowsAgentOutput(codexChrome + '\nPS C:\\work> '), '');
   assert.equal(M.windowsAgentOutput('PS C:\\work> codex --dangerously-bypass-approvals-and-sandbox\n' + codexChrome), codexChrome);
+  assert.equal(M.windowsCodexReady('PS C:\\long-path\n\\codex-launch\\codex.cmd --no-daemon'), false);
+  assert.equal(M.windowsCodexReady('PS C:\\work> codex\n' + codexChrome), true);
+  assert.equal(M.windowsCodexReady('PS C:\\work> codex\nWelcome to Codex CLI (test stand-in)'), true);
+  assert.equal(M.windowsCodexReady(codexChrome + '\nPS C:\\work> '), false);
 });
 
 test('队长\'s Antigravity commands carry the effort in the model id, never --effort', () => {
@@ -249,17 +253,11 @@ test('队长\'s Antigravity commands carry the effort in the model id, never --e
   }
 });
 
-test('队长\'s Codex commands always run without confirmation prompts, never with the flag twice', () => {
-  const C = (cmd) => M.checkCommand(cmd).cmd;
-  // GPT-6 Luna: `codex -m gpt-6-luna` would otherwise stop at the first approval
-  assert.equal(C('codex -m gpt-6-luna'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  assert.equal(C('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
-  assert.equal(C('/opt/bin/codex -m gpt-6-luna'), '/opt/bin/codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  // already has one of the two spellings (a duplicate fails to start); --no-daemon is still added once
-  assert.equal(C('codex --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
-  assert.equal(C('codex -m gpt-6-luna --yolo'), 'codex --no-daemon -m gpt-6-luna --yolo');
-  assert.equal(C('codex --yolo'), 'codex --no-daemon --yolo');
-  assert.equal(C('codex --no-daemon --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+test('captain command checks leave Codex capabilities to the local launch probe', () => {
+  for (const cmd of ['codex', 'codex -m gpt-6-luna', '/opt/bin/codex -m gpt-6-luna',
+    'codex --yolo', 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox']) {
+    assert.equal(M.checkCommand(cmd).cmd, cmd);
+  }
 });
 
 test('agy can use its tested legacy models while every other CLI still rejects old Claude models', () => {

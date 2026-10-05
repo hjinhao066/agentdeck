@@ -2060,7 +2060,18 @@ function buildColumn(col, isFresh) {
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
           const spawnId = col.id;
-          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, BoardCore.shellLaunchCommand(launch, env.platform)), env.platform) + '\r'); }, 700);
+          terms.get(spawnId).launchPending = true;
+          const start = async () => {
+            const entry = terms.get(spawnId);
+            if (!entry || !entry.alive || col.id !== spawnId) return;
+            if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
+            const prepared = await window.deck.prepareLaunch(spawnId, launch).catch(() => null);
+            if (col.id !== spawnId || terms.get(spawnId) !== entry || !entry.alive) return;
+            if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
+            if (prepared !== null) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, prepared), env.platform) + '\r');
+            entry.launchPending = false;
+          };
+          setTimeout(start, 700);
         }
         if (!isFresh && col.role !== 'manual' && !col.taskCompleted) {
           // A cold restart killed the old CLI caller. Re-deliver managed
@@ -2559,7 +2570,11 @@ function removeFolder(folderId) {
 async function agentInForeground(col, allowShell) {
   if (allowShell && !col.cmd) return true;
   const entry = terms.get(col.id);
-  if (env.platform === 'win32') return !!entry && AGENT_IDLE_RE.test(MainCore.windowsAgentOutput(entry.lastScreen));
+  if (entry?.launchPending) return false;
+  if (env.platform === 'win32') {
+    if (BoardCore.codexProgram(col.cmd, 'win32')) return !!entry && MainCore.windowsCodexReady(entry.lastScreen);
+    return !!entry && AGENT_IDLE_RE.test(MainCore.windowsAgentOutput(entry.lastScreen));
+  }
   try {
     return !MainCore.isShellProcess(await window.deck.ptyForeground(col.id));
   } catch (_) { return false; }

@@ -161,7 +161,7 @@
     'Cursor CLI：cursor-agent --force --model grok-4.7-high-fast　主要用 Grok 4.7 跑脏活和数据抓取。Cursor 会话刚开的头 1–2 分钟可能没有任何输出，属于正常初始化，别急着判定卡死。',
     'Claude Code：claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high　每次开 Claude 小弟必须显式写 --model claude-opus-5-5 或 --model claude-sonnet-5-5，并显式写 --effort；本机默认模型不是 Opus，不写可能跑成别的模型。开工后用 peek 看状态行确认模型，不符就修正命令重新派活。Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。',
     'Claude Code、Cursor、Codex 命令仍禁止 Claude 4.x 和 Haiku。只有 agy 可用上面列出的两个 Claude 4.6 模型；其他旧模型仍禁止。',
-    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon AgentDeck 会自动补齐，不要手动拼接，避免参数重复导致启动失败。',
+    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon 由 AgentDeck 按本机支持情况自动补齐，不要手动拼接。',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
   const ROUTING = [
@@ -340,14 +340,6 @@
       if (OLD_MODEL.test(id) && !(isAgy && AGY_LEGACY_MODELS.has(id))) {
         return { error: `用户不用 ${id.slice(0, 60)}（Claude 4.x 和 Haiku 都不用）。量大的普通活用 Antigravity 的 gemini-3.8-flash-high（或 -medium、-low）；写代码和重要的活用 Cursor 的 claude-opus-5-5-high 或 claude-sonnet-5-5-high，或者 Claude Code（默认 Opus 5.5，要 Sonnet 加 --model claude-sonnet-5-5）。` };
       }
-    }
-    // Codex hands out autonomous work like every other agent: no confirmation prompts.
-    // Added unless a bypass flag (or its --yolo alias) is already there, since a duplicate fails to start.
-    if (programName(words[0]) === 'codex') {
-      const extra = [];
-      if (!words.includes('--no-daemon')) extra.push('--no-daemon');
-      if (!words.some((w) => /^(?:--yolo|--dangerously-bypass-approvals-and-sandbox)$/.test(w))) extra.push('--dangerously-bypass-approvals-and-sandbox');
-      return { cmd: extra.length ? [words[0], ...extra, ...words.slice(1)].join(' ') : source };
     }
     if (!isAgy) return { cmd: source };
     const out = [words[0]];
@@ -756,6 +748,11 @@
     return /(?:^|\n)\s*PS [^>]*>\s*$/i.test(String(screen || '').trimEnd());
   }
 
+  function windowsCodexReady(screen) {
+    // A wrapped command/path containing "codex" is still PowerShell input.
+    return /^\s*(?:[│|]\s*)?(?:(?:>_\s*)?OpenAI Codex\b|Welcome to Codex(?: CLI)?\b|›(?:\s|$)|\d+% context left(?:\s|$))/im.test(windowsAgentOutput(screen));
+  }
+
   // One compact line per session for `ledger`.
   function ledgerText(rows) {
     if (!rows.length) return '还没有别的会话。';
@@ -788,7 +785,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });

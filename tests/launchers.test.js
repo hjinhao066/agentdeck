@@ -117,11 +117,11 @@ test('Codex app launches bypass shell wrappers without duplicating their --yolo 
   const cmd = B.commandForAgent('codex');
   assert.equal(B.shellLaunchCommand(cmd, 'darwin'), 'command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox');
   assert.equal(B.launchInput(cmd, 'linux'), '\x15command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox\r');
-  assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" --no-daemon resume --last --yolo');
-  assert.equal(B.shellLaunchCommand(cmd, 'win32'), cmd);
+  assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" resume --last --yolo');
+  assert.equal(B.shellLaunchCommand(cmd, 'win32'), "& 'codex' --no-daemon --dangerously-bypass-approvals-and-sandbox");
   assert.equal(B.shellLaunchCommand('codex --no-daemon --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
-  assert.equal(B.shellLaunchCommand('/opt/bin/codex --yolo', 'darwin'), '/opt/bin/codex --no-daemon --yolo');
-  assert.equal(B.shellLaunchCommand('command "codex" --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
+  assert.equal(B.shellLaunchCommand('/opt/bin/codex --yolo', 'darwin'), "command '/opt/bin/codex' --yolo");
+  assert.equal(B.shellLaunchCommand('command "codex" --yolo', 'darwin'), 'command "codex" --yolo');
 
   for (const custom of ['node fake-agent.js', './codex-wrapper.sh']) {
     assert.equal(B.shellLaunchCommand(custom, 'darwin'), custom);
@@ -146,9 +146,10 @@ test('custom and restored Codex commands use their own server on both platforms 
   for (const platform of ['darwin', 'win32']) {
     for (const cmd of ['codex -m gpt-6-luna', 'codex resume --last --yolo', '/opt/bin/codex --yolo',
       '"C:\\Program Files\\codex.exe" resume chat-1', 'command "codex" --yolo']) {
-      const launch = B.shellLaunchCommand(cmd, platform);
+      const capabilities = { noDaemon: true, bypass: true };
+      const launch = B.shellLaunchCommand(cmd, platform, capabilities);
       assert.equal(launch.match(/--no-daemon/g).length, 1, launch);
-      assert.equal(B.shellLaunchCommand(launch, platform), launch);
+      assert.equal(B.shellLaunchCommand(launch, platform, capabilities), launch);
     }
     assert.equal(B.shellLaunchCommand('agy --model gemini-3.8-flash-high', platform), 'agy --model gemini-3.8-flash-high');
   }

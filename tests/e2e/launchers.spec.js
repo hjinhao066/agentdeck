@@ -2,6 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const closeElectron = require('./fixtures/close-electron');
 
 // The agent buttons on a blank session. Each button's command is swapped for
 // the stand-in right before the click, so no real agent CLI ever starts.
@@ -47,7 +48,7 @@ test.beforeAll(async () => {
   await launch();
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -112,7 +113,7 @@ test('an agent started by hand in the terminal hides the buttons; leaving it bri
 });
 
 test('the chosen agent comes back after a restart, with the conversation', async () => {
-  await application.close();
+  await closeElectron(application);
   application = null;
   await launch();
   expect(await colCmd('ln-blank')).toBe(FAKE);
@@ -134,7 +135,7 @@ test('all five launchers use canonical bypass commands and generate safe launch 
   for (const l of launchers) {
     expect(l.cmd).toBe(l.canonical);
     expect(l.unixInput).toBe('\x15' + (l.key === 'codex' ? l.cmd.replace(/^codex/, 'command "codex"') : l.cmd) + '\r');
-    expect(l.winInput).toBe('\x1b[1;5F\x1b[1;5H' + l.cmd + '\r');
+    expect(l.winInput).toBe('\x1b[1;5F\x1b[1;5H' + (l.key === 'codex' ? l.cmd.replace(/^codex/, "& 'codex'") : l.cmd) + '\r');
     expect(l.winInput).not.toContain('\x03');
   }
 });

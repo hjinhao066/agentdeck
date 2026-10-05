@@ -79,6 +79,7 @@ contextBridge.exposeInMainWorld('deck', {
   recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
   captainRelayNotify: (colId, message) => ipcRenderer.invoke('captain:relay-notify', { colId, message }),
 
+  prepareLaunch: (id, command) => ipcRenderer.invoke('pty:prepare-launch', { id, command }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   // keepReplay: save the output first (archiving), so restoring can replay it.

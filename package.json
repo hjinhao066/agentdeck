@@ -44,6 +44,7 @@
       "index.html",
       "renderer.js",
       "board-core.js",
+      "codex-launch.js",
       "board-cli.js",
       "board-credentials.js",
       "codex-captain-driver.js",

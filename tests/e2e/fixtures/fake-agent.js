@@ -245,6 +245,10 @@ function start() {
 if (process.argv.includes('--trust-dialog')) {
   process.stdout.write('Do you trust the contents of this directory?\n  ▶ [a] Trust this workspace\n    [q] Quit\n  Use arrow keys to navigate, Enter to select\n');
   process.stdin.setRawMode(true);
-  process.stdin.once('data', () => { process.stdin.setRawMode(false); process.stdin.removeAllListeners('data'); process.stdin.pause(); process.stdout.write('\x1b[2J\x1b[H'); start(); });
+  const confirmTrust = (data) => {
+    if (!data.includes('\r') && !data.includes('\n')) return;
+    process.stdin.setRawMode(false); process.stdin.removeListener('data', confirmTrust); process.stdin.pause(); process.stdout.write('\x1b[2J\x1b[H'); start();
+  };
+  process.stdin.on('data', confirmTrust);
 } else if (delayedStart) setTimeout(start, 6000);
 else start();
