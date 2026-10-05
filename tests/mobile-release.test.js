@@ -8,6 +8,7 @@ const http = require('node:http');
 const { execFileSync } = require('node:child_process');
 const { build, pageMetadata, reader, verify, deploy, rollback, parseArgs, configuration } = require('../scripts/mobile-release');
 const { deployMobileGate } = require('../scripts/release');
+if (process.platform === 'win32') { test('Mobile deployment directory fixtures are POSIX only', { skip: true }, () => {}); return; }
 const writeJSON = (file, value) => fs.writeFileSync(file, JSON.stringify(value));
 const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: 'pipe' }).trim();
 const old = { version: '1.1.7', commit: 'a'.repeat(40), builtAt: '2026-10-04T23:00:35.000Z' };

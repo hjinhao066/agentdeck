@@ -7,6 +7,7 @@ const { startHub } = require('../fixtures/hub-proxy');
 const { deploy, rollback } = require('../../scripts/mobile-release');
 
 test('one browser reload loads the independently deployed commit and its JS; receipt rollback restores the first build', async ({ browser }) => {
+  test.skip(process.platform === 'win32', 'Local deploy directory fixture uses POSIX bash/tar/symlinks');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-mobile-release-e2e-'));
   const repo = path.join(root, 'repo'), remote = path.join(root, 'remote');
   const source = path.join(repo, 'mobile-web/hub');
