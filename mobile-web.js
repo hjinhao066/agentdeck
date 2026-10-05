@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const net = require('node:net');
+const QuotaCore = require('./quota-core');
 const fsSync = require('node:fs');
 
 const DEFAULT_PORT = 43121;
@@ -46,6 +47,24 @@ function imageKind(data) {
   if (starts([0x47, 0x49, 0x46, 0x38]) && (data[4] === 0x37 || data[4] === 0x39) && data[5] === 0x61) return 'gif';
   if (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8)) return 'webp';
   return null;
+}
+
+// Quota rows are rebuilt field by field: whatever the desktop hands over, the
+// phone gets display values only, and an account is always h***@example.com.
+const QUOTA_STATUS = ['out', 'stale', 'normal', 'warning', 'danger', 'nodigits', 'expired', 'unknown'];
+function quotaView(data, now) {
+  const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
+  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const rows = (Array.isArray(data?.rows) ? data.rows : []).slice(0, 16).filter((row) => row && typeof row === 'object').map((row) => ({
+    key: text(row.key, 60), provider: text(row.provider, 20), name: text(row.name, 100), short: text(row.short, 40), flag: text(row.flag, 8),
+    captain: row.captain === true,
+    // An unrecognized status is never shown as usable.
+    status: QUOTA_STATUS.includes(row.status) ? row.status : 'unknown', failed: row.failed === true,
+    cells: (Array.isArray(row.cells) ? row.cells : []).filter((cell) => cell && ['5h', '7d'].includes(cell.key) && QuotaCore.percent(cell.remaining) !== null).slice(0, 2)
+      .map((cell) => ({ key: cell.key, remaining: cell.remaining, out: cell.out === true, resetAt: time(cell.resetAt) })),
+    recoveryAt: time(row.recoveryAt), sampledAt: time(row.sampledAt), account: QuotaCore.maskAccount(row.account), source: text(row.source, 60),
+  }));
+  return { rows, version: /^\d+\.\d+\.\d+[\w.-]{0,20}$/.test(data?.version || '') ? data.version : '', now };
 }
 
 // Login-item registration is shared by the platforms whose Electron
@@ -105,8 +124,8 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, sendCaptain, saveSettings, getBoardVersion, machine = {}, uploadDir = '', now = Date.now }) {
-    this.sources = { getSessions, getTasks, getOutput, getCaptain, sendCaptain, saveSettings, getBoardVersion };
+  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings, getBoardVersion, machine = {}, uploadDir = '', now = Date.now }) {
+    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings, getBoardVersion };
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
@@ -441,6 +460,7 @@ class MobileWebServer {
         sessions, boardVersion });
     }
     if (req.method === 'GET' && route === '/api/captain') return this.json(res, 200, this.sources.getCaptain ? await this.sources.getCaptain() : { turns: [], status: 'unavailable' });
+    if (req.method === 'GET' && route === '/api/quota') return this.json(res, 200, quotaView(this.sources.getQuota ? await this.sources.getQuota() : null, this.now()));
     if (req.method === 'GET' && route === '/api/sessions') return this.json(res, 200, { sessions: await this.sources.getSessions() });
     if (req.method === 'GET' && route === '/api/tasks') return this.json(res, 200, { cards: await this.sources.getTasks() });
     if (req.method === 'GET' && route === '/api/output') {

@@ -37,7 +37,7 @@ test.beforeAll(async () => {
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
   await expect(page.locator('#quotaBar [data-seat-id="cn"] [data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
-  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('—');
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('——');
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(page.locator('#quotaBar [data-provider="Codex"] .quota-values')).toContainText('8%');
 });
@@ -172,7 +172,7 @@ test('collapsed sidebar keeps a gauge icon whose popover lists every quota', asy
   await expect(pop).toBeVisible();
   await expect(rail).toHaveAttribute('aria-expanded', 'true');
   await expect(pop.locator('.quota-item')).toHaveCount(5);
-  await expect(pop.locator('[data-seat-id="us"] .quota-values')).toHaveText('—');
+  await expect(pop.locator('[data-seat-id="us"] .quota-values')).toHaveText('——');
   await expect(pop.locator('[data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(pop.locator('[data-provider="Codex"]')).toHaveAttribute('aria-label', /^ChatGPT：/);
   for (const theme of ['dark', 'light']) {

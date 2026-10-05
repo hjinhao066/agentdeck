@@ -111,3 +111,74 @@ test('every fetch in the hub refuses redirects, so a machine cannot send the hub
   // The machine request must not let a caller's options turn redirects back on.
   assert.match(source, /\.\.\.options,\s*redirect: 'error'/);
 });
+
+test('injected dispatch cards, notices and receipts fold into one round: one message, one Captain reply', () => {
+  const t = 1_000_000;
+  const groups = Core.groupTurns([
+    { id: 'u1', ts: t, user: '看一下进度', reply: '', done: true },
+    { id: 'k1', ts: t + 1000, kind: 'task', task: { title: '前端', summary: '' }, done: true },
+    { id: 'k2', ts: t + 2000, kind: 'task', task: { title: '文档', summary: '写好了', failed: false }, done: true },
+    { id: 'n1', ts: t + 3000, kind: 'notice', reply: '回执已送达', done: true },
+    { id: 'r1', ts: t + 4000, reply: '进度如下', steps: ['读看板'], done: true },
+    { id: 'u2', ts: t + 5000, user: '再查一次', reply: '', done: false },
+  ]);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].user, '看一下进度');
+  assert.deepEqual(groups[0].replies, ['进度如下']);
+  assert.equal(groups[0].tasks.length, 2);
+  assert.deepEqual(groups[0].steps, ['回执已送达', '读看板']);
+  assert.equal(Core.processSummary(groups[0]), '过程：派了 2 件活，收到 1 份回执，2 步操作');
+  assert.equal(groups[1].pending, true);
+  assert.equal(Core.processSummary(groups[1]), '');
+});
+
+test('a reply that arrives long after the last message starts its own round, and odd turns are ignored', () => {
+  const t = 1_000_000;
+  const groups = Core.groupTurns([null, 'x', { id: 'u1', ts: t, user: '问', reply: '答', done: true }, { id: 'r2', ts: t + 31 * 60000, reply: '稍后的回执', done: true }]);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[1].user, '');
+  assert.deepEqual(groups[1].replies, ['稍后的回执']);
+  assert.deepEqual(Core.groupTurns(undefined), []);
+  // An images-only message is still the user's message.
+  assert.equal(Core.groupTurns([{ id: 'p', ts: t, user: '', images: ['a'.repeat(32) + '.png'], reply: '', done: true }])[0].images.length, 1);
+});
+
+test('quota rows keep display fields only and are never shown as usable when unrecognised', () => {
+  const clean = Core.cleanQuota({ version: '1.2.0', rows: [
+    { key: 'a', provider: 'Claude', name: 'Claude Max', short: 'Max', flag: '🇺🇸', captain: true, status: 'weird', cells: [{ key: '5h', remaining: 250, resetAt: 5 }, { key: 'x', remaining: 1 }, { key: '7d', remaining: 'n/a' }], token: 'secret', account: 'h***@example.com' },
+    null, 'x'] });
+  assert.equal(clean.rows.length, 1);
+  assert.equal(clean.rows[0].status, 'unknown');
+  assert.deepEqual(clean.rows[0].cells, [{ key: '5h', remaining: 100, out: false, resetAt: 5 }]);
+  assert.equal('token' in clean.rows[0], false);
+  assert.equal(clean.version, '1.2.0');
+  assert.deepEqual(Core.cleanQuota(null), { rows: [], version: '' });
+});
+
+test('quota wording matches the single-machine page: percent, reset, level, missing windows and old data', () => {
+  const now = new Date(2026, 9, 4, 12, 0).getTime();
+  const row = { name: 'Claude Max', status: 'normal', failed: false, captain: true, cells: [{ key: '5h', remaining: 72, out: false, resetAt: now + 95 * 60000 }], recoveryAt: null, sampledAt: now - 60000 };
+  assert.equal(Core.percentText({ remaining: 0.4 }), '<1%');
+  assert.equal(Core.percentText({ remaining: 71.6 }), '72%');
+  assert.equal(Core.percentText({ out: true }), '用尽');
+  assert.equal(Core.shortReset(now + 95 * 60000, now), '13:35');
+  assert.equal(Core.shortReset(now + 3 * 86400000, now), '周' + '日一二三四五六'[new Date(now + 3 * 86400000).getDay()]);
+  assert.match(Core.longReset(now + 95 * 60000, now), /^13:35（1 小时 35 分后）$/);
+  assert.deepEqual(Core.quotaCells(row).map((cell) => [cell.key, !!cell.missing]), [['5h', false], ['7d', true]]);
+  assert.equal(Core.cellLevel(row, row.cells[0], false), 'ok');
+  assert.equal(Core.cellLevel(row, { remaining: 8 }, false), 'danger');
+  assert.equal(Core.cellLevel(row, { remaining: 15 }, false), 'low');
+  assert.equal(Core.cellLevel(row, { remaining: 90 }, true), 'none');
+  assert.equal(Core.cellLevel({ ...row, status: 'stale' }, { remaining: 90 }, false), 'none');
+  assert.equal(Core.quotaLabel(row, now), 'Claude Max（队长在用）；5 小时剩余 72%，13:35（1 小时 35 分后）重置');
+  assert.equal(Core.quotaNote({ ...row, status: 'stale', failed: true }, now), '查询失败 · 数据已旧 · 采样 11:59');
+  // An account that only reported "used up" shows that under 5h.
+  assert.deepEqual(Core.quotaCells({ status: 'out', cells: [], recoveryAt: now + 1 })[0], { key: '5h', out: true, resetAt: now + 1 });
+});
+
+test('the hub asks each computer for its own quota under its prefix and keeps none of it on the phone', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'mobile-web', 'hub', 'app.js'), 'utf8');
+  assert.match(source, /request\(m, 'api\/quota'\)/);
+  const stored = [...source.matchAll(/store\(KEYS\.\w+/g)].map((match) => match[0]);
+  assert.deepEqual(stored.sort(), ['store(KEYS.machine', 'store(KEYS.machine', 'store(KEYS.meta', 'store(KEYS.theme']);
+});

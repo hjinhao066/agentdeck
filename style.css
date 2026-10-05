@@ -319,41 +319,50 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 /* Quota rows: a compact block at the bottom of the sidebar (one row per
    provider / Claude seat). The same rows show in #quotaPop while collapsed. */
 #navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; }
+.quota-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
-#quotaBar, #quotaPopList { display: flex; flex-direction: column; gap: 1px; container-type: inline-size; }
-.quota-item { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; height: 26px; padding: 0 6px; border-radius: 6px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
+/* One grid for the 5h/7d header and every row (each row is a subgrid): the name
+   column is exactly as wide as the longest name, so 5h starts right after it and
+   both value columns sit to the left; spare width stays empty on the right. */
+#quotaBar, #quotaPopList { --qw: 60px; --qg: 10px; display: grid; grid-template-columns: max-content repeat(2, minmax(0, calc(var(--qw) + var(--qg)))) minmax(0, 1fr); row-gap: 1px; container-type: inline-size; }
+.quota-cols, .quota-item { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: center; padding: 0 6px; }
+.quota-cols { height: 14px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .02em; }
+.quota-col { padding-left: var(--qg); }
+.quota-item { position: relative; min-width: 0; height: 30px; border-radius: 6px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
+.quota-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .quota-icon { display: flex; flex: 0 0 auto; color: var(--text-2); }
-.quota-name { display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 0; color: var(--text-2); line-height: 1; }
+.quota-name { display: inline-flex; align-items: center; gap: 4px; min-width: 0; color: var(--text-2); line-height: 1; }
 .quota-item[data-seat-id] .quota-name { font-size: 13px; }
 .quota-captain { display: inline-flex; color: #e0a91c; }
 .quota-captain svg { width: 11px; height: 11px; }
+.quota-item[data-provider="Claude"] .quota-icon { color: var(--brand-claude); }
+.quota-item[data-provider="Codex"] .quota-icon { color: var(--brand-chatgpt); }
+.quota-item[data-provider="Cursor"] .quota-icon { color: var(--text); }
+.quota-item[data-provider="Antigravity"] .quota-icon { color: var(--brand-gemini-a); }
+.quota-item[data-provider="Antigravity"] .quota-icon path { fill: url(#quotaGeminiGradient); }
 
-/* Two fixed columns (5h, 7d) so the numbers line up down the panel. A window the
-   provider does not have leaves its column empty; status-only rows span both. */
-.quota-values { display: grid; grid-template-columns: repeat(2, var(--quota-cell-w, 68px)); column-gap: 8px; align-items: center; margin-left: auto; flex: 0 0 auto; font-size: 11px; font-variant-numeric: tabular-nums; }
-.quota-cell { position: relative; display: flex; align-items: baseline; gap: 3px; height: 20px; line-height: 17px; }
-.quota-cell[data-window="5h"] { grid-column: 1; }
-.quota-cell[data-window="7d"] { grid-column: 2; }
-.quota-key { color: var(--text-2); font-size: 9.5px; }
-.quota-pct { min-width: 3.3ch; color: var(--text); font-weight: 600; text-align: right; }
-.quota-reset { margin-left: auto; color: var(--text-2); font-size: 10px; }
-.quota-meter { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; border-radius: 1px; background: var(--quota-track); overflow: hidden; }
-.quota-meter::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--pct, 0%); border-radius: 1px; background: var(--quota-fill); }
-[data-level="low"] > .quota-pct, [data-level="low"] > .qt-pct { color: var(--quota-low); }
-[data-level="danger"] > .quota-pct, [data-level="out"] > .quota-pct, [data-level="danger"] > .qt-pct, [data-level="out"] > .qt-pct { color: var(--quota-out); }
-[data-level="out"] > .quota-reset { color: var(--quota-out); }
+/* Cell: remaining % + reset time, a thin bar underneath. Used up = ⊘ + reset time in red; no number = —. */
+.quota-values { display: contents; }
+.quota-cell { display: flex; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; padding-left: var(--qg); font-size: 11px; font-variant-numeric: tabular-nums; }
+.quota-line { display: flex; align-items: center; gap: 5px; height: 14px; line-height: 14px; overflow: hidden; }
+.quota-pct { color: var(--text); font-weight: 600; }
+.quota-reset { color: var(--text-2); font-size: 10.5px; }
+.quota-none { color: var(--text-2); }
+.quota-ban { display: inline-flex; color: var(--quota-out); }
+.quota-ban svg { width: 12px; height: 12px; }
+.quota-meter { position: relative; display: block; height: 3px; border-radius: 2px; background: var(--quota-track); overflow: hidden; }
+.quota-meter::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--pct, 0%); border-radius: 2px; background: var(--quota-fill); }
+[data-level="low"] .quota-pct, [data-level="low"] > .qt-pct { color: var(--quota-low); }
+[data-level="danger"] .quota-pct, [data-level="danger"] > .qt-pct, [data-level="out"] > .qt-pct { color: var(--quota-out); }
+[data-level="out"] .quota-reset { color: var(--quota-out); font-weight: 600; }
 [data-level="low"] > .quota-meter::after { background: var(--quota-low-fill); }
 [data-level="danger"] > .quota-meter::after { background: var(--quota-out-fill); }
-[data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 45%, transparent); }
-.quota-status { grid-column: 1 / -1; justify-self: end; display: inline-flex; align-items: baseline; gap: 5px; color: var(--text-2); }
-.quota-status[data-window="5h"] { grid-column: 1; justify-self: stretch; }
-.quota-status[data-level="ok"]::before { content: ""; align-self: center; width: 5px; height: 5px; border-radius: 50%; background: var(--st-done); }
-.quota-status[data-level="out"] .quota-status-text { color: var(--quota-out); font-weight: 600; }
-.quota-item[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 9%, transparent); }
+[data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-out-fill) 40%, transparent); }
+.quota-item[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
 /* Too narrow for the reset times: keep the two remaining percentages only. */
-@container (max-width: 227px) {
-  .quota-values { --quota-cell-w: 41px; column-gap: 6px; }
-  .quota-cell > .quota-reset, .quota-status[data-window] > .quota-reset { display: none; }
+@container (max-width: 215px) {
+  .quota-cell .quota-reset { display: none; }
+  .quota-cell, .quota-col { padding-left: 7px; }
 }
 .quota-item:hover, .quota-item:focus-visible, .quota-item:focus { background: var(--icon-hover-bg); outline: none; }
 .quota-item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
@@ -374,8 +383,9 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .qt-reset, .qt-note, .qt-plan { color: var(--text-2); }
 .qt-note.out { color: var(--quota-out); }
 .qt-window + .qt-plan, .qt-note + .qt-plan { padding-top: 6px; border-top: 1px solid var(--hairline); }
-.qt-foot { color: var(--muted); font-size: 10.5px; }
-.qt-foot.stale { color: var(--quota-low); }
+.qt-meta { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; row-gap: 1px; padding-top: 6px; border-top: 1px solid var(--hairline); color: var(--text-2); font-size: 11px; }
+.qt-k { color: var(--muted); }
+.qt-meta.stale .qt-v { color: var(--quota-low); }
 #colNav { z-index: 30; } /* lets the quota details overlap the deck */
 #quotaPop { position: fixed; z-index: 60; width: 272px; padding: 8px; background: var(--elev); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-pop); -webkit-app-region: no-drag; }
 #quotaPop[hidden] { display: none; }
@@ -2452,9 +2462,9 @@ header.tbv-ghost { padding: 6px 10px; border: 1px solid var(--accent); border-ra
 #quotaRefresh.spinning svg { animation: quota-spin .9s linear infinite; }
 @keyframes quota-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { #quotaRefresh.spinning svg { animation: none; } }
-:root { --quota-low: #d99426; --quota-out: #e46464; --quota-low-fill: #d99426; --quota-out-fill: #e46464; --quota-track: rgba(128, 128, 128, 0.2); --quota-fill: rgba(128, 128, 128, 0.75); }
-:root[data-theme="dark"] { --quota-low: #f4cc77; --quota-out: #ffb4aa; --quota-low-fill: #e0a437; --quota-out-fill: #f07167; --quota-track: rgba(255, 255, 255, 0.1); --quota-fill: rgba(255, 255, 255, 0.5); }
-:root[data-theme="light"] { --quota-low: #765000; --quota-out: #a02020; --quota-low-fill: #c98a1b; --quota-out-fill: #d04a44; --quota-track: rgba(0, 0, 0, 0.09); --quota-fill: rgba(0, 0, 0, 0.42); }
+:root { --quota-low: #d99426; --quota-out: #e46464; --quota-low-fill: #d99426; --quota-out-fill: #e46464; --quota-track: rgba(128, 128, 128, 0.2); --quota-fill: rgba(128, 128, 128, 0.75); --brand-claude: #d97757; --brand-chatgpt: #10a37f; --brand-gemini-a: #4f8cf7; --brand-gemini-b: #9b72f2; }
+:root[data-theme="dark"] { --quota-low: #f4cc77; --quota-out: #ffb4aa; --quota-low-fill: #e0a437; --quota-out-fill: #f07167; --quota-track: rgba(255, 255, 255, 0.1); --quota-fill: rgba(255, 255, 255, 0.78); --brand-claude: #e08562; --brand-chatgpt: #19c37d; --brand-gemini-a: #5b9bff; --brand-gemini-b: #a98bff; }
+:root[data-theme="light"] { --quota-low: #765000; --quota-out: #a02020; --quota-low-fill: #c98a1b; --quota-out-fill: #d04a44; --quota-track: rgba(0, 0, 0, 0.09); --quota-fill: rgba(0, 0, 0, 0.42); --brand-claude: #c96442; --brand-chatgpt: #0d8a6a; --brand-gemini-a: #3a72e8; --brand-gemini-b: #8455d6; }
 
 .quota-heading { display: flex; align-items: center; justify-content: space-between; }
 .perpetual-toggle-row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }

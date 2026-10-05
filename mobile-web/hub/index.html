@@ -11,16 +11,16 @@
 </head>
 <body>
   <div class="app">
-    <header class="app-header">
+    <header id="app-header" class="app-header">
       <button id="back" class="icon-button" type="button" title="返回会话列表" aria-label="返回会话列表" hidden></button>
       <div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong id="brand-title">AgentDeck</strong><span id="brand-caption" class="brand-caption">总台</span></div>
+      <div id="machine-bar" class="machine-bar" role="group" aria-label="选择电脑"></div>
       <div class="header-actions">
         <button id="refresh" class="icon-button" type="button" title="刷新全部电脑" aria-label="刷新全部电脑"></button>
         <button id="theme" class="icon-button" type="button" title="切换主题" aria-label="切换主题"></button>
         <button id="logout-all" class="icon-button" type="button" title="全部退出：在这部手机上退出所有已登录的电脑" aria-label="全部退出：在这部手机上退出所有已登录的电脑"></button>
       </div>
     </header>
-    <div id="machine-bar" class="machine-bar" role="group" aria-label="选择电脑"></div>
     <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
     <main id="main">
       <section id="overview-view" class="view" aria-label="总览">
@@ -30,7 +30,6 @@
         <div class="captain-head"><h1 id="captain-title"></h1><span id="captain-status"></span></div>
         <div id="captain-turns" class="turns" role="region" aria-label="队长对话记录" tabindex="0"></div>
         <form id="message-form" class="composer">
-          <div class="target-row"><span id="target-label" class="target-label">发给</span><div id="target" class="segmented" role="group" aria-labelledby="target-label"></div></div>
           <label class="sr-only" for="message">给队长的消息</label>
           <div class="composer-box">
             <textarea id="message" name="message" rows="2" maxlength="8000" aria-describedby="send-hint"></textarea>

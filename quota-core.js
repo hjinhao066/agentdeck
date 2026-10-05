@@ -372,7 +372,8 @@
     if (entry.officialStatus?.failure) details.push(`查询失败：${entry.officialStatus.failure}；连续 ${entry.officialStatus.failures} 次${entry.officialStatus.failures >= 3 ? '，保留上次成功采样（数据已旧）' : '，保留上次数字'}`);
     if (retained && windows.some((w) => w.resetAt <= now)) details.push('窗口重置时间已过，等待新采样（显示上次数字）');
     const evidence = retained ? sample : blocked || sample;
-    if (evidence) details.push(`来源：${evidence.source}；${blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence}；采样 ${new Date(evidence.at).toLocaleString()}${stale ? '（数据已旧）' : !fresh && (!blocked || retained) ? '（已过期）' : ''}`);
+    const confidence = evidence ? (blocked && !retained ? (blocked.numeric ? '额度窗口已用尽' : '高（用尽报错）') : sample.confidence) : '';
+    if (evidence) details.push(`来源：${evidence.source}；${confidence}；采样 ${new Date(evidence.at).toLocaleString()}${stale ? '（数据已旧）' : !fresh && (!blocked || retained) ? '（已过期）' : ''}`);
     const displayLabel = provider === 'Claude' && windows.length ? (blocked && !windows.some((w) => w.label === '5 小时') ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'} · ` : '') + windows.map((w) => claudeWindow(w)).join(' · ') : provider === 'Claude' && blocked ? `5h 已用尽 ↻${recovery ? clock(recovery) : blocked.resetText || '未知'}` : label;
     const sampleLabel = provider === 'Claude' && (fresh || retained) ? `采样 ${stale ? new Date(sample.at).toLocaleString() : new Date(sample.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}${stale ? '（数据已旧）' : ''}` : '';
     // Compact panel fields: the two remaining percentages, or the recovery time while exhausted.
@@ -395,7 +396,7 @@
     const fiveHour = pick(/5 小时$/), weekly = pick(/每周$/);
     const shortRemaining = fiveHour ?? weekly;
     const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
-    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, cells, account: entry.account || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
+    return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, account: entry.account || '', source: evidence?.source || '', confidence: confidence || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
     const cmd = String(command || '').trim();
@@ -408,7 +409,29 @@
     const seat = provider === 'Claude' ? seatList.find((s) => s.id === activeSeatId) || seatForColumn({ cmd }, seatList) : null;
     return summary(store || {}, provider, now, seat);
   }
+  // The phone only ever shows h***@example.com, whatever a source stored.
+  function maskAccount(value) {
+    const m = typeof value === 'string' && value.length <= 200 ? value.match(/^([^\s@*])[^\s@]*@([^\s@*]+)$/) : null;
+    return m ? `${m[1]}***@${m[2]}` : '';
+  }
+  // Rows for the phone page: the same summaries as the desktop sidebar, cut down
+  // to display fields. No config directory, account key or raw detail.
+  function mobile(store, now = Date.now(), seats, captainSeatId = null, captainProvider = '') {
+    return items(seats).map(({ provider, seat, key }) => {
+      const q = summary(store || {}, provider, now, seat, captainSeatId);
+      const named = seat && seat.id !== 'default';
+      const flag = named ? seat.name.match(/\p{Regional_Indicator}{2}/u)?.[0] || '' : '';
+      const plain = named ? seat.name.replace(flag, '').trim() || seat.id.toUpperCase() : '';
+      const status = q.out ? 'out' : q.cells.length ? (q.stale ? 'stale' : q.state) : q.state === 'normal' ? 'nodigits' : q.sampledAt ? 'expired' : 'unknown';
+      return { key, provider,
+        name: seat ? (named ? `Claude ${seat.name}` : 'Claude') : { Codex: 'Codex', Cursor: 'Cursor Grok', Antigravity: 'Gemini' }[provider],
+        short: seat ? plain || 'Claude' : { Codex: 'Codex', Cursor: 'Cursor', Antigravity: 'Gemini' }[provider], flag,
+        captain: seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider,
+        status, failed: q.failures > 0, cells: q.cells.map((c) => ({ key: c.key, remaining: c.remaining, out: !!c.out, resetAt: c.resetAt || null })),
+        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account), source: q.source };
+    });
+  }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text, maskAccount, mobile };
 
 });
