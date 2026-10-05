@@ -180,3 +180,31 @@ test('quit ack and the timeout both leave the current turn before quitting, and 
   assert.deepEqual(quits2, ['quit']);
   assert.equal(R.createQuitGate({ schedule() {}, later() {}, quit() {} }).beforeQuit({ preventDefault() {} }, false), 'cleanup');
 });
+
+
+test('authenticated shell-tool identity binds only its column provider, not other candidates', () => {
+  const candidates = { Codex: id, Cursor: '22222222-2222-4222-8222-222222222222', Antigravity: '33333333-3333-4333-8333-333333333333' };
+  for (const [cmd, provider] of [['codex', 'Codex'], ['cursor-agent', 'Cursor'], ['agy', 'Antigravity']]) {
+    const col = { id: 'worker', cmd, cwd: '/work' };
+    assert.equal(R.bindSessionIdentity(col, candidates, [col]), true);
+    assert.equal(col.modelSessionId, candidates[provider]);
+    assert.equal(col.modelSessionOwner, col.id);
+    assert.equal(col.modelSessionCwd, col.cwd);
+    assert.equal(col.modelSessionSource, 'agent-env');
+    assert.equal(R.bindSessionIdentity(col, candidates, [col]), false);
+    const choice = R.launchChoice({ cmd, sessionId: col.modelSessionId, task: task('worker', 'working') });
+    assert.equal(choice.mode, 'resume');
+    assert.ok(choice.launch.includes(candidates[provider]));
+  }
+});
+
+test('wrong provider, malformed id and duplicate column identity cannot certify ownership', () => {
+  for (const candidates of [null, {}, { Cursor: id }, { Codex: 'malformed' }]) {
+    const col = { id: 'worker', cmd: 'codex', cwd: '/work' };
+    assert.equal(R.bindSessionIdentity(col, candidates, [col]), false);
+    assert.equal(col.modelSessionId, undefined);
+  }
+  const col = { id: 'worker', cmd: 'codex', cwd: '/work' };
+  assert.equal(R.bindSessionIdentity(col, { Codex: id }, [col, { id: 'other', cmd: 'codex', modelSessionId: id.toUpperCase() }]), false);
+  assert.equal(R.bindSessionIdentity({ id: 'claude', cmd: 'claude' }, { Codex: id }, []), false);
+});

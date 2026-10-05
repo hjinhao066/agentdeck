@@ -278,7 +278,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
-  let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  let terminalEnv = { ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
   terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
 
   // Never inherit an outer deck's managed capability into an independent shell.
@@ -1416,8 +1416,8 @@ let quitGate = null;
 let quitWatchdog = null;
 // Electron maps process.exit to app.exit; neither can break stuck native
 // teardown or a blocked main loop. A separate Node-mode process owns the hard
-// deadline. Its stdin is held open only by this process, so a normal exit
-// cancels the deadline and cannot leave a timer targeting a reused PID.
+// deadline. On POSIX, reparenting proves the process exited; Electron can close
+// stdin before native teardown finishes, so EOF alone must not cancel it.
 function armQuitWatchdog() {
   if (quitWatchdog) return;
   const deadlineMs = 5000;
@@ -1425,11 +1425,15 @@ function armQuitWatchdog() {
     const target = Number(process.argv[1]);
     if (target !== process.ppid || !Number.isSafeInteger(target) || target < 1) process.exit(1);
     const timer = setTimeout(() => {
-      if (process.stdin.readableEnded || process.ppid !== target) return process.exit(0);
+      if (process.ppid !== target) return process.exit(0);
       try { process.kill(target, 'SIGKILL'); } catch (_) {}
       process.exit(0);
     }, ${deadlineMs});
-    process.stdin.on('end', () => { clearTimeout(timer); process.exit(0); });
+    process.stdin.on('end', () => {
+      if (process.platform === 'win32' || process.ppid !== target) {
+        clearTimeout(timer); process.exit(0);
+      }
+    });
     process.stdin.resume();
   `;
   quitWatchdog = spawn(process.execPath, ['-e', script, String(process.pid)], {
@@ -1456,6 +1460,7 @@ function parkedSessions() {
     const columns = (cfg.columns || []).filter((col) => col && !col.isMain && col.captainCrew).map((col) => ({
       id: col.id, provider: RestartResume.providerOf(col.cmd), cwd: col.cwd || '',
       since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '', owner: col.modelSessionOwner || '',
+      source: col.modelSessionSource || '', capturedCwd: col.modelSessionCwd || '',
     })).filter((col) => ['Cursor', 'Codex', 'Antigravity'].includes(col.provider));
     return AgentSessions.resolveSessions(columns, { roots: AgentSessions.defaultRoots(os.homedir()), lookbackMs: lookback });
   } catch (_) { return {}; }

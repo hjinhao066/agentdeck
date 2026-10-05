@@ -30,6 +30,25 @@
   }
   function validSessionId(id) { return typeof id === 'string' && UUID.test(id); }
 
+  // These ids arrive only with the column's authenticated receipt capability.
+  // The provider sets its own id in shell-tool environments, so cwd/timestamps
+  // and the machine's latest conversation are never used to infer ownership.
+  function bindSessionIdentity(col, sessionIds, columns) {
+    if (!col || !col.id || !sessionIds || typeof sessionIds !== 'object') return false;
+    const provider = providerOf(col.cmd);
+    if (!['Codex', 'Cursor', 'Antigravity'].includes(provider)) return false;
+    const id = sessionIds[provider];
+    if (!validSessionId(id)) return false;
+    if ((columns || []).some((other) => other && other.id !== col.id && providerOf(other.cmd) === provider &&
+        String(other.modelSessionId || '').toLowerCase() === id.toLowerCase())) return false;
+    if (col.modelSessionId === id && col.modelSessionOwner === col.id && col.modelSessionCwd === (col.cwd || '') && col.modelSessionSource === 'agent-env') return false;
+    col.modelSessionId = id;
+    col.modelSessionOwner = col.id;
+    col.modelSessionCwd = col.cwd || '';
+    col.modelSessionSource = 'agent-env';
+    return true;
+  }
+
   function isSafetyCheckpoint(text) {
     return new RegExp('(?:^|\\s)' + CHECKPOINT_TOKEN + '(?:\\s|$)').test(String(text || ''));
   }
@@ -284,7 +303,7 @@
 
   return {
     CHECKPOINT_TOKEN, OPEN, BATCH, UUID,
-    providerOf, validSessionId, isSafetyCheckpoint, isCheckpointClosure,
+    providerOf, validSessionId, bindSessionIdentity, isSafetyCheckpoint, isCheckpointClosure,
     shouldResume, holdsAcrossRestart, shouldPark, resumeEnabled,
     freshCommand, resumeCommand, trueResumeNote, resendNote, launchChoice, resumeMessage,
     checkpointMessage, checkpointSummary, failureNote,

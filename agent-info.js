@@ -372,6 +372,17 @@
 
   function planAgentLaunch(cmd, storedId, isFresh, skipResume, newId) {
     const provider = inferProvider(cmd, null);
+    // These providers create their own UUID. Once an authenticated shell-tool
+    // receipt captures it, archive/restore can resume the same conversation too.
+    const capturedProvider = ['Codex', 'Cursor', 'Antigravity'].includes(provider);
+    if (capturedProvider) {
+      const R = typeof module === 'object' && module.exports ? require('./restart-resume') : globalThis.RestartResume;
+      if (!isFresh && !skipResume && R && R.providerOf(cmd) === provider && R.validSessionId(storedId)) {
+        const launch = R.resumeCommand(cmd, storedId);
+        return { launch, sessionId: storedId, resumedAgent: true, showLegacyWarning: false };
+      }
+      return { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: false };
+    }
     const canResume = provider === 'Claude' || provider === 'Grok';
     const explicit = /(^|\s)(--session-id|-s|--continue|-c|--resume|-r)(\s|=|$)/.test(cmd || '');
     if (!canResume || explicit) return { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: false };

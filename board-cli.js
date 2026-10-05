@@ -53,7 +53,17 @@ async function request(command, waitForCompletion) {
   const id = `${Date.now()}-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
   const requestFile = path.join(controlDir, 'requests', `${id}.json`);
   const responseFile = path.join(controlDir, 'responses', `${id}.json`);
-  atomicJson(requestFile, { id, token, createdAt: Date.now(), ...command });
+  // CLI shell tools inject their current conversation id. Attach it only to
+  // authenticated worker submissions; the receiver binds its own provider.
+  const modelSessionIds = {};
+  if (['complete', 'ask', 'progress'].includes(command.action)) {
+    for (const [provider, key] of [['Codex', 'CODEX_THREAD_ID'], ['Cursor', 'CURSOR_CONVERSATION_ID'], ['Antigravity', 'ANTIGRAVITY_CONVERSATION_ID']]) {
+      const value = process.env[key];
+      if (typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value)) modelSessionIds[provider] = value;
+    }
+  }
+  atomicJson(requestFile, { id, token, createdAt: Date.now(), ...command,
+    ...(Object.keys(modelSessionIds).length ? { modelSessionIds } : {}) });
   // The launch wrapper can run while Electron is quitting. Its exit status is
   // already durably queued; never keep the shell alive waiting for a renderer
   // that is shutting down. User complete/ask/progress still wait for acceptance.
