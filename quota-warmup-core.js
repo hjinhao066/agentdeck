@@ -8,7 +8,7 @@
   const RETRY_DELAY_MS = 60_000;
   const MAX_ATTEMPTS = 2;
   const STATUSES = ['pending', 'running', 'retry', 'succeeded', 'abandoned'];
-  const seatId = (value) => value === 'cn' || value === 'us';
+  const seatId = (value) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,40}$/.test(value);
   const time = (value) => Number.isFinite(value) && value > 0 ? value : null;
   const account = (value) => typeof value === 'string' && value.length > 0 && value.length <= 128 && !/[\x00-\x1f]/.test(value);
   function directory(value) {
@@ -68,7 +68,7 @@
     if (!normalizeSettings(settings).enabled) return null;
     const state = normalizeState(value);
     for (const seat of seats) {
-      if (!seat || !seatId(seat.id) || seat.occupied !== false || seat.warmupEligible === false) continue;
+      if (!seat || !seatId(seat.id) || seat.loggedIn === false || seat.occupied !== false || seat.warmupEligible === false) continue;
       const saved = state.seats[seat.id];
       if (!matches(saved, seat) || !due(saved, now)) continue;
       return { seatId: seat.id, accountKey: saved.accountKey, configDir: saved.configDir, resetAt: saved.resetAt, attempt: saved.attempts + 1, at: now };

@@ -96,11 +96,11 @@ test('idle seats refresh independently every five minutes; failure retains sampl
   } });
   t.after(() => poller.dispose());
   await poller.tick(); await poller.tick();
-  assert.deepEqual(calls, ['cn', 'us']);
-  now += C.INTERVAL_MS - 1; await poller.tick(); assert.equal(calls.length, 2);
-  now++; fail = true; await poller.tick(); assert.deepEqual(calls, ['cn', 'us', 'cn', 'us']);
+  assert.deepEqual(calls, ['cn', 'us', 'us2']);
+  now += C.INTERVAL_MS - 1; await poller.tick(); assert.equal(calls.length, 3);
+  now++; fail = true; await poller.tick(); assert.deepEqual(calls, ['cn', 'us', 'us2', 'cn', 'us', 'us2']);
   const data = await readLocal(home, undefined, now, seats);
-  assert.deepEqual(poller.samples().map(q => [q.seatId, q.windows?.length || 0]), [['cn', 2], ['us', 0]]);
+  assert.deepEqual(poller.samples().map(q => [q.seatId, q.windows?.length || 0]), [['cn', 2], ['us', 0], ['us2', 2]]);
   assert.ok(data.every(q => !q.windows?.length || q.accountBound));
   assert.ok(!JSON.stringify(data).includes('fake-'));
   for (const seat of seats) assert.ok(!fs.readFileSync(M.credentialLocation(seat, home).usagePath, 'utf8').includes('fake-'));
@@ -131,11 +131,11 @@ test('startup keeps real cached windows and concurrent quota readers wait for th
   const quotaRead = poller.tick().then(() => { settled = true; return poller.samples(); });
   await Promise.resolve();
   assert.equal(settled, false);
-  assert.equal(releases.size, 2);
+  assert.equal(releases.size, 3);
   assert.deepEqual(poller.samples().map(s => [s.seatId, s.windows[0].remaining]), [['cn', 45]]);
   for (const [id, resolve] of releases) resolve(bound(seats.find(s => s.id === id), home, { windows: [{ key: 'fiveHour', remaining: id === 'cn' ? 40 : 80 }, { key: 'weekly', remaining: 60 }] }));
   await startup;
-  assert.deepEqual((await quotaRead).map(s => [s.seatId, s.windows.length]), [['cn', 2], ['us', 2]]);
+  assert.deepEqual((await quotaRead).map(s => [s.seatId, s.windows.length]), [['cn', 2], ['us', 2], ['us2', 2]]);
 });
 test('bound server samples retain explicit screen exhaustion; empty and unbound samples have no authority', () => {
   const seat = S.normalize()[0], store = {}, now = Date.now();
@@ -291,16 +291,16 @@ test('forced refresh targets one seat; normal polling includes CN and coalesces 
   } });
   t.after(() => poller.dispose());
   await Promise.all([poller.tick(), poller.tick()]);
-  assert.deepEqual(calls, ['cn', 'us']);
-  await poller.tick(); assert.equal(calls.length, 2);
+  assert.deepEqual(calls, ['cn', 'us', 'us2']);
+  await poller.tick(); assert.equal(calls.length, 3);
   time++;
-  await poller.tick({ force: true, seatId: 'cn' }); assert.deepEqual(calls, ['cn', 'us', 'cn']);
+  await poller.tick({ force: true, seatId: 'cn' }); assert.deepEqual(calls, ['cn', 'us', 'us2', 'cn']);
   const duplicates = C.createRefresh({ home, getSeats: () => [seats[0], { ...seats[1], configDir: seats[0].configDir }], read: async (seat) => {
     calls.push(seat.id);
     return bound(seat, home, { windows: [{ key: 'fiveHour', remaining: 53 }] });
   } });
   t.after(() => duplicates.dispose());
   await duplicates.tick();
-  assert.deepEqual(duplicates.samples().map(s => s.seatId), ['cn']);
-  assert.deepEqual(calls, ['cn', 'us', 'cn', 'cn']);
+  assert.deepEqual(duplicates.samples().map(s => s.seatId), ['cn', 'us2']);
+  assert.deepEqual(calls, ['cn', 'us', 'us2', 'cn', 'cn', 'us2']);
 });

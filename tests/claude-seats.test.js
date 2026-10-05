@@ -17,14 +17,14 @@ function fixture(t) {
   return home;
 }
 test('seat config has one source for names and survives normalization', () => {
-  assert.deepEqual(S.normalize().map((s) => s.id), ['cn', 'us']);
+  assert.deepEqual(S.normalize().map((s) => s.id), ['cn', 'us', 'us2']);
   const config = { claudeSeats: S.normalize(), activeClaudeSeatId: 'us' };
   config.claudeSeats[1].name = '第二席';
   assert.equal(S.active(config).name, '第二席');
   assert.equal(S.active({ activeClaudeSeatId: 'gone' }).id, 'cn');
   assert.equal(S.normalize([{ id: '../../bad', configDir: 'x' }])[0].id, 'cn');
-  assert.equal(S.normalize([...S.normalize(), S.normalize()[0]]).length, 2);
-  assert.deepEqual(S.normalize().map((s) => s.icon), ['🇨🇳', '🇺🇸']);
+  assert.equal(S.normalize([...S.normalize(), S.normalize()[0]]).length, 3);
+  assert.deepEqual(S.normalize().map((s) => s.icon), ['🇨🇳', '🇺🇸', '🇺🇸']);
   assert.match(S.CODEX_COMMAND, /--model gpt-6\.1-sol/);
   assert.match(S.CODEX_COMMAND, /--dangerously-bypass-approvals-and-sandbox/);
   assert.match(S.CODEX_COMMAND, /--no-daemon -c model_reasoning_effort=high/);
@@ -112,7 +112,7 @@ test('launch reasserts the seat after shell overrides and handles spaces/quotes'
   for (const seat of S.normalize()) {
     const command = S.launchCommand(`"${bin}" --model sonnet`, seat, home, 'darwin');
     const actual = execFileSync('/bin/sh', ['-c', command], { env: { ...process.env, CLAUDE_CONFIG_DIR: '/wrong', ANTHROPIC_API_KEY: 'fake' }, encoding: 'utf8' });
-    assert.equal(actual, seat.id === 'cn' ? 'unset' : path.join(home, '.claude-us'));
+    assert.equal(actual, seat.id === 'cn' ? 'unset' : S.configDir(seat, home, process.platform));
   }
   const tricky = { id: 'us', configDir: path.join(home, "seat's folder") };
   assert.equal(execFileSync('/bin/sh', ['-c', S.launchCommand(`"${bin}"`, tricky, home, 'darwin')], { encoding: 'utf8' }), tricky.configDir);
@@ -261,4 +261,35 @@ test('usage IPC binds native panel observations to the saved source column and s
   column.claudeConfigDir = '~/.claude-other';
   assert.throws(() => handlers['seats:record-usage'](null, payload), /快照不匹配/);
 
+});
+
+test('saved CN/US profiles gain US2 without changing names, directories or column bindings', () => {
+  const legacy = S.normalize().slice(0, 2);
+  legacy[1].name = 'My US'; legacy[0].configDir = '/custom/cn';
+  const migrated = S.normalize(legacy);
+  assert.deepEqual(migrated.slice(0, 2), legacy);
+  assert.deepEqual(migrated[2], { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2' });
+  assert.deepEqual(S.normalize(migrated), migrated);
+  const col = { claudeSeatId: 'us', claudeConfigDir: '/pinned/us' };
+  S.bindColumn(col, { claudeSeats: migrated, activeClaudeSeatId: 'us2' });
+  assert.deepEqual(col, { claudeSeatId: 'us', claudeConfigDir: '/pinned/us' });
+  assert.equal(S.normalize(Array.from({ length: 9 }, (_, i) => ({ id: `custom${i}`, configDir: `/seat/${i}` }))).length, 8);
+});
+test('US2 setup shares only brain files and its missing login stays isolated', async (t) => {
+  const home = fixture(t);
+  fs.writeFileSync(path.join(home, '.claude', 'settings.json'), '{}');
+  const original = fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8');
+  const us = setup(home).us;
+  fs.writeFileSync(path.join(us, '.credentials.json'), 'stand-in-do-not-touch');
+  const result = setup(home, 'us2');
+  const seat = S.normalize()[2];
+  assert.equal(result.us, path.join(home, '.claude-us2'));
+  assert.equal(fs.realpathSync(path.join(result.us, 'settings.json')), path.join(home, '.claude', 'settings.json'));
+  assert.equal(fs.existsSync(path.join(result.us, '.credentials.json')), false);
+  assert.equal((await M.seatInfo(seat, home, 'win32')).loggedIn, false);
+  assert.notEqual(M.credentialLocation(seat, home).keychainService, M.credentialLocation(S.normalize()[1], home).keychainService);
+  assert.equal(M.seatEnvironment({ CLAUDE_CODE_OAUTH_TOKEN: 'fake' }, seat, home).CLAUDE_CONFIG_DIR, result.us);
+  assert.equal(fs.readFileSync(path.join(us, '.credentials.json'), 'utf8'), 'stand-in-do-not-touch');
+  assert.equal(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'), original);
+  assert.throws(() => setup(home, 'cn'), /独立席位/);
 });

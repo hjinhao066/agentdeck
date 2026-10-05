@@ -7,6 +7,7 @@
   const DEFAULTS = [
     { id: 'cn', name: 'CN', icon: '🇨🇳', configDir: '~/.claude' },
     { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us' },
+    { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2' },
   ];
   function codexCommand(effort = 'high') {
     return `codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=${effort === 'xhigh' ? 'xhigh' : 'high'} --dangerously-bypass-approvals-and-sandbox`;
@@ -25,7 +26,9 @@
     const seats = (Array.isArray(value) ? value : DEFAULTS).slice(0, 8).filter((s) => {
       if (!s || !/^[a-zA-Z0-9_-]{1,40}$/.test(s.id) || ids.has(s.id) || typeof s.configDir !== 'string' || !s.configDir.trim() || /[\x00-\x1f]/.test(s.configDir)) return false;
       ids.add(s.id); return true;
-    }).map((s) => ({ id: s.id, name: String(s.name || s.id).slice(0, 80), icon: String(s.icon || (s.id === 'us' ? '🇺🇸' : s.id === 'cn' ? '🇨🇳' : '')).slice(0, 12), configDir: s.configDir.trim() }));
+    }).map((s) => ({ id: s.id, name: String(s.name || s.id).slice(0, 80), icon: String(s.icon || DEFAULTS.find((d) => d.id === s.id)?.icon || '').slice(0, 12), configDir: s.configDir.trim() }));
+    // Upgrade saved two-seat profiles without changing names, paths or active seat.
+    if (seats.length === 2 && ids.has('cn') && ids.has('us')) seats.push({ ...DEFAULTS[2] });
     return seats.length ? seats : DEFAULTS.map((s) => ({ ...s }));
   }
   function active(config) {

@@ -210,7 +210,7 @@
     host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge });
     if (window.AgentInfo) {
       const entry = host.terms && host.terms.get(col.id);
-      window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar');
+      window.AgentInfo.renderBadge(badge, window.AgentInfo.resolveAgentInfo(col, entry), 'sidebar', host.config.claudeSeats);
     }
     captainMirror.observe(dot, { attributes: true, attributeFilter: ['class'] });
     captainHead = { col, item, counts, sub };
@@ -227,7 +227,7 @@
     box.id = 'captainCrewList';
     box.hidden = !open;
     const waiting = waitlist();
-    const groups = open ? SC.crewModelGroups(crew.map(memberIdentity)) : [];
+    const groups = open ? SC.crewModelGroups(crew.map(memberIdentity), host.config.claudeSeats) : [];
     if (open) {
       const byId = new Map(crew.map((c) => [c.id, c]));
       const collapsed = collapsedModels();
@@ -246,7 +246,7 @@
     const info = window.AgentInfo && window.AgentInfo.resolveAgentInfo(col, entry, entry && entry.lastScreen);
     const shell = !info || info.isShell || !info.provider;
     const label = shell ? '' : (info.shortModel || info.model || '');
-    const seat = !shell && info.seat && (info.seat.id === 'us' || info.seat.id === 'cn') ? info.seat.id : '';
+    const seat = !shell && info.seat ? info.seat.id : '';
     return {
       id: col.id,
       label,
@@ -270,7 +270,7 @@
   }
   function crewShownKey(groups, waiting) {
     const held = window.MainSession.memoryHeld() ? ':mem' : '';
-    return groups.map((g) => g.key + ':' + g.working + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => w.title || '').join(',') + held;
+    return groups.map((g) => g.key + ':' + g.seatName + ':' + g.flag + ':' + g.working + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => w.title || '').join(',') + held;
   }
   function cssId(key) {
     return String(key).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80);
@@ -302,8 +302,8 @@
     stat.append(dotMark, count);
     head.append(fold, icon, name);
     if (g.flag) {
-      const flag = el('span', 'agent-seat-label crew-model-flag', g.flag);
-      const seatName = g.seat === 'us' ? 'US' : 'CN';
+      const flag = el('span', 'agent-seat-label crew-model-flag', g.flag + ' ' + g.seatName);
+      const seatName = g.seatName;
       flag.title = '当前账号：' + seatName;
       flag.setAttribute('aria-label', flag.title);
       flag.setAttribute('role', 'img');
@@ -464,7 +464,7 @@
     if (!crew && window.AgentInfo) {
       const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
       const info = window.AgentInfo.resolveAgentInfo(col, entry, entry?.lastScreen);
-      window.AgentInfo.renderBadge(badge, info, 'sidebar');
+      window.AgentInfo.renderBadge(badge, info, 'sidebar', host.config.claudeSeats);
     }
     return item;
   }

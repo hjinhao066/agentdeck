@@ -159,7 +159,9 @@
       ({ seat, ...status(seat, state.seats[seat.id] || {}, config.threshold, now) }));
     if (!claude.length) return null;
     const current = claude.find(({ seat }) => seat.id === currentId);
-    const candidates = claude.filter(({ seat, available, cooling }) => seat.id !== currentId && available && !cooling);
+    const index = claude.findIndex(({ seat }) => seat.id === currentId);
+    const ordered = index < 0 ? claude : claude.slice(index + 1).concat(claude.slice(0, index));
+    const candidates = ordered.filter(({ seat, available, cooling }) => seat.id !== currentId && available && !cooling);
     if (currentId === CODEX_ID) {
       const enteredCodexAt = state.lastSwitch?.targetId === CODEX_ID ? state.lastSwitch.at : 0;
       const target = candidates.find(({ seat, state: saved, trusted }) =>
@@ -184,8 +186,9 @@
     // Stay put until it can be used rather than hopping through Codex.
     if (claude.some(({ available }) => available)) return null;
     // A low positive quota or an unknown login is not evidence of exhaustion.
-    // Codex is the fallback only after both Claude seats are actually exhausted.
-    if (claude.length < 2 || claude.some(({ exhausted }) => !exhausted)) return null;
+    // Unlogged seats are skipped; usable logins must all prove exhaustion.
+    const loggedIn = claude.filter(({ seat }) => seat.loggedIn === true);
+    if (!loggedIn.length || loggedIn.some(({ exhausted }) => !exhausted)) return null;
     const codex = state.seats[CODEX_ID] || {};
     const codexMove = Math.max(codex.enteredAt || 0, codex.leftAt || 0);
     if (codexMove && now - codexMove < COOLDOWN_MS) return null;
@@ -203,14 +206,16 @@
   function strategyText({ settings, currentId, seats = [], warmups = [], now = Date.now() }) {
     const config = normalizeSettings(settings), current = seats.find((s) => s.id === currentId);
     const name = (s) => s?.name || s?.id || 'ChatGPT';
-    const other = seats.find((s) => s.id !== currentId);
+    const index = seats.findIndex((s) => s.id === currentId);
+    const others = (index < 0 ? seats : seats.slice(index + 1).concat(seats.slice(0, index))).filter((s) => s.loggedIn !== false);
     const parts = [`正在用 ${current ? name(current) : 'ChatGPT'}`];
     if (!config.enabled) return parts.concat('自动轮换已关闭').join(' · ');
     for (const w of warmups) if (w.warmupEligible !== false && w.status === 'pending' && w.resetAt > now) {
       parts.push(`${name(seats.find((s) => s.id === w.seatId))} ${new Date(w.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })} 重置后自动预热`);
     }
-    if (other?.weeklyTrusted && other.weeklyRemaining <= config.threshold) parts.push(`${name(other)} 每周额度不足，不切换也不预热`);
-    else if (other) parts.push(`${name(current)} 剩 ${config.threshold}% 时切到 ${name(other)}`);
+    const other = others.find((s) => !s.weeklyTrusted || s.weeklyRemaining > config.threshold);
+    for (const seat of others.filter((s) => s.weeklyTrusted && s.weeklyRemaining <= config.threshold)) parts.push(`${name(seat)} 每周额度不足，不切换也不预热`);
+    if (other) parts.push(`${name(current)} 剩 ${config.threshold}% 时切到 ${name(other)}`);
     if (config.preferEarlier) parts.push('有可用额度时优先用快到期的席位');
     return parts.join(' · ');
   }

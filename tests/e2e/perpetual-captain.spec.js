@@ -44,14 +44,15 @@ async function nativeUsage(id, remaining = 3) {
     ClaudeSeats.onTick(i, entry, `Current session\n  ${100 - left}% used\n  Resets in 1h\nCurrent week (all models)\n  20% used\n  Resets in 4d\n`);
   }, [id, remaining]);
   await expect.poll(async () => {
-    const value = await page.evaluate(() => window.deck.claudeSeatUsage('cn'));
+    const value = await page.evaluate((id) => window.deck.claudeSeatUsage(columns.find((c) => c.id === id).claudeSeatId), id);
     return value?.windows.find((w) => w.key === 'fiveHour')?.remaining;
   }).toBe(remaining);
 }
-async function boardViaAgent(id, args, expected) {
+async function boardViaAgent(id, args, expected, fallback = false) {
   await idle(id);
-  await page.evaluate(([i, command]) => window.deck.ptyInput(i, 'BOARD ' + JSON.stringify(command) + '\r'), [id, args]);
-  await expect.poll(() => page.evaluate((i) => dumpScreen(terms.get(i).term).replace(/\n/g, ''), id), { timeout: 20000 }).toContain(expected);
+  const count = records('board-results.jsonl').length;
+  await page.evaluate(([i, command, noEnv]) => window.deck.ptyInput(i, (noEnv ? 'BOARD-NO-ENV ' : 'BOARD ') + JSON.stringify(command) + '\r'), [id, args, fallback]);
+  await expect.poll(() => records('board-results.jsonl').slice(count).find((r) => r.colId === id)?.stdout || '', { timeout: 20000 }).toContain(expected);
 }
 async function boardWithoutCapabilities(id, args) {
   // Only the stand-in profile's per-terminal file can recover this capability.
@@ -83,7 +84,7 @@ test.beforeEach(async () => {
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`],
-    env: isolatedEnv({ AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'),
+    env: isolatedEnv({ AGENTDECK_TEST_BOARD_RESULTS_FILE: path.join(profile, 'board-results.jsonl'), AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'),
       AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'prompt-columns.jsonl'),
       AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') }),
   });
@@ -177,12 +178,10 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
     await expect(boardWithoutCapabilities(codexId, ['ledger'])).rejects.toThrow(/independent|conductor-managed/);
     await expect(boardWithoutCapabilities(codexId, ['briefing'])).rejects.toThrow(/independent|conductor-managed/);
   } else {
-    const fallbackLedger = await boardWithoutCapabilities(codexId, ['ledger']);
-    expect(fallbackLedger.stderr).toBe('');
-    expect(fallbackLedger.stdout).toContain('不中断的队员');
-    const fallbackBriefing = await boardWithoutCapabilities(codexId, ['briefing']);
-    expect(fallbackBriefing.stdout).toContain('读看板继续');
-    expect(fallbackBriefing.stdout).toContain('receipts --wait');
+    // Recovery belongs to the Captain's own controlling PTY, never the external test runner.
+    await expect(boardWithoutCapabilities(codexId, ['ledger'])).rejects.toThrow(/independent|conductor-managed/);
+    await boardViaAgent(codexId, ['ledger'], '不中断的队员', true);
+    await boardViaAgent(codexId, ['briefing'], '读看板继续', true);
   }
   const alerts = await application.evaluate(({ app }) => app.testRelayAlerts);
   expect(alerts).toHaveLength(2);
@@ -345,4 +344,30 @@ test('official low quotas do not fall back to Codex, and changed identities reje
   expect(outcome.state.officialNotBefore).toBeGreaterThan(0);
   expect(outcome.state.lowAt).toBeUndefined();
   expect(await captainId()).toBe(CN);
+});
+
+test('automatic rotation includes US2 and wraps to recovered CN without restarting workers', async () => {
+  test.setTimeout(150000);
+  const dir = path.join(home, '.claude-us2');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
+  fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test', accountUuid: 'perpetual-us2-fixture' } }));
+  await page.evaluate(() => ClaudeSeats.refresh());
+  await nativeUsage(CN);
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');
+  const usId = await captainId(); await idle(usId);
+  await nativeUsage(usId);
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us2');
+  const us2Id = await captainId(); await idle(us2Id);
+  expect(records('seat-env.jsonl').find((r) => r.colId === us2Id).configDir).toBe(dir);
+  await nativeUsage(WORKER, 80);
+  await page.evaluate(() => {
+    config.perpetualCaptainState.seats.cn.leftAt = Date.now() - 11 * 60000;
+    config.perpetualCaptainState.seats.cn.enteredAt = Date.now() - 11 * 60000;
+  });
+  await nativeUsage(us2Id);
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('cn');
+  expect(await page.evaluate((id) => window.deck.ptyIsAlive(id), WORKER)).toBe(true);
+  expect(records('seat-env.jsonl').filter((r) => r.colId === WORKER)).toHaveLength(1);
+  expect(await page.evaluate(() => config.perpetualCaptainState.lastSwitch)).toMatchObject({ fromId: 'us2', targetId: 'cn' });
 });

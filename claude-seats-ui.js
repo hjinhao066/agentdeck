@@ -122,7 +122,7 @@
     const threshold = field('5 小时剩余阈值（%）', settings.threshold);
     threshold.input.id = 'perpetualThreshold'; threshold.input.type = 'number'; threshold.input.min = '0';
     threshold.input.max = '100'; threshold.input.step = '0.1'; threshold.input.required = true; threshold.input.disabled = !enabled;
-    d.append(threshold.l, node('p', 'seat-help', '仅在队长空闲时轮换；两个 Claude 席位都用尽时交给 Codex，重置后优先回 Claude。同一席位 10 分钟内不回切。'));
+    d.append(threshold.l, node('p', 'seat-help', '仅在队长空闲时轮换；所有已登录 Claude 席位都用尽时交给 Codex，重置后优先回 Claude。同一席位 10 分钟内不回切。'));
     let preferEarlier = settings.preferEarlier;
     const priorityRow = node('div', 'perpetual-toggle-row');
     const priorityToggle = button(POWER, '优先用快到期的席位', () => {
@@ -243,7 +243,7 @@
   function rotationMessage(from, to, decision, at, automatic) {
     const reasons = { 'threshold': `5 小时剩余 ${decision?.remaining}% ≤ ${host.config.perpetualCaptain.threshold}%`,
       'weekly-threshold': `每周剩余 ${decision?.remaining}% ≤ ${host.config.perpetualCaptain.threshold}%`,
-      'quota-exhausted': '当前席位额度用尽或限流', 'claude-unavailable': '两个 Claude 席位额度都已用尽或限流', 'claude-recovered': 'Claude 席位额度已恢复',
+      'quota-exhausted': '当前席位额度用尽或限流', 'claude-unavailable': '所有已登录 Claude 席位额度都已用尽或限流', 'claude-recovered': 'Claude 席位额度已恢复',
       'earlier-reset': '优先用还有余额、快到期的席位' };
     return `${automatic ? '永动机自动轮换' : label()}：${from} → ${to}；${reasons[decision?.reason] || '手动切换'}；${new Date(at).toLocaleString()}`;
   }

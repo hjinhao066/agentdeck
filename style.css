@@ -324,13 +324,14 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-item { position: relative; display: flex; align-items: center; gap: 6px; min-width: 0; height: 26px; padding: 0 6px; border-radius: 6px; color: var(--text); font-size: 11.5px; cursor: default; white-space: nowrap; overflow: visible; }
 .quota-icon { display: flex; flex: 0 0 auto; color: var(--text-2); }
 .quota-name { display: inline-flex; align-items: center; gap: 3px; flex: 0 1 auto; min-width: 0; color: var(--text-2); line-height: 1; }
-.quota-item[data-seat-id] .quota-name { font-size: 13px; }
+.quota-item[data-seat-id] { gap: 4px; }
+.quota-item[data-seat-id] .quota-name { font-size: 11.5px; }
 .quota-captain { display: inline-flex; color: #e0a91c; }
 .quota-captain svg { width: 11px; height: 11px; }
 
 /* Two fixed columns (5h, 7d) so the numbers line up down the panel. A window the
    provider does not have leaves its column empty; status-only rows span both. */
-.quota-values { display: grid; grid-template-columns: repeat(2, var(--quota-cell-w, 68px)); column-gap: 8px; align-items: center; margin-left: auto; flex: 0 0 auto; font-size: 11px; font-variant-numeric: tabular-nums; }
+.quota-values { display: grid; grid-template-columns: repeat(2, var(--quota-cell-w, 70px)); column-gap: 8px; align-items: center; margin-left: auto; flex: 0 0 auto; font-size: 11px; font-variant-numeric: tabular-nums; }
 .quota-cell { position: relative; display: flex; align-items: baseline; gap: 3px; height: 20px; line-height: 17px; }
 .quota-cell[data-window="5h"] { grid-column: 1; }
 .quota-cell[data-window="7d"] { grid-column: 2; }
@@ -352,7 +353,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-item[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 9%, transparent); }
 /* Too narrow for the reset times: keep the two remaining percentages only. */
 @container (max-width: 227px) {
-  .quota-values { --quota-cell-w: 41px; column-gap: 6px; }
+  .quota-values { --quota-cell-w: 44px; column-gap: 6px; }
   .quota-cell > .quota-reset, .quota-status[data-window] > .quota-reset { display: none; }
 }
 .quota-item:hover, .quota-item:focus-visible, .quota-item:focus { background: var(--icon-hover-bg); outline: none; }
@@ -1681,13 +1682,13 @@ body.linking-board .board-port.out::before {
 /* 队长's row is a single line: [fold][crown][dot] 队长 … [count][model][switch].
    Counts, last activity and the live status line are in its tooltip. */
 .colnav-item.captain-item {
-  display: flex; align-items: center; gap: 5px; flex-wrap: nowrap;
+  display: flex; align-items: center; gap: 2px; flex-wrap: nowrap;
   min-height: 36px; padding: 4px 4px 4px 2px;
 }
 .captain-item .cn-crown { flex: 0 0 auto; }
 .captain-item .cn-dot { flex: 0 0 7px; }
 .captain-item .captain-fold { flex: 0 0 20px; width: 20px; }
-.captain-item .cn-text { flex: 1 1 auto; min-width: 2.4em; display: flex; }
+.captain-item .cn-text { flex: 1 1 auto; min-width: 2em; display: flex; }
 .captain-item .cn-label {
   min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal;
 }
@@ -1702,6 +1703,7 @@ body.linking-board .board-port.out::before {
 .captain-item .crew-counts.attn { box-shadow: inset 0 0 0 1px color-mix(in srgb, #e0a91c 70%, transparent); }
 .captain-item .crew-counts[hidden] { display: none; }
 .captain-item .cn-badge { flex: 0 1 auto; min-width: 0; max-width: 104px; margin: 0; padding: 2px 6px; border-radius: 999px; gap: 3px; }
+.captain-item .cn-badge:has(.agent-seat-label) { min-width: 54px; }
 .captain-item .cn-badge .agent-provider-icon { display: none; }
 .captain-item .cn-badge .agent-model-label { max-width: 84px; }
 .captain-item .claude-seat-rotate {

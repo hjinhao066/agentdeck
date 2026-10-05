@@ -186,3 +186,22 @@ test('a just-reset window is warmed before a fresh counting window can prefer th
   await f.service.tick(); assert.equal(f.calls.length, 1);
   assert.equal(decide().targetId, 'us'); assert.equal(decide().reason, 'earlier-reset');
 });
+
+test('service warms every configured seat in order and skips US2 until logged in', async (t) => {
+  const seats = ['cn', 'us', 'us2', 'custom'].map((id) => ({ id, name: id.toUpperCase(), configDir: `/home/test/${id}` }));
+  let loggedIn = false;
+  const calls = [];
+  const f = fixture(t, {
+    getSeats: () => seats,
+    readSeat: async (seat) => ({ accountKey: seat.id, configDir: seat.configDir, loggedIn: seat.id !== 'us2' || loggedIn,
+      usage: { accountBound: true, accountKey: seat.id, configDir: seat.configDir, at: Date.parse('2026-10-03T12:00:00Z'),
+        windows: [{ key: 'fiveHour', remaining: 0, resetAt: Date.parse('2026-10-03T12:00:00Z') }, weekly] } }),
+    run: async (seat) => { calls.push(seat.id); return { ok: true }; },
+  });
+  await f.service.tick(); await f.service.tick(); await f.service.tick();
+  assert.deepEqual(calls, ['cn', 'us', 'custom']);
+  loggedIn = true;
+  await f.service.tick(); await f.service.tick();
+  assert.deepEqual(calls, ['cn', 'us', 'custom', 'us2']);
+  assert.equal((await f.service.snapshot()).find((s) => s.seatId === 'us2').status, 'succeeded');
+});
