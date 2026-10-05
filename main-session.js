@@ -121,7 +121,7 @@
       await boardRequest('dispatched', { id, key }); quotaStarts.delete(id);
       return { card: claimed.card, ignored: true };
     }
-    const { card, captain, ignored } = await boardRequest('dispatch', { id });
+    const { card, captain, ignored } = await boardRequest('dispatch', { id, key });
     if (ignored) { await boardRequest('dispatched', { id, key }); quotaStarts.delete(id); return { card, ignored: true }; }
     if (notice) { boardNotice(notice(card)); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
     if (window.TaskBoard.settings().dispatcher !== 'gemini' || captain) {
@@ -138,7 +138,7 @@
     }
     quotaStarts.delete(id);
     const sessionId = 'c-dispatch-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-    const reserved = await boardRequest('dispatch', { id, session_id: sessionId });
+    const reserved = await boardRequest('dispatch', { id, key, session_id: sessionId });
     if (reserved.ignored) return { card: reserved.card, ignored: true };
     const cli = M.boardCli(host.platform);
     const prompt = M.dispatcherInstructions(host.platform, card);
@@ -179,9 +179,8 @@
     archiveDone: (project) => boardRequest('archive', { done: true, ...(project ? { project } : {}) }),
     startCard,
     reorder: (id, anchor = {}) => boardRequest('reorder', { id, ...anchor }),
-    // The user dragged a card into 进行中: claim it and tell 队长 which card to
-    // hand out. No session is opened here.
-    requestStart: (id) => startCard(id, undefined, (card) => `用户在任务看板把卡片 ${card.id}「${card.title}」拖到了「进行中」，请安排队员开始做这件事。项目：${card.project}。`),
+    // Dragging into 进行中 uses the same routing and claims as an explicit start.
+    requestStart: (id) => startCard(id),
     answer,
     settings: (dispatcher) => {
       if (dispatcher !== undefined) {

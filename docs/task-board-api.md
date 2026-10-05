@@ -61,7 +61,7 @@ await TaskBoard.update(card.id, { title: '新标题', order: 1.5 }, card.updated
 await TaskBoard.move(card.id, 'doing', card.updated); // 进入开始，由心跳发现
 await TaskBoard.archiveDone('agentdeck');
 await TaskBoard.startCard(card.id); // 显式开始，按 dispatcher 设置调度
-await TaskBoard.requestStart(card.id); // 拖到进行中：认领后通知队长安排，不开调度会话
+await TaskBoard.requestStart(card.id); // 拖到进行中：与 startCard 使用同一派活路径
 await TaskBoard.reorder(card.id, { before: otherCard.id }); // 同项目排序，也可 after；无锚点放末尾
 await TaskBoard.answer(card.id, '用户的答案'); // 回答需要你，交给队长继续推进
 TaskBoard.settings();              // {dispatcher:'gemini'}
@@ -77,8 +77,8 @@ unsubscribe();
 | `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
 | `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；移入 doing 时保留未归档会话作为占用标记并检查前置；其他移动清除绑定 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
-| `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
-| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | `Promise<{card, dispatcher:'captain'} \| {ignored: true, card?, occupied?: true}>`；只通知队长，不开调度会话；occupied 表示未归档会话占用 |
+| `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {queued:true, card} \| {ignored:true, card?, occupied?:true}>`；occupied 表示未归档会话占用 |
+| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | 同 `startCard`；按当前 dispatcher 派活 |
 | `reorder(id, anchor = {})` | 可选 before 或 after 卡片 ID，只接受同项目锚点，两者不可同时提供；无锚点放项目末尾 | `Promise<{card, notices}>`；只改 order，必要时重排项目内序号 |
 | `answer(id, reply)` | 非空答案，必须已有队长 | 通知队长；需要你的卡回到 doing，活跃会话保留绑定，无绑定时认领并通知队长 |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
@@ -133,7 +133,7 @@ ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题�
 - 点卡片（或键盘 Enter）打开详情抽屉，显示完整说明、负责会话和相关文件；通过会话入口
   跳到对应终端，已归档的会话先恢复。「需要你」把问题放在答案框上方，发送后交给队长继续推进。
 - 项目筛选、项目折叠和拖动排序、完成列开关、已完成区开关保存在本机 config.json；卡片列内拖动排序通过
-  `reorder` 保存到任务正本，跨列拖动遵守原流转校验。拖到进行中调用 `requestStart`，只通知队长。
+  `reorder` 保存到任务正本，跨列拖动遵守原流转校验。拖到进行中调用 `requestStart`，与显式开始一样按当前 dispatcher 派活；依赖未完成时提示原因并留在原列。
   Alt+方向键提供卡片排序/状态移动；无操作时只读任务数据，刷新不改卡片。
 - 打开时订阅 `onChange`，关闭时取消订阅。打开后焦点进入项目筛选入口，Esc 或关闭
   图标关闭并返回侧边栏入口；键盘切换终端列也关闭看板。当前筛选项目没有可见卡片时，
@@ -194,7 +194,7 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 
 ## startCard、心跳与调度
 
-需要已存在的队长。默认 Gemini 开后台 Antigravity
+需要已存在的队长。`requestStart`（拖动或键盘移到进行中）与 `startCard` 共用派活入口、认领和配额排队逻辑。默认 Gemini 开后台 Antigravity
 `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`，使用与队长相同的
 模型分工表，把卡片整理成一件任务，执行 `new --task-id ... --project ...`。
 该会话没有队长 control token，只允许自己的 complete/ask/progress，以及为
@@ -212,12 +212,12 @@ Claude 席位判断；已用尽时不开 PTY，显示「额度用尽，稍后自
 
 主进程监听 tasks 目录（含原子 rename），100ms 合并通知，另每 60 秒巡检。
 发现外部卡片新进入 doing 且没有执行/调度会话、没有 failed/held/blocked 时，
-先原子写入 `dispatch_claim`，再通知同一个 startCard 入口。派出前重查认领键、
+先原子写入 `dispatch_claim`，再通知同一个 startCard 入口。派出前重查认领键及 doing 状态，卡片被拖回或认领被替换后丢弃旧请求；并重查
 执行/调度指针和本机未归档的卡片关联会话，刚开的执行或审查会话也阻止重复调度。
 未归档的已完成会话仍阻止自动调度，但允许队长显式 new 替换。普通内容更新、队员
 开工事件、重复文件通知均不启动调度。同一卡片同一次开始只认领一次；退出重开
 保留 delivered 标记，尚未送出的本机认领在有队长后接续。再次开始必须先回 todo，
-再通过 startCard 或移入 doing。历史迁移卡已标认领完成，避免重复派旧活。
+再通过 startCard 或移入 doing；只要仍有关联的未归档调度员或队员会话，拖回再开始也不会叠开会话。历史迁移卡已标认领完成，避免重复派旧活。
 新执行/调度绑定由主进程记录本机 hostname，不接受调用方指定归属。已关闭的尝试若本机
 找不到旧会话，移回 doing 时清除旧绑定；未关闭的本机旧会话缺失时也可直接 new 重绑，
 无需先移动卡片。旧版本无 hostname 的绑定，用本机归档和 mainSession.tasks 的派活记录

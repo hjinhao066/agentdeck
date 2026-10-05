@@ -461,3 +461,23 @@ test('a bind reservation fences startup but expires if the local session was nev
   doc.cards[0].session_bound_at = Date.now() - 15_001; fs.writeFileSync(file, JSON.stringify(doc));
   assert.equal(bind(c.id, 'recover', 'replacement').card.session_id, 'replacement');
 });
+
+test('dispatch reservations ignore consumed or replaced start claims before validating readiness', (t) => {
+  const { store, add, bind } = fixture(t);
+  for (const status of ['todo', 'done']) {
+    const card = add();
+    const key = store.claim({ id: card.id }).card.dispatch_claim.key;
+    store.move({ id: card.id, status });
+    assert.equal(store.dispatch({ id: card.id, key, session_id: 'stale-' + status }).ignored, true);
+    assert.equal(store.list().find((c) => c.id === card.id).status, status);
+    assert.equal(store.list().find((c) => c.id === card.id).dispatch_session_id, null);
+  }
+  const card = add();
+  const old = store.claim({ id: card.id }).card.dispatch_claim.key;
+  store.move({ id: card.id, status: 'todo' });
+  const key = store.claim({ id: card.id }).card.dispatch_claim.key;
+  assert.equal(store.dispatch({ id: card.id, key: old }).ignored, true);
+  assert.equal(store.dispatch({ id: card.id, key }).ignored, undefined);
+  bind(card.id);
+  assert.equal(store.dispatch({ id: card.id, key, session_id: 'stale-after-bind' }).ignored, true);
+});

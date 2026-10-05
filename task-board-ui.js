@@ -361,14 +361,16 @@
     return null;
   }
   // One move = an optional status change through the data layer's own
-  // transitions, then an optional reorder. A start is only announced to 队长.
+  // transitions, then an optional reorder. Starts follow the configured dispatcher.
   async function applyMove(card, status, anchor) {
     card = cards.find((c) => c.id === card.id) || card; // the newest copy, so its `updated` is current
     try {
       if (status !== card.status) {
         if (status === 'doing' && (card.status === 'todo' || card.status === 'needs_user')) {
           const result = await api().requestStart(card.id);
-          host.showToast(result && result.ignored ? result.occupied ? '这张卡仍有关联的未归档会话，请队长检查并安排' : '这张卡的派活请求已经处理，请队长检查并安排' : `已通知队长安排「${card.title}」`);
+          host.showToast(result && result.ignored ? result.occupied ? '这张卡仍有关联的未归档会话，请队长检查并安排' : '这张卡的派活请求已经处理，请队长检查并安排'
+            : result && result.queued ? `「${card.title}」已排队，稍后自动调度`
+            : result && result.dispatcher === 'gemini' ? `已开始调度「${card.title}」` : `已通知队长安排「${card.title}」`);
           if (result && result.ignored) { await refresh(); return; }
         } else await api().move(card.id, status, card.updated);
         announce(`「${card.title}」已移到${U.labelOf(status)}`);

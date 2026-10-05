@@ -358,9 +358,9 @@ test('grouped board: foldable project groups over shared status columns; counts,
   expect(errors).toEqual([]);
 });
 
-test('drag and keyboard: reorder inside a column is saved, a drop on 进行中 only tells 队长, lanes reorder', async () => {
+test('drag and keyboard: reorder is saved, Captain dispatch sends a notice, and lanes reorder', async () => {
   await launch();
-  await page.evaluate(() => TaskBoard.settings('gemini'));
+  await page.evaluate(() => TaskBoard.settings('captain'));
   await resize(1440, 900);
   const columnIds = await page.evaluate(() => columns.map((c) => c.id));
   await page.locator('#taskBoardBtn').click();
@@ -396,11 +396,11 @@ test('drag and keyboard: reorder inside a column is saved, a drop on 进行中 o
   await page.locator('#taskBoardBtn').click();
   await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-copy', 'p-sso', 'p-faq']);
 
-  // 待办 → 进行中: the card moves and 队长 is told which one; no session is opened for it
+  // dispatcher=captain: 待办 → 进行中 moves the card and notifies 队长.
   const doing = await center(page.locator('.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="doing"]'));
   await drag(card('p-copy'), doing.x, doing.y + 30);
   await expect.poll(() => cellIds('客户门户', 'doing')).toContain('p-copy');
-  await expect.poll(captainNotices).toEqual(['用户在任务看板把卡片 p-copy「整理登录页文案」拖到了「进行中」，请安排队员开始做这件事。项目：客户门户。']);
+  await expect.poll(captainNotices).toEqual(['用户要开始卡片 p-copy「整理登录页文案」。项目：客户门户。']);
   await expect.poll(() => readCard('p-copy').dispatch_claim?.delivered).toBe(true);
   expect(readCard('p-copy').status).toBe('doing');
   // a card whose prerequisite is unfinished stays put and says why
@@ -424,7 +424,7 @@ test('drag and keyboard: reorder inside a column is saved, a drop on 进行中 o
   await page.keyboard.press('Alt+ArrowRight');
   await expect.poll(() => cellIds('报表服务', 'doing')).toContain('r-filter');
   await expect(card('r-filter')).toBeFocused();
-  await expect.poll(async () => (await captainNotices()).some((n) => n.includes('r-filter「实现报告筛选和查询接口」拖到了「进行中」'))).toBe(true);
+  await expect.poll(async () => (await captainNotices()).some((n) => n.includes('用户要开始卡片 r-filter「实现报告筛选和查询接口」'))).toBe(true);
   await expect(page.locator('.tbv-live')).toHaveText('「实现报告筛选和查询接口」已移到进行中');
   // 待验收 → 完成 goes through the normal move
   await card('p-ui').focus();
@@ -454,6 +454,63 @@ test('drag and keyboard: reorder inside a column is saved, a drop on 进行中 o
   await page.keyboard.press('Escape');
   await page.locator('#taskBoardBtn').click();
   await expect.poll(lanes).toEqual([order[1], order[0], order[2]]);
+  expect(errors).toEqual([]);
+});
+
+test('Gemini drag dispatches once, dragging back keeps the session fence, and blocked starts explain why', async () => {
+  await launch();
+  await resize(1440, 900);
+  await page.evaluate((fake) => {
+    const original = BoardCore.commandForAgent;
+    BoardCore.commandForAgent = (agent, ...args) => agent === 'agy' ? fake : original(agent, ...args);
+    TaskBoard.settings('gemini');
+  }, FAKE);
+  await page.locator('#navTop .nav-row[data-nav="tasks"]').click();
+  const card = (id) => page.locator(`.tbv-card[data-card-id="${id}"]`);
+  const cell = (status) => page.locator(`.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="${status}"]`);
+  const dispatchers = () => page.evaluate(() => columns.filter((c) => c.dispatcherCardId).map((c) => c.id));
+  const count = (await dispatchers()).length;
+  let doing = await center(cell('doing'));
+  await drag(card('p-copy'), doing.x, doing.y + 30);
+  await expect(page.locator('#toast')).toContainText('已开始调度「整理登录页文案」');
+  await expect.poll(() => readCard('p-copy').dispatch_session_id).toBeTruthy();
+  await expect.poll(() => readCard('p-copy').dispatch_claim?.delivered).toBe(true);
+  await expect.poll(dispatchers).toHaveLength(count + 1);
+  const session = readCard('p-copy').dispatch_session_id;
+  expect(await captainNotices()).toEqual([]);
+  expect(await page.evaluate((id) => TaskBoard.startCard(id), 'p-copy')).toMatchObject({ ignored: true, occupied: true });
+
+  const todo = await center(cell('todo'));
+  await drag(card('p-copy'), todo.x, todo.y + 30);
+  await expect.poll(() => readCard('p-copy').status).toBe('todo');
+  doing = await center(cell('doing'));
+  await drag(card('p-copy'), doing.x, doing.y + 30);
+  await expect(page.locator('#toast')).toContainText('仍有关联的未归档会话');
+  expect(readCard('p-copy').status).toBe('todo');
+  expect(await dispatchers()).toContain(session);
+  expect((await dispatchers()).length).toBe(count + 1);
+
+  await drag(card('p-sso'), doing.x, doing.y + 30);
+  await expect(page.locator('#toast')).toContainText('它前面的任务还没做完');
+  expect(readCard('p-sso').status).toBe('todo');
+  expect(readCard('p-sso').dispatch_claim).toBeFalsy();
+  expect((await dispatchers()).length).toBe(count + 1);
+  expect(await captainNotices()).toEqual([]);
+
+  // Keyboard starts use the same dispatcher setting as pointer dragging.
+  await card('p-faq').focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect.poll(() => readCard('p-faq').dispatch_session_id).toBeTruthy();
+  await expect.poll(dispatchers).toHaveLength(count + 2);
+  await page.evaluate(async () => {
+    const card = (await TaskBoard.list()).find((c) => c.id === 'r-filter');
+    await TaskBoard.update(card.id, { important: true }, card.updated);
+  });
+  await card('r-filter').focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect(page.locator('#toast')).toContainText('已通知队长安排');
+  await expect.poll(captainNotices).toEqual(['用户要开始卡片 r-filter「实现报告筛选和查询接口」（需要队长判断）。项目：报表服务。']);
+  expect((await dispatchers()).length).toBe(count + 2);
   expect(errors).toEqual([]);
 });
 

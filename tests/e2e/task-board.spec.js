@@ -115,7 +115,7 @@ test('process and quota events update data automatically and a stale execution c
   await command(['complete', '--result', 'Review passed'], review.env);
 });
 
-test('Gemini is default; its stand-in can delegate only this card once, while important or unclear cards go to Captain', async () => {
+test('Gemini drag starts share explicit dispatch and delegate only this card once; important or unclear cards go to Captain', async () => {
   expect(await page.evaluate(() => TaskBoard.settings().dispatcher)).toBe('gemini');
   // Substitute only the dispatcher executable. All permissions and board
   // commands still travel through real PTYs and authenticated request files.
@@ -125,8 +125,10 @@ test('Gemini is default; its stand-in can delegate only this card once, while im
     BoardCore.commandForAgent = (agent, ...args) => agent === 'agy' ? fake : window.testOriginalAgentCommand(agent, ...args);
   }, FAKE);
   const c = await add('Gemini dispatch');
-  const started = await page.evaluate((id) => TaskBoard.startCard(id), c.id);
+  const started = await page.evaluate((id) => TaskBoard.requestStart(id), c.id);
   expect(started.dispatcher).toBe('gemini');
+  expect(await page.evaluate((id) => TaskBoard.startCard(id), c.id)).toMatchObject({ ignored: true });
+  expect(await page.evaluate((id) => columns.filter((c) => c.dispatcherCardId === id).length, c.id)).toBe(1);
   expect(await page.evaluate(() => window.testDispatcherCommand)).toContain('gemini-3.8-flash-high');
   await expect.poll(() => fs.existsSync(path.join(envDir, started.session_id + '.json'))).toBe(true);
   const env = JSON.parse(fs.readFileSync(path.join(envDir, started.session_id + '.json'), 'utf8'));
