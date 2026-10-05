@@ -747,6 +747,10 @@ in the history record's `alternatives`. Credential-shaped fields are stripped,
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds.
 
+Serialize local verification with the whole-machine `/tmp/agentdeck-test.lock`
+before running unit tests, E2E, or the transport smoke. Record the owning PID,
+branch and start time in `owner`, and remove that file and directory on exit.
+
 Run `node scripts/fleet-two-machine-smoke.js --ssh winpc --report /absolute/report.md`
 for a repeatable native Mac/Windows transport check. It uses fresh temporary
 stores and credentials and an SSH reverse forward bound to loopback. It verifies
