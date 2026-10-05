@@ -290,6 +290,55 @@ test('项目名完整显示: four projects with long names at 1920, 1440, 980 an
   expect(errors).toEqual([]);
 });
 
+// The crew of the four-project picture, with every status that carries a second half (排队 · 等终端就绪): the card shows the second half.
+const STATES = [
+  // the long ones first, so a narrow window's picture shows them
+  ...[['1.1.12 集成与打包', 'queued'], ['手机网页端对话区重排', 'asking'], ['额度面板并入侧栏', 'waiting'], ['Windows 安装包签名', 'stopped'], ['重启后自动续跑', 'working'],
+    ['队长接力交接 v2', 'failed'], ['CI Verify #81 失败排查', 'working'], ['任务看板星图视觉', 'working'], ['Bark 提醒去重', 'done'], ['字号缩放快捷键', 'working']].map(([t, s]) => ['agentdeck', t, s]),
+  ...[['省钱中心雷达任务注册', 'working'], ['/daily 日报卡片', 'queued'], ['订阅到期提醒', 'done'], ['回滚点保留策略', 'asking']].map(([t, s]) => ['hermes-savings', t, s]),
+  ...[['豆包语音切换', 'asking'], ['钥匙串密钥迁移', 'failed']].map(([t, s]) => ['type4me-windows', t, s]),
+  ['vps-ops', 'Caddy 证书续期巡检', 'stopped'],
+];
+// Every card's status as it shows: cut (scrollWidth past clientWidth), or run into the badge, the ⋯ button or the card's edge.
+const statusLabels = () => page.evaluate(() => [...document.querySelectorAll('.cm-node > .cm-top')].map((top) => {
+  const card = top.parentElement, st = top.querySelector('.cm-status'), text = st.querySelector('.cm-status-text'), badge = top.querySelector('.cm-agent'), more = card.querySelector('.cm-more');
+  const r = (n) => n.getBoundingClientRect();
+  const limit = Math.min(r(card).right, more ? r(more).left : Infinity, badge.childNodes.length ? r(badge).left : Infinity);
+  return { text: text.textContent, cut: st.scrollWidth > st.clientWidth || text.scrollWidth > text.clientWidth, over: r(text).right > limit + 0.5,
+    title: st.title, badgeCut: [...badge.querySelectorAll('.agent-model-label, .agent-seat-label')].some((n) => n.scrollWidth > n.clientWidth) || badge.scrollWidth > badge.clientWidth,
+    badgeOut: badge.childNodes.length > 0 && r(badge).right > Math.min(r(card).right, more ? r(more).left : Infinity) + 0.5, ellipsis: getComputedStyle(text).textOverflow };
+}));
+
+test('状态标签完整显示: every card status is whole at 1920, 1440, 980 and 700 in both themes, and a long model name gives way to it', async () => {
+  await launch(STATES);
+  await open(1920, 1080, 'light');
+  for (const [w, h] of [[1920, 1080], [1440, 900], [980, 700], [700, 800]]) for (const theme of ['dark', 'light']) {
+    await size(w, h, theme);
+    await page.evaluate(() => CrewMap.refresh());
+    await settled();
+    const got = await statusLabels();
+    expect(got.map((g) => g.text), `${w} ${theme}: every kind of status is on the map`).toEqual(expect.arrayContaining(['等终端就绪', '等空位', '在问队长', '没写回执', '干活中', '已完成', '失败']));
+    expect(got.filter((g) => /…|\.\.\./.test(g.text) || g.badgeCut), `${w} ${theme}: nothing in the row ends in an ellipsis`).toEqual([]);
+    expect(got.map((g) => g.title)).toEqual(expect.arrayContaining(['排队 · 等终端就绪', '待补充 · 在问队长', '已停下 · 没写回执']));
+    expect(got.filter((g) => g.cut || g.over || g.badgeOut), `${w} ${theme}: statuses cut or run into something`).toEqual([]);
+    await shot(`map-status-${w}-${theme}`);
+  }
+  // A real model name with its seat fits beside the longest status, whole.
+  const rename = (name) => page.evaluate((n) => document.querySelectorAll('.cm-node:not(.kind-captain) .cm-agent .agent-model-label').forEach((l) => { l.textContent = n; }), name);
+  await rename('Opus 5.5');
+  expect((await statusLabels()).filter((g) => g.cut || g.over || g.badgeOut || g.badgeCut)).toEqual([]);
+  await shot('map-status-opus-700-light');
+  await size(1920, 1080, 'light'); await page.evaluate(() => CrewMap.refresh()); await settled(); await rename('Opus 5.5');
+  await shot('map-status-opus-1920-light');
+  // A long model name is what shortens, never the status beside it.
+  await rename('Sonnet 5.5 Thinking 1M');
+  const long = await statusLabels();
+  expect(long.filter((g) => g.cut || g.over || g.badgeOut)).toEqual([]);
+  expect(await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .cm-agent .agent-seat-label')].every((n) => n.scrollWidth <= n.clientWidth))).toBe(true);
+  await shot('map-status-long-model-1920-light');
+  expect(errors).toEqual([]);
+});
+
 test('智能一页: one click hands arrangement and zoom back to the window; what cannot fit stays readable and says so; it can be undone', async () => {
   await launch(BIG);
   await open(1920, 1080, 'dark'); await settled();

@@ -125,7 +125,10 @@
     place(n, box);
     const top = el('div', 'cm-top');
     const st = el('span', 'cm-status');
-    st.append(icon(node.status, 'cm-dot'), el('span', 'cm-status-text', node.statusLabel + (node.detail ? ' · ' + node.detail : '')));
+    // A card has room for one short status beside the model badge: the precise half (等终端就绪) when there is one.
+    // The icon and colour still say which kind it is; the tooltip and the detail popover carry both halves.
+    st.append(icon(node.status, 'cm-dot'), el('span', 'cm-status-text', node.detail || node.statusLabel));
+    st.title = node.statusLabel + (node.detail ? ' · ' + node.detail : '');
     top.append(st, badge(node));
     const title = el('div', 'cm-title', node.title);
     const line = el('div', 'cm-line', node.line || (waiting ? '同时干活的会话满了，有空位就自动开' : node.status === 'working' ? '干活中，还没有回执' : captain ? '' : '还没有回执'));
