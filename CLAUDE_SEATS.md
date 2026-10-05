@@ -41,6 +41,8 @@ node scripts/setup-claude-us.js --seat us2
 
 用户在普通终端亲自运行，在浏览器选择美国二号账号。子 shell 清掉继承的认证覆盖项和嵌套会话变量，退出后不影响当前终端。不要复制 US 的登录文件或给登录文件建链接。US2 未登录时显示未知、Relay 禁用、自动轮换/预热跳过；CN/US 继续工作。
 
+启动非默认 Claude 席位时，AgentDeck 会在账号已有 OAuth 元数据、默认配置已完成首次引导且该席位标记缺失时，只补写该席位 `.claude.json` 的 `hasCompletedOnboarding` 和版本标记，保留其他账号字段。若 CLI 仍显示 `Select login method`，不会把提示词或任务输入选择菜单，永动机跳过这个引导未完成的席位；先在普通终端完成登录/引导。
+
 Windows PowerShell 同样先在子进程中清理以上环境变量，再设置 `$env:CLAUDE_CONFIG_DIR="$env:USERPROFILE\.claude-us2"` 并执行 `claude auth login`；不能只改目录而保留 OAuth/API 覆盖项。
 
 US 登录命令也由用户在普通终端亲自运行，在浏览器里选美国邮箱的 Claude

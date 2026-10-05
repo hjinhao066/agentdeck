@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const S = require('../claude-seats-core');
+const { initializeOnboarding } = require('../claude-seats-main');
 
 // Share the brain, never the account, credential fallback, caches or locks.
 const SHARED = ['CLAUDE.md', 'settings.json', 'settings.local.json', 'skills', 'hooks',
@@ -47,17 +48,7 @@ function setup(home = os.homedir(), seatId = 'us') {
     const seed = {};
     for (const key of ['projects', 'mcpServers', 'hasCompletedOnboarding', 'lastOnboardingVersion']) if (original[key]) seed[key] = original[key];
     fs.writeFileSync(global, JSON.stringify(seed, null, 2), { mode: 0o600, flag: 'wx' });
-  } else {
-    // auth status can succeed while a previously seeded profile still enters
-    // the first-run login chooser. Carry only missing UI onboarding markers.
-    const existing = JSON.parse(fs.readFileSync(global, 'utf8'));
-    if (existing.oauthAccount && existing.hasCompletedOnboarding === undefined && original.hasCompletedOnboarding === true) {
-      existing.hasCompletedOnboarding = true;
-      if (typeof original.lastOnboardingVersion === 'string') existing.lastOnboardingVersion = original.lastOnboardingVersion;
-      fs.writeFileSync(global + '.tmp', JSON.stringify(existing, null, 2), { mode: 0o600 });
-      fs.renameSync(global + '.tmp', global);
-    }
-  }
+  } else initializeOnboarding(seat, home);
   return { cn, us, seatId, name: seat.name, shared: SHARED.filter((name) => fs.existsSync(path.join(cn, name))) };
 }
 if (require.main === module) {

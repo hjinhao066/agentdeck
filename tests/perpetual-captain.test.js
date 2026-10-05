@@ -54,6 +54,21 @@ test('low positive quotas prevent Codex fallback; missing logins are skipped', (
   assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn'), { ...unknown('us'), loggedIn: false }] }).targetId, P.CODEX_ID);
   assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn')] }).targetId, P.CODEX_ID);
 });
+test('quota banner follows rotation order and reports the earliest recovery when no seat is ready', () => {
+  const seats = [quota('cn', 0), quota('us', 0), quota('us2', 80)];
+  const input = { currentId: 'us', settings: { enabled: true }, seats, now: NOW };
+  assert.deepEqual(P.quotaAction(input), { targetId: 'us2', recoveryAt: null, reason: 'quota-exhausted' });
+  assert.equal(P.quotaAction({ ...input, settings: { enabled: false } }).targetId, 'us2');
+
+  const blocked = [
+    quota('cn', 0, { resetAt: NOW + 2 * 3600_000 }),
+    quota('us', 0, { resetAt: NOW + 3600_000 }),
+    quota('us2', 80, { onboardingComplete: false, resetAt: NOW + 5 * 60_000 })
+  ];
+  assert.deepEqual(P.quotaAction({ ...input, seats: blocked }), {
+    targetId: null, recoveryAt: NOW + 3600_000, reason: 'claude-unavailable'
+  });
+});
 test('a persisted trusted zero proves exhaustion until its reset, then the Claude seat becomes usable', () => {
   let state = P.observe({}, { seatId: 'cn', at: NOW, remaining: 0, trusted: true, resetAt: NOW + 3600_000 }, NOW);
   state = exhausted(state, 'us', NOW, NOW + 7200_000);
@@ -401,4 +416,11 @@ test('three Claude seats cycle CN to US to US2 to CN, skipping unavailable seats
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), { ...unknown('us2'), loggedIn: false }] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 0)] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 2)] }), null);
+});
+test('a seat with unfinished onboarding is skipped by rotation and does not block the Codex fallback', () => {
+  const current = quota('cn', 0), us = quota('us', 0), us2 = quota('us2', 80, { onboardingComplete: false });
+  assert.equal(choose({ seats: [current, quota('us', 80), us2] }).targetId, 'us');
+  assert.equal(choose({ currentId: 'us2', seats: [quota('cn', 80), us, us2] }).targetId, 'cn');
+  assert.equal(choose({ seats: [current, us, us2] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ seats: [current, us, quota('us2', 0)] }).targetId, P.CODEX_ID);
 });

@@ -54,8 +54,8 @@ test.beforeEach(async ({}, testInfo) => {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
     fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}'); // stand-in credential existence only
   }
-  fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"}}');
-  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"}}');
+  fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"},"hasCompletedOnboarding":true,"lastOnboardingVersion":"2.1.289"}');
+  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"},"hasCompletedOnboarding":true}');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     claudeSeats: require('../../claude-seats-core').normalize().slice(0, 2), // saved legacy profile
     perpetualCaptain: { enabled: false },
@@ -197,7 +197,7 @@ test('quota banner switches once and preserves the interrupted Captain turn', as
   const banner = page.locator(`.column[data-col-id="${cn}"] .seat-quota-banner`);
   await expect(banner).toContainText('CN额度用尽', { timeout: 20000 });
   await screenshot('quota-relay');
-  await banner.locator('button[aria-label="Relay到US"]').click();
+  await banner.locator('button.quota-seat-action').click();
   await expect.poll(() => page.evaluate(() => config.activeClaudeSeatId)).toBe('us');
   const retired = JSON.parse(fs.readFileSync(path.join(profile, 'chats', cn + '.json')));
   expect(retired.captainArchive).toBe(true);
@@ -344,8 +344,31 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
     { key: 'fiveHour', remaining: 100, resetText: 'in 1h' }, { key: 'weekly', remaining: 100, resetText: 'in 4d' },
   ] });
   await page.evaluate(() => ClaudeSeats.refresh());
-  await board(['new', '--title', 'US2 worker', '--task', 'finish task', '--seat', 'us2', '--command', FAKE], '已开新会话');
-  const worker = await page.evaluate(() => columns.find((c) => c.displayTitle === 'US2 worker').id);
+  await board(['new', '--title', 'US2 startup input', '--task', 'input is ready', '--seat', 'us2', '--command', `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --onboarding-probe`], '已开新会话');
+  const startupWorker = await page.evaluate(() => columns.find((c) => c.displayTitle === 'US2 startup input').id);
+  await expect.poll(() => capture('prompt-columns.jsonl')).toContain('input is ready');
+  await expect.poll(() => page.evaluate((id) => (terms.get(id)?.lastScreen || '').includes('Claude Code startup input ready'), startupWorker)).toBe(true);
+  expect(JSON.parse(fs.readFileSync(path.join(dir, '.claude.json'), 'utf8'))).toMatchObject({ hasCompletedOnboarding: true, lastOnboardingVersion: '2.1.289' });
+  const stillCaptain = await page.evaluate(async () => {
+    const infos = await ClaudeSeats.refresh(), now = Date.now();
+    config.perpetualCaptain = { enabled: true, threshold: 3, preferEarlier: false };
+    for (const info of infos) config.quotas[QuotaCore.seatKey(info.id)] = { sample: {
+      provider: 'Claude', scope: 'claude', official: true, seatId: info.id,
+      configDir: info.configDir, credentialKey: info.credentialKey, at: now,
+      windows: [{ key: 'fiveHour', remaining: info.id === 'us2' ? 80 : 2, resetAt: now + 3600000 },
+        { key: 'weekly', remaining: 60, resetAt: now + 7 * 86400000 }],
+    } };
+    const id = config.mainSession.colId;
+    const unfinished = terms.get(columns.find((col) => col.displayTitle === 'US2 startup input').id);
+    unfinished.lastScreen = 'Claude Code\nSelect login method\n❯ 1. Claude account with subscription';
+    unfinished.state = 'input';
+    ClaudeSeats.onTick(id, terms.get(id), '');
+    return MainSession.mainCol().claudeSeatId;
+  });
+  expect(stillCaptain).toBe('cn');
+  await page.waitForTimeout(1000);
+  expect(await page.evaluate(() => MainSession.mainCol().claudeSeatId)).toBe('cn');
+  const worker = startupWorker;
   await expect.poll(() => capture('seat-env.jsonl')).toContain(worker);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === worker)).toMatchObject({ configDir: dir, authOverridePresent: false });
   await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });

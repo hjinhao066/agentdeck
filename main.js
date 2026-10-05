@@ -16,7 +16,7 @@ const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
-const { seatEnvironment, credentialLocation, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { seatEnvironment, credentialLocation, initializeOnboarding, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
 const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
@@ -265,9 +265,10 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     if (ptySeats.get(id) === binding) return;
     killPty(id, true);
   }
+  const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
+  if (selectedSeat && !credentialLocation(selectedSeat, seatHome).isDefault) initializeOnboarding(selectedSeat, seatHome, dir);
   if (selectedSeat) quotaWarmup?.cancel(selectedSeat.id);
 
-  const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   const receiptToken = crypto.randomBytes(24).toString('hex');
   receiptSessions.set(id, receiptToken);

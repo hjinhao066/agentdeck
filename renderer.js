@@ -494,7 +494,7 @@ const WORKING_RE = /^\s*[│┃|]?\s*(?:[◦●•✻✽✳✶✢✺∴*·\u2800
 // also…?" at the end of a normal reply must NOT hold a column red forever.
 // Claude/Grok permission prompts always render a "❯ 1." option list; y/n
 // prompts show "(y/n)"; Antigravity's approval footer is "Enter to confirm".
-const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)/im;
+const NEEDS_INPUT_RE = /❯\s*\d+\.\s|\(y\/n\)|\[y\/n\]|enter to confirm|trust (?:this|the) (?:folder|workspace|files)|select\s+login\s+method/im;
 const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|\bBuild anything\b|\bPlan, search, build anything\b|\bAdd a follow-up\b|Antigravity|Claude Code|Composer|OpenAI Codex|Codex|context left|Model:\s+(?:Opus|Sonnet|Haiku|Fable)|Context:\s*\[|^[❯›]\s*$|│\s*❯/im;
 // Can this column take a prompt now? Busy beats idle. Cursor's prompt row is
 // read by MainCore.cursorActivity, which also copes with a wrapped prompt.

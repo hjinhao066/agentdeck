@@ -43,6 +43,15 @@ let contextUsed = 23000;
 const codex = process.argv.includes('--codex-reset');
 let resetMenu = false;
 function box() {
+  if (process.argv.includes('--onboarding-probe')) {
+    let complete = false;
+    try { complete = JSON.parse(require('fs').readFileSync(require('path').join(process.env.CLAUDE_CONFIG_DIR, '.claude.json'), 'utf8')).hasCompletedOnboarding === true; } catch (_) {}
+    if (!complete || process.argv.includes('--force-login-method')) {
+      process.stdout.write('Claude Code\nSelect login method\n❯ 1. Claude account with subscription\n  2. Anthropic console\n');
+      return;
+    }
+    process.stdout.write('Claude Code startup input ready\n');
+  }
   if (process.argv.includes('--codex-completed')) {
     process.stdout.write('◦ Working (11m 27s • esc to interrupt)\n' +
       '─ Worked for 34m 29s • 12:52 ─\n› Ask Codex to do anything\n' +
@@ -76,6 +85,10 @@ function answer() {
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   if (process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text }) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
+  if (first === 'show login method') {
+    process.stdout.write('\x1b[2J\x1b[HClaude Code\nSelect login method\n❯ 1. Claude account with subscription\n  2. Anthropic console\n');
+    box(); return;
+  }
   if (process.argv.includes('--board-probe') && (first.startsWith('BOARD ') || first.startsWith('BOARD-NO-ENV '))) {
     const fallback = first.startsWith('BOARD-NO-ENV ');
     const args = JSON.parse(first.slice(fallback ? 13 : 6));

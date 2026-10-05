@@ -149,7 +149,8 @@
     const numericExhausted = trusted ? seat.remaining === 0 : !!state.lowAt && state.lowRemaining === 0;
     const exhausted = !!state.exhaustedAt || numericExhausted || (weeklyLow && seat.weeklyRemaining === 0) || (seat.exhausted === true && (!time(seat.exhaustedResetAt) || seat.exhaustedResetAt > now));
     const lastMove = Math.max(state.enteredAt || 0, state.leftAt || 0);
-    return { state, trusted, low, weeklyLow, exhausted, available: seat.loggedIn === true && !low && !exhausted,
+    return { state, trusted, low, weeklyLow, exhausted,
+      available: seat.loggedIn === true && seat.onboardingComplete !== false && !low && !exhausted,
       cooling: !!lastMove && now - lastMove < COOLDOWN_MS };
   }
   function decide({ settings, state: value, currentId, seats = [], busy = false, draft = false, briefing = false, switching = false, now = Date.now() } = {}) {
@@ -169,7 +170,7 @@
       return target ? { targetId: target.seat.id, reason: 'claude-recovered', at: now } : null;
     }
     if (!current) return null;
-    if (!current.exhausted && !current.low) {
+    if (!current.exhausted && !current.low && current.seat.onboardingComplete !== false) {
       // A future reset from a fresh quota sample proves that the new window
       // is already counting. A past reset stays unknown until warmup + sampling.
       if (!config.preferEarlier || !current.trusted || !time(current.seat.resetAt) ||
@@ -180,19 +181,38 @@
         .sort((a, b) => a.seat.resetAt - b.seat.resetAt)[0];
       return earlier ? { targetId: earlier.seat.id, reason: 'earlier-reset', at: now } : null;
     }
-    const reason = current.exhausted ? 'quota-exhausted' : current.weeklyLow ? 'weekly-threshold' : 'threshold';
+    const reason = current.seat.onboardingComplete === false ? 'startup-onboarding' : current.exhausted ? 'quota-exhausted' : current.weeklyLow ? 'weekly-threshold' : 'threshold';
     if (candidates.length) return { targetId: candidates[0].seat.id, reason, remaining: current.weeklyLow ? current.seat.weeklyRemaining : current.trusted ? current.seat.remaining : null, at: now };
     // A healthy seat in its cooldown is temporarily unavailable, not exhausted.
     // Stay put until it can be used rather than hopping through Codex.
     if (claude.some(({ available }) => available)) return null;
     // A low positive quota or an unknown login is not evidence of exhaustion.
     // Unlogged seats are skipped; usable logins must all prove exhaustion.
-    const loggedIn = claude.filter(({ seat }) => seat.loggedIn === true);
+    const loggedIn = claude.filter(({ seat }) => seat.loggedIn === true && seat.onboardingComplete !== false);
     if (!loggedIn.length || loggedIn.some(({ exhausted }) => !exhausted)) return null;
     const codex = state.seats[CODEX_ID] || {};
     const codexMove = Math.max(codex.enteredAt || 0, codex.leftAt || 0);
     if (codexMove && now - codexMove < COOLDOWN_MS) return null;
     return { targetId: CODEX_ID, reason: 'claude-unavailable', remaining: current.trusted ? current.seat.remaining : null, at: now };
+  }
+  function quotaAction(input = {}) {
+    const settings = { ...normalizeSettings(input.settings), enabled: true };
+    const decision = decide({ ...input, settings, busy: false, draft: false, briefing: false, switching: false });
+    const targetId = decision?.targetId && decision.targetId !== CODEX_ID ? decision.targetId : null;
+    let recoveryAt = null;
+    if (!targetId) {
+      const now = Number.isFinite(input.now) ? input.now : Date.now(), state = normalizeState(input.state);
+      for (const seat of input.seats || []) {
+        if (!seat || seat.id === CODEX_ID || seat.loggedIn !== true || seat.onboardingComplete === false) continue;
+        const check = status(seat, state.seats[seat.id] || {}, normalizeSettings(input.settings).threshold, now);
+        if (check.available) continue;
+        const saved = check.state, times = check.cooling
+          ? [Math.max(saved.enteredAt || 0, saved.leftAt || 0) + COOLDOWN_MS]
+          : [seat.resetAt, seat.exhaustedResetAt, seat.weeklyResetAt, saved.resetAt, saved.lowResetAt];
+        for (const at of times) if (time(at) && at > now && (!recoveryAt || at < recoveryAt)) recoveryAt = at;
+      }
+    }
+    return { targetId, recoveryAt, reason: decision?.reason || 'no-available-seat' };
   }
   function recordSwitch(value, event) {
     const state = normalizeState(value);
@@ -207,7 +227,8 @@
     const config = normalizeSettings(settings), current = seats.find((s) => s.id === currentId);
     const name = (s) => s?.name || s?.id || 'ChatGPT';
     const index = seats.findIndex((s) => s.id === currentId);
-    const others = (index < 0 ? seats : seats.slice(index + 1).concat(seats.slice(0, index))).filter((s) => s.loggedIn !== false);
+    const others = (index < 0 ? seats : seats.slice(index + 1).concat(seats.slice(0, index)))
+      .filter((s) => s.loggedIn !== false && s.onboardingComplete !== false);
     const parts = [`正在用 ${current ? name(current) : 'ChatGPT'}`];
     if (!config.enabled) return parts.concat('自动轮换已关闭').join(' · ');
     for (const w of warmups) if (w.warmupEligible !== false && w.status === 'pending' && w.resetAt > now) {
@@ -219,5 +240,5 @@
     if (config.preferEarlier) parts.push('有可用额度时优先用快到期的席位');
     return parts.join(' · ');
   }
-  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, normalizeSettings, normalizeState, observe, bound, seatQuota, decide, recordSwitch, strategyText };
+  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, normalizeSettings, normalizeState, observe, bound, seatQuota, decide, quotaAction, recordSwitch, strategyText };
 });
