@@ -13,6 +13,8 @@ async function launch() {
   const env = { ...process.env, AGENTDECK_TEST_CONTROL_ENV_FILE: path.join(profile, 'control.json'),
     AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received.jsonl'),
     AGENTDECK_TEST_RECEIPTS_FILE: path.join(profile, 'receipts.jsonl') };
+  // Stand-in agents must not run the user's interactive zsh startup hooks.
+  if (process.platform !== 'win32') env.ZDOTDIR = profile;
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,

@@ -34,6 +34,7 @@ test.beforeAll(async () => {
   const controlFile = path.join(profile, 'captain.json');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns: [{ id: 'task-idle-shell', title: 'Shell', cmd: '', cwd: profile, role: 'manual' }] }));
   const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: envDir }; delete env.ELECTRON_RUN_AS_NODE;
+  if (process.platform !== 'win32') env.ZDOTDIR = profile;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
@@ -42,6 +43,10 @@ test.beforeAll(async () => {
   await page.evaluate((cwd) => MainSession.create('', cwd), profile);
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
+  await expect.poll(() => page.evaluate(([id, platform]) => {
+    const screen = dumpScreen(terms.get(id).term);
+    return platform === 'win32' ? MainCore.isWindowsShellPrompt(screen) : /[%$#]\s*$/.test(screen);
+  }, [captain, process.platform]), { timeout: 30000 }).toBe(true);
   // A script file keeps Windows PowerShell/native argument parsing out of the
   // capability export; the environment still comes from the Captain's real PTY.
   const exportScript = path.join(profile, 'export-control.cjs');
