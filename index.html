@@ -31,6 +31,9 @@
     <label for="concurrencyCap">同时干活的会话数（5–50，默认 30）</label>
     <input id="concurrencyCap" type="number" min="5" max="50" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="concurrencyCapNote" />
     <p id="concurrencyCapNote" class="hint">同时最多几个会话干活，超出的自动排队</p>
+    <h3>重启后续上</h3>
+    <label class="sd-check"><input id="resumeOnRestart" type="checkbox" />重启后自动续上在跑的队员</label>
+    <p class="hint">退出前记下在干活的队员，并在时限内退出。能续上原对话的用各家自己的 resume；续不上的新开会话，并重发卡片任务和最后回执。</p>
     <button id="csSave" class="btn primary" type="button">保存设置</button>
     <h3>手机网页端</h3>
     <label class="notify-setting"><span>本地网页服务</span><input type="checkbox" role="switch" id="mobileWebEnabled" aria-label="本地网页服务" /></label>
@@ -502,6 +505,7 @@
   <script src="skills-ui.js"></script>
   <script src="pages.js"></script>
   <script src="main-core.js"></script>
+  <script src="restart-resume.js"></script>
   <script src="main-session.js"></script>
   <script src="perpetual-captain-core.js"></script>
   <script src="quota-warmup-core.js"></script>

@@ -62,6 +62,8 @@
       "pages.js",
       "main-core.js",
       "main-session.js",
+      "restart-resume.js",
+      "agent-sessions.js",
       "task-board.js",
       "task-heartbeat.js",
       "mobile-web.js",

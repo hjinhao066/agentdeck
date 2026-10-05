@@ -142,6 +142,7 @@ test('a cleared 队长 is relaunched fresh: resume flags are dropped, everything
   assert.equal(M.freshCommand('codex resume chat-1 --dangerously-bypass-approvals-and-sandbox'), 'codex --dangerously-bypass-approvals-and-sandbox');
   assert.equal(M.freshCommand('codex resume --last --dangerously-bypass-approvals-and-sandbox'), 'codex --dangerously-bypass-approvals-and-sandbox');
   assert.equal(M.freshCommand('codex resume'), 'codex');
+  assert.equal(M.freshCommand('agy --conversation abc --model gemini-3.8-flash-high'), 'agy --model gemini-3.8-flash-high');
   // -c / -r mean something else to other tools
   assert.equal(M.freshCommand('agy -c conf.toml --model gemini-3.8-flash-high'), 'agy -c conf.toml --model gemini-3.8-flash-high');
   assert.equal(M.freshCommand('node "/x/fake agent.js"  --flag'), 'node "/x/fake agent.js"  --flag');

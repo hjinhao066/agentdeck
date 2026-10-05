@@ -269,6 +269,7 @@
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
       if (!$('concurrencyCap').reportValidity()) return;
       host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
+      host.config.resumeOnRestart = $('resumeOnRestart').checked;
       applyConcurrencyCap($('concurrencyCap').value);
       cancelTokenSaving();
       tokenSaverPaused = false;
@@ -297,6 +298,8 @@
     $('csThreshold').value = settings.threshold / 1000;
     $('csThreshold').disabled = !settings.enabled;
     $('concurrencyCap').value = M.concurrencyCap(host.config.concurrencyCap);
+    const resumeBox = $('resumeOnRestart');
+    if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
   }
   function applyConcurrencyCap(raw) {
     const cap = M.concurrencyCap(raw);
@@ -908,6 +911,205 @@
     return response;
   }
 
+  // Cold start vs a reload that kept the PTY. A continue is not a new dispatch:
+  // the same task and the same board card stay open, and a claim on disk stops
+  // a second launch from sending the instruction again.
+  let resumeManifest = window.RestartResume ? window.RestartResume.emptyManifest() : { version: 1, claims: {}, entries: [] };
+  const resumeWaiting = new Map();
+  let resumeInflight = 0;
+  let resumeTimer = null;
+  function loadResumeManifest() {
+    const R = window.RestartResume;
+    if (!R || !window.deck || !window.deck.restartManifestLoad) return;
+    try { resumeManifest = R.parseManifest(JSON.stringify(window.deck.restartManifestLoad() || null)); }
+    catch (_) { resumeManifest = R.emptyManifest(); }
+  }
+  function saveResumeManifest() {
+    try { window.deck.restartManifestSave(resumeManifest); } catch (_) {}
+  }
+  function latestTask(colId) {
+    const s = state();
+    let found = null;
+    if (s) for (const t of s.tasks) if (t.colId === colId) found = t;
+    return found;
+  }
+  function pendingInstruction(colId) {
+    const batch = dispatches.get(colId);
+    if (!batch) return '';
+    return batch.items.filter((item) => item.task && item.task.status === 'queued').map((item) => item.text).join('\n\n');
+  }
+  function noteBoard(col, task, note, reopen) {
+    const id = (task && task.boardId) || (col && col.boardId);
+    if (!id || !col) return;
+    window.deck.taskBoard('resumeNote', {
+      id, session_id: col.id, attempt_id: (task && task.boardAttempt) || col.boardAttempt || '', note, reopen: !!reopen,
+    }).catch(() => {});
+  }
+  function noteResumeFailure(col, task, reason) {
+    const R = window.RestartResume;
+    if (!task || task.resumeFailed) return;
+    task.resumeFailed = true;
+    delete task.restartHold;
+    if (col) resumeWaiting.delete(col.id);
+    const failed = R.failureNote(reason);
+    if (col) resumeManifest.claims[col.id] = { phase: 'failed', at: Date.now(), taskId: task.id };
+    saveResumeManifest();
+    task.status = 'failed';
+    task.receipt = { summary: '', files: [], images: [], failed, explicit: true, source: 'resume' };
+    if (col) col.lastReceipt = { ...task.receipt, ts: Date.now() };
+    update(task);
+    host.showToast(failed);
+    const id = task.boardId || (col && col.boardId);
+    if (id && col) window.deck.taskBoard('event', {
+      id, session_id: col.id, attempt_id: task.boardAttempt || col.boardAttempt || '', type: 'failed', message: failed, source: 'resume',
+    }).catch(() => {});
+  }
+  function restartLaunch(col, isFresh) {
+    const R = window.RestartResume;
+    if (!R || !col || isFresh || !R.resumeEnabled(host.config)) return { mode: 'leave' };
+    return R.launchChoice({ cmd: col.cmd, sessionId: col.modelSessionId, task: latestTask(col.id), enabled: true });
+  }
+  function notePtySurvived(col) {
+    if (!col) return;
+    resumeWaiting.delete(col.id);
+    const task = latestTask(col.id);
+    if (task) delete task.restartHold;
+  }
+  function noteColdColumn(col) {
+    const R = window.RestartResume;
+    if (!col || col.isMain || !col.captainCrew || !R || !R.resumeEnabled(host.config)) return;
+    const task = latestTask(col.id);
+    if (!task || !R.shouldResume(task)) return;
+    const how = R.claimDisposition(resumeManifest.claims[col.id]);
+    if (how === 'skip') return;
+    if (how === 'fail') { noteResumeFailure(col, task, '上次续接没有送达'); return; }
+    task.restartHold = true;
+    task.resumeDeadline = task.resumeDeadline || Date.now() + 30000;
+    if (task.status !== 'paused' && R.isCheckpointClosure(task)) { task.status = 'paused'; task.doneAt = 0; task.endedAt = 0; }
+    resumeWaiting.set(col.id, how);
+    clearTimeout(resumeTimer);
+    resumeTimer = setTimeout(flushResume, 600);
+  }
+  async function resumeBody(col, task, stored) {
+    const entry = {
+      mode: stored.mode === 'resume' ? 'resume' : 'resend',
+      provider: stored.provider || window.RestartResume.providerOf(col.cmd) || '未知',
+      title: stored.title || task.title || '',
+      task: stored.task || '',
+      receipt: stored.receipt || '',
+      pendingText: stored.pendingText || '',
+    };
+    if (entry.mode === 'resume') return entry;
+    const boardId = stored.boardId || task.boardId || col.boardId;
+    if (boardId && !entry.task) {
+      try {
+        const card = (await window.TaskBoard.list({ archived: true })).find((item) => item.id === boardId);
+        if (card) {
+          entry.task = card.detail || '';
+          entry.title = entry.title || card.title || '';
+          if (!entry.receipt) entry.receipt = card.latest_receipt || '';
+        }
+      } catch (_) {}
+    }
+    if (!entry.receipt && task.receipt && !task.receipt.checkpoint) entry.receipt = task.receipt.summary || task.receipt.failed || '';
+    return entry;
+  }
+  function flushResume() {
+    const R = window.RestartResume;
+    if (!state() || !R) return;
+    const ready = [];
+    let waiting = false;
+    for (const [id, how] of resumeWaiting) {
+      const col = host.columns().find((c) => c.id === id && c.captainCrew && !c.isMain);
+      const task = latestTask(id);
+      const term = host.terms.get(id);
+      if (!col || !task || !R.shouldResume(task)) { resumeWaiting.delete(id); continue; }
+      if (!term || !term.alive) {
+        if (task.resumeDeadline && Date.now() > task.resumeDeadline) {
+          resumeWaiting.delete(id);
+          noteResumeFailure(col, task, '终端没有在时限内起来');
+        } else waiting = true;
+        continue;
+      }
+      ready.push({ id, how });
+    }
+    for (const item of R.nextBatch(ready, resumeInflight, R.BATCH)) {
+      resumeWaiting.delete(item.id);
+      resumeInflight += 1;
+      let released = false;
+      const release = () => { if (released) return; released = true; resumeInflight -= 1; flushResume(); };
+      const slot = setTimeout(release, 45000);
+      const col = host.columns().find((c) => c.id === item.id);
+      const task = latestTask(item.id);
+      const stored = (resumeManifest.entries || []).find((entry) => entry.colId === item.id) || {};
+      // restartMode was decided before a resend assigned a brand-new Claude id.
+      // Re-reading that id here would call a new conversation a true resume.
+      const mode = col.restartMode === 'resume' ? 'resume' : (stored.mode === 'resume' && col.restartMode !== 'resend' ? 'resume' : 'resend');
+      resumeBody(col, task, { ...stored, mode, provider: stored.provider || R.providerOf(col.cmd) || '未知' }).then((entry) => {
+        if (released) return;
+        resumeManifest.claims[item.id] = { phase: item.how === 'retry' ? 'retrying' : 'armed', at: Date.now(), taskId: task.id, mode: entry.mode };
+        saveResumeManifest();
+        host.sendWhenReady(col, R.resumeMessage({ ...entry, retry: item.how === 'retry' }), {
+          silent: true, guardUserInput: true, timeout: 45000,
+          onSent: () => {
+            clearTimeout(slot);
+            resumeManifest.claims[item.id] = { phase: 'sent', at: Date.now(), taskId: task.id, mode: entry.mode };
+            saveResumeManifest();
+            task.status = 'working';
+            task.restartHold = true;
+            task.resumeGraceUntil = Date.now() + 20000;
+            const summary = entry.mode === 'resume' ? R.trueResumeNote(entry.provider) : R.resendNote(entry.provider);
+            task.receipt = { summary, files: [], images: [], failed: '', explicit: true, checkpoint: true, source: 'restart' };
+            col.lastReceipt = { ...task.receipt, ts: Date.now() };
+            update(task);
+            noteBoard(col, task, summary, true);
+            release();
+          },
+          onGiveUp: () => { clearTimeout(slot); noteResumeFailure(col, task, '续接指令没有送进会话'); release(); },
+        });
+      }).catch(() => { clearTimeout(slot); noteResumeFailure(col, task, '续接指令没有送进会话'); release(); });
+    }
+    if (waiting) resumeTimer = setTimeout(flushResume, 400);
+  }
+  function parkForRestart(sessions) {
+    const R = window.RestartResume;
+    const s = state();
+    if (!s || !R || !R.resumeEnabled(host.config)) return;
+    if (sessions && typeof sessions === 'object') {
+      for (const col of host.columns()) {
+        if (!Object.prototype.hasOwnProperty.call(sessions, col.id)) continue;
+        if (!['Cursor', 'Codex', 'Antigravity'].includes(R.providerOf(col.cmd))) continue;
+        if (sessions[col.id]) col.modelSessionId = sessions[col.id];
+        else delete col.modelSessionId;
+      }
+    }
+    const entries = [];
+    for (const plan of R.planPark(host.columns(), s.tasks)) {
+      const task = latestTask(plan.id);
+      const col = host.columns().find((c) => c.id === plan.id);
+      if (!task || !col) continue;
+      const prior = (task.receipt && !task.receipt.checkpoint && (task.receipt.summary || task.receipt.failed)) || '';
+      task.status = 'paused';
+      task.restartHold = true;
+      task.doneAt = 0;
+      task.endedAt = 0;
+      task.receipt = { summary: R.checkpointSummary(), files: [], images: [], failed: '', explicit: true, checkpoint: true, source: 'restart' };
+      col.lastReceipt = { ...task.receipt, ts: Date.now() };
+      entries.push(R.manifestEntry({
+        colId: col.id, cmd: col.cmd, cwd: col.cwd || '', sessionId: col.modelSessionId, boardId: task.boardId || col.boardId || '',
+        title: task.title, detail: col.taskPrompt || '', receipt: prior, pendingText: pendingInstruction(col.id), task, enabled: true,
+      }));
+      const term = host.terms.get(col.id);
+      if (term && term.alive) {
+        try { host.sendWhenReady(col, plan.message, { silent: true, guardUserInput: true, timeout: 800, onGiveUp: () => {} }); } catch (_) {}
+      }
+    }
+    resumeManifest = { version: 1, claims: resumeManifest.claims || {}, entries };
+    saveResumeManifest();
+    save();
+    try { window.deck.saveConfigSync(host.config); } catch (_) {}
+  }
+
   // ---- heartbeat: called for every column on the 1.5s status loop ----
   function confirmationExcerpt(entry) {
     return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
@@ -947,10 +1149,19 @@
       }
     }
     for (const task of s.tasks) {
-      if (task.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(task.status)) continue;
+      if (task.colId !== id || !['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
+      if (task.status === 'paused' || task.restartHold) {
+        if (!entry.alive) {
+          if (!task.resumeDeadline || Date.now() <= task.resumeDeadline) continue;
+          noteResumeFailure(col, task, '终端没有在时限内起来');
+          continue;
+        }
+        if (task.status === 'paused') continue;
+      }
       if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen, col?.cmd) }); continue; }
       const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
       if (entry.state === 'quota' || activity === 'quota') {
+        if (window.RestartResume && window.RestartResume.ignoreQuota(task, Date.now())) continue;
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
         if (task.status === 'queued' && col?.lastReceipt?.source === 'quota') continue;
@@ -1090,8 +1301,9 @@
       const completed = task?.status === 'done' && task.receipt?.source === 'command';
       const cursorWorking = /\bcursor-agent\b/i.test(c.cmd || '') && entry?.alive &&
         (terminalState === 'working' || M.terminalActivity(entry.lastScreen, c.cmd) === 'working');
+      const resumedState = window.RestartResume ? window.RestartResume.ledgerState(terminalState, !!(entry && entry.alive), task) : terminalState;
       return {
-        id: c.id, title: host.columnLabel(c), state: cursorWorking ? 'working' : completed ? 'done' : terminalState, terminalState,
+        id: c.id, title: host.columnLabel(c), state: cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };
@@ -1319,7 +1531,7 @@
   }
 
   // ---- task cards in the main session's chat ----
-  const STATUS_TEXT = { waiting: '等空位', queued: '待补充', working: '干活中', quota: '额度用尽/等待', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
+  const STATUS_TEXT = { waiting: '等空位', queued: '待补充', working: '干活中', paused: '停在安全点', quota: '额度用尽/等待', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
   function renderCard(task, colId) {
     const card = el('div', 'task-card st-' + task.status);
     const head = el('div', 'task-head');
@@ -1353,12 +1565,14 @@
   function init(h) {
     host = h;
     normalize();
+    loadResumeManifest();
     initDialog();
     if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? `读看板继续：${state().seatCheckpoint}` : '');
   }
 
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
+    parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
     isMain, isMainId, mainCol, state, sendMessage,
 
     history: () => host.config.captainHistory || [],

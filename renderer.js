@@ -210,6 +210,7 @@ if (saved) {
       agentEffort: c.agentEffort,
       claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
+      sessionWatchSince: Number.isFinite(c.sessionWatchSince) ? c.sessionWatchSince : 0,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       // Relaunch always starts each session in the terminal.
       view: 'term',
@@ -1971,12 +1972,20 @@ function buildColumn(col, isFresh) {
           });
         }
         window.deck.ptyResize(col.id, term.cols, term.rows);
+        MainSession.notePtySurvived(col);
       } else {
         // Fresh spawn. If the previous app run left a saved session for this
         // column, replay it first so the agent's history survives a restart.
         const saved = await window.deck.ptySaved(col.id);
-
-        const plan = window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
+        const choice = MainSession.restartLaunch(col, isFresh);
+        if (choice.mode === 'resume' || choice.mode === 'resend') col.restartMode = choice.mode;
+        if (choice.mode === 'resend') col.sessionWatchSince = Date.now();
+        else if (!col.sessionWatchSince) col.sessionWatchSince = Date.now();
+        const plan = choice.mode === 'resume'
+          ? { launch: choice.launch, sessionId: choice.sessionId, resumedAgent: true, showLegacyWarning: false }
+          : choice.mode === 'resend'
+            ? { ...window.AgentInfo.planAgentLaunch(choice.launch, null, true, false, () => window.crypto.randomUUID()), resumedAgent: false, showLegacyWarning: true }
+            : window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
         const { launch, resumedAgent, showLegacyWarning } = plan;
         if (col.modelSessionId !== plan.sessionId) {
           if (plan.sessionId) col.modelSessionId = plan.sessionId;
@@ -2028,6 +2037,7 @@ function buildColumn(col, isFresh) {
           saveConfig();
         }
         queueInitialPrompt(col, col.cmd ? 700 : 0);
+        MainSession.noteColdColumn(col);
       }
     };
     reconnect();
@@ -3464,6 +3474,10 @@ const deckHost = {
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
 MainSession.init(deckHost);
+window.deck.onParkForRestart((sessions) => {
+  try { MainSession.parkForRestart(sessions); }
+  finally { window.deck.parkForRestartDone(); }
+});
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);

@@ -28,6 +28,8 @@ const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
+const RestartResume = require('./restart-resume');
+const AgentSessions = require('./agent-sessions');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
@@ -60,7 +62,7 @@ const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tas
   return localSessions(cfg);
 } });
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote'].includes(payload.op)) throw new Error('Invalid task board operation.');
   return taskStore[payload.op](payload.input || {});
 });
 
@@ -909,7 +911,7 @@ app.whenReady().then(async () => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
-  onMain('save-config', (_e, cfg) => {
+  const writeConfig = (cfg) => {
     cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
@@ -917,12 +919,26 @@ app.whenReady().then(async () => {
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
-    try {
-      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
-      fs.chmodSync(configPath + '.tmp', 0o600);
-      fs.renameSync(configPath + '.tmp', configPath);
-    } catch (_) {}
+    fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    fs.chmodSync(configPath + '.tmp', 0o600);
+    fs.renameSync(configPath + '.tmp', configPath);
     checkQuotaBark();
+  };
+  onMain('save-config', (_e, cfg) => { try { writeConfig(cfg); } catch (_) {} });
+  onMain('save-config-sync', (e, cfg) => { try { writeConfig(cfg); e.returnValue = true; } catch (_) { e.returnValue = false; } });
+  const manifestPath = path.join(app.getPath('userData'), 'restart-resume.json');
+  onMain('restart-manifest-load', (e) => {
+    try { e.returnValue = RestartResume.parseManifest(fs.readFileSync(manifestPath, 'utf8')); }
+    catch (_) { e.returnValue = RestartResume.emptyManifest(); }
+  });
+  onMain('restart-manifest-save', (e, doc) => {
+    try {
+      const clean = RestartResume.parseManifest(JSON.stringify(doc));
+      fs.writeFileSync(manifestPath + '.tmp', JSON.stringify(clean), { encoding: 'utf-8', mode: 0o600 });
+      fs.chmodSync(manifestPath + '.tmp', 0o600);
+      fs.renameSync(manifestPath + '.tmp', manifestPath);
+      e.returnValue = true;
+    } catch (_) { e.returnValue = false; }
   });
   // The deck page has no clipboard module of its own. Test profiles get a
   // private clipboard: a test run never reads or replaces what the user copied.
@@ -1335,7 +1351,42 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); });
 });
 
-app.on('before-quit', () => {
+// Ask the page to record in-flight crew, then quit on a later turn. A nested
+// app.quit() inside this handler is a no-op, and a timer that gives up once
+// the page has answered never reaches the real exit. The timeout always
+// schedules the same quit as the page's ack.
+let quitGate = null;
+function readResumeEnabled() {
+  try { return RestartResume.resumeEnabled(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))); }
+  catch (_) { return true; }
+}
+function parkedSessions() {
+  if (tudArg) return null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'));
+    const lookback = 14 * 24 * 3600 * 1000;
+    const columns = (cfg.columns || []).filter((col) => col && !col.isMain && col.captainCrew).map((col) => ({
+      id: col.id, provider: RestartResume.providerOf(col.cmd), cwd: col.cwd || '',
+      since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '',
+    })).filter((col) => ['Cursor', 'Codex', 'Antigravity'].includes(col.provider));
+    return AgentSessions.resolveSessions(columns, { roots: AgentSessions.defaultRoots(os.homedir()), lookbackMs: lookback });
+  } catch (_) { return {}; }
+}
+quitGate = RestartResume.createQuitGate({
+  timeoutMs: 1500,
+  schedule: (fn, ms) => { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); },
+  later: (fn) => { setImmediate(fn); },
+  onPark: () => { send('park-for-restart', { sessions: parkedSessions() }); },
+  quit: () => {
+    app.quit();
+    // If Electron swallowed quit, the process must still end. Playwright waits
+    // on that, and a swallowed quit used to sit until the test timeout.
+    setTimeout(() => { try { app.exit(0); } catch (_) {} process.exit(0); }, 1000);
+  },
+});
+onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
+app.on('before-quit', (event) => {
+  if (quitGate.beforeQuit(event, readResumeEnabled()) !== 'cleanup') return;
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
   if (mobileWeb) mobileWeb.close();
