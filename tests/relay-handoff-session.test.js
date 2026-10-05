@@ -173,6 +173,51 @@ test('one receipt listener: a newer one in the same terminal takes over, the old
   assert.match(M.instructions('darwin'), /重复挂的旧监听会被程序请退，不用为它重挂/);
 });
 
+test('listeners registered in one millisecond stay in registration order, and a later one with an earlier clock does too', async (t) => {
+  const w = world(t); const app = w.boot();
+  // two listeners started on the same millisecond: the later registration keeps the channel
+  assert.equal((await app.listen('old', 1000)).result, '');
+  assert.equal((await app.listen('new', 1000)).result, '');
+  app.receipt('same-stamp');
+  assert.equal((await app.listen('old', 1000)).result, M.LISTENER_SUPERSEDED);
+  assert.equal(app.s().pending.length, 1, 'the replaced listener does not consume');
+  assert.match((await app.listen('new', 1000)).result, /same-stamp/);
+  assert.equal(app.s().pending.length, 0);
+  // it cannot turn itself back into the listener on a later poll
+  app.receipt('still-new');
+  assert.equal((await app.listen('old', 1000)).result, M.LISTENER_SUPERSEDED);
+  assert.equal(app.s().pending.length, 1);
+  assert.match((await app.listen('new', 1000)).result, /still-new/);
+
+  // three listeners take over in the order they register
+  const w3 = world(t); const three = w3.boot();
+  assert.equal((await three.listen('a', 1000)).result, '');
+  assert.equal((await three.listen('b', 1000)).result, '');
+  assert.equal((await three.listen('a', 1000)).result, M.LISTENER_SUPERSEDED);
+  assert.equal((await three.listen('c', 1000)).result, '');
+  assert.equal((await three.listen('b', 1000)).result, M.LISTENER_SUPERSEDED);
+  three.receipt('third');
+  assert.equal((await three.listen('a', 1000)).result, M.LISTENER_SUPERSEDED);
+  assert.equal((await three.listen('b', 1000)).result, M.LISTENER_SUPERSEDED);
+  assert.equal(three.s().pending.length, 1);
+  assert.match((await three.listen('c', 1000)).result, /third/);
+  assert.equal(three.s().pending.length, 0);
+  // the same listener polling again is still the listener
+  three.receipt('again');
+  assert.match((await three.listen('c', 1000)).result, /again/);
+  assert.equal((await three.listen('c', 1000)).result, '');
+
+  // a clock that moved backwards does not outrank a listener that registered later
+  const w4 = world(t); const back = w4.boot();
+  assert.equal((await back.listen('ahead', 5000)).result, '');
+  assert.equal((await back.listen('rewound', 1000)).result, '');
+  back.receipt('clock-back');
+  assert.equal((await back.listen('ahead', 5000)).result, M.LISTENER_SUPERSEDED);
+  assert.equal(back.s().pending.length, 1);
+  assert.match((await back.listen('rewound', 1000)).result, /clock-back/);
+  assert.equal(back.s().pending.length, 0);
+});
+
 test('a command whose CLI already gave up is not run late, so retrying it cannot start the work twice', async (t) => {
   const w = world(t); const app = w.boot();
   const columns = () => w.columns.filter((c) => !c.isMain).length;

@@ -1188,7 +1188,9 @@
   // flight until its turn ends.
   const MAX_RECEIPTS_SEEN = 500;
   const LISTENER_ALIVE = 15_000;   // a `receipts --wait` polls every few seconds
-  let listener = null;            // { id, startedAt, at, colId }: the one background listener
+  let listener = null;            // { id, seq, at, colId }: the one background listener
+  let listenerSeq = 0;
+  const listenerSeqById = new Map(); // first registration only; a repeat poll keeps that seq
   function normalizeSeenIds(list) {
     const out = [];
     const have = new Set();
@@ -2062,12 +2064,17 @@
         if (message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt)) return { done: true, result: '' };
         // Exactly one listener. A second one in the same terminal (hung again after
         // /clear, or by mistake) takes over; the older one is told to leave on its
-        // next poll. One that stopped polling no longer counts.
+        // next poll. Who is newer is the order this process first saw each watcher,
+        // not the client's clock: two started in the same millisecond, or one whose
+        // clock moved backwards, still line up by registration. The same watcher
+        // polling again keeps its sequence. One that stopped polling no longer counts.
         if (message.wait && typeof message.watcher === 'string' && Number.isFinite(message.watcherStartedAt)) {
           const now = Date.now();
           const current = listener && listener.colId === s.colId && now - listener.at < LISTENER_ALIVE ? listener : null;
-          if (current && current.id !== message.watcher && current.startedAt > message.watcherStartedAt) return { done: true, result: M.LISTENER_SUPERSEDED };
-          listener = { id: message.watcher, startedAt: message.watcherStartedAt, at: now, colId: s.colId };
+          let seq = listenerSeqById.get(message.watcher);
+          if (seq === undefined) listenerSeqById.set(message.watcher, seq = ++listenerSeq);
+          if (current && current.id !== message.watcher && current.seq > seq) return { done: true, result: M.LISTENER_SUPERSEDED };
+          listener = { id: message.watcher, seq, at: now, colId: s.colId };
         }
         if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
         // The CLI has the text once this returns. Record that before the copy
