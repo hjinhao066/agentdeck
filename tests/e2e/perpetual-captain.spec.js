@@ -25,12 +25,13 @@ function records(name) {
 }
 function promptsFor(id) { return records('prompt-columns.jsonl').filter((r) => r.colId === id).map((r) => r.text); }
 async function captainId() { return page.evaluate(() => config.mainSession.colId); }
-async function idle(id) {
+async function idle(id, finishStartup = true) {
   await expect.poll(() => page.evaluate((i) => {
     const entry = terms.get(i);
     return entry?.state === 'done' && !entry.sendingPrompt && !entry.injecting &&
       ChatUI.turnsOf(i).every((turn) => turn.kind === 'task' || turn.done);
   }, id), { timeout: 20000 }).toBe(true);
+  if (!finishStartup) return;
   await page.evaluate(async () => {
     const startup = config.mainSession.relayStartup;
     if (startup?.attempt?.promptSent && startup.attempt.output) {
@@ -45,19 +46,21 @@ async function screenshot(name) {
   fs.mkdirSync(dir, { recursive: true });
   await page.screenshot({ path: path.join(dir, name + '.png') });
 }
-async function confirmedQuotas() {
-  await page.evaluate(async () => {
+async function confirmedQuotas(ids = ['us', 'us2']) {
+  await page.evaluate(async (ids) => {
     const infos = await ClaudeSeats.refresh(), now = Date.now();
-    for (const info of infos) {
-      config.quotas['Claude:' + info.id] = { sample: {
-        provider: 'Claude', scope: 'claude', official: true, seatId: info.id,
-        configDir: info.configDir, credentialKey: info.credentialKey, at: now,
-        windows: [{ key: 'fiveHour', remaining: 80, resetAt: now + 3600000 },
-          { key: 'weekly', remaining: 60, resetAt: now + 4 * 86400000 }],
-      } };
+    for (const info of infos.filter((info) => ids.includes(info.id))) {
+      const configDir = config.claudeSeats.find((seat) => seat.id === info.id).configDir;
+      config.quotas['Claude:' + info.id] = { scope: 'claude', configDir, accountKey: info.accountKey,
+        credentialKey: info.credentialKey, sample: {
+          provider: 'Claude', scope: 'claude', accountBound: true, accountKey: info.accountKey, seatId: info.id,
+          configDir, credentialKey: info.credentialKey, at: now,
+          windows: [{ key: 'fiveHour', remaining: 80, resetAt: now + 3600000 },
+            { key: 'weekly', remaining: 60, resetAt: now + 4 * 86400000 }],
+        } };
     }
     flushConfig();
-  });
+  }, ids);
 }
 async function nativeUsage(id, remaining = 3) {
   await page.evaluate(([i, left]) => {
@@ -230,7 +233,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
     config.perpetualCaptainState.lastSwitch.at = now - 11 * 60000;
     flushConfig();
   });
-  await confirmedQuotas();
+  await confirmedQuotas(['cn', 'us', 'us2']);
   await expect.poll(() => page.evaluate(() => ({
     target: config.mainSession.relayTargetId, idle: MainSession.relayIdle(),
     state: config.perpetualCaptainState, cnQuota: config.quotas['Claude:cn'],
@@ -357,12 +360,11 @@ test('changed identities reject the old slot sample before rotation', async () =
     }
     const entry = terms.get(config.mainSession.colId);
     ClaudeSeats.onTick(config.mainSession.colId, entry, '');
-    const doubleLow = config.mainSession.relayTargetId;
     const cn = infos.find((seat) => seat.id === 'cn');
     config.perpetualCaptainState = { seats: { cn: { accountKey: 'previous-account', configDir: cn.configDir } } };
     config.quotas['Claude:us'].sample.windows[0].remaining = 80;
     ClaudeSeats.onTick(config.mainSession.colId, entry, '');
-    return { doubleLow, changedTarget: config.mainSession.relayTargetId,
+    return { changedTarget: config.mainSession.relayTargetId,
       state: config.perpetualCaptainState.seats.cn };
   });
   expect(outcome.changedTarget).not.toBe('us');
@@ -399,11 +401,13 @@ test('automatic rotation runs CN to US2 to US and wraps to recovered CN without 
 
 test('startup watchdog retries available seats and stops with one urgent phone alert after three failures', async () => {
   test.setTimeout(90000);
+  await confirmedQuotas(['cn', 'us']);
   await page.evaluate(() => { config.perpetualCaptain.preferEarlier = false; });
   // A manual Relay also starts the same supervision, with a fresh failure budget.
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(true);
   for (let failure = 0; failure < 3; failure++) {
     const id = await captainId();
+    await idle(id, false);
     await expect.poll(() => page.evaluate(() => !!config.mainSession.relayStartup?.attempt)).toBe(true);
     await page.evaluate(async (id) => {
       // Stand in for a CLI that launched but never received its briefing.
@@ -423,6 +427,7 @@ test('startup watchdog retries available seats and stops with one urgent phone a
 });
 
 test('weekly exhausted US and unconfirmed reset windows are skipped instead of silently selecting CN', async () => {
+  await confirmedQuotas(['cn', 'us']);
   await page.evaluate(async () => {
     // Regression for the incident's decision shape: US exhausted, CN just reset,
     // US2 unavailable. A past reset timestamp is not evidence of new quota.
