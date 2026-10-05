@@ -782,7 +782,7 @@
       },
       onGiveUp: (reason) => {
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
-        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: reason || '这个会话已无法接收指令', explicit: true }));
+        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: reason || '这个会话已无法接收指令', explicit: true, source: 'process' }));
       },
       onWaiting: () => {
         const task = batch.items.find((i) => i.task.status === 'queued')?.task;
@@ -1892,7 +1892,7 @@
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));
     else if (r) {
       if (r.failed) card.appendChild(el('div', 'task-failed', r.failed));
-      if (r.undeliveredTaskId) card.appendChild(el('div', 'task-note', `取回未送达指令原文：read --to ${r.undeliveredTaskId}`));
+      if (r.undeliveredTaskId) card.appendChild(el('div', 'task-note', `取回未送达指令原文：read --id ${r.undeliveredTaskId}`));
       if (r.summary) card.appendChild(el('div', 'task-summary', r.summary));
       if (!r.explicit && !r.failed) card.appendChild(el('div', 'task-note', '会话已结束，等待命令回执超过 3 分钟。'));
       if (r.files && r.files.length) {

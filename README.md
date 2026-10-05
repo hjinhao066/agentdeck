@@ -326,7 +326,7 @@ again with the current provider, model and effort instructions.
   It does not expire while waiting: after 30 minutes the Captain receives a
   single 仍在排队 reminder, and delivery continues waiting for an idle prompt.
   If the session exits or becomes unavailable, its failure card keeps the full
-  unsent instruction. The receipt includes `read --to <task-id>` to retrieve it
+  unsent instruction. The receipt includes `read --id <task-id>` to retrieve it
   even after the worker has gone; unsent text is not in the worker's chat history.
   Additions waiting for the same session are combined in order into one prompt,
   with one receipt contract; their cards point to the last card for the result.

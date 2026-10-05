@@ -568,7 +568,7 @@
       const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${body}`];
       const files = r.source === 'command' ? r.files || [] : compact.files;
       if (files.length) parts.push(`  文件：${files.join('；')}`);
-      if (r.undeliveredTaskId) parts.push(`  取回未送达指令原文：read --to ${r.undeliveredTaskId}`);
+      if (r.undeliveredTaskId) parts.push(`  取回未送达指令原文：read --id ${r.undeliveredTaskId}`);
       else if (r.source !== 'command' && compact.more) parts.push('  其余见 read');
       return parts.join('\n');
     });
