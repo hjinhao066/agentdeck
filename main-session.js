@@ -47,6 +47,10 @@
   const isMain = (col) => !!(col && col.isMain && state() && state().colId === col.id);
   const isMainId = (id) => !!(state() && state().colId === id && mainCol());
   function save() { host.saveConfig(); }
+  function persistInstallation() {
+    host.flushConfig?.();
+    if (typeof window.deck.saveConfigSync !== 'function' || !window.deck.saveConfigSync(host.config)) throw new Error('安装状态无法持久保存，禁止继续安装。');
+  }
 
   function boardNotice(message) {
     const s = state();
@@ -1072,7 +1076,7 @@
   // A receipt arrived: record it on the column (the ledger), show it, queue it for the model.
   const CLOSED = ['done', 'failed', 'stopped', 'asking'];
   function settle(task, receipt, boardRecorded = false) {
-    if (CLOSED.includes(task.status)) return;
+    if (CLOSED.includes(task.status) || task.pendingInstall) return;
     if (receipt.failed && task.instructionSent === false && task.instruction) {
       receipt = { ...receipt, undeliveredInstruction: task.instruction, undeliveredTaskId: task.id };
     }
@@ -1212,6 +1216,10 @@
     const response = { done: true, result: 'Submission recorded.' };
     if (['complete', 'ask', 'progress'].includes(message.action) &&
         window.RestartResume?.bindSessionIdentity(caller, message.modelSessionIds, host.columns())) save();
+    if (task?.pendingInstall && message.action !== 'progress') {
+      if (message.action === 'session-exit') return response;
+      throw new Error('安装待核对：只能由正式安装脚本的运行结果完成任务，不能提前 complete。');
+    }
     if (message.action === 'session-exit') {
       if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
       if (message.code !== 0 && task && fallbackResume(caller, task, `原对话启动失败（exit ${message.code}）`)) return response;
@@ -1239,11 +1247,18 @@
     }
     if (message.action === 'progress') {
       if (typeof message.message !== 'string' || !message.message.trim()) throw new Error('progress requires --message.');
+      if (message.installId !== undefined) {
+        if (typeof message.installId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(message.installId) || typeof message.targetVersion !== 'string' || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(message.targetVersion)) throw new Error('Invalid installation identity.');
+        if (task.pendingInstall && (task.pendingInstall.id !== message.installId || task.pendingInstall.targetVersion !== message.targetVersion)) throw new Error('已有安装正在等待核对。');
+        task.pendingInstall = { id: message.installId, targetVersion: message.targetVersion, createdAt: Date.now() };
+        response.result = JSON.stringify({ taskId: task.id, columnId: caller.id });
+      }
       task.progress = message.message;
       caller.progress = message.message;
       task.endedAt = 0;
       persistResumeEntry(caller, task);
       update(task);
+      if (message.installId) persistInstallation();
       return response;
     }
     const receipt = M.commandReceipt(message);
@@ -1281,7 +1296,7 @@
     coldTasks.clear();
     const coldCrew = new Set(host.columns().filter((col) => col.captainCrew && !col.isMain && !col.archived).map((col) => col.id));
     for (const task of R.latestTasks(state()?.tasks).values()) {
-      if (coldCrew.has(task.colId) && R.shouldResume(task)) coldTasks.set(task.colId, task.id);
+      if (!task.pendingInstall && coldCrew.has(task.colId) && R.shouldResume(task)) coldTasks.set(task.colId, task.id);
       delete task.resumeSubmission;
       delete task.resumeFallback;
       delete task.resumeFailed;
@@ -1636,7 +1651,7 @@
       }
     }
     for (const task of s.tasks) {
-      if (task.colId !== id || !['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
+      if (task.colId !== id || task.pendingInstall || !['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
       if (task.status === 'paused' || task.restartHold) {
         if (!entry.alive) {
           if (!task.resumeDeadline || Date.now() <= task.resumeDeadline) continue;
@@ -1855,6 +1870,25 @@
       s.relayStartup.attempt.output = true; save();
     }
     switch (message.action) {
+      case 'main-install-result': {
+        const r = message.installResult;
+        const task = s.tasks.find((t) => t.id === r.taskId && t.colId === r.columnId);
+        if (!r.taskId && !r.columnId) {
+          if (s.lastInstallResultId !== r.id) { boardNotice(message.result); s.lastInstallResultId = r.id; save(); persistInstallation(); }
+          return { done: true, result: 'Installation notice recorded.' };
+        }
+        if (!task) throw new Error('安装任务不存在，结果保留待核对。');
+        if (task.installResultId === r.id) { persistInstallation(); return { done: true, result: 'Installation result already recorded.' }; }
+        if (task.pendingInstall?.id !== r.id || task.pendingInstall.targetVersion !== r.targetVersion) throw new Error('安装结果与待核对任务不匹配。');
+        const receipt = { summary: message.result, failed: r.status === 'failed' ? r.reason || '安装失败' : '', files: [], explicit: true, source: 'command' };
+        await recordReceiptForBoard(task, receipt);
+        delete task.pendingInstall; delete task.progress;
+        task.status = 'working';
+        task.installResultId = r.id;
+        settle(task, receipt, true);
+        persistInstallation();
+        return { done: true, result: 'Installation result recorded.' };
+      }
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
         return { done: true, visible: host.captainColumnVisible(caller.id),

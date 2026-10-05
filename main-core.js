@@ -63,7 +63,7 @@
   const MAX_PATH = 500;
   const TOKEN_SAVER_DEFAULT = 150_000;
   const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档';
-  const AUTONOMOUS_CONTINUATION = '回复「队长已就绪」后立即自主接续，不要等用户说“继续”：先读取 briefing 与看板里的「队长交接」，检查 ledger 和 receipts，把上次被打断或交接列出的未完成工作重新派起来，然后持续自主拆解并派活。按 quota 控制并发：额度紧时保持 3–5 个活并行，额度多时开十几个。发版时测试全过并进入打包后停止派新活，只等现有任务收尾；安装包就绪后，让耗时长的会话停在安全点并记录进度，快收尾的短暂等待；存档后直接安装并重启。';
+  const AUTONOMOUS_CONTINUATION = '回复「队长已就绪」后立即自主接续，不要等用户说“继续”：读 briefing、看板「队长交接」、ledger 和 receipts，把上次被打断或交接列出的未完成工作重新派起来，继续拆派，按 quota：额度紧时保持 3–5 个活并行，额度多时开十几个。发版时测试全过并进入打包后停止派新活，等现有任务收尾；包就绪后让长任务停在安全点记进度，短任务等收尾；存档后直接安装并重启。安装只用正式 restart-agentdeck.sh／rollback-agentdeck.sh 或发版入口，禁临时脚本；待核对不能 complete，版本启动核验后才结卡。';
   // Alias of the briefing's last paragraph. Do not paste it again after the
   // briefing: the combined text exceeds the 8000-character inline limit.
   const REBRIEF_NOTE = AUTONOMOUS_CONTINUATION;
@@ -249,10 +249,10 @@
       '16. 重要的活完成后，派 Gemini 3.8 Flash（agy --dangerously-skip-permissions --model gemini-3.8-flash-high）验收：文件确实存在、测试真的通过、截图真的落盘。验收不通过，把具体问题打回原队员，最多返工 2 轮；仍不通过，队长换更强模型或自己处理，最后才找用户。验收通过再汇报。',
       '17. 提示词正文保持静态，不拼时间或看板内容。开工或清空上下文后，读看板继续；实时状态用 ledger、quota、peek 按需读取。',
       '',
-      '可用的 agent。每件活可以选不同的 provider 和模型：用 new --command 写下面的完整启动命令，要换模型就改 --model 后面的名字。',
+      '可用 agent：new --command 写完整命令，--model 选模型。',
       ...PROVIDERS.map((p) => `   ${p}`),
       '',
-      '派给谁（模型分工路由偏好，用户明确点名 agent 或模型时按用户要求）：',
+      '模型分工（用户点名优先）：',
       ...ROUTING.map((r) => `   - ${r}`),
       '',
       '用多大的档位（effort）：',

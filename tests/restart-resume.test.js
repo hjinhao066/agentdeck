@@ -208,3 +208,11 @@ test('wrong provider, malformed id and duplicate column identity cannot certify 
   assert.equal(R.bindSessionIdentity(col, { Codex: id }, [col, { id: 'other', cmd: 'codex', modelSessionId: id.toUpperCase() }]), false);
   assert.equal(R.bindSessionIdentity({ id: 'claude', cmd: 'claude' }, { Codex: id }, []), false);
 });
+
+test('an installation awaiting runtime verification is never re-dispatched or checkpointed', () => {
+  const pending = task('installer', 'working', '', { pendingInstall: { id: 'install-1' } });
+  assert.equal(R.shouldResume(pending), false);
+  assert.equal(R.holdsAcrossRestart(pending), false);
+  assert.equal(R.shouldPark(pending), false);
+  assert.deepEqual(R.planResume([crew('installer')], [pending], {}, 'reboot'), []);
+});

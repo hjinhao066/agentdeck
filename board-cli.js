@@ -201,8 +201,10 @@ async function main() {
   if (action === 'progress') {
     const message = typeof args.message === 'string' ? args.message : args._.slice(1).join(' ');
     if (!message.trim()) fail('progress requires --message.');
-    await request({ action, message }, false);
-    process.stdout.write('Progress recorded.\n');
+    const installId = args['install-id'], targetVersion = args['target-version'];
+    if (installId !== undefined && (typeof installId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(installId) || typeof targetVersion !== 'string' || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(targetVersion))) fail('Installation progress requires --install-id and --target-version.');
+    const response = await request({ action, message, ...(installId ? { installId, targetVersion } : {}) }, false);
+    process.stdout.write(installId ? response.result + '\n' : 'Progress recorded.\n');
     return;
   }
 
