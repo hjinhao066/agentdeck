@@ -75,12 +75,27 @@ const readCard = (id) => fs.readdirSync(path.join(profile, 'tasks')).filter((n) 
 // What 队长 has been told through the receipt channel (waiting or already handed over).
 const captainNotices = () => page.evaluate(() => [...config.mainSession.pending, ...config.mainSession.inflight].filter((p) => p.title === '任务看板').map((p) => p.summary));
 const cellIds = (project, status) => page.locator(`.tbv-lane[data-project="${project}"] .tbv-cell[data-status="${status}"] .tbv-card`).evaluateAll((n) => n.map((x) => x.dataset.cardId));
+// Finite motion inside the board: the open slide and a card glide. Infinite
+// running lights are ignored. A box read during that motion is stale once it
+// ends — drag aims only 6px past a midpoint, and the open slide moves cards
+// by up to 10px — so every geometry read waits until the motion has finished.
+async function boardAtRest() {
+  await expect.poll(() => page.evaluate(() => {
+    const view = document.getElementById('taskBoardView');
+    if (!view) return 0;
+    return document.getAnimations().filter((a) => a.effect && a.effect.target && view.contains(a.effect.target) && a.effect.getComputedTiming().iterations !== Infinity && a.playState === 'running').length;
+  })).toBe(0);
+}
 // A task-store refresh replaces lane nodes. Re-resolve the locator when a
 // measurement races that repaint instead of dereferencing a detached node.
-async function bounds(locator) {
+async function boxOf(locator) {
   let box;
   await expect.poll(async () => { box = await locator.boundingBox(); return box; }).not.toBeNull();
   return box;
+}
+async function bounds(locator) {
+  await boardAtRest();
+  return boxOf(locator);
 }
 const center = async (locator) => { const b = await bounds(locator); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
 // A real pointer drag: press on `from`, move in steps to (x, y), optionally stop before releasing.
@@ -90,6 +105,21 @@ async function drag(from, x, y, { release = true } = {}) {
   await page.mouse.down();
   await page.mouse.move(a.x + 8, a.y + 8, { steps: 2 });
   await page.mouse.move(x, y, { steps: 8 });
+  if (release) await page.mouse.up();
+}
+// Aim at `anchor` (its center, or its top edge when `edge` is set) shifted by `dy`.
+// The open slide and a glide after a cancelled drag both move cards. The reorder
+// aim is only 6px past a midpoint, so the box is read once that motion is idle,
+// then the pointer is released on that same reading.
+async function dragAim(from, anchor, dy, { release = true, edge = false } = {}) {
+  const point = (b) => edge ? { x: b.x + 60, y: b.y + dy } : { x: b.x + b.width / 2, y: b.y + b.height / 2 + dy };
+  await boardAtRest();
+  const a = await boxOf(from);
+  const p = point(await boxOf(anchor));
+  await page.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(a.x + a.width / 2 + 8, a.y + a.height / 2 + 8, { steps: 2 });
+  await page.mouse.move(p.x, p.y, { steps: 8 });
   if (release) await page.mouse.up();
 }
 
@@ -131,9 +161,7 @@ test.afterEach(async () => {
 // news and time; 需要你 may take two lines for its question), and every tool
 // action is an icon button with a tooltip, a name and a real target.
 async function assertBoardLayout(minCard, stacked = false) {
-  // the board slides in when it opens and cards glide after new data: measure it at rest
-  await expect.poll(() => page.evaluate(() => { const view = document.getElementById('taskBoardView');
-    return document.getAnimations().filter((a) => a.effect && a.effect.target && view.contains(a.effect.target) && a.effect.getComputedTiming().iterations !== Infinity && a.playState === 'running').length; })).toBe(0);
+  await boardAtRest();
   const g = await page.evaluate(() => {
     const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const shown = (n) => !n.hidden && getComputedStyle(n).display !== 'none' && n.getBoundingClientRect().width > 0;
@@ -383,8 +411,7 @@ test('drag and keyboard: reorder is saved, Captain dispatch sends a notice, and 
   await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-copy', 'p-faq']);
 
   // while dragging: a ghost follows the pointer and a line shows where the card lands
-  const top = await center(card('p-sso'));
-  await drag(card('p-faq'), top.x, top.y - 6, { release: false });
+  await dragAim(card('p-faq'), card('p-sso'), -6, { release: false });
   await expect(page.locator('.tbv-ghost')).toHaveCount(1);
   await expect(page.locator('.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="todo"]')).toHaveClass(/drop-target/);
   expect(await page.locator('.tbv-drop').evaluate((n) => n.nextElementSibling.dataset.cardId)).toBe('p-sso');
@@ -397,34 +424,32 @@ test('drag and keyboard: reorder is saved, Captain dispatch sends a notice, and 
   expect(await cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-copy', 'p-faq']);
 
   // reorder inside the column: saved in the shared file, still there after reopening
-  await drag(card('p-faq'), top.x, top.y - 6);
+  await dragAim(card('p-faq'), card('p-sso'), -6);
   await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-faq', 'p-sso', 'p-copy']);
   expect(readCard('p-faq').order).toBeLessThan(readCard('p-sso').order);
   expect(readCard('p-faq').status).toBe('todo');
   await expect(page.locator('.tbv-detail')).toBeHidden(); // a drag is not a click
-  const below = await center(card('p-copy'));
-  await drag(card('p-faq'), below.x, below.y + 9);
+  await dragAim(card('p-faq'), card('p-copy'), 9);
   await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-copy', 'p-faq']);
-  await drag(card('p-copy'), top.x, top.y - 6);
+  await dragAim(card('p-copy'), card('p-sso'), -6);
   await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-copy', 'p-sso', 'p-faq']);
   await page.keyboard.press('Escape');
   await page.locator('#taskBoardBtn').click();
   await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-copy', 'p-sso', 'p-faq']);
 
   // dispatcher=captain: 待办 → 进行中 moves the card and notifies 队长.
-  const doing = await center(page.locator('.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="doing"]'));
-  await drag(card('p-copy'), doing.x, doing.y + 30);
+  const doing = page.locator('.tbv-lane[data-project="客户门户"] .tbv-cell[data-status="doing"]');
+  await dragAim(card('p-copy'), doing, 30);
   await expect.poll(() => cellIds('客户门户', 'doing')).toContain('p-copy');
   await expect.poll(captainNotices).toEqual(['用户要开始卡片 p-copy「整理登录页文案」。项目：客户门户。']);
   await expect.poll(() => readCard('p-copy').dispatch_claim?.delivered).toBe(true);
   expect(readCard('p-copy').status).toBe('doing');
   // a card whose prerequisite is unfinished stays put and says why
-  await drag(card('p-sso'), doing.x, doing.y + 30);
+  await dragAim(card('p-sso'), doing, 30);
   await expect(page.locator('#toast')).toContainText('它前面的任务还没做完');
   await expect.poll(() => cellIds('客户门户', 'todo')).toEqual(['p-sso', 'p-faq']);
   // a card cannot leave its project: a drop on another lane does nothing
-  const other = await center(page.locator('.tbv-lane[data-project="报表服务"] .tbv-cell[data-status="doing"]'));
-  await drag(card('p-faq'), other.x, other.y);
+  await dragAim(card('p-faq'), page.locator('.tbv-lane[data-project="报表服务"] .tbv-cell[data-status="doing"]'), 0);
   expect(readCard('p-faq').status).toBe('todo');
   expect(readCard('p-faq').project).toBe('客户门户');
 
@@ -456,8 +481,7 @@ test('drag and keyboard: reorder is saved, Captain dispatch sends a notice, and 
   const lanes = () => page.locator('.tbv-lane').evaluateAll((n) => n.map((x) => x.dataset.project));
   expect(await lanes()).toEqual(['agentdeck', '报表服务', '客户门户'].sort((a, b) => a.localeCompare(b)));
   const first = (await lanes())[0], last = (await lanes())[2];
-  const firstBox = await bounds(page.locator(`.tbv-lane[data-project="${first}"]`));
-  await drag(page.locator(`.tbv-lane[data-project="${last}"] .tbv-lane-name`), firstBox.x + 60, firstBox.y + 2);
+  await dragAim(page.locator(`.tbv-lane[data-project="${last}"] .tbv-lane-name`), page.locator(`.tbv-lane[data-project="${first}"]`), 2, { edge: true });
   await expect.poll(lanes).toEqual([last, first, (await lanes()).find((k) => k !== first && k !== last)]);
   const order = await lanes();
   await expect.poll(() => page.evaluate(() => config.taskBoardView.laneOrder)).toEqual(order);
