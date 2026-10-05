@@ -692,7 +692,7 @@
   }
 
   // ---- 一键整理, 智能一页, 撤销 ----
-  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduceMotion = () => document.documentElement.dataset.motion === 'off' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   // Where every frame and card stands (canvas coordinates), to glide from after a redraw.
   function places() {
     const at = new Map();

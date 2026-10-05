@@ -41,7 +41,7 @@
   const EASE = 'cubic-bezier(.2, .8, .2, 1)';
   const MAX_SPARKS = 14;      // travelling lights on the dependency lines
   const MAX_GLIDES = 24;      // cards animated to a new place in one redraw
-  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduceMotion = () => document.documentElement.dataset.motion === 'off' || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let host = null;
   let alertEl, viewEl, projectsEl, gridEl, headsEl, lanesEl, linksEl, meterEl, scrollEl, statusEl, summaryEl, emptyEl, refreshBtn, detailEl, liveEl;
   let open = false;
@@ -918,5 +918,6 @@
     open: () => setOpen(true),
     close: () => setOpen(false),
     toggle: () => setOpen(!open),
+    redraw: () => { if (open) render(); },
   };
 })();

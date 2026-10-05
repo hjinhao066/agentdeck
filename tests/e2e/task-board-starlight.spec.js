@@ -389,6 +389,66 @@ test('减少动态效果: nothing on the board moves, and a status change lands 
   expect(errors).toEqual([]);
 });
 
+test('动效开关: one icon button holds the board still, says so, and is remembered', async () => {
+  await launch();
+  await resize(1440, 900);
+  await page.locator('#taskBoardBtn').click();
+  await expect(card('a-star')).toHaveAttribute('data-run', 'working');
+  const toggle = page.locator('#taskBoardView [data-motion-toggle]');
+  const OFF = '关闭动效（卡片和连线保持静止）', ON = '开启动效（现在是静止的）';
+  // an icon button: no words on it, a name for the tooltip and for a screen reader, big enough to hit
+  await expect(toggle).toHaveAttribute('aria-label', OFF);
+  await expect(toggle).toHaveAttribute('title', OFF);
+  expect((await toggle.textContent()).trim()).toBe('');
+  await expect(toggle.locator('svg')).toHaveCount(1);
+  const box = await toggle.boundingBox();
+  expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(32);
+  await expect.poll(() => page.locator('.tbv-spark').count()).toBeGreaterThan(0);
+  expect((await boardAnimations()).length).toBeGreaterThan(0);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-label', ON);
+  await expect(page.locator('.tbv-spark')).toHaveCount(0);
+  expect(await boardAnimations()).toEqual([]);
+  await expect(page.locator('.tbv-link.live')).toHaveCount(3); // the lines still say what is moving
+  expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.tbv-flow')).display, getComputedStyle(document.querySelector('#taskBoardView .star-sky i')).animationName])).toEqual(['none', 'none']);
+  expect(Number(await page.evaluate(() => getComputedStyle(document.querySelector('.tbv-card[data-card-id="a-star"]'), '::after').opacity))).toBeGreaterThan(0.5);
+  // a status change lands at once while it is off
+  await page.evaluate(async () => { const c = (await TaskBoard.list()).find((x) => x.id === 'p-ui'); await TaskBoard.move('p-ui', 'needs_user', c.updated); });
+  await expect(page.locator('.tbv-cell[data-status="needs_user"] .tbv-card[data-card-id="p-ui"]')).toHaveCount(1);
+  expect(await page.evaluate(() => { const n = document.querySelector('.tbv-card[data-card-id="p-ui"]'); return [n.getAnimations({ subtree: true }).length, n.querySelectorAll('.tbv-flash').length]; })).toEqual([0, 0]);
+  // the 架构图's button is the same switch
+  await expect(page.locator('#crewMap [data-motion-toggle]')).toHaveAttribute('aria-label', ON);
+
+  // the keyboard reaches it, and the lights come back
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-label', OFF);
+  await expect.poll(() => page.locator('.tbv-spark').count()).toBeGreaterThan(0);
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-label', ON);
+
+  // remembered across a reload
+  await page.evaluate(() => flushConfig());
+  await page.reload();
+  await expect.poll(() => page.evaluate(() => document.documentElement.dataset.motion || '')).toBe('off');
+  await page.locator('#taskBoardBtn').click();
+  await expect(page.locator('.tbv-card').first()).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-label', ON);
+  expect(await boardAnimations()).toEqual([]);
+
+  // the system setting wins: the button only reports it
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-label', OFF);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(toggle).toHaveAttribute('aria-label', '系统已开启「减少动态效果」，动效保持关闭');
+  await expect(toggle).toHaveAttribute('aria-disabled', 'true');
+  await toggle.click({ force: true });
+  expect(await page.evaluate(() => config.calmMotion)).toBe(false);
+  expect(await boardAnimations()).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
 test('a board of 110 cards stays in its columns and keeps its moving parts bounded', async () => {
   await launch({ many: true });
   await resize(1440, 900);

@@ -448,5 +448,24 @@ test('ten sessions in two projects: side by side at every width that holds them,
     expect(c.title, theme).toBeGreaterThan(7);
     for (const k of ['line', 'status', 'time', 'failed', 'failedLine']) expect(c[k], `${theme} ${k}`).toBeGreaterThanOrEqual(4.5);
   }
+  // 动效开关: the toolbar's icon button stills the map (lights on the lines, the breathing rims, the sky) and brings it back
+  const toggle = page.locator('#crewMap [data-motion-toggle]');
+  const moving = () => page.evaluate(() => document.getAnimations().filter((a) => a.effect && a.effect.target && document.getElementById('crewMap').contains(a.effect.target) && a.playState === 'running' && a.effect.getComputedTiming().iterations === Infinity).length);
+  await expect(toggle).toHaveAttribute('aria-label', '关闭动效（卡片和连线保持静止）');
+  expect((await toggle.textContent()).trim()).toBe('');
+  const hit = await toggle.boundingBox();
+  expect(Math.min(hit.width, hit.height)).toBeGreaterThanOrEqual(32);
+  expect(await moving()).toBeGreaterThan(0);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-label', '开启动效（现在是静止的）');
+  await expect.poll(moving).toBe(0);
+  expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.cm-pulse')).display, getComputedStyle(document.querySelector('.cm-node.st-working:not(.kind-captain)'), '::before').display])).toEqual(['none', 'none']);
+  // 一键整理 lands at once while it is off
+  await dragBy(page.locator('.cm-project .cm-project-name').first(), 60, 70);
+  expect(await page.evaluate(() => { document.querySelector('[data-cm="relayout"]').click(); return [...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].flatMap((n) => n.getAnimations()).length; })).toBe(0);
+  await shot('map-10cards-2projects-1440-light-motion-off');
+  await toggle.click();
+  await expect.poll(moving).toBeGreaterThan(0);
+  expect(await page.evaluate(() => config.calmMotion)).toBe(false);
   expect(errors).toEqual([]);
 });
