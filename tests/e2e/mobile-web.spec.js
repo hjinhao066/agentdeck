@@ -55,7 +55,8 @@ async function launch(extraTurns = [], before = () => {}) {
   store.move({ id: 'mobile-review', status: 'review' });
   store.add({ id: 'mobile-done', project: '资料整理', title: '整理项目目录', detail: '测试数据。' });
   store.move({ id: 'mobile-done', status: 'done' });
-  const env = { ...process.env, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl'),
+  // Stand-ins must not load the user's zsh plugins/Conda hooks during startup.
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl'),
     AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'columns.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -109,7 +110,7 @@ async function screenshot(name) {
 }
 async function restartDesktop() {
   await application.close(); application = null;
-  const env = { ...process.env, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl') };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
