@@ -908,6 +908,7 @@ app.whenReady().then(async () => {
   });
   const needsUserBarkPath = path.join(app.getPath('userData'), 'needs-user-bark-state.json');
   let needsUserBarkState = { entries: {} };
+  let needsUserBarkStateLoaded = false;
   try {
     if (fs.statSync(needsUserBarkPath).size <= 65536) {
       const value = JSON.parse(fs.readFileSync(needsUserBarkPath, 'utf8'));
@@ -917,6 +918,7 @@ app.whenReady().then(async () => {
           if (/^[A-Za-z0-9_-]{1,160}$/.test(id) && typeof entry === 'string' && entry.length <= 200) entries[id] = entry;
         }
         needsUserBarkState = { entries };
+        needsUserBarkStateLoaded = true;
       }
     }
   } catch (_) {}
@@ -928,6 +930,7 @@ app.whenReady().then(async () => {
       return { ok: true, status: 200, json: async () => ({ code: 200 }) };
     } } : {}) });
   const observeNeedsUser = createNeedsUserBark({ state: needsUserBarkState, sendBark: sendNeedsUserBark,
+    suppressInitial: !needsUserBarkStateLoaded,
     onError: (message) => send('toast', { text: message }),
     saveState: (value) => {
       fs.writeFileSync(needsUserBarkPath + '.tmp', JSON.stringify(value), { mode: 0o600 });

@@ -59,6 +59,19 @@ test('a restarted watcher does not send the same visit again', async () => {
   assert.equal(restarted.calls.length, 0);
 });
 
+test('a missing or unreadable state file baselines existing cards instead of replaying them', async () => {
+  const calls = [];
+  const state = { entries: {} };
+  const observe = createNeedsUserBark({ state, suppressInitial: true, coalesceMs: 0,
+    saveState: (value) => { state.entries = { ...value.entries }; },
+    sendBark: (alert) => { calls.push(alert); return Promise.resolve({ ok: true }); } });
+  await observe([card('already-waiting')]);
+  assert.equal(calls.length, 0);
+  await observe([card('already-waiting', { status: 'doing' })]);
+  await observe([card('already-waiting', { needs_user_entry: '2026-10-05T05:00:00.000Z' })]);
+  assert.equal(calls.length, 1);
+});
+
 test('leaving and entering again sends once more', async () => {
   const h = harness();
   await h.observe([card('a')]);

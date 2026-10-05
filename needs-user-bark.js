@@ -35,10 +35,11 @@ function defaultSchedule(fn, ms) {
 
 // Persist the visit id before sending. A restart must not push the same visit
 // again; leaving 需要你 and coming back gets a new id from the board.
-function createNeedsUserBark({ state = {}, saveState, sendBark, onError = () => {}, coalesceMs = 2000, schedule = defaultSchedule, clear = clearTimeout } = {}) {
+function createNeedsUserBark({ state = {}, saveState, sendBark, onError = () => {}, coalesceMs = 2000, schedule = defaultSchedule, clear = clearTimeout, suppressInitial = false } = {}) {
   if (!state.entries || typeof state.entries !== 'object' || Array.isArray(state.entries)) state.entries = {};
   let pending = [];
   let timer = null;
+  let initial = true;
   function flush() {
     timer = null;
     const batch = pending;
@@ -55,6 +56,8 @@ function createNeedsUserBark({ state = {}, saveState, sendBark, onError = () => 
     }).catch(() => { onError('需要你的手机提醒发送失败，请检查本机配置。'); return { ok: false }; });
   }
   function observe(cards, { enabled = true, ready = true } = {}) {
+    const baseline = initial && suppressInitial;
+    initial = false;
     if (enabled === false && timer) { clear(timer); timer = null; pending = []; }
     const entries = { ...state.entries };
     const fresh = [];
@@ -67,7 +70,7 @@ function createNeedsUserBark({ state = {}, saveState, sendBark, onError = () => 
       const entry = stamped || `legacy:${card.id}`;
       if (entries[card.id] === entry) continue;
       // Old cards and a switched-off setting are remembered without a push.
-      if (!stamped || enabled === false) { entries[card.id] = entry; changed = true; continue; }
+      if (!stamped || enabled === false || baseline) { entries[card.id] = entry; changed = true; continue; }
       if (!ready) continue;
       entries[card.id] = entry;
       changed = true;
