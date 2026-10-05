@@ -20,7 +20,12 @@ test.beforeAll(async () => {
   const T = (id, colId, status, ago, extra) => ({ id, colId, title: id, gen: 1, status, sentAt: now - ago, turnId: '', project, receipt: null, ...extra });
   const finished = (id, colId, status, ago, receipt, extra) => T(id, colId, status, ago, { doneAt: now - ago + 60_000, receipt: { files: [], explicit: true, ...receipt }, ...extra });
   const history = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].map((id, i) => ({ ...col(id, '旧会话 ' + id), archivedAt: now - (10 + i) * H }));
+  // Quiet-archive states, not a seat rotation and not interrupted jobs to resend.
+  // Perpetual captain is on unless a fixture says otherwise, and it replaces this
+  // stand-in 队长 with a real seat. Restart resume is on unless opted out, and it
+  // resends working/asking tasks, so the map no longer shows the seeded states.
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    perpetualCaptain: { enabled: false }, resumeOnRestart: false,
     theme: 'dark', fitWindow: true, fitCols: 4,
     columns: [
       { id: 'cap', title: '队长', cmd: FAKE, cwd: profile, width: 460, role: 'manual', isMain: true },
@@ -55,6 +60,8 @@ test.beforeAll(async () => {
   });
   page = await application.firstWindow();
   page.on('dialog', (d) => d.accept());
+  await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
+  await expect.poll(() => page.evaluate(() => config.perpetualCaptain && config.perpetualCaptain.enabled)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(11);
 });
 test.afterAll(async () => {
