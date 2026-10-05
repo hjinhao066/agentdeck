@@ -8,7 +8,8 @@
   const GEAR = svg('<circle cx="12" cy="12" r="3"/><path d="m9 3 6 0 1 3 3 1 2 5-2 5-3 1-1 3H9l-1-3-3-1-2-5 2-5 3-1Z"/>');
   let host, seats = [], warmups = [], switching = false, retryAt = 0;
   const POWER = svg('<path d="M12 2v10"/><path d="M6 5a9 9 0 1 0 12 0"/>');
-  const recorded = new Map();
+  const recorded = new Map(), quotaRefreshAt = new Map();
+  let automaticRunning = false;
   const label = () => host.config.captainRelayLabel || 'Relay';
   function node(tag, cls, text) {
     const n = document.createElement(tag);
@@ -162,6 +163,7 @@
         host.config.quotaWarmup = window.QuotaWarmupCore.normalizeSettings({ enabled: warmupEnabled });
         host.config.barkKeyFile = bark.input.value.trim();
         retryAt = 0;
+        if (enabled && window.MainSession.state()) delete window.MainSession.state().relayStartup;
         host.config.captainRelayLabel = name.input.value.trim().slice(0, 80) || 'Relay';
         host.flushConfig(); d.close(); await refresh(); window.Sidebar.render();
       } catch (_) { host.showToast('保存失败：请使用不同的独立配置目录，不能链接登录文件'); }
@@ -172,7 +174,7 @@
     if (switching) return false;
     const col = window.MainSession.mainCol();
     if (!col || id === current().id) return false;
-    if (options.automatic && !window.MainSession.relayIdle()) return false;
+    if (options.automatic && !options.startupRetry && !window.MainSession.relayIdle()) return false;
     if (hasDraft(col)) { host.showToast(`队长输入框里有未发送内容，发送或清空后再${label()}`); return false; }
     switching = true;
     window.MainSession.pauseForSeatSwitch(true);
@@ -183,7 +185,7 @@
       if (window.MainSession.mainCol() !== col || hasDraft(col)) return false;
       let decision = options.decision;
       if (options.automatic || options.validateRotation) {
-        decision = options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true);
+        decision = options.startupRetry ? startupRetryDecision() : options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true);
         // The quota banner offers Claude seats only; automatic exhaustion
         // fallback must still be allowed to hand off to Codex.
         if (decision?.targetId !== id || (options.validateRotation && decision.targetId === P.CODEX_ID)) return false;
@@ -194,16 +196,17 @@
       const board = window.MainSession.checkpointForSeatSwitch
         ? await window.MainSession.checkpointForSeatSwitch(snapshot, { local: options.automatic })
         : await window.deck.captainCheckpoint(snapshot);
-      if (typeof board !== 'string' || !board || window.MainSession.mainCol() !== col || hasDraft(col)) return false;
-      if ((options.automatic || options.validateRotation) && (options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true))?.targetId !== id) return false;
+      if (window.MainSession.mainCol() !== col || hasDraft(col)) return false;
+      if (typeof board !== 'string' || !board) throw new Error('checkpoint failed');
+      if ((options.automatic || options.validateRotation) && (options.startupRetry ? startupRetryDecision() : options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true))?.targetId !== id) return false;
       const wasClaude = isClaude(col);
       if (wasClaude) host.config.captainRelayClaudeCommand = col.cmd;
       const configuredCodex = host.config.captainRelayCodex.command;
       const codexCommand = options.automatic ? S.relayCodexCommand(configuredCodex, window.MainSession.relayEffort()) : configuredCodex;
       const command = id === 'chatgpt' ? codexCommand
         : wasClaude ? col.cmd : host.config.captainRelayClaudeCommand || S.CLAUDE_COMMAND;
-      const fresh = window.MainSession.clearContext({ seatId: id === 'chatgpt' ? col.claudeSeatId || S.active(host.config).id : id, checkpointPath: board, command, relayTargetId: id, relayMessage: message });
-      if (!fresh) return false;
+      const fresh = window.MainSession.clearContext({ seatId: id === 'chatgpt' ? col.claudeSeatId || S.active(host.config).id : id, checkpointPath: board, command, relayTargetId: id, relayMessage: message, automatic: options.automatic });
+      if (!fresh) throw new Error('captain spawn failed');
       host.config.perpetualCaptainState = P.recordSwitch(host.config.perpetualCaptainState, { fromId: from.id, targetId: id, reason: decision?.reason || 'manual', at });
       window.MainSession.state().relayRecord = { message, at };
       window.ChatUI.addNotice(fresh.id, message, at);
@@ -213,7 +216,8 @@
       window.dispatchEvent(new CustomEvent('claude-seat-changed', { detail: { seatId: id } }));
       return true;
     } catch (_) {
-      host.showToast('进度存档失败，原队长继续运行，请检查看板和对话目录'); return false;
+      options.failed = true;
+      host.showToast('进度存档或队长启动失败，请检查看板和对话目录'); return false;
     } finally {
       switching = false; window.MainSession.pauseForSeatSwitch(false);
       refresh().catch(() => {});
@@ -235,6 +239,8 @@
         officialNotBefore: state.seats[info.id]?.officialNotBefore }, now);
       if (q.exhausted) state = P.observe(state, { seatId: info.id, at: q.exhaustedAt, exhausted: true, resetAt: q.exhaustedResetAt }, now);
       if (q.trusted) state = P.observe(state, { seatId: info.id, at: q.remainingAt, remainingAt: q.remainingAt, remaining: q.remaining, trusted: true, resetAt: q.resetAt, threshold: settings.threshold }, now);
+      if (q.weeklyTrusted) state = P.observe(state, { seatId: info.id, at: q.weeklyRemainingAt,
+        weeklyTrusted: true, weeklyRemaining: q.weeklyRemaining, weeklyRemainingAt: q.weeklyRemainingAt, weeklyResetAt: q.weeklyResetAt, threshold: settings.threshold }, now);
       if (q.resumedAt) state = P.observe(state, { seatId: info.id, at: q.resumedAt, resumed: true }, now);
       host.config.perpetualCaptainState = state;
       const weekly = (host.config.quotas[window.QuotaCore.seatKey(info.id)]?.sample?.windows || [])
@@ -259,6 +265,7 @@
       'weekly-threshold': `每周剩余 ${decision?.remaining}% ≤ ${host.config.perpetualCaptain.threshold}%`,
       'quota-exhausted': '当前席位额度用尽或限流', 'claude-unavailable': '所有已登录 Claude 席位额度都已用尽或限流', 'claude-recovered': 'Claude 席位额度已恢复',
       'startup-onboarding': '席位仍停在首次启动引导，跳过该席位',
+      'startup-retry': '新队长未能在 3 分钟内接续，尝试下一可用席位',
       'earlier-reset': '优先用还有余额、快到期的席位' };
     return `${automatic ? '永动机自动轮换' : label()}：${from} → ${to}；${reasons[decision?.reason] || '手动切换'}；${new Date(at).toLocaleString()}`;
   }
@@ -334,15 +341,107 @@
     const provider = window.MainSession.state()?.relayTargetId === 'chatgpt' ? 'Codex' : window.AgentInfo.resolveAgentInfo(col, entry).provider;
     if (!['Claude', 'Codex'].includes(provider)) return;
     if (provider === 'Claude') window.deck.claudeWarmupIdle(col.id, !switching && window.MainSession.relayIdle()).catch(() => {});
-    const before = JSON.stringify(host.config.perpetualCaptainState), context = rotationContext();
-    const decision = P.decide({ ...context, busy: !window.MainSession.relayIdle(), switching });
-    const action = P.quotaAction(context);
-    renderQuotaBanner(entry, action);
-    if (before !== JSON.stringify(host.config.perpetualCaptainState)) host.flushConfig();
-    if (decision && Date.now() >= retryAt) {
-      switchSeat(decision.targetId, { automatic: true, decision }).then((ok) => { if (!ok) retryAt = Date.now() + 60_000; });
-    }
+    renderQuotaBanner(entry, P.quotaAction(rotationContext()));
+    automaticTick().catch(() => {});
   }
+  function codexUnavailable() {
+    return window.QuotaCore.commandQuota(host.config.quotas, 'codex', host.config.claudeSeats)?.out === true;
+  }
+  function startupRetryDecision() {
+    const context = rotationContext(), startup = window.MainSession.state()?.relayStartup;
+    const failed = new Set(startup?.failures || []);
+    if (startup?.stopped || !failed.size) return null;
+    const ordered = P.orderSeats(context.seats, context.settings.order);
+    const index = ordered.findIndex((seat) => seat.id === context.currentId);
+    const circle = index < 0 ? ordered : ordered.slice(index + 1).concat(ordered.slice(0, index));
+    const next = circle.find((seat) => !failed.has(seat.id) && seat.id !== context.currentId &&
+      P.status(seat, context.state.seats[seat.id], context.settings.threshold, context.now).available);
+    const targetId = next?.id || (context.currentId !== P.CODEX_ID && !failed.has(P.CODEX_ID) && !codexUnavailable() ? P.CODEX_ID : null);
+    return targetId ? { targetId, reason: 'startup-retry', at: context.now } : null;
+  }
+  async function refreshUnknownQuota() {
+    const context = rotationContext();
+    const unknown = context.seats.filter((seat) => {
+      const check = P.status(seat, context.state.seats[seat.id], context.settings.threshold, context.now);
+      return seat.loggedIn && (!check.trusted || !check.weeklyTrusted) &&
+        context.now - (quotaRefreshAt.get(seat.id) || 0) >= 60_000;
+    });
+    await Promise.all(unknown.map(async (seat) => {
+      quotaRefreshAt.set(seat.id, context.now);
+      try {
+        for (const sample of await window.deck.quotaRefresh(seat.id)) window.QuotaCore.observe(host.config.quotas, sample);
+      } catch (_) { /* Unknown remains ineligible; confirmed seats can proceed. */ }
+    }));
+    if (unknown.length) host.flushConfig();
+  }
+  async function stopRotation(reason) {
+    const state = window.MainSession.state();
+    const notified = state.relayStartup?.notified === true;
+    state.relayStartup = { ...window.RelayStartupCore.normalize(state.relayStartup), attempt: null, stopped: true, reason, notified };
+    host.flushConfig();
+    const message = `永动机已停止：${reason}。请检查队长；处理后可手动 Relay 或在席位设置重新开启永动机。`;
+    host.showToast(message);
+    // Persist before sending: subsequent ticks/restarts must not spam the phone.
+    if (state.relayStartup.notified) return;
+    state.relayStartup.notified = true; host.flushConfig();
+    try {
+      const result = await window.deck.captainRelayNotify(state.colId, message, true);
+      if (!result.ok || /失败|跳过/.test(result.message || '')) host.showToast(result.message);
+    } catch (_) { host.showToast('永动机已停止，紧急提醒发送失败，请检查通知设置'); }
+  }
+  async function automaticTick() {
+    if (automaticRunning || switching || !P.normalizeSettings(host.config.perpetualCaptain).enabled) return;
+    const col = window.MainSession.mainCol(), state = window.MainSession.state();
+    if (!col || !state) return;
+    automaticRunning = true;
+    try {
+      if (state.relayStartup?.stopped) {
+        if (!state.relayStartup.notified) await stopRotation(state.relayStartup.reason || '队长启动失败');
+        return;
+      }
+      const R = window.RelayStartupCore, entry = host.terms.get(col.id);
+      const startup = state.relayStartup;
+      if (startup?.attempt) {
+        const activity = window.MainCore?.terminalActivity(entry?.lastScreen, col.cmd);
+        const result = R.check(startup, { colId: col.id, now: Date.now(),
+          quota: entry?.state === 'quota' || activity === 'quota', exited: entry?.alive === false,
+          promptSent: startup.attempt.promptSent,
+          output: startup.attempt.output || (startup.attempt.promptSent && !entry?.sendingPrompt && !entry?.injecting &&
+            (activity === 'working' || entry?.state === 'working') &&
+            entry?.lastOutputAt > (startup.attempt.promptSentAt || startup.attempt.at)) });
+        if (JSON.stringify(result.state) !== JSON.stringify(startup)) { state.relayStartup = result.state; host.flushConfig(); }
+        if (result.action === 'stop') { await stopRotation('连续 3 次队长启动失败'); return; }
+        if (result.action === 'waiting') return;
+      }
+      if (!state.relayStartup?.attempt && current().id === P.CODEX_ID &&
+        (entry?.state === 'quota' || codexUnavailable()) && !state.relayStartup?.failures?.length) {
+        state.relayStartup = R.fail(R.begin({}, { colId: col.id, targetId: P.CODEX_ID, at: Date.now() }), 'quota').state;
+        host.flushConfig();
+      }
+      const retry = !!state.relayStartup?.failures?.length;
+      if (!retry && !window.MainSession.relayIdle()) return;
+      if (hasDraft(col)) { if (retry) await stopRotation('队长启动失败，但输入框有未发送内容，无法安全重试'); return; }
+      await refreshUnknownQuota();
+      if (window.MainSession.mainCol() !== col) return;
+      const before = JSON.stringify(host.config.perpetualCaptainState);
+      const decision = retry ? startupRetryDecision() : rotationDecision();
+      if (before !== JSON.stringify(host.config.perpetualCaptainState)) host.flushConfig();
+      if (retry && !decision) { await stopRotation('没有剩余可用席位，Codex 也不可用'); return; }
+      if (!decision || Date.now() < retryAt) return;
+      if (decision.targetId === P.CODEX_ID && codexUnavailable()) { await stopRotation('Claude 席位都不可用，Codex 额度也已用尽'); return; }
+      const options = { automatic: true, startupRetry: retry, decision };
+      const ok = await switchSeat(decision.targetId, options);
+      if (!ok && window.MainSession.mainCol() === col && window.MainSession.state() === state && options.failed) {
+        // A failed checkpoint/spawn is also a failed attempt; never retry forever.
+        const pending = R.begin(state.relayStartup, { colId: col.id, targetId: decision.targetId, at: Date.now() });
+        const failed = R.fail(pending, '轮换存档或启动失败');
+        state.relayStartup = failed.state; host.flushConfig();
+        if (failed.action === 'stop') await stopRotation('连续 3 次队长启动失败');
+        else retryAt = Date.now() + 1500;
+      } else if (!ok) retryAt = Date.now() + 60_000;
+    } finally { automaticRunning = false; }
+  }
+
   function init(h) {
     host = h;
     document.getElementById('claudeSeatsSettings').innerHTML = GEAR;
@@ -351,6 +450,8 @@
     });
     refresh().catch(() => {});
     setInterval(() => refresh().catch(() => {}), 30_000);
+    // Independent of a live PTY/status tick: crashed or unstarted Captains need the watchdog too.
+    setInterval(() => automaticTick().catch(() => {}), 1500);
   }
   function warmupDetail(seatId) {
     const entry = warmups.find((s) => s.seatId === seatId);
@@ -360,7 +461,7 @@
     const now = Date.now();
     const candidates = seats.map((info) => ({ ...info, ...P.seatQuota(host.config.quotas?.[window.QuotaCore.seatKey(info.id)],
       { ...info, configuredDir: host.config.claudeSeats.find((s) => s.id === info.id)?.configDir }, now) }));
-    return detail + '\n' + P.strategyText({ settings: host.config.perpetualCaptain, currentId: current().id, seats: candidates, warmups, now });
+    return detail + '\n' + P.strategyText({ settings: host.config.perpetualCaptain, state: host.config.perpetualCaptainState, currentId: current().id, seats: candidates, warmups, now });
   }
-  window.ClaudeSeats = { init, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail };
+  window.ClaudeSeats = { init, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick };
 })();

@@ -7,10 +7,10 @@ const Q = require('../quota-core');
 const NOW = Date.UTC(2026, 9, 3, 12);
 const info = { id: 'cn', loggedIn: true, accountKey: 'cn-account', configDir: '/home/test/.claude', configuredDir: '~/.claude' };
 const unknown = (id) => ({ id, loggedIn: true, trusted: false, remaining: null });
-const quota = (id, remaining, extra = {}) => ({ id, loggedIn: true, trusted: true, remaining, remainingAt: NOW, resetAt: NOW + 3600_000, ...extra });
+const quota = (id, remaining, extra = {}) => ({ id, loggedIn: true, trusted: true, remaining, remainingAt: NOW, resetAt: NOW + 3600_000, weeklyTrusted: true, weeklyRemaining: 60, weeklyResetAt: NOW + 7 * 86400_000, ...extra });
 const sample = (extra = {}) => ({ at: NOW, accountBound: true, accountKey: info.accountKey, configDir: info.configuredDir,
   windows: [{ label: '5 小时', remaining: 3, resetAt: NOW + 3600_000 }, { label: '每周', remaining: 60 }], ...extra });
-const choose = (extra = {}) => P.decide({ currentId: 'cn', seats: [quota('cn', 3), unknown('us')], now: NOW, ...extra });
+const choose = (extra = {}) => P.decide({ currentId: 'cn', seats: [quota('cn', 3), quota('us', 80)], now: NOW, ...extra });
 function exhausted(state, id, at = NOW, resetAt = NOW + 3600_000) {
   return P.observe(state, { seatId: id, at, exhausted: true, resetAt }, at);
 }
@@ -27,19 +27,19 @@ test('perpetual defaults enabled at 3 percent and normalizes invalid settings', 
 test('trusted 5-hour remaining at the threshold relays to the other Claude seat', () => {
   assert.equal(choose().targetId, 'us');
   assert.equal(choose().reason, 'threshold');
-  assert.equal(choose({ seats: [quota('us', 0.1), unknown('cn')], currentId: 'us' }).targetId, 'cn');
+  assert.equal(choose({ seats: [quota('us', 0.1), quota('cn', 80)], currentId: 'us' }).targetId, 'cn');
   assert.equal(choose({ seats: [quota('cn', 3.1), unknown('us')] }), null);
-  assert.equal(choose({ settings: { threshold: 5 }, seats: [quota('cn', 5), unknown('us')] }).targetId, 'us');
+  assert.equal(choose({ settings: { threshold: 5 }, seats: [quota('cn', 5), quota('us', 80)] }).targetId, 'us');
 });
-test('unknown or unbound digits cannot trigger threshold or reject the other seat', () => {
+test('unknown or unbound digits cannot trigger threshold or qualify a destination', () => {
   assert.equal(choose({ seats: [quota('cn', 0, { trusted: false }), unknown('us')] }), null);
-  assert.equal(choose({ seats: [quota('cn', 3), quota('us', 0, { trusted: false })] }).targetId, 'us');
+  assert.equal(choose({ seats: [quota('cn', 3), quota('us', 0, { trusted: false })] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [quota('cn', 3, { remainingAt: NOW - P.FRESH_MS - 1 }), unknown('us')] }), null);
 });
 test('an actual rate-limit error triggers relay without numeric usage', () => {
   const state = exhausted({}, 'cn');
-  assert.equal(choose({ state, seats: [unknown('cn'), unknown('us')] }).targetId, 'us');
-  assert.equal(choose({ state, seats: [unknown('cn'), unknown('us')] }).reason, 'quota-exhausted');
+  assert.equal(choose({ state, seats: [unknown('cn'), quota('us', 80)] }).targetId, 'us');
+  assert.equal(choose({ state, seats: [unknown('cn'), quota('us', 80)] }).reason, 'quota-exhausted');
 });
 test('two actually exhausted Claude seats relay to Codex', () => {
   let state = exhausted({}, 'cn'); state = exhausted(state, 'us');
@@ -48,10 +48,10 @@ test('two actually exhausted Claude seats relay to Codex', () => {
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0)] }).targetId, P.CODEX_ID);
   assert.equal(choose({ state: exhausted({}, 'us'), seats: [quota('cn', 0), unknown('us')] }).targetId, P.CODEX_ID);
 });
-test('low positive quotas prevent Codex fallback; missing logins are skipped', () => {
-  assert.equal(choose({ seats: [quota('cn', 3), quota('us', 2)] }), null);
-  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 2)] }), null);
-  assert.equal(choose({ seats: [quota('cn', 3), { ...unknown('us'), loggedIn: false }] }), null);
+test('low positive quotas and missing logins do not strand the captain without a usable destination', () => {
+  assert.equal(choose({ seats: [quota('cn', 3), quota('us', 2)] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 2)] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ seats: [quota('cn', 3), { ...unknown('us'), loggedIn: false }] }).targetId, P.CODEX_ID);
   assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn'), { ...unknown('us'), loggedIn: false }] }).targetId, P.CODEX_ID);
   assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn')] }).targetId, P.CODEX_ID);
 });
@@ -70,12 +70,12 @@ test('quota banner follows rotation order and reports the earliest recovery when
     targetId: null, recoveryAt: NOW + 3600_000, reason: 'claude-unavailable'
   });
 });
-test('a persisted trusted zero proves exhaustion until its reset, then the Claude seat becomes usable', () => {
+test('a persisted trusted zero waits for a fresh sample after reset before the Claude seat becomes usable', () => {
   let state = P.observe({}, { seatId: 'cn', at: NOW, remaining: 0, trusted: true, resetAt: NOW + 3600_000 }, NOW);
   state = exhausted(state, 'us', NOW, NOW + 7200_000);
   const seats = [unknown('cn'), unknown('us')];
   assert.equal(choose({ state, currentId: 'us', seats, now: NOW + P.FRESH_MS + 1 }).targetId, P.CODEX_ID);
-  assert.equal(choose({ state, currentId: 'us', seats, now: NOW + 3600_000 }).targetId, 'cn');
+  assert.equal(choose({ state, currentId: 'us', seats, now: NOW + 3600_000 }).targetId, P.CODEX_ID);
 });
 test('busy turns, drafts, briefing and an in-progress switch never auto relay', () => {
   for (const guard of ['busy', 'draft', 'briefing', 'switching']) {
@@ -92,7 +92,7 @@ test('disabled setting prevents switching while quota observations continue', ()
 });
 test('CN to US to Codex can advance immediately while both Claude targets remain in cooldown', () => {
   let state = exhausted({}, 'cn');
-  const us = choose({ state, seats: [unknown('cn'), unknown('us')] });
+  const us = choose({ state, seats: [unknown('cn'), quota('us', 80)] });
   state = P.recordSwitch(state, { fromId: 'cn', ...us });
   state = exhausted(state, 'us', NOW + 1000);
   const codex = choose({ state, currentId: 'us', seats: [unknown('cn'), unknown('us')], now: NOW + 1000 });
@@ -100,15 +100,15 @@ test('CN to US to Codex can advance immediately while both Claude targets remain
   state = P.recordSwitch(state, { fromId: 'us', ...codex });
   state = P.observe(state, { seatId: 'cn', at: NOW + 2000, resumed: true }, NOW + 2000);
   assert.equal(choose({ state, currentId: P.CODEX_ID, seats: [unknown('cn'), unknown('us')], now: NOW + 2000 }), null);
-  const returned = choose({ state, currentId: P.CODEX_ID, seats: [unknown('cn'), unknown('us')], now: NOW + P.COOLDOWN_MS });
+  const returned = choose({ state, currentId: P.CODEX_ID, seats: [quota('cn', 80, { remainingAt: NOW + P.COOLDOWN_MS }), unknown('us')], now: NOW + P.COOLDOWN_MS });
   assert.equal(returned.targetId, 'cn');
   assert.equal(returned.reason, 'claude-recovered');
 });
 test('cooldown is per target and an otherwise healthy Claude cooldown does not force Codex', () => {
   let state = P.recordSwitch({}, { fromId: 'cn', targetId: 'us', reason: 'threshold', at: NOW });
   state = exhausted(state, 'us', NOW + 1000);
-  assert.equal(choose({ state, currentId: 'us', seats: [unknown('cn'), unknown('us')], now: NOW + 1000 }), null);
-  assert.equal(choose({ state, currentId: 'us', seats: [unknown('cn'), unknown('us')], now: NOW + P.COOLDOWN_MS }).targetId, 'cn');
+  assert.equal(choose({ state, currentId: 'us', seats: [quota('cn', 80), unknown('us')], now: NOW + 1000 }), null);
+  assert.equal(choose({ state, currentId: 'us', seats: [quota('cn', 80), unknown('us')], now: NOW + P.COOLDOWN_MS }).targetId, 'cn');
 });
 test('returning Claude cannot immediately bounce back into the same Codex target', () => {
   let state = exhausted({}, 'us');
@@ -127,16 +127,16 @@ test('Codex waits for real Claude recovery, then returns at an idle boundary', (
   assert.equal(choose({ state, currentId: P.CODEX_ID, seats, now: NOW + P.COOLDOWN_MS }), null);
   const resumedNow = NOW + P.COOLDOWN_MS + 1001;
   assert.equal(choose({ state, currentId: P.CODEX_ID, seats, now: resumedNow, busy: true }), null);
-  assert.equal(choose({ state, currentId: P.CODEX_ID, seats, now: resumedNow }).targetId, 'cn');
+  assert.equal(choose({ state, currentId: P.CODEX_ID, seats, now: resumedNow }), null);
   state = P.observe(state, null, resumedNow);
   assert.equal(state.seats.cn.exhaustedAt, undefined);
   assert.equal(state.seats.cn.recoveredAt, NOW + P.COOLDOWN_MS + 1000);
 });
-test('a low trusted numeric seat becomes available after its reset even when usage is unknown', () => {
+test('a low trusted numeric seat stays unknown after reset until sampled', () => {
   let state = P.observe({}, { seatId: 'cn', at: NOW, remaining: 3, trusted: true, resetAt: NOW + P.COOLDOWN_MS + 1000 }, NOW);
   state = exhausted(state, 'us');
   state = P.recordSwitch(state, { fromId: 'us', targetId: P.CODEX_ID, reason: 'claude-unavailable', at: NOW });
-  assert.equal(choose({ state, currentId: P.CODEX_ID, seats: [unknown('cn'), unknown('us')], now: NOW + P.COOLDOWN_MS + 1001 }).targetId, 'cn');
+  assert.equal(choose({ state, currentId: P.CODEX_ID, seats: [unknown('cn'), unknown('us')], now: NOW + P.COOLDOWN_MS + 1001 }), null);
 });
 test('Codex does not immediately return to a never-exhausted unknown Claude seat', () => {
   const state = P.recordSwitch({}, { fromId: 'us', targetId: P.CODEX_ID, reason: 'claude-unavailable', at: NOW });
@@ -165,7 +165,7 @@ test('a fresh positive number clears low usage but cannot clear a real quota err
   state = P.observe(state, { seatId: 'cn', at: NOW + 1000, remaining: 90, trusted: true }, NOW + 1000);
   assert.equal(state.seats.cn.lowAt, undefined);
   assert.equal(state.seats.cn.exhaustedAt, NOW);
-  assert.equal(choose({ state, seats: [quota('cn', 90), unknown('us')] }).reason, 'quota-exhausted');
+  assert.equal(choose({ state, seats: [quota('cn', 90), quota('us', 80)] }).reason, 'quota-exhausted');
 });
 test('account or directory changes discard old account quota latches while keeping cooldown', () => {
   let state = P.observe({}, { seatId: 'cn', accountKey: 'old', configDir: '~/.claude' }, NOW);
@@ -319,7 +319,7 @@ test('state and switch history survive JSON persistence and pure calls do not mu
     { seats: { cn: { enteredAt: NOW } }, lastSwitch: null });
   assert.equal(P.recordSwitch(state, { fromId: 'cn', targetId: 'cn', at: NOW }).lastSwitch, null);
   for (const malformed of [undefined, null, 3, 'invalid']) assert.deepEqual(P.normalizeState(malformed), { seats: {}, lastSwitch: null });
-  assert.deepEqual(P.seatQuota(null, null, NOW), { remaining: null, remainingAt: null, resetAt: null, trusted: false, weeklyRemaining: null, weeklyTrusted: false, exhausted: false, exhaustedAt: null, exhaustedResetAt: null, resumedAt: null });
+  assert.deepEqual(P.seatQuota(null, null, NOW), { remaining: null, remainingAt: null, resetAt: null, trusted: false, weeklyRemaining: null, weeklyTrusted: false, weeklyRemainingAt: null, weeklyResetAt: null, exhausted: false, exhaustedAt: null, exhaustedResetAt: null, resumedAt: null });
 });
 
 test('healthy counting windows prefer the earlier reset, with weekly availability, unknown data and the icon setting respected', () => {
@@ -393,14 +393,14 @@ test('a materially earlier jittered window gets one rotation across three hours'
   assert.equal(currentId, 'us');
 });
 test('weekly low quota is never a Relay destination, including the old low-five-hour fallback', () => {
-  assert.equal(choose({ seats: [quota('cn', 2), quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 3 })] }), null);
+  assert.equal(choose({ seats: [quota('cn', 2), quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 3 })] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 80, { weeklyTrusted: true, weeklyRemaining: 0 })] }).targetId, P.CODEX_ID);
 });
 test('strategy details use plain language and show the reset, threshold and weekly guard', () => {
-  const seats = [{ id: 'cn', name: 'CN' }, { id: 'us', name: 'US', weeklyTrusted: true, weeklyRemaining: 60 }];
+  const seats = [{ ...quota('cn', 80), name: 'CN' }, { ...quota('us', 80), name: 'US' }];
   const text = P.strategyText({ currentId: 'cn', seats, warmups: [{ seatId: 'us', resetAt: NOW + 3600000, status: 'pending' }], now: NOW });
   assert.match(text, /正在用 CN/); assert.match(text, /US .*重置后自动预热/); assert.match(text, /CN 剩 3% 时切到 US/);
-  assert.match(P.strategyText({ currentId: 'cn', seats: [seats[0], { ...seats[1], weeklyRemaining: 0 }] }), /每周额度不足，不切换也不预热/);
+  assert.match(P.strategyText({ currentId: 'cn', seats: [seats[0], { ...seats[1], weeklyRemaining: 0 }], now: NOW }), /每周额度不足，不切换也不预热/);
 });
 
 test('three Claude seats cycle US2 to US to CN to US2, skipping unavailable seats', () => {
@@ -416,7 +416,7 @@ test('three Claude seats cycle US2 to US to CN to US2, skipping unavailable seat
   assert.equal(choose({ currentId: 'us', seats: [quota('cn', 0), quota('us', 0), quota('us2', 60)] }).targetId, 'us2');
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), { ...unknown('us2'), loggedIn: false }] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 0)] }).targetId, P.CODEX_ID);
-  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 2)] }), null);
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 2)] }).targetId, P.CODEX_ID);
 });
 test('rotation order is independent of the order seats are listed in', () => {
   for (const listed of [['cn', 'us', 'us2'], ['us2', 'us', 'cn'], ['us', 'cn', 'us2']]) {
@@ -468,7 +468,7 @@ test('the one-click quota action and the strategy text follow the rotation order
   const seats = [quota('cn', 80), quota('us', 80), quota('us2', 0)];
   assert.equal(P.quotaAction({ currentId: 'us2', seats, now: NOW }).targetId, 'us');
   assert.equal(P.quotaAction({ currentId: 'us2', seats: seats.map((s) => s.id === 'us' ? quota('us', 0) : s), now: NOW }).targetId, 'cn');
-  const named = ['cn', 'us', 'us2'].map((id) => ({ id, name: id.toUpperCase(), loggedIn: true }));
+  const named = ['cn', 'us', 'us2'].map((id) => ({ ...quota(id, 80), name: id.toUpperCase() }));
   assert.match(P.strategyText({ currentId: 'us2', seats: named, now: NOW }), /US2 剩 3% 时切到 US(?!2)/);
   assert.match(P.strategyText({ currentId: 'cn', seats: named, now: NOW }), /CN 剩 3% 时切到 US2/);
 });
@@ -478,4 +478,90 @@ test('a seat with unfinished onboarding is skipped by rotation and does not bloc
   assert.equal(choose({ currentId: 'us2', seats: [quota('cn', 80), us, us2] }).targetId, 'cn');
   assert.equal(choose({ seats: [current, us, us2] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [current, us, quota('us2', 0)] }).targetId, P.CODEX_ID);
+});
+
+
+test('fresh confirmed Claude seats take precedence over unknown, stale and reset-expired seats', () => {
+  const variants = [unknown('us'), quota('us', 80, { remainingAt: NOW - P.FRESH_MS - 1 }),
+    quota('us', 80, { weeklyTrusted: false }), quota('us', 80, { weeklyRemainingAt: NOW - P.FRESH_MS - 1 }),
+    quota('us', 80, { resetAt: NOW }), quota('us', 80, { weeklyResetAt: NOW })];
+  for (const us of variants) {
+    assert.equal(choose({ currentId: 'us2', seats: [quota('us2', 0), us, quota('cn', 80)] }).targetId, 'cn');
+    assert.equal(choose({ currentId: 'us2', seats: [quota('us2', 0), us] }).targetId, P.CODEX_ID);
+  }
+});
+test('a weekly exhausted US seat stays excluded through stale samples and rejoins only with post-reset samples', () => {
+  const resetAt = NOW + 4 * 86400_000;
+  let state = P.observe({}, { seatId: 'us', at: NOW, weeklyTrusted: true, weeklyRemaining: 0, weeklyResetAt: resetAt }, NOW);
+  state = P.normalizeState(JSON.parse(JSON.stringify(state)));
+  assert.equal(state.seats.us.weeklyLowResetAt, resetAt);
+  const later = NOW + P.FRESH_MS + 1;
+  assert.equal(P.status(unknown('us'), state.seats.us, 3, later).exhausted, true);
+  for (const [currentId, next] of [['cn', 'us2'], ['us2', 'cn']]) {
+    const seats = [quota('cn', currentId === 'cn' ? 0 : 80, { remainingAt: later }), unknown('us'),
+      quota('us2', currentId === 'us2' ? 0 : 80, { remainingAt: later })];
+    assert.equal(choose({ currentId, state, seats, now: later }).targetId, next);
+  }
+  const seats = [quota('us2', 0, { remainingAt: resetAt, resetAt: resetAt + 3600_000 }), unknown('us'),
+    quota('cn', 80, { remainingAt: resetAt, resetAt: resetAt + 3600_000 })];
+  assert.equal(choose({ currentId: 'us2', state, seats, now: resetAt }).targetId, 'cn');
+  // A sample from before the reset remains insufficient, even when its advertised reset changes.
+  seats[1] = quota('us', 80, { remainingAt: resetAt - 1, resetAt: resetAt + 3600_000, weeklyResetAt: resetAt + 7 * 86400_000 });
+  assert.equal(choose({ currentId: 'us2', state, seats, now: resetAt }).targetId, 'cn');
+  seats[1] = { ...seats[1], remainingAt: resetAt, weeklyRemainingAt: resetAt };
+  assert.equal(choose({ currentId: 'us2', state, seats, now: resetAt }).targetId, 'us');
+});
+test('a five-hour exhausted seat rejoins only after reset and a fresh sample confirming both windows', () => {
+  const resetAt = NOW + 3600_000;
+  const state = exhausted({}, 'cn', NOW, resetAt);
+  const current = quota('us', 0, { remainingAt: resetAt, resetAt: resetAt + 3600_000 });
+  const ready = quota('cn', 80, { remainingAt: resetAt, resetAt: resetAt + 3600_000 });
+  for (const seat of [unknown('cn'), { ...ready, remainingAt: resetAt - 1 }, { ...ready, weeklyTrusted: false }]) {
+    assert.equal(choose({ state, currentId: 'us', seats: [seat, current], now: resetAt }).targetId, P.CODEX_ID);
+  }
+  assert.equal(choose({ state, currentId: 'us', seats: [ready, current], now: resetAt }).targetId, 'cn');
+});
+test('03:51 regression: weekly exhausted US cannot relay to CN on reset expiry without fresh confirmation', () => {
+  const at0351 = Date.UTC(2026, 9, 5, 10, 51), cnReset = at0351 - 60_000;
+  const usReset = Date.UTC(2026, 9, 9, 10);
+  let state = exhausted({}, 'cn', cnReset - 3600_000, cnReset);
+  state = exhausted(state, 'us', at0351 - 1000, usReset);
+  const seats = [quota('us', 80, { remainingAt: at0351, resetAt: at0351 + 3600_000,
+    weeklyRemaining: 0, weeklyResetAt: usReset }),
+    quota('cn', 0, { remainingAt: cnReset - 60000, resetAt: cnReset }),
+    quota('us2', 0, { remainingAt: at0351, resetAt: at0351 + 3600_000 })];
+  assert.equal(choose({ state, currentId: 'us', seats, now: at0351 }).targetId, P.CODEX_ID);
+  seats[1] = quota('cn', 100, { remainingAt: at0351, resetAt: at0351 + 5 * 3600_000 });
+  assert.equal(choose({ state, currentId: 'us', seats, now: at0351 }).targetId, 'cn');
+});
+test('an official sample must contain both quota windows before it can prove recovery', () => {
+  const current = { ...info, credentialKey: 'cn-current-slot' };
+  const official = { provider: 'Claude', scope: 'claude', official: true, seatId: 'cn', configDir: info.configuredDir,
+    credentialKey: current.credentialKey, at: NOW,
+    windows: [{ key: 'fiveHour', remaining: 80, resetAt: NOW + 3600_000 }] };
+  assert.equal(P.seatQuota({ sample: official }, current, NOW).resumedAt, null);
+  official.windows.push({ key: 'weekly', remaining: 60, resetAt: NOW + 7 * 86400_000 });
+  const result = P.seatQuota({ sample: official }, current, NOW);
+  assert.equal(result.weeklyRemainingAt, NOW);
+  assert.equal(result.weeklyResetAt, NOW + 7 * 86400_000);
+  assert.equal(result.resumedAt, NOW);
+});
+
+
+test('strategy details never promise a switch to unknown or stale quota and retain persisted weekly exclusions', () => {
+  const seats = [{ ...quota('us2', 0), name: 'US2' }, { ...unknown('us'), name: 'US' }, { ...quota('cn', 80), name: 'CN' }];
+  let text = P.strategyText({ currentId: 'us2', seats, now: NOW });
+  assert.match(text, /US 额度未知，等待新采样确认/);
+  assert.match(text, /US2 剩 3% 时切到 CN/);
+  const state = P.observe({}, { seatId: 'us', at: NOW, weeklyTrusted: true, weeklyRemaining: 0, weeklyResetAt: NOW + 4 * 86400_000 }, NOW);
+  text = P.strategyText({ state, currentId: 'us2', seats, now: NOW + P.FRESH_MS + 1 });
+  assert.match(text, /US 每周额度不足/);
+  assert.match(text, /CN 额度未知，等待新采样确认/);
+  assert.doesNotMatch(text, /剩 3% 时切到/);
+});
+test('native five-hour resumption does not clear a persisted weekly quota lock', () => {
+  let state = P.observe({}, { seatId: 'us', at: NOW, weeklyTrusted: true, weeklyRemaining: 0, weeklyResetAt: NOW + 4 * 86400_000 }, NOW);
+  state = P.observe(state, { seatId: 'us', at: NOW + 1000, resumed: true }, NOW + 1000);
+  assert.equal(state.seats.us.weeklyLowRemaining, 0);
+  assert.equal(P.status(unknown('us'), state.seats.us, 3, NOW + 1000).exhausted, true);
 });

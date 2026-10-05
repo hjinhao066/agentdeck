@@ -79,6 +79,7 @@
       "mobile-web/**",
       "claude-seats-core.js",
       "perpetual-captain-core.js",
+      "relay-startup-core.js",
       "quota-warmup-core.js",
       "quota-warmup-service.js",
       "quota-warmup-main.js",

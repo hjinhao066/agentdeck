@@ -950,9 +950,15 @@ app.whenReady().then(async () => {
       app.testRelayAlerts.push(payload);
       return { ok: true, status: 200, json: async () => ({ code: 200 }) };
     } } : {}) });
-  handleMain('captain:relay-notify', (_e, { colId, message }) => {
+  handleMain('captain:relay-notify', async (_e, { colId, message, urgent = false }) => {
     if (colId !== notificationConfig.mainSession?.colId || !notificationConfig.columns?.some((c) => c.id === colId && c.isMain) ||
-      typeof message !== 'string' || !message.trim() || message.length > 1000) throw new Error('无效队长轮换提醒');
+      typeof message !== 'string' || !message.trim() || message.length > 1000 || typeof urgent !== 'boolean') throw new Error('无效队长轮换提醒');
+    if (urgent) {
+      // The same local + critical Bark route as notify-user --urgent, even
+      // when no Captain process is able to run the board command.
+      const result = await notifyUser({ callerId: colId, id: 'relay-stopped-' + colId, message, urgent: true }, false);
+      return { ok: true, message: result };
+    }
     return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
   });
   const needsUserBarkPath = path.join(app.getPath('userData'), 'needs-user-bark-state.json');

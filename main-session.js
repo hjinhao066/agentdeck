@@ -406,6 +406,11 @@
     briefing = id;
     const done = () => { if (briefing === id) briefing = ''; };
     const sent = () => {
+      if (state()?.relayStartup?.attempt?.colId === id) {
+        state().relayStartup.attempt.promptSent = true;
+        state().relayStartup.attempt.promptSentAt = Date.now();
+        save();
+      }
       done();
       if (note) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
     };
@@ -704,6 +709,10 @@
     if (rotation) { delete col.agentProvider; delete col.agentModel; delete col.agentEffort; }
     const fresh = host.respawnColumn(col, { freshChat: true });   // new id, new shell, new token
     s.colId = fresh.id;
+    if (rotation && window.RelayStartupCore) {
+      s.relayStartup = window.RelayStartupCore.begin(options.automatic ? s.relayStartup : {},
+        { colId: fresh.id, targetId: s.relayTargetId, at: Date.now() });
+    } else delete s.relayStartup;
     s.fresh = true;
     carried.forEach((t) => window.ChatUI.addCard(s.colId, t));
     save();
@@ -1693,6 +1702,9 @@
     if (!s) return;
     if (colId === s.colId) {
       host.captainTurnDone(colId, turn);
+      if (s.relayStartup?.attempt?.colId === colId && turn.reply?.trim() && !turn.interrupted) {
+        s.relayStartup.attempt.output = true; save();
+      }
       if (tokenSaving?.phase === 'archiving' && turn.id === tokenSaving.turnId) {
         if (!turn.interrupted && String(turn.reply || '').trim() === '已存档') {
           if (tokenSaving.relay) {
@@ -1838,6 +1850,9 @@
   async function handleOnce(message, caller) {
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
+    if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id) {
+      s.relayStartup.attempt.output = true; save();
+    }
     switch (message.action) {
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
