@@ -151,8 +151,11 @@ function readUsage(seat, home) {
 // holds (dispatch records, live sessions, unread receipts); the board cards and
 // the Captain's decisions file are read here. The decisions file belongs to the
 // Captain and is only ever read; the handoff file belongs to the app.
+// Open dispatch records are never trimmed, so their number is not bounded by the renderer's
+// cap on finished ones; the limit here only rejects a payload that cannot be real.
+const MAX_HANDOFF_RECORDS = 5000;
 function handoff(home, userData, payload, options = {}) {
-  if (!validId(payload?.colId) || !Array.isArray(payload.tasks) || payload.tasks.length > 120) throw new Error('无效队长存档');
+  if (!validId(payload?.colId) || !Array.isArray(payload.tasks) || payload.tasks.length > MAX_HANDOFF_RECORDS) throw new Error('无效队长存档');
   const dir = path.join(home, '.agents', 'boards');
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const board = path.join(dir, Handoff.HANDOFF_FILE), notes = path.join(dir, Handoff.DECISIONS_FILE);
@@ -161,7 +164,9 @@ function handoff(home, userData, payload, options = {}) {
   try {
     const stat = fs.statSync(notes);
     if (stat.isFile() && stat.size <= 512 * 1024) { decisions.text = fs.readFileSync(notes, 'utf8'); decisions.mtime = stat.mtimeMs; }
-  } catch (_) {}
+    // Too big to be the one-line-per-decision file: said in the text, not read as "nothing recorded".
+    else decisions.error = stat.isFile() ? '文件超过 512KB，没有读' : '不是普通文件，没有读';
+  } catch (error) { if (error.code !== 'ENOENT') decisions.error = '读不出来：' + error.message; }
   // An unreadable board is said out loud; the dispatch records alone still go out.
   let cards = [], boardError = '';
   try { cards = options.cards ? options.cards() : []; } catch (error) { boardError = error.message; }
@@ -171,6 +176,7 @@ function handoff(home, userData, payload, options = {}) {
   const machine = options.machine || {};
   const built = Handoff.build({
     now: Number.isFinite(payload.now) ? payload.now : Date.now(), timeZone: payload.timeZone, reason: payload.reason, cli: payload.cli, budget: payload.budget,
+    dispatchCap: payload.dispatchCap, userTurnsOlder: payload.userTurnsOlder === true || all(payload.userTurns).length > 12,
     platform: machine.platform || process.platform, host: machine.hostname || os.hostname(), appVersion: machine.appVersion || '', boardVersion: options.boardVersion ? options.boardVersion() : '',
     captain: { ...(payload.captain && typeof payload.captain === 'object' ? payload.captain : { previousId: payload.colId, message: payload.relayMessage || '' }) },
     cards, boardError, dispatches: payload.tasks, sessions: all(payload.sessions), archivedIds: all(payload.archivedIds),
@@ -183,7 +189,7 @@ function handoff(home, userData, payload, options = {}) {
   return { path: board, text: built.text, plan: built.state.plan, level: built.level, over: built.over };
 }
 function checkpoint(home, userData, payload, options) {
-  if (!validId(payload?.colId) || !payload.chat || !Array.isArray(payload.tasks) || payload.tasks.length > 120) throw new Error('无效队长存档');
+  if (!validId(payload?.colId) || !payload.chat || !Array.isArray(payload.tasks) || payload.tasks.length > MAX_HANDOFF_RECORDS) throw new Error('无效队长存档');
   // Save the full old chat, including interrupted output, before allowing kill.
   const activeChat = { ...payload.chat };
   delete activeChat.captainArchive; // A failed checkpoint must leave an active chat active.

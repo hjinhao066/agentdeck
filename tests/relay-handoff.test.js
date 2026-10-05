@@ -346,6 +346,43 @@ test('however many receipts are waiting, each is named: past the first few by se
   assert.doesNotMatch(src, /cap\(payload\.(?:pending|inflight|unconfirmed)/);
 });
 
+test('every window on the page says it is a window: old messages, long reference lists, the reset note, an unreadable notes file', (t) => {
+  // more user messages than the excerpt holds
+  const userTurns = Array.from({ length: 12 }, (_, i) => ({ ts: NOW - (12 - i) * 60_000, text: `第 ${i} 条`, sourceId: 'cap-old' }));
+  let built = build({ cards: [], userTurns, userTurnsOlder: true, decisions: { path: '/b/d.md', mtime: NOW - 3600_000, text: '## 当前目标\n- 发 1.2\n' } });
+  assert.match(built.text, /最近用户消息 12 条（[^\n]*其中 12 条还没进有效决定文件；更早的没有统计在内，read --id captain-history --find 关键词）/);
+  assert.match(built.text, /此后还有 至少 12 条用户消息没整理进来/);
+  built = build({ cards: [], userTurns: userTurns.slice(0, 3), decisions: { path: '/b/d.md', mtime: NOW - 3600_000, text: '## 当前目标\n- 发 1.2\n' } });
+  assert.doesNotMatch(built.text, /更早的没有统计在内|至少/);
+  // a notes file that could not be read is not "nothing recorded"
+  built = build({ cards: [], decisions: { path: '/b/d.md', text: '', mtime: 0, error: '文件超过 512KB，没有读' } });
+  assert.match(built.text, /来源：队长维护的 \/b\/d\.md（文件超过 512KB，没有读，下面各项待核实）/);
+  assert.doesNotMatch(built.text, /还没有这份文件/);
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-big-notes-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(home, '.agents', 'boards'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.agents', 'boards', H.DECISIONS_FILE), '## 暂停/取消/暂不启动\n- 别动 Windows\n' + '填充\n'.repeat(200_000));
+  const written = Seats.handoff(home, path.join(home, 'deck'), { colId: 'cap', tasks: [], reason: 'refresh' }, {});
+  assert.match(written.text, /文件超过 512KB，没有读，下面各项待核实/);
+  // more branches or files than a line shows
+  const f = fixture(t);
+  const card = f.add({ title: '改了很多分支的' }); f.bind(card.id, 'a1', 's1'); f.event(card.id, 'started', '', 'a1', 's1');
+  built = build({ cards: f.cards(), sessions: [session('s1')], dispatches: [record('s1', 'working', { boardId: card.id, boardAttempt: 'a1',
+    progress: Array.from({ length: 8 }, (_, i) => `feat/branch-${i}`).join(' ') })] });
+  assert.match(section(built.text, 3), /分支 feat\/branch-0、[^\n]*feat\/branch-5｜还有没列出的，见回执原文/);
+  assert.equal(H.refsIn('feat/a', []).more, false);
+  // the note a new Captain gets lists twenty tasks and says how many it left out
+  const active = Array.from({ length: 27 }, (_, i) => ({ title: '活 ' + i, colId: 'c' + i, status: 'working' }));
+  const note = M.resetNote('cap-old', active, 'relay');
+  assert.equal(note.split('\n').filter((l) => /^ {3}- 「活 \d+」/.test(l)).length, 20);
+  assert.match(note, /另有 7 件没列在这里，完整清单看 handoff 第 4 节。/);
+  assert.doesNotMatch(M.resetNote('cap-old', active.slice(0, 20), 'relay'), /另有/);
+  // the records themselves: when the list is at its cap, the page says finished ones were dropped
+  const records = Array.from({ length: 120 }, (_, i) => record('s-old-' + i, 'done', { receipt: receipt('完成') }));
+  assert.match(build({ cards: [], dispatches: records, dispatchCap: 120 }).text, /派活记录：本快照有 120 条。未结束的全部保留；已结束的只留最近的/);
+  assert.doesNotMatch(build({ cards: [], dispatches: records.slice(0, 50), dispatchCap: 120 }).text, /派活记录：本快照/);
+});
+
 test('the length budget squeezes explanations, never an unfinished task, a blocker, a limit or an open decision', (t) => {
   const f = fixture(t);
   const ids = [], questions = [];
@@ -507,7 +544,9 @@ test('the handoff file is the app\'s, the decisions file is the Captain\'s: one 
   assert.match(broken.text, /任务看板读不出来（Task board has invalid JSON or a sync conflict: p\.json）：下面只有队长自己的派活记录，卡片状态待核实/);
   assert.match(broken.text, /没挂卡｜p｜执行｜执行 s1（运行中）/);
   assert.throws(() => Seats.handoff(home, userData, { ...payload, colId: '../x' }, options), /无效/);
-  assert.throws(() => Seats.handoff(home, userData, { ...payload, tasks: Array(121).fill({}) }, options), /无效/);
+  // open records are never trimmed, so more than the renderer's cap of 120 is a real payload; only an absurd one is refused
+  assert.match(Seats.handoff(home, userData, { ...payload, tasks: Array(121).fill({}) }, options).text, /# AgentDeck 队长交接/);
+  assert.throws(() => Seats.handoff(home, userData, { ...payload, tasks: Array(5001).fill({}) }, options), /无效/);
   // the Relay checkpoint is the same text, after the old chat is safely on disk
   const chat = { turns: [{ id: 't1', user: '继续', reply: '半句', interrupted: true, ts: NOW }] };
   const file = Seats.checkpoint(home, userData, { ...payload, colId: 'captain-old', chat, relayMessage: 'Relay：CN → US；手动切换' }, options);

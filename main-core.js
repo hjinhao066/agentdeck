@@ -288,6 +288,7 @@
     if (list.length) {
       lines.push(`${relay ? '交接' : '清空'}前派出去、还没结束的活（已有会话在做，不要重派；回执和提问会照常发给你）：`);
       list.forEach((t) => lines.push(`   - 「${oneLine(t.title, 60)}」(${t.colId})：${TASK_STATUS[t.status] || t.status}`));
+      if (active.length > list.length) lines.push(`   另有 ${active.length - list.length} 件没列在这里，完整清单看 handoff 第 4 节。`);
     }
     return lines.join('\n');
   }

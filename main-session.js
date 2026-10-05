@@ -27,9 +27,12 @@
 
   // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], receiptsSeen: [id], tasks: [task], fresh, crewMarked, waitlist }
   // inflight: receipts already handed to 队长 whose turn has not finished yet.
-  // receiptsSeen: ids the background receipts channel already returned. Saved with
-  // the rest of mainSession in config.json, so a relaunch or Relay does not
-  // deliver them again. Legacy injection stays out of this set until its turn ends.
+  // A receipt the background channel returned carries viaChannel itself (and takenAt),
+  // saved with the rest of mainSession, so a relaunch or Relay neither delivers it
+  // again nor loses it. Legacy injection never sets the mark.
+  // receiptsSeen: the last ids the channel returned. Only read for receipts an older
+  // version took, which have no mark. It is trimmed, so nothing still in flight may
+  // depend on it.
   // fresh: the context was cleared and 队长 has not finished a turn since.
   // crewMarked: sessions opened before captainCrew existed were marked once.
   // waitlist: `new` requests waiting for a free slot (settings cap, live on M.MAX_ACTIVE), oldest first;
@@ -365,12 +368,12 @@
     const seen = new Set(s.receiptsSeen);
     const lost = unconfirmedReceipts(s);
     if (lost.length) s.handoffCarry = { at: Date.now(), kind: 'restart', fromId: s.colId, items: [...(s.handoffCarry?.items || []), ...lost] };
-    s.pending = [...unreadReceipts(s.inflight, seen), ...s.pending];
+    s.pending = [...requeued(unreadReceipts(s.inflight, seen)), ...s.pending];
     s.inflight = [];
     s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((m) => typeof m === 'string' ? m.trim() && m.length <= 8000 : mobileImages(m?.atts).length && typeof m.text === 'string' && m.text.length <= 8000) : [];
     s.fresh = !!s.fresh;
     s.legacyReceiptInjection = s.legacyReceiptInjection === true && !nativeCaptain(s.cmd);
-    s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
+    s.tasks = Array.isArray(s.tasks) ? trimTasks(s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string')) : [];
     s.tasks.forEach((t) => { delete t.boardRetrying; });
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
     // the column was closed while the app was down
@@ -531,8 +534,7 @@
   // since. They are never sent again, so a Relay or restart has to name them.
   function unconfirmedReceipts(s) {
     const seen = new Set(normalizeSeenIds(s.receiptsSeen));
-    const settled = Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0;
-    return (Array.isArray(s.inflight) ? s.inflight : []).filter((p) => p && typeof p.receiptId === 'string' && seen.has(p.receiptId) && Number.isFinite(p.takenAt) && p.takenAt > settled).map(carryItem);
+    return (Array.isArray(s.inflight) ? s.inflight : []).filter((p) => p && takenByChannel(p, seen) && !dealtWith(p, s)).map(carryItem);
   }
   // What an earlier Relay or restart already named. It stays open until 队长 has
   // finished a stretch of work that began after it was listed: a Captain that took
@@ -553,14 +555,18 @@
         ...(/（全文 \d+ 字，见附件）$/.test(t.user) && /prompt-[\w-]+\.txt$/.test(String((t.atts || []).at(-1) || '')) ? { longFile: t.atts.at(-1) } : {}) }));
     // The user's last words may be several Captains back (a night of automatic Relays).
     let userTurns = said(col.id);
-    for (const past of [...(host.config.captainHistory || [])].reverse().slice(0, 8)) {
+    const earlier = [...(host.config.captainHistory || [])].reverse().filter((past) => past.id !== col.id);
+    let looked = 0;
+    for (const past of earlier.slice(0, 8)) {
       if (userTurns.length >= 8) break;
-      if (past.id !== col.id) userTurns = [...said(past.id), ...userTurns];
+      userTurns = [...said(past.id), ...userTurns]; looked += 1;
     }
+    // The excerpt is a window; the text says when there is more behind it.
+    const userTurnsOlder = looked < earlier.length || userTurns.length > 12;
     const rotation = window.PerpetualCaptainCore ? window.PerpetualCaptainCore.normalizeSettings(host.config.perpetualCaptain) : null;
     return {
       colId: col.id, reason, now: Date.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, cli: M.boardCli(host.platform),
-      budget: host.config.captainHandoffBudget,
+      budget: host.config.captainHandoffBudget, dispatchCap: MAX_TASKS, userTurnsOlder,
       captain: { previousId, gen: s.gen, ...(leaving ? { nextGen: s.gen + 1 } : {}), message: relayMessage || '', lastRelay: leaving ? null : s.relayRecord || null,
         rotation: rotation ? `永动机自动轮换${rotation.enabled ? '开' : '关'}，席位顺序 ${rotation.order.join(' → ')}，Claude 席位都用尽时交给 ${host.config.captainRelayCodex?.name || 'ChatGPT'}` : '' },
       // Instruction bodies stay where they are; the handoff never quotes them.
@@ -652,7 +658,7 @@
     const retired = window.ChatUI.archiveCaptainSnapshot(col.id, snapshot);
     if (retired) host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { ...retired, clearedAt: Date.now() }]);
     const s = state();
-    s.pending = [...s.inflight, ...s.pending];
+    s.pending = [...requeued(s.inflight), ...s.pending];
     s.inflight = [];
     delete col.modelSessionId;
     col.cmd = M.freshCommand(col.cmd);
@@ -732,9 +738,7 @@
     // A manual clear sends everything in flight again, except what the background
     // channel handed over before 队长 last finished a stretch of work: the old
     // context dealt with those, and a second copy would be handled twice.
-    const settled = Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0;
-    const dealtWith = (p) => typeof p.receiptId === 'string' && seen.has(p.receiptId) && Number.isFinite(p.takenAt) && p.takenAt <= settled;
-    const requeue = rotation ? unreadReceipts(s.inflight, seen) : s.inflight.filter((p) => !dealtWith(p));
+    const requeue = rotation ? unreadReceipts(s.inflight, seen) : s.inflight.filter((p) => !(takenByChannel(p, seen) && dealtWith(p, s)));
     const unconfirmed = rotation ? [...(carriedReceipts(s)?.items || []), ...unconfirmedReceipts(s)] : [];
     s.inflight = [];
     const oldId = col.id;
@@ -743,7 +747,8 @@
     if (retired) {
       host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { id: oldId, ...retired, clearedAt: Date.now() }]);
     }
-    s.pending = [...requeue, ...(rotation ? unreadReceipts(s.pending, seen) : s.pending)];
+    // Whatever is still waiting was never handed over, whatever the id list says: it goes on.
+    s.pending = [...requeued(requeue), ...s.pending];
     s.gen += 1;
     const waiting = new Set(s.pending.map((p) => p.taskId).filter(Boolean));
     const latest = new Map(s.tasks.map((t) => [t.colId, t]));
@@ -809,6 +814,19 @@
     const byTitle = cols.filter((c) => host.columnLabel(c) === key);
     return byTitle.length === 1 ? byTitle[0] : null;
   }
+  // Past MAX_TASKS the oldest finished records drop off. One that is still out, or
+  // whose result has not reached the board yet, never does: the handoff, the restart
+  // resume and the receipt it is waiting for all read it.
+  const STILL_OUT = ['waiting', 'queued', 'working', 'paused', 'quota', 'input', 'asking'];
+  function trimTasks(tasks) {
+    let extra = tasks.length - MAX_TASKS;
+    if (extra <= 0) return tasks;
+    return tasks.filter((t) => {
+      if (extra <= 0 || STILL_OUT.includes(t.status) || t.pendingBoardEvent) return true;
+      extra -= 1;
+      return false;
+    });
+  }
   // col null: a 'waiting' card for work queued until a slot frees up.
   function addTask(col, title) {
     const s = state();
@@ -820,7 +838,7 @@
       boardId: col?.boardId || '', boardAttempt: col?.boardAttempt || '',
     };
     s.tasks.push(task);
-    if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length - MAX_TASKS);
+    if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length, ...trimTasks(s.tasks));
     window.ChatUI.addCard(s.colId, task);
     save();
     return task;
@@ -1193,14 +1211,31 @@
     if (!s) return;
     s.receiptsSeen = normalizeSeenIds([...(Array.isArray(s.receiptsSeen) ? s.receiptsSeen : []), ...items.map(ensureReceiptId)]);
   }
-  function unreadReceipts(items, seen) {
-    return (Array.isArray(items) ? items : []).filter((item) => item && (typeof item.receiptId !== 'string' || !seen.has(item.receiptId)));
+  // Whether the background channel handed this receipt to 队长's CLI. The mark is on
+  // the receipt; the id list only speaks for receipts taken before the mark existed.
+  function takenByChannel(item, seen) {
+    return item.viaChannel === true || (typeof item.receiptId === 'string' && seen.has(item.receiptId));
   }
-  function takePending(nextTurn = false, batch) {
+  // Taken before 队长 began a stretch of work it then finished: the model had it in
+  // front of it throughout. Without a time there is no such sign.
+  function dealtWith(item, s) {
+    return Number.isFinite(item.takenAt) && item.takenAt <= (Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0);
+  }
+  function unreadReceipts(items, seen) {
+    return (Array.isArray(items) ? items : []).filter((item) => item && !takenByChannel(item, seen));
+  }
+  // Back to waiting: it will be handed over afresh, so it is no longer a taken one.
+  function requeued(items) {
+    const ids = new Set(items.map((p) => p.receiptId).filter((id) => typeof id === 'string'));
+    const s = state();
+    if (ids.size && Array.isArray(s.receiptsSeen)) s.receiptsSeen = s.receiptsSeen.filter((id) => !ids.has(id));
+    return items.map(({ viaChannel, takenAt, ...item }) => item);
+  }
+  function takePending(nextTurn = false, batch, viaChannel = false) {
     const s = state();
     const text = M.receiptsForModel(s.pending);
     const turnId = nextTurn ? '' : (window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '');
-    s.inflight = [...s.inflight, ...s.pending.map((p) => ({ ...p, deliveryTurnId: turnId, takenAt: Date.now(), ...(batch ? { batch } : {}) }))];
+    s.inflight = [...s.inflight, ...s.pending.map(({ viaChannel: old, ...p }) => ({ ...p, deliveryTurnId: turnId, takenAt: Date.now(), ...(batch ? { batch } : {}), ...(viaChannel ? { viaChannel: true } : {}) }))];
     s.pending = [];
     save();
     return text;
@@ -1235,7 +1270,7 @@
       Promise.resolve(window.ChatUI.sendPrompt(col, '', null, { prefix: text.trim(), force: true, guardUserInput: true })).then((sent) => {
         if (sent) return;
         // not typed after all: the receipts go back to waiting
-        const back = s.inflight.filter((p) => p.batch === batch).map(({ batch: b, deliveryTurnId, ...item }) => item);
+        const back = s.inflight.filter((p) => p.batch === batch).map(({ batch: b, deliveryTurnId, takenAt, ...item }) => item);
         s.inflight = s.inflight.filter((p) => p.batch !== batch);
         s.pending = [...back, ...s.pending];
         save();
@@ -2038,7 +2073,7 @@
         // The CLI has the text once this returns. Record that before the copy
         // into inflight so the same config save survives relaunch and Relay.
         rememberReceiptsSeen(s.pending);
-        const text = takePending();
+        const text = takePending(false, undefined, true);
         return { done: true, result: text || '没有新的回执。' };
       }
       case 'main-peek': {

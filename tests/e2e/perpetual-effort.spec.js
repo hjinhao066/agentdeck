@@ -15,6 +15,13 @@ function cleanEnv(extra = {}) {
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   delete env.ELECTRON_RUN_AS_NODE;
+  // The stand-in agents start in the column's shell. Whatever shell and startup files the
+  // caller has must not decide whether they start: zsh, with ZDOTDIR on the empty profile
+  // (set at launch), and the node that runs this test first on PATH.
+  if (process.platform !== 'win32') {
+    if (fs.existsSync('/bin/zsh')) env.SHELL = '/bin/zsh';
+    env.PATH = path.dirname(process.execPath) + path.delimiter + (env.PATH || '');
+  }
   return { ...env, ...extra };
 }
 function cli(args, extra = {}) {
@@ -36,6 +43,7 @@ const credentialsFile = (id) => path.join(profile, 'board-control', 'credentials
 test.beforeEach(async () => {
   profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-perpetual-capability-')));
   const home = path.join(profile, 'seats-home');
+  fs.writeFileSync(path.join(profile, '.zshrc'), '');   // an empty startup file: no personal hooks, no first-run wizard
   for (const dir of ['.claude', '.claude-us']) {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
     fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');
@@ -53,7 +61,7 @@ test.beforeEach(async () => {
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`],
-    env: cleanEnv({ AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'),
+    env: cleanEnv({ ZDOTDIR: profile, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'),
       AGENTDECK_TEST_BOARD_RESULTS_FILE: path.join(profile, 'board-results.jsonl') }),
   });
   page = await application.firstWindow();

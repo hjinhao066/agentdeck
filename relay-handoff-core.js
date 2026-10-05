@@ -98,7 +98,8 @@ function refsIn(text, files) {
   const body = String(text || '');
   const commits = [...new Set((body.match(/(?<![\w-])[0-9a-f]{7,40}(?![\w-])/gi) || []).filter((h) => /[a-f]/i.test(h) && /\d/.test(h) && !/^c\d{13,}$/i.test(h)))];
   const branches = [...new Set(body.match(/(?<![\w/.-])(?:feat|fix|release|prep|hotfix|chore|docs|test)\/[\w.\-/]*\w/g) || [])];
-  return { commits: commits.slice(0, 6), branches: branches.slice(0, 6), files: [...new Set((Array.isArray(files) ? files : []).filter((f) => typeof f === 'string'))].slice(0, 12) };
+  const paths = [...new Set((Array.isArray(files) ? files : []).filter((f) => typeof f === 'string'))];
+  return { commits: commits.slice(0, 6), branches: branches.slice(0, 6), files: paths.slice(0, 12), more: commits.length > 6 || branches.length > 6 || paths.length > 12 };
 }
 
 // ---- state ----
@@ -126,7 +127,7 @@ function index(snapshot) {
     decisions: s.decisions && typeof s.decisions === 'object' ? s.decisions : {},
     paths: s.paths && typeof s.paths === 'object' ? s.paths : {},
     cli: typeof s.cli === 'string' && s.cli ? s.cli : 'node "$AGENTDECK_BOARD_CLI"',
-    budget: budget(s.budget),
+    budget: budget(s.budget), dispatchCap: Number.isFinite(s.dispatchCap) ? s.dispatchCap : 0, userTurnsOlder: s.userTurnsOlder === true,
   };
 }
 const lastReal = (records) => (records || []).filter((t) => !bookkeeping(t)).at(-1) || (records || []).at(-1) || null;
@@ -481,15 +482,17 @@ function render(state, level) {
   out.push(`- 上任会话：${prev || '无'}${prev ? `（read --id ${prev} 按需读）` : ''}`);
   out.push(`- 快照版本：队长代次 gen ${ctx.captain.gen ?? '待核实'}${ctx.captain.nextGen ? ' → ' + ctx.captain.nextGen : ''}${ctx.boardVersion ? '；看板版本 ' + ctx.boardVersion : ''}。下面各节都取自这一份快照，另标了时间的除外`);
   out.push(`- 摘要：未完成任务 ${stats.cards + stats.loose} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）；在跑的队员会话 ${stats.running.length} 个；未读回执 ${stats.pending} 条；已取走未确认 ${stats.unconfirmed} 条；队员在等回答 ${stats.asks} 条；等用户决定 ${stats.forUser} 条；矛盾 ${stats.conflicts} 条`);
+  if (ctx.dispatchCap && ctx.dispatches.length >= ctx.dispatchCap) out.push(`- 派活记录：本快照有 ${ctx.dispatches.length} 条。未结束的全部保留；已结束的只留最近的，更早的旧轮次和只记在派活记录里的外部审查结论不在这里，以看板卡片为准，细节 read --id 会话id`);
   out.push('- 长度：{{LENGTH}}');
   out.push(`- 命令：下文的 handoff、ledger、read 等都接在 ${cli} 后面运行`);
   if (ctx.captain.rotation) out.push(`- 队长轮换：${one(ctx.captain.rotation, 160)}。谁接任队长只看这项设置，和队员用什么模型无关；交接不改它`);
 
   // 2
   const file = ctx.decisions.path || ctx.paths.decisions || DECISIONS_FILE;
-  const stale = state.unsorted.length && state.recorded ? `；此后还有 ${state.unsorted.length} 条用户消息没整理进来，以原文为准` : '';
+  const atLeast = ctx.userTurnsOlder && state.unsorted.length === ctx.userTurns.length ? '至少 ' : '';
+  const stale = state.unsorted.length && state.recorded ? `；此后还有 ${atLeast}${state.unsorted.length} 条用户消息没整理进来，以原文为准` : '';
   out.push('', '## 2. 当前目标和有效决定');
-  out.push(`来源：队长维护的 ${file}（${state.mtime ? '最后修改 ' + when(state.mtime) : '还没有这份文件'}${stale}）。程序原样引用，不判断语义。`);
+  out.push(`来源：队长维护的 ${file}（${ctx.decisions.error ? ctx.decisions.error + '，下面各项待核实' : state.mtime ? '最后修改 ' + when(state.mtime) : '还没有这份文件'}${stale}）。程序原样引用，不判断语义。`);
   const cut = (line) => one(line, L.note) + (Array.from(one(line)).length > L.note ? '（全文见文件）' : '');
   const block = (title, lines, empty) => {
     if (!lines.length) { out.push(`- ${title}：${empty}`); return; }
@@ -501,11 +504,12 @@ function render(state, level) {
   block('暂停、取消、暂不启动', notes.paused, '无');
   block('仍有效的用户决定', notes.decisions, '无记录，待核实');
   if (notes.other.length) block('其他记录', notes.other, '无');
+  const olderTurns = ctx.userTurnsOlder ? '；更早的没有统计在内，read --id captain-history --find 关键词' : '';
   if (!ctx.userTurns.length) out.push('- 最近用户消息：无');
   else {
     const turns = L.excerpts ? ctx.userTurns.slice(-L.excerpts) : [];
     const hidden = ctx.userTurns.length - turns.length;
-    out.push(`- 最近用户消息 ${ctx.userTurns.length} 条（原文指针，程序没有整理；其中 ${state.unsorted.length} 条还没进有效决定文件）：`);
+    out.push(`- 最近用户消息 ${ctx.userTurns.length} 条（原文指针，程序没有整理；其中 ${state.unsorted.length} 条还没进有效决定文件${olderTurns}）：`);
     for (const t of turns) {
       const words = one(t.text).replace(/["\\`$]/g, '');
       const find = Array.from(words.split(' ')[0] || '').slice(0, 12).join('');
@@ -532,7 +536,7 @@ function render(state, level) {
     out.push('- 未完成任务的回执和进度里提到的分支、提交、产物（队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理）：');
     for (const c of withRefs) {
       const files = c.refs.files.slice(0, Math.max(1, Math.floor(L.files / 3)));
-      out.push(`  - ${c.id}｜${[c.refs.branches.length ? '分支 ' + c.refs.branches.join('、') : '', c.refs.commits.length ? '提交 ' + c.refs.commits.join('、') : '', files.length ? '产物 ' + files.join('、') : ''].filter(Boolean).join('｜')}`);
+      out.push(`  - ${c.id}｜${[c.refs.branches.length ? '分支 ' + c.refs.branches.join('、') : '', c.refs.commits.length ? '提交 ' + c.refs.commits.join('、') : '', files.length ? '产物 ' + files.join('、') : ''].filter(Boolean).join('｜')}${c.refs.more || files.length < c.refs.files.length ? '｜还有没列出的，见回执原文' : ''}`);
     }
   }
 

@@ -307,6 +307,108 @@ test('sixty receipts taken and never handled all reach the next Captain, the one
   assert.equal((await again.listen('z', 1)).result, '');
 });
 
+// The id list of what the channel returned is history and is trimmed to 500. Whether a
+// receipt still in flight was taken must not depend on it.
+const boundary = (n, prefix = 'boundary-') => Array.from({ length: n }, (_, i) => prefix + String(i).padStart(3, '0'));
+const titled = (text, names) => names.filter((n) => text.includes(`「${n}」`));
+const settle = (app, w, id) => { app.api.onTick(id, { alive: true, state: 'working', lastScreen: '' }); w.skew += 2000; app.api.onTick(id, { alive: true, state: 'done', lastScreen: '' }); };
+
+test('501 receipts taken in one go, then a Relay: none reads as unread, none is delivered twice, all are handed on, and a restart keeps them', async (t) => {
+  const w = world(t); const app = w.boot();
+  const names = boundary(501);
+  for (const n of names) app.receipt(n);
+  assert.equal(titled((await app.listen('a', 1)).result, names).length, 501);
+  assert.equal(app.s().inflight.length, 501); assert.equal(app.s().receiptsSeen.length, 500, 'the history is trimmed; the receipts are not');
+  assert.ok(app.s().inflight.every((p) => p.viaChannel === true && Number.isFinite(p.takenAt)));
+  const before = app.api.handoffSnapshot('relay');
+  assert.equal(before.unconfirmed.length, 501); assert.equal(before.inflight.length, 0); assert.equal(before.pending.length, 0);
+  const relay = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
+  const text = fs.readFileSync(relay.file, 'utf8');
+  assert.match(text, /上任已取走、可能没处理完的回执 501 条/); assert.match(text, /未读回执和提问：无/);
+  assert.deepEqual(titled(text, names), names);
+  assert.equal(app.s().pending.length, 0); assert.equal(app.s().inflight.length, 0); assert.equal(app.s().handoffCarry.items.length, 501);
+  assert.equal((await app.listen('n', 1, relay.fresh)).result, '', 'boundary-000 is not delivered a second time');
+  // restart: still all of them, still not delivered again
+  const again = boot(w, app.persisted());
+  assert.equal(again.s().handoffCarry.items.length, 501); assert.equal(again.s().pending.length, 0);
+  assert.deepEqual(titled((await again.handle({ action: 'main-handoff' })).result, names), names);
+  assert.equal((await again.listen('z', 1)).result, '');
+});
+
+test('receipts taken over many reads, well past 500 in total: only the unhandled ones are handed on, exactly once, through Relay and restart', async (t) => {
+  const w = world(t); const app = w.boot();
+  // 300 the Captain took and then worked through
+  const handled = boundary(300, 'handled-');
+  for (const n of handled) app.receipt(n);
+  assert.equal(titled((await app.listen('a', 1)).result, handled).length, 300);
+  w.skew += 1000; settle(app, w, app.captain().id); w.skew += 1000;
+  // 501 more, in three reads, none followed by finished work
+  const names = boundary(501);
+  for (const part of [names.slice(0, 200), names.slice(200, 400), names.slice(400)]) {
+    for (const n of part) app.receipt(n);
+    assert.equal(titled((await app.listen('a', 1)).result, part).length, part.length);
+    w.skew += 500;
+  }
+  assert.equal(app.s().receiptsSeen.length, 500);
+  // a restart first: the 501 are carried, the 300 are not brought back, nothing returns to the queue
+  const restarted = boot(w, app.persisted());
+  assert.equal(restarted.s().pending.length, 0); assert.equal(restarted.s().inflight.length, 0);
+  assert.deepEqual([...restarted.s().handoffCarry.items].map((p) => p.summary), names);
+  assert.equal((await restarted.listen('r', 1)).result, '');
+  // then a Relay by a Captain that never worked after the restart: the same 501, once
+  const relay = await restarted.relay('us', '永动机自动轮换：CN → US；新队长没有开工');
+  const text = fs.readFileSync(relay.file, 'utf8');
+  assert.deepEqual(titled(text, names), names); assert.equal(titled(text, handled).length, 0);
+  assert.match(text, /已取走未确认 501 条/);
+  assert.equal(restarted.s().handoffCarry.items.length, 501); assert.equal(restarted.s().pending.length, 0);
+  assert.equal((await restarted.listen('n', 1, relay.fresh)).result, '');
+  // and once more through a restart
+  const last = boot(w, restarted.persisted());
+  assert.equal(last.s().handoffCarry.items.length, 501); assert.equal(last.s().pending.length, 0);
+  assert.equal((await last.listen('z', 1)).result, '');
+});
+
+test('a manual clear puts 501 unhandled receipts back in the queue; a Relay before they are read still delivers every one, once', async (t) => {
+  const w = world(t); const app = w.boot();
+  const names = boundary(501);
+  for (const n of names) app.receipt(n);
+  await app.listen('a', 1);
+  app.api.clearContext({ fromEdit: true });
+  assert.equal(app.s().pending.length, 501); assert.equal(app.s().inflight.length, 0);
+  assert.ok(app.s().pending.every((p) => p.viaChannel === undefined && p.takenAt === undefined), 'waiting again, not taken');
+  // the new context never reads them; the seat changes
+  const relay = await app.relay('us', 'Relay：CN → US；手动切换');
+  assert.equal(app.s().pending.length, 501, 'still waiting, whatever the id history says');
+  assert.match(fs.readFileSync(relay.file, 'utf8'), /未读回执和提问 501 条/);
+  const got = (await app.listen('n', 1, relay.fresh)).result;
+  assert.deepEqual(titled(got, names), names);
+  assert.equal((await app.listen('n', 1, relay.fresh)).result, '');
+});
+
+test('a dispatch record that is still out is never trimmed away, and the handoff takes more than 120 records', async (t) => {
+  const w = world(t); let app = w.boot();
+  const now = Date.now();
+  const rec = (i, status) => ({ id: 'k' + i, colId: 'c' + i, title: '活 ' + i, gen: 1, status, sentAt: now - (200 - i) * 1000, receipt: status === 'done' ? { summary: '做完了', files: [], failed: '' } : null, project: 'p', reviews: [], boardId: '', boardAttempt: '' });
+  // the 15 oldest are still running, 115 newer ones are finished
+  app.s().tasks.push(...Array.from({ length: 130 }, (_, i) => rec(i, i < 15 ? 'working' : 'done')));
+  app = boot(w, app.persisted());
+  assert.equal(app.s().tasks.length, 120);
+  assert.equal(app.s().tasks.filter((x) => x.status === 'working').length, 15, 'the oldest records are the open ones, and they stay');
+  assert.equal(app.s().tasks.find((x) => x.status === 'done').id, 'k25', 'the ten oldest finished ones went');
+  // a new record past the cap pushes out a finished one, never an open one
+  const { col } = await app.execute(await newCard(app, { title: '新派的' }), 'one-more');
+  assert.ok(col); assert.equal(app.s().tasks.length, 120);
+  assert.equal(app.s().tasks.filter((x) => x.status === 'working' && /^k\d+$/.test(x.id) && Number(x.id.slice(1)) < 15).length, 15);
+  // more open records than the cap: all kept, and the handoff is still written
+  app.s().tasks.push(...Array.from({ length: 140 }, (_, i) => rec(1000 + i, 'working')));
+  app = boot(w, app.persisted());
+  assert.ok(app.s().tasks.filter((x) => x.status === 'working' || x.status === 'paused').length >= 155);
+  const text = (await app.handle({ action: 'main-handoff' })).result;
+  assert.match(text, /# AgentDeck 队长交接/);
+  assert.match(text, /派活记录：本快照有 \d+ 条。未结束的全部保留；已结束的只留最近的/);
+  for (const i of [0, 14, 1000, 1139]) assert.ok(text.includes(`「活 ${i}」`) || text.includes(`活 ${i}｜`), 'record ' + i);
+});
+
 test('the handoff command: live state on demand, the same text as the file, Captain only, nothing else touched', async (t) => {
   const w = world(t); const app = w.boot();
   const card = await newCard(app, { title: '在做的' });
