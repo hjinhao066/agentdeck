@@ -411,8 +411,11 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   `(no content)` even when no numeric decrease is available.
 - On confirmation, the pre-command conversation is saved to Captain history
   without replacing the column or PTY. Unread receipts, questions and live task
-  cards carry over. The current instructions are sent once, followed by
-  `先跑 ledger、读看板里的队长交接再接续。` The delivery waits for an idle
+  cards carry over. The current instructions are sent once. Their closing
+  paragraph tells the Captain to read the handoff, inspect the ledger and
+  receipts, restart interrupted work, and keep dispatching. That paragraph is
+  not appended again: the combined text would exceed the inline prompt limit
+  and be replaced by a file pointer. The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
   including attachments, and rechecks these guards when sending.
 - Raw terminal history recall, Tab completion and cursor edits make the tracked

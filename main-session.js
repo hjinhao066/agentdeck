@@ -553,7 +553,10 @@
     } else if (op.phase === 'cleared' && used !== null && used < op.used / 2) {
       archiveSnapshot(col, op.snapshot);
       saverBanner('上下文已清空，正在重发队长提示词');
-      saverSend(op, briefingText() + '\n\n读看板继续。' + M.REBRIEF_NOTE, 'briefing', true, () => {
+      // The briefing already ends with AUTONOMOUS_CONTINUATION. Appending it
+      // again exceeds the 8000-character inline limit, so the captain would
+      // only see a file pointer and miss the "don't wait" closing.
+      saverSend(op, briefingText() + '\n\n读看板继续。', 'briefing', true, () => {
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
       });
@@ -616,7 +619,7 @@
     if (op.sending || briefing || delivering || entry.sendingPrompt || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, op.col.cmd) ||
       Date.now() - (entry.lastOutputAt || 0) < 3000 || host.userComposing(op.col.id)) return;
     op.sending = true;
-    host.sendWhenReady(op.col, briefingText() + '\n\n' + M.REBRIEF_NOTE, {
+    host.sendWhenReady(op.col, briefingText(), {
       silent: true, guardUserInput: true, requireIdle: true,
       cancelled: () => contextReset !== op && !entry.injecting,
       onSent: () => { if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
