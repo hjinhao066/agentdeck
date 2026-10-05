@@ -14,7 +14,7 @@ async function agentsReady() {
   // Persisted quota UI is ready before terminal mount/replay. Direct PTY
   // commands must wait for the running fixture, including after a reload.
   for (const id of ['us-column', 'cn-column']) {
-    await expect.poll(() => page.evaluate(id => terms.get(id)?.lastScreen || '', id), { timeout: 20000 }).toContain('Claude Code');
+    await expect.poll(() => page.evaluate(id => typeof terms === 'undefined' ? '' : terms.get(id)?.lastScreen || '', id), { timeout: 20000 }).toContain('Claude Code');
   }
 }
 test.beforeAll(async () => {
