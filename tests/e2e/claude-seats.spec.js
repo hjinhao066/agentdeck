@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -6,9 +7,7 @@ const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --quot
 let application, page, profile, home;
 const cn = 'seat-captain';
 async function closeApplication() {
-  // Close renderer windows before quitting Electron; keep its normal quit hooks.
-  for (const window of application.windows()) await window.close();
-  await application.close();
+  await closeElectron(application);
 }
 async function screenshot(name) {
   const dir = process.env.AGENTDECK_TEST_SCREENSHOTS;
@@ -221,8 +220,12 @@ test('settings rename all placeholders in one config and survive renderer reload
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toContainText('乙席');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
   await expect(page.locator('#claudeSeatMenu')).toBeHidden();
-  await page.evaluate((id) => ChatUI.setMode(id, 'chat'), cn);
-  const composer = page.locator(`.column[data-col-id="${cn}"] .composer textarea`);
+  const captain = page.locator(`.column[data-col-id="${cn}"]`);
+  // The dialog's queued close event returns to the Captain's terminal.
+  // Wait for that navigation before selecting chat, so it cannot undo it.
+  await expect(captain).not.toHaveClass(/chat-mode/);
+  await captain.locator('.view-toggle').click();
+  const composer = captain.locator('.composer textarea');
   await expect(composer).toBeVisible();
   await composer.fill('keep draft');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);

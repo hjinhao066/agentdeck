@@ -10,10 +10,10 @@ const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
-
-const { registerSideIpc } = require('./side-main');
+const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
+const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
@@ -25,12 +25,15 @@ const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
+const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
+const { createExecutor: createChatGPTWebExecutor } = require('./chatgpt-web-executor');
+let chatgptWebExecutor = null;
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
@@ -62,11 +65,15 @@ function readLocalConfig() {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 }
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
+let fleetClient = null;
 let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
-  return taskStore[payload.op](payload.input || {});
+  const result = taskStore[payload.op](payload.input || {});
+  if (fleetClient && payload.op !== 'list') fleetClient.noteResult(result);
+  return result;
 });
+handleMain('fleet:state', () => fleetClient ? fleetClient.snapshot() : { configured: false, devices: [], history: [], error: null, conflictCount: 0, selfId: null, lastSyncAt: null });
 
 // Every privileged channel belongs exclusively to the local deck main frame.
 // Native notifications are created here, never in a page.
@@ -227,6 +234,13 @@ function shellArgs() {
   return ['-NoLogo', '-NoExit', '-EncodedCommand', b64];
 }
 
+const codexLauncher = createCodexLauncher({ shell: shellFile(), env: ENV });
+const ptyLaunchDirs = new Map();
+handleMain('pty:prepare-launch', async (_event, { id, command }) => {
+  if (!ptys.has(id) || typeof command !== 'string' || command.length > 1000 || /[\x00-\x1f\x7f]/.test(command)) throw new Error('Invalid launch command');
+  return codexLauncher.prepare(command, ptyLaunchDirs.get(id));
+});
+
 const ptySeats = new Map();
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
@@ -243,8 +257,9 @@ const PTY_BUFFER_MAX = 200_000; // ~200 KB per pty (plenty for a full screen)
 
 function bufferAppend(id, data) {
   let buf = ptyBuffers.get(id);
-  if (!buf) { buf = { chunks: [], totalSize: 0 }; ptyBuffers.set(id, buf); }
+  if (!buf) { buf = { chunks: [], totalSize: 0, sequence: 0 }; ptyBuffers.set(id, buf); }
   boundedAppend(buf, data, PTY_BUFFER_MAX);
+  return ++buf.sequence;
 }
 
 function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
@@ -278,7 +293,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
-  let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  let terminalEnv = { ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
   terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
 
   // Never inherit an outer deck's managed capability into an independent shell.
@@ -319,14 +334,17 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   // writing the tty credential does disk I/O and would miss that exit.
   const tty = ttyFromPty(p);
   ptys.set(id, p);
+  ptyLaunchDirs.set(id, dir);
   ptySeats.set(id, binding);
-  p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
+  p.onData((data) => { const sequence = bufferAppend(id, data); send('pty:data', { id, data, sequence }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
     // column is respawned quickly with the same id.
     if (ptys.get(id) === p) {
+      chatgptWebExecutor?.cancel(id);
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
+      ptyLaunchDirs.delete(id);
       ptySeats.delete(id);
       managedSessions.delete(id);
       receiptSessions.delete(id);
@@ -347,11 +365,13 @@ function send(channel, payload) {
 }
 
 function killPty(id, keepReplay) {
+  chatgptWebExecutor?.cancel(id);
   if (notifications) notifications.cancel(id);
   // Archived sessions keep their last output so restoring replays it.
   if (keepReplay) writeSession(id, ptyBuffers.get(id));
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
+  ptyLaunchDirs.delete(id);
   ptyBuffers.delete(id);
   ptySeats.delete(id);
   managedSessions.delete(id);
@@ -425,7 +445,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -468,7 +488,7 @@ function setupBoardControl() {
       }
     }
     clearCredentials(boardControlDir);
-    for (const file of ['board-credentials.js', 'security.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
+    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
     fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));
@@ -746,13 +766,19 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   setupBoardControl();
+  const configPath = path.join(app.getPath('userData'), 'config.json');
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
     getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
+    onChatSaved: (id, chat) => {
+      if (!fleetClient || typeof fleetClient.noteCaptain !== 'function') return;
+      let captain = false;
+      try { captain = JSON.parse(fs.readFileSync(configPath, 'utf8')).mainSession?.colId === id; } catch (_) {}
+      if (captain || chat?.captainArchive === true) fleetClient.noteCaptain(id, chat);
+    },
   });
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
-  const configPath = path.join(app.getPath('userData'), 'config.json');
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
@@ -1043,6 +1069,32 @@ app.whenReady().then(async () => {
     return claudeQuotaRefresh.samples().filter((s) => !seatId || s.seatId === seatId);
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
+  // Only the trusted deck main frame can submit a native worker. No browser
+  // credentials or Captain capability are passed into the skill subprocess.
+  chatgptWebExecutor = createChatGPTWebExecutor({
+    ...(tudArg ? {
+      cliPath: process.env.AGENTDECK_TEST_CHATGPT_WEB_CLI || path.join(app.getPath('userData'), 'missing-web-cli.mjs'),
+      stateDir: path.join(app.getPath('userData'), 'web-state'),
+      reportsDir: path.join(app.getPath('userData'), 'web-reports'),
+      cooldownMs: Number(process.env.AGENTDECK_TEST_CHATGPT_WEB_COOLDOWN_MS || 60000),
+      env: { ...process.env, CHATGPT_WEB_TEST_EVENTS_DIR: process.env.AGENTDECK_TEST_CHATGPT_WEB_EVENTS_DIR || '' },
+    } : {}),
+    emit: (event) => {
+      const id = crypto.randomUUID();
+      const command = { ...event, id, submitOnly: true, nativeWeb: true };
+      pendingBoardCommands.set(id, { command, delivered: false });
+      dispatchPendingBoardCommands();
+      const text = event.action === 'progress' ? event.message : event.failed || '完整报告已保存，结果已提交队长。';
+      const data = `\r\n[网页版 ChatGPT 6 Pro] ${text}\r\n`;
+      bufferAppend(event.callerId, data); send('pty:data', { id: event.callerId, data });
+    },
+  });
+  handleMain('chatgpt-web:run', (_e, input) => {
+    if (!input || !validId(input.id) || !validId(input.taskId) || !ptys.has(input.id) || !receiptSessions.has(input.id) || managedSessions.has(input.id)) throw new Error('网页队员会话不存在或不是队员。');
+    return chatgptWebExecutor.submit(input);
+  });
+  handleMain('chatgpt-web:cancel', (_e, { id }) => chatgptWebExecutor.cancel(id));
+  handleMain('chatgpt-web:status', (_e, { id }) => chatgptWebExecutor.status(id));
   onMain('pty:input', (_e, { id, data }) => {
     if (id === warmupCaptain.id) {
       warmupCaptain.idle = false;
@@ -1067,8 +1119,9 @@ app.whenReady().then(async () => {
       try { result = await pending.notifyPromise; }
       catch (err) { error = err.message; }
     }
-    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task';
+    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read';
     pendingBoardCommands.delete(requestId);
+    if (pending?.command.nativeWeb) return;
     if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
       done: !!done,
@@ -1098,9 +1151,9 @@ app.whenReady().then(async () => {
     try { return p ? String(p.process || '').slice(0, 64) : ''; } catch (_) { return ''; }
   });
   // Return all buffered output for a pty so the renderer can replay it.
-  handleMain('pty:replay', (_e, { id }) => {
-    const buf = ptyBuffers.get(id);
-    return buf ? buf.chunks.join('') : null;
+  handleMain('pty:replay', (_e, { id, snapshot }) => {
+    const buf = ptyBuffers.get(id), data = buf ? buf.chunks.join('') : null;
+    return snapshot ? { data, sequence: buf?.sequence || 0 } : data;
   });
   // Saved session replay from the previous app run: read once, then delete so
   // a hot reload (where the pty is still alive) can never double-replay it.
@@ -1405,11 +1458,52 @@ app.whenReady().then(async () => {
   const nativeMenu = Menu.getApplicationMenu();
   if (nativeMenu) Menu.setApplicationMenu(Menu.buildFromTemplate(fontMenu(nativeMenu)));
 
+  startFleet(configPath);
   createWindow();
   const initialFocus = process.argv.find((arg) => arg.startsWith('--focus-column='));
   if (initialFocus && validId(initialFocus.slice(15))) pendingFocusColumn = initialFocus.slice(15);
   app.on('activate', () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); });
 });
+
+function fleetSessions(file) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const captain = cfg.mainSession && cfg.mainSession.colId;
+    return [...(cfg.columns || []), ...(cfg.archived || [])].filter((col) => col && typeof col.id === 'string').map((col) => ({
+      id: col.id, role: col.id === captain || col.isMain ? 'captain' : 'session',
+      title: typeof (col.displayTitle || col.title) === 'string' ? (col.displayTitle || col.title) : '',
+    }));
+  } catch (_) { return []; }
+}
+function startFleet(configPath) {
+  const userData = app.getPath('userData');
+  const device = loadDevice(path.join(userData, 'device.json'));
+  taskStore.deviceId = device.id;
+  const settings = readFleetSettings({ env: process.env, fleetFile: path.join(userData, 'fleet.json') });
+  if (!settings) return;
+  if (settings.error) {
+    fleetClient = {
+      snapshot: () => ({ configured: true, devices: [], history: [], error: settings.error, conflictCount: 0, selfId: device.id, lastSyncAt: null }),
+      stop() {}, noteResult() {}, noteCaptain() {},
+    };
+    return;
+  }
+  let version = '';
+  try { version = require('./package.json').version; } catch (_) {}
+  fleetClient = new FleetClient({
+    baseUrl: settings.baseUrl, tokenFile: settings.tokenFile, device, taskStore,
+    historyDir: path.join(userData, 'fleet-history'), stateFile: path.join(userData, 'fleet-state.json'),
+    sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs,
+    onChange: () => send('task-board:changed', {}),
+  });
+  try {
+    const captain = fleetSessions(configPath).find((item) => item.role === 'captain');
+    for (const chat of loadAllChats(CHAT_DIR)) {
+      if (chat && (chat.captainArchive === true || chat.id === captain?.id)) fleetClient.noteCaptain(chat.id, chat);
+    }
+  } catch (_) {}
+  fleetClient.start();
+}
 
 // Ask the page to record in-flight crew, then quit on a later turn. A nested
 // app.quit() inside this handler is a no-op, and a timer that gives up once
@@ -1419,8 +1513,8 @@ let quitGate = null;
 let quitWatchdog = null;
 // Electron maps process.exit to app.exit; neither can break stuck native
 // teardown or a blocked main loop. A separate Node-mode process owns the hard
-// deadline. Its stdin is held open only by this process, so a normal exit
-// cancels the deadline and cannot leave a timer targeting a reused PID.
+// deadline. On POSIX, reparenting proves the process exited; Electron can close
+// stdin before native teardown finishes, so EOF alone must not cancel it.
 function armQuitWatchdog() {
   if (quitWatchdog) return;
   const deadlineMs = 5000;
@@ -1428,11 +1522,15 @@ function armQuitWatchdog() {
     const target = Number(process.argv[1]);
     if (target !== process.ppid || !Number.isSafeInteger(target) || target < 1) process.exit(1);
     const timer = setTimeout(() => {
-      if (process.stdin.readableEnded || process.ppid !== target) return process.exit(0);
+      if (process.ppid !== target) return process.exit(0);
       try { process.kill(target, 'SIGKILL'); } catch (_) {}
       process.exit(0);
     }, ${deadlineMs});
-    process.stdin.on('end', () => { clearTimeout(timer); process.exit(0); });
+    process.stdin.on('end', () => {
+      if (process.platform === 'win32' || process.ppid !== target) {
+        clearTimeout(timer); process.exit(0);
+      }
+    });
     process.stdin.resume();
   `;
   quitWatchdog = spawn(process.execPath, ['-e', script, String(process.pid)], {
@@ -1459,6 +1557,7 @@ function parkedSessions() {
     const columns = (cfg.columns || []).filter((col) => col && !col.isMain && col.captainCrew).map((col) => ({
       id: col.id, provider: RestartResume.providerOf(col.cmd), cwd: col.cwd || '',
       since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '', owner: col.modelSessionOwner || '',
+      source: col.modelSessionSource || '', capturedCwd: col.modelSessionCwd || '',
     })).filter((col) => ['Cursor', 'Codex', 'Antigravity'].includes(col.provider));
     return AgentSessions.resolveSessions(columns, { roots: AgentSessions.defaultRoots(os.homedir()), lookbackMs: lookback });
   } catch (_) { return {}; }
@@ -1478,6 +1577,7 @@ quitGate = RestartResume.createQuitGate({
 onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
 app.on('before-quit', (event) => {
   if (quitGate.beforeQuit(event, readResumeEnabled()) !== 'cleanup') return;
+  if (fleetClient && fleetClient.stop) fleetClient.stop();
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
   if (mobileWeb) mobileWeb.close();
@@ -1485,6 +1585,7 @@ app.on('before-quit', (event) => {
   mobileRequests.clear();
   clearInterval(quotaWarmupTimer);
   quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
+  chatgptWebExecutor?.dispose();
 
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }

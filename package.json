@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "1.1.11",
+  "version": "1.2.0",
   "description": "TweetDeck-style multi-column deck for terminal AI agents",
   "main": "main.js",
   "scripts": {
@@ -44,6 +44,9 @@
       "index.html",
       "renderer.js",
       "board-core.js",
+      "codex-launch.js",
+      "chatgpt-web-core.js",
+      "chatgpt-web-executor.js",
       "board-cli.js",
       "board-credentials.js",
       "codex-captain-driver.js",
@@ -68,6 +71,10 @@
       "restart-resume.js",
       "agent-sessions.js",
       "task-board.js",
+      "shared-store.js",
+      "sync-server.js",
+      "sync-client.js",
+      "fleet-ui.js",
       "task-heartbeat.js",
       "mobile-web.js",
       "mobile-web/**",

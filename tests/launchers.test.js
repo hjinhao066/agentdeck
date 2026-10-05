@@ -117,11 +117,11 @@ test('Codex app launches bypass shell wrappers without duplicating their --yolo 
   const cmd = B.commandForAgent('codex');
   assert.equal(B.shellLaunchCommand(cmd, 'darwin'), 'command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox');
   assert.equal(B.launchInput(cmd, 'linux'), '\x15command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox\r');
-  assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" --no-daemon resume --last --yolo');
-  assert.equal(B.shellLaunchCommand(cmd, 'win32'), cmd);
+  assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" resume --last --yolo');
+  assert.equal(B.shellLaunchCommand(cmd, 'win32'), "& 'codex' --no-daemon --dangerously-bypass-approvals-and-sandbox");
   assert.equal(B.shellLaunchCommand('codex --no-daemon --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
-  assert.equal(B.shellLaunchCommand('/opt/bin/codex --yolo', 'darwin'), '/opt/bin/codex --no-daemon --yolo');
-  assert.equal(B.shellLaunchCommand('command "codex" --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
+  assert.equal(B.shellLaunchCommand('/opt/bin/codex --yolo', 'darwin'), "command '/opt/bin/codex' --yolo");
+  assert.equal(B.shellLaunchCommand('command "codex" --yolo', 'darwin'), 'command "codex" --yolo');
 
   for (const custom of ['node fake-agent.js', './codex-wrapper.sh']) {
     assert.equal(B.shellLaunchCommand(custom, 'darwin'), custom);
@@ -146,9 +146,10 @@ test('custom and restored Codex commands use their own server on both platforms 
   for (const platform of ['darwin', 'win32']) {
     for (const cmd of ['codex -m gpt-6-luna', 'codex resume --last --yolo', '/opt/bin/codex --yolo',
       '"C:\\Program Files\\codex.exe" resume chat-1', 'command "codex" --yolo']) {
-      const launch = B.shellLaunchCommand(cmd, platform);
+      const capabilities = { noDaemon: true, bypass: true };
+      const launch = B.shellLaunchCommand(cmd, platform, capabilities);
       assert.equal(launch.match(/--no-daemon/g).length, 1, launch);
-      assert.equal(B.shellLaunchCommand(launch, platform), launch);
+      assert.equal(B.shellLaunchCommand(launch, platform, capabilities), launch);
     }
     assert.equal(B.shellLaunchCommand('agy --model gemini-3.8-flash-high', platform), 'agy --model gemini-3.8-flash-high');
   }
@@ -180,7 +181,7 @@ test('队长 knows the providers, only verified models, and the routing preferen
   // Codex: --agent codex (default GPT-6.1 Sol) or the Luna command; the bypass flag is named only to forbid writing it
   assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*--dangerously-bypass-approvals-and-sandbox[^\n]*--no-daemon[^\n]*不要手动拼接/);
   assert.ok(!text.includes(B.commandForAgent('codex')), 'no ready-made codex command with the flag to copy');
-  assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex \| --command/);
+  assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex\|chatgpt-web \| --command/);
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [

@@ -24,6 +24,7 @@
     codex: CODEX,
     'codex (chatgpt)': CODEX,
     chatgpt: CODEX,
+    'chatgpt-web': 'chatgpt-web',
     gemini: GEMINI,
     shell: '',
   });
@@ -120,6 +121,7 @@
     if (/^\s*grok(?:\s|$)/.test(cmd)) return 'Grok';
     if (/^\s*cursor-agent(?:\s|$)/.test(cmd)) return 'Cursor';
     if (/^\s*codex(?:\s|$)/.test(cmd)) return 'Codex';
+    if (cmd === 'chatgpt-web') return 'ChatGPT Web';
     if (/^\s*gemini(?:\s|$)/.test(cmd)) return 'Antigravity';
     return cmd ? 'Custom agent' : 'Shell';
   }
@@ -155,25 +157,41 @@
       : `${command}; node "$AGENTDECK_BOARD_CLI" session-exit --code "$?"`;
   }
 
-  // A user's codex() wrapper may already add --yolo (the bypass flag's alias).
-  // Invoke the binary directly for app launches, without changing saved commands.
-  // Quoting the name also prevents shell alias expansion.
-  function shellLaunchCommand(command, platform) {
-    // A shared Codex server retains its own launch environment, not this PTY's
-    // per-column capabilities. Use an embedded server for new and resumed runs.
-
+  function codexProgram(command, platform) {
     const words = String(command).match(/(?:[^\s"']|"[^"]*"|'[^']*')+/g) || [];
-    const program = (words[0] === 'command' ? words[1] : words[0]) || '';
-    const name = program.replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '');
-    if (name.toLowerCase() === 'codex' && !words.includes('--no-daemon')) {
-      command = command.replace(program, program + ' --no-daemon');
-    }
-    if (platform !== 'win32' && name.toLowerCase() === 'codex' && !/[\\/]/.test(program) && words[0] !== 'command') {
-      const direct = /^["']/.test(program) ? program : `"${program}"`;
-      return command.replace(program, 'command ' + direct);
-    }
-    return command;
+    const index = ['command', '&'].includes(words[0]) ? 1 : 0;
+    const program = words[index] || '';
+    let literal = program.replace(/^["']|["']$/g, '');
+    if (platform === 'win32' && program.startsWith("'")) literal = literal.replace(/''/g, "'");
+    const name = literal.replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat|ps1)$/i, '');
+    return name.toLowerCase() === 'codex' ? { words, index, program, literal } : null;
+  }
 
+  // Capabilities come from this executable's root --help, never a version guess.
+  // Saved presets are launch intent: unsupported managed flags must be removed.
+  function shellLaunchCommand(command, platform, capabilities) {
+    const parsed = codexProgram(command, platform);
+    if (!parsed) return command;
+    const { words, index, program, literal } = parsed;
+    let args = words.slice(index + 1);
+    if (capabilities) {
+      const managed = new Set(['--no-daemon', '--yolo', '--dangerously-bypass-approvals-and-sandbox']);
+      const stop = args.indexOf('--');
+      const tail = stop < 0 ? [] : args.slice(stop);
+      args = (stop < 0 ? args : args.slice(0, stop)).filter((w) => !managed.has(w));
+      const extra = [];
+      if (capabilities.noDaemon) extra.push('--no-daemon');
+      if (capabilities.bypass) extra.push('--dangerously-bypass-approvals-and-sandbox');
+      else if (capabilities.yolo) extra.push('--yolo');
+      args = [...extra, ...args, ...tail];
+    }
+    const binary = capabilities?.program || literal;
+    const quote = (s) => "'" + s.replace(/'/g, platform === 'win32' ? "''" : "'\\''") + "'";
+    // PowerShell needs & before a quoted executable. Unix command bypasses
+    // functions/aliases that may append another --yolo.
+    const direct = platform === 'win32' ? '& ' + quote(binary)
+      : 'command ' + (capabilities?.program || /[\\/]/.test(program) ? quote(binary) : /^["']/.test(program) ? program : `"${program}"`);
+    return [direct, ...args].join(' ');
   }
 
   // Where a launch from those buttons stands. Only an agent identified in the
@@ -443,6 +461,7 @@
     launchErrors,
     launchInput,
     shellLaunchCommand,
+    codexProgram,
     reportAgentExit,
     launchVerdict,
     stateLabel,

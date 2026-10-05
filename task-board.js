@@ -60,10 +60,50 @@ function newCard(input, now = new Date().toISOString()) {
     consecutive_failures: 0, important: input.important === true };
 }
 
+function syncedCard(input) {
+  if (!input || typeof input !== 'object') throw new Error('Invalid synced card.');
+  const card = {
+    id: idValue(input.id), project: projectName(input.project),
+    title: text(input.title, 'title', true), detail: text(input.detail || '', 'detail'),
+    status: STATUSES.includes(input.status) ? input.status : 'todo',
+    flag: [null, 'failed', 'blocked', 'held', 'quota'].includes(input.flag) ? input.flag : null,
+    order: Number.isFinite(input.order) && input.order >= 0 ? input.order : 0,
+    depends_on: Array.isArray(input.depends_on) ? [...new Set(input.depends_on.map(idValue))] : [],
+    assignee: input.assignee && typeof input.assignee === 'object' && typeof input.assignee.agent === 'string' && typeof input.assignee.model === 'string' ? { agent: input.assignee.agent, model: input.assignee.model } : null,
+    session_id: typeof input.session_id === 'string' && input.session_id ? idValue(input.session_id) : null,
+    latest_receipt: typeof input.latest_receipt === 'string' ? input.latest_receipt : '',
+    verify: input.verify === true, rework_count: Number.isInteger(input.rework_count) && input.rework_count >= 0 ? input.rework_count : 0,
+    created: typeof input.created === 'string' ? input.created : new Date().toISOString(),
+    updated: typeof input.updated === 'string' ? input.updated : new Date().toISOString(),
+    archived: input.archived === true,
+    consecutive_failures: Number.isInteger(input.consecutive_failures) && input.consecutive_failures >= 0 ? input.consecutive_failures : 0,
+    important: input.important === true,
+  };
+  const device = (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(value);
+  if (device(input.deviceId)) card.deviceId = input.deviceId;
+  if (device(input.updatedByDevice)) card.updatedByDevice = input.updatedByDevice;
+  if (Number.isInteger(input.revision) && input.revision >= 0) card.revision = input.revision;
+  if (Array.isArray(input.conflicts)) card.conflicts = JSON.parse(JSON.stringify(input.conflicts));
+  for (const key of ['attempt_id', 'dispatch_session_id']) if (typeof input[key] === 'string' && input[key]) card[key] = idValue(input[key]);
+  if (typeof input.attempt_closed === 'boolean') card.attempt_closed = input.attempt_closed;
+  if (typeof input.review_session === 'boolean') card.review_session = input.review_session;
+  if (typeof input.last_event === 'string' && input.last_event.length <= 500) card.last_event = input.last_event;
+  if (typeof input.last_failure_attempt === 'string' && input.last_failure_attempt.length <= 200) card.last_failure_attempt = input.last_failure_attempt;
+  if (typeof input.start_previous_status === 'string' && STATUSES.includes(input.start_previous_status)) card.start_previous_status = input.start_previous_status;
+  if (input.dispatch_claim && typeof input.dispatch_claim === 'object' && typeof input.dispatch_claim.key === 'string') {
+    card.dispatch_claim = { key: idValue(input.dispatch_claim.key), owner: text(String(input.dispatch_claim.owner || ''), 'owner').slice(0, 200), delivered: input.dispatch_claim.delivered === true, created: typeof input.dispatch_claim.created === 'string' ? input.dispatch_claim.created : card.updated };
+  }
+  for (const key of ['session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject']) {
+    if (input[key] !== undefined) card[key] = JSON.parse(JSON.stringify(input[key]));
+  }
+  return card;
+}
+
 class TaskStore {
-  constructor(dir = path.join(os.homedir(), '.agents', 'boards', 'tasks'), { sessions = () => [] } = {}) {
+  constructor(dir = path.join(os.homedir(), '.agents', 'boards', 'tasks'), { sessions = () => [], deviceId = null } = {}) {
     this.dir = path.resolve(dir);
     this.sessions = sessions;
+    this.deviceId = deviceId;
     // A local cross-process lock lives outside the synced repository.
     this.lock = path.join(os.tmpdir(), 'agentdeck-tasks-' + crypto.createHash('sha256').update(this.dir).digest('hex') + '.lock');
   }
@@ -126,6 +166,13 @@ class TaskStore {
             if ((fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null) !== raw) throw new Error('TASK_SYNC_RETRY');
           }
           for (const [project, { doc, raw }] of docs) {
+            const drop = doc._drop === true;
+            delete doc._drop;
+            if (drop) {
+              const file = path.join(this.dir, project + '.json');
+              if (fs.existsSync(file)) fs.unlinkSync(file);
+              continue;
+            }
             if (JSON.stringify(doc) !== (raw === null ? '' : JSON.stringify(JSON.parse(raw)))) this.write(project, doc, raw);
           }
           return result;
@@ -171,6 +218,7 @@ class TaskStore {
   }
   add(input) {
     const card = newCard(input);
+    if (this.deviceId) { card.deviceId = this.deviceId; card.updatedByDevice = this.deviceId; }
     return this.mutate((docs) => {
       if ([...docs.values()].some(({ doc }) => doc.cards.some((c) => c.id === card.id))) throw new Error('Duplicate task id.');
       if ([...docs.keys()].some((p) => p !== card.project && p.normalize('NFC').toLowerCase() === card.project.normalize('NFC').toLowerCase())) throw new Error('Project filename conflicts on Windows/macOS.');
@@ -543,6 +591,49 @@ class TaskStore {
       return { card, notices: [] };
     });
   }
+  // One card from the fleet server. Other projects stay put.
+  upsertSynced(card) {
+    const next = syncedCard(card);
+    return this.mutate((docs) => {
+      for (const [project, { doc }] of [...docs.entries()]) {
+        const index = doc.cards.findIndex((item) => item.id === next.id);
+        if (index < 0) continue;
+        if (project === next.project) doc.cards[index] = next;
+        else doc.cards.splice(index, 1);
+      }
+      if (![...docs.values()].some(({ doc }) => doc.cards.some((item) => item.id === next.id))) {
+        if (!docs.has(next.project)) docs.set(next.project, { raw: null, doc: { version: 1, project: next.project, cards: [] } });
+        docs.get(next.project).doc.cards.push(next);
+      }
+      for (const [, { doc }] of docs) if (!doc.cards.length) doc._drop = true;
+      return { card: next };
+    });
+  }
+  // Full server snapshot. keepIds are local edits still waiting to upload;
+  // dropping them here would lose the offline copy.
+  replaceSynced(cards, keepIds = []) {
+    const keep = new Set(keepIds);
+    const incoming = [];
+    const seen = new Set();
+    for (const raw of cards) {
+      const card = syncedCard(raw);
+      if (seen.has(card.id) || keep.has(card.id)) continue;
+      seen.add(card.id);
+      incoming.push(card);
+    }
+    return this.mutate((docs) => {
+      const kept = [];
+      for (const { doc } of docs.values()) for (const card of doc.cards) if (keep.has(card.id)) kept.push(card);
+      for (const entry of docs.values()) { entry.doc.cards = []; entry.doc._drop = true; }
+      for (const card of [...incoming, ...kept]) {
+        if (!docs.has(card.project)) docs.set(card.project, { raw: null, doc: { version: 1, project: card.project, cards: [] } });
+        const entry = docs.get(card.project);
+        entry.doc._drop = false;
+        entry.doc.cards.push(card);
+      }
+      return { count: incoming.length + kept.length };
+    });
+  }
   import(project, cards) {
     projectName(project);
     return this.mutate((docs) => {
@@ -553,4 +644,4 @@ class TaskStore {
     });
   }
 }
-module.exports = { TaskStore, STATUSES, projectName, sameProject, newCard, sentence, localSessions };
+module.exports = { TaskStore, STATUSES, projectName, sameProject, newCard, sentence, localSessions, syncedCard };

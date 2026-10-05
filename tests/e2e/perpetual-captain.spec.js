@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
@@ -115,7 +116,7 @@ test.afterEach(async () => {
         document.querySelectorAll('dialog[open]').forEach((d) => d.close());
         columns.forEach((c) => window.deck.ptyKill(c.id));
       });
-      await application.close();
+      await closeElectron(application);
     } finally { clearTimeout(force); }
   }
   application = null; page = null;

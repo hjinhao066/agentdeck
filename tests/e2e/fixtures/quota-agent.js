@@ -3,7 +3,7 @@ const readline = require('readline');
 const provider = process.argv[2];
 const west = process.argv[3] === 'cn';
 let westData = false, statusline = false;
-let claudeRemaining = null;
+let claudeRemaining = null, statuslineOnce = false;
 process.stdout.write('\x1b[?1049h');
 function draw(exhausted = false, suffix = '', otherModel = false) {
   process.stdout.write('\x1b[2J\x1b[H');
@@ -21,6 +21,13 @@ function draw(exhausted = false, suffix = '', otherModel = false) {
 }
 draw();
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
+  if (statuslineOnce) return;
+  // Freeze this one redraw and disable PTY echo so the replay-race test
+  // cannot be rescued by an unrelated Captain rebrief's later redraw.
+  if (line === 'statusline-once') {
+    statusline = true; statuslineOnce = true;
+    if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  }
   if (line === 'statusline') statusline = true;
   if (line === 'quota-data') westData = true;
   if (/^remaining:\d+$/.test(line)) claudeRemaining = Number(line.split(':')[1]);

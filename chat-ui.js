@@ -715,7 +715,9 @@
     }
     launchNote(id, `正在启动 ${label}…`, false);
     const before = window.BoardCore.launchErrors(entry.lastScreen, cmd);
-    const launch = host.seatLaunchCommand ? host.seatLaunchCommand(col, window.BoardCore.shellLaunchCommand(cmd, host.platform)) : window.BoardCore.shellLaunchCommand(cmd, host.platform);
+    const prepared = await window.deck.prepareLaunch(id, cmd).catch(() => null);
+    if (prepared === null || col.id !== id || host.terms.get(id) !== entry || !entry.alive) { launching.delete(id); return; }
+    const launch = host.seatLaunchCommand ? host.seatLaunchCommand(col, prepared) : prepared;
     window.deck.ptyInput(id, (host.platform === 'win32' ? '\x1b[1;5F\x1b[1;5H' : '\x15') + window.BoardCore.reportAgentExit(launch, host.platform) + '\r');
     const started = Date.now();
     const finish = (ok, note) => {
@@ -737,7 +739,7 @@
       const now = host.terms.get(id);
       const alive = !!now && now.alive;
       const missing = alive && window.BoardCore.launchErrors(now.lastScreen, cmd) > before;
-      const up = alive && !missing && await host.agentInForeground(col, false);
+      const up = alive && !missing && await host.agentInForeground({ ...col, cmd }, false);
       const verdict = window.BoardCore.launchVerdict({ alive, missing, up, waited: Date.now() - started, platform: host.platform });
       if (verdict === 'waiting') { setTimeout(check, 500); return; }
       if (verdict === 'up') { finish(true); return; }

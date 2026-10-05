@@ -81,3 +81,21 @@ test('a database containing a matching file URL never proves agy ownership', (t)
     { id: 'a', owner: 'a', provider: 'Antigravity', cwd: '/work', sessionId: agyId },
   ], { roots: { agy: root } }), { a: null });
 });
+
+
+test('authenticated agent-env proof survives without legacy files but requires owner and captured cwd', () => {
+  for (const provider of ['Codex', 'Cursor', 'Antigravity']) {
+    const col = { id: 'worker', provider, cwd: '/work', capturedCwd: '/work', sessionId: codexId, owner: 'worker', source: 'agent-env' };
+    assert.deepEqual(S.assignSessions([col], [], 'linux'), { worker: codexId });
+    for (const change of [{ owner: 'other' }, { capturedCwd: '/other' }, { capturedCwd: undefined }, { source: 'unknown' }]) {
+      assert.deepEqual(S.assignSessions([{ ...col, ...change }], [], 'linux'), { worker: null });
+    }
+    assert.deepEqual(S.assignSessions([{ ...col, cwd: '', capturedCwd: '' }], [], 'linux'), { worker: codexId });
+  }
+});
+
+test('a fresh PTY removes outer CLI identities without mutating the app environment', () => {
+  const env = { CODEX_THREAD_ID: codexId, CURSOR_CONVERSATION_ID: cursorId, ANTIGRAVITY_CONVERSATION_ID: agyId, PATH: '/bin', AGENTDECK_COL_ID: 'outer' };
+  assert.deepEqual(S.clearInheritedSessionIds(env), { PATH: '/bin', AGENTDECK_COL_ID: 'outer' });
+  assert.equal(env.CODEX_THREAD_ID, codexId);
+});

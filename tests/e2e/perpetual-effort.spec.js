@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -52,7 +53,8 @@ test.beforeEach(async () => {
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`],
-    env: cleanEnv({ AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') }),
+    env: cleanEnv({ AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'),
+      AGENTDECK_TEST_BOARD_RESULTS_FILE: path.join(profile, 'board-results.jsonl') }),
   });
   page = await application.firstWindow();
   await expect(page.locator('.column')).toHaveCount(2);
@@ -64,7 +66,7 @@ test.beforeEach(async () => {
 test.afterEach(async () => {
   for (const child of children.splice(0)) if (child.exitCode === null) child.kill();
   if (page && !page.isClosed()) await page.evaluate(() => document.querySelectorAll('dialog[open]').forEach((d) => d.close()));
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   application = null; page = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
@@ -105,14 +107,30 @@ test('Relay revokes the old Captain and listener, preserves independent tokens, 
     try { await window.deck.captainRelayNotify(id, 'worker should not send'); return false; }
     catch (_) { return true; }
   }, INDEPENDENT)).toBe(true);
-  if (process.platform === 'win32') expect((await cli(['ledger'], { AGENTDECK_TERMINAL_ID: newId }).done).code).toBe(1);
-  const replacementEnv = process.platform === 'win32'
-    ? { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: fresh.controlToken }
-    : { AGENTDECK_TERMINAL_ID: newId };
+  // This CLI runs in the external test runner, outside the replacement's PTY.
+  // A column id cannot recover that terminal's private capability on any OS.
+  const unbound = await cli(['ledger'], { AGENTDECK_TERMINAL_ID: newId }).done;
+  expect(unbound.code).toBe(1);
+  expect(unbound.stderr).toContain('This terminal is independent');
+  const replacementEnv = { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: fresh.controlToken };
   const replacement = await cli(['receipts', '--wait', '--timeout', '10'], replacementEnv).done;
-  expect(replacement.code).toBe(0);
+  expect(replacement.code, replacement.stderr + replacement.stdout).toBe(0);
   expect(replacement.stdout).toContain('handoff-protected-receipt');
   expect(await page.evaluate(() => config.mainSession.pending.length)).toBe(0);
+  if (process.platform !== 'win32') {
+    // Recovery without inherited environment belongs to the real Captain PTY.
+    await expect.poll(() => page.evaluate((id) => {
+      const entry = terms.get(id);
+      return entry?.state === 'done' && !entry.sendingPrompt && !entry.injecting;
+    }, newId), { timeout: 20000 }).toBe(true);
+    await page.evaluate((id) => window.deck.ptyInput(id, 'BOARD-NO-ENV ["ledger"]\r'), newId);
+    const results = () => {
+      const file = path.join(profile, 'board-results.jsonl');
+      return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : [];
+    };
+    await expect.poll(() => results().find((r) => r.colId === newId)?.code, { timeout: 20000 }).toBe(0);
+    expect(results().find((r) => r.colId === newId).stdout).toContain(INDEPENDENT);
+  }
 });
 
 test('after a Relay the new Captain reads the handoff through the CLI; a second listener replaces the first; a command past its deadline is not run', async () => {

@@ -131,7 +131,7 @@
     const chars = Array.from(summary), files = receipt.files || [];
     return { summary: chars.slice(0, 300).join(''), files: files.slice(0, 5), more: chars.length > 300 || files.length > 5 };
   }
-  const STATUS = { plain: '未开始', working: '干活中', paused: '停在安全点', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
+  const STATUS = { plain: '未开始', working: '干活中', paused: '停在安全点', quota: '额度用尽/等待', input: '等你回复', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
   const oneLine = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max);
@@ -174,7 +174,7 @@
     'Cursor CLI：cursor-agent --force --model grok-4.7-high-fast　主要用 Grok 4.7 跑脏活和数据抓取。Cursor 会话刚开的头 1–2 分钟可能没有任何输出，属于正常初始化，别急着判定卡死。',
     'Claude Code：claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high　每次开 Claude 小弟必须显式写 --model claude-opus-5-5 或 --model claude-sonnet-5-5，并显式写 --effort；本机默认模型不是 Opus，不写可能跑成别的模型。开工后用 peek 看状态行确认模型，不符就修正命令重新派活。Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。Claude Code 额度受限时，可改用 Cursor 里的同名模型（claude-opus-5-5-high、claude-sonnet-5-5-high）。',
     'Claude Code、Cursor、Codex 命令仍禁止 Claude 4.x 和 Haiku。只有 agy 可用上面列出的两个 Claude 4.6 模型；其他旧模型仍禁止。',
-    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon AgentDeck 会自动补齐，不要手动拼接，避免参数重复导致启动失败。',
+    'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon 由 AgentDeck 按本机支持情况自动补齐，不要手动拼接。',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
   ];
   const ROUTING = [
@@ -224,14 +224,15 @@
       '你是 AgentDeck 的「队长」：常驻的总负责人。你听懂用户要什么，把活派给各个会话（deck 里的列，也就是你的队员），再把简短回执告诉用户。',
       '',
       '规则：',
-      '1. 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及 macOS 上只读的 sysctl -n kern.memorystatus_vm_pressure_level（见第 14 条）。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。',
+      '1. 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及第 14 条的只读 sysctl。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
       `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 额外发 Bark。仅必须用户亲自登录/授权或确认付款时使用；测试用 notify-user --test（【测试】，critical，音量 3）。`,
-      `   ${cli} handoff   生成当前交接快照（未完成任务卡、待处理回执、接手动作）并刷新交接文件；开工、Relay、清空、重启后先跑。briefing 只读本提示词全文；用户说「你是队长」时先跑 ledger 验证身份，再读这两个`,
+      `   ${cli} handoff   生成当前交接快照并刷新交接文件；开工、Relay、清空、重启后先跑。briefing 只读本提示词全文；用户说「你是队长」先跑 ledger 验证身份，再读这两个`,
       `   ${cli} ledger   列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task archive --done [--project "项目"]`,
+      `   ${cli} queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令/模型会替换，移到 done/todo 撤队`,
       `   ${cli} quota   只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
-      `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--task-id 卡片id] [--cwd 目录] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--seat 指定已登录 Claude 席位，省略沿用当前席位；--agent 和 --command 都不写就用和你一样的 agent`,
+      `   ${cli} new --title "标题" --task "任务正文" [--project "项目名"] [--reviews id[,id]] [--task-id id] [--cwd 目录] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "启动命令"]   --seat 为已登录 Claude 席位；默认同队长；网页仅公开调研，先审查敏感信息；--web-mode deep-research；禁 --seat/--command`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
       `   ${cli} stop --id 会话id   发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
       `   ${cli} archive --id 会话id   结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
@@ -240,7 +241,7 @@
       `   ${cli} peek --id 会话id [--lines 40]   只读查看终端实时屏幕/最近输出（去颜色，最多1000行）；不发任何输入，也不会恢复已归档的会话。需要检查进度或诊断卡住时才用，比 read 省上下文`,
       `   ${cli} receipts [--wait] [--timeout 秒]   取回还没看过的回执；--wait 阻塞等回执/提问，超时输出空并退出，省略 timeout 就一直等`,
       `   ${cli} answer --to 会话id --key y|n|1-9|enter|esc   回答停在确认或权限提示上的会话`,
-      '3. 目标清楚就派活：目标、范围和验收要求明确且已获授权，直接拆开派下去；缺的信息能靠检查项目、产物或历史弄清的先派人检查，影响目标、范围、授权或关键结果又查不出来的才问用户。已有授权不因 Relay、重启或清空而重新确认，也不因此扩大。技术细节（用哪个模型、怎么实现、怎么拆）自己决定，不拿去问用户。',
+      '3. 目标清楚就派活：目标、范围和验收要求明确且已获授权，直接拆开派下去；缺的信息能靠检查项目、产物或历史弄清的先派人检查，影响目标、范围、授权或关键结果又查不出来的才问用户。已有授权不因 Relay、重启或清空而重新确认，也不因此扩大。技术细节（模型、实现、拆法）自己决定，不拿去问用户。',
       '4. 派活单步原则：一个会话一次只派一件活！绝对不要在会话正在忙碌（working）时连续向其追加多件任务。如果用户一条消息里有几件互不依赖的事，或者一个复杂大任务能拆解，拆开分别交给不同的会话并行跑。同一件活的补充和修改用 tell 发回原会话，只转发新指令，不要把文件正文再贴一遍；用户要改方向、放弃正在做的，用 tell --replace --now，只有用户明确要停才用 stop。',
       '5. 界面类的活要写明图标规则：派任何带界面的活，任务正文里必须写明——复制、删除、编辑等常见工具动作用图标按钮（复制=两个重叠方框、删除=垃圾桶、编辑=铅笔），配 tooltip 和无障碍名称，不用「复制」这类文字按钮。其他模型默认不会这样做，不写就会做成文字按钮。',
       '   大项目由你直接拆块派给正式会话，不层层外包；同一项目的会话用同一个 --project "项目名"，审查会话用 --reviews 会话id[,会话id] 明确标明审谁，结果收回你这里。',
@@ -254,11 +255,11 @@
       '10. 判断会话卡没卡先用 peek，至少等 5 分钟：启动、复杂分析或深度思考时终端可能几分钟没有完整输出，属正常，别急着判卡死。已有明确报错（进程退出、参数非法、认证失败、限流）或停在等输入时不用等，直接按原因处理。',
       `11. 你开的会话在后台跑，用户平时看不到它们，靠你的汇报了解进度。同一时间最多 ${limit} 个会话在干活：再 new 会自动排队，有空位时 AgentDeck 自动开新会话并把任务发过去，不用你重派。用 tell 给还在忙的会话追加指令会标记为「待补充」，等它空下来自动执行。`,
       `12. 做完的会话没有新指令 ${ARCHIVE_AFTER / 60_000} 分钟后会自动归档（终端关掉，对话保留）；以后用 tell 发给它会自动恢复。汇报核对完的会话立即 archive，还在验收的先留着。`,
-      '13. 任务看板：用户交代的任务默认先记进看板，用 task add 记入 ~/.agents/boards/tasks/<项目名>.json（鸡毛蒜皮可不记卡直接派）；记了卡的活 new 必须带 --task-id 和 --project，恢复已有任务不重复建卡。状态由程序随命令回执自动改。会话结束、任务完成、验收通过、交付到哪一步（提交、合并、打包、安装）是四件事，分开判断；审查结束但不通过就是要返工。需要验收就 --verify：执行回执后进 review，程序自动开一个和执行会话不同提供方的审查会话，不要自己再开审查或 tell 返工。不通过时审查员的原话自动发回原执行会话返工（已归档会自动恢复）再审；连续失败两次 held，先由队长决定，不再自动重试。选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因，这时才 new --task-id 或 task move 回 doing。没带 --verify 的重要活按第 16 条验收。',
+      '13. 任务看板：用户交代的任务默认先记进看板，用 task add 记入 ~/.agents/boards/tasks/<项目名>.json（鸡毛蒜皮可不记卡直接派）；记了卡的活 new 必须带 --task-id 和 --project，恢复已有任务不重复建卡。状态由程序随命令回执自动改。会话结束、任务完成、验收通过、交付到哪一步（提交、合并、打包、安装）是四件事，分开判断；审查结束但不通过就是要返工。需要验收就 --verify：执行回执后进 review，程序自动开一个和执行会话不同提供方的审查会话，不要自己再开审查或 tell 返工。不通过时审查员的原话自动发回原执行会话返工再审；连续失败两次 held，先由队长决定，不再自动重试。选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因，这时才 new --task-id 或 task move 回 doing。没带 --verify 的重要活按第 16 条验收。',
       `14. 并发上限 ${limit}（设置里的同时干活上限）。把控看内存压力等级：压缩和 swap 增长都属正常，不要因为 swap 用了几个 G 就少开。macOS 可只读 sysctl -n kern.memorystatus_vm_pressure_level（1 正常、2 警告照常开、4 危急先别开）。危急时自动开新会话会暂停，排队卡片写「内存吃紧，稍后自动开」，压力下来后自动补位，不用重派。Windows 没有这个指标，只按上限和 ledger 里干活的会话数把控。真正要避免的是多组全量 E2E 同时跑。`,
       '15. 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。ledger 和旧回执超出摘要 300 字或 5 个文件路径的部分用 read 按需查；命令回执保持原样，提交摘要要简短，不要整段重读旧对话。',
       '16. 重要的活完成后，派 Gemini 3.8 Flash 验收：文件确实存在、测试真的通过、截图真的落盘。验收不通过，把具体问题打回原队员，最多返工 2 轮；仍不通过，换更强模型的队员接手，最后才找用户。验收通过再汇报。',
-      '17. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff。用户做了新决定、改了范围、叫停或恢复某事，或交付有进展时，更新有效决定文件（路径和格式见 handoff 第 2 节）；暂停只在它说的范围和阶段内有效，“继续当前工作”不等于可以新立项目。谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关。',
+      '17. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff。用户有新决定、改范围、叫停或恢复某事，或交付有进展时，更新有效决定文件（格式见 handoff 第 2 节）；暂停只在它说的范围和阶段内有效，“继续当前工作”不等于可以新立项目。谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关。',
       '',
       '可用的 agent。每件活可以选不同的 provider 和模型：用 new --command 写下面的完整启动命令，要换模型就改 --model 后面的名字。',
       ...PROVIDERS.map((p) => `   ${p}`),
@@ -364,14 +365,6 @@
         return { error: `用户不用 ${id.slice(0, 60)}（Claude 4.x 和 Haiku 都不用）。量大的普通活用 Antigravity 的 gemini-3.8-flash-high（或 -medium、-low）；写代码和重要的活用 Cursor 的 claude-opus-5-5-high 或 claude-sonnet-5-5-high，或者 Claude Code（默认 Opus 5.5，要 Sonnet 加 --model claude-sonnet-5-5）。` };
       }
     }
-    // Codex hands out autonomous work like every other agent: no confirmation prompts.
-    // Added unless a bypass flag (or its --yolo alias) is already there, since a duplicate fails to start.
-    if (programName(words[0]) === 'codex') {
-      const extra = [];
-      if (!words.includes('--no-daemon')) extra.push('--no-daemon');
-      if (!words.some((w) => /^(?:--yolo|--dangerously-bypass-approvals-and-sandbox)$/.test(w))) extra.push('--dangerously-bypass-approvals-and-sandbox');
-      return { cmd: extra.length ? [words[0], ...extra, ...words.slice(1)].join(' ') : source };
-    }
     if (!isAgy) return { cmd: source };
     const out = [words[0]];
     let effort = '';
@@ -411,7 +404,8 @@
   }
 
   // Background sessions with work still out: the latest card for the column
-  // is not finished (a question waits on 队长 too). Each holds a slot.
+  // is not finished (a question waits on 队长 too). Quota waits remain open
+  // for lifecycle/archiving purposes, but do not occupy a work slot.
   const OPEN = ['queued', 'working', 'quota', 'input', 'asking'];
   function latestTasks(tasks) {
     const latest = new Map();
@@ -420,7 +414,7 @@
   }
   function activeCrew(tasks, crewIds) {
     const ids = new Set();
-    latestTasks(tasks).forEach((t, colId) => { if (crewIds.has(colId) && OPEN.includes(t.status)) ids.add(colId); });
+    latestTasks(tasks).forEach((t, colId) => { if (crewIds.has(colId) && t.status !== 'quota' && OPEN.includes(t.status)) ids.add(colId); });
     return ids;
   }
   // The 后台 list: sessions at work first (in the order they were sent work),
@@ -591,7 +585,8 @@
       const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${body}`];
       const files = r.source === 'command' ? r.files || [] : compact.files;
       if (files.length) parts.push(`  文件：${files.join('；')}`);
-      if (r.source !== 'command' && compact.more) parts.push('  其余见 read');
+      if (r.undeliveredTaskId) parts.push(`  取回未送达指令原文：read --id ${r.undeliveredTaskId}`);
+      else if (r.source !== 'command' && compact.more) parts.push('  其余见 read');
       return parts.join('\n');
     });
     return '【AgentDeck 新回执】\n' + lines.join('\n') + '\n\n';
@@ -777,6 +772,11 @@
     return /(?:^|\n)\s*PS [^>]*>\s*$/i.test(String(screen || '').trimEnd());
   }
 
+  function windowsCodexReady(screen) {
+    // A wrapped command/path containing "codex" is still PowerShell input.
+    return /^\s*(?:[│|]\s*)?(?:(?:>_\s*)?OpenAI Codex\b|Welcome to Codex(?: CLI)?\b|›(?:\s|$)|\d+% context left(?:\s|$))/im.test(windowsAgentOutput(screen));
+  }
+
   // One compact line per session for `ledger`.
   function ledgerText(rows) {
     if (!rows.length) return '还没有别的会话。';
@@ -809,7 +809,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });

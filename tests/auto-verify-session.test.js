@@ -41,7 +41,9 @@ function boot(w, persisted) {
       taskBoard(op, input) {
         return Promise.resolve().then(() => {
           const fail = w.failOps.get(op); if (fail > 0) { w.failOps.set(op, fail - 1); throw new Error('board busy: ' + op); }
-          return store[op](input);
+          const result = store[op](input);
+          if (op === 'list') w.afterList?.();
+          return result;
         });
       },
       memoryPressure: async () => ({ level: w.pressure }), saveLongPrompt: async () => '/tmp/long-task.txt', onTasksChanged() {},
@@ -285,6 +287,30 @@ test('a queued reviewer is dropped if its round is no longer the open one', asyn
   app.api.onTick('captain', app.entries.get('captain')); await tick();
   assert.equal(app.reviewers(card).length, 0); assert.equal(app.card(card.id).review_session, false);
   assert.equal(app.card(card.id).status, 'doing');
+});
+
+test('review admission rechecks a concurrent card move or manual queue request under the queue lock', async (t) => {
+  for (const action of ['move', 'manual']) {
+    const w = world(t), app = w.boot(), card = await newCard(app);
+    const exec = await app.execute(card); await app.finish(exec, '做完');
+    w.pressure = 4;
+    let competing;
+    w.afterList = () => {
+      w.afterList = null;
+      // The automatic reviewer has a snapshot, but the Captain gets the queue
+      // lock before that reviewer can attempt admission.
+      competing = action === 'move' ? app.window.TaskBoard.move(card.id, 'todo') : app.execute(card, CODEX, 'manual-review');
+    };
+    await app.scan(); await competing; await tick();
+    assert.equal(app.reviewers(card).length, 0);
+    if (action === 'move') {
+      assert.equal(w.config.mainSession.waitlist.length, 0);
+      assert.equal(app.card(card.id).status, 'todo');
+    } else {
+      assert.equal(w.config.mainSession.waitlist.length, 1);
+      assert.equal(w.config.mainSession.waitlist[0].requestId, 'manual-review');
+    }
+  }
 });
 
 test('a Captain who already opened or queued a review keeps it: no automatic second reviewer', async (t) => {
