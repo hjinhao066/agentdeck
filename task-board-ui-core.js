@@ -1,7 +1,7 @@
-// Pure helpers behind the 任务看板 view: project swimlanes (one per project,
+// Pure helpers behind the 任务看板 view: project groups (one per project,
 // case-insensitive, in the user's order) crossed with the five status columns,
-// the project overview, drag/drop targets, the 需要你 question and
-// dependency/parallel marks. Cards come
+// the project overview, the finished-projects area, the 需要你 reminder, a
+// card's activity line, drag/drop targets and dependency/parallel marks. Cards come
 // from TaskBoard.list (docs/task-board-api.md). No DOM: runs in the page and
 // in tests.
 (function (root, factory) {
@@ -144,7 +144,8 @@
   // The whole board for one render: every project as one lane (the user's lane
   // order), each lane split into the five columns in task order, each card
   // decorated. `projects` is the overview strip (always every project, with
-  // per-status counts); `lanes` are the ones shown for the chosen project.
+  // per-status counts); `lanes` are the ones shown for the chosen project,
+  // split into `active` and `finished`; `alerts` are the 需要你 cards.
   function buildBoard(allCards, opts = {}) {
     const index = new Map(allCards.map((c) => [c.id, c]));
     const live = allCards.filter((c) => !c.archived);
@@ -173,13 +174,16 @@
   }
 
   // The one line of recent news a card shows under its title: why it failed,
-  // what it waits on, the latest receipt, else the first line of its brief.
-  function activity(card, waitText) {
+  // that it is held, what it waits on, the latest receipt, else (for a 进行中
+  // card) whether anyone is really on it, else the first line of its brief.
+  function activity(card, waitText, runLabel) {
     const firstLine = (t) => String(t || '').trim().split(/\r?\n/)[0].trim();
     if (card.flag === 'failed' || card.flag === 'quota') return { text: firstLine(receiptText(card)) || (card.flag === 'quota' ? '额度、登录或限流问题' : '执行失败，没有写明原因'), tone: 'failed' };
+    if (card.flag === 'held') return { text: '已挂起，等队长放行', tone: 'wait' };
     if (waitText) return { text: waitText, tone: 'wait' };
     const receipt = firstLine(receiptText(card));
     if (receipt) return { text: receipt, tone: '' };
+    if (runLabel) return { text: runLabel, tone: 'quiet' };
     return { text: firstLine(card.detail), tone: 'quiet' };
   }
   // The fold button's wording: how many cards are still hidden.

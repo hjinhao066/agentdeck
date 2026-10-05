@@ -1,8 +1,10 @@
-// 任务看板 view: every shared task card from window.TaskBoard, one compact
-// swimlane per project (case-insensitive, in the user's own order) across the
-// five status columns. Built to be read at a glance: one-line cards, the 完成
-// column folded to a count, long cells folded to 还有 N 张, lanes that fold and
-// remember it, and a project overview strip on top. Cards drag (or Alt+arrows)
+// 任务看板 view: every shared task card from window.TaskBoard, one foldable
+// group per project (case-insensitive, in the user's own order) over one shared
+// grid of the five status columns. Built to be read at a glance: a full-width
+// bar per group with its counts, cards led by their title, the 完成 column
+// folded to a count, long cells folded to 展开剩余 N 项, finished projects
+// gathered in one folded area, a 需要你 reminder bar and a project overview
+// strip on top. Cards drag (or Alt+arrows)
 // inside a column to reorder and across columns to change status; a card
 // dragged into 进行中 is announced to 队长, never started behind his back. A
 // card opens a detail drawer; a 需要你 card shows its question there with an
@@ -105,7 +107,7 @@
     };
     projectsEl.append(chip(U.ALL, '全部', '看全部项目'));
     board.projects.forEach((p) => {
-      const b = chip(p.key, p.name, `只看 ${p.name}：进行中 ${p.counts.doing}，需要你 ${p.counts.needs_user}，还有 ${p.open} 件没做完`);
+      const b = chip(p.key, p.name, `只看 ${p.name}：进行中 ${p.counts.doing}，需要你 ${p.counts.needs_user}，${p.open} 件待完成`);
       if (p.counts.doing) { const n = el('span', 'tbv-chip-n doing', String(p.counts.doing)); n.title = `进行中 ${p.counts.doing}`; b.append(n); }
       if (p.counts.needs_user) { const n = el('span', 'tbv-chip-n needs', String(p.counts.needs_user)); n.title = `需要你 ${p.counts.needs_user}`; b.append(n); }
       if (!p.open) b.classList.add('quiet');
@@ -137,7 +139,7 @@
 
   // Every group shares one column grid; the folded 完成 column is only a count.
   function gridTemplate() {
-    return board.columns.map((c) => c.key === 'done' && !prefs.doneOpen ? '92px' : 'minmax(168px, 1fr)').join(' ');
+    return board.columns.map((c) => c.key === 'done' && !prefs.doneOpen ? '92px' : 'minmax(140px, 1fr)').join(' ');
   }
 
   // ---- cards ----
@@ -172,22 +174,22 @@
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') row.append(el('span', 'tbv-tag held', '挂起'));
     node.append(row);
+    // Second line: the question (需要你) or the latest news, with the update time at its end.
+    const sub = el('div', 'tbv-sub');
     if (c.status === 'needs_user') {
       const q = el('p', 'tbv-question', item.question || '队长还没把问题整理出来');
       if (!item.question) q.classList.add('none');
-      node.append(q);
+      sub.append(q);
     } else {
-      const act = U.activity(c, item.waitLabel);
-      if (act.text) node.append(el('p', 'tbv-activity' + (act.tone ? ' ' + act.tone : ''), act.text));
+      const act = U.activity(c, item.waitLabel, c.status === 'doing' ? stateLabel : '');
+      sub.append(el('p', 'tbv-activity' + (act.tone ? ' ' + act.tone : ''), act.text));
     }
-    const session = c.session_id ? host.session(c.session_id) : null;
-    const who = session ? session.label : U.ownerLabel(c, null);
-    const meta = el('div', 'tbv-meta');
-    meta.append(el('span', 'tbv-who', who));
     const when = el('time', 'tbv-time', U.formatUpdated(c.updated));
     if (c.updated) when.dateTime = c.updated;
-    meta.append(when);
-    node.append(meta);
+    sub.append(when);
+    node.append(sub);
+    const session = c.session_id ? host.session(c.session_id) : null;
+    const who = session ? session.label : U.ownerLabel(c, null);
     node.title = [c.title, item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
     node.setAttribute('aria-label', `${c.title}，${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
     node.addEventListener('click', () => { if (suppressClick) return; openDetail(c.id); });
@@ -234,24 +236,35 @@
   }
   // The group bar spans the board: arrow, colour dot, name, unfinished count on
   // the left, per-status counts (需要你 in red) on the right. A click folds it.
-  function renderLane(lane) {
+  function renderLane(lane, finished) {
     const collapsed = !filter.project && !!prefs.collapsed[lane.key];
-    const section = el('section', 'tbv-lane' + (collapsed ? ' collapsed' : ''));
+    const section = el('section', 'tbv-lane' + (collapsed ? ' collapsed' : '') + (finished ? ' finished' : ''));
     section.dataset.project = lane.key;
     section.style.setProperty('--project-hue', hue(lane.key));
     section.setAttribute('aria-label', `${lane.name}，${lane.total} 项`);
     const head = el('header', 'tbv-lane-head');
-    const toggle = iconButton('tbv-lane-toggle', ICON.chevron, `${collapsed ? '展开' : '收起'} ${lane.name}（Alt+↑/↓ 调整项目先后）`);
+    const toggle = iconButton('tbv-lane-toggle', ICON.chevron, `${collapsed ? '展开' : '收起'} ${lane.name}${finished ? '' : '（Alt+↑/↓ 调整项目先后）'}`);
     toggle.setAttribute('aria-expanded', String(!collapsed));
     toggle.disabled = !!filter.project;
-    toggle.addEventListener('keydown', (e) => laneKey(e, lane));
+    if (!finished) toggle.addEventListener('keydown', (e) => laneKey(e, lane));
     const counts = el('div', 'tbv-lane-counts');
-    U.COLUMNS.filter((c) => lane.counts[c.key]).forEach((c) => { const n = el('span', 'tbv-lane-n', `${c.label} `); n.dataset.status = c.key; n.append(el('b', null, String(lane.counts[c.key]))); counts.append(n); });
+    U.COLUMNS.filter((c) => lane.counts[c.key]).forEach((c) => {
+      // The red 需要你 count opens the group's first question.
+      const asks = c.key === 'needs_user';
+      const n = el(asks ? 'button' : 'span', 'tbv-lane-n', `${c.label} `);
+      n.dataset.status = c.key; n.append(el('b', null, String(lane.counts[c.key])));
+      if (asks) {
+        const first = lane.columns.find((x) => x.key === 'needs_user').cards[0].card;
+        n.type = 'button'; n.title = `${lane.name} 有 ${lane.counts[c.key]} 件需要你，点开「${first.title}」`; n.setAttribute('aria-label', n.title);
+        n.onclick = (e) => { e.stopPropagation(); openDetail(first.id); };
+      }
+      counts.append(n);
+    });
     const left = el('span', 'tbv-lane-open', lane.open ? `${lane.open} 件待完成` : '都做完了');
     head.append(toggle, el('span', 'tbv-dot'), el('h2', 'tbv-lane-name', lane.name), left, counts);
-    head.title = filter.project ? lane.name : `${lane.name}：点一下${collapsed ? '展开' : '收起'}，拖动可调整项目先后`;
-    if (!filter.project) head.addEventListener('click', (e) => { if (suppressClick) return; toggleLane(lane, collapsed); });
-    head.addEventListener('pointerdown', (e) => startLaneDrag(e, section, lane));
+    head.title = filter.project ? lane.name : `${lane.name}：点一下${collapsed ? '展开' : '收起'}${finished ? '' : '，拖动可调整项目先后'}`;
+    if (!filter.project) head.addEventListener('click', () => { if (suppressClick) return; toggleLane(lane, collapsed); });
+    if (!finished) head.addEventListener('pointerdown', (e) => startLaneDrag(e, section, lane));
     section.append(head);
     if (!collapsed) {
       const cells = el('div', 'tbv-cells');
@@ -267,7 +280,7 @@
     const bar = el('button', 'tbv-lane-head tbv-finished');
     bar.type = 'button'; bar.setAttribute('aria-expanded', String(open));
     bar.title = open ? '收起已完成的 Agent' : '展开已完成的 Agent';
-    const chev = el('span', 'tbv-icon tbv-lane-toggle'); chev.innerHTML = ICON.chevron;
+    const chev = el('span', 'tbv-lane-toggle tbv-fold'); chev.innerHTML = ICON.chevron;
     const counts = el('div', 'tbv-lane-counts');
     const n = el('span', 'tbv-lane-n', '已完成 '); n.dataset.status = 'done'; n.append(el('b', null, String(board.finishedDone))); counts.append(n);
     bar.append(chev, el('span', 'tbv-dot done'), el('h2', 'tbv-lane-name', '已完成的 Agent'), el('span', 'tbv-lane-open', `${board.finished.length} 个 · ${open ? '收起' : '展开查看'}`), counts);
@@ -275,20 +288,31 @@
     return bar;
   }
 
-  // The 需要你 reminder: one slim bar above the board, a click opens the first question.
+  // The 需要你 reminder: one slim bar above the board. Every waiting card is
+  // named and opens its own detail; 处理 opens the first.
   function renderAlert() {
     const items = board.alerts;
     alertEl.hidden = !items.length;
-    if (!items.length) { alertEl.onclick = null; return; }
-    const first = items[0];
     alertEl.innerHTML = '';
-    alertEl.dataset.cardId = first.card.id;
+    if (!items.length) return;
     const dot = el('span', 'tbv-alert-dot'); dot.innerHTML = ICON.alert;
-    const go = el('span', 'tbv-alert-go', '处理'); const chev = el('span', 'tbv-chev'); chev.innerHTML = ICON.chevron; go.append(chev);
-    alertEl.append(dot, el('strong', 'tbv-alert-n', `${items.length} 件需要你`), el('span', 'tbv-alert-title', `${first.name} · ${first.card.title}`), el('span', 'tbv-alert-q', first.question || '队长还没把问题整理出来'), go);
-    const label = `${items.length} 件需要你，先看「${first.card.title}」`;
-    alertEl.title = label; alertEl.setAttribute('aria-label', label);
-    alertEl.onclick = () => openDetail(first.card.id);
+    const list = el('div', 'tbv-alert-list');
+    items.forEach((a) => {
+      const question = a.question || '队长还没把问题整理出来';
+      const b = el('button', 'tbv-alert-item');
+      b.type = 'button'; b.dataset.cardId = a.card.id;
+      b.append(el('span', 'tbv-alert-title', `${a.name} · ${a.card.title}`));
+      if (items.length === 1) b.append(el('span', 'tbv-alert-q', question));
+      b.title = `${a.name} · ${a.card.title}\n${question}`;
+      b.setAttribute('aria-label', `${a.name}，${a.card.title}：${question}。点开处理`);
+      b.onclick = () => openDetail(a.card.id);
+      list.append(b);
+    });
+    const go = el('button', 'tbv-alert-go', '处理');
+    go.type = 'button'; go.title = `处理「${items[0].card.title}」`; go.setAttribute('aria-label', go.title);
+    const chev = el('span', 'tbv-chev'); chev.innerHTML = ICON.chevron; go.append(chev);
+    go.onclick = () => openDetail(items[0].card.id);
+    alertEl.append(dot, el('strong', 'tbv-alert-n', `${items.length} 件需要你`), list, go);
   }
 
   function setAll(open) {
@@ -302,6 +326,7 @@
     if (drag) { renderQueued = true; return; }
     const active = document.activeElement;
     const keepCard = !focusAfter && active && active.classList && active.classList.contains('tbv-card') ? active.dataset.cardId : null;
+    if (!focusAfter && active && alertEl.contains(active)) focusAfter = active.dataset.cardId ? `.tbv-alert-item[data-card-id="${escapeId(active.dataset.cardId)}"]` : '.tbv-alert-go';
     board = U.buildBoard(cards, { project: filter.project, laneOrder: prefs.laneOrder });
     filter.project = board.project;
     renderProjects();
@@ -311,11 +336,11 @@
     board.active.forEach((lane) => lanesEl.append(renderLane(lane)));
     if (board.finished.length) {
       lanesEl.append(renderFinished());
-      if (prefs.completedOpen) board.finished.forEach((lane) => lanesEl.append(renderLane(lane)));
+      if (prefs.completedOpen) board.finished.forEach((lane) => lanesEl.append(renderLane(lane, true)));
     }
     renderAlert();
     const needs = board.columns.find((c) => c.key === 'needs_user').count;
-    summaryEl.textContent = board.total ? `${board.open} 件没做完${needs ? ` · ${needs} 件需要你` : ''}` : '';
+    summaryEl.textContent = board.total ? `${board.open} 件待完成${needs ? ` · ${needs} 件需要你` : ''}` : '';
     emptyEl.hidden = board.total > 0;
     gridEl.hidden = board.total === 0;
     renderDetail();
@@ -371,14 +396,16 @@
     if (at >= CELL_LIMIT) expanded.add(lane.key + '/' + c.status);
     applyMove(c, c.status, e.key === 'ArrowUp' ? { before: ids[at] } : { after: ids[at] });
   }
+  // Only unfinished groups are reordered; the finished ones keep their place after them.
+  const withFinished = (keys) => keys.concat(board.finished.map((l) => l.key));
   function laneKey(e, lane) {
     if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') || filter.project) return;
     e.preventDefault(); e.stopPropagation();
-    const keys = board.projects.map((p) => p.key);
+    const keys = board.active.map((l) => l.key);
     const at = keys.indexOf(lane.key), to = at + (e.key === 'ArrowUp' ? -1 : 1);
     if (to < 0 || to >= keys.length) return;
     keys.splice(at, 1); keys.splice(to, 0, lane.key);
-    prefs.laneOrder = keys; savePrefs();
+    prefs.laneOrder = withFinished(keys); savePrefs();
     focusAfter = `.tbv-lane[data-project="${escapeId(lane.key)}"] .tbv-lane-toggle`;
     announce(`${lane.name} 已移到第 ${to + 1} 个`);
     render();
@@ -487,18 +514,18 @@
       const d = drag;
       d.ghost.style.left = ev.clientX - d.dx + 'px'; d.ghost.style.top = ev.clientY - d.dy + 'px';
       viewEl.querySelectorAll('.tbv-lane-drop').forEach((n) => n.remove());
-      const lanes = [...lanesEl.querySelectorAll('.tbv-lane')];
+      const lanes = [...lanesEl.querySelectorAll('.tbv-lane:not(.finished)')];
       const next = lanes.find((n) => { const r = n.getBoundingClientRect(); return ev.clientY < r.top + r.height / 2; });
       d.before = next ? next.dataset.project : null;
       const line = el('div', 'tbv-lane-drop');
-      if (next) lanesEl.insertBefore(line, next); else lanesEl.append(line);
+      if (next) lanesEl.insertBefore(line, next); else lanes[lanes.length - 1].after(line);
     }, (d) => {
       if (d.before === undefined || d.before === lane.key) return;
-      const keys = board.projects.map((p) => p.key);
+      const keys = board.active.map((l) => l.key);
       const order = U.moveLane(keys, lane.key, d.before);
       if (order.join('\n') === keys.join('\n')) return;
       d.acted = true;
-      prefs.laneOrder = order; savePrefs();
+      prefs.laneOrder = withFinished(order); savePrefs();
       announce(`${lane.name} 已移到第 ${order.indexOf(lane.key) + 1} 个`);
       render();
     });
