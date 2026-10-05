@@ -25,8 +25,11 @@
     return n;
   }
 
-  // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], tasks: [task], fresh, crewMarked, waitlist }
-  // inflight: receipts already typed to 队长 whose turn has not finished yet.
+  // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], receiptsSeen: [id], tasks: [task], fresh, crewMarked, waitlist }
+  // inflight: receipts already handed to 队长 whose turn has not finished yet.
+  // receiptsSeen: ids the background receipts channel already returned. Saved with
+  // the rest of mainSession in config.json, so a relaunch or Relay does not
+  // deliver them again. Legacy injection stays out of this set until its turn ends.
   // fresh: the context was cleared and 队长 has not finished a turn since.
   // crewMarked: sessions opened before captainCrew existed were marked once.
   // waitlist: `new` requests waiting for a free slot (settings cap, live on M.MAX_ACTIVE), oldest first;
@@ -298,8 +301,12 @@
     if (col && col.cmd) s.cmd = col.cmd;
     s.pending = Array.isArray(s.pending) ? s.pending : [];
     s.inflight = Array.isArray(s.inflight) ? s.inflight : [];
-    // A turn open at shutdown cannot acknowledge these items after relaunch.
-    s.pending = [...s.inflight, ...s.pending];
+    s.receiptsSeen = normalizeSeenIds(s.receiptsSeen);
+    // A turn open at shutdown cannot acknowledge legacy injection. Receipts the
+    // background channel already returned stay read across relaunch. Items still
+    // in pending were never taken, including ones that arrived while restarting.
+    const seen = new Set(s.receiptsSeen);
+    s.pending = [...unreadReceipts(s.inflight, seen), ...s.pending];
     s.inflight = [];
     s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((m) => typeof m === 'string' ? m.trim() && m.length <= 8000 : mobileImages(m?.atts).length && typeof m.text === 'string' && m.text.length <= 8000) : [];
     s.fresh = !!s.fresh;
@@ -599,15 +606,18 @@
       : '只清空队长的模型上下文：队长重新启动，重新读一遍默认说明。' + kept)) return;
     contextReset = null;
     cancelTokenSaving();
-    // receipts typed in but not answered yet go to the new context again
-    const requeue = s.inflight;
+    // Receipts already returned on the background channel stay read when Relay
+    // changes seats. Unread inflight (legacy injection) and anything still
+    // pending go to the new seat, so a handoff neither resends nor drops them.
+    const seen = new Set(normalizeSeenIds(s.receiptsSeen));
+    const requeue = rotation ? unreadReceipts(s.inflight, seen) : s.inflight.slice();
     s.inflight = [];
     const oldId = col.id;
     const retired = window.ChatUI.retireChat(oldId, { interrupted: !!rotation });
     if (retired) {
       host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { id: oldId, ...retired, clearedAt: Date.now() }]);
     }
-    s.pending = [...requeue, ...s.pending];
+    s.pending = [...requeue, ...(rotation ? unreadReceipts(s.pending, seen) : s.pending)];
     s.gen += 1;
     const waiting = new Set(s.pending.map((p) => p.taskId).filter(Boolean));
     const latest = new Map(s.tasks.map((t) => [t.colId, t]));
@@ -926,6 +936,32 @@
   }
   // Hand every pending receipt to 队长's model as text; they count as in
   // flight until its turn ends.
+  const MAX_RECEIPTS_SEEN = 500;
+  function normalizeSeenIds(list) {
+    const out = [];
+    const have = new Set();
+    for (const id of Array.isArray(list) ? list : []) {
+      if (typeof id !== 'string' || !/^[a-z0-9-]{1,100}$/.test(id) || have.has(id)) continue;
+      have.add(id);
+      out.push(id);
+    }
+    return out.slice(-MAX_RECEIPTS_SEEN);
+  }
+  function ensureReceiptId(item) {
+    const s = state();
+    if (typeof item.receiptId === 'string' && /^[a-z0-9-]{1,100}$/.test(item.receiptId)) return item.receiptId;
+    s.receiptSeq = (Number.isSafeInteger(s.receiptSeq) ? s.receiptSeq : 0) + 1;
+    item.receiptId = 'r-' + Date.now().toString(36) + '-' + s.receiptSeq.toString(36);
+    return item.receiptId;
+  }
+  function rememberReceiptsSeen(items) {
+    const s = state();
+    if (!s) return;
+    s.receiptsSeen = normalizeSeenIds([...(Array.isArray(s.receiptsSeen) ? s.receiptsSeen : []), ...items.map(ensureReceiptId)]);
+  }
+  function unreadReceipts(items, seen) {
+    return (Array.isArray(items) ? items : []).filter((item) => item && (typeof item.receiptId !== 'string' || !seen.has(item.receiptId)));
+  }
   function takePending(nextTurn = false, batch) {
     const s = state();
     const text = M.receiptsForModel(s.pending);
@@ -1348,7 +1384,10 @@
         // if it was queued while the renderer was unavailable and has expired.
         if (message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt)) return { done: true, result: '' };
         if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
-      const text = takePending();
+        // The CLI has the text once this returns. Record that before the copy
+        // into inflight so the same config save survives relaunch and Relay.
+        rememberReceiptsSeen(s.pending);
+        const text = takePending();
         return { done: true, result: text || '没有新的回执。' };
       }
       case 'main-peek': {
