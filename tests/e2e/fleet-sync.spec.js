@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -67,7 +68,7 @@ test('shows the other computer offline, a kept conflict, and a visible sync erro
 });
 
 test.afterEach(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (server) await server.close();
   if (root) fs.rmSync(root, { recursive: true, force: true });
   application = null;
