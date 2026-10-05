@@ -118,7 +118,7 @@
     const chars = Array.from(summary), files = receipt.files || [];
     return { summary: chars.slice(0, 300).join(''), files: files.slice(0, 5), more: chars.length > 300 || files.length > 5 };
   }
-  const STATUS = { plain: '未开始', working: '干活中', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
+  const STATUS = { plain: '未开始', working: '干活中', paused: '停在安全点', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
   const oneLine = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max);
@@ -302,6 +302,10 @@
       }
       if (name === 'codex' && w === '--last') continue;
       if (/^--(continue|resume)=/.test(w)) continue;
+      if (/^--conversation(?:=|$)/.test(w)) {
+        if (w === '--conversation' && words[i + 1] && !words[i + 1].startsWith('-')) i++;
+        continue;
+      }
       if (w === '--continue' || (claude && w === '-c')) continue;
       if (w === '--resume' || (claude && w === '-r')) {
         if (words[i + 1] && !words[i + 1].startsWith('-')) i++;

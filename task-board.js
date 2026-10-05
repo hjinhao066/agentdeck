@@ -37,7 +37,7 @@ function localSessions(config) {
   const tasks = config.mainSession?.tasks || [];
   const sessions = [...(config.columns || []).map((c) => {
     const status = tasks.findLast((t) => t.colId === c.id)?.status;
-    return { ...c, active: ['queued', 'working', 'quota', 'input', 'asking'].includes(status), failed: ['failed', 'stopped'].includes(status) };
+    return { ...c, active: ['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(status), failed: ['failed', 'stopped'].includes(status) };
   }), ...(config.archived || []).map((c) => ({ ...c, archived: true }))];
   const known = new Set(sessions.map((s) => s.id));
   // A local assignment record proves provenance even after its column is deleted.
@@ -447,6 +447,33 @@ class TaskStore {
         if (!question.trim()) notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
       }
       card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; finishStatus(card, previous); return { card, notices };
+    });
+  }
+  // A restart continues the same card. It does not close the attempt, archive
+  // the card, or bind a second session while one is still open.
+  resumeNote(input) {
+    if (!input || typeof input.note !== 'string' || !input.note.trim()) throw new Error('resume note required.');
+    idValue(input.session_id);
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (card.archived) return { card, ignored: true, notices: [] };
+      if (card.attempt_closed || card.status === 'done' || (card.status === 'review' && !card.review_session)) return { card, ignored: true, notices: [] };
+      const sessions = this.sessions();
+      const open = card.session_id && card.session_id !== input.session_id && !card.attempt_closed &&
+        this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at);
+      if (open) return { card, ignored: true, notices: [] };
+      if (card.session_id !== input.session_id) {
+        card.session_id = input.session_id;
+        card.session_host = os.hostname();
+        card.session_bound_at = Date.now();
+        if (input.attempt_id) card.attempt_id = idValue(input.attempt_id);
+      }
+      if (card.status !== 'review') card.status = 'doing';
+      card.attempt_closed = false;
+      card.flag = null;
+      card.latest_receipt = sentence(input.note);
+      touch(card);
+      return { card, notices: [] };
     });
   }
   // ---- automatic verification ----

@@ -29,6 +29,8 @@ const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
+const RestartResume = require('./restart-resume');
+const AgentSessions = require('./agent-sessions');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
@@ -62,7 +64,7 @@ function readLocalConfig() {
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
 let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
   return taskStore[payload.op](payload.input || {});
 });
 
@@ -968,7 +970,7 @@ app.whenReady().then(async () => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
-  onMain('save-config', (_e, cfg) => {
+  const writeConfig = (cfg) => {
     cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
@@ -976,13 +978,27 @@ app.whenReady().then(async () => {
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
-    try {
-      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
-      fs.chmodSync(configPath + '.tmp', 0o600);
-      fs.renameSync(configPath + '.tmp', configPath);
-    } catch (_) {}
+    fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    fs.chmodSync(configPath + '.tmp', 0o600);
+    fs.renameSync(configPath + '.tmp', configPath);
     checkQuotaBark();
     notifyNeedsUserCards();
+  };
+  onMain('save-config', (_e, cfg) => { try { writeConfig(cfg); } catch (_) {} });
+  onMain('save-config-sync', (e, cfg) => { try { writeConfig(cfg); e.returnValue = true; } catch (_) { e.returnValue = false; } });
+  const manifestPath = path.join(app.getPath('userData'), 'restart-resume.json');
+  onMain('restart-manifest-load', (e) => {
+    try { e.returnValue = RestartResume.parseManifest(fs.readFileSync(manifestPath, 'utf8')); }
+    catch (_) { e.returnValue = RestartResume.emptyManifest(); }
+  });
+  onMain('restart-manifest-save', (e, doc) => {
+    try {
+      const clean = RestartResume.parseManifest(JSON.stringify(doc));
+      fs.writeFileSync(manifestPath + '.tmp', JSON.stringify(clean), { encoding: 'utf-8', mode: 0o600 });
+      fs.chmodSync(manifestPath + '.tmp', 0o600);
+      fs.renameSync(manifestPath + '.tmp', manifestPath);
+      e.returnValue = true;
+    } catch (_) { e.returnValue = false; }
   });
   // The deck page has no clipboard module of its own. Test profiles get a
   // private clipboard: a test run never reads or replaces what the user copied.
@@ -1392,7 +1408,73 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); });
 });
 
-app.on('before-quit', () => {
+// Ask the page to record in-flight crew, then quit on a later turn. A nested
+// app.quit() inside this handler is a no-op, and a timer that gives up once
+// the page has answered never reaches the real exit. The timeout always
+// schedules the same quit as the page's ack.
+let quitGate = null;
+let quitWatchdog = null;
+// Electron maps process.exit to app.exit; neither can break stuck native
+// teardown or a blocked main loop. A separate Node-mode process owns the hard
+// deadline. Its stdin is held open only by this process, so a normal exit
+// cancels the deadline and cannot leave a timer targeting a reused PID.
+function armQuitWatchdog() {
+  if (quitWatchdog) return;
+  const deadlineMs = 5000;
+  const script = `
+    const target = Number(process.argv[1]);
+    if (target !== process.ppid || !Number.isSafeInteger(target) || target < 1) process.exit(1);
+    const timer = setTimeout(() => {
+      if (process.stdin.readableEnded || process.ppid !== target) return process.exit(0);
+      try { process.kill(target, 'SIGKILL'); } catch (_) {}
+      process.exit(0);
+    }, ${deadlineMs});
+    process.stdin.on('end', () => { clearTimeout(timer); process.exit(0); });
+    process.stdin.resume();
+  `;
+  quitWatchdog = spawn(process.execPath, ['-e', script, String(process.pid)], {
+    env: { ELECTRON_RUN_AS_NODE: '1', ...(isWin ? { SystemRoot: process.env.SystemRoot } : {}) },
+    stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true,
+  });
+  quitWatchdog.on('error', () => {});
+  quitWatchdog.stdin.on('error', () => {});
+  quitWatchdog.unref();
+  quitWatchdog.stdin.unref();
+  // Also cover a watchdog spawn failure while the main loop is responsive.
+  setTimeout(() => { try { process.kill(process.pid, 'SIGKILL'); } catch (_) {} }, deadlineMs).unref();
+}
+app.prependListener('before-quit', armQuitWatchdog);
+function readResumeEnabled() {
+  try { return RestartResume.resumeEnabled(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))); }
+  catch (_) { return true; }
+}
+function parkedSessions() {
+  if (tudArg) return null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'));
+    const lookback = 14 * 24 * 3600 * 1000;
+    const columns = (cfg.columns || []).filter((col) => col && !col.isMain && col.captainCrew).map((col) => ({
+      id: col.id, provider: RestartResume.providerOf(col.cmd), cwd: col.cwd || '',
+      since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '', owner: col.modelSessionOwner || '',
+    })).filter((col) => ['Cursor', 'Codex', 'Antigravity'].includes(col.provider));
+    return AgentSessions.resolveSessions(columns, { roots: AgentSessions.defaultRoots(os.homedir()), lookbackMs: lookback });
+  } catch (_) { return {}; }
+}
+quitGate = RestartResume.createQuitGate({
+  timeoutMs: 1500,
+  schedule: (fn, ms) => { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); },
+  later: (fn) => { setImmediate(fn); },
+  onPark: () => { send('park-for-restart', { sessions: parkedSessions() }); },
+  quit: () => {
+    app.quit();
+    // Try normal Electron teardown first; the OS watchdog remains armed if
+    // either Electron exit path returns without ending the real process.
+    setTimeout(() => { try { app.exit(0); } catch (_) {} }, 1000);
+  },
+});
+onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
+app.on('before-quit', (event) => {
+  if (quitGate.beforeQuit(event, readResumeEnabled()) !== 'cleanup') return;
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
   if (mobileWeb) mobileWeb.close();
@@ -1420,11 +1502,9 @@ app.on('before-quit', () => {
   ptys.clear();
 });
 // before-quit already removed credentials and closed PTY masters. Exit
-// immediately so inspector sockets cannot keep quit waiting. app.exit()
-// returns without ending the process once the chat page is still tearing
-// down, so follow it with process.exit.
+// immediately so inspector sockets cannot keep quit waiting. The independent
+// watchdog still enforces the deadline if native teardown does not finish.
 app.on('will-quit', () => {
   app.exit(0);
-  process.exit(0);
 });
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });

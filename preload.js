@@ -3,6 +3,11 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
   saveConfig: (cfg) => ipcRenderer.send('save-config', cfg),
+  saveConfigSync: (cfg) => ipcRenderer.sendSync('save-config-sync', cfg),
+  restartManifestLoad: () => ipcRenderer.sendSync('restart-manifest-load'),
+  restartManifestSave: (doc) => ipcRenderer.sendSync('restart-manifest-save', doc),
+  onParkForRestart: (cb) => ipcRenderer.on('park-for-restart', (_e, m) => cb(m && m.sessions)),
+  parkForRestartDone: () => ipcRenderer.send('park-for-restart-done'),
   mobileWebSettings: (input) => ipcRenderer.invoke('mobile-web:settings', input),
   onMobileRequest: (cb) => ipcRenderer.on('mobile-web:request', (_e, m) => cb(m)),
   mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
