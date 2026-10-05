@@ -158,6 +158,7 @@ if (saved) {
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
   config.crewModelsCollapsed = SidebarCore.normalizeCollapsedModels(saved.crewModelsCollapsed);
+  config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
