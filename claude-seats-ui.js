@@ -184,7 +184,9 @@
       let decision = options.decision;
       if (options.automatic || options.validateRotation) {
         decision = options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true);
-        if (decision?.targetId !== id || decision.targetId === P.CODEX_ID) return false;
+        // The quota banner offers Claude seats only; automatic exhaustion
+        // fallback must still be allowed to hand off to Codex.
+        if (decision?.targetId !== id || (options.validateRotation && decision.targetId === P.CODEX_ID)) return false;
       }
       const from = current(), at = Date.now();
       const message = rotationMessage(from.name, id === 'chatgpt' ? host.config.captainRelayCodex.name : target.name, decision, at, options.automatic);

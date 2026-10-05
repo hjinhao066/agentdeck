@@ -105,12 +105,13 @@ test('Relay revokes the old Captain and listener, preserves independent tokens, 
     try { await window.deck.captainRelayNotify(id, 'worker should not send'); return false; }
     catch (_) { return true; }
   }, INDEPENDENT)).toBe(true);
-  if (process.platform === 'win32') expect((await cli(['ledger'], { AGENTDECK_TERMINAL_ID: newId }).done).code).toBe(1);
-  const replacementEnv = process.platform === 'win32'
-    ? { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: fresh.controlToken }
-    : { AGENTDECK_TERMINAL_ID: newId };
+  // README's Codex receipt environment binds file fallback to the controlling
+  // tty, never TERMINAL_ID. This helper runs outside the replacement's PTY, so
+  // it must supply the rotated capability on every platform.
+  expect((await cli(['ledger'], { AGENTDECK_TERMINAL_ID: newId }).done).code).toBe(1);
+  const replacementEnv = { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: fresh.controlToken };
   const replacement = await cli(['receipts', '--wait', '--timeout', '10'], replacementEnv).done;
-  expect(replacement.code).toBe(0);
+  expect(replacement.code, replacement.stderr + replacement.stdout).toBe(0);
   expect(replacement.stdout).toContain('handoff-protected-receipt');
   expect(await page.evaluate(() => config.mainSession.pending.length)).toBe(0);
 });

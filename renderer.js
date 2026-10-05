@@ -470,9 +470,15 @@ function toggleZoom(id) {
   if (t) { focusColumnInput(id); focusedId = id; syncNav(); }
 }
 
-window.deck.onPtyData((id, data) => {
+function writePtyData(id, t, data, at) {
+  t.lastOutputAt = at; MainSession.onOutput(id, data); t.term.write(data);
+}
+window.deck.onPtyData((id, data, sequence) => {
   const t = terms.get(id);
-  if (t) { t.lastOutputAt = Date.now(); MainSession.onOutput(id, data); t.term.write(data); }
+  if (!t) return;
+  const at = Date.now();
+  if (t.pendingPtyData) t.pendingPtyData.push({ data, sequence, at });
+  else writePtyData(id, t, data, at);
 });
 window.deck.onPtyExit((id, reason) => {
   const t = terms.get(id);
@@ -1906,7 +1912,7 @@ function buildColumn(col, isFresh) {
       // Status-machine memory: hasWorked separates green "just finished" from
       // gray "idle since launch"; idleTicks debounces working→done (~3s);
       // workStart/workedMs drive the header timer; lastDump skips redundant IPC.
-      hasWorked: false, idleTicks: 0, workStart: 0, workedMs: 0, doneAt: 0, lastDump: '',
+      hasWorked: false, idleTicks: 0, workStart: 0, workedMs: 0, doneAt: 0, lastDump: '', pendingPtyData: [],
     });
 
     const newOutput = document.createElement('button');
@@ -1970,18 +1976,30 @@ function buildColumn(col, isFresh) {
     // garbage like `1;2c56;3R54;3R54;…`, which the shell echoes, which gets
     // SAVED on quit and replayed again next launch, snowballing every restart.
     let replayMuted = false;
+    const finishReplay = (sequence = 0) => {
+      const entry = terms.get(col.id);
+      if (!entry || entry.term !== term) return;
+      const pending = entry.pendingPtyData;
+      entry.pendingPtyData = null;
+      replayMuted = false;
+      // Output already in the snapshot must not be painted twice. Later
+      // redraws are applied only after the old replay has finished parsing.
+      for (const chunk of pending) if (!chunk.sequence || chunk.sequence > sequence)
+        writePtyData(col.id, entry, chunk.data, chunk.at);
+    };
     const reconnect = async () => {
       const alive = await window.deck.ptyIsAlive(col.id);
       if (alive) {
         // Hot-reload path: pty survived, replay its buffered output and resize.
-        const replay = await window.deck.ptyReplay(col.id);
+        const snapshot = await window.deck.ptyReplay(col.id, true);
+        const replay = snapshot.data;
         if (replay) {
           replayMuted = true;
           term.write(replay, () => {
             updateAgentIdentityBadge(col.id, terms.get(col.id), dumpScreen(term));
-            replayMuted = false;
+            finishReplay(snapshot.sequence);
           });
-        }
+        } else finishReplay(snapshot.sequence);
         window.deck.ptyResize(col.id, term.cols, term.rows);
         MainSession.notePtySurvived(col);
       } else {
@@ -2027,9 +2045,9 @@ function buildColumn(col, isFresh) {
               : showLegacyWarning
                 ? '\r\n\x1b[33m── 上次输出回放；此栏未绑定模型会话，本次将新开对话 ──\x1b[0m\r\n'
                 : '\r\n\x1b[2m── 上次输出回放，进程已结束──\x1b[0m\r\n';
-            term.write(replayMsg, () => { replayMuted = false; });
+            term.write(replayMsg, () => finishReplay());
           });
-        }
+        } else finishReplay();
         // 队长 gets a control token too; the columns it drives never do.
         const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
