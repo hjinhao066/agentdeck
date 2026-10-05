@@ -512,9 +512,12 @@ function classify(text, entry, cmd) {
   if (activity === 'quota') return activity;
   const lines = text.split('\n');
   if (activity === 'working') return activity;
-  // The live Cursor prompt takes precedence over old spinner/tool rows.
+  // Cursor's prompt is idle only after MainCore has ruled out live activity.
   if (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorActivity(text) === 'idle') {
     if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+    // Cursor briefly paints a ready prompt between tools. Require quiet output
+    // before ending an already-running turn, even when no spinner is visible.
+    if (entry?.state === 'working' && Date.now() - (entry.lastOutputAt || 0) < 10_000) return 'working';
     return entry?.hasWorked ? 'done' : 'plain';
   }
   if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
@@ -3768,9 +3771,14 @@ setInterval(() => {
     // see the replayed part. Once real output scrolls the separator out of the
     // 40-line window this is a no-op.
     text = MainCore.afterReplay(text, env.platform);
-    entry.lastScreen = text; // readiness checks (Board task delivery, Schedule)
+    const cmd = columns.find((c) => c.id === id)?.cmd;
+    const liveText = env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term);
+    // Cursor activity/readiness must share the live screen with its status dot;
+    // the bounded reply tail can reach into old scrollback after a TUI clear.
+    const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;
+    entry.lastScreen = cursorScreen;
     if (entry.alive) {
-      let st = classify(env.platform === 'win32' ? MainCore.afterReplay(statusScreen(entry.term), env.platform) : statusScreen(entry.term), entry, columns.find((c) => c.id === id)?.cmd);
+      let st = classify(liveText, entry, cmd);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
@@ -3819,20 +3827,20 @@ setInterval(() => {
       }
     }
 
-    ChatUI.onTick(id, entry, text);
+    ChatUI.onTick(id, entry, cursorScreen);
     MainSession.onTick(id, entry); // heartbeat for work 队长 handed out
 
     // A restarted terminal replays the PREVIOUS run's output above a
     // separator. It is excluded from status classification, but remains the
     // best source for recovering the last provider/model before a fresh shell.
     updateAgentIdentityBadge(id, entry, identityText);
-    if (entry.alive && entry.lastOutputAt && text !== entry.lastQuotaScreen) {
-      entry.lastQuotaScreen = text;
+    if (entry.alive && entry.lastOutputAt && cursorScreen !== entry.lastQuotaScreen) {
+      entry.lastQuotaScreen = cursorScreen;
       const col = columns.find((c) => c.id === id);
       const provider = AgentInfo.inferProvider(col?.cmd, text) || entry.detectedProvider;
       const footer = (entry.footerLines || []).map((line) => line.map((s) => s.text).join(''));
       const model = AgentInfo.extractModel(MainCore.afterContract(text), '', footer) || col?.agentModel || AgentInfo.extractModel('', col?.cmd);
-      let sample = QuotaCore.screen(provider, MainCore.afterContract(text), footer, entry.lastOutputAt, model);
+      let sample = QuotaCore.screen(provider, MainCore.afterContract(cursorScreen), footer, entry.lastOutputAt, model);
       if (sample && provider === 'Claude') {
         const seat = QuotaCore.seatForColumn(col, QuotaCore.claudeSeats(config.claudeSeats));
         sample = seat ? { ...sample, seatId: seat.id, configDir: seat.configDir, sourceColumnId: id } : null;

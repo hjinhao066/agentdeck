@@ -91,6 +91,23 @@ test('fallback never declares success and an authoritative late completion wins'
   assert.equal(event(c.id, 'fallback').card.status, 'needs_user');
   assert.equal(event(c.id, 'complete', 'actual result').card.status, 'done');
 });
+test('restarting after a fallback clears latest_receipt, while command receipts survive', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  const card = add(); bind(card.id); event(card.id, 'started'); event(card.id, 'fallback');
+  assert.equal(event(card.id, 'started', '', 'a1', 'worker', 'resume-1').card.latest_receipt, '');
+  assert.equal(store.list()[0].status, 'doing');
+  // A pre-fix app could already have written started while retaining the notice.
+  store.mutate((docs) => { store.find(docs, card.id).latest_receipt = '已结束，未提交回执'; return {}; });
+  assert.equal(event(card.id, 'started', '', 'a1', 'worker', 'resume-fallback-2').card.latest_receipt, '');
+  event(card.id, 'fallback');
+  bind(card.id, 'a2');
+  assert.equal(event(card.id, 'started', '', 'a2').card.latest_receipt, '');
+  for (const result of ['实际完成了修改。', '已结束，未提交回执']) {
+    const real = add({ verify: true }); bind(real.id); event(real.id, 'complete', result);
+    bind(real.id, 'review', 'reviewer');
+    assert.equal(event(real.id, 'started', '', 'review', 'reviewer').card.latest_receipt, result);
+  }
+});
 test('runtime model identity fills default models without allowing a stale session to change the reviewer', (t) => {
   const { store, add, bind, event } = fixture(t); const c = add({ verify: true }); bind(c.id);
   store.identity({ id: c.id, session_id: 'worker', attempt_id: 'a1', agent: 'codex', model: 'gpt-6.1-sol' });

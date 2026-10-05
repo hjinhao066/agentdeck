@@ -4,6 +4,23 @@ const assert = require('node:assert/strict');
 const Q = require('../quota-core');
 const now = Date.parse('2026-10-03T23:00:00Z');
 
+test('Cursor monthly billing errors recognize the native unpunctuated suffix without matching narration', () => {
+  // Native wording from saved Cursor errors; account-specific amount replaced.
+  const sample = require('fs').readFileSync(require('path').join(__dirname, 'fixtures/cursor-monthly-limit.txt'), 'utf8').trim();
+  const brief = sample.split(' fallbackModel:')[0];
+  for (const line of [sample, brief, sample.replace('usage limit You', 'usage limit for Opus You')]) {
+    for (const decorated of [line, '● ' + line, '│ ' + line + ' │']) {
+      assert.equal(Q.resourceError(decorated), 'quota');
+      assert.equal(Q.screen('Cursor', decorated, [], now, 'grok-4.7').exhausted, true);
+    }
+  }
+  for (const line of [sample + ' fixed', brief + ' 的识别已补测试', brief + ' regression test added',
+    'The error was ' + sample, 'Error: You\'ve hit your usage limit handling test failed',
+    brief.replace('hit your usage limit', 'used 80% of your usage limit')]) {
+    assert.equal(Q.resourceError(line), '', line);
+  }
+});
+
 test('Claude Session/Weekly percentages are used; compact footers are remaining, context is ignored, resets are per window', () => {
   const q = Q.screen('Claude', '', ['Context: 99% | Session: 81% | Reset: 2hr 10m', 'Weekly: 9% | Reset: 3d 10hr'], now);
   assert.deepEqual(q.windows.map((w) => [w.label, w.remaining, w.resetAt]), [['5 小时', 19, now + 7800000], ['每周', 91, now + 295200000]]);
