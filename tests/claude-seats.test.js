@@ -69,6 +69,24 @@ test('setup carries onboarding for an authenticated US profile without copying C
   setup(home);
   assert.equal(JSON.parse(fs.readFileSync(file)).hasCompletedOnboarding, false);
 });
+test('US2 startup initializes only the missing onboarding marker and preserves its independent login metadata', (t) => {
+  const home = fixture(t), [cn, , us2] = S.normalize();
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ hasCompletedOnboarding: true, lastOnboardingVersion: '2.1.289', oauthAccount: { emailAddress: 'cn@example.test' }, projects: { '/repo': { hasTrustDialogAccepted: true } } }));
+  const loc = M.credentialLocation(us2, home);
+  fs.mkdirSync(loc.dir, { recursive: true });
+  const login = { oauthAccount: { emailAddress: 'us2@example.test', accountUuid: 'us2-private-id' }, localPreference: 'keep' };
+  fs.writeFileSync(loc.metadataPath, JSON.stringify(login));
+  assert.equal(M.onboardingComplete(us2, home), false);
+  assert.equal(M.initializeOnboarding(us2, home, '/repo'), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')), {
+    ...login, hasCompletedOnboarding: true, lastOnboardingVersion: '2.1.289', projects: { '/repo': { hasTrustDialogAccepted: true } },
+  });
+  assert.equal(M.onboardingComplete(us2, home), true);
+  fs.writeFileSync(loc.metadataPath, JSON.stringify({ ...login, hasCompletedOnboarding: false }));
+  assert.equal(M.initializeOnboarding(us2, home), false);
+  assert.equal(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).hasCompletedOnboarding, false);
+  assert.equal(M.initializeOnboarding(cn, home), true);
+});
 test('default cn leaves config env unset, us uses its own service and removes overrides', (t) => {
   const home = fixture(t), [cn, us] = S.normalize();
   const before = { CLAUDE_CONFIG_DIR: '/elsewhere', CLAUDE_SECURESTORAGE_CONFIG_DIR: '/other', CLAUDE_CODE_OAUTH_TOKEN: 'test-override', ANTHROPIC_API_KEY: 'test-override', ANTHROPIC_AUTH_TOKEN: 'test-override', AGENTDECK_COL_ID: 'col', PATH: '/bin' };

@@ -39,8 +39,8 @@ test.beforeEach(async () => {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
     fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}');
   }
-  fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"}}');
-  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"}}');
+  fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"},"hasCompletedOnboarding":true}');
+  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"},"hasCompletedOnboarding":true}');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     perpetualCaptain: { enabled: false }, theme: 'dark', fitCols: 2,
     columns: [

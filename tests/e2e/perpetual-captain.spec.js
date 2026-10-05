@@ -68,8 +68,8 @@ test.beforeEach(async () => {
     fs.mkdirSync(path.join(home, dir), { recursive: true });
     fs.writeFileSync(path.join(home, dir, '.credentials.json'), '{}'); // existence stand-in; never a real credential
   }
-  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'perpetual-cn-fixture' } }));
-  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test', accountUuid: 'perpetual-us-fixture' } }));
+  fs.writeFileSync(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.test', accountUuid: 'perpetual-cn-fixture' }, hasCompletedOnboarding: true }));
+  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us@example.test', accountUuid: 'perpetual-us-fixture' }, hasCompletedOnboarding: true }));
   const barkKeyFile = path.join(profile, 'bark-fixture-key.txt');
   fs.writeFileSync(barkKeyFile, 'offline-test-device');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
@@ -351,7 +351,7 @@ test('automatic rotation includes US2 and wraps to recovered CN without restarti
   const dir = path.join(home, '.claude-us2');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
-  fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test', accountUuid: 'perpetual-us2-fixture' } }));
+  fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test', accountUuid: 'perpetual-us2-fixture' }, hasCompletedOnboarding: true }));
   await page.evaluate(() => ClaudeSeats.refresh());
   await nativeUsage(CN);
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');

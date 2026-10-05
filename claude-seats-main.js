@@ -26,6 +26,49 @@ function credentialLocation(seat, home) {
     credentialsPath: path.join(dir, '.credentials.json'), usagePath: path.join(dir, 'agentdeck-usage.json'),
     keychainService: 'Claude Code-credentials' + (isDefault ? '' : '-' + crypto.createHash('sha256').update(dir).digest('hex').slice(0, 8)) };
 }
+function onboardingComplete(seat, home) {
+  try {
+    const loc = credentialLocation(seat, home);
+    return JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).hasCompletedOnboarding === true;
+  } catch (_) { return false; }
+}
+function initializeOnboarding(seat, home, projectDir) {
+  const loc = credentialLocation(seat, home);
+  if (loc.isDefault) return onboardingComplete(seat, home);
+  let account, existing, defaults;
+  try {
+    existing = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8'));
+    account = existing.oauthAccount;
+  } catch (_) { return false; }
+  if (!account || typeof account !== 'object') return false;
+  try { defaults = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')); }
+  catch (_) { return existing.hasCompletedOnboarding === true; }
+  let changed = false;
+  if (existing.hasCompletedOnboarding === undefined && defaults.hasCompletedOnboarding === true) {
+    existing.hasCompletedOnboarding = true;
+    if (typeof defaults.lastOnboardingVersion === 'string') existing.lastOnboardingVersion = defaults.lastOnboardingVersion;
+    changed = true;
+  }
+  const trusted = typeof projectDir === 'string' && path.isAbsolute(projectDir) &&
+    defaults.projects?.[projectDir]?.hasTrustDialogAccepted === true;
+  if (trusted && existing.projects?.[projectDir]?.hasTrustDialogAccepted !== true &&
+      existing.projects?.[projectDir]?.hasTrustDialogAccepted !== false) {
+    existing.projects ||= {};
+    existing.projects[projectDir] ||= {};
+    existing.projects[projectDir].hasTrustDialogAccepted = true;
+    changed = true;
+  }
+  if (!changed) return existing.hasCompletedOnboarding === true;
+  const temp = loc.metadataPath + `.agentdeck-tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    fs.writeFileSync(temp, JSON.stringify(existing, null, 2), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temp, loc.metadataPath);
+    return existing.hasCompletedOnboarding === true;
+  } catch (_) {
+    try { fs.unlinkSync(temp); } catch (_) {}
+    return false;
+  }
+}
 const AUTH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_HOST_CREDS_FILE', 'CLAUDE_CODE_HOST_GATEWAY_LINEAGE'];
 function seatEnvironment(env, seat, home) {
@@ -58,7 +101,7 @@ async function seatInfo(seat, home, platform = process.platform, keychain = cred
   } catch (_) {}
   const status = platform === 'darwin' ? await keychain(loc.keychainService) : fs.existsSync(loc.credentialsPath);
   const present = typeof status === 'object' ? status.present : !!status;
-  return { ...seat, configDir: loc.dir, maskedEmail: email, accountKey,
+  return { ...seat, configDir: loc.dir, maskedEmail: email, accountKey, onboardingComplete: onboardingComplete(seat, home),
     credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present,
     loginReason: typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
     authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
@@ -149,4 +192,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };

@@ -182,9 +182,9 @@
       if (!target?.loggedIn) { host.showToast(`${target?.name || id}：${target?.loginReason || target?.authReason || '席位不存在'}${target?.loginReason ? '，请在此席位配置目录下登录' : ''}`); return false; }
       if (window.MainSession.mainCol() !== col || hasDraft(col)) return false;
       let decision = options.decision;
-      if (options.automatic) {
-        decision = rotationDecision(false);
-        if (decision?.targetId !== id) return false;
+      if (options.automatic || options.validateRotation) {
+        decision = options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true);
+        if (decision?.targetId !== id || decision.targetId === P.CODEX_ID) return false;
       }
       const from = current(), at = Date.now();
       const message = rotationMessage(from.name, id === 'chatgpt' ? host.config.captainRelayCodex.name : target.name, decision, at, options.automatic);
@@ -193,7 +193,7 @@
         ? await window.MainSession.checkpointForSeatSwitch(snapshot, { local: options.automatic })
         : await window.deck.captainCheckpoint(snapshot);
       if (typeof board !== 'string' || !board || window.MainSession.mainCol() !== col || hasDraft(col)) return false;
-      if (options.automatic && rotationDecision(false)?.targetId !== id) return false;
+      if ((options.automatic || options.validateRotation) && (options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true))?.targetId !== id) return false;
       const wasClaude = isClaude(col);
       if (wasClaude) host.config.captainRelayClaudeCommand = col.cmd;
       const configuredCodex = host.config.captainRelayCodex.command;
@@ -224,7 +224,7 @@
       configDir: usage.configDir, sourceColumnId: usage.sourceColumnId,
     })) host.flushConfig();
   }
-  function rotationDecision(checkSwitching = true) {
+  function rotationContext() {
     const now = Date.now(), settings = P.normalizeSettings(host.config.perpetualCaptain);
     const candidates = seats.map((info) => {
       const configured = host.config.claudeSeats.find((s) => s.id === info.id);
@@ -235,15 +235,28 @@
       if (q.trusted) state = P.observe(state, { seatId: info.id, at: q.remainingAt, remainingAt: q.remainingAt, remaining: q.remaining, trusted: true, resetAt: q.resetAt, threshold: settings.threshold }, now);
       if (q.resumedAt) state = P.observe(state, { seatId: info.id, at: q.resumedAt, resumed: true }, now);
       host.config.perpetualCaptainState = state;
-      return { id: info.id, loggedIn: info.loggedIn, ...q };
+      const weekly = (host.config.quotas[window.QuotaCore.seatKey(info.id)]?.sample?.windows || [])
+        .find((w) => w.key === 'weekly' || w.label === '每周');
+      const loginScreen = host.columns().some((col) => col.claudeSeatId === info.id &&
+        /select\s+login\s+method/i.test(host.terms.get(col.id)?.lastScreen || ''));
+      return { id: info.id, loggedIn: info.loggedIn,
+        onboardingComplete: info.onboardingComplete !== false && !loginScreen,
+        weeklyResetAt: q.weeklyTrusted ? weekly?.resetAt : undefined, ...q };
     });
-    return P.decide({ settings, state: host.config.perpetualCaptainState, currentId: current().id, seats: candidates,
-      busy: !window.MainSession.relayIdle(), switching: checkSwitching && switching, now });
+    return { settings, state: host.config.perpetualCaptainState, currentId: current().id, seats: candidates, now };
+  }
+  function rotationDecision(checkSwitching = true, checkBusy = true) {
+    return P.decide({ ...rotationContext(), busy: checkBusy && !window.MainSession.relayIdle(), switching: checkSwitching && switching });
+  }
+  function quotaRotationDecision() {
+    const context = rotationContext();
+    return P.decide({ ...context, settings: { ...context.settings, enabled: true } });
   }
   function rotationMessage(from, to, decision, at, automatic) {
     const reasons = { 'threshold': `5 小时剩余 ${decision?.remaining}% ≤ ${host.config.perpetualCaptain.threshold}%`,
       'weekly-threshold': `每周剩余 ${decision?.remaining}% ≤ ${host.config.perpetualCaptain.threshold}%`,
       'quota-exhausted': '当前席位额度用尽或限流', 'claude-unavailable': '所有已登录 Claude 席位额度都已用尽或限流', 'claude-recovered': 'Claude 席位额度已恢复',
+      'startup-onboarding': '席位仍停在首次启动引导，跳过该席位',
       'earlier-reset': '优先用还有余额、快到期的席位' };
     return `${automatic ? '永动机自动轮换' : label()}：${from} → ${to}；${reasons[decision?.reason] || '手动切换'}；${new Date(at).toLocaleString()}`;
   }
@@ -256,6 +269,38 @@
       entry.wrap.querySelector('.col-head').after(banner);
     }
     banner.textContent = record.message;
+  }
+  function recoveryLabel(at) {
+    return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }).format(at);
+  }
+  function renderQuotaBanner(entry, action) {
+    let banner = entry.wrap.querySelector('.seat-quota-banner:not(.perpetual-relay-banner)');
+    if (entry.state !== 'quota') { banner?.remove(); return; }
+    if (!banner) {
+      banner = node('div', 'seat-quota-banner'); banner.setAttribute('role', 'status');
+      banner.append(node('span', 'quota-message', ''));
+      const actionButton = button(ROTATE, '', () => {
+        const context = rotationContext(), selected = P.quotaAction(context);
+        if (selected.targetId) switchSeat(selected.targetId, { validateRotation: true });
+      });
+      actionButton.classList.add('quota-seat-action');
+      banner.append(actionButton);
+      entry.wrap.querySelector('.col-head').after(banner);
+    }
+    const message = banner.querySelector('.quota-message'), actionButton = banner.querySelector('.quota-seat-action');
+    const selected = action.targetId && host.config.claudeSeats.find((seat) => seat.id === action.targetId);
+    if (selected) {
+      message.textContent = `${current().name}额度用尽，下一可用席位 ${selected.name}`;
+      actionButton.disabled = false;
+      actionButton.title = `${label()}到${selected.name}`;
+      actionButton.setAttribute('aria-label', actionButton.title);
+    } else {
+      const recovery = action.recoveryAt ? `；最早恢复 ${recoveryLabel(action.recoveryAt)}` : '；最早恢复时间未知';
+      message.textContent = `${current().name}额度用尽，没有可用席位${recovery}`;
+      actionButton.disabled = true;
+      actionButton.title = message.textContent;
+      actionButton.setAttribute('aria-label', '没有可用席位');
+    }
   }
   function onTick(id, entry, text) {
     const col = host.columns().find((c) => c.id === id);
@@ -287,16 +332,10 @@
     const provider = window.MainSession.state()?.relayTargetId === 'chatgpt' ? 'Codex' : window.AgentInfo.resolveAgentInfo(col, entry).provider;
     if (!['Claude', 'Codex'].includes(provider)) return;
     if (provider === 'Claude') window.deck.claudeWarmupIdle(col.id, !switching && window.MainSession.relayIdle()).catch(() => {});
-    let banner = entry.wrap.querySelector('.seat-quota-banner:not(.perpetual-relay-banner)');
-    if (entry.state !== 'quota') banner?.remove();
-    else if (!banner) {
-      banner = node('div', 'seat-quota-banner'); banner.setAttribute('role', 'status');
-      banner.append(node('span', '', `${current().name}额度用尽，${host.config.perpetualCaptain.enabled ? '永动机等待空闲后轮换' : '可' + label()}`));
-      const other = host.config.claudeSeats.find((s) => s.id !== current().id);
-      if (other) banner.append(button(ROTATE, `${label()}到${other.name}`, () => switchSeat(other.id)));
-      entry.wrap.querySelector('.col-head').after(banner);
-    }
-    const before = JSON.stringify(host.config.perpetualCaptainState), decision = rotationDecision();
+    const before = JSON.stringify(host.config.perpetualCaptainState), context = rotationContext();
+    const decision = P.decide({ ...context, busy: !window.MainSession.relayIdle(), switching });
+    const action = P.quotaAction(context);
+    renderQuotaBanner(entry, action);
     if (before !== JSON.stringify(host.config.perpetualCaptainState)) host.flushConfig();
     if (decision && Date.now() >= retryAt) {
       switchSeat(decision.targetId, { automatic: true, decision }).then((ok) => { if (!ok) retryAt = Date.now() + 60_000; });
