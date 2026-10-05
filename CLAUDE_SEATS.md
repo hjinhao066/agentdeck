@@ -11,7 +11,7 @@
   ],
   "activeClaudeSeatId": "cn",
   "captainRelayLabel": "Relay",
-  "perpetualCaptain": { "enabled": true, "threshold": 3 },
+  "perpetualCaptain": { "enabled": true, "threshold": 3, "order": ["us2", "us", "cn"] },
   "captainRelayCodex": { "name": "ChatGPT", "command": "codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox" }
 }
 ```
@@ -122,7 +122,7 @@ Bark 密钥文件路径复用 `barkKeyFile`，只保存路径；每次切换发�
   自动 Relay 固定这个模型和档位，手动 Relay 保留配置命令。
 - 用尽/低额度的重置时间过去，或看到绑定本账号的恢复证据后，下一次队长空闲
   优先回到 Claude；工作中、确认提示上、发送中、有未发草稿或附件时不自动切。
-- 每个目标席位/提供方 10 分钟内不重复进入，但首次 CN → US → US2 → Codex 可以连续推进。
+- 每个目标席位/提供方 10 分钟内不重复进入，但首次 US2 → US → CN → Codex 可以连续推进。
   轮换记录及冷却时间存本机配置，重载不清掉防抖。手动选择仍可明确覆盖自动策略。
 
 自动切换使用 Relay 本地持久存档，不再要求额度临界的模型多跑一次存档回合：
@@ -134,7 +134,7 @@ Bark 密钥文件路径复用 `barkKeyFile`，只保存路径；每次切换发�
 每次切换留下带目标、原因和时间的横幅与持久对话记录。
 存档失败保留原队长，一分钟后才重试，不会每个 heartbeat 弹提示。
 
-自动低额度接力按配置列表循环，默认 CN → US → US2 → CN；未登录、用尽、每周额度不足或冷却中的目标跳过。所有已登录席位确实用尽后才回退 Codex；低但非零余额仍不视作用尽。原有「优先用快到期的席位」开启时，可信且健康的席位仍可按重置时间提前切换。
+自动低额度接力按 `perpetualCaptain.order`（席位 id 列表）循环，缺省 US2 → US → CN → US2，从任一席位出发都按这个圈子找下一个可用席位：US2 额度低了先去 US，US 到阈值再去 CN，CN 之后回 US2。圈子只管轮换，设置页、侧边栏、额度区的显示顺序仍按 `claudeSeats`（CN、US、US2）。没有这一项的旧配置用缺省值；列表里没写到的席位排在最后，不存在的 id 忽略。额度用尽横幅的一键切换与自动轮换共用同一顺序。暂无调整顺序的界面，需要时直接改配置。未登录、用尽、每周额度不足或冷却中的目标跳过。所有已登录席位确实用尽后才回退 Codex；低但非零余额仍不视作用尽。原有「优先用快到期的席位」开启时，可信且健康的席位仍可按重置时间提前切换。
 
 ## 额度窗口预热
 

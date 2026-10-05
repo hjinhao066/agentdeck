@@ -158,7 +158,7 @@
       try {
         const updated = await window.deck.validateClaudeSeats(fields.map((f) => ({ id: f.id, name: f.name.value.trim(), icon: f.icon.value.trim(), configDir: f.dir.value.trim() })));
         host.config.claudeSeats = updated;
-        host.config.perpetualCaptain = P.normalizeSettings({ enabled, threshold: Number(threshold.input.value), preferEarlier });
+        host.config.perpetualCaptain = P.normalizeSettings({ enabled, threshold: Number(threshold.input.value), preferEarlier, order: settings.order });
         host.config.quotaWarmup = window.QuotaWarmupCore.normalizeSettings({ enabled: warmupEnabled });
         host.config.barkKeyFile = bark.input.value.trim();
         retryAt = 0;

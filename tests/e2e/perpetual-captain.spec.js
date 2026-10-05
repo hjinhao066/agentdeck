@@ -124,7 +124,7 @@ test.afterEach(async () => {
 
 test('automatic CN → US → Codex preserves worker and handoff, then returns to restored Claude while idle', async () => {
   test.setTimeout(150000);
-  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 3, preferEarlier: true });
+  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 3, preferEarlier: true, order: ['us2', 'us', 'cn'] });
   await page.evaluate((id) => {
     config.mainSession.tasks = [{ id: 'keep-task', colId: id, title: '继续跑的任务', status: 'working', gen: 1, startedAt: Date.now() }];
     sendWhenReady(columns.find((c) => c.id === id), 'keep working', { guardUserInput: true });
@@ -242,6 +242,8 @@ test('automatic rotation waits for a completed turn and preserves an unsent draf
 });
 
 test('icon switch and threshold settings persist and control automatic rotation', async () => {
+  // A custom rotation order must survive the settings dialog saving the other fields.
+  await page.evaluate(() => { config.perpetualCaptain = { ...config.perpetualCaptain, order: ['us', 'cn', 'us2'] }; });
   await page.locator('#settingsBtn').click();
   await page.locator('#claudeSeatsSettings').click();
   const enabled = page.locator('#perpetualEnabled');
@@ -260,10 +262,10 @@ test('icon switch and threshold settings persist and control automatic rotation'
   await threshold.fill('5');
   await enabled.click();
   await page.locator('#claudeSeatSettings').getByRole('button', { name: '保存设置' }).click();
-  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5, preferEarlier: false });
+  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5, preferEarlier: false, order: ['us', 'cn', 'us2'] });
   await page.reload();
   await expect(page.locator('.claude-seat-rotate')).toBeEnabled({ timeout: 20000 });
-  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5, preferEarlier: false });
+  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: false, threshold: 5, preferEarlier: false, order: ['us', 'cn', 'us2'] });
   await idle(CN);
   await nativeUsage(CN, 4);
   await page.waitForTimeout(4500);
@@ -273,7 +275,7 @@ test('icon switch and threshold settings persist and control automatic rotation'
   await enabled.click();
   await priority.click();
   await page.locator('#claudeSeatSettings').getByRole('button', { name: '保存设置' }).click();
-  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 5, preferEarlier: true });
+  await expect.poll(() => page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 5, preferEarlier: true, order: ['us', 'cn', 'us2'] });
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');
 });
 
@@ -346,7 +348,7 @@ test('official low quotas do not fall back to Codex, and changed identities reje
   expect(await captainId()).toBe(CN);
 });
 
-test('automatic rotation includes US2 and wraps to recovered CN without restarting workers', async () => {
+test('automatic rotation runs CN to US2 to US and wraps to recovered CN without restarting workers', async () => {
   test.setTimeout(150000);
   const dir = path.join(home, '.claude-us2');
   fs.mkdirSync(dir, { recursive: true });
@@ -354,20 +356,20 @@ test('automatic rotation includes US2 and wraps to recovered CN without restarti
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test', accountUuid: 'perpetual-us2-fixture' }, hasCompletedOnboarding: true }));
   await page.evaluate(() => ClaudeSeats.refresh());
   await nativeUsage(CN);
-  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');
-  const usId = await captainId(); await idle(usId);
-  await nativeUsage(usId);
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us2');
   const us2Id = await captainId(); await idle(us2Id);
   expect(records('seat-env.jsonl').find((r) => r.colId === us2Id).configDir).toBe(dir);
+  await nativeUsage(us2Id);
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us');
+  const usId = await captainId(); await idle(usId);
   await nativeUsage(WORKER, 80);
   await page.evaluate(() => {
     config.perpetualCaptainState.seats.cn.leftAt = Date.now() - 11 * 60000;
     config.perpetualCaptainState.seats.cn.enteredAt = Date.now() - 11 * 60000;
   });
-  await nativeUsage(us2Id);
+  await nativeUsage(usId);
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('cn');
   expect(await page.evaluate((id) => window.deck.ptyIsAlive(id), WORKER)).toBe(true);
   expect(records('seat-env.jsonl').filter((r) => r.colId === WORKER)).toHaveLength(1);
-  expect(await page.evaluate(() => config.perpetualCaptainState.lastSwitch)).toMatchObject({ fromId: 'us2', targetId: 'cn' });
+  expect(await page.evaluate(() => config.perpetualCaptainState.lastSwitch)).toMatchObject({ fromId: 'us', targetId: 'cn' });
 });
