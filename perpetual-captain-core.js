@@ -36,8 +36,8 @@
     for (const [id, raw] of Object.entries(value.seats || {})) {
       if (!validId(id) || !raw || typeof raw !== 'object') continue;
       const seat = {};
-      for (const key of ['exhaustedAt', 'resetAt', 'lowAt', 'lowResetAt', 'recoveredAt', 'clearedAt', 'enteredAt', 'leftAt', 'officialNotBefore']) if (time(raw[key])) seat[key] = raw[key];
-      if (percent(raw.lowRemaining) !== null) seat.lowRemaining = raw.lowRemaining;
+      for (const key of ['exhaustedAt', 'resetAt', 'lowAt', 'lowResetAt', 'weeklyLowAt', 'weeklyLowResetAt', 'recoveredAt', 'clearedAt', 'enteredAt', 'leftAt', 'officialNotBefore']) if (time(raw[key])) seat[key] = raw[key];
+      for (const key of ['lowRemaining', 'weeklyLowRemaining']) if (percent(raw[key]) !== null) seat[key] = raw[key];
       for (const key of ['accountKey', 'configDir']) if (typeof raw[key] === 'string' && raw[key]) seat[key] = raw[key];
       seats[id] = seat;
     }
@@ -47,12 +47,13 @@
     return { seats, lastSwitch };
   }
   function recover(seat, now) {
-    for (const [atKey, resetKey] of [['exhaustedAt', 'resetAt'], ['lowAt', 'lowResetAt']]) {
+    for (const [atKey, resetKey] of [['exhaustedAt', 'resetAt'], ['lowAt', 'lowResetAt'], ['weeklyLowAt', 'weeklyLowResetAt']]) {
       if (!seat[atKey] || !seat[resetKey] || seat[resetKey] > now) continue;
       seat.recoveredAt = Math.max(seat.recoveredAt || 0, seat[resetKey]);
       seat.clearedAt = Math.max(seat.clearedAt || 0, seat[atKey], seat[resetKey]);
       delete seat[atKey]; delete seat[resetKey];
       if (atKey === 'lowAt') delete seat.lowRemaining;
+      if (atKey === 'weeklyLowAt') delete seat.weeklyLowRemaining;
     }
     return seat;
   }
@@ -94,6 +95,18 @@
       }
       // A positive numeric sample alone cannot clear a real rate-limit error.
     }
+    const weeklyAt = time(event.weeklyRemainingAt) || at;
+    const weekly = percent(event.weeklyRemaining);
+    if (event.weeklyTrusted === true && weekly !== null && now - weeklyAt <= FRESH_MS && weeklyAt <= now + 60_000 &&
+      weeklyAt > (seat.clearedAt || 0) && (!time(event.weeklyResetAt) || event.weeklyResetAt > now)) {
+      if (weekly <= normalizeSettings({ threshold: event.threshold }).threshold && weeklyAt >= (seat.weeklyLowAt || 0)) {
+        const newer = weeklyAt > (seat.weeklyLowAt || 0);
+        seat.weeklyLowAt = weeklyAt; seat.weeklyLowRemaining = weekly;
+        if (time(event.weeklyResetAt)) seat.weeklyLowResetAt = event.weeklyResetAt; else if (newer) delete seat.weeklyLowResetAt;
+      } else if (weeklyAt > (seat.weeklyLowAt || 0)) {
+        delete seat.weeklyLowAt; delete seat.weeklyLowResetAt; delete seat.weeklyLowRemaining;
+      }
+    }
     return state;
   }
   function sameDir(actual, info) {
@@ -133,7 +146,7 @@
       (block.official !== true || (time(block.at) && now - block.at <= FRESH_MS))) ||
       (bound(sample, info) && (sample.official !== true || fresh) && sample.at >= block.at && (sample.windows || []).some((window) => window.exhausted)));
     const blocked = block && time(block.at) && block.at <= now + 60_000 && (!time(block.resetAt) || block.resetAt > now) && (errorBound || numericBound);
-    const officialRecovery = fresh && sample.official === true && bound(sample, info) && sample.windows?.length &&
+    const officialRecovery = fresh && sample.official === true && bound(sample, info) && fiveHour && weekly &&
       sample.windows.every((window) => percent(window.remaining) !== null && window.remaining > 0 &&
         !window.exhausted && time(window.resetAt) && window.resetAt > now);
     const recovery = [saved.resumed, fresh && (sample.resumed || officialRecovery) ? sample : null]
@@ -148,6 +161,8 @@
       trusted: !!fiveHour,
       weeklyRemaining: weekly ? weekly.remaining : null,
       weeklyTrusted: !!weekly,
+      weeklyRemainingAt: weekly ? sample.at : null,
+      weeklyResetAt: weekly ? time(weekly.resetAt) : null,
       exhausted: !!blocked,
       exhaustedAt: blocked ? block.at : null,
       exhaustedResetAt: blocked ? time(block.resetAt) : null,
@@ -157,14 +172,19 @@
   function status(seat, saved, threshold, now) {
     const state = recover({ ...saved }, now);
     const at = time(seat.remainingAt);
-    const trusted = seat.trusted === true && percent(seat.remaining) !== null && at && at <= now + 60_000 && now - at <= FRESH_MS && (!time(seat.resetAt) || seat.resetAt > now);
-    const weeklyLow = seat.weeklyTrusted === true && percent(seat.weeklyRemaining) !== null && seat.weeklyRemaining <= threshold;
+    const trusted = seat.trusted === true && percent(seat.remaining) !== null && at && at <= now + 60_000 && now - at <= FRESH_MS &&
+      at >= (state.recoveredAt || 0) && (!time(seat.resetAt) || seat.resetAt > now);
+    const weeklyAt = time(seat.weeklyRemainingAt) || at;
+    const weeklyTrusted = seat.weeklyTrusted === true && percent(seat.weeklyRemaining) !== null && weeklyAt &&
+      weeklyAt <= now + 60_000 && now - weeklyAt <= FRESH_MS && weeklyAt >= (state.recoveredAt || 0) &&
+      (!time(seat.weeklyResetAt) || seat.weeklyResetAt > now);
+    const weeklyLow = weeklyTrusted ? seat.weeklyRemaining <= threshold : !!state.weeklyLowAt && state.weeklyLowRemaining <= threshold;
     const low = (trusted ? seat.remaining <= threshold : !!state.lowAt && state.lowRemaining <= threshold) || weeklyLow;
     const numericExhausted = trusted ? seat.remaining === 0 : !!state.lowAt && state.lowRemaining === 0;
-    const exhausted = !!state.exhaustedAt || numericExhausted || (weeklyLow && seat.weeklyRemaining === 0) || (seat.exhausted === true && (!time(seat.exhaustedResetAt) || seat.exhaustedResetAt > now));
+    const exhausted = !!state.exhaustedAt || numericExhausted || (weeklyLow && (weeklyTrusted ? seat.weeklyRemaining : state.weeklyLowRemaining) === 0) || (seat.exhausted === true && (!time(seat.exhaustedResetAt) || seat.exhaustedResetAt > now));
     const lastMove = Math.max(state.enteredAt || 0, state.leftAt || 0);
-    return { state, trusted, low, weeklyLow, exhausted,
-      available: seat.loggedIn === true && seat.onboardingComplete !== false && !low && !exhausted,
+    return { state, trusted, weeklyTrusted, low, weeklyLow, exhausted,
+      available: seat.loggedIn === true && seat.onboardingComplete !== false && trusted && weeklyTrusted && !low && !exhausted,
       cooling: !!lastMove && now - lastMove < COOLDOWN_MS };
   }
   function decide({ settings, state: value, currentId, seats = [], busy = false, draft = false, briefing = false, switching = false, now = Date.now() } = {}) {
@@ -188,8 +208,8 @@
       // A future reset from a fresh quota sample proves that the new window
       // is already counting. A past reset stays unknown until warmup + sampling.
       if (!config.preferEarlier || !current.trusted || !time(current.seat.resetAt) ||
-        current.seat.weeklyTrusted !== true) return null;
-      const earlier = candidates.filter(({ seat, trusted }) => trusted && seat.weeklyTrusted === true &&
+        !current.weeklyTrusted) return null;
+      const earlier = candidates.filter(({ seat, trusted, weeklyTrusted }) => trusted && weeklyTrusted &&
         // Tiny differences around the same reset boundary are sampling jitter.
         time(seat.resetAt) && seat.resetAt > now && current.seat.resetAt - seat.resetAt >= RESET_ADVANCE_MS)
         .sort((a, b) => a.seat.resetAt - b.seat.resetAt)[0];
@@ -200,10 +220,8 @@
     // A healthy seat in its cooldown is temporarily unavailable, not exhausted.
     // Stay put until it can be used rather than hopping through Codex.
     if (claude.some(({ available }) => available)) return null;
-    // A low positive quota or an unknown login is not evidence of exhaustion.
-    // Unlogged seats are skipped; usable logins must all prove exhaustion.
-    const loggedIn = claude.filter(({ seat }) => seat.loggedIn === true && seat.onboardingComplete !== false);
-    if (!loggedIn.length || loggedIn.some(({ exhausted }) => !exhausted)) return null;
+    // Unknown and stale seats need a successful refresh before they can be
+    // destinations. If no Claude seat is confirmed usable, continue with Codex.
     const codex = state.seats[CODEX_ID] || {};
     const codexMove = Math.max(codex.enteredAt || 0, codex.leftAt || 0);
     if (codexMove && now - codexMove < COOLDOWN_MS) return null;
@@ -222,7 +240,7 @@
         if (check.available) continue;
         const saved = check.state, times = check.cooling
           ? [Math.max(saved.enteredAt || 0, saved.leftAt || 0) + COOLDOWN_MS]
-          : [seat.resetAt, seat.exhaustedResetAt, seat.weeklyResetAt, saved.resetAt, saved.lowResetAt];
+          : [seat.resetAt, seat.exhaustedResetAt, seat.weeklyResetAt, saved.resetAt, saved.lowResetAt, saved.weeklyLowResetAt];
         for (const at of times) if (time(at) && at > now && (!recoveryAt || at < recoveryAt)) recoveryAt = at;
       }
     }
@@ -237,8 +255,8 @@
     state.lastSwitch = { fromId: event.fromId, targetId: event.targetId, reason: String(event.reason || ''), at: event.at };
     return state;
   }
-  function strategyText({ settings, currentId, seats = [], warmups = [], now = Date.now() }) {
-    const config = normalizeSettings(settings), current = seats.find((s) => s.id === currentId);
+  function strategyText({ settings, state: value, currentId, seats = [], warmups = [], now = Date.now() }) {
+    const config = normalizeSettings(settings), state = normalizeState(value), current = seats.find((s) => s.id === currentId);
     const name = (s) => s?.name || s?.id || 'ChatGPT';
     const sorted = orderSeats(seats, config.order), index = sorted.findIndex((s) => s.id === currentId);
     const others = (index < 0 ? sorted : sorted.slice(index + 1).concat(sorted.slice(0, index)))
@@ -248,11 +266,16 @@
     for (const w of warmups) if (w.warmupEligible !== false && w.status === 'pending' && w.resetAt > now) {
       parts.push(`${name(seats.find((s) => s.id === w.seatId))} ${new Date(w.resetAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })} 重置后自动预热`);
     }
-    const other = others.find((s) => !s.weeklyTrusted || s.weeklyRemaining > config.threshold);
-    for (const seat of others.filter((s) => s.weeklyTrusted && s.weeklyRemaining <= config.threshold)) parts.push(`${name(seat)} 每周额度不足，不切换也不预热`);
-    if (other) parts.push(`${name(current)} 剩 ${config.threshold}% 时切到 ${name(other)}`);
+    const checked = others.map((seat) => ({ seat, ...status(seat, state.seats[seat.id] || {}, config.threshold, now) }));
+    for (const check of checked) {
+      if (check.weeklyLow) parts.push(`${name(check.seat)} 每周额度不足，不切换也不预热`);
+      else if (check.low || check.exhausted) parts.push(`${name(check.seat)} 额度不足，等待重置后重新采样`);
+      else if (!check.trusted || !check.weeklyTrusted) parts.push(`${name(check.seat)} 额度未知，等待新采样确认`);
+    }
+    const other = checked.find((check) => check.available && !check.cooling);
+    if (other) parts.push(`${name(current)} 剩 ${config.threshold}% 时切到 ${name(other.seat)}`);
     if (config.preferEarlier) parts.push('有可用额度时优先用快到期的席位');
     return parts.join(' · ');
   }
-  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, DEFAULT_ROTATION_ORDER, normalizeSettings, orderSeats, normalizeState, observe, bound, seatQuota, decide, quotaAction, recordSwitch, strategyText };
+  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, DEFAULT_ROTATION_ORDER, normalizeSettings, orderSeats, normalizeState, observe, bound, seatQuota, status, decide, quotaAction, recordSwitch, strategyText };
 });

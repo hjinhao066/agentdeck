@@ -1,6 +1,6 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
 const closeElectron = require('./fixtures/close-electron');
-const { execFile } = require('child_process');
+const { execFile, spawnSync } = require('child_process');
 const { promisify } = require('util');
 const fs = require('fs');
 const os = require('os');
@@ -25,18 +25,42 @@ function records(name) {
 }
 function promptsFor(id) { return records('prompt-columns.jsonl').filter((r) => r.colId === id).map((r) => r.text); }
 async function captainId() { return page.evaluate(() => config.mainSession.colId); }
-async function idle(id) {
+async function idle(id, finishStartup = true) {
   await expect.poll(() => page.evaluate((i) => {
     const entry = terms.get(i);
     return entry?.state === 'done' && !entry.sendingPrompt && !entry.injecting &&
       ChatUI.turnsOf(i).every((turn) => turn.kind === 'task' || turn.done);
   }, id), { timeout: 20000 }).toBe(true);
+  if (!finishStartup) return;
+  await page.evaluate(async () => {
+    const startup = config.mainSession.relayStartup;
+    if (startup?.attempt?.promptSent && startup.attempt.output) {
+      startup.attempt.deadline = Date.now() - 1;
+      await ClaudeSeats.automaticTick();
+    }
+  });
 }
 async function screenshot(name) {
   const dir = process.env.AGENTDECK_TEST_SCREENSHOTS;
   if (!dir) return;
   fs.mkdirSync(dir, { recursive: true });
   await page.screenshot({ path: path.join(dir, name + '.png') });
+}
+async function confirmedQuotas(ids = ['us', 'us2']) {
+  await page.evaluate(async (ids) => {
+    const infos = await ClaudeSeats.refresh(), now = Date.now();
+    for (const info of infos.filter((info) => ids.includes(info.id))) {
+      const configDir = config.claudeSeats.find((seat) => seat.id === info.id).configDir;
+      config.quotas['Claude:' + info.id] = { scope: 'claude', configDir, accountKey: info.accountKey,
+        credentialKey: info.credentialKey, sample: {
+          provider: 'Claude', scope: 'claude', accountBound: true, accountKey: info.accountKey, seatId: info.id,
+          configDir, credentialKey: info.credentialKey, at: now,
+          windows: [{ key: 'fiveHour', remaining: 80, resetAt: now + 3600000 },
+            { key: 'weekly', remaining: 60, resetAt: now + 4 * 86400000 }],
+        } };
+    }
+    flushConfig();
+  }, ids);
 }
 async function nativeUsage(id, remaining = 3) {
   await page.evaluate(([i, left]) => {
@@ -87,7 +111,7 @@ test.beforeEach(async () => {
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`],
     env: isolatedEnv({ AGENTDECK_TEST_BOARD_RESULTS_FILE: path.join(profile, 'board-results.jsonl'), AGENTDECK_TEST_SEATS_ENV_FILE: path.join(profile, 'seat-env.jsonl'),
       AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'prompt-columns.jsonl'),
-      AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') }),
+      AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'), ZDOTDIR: profile }),
   });
   if (process.env.AGENTDECK_TEST_ELECTRON_LOGS) {
     const child = application.process();
@@ -98,6 +122,7 @@ test.beforeEach(async () => {
   await expect(page.locator('.column')).toHaveCount(2);
   await expect.poll(() => promptsFor(CN).some((p) => p.startsWith('你是 AgentDeck')), { timeout: 20000 }).toBe(true);
   await idle(CN);
+  await confirmedQuotas();
   await expect.poll(() => records('seat-env.jsonl').some((r) => r.colId === WORKER), { timeout: 20000 }).toBe(true);
 });
 test.afterEach(async () => {
@@ -208,6 +233,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
     config.perpetualCaptainState.lastSwitch.at = now - 11 * 60000;
     flushConfig();
   });
+  await confirmedQuotas(['cn', 'us', 'us2']);
   await expect.poll(() => page.evaluate(() => ({
     target: config.mainSession.relayTargetId, idle: MainSession.relayIdle(),
     state: config.perpetualCaptainState, cnQuota: config.quotas['Claude:cn'],
@@ -320,7 +346,7 @@ test('the idle current Captain renews its expired window before switching to the
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-detail', /正在用.*US/);
 });
 
-test('official low quotas do not fall back to Codex, and changed identities reject the old slot sample before rotation', async () => {
+test('changed identities reject the old slot sample before rotation', async () => {
   const outcome = await page.evaluate(async () => {
     const infos = await ClaudeSeats.refresh();
     const now = Date.now();
@@ -334,15 +360,13 @@ test('official low quotas do not fall back to Codex, and changed identities reje
     }
     const entry = terms.get(config.mainSession.colId);
     ClaudeSeats.onTick(config.mainSession.colId, entry, '');
-    const doubleLow = config.mainSession.relayTargetId;
     const cn = infos.find((seat) => seat.id === 'cn');
     config.perpetualCaptainState = { seats: { cn: { accountKey: 'previous-account', configDir: cn.configDir } } };
     config.quotas['Claude:us'].sample.windows[0].remaining = 80;
     ClaudeSeats.onTick(config.mainSession.colId, entry, '');
-    return { doubleLow, changedTarget: config.mainSession.relayTargetId,
+    return { changedTarget: config.mainSession.relayTargetId,
       state: config.perpetualCaptainState.seats.cn };
   });
-  expect(outcome.doubleLow).not.toBe('chatgpt');
   expect(outcome.changedTarget).not.toBe('us');
   expect(outcome.state.officialNotBefore).toBeGreaterThan(0);
   expect(outcome.state.lowAt).toBeUndefined();
@@ -355,7 +379,7 @@ test('automatic rotation runs CN to US2 to US and wraps to recovered CN without 
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test', accountUuid: 'perpetual-us2-fixture' }, hasCompletedOnboarding: true }));
-  await page.evaluate(() => ClaudeSeats.refresh());
+  await confirmedQuotas();
   await nativeUsage(CN);
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 30000 }).toBe('us2');
   const us2Id = await captainId(); await idle(us2Id);
@@ -373,4 +397,49 @@ test('automatic rotation runs CN to US2 to US and wraps to recovered CN without 
   expect(await page.evaluate((id) => window.deck.ptyIsAlive(id), WORKER)).toBe(true);
   expect(records('seat-env.jsonl').filter((r) => r.colId === WORKER)).toHaveLength(1);
   expect(await page.evaluate(() => config.perpetualCaptainState.lastSwitch)).toMatchObject({ fromId: 'us', targetId: 'cn' });
+});
+
+test('startup watchdog retries available seats and stops with one urgent phone alert after three failures', async () => {
+  test.setTimeout(90000);
+  await confirmedQuotas(['cn', 'us']);
+  await page.evaluate(() => { config.perpetualCaptain.preferEarlier = false; });
+  // A manual Relay also starts the same supervision, with a fresh failure budget.
+  expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(true);
+  for (let failure = 0; failure < 3; failure++) {
+    const id = await captainId();
+    await idle(id, false);
+    await expect.poll(() => page.evaluate(() => !!config.mainSession.relayStartup?.attempt)).toBe(true);
+    await page.evaluate(async (id) => {
+      // Stand in for a CLI that launched but never received its briefing.
+      const attempt = config.mainSession.relayStartup.attempt;
+      attempt.deadline = Date.now() - 1; attempt.promptSent = false; attempt.output = false;
+      await ClaudeSeats.automaticTick();
+    }, id);
+    if (failure < 2) await expect.poll(captainId).not.toBe(id);
+  }
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayStartup?.stopped)).toBe(true);
+  const stoppedId = await captainId();
+  await expect.poll(async () => (await application.evaluate(({ app }) => app.testCaptainAlerts)).filter((x) => x.type === 'bark' && x.level === 'critical').length).toBe(1);
+  await page.evaluate(async () => { await ClaudeSeats.automaticTick(); await ClaudeSeats.automaticTick(); });
+  expect(await captainId()).toBe(stoppedId);
+  expect((await application.evaluate(({ app }) => app.testCaptainAlerts)).filter((x) => x.type === 'bark' && x.level === 'critical')).toHaveLength(1);
+  expect(await page.evaluate((id) => window.deck.ptyIsAlive(id), WORKER)).toBe(true);
+});
+
+test('weekly exhausted US and unconfirmed reset windows are skipped instead of silently selecting CN', async () => {
+  await confirmedQuotas(['cn', 'us']);
+  await page.evaluate(async () => {
+    // Regression for the incident's decision shape: US exhausted, CN just reset,
+    // US2 unavailable. A past reset timestamp is not evidence of new quota.
+    const col = MainSession.mainCol(); col.claudeSeatId = 'us';
+    const now = Date.now();
+    config.perpetualCaptainState = {};
+    config.quotas['Claude:us'].sample.windows[1].remaining = 0;
+    config.quotas['Claude:cn'].sample.windows[0].resetAt = now - 1000;
+    flushConfig();
+    await ClaudeSeats.automaticTick();
+  });
+  await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId)).toBe('chatgpt');
+  expect(await page.evaluate(() => config.perpetualCaptainState.lastSwitch)).toMatchObject({ fromId: 'us', targetId: 'chatgpt' });
+  expect(await page.evaluate((id) => window.deck.ptyIsAlive(id), WORKER)).toBe(true);
 });
