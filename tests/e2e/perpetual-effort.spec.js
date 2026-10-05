@@ -53,7 +53,7 @@ test.beforeEach(async () => {
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`],
-    env: cleanEnv({ AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'),
+    env: cleanEnv({ ZDOTDIR: profile, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md'),
       AGENTDECK_TEST_BOARD_RESULTS_FILE: path.join(profile, 'board-results.jsonl') }),
   });
   page = await application.firstWindow();
