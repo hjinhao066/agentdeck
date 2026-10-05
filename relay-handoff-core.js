@@ -618,7 +618,7 @@ function render(state, level) {
   out.push(`5. 确认没有有效执行者后，在原卡下接手并交代前次结果和剩余工作：${ids(takeOver)}`);
   out.push(`6. 进入验收或返工：${ids(toReview)}`);
   out.push(`7. 条件满足才启动（前置完成、额度恢复、队长改方案、用户答复或新指令）：${ids(gated)}`);
-  out.push('8. 回执监听：上任终端的监听已随旧终端被程序作废；同一终端里更早挂的监听会被程序请退，只留最新的。确认自己挂着恰好一个后台 receipts --wait --timeout 300。');
+  out.push('8. 回执监听：上任终端的监听已随旧终端被程序作废；同一终端里更早挂的监听会被程序请退，只留最新的。确认自己挂着恰好一个后台回执监听，命令和挂法见 briefing 第 8 条。');
   out.push(`9. 核对完、状态有变化后再跑一次 handoff，交接文件随之更新。`);
   out.push('证据索引：');
   out.push(`- 上任队长对话：${prev ? `read --id ${prev} [--find 关键词]` : '无'}；历次队长对话：read --id captain-history --find 关键词`);

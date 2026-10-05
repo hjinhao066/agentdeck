@@ -380,14 +380,14 @@ class TaskStore {
       const notices = [];
       // An automatic reviewer's receipt is read for its verdict: a plain failure,
       // or a "不通过" complete, is a rejection; a complete with no clear verdict is
-      // never taken as a pass. A reviewer the Captain opened by hand is not held to
-      // that wording, but its session ending is not a pass either: a receipt that
-      // opens with "不通过" sends the card back instead of marking it done.
-      const reviewing = card.review_session === true;
-      const autoReview = reviewing && AutoVerify.isReviewAttempt(input.attempt_id);
-      const said = reviewing && input.type === 'complete' ? AutoVerify.verdict(input.message) : null;
-      const verdict = autoReview || said === 'fail' ? said : null;
-      const type = verdict === 'fail' ? 'failed' : input.type;
+      // never taken as a pass.
+      const autoReview = card.review_session === true && AutoVerify.isReviewAttempt(input.attempt_id);
+      const verdict = autoReview && input.type === 'complete' ? AutoVerify.verdict(input.message) : null;
+      // A reviewer the Captain opened by hand is not held to that wording, but its
+      // session ending is not a pass either: a receipt that opens with "不通过" sends
+      // the card back instead of marking it done.
+      const rejected = verdict === 'fail' || (card.review_session === true && input.type === 'complete' && AutoVerify.verdict(input.message) === 'fail');
+      const type = rejected ? 'failed' : input.type;
       if (type === 'started') {
         if (/:fallback:/.test(card.last_event || '') ||
           (input.source?.startsWith('resume-fallback-') && /:started:/.test(card.last_event || '') && card.latest_receipt === '已结束，未提交回执')) card.latest_receipt = '';

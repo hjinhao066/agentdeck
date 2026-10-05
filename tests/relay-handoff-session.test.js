@@ -111,7 +111,8 @@ test('after a Relay the card that is out is named with its owner, cannot be hand
   assert.match(note, /^你是刚接任的队长：上一任已经 Relay 到这个席位/);
   assert.match(note, /已有会话在做，不要重派/);
   assert.match(note, /先运行 node "\$AGENTDECK_BOARD_CLI" handoff 取交接快照/);
-  assert.match(note, /读看板继续/); assert.match(note, /上任终端的回执监听已被程序作废，现在重挂恰好一个后台 receipts --wait --timeout 300 监听/);
+  assert.match(note, /读看板继续/); assert.match(note, /上任终端的回执监听已被程序作废，现在按规则第 8 条重挂恰好一个后台回执监听/);
+  assert.ok(!/--timeout/.test(note), 'the listener command is written once, in rule 8');
   assert.ok(!note.includes('先确认旧监听已退出'), 'the new Captain cannot look into the old terminal');
 
   // the new Captain forgets and sends the same card out again: the board refuses, nothing opens

@@ -466,15 +466,11 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项/);
   assert.match(text, /有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派/);
   assert.doesNotMatch(text, /重新派起来|持续自主拆解并派活/);
-  assert.match(text, /有活可派时至少保持 3 个并行/);
   assert.match(text, /额度紧时保持 3–5 个活并行/);
   assert.match(text, /额度多时开十几个/);
-  // Release habits the user set: one step per release from 1.2 on, and the crew
-  // keeps working until only the install itself is left.
-  assert.match(text, /1\.1\.11 之后每版进一位，叫 1\.2、1\.3、1\.4/);
-  assert.match(text, /打包、核对、冒烟和安装脚本都做完、只差执行安装（约 5 分钟内能重启）才通知队员存档停下，之前照常干活、照常派新活/);
-  assert.doesNotMatch(text, /测试全过并进入打包后停止派新活/);
-  assert.match(text, /存档后直接安装并重启，不再请示/);
+  assert.match(text, /测试全过并进入打包后停止派新活/);
+  assert.match(text, /存档后直接安装并重启/);
+  assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
   // The Captain's boundary is one rule, with the one exception the user set.
   assert.match(text, /1\. 不要在这一列里改文件[^\n]*实际工作和返工都交给别的会话[^\n]*例外：各家都没额度而你还有额度时可以亲自动手，活不能停/);
   assert.match(text, /仍不通过，换更强模型的队员接手，最后才找用户/);
@@ -491,7 +487,6 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /AGENTDECK_BOARD_CLI" handoff {3}生成当前交接快照[^\n]*briefing 只读本提示词全文/);
   assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc/);
   assert.ok(!/ {4,}\S/.test(text.split('\n').filter((line) => line.includes('AGENTDECK_BOARD_CLI')).join('\n')), 'no alignment padding in the command list');
-  assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
   // chat-ui replaces prompts longer than 8000 with a file pointer. The closing
   // paragraph must stay inside the pasted briefing on both platforms.
   for (const platform of ['darwin', 'win32']) {

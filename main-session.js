@@ -1910,18 +1910,18 @@
     return ['main-new', 'main-queue', 'main-task'].includes(message.action)
       ? withQueue(() => handleOnce(message, caller)) : handleOnce(message, caller);
   }
+  // The CLI stops waiting at its deadline and reports a timeout. Running the
+  // command after that would start work 队长 believes never started, and a retry
+  // would then start it twice.
+  function refuseLate(message) {
+    if (['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'].includes(message.action) && Number.isFinite(message.deadline) && Date.now() > message.deadline) {
+      throw new Error('这条命令等到超时才轮到，没有执行。先用 ledger 确认现状，需要的话再发一次。');
+    }
+  }
   async function handleOnce(message, caller) {
+    refuseLate(message);
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
-    // The CLI stops waiting at its deadline and reports a timeout. Running the
-    // command after that would start work 队长 believes never started, and a retry
-    // would then start it twice.
-    const late = () => {
-      if (['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'].includes(message.action) && Number.isFinite(message.deadline) && Date.now() > message.deadline) {
-        throw new Error('这条命令等到超时才轮到，没有执行。先用 ledger 确认现状，需要的话再发一次。');
-      }
-    };
-    late();
     switch (message.action) {
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
@@ -2134,7 +2134,7 @@
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
         // Past the limit, behind work already waiting, at quota, or under critical memory: queue it.
         // placeSession applies same-tier fallback unless the command was named with --command.
-        late();   // the checks above wait on the board and the seat list
+        refuseLate(message);   // the checks above wait on the board and the seat list
         const placed = await placeSession(title, cmd, cwd, message.id, task, metadata, prior);
         if (prior) cancelWaiting((w) => w === prior, '队长已换命令/模型，替换旧排队。');
         if (placed.queued) {
