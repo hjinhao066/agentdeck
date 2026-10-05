@@ -42,7 +42,8 @@ test.beforeAll(async () => {
   const column = (id, title, project, reviews = []) => ({ id, title, displayTitle: title, manualTitle: true, project, reviews, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true });
   const now = Date.now();
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
-    theme: 'dark', fitWindow: true, fitCols: 3,
+    // These tasks declare map states; they are not interrupted jobs to resume.
+    resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [
       { ...column('cap', '队长', ''), isMain: true, captainCrew: false },
       column('a1', '登录与权限', '客户门户'), column('a2', '工作台界面', '客户门户'), column('a3', '回归测试', '客户门户'),
