@@ -8,13 +8,27 @@
   const RESET_ADVANCE_MS = 10 * 60_000;
   const FRESH_MS = 15 * 60_000;
   const CODEX_ID = 'chatgpt';
+  // Rotation circle, independent of the order seats are displayed in.
+  const DEFAULT_ROTATION_ORDER = ['us2', 'us', 'cn'];
   const validId = (id) => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,40}$/.test(id);
   const time = (value) => Number.isFinite(value) && value > 0 ? value : null;
   const percent = (value) => Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+  function normalizeOrder(value) {
+    const order = Array.isArray(value) ? [...new Set(value.filter(validId))] : [];
+    return order.length ? order : [...DEFAULT_ROTATION_ORDER];
+  }
+  // Seats named in the order come first, in that order; the rest follow in
+  // their original order. Ids in the order that match no seat are ignored.
+  function orderSeats(seats, order) {
+    const rank = new Map(normalizeOrder(order).map((id, index) => [id, index]));
+    return seats.map((seat, index) => ({ seat, index, rank: rank.has(seat?.id) ? rank.get(seat.id) : Infinity }))
+      .sort((a, b) => a.rank === b.rank ? a.index - b.index : a.rank - b.rank).map(({ seat }) => seat);
+  }
   function normalizeSettings(value = {}) {
     if (!value || typeof value !== 'object') value = {};
     const threshold = percent(value.threshold);
-    return { enabled: value.enabled !== false, threshold: threshold === null ? 3 : threshold, preferEarlier: value.preferEarlier !== false };
+    return { enabled: value.enabled !== false, threshold: threshold === null ? 3 : threshold, preferEarlier: value.preferEarlier !== false,
+      order: normalizeOrder(value.order) };
   }
   function normalizeState(value = {}) {
     if (!value || typeof value !== 'object') value = {};
@@ -156,7 +170,7 @@
   function decide({ settings, state: value, currentId, seats = [], busy = false, draft = false, briefing = false, switching = false, now = Date.now() } = {}) {
     const config = normalizeSettings(settings), state = normalizeState(value);
     if (!config.enabled || busy || draft || briefing || switching || !validId(currentId)) return null;
-    const claude = seats.filter((seat) => seat && validId(seat.id) && seat.id !== CODEX_ID).map((seat) =>
+    const claude = orderSeats(seats.filter((seat) => seat && validId(seat.id) && seat.id !== CODEX_ID), config.order).map((seat) =>
       ({ seat, ...status(seat, state.seats[seat.id] || {}, config.threshold, now) }));
     if (!claude.length) return null;
     const current = claude.find(({ seat }) => seat.id === currentId);
@@ -226,8 +240,8 @@
   function strategyText({ settings, currentId, seats = [], warmups = [], now = Date.now() }) {
     const config = normalizeSettings(settings), current = seats.find((s) => s.id === currentId);
     const name = (s) => s?.name || s?.id || 'ChatGPT';
-    const index = seats.findIndex((s) => s.id === currentId);
-    const others = (index < 0 ? seats : seats.slice(index + 1).concat(seats.slice(0, index)))
+    const sorted = orderSeats(seats, config.order), index = sorted.findIndex((s) => s.id === currentId);
+    const others = (index < 0 ? sorted : sorted.slice(index + 1).concat(sorted.slice(0, index)))
       .filter((s) => s.loggedIn !== false && s.onboardingComplete !== false);
     const parts = [`正在用 ${current ? name(current) : 'ChatGPT'}`];
     if (!config.enabled) return parts.concat('自动轮换已关闭').join(' · ');
@@ -240,5 +254,5 @@
     if (config.preferEarlier) parts.push('有可用额度时优先用快到期的席位');
     return parts.join(' · ');
   }
-  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, normalizeSettings, normalizeState, observe, bound, seatQuota, decide, quotaAction, recordSwitch, strategyText };
+  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, DEFAULT_ROTATION_ORDER, normalizeSettings, orderSeats, normalizeState, observe, bound, seatQuota, decide, quotaAction, recordSwitch, strategyText };
 });

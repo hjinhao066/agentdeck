@@ -16,9 +16,10 @@ function exhausted(state, id, at = NOW, resetAt = NOW + 3600_000) {
 }
 
 test('perpetual defaults enabled at 3 percent and normalizes invalid settings', () => {
-  assert.deepEqual(P.normalizeSettings(), { enabled: true, threshold: 3, preferEarlier: true });
-  assert.deepEqual(P.normalizeSettings(null), { enabled: true, threshold: 3, preferEarlier: true });
-  assert.deepEqual(P.normalizeSettings({ enabled: false, threshold: 7.5, preferEarlier: true }), { enabled: false, threshold: 7.5, preferEarlier: true });
+  const order = ['us2', 'us', 'cn'];
+  assert.deepEqual(P.normalizeSettings(), { enabled: true, threshold: 3, preferEarlier: true, order });
+  assert.deepEqual(P.normalizeSettings(null), { enabled: true, threshold: 3, preferEarlier: true, order });
+  assert.deepEqual(P.normalizeSettings({ enabled: false, threshold: 7.5, preferEarlier: true }), { enabled: false, threshold: 7.5, preferEarlier: true, order });
   assert.equal(P.normalizeSettings({ threshold: -1 }).threshold, 3);
   assert.equal(P.normalizeSettings({ threshold: '3' }).threshold, 3);
   assert.equal(P.normalizeSettings({ threshold: 101 }).threshold, 3);
@@ -402,8 +403,8 @@ test('strategy details use plain language and show the reset, threshold and week
   assert.match(P.strategyText({ currentId: 'cn', seats: [seats[0], { ...seats[1], weeklyRemaining: 0 }] }), /每周额度不足，不切换也不预热/);
 });
 
-test('three Claude seats cycle CN to US to US2 to CN, skipping unavailable seats', () => {
-  for (const [currentId, next] of [['cn', 'us'], ['us', 'us2'], ['us2', 'cn']]) {
+test('three Claude seats cycle US2 to US to CN to US2, skipping unavailable seats', () => {
+  for (const [currentId, next] of [['us2', 'us'], ['us', 'cn'], ['cn', 'us2']]) {
     const seats = ['cn', 'us', 'us2'].map((id) => quota(id, id === currentId ? 0 : 80));
     assert.equal(choose({ currentId, seats }).targetId, next);
     seats.find((s) => s.id === next).loggedIn = false;
@@ -416,6 +417,60 @@ test('three Claude seats cycle CN to US to US2 to CN, skipping unavailable seats
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), { ...unknown('us2'), loggedIn: false }] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 0)] }).targetId, P.CODEX_ID);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 2)] }), null);
+});
+test('rotation order is independent of the order seats are listed in', () => {
+  for (const listed of [['cn', 'us', 'us2'], ['us2', 'us', 'cn'], ['us', 'cn', 'us2']]) {
+    for (const [currentId, next] of [['us2', 'us'], ['us', 'cn'], ['cn', 'us2']]) {
+      const seats = listed.map((id) => quota(id, id === currentId ? 0 : 80));
+      assert.equal(choose({ currentId, seats }).targetId, next, `${currentId} listed as ${listed}`);
+    }
+  }
+});
+test('with every Claude seat healthy the current seat stays', () => {
+  for (const currentId of ['us2', 'us', 'cn']) {
+    assert.equal(choose({ currentId, seats: ['cn', 'us', 'us2'].map((id) => quota(id, 100)) }), null, currentId);
+  }
+});
+test('a US seat at the weekly threshold is skipped: US2 goes straight to CN', () => {
+  const weekly = (remaining) => ({ weeklyTrusted: true, weeklyRemaining: remaining });
+  const seats = (usWeekly) => [quota('cn', 80, weekly(60)), quota('us', 80, weekly(usWeekly)), quota('us2', 0, weekly(60))];
+  assert.equal(choose({ currentId: 'us2', seats: seats(60) }).targetId, 'us');
+  assert.equal(choose({ currentId: 'us2', seats: seats(3) }).targetId, 'cn');
+  assert.equal(choose({ currentId: 'us2', seats: seats(2) }).targetId, 'cn');
+  assert.equal(choose({ currentId: 'us2', seats: seats(3.1) }).targetId, 'us');
+});
+test('a configured order replaces the default; missing order uses the default', () => {
+  const seats = (currentId) => ['cn', 'us', 'us2'].map((id) => quota(id, id === currentId ? 0 : 80));
+  assert.equal(choose({ currentId: 'us2', seats: seats('us2'), settings: { order: ['cn', 'us', 'us2'] } }).targetId, 'cn');
+  assert.equal(choose({ currentId: 'cn', seats: seats('cn'), settings: { order: ['cn', 'us', 'us2'] } }).targetId, 'us');
+  for (const order of [undefined, null, 'us', 7, {}, [], [''], [null, 3]]) {
+    assert.deepEqual(P.normalizeSettings({ order }).order, ['us2', 'us', 'cn'], JSON.stringify(order));
+    assert.equal(choose({ currentId: 'us2', seats: seats('us2'), settings: { order } }).targetId, 'us');
+  }
+  assert.deepEqual(P.normalizeSettings({ order: ['cn', 'cn', 'us'] }).order, ['cn', 'us']);
+});
+test('rotation order ignores unknown ids and puts unlisted seats last', () => {
+  const seats = (currentId) => ['cn', 'us', 'us2'].map((id) => quota(id, id === currentId ? 0 : 80));
+  const settings = { order: ['ghost', 'us', 'bad id!', 'nope'] };
+  assert.equal(choose({ currentId: 'us', seats: seats('us'), settings }).targetId, 'cn');
+  assert.equal(choose({ currentId: 'cn', seats: seats('cn'), settings }).targetId, 'us2');
+  assert.equal(choose({ currentId: 'us2', seats: seats('us2'), settings }).targetId, 'us');
+  assert.deepEqual(P.orderSeats([{ id: 'cn' }, { id: 'x' }, { id: 'us2' }, { id: 'us' }], ['us', 'ghost']).map((s) => s.id), ['us', 'cn', 'x', 'us2']);
+  assert.deepEqual(P.orderSeats([{ id: 'cn' }, { id: 'us' }, { id: 'us2' }]).map((s) => s.id), ['us2', 'us', 'cn']);
+});
+test('Codex hands back to the first available Claude seat in rotation order', () => {
+  const state = P.recordSwitch({}, { fromId: 'us', targetId: P.CODEX_ID, reason: 'claude-unavailable', at: NOW - P.COOLDOWN_MS - 1 });
+  const seats = ['cn', 'us', 'us2'].map((id) => quota(id, 80, { remainingAt: NOW }));
+  assert.equal(choose({ currentId: P.CODEX_ID, state, seats }).targetId, 'us2');
+  assert.equal(choose({ currentId: P.CODEX_ID, state, seats: seats.map((s) => s.id === 'us2' ? { ...s, loggedIn: false } : s) }).targetId, 'us');
+});
+test('the one-click quota action and the strategy text follow the rotation order', () => {
+  const seats = [quota('cn', 80), quota('us', 80), quota('us2', 0)];
+  assert.equal(P.quotaAction({ currentId: 'us2', seats, now: NOW }).targetId, 'us');
+  assert.equal(P.quotaAction({ currentId: 'us2', seats: seats.map((s) => s.id === 'us' ? quota('us', 0) : s), now: NOW }).targetId, 'cn');
+  const named = ['cn', 'us', 'us2'].map((id) => ({ id, name: id.toUpperCase(), loggedIn: true }));
+  assert.match(P.strategyText({ currentId: 'us2', seats: named, now: NOW }), /US2 剩 3% 时切到 US(?!2)/);
+  assert.match(P.strategyText({ currentId: 'cn', seats: named, now: NOW }), /CN 剩 3% 时切到 US2/);
 });
 test('a seat with unfinished onboarding is skipped by rotation and does not block the Codex fallback', () => {
   const current = quota('cn', 0), us = quota('us', 0), us2 = quota('us2', 80, { onboardingComplete: false });
