@@ -472,8 +472,10 @@ const cutNames = () => page.evaluate(() => {
   const view = document.getElementById('taskBoardView');
   const shown = (n) => n.getClientRects().length > 0;
   const rect = (n) => n.getBoundingClientRect();
-  const cut = [...view.querySelectorAll('.tbv-chip-name, .tbv-lane-name, .tbv-summary, .tbv-heading h1, .tbv-head-label, .tbv-lane-open')].filter(shown)
+  const cut = [...view.querySelectorAll('.tbv-chip-name, .tbv-lane-name, .tbv-summary, .tbv-heading h1, .tbv-head-label, .tbv-lane-open, .tbv-tag, .tbv-count')].filter(shown)
     .filter((n) => n.scrollWidth > n.clientWidth).map((n) => `${n.className}「${n.textContent}」 ${n.scrollWidth}>${n.clientWidth}`);
+  // a card's status tag (失败 / 额度 / 挂起 / 冲突) stays whole inside its card
+  view.querySelectorAll('.tbv-card .tbv-tag').forEach((n) => { const r = rect(n), c = rect(n.closest('.tbv-card')); if (shown(n) && (r.left < c.left - 0.5 || r.right > c.right + 0.5)) cut.push(`tbv-tag「${n.textContent}」 outside its card`); });
   const bar = rect(view.querySelector('.tbv-filters'));
   const parts = [...view.querySelectorAll('.tbv-chip, .tbv-summary, .tbv-filters > .tbv-icon')].filter(shown).map((n) => ({ what: n.className + ' ' + n.textContent.trim().slice(0, 12), r: rect(n) }));
   const touching = [];

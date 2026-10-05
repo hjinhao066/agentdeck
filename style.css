@@ -2288,18 +2288,21 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; height: 20px; padding-right: 34px; }
 .cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12.5px; font-weight: 600; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; height: 20px; }
 .cm-status-text { overflow: hidden; text-overflow: ellipsis; }
+/* On a card the status is always whole: it takes the width its words need and the model badge beside it gives way. */
+.cm-top > .cm-status { flex: 0 0 auto; }
 .st-working > .cm-top .cm-status { color: var(--cm-work); }
 .st-input > .cm-top .cm-status { color: var(--cm-need); }
 .st-done > .cm-top .cm-status { color: var(--cm-done); }
 .st-failed > .cm-top .cm-status { color: var(--cm-fail); }
 .cm-node.archived .cm-ico svg, .cm-node.archived .cm-ico::after { animation: none; }
 /* model badge: a small capsule; the brand colour stays in its icon */
-.cm-agent { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; font-size: 11px; color: var(--cm-text-2); max-width: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cm-agent { flex: 0 1 auto; min-width: 0; margin-left: auto; display: inline-flex; align-items: center; font-size: 11px; color: var(--cm-text-2); max-width: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cm-agent > span { display: flex; min-width: 0; max-width: 100%; }
 .cm-agent .cn-badge {
-  margin-right: 0; max-width: 130px; padding: 2px 9px 2px 7px; gap: 5px; border-radius: 999px;
+  margin-right: 0; min-width: 0; max-width: min(130px, 100%); padding: 2px 9px 2px 7px; gap: 5px; border-radius: 999px;
   background: color-mix(in srgb, var(--cm-text) 6%, transparent); border: 1px solid var(--cm-rim);
 }
-.cm-agent .cn-badge .agent-model-label { max-width: 104px; font-weight: 550; color: var(--cm-text); }
+.cm-agent .cn-badge .agent-model-label { min-width: 0; max-width: 104px; font-weight: 550; color: var(--cm-text); }
 .cm-node.kind-captain .cm-agent { margin-left: 0; }
 .cm-more {
   position: absolute; top: 3px; right: 5px; z-index: 1; width: 32px; height: 32px; padding: 0; display: grid; place-items: center;
