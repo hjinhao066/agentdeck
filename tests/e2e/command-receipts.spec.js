@@ -243,8 +243,15 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
 });
 
 test('a day-long receipt wait returns promptly for a labelled abnormal receipt and duplicates stay quiet', async () => {
+  // The preceding restart rotates the Captain capability; export its current
+  // credential through the real PTY again instead of reusing the old snapshot.
+  fs.rmSync(controlFile, { force: true });
+  const captain = await page.evaluate(() => MainSession.mainCol().id);
+  const exportEnv = `node "${path.join(profile, 'export-control.js')}" "${controlFile}"`;
+  await page.evaluate(([id, command]) => window.deck.ptyInput(id, command + '\r'), [captain, exportEnv]);
+  await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
   const control = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
-  await cli(['receipts'], control);
+  expect((await cli(['receipts'], control)).code).toBe(0);
   await dispatch('silence monitor probe');
   const waiting = cli(['receipts', '--wait', '--timeout', '86400'], control);
   // Allow the first authenticated poll to register before producing the event.
@@ -261,7 +268,7 @@ test('a day-long receipt wait returns promptly for a labelled abnormal receipt a
   });
   const received = await waiting;
   expect(Date.now() - started).toBeLessThan(10000);
-  expect(received.code).toBe(0); expect(received.stdout).toContain('异常回执（长时间无输出）');
+  expect(received.code, received.stderr).toBe(0); expect(received.stdout).toContain('异常回执（长时间无输出）');
   expect(received.stdout).toContain('submit-worker');
   const task = await page.evaluate(() => config.mainSession.tasks.at(-1));
   expect(task.status).toBe('working');
@@ -270,7 +277,7 @@ test('a day-long receipt wait returns promptly for a labelled abnormal receipt a
 
 test('closing the isolated application ends its day-long listener without an orphan', async () => {
   const control = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
-  await cli(['receipts'], control);
+  expect((await cli(['receipts'], control)).code).toBe(0);
   const waiting = cli(['receipts', '--wait', '--timeout', '86400'], control);
   await expect.poll(() => fs.readdirSync(path.join(profile, 'board-control', 'receipt-listeners')).filter((name) => name.endsWith('.json')).length).toBe(1);
   const started = Date.now();
