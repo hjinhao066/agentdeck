@@ -45,6 +45,8 @@
       "renderer.js",
       "board-core.js",
       "codex-launch.js",
+      "chatgpt-web-core.js",
+      "chatgpt-web-executor.js",
       "board-cli.js",
       "board-credentials.js",
       "codex-captain-driver.js",

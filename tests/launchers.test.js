@@ -181,7 +181,7 @@ test('队长 knows the providers, only verified models, and the routing preferen
   // Codex: --agent codex (default GPT-6.1 Sol) or the Luna command; the bypass flag is named only to forbid writing it
   assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*--dangerously-bypass-approvals-and-sandbox[^\n]*--no-daemon[^\n]*不要手动拼接/);
   assert.ok(!text.includes(B.commandForAgent('codex')), 'no ready-made codex command with the flag to copy');
-  assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex \| --command/);
+  assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex\|chatgpt-web \| --command/);
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [

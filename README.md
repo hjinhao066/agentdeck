@@ -4,6 +4,46 @@ A Windows/macOS multi-column terminal app for running AI agents side by side.
 Each column has its own shell, output history and input. The Conductor Board
 adds explicit task relationships without taking control of manual terminals.
 
+The Captain can delegate public research to the local, already signed-in ChatGPT
+web subscription without a Claude/Codex model turn:
+
+```sh
+node "$AGENTDECK_BOARD_CLI" new --agent chatgpt-web --title "公开调研" --task "解释水的冰点，附公开来源链接。"
+# Optional: use the existing skill's verified Deep Research workflow.
+node "$AGENTDECK_BOARD_CLI" new --agent chatgpt-web --web-mode deep-research --title "公开研究" --task "需要研究的公开问题"
+```
+
+`chatgpt-web` is a native executor, not a shell command. It reuses
+`~/.agents/skills/ask-chatgpt-web/` and `~/.agents/tools/ask-chatgpt-web/cli.mjs`
+(install that tool's dependencies first). Default chat waits up to 30 minutes;
+Deep Research waits up to 60 minutes, automatically confirms the research plan
+once, and must pass the skill's actual mode/report verification. Both require
+the actual **6 Pro** selection; there is no model fallback. `--command` and
+`--seat` cannot be combined with this executor. The UI session selector is unchanged.
+
+The task body is the exact research question, without the terminal worker
+instruction suffix. The Captain must review it for credentials and sensitive
+personal information before dispatch; obvious credentials are rejected before
+storage/sending. Only public research is supported. `ledger`, `peek`, `receipts`,
+`tell`, `stop`, and board-card `--task-id` use the usual session/receipt lifecycle.
+`tell` submits a new question, not a follow-up in the prior webpage. `tell --now`
+cancels the current question and sends the new one ahead of that session's queued
+questions; `--replace` drops those queued questions (`--replace --now` does both).
+Failed receipts show “没做成” in the ledger and status dot; cancelled work shows
+“已中断”. A report excerpt and the absolute full Markdown path return through the existing completion
+channel. Reports stay local under `~/reports/agentdeck-chatgpt-web/<run-id>/`.
+
+Requests in one app execute FIFO, one at a time, with at least 60 seconds after
+the previous request ends. The existing skill also protects the local browser
+with its own lock/cooldown/pending-request checks. A conflicting external request,
+login problem, quota limit, or timeout returns a distinct failed receipt; it is
+not retried. A restart never resends a question that was already handed to the
+executor. Failed/suspended requests may keep their dedicated browser tab: the
+user must confirm generation has ended and close it before another request.
+Missing login requires the user to log in manually; AgentDeck never logs in,
+reads cookies/storage, or records browser credentials. Webpage stdout/stderr and
+raw diagnostics are not copied into AgentDeck logs or conversations.
+
 ## Layout
 
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in

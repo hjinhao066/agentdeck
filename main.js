@@ -32,6 +32,8 @@ const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEn
 const { createMemoryPressure } = require('./memory-pressure');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
+const { createExecutor: createChatGPTWebExecutor } = require('./chatgpt-web-executor');
+let chatgptWebExecutor = null;
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
@@ -339,6 +341,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     // Ignore a late exit from an older PTY generation. This matters if a
     // column is respawned quickly with the same id.
     if (ptys.get(id) === p) {
+      chatgptWebExecutor?.cancel(id);
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
       ptyLaunchDirs.delete(id);
@@ -362,6 +365,7 @@ function send(channel, payload) {
 }
 
 function killPty(id, keepReplay) {
+  chatgptWebExecutor?.cancel(id);
   if (notifications) notifications.cancel(id);
   // Archived sessions keep their last output so restoring replays it.
   if (keepReplay) writeSession(id, ptyBuffers.get(id));
@@ -484,7 +488,7 @@ function setupBoardControl() {
       }
     }
     clearCredentials(boardControlDir);
-    for (const file of ['board-credentials.js', 'security.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
+    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
     fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));
@@ -1062,6 +1066,32 @@ app.whenReady().then(async () => {
     return claudeQuotaRefresh.samples().filter((s) => !seatId || s.seatId === seatId);
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
+  // Only the trusted deck main frame can submit a native worker. No browser
+  // credentials or Captain capability are passed into the skill subprocess.
+  chatgptWebExecutor = createChatGPTWebExecutor({
+    ...(tudArg ? {
+      cliPath: process.env.AGENTDECK_TEST_CHATGPT_WEB_CLI || path.join(app.getPath('userData'), 'missing-web-cli.mjs'),
+      stateDir: path.join(app.getPath('userData'), 'web-state'),
+      reportsDir: path.join(app.getPath('userData'), 'web-reports'),
+      cooldownMs: Number(process.env.AGENTDECK_TEST_CHATGPT_WEB_COOLDOWN_MS || 60000),
+      env: { ...process.env, CHATGPT_WEB_TEST_EVENTS_DIR: process.env.AGENTDECK_TEST_CHATGPT_WEB_EVENTS_DIR || '' },
+    } : {}),
+    emit: (event) => {
+      const id = crypto.randomUUID();
+      const command = { ...event, id, submitOnly: true, nativeWeb: true };
+      pendingBoardCommands.set(id, { command, delivered: false });
+      dispatchPendingBoardCommands();
+      const text = event.action === 'progress' ? event.message : event.failed || '完整报告已保存，结果已提交队长。';
+      const data = `\r\n[网页版 ChatGPT 6 Pro] ${text}\r\n`;
+      bufferAppend(event.callerId, data); send('pty:data', { id: event.callerId, data });
+    },
+  });
+  handleMain('chatgpt-web:run', (_e, input) => {
+    if (!input || !validId(input.id) || !validId(input.taskId) || !ptys.has(input.id) || !receiptSessions.has(input.id) || managedSessions.has(input.id)) throw new Error('网页队员会话不存在或不是队员。');
+    return chatgptWebExecutor.submit(input);
+  });
+  handleMain('chatgpt-web:cancel', (_e, { id }) => chatgptWebExecutor.cancel(id));
+  handleMain('chatgpt-web:status', (_e, { id }) => chatgptWebExecutor.status(id));
   onMain('pty:input', (_e, { id, data }) => {
     if (id === warmupCaptain.id) {
       warmupCaptain.idle = false;
@@ -1088,6 +1118,7 @@ app.whenReady().then(async () => {
     }
     const verbatim = action === 'main-briefing' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read';
     pendingBoardCommands.delete(requestId);
+    if (pending?.command.nativeWeb) return;
     if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
       done: !!done,
@@ -1551,6 +1582,7 @@ app.on('before-quit', (event) => {
   mobileRequests.clear();
   clearInterval(quotaWarmupTimer);
   quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
+  chatgptWebExecutor?.dispose();
 
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }

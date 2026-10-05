@@ -118,7 +118,7 @@
     const chars = Array.from(summary), files = receipt.files || [];
     return { summary: chars.slice(0, 300).join(''), files: files.slice(0, 5), more: chars.length > 300 || files.length > 5 };
   }
-  const STATUS = { plain: '未开始', working: '干活中', paused: '停在安全点', quota: '额度用尽/等待', input: '等你回复', done: '已完成', exited: '已退出' };
+  const STATUS = { plain: '未开始', working: '干活中', paused: '停在安全点', quota: '额度用尽/等待', input: '等你回复', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
   const IMAGE = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 
   const oneLine = (s, max) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().slice(0, max);
@@ -219,7 +219,7 @@
       `   ${cli} queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令/模型会替换，移到 done/todo 撤队`,
 
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
-      `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--task-id 卡片id] [--cwd 目录] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--seat 指定已登录 Claude 席位，省略沿用当前席位；--agent 和 --command 都不写就用和你一样的 agent`,
+      `   ${cli} new --title "标题" --task "任务正文" [--project "项目名"] [--reviews id[,id]] [--task-id id] [--cwd 目录] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "启动命令"]   --seat 为已登录 Claude 席位；默认同队长；网页仅公开调研，先审查敏感信息；--web-mode deep-research；禁 --seat/--command`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
       `   ${cli} stop --id 会话id                 发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
       `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
