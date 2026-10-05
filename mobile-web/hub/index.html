@@ -27,16 +27,14 @@
         <div id="machine-cards" class="stack"></div>
       </section>
       <section id="captain-view" class="view captain-view" aria-label="队长对话" hidden>
-        <div class="captain-head"><h1 id="captain-title"></h1><span id="captain-status"></span></div>
+        <div class="sr-only"><h1 id="captain-title"></h1><span id="captain-status"></span></div>
         <div id="captain-turns" class="turns" role="region" aria-label="队长对话记录" tabindex="0"></div>
         <form id="message-form" class="composer">
           <label class="sr-only" for="message">给队长的消息</label>
           <div class="composer-box">
-            <textarea id="message" name="message" rows="2" maxlength="8000" aria-describedby="send-hint"></textarea>
-            <div class="composer-actions">
-              <button id="clear" class="icon-button" type="button" title="清空草稿" aria-label="清空草稿" disabled></button>
-              <button id="send" class="icon-button send-button" type="submit" aria-describedby="send-hint" disabled></button>
-            </div>
+            <textarea id="message" name="message" rows="1" maxlength="8000" aria-describedby="send-hint"></textarea>
+            <button id="clear" class="icon-button" type="button" title="清空草稿" aria-label="清空草稿" hidden></button>
+            <button id="send" class="icon-button send-button" type="submit" aria-describedby="send-hint" disabled></button>
           </div>
           <p id="send-hint" class="send-hint" role="status" aria-live="polite"></p>
         </form>
