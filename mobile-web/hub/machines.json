@@ -1,0 +1,6 @@
+{
+  "machines": [
+    { "id": "mac", "label": "Mac", "basePath": "/mac/", "platform": "darwin", "default": true },
+    { "id": "win", "label": "Windows", "basePath": "/win/", "platform": "win32" }
+  ]
+}

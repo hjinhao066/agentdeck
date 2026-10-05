@@ -136,6 +136,61 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | POST | `/api/upload` | 原始图片字节 + CSRF，返回 `{id}` |
 | GET | `/api/image?id=…` | 已登录设备读取自己上传的图片 |
 
+设置了前缀时，以上路径都相对于前缀（`/win/login`、`/win/api/auth` 等），内置页面和资源除外。
+
+## 多台电脑（路径前缀）
+
+一个手机入口可以同时接 Mac 和 Windows：VPS 的 Caddy 按路径把 `/mac/*`、`/win/*`
+**不剥前缀**地转到各自隧道，AgentDeck 自己校验并去掉前缀。每台电脑独立保存 token、
+设备 cookie、CSRF 密钥和登录封禁计数，互相不知道对方的凭据。
+
+每台的 `~/.config/agentdeck-remote/endpoint.json`（隧道安装器写入，不含密钥）可带两项：
+
+```json
+{ "publicOrigin": "https://your-private-entry.example", "basePath": "/win/", "label": "Windows" }
+```
+
+- `basePath`：一段小写字母/数字/连字符，前后各一个 `/`，例如 `/mac/`、`/win/`。不写或写成空字符串＝旧行为，逐字节不变。
+  每次在设置页开关网页服务时重新读取 `endpoint.json`，**以本次读到的内容为准**，不沿用上一次的值，不需要重启应用；
+  它不写进 `config.json`。回滚：删掉（或清空）`basePath` 与 `label`，再在设置页关开一次网页服务即可回到旧模式，无需重启应用。
+  只有「不写」和 `""` 算无前缀；`null`、`false`、`0`、数字、格式不合法的字符串一律让服务拒绝启动并在设置中提示，不会悄悄退回无前缀。
+- `label`：手机总台里显示的名称，1–32 个字符，不能含控制符、双向控制符、零宽字符、行/段分隔符、引号（`"` `'` `` ` `` 及弯引号）和尖括号，
+  首尾不能是空白；只在设置了 `basePath` 时生效。不写则按平台显示 Mac / Windows，其它平台显示固定的 `AgentDeck`（绝不回退成主机名）。
+  无 `basePath` 时 `label` 被忽略：服务照常以旧模式启动（保证回滚时本机登录不断），仅在 `status.warning` 与日志里记一条警告。
+  有 `basePath` 而 `label` 不合法时拒绝启动。
+- 桌面设置页只读显示「手机入口中的名称：Windows · /win/」。
+
+配置了 `basePath` 后：
+
+- 来自公网 Host 的请求路径必须以前缀开头，否则 404（在任何鉴权之前，含带有效 Bearer 或 cookie 的请求）。
+  本机 `127.0.0.1` 直连仍走无前缀的旧路径，前缀路径在直连上是 404。原有 Host、Origin、Fetch Metadata、
+  单个 X-Forwarded-For 校验全部保留。
+- 公网设备 cookie 改为 `__Secure-agentdeck_<前缀名>`（如 `__Secure-agentdeck_win`，Path=`/win/`），HttpOnly、Secure、
+  SameSite=Strict、无 Domain。用 `__Secure-` 而不是 `__Host-`，因为后者要求 Path=/，无法按机器隔离。
+  服务端只认已登记哈希，注入的同名 cookie 登不上。请求里带了多个同名 cookie 时，**恰有一个**是已登记且未过期的设备
+  cookie 才接受（夹带的垃圾 cookie 不会把用户踢下线）；一个都没有、或有多个合法的（有歧义）一律按未登录处理。本机直连仍用旧 cookie。
+- 未登录访问前缀下任何路径（包括 `/win/`）都返回 JSON 401，不返回内嵌登录页，也不提供旧的内置页面和静态资源
+  （旧页面使用绝对路径，只适用于本机直连）。登录用 `POST /win/login`。
+- 吊销（设置页垃圾桶）和手机退出只影响这一台。
+
+新增接口（相对于前缀，例如 `/win/api/snapshot`；无前缀的直连也可用）：
+
+| 方法 | 路径 | 行为 |
+| --- | --- | --- |
+| GET | `api/snapshot` | `{apiVersion:2, machine:{id,label,platform,hostname,appVersion}, now, csrfToken, captain:{id,title,status,turns}, sessions, boardVersion}`；一次返回手机总台每 5 秒需要的数据 |
+
+| GET | `api/info` | **无需登录**的能力探测：`{app:'agentdeck', apiVersion:2, capabilities:['snapshot','basePath'], machine:{id,label,platform}}`；不含 hostname、精确版本号、token 或任何会话数据（需要版本号请在登录后读 `api/snapshot`）。只响应 GET，HEAD 不当探测处理 |
+
+手机总台的判定：先请求 `api/info`。200＝新版（再请求 `api/snapshot`，401 即需要登录）；401 或 404＝旧版，
+旧版对前缀路径一律回 401，所以应显示「需要升级 AgentDeck」而不是登录框。`api/info` 仍受前缀、Host、
+Origin 和代理校验约束，不计入登录失败次数。
+
+`machine.id` 是前缀名（`win`），无前缀时为 `local`。`boardVersion` 是看板文件名、大小、mtime 的 16 位哈希，
+不含任何卡片内容，只在看板文件变化时改变，读取失败时为空字符串。`csrfToken` 与 `GET api/auth` 相同。
+
+开启带私人 origin 的安装版 AgentDeck 会在 macOS 和 Windows 上注册登录项（Electron `openAtLogin`），
+Windows 若被系统「启动」应用设置禁用，设置页会提示。测试用 `--test-user-data` 实例从不改登录项，也不读取 endpoint.json。
+
 ## 验证与回滚
 
 `npm test`；`npm run test:e2e -- tests/e2e/mobile-web.spec.js`（仅相关测试）。

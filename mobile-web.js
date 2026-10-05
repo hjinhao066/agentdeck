@@ -6,10 +6,20 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const net = require('node:net');
 const QuotaCore = require('./quota-core');
+const fsSync = require('node:fs');
 
 const DEFAULT_PORT = 43121;
 const COOKIE = 'agentdeck_mobile';
 const REMOTE_COOKIE = '__Host-agentdeck_mobile';
+const MACHINE_COOKIE_PREFIX = '__Secure-agentdeck_';
+const BASE_PATH = /^\/[a-z0-9][a-z0-9-]{0,31}\/$/;
+// Letters, digits, punctuation and inner spaces only: no control, format
+// (zero-width, bidirectional), line/paragraph separator, quote or angle-bracket
+// characters, and no leading/trailing space. Length counts code points.
+const LABEL = /^(?!\s)(?!.*\s$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}<>\uFF1C\uFF1E"'`\u00AB\u00BB\u2018-\u201F]{1,32}$/u;
+const GENERIC_LABEL = 'AgentDeck';
+const API_VERSION = 2;
+const LOGIN_ITEM_PLATFORMS = ['darwin', 'win32'];
 const DEVICE_LIFETIME = 30 * 24 * 60 * 60 * 1000;
 const LOGIN_LIMITS = { perIp: 5, global: 30, windowMs: 10 * 60 * 1000, banMs: 15 * 60 * 1000 };
 // Uploaded images: one per request, re-checked by file signature. The id is
@@ -57,6 +67,41 @@ function quotaView(data, now) {
   return { rows, version: /^\d+\.\d+\.\d+[\w.-]{0,20}$/.test(data?.version || '') ? data.version : '', now };
 }
 
+// Login-item registration is shared by the platforms whose Electron
+// `openAtLogin` can restore the private web service after a user login.
+function supportsLoginItem(platform) { return LOGIN_ITEM_PLATFORMS.includes(platform); }
+
+// endpoint.json is the only source of the path prefix and name: they are taken
+// from it on every (re)configure and never kept in config.json. Absent keys mean
+// the legacy unprefixed mode; a malformed value is passed on so configure refuses
+// to start instead of silently falling back.
+function withEndpoint(settings, endpoint) {
+  const { basePath, label, ...rest } = settings;
+  if (endpoint === null || typeof endpoint !== 'object') endpoint = {};
+  if (!rest.publicOrigin && typeof endpoint.publicOrigin === 'string') rest.publicOrigin = endpoint.publicOrigin;
+  if (endpoint.basePath !== undefined) rest.basePath = endpoint.basePath;
+  if (endpoint.label !== undefined) rest.label = endpoint.label;
+  return rest;
+}
+function readEndpoint(file) {
+  try { return JSON.parse(fsSync.readFileSync(file, 'utf8')); } catch (_) { return {}; }
+}
+function persistable(settings) {
+  const { basePath, label, ...rest } = settings;
+  return rest;
+}
+
+// A short digest of board file names, sizes and mtimes; never any card text.
+function boardVersionOf(dir) {
+  try {
+    const parts = fsSync.readdirSync(dir).filter((name) => name.endsWith('.json')).sort().map((name) => {
+      const stat = fsSync.statSync(path.join(dir, name));
+      return `${name}:${stat.size}:${stat.mtimeMs}:${stat.ino}`;
+    });
+    return crypto.createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
+  } catch (_) { return ''; }
+}
+
 function hash(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 
 function publicOrigin(value) {
@@ -79,13 +124,15 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings, uploadDir = '', now = Date.now }) {
-    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings };
+  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings, getBoardVersion, machine = {}, uploadDir = '', now = Date.now }) {
+    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings, getBoardVersion };
+    this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
+    this.warning = '';
     this.pending = Promise.resolve();
     this.storage = Promise.resolve();
     this.now = now;
@@ -97,7 +144,9 @@ class MobileWebServer {
     const port = this.server?.address()?.port || this.settings.port;
     const enabled = !!this.server?.listening;
     return { enabled, url: enabled ? `http://127.0.0.1:${port}` : '', publicUrl: enabled ? this.settings.publicOrigin : '', publicOrigin: this.settings.publicOrigin,
-      token: this.settings.token, port, deviceCount: this.settings.devices.filter((device) => device.expiresAt > this.now()).length, error: this.error };
+      token: this.settings.token, port, deviceCount: this.settings.devices.filter((device) => device.expiresAt > this.now()).length, error: this.error,
+      ...(this.warning ? { warning: this.warning } : {}),
+      ...(this.settings.basePath ? { basePath: this.settings.basePath, label: this.machineLabel() } : {}) };
   }
   configure(settings = {}) {
     this.pending = this.pending.then(() => this.applySettings(settings));
@@ -120,18 +169,34 @@ class MobileWebServer {
   async applySettings(value) {
     await this.close();
     this.error = '';
+    this.warning = '';
     const next = { ...this.settings, ...value };
     const port = next.port;
     const origin = publicOrigin(next.publicOrigin);
     const token = typeof next.token === 'string' ? next.token : '';
+    // Prefix and label come only from this call, never from the previous
+    // settings, so removing them from endpoint.json returns to the legacy mode
+    // without restarting the app. Only undefined/'' mean "none"; null, false, 0
+    // and every other non-string are invalid and refuse to start.
+    const basePath = value.basePath === undefined || value.basePath === '' ? '' : value.basePath;
+    let label = value.label === undefined || value.label === '' ? '' : value.label;
+    const validBase = basePath === '' || (typeof basePath === 'string' && BASE_PATH.test(basePath));
+    const validLabel = label === '' || (typeof label === 'string' && LABEL.test(label));
+    // Without a prefix the label is meaningless. Ignore it so a rollback that
+    // removes only basePath still lets the local login start, and say so.
+    if (basePath === '' && label !== '') { label = ''; this.warning = 'Machine label ignored without a base path.'; console.warn('[mobile-web] ' + this.warning); }
     if (token !== this.settings.token) this.csrfSecret = crypto.randomBytes(32);
     this.settings = { enabled: next.enabled === true, token, port, publicOrigin: origin || '',
+      ...(basePath && validBase ? { basePath } : {}),
+      ...(basePath && label && validLabel ? { label } : {}),
       devices: (!this.settings.token || token === this.settings.token) && Array.isArray(next.devices) ? next.devices.filter((device) => device && /^[a-f0-9]{64}$/.test(device.hash) && Number.isSafeInteger(device.expiresAt) && device.expiresAt > this.now()).slice(-20).map((device) => ({ hash: device.hash, expiresAt: device.expiresAt })) : [] };
     if (!Number.isInteger(port) || port < 0 || port > 65535) {
       this.error = 'Invalid local port.';
       return this.status();
     }
     if (origin === null) { this.error = 'Public origin must be an HTTPS origin without a path.'; return this.status(); }
+    if (!validBase) { this.error = 'Invalid base path.'; return this.status(); }
+    if (basePath && !validLabel) { this.error = 'Invalid machine label.'; return this.status(); }
     if (token && !/^[a-f0-9]{64}$/.test(token)) { this.error = 'Invalid login token.'; return this.status(); }
     try {
       if (this.settings.enabled && !this.settings.token) this.settings.token = crypto.randomBytes(32).toString('hex');
@@ -160,31 +225,44 @@ class MobileWebServer {
     res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify(body));
   }
-  credential(req) {
+  machineLabel() {
+    if (this.settings.label) return this.settings.label;
+    return this.machine.platform === 'darwin' ? 'Mac' : this.machine.platform === 'win32' ? 'Windows' : GENERIC_LABEL;
+  }
+  // Public requests through a machine prefix get a per-machine cookie name and
+  // Path, so the browser never sends one machine's device cookie to another.
+  // Everything else keeps the original cookie scheme byte for byte.
+  cookieName(prefixed) {
+    if (prefixed) return MACHINE_COOKIE_PREFIX + this.settings.basePath.slice(1, -1);
+    return this.settings.publicOrigin ? REMOTE_COOKIE : COOKIE;
+  }
+  credential(req, prefixed = false) {
     if (req.headers.authorization !== undefined) {
       const match = /^Bearer (\S+)$/.exec(req.headers.authorization);
       return match && matches(match[1], this.settings.token) ? { hash: hash(this.settings.token), bearer: true } : null;
     }
-    const name = this.settings.publicOrigin ? REMOTE_COOKIE : COOKIE;
-    const cookies = String(req.headers.cookie || '').split(';').map((s) => s.trim()).filter((s) => s.startsWith(name + '='));
-    if (cookies.length !== 1) return null;
-    const value = cookies[0].slice(name.length + 1);
-    if (!/^[a-f0-9]{64}$/.test(value)) return null;
-    const digest = hash(value);
-    return this.settings.devices.find((device) => device.expiresAt > this.now() && matches(digest, device.hash)) || null;
+    const name = this.cookieName(prefixed);
+    // Extra cookies of the same name can be planted next to the real one (for example through a Set-Cookie
+    // smuggled past the entry proxy), so a request is not refused just for carrying them. It is accepted only
+    // when exactly one of them is a registered, unexpired device cookie; none, or more than one, is no credential.
+    const registered = String(req.headers.cookie || '').split(';').map((s) => s.trim()).filter((s) => s.startsWith(name + '='))
+      .map((s) => s.slice(name.length + 1)).filter((value) => /^[a-f0-9]{64}$/.test(value))
+      .map((value) => { const digest = hash(value); return this.settings.devices.find((device) => device.expiresAt > this.now() && matches(digest, device.hash)); })
+      .filter(Boolean);
+    return registered.length === 1 ? registered[0] : null;
   }
   csrfToken(credential) {
     return crypto.createHmac('sha256', this.csrfSecret).update(`${credential.bearer ? 'bearer' : 'device'}:${credential.hash}`).digest('hex');
   }
-  writeCredential(req, res) {
-    const credential = this.credential(req);
+  writeCredential(req, res, prefixed = false) {
+    const credential = this.credential(req, prefixed);
     if (!credential) { this.json(res, 401, { error: 'Unauthorized.' }); return null; }
     if (!matches(req.headers['x-csrf-token'], this.csrfToken(credential))) { this.json(res, 403, { error: 'CSRF token required.' }); return null; }
     return credential;
   }
-  cookie(value, maxAge = DEVICE_LIFETIME / 1000) {
+  cookie(value, maxAge = DEVICE_LIFETIME / 1000, prefixed = false) {
     const remote = !!this.settings.publicOrigin;
-    return `${remote ? REMOTE_COOKIE : COOKIE}=${value}; HttpOnly; ${remote ? 'Secure; ' : ''}SameSite=Strict; Path=/; Max-Age=${maxAge}`;
+    return `${this.cookieName(prefixed)}=${value}; HttpOnly; ${remote ? 'Secure; ' : ''}SameSite=Strict; Path=${prefixed ? this.settings.basePath : '/'}; Max-Age=${maxAge}`;
   }
   requestContext(req) {
     const critical = new Set(['host', 'origin', 'authorization', 'x-forwarded-for', 'x-forwarded-proto', 'x-csrf-token', 'sec-fetch-site']);
@@ -197,11 +275,11 @@ class MobileWebServer {
     const address = req.socket.remoteAddress;
     if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(address)) return null;
     const port = this.server?.address()?.port;
-    if ([`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) return { origin: `http://${req.headers.host}`, ip: address };
+    if ([`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host)) return { origin: `http://${req.headers.host}`, ip: address, public: false };
     if (!this.settings.publicOrigin || req.headers.host !== new URL(this.settings.publicOrigin).host || req.headers['x-forwarded-proto'] !== 'https' || !net.isIP(req.headers['x-forwarded-for'] || '')) return null;
     // Only the configured HTTPS host through the loopback tunnel may supply
     // client IPs. Caddy must replace these headers, never append client input.
-    return { origin: this.settings.publicOrigin, ip: req.headers['x-forwarded-for'] };
+    return { origin: this.settings.publicOrigin, ip: req.headers['x-forwarded-for'], public: true };
   }
   loginBan(ip) {
     const now = this.now();
@@ -297,10 +375,27 @@ class MobileWebServer {
     let url;
     try { url = new URL(req.url, context.origin); } catch (_) { return this.json(res, 400, { error: 'Invalid URL.' }); }
     if (url.origin !== context.origin || url.username || url.password || [...url.searchParams.keys()].some((key) => /(?:^|_)(?:token|password|secret)(?:$|_)/i.test(key))) return this.json(res, 400, { error: 'Invalid URL.' });
-    const credential = this.credential(req);
+    // With a base path configured, a request from the public host must carry it;
+    // anything else is not this machine's route and never reaches auth. Direct
+    // loopback clients keep the unprefixed legacy routes.
+    const prefixed = context.public && !!this.settings.basePath;
+    let route = url.pathname;
+    if (prefixed) {
+      if (!route.startsWith(this.settings.basePath)) return this.json(res, 404, { error: 'Not found.' });
+      route = route.slice(this.settings.basePath.length - 1);
+    }
+    const credential = this.credential(req, prefixed);
     // An explicit wrong credential must never fall back to a valid cookie.
     if (req.headers.authorization !== undefined && !credential) return this.unauthorized(res, this.loginBan(context.ip) || this.failedLogin(context.ip));
-    if (url.pathname === '/login' && req.method === 'POST') {
+    // Unauthenticated capability probe so the phone can tell a current machine
+    // that needs a login from an older build, which answers 401 to every path.
+    // Fixed, non-sensitive fields only; no hostname, exact app version, token,
+    // device or app data.
+    if (req.method === 'GET' && route === '/api/info') {
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath'],
+        machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
+    }
+    if (route === '/login' && req.method === 'POST') {
       const ban = this.loginBan(context.ip);
       if (ban) return this.unauthorized(res, ban);
       let body;
@@ -313,31 +408,32 @@ class MobileWebServer {
       this.settings.devices = this.settings.devices.filter((entry) => entry.expiresAt > this.now() && (!credential || credential.hash !== entry.hash)).slice(-19).concat(device);
       try { await this.persist(); } catch (_) { this.settings.devices = this.settings.devices.filter((entry) => entry.hash !== device.hash); return this.json(res, 500, { error: 'Could not remember this device.' }); }
       this.failures.delete(context.ip);
-      res.setHeader('Set-Cookie', this.cookie(value));
+      res.setHeader('Set-Cookie', this.cookie(value, undefined, prefixed));
       return this.json(res, 200, { authenticated: true });
     }
     if (!credential) {
-      if (req.method === 'GET' && url.pathname === '/') {
+      if (!prefixed && req.method === 'GET' && route === '/') {
         res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
         return res.end(loginPage(nonce));
       }
       return this.json(res, 401, { error: 'Unauthorized.' });
     }
     if (req.method === 'POST' && !matches(req.headers['x-csrf-token'], this.csrfToken(credential))) return this.json(res, 403, { error: 'CSRF token required.' });
-    if (req.method === 'GET' && ASSETS[url.pathname]) {
-      const [file, type] = ASSETS[url.pathname];
+    // The bundled single-machine page uses absolute URLs, so it is not served under a prefix.
+    if (!prefixed && req.method === 'GET' && ASSETS[route]) {
+      const [file, type] = ASSETS[route];
       const data = await fs.readFile(path.join(__dirname, 'mobile-web', file));
       res.writeHead(200, { 'Content-Type': type });
       return res.end(data);
     }
-    if (req.method === 'GET' && url.pathname === '/api/auth') return this.json(res, 200, { authenticated: true, csrfToken: this.csrfToken(credential) });
-    if (req.method === 'POST' && url.pathname === '/logout') {
+    if (req.method === 'GET' && route === '/api/auth') return this.json(res, 200, { authenticated: true, csrfToken: this.csrfToken(credential) });
+    if (req.method === 'POST' && route === '/logout') {
       if (req.headers['transfer-encoding'] || Number(req.headers['content-length']) > 0) {
         let body;
         try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
         if (Object.keys(body).length) return this.json(res, 400, { error: 'Invalid request.' });
       }
-      const current = this.writeCredential(req, res);
+      const current = this.writeCredential(req, res, prefixed);
       if (!current) return;
       if (current.bearer) return this.json(res, 400, { error: 'Device cookie required.' });
       this.settings.devices = this.settings.devices.filter((device) => device.hash !== current.hash);
@@ -349,21 +445,32 @@ class MobileWebServer {
         res.once('finish', () => this.close());
         return this.json(res, 500, { error: 'Could not save device logout.' });
       }
-      res.setHeader('Set-Cookie', this.cookie('', 0));
+      res.setHeader('Set-Cookie', this.cookie('', 0, prefixed));
       return this.json(res, 200, { authenticated: false });
     }
-    if (req.method === 'GET' && url.pathname === '/api/captain') return this.json(res, 200, this.sources.getCaptain ? await this.sources.getCaptain() : { turns: [], status: 'unavailable' });
-    if (req.method === 'GET' && url.pathname === '/api/quota') return this.json(res, 200, quotaView(this.sources.getQuota ? await this.sources.getQuota() : null, this.now()));
-    if (req.method === 'GET' && url.pathname === '/api/sessions') return this.json(res, 200, { sessions: await this.sources.getSessions() });
-    if (req.method === 'GET' && url.pathname === '/api/tasks') return this.json(res, 200, { cards: await this.sources.getTasks() });
-    if (req.method === 'GET' && url.pathname === '/api/output') {
+    if (req.method === 'GET' && route === '/api/snapshot') {
+      const [captain, sessions] = await Promise.all([this.sources.getCaptain ? this.sources.getCaptain() : null, this.sources.getSessions()]);
+      let boardVersion = '';
+      try { boardVersion = String(this.sources.getBoardVersion ? await this.sources.getBoardVersion() : ''); } catch (_) { /* Version is advisory; the phone refetches on ''. */ }
+      const str = (value) => typeof value === 'string' ? value : '';
+      return this.json(res, 200, { apiVersion: API_VERSION,
+        machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform, hostname: this.machine.hostname, appVersion: this.machine.appVersion },
+        now: this.now(), csrfToken: this.csrfToken(credential),
+        captain: { id: str(captain?.id), title: str(captain?.title), status: str(captain?.status) || 'unavailable', turns: Array.isArray(captain?.turns) ? captain.turns : [] },
+        sessions, boardVersion });
+    }
+    if (req.method === 'GET' && route === '/api/captain') return this.json(res, 200, this.sources.getCaptain ? await this.sources.getCaptain() : { turns: [], status: 'unavailable' });
+    if (req.method === 'GET' && route === '/api/quota') return this.json(res, 200, quotaView(this.sources.getQuota ? await this.sources.getQuota() : null, this.now()));
+    if (req.method === 'GET' && route === '/api/sessions') return this.json(res, 200, { sessions: await this.sources.getSessions() });
+    if (req.method === 'GET' && route === '/api/tasks') return this.json(res, 200, { cards: await this.sources.getTasks() });
+    if (req.method === 'GET' && route === '/api/output') {
       const id = url.searchParams.get('id');
       if (!id || id.length > 256 || /[\x00-\x1f]/.test(id)) return this.json(res, 400, { error: 'Session id required.' });
       const output = await this.sources.getOutput(id);
       if (!output) return this.json(res, 404, { error: 'Session not found.' });
       return this.json(res, 200, { id: output.id, title: output.title, text: String(output.text || '').slice(-64_000) });
     }
-    if (req.method === 'POST' && url.pathname === '/api/captain') {
+    if (req.method === 'POST' && route === '/api/captain') {
       let body;
       try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
       const images = body.images === undefined ? [] : body.images;
@@ -373,16 +480,16 @@ class MobileWebServer {
       if (files.includes(null)) return this.json(res, 400, { error: 'Image not found. Upload it again.' });
       // Body uploads can outlive desktop revocation. Resolve the current device
       // and CSRF secret again immediately before queuing a command.
-      if (!this.writeCredential(req, res)) return;
+      if (!this.writeCredential(req, res, prefixed)) return;
       await this.sources.sendCaptain(body.message, files);
       return this.json(res, 200, { queued: true });
     }
-    if (req.method === 'POST' && url.pathname === '/api/upload' && this.uploadDir) {
+    if (req.method === 'POST' && route === '/api/upload' && this.uploadDir) {
       let data;
       try { data = await this.read(req, /^application\/octet-stream$/i, IMAGE_LIMITS.bytes); } catch (err) { return this.json(res, err.status || 400, { error: err.status === 413 ? 'Image too large.' : 'Invalid request.' }); }
       const kind = imageKind(data);
       if (!kind) return this.json(res, 415, { error: 'Only JPEG, PNG, GIF or WebP images are accepted.' });
-      if (!this.writeCredential(req, res)) return;
+      if (!this.writeCredential(req, res, prefixed)) return;
       // One upload at a time checks and fills the directory, so parallel
       // requests cannot pass the cap together.
       const turn = this.uploading.then(() => this.storeUpload(data, kind));
@@ -391,7 +498,7 @@ class MobileWebServer {
       if (!id) return this.json(res, 507, { error: 'Image storage is full. Try again tomorrow.' });
       return this.json(res, 200, { id });
     }
-    if (req.method === 'GET' && url.pathname === '/api/image') {
+    if (req.method === 'GET' && route === '/api/image') {
       const id = url.searchParams.get('id'), file = await this.imageFile(id);
       if (!file) return this.json(res, IMAGE_ID.test(id || '') ? 404 : 400, { error: 'Image not found.' });
       const data = await fs.readFile(file);
@@ -403,4 +510,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS };
+module.exports = { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable };
