@@ -35,7 +35,11 @@ async function launch() {
   const workers = crew.map(([project, title, , reviews = []], i) => column('w' + i, title, { project, reviews, cmd: FAKE + (i % 3 ? '' : ' --captain-statusline') }));
   const receipt = (status) => status === 'done' ? { summary: '已完成并推送，单测与端到端全过，截图已存档。', files: [], explicit: true }
     : status === 'failed' ? { failed: '测试环境缺少权限，需要队长处理后再继续。', files: [], explicit: true } : null;
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3,
+  // Layout states, not a seat rotation and not interrupted jobs to resend.
+  // Restart resume would start the queued rows and finish the working ones;
+  // a project whose sessions are then all done leaves the map, so the tally
+  // no longer matches the crew declared above.
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [column('cap', '队长', { isMain: true, captainCrew: false, cmd: FAKE + ' --captain-statusline' }), ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: crew[i][2], sentAt: now - 3_600_000 + i * 240_000, doneAt: now - 60_000 + i * 1000, turnId: '', receipt: receipt(crew[i][2]) })) },
@@ -46,6 +50,8 @@ async function launch() {
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
+  await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
+  await expect.poll(() => page.evaluate(() => config.perpetualCaptain && config.perpetualCaptain.enabled)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(crew.length + 1);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(crew.length + 1);
 }
