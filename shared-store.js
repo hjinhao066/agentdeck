@@ -13,7 +13,7 @@ const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/;
 // Fields a client may try to change. `updated` is omitted on purpose: every
 // edit touches it, so treating it as a user field would turn every disjoint
 // edit into a false conflict.
-const MUTABLE_KEYS = ['project', 'title', 'detail', 'status', 'flag', 'order', 'depends_on', 'assignee', 'session_id', 'latest_receipt', 'verify', 'rework_count', 'archived', 'consecutive_failures', 'important', 'attempt_id', 'attempt_closed', 'review_session', 'last_event', 'last_failure_attempt', 'dispatch_session_id', 'dispatch_claim', 'start_previous_status', 'created', 'session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject'];
+const MUTABLE_KEYS = ['project', 'title', 'detail', 'status', 'flag', 'order', 'depends_on', 'assignee', 'session_id', 'latest_receipt', 'verify', 'rework_count', 'archived', 'consecutive_failures', 'important', 'attempt_id', 'attempt_closed', 'review_session', 'review_verdict', 'last_event', 'last_failure_attempt', 'dispatch_session_id', 'dispatch_claim', 'start_previous_status', 'created', 'session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject'];
 const SECRET_KEY = /^(token|api[_-]?key|password|secret|authorization|cookie|private[_-]?key|access[_-]?token|refresh[_-]?token|bearer)$/i;
 
 function isDeviceId(value) { return typeof value === 'string' && DEVICE_ID.test(value); }
@@ -97,7 +97,7 @@ function checkValue(key, value) {
     if (!Number.isFinite(value) || value < 0) throw reject(400, 'Invalid order.');
   } else if (key === 'depends_on') {
     if (!Array.isArray(value) || value.some((id) => typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(id))) throw reject(400, 'Invalid dependencies.');
-  } else if (['verify', 'archived', 'important', 'attempt_closed', 'review_session'].includes(key)) {
+  } else if (['verify', 'archived', 'important', 'attempt_closed', 'review_session', 'review_verdict'].includes(key)) {
     if (typeof value !== 'boolean') throw reject(400, 'Invalid boolean field.');
   } else if (key === 'rework_count' || key === 'consecutive_failures') {
     if (!Number.isInteger(value) || value < 0) throw reject(400, 'Invalid counter.');

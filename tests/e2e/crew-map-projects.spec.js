@@ -13,13 +13,15 @@ async function launch() {
   const env = { ...process.env, AGENTDECK_TEST_CONTROL_ENV_FILE: path.join(profile, 'control.json'),
     AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received.jsonl'),
     AGENTDECK_TEST_RECEIPTS_FILE: path.join(profile, 'receipts.jsonl') };
+  // Stand-in agents must not run the user's interactive zsh startup hooks.
+  if (process.platform !== 'win32') env.ZDOTDIR = profile;
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  await expect.poll(() => fs.existsSync(path.join(profile, 'control.json'))).toBe(true);
+  await expect.poll(() => fs.existsSync(path.join(profile, 'control.json')), { timeout: 30000 }).toBe(true);
   controls = JSON.parse(fs.readFileSync(path.join(profile, 'control.json'), 'utf8'));
   await expect.poll(() => page.evaluate(() => typeof MainSession !== 'undefined' && !!MainSession.state())).toBe(true);
 }
@@ -40,7 +42,8 @@ test.beforeAll(async () => {
   const column = (id, title, project, reviews = []) => ({ id, title, displayTitle: title, manualTitle: true, project, reviews, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true });
   const now = Date.now();
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
-    theme: 'dark', fitWindow: true, fitCols: 3,
+    // These tasks declare map states; they are not interrupted jobs to resume.
+    resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [
       { ...column('cap', '队长', ''), isMain: true, captainCrew: false },
       column('a1', '登录与权限', '客户门户'), column('a2', '工作台界面', '客户门户'), column('a3', '回归测试', '客户门户'),

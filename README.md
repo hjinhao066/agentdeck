@@ -327,6 +327,12 @@ again with the current provider, model and effort instructions.
   `done` or `todo` through `task move` or the board UI cancels its unsent request.
   Queue responses distinguish quota, critical memory, the actual occupied-slot
   count and earlier executable requests; the concurrency limit is not an active count.
+  To reopen verification, use `new --task-id <card-id> --reviews <original-worker-id>`.
+  This binds the card's existing review round, including after an explicit move back
+  to `doing`: a leading `通过` completes it; `不通过` or `--failed` returns the full
+  findings to the original worker, restoring it if archived. The reviewer receipt
+  never starts another review, and repeated reviews of the same execution round
+  count as one failure. Queued reviews cannot bind a later execution round.
   Live sessions waiting on exhausted quota keep their lifecycle/archiving protection
   but release their work slot. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have

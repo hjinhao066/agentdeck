@@ -910,6 +910,7 @@
     }
     if (metadata.boardId) {
       await boardRequest('bind', { id: metadata.boardId, project: metadata.project, session_id: id, attempt_id: requestId,
+        reviews: metadata.reviews, review_round: metadata.reviewRound ?? metadata.autoReviewRound, exec_receipt: metadata.reviewReceipt,
         assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
     }
     const col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
@@ -1991,6 +1992,19 @@
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
+        if (metadata.boardId && reviews.length) {
+          const card = await findCard(metadata.boardId);
+          if (!card) throw new Error('找不到卡片。');
+          metadata.reviewRound = card.review_round || 0;
+          if (card.exec_receipt && !reviews.includes(card.exec_receipt.session_id)) throw new Error('--reviews 必须包含这张卡片的原执行会话。');
+          if (!card.exec_receipt) {
+            const exec = sessions.find((c) => c.id === reviews[0]);
+            if (exec.boardId !== metadata.boardId) throw new Error('--reviews 必须指向这张卡片的原执行会话。');
+            metadata.reviewReceipt = { session_id: exec.id, attempt_id: exec.boardAttempt || '',
+              text: exec.lastReceipt?.summary || '', files: exec.lastReceipt?.files || [],
+              assignee: { agent: window.BoardCore.inferAgentType(exec.cmd || ''), model: exec.cmd?.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } };
+          }
+        }
         let prior;
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();

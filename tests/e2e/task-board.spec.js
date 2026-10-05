@@ -22,8 +22,8 @@ const card = async (id) => (await list({ archived: true })).find((c) => c.id ===
 async function add(title, verify = false, detail = 'Clear test instructions.') {
   return JSON.parse(await command(['task', 'add', '--project', 'e2e', '--title', title, '--detail', detail, ...(verify ? ['--verify'] : [])])).card;
 }
-async function worker(id, title = 'Worker', commandLine = FAKE, env) {
-  const output = await command(['new', '--task-id', id, '--project', 'e2e', '--title', title, '--task', 'Run this single test task', '--command', commandLine], env);
+async function worker(id, title = 'Worker', commandLine = FAKE, env, reviews = []) {
+  const output = await command(['new', '--task-id', id, '--project', 'e2e', '--title', title, '--task', 'Run this single test task', '--command', commandLine, ...(reviews.length ? ['--reviews', reviews.join(',')] : [])], env);
   const session = output.match(/已开新会话 ([^「]+)/)?.[1]; expect(session).toBeTruthy();
   await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, session), { timeout: 30000 }).toBe('working');
   await expect.poll(() => fs.existsSync(path.join(envDir, session + '.json'))).toBe(true);
@@ -34,6 +34,7 @@ test.beforeAll(async () => {
   const controlFile = path.join(profile, 'captain.json');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns: [{ id: 'task-idle-shell', title: 'Shell', cmd: '', cwd: profile, role: 'manual' }] }));
   const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: envDir }; delete env.ELECTRON_RUN_AS_NODE;
+  if (process.platform !== 'win32') env.ZDOTDIR = profile;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
@@ -42,13 +43,17 @@ test.beforeAll(async () => {
   await page.evaluate((cwd) => MainSession.create('', cwd), profile);
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
+  await expect.poll(() => page.evaluate(([id, platform]) => {
+    const screen = dumpScreen(terms.get(id).term);
+    return platform === 'win32' ? MainCore.isWindowsShellPrompt(screen) : /[%$#]\s*$/.test(screen);
+  }, [captain, process.platform]), { timeout: 30000 }).toBe(true);
   // A script file keeps Windows PowerShell/native argument parsing out of the
   // capability export; the environment still comes from the Captain's real PTY.
   const exportScript = path.join(profile, 'export-control.cjs');
   fs.writeFileSync(exportScript, `require("fs").writeFileSync(${JSON.stringify(controlFile)}, JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}));`);
   const exportEnv = `node "${exportScript}"`;
   await page.evaluate(([id, cmd]) => window.deck.ptyInput(id, cmd + '\r'), [captain, exportEnv]);
-  await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
+  await expect.poll(() => fs.existsSync(controlFile), { timeout: 30000 }).toBe(true);
   captainEnv = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
   // The tests below open their own reviewers by hand; automatic verification has its own tests.
   await page.evaluate(() => TaskBoard.autoVerify(false));
@@ -90,6 +95,66 @@ test('verification rejects twice, reports held and refuses further automatic wor
   const held = await card(c.id); expect(held.rework_count).toBe(2); expect(held.flag).toBe('held');
   expect((await cli(['new', '--task-id', c.id, '--title', 'Must not retry', '--task', 'test', '--command', FAKE])).code).toBe(1);
   expect(await command(['receipts'])).toContain('连续失败 2 次');
+});
+
+test('explicit queued review of a reopened card passes to done and keeps the original execution receipt', async () => {
+  const c = await add('Reopened explicit pass', true), execution = await worker(c.id);
+  await command(['complete', '--result', '原执行全文。第二句'], execution.env);
+  const receipt = (await card(c.id)).exec_receipt;
+  await command(['task', 'move', '--id', c.id, '--status', 'todo']);
+  await command(['task', 'move', '--id', c.id, '--status', 'doing']);
+  await page.evaluate(() => {
+    window.testReviewActiveCrew = MainCore.activeCrew;
+    MainCore.activeCrew = () => new Set(Array.from({ length: MainCore.MAX_ACTIVE }, (_, i) => 'busy-' + i));
+    TaskBoard.autoVerify(true);
+  });
+  try {
+    expect(await command(['new', '--task-id', c.id, '--project', 'e2e', '--reviews', execution.session, '--title', 'Reopened pass reviewer', '--task', 'Independent review', '--command', FAKE])).toContain('已排队');
+    expect(await page.evaluate((id) => config.mainSession.waitlist.find((w) => w.metadata?.boardId === id)?.metadata.reviewRound, c.id)).toBe(1);
+  } finally {
+    await page.evaluate(() => { MainCore.activeCrew = window.testReviewActiveCrew; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
+  }
+  try {
+    await expect.poll(async () => (await card(c.id)).review_session).toBe(true);
+    const id = (await card(c.id)).session_id;
+    await expect.poll(() => fs.existsSync(path.join(envDir, id + '.json'))).toBe(true);
+    await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, id)).toBe('working');
+    await command(['complete', '--result', '通过：已核对测试'], JSON.parse(fs.readFileSync(path.join(envDir, id + '.json'), 'utf8')));
+    await expect.poll(async () => (await card(c.id)).status).toBe('done');
+    expect((await card(c.id)).exec_receipt).toEqual(receipt);
+    expect((await card(c.id)).consecutive_failures).toBe(0);
+    expect(await page.evaluate((id) => columns.concat(config.archived).filter((s) => s.boardId === id).length, c.id)).toBe(2);
+  } finally { await page.evaluate(() => TaskBoard.autoVerify(false)); }
+});
+
+test('explicit rejection restores the archived original executor and delivers the reviewer words once', async () => {
+  for (const failedFlag of [false, true]) {
+    const c = await add('Archived executor explicit rejection ' + failedFlag, true), execution = await worker(c.id);
+    await command(['complete', '--result', 'Original implementation'], execution.env);
+    await command(['archive', '--id', execution.session]);
+    const reviewer = await worker(c.id, 'Manual reject ' + failedFlag, FAKE, captainEnv, [execution.session]);
+    const findings = '不通过：1) 缺断言\n2) 提交未推送  （两个空格）';
+    await page.evaluate(() => TaskBoard.autoVerify(true));
+    try {
+      await command(['complete', '--result', findings, ...(failedFlag ? ['--failed', findings] : [])], reviewer.env);
+      await expect.poll(async () => (await card(c.id)).attempt_id, { timeout: 30000 }).toBe('auto-rework-' + c.id + '-r1');
+      expect((await card(c.id)).session_id).toBe(execution.session);
+      expect((await card(c.id)).consecutive_failures).toBe(1);
+      expect((await card(c.id)).rework_count).toBe(1);
+      expect((await card(c.id)).review_session).toBe(false);
+      expect(await page.evaluate((id) => config.archived.some((s) => s.id === id), execution.session)).toBe(false);
+      await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, execution.session)).toBe('working');
+      const tasks = await page.evaluate((id) => config.mainSession.tasks.filter((t) => t.colId === id), execution.session);
+      expect(tasks).toHaveLength(2);
+      expect(await page.evaluate(([id, findings]) => ChatUI.turnsOf(id).filter((t) => t.user?.includes(findings)).length, [execution.session, findings])).toBe(1);
+      expect(await page.evaluate((id) => columns.concat(config.archived).filter((s) => s.boardId === id).length, c.id)).toBe(2);
+    } finally { await page.evaluate(() => TaskBoard.autoVerify(false)); }
+    const restoredEnv = JSON.parse(fs.readFileSync(path.join(envDir, execution.session + '.json'), 'utf8'));
+    await command(['complete', '--result', 'Reworked implementation'], restoredEnv);
+    const final = await worker(c.id, 'Manual final pass', FAKE, captainEnv, [execution.session]);
+    await command(['complete', '--result', '通过：返工已核对'], final.env);
+    expect((await card(c.id)).status).toBe('done');
+  }
 });
 
 test('process and quota events update data automatically and a stale execution cannot complete its reviewer', async () => {
@@ -189,13 +254,13 @@ test('external JSON start edges notify once, quiet edits do not dispatch, and se
   expect(await page.evaluate(() => window.deck.taskBoard('read-file', { path: '/etc/passwd' }).then(() => false, () => true))).toBe(true);
 });
 
-test('queued new keeps card binding and project review targets until delivery, and Captain rejection can return work to the original session', async () => {
+test('queued execution keeps card binding until delivery, and Captain rejection can return work to the original session', async () => {
   const c = await add('Queued card', true);
   await page.evaluate(() => {
     window.testOriginalActiveCrew = MainCore.activeCrew;
     MainCore.activeCrew = () => new Set(Array.from({ length: MainCore.MAX_ACTIVE }, (_, i) => 'busy-' + i));
   });
-  expect(await command(['new', '--task-id', c.id, '--project', 'e2e', '--reviews', 'task-idle-shell', '--title', 'Queued binding', '--task', 'Single queued task', '--command', FAKE])).toContain('已排队');
+  expect(await command(['new', '--task-id', c.id, '--project', 'e2e', '--title', 'Queued binding', '--task', 'Single queued task', '--command', FAKE])).toContain('已排队');
   expect((await card(c.id)).status).toBe('todo');
   expect(await page.evaluate((id) => config.mainSession.waitlist.at(-1).metadata.boardId, c.id)).toBe(c.id);
   await page.evaluate(() => {
@@ -204,7 +269,7 @@ test('queued new keeps card binding and project review targets until delivery, a
   });
   await expect.poll(async () => (await card(c.id)).status, { timeout: 30000 }).toBe('doing');
   const id = (await card(c.id)).session_id;
-  expect(await page.evaluate((id) => { const c = columns.find((c) => c.id === id); return { project: c.project, reviews: c.reviews, boardId: c.boardId }; }, id)).toEqual({ project: 'e2e', reviews: ['task-idle-shell'], boardId: c.id });
+  expect(await page.evaluate((id) => { const c = columns.find((c) => c.id === id); return { project: c.project, reviews: c.reviews, boardId: c.boardId }; }, id)).toEqual({ project: 'e2e', reviews: [], boardId: c.id });
   await expect.poll(() => fs.existsSync(path.join(envDir, id + '.json'))).toBe(true);
   const env = JSON.parse(fs.readFileSync(path.join(envDir, id + '.json'), 'utf8'));
   await command(['complete', '--result', 'First execution'], env);
