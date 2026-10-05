@@ -32,8 +32,9 @@ function pick(card) {
 function diff(base, next) {
   const set = {};
   const from = base || {};
-  for (const key of Object.keys(next)) {
-    if (JSON.stringify(from[key]) !== JSON.stringify(next[key])) set[key] = next[key];
+  for (const key of new Set([...Object.keys(from), ...Object.keys(next)])) {
+    const value = next[key] === undefined ? null : next[key];
+    if (JSON.stringify(from[key] ?? null) !== JSON.stringify(value)) set[key] = value;
   }
   return set;
 }
@@ -150,10 +151,17 @@ class FleetClient {
     const fields = pick(card);
     const base = this.bases.get(card.id);
     const set = base ? diff(base.fields, fields) : fields;
-    if (!Object.keys(set).length) { this.taskOutbox.delete(card.id); this._persist(); return; }
     const previous = this.taskOutbox.get(card.id);
+    // An attempted operation is immutable: the server may already have applied
+    // it even if its response was lost. Save later edits separately until ack.
+    if (previous?.attempted) {
+      previous.nextSet = diff({ ...(base?.fields || {}), ...previous.set }, fields);
+      this._persist();
+      return;
+    }
+    if (!Object.keys(set).length) { this.taskOutbox.delete(card.id); this._persist(); return; }
     this.taskOutbox.set(card.id, {
-      opId: previous?.opId || ('op-' + crypto.randomUUID()),
+      opId: 'op-' + crypto.randomUUID(),
       cardId: card.id,
       expectedRevision: base ? base.revision : 0,
       set,
@@ -195,6 +203,7 @@ class FleetClient {
         method,
         headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
         body: body === undefined ? undefined : JSON.stringify(body),
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (_) { throw new Error('同步失败：连不上同步服务'); }
     const text = await response.text();
@@ -212,20 +221,33 @@ class FleetClient {
     return { status: response.status, body: payload };
   }
   _accept(card) {
-    this.bases.set(card.id, { revision: card.revision || 0, fields: pick(card) });
     this.taskStore.upsertSynced(card);
+    this.bases.set(card.id, { revision: card.revision || 0, fields: pick(card) });
   }
   async _flushTasks(token) {
     for (const item of [...this.taskOutbox.values()]) {
-      const result = await this._send(token, 'POST', '/v1/tasks', { ...item, deviceId: this.device.id });
+      item.attempted = true;
+      this._persist();
+      const result = await this._send(token, 'POST', '/v1/tasks', {
+        opId: item.opId, cardId: item.cardId, expectedRevision: item.expectedRevision, set: item.set, deviceId: this.device.id,
+      });
+      this._seedTasks();
+      const nextSet = item.nextSet || {};
       this._accept(result.body.card);
       this.taskOutbox.delete(item.cardId);
+      if (Object.keys(nextSet).length) {
+        const next = { ...result.body.card, ...nextSet };
+        this.taskStore.upsertSynced(next);
+        this.noteCard(next);
+      }
+      this._persist();
     }
   }
   async _flushHistory(token) {
     for (const item of [...this.historyOutbox.values()]) {
       await this._send(token, 'POST', '/v1/history', { ...item, deviceId: this.device.id });
-      this.historyOutbox.delete(item.sessionId);
+      if (this.historyOutbox.get(item.sessionId)?.opId === item.opId) this.historyOutbox.delete(item.sessionId);
+      this._persist();
     }
   }
   _writeHistory(records) {
@@ -248,6 +270,16 @@ class FleetClient {
     const result = await this._send(token, 'GET', '/v1/snapshot');
     const snap = result.body || {};
     this.devices = Array.isArray(snap.devices) ? snap.devices : [];
+    // Local writers (including the board heartbeat) can edit while HTTP waits.
+    this._seedTasks();
+    const remoteIds = new Set((snap.cards || []).map((card) => card.id));
+    for (const card of this.taskStore.list({ archived: true })) {
+      if (!remoteIds.has(card.id) && !this.taskOutbox.has(card.id)) {
+        // A restored cache can outlive its client state or an empty hub.
+        this.bases.delete(card.id);
+        this.noteCard(card);
+      }
+    }
     const keep = [...this.taskOutbox.keys()];
     this.taskStore.replaceSynced(Array.isArray(snap.cards) ? snap.cards : [], keep);
     for (const card of snap.cards || []) {
@@ -263,6 +295,7 @@ class FleetClient {
   async _syncBody() {
     let token = '';
     try {
+      this._seedTasks();
       token = readToken(this.tokenFile);
       const sessions = (this.sessions() || []).filter((item) => item && isSessionId(item.id)).slice(0, 100).map((item) => ({
         id: item.id, role: item.role === 'captain' ? 'captain' : 'session', title: clip(item.title, 200), deviceId: this.device.id,

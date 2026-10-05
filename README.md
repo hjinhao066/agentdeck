@@ -709,10 +709,11 @@ and GitHub synchronization after every completed change.
 
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
 
-## Two-machine sync (1.2.0)
+## Two-machine sync (1.2)
 
 Mac and Windows each run AgentDeck and talk to one sync service (the existing
-VPS, reached over WireGuard). The app heartbeats every sync round, every 10
+VPS is the intended deployment target, reached over WireGuard). This branch
+does not deploy that service or configure either installed app. The app heartbeats every sync round, every 10
 seconds, and the service marks a machine offline 45 seconds after its last
 heartbeat, which covers shutdown and sleep. Task cards, their fields, and
 saved captain transcripts are shared; a change is visible on the other side
@@ -734,6 +735,27 @@ command line, and not written into logs or task JSON. `~/.agents` git sync is
 unchanged and is not the live channel. This build does not choose which
 computer runs a task, move work off a sleeping machine, or switch captains
 from a phone. Cards and sessions carry `deviceId` for those later steps.
+
+Offline edits persist in `fleet-state.json`. A request retains its operation ID
+and original payload until acknowledged, even across a process restart; later
+edits wait separately and are rebased on the accepted card. Snapshot downloads
+preserve pending edits, including changes made by other local board writers.
+Repeated operations do not increment a card revision or add a second conflict.
+All conflicting alternatives and captain turns are retained. Older transcript
+prefixes cannot shorten newer history; divergent saves retain the prior version
+in the history record's `alternatives`. Credential-shaped fields are stripped,
+but transcript prose is preserved, so sync only to a trusted private service.
+Requests time out after 10 seconds and retry on subsequent sync rounds.
+
+Run `node scripts/fleet-two-machine-smoke.js --ssh winpc --report /absolute/report.md`
+for a repeatable native Mac/Windows transport check. It uses fresh temporary
+stores and credentials and an SSH reverse forward bound to loopback. It verifies
+the production 10-second sync interval, 45-second offline lease, two-way task and
+captain history propagation, conflicts, operation replay, and offline outbox
+recovery after a peer process restart. It removes its temporary directories and
+forward when done. Omit `--ssh` to rehearse with a separate local Node process;
+`--quick` shortens timers only for that local rehearsal. This does not exercise
+the Windows Electron UI or install, rebuild, or restart either installed app.
 
 
 

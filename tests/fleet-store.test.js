@@ -105,3 +105,56 @@ test('synced snapshot replaces the local cache and keeps an unsent local card', 
   assert.equal(left[0].conflicts[0].fields.title.other, '本地标题');
   assert.equal(fs.existsSync(path.join(root, 'tasks', 'agentdeck.json')), true);
 });
+
+test('all conflict alternatives survive more than twenty concurrent edits and reload', (t) => {
+  const { hub } = store(t);
+  hub.pushTask({ opId: 'op-many-create', cardId: 'card-1', expectedRevision: 0, deviceId: 'dev-mac', set: setOf() });
+  for (let i = 0; i < 25; i++) hub.pushTask({ opId: 'op-many-conflict-' + i, cardId: 'card-1', expectedRevision: 0, deviceId: 'dev-win', set: { title: 'alternative-' + i } });
+  const restored = new SharedStore({ file: hub.file });
+  const card = restored.snapshot().cards[0];
+  assert.equal(card.conflicts.length, 25);
+  assert.equal(card.conflicts[0].fields.title.other, 'alternative-0');
+  const local = new TaskStore(path.join(path.dirname(hub.file), 'local'));
+  local.upsertSynced(card);
+  assert.equal(local.list()[0].conflicts.length, 25);
+});
+
+test('older captain uploads cannot shorten history and divergent saves retain both versions', (t) => {
+  const { hub } = store(t);
+  const push = (opId, hash, turns) => hub.pushHistory({ opId, sessionId: 'cap-mac', deviceId: 'dev-mac', contentHash: hash.repeat(64), turns });
+  const first = { prompt: 'first', reply: 'complete' };
+  const second = { prompt: 'second', reply: 'complete' };
+  push('op-history-newer', 'a', [first, second]);
+  push('op-history-older', 'b', [first]);
+  assert.equal(hub.snapshot().history[0].turns.length, 2);
+  push('op-history-diverged', 'c', [{ ...first, reply: 'different' }]);
+  const record = hub.snapshot().history[0];
+  assert.equal(record.turns[0].reply, 'different');
+  assert.deepEqual(record.alternatives[0].turns, [first, second]);
+});
+
+test('a late operation replay remains idempotent after more than two thousand other operations', (t) => {
+  const { hub } = store(t);
+  const input = { opId: 'op-durable-replay', cardId: 'card-1', expectedRevision: 0, deviceId: 'dev-mac', set: setOf() };
+  const first = hub.pushTask(input);
+  // Represent other clients' already-committed operation receipts without 2000 disk fsyncs.
+  for (let i = 0; i < 2000; i++) hub.data.ops['op-other-' + i] = { status: 200, body: {} };
+  hub.pushTask({ opId: 'op-next-change', cardId: 'card-1', expectedRevision: 1, deviceId: 'dev-win', set: { title: 'newer' } });
+  const reloaded = new SharedStore({ file: hub.file });
+  assert.deepEqual(reloaded.pushTask(input), first);
+  assert.equal(reloaded.snapshot().cards[0].title, 'newer');
+  assert.equal(reloaded.snapshot().cards[0].revision, 2);
+  assert.deepEqual(reloaded.snapshot().cards[0].conflicts, []);
+});
+
+test('incomplete captain snapshots cannot replace later completed replies', (t) => {
+  const { hub } = store(t);
+  const push = (opId, hash, turns) => hub.pushHistory({ opId, sessionId: 'cap-mac', deviceId: 'dev-mac', contentHash: hash.repeat(64), turns });
+  const pending = { id: 'turn-1', prompt: 'question', reply: 'par', done: false, end: null };
+  const complete = { ...pending, reply: 'partial became complete', done: true, end: 'complete' };
+  push('op-history-pending', 'a', [pending]);
+  push('op-history-complete', 'b', [complete]);
+  assert.deepEqual(hub.snapshot().history[0].alternatives, []);
+  push('op-history-late-pending', 'c', [pending]);
+  assert.deepEqual(hub.snapshot().history[0].turns, [complete]);
+});

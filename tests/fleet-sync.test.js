@@ -20,10 +20,10 @@ function writeToken(root, name, token) {
   fs.writeFileSync(file, token + '\n', { mode: 0o600 });
   return file;
 }
-async function hub(t, { leaseMs, token = 'fleet-secret-token-value' } = {}) {
+async function hub(t, { leaseMs, now, token = 'fleet-secret-token-value' } = {}) {
   const root = tmp(t);
   const logs = [];
-  const store = new SharedStore({ file: path.join(root, 'hub', 'store.json'), leaseMs });
+  const store = new SharedStore({ file: path.join(root, 'hub', 'store.json'), leaseMs, now });
   const server = await startSyncServer({ store, token, log: (line) => logs.push(line) });
   t.after(() => server.close());
   return { root, server, logs, token, tokenFile: writeToken(root, 'token', token) };
@@ -112,13 +112,14 @@ test('two isolated machines share a card, keep both edits, and share captain his
 });
 
 test('a machine that stops heartbeating is shown offline with its last seen time', async (t) => {
-  const { root, server, tokenFile } = await hub(t, { leaseMs: 200 });
+  let now = Date.now();
+  const { root, server, tokenFile } = await hub(t, { leaseMs: 200, now: () => now });
   const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
   const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
   await mac.client.syncOnce();
   await win.client.syncOnce();
   assert.equal(win.client.snapshot().devices.find((device) => device.id === 'dev-mac').online, true);
-  await delay(350);
+  now += 350;
   await win.client.syncOnce();
   const quiet = win.client.snapshot().devices.find((device) => device.id === 'dev-mac');
   assert.equal(quiet.online, false);
@@ -147,4 +148,152 @@ test('sync failures stay visible and never repeat the token', async (t) => {
   const offline = await missing.syncOnce();
   assert.match(offline.error, /连不上同步服务/);
   assert.equal(offline.error.includes('different-token-value'), false);
+});
+
+function edit(side, patch) {
+  const card = side.tasks.list()[0];
+  side.client.noteResult(side.tasks.update({ id: card.id, updated: card.updated, patch }));
+}
+
+test('a lost acknowledgement and offline restart replay the immutable operation before later edits', async (t) => {
+  const { root, server, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+  mac.client.noteResult(mac.tasks.add({ project: 'agentdeck', title: 'base' }));
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  edit(mac, { title: 'first' });
+  let lost = false;
+  mac.client.fetchImpl = async (url, options) => {
+    if (lost) throw new Error('offline');
+    const response = await fetch(url, options);
+    if (url.endsWith('/v1/tasks')) {
+      await response.text();
+      lost = true;
+      throw new Error('response lost after commit');
+    }
+    return response;
+  };
+  assert.match((await mac.client.syncOnce()).error, /同步失败/);
+  const firstOp = mac.client.taskOutbox.values().next().value.opId;
+  edit(mac, { title: 'second' });
+  assert.equal(mac.client.taskOutbox.values().next().value.opId, firstOp);
+  // The other computer remains useful while this writer cannot connect.
+  await win.client.syncOnce();
+  edit(win, { detail: 'Windows worked while Mac was offline' });
+  await win.client.syncOnce();
+  const restarted = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  await restarted.client.syncOnce();
+  assert.equal(restarted.tasks.list()[0].title, 'second');
+  assert.equal(restarted.client.taskOutbox.size, 1);
+  await restarted.client.syncOnce();
+  await win.client.syncOnce();
+  const card = win.tasks.list()[0];
+  assert.equal(card.title, 'second');
+  assert.equal(card.detail, 'Windows worked while Mac was offline');
+  assert.deepEqual(card.conflicts, []);
+  assert.equal(card.revision, 4); // create, first, Windows detail, second; replay adds none
+  assert.equal(restarted.client.taskOutbox.size, 0);
+});
+
+test('edits during a task POST or snapshot pull survive and synchronize on the next round', async (t) => {
+  const { root, server, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+  mac.client.noteResult(mac.tasks.add({ project: 'agentdeck', title: 'base' }));
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  edit(mac, { title: 'first' });
+  let stage = 'post';
+  mac.client.fetchImpl = async (url, options) => {
+    const response = await fetch(url, options);
+    if (stage === 'post' && url.endsWith('/v1/tasks')) {
+      stage = 'pull';
+      edit(mac, { title: 'second' });
+    } else if (stage === 'pull' && url.endsWith('/v1/snapshot')) {
+      stage = 'done';
+      // A separate local writer does not go through the renderer's noteResult.
+      const card = mac.tasks.list()[0];
+      mac.tasks.update({ id: card.id, updated: card.updated, patch: { detail: 'edited during pull' } });
+    }
+    return response;
+  };
+  await mac.client.syncOnce();
+  assert.equal(mac.tasks.list()[0].title, 'second');
+  assert.equal(mac.tasks.list()[0].detail, 'edited during pull');
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  assert.equal(win.tasks.list()[0].title, 'second');
+  assert.equal(win.tasks.list()[0].detail, 'edited during pull');
+  assert.deepEqual(win.tasks.list()[0].conflicts, []);
+});
+
+test('captain saves during a history POST and long histories are delivered in full', async (t) => {
+  const { root, server, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+  const turns = Array.from({ length: 205 }, (_, i) => ({ prompt: 'turn-' + i, reply: i === 204 ? 'x'.repeat(20001) : 'reply', token: 'must-not-sync' }));
+  mac.client.noteCaptain('mac-cap', { turns: turns.slice(0, 1) });
+  let saved = false;
+  mac.client.fetchImpl = async (url, options) => {
+    const response = await fetch(url, options);
+    if (!saved && url.endsWith('/v1/history')) {
+      saved = true;
+      mac.client.noteCaptain('mac-cap', { turns });
+    }
+    return response;
+  };
+  await mac.client.syncOnce();
+  assert.equal(mac.client.historyOutbox.size, 1);
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  const file = path.join(win.dir, 'history', 'mac-cap--dev-mac.json');
+  const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(record.turns.length, 205);
+  assert.equal(record.turns[204].reply.length, 20001);
+  assert.equal(fs.readFileSync(file, 'utf8').includes('must-not-sync'), false);
+  assert.equal(mac.client.historyOutbox.size, 0);
+});
+
+test('release 1.1.11 task ownership, quota, review and question fields survive a round trip', async (t) => {
+  const { root, server, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+  const card = mac.tasks.add({ project: 'agentdeck', title: 'bound task', verify: true }).card;
+  const fields = {
+    flag: 'quota', session_id: 'mac-worker', attempt_id: 'attempt-1', session_host: 'Mac', session_bound_at: 100,
+    dispatch_host: 'Mac', dispatch_bound_at: 50, dispatch_wait: 'waiting', resource_failure: 'quota',
+    user_question: 'which?', needs_user_entry: 'entry-1', review_round: 1,
+    exec_receipt: { text: 'complete', files: ['/tmp/result'], session_id: 'mac-worker', attempt_id: 'attempt-1' },
+    review_claim: { round: 1, key: 'claim-1', owner: 'Mac', delivered: false },
+    review_block: { round: 1, reason: 'blocked' }, review_reject: { round: 1, findings: 'redo' },
+  };
+  mac.tasks.upsertSynced({ ...card, ...fields });
+  mac.client.noteCard({ ...card, ...fields });
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  const got = win.tasks.list()[0];
+  for (const [key, value] of Object.entries(fields)) assert.deepEqual(got[key], value, key);
+  // Optional fields deleted locally must disappear remotely too.
+  const cleaned = { ...got };
+  delete cleaned.user_question;
+  mac.tasks.upsertSynced(cleaned);
+  mac.client.noteCard(cleaned);
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  assert.equal(win.tasks.list()[0].user_question ?? null, null);
+});
+
+test('restored revisioned cards are retained and re-uploaded when client state and hub are empty', async (t) => {
+  const { root, server, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  const card = mac.tasks.add({ project: 'agentdeck', title: 'only remaining copy' }).card;
+  mac.tasks.upsertSynced({ ...card, revision: 4 });
+  const restored = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  await restored.client.syncOnce();
+  assert.equal(restored.tasks.list()[0].title, card.title);
+  await restored.client.syncOnce();
+  const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+  await win.client.syncOnce();
+  assert.equal(win.tasks.list()[0].title, card.title);
 });

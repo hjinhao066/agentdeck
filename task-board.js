@@ -66,7 +66,7 @@ function syncedCard(input) {
     id: idValue(input.id), project: projectName(input.project),
     title: text(input.title, 'title', true), detail: text(input.detail || '', 'detail'),
     status: STATUSES.includes(input.status) ? input.status : 'todo',
-    flag: [null, 'failed', 'blocked', 'held'].includes(input.flag) ? input.flag : null,
+    flag: [null, 'failed', 'blocked', 'held', 'quota'].includes(input.flag) ? input.flag : null,
     order: Number.isFinite(input.order) && input.order >= 0 ? input.order : 0,
     depends_on: Array.isArray(input.depends_on) ? [...new Set(input.depends_on.map(idValue))] : [],
     assignee: input.assignee && typeof input.assignee === 'object' && typeof input.assignee.agent === 'string' && typeof input.assignee.model === 'string' ? { agent: input.assignee.agent, model: input.assignee.model } : null,
@@ -83,7 +83,7 @@ function syncedCard(input) {
   if (device(input.deviceId)) card.deviceId = input.deviceId;
   if (device(input.updatedByDevice)) card.updatedByDevice = input.updatedByDevice;
   if (Number.isInteger(input.revision) && input.revision >= 0) card.revision = input.revision;
-  if (Array.isArray(input.conflicts)) card.conflicts = input.conflicts.slice(0, 20);
+  if (Array.isArray(input.conflicts)) card.conflicts = JSON.parse(JSON.stringify(input.conflicts));
   for (const key of ['attempt_id', 'dispatch_session_id']) if (typeof input[key] === 'string' && input[key]) card[key] = idValue(input[key]);
   if (typeof input.attempt_closed === 'boolean') card.attempt_closed = input.attempt_closed;
   if (typeof input.review_session === 'boolean') card.review_session = input.review_session;
@@ -92,6 +92,9 @@ function syncedCard(input) {
   if (typeof input.start_previous_status === 'string' && STATUSES.includes(input.start_previous_status)) card.start_previous_status = input.start_previous_status;
   if (input.dispatch_claim && typeof input.dispatch_claim === 'object' && typeof input.dispatch_claim.key === 'string') {
     card.dispatch_claim = { key: idValue(input.dispatch_claim.key), owner: text(String(input.dispatch_claim.owner || ''), 'owner').slice(0, 200), delivered: input.dispatch_claim.delivered === true, created: typeof input.dispatch_claim.created === 'string' ? input.dispatch_claim.created : card.updated };
+  }
+  for (const key of ['session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject']) {
+    if (input[key] !== undefined) card[key] = JSON.parse(JSON.stringify(input[key]));
   }
   return card;
 }

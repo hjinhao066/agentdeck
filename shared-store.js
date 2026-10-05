@@ -8,14 +8,12 @@ const crypto = require('crypto');
 
 const LEASE_MS = 45_000;
 const TRAIL_CAP = 100;
-const OPS_CAP = 2000;
-const CONFLICT_CAP = 20;
 const DEVICE_ID = /^[A-Za-z0-9_-]{1,160}$/;
 const SESSION_ID = /^[A-Za-z0-9._-]{1,160}$/;
 // Fields a client may try to change. `updated` is omitted on purpose: every
 // edit touches it, so treating it as a user field would turn every disjoint
 // edit into a false conflict.
-const MUTABLE_KEYS = ['project', 'title', 'detail', 'status', 'flag', 'order', 'depends_on', 'assignee', 'session_id', 'latest_receipt', 'verify', 'rework_count', 'archived', 'consecutive_failures', 'important', 'attempt_id', 'attempt_closed', 'review_session', 'last_event', 'last_failure_attempt', 'dispatch_session_id', 'dispatch_claim', 'start_previous_status', 'created'];
+const MUTABLE_KEYS = ['project', 'title', 'detail', 'status', 'flag', 'order', 'depends_on', 'assignee', 'session_id', 'latest_receipt', 'verify', 'rework_count', 'archived', 'consecutive_failures', 'important', 'attempt_id', 'attempt_closed', 'review_session', 'last_event', 'last_failure_attempt', 'dispatch_session_id', 'dispatch_claim', 'start_previous_status', 'created', 'session_host', 'session_bound_at', 'dispatch_host', 'dispatch_bound_at', 'dispatch_wait', 'resource_failure', 'user_question', 'needs_user_entry', 'review_round', 'exec_receipt', 'review_claim', 'review_block', 'review_reject'];
 const SECRET_KEY = /^(token|api[_-]?key|password|secret|authorization|cookie|private[_-]?key|access[_-]?token|refresh[_-]?token|bearer)$/i;
 
 function isDeviceId(value) { return typeof value === 'string' && DEVICE_ID.test(value); }
@@ -54,9 +52,9 @@ function emptyData() {
 // the turn stays; this only removes fields whose names are secrets.
 function stripSecrets(value, depth = 0) {
   if (depth > 8) return null;
-  if (Array.isArray(value)) return value.slice(0, 200).map((item) => stripSecrets(item, depth + 1));
+  if (Array.isArray(value)) return value.map((item) => stripSecrets(item, depth + 1));
   if (!value || typeof value !== 'object') {
-    if (typeof value === 'string') return value.length > 20_000 ? value.slice(0, 20_000) : value;
+    if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
     return null;
   }
@@ -68,12 +66,23 @@ function stripSecrets(value, depth = 0) {
   return out;
 }
 
+function turnExtends(next, previous) {
+  if (!next || !previous) return same(next, previous);
+  return Object.entries(previous).every(([key, value]) => {
+    if (key === 'reply' && typeof value === 'string' && typeof next[key] === 'string') return next[key].startsWith(value);
+    if (key === 'done' && value === false && next[key] === true) return true;
+    if (key === 'end' && value == null) return true;
+    return same(next[key], value);
+  });
+}
+
 function publicCard(card) {
   const { trail, ...rest } = card;
   return clone(rest);
 }
 
 function checkValue(key, value) {
+  if (value === null && !['project', 'title', 'detail', 'status', 'order', 'depends_on', 'verify', 'archived', 'important', 'rework_count', 'consecutive_failures', 'created', 'latest_receipt'].includes(key)) return;
   if (key === 'project') {
     if (typeof value !== 'string' || !value.trim() || value !== value.trim() || value.length > 120 || /[<>:"/\\|?*\x00-\x1f]/.test(value)) throw reject(400, 'Invalid project.');
   } else if (key === 'title') {
@@ -83,7 +92,7 @@ function checkValue(key, value) {
   } else if (key === 'status' || key === 'start_previous_status') {
     if (!['todo', 'doing', 'review', 'needs_user', 'done'].includes(value)) throw reject(400, 'Invalid status.');
   } else if (key === 'flag') {
-    if (![null, 'failed', 'blocked', 'held'].includes(value)) throw reject(400, 'Invalid flag.');
+    if (![null, 'failed', 'blocked', 'held', 'quota'].includes(value)) throw reject(400, 'Invalid flag.');
   } else if (key === 'order') {
     if (!Number.isFinite(value) || value < 0) throw reject(400, 'Invalid order.');
   } else if (key === 'depends_on') {
@@ -144,8 +153,6 @@ class SharedStore {
   _remember(opId, status, body) {
     const saved = { status, body: clone(body) };
     this.data.ops[opId] = saved;
-    const keys = Object.keys(this.data.ops);
-    while (keys.length > OPS_CAP) delete this.data.ops[keys.shift()];
     return saved;
   }
   devices() {
@@ -232,7 +239,7 @@ class SharedStore {
         id: 'cf-' + crypto.randomUUID(), at: new Date(this.now()).toISOString(), deviceId,
         baseRevision: expectedRevision, fields: conflicts,
       };
-      card.conflicts = [...(card.conflicts || []), conflict].slice(-CONFLICT_CAP);
+      card.conflicts = [...(card.conflicts || []), conflict];
     }
     const touched = [...new Set([...Object.keys(applied), ...Object.keys(conflicts)])];
     if (touched.length) {
@@ -260,14 +267,28 @@ class SharedStore {
       this._save();
       return saved;
     }
+    const cleanTurns = stripSecrets(Array.isArray(turns) ? turns : []);
+    // A delayed older save cannot shorten history already accepted by the hub.
+    if (existing && cleanTurns.length <= existing.turns.length && cleanTurns.every((turn, i) => turnExtends(existing.turns[i], turn))) {
+      const saved = this._remember(opId, 200, { record: existing, duplicate: true });
+      this._save();
+      return saved;
+    }
     const record = {
       sessionId, deviceId, contentHash,
       startedAt: typeof startedAt === 'string' ? startedAt : null,
       endedAt: typeof endedAt === 'string' ? endedAt : null,
       summary: clip(summary || '', 200),
-      turns: stripSecrets(Array.isArray(turns) ? turns : []),
+      turns: cleanTurns,
       updatedAt: new Date(this.now()).toISOString(),
     };
+    if (existing) {
+      record.alternatives = existing.alternatives || [];
+      if (!existing.turns.every((turn, i) => turnExtends(cleanTurns[i], turn))) {
+        const { alternatives, ...previous } = existing;
+        record.alternatives = [...record.alternatives, previous];
+      }
+    }
     this.data.history[key] = record;
     const saved = this._remember(opId, 200, { record, duplicate: false });
     this._save();
