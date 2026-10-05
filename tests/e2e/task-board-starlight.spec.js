@@ -15,10 +15,16 @@ const shots = process.env.AGENTDECK_TASK_BOARD_SHOTS;
 let application, page, profile;
 const errors = [];
 
+// The test window is invisible and click-through, but the page is still told where the real cursor
+// rests whenever the layout under it changes, and the card there lights up. Moving the driven pointer
+// off the board puts that out.
+const park = () => page.mouse.move(Math.round((page.viewportSize() || { width: 1440 }).width * 0.48), 4);
 // Running lights are frozen at a set point of their cycle so a picture shows them lit, the same way every time.
-async function screenshot(name) {
+// `hovering` keeps the pointer where the test put it, for a picture of a hovered card.
+async function screenshot(name, hovering) {
   if (!shots) return;
   fs.mkdirSync(shots, { recursive: true });
+  if (!hovering) await park();
   await page.evaluate(() => {
     const at = { 'tbv-breathe': 0.5, 'tbv-flow': 0.42, 'tbv-ping': 0.2, 'sky-twinkle': 0.6, 'tbv-twinkle-soft': 0.8, 'tbv-breathe-soft': 0.5 };
     document.getAnimations().forEach((a, i) => {
@@ -117,7 +123,8 @@ async function launch({ many = false, empty = false } = {}) {
   const workers = [column('w-star', '星图视觉', 'agentdeck'), column('w-mobile', '手机网页端', 'agentdeck'), column('w-quota', '额度面板', 'agentdeck'), column('w-radar', '雷达任务', 'hermes-savings'), column('w-doubao', '豆包切换', 'type4me-windows')];
   const now = Date.now();
   // Unbound 进行中 cards send their heartbeat notices to the stand-in Captain, never to a real provider CLI.
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
+  // These sessions stand for work in progress; nothing is to be sent again when the app starts.
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
     columns: [{ ...column('cap', '队长', ''), isMain: true, captainCrew: false }, ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: 'working', sentAt: now - 60_000 + i, turnId: '', receipt: null })) },
@@ -233,7 +240,7 @@ test('star chart: status light, dependency lines, meter, motion rules and both t
   await expect(page.locator('.tbv-links')).toHaveClass(/hot/);
   await expect(page.locator('.tbv-link.on')).toHaveCount(4);
   expect((await page.locator('.tbv-card.linked').evaluateAll((n) => n.map((x) => x.dataset.cardId))).sort()).toEqual(['a-docs', 'a-mobile', 'a-resume', 'a-star']);
-  await screenshot('dark-1440-links-lit');
+  await screenshot('dark-1440-links-lit', true);
   await page.mouse.move(700, 20);
   await expect(page.locator('.tbv-links')).not.toHaveClass(/hot/);
   await expect(page.locator('.tbv-card.linked')).toHaveCount(0);
@@ -327,6 +334,7 @@ test('star chart: status light, dependency lines, meter, motion rules and both t
   for (const theme of ['dark', 'light']) {
     await page.evaluate((t) => applyTheme(t), theme);
     // the opened card has no lines of its own: nothing else on the board is lit or marked
+    await park();
     expect(await page.evaluate(() => [...document.querySelectorAll('.tbv-card.linked, .tbv-card .tbv-flash, .tbv-link.on')].map((n) => `${n.className.baseVal || n.className} ${n.dataset.cardId || n.parentElement.dataset.cardId || n.dataset.from + '>' + n.dataset.to}`))).toEqual([]);
     await screenshot(`${theme}-1440-drawer`);
   }
@@ -409,7 +417,7 @@ test('动效开关: one icon button holds the board still, says so, and is remem
   await toggle.click();
   await expect(toggle).toHaveAttribute('aria-label', ON);
   await expect(page.locator('.tbv-spark')).toHaveCount(0);
-  expect(await boardAnimations()).toEqual([]);
+  await expect.poll(boardAnimations).toEqual([]); // the board's own arrival may still be finishing
   await expect(page.locator('.tbv-link.live')).toHaveCount(3); // the lines still say what is moving
   expect(await page.evaluate(() => [getComputedStyle(document.querySelector('.tbv-flow')).display, getComputedStyle(document.querySelector('#taskBoardView .star-sky i')).animationName])).toEqual(['none', 'none']);
   expect(Number(await page.evaluate(() => getComputedStyle(document.querySelector('.tbv-card[data-card-id="a-star"]'), '::after').opacity))).toBeGreaterThan(0.5);

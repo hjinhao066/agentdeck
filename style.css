@@ -2444,8 +2444,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   .cm-node, .cm-canvas.cm-smooth, .cm-tray-arrow svg { transition: none; }
 }
 /* the same stillness when motion is switched off from the toolbar */
-:root[data-motion="off"] :is(.cm-pulse, .cm-edge.review, #crewMap .cm-ico svg, #crewMap .cm-ico::after, #crewMap .cm-node::before, #crewMap .cm-node::after) { animation: none; }
-:root[data-motion="off"] :is(.cm-pulse, #crewMap .cm-ico::after, #crewMap .cm-node.st-working::before) { display: none; }
+:root[data-motion="off"] .cm-pulse, :root[data-motion="off"] .cm-edge.review, :root[data-motion="off"] #crewMap .cm-ico svg, :root[data-motion="off"] #crewMap .cm-ico::after, :root[data-motion="off"] #crewMap .cm-node::before, :root[data-motion="off"] #crewMap .cm-node::after { animation: none; }
+:root[data-motion="off"] .cm-pulse, :root[data-motion="off"] #crewMap .cm-ico::after, :root[data-motion="off"] #crewMap .cm-node.st-working::before { display: none; }
 :root[data-motion="off"] #crewMap .cm-node.st-working::after { opacity: .7; }
 :root[data-motion="off"] :is(.cm-node, .cm-canvas.cm-smooth, .cm-tray-arrow svg) { transition: none; }
 .cm-controls [aria-disabled="true"], .tbv-icon[aria-disabled="true"] { opacity: .45; cursor: default; }
@@ -3075,8 +3075,8 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
   .tbv-flow, .tbv-spark, .tbv-beacon::after, .tbv-state.working::after, .tbv-alert-dot::after { display: none; }
   .tbv-card[data-run="working"]::after { opacity: .7; }
 }
-:root[data-motion="off"] :is(#taskBoardView *, #taskBoardView *::before, #taskBoardView *::after) { animation: none !important; transition: none !important; }
-:root[data-motion="off"] :is(.tbv-flow, .tbv-spark, .tbv-beacon::after, .tbv-state.working::after, .tbv-alert-dot::after) { display: none; }
+:root[data-motion="off"] #taskBoardView *, :root[data-motion="off"] #taskBoardView *::before, :root[data-motion="off"] #taskBoardView *::after { animation: none !important; transition: none !important; }
+:root[data-motion="off"] .tbv-flow, :root[data-motion="off"] .tbv-spark, :root[data-motion="off"] .tbv-beacon::after, :root[data-motion="off"] .tbv-state.working::after, :root[data-motion="off"] .tbv-alert-dot::after { display: none; }
 :root[data-motion="off"] .tbv-card[data-run="working"]::after { opacity: .7; }
 
 .mobile-web-access label { display: block; margin: 10px 0 6px; font-size: 12px; }

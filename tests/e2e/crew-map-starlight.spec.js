@@ -35,7 +35,8 @@ async function launch(crew) {
   const now = Date.now();
   const column = (id, title, extra = {}) => ({ id, title, displayTitle: title, manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true, ...extra });
   const workers = crew.map(([project, title], i) => column('w' + i, title, { project }));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3,
+  // These are layout states, not restartable tasks with a saved instruction.
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [column('cap', '队长', { isMain: true, captainCrew: false }), ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: workers.map((c, i) => { const st = crew[i][2]; return { id: 'task-' + c.id, colId: c.id, gen: 1, status: st, sentAt: now - (90 - i * 3) * 60_000, doneAt: now - (40 - i) * 60_000, turnId: '',
@@ -49,6 +50,7 @@ async function launch(crew) {
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
+  await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(crew.length + 1);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 40000 }).toBe(crew.length + 1);
 }
@@ -113,7 +115,7 @@ const read = () => page.evaluate(() => {
 const apart = (a, b) => a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
 // The map is in order: no frame or card on another, every card inside its own frame on the frame's column
 // grid, frames of a lane on one left edge with one gap between them, and readable.
-function assertNeat(g) {
+function assertNeat(g, ownZoom) {
   g.groups.forEach((a, i) => g.groups.slice(i + 1).forEach((b) => expect(apart(a, b), `${a.key}/${b.key} overlap`).toBe(true)));
   g.nodes.forEach((a, i) => g.nodes.slice(i + 1).forEach((b) => expect(apart(a, b), `${a.id}/${b.id} overlap`).toBe(true)));
   for (const n of g.nodes) {
@@ -128,6 +130,7 @@ function assertNeat(g) {
     list.slice(1).forEach((f, i) => expect(f.y - (list[i].y + list[i].h), 'one gap between frames in a lane').toBe(32));
   });
   expect(new Set(g.groups.filter((f) => !lanes.get(f.lane).indexOf(f)).map((f) => f.y)).size, 'every lane starts on one line').toBe(1);
+  if (ownZoom) return; // a zoom the user set is theirs: the readable floor belongs to the automatic fit
   expect(g.view.scale).toBeGreaterThanOrEqual(0.85 - 1e-6);
   expect(g.bodyPx * g.view.scale, 'card text stays 11px or more on screen').toBeGreaterThanOrEqual(11 - 1e-6);
 }
@@ -359,7 +362,7 @@ test('一键整理: dragged frames and cards go back on the grid in the order th
   expect(gliding.lines).toBe(1);
   await settled();
   let g = await read();
-  assertNeat(g);
+  assertNeat(g, true); // the zoom is still the one the user set
   expect(await linesClear()).toEqual([]);
   expect(g.saved.positions).toEqual({});
   expect(g.saved.projectPositions).toEqual({});
@@ -439,7 +442,7 @@ test('ten sessions in two projects: side by side at every width that holds them,
   for (const theme of ['dark', 'light']) {
     await open(1440, 900, theme);
     const c = await page.evaluate(() => { const card = document.querySelector('.cm-node.st-working:not(.kind-captain)'), failed = document.querySelector('.cm-node.st-failed');
-      const rgb = (v) => v.match(/[\d.]+/g).slice(0, 3).map(Number);
+      const rgb = (v) => v.match(/[\d.]+/g).slice(0, 3).map((x) => Number(x) * (/^color\(/.test(v) ? 255 : 1));
       const lum = (v) => { const [r, g2, b] = rgb(v).map((x) => { x /= 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g2 + 0.0722 * b; };
       const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((p, q) => q - p); return (x + 0.05) / (y + 0.05); };
       const bg = getComputedStyle(card).backgroundColor, color = (n, sel) => getComputedStyle(n.querySelector(sel)).color;

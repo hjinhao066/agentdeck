@@ -582,13 +582,11 @@ function applyMotion(off, redraw) {
   document.querySelectorAll('[data-motion-toggle]').forEach((b) => {
     b.innerHTML = still ? MOTION_ICON.off : MOTION_ICON.on;
     b.title = label; b.setAttribute('aria-label', label);
-    b.classList.toggle('on', !still);
     if (systemCalm.matches) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
   });
   if (!redraw) return;
   saveConfig();
-  TaskBoardUI.redraw();
-  if (activeView === 'board' && CrewMap.mode() === 'crew') CrewMap.render();
+  TaskBoardUI.redraw(); // the lights on its lines are drawn by script; the map's are all in the stylesheet
 }
 document.querySelectorAll('[data-motion-toggle]').forEach((b) => b.addEventListener('click', () => { if (!systemCalm.matches) applyMotion(!config.calmMotion, true); }));
 systemCalm.addEventListener('change', () => applyMotion(config.calmMotion, true));
