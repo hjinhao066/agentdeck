@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { install, parseArgs } = require('../scripts/install-agentdeck');
+const { install, parseArgs, newestBackup } = require('../scripts/install-agentdeck');
 function fixture(t, fail = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-install-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -111,4 +111,17 @@ test('backup deadline exhaustion grants a bounded recovery budget and starts old
   const result = await install(f.options, f.ops);
   assert.equal(result.status, 'failed'); assert.equal(result.attempts, 0); assert.equal(result.activeVersion, '1.1.11');
   assert.equal(result.running, true); assert.equal(recoveryGranted, true); assert.deepEqual(f.starts, ['1.1.11']);
+});
+
+test('rollback chooses newest backup by directory mtime across legacy and epoch names', (t) => {
+  const f = fixture(t);
+  const old = path.join(f.options.backups, '20261005-040100-1.1.11');
+  const latest = path.join(f.options.backups, '1791234000000-new-operation');
+  const invalid = path.join(f.options.backups, '9999999999999-incomplete');
+  for (const dir of [old, latest]) fs.mkdirSync(path.join(dir, 'AgentDeck.app'), { recursive: true });
+  fs.mkdirSync(invalid);
+  fs.utimesSync(old, 100, 100); fs.utimesSync(latest, 200, 200); fs.utimesSync(invalid, 300, 300);
+  assert.equal(newestBackup(f.options.backups), latest);
+  fs.utimesSync(old, 400, 400);
+  assert.equal(newestBackup(f.options.backups), old);
 });

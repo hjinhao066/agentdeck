@@ -183,6 +183,13 @@ async function install(options, ops = macOperations(options)) {
   }
   return result;
 }
+function newestBackup(directory) {
+  requireFile(directory);
+  return fs.readdirSync(directory).map((name) => path.join(directory, name))
+    .filter((dir) => fs.existsSync(path.join(dir, 'AgentDeck.app')))
+    .map((dir) => ({ dir, modified: fs.statSync(dir).mtimeMs }))
+    .sort((a, b) => b.modified - a.modified || a.dir.localeCompare(b.dir))[0]?.dir;
+}
 async function main(argv) {
   const options = parseArgs(argv);
   if (options.child) {
@@ -207,9 +214,7 @@ async function main(argv) {
     return;
   }
   if (options.rollback && !options.backup) {
-    requireFile(options.backups);
-    const entries = fs.readdirSync(options.backups).sort().reverse();
-    options.backup = entries.map((name) => path.join(options.backups, name)).find((dir) => fs.existsSync(path.join(dir, 'AgentDeck.app')));
+    options.backup = newestBackup(options.backups);
     if (!options.backup) throw new Error('No app backup found');
   }
   if (!options.go) { console.log('Plan only. Add --go to run the one-shot installer (maximum 3 attempts).', JSON.stringify(options)); return; }
@@ -277,4 +282,4 @@ async function main(argv) {
   } finally { if (!handedOff) fs.rmdirSync(options.entryLock); }
 }
 if (require.main === module) main(process.argv.slice(2)).catch((error) => { console.error(error.message); process.exitCode = 1; });
-module.exports = { MAX_ATTEMPTS, defaults, parseArgs, atomicJson, macOperations, install, main };
+module.exports = { MAX_ATTEMPTS, defaults, parseArgs, atomicJson, macOperations, install, newestBackup, main };
