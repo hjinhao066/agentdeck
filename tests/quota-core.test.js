@@ -701,6 +701,73 @@ test('same-tier quota fallback switches only on a clear shortage and names the s
   assert.ok(titled.endsWith(switched.note));
   assert.ok(titled.length <= 120);
   assert.equal(Q.quotaFallbackTitle('审查', ''), '审查');
+  const B = require('../board-core');
+  const modelOf = (cmd) => cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1];
+  assert.equal(B.inferAgentType(switched.cmd), 'Cursor');
+  assert.equal(modelOf(switched.cmd), 'claude-opus-5-5-high');
+  assert.equal(B.inferAgentType(toOss.cmd), 'Antigravity');
+  assert.equal(modelOf(toOss.cmd), 'gpt-oss-120b-medium');
+  assert.doesNotMatch(toOss.cmd, /--effort/);
+});
+
+test('a screen with no remaining percent is not a usable substitute', () => {
+  const grok = 'cursor-agent --force --model grok-4.7-high-fast';
+  const welcome = {};
+  Q.observe(welcome, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now, 'grok-4.7-high-fast'), now);
+  Q.observe(welcome, Q.screen('Antigravity', 'Welcome', [], now, 'gemini-3.8-flash-high'), now);
+  const picked = Q.quotaFallback(welcome, grok, null, null, now);
+  assert.equal(picked.action, 'switch');
+  assert.equal(picked.to, 'agy gpt-oss-120b-medium');
+  assert.equal(picked.cmd, 'agy --dangerously-skip-permissions --model gpt-oss-120b-medium');
+  assert.doesNotMatch(picked.cmd, /--effort/);
+  const resumed = {};
+  Q.observe(resumed, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now, 'grok-4.7-high-fast'), now);
+  Q.observe(resumed, Q.screen('Antigravity', 'Usage limit reset', [], now, 'gemini-3.8-flash-high'), now);
+  assert.equal(Q.quotaFallback(resumed, grok, null, null, now).to, 'Gemini Flash');
+});
+
+test('stale or expired quota numbers do not trigger a switch', () => {
+  const opus = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+  const bind = (sample) => ({ ...sample, accountBound: true, accountKey: 'acc', configDir: '~/.claude', seatId: 'default', credentialKey: 'cred' });
+  const stale = {};
+  Q.observe(stale, bind(Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 15, resetText: new Date(now + 3_600_000).toISOString() },
+    { key: 'weekly', remaining: 80, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  assert.equal(Q.summary(stale, 'Claude', now + 31 * 60_000).stale, true);
+  assert.equal(Q.quotaFallback(stale, opus, null, null, now + 31 * 60_000).action, 'open');
+  const expired = {};
+  Q.observe(expired, bind(Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 0, resetText: new Date(now + 60_000).toISOString() },
+    { key: 'weekly', remaining: 10, resetText: new Date(now + 120_000).toISOString() },
+  ] }, now)), now);
+  assert.equal(Q.quotaFallback(expired, opus, null, null, now + 31 * 60_000).action, 'open');
+});
+
+test('every measured substitute being exhausted queues the original command', () => {
+  // quotaFallback follows a replaced commandQuota on the shared module. Run that
+  // replacement in a child so it cannot change other tests in this file.
+  const { spawnSync } = require('child_process');
+  const result = spawnSync(process.execPath, ['-e', `
+    const Q = require('./quota-core');
+    const assert = require('assert');
+    const now = ${JSON.stringify(now)};
+    const orig = Q.commandQuota;
+    Q.commandQuota = (store, cmd, ...args) => /cursor-agent|gpt-oss|claude-sonnet-4-6/.test(cmd)
+      ? { out: true, state: 'exhausted', stale: false, fiveHour: 0, weekly: 0 }
+      : orig(store, cmd, ...args);
+    const opus = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+    const gemini = 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high';
+    const plan = Q.quotaFallback({ Claude: { scope: 'claude', blocked: { at: now, resetAt: now + 60_000 } } }, opus, null, null, now);
+    assert.equal(plan.action, 'queue');
+    assert.equal(plan.reason, 'out');
+    assert.equal(plan.cmd, opus);
+    const flash = Q.quotaFallback({ Antigravity: { scope: 'gemini', blocked: { at: now, resetAt: now + 60_000 } } }, gemini, null, null, now);
+    assert.equal(flash.action, 'queue');
+    assert.equal(flash.cmd, gemini);
+    assert.equal(flash.to, '');
+  `], { cwd: require('path').join(__dirname, '..'), encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test('summary exposes the evidence source and confidence for the panel details', () => {
