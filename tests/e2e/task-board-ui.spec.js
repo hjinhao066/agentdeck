@@ -248,7 +248,7 @@ test('grouped board: foldable project groups over shared status columns; counts,
   await expect(page.locator('.tbv-cell[data-status="done"] .tbv-card')).toHaveCount(0);
   await expect(deck.locator('.tbv-done-count')).toHaveText('5');
   await page.locator('.tbv-head[data-status="done"]').click();
-  await expect(page.locator('.tbv-cell[data-status="done"] .tbv-card')).toHaveCount(5); // 3 + 1 + 1 shown, the rest behind 展开剩余
+  await expect(page.locator('.tbv-cell[data-status="done"] .tbv-card')).toHaveCount(6); // agentdeck 3 (rest behind 展开剩余) + 客户门户 1 + 报表服务 2
   await expect(deck.locator('.tbv-cell[data-status="done"] .tbv-more')).toHaveText('展开剩余 2 项');
   await expect(page.locator('.tbv-head[data-status="done"]')).toBeFocused();
   await assertBoardLayout(140);
@@ -337,13 +337,13 @@ test('grouped board: foldable project groups over shared status columns; counts,
   await expect(page.locator('#taskBoardView')).toBeVisible();
 
   // narrow panel: each group's columns stack under its bar with their own label; titles stay readable
-  for (const [w, h, theme] of [[980, 700, 'light'], [700, 800, 'dark']]) {
+  for (const [w, h, theme] of [[980, 700, 'dark'], [980, 700, 'light'], [700, 800, 'dark'], [700, 800, 'light']]) {
     await resize(w, h);
     await page.evaluate((t) => applyTheme(t), theme);
     await assertBoardLayout(300, true);
     const narrow = await page.evaluate(() => { const l = document.querySelector('.tbv-lane'), s = document.querySelector('.tbv-scroll');
       return { head: l.querySelector('.tbv-lane-head').getBoundingClientRect().bottom, cells: l.querySelector('.tbv-cells').getBoundingClientRect().top, view: document.getElementById('taskBoardView').getBoundingClientRect().right, win: innerWidth,
-        fits: s.scrollWidth <= s.clientWidth + 1, labels: [...l.querySelectorAll('.tbv-cell')].filter((c) => c.getBoundingClientRect().height > 0).map((c) => getComputedStyle(c, '::before').content.replace(/"/g, '')) }; });
+        fits: s.scrollWidth <= s.clientWidth + 1, labels: [...l.querySelectorAll('.tbv-cell:not(.folded)')].filter((c) => c.getBoundingClientRect().height > 0).map((c) => getComputedStyle(c, '::before').content.replace(/"/g, '')) }; });
     expect(narrow.head).toBeLessThanOrEqual(narrow.cells + 1);
     expect(narrow.view).toBeLessThanOrEqual(narrow.win);
     expect(narrow.fits, 'no horizontal scroll').toBe(true);
@@ -525,6 +525,15 @@ test('需要你: the card shows the question, the drawer takes an answer and sen
   await screenshot('4-needs-you-1440x900-dark');
   await page.evaluate(() => applyTheme('light'));
   await screenshot('4-needs-you-1440x900-light');
+  // the drawer open at the narrower panels, both themes
+  for (const [w, h] of [[980, 700], [700, 800]]) {
+    await resize(w, h);
+    await screenshot(`4-needs-you-${w}x${h}-light`);
+    await page.evaluate(() => applyTheme('dark'));
+    await screenshot(`4-needs-you-${w}x${h}-dark`);
+    await page.evaluate(() => applyTheme('light'));
+  }
+  await resize(1440, 900);
   await page.evaluate(() => applyTheme('dark'));
   await detail.locator('.tbv-send').click();
   await expect.poll(captainNotices).toHaveLength(2);

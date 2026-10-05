@@ -176,12 +176,15 @@
     node.append(row);
     // Second line: the question (需要你) or the latest news, with the update time at its end.
     const sub = el('div', 'tbv-sub');
+    let news = '';
     if (c.status === 'needs_user') {
       const q = el('p', 'tbv-question', item.question || '队长还没把问题整理出来');
       if (!item.question) q.classList.add('none');
       sub.append(q);
+      news = q.textContent;
     } else {
       const act = U.activity(c, item.waitLabel, c.status === 'doing' ? stateLabel : '');
+      news = act.text;
       sub.append(el('p', 'tbv-activity' + (act.tone ? ' ' + act.tone : ''), act.text));
     }
     const when = el('time', 'tbv-time', U.formatUpdated(c.updated));
@@ -190,7 +193,7 @@
     node.append(sub);
     const session = c.session_id ? host.session(c.session_id) : null;
     const who = session ? session.label : U.ownerLabel(c, null);
-    node.title = [c.title, item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
+    node.title = [c.title, news !== item.waitLabel ? news : '', item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
     node.setAttribute('aria-label', `${c.title}，${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
     node.addEventListener('click', () => { if (suppressClick) return; openDetail(c.id); });
     node.addEventListener('keydown', (e) => cardKey(e, item, lane));
