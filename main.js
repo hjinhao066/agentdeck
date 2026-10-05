@@ -10,8 +10,7 @@ const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
-
-const { registerSideIpc } = require('./side-main');
+const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const { createCodexLauncher } = require('./codex-launch');
@@ -26,6 +25,7 @@ const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
+const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
@@ -63,11 +63,15 @@ function readLocalConfig() {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 }
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
+let fleetClient = null;
 let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
-  return taskStore[payload.op](payload.input || {});
+  const result = taskStore[payload.op](payload.input || {});
+  if (fleetClient && payload.op !== 'list') fleetClient.noteResult(result);
+  return result;
 });
+handleMain('fleet:state', () => fleetClient ? fleetClient.snapshot() : { configured: false, devices: [], history: [], error: null, conflictCount: 0, selfId: null, lastSyncAt: null });
 
 // Every privileged channel belongs exclusively to the local deck main frame.
 // Native notifications are created here, never in a page.
@@ -758,13 +762,19 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   setupBoardControl();
+  const configPath = path.join(app.getPath('userData'), 'config.json');
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
     getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
+    onChatSaved: (id, chat) => {
+      if (!fleetClient || typeof fleetClient.noteCaptain !== 'function') return;
+      let captain = false;
+      try { captain = JSON.parse(fs.readFileSync(configPath, 'utf8')).mainSession?.colId === id; } catch (_) {}
+      if (captain || chat?.captainArchive === true) fleetClient.noteCaptain(id, chat);
+    },
   });
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
-  const configPath = path.join(app.getPath('userData'), 'config.json');
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
@@ -1414,11 +1424,52 @@ app.whenReady().then(async () => {
   const nativeMenu = Menu.getApplicationMenu();
   if (nativeMenu) Menu.setApplicationMenu(Menu.buildFromTemplate(fontMenu(nativeMenu)));
 
+  startFleet(configPath);
   createWindow();
   const initialFocus = process.argv.find((arg) => arg.startsWith('--focus-column='));
   if (initialFocus && validId(initialFocus.slice(15))) pendingFocusColumn = initialFocus.slice(15);
   app.on('activate', () => { if (!mainWindow || mainWindow.isDestroyed()) createWindow(); });
 });
+
+function fleetSessions(file) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const captain = cfg.mainSession && cfg.mainSession.colId;
+    return [...(cfg.columns || []), ...(cfg.archived || [])].filter((col) => col && typeof col.id === 'string').map((col) => ({
+      id: col.id, role: col.id === captain || col.isMain ? 'captain' : 'session',
+      title: typeof (col.displayTitle || col.title) === 'string' ? (col.displayTitle || col.title) : '',
+    }));
+  } catch (_) { return []; }
+}
+function startFleet(configPath) {
+  const userData = app.getPath('userData');
+  const device = loadDevice(path.join(userData, 'device.json'));
+  taskStore.deviceId = device.id;
+  const settings = readFleetSettings({ env: process.env, fleetFile: path.join(userData, 'fleet.json') });
+  if (!settings) return;
+  if (settings.error) {
+    fleetClient = {
+      snapshot: () => ({ configured: true, devices: [], history: [], error: settings.error, conflictCount: 0, selfId: device.id, lastSyncAt: null }),
+      stop() {}, noteResult() {}, noteCaptain() {},
+    };
+    return;
+  }
+  let version = '';
+  try { version = require('./package.json').version; } catch (_) {}
+  fleetClient = new FleetClient({
+    baseUrl: settings.baseUrl, tokenFile: settings.tokenFile, device, taskStore,
+    historyDir: path.join(userData, 'fleet-history'), stateFile: path.join(userData, 'fleet-state.json'),
+    sessions: () => fleetSessions(configPath), version, syncMs: settings.syncMs,
+    onChange: () => send('task-board:changed', {}),
+  });
+  try {
+    const captain = fleetSessions(configPath).find((item) => item.role === 'captain');
+    for (const chat of loadAllChats(CHAT_DIR)) {
+      if (chat && (chat.captainArchive === true || chat.id === captain?.id)) fleetClient.noteCaptain(chat.id, chat);
+    }
+  } catch (_) {}
+  fleetClient.start();
+}
 
 // Ask the page to record in-flight crew, then quit on a later turn. A nested
 // app.quit() inside this handler is a no-op, and a timer that gives up once
@@ -1492,6 +1543,7 @@ quitGate = RestartResume.createQuitGate({
 onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
 app.on('before-quit', (event) => {
   if (quitGate.beforeQuit(event, readResumeEnabled()) !== 'cleanup') return;
+  if (fleetClient && fleetClient.stop) fleetClient.stop();
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
   if (mobileWeb) mobileWeb.close();

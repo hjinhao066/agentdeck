@@ -754,6 +754,69 @@ and GitHub synchronization after every completed change.
 
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
 
+## Two-machine sync (1.2)
+
+Mac and Windows each run AgentDeck and talk to one sync service (the existing
+VPS is the intended deployment target, reached over WireGuard). This branch
+does not deploy that service or configure either installed app. The app heartbeats every sync round, every 10
+seconds, and the service marks a machine offline 45 seconds after its last
+heartbeat, which covers shutdown and sleep. Task cards, their fields, and
+saved captain transcripts are shared; a change is visible on the other side
+within a minute. Edits to different fields of the same card merge. Edits to
+the same field stay as two copies and the card shows 冲突. The sidebar section
+两机 shows online/offline, the last-seen time, and any sync error.
+
+The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
+to the WireGuard address when it is deployed; the default listen address is
+loopback. Each desktop keeps its settings in `userData/fleet.json` (not the
+deck `config.json`, which the window rewrites):
+
+```json
+{ "baseUrl": "https://sync.example", "tokenFile": "/absolute/path/to/token" }
+```
+
+The token file contains only the token. It is not committed, not passed on the
+command line, and not written into logs or task JSON. `~/.agents` git sync is
+unchanged and is not the live channel. This build does not choose which
+computer runs a task, move work off a sleeping machine, or switch captains
+from a phone. Cards and sessions carry `deviceId` for those later steps.
+
+Offline edits persist in `fleet-state.json`. A request retains its operation ID
+and original payload until acknowledged, even across a process restart; later
+edits wait separately and are rebased on the accepted card. Snapshot downloads
+preserve pending edits, including changes made by other local board writers.
+Older revisioned task snapshots restored by Git keep their older revision when
+submitted, so they cannot silently replace newer server edits.
+Repeated operations do not increment a card revision or add a second conflict.
+All conflicting alternatives and captain turns are retained. Older transcript
+prefixes cannot shorten newer history; divergent saves retain the prior version
+in the history record's `alternatives`. Credential-shaped fields are stripped,
+but transcript prose is preserved, so sync only to a trusted private service.
+Requests time out after 10 seconds and retry on subsequent sync rounds.
+If the hub loses a card or rolls back behind a pending edit's revision, the
+client discards that edit's old base and queues the complete local card with a
+new operation ID and revision zero for the next round. Newer local fields are
+retained as conflicts if an older hub copy already exists. A failed individual
+task or transcript upload stays queued and visible as a sync error while other
+uploads and snapshot downloads continue. Store ID indexes have no prototype,
+including after loading JSON, so prototype-shaped IDs are ordinary keys.
+
+Serialize local verification with the whole-machine `/tmp/agentdeck-test.lock`
+before running unit tests, E2E, or the transport smoke. Record the owning PID,
+branch and start time in `owner`, and remove that file and directory on exit.
+
+Run `node scripts/fleet-two-machine-smoke.js --ssh winpc --report /absolute/report.md`
+for a repeatable native Mac/Windows transport check. It uses fresh temporary
+stores and credentials and an SSH reverse forward bound to loopback. It verifies
+the production 10-second sync interval, 45-second offline lease, two-way task and
+captain history propagation, conflicts, operation replay, and offline outbox
+recovery after a peer process restart. It removes its temporary directories and
+forward when done. Omit `--ssh` to rehearse with a separate local Node process;
+`--quick` shortens timers only for that local rehearsal. This does not exercise
+the Windows Electron UI or install, rebuild, or restart either installed app.
+
+
+
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in

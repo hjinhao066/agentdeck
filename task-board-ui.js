@@ -173,6 +173,8 @@
     if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') row.append(el('span', 'tbv-tag held', '挂起'));
+    const conflict = window.FleetUI && window.FleetUI.conflictText(c);
+    if (conflict) { const tag = el('span', 'tbv-tag conflict', '冲突'); tag.title = conflict; row.append(tag); }
     node.append(row);
     // Second line: the question (需要你) or the latest news, with the update time at its end.
     const sub = el('div', 'tbv-sub');
