@@ -216,6 +216,7 @@
       `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 额外发 Bark。仅必须用户亲自登录/授权或确认付款时使用；测试用 notify-user --test（【测试】，critical，音量 3）。`,
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task archive --done [--project "项目"]`,
+      `   ${cli} queue list；queue cancel --task-id 卡片或排队id   查看/取消未开会话的排队；同卡 new 换命令/模型会替换旧排队，移到 done/todo 自动取消`,
       `   ${cli} briefing                        只读当前队长说明；Relay 后先读 briefing 和看板交接，再重挂后台回执监听`,
 
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,

@@ -275,9 +275,17 @@ again with the current provider, model and effort instructions.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   The 队长 can read observed subscription quotas with `quota` and switches
-  provider when a worker reports a limit. At most 15 background sessions work at
+  provider when a worker reports a limit. At most the configured concurrency limit (default 30) background sessions work at
   once: a further `new` waits (its card says 等空位, the only thing called 排队) and starts by itself, oldest
-  first, when one finishes. A finished background session is archived after 10
+  first among available providers, when one finishes. Quota-held requests do not
+  block available providers. `queue list` shows unsent requests with their card/queue
+  ids, launch commands and wait reasons; `queue cancel --task-id <card-or-queue-id>`
+  cancels one (repeating it is harmless). `new --task-id` with a changed launch command,
+  model or Claude seat replaces the old queued request and starts when its provider
+  and a slot are available. An unchanged command is refused. Moving a card to
+  `done` or `todo` through `task move` or the board UI cancels its unsent request.
+  Queue responses distinguish quota, critical memory, the actual occupied-slot
+  count and earlier executable requests; the concurrency limit is not an active count. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have
   open); `tell` to it restores it first, and `ledger` lists those and the waiting work.
   Archiving ends the terminal, so a session that is working, waiting on an

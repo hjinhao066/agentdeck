@@ -108,6 +108,9 @@ function usage() {
     '  task move --id <card-id> --status todo|doing|review|needs_user|done\n' +
     '  task archive --done [--project "Project"]\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
+    '  queue list                               unsent new-session requests, ids, commands and reasons\n' +
+    '  queue cancel --task-id <card-or-queue-id> cancel an unsent request\n' +
+    '                                           new on a queued card replaces a changed command/model; task move to done/todo cancels it\n' +
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
@@ -220,6 +223,16 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'queue') {
+    const op = args._[1];
+    if (!['list', 'cancel'].includes(op)) fail('queue requires list or cancel.');
+    const taskId = args['task-id'];
+    if (op === 'cancel' && (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(taskId))) fail('queue cancel requires --task-id <card-or-queue-id>.');
+    if (op === 'list' && taskId !== undefined) fail('queue list takes no --task-id.');
+    const response = await request({ action: 'main-queue', op, ...(op === 'cancel' ? { taskId } : {}) }, false);
+    process.stdout.write(`${response.result}\n`);
+    return;
+  }
   if (action === 'task') {
     const op = args._[1];
     if (!['add', 'list', 'move', 'archive'].includes(op)) fail('task requires add, list, move or archive.');

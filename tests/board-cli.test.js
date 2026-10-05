@@ -327,3 +327,35 @@ test('notify-user routes local, urgent and fixed test requests without key data'
     } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
   }
 });
+
+test('queue list/cancel send Captain requests, validate ids and document replacement', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-queue-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: request.op === 'list' ? '[]' : 'cancelled' }));
+    }
+  }, 20);
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' };
+  try {
+    assert.equal((await runCli(['queue', 'list'], env)).stdout, '[]\n');
+    assert.equal((await runCli(['queue', 'cancel', '--task-id', 'card-123'], env)).stdout, 'cancelled\n');
+    assert.deepEqual(requests.map(({ action, op, taskId }) => ({ action, op, taskId })), [
+      { action: 'main-queue', op: 'list', taskId: undefined }, { action: 'main-queue', op: 'cancel', taskId: 'card-123' },
+    ]);
+    for (const args of [['queue', 'cancel'], ['queue', 'cancel', '--task-id', '../bad'], ['queue', 'list', '--task-id', 'card'], ['queue', 'unknown']]) {
+      assert.equal((await runCli(args, env)).code, 1);
+    }
+    assert.equal(requests.length, 2);
+    const denied = await runCli(['queue', 'list'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.match(denied.stderr, /Only conductor-managed terminals/);
+    const help = (await runCli(['help'], {})).stdout;
+    assert.match(help, /queue cancel --task-id/); assert.match(help, /replaces a changed command\/model/);
+    const prompt = require('../main-core').instructions('darwin');
+    assert.match(prompt, /queue list；queue cancel --task-id/);
+    assert.equal(prompt, require('../main-core').instructions('darwin', 'dynamic note must stay out'));
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});
