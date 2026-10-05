@@ -86,7 +86,8 @@ test('night and day: the A palette, a 3-column grid, finished projects in the tr
       const vp = document.querySelector('.cm-viewport').getBoundingClientRect();
       const card = document.querySelector('.cm-node.st-working:not(.kind-captain)');
       return {
-        vp: { x: vp.x, y: vp.y, right: vp.right, bottom: vp.bottom }, boxes: [...document.querySelectorAll('.cm-node')].map(rect),
+        vp: { x: vp.x, y: vp.y, right: vp.right, bottom: vp.bottom }, boxes: [...document.querySelectorAll('.cm-node, .cm-pane')].map(rect),
+        scale: CrewMap.view().scale, trayTop: document.querySelector('.cm-tray').getBoundingClientRect().y,
         canvas: css('.cm-viewport', 'backgroundColor'), card: getComputedStyle(card).backgroundColor,
         texts: [...document.querySelectorAll('.cm-node:not(.kind-captain)')].flatMap((c) => [...c.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: c.dataset.nodeId, cls: n.className, bottom: n.getBoundingClientRect().bottom, right: n.getBoundingClientRect().right, card: c.getBoundingClientRect() }))),
         title: getComputedStyle(document.querySelector('.cm-node:not(.kind-captain) .cm-title')).color,
@@ -100,11 +101,15 @@ test('night and day: the A palette, a 3-column grid, finished projects in the tr
     expect(g.card).toBe(theme === 'dark' ? 'rgb(21, 26, 34)' : 'rgb(255, 255, 255)');
     if (theme === 'light') expect(g.sock[0]).toBe('rgb(254, 243, 242)');
     expect(g.cols).toBe(3);
-    // everything inside the viewport, no two cards overlapping, no text past its card
+    // The whole map shows above the tray: 队长, every card and the project's frame keep the
+    // fit's margin (its 8px inset + the 16px the map carries around itself) from every edge
+    // of the viewport, the tray sits under it; no two cards overlapping, no text past its card
+    const edge = 8 + 16 * g.scale;
+    expect(g.trayTop).toBeGreaterThanOrEqual(g.vp.bottom - 0.5);
     for (const a of g.boxes) {
-      expect(a.x).toBeGreaterThanOrEqual(g.vp.x); expect(a.right).toBeLessThanOrEqual(g.vp.right);
-      expect(a.y).toBeGreaterThanOrEqual(g.vp.y); expect(a.bottom).toBeLessThanOrEqual(g.vp.bottom);
-      for (const b of g.boxes) if (a.id !== b.id) expect(a.x < b.right - 1 && a.right > b.x + 1 && a.y < b.bottom - 1 && a.bottom > b.y + 1, `${a.id}/${b.id}`).toBe(false);
+      expect(a.x).toBeGreaterThanOrEqual(g.vp.x + edge - 0.5); expect(a.right).toBeLessThanOrEqual(g.vp.right - edge + 0.5);
+      expect(a.y).toBeGreaterThanOrEqual(g.vp.y + edge - 0.5); expect(a.bottom, `${a.id || 'project frame'} above the tray`).toBeLessThanOrEqual(g.vp.bottom - edge + 0.5);
+      for (const b of g.boxes) if (a.id && b.id && a.id !== b.id) expect(a.x < b.right - 1 && a.right > b.x + 1 && a.y < b.bottom - 1 && a.bottom > b.y + 1, `${a.id}/${b.id}`).toBe(false);
     }
     for (const t of g.texts) { expect(t.bottom, `${t.id} ${t.cls}`).toBeLessThanOrEqual(t.card.bottom - 2); expect(t.right, `${t.id} ${t.cls}`).toBeLessThanOrEqual(t.card.right); }
     // readable text on the card surface
@@ -128,6 +133,45 @@ test('night and day: the A palette, a 3-column grid, finished projects in the tr
     await expect(page.locator('[data-cm="fit"]')).toHaveText('适应画布');
     await shot(`arch-a-${width}x${height}-${theme}`);
   }
+});
+
+test('too tall with the tray showing: a row is whole and clear of the tray or plainly cut; the end scrolls clear of it', async () => {
+  const read = () => page.evaluate(() => {
+    const rect = (n) => { const r = n.getBoundingClientRect(); return { y: r.y, bottom: r.bottom, x: r.x, width: r.width }; };
+    return { vp: rect(document.querySelector('.cm-viewport')), tray: rect(document.querySelector('.cm-tray')), cap: rect(document.querySelector('.cm-node.kind-captain')), scale: CrewMap.view().scale,
+      pane: rect(document.querySelector('.cm-pane')), card: Object.fromEntries([...document.querySelectorAll('.cm-node:not(.kind-captain)')].map((n) => [n.dataset.nodeId, rect(n)])) };
+  });
+  // 1280x800 holds two columns: four rows at the floor, the third cut by the tray's edge.
+  await open(1280, 800, 'dark'); await settled();
+  const base = await read();
+  expect(base.scale).toBeCloseTo(0.85, 5);
+  expect(base.card.w6.bottom).toBeGreaterThan(base.vp.bottom);
+  // Size the window so the edge would land 5px under the second row (1.1.8 left a row 4.4px
+  // above the tray), then 5px inside it: neither may stay flush against the tray.
+  for (const [nudge, check] of [[5, (gap) => gap >= 16 * 0.85 - 0.5], [-5, (gap) => gap <= -24 * 0.85 + 0.5]]) {
+    await open(1280, 800 - Math.round(base.vp.bottom - (base.card.w3.bottom + nudge)), 'dark'); await settled();
+    const g = await read(), gap = g.vp.bottom - g.card.w3.bottom;
+    expect(g.scale).toBeCloseTo(0.85, 5);
+    expect(check(gap), `second row ends ${gap.toFixed(1)}px above the tray`).toBe(true);
+    expect(g.cap.y, '队长 stays whole').toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
+    expect(g.tray.y).toBeGreaterThanOrEqual(g.vp.bottom - 0.5);
+  }
+  // scrolled to the end, the last card and its project's frame rest above the tray with the fit's margin
+  await open(1280, 800, 'dark'); await settled();
+  const edge = 8 + 16 * 0.85;
+  await page.mouse.move(base.vp.x + base.vp.width / 2, base.vp.y + 200);
+  await expect.poll(async () => {
+    const over = (await read()).pane.bottom - (base.vp.bottom - edge);
+    // a wheel step lands 1x or 2x depending on the platform: go half way and close in
+    if (over > 0) await page.mouse.wheel(0, Math.ceil(over / 2) + 1);
+    return over <= 0;
+  }).toBe(true);
+  const end = await read();
+  expect(end.card.w6.y).toBeGreaterThanOrEqual(end.vp.y);
+  expect(end.card.w6.bottom).toBeLessThanOrEqual(end.tray.y - edge);
+  expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y).closest('.cm-node[data-node-id="w6"]'), [end.card.w6.x + end.card.w6.width / 2, end.card.w6.bottom - 4])).toBe(true);
+  await shot('arch-a-1280x800-scrolled-end-dark');
+  await page.locator('[data-cm="fit"]').click();
 });
 
 test('pipes: hovering a card lights its own path; only the running lines carry moving dots', async () => {
