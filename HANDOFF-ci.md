@@ -105,3 +105,45 @@ Verify [37244334189](https://github.com/hjinhao066/agentdeck/actions/runs/372443
 2. 有一边红，就下那一边的 log / `test-results-*` artifact，只改还红的用例。凭据模型不要动。
 3. 仍然不要开 PR、不要合 main、不要在这台机器上打包或重启 AgentDeck。
 4. 本地要复跑时用单 worker，例如 `npx playwright test <spec> --workers=1`。清 `AGENTDECK_` 变量只能放在子进程里。
+
+## 第二位接手人的记录（run 37247904645 的结果，暂停于额度）
+
+因 CN 席位额度要留给下一版，这件**暂停，不是放弃**。本节只记录，没有新的产品代码改动，产品代码仍停在 `4ed27dd`。
+
+### 结果
+
+[Verify run 37247904645](https://github.com/hjinhao066/agentdeck/actions/runs/37247904645)（提交 `4ed27dd`，约 31 分钟）：
+
+- **macOS（job `111569361935`）：成功。** `npm test`、e2e、打包、打包后 e2e 全过。Mac 这边 `4ed27dd` 可以算过了，还差第二次连续绿（见「下一步」）。
+- **Windows（job `111569361795`）：失败。** e2e 222 过、5 失败、4 跳过、23 没跑；打包未执行。
+
+### Windows 还失败的 5 项
+
+上一轮（`d634`）的 6 条里，`layout.spec.js:158`、`mobile-web.spec.js:465`、`perpetual-effort.spec.js:81` 这一轮没再失败；拖拽两条仍在，并多出两条新的。
+
+| 用例 | 现象 |
+| --- | --- |
+| `captain.spec.js:194`（断言在 216 行） | 页内派发 pointer 事件把队员拖到「对话」区后，`.nav-crew` 里它的行仍在（期望 0，实际 1）。这条一失败，同一串行文件里后面 23 个用例都没跑，所以 captain.spec 后半可能还藏着别的 Windows 问题，现在看不到。 |
+| `claude-seats.spec.js:204`（断言在 222 行） | `ChatUI.setMode(cn,'chat')` 后 `seat-captain` 列的 `.composer textarea` 一直 not visible，`fill` 超时。与上一轮同一位置，`4ed27dd` 的「点在 .chat 里不切回终端」没解决它。 |
+| `deck-navigation.spec.js:6` | 整条 60 秒超时。上一轮没出现，**新出现**。 |
+| `scroll-peek.spec.js:62`（断言在 73 行） | 开始时 `.terminal-new-content`（「有新内容 ↓」）本该隐藏却可见。上一轮没出现，**新出现**。 |
+| `workspace.spec.js:167`（断言在 190 行） | 页内派发 pointer 事件拖「Session d」进文件夹「Work」后，d 仍在「对话」列表里，文件夹是空的（失败现场的页面快照可证）。 |
+
+### 根因判断
+
+- **拖拽两条（captain:216、workspace:190）：** 已排除 Playwright 的 `page.mouse` 路径（现在是页内派发 `PointerEvent`），事件也确实冒到了 window。`sidebar.js` 的 `dropTargetAt` 靠 `document.elementFromPoint(x, y)` 判落点，返回 null 或落在 `listEl` 之外就什么都不做。**我的判断（未证实）**：Windows CI 桌面分辨率小（GitHub Windows 跑机常见 1024×768），而 `main.js` 要 1600×950 的窗口，实际可视区比 Mac 小；落点坐标取自拖之前的 `boundingBox()`，若落点在可视区外或被别的元素盖住，`elementFromPoint` 就拿不到文件夹头 / 「对话」区。其余几条（composer 不可见、deck-navigation 超时、scroll-peek 的新内容按钮）也都是「依赖版面大小」的类型，和这个假设吻合。
+- **小屏假设验证到哪一步：** 只在 Mac 上做了一次，且**没有得出结论**。我写了个预加载脚本（`/private/tmp/claude-501/-Users-jinhao/94077dcd-3031-4518-b941-336076a4c56e/scratchpad/shrink.js`，不在仓库里），在 `electron.launch` 之后用 `BrowserWindow.setSize` 缩窗口。`SHRINK=1024x700` 下 `workspace.spec.js -g "dragging a session"` **通过**（4.6 秒）。**我没有核实窗口真的缩到了 1024×700**；800×500 和 1024×400 两档被中断，没跑。所以「Mac 缩窗口复现不了」目前只是弱证据，不能据此排除小屏假设，也不能当作假设成立。
+- 失败现场的 trace（artifact `test-results-Windows`，artifact id `11320276981`）只有测试器步骤，**没有浏览器内的 DOM / 视口信息**（Electron 的 page 没被 Playwright 录），所以从 trace 里读不出 Windows 的实际窗口尺寸。需要主动打出来。
+- main 上的既有失败（perpetual-captain:124、quota-warmup:182/215）：这一轮 Mac、Windows 都没出现，跟本次问题无关，不用处理。
+
+### 红线与没动的东西
+
+- 没改凭据模型，没放宽断言，没加重试，没跳过测试。
+- 没开 PR、没合 main、没打包安装、没碰现役 AgentDeck。
+
+### 下一步
+
+1. **先量，不要猜。** 在 Windows 上把真实窗口尺寸打出来。不要再用 30 分钟的全量工作流试：另起一个临时调试分支（例如 `ci-debug-win`，推送触发，不动 `verify.yml`），只在 `windows-2022` 上跑上面 5 个 spec，`npm ci` 之后直接 `npx playwright test <spec> --workers=1`，并在失败点前用 `page.evaluate` 打印 `innerWidth/innerHeight`、`screen.width/height`、`devicePixelRatio`、拖拽落点的 `elementFromPoint` 结果和目标元素的 `getBoundingClientRect`。几分钟一轮。调试分支用完要删，调试工作流不进 `fix/ci-e2e-flaky`。
+2. 量出来的窗口尺寸如果确实小：回到 Mac，用同样尺寸真正缩窗口（先确认 `getBounds()` 生效）复现，再决定是产品版面要修（窄屏下列头、composer 可见性、落点）还是测试要先 `setSize` / 把落点滚进可视区。落点取自拖之前的 `boundingBox()`，要在拖之前先 `scrollIntoViewIfNeeded()` 并确认在可视区内——这是测试自己的前提，不算放宽断言。
+3. `captain.spec.js:194` 先修好之前，后面那 23 个用例在 Windows 上是黑盒；修好后可能冒出新的失败，要预留一轮。
+4. 全部修好后，按「完成标准」：`macos-14` 和 `windows-2022` 在**同一提交**上连续两次全绿，才算数。Mac 已有一次绿（`4ed27dd`），但产品代码一改，Mac 也要重来。
