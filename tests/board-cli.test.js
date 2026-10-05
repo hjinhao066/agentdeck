@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
+const ReceiptListener = require('../receipt-listener-core');
 
 const cli = path.join(__dirname, '..', 'board-cli.js');
 
@@ -102,6 +103,7 @@ test('receipts --wait validates seconds and still requires the Captain capabilit
 test('receipts --wait remains silent on empty reads, prints a later question once, and exits empty on timeout', async () => {
   for (const timeout of [undefined, '3', '0.4']) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-receipts-cli-'));
+    ReceiptListener.initialize(dir);
     fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
     let reads = 0;
     const server = setInterval(() => {
@@ -137,6 +139,7 @@ test('receipts --wait remains silent on empty reads, prints a later question onc
 
 test('receipts --wait timeout succeeds even when the renderer has not taken the request', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-receipts-timeout-'));
+  ReceiptListener.initialize(dir);
   try {
     for (const timeout of ['0', '0.1']) {
       const result = await runCli(['receipts', '--wait', '--timeout', timeout], {

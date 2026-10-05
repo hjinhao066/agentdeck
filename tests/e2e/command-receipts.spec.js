@@ -241,3 +241,41 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
   expect((await cli(['complete', '--result', 'no tty'], filteredEnv(workerEnv()))).code).toBe(1);
   expect((await cli(['complete', '--result', 'restarted completed'], workerEnv())).code).toBe(0);
 });
+
+test('a day-long receipt wait returns promptly for a labelled abnormal receipt and duplicates stay quiet', async () => {
+  const control = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
+  await cli(['receipts'], control);
+  await dispatch('silence monitor probe');
+  const waiting = cli(['receipts', '--wait', '--timeout', '86400'], control);
+  // Allow the first authenticated poll to register before producing the event.
+  await expect.poll(() => fs.readdirSync(path.join(profile, 'board-control', 'receipt-listeners')).filter((name) => name.endsWith('.json')).length).toBe(1);
+  const duplicate = await cli(['receipts', '--wait', '--timeout', '86400'], control);
+  expect(duplicate).toEqual({ code: 0, stdout: '', stderr: '' });
+  const started = Date.now();
+  await page.evaluate(() => {
+    const task = config.mainSession.tasks.at(-1), entry = terms.get('submit-worker');
+    const quiet = Date.now() - MainCore.silenceTimeout(columns.find((c) => c.id === task.colId).cmd) - 1000;
+    task.startedAt = quiet;
+    task.endedAt = 0;
+    MainSession.onTick(task.colId, { ...entry, alive: true, state: 'working', lastOutputAt: quiet, lastScreen: '' });
+  });
+  const received = await waiting;
+  expect(Date.now() - started).toBeLessThan(10000);
+  expect(received.code).toBe(0); expect(received.stdout).toContain('异常回执（长时间无输出）');
+  expect(received.stdout).toContain('submit-worker');
+  const task = await page.evaluate(() => config.mainSession.tasks.at(-1));
+  expect(task.status).toBe('working');
+  expect((await cli(['complete', '--result', 'silence check complete'], workerEnv())).code).toBe(0);
+});
+
+test('closing the isolated application ends its day-long listener without an orphan', async () => {
+  const control = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
+  await cli(['receipts'], control);
+  const waiting = cli(['receipts', '--wait', '--timeout', '86400'], control);
+  await expect.poll(() => fs.readdirSync(path.join(profile, 'board-control', 'receipt-listeners')).filter((name) => name.endsWith('.json')).length).toBe(1);
+  const started = Date.now();
+  await closeElectron(app); app = null;
+  const ended = await waiting;
+  expect(ended).toEqual({ code: 0, stdout: '', stderr: '' });
+  expect(Date.now() - started).toBeLessThan(10000);
+});

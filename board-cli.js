@@ -5,6 +5,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { resolveBoardAuth, controllingTerminal } = require('./board-credentials');
+const ReceiptListener = require('./receipt-listener-core');
+let receiptListener = null;
 
 
 function fail(message, code = 1) {
@@ -41,6 +43,7 @@ function sleep(ms) {
 }
 
 async function request(command, waitForCompletion) {
+  if (receiptListener && !receiptListener.valid()) return { done: true, result: '', listenerStopped: true };
   const auth = resolveBoardAuth({
     env: process.env, tty: controllingTerminal(), filename: __filename, action: command.action,
   });
@@ -73,6 +76,11 @@ async function request(command, waitForCompletion) {
   const deadline = command.expiresAt === undefined ? Date.now() + timeoutMs : Math.min(Date.now() + timeoutMs, command.expiresAt);
   let announcedChild = false;
   while (true) {
+    if (receiptListener && !receiptListener.valid()) {
+      try { fs.unlinkSync(requestFile); } catch (_) {}
+      try { fs.unlinkSync(responseFile); } catch (_) {}
+      return { done: true, result: '', listenerStopped: true };
+    }
     try {
       const response = JSON.parse(fs.readFileSync(responseFile, 'utf8'));
       if (response.error) {
@@ -287,11 +295,29 @@ async function main() {
       const seconds = args.timeout === undefined ? undefined : (typeof args.timeout === 'string' && args.timeout.trim() ? Number(args.timeout) : NaN);
       if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0 || seconds > Number.MAX_SAFE_INTEGER / 1000)) fail('receipts --timeout must be a non-negative number of seconds.');
       const expiresAt = seconds === undefined ? undefined : Date.now() + seconds * 1000;
+      const auth = resolveBoardAuth({ env: process.env, tty: controllingTerminal(), filename: __filename, action: 'main-receipts' });
+      if (!auth.controlDir || !auth.token) fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
+      try {
+        const ownerPid = ReceiptListener.agentOwnerPid();
+        receiptListener = ReceiptListener.claim(auth.controlDir, auth.token, ownerPid);
+        // Give the application one housekeeping turn to retire a completed or
+        // dead listener; a genuinely live duplicate still exits immediately.
+        for (let attempt = 0; !receiptListener && attempt < 4 && ReceiptListener.retiring(auth.controlDir, auth.token); attempt++) {
+          await sleep(250);
+          receiptListener = ReceiptListener.claim(auth.controlDir, auth.token, ownerPid);
+        }
+      }
+      catch (error) { fail(error.message); }
+      if (!receiptListener) return; // A listener in this Captain generation already owns delivery.
+      const release = () => receiptListener?.release();
+      process.once('exit', release);
+      for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { release(); process.exit(0); });
       // One background CLI process, short authenticated reads: a cancelled
       // watcher leaves no long-lived request that could eat a later receipt.
       do {
         const pollExpiresAt = Math.min(Date.now() + 5000, expiresAt === undefined ? Infinity : expiresAt);
-        const response = await request({ action: 'main-receipts', wait: true, expiresAt: pollExpiresAt }, false);
+        const response = await request({ action: 'main-receipts', wait: true, expiresAt: pollExpiresAt, listener: receiptListener.lease }, false);
+        if (response.listenerStopped) return;
         if (response.result) { process.stdout.write(`${response.result}\n`); return; }
         if (expiresAt !== undefined && Date.now() >= expiresAt) return;
         await sleep(Math.min(1000, expiresAt === undefined ? 1000 : Math.max(0, expiresAt - Date.now())));

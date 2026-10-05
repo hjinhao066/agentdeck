@@ -16,6 +16,9 @@
   let tokenSaverPaused = false;  // cancel/failure: no retry until usage falls below the threshold
   let contextReset = null;
   let mobileDelivery = null;
+  let listenerStatus = null;
+  let listenerReminder = false;
+  let listenerReminderSending = false;
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -354,6 +357,7 @@
     s.pending = Array.isArray(s.pending) ? s.pending : [];
     s.inflight = Array.isArray(s.inflight) ? s.inflight : [];
     s.receiptsSeen = normalizeSeenIds(s.receiptsSeen);
+    s.exceptionSeen = Array.isArray(s.exceptionSeen) ? s.exceptionSeen.filter((key) => typeof key === 'string') : [];
     // A turn open at shutdown cannot acknowledge legacy injection. Receipts the
     // background channel already returned stay read across relaunch. Items still
     // in pending were never taken, including ones that arrived while restarting.
@@ -1096,7 +1100,15 @@
   function push(task, item) {
     const s = state();
     if (!s || task.gen !== s.gen) return;
-    s.pending.push({ taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
+    const anomaly = M.exceptionReason(item);
+    if (anomaly) {
+      const key = task.colId + ':' + anomaly;
+      s.exceptionSeen = Array.isArray(s.exceptionSeen) ? s.exceptionSeen : [];
+      if (s.exceptionSeen.includes(key)) return false;
+      s.exceptionSeen.push(key);
+    }
+    s.pending.push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
+    return true;
   }
   // Hand every pending receipt to 队长's model as text; they count as in
   // flight until its turn ends.
@@ -1216,15 +1228,19 @@
     if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return message.action === 'session-exit' ? response : null;
     if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
     if (message.action === 'session-exit') {
-      if (message.code !== 0) {
+      if (task.status === 'stopped' && task.receipt?.source === 'fallback') {
+        task.status = 'working';
+        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+      }
+      if (!CLOSED.includes(task.status) || task.status === 'asking') {
         if (task.status === 'asking') task.status = 'working';
         const entry = host.terms.get(caller.id);
         // The exit command may beat the status tick; read the current terminal.
         const screen = entry?.term ? host.dumpScreen(entry.term, 40) : entry?.lastScreen;
-        const receipt = { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process', ...M.resourceReceipt(screen, caller.cmd) };
+        const receipt = { summary: '', files: [], images: [], failed: `agent 进程已退出（exit ${message.code}），未提交回执`, explicit: true, source: 'process', ...M.resourceReceipt(screen, caller.cmd) };
         await recordReceiptForBoard(task, receipt);
         settle(task, receipt, true);
-      } else { task.endedAt = Date.now(); task.processEnded = true; update(task); }
+      }
       return response;
     }
     if (message.action === 'progress') {
@@ -1587,6 +1603,26 @@
     return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
       .map((l) => l.slice(0, 140)).join('\n') || '（看不到提示内容）';
   }
+  // The app sends only authenticated listener liveness, never terminal output.
+  // A dead listener costs no model turns until unread work has waited three minutes.
+  function remindMissingListener(entry) {
+    const s = state(), col = mainCol();
+    if (!s || !col || nativeCaptain(col.cmd) || s.legacyReceiptInjection || !listenerStatus ||
+        listenerStatus.colId !== col.id || Date.now() - listenerStatus.at > 30_000) return;
+    if (listenerStatus.alive || !s.pending.length) { listenerReminder = false; return; }
+    if (listenerReminder || listenerReminderSending || Date.now() - Math.min(...s.pending.map((p) => p.ts || Date.now())) < 3 * 60_000 ||
+        !entry.alive || entry.sendingPrompt || ['working', 'quota', 'input'].includes(entry.state) ||
+        M.terminalActivity(entry.lastScreen, col.cmd) || briefing === col.id || host.userComposing(col.id)) return;
+    listenerReminderSending = true;
+    Promise.resolve(host.agentInForeground(col, false)).then((ok) => {
+      if (!ok || mainCol() !== col || listenerStatus?.alive || !s.pending.length || !entry.alive ||
+          entry.sendingPrompt || ['working', 'quota', 'input'].includes(entry.state) || host.userComposing(col.id)) return false;
+      return window.ChatUI.sendPrompt(col, '', null, {
+        prefix: '【AgentDeck 回执监听提醒】后台回执监听已退出，未读回执已等待三分钟。请立即读取 receipts 处理，再用 run_in_background: true 重挂恰好一个 receipts --wait 监听。',
+        force: true, guardUserInput: true,
+      });
+    }).then((sent) => { if (sent && listenerStatus?.colId === col.id) listenerReminder = true; }, () => {}).finally(() => { listenerReminderSending = false; });
+  }
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
@@ -1597,6 +1633,7 @@
           startCard(cardId, input).catch((error) => host.showToast(error.message));
         }
       }
+      remindMissingListener(entry);
       retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return;
     }
     const col = host.columns().find((c) => c.id === id);
@@ -1626,7 +1663,13 @@
       }
     }
     for (const task of s.tasks) {
-      if (task.colId !== id || !['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
+      if (task.colId !== id) continue;
+      if (task.status === 'stopped' && task.receipt?.source === 'fallback' &&
+          (!entry.alive || entry.state === 'quota' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'quota')) {
+        task.status = 'working';
+        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+      }
+      if (!['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
       if (task.status === 'paused' || task.restartHold) {
         if (!entry.alive) {
           if (!task.resumeDeadline || Date.now() <= task.resumeDeadline) continue;
@@ -1645,6 +1688,12 @@
         if (task.status === 'asking') task.status = 'working';
         settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen, col?.cmd) });
         continue;
+      }
+      const quietSince = Math.max(entry.lastOutputAt || 0, task.startedAt || task.sentAt || 0);
+      const quietLimit = M.silenceTimeout(col?.cmd);
+      if (quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' &&
+          (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
+        if (push(task, { summary: `已连续 ${quietLimit / 60_000} 分钟没有任何终端输出，请检查会话；可能仍在深度思考，未自动中断或重派。`, source: 'watchdog' })) save();
       }
       if (task.status === 'queued') {
         // Not delivered yet and the session is stopped on a dialog (Cursor asks "Do you
@@ -1839,6 +1888,12 @@
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
+      case 'main-receipt-listener-status':
+        if (!isMain(caller) || typeof message.alive !== 'boolean') throw new Error('无效回执监听状态');
+        if (listenerStatus?.colId !== caller.id) listenerReminder = false;
+        listenerStatus = { colId: caller.id, alive: message.alive, at: Date.now() };
+        if (message.alive) listenerReminder = false;
+        return { done: true };
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
         return { done: true, visible: host.captainColumnVisible(caller.id),

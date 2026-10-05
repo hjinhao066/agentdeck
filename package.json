@@ -48,6 +48,7 @@
       "chatgpt-web-core.js",
       "chatgpt-web-executor.js",
       "board-cli.js",
+      "receipt-listener-core.js",
       "board-credentials.js",
       "codex-captain-driver.js",
       "scripts/codex-captain-host.js",

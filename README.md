@@ -358,12 +358,35 @@ again with the current provider, model and effort instructions.
   or truncation. A submission is
   shown as a card in the 队长 column (click the title to jump there), stored as the
   column's last receipt, and read through the Captain's background channel.
-  With Claude Code, the Captain runs `receipts --wait --timeout 300` using Bash
+  With Claude Code, the Captain runs `receipts --wait` using Bash
   `run_in_background: true`. The command blocks until unread receipts, questions
   or confirmation notices arrive, prints their summaries and exits. Bash's task
   completion notification wakes the model; after processing it the Captain starts
   another listener, keeping exactly one active. A timeout prints nothing and exits
-  successfully; omit `--timeout` to wait indefinitely. The timeout is in seconds
+  successfully and the Captain quietly starts a replacement without a user update.
+  Omit `--timeout` to wait indefinitely. Local interactive Claude Code 2.1.288+
+  supports background commands without a time limit (including the installed
+  2.1.289); older versions and unattended/SDK runs require a finite Bash timeout:
+  use `receipts --wait --timeout 6900` with Bash `timeout: 7200000` (115/120 minutes).
+  See [Claude's background command limits](https://code.claude.com/docs/en/tools-reference#time-limit-for-background-commands).
+  A private per-Captain exclusive lease prevents duplicate consumers, and every
+  wait checks the application instance and its Captain capability. Restarting the
+  app or ending/replacing the Captain invalidates the old wait; it exits within
+  the next polling/check interval instead of becoming an orphan.
+  The app monitors process death and existing quota, throttle, login and
+  confirmation/permission states through its status loop. Silence thresholds are
+  30 minutes for Codex/unknown agents, 20 for Claude and 15 for Gemini/agy/Cursor.
+  These create labelled abnormal receipts immediately on detection. Silence
+  requests inspection; it does not end, retry or reassign a thinking worker.
+  The same session/reason is reported only once, with the seen reasons retained
+  across app restarts and Captain context resets. An exit with code zero before
+  a command receipt is also an abnormal receipt, rather than a successful task.
+  If unread receipts have waited three minutes with no live listener, the app
+  sends one fixed reminder through the existing guarded Captain prompt path
+  when its agent is idle and the user's input is empty. Receipt text stays in the
+  channel; no repeated model heartbeat is scheduled. Reading all pending receipts
+  or registering a new listener rearms this exceptional reminder.
+  The timeout is in seconds
   (other legacy CLI commands retain their existing timeout units).
   Codex execution session IDs do not by themselves wake an idle model. An
   opt-in [native Codex Captain host](docs/native-codex-captain.md) owns a private
@@ -388,8 +411,8 @@ again with the current provider, model and effort instructions.
   creates a failed task receipt with the
   provider's reason. The terminal stays open with 额度用尽/等待 in the dot/sidebar;
   pending additions cannot be delivered until the quota screen clears. Agent
-  launch wrappers report nonzero exit codes as failures even when the parent
-  shell stays alive; PTY exits include their exit code/signal or spawn error.
+  launch wrappers report every exit before a command receipt as a failure even
+  when the parent shell stays alive; PTY exits include their exit code/signal or spawn error.
   **Receipts never pass through the Captain's input box.** They also stay out
   of your next chat message. The background command uses the same Captain-only
   capability token as `receipts`; workers and independent terminals cannot read
@@ -405,7 +428,7 @@ again with the current provider, model and effort instructions.
   and asks you otherwise. A pause between tool calls, between two instructions or a silent
   start (Cursor can print nothing for a minute or two) is not a stop: a turn that
   ended without a command receipt gets a three-minute grace period. Only a
-  finished, uninterrupted turn or a reported normal agent exit can trigger the
+  finished, uninterrupted turn can trigger the
   fallback: “已结束，未提交回执”, with no screen content or inferred files.
   Screen 【回执】/【提问】 blocks, examples, contract echoes and Doing… never count
   as submissions. A late command replaces the fallback notice. Prompt submission
