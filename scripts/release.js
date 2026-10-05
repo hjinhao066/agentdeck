@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Release into an owned worktree. Never install, launch, push, or touch main.
+// Release an owned worktree or a prepared checkout. Never install, launch, push, or touch main.
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -29,6 +29,7 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--prepared') options.prepared = true;
     else if (['--base', '--worktree', '--output'].includes(arg)) {
       if (!argv[i + 1] || argv[i + 1].startsWith('-')) throw new Error(`Missing value for ${arg}`);
       options[arg.slice(2)] = argv[++i];
@@ -43,6 +44,9 @@ function parseArgs(argv) {
     if (!ref || ref.startsWith('-') || /[\s\x00-\x1f]/.test(ref)) throw new Error(`Invalid ref: ${ref}`);
   }
   options.branches = [...new Set(options.branches)];
+  if (options.prepared && (options.branches.length || options.worktree || argv.includes('--base'))) {
+    throw new Error('--prepared uses the current checkout; do not supply branches, --worktree or --base');
+  }
   return options;
 }
 
@@ -51,14 +55,24 @@ function planRelease(repo, options) {
   const previous = JSON.parse(git(repo, 'show', `${baseCommit}:package.json`)).version;
   const parts = /^(\d+)\.(\d+)\.(\d+)$/.exec(previous);
   if (!parts) throw new Error(`Unsupported base version: ${previous}`);
-  const version = options.version ? options.version.replace(/^(\d+\.\d+)$/, '$1.0') : `${parts[1]}.${Number(parts[2]) + 1}.0`;
+  const version = options.version ? options.version.replace(/^(\d+\.\d+)$/, '$1.0') : options.prepared ? previous : `${parts[1]}.${Number(parts[2]) + 1}.0`;
   const [major, minor] = version.split('.').map(Number);
-  if (major < Number(parts[1]) || (major === Number(parts[1]) && minor <= Number(parts[2]))) {
+  if (!options.prepared && (major < Number(parts[1]) || (major === Number(parts[1]) && minor <= Number(parts[2])))) {
     throw new Error(`Release ${version} must be newer than base ${previous}`);
+  }
+  if (options.prepared) {
+    if (options.branches.length || options.worktree || options.base !== 'HEAD') throw new Error('--prepared uses the current checkout; do not supply branches, --worktree or --base');
+    if (!/^[1-9]\d*\.(0|[1-9]\d*)\.0$/.test(version)) throw new Error('Prepared release version must be MAJOR.MINOR.0');
+    if (git(repo, 'branch', '--show-current') !== `release/${version}`) throw new Error(`Prepared checkout must be on release/${version}`);
+    if (git(repo, 'status', '--porcelain')) throw new Error('Prepared release checkout must be clean');
+    const lock = json(path.join(repo, 'package-lock.json'));
+    if (previous !== version || lock.version !== version || lock.packages?.['']?.version !== version) {
+      throw new Error('Prepared package.json and package-lock.json versions must match the release version');
+    }
   }
   const label = `${major}.${minor}`;
   const merges = options.branches.map((ref) => ({ ref, commit: git(repo, 'rev-parse', '--verify', `${ref}^{commit}`) }));
-  const worktree = canonical(options.worktree || path.join(path.dirname(repo), `agentdeck-release-${label}`));
+  const worktree = options.prepared ? canonical(repo) : canonical(options.worktree || path.join(path.dirname(repo), `agentdeck-release-${label}`));
   const output = canonical(options.output || path.join(path.dirname(repo), 'reports', `agentdeck-${label}`));
   const common = canonical(path.resolve(repo, git(repo, 'rev-parse', '--git-common-dir')));
   // Output must not pollute a source checkout, including a different existing worktree.
@@ -70,7 +84,8 @@ function planRelease(repo, options) {
   if (checkouts.some((root) => inside(root, worktree) || inside(worktree, root)) && !checkouts.includes(worktree)) {
     throw new Error('Release worktree must be separate from existing checkouts');
   }
-  return { version, label, previous, branch: `release/${label}`, baseCommit, merges, worktree, output };
+  return { version, label, previous, branch: `release/${options.prepared ? version : label}`, baseCommit, merges, worktree, output,
+    ...(options.prepared ? { prepared: true } : {}) };
 }
 
 function isolatedEnv(env = process.env) {
@@ -266,7 +281,8 @@ async function release(repo, options, runCommand = run) {
   const plan = planRelease(repo, options);
   if (options.dryRun) {
     console.log(JSON.stringify({ ...plan, dryRun: true, steps: [
-      'create owned release worktree', 'merge branches in order (stop on conflict)', 'commit package + lock version',
+      ...(plan.prepared ? ['verify clean prepared release checkout (no merges or version changes)'] :
+        ['create owned release worktree', 'merge branches in order (stop on conflict)', 'commit package + lock version']),
       'npm ci + Electron preparation (lock/platform cache)', 'machine test lock: npm test then npm run test:smoke (one worker); audit in parallel',
       'npm run dist:mac -- --publish never (unchanged-input cache)',
       'SHA256 + verified DMG mount/signature/packaged source in parallel', 'generate timed installer + timing report (do not execute installer)',
@@ -313,7 +329,15 @@ async function release(repo, options, runCommand = run) {
     if (failed) throw failed.reason;
   };
   try {
-    await step('worktree', () => {
+    if (plan.prepared) {
+      await step('prepared-checkout', () => {
+        if (git(repo, 'rev-parse', 'HEAD') !== plan.baseCommit || git(repo, 'branch', '--show-current') !== plan.branch || git(repo, 'status', '--porcelain')) {
+          throw new Error('Prepared release checkout changed after planning; commit changes and rerun');
+        }
+        report.commit = plan.baseCommit;
+      });
+    }
+    if (!plan.prepared) await step('worktree', () => {
       const ownership = { version: plan.version, baseCommit: plan.baseCommit, merges: plan.merges };
       if (!fs.existsSync(plan.worktree)) {
         git(repo, 'worktree', 'add', '-b', plan.branch, plan.worktree, plan.baseCommit);
@@ -336,7 +360,7 @@ async function release(repo, options, runCommand = run) {
         }
       });
     }
-    await step('version', () => {
+    if (!plan.prepared) await step('version', () => {
       const pkgFile = path.join(plan.worktree, 'package.json');
       const lockFile = path.join(plan.worktree, 'package-lock.json');
       const pkg = json(pkgFile), lock = json(lockFile);

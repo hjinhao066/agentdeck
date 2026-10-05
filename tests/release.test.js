@@ -68,6 +68,34 @@ test('dry-run resolves pinned commits but writes nothing or runs commands', asyn
   assert.throws(() => planRelease(repo, { ...options, worktree: path.join(repo, 'nested') }), /separate/);
 });
 
+test('prepared plans pin a clean versioned release checkout without creating or bumping it', async (t) => {
+  const { repo, root } = fixture(t, '1.2.0');
+  git(repo, 'checkout', '-qb', 'release/1.2.0');
+  const options = parseArgs(['--prepared', '--dry-run', '--output', path.join(root, 'output')]);
+  const before = git(repo, 'show-ref');
+  const plan = planRelease(repo, options);
+  assert.equal(plan.prepared, true); assert.equal(plan.branch, 'release/1.2.0');
+  assert.equal(plan.worktree, fs.realpathSync(repo)); assert.equal(plan.version, '1.2.0');
+  assert.equal(plan.baseCommit, git(repo, 'rev-parse', 'HEAD')); assert.deepEqual(plan.merges, []);
+  await release(repo, options, () => assert.fail('runner called'));
+  assert.equal(git(repo, 'show-ref'), before); assert.deepEqual(fs.readdirSync(root), ['source']);
+  assert.equal(planRelease(repo, { ...options, version: '1.2' }).version, '1.2.0');
+  for (const args of [['fix/a'], ['--base', 'main'], ['--base', 'HEAD'], ['--worktree', path.join(root, 'other')]]) {
+    assert.throws(() => parseArgs(['--prepared', ...args]), /current checkout/);
+  }
+  assert.throws(() => planRelease(repo, { ...options, branches: ['main'] }), /current checkout/);
+  assert.throws(() => planRelease(repo, { ...options, version: '1.3.0' }), /release\/1.3.0/);
+  assert.throws(() => planRelease(repo, { ...options, output: path.join(repo, 'reports') }), /outside/);
+  write(path.join(repo, 'untracked.txt'), 'local data');
+  assert.throws(() => planRelease(repo, options), /must be clean/);
+  fs.unlinkSync(path.join(repo, 'untracked.txt'));
+  write(path.join(repo, 'package-lock.json'), JSON.stringify({ version: '1.1.11', packages: { '': { version: '1.2.0' } } }));
+  git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'mismatched lock');
+  assert.throws(() => planRelease(repo, options), /versions must match/);
+  git(repo, 'checkout', '-q', 'main');
+  assert.throws(() => planRelease(repo, options), /must be on release/);
+});
+
 test('isolation strips app routing only from child environment', () => {
   const env = { PATH: 'fixture', AGENTDECK_RECEIPT_TOKEN: 'private', ELECTRON_RUN_AS_NODE: '1' };
   assert.deepEqual(isolatedEnv(env), { PATH: 'fixture' });
@@ -204,6 +232,51 @@ test('full isolated rehearsal: serial tests with parallel audit, cache reuse, da
   const unsafe = fixture(t); fs.mkdirSync(unsafe.options.worktree); write(path.join(unsafe.options.worktree, 'keep.txt'), 'keep');
   await assert.rejects(release(unsafe.repo, unsafe.options, runner), /not owned/);
   assert.equal(fs.readFileSync(path.join(unsafe.options.worktree, 'keep.txt'), 'utf8'), 'keep');
+});
+
+test('prepared release runs packaging gates while preserving checkout, commit and metadata', { skip: process.platform !== 'darwin' }, async (t) => {
+  const { root, repo } = fixture(t, '1.2.0');
+  git(repo, 'checkout', '-qb', 'release/1.2.0');
+  const options = parseArgs(['--prepared', '--output', path.join(root, 'output')]);
+  const refs = git(repo, 'show-ref'), worktrees = git(repo, 'worktree', 'list', '--porcelain');
+  const pkg = fs.readFileSync(path.join(repo, 'package.json'));
+  const lock = fs.readFileSync(path.join(repo, 'package-lock.json'));
+  const packed = path.join(root, 'fixture.asar'), calls = [];
+  const runner = async (command, args, cwd, log, env) => {
+    assert.equal(cwd, fs.realpathSync(repo));
+    assert.equal(Object.keys(env || {}).some((key) => key.startsWith('AGENTDECK_')), false);
+    calls.push([command, ...args]);
+    if (args[0] === 'ci') {
+      fs.mkdirSync(path.join(cwd, 'node_modules/electron/dist/Electron.app'), { recursive: true });
+      write(path.join(cwd, 'node_modules/@electron/asar/index.js'), `module.exports = require(${JSON.stringify(require.resolve('@electron/asar'))});`);
+    }
+    if (args.includes('dist:mac')) {
+      const dir = args.find((arg) => arg.startsWith('--config.directories.output=')).split('=')[1];
+      write(path.join(dir, 'fixture.dmg'), 'prepared image'); await archive(cwd, packed);
+    }
+    if (command === 'hdiutil' && args[0] === 'attach') {
+      assert.ok(args.includes('-verify')); assert.ok(args.includes('-noignorebadchecksums'));
+      write(path.join(args.at(-1), 'AgentDeck.app/Contents/Resources/app.asar'), fs.readFileSync(packed));
+    }
+    if (command === 'hdiutil' && args[0] === 'detach') fs.rmSync(path.join(args[1], 'AgentDeck.app'), { recursive: true });
+    if (command === 'bash') execFileSync(command, args);
+  };
+  await release(repo, options, runner);
+  const report = JSON.parse(fs.readFileSync(path.join(options.output, 'release-report.json')));
+  assert.equal(report.status, 'passed'); assert.equal(report.commit, git(repo, 'rev-parse', 'HEAD'));
+  assert.equal(report.prepared, true); assert.equal(report.verification.commit, report.commit);
+  assert.equal(report.sha256, digest('prepared image'));
+  assert.ok(report.steps.some((step) => step.name === 'prepared-checkout'));
+  assert.ok(report.steps.every((step) => step.status === 'passed' && step.seconds >= 0));
+  for (const gate of ['unit', 'smoke', 'audit', 'build', 'verify-package']) assert.ok(report.steps.some((step) => step.name === gate), gate);
+  assert.ok(!report.steps.some((step) => ['worktree', 'version'].includes(step.name) || step.name.startsWith('merge-')));
+  assert.ok(calls.findIndex((call) => call.join(' ') === 'npm test') < calls.findIndex((call) => call.join(' ') === 'npm run test:smoke'));
+  assert.ok(calls.some((call) => call[0] === 'codesign' && call.includes('--deep') && call.includes('--strict')));
+  assert.equal(git(repo, 'show-ref'), refs); assert.equal(git(repo, 'worktree', 'list', '--porcelain'), worktrees);
+  assert.equal(git(repo, 'status', '--porcelain'), '');
+  assert.deepEqual(fs.readFileSync(path.join(repo, 'package.json')), pkg);
+  assert.deepEqual(fs.readFileSync(path.join(repo, 'package-lock.json')), lock);
+  assert.equal(fs.existsSync(path.resolve(repo, git(repo, 'rev-parse', '--git-path', 'fast-release.json'))), false);
 });
 
 test('test lock records owner PID and branch and releases after success or failure', async (t) => {

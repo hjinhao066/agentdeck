@@ -743,6 +743,8 @@ node scripts/release.js 1.2 --base origin/release/1.1.11 origin/fix/example
 
 先自行 `git fetch origin`，再指定基线；默认基线是当前 HEAD。省略版本号时进一位次版本号：1.1.11 → 1.2.0，分支/目录对外叫 `release/1.2` / `agentdeck-release-1.2`，不再生成 1.1.12。脚本把基线和待合分支解析成固定提交，在独立 worktree 依次合并；冲突即停止，报告列出文件，手动解决并提交后按原命令续跑。已有目录必须属于同一发布计划，其他 worktree 和历史报告不会被覆盖。`--worktree DIR` / `--output DIR` 可另选绝对路径，输出须在源码目录外。`--dry-run` 只读，不创建目录、不测试、不打包。
 
+已手动审查并合并的发布分支可用 `node scripts/release.js 1.2.0 --prepared --output <源码外独立目录>`。要求当前分支为 `release/1.2.0`、工作区干净、package.json 与 lockfile 三处版本一致；该模式不创建 worktree、不合分支、不升版本，保留依赖准备、持锁单测/单 worker 冒烟、audit、打包及校验/耗时报告。可加 `--dry-run`；不可与分支列表、`--base`、`--worktree` 共用。
+
 流程：同步 package.json 与 lockfile 版本 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本和 JSON/Markdown 逐步耗时报告。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
 
 `release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 或 E2E 命令时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。
