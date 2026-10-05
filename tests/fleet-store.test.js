@@ -158,3 +158,18 @@ test('incomplete captain snapshots cannot replace later completed replies', (t) 
   push('op-history-late-pending', 'c', [pending]);
   assert.deepEqual(hub.snapshot().history[0].turns, [complete]);
 });
+
+test('all ID dictionaries have no prototype in fresh and loaded stores', (t) => {
+  const { hub } = store(t);
+  for (const name of ['cards', 'ops', 'devices', 'history']) assert.equal(Object.getPrototypeOf(hub.data[name]), null, name);
+  hub.heartbeat({ id: '__proto__', name: 'prototype device', platform: 'win32' });
+  const input = { opId: '__proto__', sessionId: 'constructor', deviceId: '__proto__', contentHash: 'a'.repeat(64), turns: [{ prompt: 'ordinary history' }] };
+  const first = hub.pushHistory(input);
+  assert.equal(first.status, 200);
+  assert.deepEqual(hub.pushHistory(input), first);
+  const reloaded = new SharedStore({ file: hub.file });
+  for (const name of ['cards', 'ops', 'devices', 'history']) assert.equal(Object.getPrototypeOf(reloaded.data[name]), null, name);
+  assert.deepEqual(reloaded.pushHistory(input), first);
+  assert.equal(reloaded.snapshot().history[0].turns[0].prompt, 'ordinary history');
+  assert.equal(reloaded.devices()[0].id, '__proto__');
+});

@@ -748,6 +748,13 @@ prefixes cannot shorten newer history; divergent saves retain the prior version
 in the history record's `alternatives`. Credential-shaped fields are stripped,
 but transcript prose is preserved, so sync only to a trusted private service.
 Requests time out after 10 seconds and retry on subsequent sync rounds.
+If the hub loses a card or rolls back behind a pending edit's revision, the
+client discards that edit's old base and queues the complete local card with a
+new operation ID and revision zero for the next round. Newer local fields are
+retained as conflicts if an older hub copy already exists. A failed individual
+task or transcript upload stays queued and visible as a sync error while other
+uploads and snapshot downloads continue. Store ID indexes have no prototype,
+including after loading JSON, so prototype-shaped IDs are ordinary keys.
 
 Serialize local verification with the whole-machine `/tmp/agentdeck-test.lock`
 before running unit tests, E2E, or the transport smoke. Record the owning PID,

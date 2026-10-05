@@ -26,7 +26,7 @@ async function hub(t, { leaseMs, now, token = 'fleet-secret-token-value' } = {})
   const store = new SharedStore({ file: path.join(root, 'hub', 'store.json'), leaseMs, now });
   const server = await startSyncServer({ store, token, log: (line) => logs.push(line) });
   t.after(() => server.close());
-  return { root, server, logs, token, tokenFile: writeToken(root, 'token', token) };
+  return { root, server, store, logs, token, tokenFile: writeToken(root, 'token', token) };
 }
 function machine(root, name, id, platform, url, tokenFile) {
   const dir = path.join(root, name);
@@ -317,4 +317,175 @@ test('a Git-restored older task snapshot cannot overwrite a newer accepted edit'
     assert.equal(card.title, 'newer accepted title');
     assert.ok(card.conflicts.some((item) => item.fields.title.other === 'old snapshot title'));
   }
+});
+
+for (const reset of ['empty', 'older backup']) {
+  test(`pending edits recover after the hub is reset to ${reset} with client state retained`, async (t) => {
+    const { root, server, store, tokenFile } = await hub(t);
+    const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+    const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+    const card = mac.tasks.add({ project: 'agentdeck', title: 'original', detail: 'original detail' }).card;
+    mac.client.noteCard(card);
+    await mac.client.syncOnce();
+    await win.client.syncOnce();
+    const backup = JSON.parse(JSON.stringify(store.data));
+    edit(mac, { detail: 'only newer local detail' });
+    await mac.client.syncOnce();
+    edit(mac, { title: 'pending local title' });
+    const rejectedOp = mac.client.taskOutbox.get(card.id).opId;
+    const second = mac.tasks.add({ project: 'agentdeck', title: 'second Mac card' }).card;
+    mac.client.noteCard(second);
+    mac.client.noteCaptain('mac-cap', { turns: [{ prompt: 'history must still upload' }] });
+    store.data = reset === 'empty' ? { version: 1, seq: 0, devices: {}, cards: {}, ops: {}, history: {} } : backup;
+    win.client.noteResult(win.tasks.add({ project: 'agentdeck', title: 'new Windows card' }));
+    await win.client.syncOnce();
+
+    let edited = false;
+    mac.client.fetchImpl = async (url, options) => {
+      const response = await fetch(url, options);
+      if (!edited && url.endsWith('/v1/tasks') && JSON.parse(options.body).cardId === card.id) {
+        edited = true;
+        edit(mac, { title: 'latest in-flight local title' });
+      }
+      return response;
+    };
+    assert.equal((await mac.client.syncOnce()).error, null);
+    const recovery = mac.client.taskOutbox.get(card.id);
+    assert.notEqual(recovery.opId, rejectedOp);
+    assert.equal(recovery.expectedRevision, 0);
+    assert.equal(recovery.set.title, 'latest in-flight local title');
+    assert.equal(recovery.set.detail, 'only newer local detail');
+    assert.equal(recovery.set.project, 'agentdeck');
+    assert.equal(store.snapshot().cards.some((item) => item.id === second.id), true);
+    assert.equal(store.snapshot().history[0].turns[0].prompt, 'history must still upload');
+    assert.equal(mac.tasks.list().some((item) => item.title === 'new Windows card'), true);
+
+    // The replacement operation and the full local copy survive a restart.
+    const restarted = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+    assert.notEqual(restarted.client.taskOutbox.get(card.id).opId, rejectedOp);
+    edit(restarted, { detail: 'edited after recovery queued' });
+    assert.equal(restarted.client.taskOutbox.get(card.id).expectedRevision, 0);
+    assert.equal(restarted.client.taskOutbox.get(card.id).set.title, 'latest in-flight local title');
+    assert.equal((await restarted.client.syncOnce()).error, null);
+    assert.equal(restarted.client.taskOutbox.size, 0);
+    await win.client.syncOnce();
+    await restarted.client.syncOnce();
+    for (const side of [restarted, win]) {
+      const recovered = side.tasks.list().find((item) => item.id === card.id);
+      if (reset === 'empty') {
+        assert.equal(recovered.title, 'latest in-flight local title');
+        assert.equal(recovered.detail, 'edited after recovery queued');
+      } else {
+        assert.equal(recovered.title, 'original');
+        assert.ok(recovered.conflicts.some((item) => item.fields.title?.other === 'latest in-flight local title'));
+        assert.ok(recovered.conflicts.some((item) => item.fields.detail?.other === 'edited after recovery queued'));
+      }
+      assert.equal(side.tasks.list().length, 3);
+    }
+  });
+}
+
+test('a recovery upload with a lost response remains immutable across later edits and restart', async (t) => {
+  const { root, server, store, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  mac.client.noteResult(mac.tasks.add({ project: 'agentdeck', title: 'base' }));
+  await mac.client.syncOnce();
+  edit(mac, { title: 'first recovery title' });
+  store.data = { version: 1, seq: 0, devices: {}, cards: {}, ops: {}, history: {} };
+  await mac.client.syncOnce();
+  let lost = false;
+  mac.client.fetchImpl = async (url, options) => {
+    const response = await fetch(url, options);
+    if (!lost && url.endsWith('/v1/tasks')) {
+      await response.text();
+      lost = true;
+      throw new Error('recovery response lost after commit');
+    }
+    return response;
+  };
+  assert.match((await mac.client.syncOnce()).error, /同步失败/);
+  const attempted = mac.client.taskOutbox.values().next().value;
+  assert.equal(attempted.attempted, true);
+  const opId = attempted.opId;
+  edit(mac, { title: 'later recovery title' });
+  assert.equal(mac.client.taskOutbox.values().next().value.opId, opId);
+  assert.equal(mac.client.taskOutbox.values().next().value.set.title, 'first recovery title');
+  const restarted = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  assert.equal(restarted.client.taskOutbox.values().next().value.opId, opId);
+  await restarted.client.syncOnce();
+  assert.equal(restarted.client.taskOutbox.size, 1);
+  await restarted.client.syncOnce();
+  assert.equal(restarted.client.taskOutbox.size, 0);
+  assert.equal(store.snapshot().cards[0].title, 'later recovery title');
+  assert.equal(store.snapshot().cards[0].revision, 2);
+  assert.deepEqual(store.snapshot().cards[0].conflicts, []);
+});
+
+test('a failed task or history upload does not block other uploads or snapshot pulls', async (t) => {
+  const { root, server, store, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+  win.client.noteResult(win.tasks.add({ project: 'agentdeck', title: 'remote card to pull' }));
+  await win.client.syncOnce();
+  const blocked = mac.tasks.add({ project: 'agentdeck', title: 'blocked card' }).card;
+  const good = mac.tasks.add({ project: 'agentdeck', title: 'good card' }).card;
+  mac.client.noteCard(blocked);
+  mac.client.noteCard(good);
+  mac.client.noteCaptain('blocked-cap', { turns: [{ prompt: 'blocked history' }] });
+  mac.client.noteCaptain('mac-cap', { turns: [{ prompt: 'good history' }] });
+  mac.client.fetchImpl = async (url, options) => {
+    if (url.endsWith('/v1/tasks') && JSON.parse(options.body).cardId === blocked.id) {
+      return new Response(JSON.stringify({ error: 'invalid field' }), { status: 400 });
+    }
+    if (url.endsWith('/v1/history') && JSON.parse(options.body).sessionId === 'blocked-cap') {
+      return new Response(JSON.stringify({ error: 'temporary failure' }), { status: 503 });
+    }
+    return fetch(url, options);
+  };
+  for (let round = 0; round < 2; round++) {
+    assert.match((await mac.client.syncOnce()).error, /服务状态 400/);
+    assert.equal(mac.client.taskOutbox.size, 1);
+    assert.equal(mac.client.historyOutbox.size, 1);
+    assert.equal(store.snapshot().cards.some((item) => item.id === good.id), true);
+    assert.equal(store.snapshot().history[0].turns[0].prompt, 'good history');
+    assert.equal(mac.tasks.list().some((item) => item.title === 'remote card to pull'), true);
+    assert.equal(mac.tasks.list().find((item) => item.id === blocked.id).title, 'blocked card');
+  }
+  mac.client.fetchImpl = fetch;
+  assert.equal((await mac.client.syncOnce()).error, null);
+  assert.equal(mac.client.taskOutbox.size, 0);
+  assert.equal(mac.client.historyOutbox.size, 0);
+});
+
+test('authenticated prototype-shaped IDs remain ordinary store keys over HTTP and reload', async (t) => {
+  const { server, store, token } = await hub(t);
+  const prototype = Object.getOwnPropertyDescriptors(Object.prototype);
+  t.after(() => {
+    // Keep a failing negative-control run from contaminating later tests.
+    for (const key of Object.getOwnPropertyNames(Object.prototype)) {
+      if (!Object.hasOwn(prototype, key)) delete Object.prototype[key];
+    }
+  });
+  const post = async (route, body) => {
+    const response = await fetch(server.url + route, {
+      method: 'POST', headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  // Exact reviewer reproduction: must create a real card, never mutate Object.prototype.
+  const repro = await post('/v1/tasks', { opId: 'op-proto-12345', cardId: '__proto__', expectedRevision: 0, deviceId: 'dev-x', set: { project: 'p', title: 'polluted' } });
+  assert.equal(({}).title, undefined);
+  assert.equal(repro.card.id, '__proto__');
+  for (const id of ['__proto__', 'constructor', 'prototype', 'toString']) {
+    const input = { opId: id, cardId: 'card-' + id, expectedRevision: 0, deviceId: id, set: { project: 'p', title: id } };
+    const first = await post('/v1/tasks', input);
+    assert.deepEqual(await post('/v1/tasks', input), first);
+    await post('/v1/heartbeat', { id, name: id, platform: 'darwin' });
+  }
+  const reloaded = new SharedStore({ file: store.file });
+  assert.equal(reloaded.snapshot().cards.length, 5);
+  assert.equal(reloaded.snapshot().devices.length, 4);
+  assert.equal(reloaded.pushTask({ opId: 'op-proto-reload', cardId: '__proto__', expectedRevision: 1, deviceId: 'dev-x', set: { title: 'ordinary updated card' } }).body.card.title, 'ordinary updated card');
+  assert.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype), prototype);
 });

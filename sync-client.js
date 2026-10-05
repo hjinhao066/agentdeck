@@ -141,7 +141,7 @@ class FleetClient {
       const base = this.bases.get(card.id);
       if (base) {
         if (Object.keys(diff(base.fields, pick(card))).length) this.noteCard(card);
-      } else if (Number.isInteger(card.revision) && card.revision > 0) {
+      } else if (!this.taskOutbox.has(card.id) && Number.isInteger(card.revision) && card.revision > 0) {
         this.bases.set(card.id, { revision: card.revision, fields: pick(card) });
       } else this.noteCard(card);
     }
@@ -214,8 +214,7 @@ class FleetClient {
       catch (_) { throw new Error('同步失败：服务返回了无法识别的内容'); }
     }
     if (response.status === 401) throw new Error('同步失败：同步服务拒绝了本机（检查令牌文件）');
-    if (response.status === 409) {
-      if (!payload.card) throw new Error('同步失败：冲突结果不完整');
+    if (response.status === 409 && pathname === '/v1/tasks') {
       return { status: 409, body: payload };
     }
     if (!response.ok) throw new Error('同步失败：服务状态 ' + response.status);
@@ -226,30 +225,49 @@ class FleetClient {
     this.bases.set(card.id, { revision: card.revision || 0, fields: pick(card) });
   }
   async _flushTasks(token) {
+    let failure = null;
     for (const item of [...this.taskOutbox.values()]) {
-      item.attempted = true;
-      this._persist();
-      const result = await this._send(token, 'POST', '/v1/tasks', {
-        opId: item.opId, cardId: item.cardId, expectedRevision: item.expectedRevision, set: item.set, deviceId: this.device.id,
-      });
-      this._seedTasks();
-      const nextSet = item.nextSet || {};
-      this._accept(result.body.card);
-      this.taskOutbox.delete(item.cardId);
-      if (Object.keys(nextSet).length) {
-        const next = { ...result.body.card, ...nextSet };
-        this.taskStore.upsertSynced(next);
-        this.noteCard(next);
-      }
-      this._persist();
+      try {
+        item.attempted = true;
+        this._persist();
+        const result = await this._send(token, 'POST', '/v1/tasks', {
+          opId: item.opId, cardId: item.cardId, expectedRevision: item.expectedRevision, set: item.set, deviceId: this.device.id,
+        });
+        this._seedTasks();
+        if (result.status === 409 && !result.body.card) {
+          // The hub lost this card or rolled back behind our base. The rejected
+          // operation cannot be rebased; queue the latest complete local copy
+          // with a new ID, preserving edits made while the request was in flight.
+          const local = this.taskStore.list({ archived: true }).find((card) => card.id === item.cardId);
+          if (!local) throw new Error('同步失败：待补传的本地任务不存在');
+          this.bases.delete(item.cardId);
+          this.taskOutbox.delete(item.cardId);
+          this.noteCard(local);
+          continue;
+        }
+        const nextSet = item.nextSet || {};
+        this._accept(result.body.card);
+        this.taskOutbox.delete(item.cardId);
+        if (Object.keys(nextSet).length) {
+          const next = { ...result.body.card, ...nextSet };
+          this.taskStore.upsertSynced(next);
+          this.noteCard(next);
+        }
+        this._persist();
+      } catch (err) { failure = failure || err; }
     }
+    return failure;
   }
   async _flushHistory(token) {
+    let failure = null;
     for (const item of [...this.historyOutbox.values()]) {
-      await this._send(token, 'POST', '/v1/history', { ...item, deviceId: this.device.id });
-      if (this.historyOutbox.get(item.sessionId)?.opId === item.opId) this.historyOutbox.delete(item.sessionId);
-      this._persist();
+      try {
+        await this._send(token, 'POST', '/v1/history', { ...item, deviceId: this.device.id });
+        if (this.historyOutbox.get(item.sessionId)?.opId === item.opId) this.historyOutbox.delete(item.sessionId);
+        this._persist();
+      } catch (err) { failure = failure || err; }
     }
+    return failure;
   }
   _writeHistory(records) {
     fs.mkdirSync(this.historyDir, { recursive: true, mode: 0o700 });
@@ -307,11 +325,12 @@ class FleetClient {
         captainSessionId: captain ? captain.id : null, sessions,
       });
       this.devices = beat.body.devices || this.devices;
-      await this._flushTasks(token);
-      await this._flushHistory(token);
+      const taskFailure = await this._flushTasks(token);
+      const historyFailure = await this._flushHistory(token);
       await this._pull(token);
-      this.error = null;
-      this.lastSyncAt = new Date().toISOString();
+      const failure = taskFailure || historyFailure;
+      this.error = failure ? this._safeError(failure, token) : null;
+      if (!failure) this.lastSyncAt = new Date().toISOString();
     } catch (err) {
       this.error = this._safeError(err, token);
     }

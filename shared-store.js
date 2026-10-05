@@ -45,7 +45,7 @@ function atomicWrite(file, text) {
 }
 
 function emptyData() {
-  return { version: 1, seq: 0, devices: {}, cards: {}, ops: {}, history: {} };
+  return { version: 1, seq: 0, devices: Object.create(null), cards: Object.create(null), ops: Object.create(null), history: Object.create(null) };
 }
 
 // Drop credential-shaped keys anywhere in a captain transcript. The prose of
@@ -143,6 +143,9 @@ class SharedStore {
       throw reject(500, 'Sync store schema is not version 1. Refusing to overwrite it.');
     }
     data.ops = data.ops || {};
+    // IDs are untrusted keys, including __proto__ and inherited method names.
+    // JSON.parse restores ordinary objects, so rebuild every index on load too.
+    for (const key of ['devices', 'cards', 'ops', 'history']) data[key] = Object.assign(Object.create(null), data[key]);
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
   }
