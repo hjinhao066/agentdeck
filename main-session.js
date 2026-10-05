@@ -30,13 +30,21 @@
 
   // config.mainSession = { colId, cmd, gen, pending: [receipt], inflight: [receipt], receiptsSeen: [id], tasks: [task], fresh, crewMarked, waitlist }
   // inflight: receipts already handed to 队长 whose turn has not finished yet.
-  // receiptsSeen: ids the background receipts channel already returned. Saved with
-  // the rest of mainSession in config.json, so a relaunch or Relay does not
-  // deliver them again. Legacy injection stays out of this set until its turn ends.
+  // A receipt the background channel returned carries viaChannel itself (and takenAt),
+  // saved with the rest of mainSession, so a relaunch or Relay neither delivers it
+  // again nor loses it. Legacy injection never sets the mark.
+  // receiptsSeen: the last ids the channel returned. Only read for receipts an older
+  // version took, which have no mark. It is trimmed, so nothing still in flight may
+  // depend on it.
   // fresh: the context was cleared and 队长 has not finished a turn since.
   // crewMarked: sessions opened before captainCrew existed were marked once.
   // waitlist: `new` requests waiting for a free slot (settings cap, live on M.MAX_ACTIVE), oldest first;
   // each has a 'waiting' card with no column yet.
+  // captainSettledAt: when the last stretch of work 队长 finished began. A receipt
+  // the CLI took after that has no sign of being dealt with.
+  // handoffCarry: such receipts at the last Relay or restart, { at, kind, fromId, items };
+  // they are never delivered again, the handoff lists them until the next Relay.
+  // Never trimmed: a receipt dropped here is a result nobody will ever see.
   // config.captainHistory: conversations from before a clear (MainCore.normalizeHistory).
   function state() {
     const s = host.config.mainSession;
@@ -367,12 +375,14 @@
     // background channel already returned stay read across relaunch. Items still
     // in pending were never taken, including ones that arrived while restarting.
     const seen = new Set(s.receiptsSeen);
-    s.pending = [...unreadReceipts(s.inflight, seen), ...s.pending];
+    const lost = unconfirmedReceipts(s);
+    if (lost.length) s.handoffCarry = { at: Date.now(), kind: 'restart', fromId: s.colId, items: [...(s.handoffCarry?.items || []), ...lost] };
+    s.pending = [...requeued(unreadReceipts(s.inflight, seen)), ...s.pending];
     s.inflight = [];
     s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((m) => typeof m === 'string' ? m.trim() && m.length <= 8000 : mobileImages(m?.atts).length && typeof m.text === 'string' && m.text.length <= 8000) : [];
     s.fresh = !!s.fresh;
     s.legacyReceiptInjection = s.legacyReceiptInjection === true && !nativeCaptain(s.cmd);
-    s.tasks = Array.isArray(s.tasks) ? s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string').slice(-MAX_TASKS) : [];
+    s.tasks = Array.isArray(s.tasks) ? trimTasks(s.tasks.filter((t) => t && typeof t.id === 'string' && typeof t.colId === 'string')) : [];
     s.tasks.forEach((t) => { delete t.boardRetrying; });
     s.waitlist = Array.isArray(s.waitlist) ? s.waitlist.filter((w) => w && typeof w.taskId === 'string' && typeof w.task === 'string' && s.tasks.some((t) => t.id === w.taskId && t.status === 'waiting')) : [];
     // the column was closed while the app was down
@@ -434,6 +444,9 @@
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
       if (!$('concurrencyCap').reportValidity()) return;
+      const budgetBox = $('handoffBudget');
+      if (budgetBox?.reportValidity && !budgetBox.reportValidity()) return;
+      if (budgetBox && budgetBox.value !== undefined) host.config.captainHandoffBudget = M.handoffBudget(budgetBox.value);
       host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
       host.config.resumeOnRestart = $('resumeOnRestart').checked;
       applyConcurrencyCap($('concurrencyCap').value);
@@ -464,6 +477,7 @@
     $('csThreshold').value = settings.threshold / 1000;
     $('csThreshold').disabled = !settings.enabled;
     $('concurrencyCap').value = M.concurrencyCap(host.config.concurrencyCap);
+    if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffBudget);
     const resumeBox = $('resumeOnRestart');
     if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
   }
@@ -524,7 +538,60 @@
     // Busy/quota/exited/Codex Captains cannot be asked for another model turn.
     // Persist a fresh full snapshot in every path, before the old PTY is killed.
     if (mainCol() !== col || host.userComposing(col.id)) throw new Error('队长或输入已变更');
-    return window.deck.captainCheckpoint({ ...snapshot, chat: window.ChatUI.snapshotForHandoff(col.id), tasks: state().tasks });
+    return window.deck.captainCheckpoint({ ...snapshot, ...handoffSnapshot('relay', snapshot.relayMessage), chat: window.ChatUI.snapshotForHandoff(col.id) });
+  }
+  // ---- Relay handoff: one moment of this state, for the next 队长 ----
+  // The main process adds the board cards and 队长's decisions file and writes the text.
+  const carryItem = (p) => ({ receiptId: p.receiptId, taskId: p.taskId, colId: p.colId, title: String(p.title || '').slice(0, 120), ts: p.ts,
+    ...Object.fromEntries(['question', 'waiting', 'failed', 'summary'].filter((k) => typeof p[k] === 'string' && p[k]).map((k) => [k, p[k].slice(0, 400)])) });
+  // Receipts the background channel handed over, with no finished work by 队长
+  // since. They are never sent again, so a Relay or restart has to name them.
+  function unconfirmedReceipts(s) {
+    const seen = new Set(normalizeSeenIds(s.receiptsSeen));
+    return (Array.isArray(s.inflight) ? s.inflight : []).filter((p) => p && takenByChannel(p, seen) && !dealtWith(p, s)).map(carryItem);
+  }
+  // What an earlier Relay or restart already named. It stays open until 队长 has
+  // finished a stretch of work that began after it was listed: a Captain that took
+  // over and never got to work must pass it on, not drop it.
+  function carriedReceipts(s) {
+    const carry = s.handoffCarry;
+    if (!carry || !Array.isArray(carry.items) || !carry.items.length) return null;
+    return (Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0) > carry.at ? null : carry;
+  }
+  function handoffSnapshot(reason, relayMessage) {
+    const s = state(), col = mainCol();
+    const cols = host.columns();
+    const leaving = reason === 'relay' || reason === 'clear';
+    const previousId = leaving ? col.id : (host.config.captainHistory || []).at(-1)?.id || '';
+    const seen = new Set(normalizeSeenIds(s.receiptsSeen));
+    const said = (id) => window.ChatUI.turnsOf(id).filter((t) => t.kind !== 'task' && t.kind !== 'notice' && String(t.user || '').trim())
+      .map((t) => ({ ts: t.ts, text: String(t.user).slice(0, 4000), sourceId: id,
+        ...(/（全文 \d+ 字，见附件）$/.test(t.user) && /prompt-[\w-]+\.txt$/.test(String((t.atts || []).at(-1) || '')) ? { longFile: t.atts.at(-1) } : {}) }));
+    // The user's last words may be several Captains back (a night of automatic Relays).
+    let userTurns = said(col.id);
+    const earlier = [...(host.config.captainHistory || [])].reverse().filter((past) => past.id !== col.id);
+    let looked = 0;
+    for (const past of earlier.slice(0, 8)) {
+      if (userTurns.length >= 8) break;
+      userTurns = [...said(past.id), ...userTurns]; looked += 1;
+    }
+    // The excerpt is a window; the text says when there is more behind it.
+    const userTurnsOlder = looked < earlier.length || userTurns.length > 12;
+    const rotation = window.PerpetualCaptainCore ? window.PerpetualCaptainCore.normalizeSettings(host.config.perpetualCaptain) : null;
+    return {
+      colId: col.id, reason, now: Date.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, cli: M.boardCli(host.platform),
+      budget: host.config.captainHandoffBudget, dispatchCap: MAX_TASKS, userTurnsOlder,
+      captain: { previousId, gen: s.gen, ...(leaving ? { nextGen: s.gen + 1 } : {}), message: relayMessage || '', lastRelay: leaving ? null : s.relayRecord || null,
+        rotation: rotation ? `永动机自动轮换${rotation.enabled ? '开' : '关'}，席位顺序 ${rotation.order.join(' → ')}，Claude 席位都用尽时交给 ${host.config.captainRelayCodex?.name || 'ChatGPT'}` : '' },
+      // Instruction bodies stay where they are; the handoff never quotes them.
+      tasks: s.tasks.map(({ instruction, ...task }) => task),
+      sessions: ledgerRows().map((row) => ({ id: row.id, title: row.title, state: row.state, terminalState: row.terminalState, alive: !!host.terms.get(row.id)?.alive,
+        crew: !!cols.find((c) => c.id === row.id)?.captainCrew, project: row.project, boardId: cols.find((c) => c.id === row.id)?.boardId || '' })),
+      archivedIds: (host.config.archived || []).map((a) => a.id),
+      pending: s.pending, inflight: unreadReceipts(s.inflight, seen), unconfirmed: unconfirmedReceipts(s),
+      waitlist: s.waitlist.map((w) => ({ taskId: w.taskId, title: w.title, project: w.project || '', metadata: { boardId: w.metadata?.boardId || '' } })),
+      carry: reason === 'relay' ? carriedReceipts(s) : s.handoffCarry || null, userTurns: userTurns.slice(-12),
+    };
   }
   function saverFailed(message) {
     cancelTokenSaving();
@@ -605,7 +672,7 @@
     const retired = window.ChatUI.archiveCaptainSnapshot(col.id, snapshot);
     if (retired) host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { ...retired, clearedAt: Date.now() }]);
     const s = state();
-    s.pending = [...s.inflight, ...s.pending];
+    s.pending = [...requeued(s.inflight), ...s.pending];
     s.inflight = [];
     delete col.modelSessionId;
     col.cmd = M.freshCommand(col.cmd);
@@ -682,14 +749,20 @@
     // changes seats. Unread inflight (legacy injection) and anything still
     // pending go to the new seat, so a handoff neither resends nor drops them.
     const seen = new Set(normalizeSeenIds(s.receiptsSeen));
-    const requeue = rotation ? unreadReceipts(s.inflight, seen) : s.inflight.slice();
+    // A manual clear sends everything in flight again, except what the background
+    // channel handed over before 队长 last finished a stretch of work: the old
+    // context dealt with those, and a second copy would be handled twice.
+    const requeue = rotation ? unreadReceipts(s.inflight, seen) : s.inflight.filter((p) => !(takenByChannel(p, seen) && dealtWith(p, s)));
+    const unconfirmed = rotation ? [...(carriedReceipts(s)?.items || []), ...unconfirmedReceipts(s)] : [];
     s.inflight = [];
     const oldId = col.id;
+    if (rotation) s.handoffCarry = unconfirmed.length ? { at: Date.now(), kind: 'relay', fromId: oldId, items: unconfirmed } : null;
     const retired = window.ChatUI.retireChat(oldId, { interrupted: !!rotation });
     if (retired) {
       host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { id: oldId, ...retired, clearedAt: Date.now() }]);
     }
-    s.pending = [...requeue, ...(rotation ? unreadReceipts(s.pending, seen) : s.pending)];
+    // Whatever is still waiting was never handed over, whatever the id list says: it goes on.
+    s.pending = [...requeued(requeue), ...s.pending];
     s.gen += 1;
     const waiting = new Set(s.pending.map((p) => p.taskId).filter(Boolean));
     const latest = new Map(s.tasks.map((t) => [t.colId, t]));
@@ -727,8 +800,8 @@
     carried.forEach((t) => window.ChatUI.addCard(s.colId, t));
     save();
     window.Sidebar.render();
-    brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status)))
-      + (rotation ? `\n${options.relayMessage || ''}\n先运行 ${M.boardCli(host.platform)} briefing，再读看板继续：${options.checkpointPath}。先确认旧监听已退出，再用 Bash（run_in_background: true）重挂恰好一个后台 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。` : ''));
+    brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status)), rotation ? 'relay' : '')
+      + (rotation ? '\n' + M.relayNote(host.platform, options.relayMessage, options.checkpointPath) : ''));
     host.showToast(rotation ? `已${host.config.captainRelayLabel || 'Relay'}；进度看板、队员和回执已保留` : '队长的模型上下文已清空；派出去的活、回执和之前的对话都还在');
     return fresh;
   }
@@ -760,6 +833,19 @@
     const byTitle = cols.filter((c) => host.columnLabel(c) === key);
     return byTitle.length === 1 ? byTitle[0] : null;
   }
+  // Past MAX_TASKS the oldest finished records drop off. One that is still out, or
+  // whose result has not reached the board yet, never does: the handoff, the restart
+  // resume and the receipt it is waiting for all read it.
+  const STILL_OUT = ['waiting', 'queued', 'working', 'paused', 'quota', 'input', 'asking'];
+  function trimTasks(tasks) {
+    let extra = tasks.length - MAX_TASKS;
+    if (extra <= 0) return tasks;
+    return tasks.filter((t) => {
+      if (extra <= 0 || STILL_OUT.includes(t.status) || t.pendingBoardEvent) return true;
+      extra -= 1;
+      return false;
+    });
+  }
   // col null: a 'waiting' card for work queued until a slot frees up.
   function addTask(col, title) {
     const s = state();
@@ -771,7 +857,7 @@
       boardId: col?.boardId || '', boardAttempt: col?.boardAttempt || '',
     };
     s.tasks.push(task);
-    if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length - MAX_TASKS);
+    if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length, ...trimTasks(s.tasks));
     window.ChatUI.addCard(s.colId, task);
     save();
     return task;
@@ -847,7 +933,7 @@
           t.instructionSent = true;
           t.status = t === last ? 'working' : 'done';
           if (t === last) { t.instruction = sentItems.map((i) => i.text).join('\n\n'); t.turnId = turn ? turn.id : ''; t.startedAt = Date.now(); }
-          else { t.doneAt = Date.now(); t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], images: [], failed: '', explicit: true }; }
+          else { t.doneAt = Date.now(); t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], images: [], failed: '', explicit: true, source: 'merged' }; }
           update(t);
           if (t === last) { persistResumeEntry(col, t); autoBoardEvent(t, 'started'); }
         });
@@ -871,7 +957,7 @@
     state().tasks.forEach((t) => {
       if (t.colId !== colId || t.status !== 'queued') return;
       t.status = 'stopped'; t.doneAt = Date.now();
-      t.receipt = { summary: '队长已取消这条尚未送达的补充指令。', files: [], images: [], failed: '', explicit: true };
+      t.receipt = { summary: '队长已取消这条尚未送达的补充指令。', files: [], images: [], failed: '', explicit: true, source: 'captain-cancel' };
       update(t);
     });
   }
@@ -882,7 +968,7 @@
     const s = state();
     s.tasks.forEach((t) => {
       if (t === task || t.colId !== task.colId || !['working', 'quota', 'input', 'asking'].includes(t.status)) return;
-      t.receipt = { summary: '后来又给这个会话发了新指令，结果看后面的卡片。', files: [], images: [], failed: '', explicit: true };
+      t.receipt = { summary: '后来又给这个会话发了新指令，结果看后面的卡片。', files: [], images: [], failed: '', explicit: true, source: 'superseded' };
       t.status = 'done';
       t.doneAt = Date.now();
       update(t);
@@ -1126,6 +1212,10 @@
   // Hand every pending receipt to 队长's model as text; they count as in
   // flight until its turn ends.
   const MAX_RECEIPTS_SEEN = 500;
+  const LISTENER_ALIVE = 15_000;   // a `receipts --wait` polls every few seconds
+  let listener = null;            // { id, seq, at, colId }: the one background listener
+  let listenerSeq = 0;
+  const listenerSeqById = new Map(); // first registration only; a repeat poll keeps that seq
   function normalizeSeenIds(list) {
     const out = [];
     const have = new Set();
@@ -1148,14 +1238,31 @@
     if (!s) return;
     s.receiptsSeen = normalizeSeenIds([...(Array.isArray(s.receiptsSeen) ? s.receiptsSeen : []), ...items.map(ensureReceiptId)]);
   }
-  function unreadReceipts(items, seen) {
-    return (Array.isArray(items) ? items : []).filter((item) => item && (typeof item.receiptId !== 'string' || !seen.has(item.receiptId)));
+  // Whether the background channel handed this receipt to 队长's CLI. The mark is on
+  // the receipt; the id list only speaks for receipts taken before the mark existed.
+  function takenByChannel(item, seen) {
+    return item.viaChannel === true || (typeof item.receiptId === 'string' && seen.has(item.receiptId));
   }
-  function takePending(nextTurn = false, batch) {
+  // Taken before 队长 began a stretch of work it then finished: the model had it in
+  // front of it throughout. Without a time there is no such sign.
+  function dealtWith(item, s) {
+    return Number.isFinite(item.takenAt) && item.takenAt <= (Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0);
+  }
+  function unreadReceipts(items, seen) {
+    return (Array.isArray(items) ? items : []).filter((item) => item && !takenByChannel(item, seen));
+  }
+  // Back to waiting: it will be handed over afresh, so it is no longer a taken one.
+  function requeued(items) {
+    const ids = new Set(items.map((p) => p.receiptId).filter((id) => typeof id === 'string'));
+    const s = state();
+    if (ids.size && Array.isArray(s.receiptsSeen)) s.receiptsSeen = s.receiptsSeen.filter((id) => !ids.has(id));
+    return items.map(({ viaChannel, takenAt, ...item }) => item);
+  }
+  function takePending(nextTurn = false, batch, viaChannel = false) {
     const s = state();
     const text = M.receiptsForModel(s.pending);
     const turnId = nextTurn ? '' : (window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '');
-    s.inflight = [...s.inflight, ...s.pending.map((p) => ({ ...p, deliveryTurnId: turnId, ...(batch ? { batch } : {}) }))];
+    s.inflight = [...s.inflight, ...s.pending.map(({ viaChannel: old, ...p }) => ({ ...p, deliveryTurnId: turnId, takenAt: Date.now(), ...(batch ? { batch } : {}), ...(viaChannel ? { viaChannel: true } : {}) }))];
     s.pending = [];
     save();
     return text;
@@ -1190,7 +1297,7 @@
       Promise.resolve(window.ChatUI.sendPrompt(col, '', null, { prefix: text.trim(), force: true, guardUserInput: true })).then((sent) => {
         if (sent) return;
         // not typed after all: the receipts go back to waiting
-        const back = s.inflight.filter((p) => p.batch === batch).map(({ batch: b, deliveryTurnId, ...item }) => item);
+        const back = s.inflight.filter((p) => p.batch === batch).map(({ batch: b, deliveryTurnId, takenAt, ...item }) => item);
         s.inflight = s.inflight.filter((p) => p.batch !== batch);
         s.pending = [...back, ...s.pending];
         save();
@@ -1545,7 +1652,7 @@
               t.instructionSent = true;
               t.status = 'done';
               t.doneAt = Date.now();
-              t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], failed: '', explicit: true };
+              t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], failed: '', explicit: true, source: 'merged' };
               update(t);
             }
             if (entry.pendingText) task.instruction = entry.pendingText;
@@ -1636,6 +1743,7 @@
     if (s.implicitQuestions.length > 100) s.implicitQuestions.splice(0, s.implicitQuestions.length - 100);
     return true;
   }
+  let captainBusySince = 0;   // when 队长 was first seen working in the stretch it has not finished yet
   function confirmationExcerpt(entry) {
     return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
       .map((l) => l.slice(0, 140)).join('\n') || '（看不到提示内容）';
@@ -1664,6 +1772,10 @@
     const s = state();
     if (!s) return;
     if (id === s.colId) {
+      const busy = entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, mainCol()?.cmd) === 'working');
+      // Only a receipt taken before a stretch began was in front of the model for all of it.
+      if (busy) captainBusySince ||= Date.now();
+      else if (captainBusySince && entry.state === 'done') { s.captainSettledAt = Math.max(s.captainSettledAt || 0, captainBusySince); captainBusySince = 0; save(); }
       for (const [cardId, input] of quotaStarts) {
         if (quotaPlan(window.BoardCore.commandForAgent('agy')).action !== 'queue') {
           quotaStarts.delete(cardId);
@@ -1808,6 +1920,7 @@
         }
         else saverFailed('队长没有只回复「已存档」，未清空上下文');
       }
+      if (!turn.interrupted && Number.isFinite(turn.ts)) s.captainSettledAt = Math.max(s.captainSettledAt || 0, turn.ts);
       if (s.inflight.length || s.fresh) {
         s.inflight = s.inflight.filter((p) => p.deliveryTurnId !== turn.id);
         s.fresh = false;
@@ -1941,7 +2054,16 @@
     return ['main-new', 'main-queue', 'main-task'].includes(message.action)
       ? withQueue(() => handleOnce(message, caller)) : handleOnce(message, caller);
   }
+  // The CLI stops waiting at its deadline and reports a timeout. Running the
+  // command after that would start work 队长 believes never started, and a retry
+  // would then start it twice.
+  function refuseLate(message) {
+    if (['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'].includes(message.action) && Number.isFinite(message.deadline) && Date.now() > message.deadline) {
+      throw new Error('这条命令等到超时才轮到，没有执行。先用 ledger 确认现状，需要的话再发一次。');
+    }
+  }
   async function handleOnce(message, caller) {
+    refuseLate(message);
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id &&
@@ -1982,6 +2104,12 @@
         return { done: true, result: briefingText() };
       case 'main-quota':
         return { done: true, result: host.quotaText() };
+      case 'main-handoff': {
+        const built = await window.deck.captainHandoff(handoffSnapshot('refresh'));
+        // A later restart points 队长 at this file again.
+        if (state() === s && built.path && s.seatCheckpoint !== built.path) { s.seatCheckpoint = built.path; save(); }
+        return { done: true, result: built.text };
+      }
       case 'main-queue': {
         if (message.op === 'list') {
           const wasHold = memoryHold;
@@ -2020,7 +2148,7 @@
           if (t.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(t.status) || (message.keepQueued && t.status === 'queued')) return;
           t.status = 'stopped';
           t.doneAt = Date.now();
-          t.receipt = { summary: archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。', files: [], images: [], failed: '', explicit: true };
+          t.receipt = { summary: archive ? '队长已结束终端并归档。' : '队长已请求中断当前操作。', files: [], images: [], failed: '', explicit: true, source: archive ? 'captain-archive' : 'captain-stop' };
           update(t);
         });
         s.pending = s.pending.filter((p) => p.colId !== id);
@@ -2069,11 +2197,25 @@
         // A short read belonging to a timed watcher must not consume anything
         // if it was queued while the renderer was unavailable and has expired.
         if (message.wait && message.expiresAt !== undefined && (!Number.isFinite(message.expiresAt) || Date.now() >= message.expiresAt)) return { done: true, result: '' };
+        // Exactly one listener. A second one in the same terminal (hung again after
+        // /clear, or by mistake) takes over; the older one is told to leave on its
+        // next poll. Who is newer is the order this process first saw each watcher,
+        // not the client's clock: two started in the same millisecond, or one whose
+        // clock moved backwards, still line up by registration. The same watcher
+        // polling again keeps its sequence. One that stopped polling no longer counts.
+        if (message.wait && typeof message.watcher === 'string' && Number.isFinite(message.watcherStartedAt)) {
+          const now = Date.now();
+          const current = listener && listener.colId === s.colId && now - listener.at < LISTENER_ALIVE ? listener : null;
+          let seq = listenerSeqById.get(message.watcher);
+          if (seq === undefined) listenerSeqById.set(message.watcher, seq = ++listenerSeq);
+          if (current && current.id !== message.watcher && current.seq > seq) return { done: true, result: M.LISTENER_SUPERSEDED };
+          listener = { id: message.watcher, seq, at: now, colId: s.colId };
+        }
         if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
         // The CLI has the text once this returns. Record that before the copy
         // into inflight so the same config save survives relaunch and Relay.
         rememberReceiptsSeen(s.pending);
-        const text = takePending();
+        const text = takePending(false, undefined, true);
         return { done: true, result: text || '没有新的回执。' };
       }
       case 'main-peek': {
@@ -2183,6 +2325,7 @@
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
         // Past the limit, behind work already waiting, at quota, or under critical memory: queue it.
         // placeSession applies same-tier fallback unless the command was named with --command.
+        refuseLate(message);   // the checks above wait on the board and the seat list
         const placed = await placeSession(title, cmd, cwd, message.id, task, metadata, prior);
         if (prior) cancelWaiting((w) => w === prior, '队长已换命令/模型，替换旧排队。');
         if (placed.queued) {
@@ -2260,11 +2403,11 @@
     }
     loadResumeManifest();
     initDialog();
-    if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? `读看板继续：${state().seatCheckpoint}` : '');
+    if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? M.restartNote(host.platform, state().seatCheckpoint) : '');
   }
 
   window.MainSession = {
-    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
     isMain, isMainId, mainCol, state, sendMessage,
 

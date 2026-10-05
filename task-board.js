@@ -400,7 +400,11 @@ class TaskStore {
       // never taken as a pass.
       const autoReview = card.review_session === true && (card.review_verdict === true || AutoVerify.isReviewAttempt(input.attempt_id));
       const verdict = autoReview && input.type === 'complete' ? AutoVerify.verdict(input.message) : null;
-      const type = verdict === 'fail' ? 'failed' : input.type;
+      // A reviewer the Captain opened by hand is not held to that wording, but its
+      // session ending is not a pass either: a receipt that opens with "不通过" sends
+      // the card back instead of marking it done.
+      const rejected = verdict === 'fail' || (card.review_session === true && input.type === 'complete' && AutoVerify.verdict(input.message) === 'fail');
+      const type = rejected ? 'failed' : input.type;
       if (type === 'started') {
         if (/:fallback:/.test(card.last_event || '') ||
           (input.source?.startsWith('resume-fallback-') && /:started:/.test(card.last_event || '') && card.latest_receipt === '已结束，未提交回执')) card.latest_receipt = '';

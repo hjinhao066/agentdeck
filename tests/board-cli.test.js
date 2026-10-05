@@ -394,3 +394,91 @@ test('worker receipts carry provider-injected UUIDs and never emit unrelated or 
     assert.equal(requests.at(-1).modelSessionIds, undefined);
   } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ---- Relay handoff: the command, the listener's identity, and the deadline on commands that change something ----
+function controlDir(prefix) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  return dir;
+}
+function serve(dir, answer) {
+  const requests = [];
+  const timer = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file));
+      requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify(answer(request, requests.length)));
+    }
+  }, 20);
+  return { requests, stop() { clearInterval(timer); fs.rmSync(dir, { recursive: true, force: true }); } };
+}
+
+test('handoff asks the Captain channel for the live handoff and prints it whole, long or not', async () => {
+  const dir = controlDir('agentdeck-handoff-cli-');
+  const text = '# AgentDeck 队长交接\n\n## 1. 交接元信息\n' + '- 一张未完成的卡\n'.repeat(1500);
+  assert.ok(text.length > 12000, 'longer than the cap ordinary results are cut to');
+  const server = serve(dir, () => ({ done: true, result: text }));
+  try {
+    const result = await runCli(['handoff'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
+    assert.equal(result.code, 0); assert.equal(result.stdout, text + '\n');
+    assert.equal(server.requests.length, 1); assert.equal(server.requests[0].action, 'main-handoff');
+    assert.equal(server.requests[0].deadline, undefined, 'a read is never refused for being late');
+    // a worker's submission-only capability does not reach it
+    const denied = await runCli(['handoff'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: '', AGENTDECK_RECEIPT_TOKEN: 'worker-test' });
+    assert.equal(denied.code, 1); assert.match(denied.stderr, /Only conductor-managed terminals/);
+    assert.equal(server.requests.length, 1);
+    assert.match((await runCli(['help'], {})).stdout, /handoff\s+current Relay handoff from live state/);
+  } finally { server.stop(); }
+  // the bridge passes it through uncut, like the briefing
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /'main-briefing', 'main-handoff',/);
+  assert.match(main, /const verbatim = action === 'main-briefing' \|\| action === 'main-handoff' \|\|/);
+  assert.match(fs.readFileSync(path.join(__dirname, '..', 'preload.js'), 'utf8'), /captainHandoff: \(payload\) => ipcRenderer\.invoke\('seats:handoff', payload\)/);
+  assert.ok(require('../package.json').build.files.includes('relay-handoff-core.js'), 'the packaged app ships the module main requires');
+});
+
+test('one receipts --wait process is one listener: every poll carries the same id and start time, and it leaves when told it was replaced', async () => {
+  const dir = controlDir('agentdeck-listener-cli-');
+  const notice = require('../main-core').LISTENER_SUPERSEDED;
+  const server = serve(dir, (_request, n) => ({ done: true, result: n >= 3 ? notice : '' }));
+  try {
+    const before = Date.now();
+    const result = await runCli(['receipts', '--wait', '--timeout', '30'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
+    assert.equal(result.code, 0); assert.equal(result.stdout, notice + '\n');
+    assert.equal(server.requests.length, 3);
+    const ids = new Set(server.requests.map((r) => r.watcher)), starts = new Set(server.requests.map((r) => r.watcherStartedAt));
+    assert.equal(ids.size, 1); assert.match([...ids][0], /^\d+-[0-9a-f]{8}$/);
+    assert.equal(starts.size, 1); assert.ok([...starts][0] >= before && [...starts][0] <= Date.now());
+    // a second process is a different listener; a plain read is not a listener at all
+    await runCli(['receipts', '--wait', '--timeout', '30'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
+    assert.notEqual(server.requests.at(-1).watcher, [...ids][0]);
+    await runCli(['receipts'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
+    assert.equal(server.requests.at(-1).wait, undefined); assert.equal(server.requests.at(-1).watcher, undefined);
+  } finally { server.stop(); }
+});
+
+test('commands that change something tell the app when their CLI stops waiting; reads and worker submissions do not', async () => {
+  for (const [args, action, guarded] of [
+    [['new', '--title', '查日志', '--task', '整理错误日志'], 'main-new', true],
+    [['tell', '--to', 'c1', '--message', '补充'], 'main-tell', true],
+    [['stop', '--id', 'c1'], 'main-stop', true],
+    [['archive', '--id', 'c1'], 'main-archive', true],
+    [['answer', '--to', 'c1', '--key', 'y'], 'main-answer', true],
+    [['ledger'], 'main-ledger', false],
+    [['complete', '--result', '做完了'], 'complete', false],
+  ]) {
+    const dir = controlDir('agentdeck-deadline-cli-');
+    const server = serve(dir, () => ({ done: true, result: 'ok' }));
+    try {
+      const result = await runCli(args, { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
+      assert.equal(result.code, 0, action);
+      const request = server.requests[0];
+      assert.equal(request.action, action);
+      if (guarded) assert.ok(request.deadline >= request.createdAt + 29000 && request.deadline <= request.createdAt + 31000, action);
+      else assert.equal(request.deadline, undefined, action);
+    } finally { server.stop(); }
+  }
+  const cli = fs.readFileSync(path.join(__dirname, '..', 'board-cli.js'), 'utf8');
+  assert.match(cli, /这条命令过期后不会再被执行；重发前先用 ledger 确认它是否刚好已经生效/);
+});

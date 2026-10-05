@@ -77,6 +77,7 @@ contextBridge.exposeInMainWorld('deck', {
   claudeSeats: () => ipcRenderer.invoke('seats:list'),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
+  captainHandoff: (payload) => ipcRenderer.invoke('seats:handoff', payload),
   claudeSeatUsage: (seatId) => ipcRenderer.invoke('seats:usage', { seatId }),
   claudeWarmupStatus: () => ipcRenderer.invoke('seats:warmup-status'),
   claudeWarmupIdle: (colId, idle) => ipcRenderer.invoke('seats:warmup-idle', { colId, idle }),

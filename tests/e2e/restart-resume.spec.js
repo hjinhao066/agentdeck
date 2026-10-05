@@ -4,6 +4,18 @@ const os = require('os');
 const path = require('path');
 
 const fake = `node "${path.join(__dirname, 'fixtures/fake-agent.js')}" --screen-only`;
+// The stand-in agents start in the column's shell. Whatever shell and startup files the
+// caller has must not decide whether they start (a failing Conda hook in a personal .zshrc
+// kept them from starting at all): zsh with an empty startup directory, and the node that
+// runs this test first on PATH.
+function isolateShell(env, dir) {
+  if (process.platform === 'win32') return env;
+  fs.writeFileSync(path.join(dir, '.zshrc'), '');
+  env.ZDOTDIR = dir;
+  if (fs.existsSync('/bin/zsh')) env.SHELL = '/bin/zsh';
+  env.PATH = path.dirname(process.execPath) + path.delimiter + (env.PATH || '');
+  return env;
+}
 let app, page, profile, prompts;
 
 async function quitAndWait(application) {
@@ -76,6 +88,7 @@ test.beforeAll(async () => {
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
   delete env.ELECTRON_RUN_AS_NODE;
+  isolateShell(env, profile);
   app = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`],
@@ -135,6 +148,7 @@ test('a second application restart resumes the unfinished card once again', asyn
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
   delete env.ELECTRON_RUN_AS_NODE;
+  isolateShell(env, profile);
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
   await expect.poll(() => delivered().filter((row) => row.colId === 'worker-live' && row.text.includes('重发')).length, { timeout: 30000 }).toBe(before + 1);
@@ -187,6 +201,7 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = captured;
   delete env.ELECTRON_RUN_AS_NODE;
+  isolateShell(env, profile2);
   let application, window;
   try {
     application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile2}`], env });

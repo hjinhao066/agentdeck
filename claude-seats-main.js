@@ -7,7 +7,8 @@ const S = require('./claude-seats-core');
 const { validId } = require('./security');
 const { saveChat } = require('./side-main');
 const { accountIdentity } = require('./quota-codex');
-const { AUTONOMOUS_CONTINUATION } = require('./main-core');
+const os = require('os');
+const Handoff = require('./relay-handoff-core');
 
 function directory(seat, home) {
   const raw = seat.configDir.replace(/^~(?=$|[\\/])/, home);
@@ -146,29 +147,56 @@ function readUsage(seat, home) {
   }
   catch (_) { return null; }
 }
-function checkpoint(home, userData, payload) {
-  if (!validId(payload?.colId) || !payload.chat || !Array.isArray(payload.tasks) || payload.tasks.length > 120) throw new Error('无效队长存档');
+// The Relay handoff, written from one snapshot. The renderer supplies what it
+// holds (dispatch records, live sessions, unread receipts); the board cards and
+// the Captain's decisions file are read here. The decisions file belongs to the
+// Captain and is only ever read; the handoff file belongs to the app.
+// Open dispatch records are never trimmed, so their number is not bounded by the renderer's
+// cap on finished ones; the limit here only rejects a payload that cannot be real.
+const MAX_HANDOFF_RECORDS = 5000;
+function handoff(home, userData, payload, options = {}) {
+  if (!validId(payload?.colId) || !Array.isArray(payload.tasks) || payload.tasks.length > MAX_HANDOFF_RECORDS) throw new Error('无效队长存档');
+  const dir = path.join(home, '.agents', 'boards');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const board = path.join(dir, Handoff.HANDOFF_FILE), notes = path.join(dir, Handoff.DECISIONS_FILE);
+  try { fs.writeFileSync(notes, Handoff.DECISIONS_TEMPLATE, { flag: 'wx', mode: 0o600 }); } catch (e) { if (e.code !== 'EEXIST') throw e; }
+  const decisions = { path: notes, text: '', mtime: 0 };
+  try {
+    const stat = fs.statSync(notes);
+    if (stat.isFile() && stat.size <= 512 * 1024) { decisions.text = fs.readFileSync(notes, 'utf8'); decisions.mtime = stat.mtimeMs; }
+    // Too big to be the one-line-per-decision file: said in the text, not read as "nothing recorded".
+    else decisions.error = stat.isFile() ? '文件超过 512KB，没有读' : '不是普通文件，没有读';
+  } catch (error) { if (error.code !== 'ENOENT') decisions.error = '读不出来：' + error.message; }
+  // An unreadable board is said out loud; the dispatch records alone still go out.
+  let cards = [], boardError = '';
+  try { cards = options.cards ? options.cards() : []; } catch (error) { boardError = error.message; }
+  // Receipts, queued work and sessions go in whole: the text names every one of them,
+  // and a trimmed list would lose a result or call a live session gone.
+  const all = (value) => (Array.isArray(value) ? value : []);
+  const machine = options.machine || {};
+  const built = Handoff.build({
+    now: Number.isFinite(payload.now) ? payload.now : Date.now(), timeZone: payload.timeZone, reason: payload.reason, cli: payload.cli, budget: payload.budget,
+    dispatchCap: payload.dispatchCap, userTurnsOlder: payload.userTurnsOlder === true || all(payload.userTurns).length > 12,
+    platform: machine.platform || process.platform, host: machine.hostname || os.hostname(), appVersion: machine.appVersion || '', boardVersion: options.boardVersion ? options.boardVersion() : '',
+    captain: { ...(payload.captain && typeof payload.captain === 'object' ? payload.captain : { previousId: payload.colId, message: payload.relayMessage || '' }) },
+    cards, boardError, dispatches: payload.tasks, sessions: all(payload.sessions), archivedIds: all(payload.archivedIds),
+    pending: all(payload.pending), inflight: all(payload.inflight), unconfirmed: all(payload.unconfirmed), waitlist: all(payload.waitlist),
+    carry: payload.carry, userTurns: all(payload.userTurns).slice(-12), decisions,
+    paths: { handoff: board, decisions: notes, chats: path.join(userData, 'chats'), tasks: options.tasksDir || path.join(dir, 'tasks') },
+  });
+  fs.writeFileSync(board + '.tmp', built.text, { mode: 0o600 });
+  fs.renameSync(board + '.tmp', board);
+  return { path: board, text: built.text, plan: built.state.plan, level: built.level, over: built.over };
+}
+function checkpoint(home, userData, payload, options) {
+  if (!validId(payload?.colId) || !payload.chat || !Array.isArray(payload.tasks) || payload.tasks.length > MAX_HANDOFF_RECORDS) throw new Error('无效队长存档');
   // Save the full old chat, including interrupted output, before allowing kill.
   const activeChat = { ...payload.chat };
   delete activeChat.captainArchive; // A failed checkpoint must leave an active chat active.
   if (!saveChat(path.join(userData, 'chats'), payload.colId, activeChat)) throw new Error('队长对话保存失败，没有Relay');
-  const board = path.join(home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
-  fs.mkdirSync(path.dirname(board), { recursive: true, mode: 0o700 });
-  const line = (x) => String(x || '').replace(/[\r\n|]/g, ' ').slice(0, 600);
-  const latest = payload.chat.turns?.findLast((t) => t.kind !== 'task' && t.kind !== 'notice' && t.user);
-  const text = '# AgentDeck 队长Relay接续\n\n## 在做什么\n席位Relay；先读本看板，再按需读取上一任队长的完整对话。\n\n'
-    + `上任会话：${payload.colId}\n完整对话：${path.join(userData, 'chats', payload.colId + '.json')}\n`
-    + `使用 board-cli read --id ${payload.colId} 可读取之前的队长对话。\n\n`
-    + `## 队长交接\n${line(payload.relayMessage || '手动 Relay')}\n最近指令：${line(latest?.user)}\n先读 briefing 和本交接，检查 ledger；先确认旧监听已退出，再用 Bash（run_in_background: true）重挂恰好一个后台 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。\n\n`
-    + '## 谁在做\n| 会话 | 事项 | 状态 | 回执/提问 |\n| --- | --- | --- | --- |\n'
-    + payload.tasks.map((t) => `| ${line(t.colId)} | ${line(t.title)} | ${line(t.status)} | ${line(t.receipt?.question || t.receipt?.failed || t.receipt?.summary)} |`).join('\n')
-    + `\n\n## 卡在哪\n未处理回执和提问在 AgentDeck 中保留；额度用尽的会话保持原席位。\n\n## 等用户拍板什么\n见任务表中的提问及队长待处理回执。\n\n## 下一步\n${AUTONOMOUS_CONTINUATION}\n\n`
-    + `## 指针\nAgentDeck 对话目录：${path.join(userData, 'chats')}\n\n## 最后更新时间与更新记录\n${new Date().toISOString()} AgentDeck：Relay前存档。\n`;
-  fs.writeFileSync(board + '.tmp', text, { mode: 0o600 });
-  fs.renameSync(board + '.tmp', board);
-  return board;
+  return handoff(home, userData, { ...payload, reason: 'relay' }, options).path;
 }
-function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, getColumn, platform = process.platform, onUsageRecorded = () => {} }) {
+function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, getColumn, platform = process.platform, onUsageRecorded = () => {}, handoffOptions }) {
 
   const find = (id) => { const seat = S.normalize(getSeats()).find((s) => s.id === id); if (!seat) throw new Error('席位不存在'); return seat; };
   handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home, platform))));
@@ -181,7 +209,12 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
   });
   handleMain('seats:checkpoint', (_e, payload) => {
     if (payload?.colId !== getCaptainId()) throw new Error('只能存档当前队长');
-    return checkpoint(home, userData, payload);
+    return checkpoint(home, userData, payload, handoffOptions);
+  });
+  // The same handoff on demand (`handoff` command): nothing is saved or killed.
+  handleMain('seats:handoff', (_e, payload) => {
+    if (payload?.colId !== getCaptainId()) throw new Error('只能为当前队长生成交接');
+    return handoff(home, userData, payload, handoffOptions);
   });
   handleMain('seats:usage', (_e, { seatId }) => readUsage(find(seatId), home));
   handleMain('seats:record-usage', (_e, { colId, seatId, configDir, usage }) => {
@@ -193,4 +226,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };

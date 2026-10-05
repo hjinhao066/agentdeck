@@ -70,6 +70,7 @@
       "pages.js",
       "main-core.js",
       "auto-verify-core.js",
+      "relay-handoff-core.js",
       "main-session.js",
       "restart-resume.js",
       "install-result.js",

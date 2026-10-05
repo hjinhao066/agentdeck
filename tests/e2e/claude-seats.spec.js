@@ -257,8 +257,8 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 20000 }).toBe('chatgpt');
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((i) => /Codex CLI/.test(terms.get(i)?.lastScreen || ''), id), { timeout: 20000 }).toBe(true);
-  await expect.poll(() => promptsFor(id).some((p) => p.startsWith('用户刚清空了你的模型上下文。') && p.includes('读看板继续')), { timeout: 20000 }).toBe(true);
-  await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 用户刚清空了你的模型上下文。'), id), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => promptsFor(id).some((p) => p.startsWith('你是刚接任的队长：') && p.includes('handoff') && p.includes('读看板继续')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 你是刚接任的队长：'), id), { timeout: 20000 }).toBe(true);
   async function board(args, expected) {
     await idle(id);
     await page.evaluate(([i, a]) => window.deck.ptyInput(i, 'BOARD ' + JSON.stringify(a) + '\r'), [id, args]);
@@ -303,7 +303,7 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   // The new seat must finish its continuation briefing before a direct TUI
   // command; otherwise readline batches /model into that first prompt.
   const fresh = await page.evaluate(() => config.mainSession.colId);
-  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('用户刚清空了你的模型上下文。')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('你是刚接任的队长：')), { timeout: 20000 }).toBe(true);
   await idle(fresh);
   await page.evaluate(() => { window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'); window.deck.ptyInput('seat-worker', '/model Opus 5.5\r'); });
   await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');

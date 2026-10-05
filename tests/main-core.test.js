@@ -489,9 +489,11 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /鸡毛蒜皮/);
   assert.match(text, /截图真的落盘/);
   assert.match(text, /最多返工 2 轮/);
-  assert.match(text, /回复「队长已就绪」后立即自主接续/);
-  assert.match(text, /不要等用户说“继续”/);
-  assert.match(text, /上次被打断或交接列出的未完成工作重新派起来/);
+  // How to start depends on the live state, so the closing paragraph points at handoff:
+  // nothing to do means a short "ready"; authorised work means carry on without being told.
+  assert.match(text, /开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项/);
+  assert.match(text, /有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派/);
+  assert.doesNotMatch(text, /重新派起来|持续自主拆解并派活/);
   assert.match(text, /额度紧时保持 3–5 个活并行/);
   assert.match(text, /额度多时开十几个/);
   assert.match(text, /测试全过并进入打包后停止派新活/);
@@ -499,6 +501,22 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /安装只用正式 restart-agentdeck.sh／rollback-agentdeck.sh 或发版入口/);
   assert.match(text, /待核对不能 complete，版本启动核验后才结卡/);
   assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
+  // The Captain's boundary is one rule, with the one exception the user set.
+  assert.match(text, /1\. 不要在这一列里改文件[^\n]*实际工作和返工都交给别的会话[^\n]*例外：各家都没额度而你还有额度时可以亲自动手，活不能停/);
+  assert.match(text, /仍不通过，换更强模型的队员接手，最后才找用户/);
+  assert.doesNotMatch(text, /自己处理/);
+  // Stable rules here, live state in handoff; history may be read whenever recovery needs it.
+  assert.match(text, /17\. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff/);
+  assert.match(text, /read --id 会话id \[--turns 3\] \[--find 关键词\]   读某个会话已保存的对话；恢复、诊断、验收、核对矛盾或用户追问时按需读/);
+  assert.doesNotMatch(text, /只在用户追问细节时用/);
+  assert.match(text, /会话结束、任务完成、验收通过、交付到哪一步（提交、合并、打包、安装）是四件事，分开判断；审查结束但不通过就是要返工/);
+  assert.match(text, /谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关/);
+  assert.match(text, /汇报核对完的会话立即 archive，还在验收的先留着/);
+  // Commands as the CLI takes them: one line each, the keys answer really accepts.
+  assert.equal(text.split('\n').filter((line) => /AGENTDECK_BOARD_CLI" (?:briefing|handoff)/.test(line)).length, 1, 'handoff and briefing share one line');
+  assert.match(text, /AGENTDECK_BOARD_CLI" handoff {3}生成当前交接快照[^\n]*briefing 只读本提示词全文/);
+  assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc/);
+  assert.ok(!/ {4,}\S/.test(text.split('\n').filter((line) => line.includes('AGENTDECK_BOARD_CLI')).join('\n')), 'no alignment padding in the command list');
   // chat-ui replaces prompts longer than 8000 with a file pointer. The closing
   // paragraph must stay inside the pasted briefing on both platforms.
   for (const platform of ['darwin', 'win32']) {

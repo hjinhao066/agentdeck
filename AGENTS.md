@@ -121,6 +121,16 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   receipts. Full output, logs and file bodies never go into the 队长's context.
   Automated tests must use the stand-in agent (`--command`); real CLI smoke tasks
   require an explicit user request and an isolated profile.
+- Relay handoff (`relay-handoff-core.js`, `docs/relay-handoff.md`): the app rewrites
+  `agentdeck-captain-handoff.md` whole from one snapshot (board cards, dispatch records,
+  live sessions, unread receipts); the Captain's `agentdeck-captain-decisions.md` is only
+  ever read. One record per task card, derived from the card's binding, attempt and review
+  round, never from the last row of a session's records. A session ending is not a task
+  finishing and not a review passing. Under the length budget only explanations shrink:
+  unfinished tasks, blockers, limits and open decisions are never dropped. The briefing
+  stays static; anything that changes belongs in the handoff. A `receipts --wait` that a
+  newer one replaced must leave without consuming, and a Captain command past its CLI's
+  deadline must not run.
 - The side pane browser is a sandboxed `WebContentsView` with its own partition,
   http(s) only, permissions and downloads denied. Previews are read in the main
   process with size caps; the page never gets a raw path it did not click on.
