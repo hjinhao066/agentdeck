@@ -927,6 +927,25 @@
     }
     const col = host.columns().find((c) => c.id === id);
     if (col && col.captainCrew) maybeArchive(col, entry);
+    // The no-command notice is provisional. A live working session supersedes
+    // it, including when it resumes the same instruction after a quiet gap.
+    if (entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'working')) {
+      const stale = col?.lastReceipt?.source === 'fallback';
+      if (stale) delete col.lastReceipt;
+      const task = s.tasks.findLast((t) => t.colId === id);
+      if (task?.status === 'stopped' && task.receipt?.source === 'fallback') {
+        delete task.receipt;
+        delete task.doneAt;
+        delete task.processEnded;
+        task.status = 'working'; task.endedAt = 0;
+        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+        autoBoardEvent(task, 'started', '', 'resume-fallback-' + Date.now());
+        update(task);
+      } else if (stale) {
+        if (task?.status === 'working') autoBoardEvent(task, 'started', '', 'resume-fallback-' + Date.now());
+        save();
+      }
+    }
     for (const task of s.tasks) {
       if (task.colId !== id || !['queued', 'working', 'quota', 'input', 'asking'].includes(task.status)) continue;
       if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen, col?.cmd) }); continue; }
@@ -1066,11 +1085,13 @@
       const entry = host.terms.get(c.id);
       const terminalState = entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain';
       const task = latest.get(c.id);
-      // A command receipt completes the assignment, even while the agent is
-      // finishing its response. Keep terminal activity visible separately.
+      // A receipt completes the assignment; Cursor's session can still be
+      // running tools or writing its final response after submitting it.
       const completed = task?.status === 'done' && task.receipt?.source === 'command';
+      const cursorWorking = /\bcursor-agent\b/i.test(c.cmd || '') && entry?.alive &&
+        (terminalState === 'working' || M.terminalActivity(entry.lastScreen, c.cmd) === 'working');
       return {
-        id: c.id, title: host.columnLabel(c), state: completed ? 'done' : terminalState, terminalState,
+        id: c.id, title: host.columnLabel(c), state: cursorWorking ? 'working' : completed ? 'done' : terminalState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };

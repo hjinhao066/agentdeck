@@ -45,7 +45,7 @@ process.stdin.on('data', (data) => {
     // Windows Node may retain the original stdout.rows after a PTY resize.
     // The test supplies the intended height for its tall-screen scenario.
     const rows = /\brows=(\d+)\b/.exec(text)?.[1];
-    draw(provider ? markers[provider] : lastProvider === 'cursor' ? '⠋ Thinking…\r\n⏺ Finished.' : '⏺ Finished. Working indicator removed.', rows ? Number(rows) : undefined, provider === 'cursor');
+    draw(provider ? markers[provider] : '⏺ Finished. Working indicator removed.', rows ? Number(rows) : undefined, provider === 'cursor' && !/\bno-stop\b/.test(text));
   }, 250);
 });
 draw('Status stand-in ready');

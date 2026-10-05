@@ -66,9 +66,11 @@ the middle:
   still block delivery. Ordinary `tell` and `tell --now` use this same readiness.
   Cursor's `→ Add a follow-up … ctrl+c to stop` input row is busy evidence;
   only its ready input row can end a submitted turn, including during silent
-  initialization. Its ready row also clears obsolete tool indicators above it.
+  initialization. Thinking/Waiting/Running rows anywhere on the live screen
+  override its ready row; a running turn also waits for ten seconds of quiet.
   `ledger` marks an assignment complete after its command receipt and shows a
-  separate terminal status if that agent is still running or waiting.
+  separate terminal status if that agent is still running or waiting. Cursor's
+  session status stays working while its terminal is busy, retaining the receipt.
 - **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
   one row per provider: a brand-coloured icon plus name (Claude seats show only
   the flag, with a crown on the Captain's seat), then a 5h and a 7d cell, with
@@ -159,6 +161,9 @@ skipped.
 队长 `task move` 回 doing 不自动开调度员；未归档的关联会话阻止重复自动调度。
 额度/登录/限流失败不累计连续失败；开新会话前检查所选 provider/Claude 席位额度，
 已用尽的任务排队到额度恢复，显示「额度用尽，稍后自动开」。
+会话恢复干活时，自动生成的「已结束，未提交回执」提示会从回执栏及任务卡清除；真实命令回执保留。
+Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；运行中的回合需静默至少 10 秒才判空闲。
+提交完成回执后，任务仍为完成，但 Cursor 会话只要还在运行就继续显示「干活中」。
 看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：每个项目是一个
 可折叠分组（标题栏显示未完成数和各状态数量，折叠状态会记住，可一键展开/收起全部），分组共用
 同一套状态列（待办 / 进行中 / 待验收 / 需要你，完成默认折成数量）和固定列头；卡片是标题加一行

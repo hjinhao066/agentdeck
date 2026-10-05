@@ -1027,7 +1027,7 @@
       if (v.live.textContent !== line) { v.live.textContent = line; followOutput(v); }
     }
     if (!entry.alive) { finalizeTurn(id); return; }
-    if (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(text, columnById(id)?.cmd)) return;
+    if (entry.sendingPrompt || entry.injecting || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(text, columnById(id)?.cmd)) return;
     const quiet = Date.now() - (entry.lastOutputAt || 0);
     const sawOutput = (entry.lastOutputAt || 0) - open.startedAt > 600;
     if ((entry.state === 'done' && quiet >= 2000 && sawOutput) || quiet >= 6000) finalizeTurn(id);

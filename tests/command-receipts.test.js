@@ -89,6 +89,16 @@ test('quota output is recognized for Claude, Codex, Cursor and Antigravity', () 
   assert.equal(M.terminalActivity('I will test quota exceeded handling'), '');
 });
 
+test('Cursor monthly exhaustion creates a failure receipt with its native reason, including on exit', () => {
+  const sample = fs.readFileSync(path.join(__dirname, 'fixtures/cursor-monthly-limit.txt'), 'utf8').trim();
+  assert.equal(M.terminalActivity(sample, 'cursor-agent --model grok-4.7'), 'quota');
+  const receipt = M.resourceReceipt(sample, 'cursor-agent --model grok-4.7');
+  assert.equal(receipt.source, 'quota');
+  assert.equal(receipt.failed, '额度用尽：' + sample);
+  assert.equal(M.resourceFailure(receipt.failed, 'quota'), 'quota');
+  assert.equal(M.resourceReceipt(sample + '\n→ Add a follow-up ctrl+c to stop', 'cursor-agent'), null);
+});
+
 test('internal exit reports queue durably without waiting on a quitting renderer', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-exit-cli-'));
   try {

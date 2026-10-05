@@ -1,0 +1,5 @@
+ ⠘⠣ Grepping  45.67k tokens
+    Tip: Use /config to customize Cursor settings and behavior.
+
+  1 task
+  Grok 4.7 256K High    · 32.2%  Run Everything Fast ~

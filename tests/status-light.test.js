@@ -36,6 +36,37 @@ for (const name of cursorSamples) {
   });
 }
 
+// 10-04 saved done turns: muu3iprlq3aw40, muu3gnm794q3aw,
+// mutgiolujzsm2d. Only their status/footer rows are retained.
+for (const name of ['done-thinking', 'done-grepping', 'done-running']) {
+  test(`real done Cursor snapshot: ${name} remains working with ready prompts and tall footers`, () => {
+    const screen = fs.readFileSync(path.join(__dirname, 'fixtures/cursor-live', `${name}.txt`), 'utf8');
+    for (const prompt of ['', '\n→ Add a follow-up', '\n  → Plan, search, build\n    anything']) {
+      const live = screen + '\n' + Array(20).fill('  footer').join('\n') + prompt;
+      assert.equal(MainCore.cursorActivity(live), 'working');
+      assert.equal(MainCore.terminalActivity(live, cursorCmd), 'working');
+      assert.equal(classify(live, { state: 'done', hasWorked: true, lastOutputAt: 1 }, cursorCmd), 'working');
+      assert.equal(context.terminalIdle({ cmd: cursorCmd }, { alive: true, state: 'done', lastScreen: live }), false);
+    }
+  });
+}
+
+test('Cursor waiting commands, soft-wrapped stop hints and short idle gaps never complete a running turn', () => {
+  for (const marker of ['Waiting 2m 38s for shell', 'Waiting for shell', 'Thinking', 'Working', '正在运行命令 gh run watch']) {
+    const screen = '$ gh run watch 123 --exit-status\n' + marker + '\n→ Add a follow-up';
+    assert.equal(classify(screen, { state: 'done', hasWorked: true }, cursorCmd), 'working', marker);
+  }
+  for (const hint of ['ctrl+c to\nstop', 'ctrl+\nc to stop', 'ct\nrl+c to stop']) {
+    assert.equal(classify('→ Add a follow-up ' + hint, { hasWorked: true }, cursorCmd), 'working', hint);
+  }
+  assert.equal(classify('→ Add a follow-up', { state: 'working', hasWorked: true, lastOutputAt: Date.now() - 2000 }, cursorCmd), 'working');
+  assert.equal(classify('→ Add a follow-up', { state: 'working', hasWorked: true, lastOutputAt: Date.now() - 11000 }, cursorCmd), 'done');
+  assert.equal(classify('⏺ Finished.\n• Tests passed.\n→ Add a follow-up', { hasWorked: true }, cursorCmd), 'done');
+  for (const prose of ['The docs say ctrl+c to stop.', 'Read tool metadata: AwaitShell', 'Enter to send · Esc to cancel']) {
+    assert.equal(classify(prose + '\n→ Add a follow-up', { hasWorked: true }, cursorCmd), 'done', prose);
+  }
+});
+
 const busy = [
   '◦ Working (11m 27s • esc to interrupt) · 1 background terminal',
   '✻ Contemplating… (11m 27s · esc to interrupt · ↓ 1.2k tokens)',
@@ -75,6 +106,10 @@ test('completed/idle screens exclude stale scrollback and replayed busy rows', (
   const term = terminal([busy[0], 'Done. Working status was checked.', '❯', 'Thinking: high'], 1);
   assert.equal(classify(statusScreen(term), { hasWorked: true }), 'done');
   assert.equal(classify(statusScreen(term), { hasWorked: false }), 'plain');
+  const cursor = terminal(['→ Add a follow-up ctrl+c to stop', '⏺ Finished.', '→ Add a follow-up'], 1);
+  const live = statusScreen(cursor);
+  assert.equal(MainCore.terminalActivity(live, cursorCmd), '');
+  assert.equal(classify(live, { hasWorked: true }, cursorCmd), 'done', 'historical stop hints must not hold a live idle Cursor');
   for (const separator of ['── 以上为上次会话的输出 ──',
     '── 上次输出回放，进程已结束（模型上下文将通过 CLI 恢复）──',
     '── 上次输出回放；此栏未绑定模型会话，本次将新开对话 ──']) {
@@ -103,13 +138,13 @@ test('Cursor uses the live stop hint on its input row, including wrapped multi-c
   assert.notEqual(classify('The docs say ctrl+c to stop.\n❯', { hasWorked: true }), 'working');
 });
 
-test('Cursor startup silence stays busy after submission and an idle prompt clears old tool indicators', () => {
+test('Cursor startup silence and visible activity stay busy even with a ready-looking prompt', () => {
   assert.equal(classify('', { hasWorked: true }, 'cursor-agent --model grok-4.7-high-fast'), 'working');
   assert.equal(classify('Initializing\nComposer', { hasWorked: true }, 'cursor-agent'), 'working');
   assert.equal(classify('', { hasWorked: false }, 'cursor-agent'), 'plain');
   const idle = '⠋ Thinking…\n⠰⠳ Grepping  32.91k tokens\n\n→ Add a follow-up';
-  assert.equal(MainCore.terminalActivity(idle, 'cursor-agent'), '');
-  assert.equal(classify(idle, { hasWorked: true }, 'cursor-agent'), 'done');
+  assert.equal(MainCore.terminalActivity(idle, 'cursor-agent'), 'working');
+  assert.equal(classify(idle, { hasWorked: true }, 'cursor-agent'), 'working');
   assert.equal(classify('→ Plan, search, build anything', { hasWorked: false }, 'cursor-agent'), 'plain');
   assert.equal(classify('✻ Doing…\n→ Add a follow-up', { hasWorked: true }, 'claude'), 'working');
   assert.equal(classify('Usage limit reached\n→ Add a follow-up  ctrl+c to stop', { hasWorked: true }, 'cursor-agent'), 'working');
@@ -176,8 +211,8 @@ test('a narrow Cursor screen: wrapped idle prompt reads idle, a busy one reads w
     assert.equal(classify(screen, { hasWorked: false }, cmd), 'working', row);
   }
   assert.equal(classify('  → Add a follow-up   ctrl+c to\n    stop', { hasWorked: true }, cmd), 'working');
-  // unwrapped behaviour of the accepted Cursor status work is unchanged
-  assert.equal(classify('⠋ Thinking…\n\n→ Add a follow-up', { hasWorked: true }, cmd), 'done');
+  // An unwrapped prompt cannot override an activity row either.
+  assert.equal(classify('⠋ Thinking…\n\n→ Add a follow-up', { hasWorked: true }, cmd), 'working');
 });
 
 test('Codex completed divider excludes historical busy evidence from status and delivery readiness', () => {

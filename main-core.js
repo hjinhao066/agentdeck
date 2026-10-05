@@ -582,10 +582,15 @@
   // ("→ Plan, search, build" / "    anything"): only those rows are joined to
   // the prompt, never the rest of the screen.
   const CURSOR_PROMPT = /^(?:Add a follow-up(?: — \/plan to review and build)?|Plan, search, build anything|Build anything)$/i;
-  // A live busy row: spinner glyph, "Reading…", a token counter or a stop/interrupt hint.
-  const CURSOR_BUSY = /^\s*[│┃]?\s*[◦●•✻✽✳✶✢✺∴*·⠀-⣿]+\s*\S|\b(?:Thinking|Reading|Editing|Running|Working|Grepping|Searching|Writing|Generating|Planning|Responding|Doing)(?:…|\.\.\.)|\besc to (?:interrupt|cancel)\b|\bctrl\+c to stop\b|[↑↓]\s*[\d.]+k?\s+tokens/im;
+  // Only live activity chrome: ordinary bullets and completed tool rows are
+  // not spinners. Read the entire screen, including a tall/narrow footer.
+  const CURSOR_BUSY = /^\s*[│┃]?\s*[⠀-⣿]+\s*\S|^\s*[│┃]?\s*(?:[◦●•✻✽✳✶✢✺∴*·]\s*)?(?:Thinking|Waiting|Reading|Editing|Running|Working|Grepping|Searching|Writing|Generating|Planning|Responding|Updating|Doing)(?:…|\.\.\.|\s*\(|\s+\d|\s+(?:for|on)\b|\s*$)|^\s*(?:正在运行|正在思考)[^\n]*|^\s*esc to (?:interrupt|cancel)\s*$|^\s*[│┃]?\s*(?:→[^\n]*?)?c\s*t\s*r\s*l\s*\+\s*c\s+t\s*o\s+s\s*t\s*o\s*p\b\s*[│┃]?\s*$|[↑↓]\s*[\d.]+k?\s+tokens/im;
+  const cursorBusy = (screen) => CURSOR_BUSY.test(String(screen || ''));
   function cursorActivity(screen) {
-    const lines = String(screen || '').split('\n').filter((line) => line.trim()).slice(-10);
+    // A ready-looking prompt also appears while Cursor is waiting on tools.
+    // Busy evidence always wins, even when the prompt itself is not wrapped.
+    if (cursorBusy(screen)) return 'working';
+    const lines = String(screen || '').split('\n').filter((line) => line.trim());
     for (let i = lines.length - 1; i >= 0; i--) {
       const row = /^(\s*)[│┃]?\s*→\s*(.*?)[│┃]?\s*$/.exec(lines[i]);
       if (!row) continue;
@@ -595,14 +600,10 @@
       const text = rest.join(' ').replace(/\s+/g, ' ').trim();
       if (/\bctrl\+c to stop\s*$/i.test(text)) return 'working';
       if (!CURSOR_PROMPT.test(text)) return '';
-      // a wrapped prompt is read less trustingly: any busy row on the screen wins
-      if (rest.length > 1 && lines.slice(0, i).some((line) => CURSOR_BUSY.test(line))) return '';
       return 'idle';
     }
     return '';
   }
-
-  const cursorBusy = (screen) => String(screen || '').split('\n').filter((line) => line.trim()).slice(-10).some((line) => CURSOR_BUSY.test(line));
 
   function resourceFailure(reason, source = '') {
     if (!['quota', 'process', 'automatic'].includes(source)) return '';
@@ -640,7 +641,7 @@
       if (/press up to edit queued messages/i.test(line)) queued = true;
     });
     if (quota > resumed && quota > working) return 'quota';
-    const cursor = cursorActivity(screen);
+    const cursor = /\bcursor-agent\b/i.test(cmd || '') || /^\s*[│┃]?\s*→/m.test(screen) ? cursorActivity(screen) : '';
     if (cursor === 'working') return 'working';
     if (cursor === 'idle' && /\bcursor-agent\b/i.test(cmd || '')) return '';
     if (working >= 0 || queued) return 'working';

@@ -287,6 +287,7 @@ class TaskStore {
       if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       const review = card.status === 'review';
+      if (/:fallback:/.test(card.last_event || '')) card.latest_receipt = '';
       if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
       Object.assign(card, { session_id: input.session_id, session_host: os.hostname(), session_bound_at: Date.now(), attempt_id: input.attempt_id, assignee: input.assignee,
         review_session: review, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
@@ -306,7 +307,11 @@ class TaskStore {
       const authoritative = input.type === 'complete' && input.source === 'command' && /:failed:(?:quota|process|automatic):/.test(card.last_event || '');
       if (card.flag === 'held' && !authoritative) return { card, ignored: true, notices: [] };
       const notices = [];
-      if (input.type === 'started') { card.status = card.review_session ? 'review' : 'doing'; card.flag = null; }
+      if (input.type === 'started') {
+        if (/:fallback:/.test(card.last_event || '') ||
+          (input.source?.startsWith('resume-fallback-') && /:started:/.test(card.last_event || '') && card.latest_receipt === '已结束，未提交回执')) card.latest_receipt = '';
+        card.status = card.review_session ? 'review' : 'doing'; card.flag = null;
+      }
       if (input.type === 'ask') { card.status = 'needs_user'; card.latest_receipt = sentence(text(input.message, 'question', true)); }
       if (input.type === 'fallback') { card.status = 'needs_user'; card.latest_receipt = '已结束，未提交回执'; }
       if (input.type === 'complete') {

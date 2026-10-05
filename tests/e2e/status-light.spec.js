@@ -41,7 +41,7 @@ for (const provider of ['codex', 'claude', 'agy', 'cursor']) {
       terms.get('silent-worker').term.resize(45, 80);
     });
     await expect.poll(() => page.evaluate(() => [terms.get('silent-worker').term.cols, terms.get('silent-worker').term.rows])).toEqual([45, 80]);
-    await page.evaluate((provider) => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: `busy ${provider} rows=80` }, MainSession.mainCol()), provider);
+    await page.evaluate((provider) => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: `busy ${provider} rows=80${provider === 'cursor' ? ' no-stop' : ''}` }, MainSession.mainCol()), provider);
     await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 20000 }).toBe('working');
     await expect.poll(() => page.evaluate((provider) => {
       const entry = terms.get('silent-worker');
@@ -53,7 +53,7 @@ for (const provider of ['codex', 'claude', 'agy', 'cursor']) {
     expect(before.peekId).not.toBe('silent-worker');
     await expect(page.locator('.column[data-col-id="silent-worker"]')).toHaveClass(/backstage/);
     // Longer than both status debounce and ChatUI's six-second quiet fallback.
-    await page.waitForTimeout(7500);
+    await page.waitForTimeout(provider === 'cursor' ? 11000 : 7500);
     const quiet = await page.evaluate(() => {
       const entry = terms.get('silent-worker');
       return { state: entry.state, outputAt: entry.lastOutputAt, turnDone: ChatUI.turnsOf('silent-worker').at(-1)?.done,
@@ -66,10 +66,10 @@ for (const provider of ['codex', 'claude', 'agy', 'cursor']) {
     expect(quiet.turnDone).toBe(false);
     expect(quiet.taskStatus).toBe('working');
     if (provider !== 'cursor') expect(quiet.tail).not.toMatch(/esc to interrupt|esc to cancel|Grepping/);
-    expect(quiet.live).toMatch(/esc to interrupt|esc to cancel|ctrl\+c to stop/);
+    expect(quiet.live).toMatch(provider === 'cursor' ? /Grepping/ : /esc to interrupt|esc to cancel/);
     await page.evaluate(() => window.deck.ptyInput('silent-worker', 'finish\r'));
     await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 15000 }).toBe('done');
-    await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done)).toBe(true);
+    await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done), { timeout: 15000 }).toBe(true);
     expect(await page.evaluate(() => navItems.get('silent-worker').dot.className)).toContain('done');
   });
 }
@@ -88,8 +88,8 @@ test('Cursor startup silence cannot finish a submitted turn', async () => {
       turnDone: ChatUI.turnsOf('silent-worker').at(-1)?.done,
       task: config.mainSession.tasks.at(-1)?.status }))).toEqual({ state: 'working', turnDone: false, task: 'working' });
     await page.evaluate(() => window.deck.ptyInput('silent-worker', 'finish\r'));
-    await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state)).toBe('done');
-    await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done)).toBe(true);
+    await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 15000 }).toBe('done');
+    await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done), { timeout: 15000 }).toBe(true);
   } finally {
     await page.evaluate((cmd) => { columns.find((c) => c.id === 'silent-worker').cmd = cmd; }, statusAgent);
   }
@@ -104,14 +104,15 @@ test('ordinary resource words on a worker screen do not fail its assignment or h
   expect(await page.evaluate(() => MainCore.resourceReceipt(statusScreen(terms.get('silent-worker').term)))).toBeNull();
 });
 
-test('command completion is reflected in ledger while live busy evidence still prevents automatic archive', async () => {
+test('Cursor remains working in ledger after command completion until the live terminal finishes', async () => {
   await page.evaluate(() => { columns.find((c) => c.id === 'silent-worker').cmd = 'cursor-agent --force'; });
   await page.evaluate(() => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: 'busy cursor rows=80' }, MainSession.mainCol()));
   await expect.poll(() => page.evaluate(() => MainCore.cursorActivity(statusScreen(terms.get('silent-worker').term)))).toBe('working');
   await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state)).toBe('working');
   await page.evaluate(() => MainSession.submit({ action: 'complete', result: 'stand-in assignment finished' }, columns.find((c) => c.id === 'silent-worker')));
   const ledger = await page.evaluate(() => MainSession.handle({ action: 'main-ledger' }, MainSession.mainCol()));
-  expect(ledger.result).toMatch(/silent-worker[^\n]*已完成[^\n]*终端:干活中/);
+  expect(ledger.result).toMatch(/silent-worker[^\n]*干活中/);
+  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.source)).toBe('command');
   await page.evaluate(() => {
     const entry = terms.get('silent-worker'), task = config.mainSession.tasks.at(-1);
     task.doneAt = task.sentAt = Date.now() - 20 * 60000;
@@ -124,8 +125,9 @@ test('command completion is reflected in ledger while live busy evidence still p
   });
   expect(await page.evaluate(() => columns.some((c) => c.id === 'silent-worker'))).toBe(true);
   await page.evaluate(() => window.deck.ptyInput('silent-worker', 'finish\r'));
-  await expect.poll(() => page.evaluate(() => terms.get('silent-worker')?.state)).toBe('done');
-  await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done)).toBe(true);
+  await expect.poll(() => page.evaluate(() => statusScreen(terms.get('silent-worker').term))).toContain('Finished. Working indicator removed.');
+  await expect.poll(() => page.evaluate(() => terms.get('silent-worker')?.state), { timeout: 15000 }).toBe('done');
+  await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done), { timeout: 15000 }).toBe(true);
   await page.evaluate(() => { terms.get('silent-worker').lastOutputAt = Date.now() - 20 * 60000; });
   await expect.poll(() => page.evaluate(() => (config.archived || []).some((c) => c.id === 'silent-worker'))).toBe(true);
 });

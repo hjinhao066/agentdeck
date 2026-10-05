@@ -129,6 +129,15 @@ test('screen templates, Doing and open turns cannot produce receipts; ended turn
   expect(probe.openTurn).toBe('working'); expect(probe.beforeDeadline).toBe('working'); expect(probe.doing).toBe('working'); expect(probe.classified).toBe('working');
   expect(probe.status).toBe('stopped'); expect(probe.receipt.summary).toBe('已结束，未提交回执');
   expect(probe.receipt.files).toEqual([]);
+  const resumed = await page.evaluate(() => {
+    const t = config.mainSession.tasks.at(-1);
+    MainSession.onTick('submit-worker', { ...terms.get('submit-worker'), alive: true, state: 'working',
+      lastScreen: '→ Add a follow-up ctrl+c to stop' });
+    return { status: t.status, receipt: t.receipt || null,
+      lastReceipt: columns.find((c) => c.id === 'submit-worker').lastReceipt || null,
+      pending: config.mainSession.pending.filter((p) => p.taskId === t.id && p.source === 'fallback') };
+  });
+  expect(resumed).toEqual({ status: 'working', receipt: null, lastReceipt: null, pending: [] });
   // A late command wins over the automatic no-receipt notice.
   expect((await cli(['complete', '--result', '真实结果🙂'], workerEnv())).code).toBe(0);
   expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.summary)).toBe('真实结果🙂');
