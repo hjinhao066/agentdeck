@@ -76,11 +76,10 @@ async function assertLayout() {
     }
   }
   const controls = await page.evaluate(() => [...document.querySelectorAll('.cm-controls button, .cm-return-toggle, .cm-project-toggle, .cm-more, .cm-tray-arrow, #boardViewBtn, #navCollapseBtn')].filter((n) => !n.hidden).map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, icon: !!n.querySelector('svg'), text: n.textContent.trim(), cm: n.dataset.cm || '' })));
-  // icon buttons everywhere; only the zoom readout and 适应画布 carry text (the spec asks for it)
+  // icon buttons everywhere; only the zoom readout carries text
   for (const c of controls) {
     expect(c.label).toBeTruthy(); expect(c.title).toBeTruthy();
     if (c.cm === 'reset') expect(c.text).toMatch(/^\d+%$/);
-    else if (c.cm === 'fit') { expect(c.icon).toBe(true); expect(c.text).toBe('适应画布'); }
     else { expect(c.icon).toBe(true); expect(c.text).toBe(''); }
   }
   await expect(page.locator('.cm-edges .cm-edge.return.show, .cm-edges .cm-chevron')).toHaveCount(0);

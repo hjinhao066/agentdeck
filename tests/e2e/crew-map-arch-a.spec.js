@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 架构图 A 版: one busy project on the canvas; finished projects are off the map, one with a failure waits in the bottom tray.
+// 架构图: one busy project on the canvas; finished projects are off the map, one with a failure waits in the bottom tray.
 // Real renderer, isolated userData, stand-in TUI. Screenshots when AGENTDECK_CREW_MAP_SHOTS is set.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const shots = process.env.AGENTDECK_CREW_MAP_SHOTS;
@@ -75,7 +75,7 @@ test.afterAll(async () => {
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(launch);
 
-test('night and day: the A palette, a 3-column grid, finished projects in the tray, nothing overlapping or clipped', async () => {
+test('night and day: the sky palette, the grid that shows the whole map, finished projects in the tray, nothing overlapping or clipped', async () => {
   for (const [width, height] of [[1920, 1080], [1440, 900]]) for (const theme of ['dark', 'light']) {
     await open(width, height, theme);
     await expect(page.locator('.cm-project')).toHaveCount(1);
@@ -97,10 +97,11 @@ test('night and day: the A palette, a 3-column grid, finished projects in the tr
         sock: [...document.querySelectorAll('.cm-node.st-failed:not(.kind-captain)')].map((n) => getComputedStyle(n).backgroundColor),
       };
     });
-    expect(g.canvas).toBe(theme === 'dark' ? 'rgb(12, 16, 22)' : 'rgb(246, 247, 249)');
-    expect(g.card).toBe(theme === 'dark' ? 'rgb(21, 26, 34)' : 'rgb(255, 255, 255)');
-    if (theme === 'light') expect(g.sock[0]).toBe('rgb(254, 243, 242)');
-    expect(g.cols).toBe(3);
+    expect(g.canvas).toBe(theme === 'dark' ? 'rgb(6, 8, 15)' : 'rgb(243, 245, 252)');
+    expect(g.card).toBe(theme === 'dark' ? 'rgb(22, 27, 44)' : 'rgb(255, 255, 255)');
+    if (theme === 'light') expect(g.sock[0]).toBe('rgb(255, 241, 244)');
+    // seven cards, four wide (4 + 3): three wide would be three rows and no longer show whole in these windows
+    expect(g.cols).toBe(4);
     // The whole map shows above the tray: 队长, every card and the project's frame keep the
     // fit's margin (its 8px inset + the 16px the map carries around itself) from every edge
     // of the viewport, the tray sits under it; no two cards overlapping, no text past its card
@@ -126,11 +127,12 @@ test('night and day: the A palette, a 3-column grid, finished projects in the tr
     await expect(tray.locator('.cm-chip.failed')).toContainText('hermes-quality');
     await expect(tray.locator('.cm-chip.failed .cm-chip-fail')).toHaveText('✕ 1');
     await expect(tray.locator('.cm-chip[aria-pressed="true"]')).toHaveCount(0);
-    // the controls sit on the legend row, bottom right; fit has its words
+    // the controls sit on the legend row, bottom right; 智能一页 is an icon with its name
     const box = await page.evaluate(() => { const c = document.querySelector('.cm-controls').getBoundingClientRect(), l = document.querySelector('.cm-legend').getBoundingClientRect(), v = document.querySelector('.cm-viewport').getBoundingClientRect(); return { c: [c.x, c.y, c.right, c.bottom], l: [l.x, l.y, l.right, l.bottom], vBottom: v.bottom }; });
     expect(box.c[1]).toBeGreaterThanOrEqual(box.l[1]); expect(box.c[3]).toBeLessThanOrEqual(box.l[3]); expect(box.c[2]).toBeGreaterThan(box.l[2] - 40);
     expect(box.l[1]).toBeGreaterThanOrEqual(box.vBottom);
-    await expect(page.locator('[data-cm="fit"]')).toHaveText('适应画布');
+    await expect(page.locator('[data-cm="fit"]')).toHaveAttribute('aria-label', /^智能一页/);
+    await expect(page.locator('[data-cm="fit"]')).toHaveText('');
     await shot(`arch-a-${width}x${height}-${theme}`);
   }
 });
@@ -141,7 +143,7 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
     return { vp: rect(document.querySelector('.cm-viewport')), tray: rect(document.querySelector('.cm-tray')), cap: rect(document.querySelector('.cm-node.kind-captain')), scale: CrewMap.view().scale,
       pane: rect(document.querySelector('.cm-pane')), card: Object.fromEntries([...document.querySelectorAll('.cm-node:not(.kind-captain)')].map((n) => [n.dataset.nodeId, rect(n)])) };
   });
-  // 1280x800 holds two columns: four rows at the floor, the third cut by the tray's edge.
+  // 1280x800 cannot show seven cards whole: three wide, three rows at the floor (no sideways scrolling), the last cut by the tray's edge.
   await open(1280, 800, 'dark'); await settled();
   const base = await read();
   expect(base.scale).toBeCloseTo(0.85, 5);
@@ -174,7 +176,7 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   await page.locator('[data-cm="fit"]').click();
 });
 
-test('pipes: hovering a card lights its own path; only the running lines carry moving dots', async () => {
+test('pipes: hovering a card lights its own path; only the running lines carry a moving light', async () => {
   await open(1920, 1080, 'dark');
   await settled();
   // One read per frame: a status tick can replace the wiring between two locators,
@@ -185,7 +187,8 @@ test('pipes: hovering a card lights its own path; only the running lines carry m
     const review = document.querySelector('.cm-legend .cm-edge.review');
     const pulses = document.querySelectorAll('.cm-edges .cm-pulse').length;
     const working = document.querySelectorAll('.cm-edges .cm-edge.dispatch.st-working').length;
-    return !!(pulse && failed && review && pulses === working + 1 && pulse.cap === 'round' && pulse.w >= 4 && pulse.anim === 'cm-flow' && /^0\.1/.test(pulse.array) && failed.op < 1 && failed.anim === 'none' && getComputedStyle(review).strokeDasharray !== 'none');
+    // a running line carries one short bright stretch, 14px of every 260
+    return !!(pulse && failed && review && pulses === working + 1 && pulse.cap === 'round' && pulse.w >= 3 && pulse.anim === 'cm-flow' && /^14px, 246px$/.test(pulse.array) && failed.op < 1 && failed.anim === 'none' && getComputedStyle(review).strokeDasharray !== 'none');
   })).toBe(true);
   await expect(page.locator('.cm-edges.cm-hovering')).toHaveCount(0);
   await expect.poll(async () => {
@@ -232,7 +235,7 @@ test('the tray opens a project onto the canvas, closes it again, and fits smooth
   await expect(page.locator('.cm-chip[aria-pressed="true"]')).toHaveCount(0);
 });
 
-test('live updates keep a hand-placed view; 适应画布 brings the fit back', async () => {
+test('live updates keep a hand-placed view; 智能一页 brings the fit back', async () => {
   await open(1920, 1080, 'dark');
   await settled();
   expect(await page.evaluate(() => CrewMap.userMoved())).toBe(false);

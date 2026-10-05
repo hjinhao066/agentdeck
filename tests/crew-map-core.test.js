@@ -219,8 +219,14 @@ test('saved positions win over the layout; saved state is checked on load', () =
   assert.equal(box.moved, true);
   assert.deepEqual([lay.captain.x, lay.captain.y], [5, 6]);
   const s = C.normalizeSaved({ projectPositions: {}, mode: 'canvas', positions: { a: { x: 1.4, y: 2 }, b: { x: NaN, y: 1 } }, view: { x: 1, y: 2, scale: 99 } });
-  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false });
-  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false });
+  assert.deepEqual(s, { projectPositions: {}, mode: 'canvas', positions: { a: { x: 1, y: 2 } }, view: { x: 1, y: 2, scale: C.MAX_SCALE }, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null });
+  assert.deepEqual(C.normalizeSaved(null), { projectPositions: {}, mode: 'crew', positions: {}, view: null, collapsedProjects: {}, showReturn: false, projectOrder: [], plan: null });
+  // the user's project order and the arrangement their hand-placed map stands on are kept, checked
+  const kept = C.normalizeSaved({ projectOrder: ['B', 'A', 'B', 7, 'x'.repeat(200)], plan: { lanes: [['A'], ['B', 'C']], caps: { A: 3, B: 2, C: 2.5, D: 99 }, tight: 1, junk: true } });
+  assert.deepEqual(kept.projectOrder, ['B', 'A']);
+  assert.deepEqual(kept.plan, { lanes: [['A'], ['B', 'C']], caps: { A: 3, B: 2 }, tight: true });
+  assert.equal(C.normalizeSaved({ plan: { lanes: 'A' } }).plan, null);
+  assert.equal(C.normalizeSaved({ plan: { lanes: [['A', 5]] } }).plan, null);
 });
 
 const onSpine = (s) => (s.v ? Math.abs(s.c - s.r.hub[0]) < 0.5 && s.b <= s.r.hub[1] + 0.5 : Math.abs(s.c - s.r.hub[1]) < 0.5);
@@ -336,7 +342,7 @@ test('multiple projects keep separate routes and reserve space for a busy return
 test('ten ungrouped sessions wrap into a contained grid without overlapping nodes', () => {
   const columns = Array.from({ length: 10 }, (_, i) => col('w' + i, 'worker', { state: 'working' }));
   const map = C.buildCrewMap({ captain, columns, tasks: [] });
-  const lay = C.layout(map, { maxWidth: 1100, columnsPerProject: 4 });
+  const lay = C.layout(map, { columnsPerProject: 4 });
   assert.equal(new Set([...lay.nodes.values()].map((b) => b.y)).size, 3);
   assert.ok(lay.width <= 1200);
   const boxes = [...lay.nodes.values()];
@@ -345,12 +351,18 @@ test('ten ungrouped sessions wrap into a contained grid without overlapping node
   boxes.forEach((b) => assert.ok(b.x >= g.x && b.y >= g.y + 48 && b.x + b.w <= g.x + g.w && b.y + b.h <= g.y + g.h));
 });
 
-test('project wrapping uses the tallest previous shelf and moves cards with their own group', () => {
+test('frames in one lane stand one under another, and a frame moves its own cards with it', () => {
   const columns = [col('a', 'a', { project: 'A', state: 'working' }), col('r', 'r', { project: 'A', reviews: ['a'], state: 'working' }), col('b', 'b', { project: 'B', state: 'working' })];
   const map = C.buildCrewMap({ captain, columns, tasks: [] });
-  const lay = C.layout(map, { maxWidth: 400 });
+  // with nothing said, every project has a lane of its own
+  const apart = C.layout(map);
+  assert.equal(apart.groups[0].y, apart.groups[1].y);
+  assert.ok(apart.groups[1].x >= apart.groups[0].x + apart.groups[0].w + 52);
+  assert.deepEqual(apart.groups.map((g) => g.lane), [0, 1]);
+  const lay = C.layout(map, { lanes: [['A', 'B']] });
   const [a, b] = lay.groups;
-  assert.ok(b.y > a.y + a.h);
+  assert.equal(b.y, a.y + a.h + 52, 'B sits under A, one gap below');
+  assert.equal(b.x, a.x);
   assert.ok(lay.nodes.get('b').y >= b.y + 48);
   const old = { ...lay.nodes.get('b') };
   C.translateProject(lay, 'B', 80, 30);
@@ -359,31 +371,51 @@ test('project wrapping uses the tallest previous shelf and moves cards with thei
   assert.equal(lay.nodes.get('a').project, 'A');
   const saved = C.normalizeSaved({ projectPositions: { B: { x: 80, y: 30 }, bad: { x: NaN, y: 0 } } });
   assert.deepEqual(saved.projectPositions, { B: { x: 80, y: 30 } });
-  const restored = C.applyPositions(C.layout(map, { maxWidth: 400 }), {}, 'cap', saved.projectPositions);
+  const restored = C.applyPositions(C.layout(map, { lanes: [['A', 'B']] }), {}, 'cap', saved.projectPositions);
   assert.deepEqual(restored.nodes.get('b'), lay.nodes.get('b'));
+  // a lane names a project once; a project no lane names, or one named twice, still gets exactly one frame
+  assert.deepEqual(C.layout(map, { lanes: [['B', 'B', 'nope'], ['B']] }).groups.map((g) => [g.key, g.lane]), [['B', 0], ['A', 1]]);
+  // caps: how many cards wide each project's frame is
+  const wide = C.buildCrewMap({ captain, columns: Array.from({ length: 6 }, (_, i) => col('w' + i, 'w', { project: i < 5 ? 'A' : 'B', state: 'working' })), tasks: [] });
+  const capped = C.layout(wide, { grid: true, lanes: [['A'], ['B']], caps: { A: 2 } });
+  assert.equal(new Set([...capped.nodes.values()].filter((n) => n.project === 'A').map((n) => n.x)).size, 2);
+  assert.equal(new Set([...capped.nodes.values()].filter((n) => n.project === 'A').map((n) => n.y)).size, 3);
 });
 
-test('dispatch is one bundled tree: one port, a bus per project, lower projects go round the ones above', () => {
-  const spec = { A: 4, B: 1, C: 1, D: 2 };
-  const columns = Object.entries(spec).flatMap(([p, n]) => Array.from({ length: n }, (_, i) => col(p + i, p + ' ' + i, { project: p, state: i ? 'done' : 'working' })));
-  const map = C.buildCrewMap({ captain, columns, tasks: [] });
-  // A and B on the first shelf, C and D wrapped below A
-  const lay = C.layout(map, { nodeW: 240, nodeH: 176, captainW: 340, captainH: 140, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64, maxWidth: 1500, columnsPerProject: 4 });
-  const [a, , c, d] = lay.groups;
-  assert.ok(c.y > a.y + a.h && d.y > a.y + a.h, 'C and D sit on a lower shelf');
-  const routes = C.routes(map, lay, { clusterGap: 52 });
-  const dispatch = routes.filter((r) => r.type === 'dispatch');
-  assert.equal(new Set(dispatch.map((r) => r.points[0].join())).size, 1);
-  assert.deepEqual(dispatch[0].points[0], [lay.captain.x + lay.captain.w / 2, lay.captain.y + lay.captain.h]);
-  // one feeder per project
-  ['A', 'B', 'C', 'D'].forEach((p) => assert.equal(new Set(dispatch.filter((r) => r.project === p).map((r) => r.feederX)).size, 1));
-  // no dispatch line enters a project box other than its own
+// no dispatch line enters a project frame other than its own
+function staysOutOfOtherFrames(dispatch, lay) {
   dispatch.forEach((r) => r.points.slice(1).forEach(([x2, y2], k) => {
     const [x1, y1] = r.points[k];
     lay.groups.filter((g) => g.key !== r.project).forEach((g) => assert.ok(
       !(Math.max(x1, x2) > g.x + 1 && Math.min(x1, x2) < g.x + g.w - 1 && Math.max(y1, y2) > g.y + 1 && Math.min(y1, y2) < g.y + g.h - 1),
       `${r.to} crosses ${g.key}`));
   }));
+}
+
+test('dispatch is one bundled tree: one port, a bus per project, a frame below another is reached down the gap beside its lane', () => {
+  const spec = { A: 4, B: 1, C: 1, D: 2 };
+  const columns = Object.entries(spec).flatMap(([p, n]) => Array.from({ length: n }, (_, i) => col(p + i, p + ' ' + i, { project: p, state: i ? 'done' : 'working' })));
+  const map = C.buildCrewMap({ captain, columns, tasks: [] });
+  const dims = { nodeW: 240, nodeH: 176, captainW: 340, captainH: 140, gapX: 24, clusterGap: 52, fanY: 64, gapY: 64 };
+  // A alone in the first lane; B, C and D one under another in the second
+  const lay = C.layout(map, { ...dims, lanes: [['A'], ['B', 'C', 'D']], caps: { A: 4, B: 2, C: 2, D: 2 } });
+  const [a, bb, c, d] = lay.groups;
+  assert.ok(bb.x > a.x + a.w && c.y > bb.y + bb.h && d.y > c.y + c.h && c.x === bb.x && d.x === bb.x);
+  // the lines to C and D come down the gap between the lanes, D's (the lower) farther from its own lane, and turn in above their frames
+  assert.deepEqual([...lay.feeds.keys()].sort(), ['C', 'D']);
+  const gapLeft = a.x + a.w, gapRight = bb.x;
+  for (const key of ['C', 'D']) assert.ok(lay.feeds.get(key).x > gapLeft + 8 && lay.feeds.get(key).x < gapRight - 8, key + ' runs inside the gap');
+  assert.ok(lay.feeds.get('D').x < lay.feeds.get('C').x);
+  assert.equal(lay.feeds.get('C').y, c.y - 26);
+  assert.equal(lay.feeds.get('D').y, d.y - 26);
+  const routes = C.routes(map, lay, { clusterGap: 52 });
+  const dispatch = routes.filter((r) => r.type === 'dispatch');
+  assert.equal(new Set(dispatch.map((r) => r.points[0].join())).size, 1);
+  assert.deepEqual(dispatch[0].points[0], [lay.captain.x + lay.captain.w / 2, lay.captain.y + lay.captain.h]);
+  // one feeder per project, the planned one for the frames below
+  ['A', 'B', 'C', 'D'].forEach((p) => assert.equal(new Set(dispatch.filter((r) => r.project === p).map((r) => r.feederX)).size, 1));
+  assert.equal(dispatch.find((r) => r.project === 'D').feederX, lay.feeds.get('D').x);
+  staysOutOfOtherFrames(dispatch, lay);
   assert.equal(noSharedStretch(routes), '');
   // the branch drawn per line ends where the full line ends
   dispatch.forEach((r) => assert.deepEqual(r.branch.at(-1), r.points.at(-1)));
@@ -394,6 +426,40 @@ test('dispatch is one bundled tree: one port, a bus per project, lower projects 
   if (Math.min(...xs) < s.hub[0]) assert.equal(s.left.points[1][0], Math.min(...xs));
   if (Math.max(...xs) > s.hub[0]) assert.equal(s.right.points[1][0], Math.max(...xs));
   assert.equal(C.spine([]), null);
+  // a frame dragged by hand has no planned line any more: the lines find their own way round, still outside other frames
+  C.translateProject(lay, 'D', -300, 40);
+  assert.equal(lay.feeds.size, 0);
+  staysOutOfOtherFrames(C.routes(map, lay, { clusterGap: 52 }).filter((r) => r.type === 'dispatch'), lay);
+});
+
+test('lanes on both sides of a gap share it without a line crossing or riding another; one lane alone uses its outer edge', () => {
+  const spec = { A: 2, B: 1, C: 3, D: 1, E: 2, F: 1, G: 1 };
+  const columns = Object.entries(spec).flatMap(([p, n]) => Array.from({ length: n }, (_, i) => col(p + i, p + ' ' + i, { project: p, state: 'working' })));
+  const map = C.buildCrewMap({ captain, columns, tasks: [] });
+  for (const lanes of [[['A', 'B', 'C'], ['D', 'E', 'F', 'G']], [['A', 'B'], ['C', 'D'], ['E', 'F', 'G']], [['A', 'B', 'C', 'D', 'E', 'F', 'G']], [['A'], ['B'], ['C', 'D', 'E'], ['F', 'G']]]) {
+    const lay = C.layout(map, { ...A_GRID, lanes, caps: { C: 2, E: 2 } });
+    const below = lanes.reduce((n, l) => n + l.length - 1, 0);
+    assert.equal(lay.feeds.size, below, JSON.stringify(lanes));
+    // no two frames overlap, and frames of a lane share its left edge
+    lay.groups.forEach((g, i) => lay.groups.slice(i + 1).forEach((h) => assert.ok(g.x + g.w <= h.x || h.x + h.w <= g.x || g.y + g.h <= h.y || h.y + h.h <= g.y)));
+    lanes.forEach((keys) => assert.equal(new Set(keys.map((key) => lay.groups.find((g) => g.key === key).x)).size, 1));
+    // every planned line keeps 8px or more from every frame, and no two share an x
+    const xs = [...lay.feeds.values()].map((f) => f.x);
+    assert.equal(new Set(xs).size, xs.length);
+    xs.forEach((x) => lay.groups.forEach((g) => assert.ok(x <= g.x - 8 || x >= g.x + g.w + 8, `${x} too close to ${g.key}`)));
+    const routes = C.routes(map, lay, { clusterGap: A_GRID.clusterGap, gapX: A_GRID.gapX });
+    const dispatch = routes.filter((r) => r.type === 'dispatch');
+    staysOutOfOtherFrames(dispatch, lay);
+    assert.equal(noSharedStretch(routes), '');
+    // no feeder's drop crosses another project's bus (the stretch running along the top of a frame)
+    const feeder = (p) => dispatch.find((r) => r.project === p);
+    lay.feeds.forEach((f, key) => lay.feeds.forEach((other, otherKey) => {
+      if (key === otherKey || other.y <= f.y) return;   // `other` belongs to a frame lower down: its drop passes f's turn
+      const bus = feeder(key).points.filter(([, y]) => Math.abs(y - f.y) < 0.5).map(([x]) => x);
+      assert.ok(!(other.x > Math.min(...bus) + 0.5 && other.x < Math.max(...bus) - 0.5), `${otherKey}'s line crosses ${key}'s bus`);
+    }));
+    routes.forEach((r) => r.points.forEach(([x, y]) => assert.ok(x >= 0 && x <= lay.width && y >= 0 && y <= lay.height, `${r.type}: ${x},${y} outside canvas`)));
+  }
 });
 
 test('tidy drops repeats and straight-run midpoints only', () => {
@@ -436,21 +502,21 @@ test('a project with nothing working, waiting on an answer or queued is inactive
 
 test('tray layout: only active projects (and the ones the user opened) take canvas room', () => {
   const map = trayMap();
-  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3, maxWidth: 1400 });
+  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3 });
   assert.deepEqual(lay.groups.map((g) => g.key), ['agentdeck']);
   assert.equal(lay.nodes.size, 7);
-  const opened = C.layout(map, { ...A_GRID, collapsedProjects: { 'hermes-quality': false }, columnsPerProject: 3, maxWidth: 1400 });
+  const opened = C.layout(map, { ...A_GRID, collapsedProjects: { 'hermes-quality': false }, columnsPerProject: 3 });
   assert.deepEqual(opened.groups.map((g) => g.key).sort(), ['agentdeck', 'hermes-quality']);
   assert.ok(opened.nodes.has('h0') && opened.nodes.has('h1') && !opened.nodes.has('t0'));
   // an active project the user folded stays a one-row group on the canvas, not in the tray
-  const folded = C.layout(map, { ...A_GRID, collapsedProjects: { agentdeck: true }, columnsPerProject: 3, maxWidth: 1400 });
+  const folded = C.layout(map, { ...A_GRID, collapsedProjects: { agentdeck: true }, columnsPerProject: 3 });
   assert.equal(folded.groups[0].collapsed, true);
   assert.equal(folded.nodes.size, 0);
 });
 
 test('grid layout: 3 columns on a wide window, rows share the column grid, groups centred under 队长', () => {
   const map = trayMap();
-  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3, maxWidth: 1400 });
+  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3 });
   const xs = [...lay.nodes.values()].map((b) => b.x);
   assert.equal(new Set(xs).size, 3);
   const rows = new Set([...lay.nodes.values()].map((b) => b.y));
@@ -465,14 +531,14 @@ test('grid layout: 3 columns on a wide window, rows share the column grid, group
     boxes.slice(i + 1).forEach((b) => assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y));
   });
   // 2 and 1 columns
-  assert.equal(new Set([...C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 2, maxWidth: 900 }).nodes.values()].map((b) => b.x)).size, 2);
-  assert.equal(new Set([...C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 1, maxWidth: 500 }).nodes.values()].map((b) => b.x)).size, 1);
+  assert.equal(new Set([...C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 2 }).nodes.values()].map((b) => b.x)).size, 2);
+  assert.equal(new Set([...C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 1 }).nodes.values()].map((b) => b.x)).size, 1);
 });
 
 test('grid routes: rows below the first share one channel per column, left of the cards, and reviewers use the nearest one', () => {
   const columns = [...Array.from({ length: 7 }, (_, i) => col('w' + i, 'w' + i, { project: 'P', state: 'working' })), col('rv', 'review', { project: 'P', state: 'working', reviews: ['w0', 'w1'] })];
   const map = C.buildCrewMap({ captain, columns, tasks: [] });
-  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3, maxWidth: 1400 });
+  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3 });
   const routes = C.routes(map, lay, { clusterGap: 52, gapX: 24 });
   const dispatch = routes.filter((r) => r.type === 'dispatch');
   const channel = (id) => { const pts = dispatch.find((r) => r.to === id).points; return pts[pts.length - 3][0]; };
@@ -572,4 +638,112 @@ test('a project box counts only the sessions still on the map, like 队长 box; 
   const shown = C.buildCrewMap({ captain, columns: [col('a', '干活', { project: 'p' })], archived, showArchived: true, tasks: [task('t1', 'a', 'working', 10, { project: 'p' }), task('o1', 'old1', 'failed', 1, { project: 'p' })] });
   assert.deepEqual(shown.projects[0].counts, { working: 1 });
   assert.equal(shown.nodes.length, 4);
+});
+
+// ---- arrangement: lanes planned for the window ----
+const ROOM = { nodeW: 280, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16, padX: 24, padBottom: 20, rowGap: 20, reviewGap: 40, grid: true, center: true, tray: true };
+const crewOf = (spec) => C.buildCrewMap({ captain, tasks: [], columns: Object.entries(spec).flatMap(([p, n]) => Array.from({ length: n }, (_, i) => col(p + i, p + ' ' + i, { project: p, state: 'working' }))) });
+// the bounds a plan really takes, the way the map measures them: frames and 队长 with 16px around
+function bounds(map, plan) {
+  const lay = C.layout(map, { ...ROOM, lanes: plan.lanes, caps: plan.caps });
+  const boxes = [lay.captain, ...lay.groups];
+  return { w: Math.max(...boxes.map((b) => b.x + b.w)) - Math.min(...boxes.map((b) => b.x)) + 32, h: Math.max(...boxes.map((b) => b.y + b.h)) - Math.min(...boxes.map((b) => b.y)) + 32, lay };
+}
+
+test('planLanes: project frames stand side by side, small ones stacked beside a big one, for the largest whole view', () => {
+  // the shape the user described: one project of ten sessions, then four, two, two and one
+  const map = crewOf({ agentdeck: 10, hermes: 4, music: 2, type4me: 2, vps: 1 });
+  const wide = C.planLanes(map, { w: 2284, h: 1084 }, { ...ROOM, max: 1.15 });
+  assert.equal(wide.fits, true);
+  assert.ok(wide.lanes.length >= 2, 'more than one lane across');
+  assert.deepEqual(wide.lanes.flat(), ['agentdeck', 'hermes', 'music', 'type4me', 'vps'], 'lanes keep the projects in order');
+  assert.deepEqual(wide.lanes[0], ['agentdeck'], 'the big project has a lane to itself');
+  assert.ok(wide.lanes.slice(1).some((l) => l.length > 1), 'small projects share a lane');
+  // what it promises is what the layout takes
+  const b = bounds(map, wide);
+  assert.ok(Math.abs(Math.min(2284 / b.w, 1084 / b.h) - wide.scale) < 0.02, `${wide.scale} promised, ${Math.min(2284 / b.w, 1084 / b.h)} taken`);
+  assert.ok(wide.scale >= 0.85);
+  // far better than the old way (every project full width, one under another)
+  const stacked = bounds(map, { lanes: [wide.lanes.flat()], caps: Object.fromEntries(wide.lanes.flat().map((k) => [k, 3])) });
+  assert.ok(Math.min(2284 / stacked.w, 1084 / stacked.h) < wide.scale * 0.6);
+  // no frame overlaps another and every card is inside its own frame
+  b.lay.groups.forEach((g, i) => b.lay.groups.slice(i + 1).forEach((h) => assert.ok(g.x + g.w <= h.x || h.x + h.w <= g.x || g.y + g.h <= h.y || h.y + h.h <= g.y)));
+  b.lay.nodes.forEach((n) => { const g = b.lay.groups.find((x) => x.key === n.project); assert.ok(n.x >= g.x && n.x + n.w <= g.x + g.w && n.y >= g.y && n.y + n.h <= g.y + g.h); });
+  // every project in a lane is as wide as that lane allows
+  wide.lanes.forEach((keys) => assert.equal(new Set(keys.map((k) => wide.caps[k])).size, 1));
+});
+
+test('planLanes: a small map and a window too small for the map', () => {
+  // one project, three sessions: one row
+  const one = C.planLanes(crewOf({ solo: 3 }), { w: 1172, h: 644 }, { ...ROOM, max: 1.15 });
+  assert.deepEqual([one.lanes, one.caps, one.fits], [[['solo']], { solo: 3 }, true]);
+  // ten sessions in two projects on a laptop window: side by side, whole
+  const two = C.planLanes(crewOf({ a: 6, b: 4 }), { w: 1652, h: 824 }, { ...ROOM, max: 1.15 });
+  assert.equal(two.fits, true);
+  assert.deepEqual(two.lanes, [['a'], ['b']]);
+  // too much for one page at readable size: no sideways scrolling, the shortest way down
+  const map = crewOf({ agentdeck: 10, hermes: 4, music: 2, type4me: 2, vps: 1 });
+  const small = C.planLanes(map, { w: 1172, h: 644 }, { ...ROOM, max: 1.15 });
+  assert.equal(small.fits, false);
+  const b = bounds(map, small);
+  assert.ok(b.w * 0.85 <= 1172 + 1, 'the map is no wider than the window at the smallest readable size');
+  for (const other of [{ lanes: [small.lanes.flat()], caps: Object.fromEntries(small.lanes.flat().map((k) => [k, 3])) }, { lanes: [small.lanes.flat()], caps: Object.fromEntries(small.lanes.flat().map((k) => [k, 2])) }]) {
+    const o = bounds(map, other);
+    assert.ok(o.w * 0.85 > 1172 + 1 || o.h >= b.h, 'no arrangement that fits the width is shorter');
+  }
+  // a window narrower than one card still gets a plan: one lane, one card wide
+  const tiny = C.planLanes(map, { w: 200, h: 300 }, { ...ROOM, max: 1.15 });
+  assert.deepEqual([tiny.lanes.length, [...new Set(Object.values(tiny.caps))]], [1, [1]]);
+  // nothing on the canvas
+  assert.deepEqual(C.planLanes(C.buildCrewMap({ captain, columns: [], tasks: [] }), { w: 800, h: 600 }, ROOM), { lanes: [], caps: {}, fits: true, scale: 1 });
+  // tray rules are the layout's: a folded inactive project takes no lane
+  const tray = trayMap();
+  assert.deepEqual(C.planLanes(tray, { w: 1600, h: 900 }, { ...A_GRID, collapsedProjects: {} }).lanes.flat(), ['agentdeck']);
+  assert.deepEqual(C.planLanes(tray, { w: 1600, h: 900 }, { ...A_GRID, collapsedProjects: { 'hermes-quality': false } }).lanes.flat().sort(), ['agentdeck', 'hermes-quality']);
+});
+
+test('planLanes keeps the plan in use while it is nearly as good, and follows the user\'s project order', () => {
+  const map = crewOf({ a: 6, b: 4, c: 2 });
+  const size = { w: 1652, h: 824 };
+  const best = C.planLanes(map, size, { ...ROOM, max: 1.15 });
+  assert.deepEqual([best.lanes, best.caps], [[['a'], ['b'], ['c']], { a: 2, b: 2, c: 1 }]);
+  const scaleOf = (plan) => { const b = bounds(map, plan); return Math.min(size.w / b.w, size.h / b.h); };
+  // a card more or less must not reshuffle the map: the plan in use stays while it shows the map
+  // whole and within a few percent of the best size
+  const inUse = { lanes: [['a'], ['b', 'c']], caps: { a: 2, b: 2, c: 2 } };
+  assert.ok(scaleOf(inUse) < best.scale && scaleOf(inUse) >= best.scale * 0.93, 'not the best plan, but close');
+  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, inUse).lanes, inUse.lanes);
+  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, inUse).caps, inUse.caps);
+  // a plan that would show the map larger than it is ever shown is no reason to move either
+  const roomy = { w: 3000, h: 1600 };
+  assert.deepEqual(C.planLanes(map, roomy, { ...ROOM, max: 1.15 }, inUse).lanes, inUse.lanes);
+  // a plan that no longer shows the map whole when another does is dropped
+  const poor = { lanes: [['a', 'b', 'c']], caps: { a: 1, b: 1, c: 1 } };
+  assert.ok(scaleOf(poor) < 0.85);
+  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, poor).lanes, best.lanes);
+  // a plan for other projects (one gone, one new, another order) is not kept
+  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, { lanes: [['a'], ['c', 'b']], caps: { a: 3, b: 2, c: 2 } }).lanes.flat(), ['a', 'b', 'c']);
+  // the user's order: named projects first, in that order; lanes still run through it in sequence
+  const mine = C.planLanes(map, size, { ...ROOM, max: 1.15, order: ['c', 'a'] });
+  assert.deepEqual(mine.lanes.flat(), ['c', 'a', 'b']);
+  assert.deepEqual(C.layout(map, { ...ROOM, order: ['c', 'a'], lanes: mine.lanes, caps: mine.caps }).groups.map((g) => g.key), ['c', 'a', 'b']);
+});
+
+test('orderByPlace reads the order the frames were left in: column by column, top to bottom', () => {
+  const g = (key, x, y, w = 300, h = 200) => ({ key, x, y, w, h });
+  // tidy lanes read back as they were laid out
+  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 240), g('c', 340, 0), g('d', 340, 240)]), ['a', 'b', 'c', 'd']);
+  // d dragged up beside a, a little lower and overlapping the first column by less than half: it starts a column
+  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 240), g('c', 700, 0), g('d', 330, 30)]), ['a', 'b', 'd', 'c']);
+  // c dropped roughly over the first column, between a and b
+  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 400), g('c', 40, 190), g('d', 700, 0)]), ['a', 'c', 'b', 'd']);
+  // a narrow frame under a wide one belongs to its column
+  assert.deepEqual(C.orderByPlace([g('wide', 0, 0, 900), g('narrow', 500, 240, 300), g('next', 940, 0)]), ['wide', 'narrow', 'next']);
+  assert.deepEqual(C.orderByPlace([]), []);
+  // read from a real layout, the order is the layout's own
+  const map = crewOf({ a: 3, b: 2, c: 2, d: 1 });
+  const lay = C.layout(map, { ...ROOM, lanes: [['a', 'b'], ['c', 'd']] });
+  assert.deepEqual(C.orderByPlace(lay.groups), ['a', 'b', 'c', 'd']);
+  C.translateProject(lay, 'd', -lay.groups.find((x) => x.key === 'd').x + lay.groups[0].x, -400);   // d dragged above the first lane
+  assert.deepEqual(C.orderByPlace(lay.groups), ['d', 'a', 'b', 'c']);
 });

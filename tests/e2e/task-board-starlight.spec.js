@@ -20,7 +20,7 @@ async function screenshot(name) {
   if (!shots) return;
   fs.mkdirSync(shots, { recursive: true });
   await page.evaluate(() => {
-    const at = { 'tbv-breathe': 0.5, 'tbv-flow': 0.42, 'tbv-ping': 0.2, 'tbv-twinkle': 0.6, 'tbv-twinkle-soft': 0.8, 'tbv-breathe-soft': 0.5 };
+    const at = { 'tbv-breathe': 0.5, 'tbv-flow': 0.42, 'tbv-ping': 0.2, 'sky-twinkle': 0.6, 'tbv-twinkle-soft': 0.8, 'tbv-breathe-soft': 0.5 };
     document.getAnimations().forEach((a, i) => {
       const target = a.effect && a.effect.target;
       if (!target || !document.getElementById('taskBoardView').contains(target)) return;
@@ -179,7 +179,7 @@ test('star chart: status light, dependency lines, meter, motion rules and both t
   await expect(page.locator('.tbv-head .tbv-count')).toHaveText(['9', '9', '4', '2', '14']);
 
   // the sky sits under everything, is never hit, and no part of the board blurs what is behind it
-  const sky = await page.evaluate(() => { const s = document.querySelector('.tbv-sky'), v = document.getElementById('taskBoardView');
+  const sky = await page.evaluate(() => { const s = document.querySelector('#taskBoardView .star-sky'), v = document.getElementById('taskBoardView');
     const a = s.getBoundingClientRect(), b = v.getBoundingClientRect();
     return { covers: Math.abs(a.width - b.width) < 1 && Math.abs(a.height - b.height) < 1, events: getComputedStyle(s).pointerEvents, hidden: s.getAttribute('aria-hidden'),
       blur: [...v.querySelectorAll('*')].filter((n) => getComputedStyle(n).backdropFilter !== 'none').length }; });
@@ -271,7 +271,7 @@ test('star chart: status light, dependency lines, meter, motion rules and both t
   expect(endless.length).toBeGreaterThan(0);
   for (const a of endless) expect(a.props.every((p) => p === 'transform' || p === 'opacity'), `${a.cls}${a.pseudo} animates ${a.props}`).toBe(true);
   const owners = new Set(endless.map((a) => a.name || a.cls));
-  for (const name of owners) expect(['tbv-breathe', 'tbv-flow', 'tbv-ping', 'tbv-twinkle', 'tbv-spark']).toContain(name);
+  for (const name of owners) expect(['tbv-breathe', 'tbv-flow', 'tbv-ping', 'sky-twinkle', 'tbv-spark']).toContain(name);
   // a still card has nothing running on it
   expect(await page.evaluate(() => { const n = document.querySelector('.tbv-card[data-card-id="a-docs"]'); return n.getAnimations({ subtree: true }).length; })).toBe(0);
 

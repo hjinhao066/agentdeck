@@ -4,6 +4,19 @@
 // down (派出), reviews run down from what they review (审查), results run
 // back around into 队长's side (收回). A projection only: drawing it never
 // touches a terminal; clicking a card opens that real column.
+//
+// Arrangement and view are one system with two layers:
+// - Where things stand. Untouched, the map arranges itself for the window:
+//   project frames side by side in lanes, the plan that shows everything
+//   largest (CrewMapCore.planLanes). Once the user drags a card or a frame,
+//   that plan is kept under their moves until they tidy, so a window resize
+//   never pulls the ground from under a hand-placed map.
+// - How it is seen. Untouched, the view fits the map to the window, never
+//   below FIT_MIN; once the user pans or zooms, it is theirs.
+// 一键整理 puts every frame and card back on the grid in the order the frames
+// were left in, and leaves a hand-set zoom alone. 智能一页 hands both layers
+// back: arrangement, order and zoom are worked out again for this window.
+// Either can be undone until the next move by hand.
 (function () {
   'use strict';
   const C = window.CrewMapCore;
@@ -12,12 +25,15 @@
   const GRID = { padX: 24, padBottom: 20, rowGap: 20, reviewGap: 40 };   // card grid inside a project
   // Auto-fit never shrinks below this: card body text (13px) stays at 11px or more on screen.
   // What does not fit at this scale is reached by panning (drag, wheel, trackpad).
-  const FIT_MIN = 0.85;   // card grid inside a project
+  const FIT_MIN = 0.85;
+  // A small map grows a little to fill its page, never more than this.
+  const FIT_MAX = 1.15;
+  const MOVE_MS = 280;    // frames and cards gliding to a new place (shorter than the view's own glide)
   // Spacing given up when the roomy map just misses the window at FIT_MIN and this brings all of it in.
   const TIGHT = { captainH: 92, fanY: 40, rowGap: 12, padBottom: 12 };
   const DRAG_PX = 4;
   let host = null;
-  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn, trayEl, popEl;
+  let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn, undoBtn, hintEl, trayEl, popEl;
   let mode = 'crew';
   let showArchived = false;
   let showReturn = false;
@@ -33,6 +49,10 @@
   let hoverId = null;
   let popId = null;         // the session whose detail popover is open
   let smoothT = 0;
+  let plan = null;          // the arrangement in use: { lanes, caps, tight }
+  let pageFits = true;      // the whole map shows at FIT_MIN or better in this window
+  let undo = null;          // what 一键整理 / 智能一页 replaced, until the next move by hand
+  let hintT = 0;
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -389,7 +409,7 @@
   function fit(smooth) {
     if (!lay) return;
     const bounds = fitBounds(lay), inset = FIT_INSET;
-    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, { min: FIT_MIN, max: 1 });
+    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, { min: FIT_MIN, max: FIT_MAX });
     // held at the floor and still too tall: start at the top (队长 and the first rows), not mid-map
     if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) {
       view.y = inset.top - bounds.top * view.scale;
@@ -401,29 +421,35 @@
     saveView();
   }
 
-  // Widest card grid (3 / 2 / 1 columns by window width) that still shows the
-  // map at close to the best scale this window allows.
-  function autoLayout(map) {
+  const hasManual = () => Object.keys(saved().positions).length > 0 || Object.keys(saved().projectPositions).length > 0;
+  // The layout for this render. Nothing hand-placed: the plan that shows the whole map
+  // largest in this window (the plan in use is kept while it is nearly as good). Something
+  // hand-placed: the plan those moves were made on, whatever the window is now.
+  function arrange(map) {
     const vw = vpEl.clientWidth, vh = vpEl.clientHeight;
-    const widest = vw >= 1040 ? 3 : vw >= 700 ? 2 : 1;
-    const pick = (spacing) => {
-      const base = { ...dims, ...GRID, ...spacing, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: Math.max((vw - 16) / FIT_MIN - 2 * dims.pad, dims.nodeW + 2 * GRID.padX), grid: true, center: true, tray: true };
-      const options = [];
-      for (let cols = widest; cols >= 1; cols--) {
-        const candidate = C.layout(map, { ...base, columnsPerProject: cols });
-        options.push({ candidate, scale: Math.max(0.01, Math.min(1, (vw - 16) / candidate.width, (vh - 16) / candidate.height)) });
-      }
-      const best = Math.max(...options.map((o) => o.scale));
-      // the widest grid whose scale is within 12% of the best this window allows
-      return (options.find((o) => o.scale >= best * 0.88) || options[0]).candidate;
+    const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, order: saved().projectOrder, grid: true, center: true, tray: true };
+    const build = (p) => C.layout(map, { ...base, ...(p.tight ? TIGHT : {}), lanes: p.lanes, caps: p.caps });
+    const whole = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= FIT_MIN;
+    const pinned = hasManual() ? saved().plan : null;
+    if (pinned) {
+      const l = build(pinned), keys = new Set(pinned.lanes.flat());
+      // still the same projects on the canvas: the hand-placed map keeps its ground
+      if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l); return l; }
+    }
+    const size = { w: vw - FIT_INSET.left - FIT_INSET.right, h: vh - FIT_INSET.top - FIT_INSET.bottom };
+    const pick = (tight) => {
+      const p = C.planLanes(map, size, { ...base, ...(tight ? TIGHT : {}), floor: FIT_MIN, max: FIT_MAX }, plan && !!plan.tight === tight ? plan : null);
+      const next = { lanes: p.lanes, caps: p.caps, tight };
+      return { plan: next, lay: build(next) };
     };
     // Roomy while the whole map shows at FIT_MIN or better; tight when only that brings
     // it all in; a map too tall either way stays roomy and is panned.
-    const whole = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= FIT_MIN;
-    const roomy = pick({});
-    if (whole(roomy)) return roomy;
-    const tight = pick(TIGHT);
-    return whole(tight) ? tight : roomy;
+    let chosen = pick(false);
+    pageFits = whole(chosen.lay);
+    if (!pageFits) { const tight = pick(true); if (whole(tight.lay)) { chosen = tight; pageFits = true; } }
+    plan = chosen.plan;
+    if (hasManual()) { saved().plan = plan; host.save(); }
+    return chosen.lay;
   }
   function zoomAt(cx, cy, factor) {
     const scale = Math.min(C.MAX_SCALE, Math.max(C.MIN_SCALE, view.scale * factor));
@@ -488,6 +514,9 @@
     vpEl.classList.remove('panning');
     if (!d.moved) return;
     if (d.kind === 'pan') { userView = true; saveView(); return; }
+    // a move by hand: the arrangement it was made on stays under it, and what 整理 replaced is gone
+    if (!saved().plan && plan) saved().plan = plan;
+    setUndo(null);
     if (d.kind === 'project') {
       const old = saved().projectPositions[d.group.key] || { x: 0, y: 0 };
       saved().projectPositions[d.group.key] = { x: old.x + d.dx, y: old.y + d.dy };
@@ -635,11 +664,12 @@
     returnBtn.classList.toggle('on', showReturn);
     drawTray(map);
     hoverId = null;
+    const before = opts && opts.smooth && lay && !reduceMotion() ? places() : null;
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; projectsEl.innerHTML = ''; lay = null; closePop(); return; }
     dims = { ...NODE, captainW: Math.round(captainWidth(map)) };
-    lay = C.applyPositions(autoLayout(map), saved().positions, map.captain.id, saved().projectPositions);
+    lay = C.applyPositions(arrange(map), saved().positions, map.captain.id, saved().projectPositions);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';
     drawGroups();
@@ -656,7 +686,86 @@
     }
     // fit on arrival and while the user has not moved the view; after that it stays put
     if (!view || !userView) fit(!!(opts && opts.smooth)); else applyView();
+    if (before) settle(before);
     if (popId) { fillPop(); placePop(); }
+  }
+
+  // ---- 一键整理, 智能一页, 撤销 ----
+  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Where every frame and card stands (canvas coordinates), to glide from after a redraw.
+  function places() {
+    const at = new Map();
+    if (lay.captain && lastMap.captain) at.set('node:' + lastMap.captain.id, { x: lay.captain.x, y: lay.captain.y });
+    lay.nodes.forEach((b, id) => at.set('node:' + id, { x: b.x, y: b.y }));
+    lay.groups.forEach((g) => at.set('group:' + g.key, { x: g.x, y: g.y }));
+    return at;
+  }
+  // Frames and cards glide from where they stood to where they stand now; the lines fade back in
+  // once they have landed. A card that was not on the map fades in.
+  function settle(before) {
+    const ease = 'cubic-bezier(.2, .8, .2, 1)';
+    const move = (n, key, box) => {
+      const was = before.get(key);
+      if (!was) { n.animate([{ opacity: 0 }, { opacity: 1 }], { duration: MOVE_MS, easing: 'ease-out' }); return 0; }
+      const dx = was.x - box.x, dy = was.y - box.y;
+      if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return 0;
+      n.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: MOVE_MS, easing: ease });
+      return 1;
+    };
+    let moved = 0;
+    nodesEl.querySelectorAll('.cm-node').forEach((n) => { const id = n.dataset.nodeId; moved += move(n, 'node:' + id, lay.nodes.get(id) || lay.captain); });
+    lay.groups.forEach((g) => [zonesEl.querySelector(`.cm-pane[data-project="${CSS.escape(g.key)}"]`), projectsEl.querySelector(`.cm-project[data-project="${CSS.escape(g.key)}"]`)]
+      .forEach((n) => { if (n) moved += move(n, 'group:' + g.key, g); }));
+    if (moved) edgesEl.animate([{ opacity: 0 }, { opacity: 0, offset: 0.6 }, { opacity: 1 }], { duration: MOVE_MS + 60, easing: 'ease-out' });
+  }
+  function setUndo(snap) {
+    undo = snap || null;
+    undoBtn.hidden = !undo;
+  }
+  const snapshot = () => ({ positions: { ...saved().positions }, projectPositions: { ...saved().projectPositions }, projectOrder: saved().projectOrder.slice(), plan: saved().plan, view: view && { ...view }, userView });
+  function say(text) {
+    clearTimeout(hintT);
+    hintEl.textContent = text || '';
+    hintEl.hidden = !text;
+    if (text) hintT = setTimeout(() => { hintEl.hidden = true; }, 6000);
+  }
+  // 一键整理: every frame and card back on the grid, in the order the frames stand in now.
+  // The zoom is left alone when the user has set one.
+  function tidy() {
+    if (!lay) return;
+    const snap = hasManual() ? snapshot() : null;
+    // the order the map would use by itself needs no remembering
+    const order = C.orderByPlace(lay.groups), usual = lastMap.projects.map((p) => p.key).filter((key) => order.includes(key));
+    Object.assign(saved(), { positions: {}, projectPositions: {}, plan: null, projectOrder: order.join('\u0001') === usual.join('\u0001') ? [] : order });
+    host.save();
+    render({ smooth: true });
+    setUndo(snap);
+    say('');
+  }
+  // 智能一页: arrangement, order and zoom worked out again for this window, so the whole map
+  // fills one page. When it cannot at readable size, it stays readable and says so.
+  function page() {
+    if (!lay) return;
+    const snap = hasManual() || saved().projectOrder.length || userView ? snapshot() : null;
+    Object.assign(saved(), { positions: {}, projectPositions: {}, plan: null, projectOrder: [] });
+    plan = null;
+    userView = false;
+    host.save();
+    render({ smooth: true });
+    setUndo(snap);
+    say(pageFits ? '' : `一页放不下：文字保持在最小可读大小（${Math.round(FIT_MIN * 100)}%），其余部分滚动查看`);
+  }
+  function undoArrange() {
+    const u = undo;
+    if (!u) return;
+    Object.assign(saved(), { positions: u.positions, projectPositions: u.projectPositions, projectOrder: u.projectOrder, plan: u.plan });
+    plan = u.plan;
+    userView = u.userView;
+    host.save();
+    render({ smooth: true });
+    if (u.userView && u.view) { view = { ...u.view }; glide(true); applyView(); saveView(); }
+    setUndo(null);
+    say('');
   }
 
   // Every status tick: a structural change rebuilds, the rest updates text in place.
@@ -677,7 +786,6 @@
   }
 
   function setShowArchived(v) { showArchived = !!v; render(); }
-  function relayout() { saved().positions = {}; saved().projectPositions = {}; host.save(); userView = false; render({ smooth: true }); }
 
   function setMode(next) {
     mode = next === 'canvas' ? 'canvas' : 'crew';
@@ -707,6 +815,8 @@
     zoomLabel = rootEl.querySelector('[data-cm="reset"]');
     archBtn = rootEl.querySelector('[data-cm="archived"]');
     returnBtn = rootEl.querySelector('[data-cm="return"]');
+    undoBtn = rootEl.querySelector('[data-cm="undo"]');
+    hintEl = rootEl.querySelector('.cm-hint');
     trayEl = rootEl.querySelector('.cm-tray');
     popEl = rootEl.querySelector('.cm-pop');
     returnBtn.setAttribute('aria-pressed', String(showReturn));
@@ -715,8 +825,9 @@
     on('out', () => view && zoomCenter(1 / 1.2));
     on('in', () => view && zoomCenter(1.2));
     on('reset', () => view && zoomCenter(1 / view.scale));
-    on('fit', () => { userView = false; if (lay) fit(true); });
-    on('relayout', relayout);
+    on('fit', page);
+    on('relayout', tidy);
+    on('undo', undoArrange);
     on('return', () => setShowReturn(!showReturn));
     returnBtn.classList.toggle('on', showReturn);
     rootEl.querySelectorAll('.cm-legend .cm-key').forEach((k) => k.replaceWith(icon((/st-(\w+)/.exec(k.className) || [])[1])));
@@ -733,5 +844,5 @@
     setMode(host.config.crewMap.mode);
   }
 
-  window.CrewMap = { init, render, refresh, fit, relayout, mode: () => mode, setMode, setShowArchived, setShowReturn, lastMap: () => lastMap, view: () => view && { ...view }, userMoved: () => userView, layout: () => lay };
+  window.CrewMap = { init, render, refresh, fit, relayout: tidy, tidy, page, undo: undoArrange, plan: () => plan && { lanes: plan.lanes.map((l) => l.slice()), caps: { ...plan.caps }, tight: !!plan.tight }, pageFits: () => pageFits, canUndo: () => !!undo, mode: () => mode, setMode, setShowArchived, setShowReturn, lastMap: () => lastMap, view: () => view && { ...view }, userMoved: () => userView, layout: () => lay };
 })();

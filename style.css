@@ -1857,6 +1857,73 @@ body.linking-board .board-port.out::before {
 
 body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 
+/* ===== The sky behind 终端架构图 and 任务看板 =====
+   Three washes of colour over a deep ground, star dust in three tile sizes that never line up,
+   and a dozen stars that slowly brighten and dim. It sits under everything in its view, never
+   moves with what is on it, and is painted once. By day the same layer is a pale dawn with fine
+   indigo dust. Its host is a stacking context of its own (isolation: isolate). */
+.star-sky {
+  --star-a: rgba(255, 255, 255, .62); --star-b: rgba(170, 195, 255, .55); --star-c: rgba(214, 190, 255, .5);
+  position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; contain: strict;
+  background:
+    radial-gradient(58% 46% at 6% -8%, rgba(108, 96, 255, .23), transparent 72%),
+    radial-gradient(48% 42% at 98% 0%, rgba(44, 140, 255, .14), transparent 72%),
+    radial-gradient(64% 52% at 72% 114%, rgba(168, 85, 247, .12), transparent 72%),
+    linear-gradient(180deg, #080b16 0%, #05070d 58%, #070913 100%);
+}
+:root[data-theme="light"] .star-sky {
+  --star-a: rgba(74, 92, 240, .3); --star-b: rgba(124, 77, 219, .26); --star-c: rgba(56, 132, 255, .28);
+  background:
+    radial-gradient(58% 46% at 4% -10%, rgba(128, 110, 255, .24), transparent 72%),
+    radial-gradient(48% 42% at 98% -2%, rgba(64, 176, 255, .2), transparent 72%),
+    radial-gradient(64% 52% at 76% 114%, rgba(255, 164, 112, .17), transparent 72%),
+    linear-gradient(180deg, #f8f9fe 0%, #f1f3fb 58%, #f4f3fb 100%);
+}
+.star-sky::before, .star-sky::after { content: ""; position: absolute; inset: 0; }
+.star-sky::before {
+  background-image:
+    radial-gradient(circle at 19px 27px, var(--star-a) 0 .55px, transparent 1.2px),
+    radial-gradient(circle at 71px 143px, var(--star-b) 0 .55px, transparent 1.2px),
+    radial-gradient(circle at 118px 61px, var(--star-a) 0 .5px, transparent 1.1px),
+    radial-gradient(circle at 163px 177px, var(--star-c) 0 .55px, transparent 1.2px),
+    radial-gradient(circle at 201px 96px, var(--star-a) 0 .5px, transparent 1.1px),
+    radial-gradient(circle at 47px 88px, var(--star-b) 0 .45px, transparent 1px),
+    radial-gradient(circle at 41px 201px, var(--star-a) 0 .8px, transparent 1.6px),
+    radial-gradient(circle at 129px 57px, var(--star-c) 0 .85px, transparent 1.7px),
+    radial-gradient(circle at 233px 263px, var(--star-a) 0 .8px, transparent 1.6px),
+    radial-gradient(circle at 301px 119px, var(--star-b) 0 .85px, transparent 1.7px);
+  background-size: 223px 199px, 223px 199px, 223px 199px, 223px 199px, 223px 199px, 223px 199px, 347px 311px, 347px 311px, 347px 311px, 347px 311px;
+  opacity: .78;
+}
+.star-sky::after {
+  background-image:
+    radial-gradient(circle at 97px 83px, var(--star-a) 0 1.1px, transparent 3.4px),
+    radial-gradient(circle at 421px 331px, var(--star-b) 0 1.2px, transparent 3.8px),
+    radial-gradient(circle at 263px 467px, var(--star-c) 0 1px, transparent 3.2px);
+  background-size: 613px 541px;
+}
+.star-sky i {
+  position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; opacity: .2;
+  box-shadow: 0 0 6px 1px rgba(170, 190, 255, .85);
+  animation: sky-twinkle 5.2s ease-in-out infinite alternate;
+}
+:root[data-theme="light"] .star-sky i { background: #6a7cf5; box-shadow: 0 0 5px 1px rgba(106, 124, 245, .45); }
+.star-sky i:nth-child(1) { left: 7%; top: 13%; }
+.star-sky i:nth-child(2) { left: 23%; top: 5%; animation-duration: 6.4s; animation-delay: -2.1s; }
+.star-sky i:nth-child(3) { left: 38%; top: 21%; animation-duration: 4.6s; animation-delay: -3.3s; }
+.star-sky i:nth-child(4) { left: 55%; top: 8%; width: 3px; height: 3px; animation-duration: 7.1s; animation-delay: -1.2s; }
+.star-sky i:nth-child(5) { left: 71%; top: 17%; animation-duration: 5.8s; animation-delay: -4.4s; }
+.star-sky i:nth-child(6) { left: 88%; top: 9%; animation-duration: 6.9s; animation-delay: -.6s; }
+.star-sky i:nth-child(7) { left: 14%; top: 58%; animation-duration: 7.6s; animation-delay: -2.8s; }
+.star-sky i:nth-child(8) { left: 33%; top: 79%; width: 3px; height: 3px; animation-duration: 5.5s; animation-delay: -3.9s; }
+.star-sky i:nth-child(9) { left: 49%; top: 46%; animation-duration: 6.2s; animation-delay: -5.1s; }
+.star-sky i:nth-child(10) { left: 66%; top: 68%; animation-duration: 4.9s; animation-delay: -1.7s; }
+.star-sky i:nth-child(11) { left: 81%; top: 41%; animation-duration: 7.3s; animation-delay: -3s; }
+.star-sky i:nth-child(12) { left: 94%; top: 86%; animation-duration: 5.9s; animation-delay: -4.7s; }
+@keyframes sky-twinkle { from { opacity: .12; transform: scale(.8); } to { opacity: .95; transform: scale(1.15); } }
+
+@media (prefers-reduced-motion: reduce) { .star-sky i { animation: none; opacity: .6; } }
+
 /* ===== 终端架构图 (crew map): the board view's default tab =====
    A canvas (pan / zoom / drag cards). 派出 = accent, enters a card's top;
    审查 = violet dashed, runs down; 收回 = green (red for a question or a
@@ -1882,76 +1949,80 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #boardView[data-mode="crew"] #boardNewTask { display: none !important; }
 #boardView:not([data-mode="crew"]) #crewMap { display: none !important; }
 
-/* 终端架构图 (A 版): near-black / soft-grey canvas, solid cards, thin blue wiring with a few
-   travelling dots. Whatever is running moves (spinner, dots on its line); everything else holds still.
+/* 终端架构图 (星图): the same sky as the task board, glass frames and cards, wiring that glows.
+   Whatever is running moves (its spinner, a light along its card's top edge, a light down its
+   line); everything else holds still, and all of it stops under prefers-reduced-motion.
+   No backdrop blur anywhere: the canvas pans and zooms, and a blur would repaint with it.
    Night and day share one structure; only the tokens below change. */
 #crewMap {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
-  --cm-space: #0c1016;
-  --cm-dotc: rgba(255, 255, 255, 0.045);
-  --cm-card: #151a22;
-  --cm-card-2: #121720;
-  --cm-pane: #11161d;
-  --cm-rim: #232b38;
-  --cm-rim-hi: #323d4e;
-  --cm-text: #e8ecf2;
-  --cm-text-2: #9aa4b2;
-  --cm-text-dim: #7d8696;
-  --cm-work: #f5b83d;
-  --cm-done: #3dd68c;
-  --cm-fail: #f07178;
-  --cm-fail-bg: #1e1519;
-  --cm-need: #ff9a4d;
-  --cm-wait: #8d96aa;
-  --cm-cap: #a78bfa;
-  --cm-cap-bg: #181629;
-  --cm-core: #7aa5ff;
-  --cm-wire: #4c7ef0;
-  --cm-wire-hi: #7aa5ff;
-  --cm-spark: #d6e4ff;
-  --cm-review: #b197fc;
-  --cm-btn: #4c7ef0;
-  --cm-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 20px -12px rgba(0, 0, 0, 0.6);
+  --cm-space: #06080f;
+  --cm-card: #161b2c;
+  --cm-card-2: #10141f;
+  --cm-pane: #0d111c;
+  --cm-rim: #252c45;
+  --cm-rim-hi: #3a4470;
+  --cm-text: #eef1f9;
+  --cm-text-2: #b6bed1;
+  --cm-text-dim: #838ca3;
+  --cm-work: #f7c456;
+  --cm-done: #4fdea2;
+  --cm-fail: #ff8194;
+  --cm-fail-bg: #21151f;
+  --cm-need: #ffa066;
+  --cm-wait: #909bb6;
+  --cm-cap: #b79cff;
+  --cm-cap-bg: #18152e;
+  --cm-core: #8ea2ff;
+  --cm-wire: #6480f2;
+  --cm-wire-hi: #9db0ff;
+  --cm-spark: #f1f5ff;
+  --cm-review: #bda2ff;
+  --cm-btn: #4f63ea;
+  --cm-sheen: rgba(190, 200, 255, .07);   /* the light a pane of glass catches along its top */
+  --cm-glow: 62%;                         /* how much of a colour a numeral's or a line's glow keeps (none by day) */
+  --cm-aura: 100%;                        /* strength of the coloured light around a lit card */
+  --cm-shadow: 0 12px 24px -14px rgba(0, 0, 0, 0.9);
   --cm-back: var(--cm-done);
   --cm-back-bad: var(--cm-fail);
   color: var(--cm-text);
 }
 :root[data-theme="light"] #crewMap {
-  --cm-space: #f6f7f9;
-  --cm-dotc: rgba(24, 34, 48, 0.07);
+  --cm-space: #f3f5fc;
   --cm-card: #ffffff;
   --cm-card-2: #ffffff;
   --cm-pane: #ffffff;
-  --cm-rim: #e2e6ec;
-  --cm-rim-hi: #cdd3dc;
-  --cm-text: #182230;
-  --cm-text-2: #475467;
-  --cm-text-dim: #667085;
-  --cm-work: #b54708;
-  --cm-done: #067647;
-  --cm-fail: #b42318;
-  --cm-fail-bg: #fef3f2;
-  --cm-need: #c4320a;
-  --cm-wait: #667085;
-  --cm-cap: #6941c6;
-  --cm-cap-bg: #f4f0ff;
-  --cm-core: #2563eb;
-  --cm-wire: #2563eb;
-  --cm-wire-hi: #1d4ed8;
-  --cm-spark: #0b2a8a;
+  --cm-rim: #dde1ef;
+  --cm-rim-hi: #c3cae2;
+  --cm-text: #141a2e;
+  --cm-text-2: #414a63;
+  --cm-text-dim: #636c86;
+  --cm-work: #9a5b06;
+  --cm-done: #0a7a4b;
+  --cm-fail: #c2264b;
+  --cm-fail-bg: #fff1f4;
+  --cm-need: #c2410c;
+  --cm-wait: #5d6781;
+  --cm-cap: #6a3fd2;
+  --cm-cap-bg: #f5f1ff;
+  --cm-core: #4257e6;
+  --cm-wire: #5468f0;
+  --cm-wire-hi: #3d50de;
+  --cm-spark: #1e2f9e;
   --cm-review: #7c5ce0;
-  --cm-btn: #2563eb;
-  --cm-shadow: 0 1px 2px rgba(16, 24, 40, 0.07), 0 6px 14px -8px rgba(16, 24, 40, 0.14);
+  --cm-btn: #4a5fe8;
+  --cm-sheen: rgba(255, 255, 255, .9);
+  --cm-glow: 0%;
+  --cm-aura: 60%;
+  --cm-shadow: 0 1px 2px rgba(30, 40, 90, 0.06), 0 12px 24px -16px rgba(50, 60, 140, 0.45);
 }
-/* Backdrop: flat, with a very faint dot grid. */
+/* Backdrop: the sky (.star-sky), still while the canvas pans and zooms over it. */
 .cm-viewport {
-  position: relative; flex: 1; min-height: 0; overflow: hidden; cursor: grab; touch-action: none;
+  position: relative; flex: 1; min-height: 0; overflow: hidden; cursor: grab; touch-action: none; isolation: isolate;
   background-color: var(--cm-space);
-  background-image: radial-gradient(circle at 50% 50%, var(--cm-dotc) 1px, transparent 1.5px);
-  background-size: 24px 24px;
 }
 .cm-viewport.panning { cursor: grabbing; }
-.cm-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.cm-canvas { position: absolute; left: 0; top: 0; z-index: 1; transform-origin: 0 0; will-change: transform; }
 .cm-canvas.cm-smooth { transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1); }
 .cm-zones, .cm-edges, .cm-nodes { position: absolute; inset: 0; overflow: visible; }
 .cm-edges, .cm-zones { pointer-events: none; }
@@ -1996,17 +2067,19 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 }
 .cm-pane {
   pointer-events: none;
-  background-color: hsl(var(--project-hue) 40% 55% / 0.05);
-  background-image: linear-gradient(180deg, hsl(var(--project-hue) 70% 60% / 0.08), transparent 90px);
-  border: 1px solid hsl(var(--project-hue) 38% 62% / 0.30);
+  background-color: hsl(var(--project-hue) 46% 48% / 0.075);
+  background-image: radial-gradient(72% 140px at 28% 0, hsl(var(--project-hue) 88% 66% / 0.14), transparent), linear-gradient(180deg, var(--cm-sheen), transparent 46px);
+  border: 1px solid hsl(var(--project-hue) 46% 66% / 0.32);
+  box-shadow: inset 0 1px 0 hsl(var(--project-hue) 80% 82% / 0.18), 0 30px 60px -36px rgba(0, 0, 0, 0.95);
 }
 .cm-project { pointer-events: auto; touch-action: none; cursor: grab; background: transparent; }
 :root[data-theme="light"] .cm-pane, :root[data-theme="light"] .cm-project, :root[data-theme="light"] .cm-chip { --project-color: hsl(var(--project-hue) 70% 42%); }
 :root[data-theme="light"] .cm-pane, :root[data-theme="light"] .cm-project { --cm-headbg: color-mix(in srgb, hsl(var(--project-hue) 55% 50%) 8%, var(--cm-space)); }
 :root[data-theme="light"] .cm-pane {
-  background-color: hsl(var(--project-hue) 60% 50% / 0.045);
-  background-image: linear-gradient(180deg, hsl(var(--project-hue) 70% 50% / 0.08), transparent 90px);
-  border-color: hsl(var(--project-hue) 40% 45% / 0.30);
+  background-color: hsl(var(--project-hue) 70% 52% / 0.055);
+  background-image: radial-gradient(72% 140px at 28% 0, hsl(var(--project-hue) 85% 56% / 0.12), transparent), linear-gradient(180deg, rgba(255, 255, 255, .65), transparent 46px);
+  border-color: hsl(var(--project-hue) 45% 46% / 0.30);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), 0 30px 60px -40px rgba(50, 60, 140, 0.55);
 }
 .cm-projects { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .cm-project-head { position: relative; z-index: 1; height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 10px; user-select: none; pointer-events: none; }
@@ -2026,26 +2099,27 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-project-toggle:hover { color: var(--cm-text); }
 .cm-project-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
 
-/* Wiring: thin blue; running lines are brighter and carry a few travelling dots; ended lines hold still and fade. */
+/* Wiring: blue-violet light. A line that is running is brighter, sits in a soft glow and carries
+   a short bright stretch that travels it; ended lines hold still and fade. */
 .cm-edges .cm-edge, .cm-halo, .cm-pulse, .cm-bus, .cm-hl-path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
-.cm-edge.dispatch { stroke: var(--cm-wire); stroke-width: 1.2; opacity: 0.5; }
+.cm-edge.dispatch { stroke: var(--cm-wire); stroke-width: 1.2; opacity: 0.55; }
 .cm-edge.dispatch.st-working { stroke: var(--cm-wire-hi); stroke-width: 1.8; opacity: 1; }
 .cm-edge.dispatch.st-input { stroke: var(--cm-need); stroke-width: 1.5; opacity: 0.9; }
 .cm-edge.dispatch.st-queued { stroke: var(--cm-wait); stroke-width: 1.2; stroke-dasharray: 2 6; opacity: 0.7; }
-.cm-halos { opacity: 0.12; }
-.cm-halo { stroke: var(--cm-wire-hi); stroke-width: 8; }
-.cm-halo.core { stroke-width: 11; }
-:root[data-theme="light"] .cm-halos { display: none; }
-/* a few dots of light, one lap in about six seconds */
-.cm-pulse { stroke: var(--cm-spark); stroke-width: 4; stroke-dasharray: 0.1 260; animation: cm-flow 6s linear infinite; }
-.cm-pulse.core { stroke-width: 4.5; }
-@keyframes cm-flow { to { stroke-dashoffset: -260.1; } }
-.cm-bus { stroke: var(--cm-wire); stroke-width: 1.6; opacity: 0.55; }
-.cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2; opacity: 1; }
+.cm-halos { opacity: 0.2; }
+.cm-halo { stroke: var(--cm-wire-hi); stroke-width: 9; }
+.cm-halo.core { stroke-width: 13; }
+:root[data-theme="light"] .cm-halos { opacity: 0.13; }
+/* a short stretch of light, one lap in about six seconds */
+.cm-pulse { stroke: var(--cm-spark); stroke-width: 3; stroke-dasharray: 14 246; animation: cm-flow 6s linear infinite; }
+.cm-pulse.core { stroke-width: 3.6; stroke-dasharray: 18 242; }
+@keyframes cm-flow { to { stroke-dashoffset: -260; } }
+.cm-bus { stroke: var(--cm-wire); stroke-width: 1.6; opacity: 0.6; }
+.cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2.2; opacity: 1; }
 .cm-hub { fill: var(--cm-space); stroke: var(--cm-wire); stroke-width: 1.8; }
 .cm-hub.active { fill: #fff; stroke: var(--cm-wire-hi); }
-.cm-hub-ring { fill: color-mix(in srgb, var(--cm-wire) 6%, transparent); stroke: color-mix(in srgb, var(--cm-wire) 25%, transparent); stroke-width: 1; }
-.cm-hub-ring.active { fill: color-mix(in srgb, var(--cm-wire) 14%, transparent); stroke: color-mix(in srgb, var(--cm-wire) 55%, transparent); }
+.cm-hub-ring { fill: color-mix(in srgb, var(--cm-wire) 8%, transparent); stroke: color-mix(in srgb, var(--cm-wire) 28%, transparent); stroke-width: 1; }
+.cm-hub-ring.active { fill: color-mix(in srgb, var(--cm-wire-hi) 18%, transparent); stroke: color-mix(in srgb, var(--cm-wire-hi) 60%, transparent); }
 :root[data-theme="light"] .cm-hub.active { fill: var(--cm-wire-hi); }
 .cm-joint { fill: var(--cm-wire-hi); stroke: var(--cm-space); stroke-width: 1.5; }
 .cm-socket { fill: var(--cm-wire); stroke: var(--cm-space); stroke-width: 1.5; opacity: 0.6; }
@@ -2074,28 +2148,58 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-hl-path.return { stroke: var(--cm-back); }
 :root[data-theme="light"] .cm-hl-path { stroke-width: 2.8; }
 
-/* Cards: one solid surface. Status = icon + label; running work gets an amber rim, a failure a red one. */
+/* Cards: a pane of glass on the sky. A rim brighter at the top, a light from the top edge in the
+   status colour (--st-c), a soft light around a card that needs watching. A working card's rim is
+   gold, its inner light breathes and a light travels along its top edge; a card waiting on an
+   answer is orange; a failure is red and tinted. Finished and idle cards are unlit.
+   The surface colour stays a plain background-color so its contrast with the text can be read. */
 .cm-node {
   position: absolute; z-index: 2; overflow: hidden;
   display: flex; flex-direction: column; gap: 3px; text-align: left;
   padding: 10px 14px 12px;
   width: 280px; height: 172px;
-  --st-c: var(--cm-wait);
-  background: var(--cm-card);
+  --st-c: var(--cm-wait); --lit: 0%; --rim-top: var(--cm-rim-hi);
+  background-color: var(--cm-card);
+  background-image:
+    radial-gradient(78% 64px at 50% 0, color-mix(in srgb, var(--st-c) var(--lit), transparent), transparent),
+    linear-gradient(180deg, var(--cm-sheen), transparent 38%),
+    linear-gradient(180deg, var(--rim-top), var(--cm-rim) 52%, color-mix(in srgb, var(--cm-rim) 70%, transparent));
+  background-clip: padding-box, padding-box, border-box; background-origin: border-box;
   color: var(--cm-text);
-  border: 1px solid var(--cm-rim);
-  border-radius: 12px;
+  border: 1px solid transparent;
+  border-radius: 13px;
   box-shadow: var(--cm-shadow);
   cursor: pointer; touch-action: none; user-select: none;
-  transition: border-color .15s ease, box-shadow .15s ease;
+  transition: box-shadow .15s ease;
 }
-.cm-node.st-working { --st-c: var(--cm-work); border-color: color-mix(in srgb, var(--cm-work) 70%, var(--cm-rim)); box-shadow: var(--cm-shadow), 0 0 0 1px color-mix(in srgb, var(--cm-work) 25%, transparent); }
-.cm-node.st-input { --st-c: var(--cm-need); border-color: color-mix(in srgb, var(--cm-need) 65%, var(--cm-rim)); }
-.cm-node.st-queued { border-style: dashed; border-color: var(--cm-rim-hi); }
-.cm-node.st-done, .cm-node.st-stopped { --st-c: var(--cm-done); }
-.cm-node.st-failed { --st-c: var(--cm-fail); background: var(--cm-fail-bg); border-color: color-mix(in srgb, var(--cm-fail) 65%, var(--cm-rim)); }
-.cm-node:hover { border-color: color-mix(in srgb, var(--cm-wire-hi) 70%, var(--cm-rim)); }
-.cm-node.dragging { z-index: 8; cursor: grabbing; box-shadow: 0 18px 36px -12px rgba(0, 0, 0, 0.5), 0 0 0 2px color-mix(in srgb, var(--cm-wire-hi) 45%, transparent); transition: none; }
+.cm-node.st-working {
+  --st-c: var(--cm-work); --lit: 15%; --rim-top: var(--cm-work);
+  box-shadow: var(--cm-shadow), 0 0 0 1px color-mix(in srgb, var(--cm-work) 28%, transparent), 0 0 30px -10px color-mix(in srgb, var(--cm-work) var(--cm-aura), transparent);
+}
+:root[data-theme="light"] .cm-node.st-working { --st-c: #f0a11c; --rim-top: #f0a11c; --lit: 13%; }
+.cm-node.st-input { --st-c: var(--cm-need); --lit: 13%; --rim-top: var(--cm-need); box-shadow: var(--cm-shadow), 0 0 26px -12px color-mix(in srgb, var(--cm-need) var(--cm-aura), transparent); }
+.cm-node.st-queued { background-image: none; border-style: dashed; border-color: var(--cm-rim-hi); }
+.cm-node.st-done, .cm-node.st-stopped { --st-c: var(--cm-done); --rim-top: color-mix(in srgb, var(--cm-done) 34%, var(--cm-rim-hi)); }
+.cm-node.st-failed {
+  --st-c: var(--cm-fail); --lit: 16%; --rim-top: var(--cm-fail); background-color: var(--cm-fail-bg);
+  box-shadow: var(--cm-shadow), 0 0 26px -12px color-mix(in srgb, var(--cm-fail) var(--cm-aura), transparent);
+}
+/* running work: the inner light breathes and a light travels along the top edge (opacity and transform only) */
+.cm-node.st-working:not(.kind-captain)::after {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; opacity: .15;
+  background: radial-gradient(92% 86px at 50% 0, color-mix(in srgb, var(--st-c) 22%, transparent), transparent);
+  animation: cm-breathe 3.8s ease-in-out infinite;
+}
+.cm-node.st-working:not(.kind-captain)::before {
+  content: ""; position: absolute; top: 0; left: 0; width: 34%; height: 2px; pointer-events: none;
+  background: linear-gradient(90deg, transparent, #fff6d8 50%, transparent); transform: translateX(-110%);
+  animation: cm-edge-flow 3.4s cubic-bezier(.45, 0, .55, 1) infinite;
+}
+@keyframes cm-breathe { 0%, 100% { opacity: .12; } 50% { opacity: 1; } }
+@keyframes cm-edge-flow { to { transform: translateX(305%); } }
+.cm-node.archived::before, .cm-node.archived::after { display: none; }
+.cm-node:hover { --rim-top: var(--cm-wire-hi); box-shadow: var(--cm-shadow), 0 0 0 1px color-mix(in srgb, var(--cm-wire-hi) 55%, transparent), 0 0 26px -12px var(--cm-wire-hi); }
+.cm-node.dragging { z-index: 8; cursor: grabbing; box-shadow: 0 18px 36px -12px rgba(0, 0, 0, 0.6), 0 0 0 2px color-mix(in srgb, var(--cm-wire-hi) 50%, transparent); transition: none; }
 .cm-node:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
 .cm-node.review { border-left: 3px solid var(--cm-review); }
 
@@ -2105,15 +2209,21 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   display: grid; grid-template-columns: 52px auto 1fr; grid-template-rows: 24px 40px; column-gap: 14px; row-gap: 8px;
   align-content: center; align-items: center;
   padding: 0 20px 0 18px;
-  background: var(--cm-cap-bg);
-  border: 1.5px solid color-mix(in srgb, var(--cm-cap) 70%, transparent); border-radius: 18px;
-  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 10%, transparent), 0 10px 26px -14px rgba(0, 0, 0, 0.6);
+  background-color: var(--cm-cap-bg);
+  background-image:
+    radial-gradient(60% 120% at 0 0, color-mix(in srgb, var(--cm-cap) 26%, transparent), transparent 70%),
+    radial-gradient(50% 120% at 100% 100%, color-mix(in srgb, var(--cm-wire-hi) 16%, transparent), transparent 70%),
+    linear-gradient(180deg, var(--cm-sheen), transparent 46%);
+  background-clip: padding-box; background-origin: padding-box;
+  border: 1.5px solid color-mix(in srgb, var(--cm-cap) 74%, transparent); border-radius: 18px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 11%, transparent), 0 0 44px -12px color-mix(in srgb, var(--cm-cap) var(--cm-aura), transparent), 0 14px 30px -16px rgba(0, 0, 0, 0.8);
 }
-:root[data-theme="light"] .cm-node.kind-captain { box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 8%, transparent), 0 8px 20px -12px rgba(105, 65, 198, 0.35); }
+:root[data-theme="light"] .cm-node.kind-captain { box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 9%, transparent), 0 0 44px -14px color-mix(in srgb, var(--cm-cap) 45%, transparent), 0 12px 26px -14px rgba(105, 65, 198, 0.4); }
 .cm-node.kind-captain:hover { border-color: var(--cm-cap); }
 .cm-crest {
   grid-row: 1 / 3; grid-column: 1; width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; color: #fff;
-  background: linear-gradient(140deg, #8b7cf6, #6d5be0);
+  background: linear-gradient(140deg, #9b8cff, #6a56e4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35), 0 0 22px -4px color-mix(in srgb, var(--cm-cap) var(--cm-glow), transparent);
 }
 .cm-crest svg { width: 26px; height: 26px; }
 .cm-node.kind-captain .cm-title {
@@ -2134,7 +2244,12 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   background: color-mix(in srgb, var(--cm-text) 5%, transparent); border: 1px solid var(--cm-rim);
 }
 .cm-node.kind-captain .cm-count .cm-ico { width: 17px; height: 17px; }
-.cm-node.kind-captain .cm-count b { font-size: 22px; line-height: 1; letter-spacing: -0.02em; }
+.cm-node.kind-captain .cm-count { --n: var(--cm-text); }
+.cm-node.kind-captain .cm-count.st-working { --n: var(--cm-work); }
+.cm-node.kind-captain .cm-count.st-input { --n: var(--cm-need); }
+.cm-node.kind-captain .cm-count.st-failed { --n: var(--cm-fail); }
+.cm-node.kind-captain .cm-count.st-done { --n: var(--cm-done); }
+.cm-node.kind-captain .cm-count b { font-size: 22px; line-height: 1; letter-spacing: -0.02em; text-shadow: 0 0 14px color-mix(in srgb, var(--n) var(--cm-glow), transparent); }
 .cm-node.kind-captain .cm-count.st-working { background: color-mix(in srgb, var(--cm-work) 11%, transparent); border-color: color-mix(in srgb, var(--cm-work) 32%, transparent); color: var(--cm-text); }
 .cm-node.kind-captain .cm-count.st-working b { color: var(--cm-work); }
 .cm-node.kind-captain .cm-count.st-input { background: color-mix(in srgb, var(--cm-need) 12%, transparent); border-color: color-mix(in srgb, var(--cm-need) 36%, transparent); color: var(--cm-text); }
@@ -2144,7 +2259,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-node.kind-captain .cm-count.st-done b { color: var(--cm-done); }
 
 .cm-node.kind-waiting { background: transparent; box-shadow: none; }
-.cm-node.archived { opacity: 0.5; border-style: dashed; box-shadow: none; }
+.cm-node.archived { opacity: 0.5; border-style: dashed; border-color: var(--cm-rim-hi); background-image: none; box-shadow: none; }
 .cm-node.archived:hover { opacity: 0.9; }
 .cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; height: 20px; padding-right: 34px; }
 .cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12.5px; font-weight: 600; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; height: 20px; }
@@ -2200,7 +2315,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-fold:hover { color: var(--cm-text); border-color: var(--cm-core); }
 .cm-fold:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
 .cm-empty {
-  position: absolute; left: 40px; top: 32px; max-width: 460px;
+  position: absolute; z-index: 1; left: 40px; top: 32px; max-width: 460px;
   display: flex; flex-direction: column; gap: 6px; color: var(--cm-text-dim); font-size: 13px; line-height: 1.5;
 }
 .cm-empty strong { color: var(--cm-text); font-size: 15px; }
@@ -2293,12 +2408,21 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-controls button.on { background: color-mix(in srgb, var(--cm-core) 18%, transparent); color: var(--cm-text); }
 .cm-controls button[hidden] { display: none; }
 .cm-controls .cm-zoom { min-width: 52px; font-family: var(--mono); color: var(--cm-text); }
-.cm-controls .cm-fit { padding: 0 12px 0 10px; font-weight: 550; color: var(--cm-text); }
+.cm-controls .cm-fit { color: var(--cm-wire-hi); background: color-mix(in srgb, var(--cm-wire-hi) 13%, transparent); }
+.cm-controls .cm-fit:hover { background: color-mix(in srgb, var(--cm-wire-hi) 24%, transparent); color: var(--cm-text); }
+.cm-controls [data-cm="undo"] { color: var(--cm-work); }
+/* A word from the map itself (智能一页 that cannot fit a page): bottom centre of the canvas, gone in a few seconds. */
+.cm-hint {
+  position: absolute; z-index: 11; left: 50%; bottom: 14px; transform: translateX(-50%); max-width: calc(100% - 32px);
+  padding: 8px 14px; border: 1px solid var(--cm-rim-hi); border-radius: 12px; background: var(--cm-pane); color: var(--cm-text);
+  font-size: 12.5px; line-height: 1.5; text-align: center; box-shadow: 0 14px 30px -14px rgba(0, 0, 0, 0.7); pointer-events: none;
+}
 .cm-sep { width: 1px; height: 18px; margin: 0 3px; background: var(--cm-rim-hi); }
 @media (max-width: 1100px) { .cm-legend-keys > span:nth-child(-n+5) { display: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .cm-pulse, .cm-edge.review, #crewMap .cm-ico svg, #crewMap .cm-ico::after { animation: none; }
-  .cm-pulse, #crewMap .cm-ico::after { display: none; }
+  .cm-pulse, .cm-edge.review, #crewMap .cm-ico svg, #crewMap .cm-ico::after, #crewMap .cm-node::before, #crewMap .cm-node::after { animation: none; }
+  .cm-pulse, #crewMap .cm-ico::after, #crewMap .cm-node.st-working::before { display: none; }
+  #crewMap .cm-node.st-working::after { opacity: .7; }
   .cm-node, .cm-canvas.cm-smooth, .cm-tray-arrow svg { transition: none; }
 }
 /* Claude seats: account switching stays local to the Captain. */
@@ -2373,7 +2497,6 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   --tbv-glow: 62%;      /* how much of a colour a numeral's glow keeps (none by day) */
   --tbv-halo: 100%;     /* strength of the coloured light around a lit card */
   --tbv-cta: linear-gradient(135deg, #4f63ea, #7d54e2); --tbv-cta-ink: #fff;
-  --tbv-star-a: rgba(255, 255, 255, .62); --tbv-star-b: rgba(170, 195, 255, .55); --tbv-star-c: rgba(214, 190, 255, .5);
   /* the app's own tokens, so shared pieces (view tabs, icon buttons, badges) follow the sky */
   --app-bg: var(--tbv-sky); --card: #0d101b; --elev: #1a2034; --card-head: transparent;
   --text: var(--tbv-ink); --text-2: var(--tbv-ink-2); --muted: var(--tbv-ink-3);
@@ -2398,74 +2521,12 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   --tbv-doing-lit: #f0a11c; --tbv-review-lit: #8b5cf6; --tbv-need-lit: #f97316; --tbv-fail-lit: #ee4468; --tbv-done-lit: #12b76a;
   --tbv-glow: 0%; --tbv-halo: 62%;
   --tbv-cta: linear-gradient(135deg, #4a5fe8, #7446da);
-  --tbv-star-a: rgba(74, 92, 240, .3); --tbv-star-b: rgba(124, 77, 219, .26); --tbv-star-c: rgba(56, 132, 255, .28);
   --card: #fff; --elev: #fff;
   --icon: #5d6781; --icon-hover-bg: rgba(52, 64, 130, .09);
   --accent: #4257e6; --accent-soft: rgba(66, 87, 230, .22);
 }
 #taskBoardView[hidden] { display: none; }
 #taskBoardView:focus { outline: none; }
-
-/* The sky: three washes of colour over a deep ground, star dust in three tile sizes that never
-   line up, and a dozen stars that slowly brighten and dim. It sits under everything and is
-   painted once. By day the same layer is a pale dawn with fine indigo dust. */
-.tbv-sky {
-  position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; contain: strict;
-  background:
-    radial-gradient(58% 46% at 6% -8%, rgba(108, 96, 255, .23), transparent 72%),
-    radial-gradient(48% 42% at 98% 0%, rgba(44, 140, 255, .14), transparent 72%),
-    radial-gradient(64% 52% at 72% 114%, rgba(168, 85, 247, .12), transparent 72%),
-    linear-gradient(180deg, #080b16 0%, #05070d 58%, #070913 100%);
-}
-:root[data-theme="light"] .tbv-sky {
-  background:
-    radial-gradient(58% 46% at 4% -10%, rgba(128, 110, 255, .24), transparent 72%),
-    radial-gradient(48% 42% at 98% -2%, rgba(64, 176, 255, .2), transparent 72%),
-    radial-gradient(64% 52% at 76% 114%, rgba(255, 164, 112, .17), transparent 72%),
-    linear-gradient(180deg, #f8f9fe 0%, #f1f3fb 58%, #f4f3fb 100%);
-}
-.tbv-sky::before, .tbv-sky::after { content: ""; position: absolute; inset: 0; }
-.tbv-sky::before {
-  background-image:
-    radial-gradient(circle at 19px 27px, var(--tbv-star-a) 0 .55px, transparent 1.2px),
-    radial-gradient(circle at 71px 143px, var(--tbv-star-b) 0 .55px, transparent 1.2px),
-    radial-gradient(circle at 118px 61px, var(--tbv-star-a) 0 .5px, transparent 1.1px),
-    radial-gradient(circle at 163px 177px, var(--tbv-star-c) 0 .55px, transparent 1.2px),
-    radial-gradient(circle at 201px 96px, var(--tbv-star-a) 0 .5px, transparent 1.1px),
-    radial-gradient(circle at 47px 88px, var(--tbv-star-b) 0 .45px, transparent 1px),
-    radial-gradient(circle at 41px 201px, var(--tbv-star-a) 0 .8px, transparent 1.6px),
-    radial-gradient(circle at 129px 57px, var(--tbv-star-c) 0 .85px, transparent 1.7px),
-    radial-gradient(circle at 233px 263px, var(--tbv-star-a) 0 .8px, transparent 1.6px),
-    radial-gradient(circle at 301px 119px, var(--tbv-star-b) 0 .85px, transparent 1.7px);
-  background-size: 223px 199px, 223px 199px, 223px 199px, 223px 199px, 223px 199px, 223px 199px, 347px 311px, 347px 311px, 347px 311px, 347px 311px;
-  opacity: .78;
-}
-.tbv-sky::after {
-  background-image:
-    radial-gradient(circle at 97px 83px, var(--tbv-star-a) 0 1.1px, transparent 3.4px),
-    radial-gradient(circle at 421px 331px, var(--tbv-star-b) 0 1.2px, transparent 3.8px),
-    radial-gradient(circle at 263px 467px, var(--tbv-star-c) 0 1px, transparent 3.2px);
-  background-size: 613px 541px;
-}
-.tbv-sky i {
-  position: absolute; width: 2px; height: 2px; border-radius: 50%; background: #fff; opacity: .2;
-  box-shadow: 0 0 6px 1px rgba(170, 190, 255, .85);
-  animation: tbv-twinkle 5.2s ease-in-out infinite alternate;
-}
-:root[data-theme="light"] .tbv-sky i { background: #6a7cf5; box-shadow: 0 0 5px 1px rgba(106, 124, 245, .45); }
-.tbv-sky i:nth-child(1) { left: 7%; top: 13%; }
-.tbv-sky i:nth-child(2) { left: 23%; top: 5%; animation-duration: 6.4s; animation-delay: -2.1s; }
-.tbv-sky i:nth-child(3) { left: 38%; top: 21%; animation-duration: 4.6s; animation-delay: -3.3s; }
-.tbv-sky i:nth-child(4) { left: 55%; top: 8%; width: 3px; height: 3px; animation-duration: 7.1s; animation-delay: -1.2s; }
-.tbv-sky i:nth-child(5) { left: 71%; top: 17%; animation-duration: 5.8s; animation-delay: -4.4s; }
-.tbv-sky i:nth-child(6) { left: 88%; top: 9%; animation-duration: 6.9s; animation-delay: -.6s; }
-.tbv-sky i:nth-child(7) { left: 14%; top: 58%; animation-duration: 7.6s; animation-delay: -2.8s; }
-.tbv-sky i:nth-child(8) { left: 33%; top: 79%; width: 3px; height: 3px; animation-duration: 5.5s; animation-delay: -3.9s; }
-.tbv-sky i:nth-child(9) { left: 49%; top: 46%; animation-duration: 6.2s; animation-delay: -5.1s; }
-.tbv-sky i:nth-child(10) { left: 66%; top: 68%; animation-duration: 4.9s; animation-delay: -1.7s; }
-.tbv-sky i:nth-child(11) { left: 81%; top: 41%; animation-duration: 7.3s; animation-delay: -3s; }
-.tbv-sky i:nth-child(12) { left: 94%; top: 86%; animation-duration: 5.9s; animation-delay: -4.7s; }
-@keyframes tbv-twinkle { from { opacity: .12; transform: scale(.8); } to { opacity: .95; transform: scale(1.15); } }
 
 /* Toolbar: the title, how far the shown cards are, the view tabs. */
 #taskBoardView .board-toolbar { background: transparent; border-bottom-color: var(--tbv-line); }
@@ -2986,7 +3047,6 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
   #taskBoardView *, #taskBoardView *::before, #taskBoardView *::after { animation: none !important; transition: none !important; }
   .tbv-flow, .tbv-spark, .tbv-beacon::after, .tbv-state.working::after, .tbv-alert-dot::after { display: none; }
   .tbv-card[data-run="working"]::after { opacity: .7; }
-  .tbv-sky i { opacity: .6; }
 }
 
 .mobile-web-access label { display: block; margin: 10px 0 6px; font-size: 12px; }
