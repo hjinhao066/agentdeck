@@ -192,10 +192,25 @@ test('unsent composer text is preserved and blocks rotation', async () => {
   await expect(composer).toHaveValue('half written instruction');
 });
 test('quota banner switches once and preserves the interrupted Captain turn', async () => {
+  // The banner only offers a seat whose account-bound quota is known, not a
+  // logged-in placeholder with unknown availability. Match the Relay fixture.
+  await page.evaluate(async () => {
+    const info = (await ClaudeSeats.refresh()).find((seat) => seat.id === 'us'), now = Date.now();
+    const configDir = config.claudeSeats.find((seat) => seat.id === 'us').configDir;
+    config.quotas['Claude:us'] = { scope: 'claude', configDir, accountKey: info.accountKey,
+      credentialKey: info.credentialKey, sample: {
+        provider: 'Claude', scope: 'claude', accountBound: true, accountKey: info.accountKey, seatId: 'us',
+        configDir, credentialKey: info.credentialKey, at: now,
+        windows: [{ key: 'fiveHour', remaining: 80, resetAt: now + 3600000 },
+          { key: 'weekly', remaining: 60, resetAt: now + 4 * 86400000 }],
+      } };
+    flushConfig();
+  });
   await page.evaluate((id) => sendWhenReady(columns.find((c) => c.id === id), 'wait for quota', { guardUserInput: true }), cn);
   const banner = page.locator(`.column[data-col-id="${cn}"] .seat-quota-banner`);
   await expect(banner).toContainText('CN额度用尽', { timeout: 20000 });
   await screenshot('quota-relay');
+  await expect(banner.locator('button.quota-seat-action')).toBeEnabled();
   await banner.locator('button.quota-seat-action').click();
   await expect.poll(() => page.evaluate(() => config.activeClaudeSeatId)).toBe('us');
   const retired = JSON.parse(fs.readFileSync(path.join(profile, 'chats', cn + '.json')));
