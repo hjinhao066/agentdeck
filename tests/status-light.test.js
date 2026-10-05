@@ -38,11 +38,13 @@ for (const name of cursorSamples) {
 
 // 10-04 saved done turns: muu3iprlq3aw40, muu3gnm794q3aw,
 // mutgiolujzsm2d. Only their status/footer rows are retained.
+// The spinner stays in the band above the prompt; a tall footer sits below it.
 for (const name of ['done-thinking', 'done-grepping', 'done-running']) {
   test(`real done Cursor snapshot: ${name} remains working with ready prompts and tall footers`, () => {
     const screen = fs.readFileSync(path.join(__dirname, 'fixtures/cursor-live', `${name}.txt`), 'utf8');
+    const body = 'Working on the parser.\nSearching for the call site.\nReading 3 files.\n';
     for (const prompt of ['', '\n→ Add a follow-up', '\n  → Plan, search, build\n    anything']) {
-      const live = screen + '\n' + Array(20).fill('  footer').join('\n') + prompt;
+      const live = body + screen + prompt + (prompt ? '\n' + Array(20).fill('  footer').join('\n') : '');
       assert.equal(MainCore.cursorActivity(live), 'working');
       assert.equal(MainCore.terminalActivity(live, cursorCmd), 'working');
       assert.equal(classify(live, { state: 'done', hasWorked: true, lastOutputAt: 1 }, cursorCmd), 'working');
@@ -51,8 +53,42 @@ for (const name of ['done-thinking', 'done-grepping', 'done-running']) {
   });
 }
 
+test('Cursor reply prose above an idle prompt is finished once the quiet grace ends', () => {
+  const prose = [
+    'Working on the status detector.',
+    'Searching for cursorActivity in main-core.js',
+    'Reading 3 files showed the spinner.',
+    'Waiting for the test run to finish.',
+    'Thinking… the three cases are covered.',
+    'Planning',
+    '• Working on the parser',
+    'Running 12 tests next.',
+  ].join('\n');
+  const screen = prose + '\n→ Add a follow-up';
+  assert.equal(MainCore.cursorBusy(screen), false);
+  assert.equal(MainCore.cursorActivity(screen), 'idle');
+  assert.equal(MainCore.terminalActivity(screen, cursorCmd), '');
+  assert.equal(classify(screen, { state: 'done', hasWorked: true, lastOutputAt: 1 }, cursorCmd), 'done');
+  assert.equal(classify(screen, { state: 'working', hasWorked: true, lastOutputAt: Date.now() - 11000 }, cursorCmd), 'done');
+  assert.equal(classify(screen, { state: 'working', hasWorked: true, lastOutputAt: Date.now() - 2000 }, cursorCmd), 'working');
+  const stale = '  ⠠⠛ Running  94.91k tokens\n' + Array(30).fill('The reply continues.').join('\n') + '\n→ Add a follow-up';
+  assert.equal(MainCore.cursorActivity(stale), 'idle');
+  assert.equal(classify(stale, { state: 'working', hasWorked: true, lastOutputAt: Date.now() - 11000 }, cursorCmd), 'done');
+});
+
+test('Claude, Codex and agy status ignores Cursor reply wording', () => {
+  const prose = 'Working on the fix.\nSearching for the call site.\nReading 3 files.\n';
+  assert.equal(classify(prose + '✻ Doing…\n→ Add a follow-up', { hasWorked: true }, 'claude'), 'working');
+  assert.equal(classify(prose + '❯\nClaude Code', { hasWorked: true, lastOutputAt: 1 }, 'claude'), 'done');
+  assert.equal(classify(prose + '→ see the note\n❯\nClaude Code', { hasWorked: true, lastOutputAt: 1 }, 'claude'), 'done');
+  assert.equal(classify(prose + '\n' + codexIdle, { state: 'working', hasWorked: true }, 'codex'), 'done');
+  assert.equal(classify(codexIdle + '\n' + '◦ Working (11m 27s • esc to interrupt) · 1 background terminal', { hasWorked: true }, 'codex'), 'working');
+  assert.equal(classify(prose + 'Searching… (11m 27s · esc to cancel)\n❯', { hasWorked: true }, 'agy'), 'working');
+  assert.equal(classify(prose + '❯\nAntigravity', { hasWorked: true, lastOutputAt: 1 }, 'agy'), 'done');
+});
+
 test('Cursor waiting commands, soft-wrapped stop hints and short idle gaps never complete a running turn', () => {
-  for (const marker of ['Waiting 2m 38s for shell', 'Waiting for shell', 'Thinking', 'Working', '正在运行命令 gh run watch']) {
+  for (const marker of ['Waiting 2m 38s for shell', 'Waiting for shell', '  ⠀⠞ Thinking  27.62k tokens', '  ⠠⠛ Working  3k tokens', '正在运行命令 gh run watch']) {
     const screen = '$ gh run watch 123 --exit-status\n' + marker + '\n→ Add a follow-up';
     assert.equal(classify(screen, { state: 'done', hasWorked: true }, cursorCmd), 'working', marker);
   }
@@ -205,7 +241,7 @@ test('a narrow Cursor screen: wrapped idle prompt reads idle, a busy one reads w
   const cmd = 'cursor-agent --force --model claude-opus-5-5-high';
   assert.equal(classify(wrapped.join('\n'), { hasWorked: false }, cmd), 'plain');
   assert.equal(classify(wrapped.join('\n'), { hasWorked: true }, cmd), 'done');
-  for (const row of ['  ⠋ Reading…', '  ⠰⠳ Grepping  32.91k tokens', '  Running…', '  Editing...']) {
+  for (const row of ['  ⠋ Reading…', '  ⠰⠳ Grepping  32.91k tokens', '  ⠠⠛ Running  94.91k tokens', '  ⠋ Editing...']) {
     const screen = [row, ...wrapped].join('\n');
     assert.equal(classify(screen, { hasWorked: true }, cmd), 'working', row);
     assert.equal(classify(screen, { hasWorked: false }, cmd), 'working', row);

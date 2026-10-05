@@ -12,9 +12,17 @@ const markers = {
 let lastProvider = '';
 function draw(marker, rows = process.stdout.rows || 24, cursorBusy = false) {
   const bottom = Math.max(8, rows - 4);
-  process.stdout.write('\x1b[2J\x1b[H' + marker + '\r\n');
   const prompt = lastProvider === 'cursor' ? '→ Add a follow-up' + (cursorBusy ? '              ctrl+c to stop' : '') : '❯';
-  process.stdout.write(`\x1b[${bottom};1H` + '─'.repeat(30) + '\r\n' + prompt + '\r\n' + '─'.repeat(30) + '\r\n' + (lastProvider === 'cursor' ? 'Composer' : 'Claude Code'));
+  // Cursor paints its spinner in the status band, just above the prompt.
+  // Claude/Codex/agy keep a busy row at the top so a tall viewport still counts.
+  if (lastProvider === 'cursor') {
+    process.stdout.write('\x1b[2J\x1b[H');
+    process.stdout.write(`\x1b[${bottom - 1};1H` + marker);
+    process.stdout.write(`\x1b[${bottom};1H` + '─'.repeat(30) + '\r\n' + prompt + '\r\n' + '─'.repeat(30) + '\r\nComposer');
+    return;
+  }
+  process.stdout.write('\x1b[2J\x1b[H' + marker + '\r\n');
+  process.stdout.write(`\x1b[${bottom};1H` + '─'.repeat(30) + '\r\n' + prompt + '\r\n' + '─'.repeat(30) + '\r\nClaude Code');
 }
 let incoming = '', pasted = '', lines = [], timer;
 process.stdin.on('data', (data) => {
