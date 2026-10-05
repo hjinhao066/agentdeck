@@ -45,7 +45,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .icon-button:disabled { opacity: .4; }
 .refreshing svg { animation: rotate 1s linear infinite; }
 
-.app-header { flex: none; display: flex; align-items: center; gap: 2px; min-height: 52px; padding: env(safe-area-inset-top) 4px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+.app-header { flex: none; display: flex; align-items: center; gap: 2px; min-height: 44px; padding: env(safe-area-inset-top) 2px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
 .title-block { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0 4px; }
 .title-text { flex: 0 1 auto; }
 /* 44px tall for the finger; the visible pill is the small label inside. */
@@ -86,7 +86,7 @@ h1, h2, h3, h4, p { margin: 0; }
 /* Conversation */
 /* Positioned, so the visually hidden labels scroll inside it instead of
    stretching the shell (a scrollable shell lets focus shift the drawer). */
-.conversation { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 16px 16px 8px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+.conversation { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 10px 16px 6px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
 .conversation > :first-child { margin-top: auto; }
 .captain-turn { display: flex; flex-direction: column; }
 .captain-turn + .captain-turn { margin-top: 20px; }
@@ -143,8 +143,8 @@ h1, h2, h3, h4, p { margin: 0; }
 .output { flex: 1; min-height: 0; margin: 0; overflow: auto; overscroll-behavior: contain; padding: 14px 16px; font: 13px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); background: var(--bg); scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
 
 /* Composer. The tab bar below it owns the bottom safe area. */
-.composer { flex: none; padding: 6px 10px 6px; background: var(--bg); }
-.send-status { font-size: 12px; color: var(--muted); padding: 0 8px 6px; overflow-wrap: anywhere; }
+.composer { flex: none; padding: 4px 8px 2px; background: var(--bg); }
+.send-status { font-size: 12px; line-height: 1.4; color: var(--muted); padding: 0 8px 4px; overflow-wrap: anywhere; }
 .send-status:empty { display: none; }
 /* Padding leaves room for the remove buttons and their focus rings. */
 .attachments { --thumb: 72px; display: flex; align-items: flex-end; gap: 8px; padding: 20px 14px 8px 4px; overflow-x: auto; scrollbar-width: none; }
@@ -168,7 +168,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .attachment-remove:hover:not(:disabled) { background: transparent; color: var(--bg); }
 .attachment-retry { position: absolute; left: 0; bottom: 0; width: 100%; height: 44px; border-radius: 0 0 14px 14px; color: var(--red); }
 .attachment-retry:hover:not(:disabled) { background: transparent; color: var(--red); }
-.composer-box { display: flex; align-items: flex-end; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 24px; background: var(--raised); }
+.composer-box { display: flex; align-items: flex-end; gap: 2px; padding: 0; border: 1px solid var(--line); border-radius: 23px; background: var(--raised); }
 .composer-box:focus-within { border-color: color-mix(in srgb, var(--orange) 55%, var(--line)); }
 #attach { border-radius: 50%; }
 /* Six lines at most, and never more than 30% of the visible height, so the
@@ -190,7 +190,7 @@ textarea:disabled { opacity: .6; }
 /* Tab bar: pinned to the bottom, its background runs under the home indicator. */
 .tabbar { flex: none; display: flex; padding: 0 4px env(safe-area-inset-bottom); background: var(--bg); border-top: 1px solid var(--line); }
 .keyboard-open .tabbar { display: none; }
-.tab { flex: 1; min-width: 0; min-height: 48px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 5px 0 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); }
+.tab { flex: 1; min-width: 0; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 3px 0 2px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); }
 .tab[aria-current="page"] { color: var(--tab-active); }
 .tab[aria-current="page"] .tab-label { font-weight: 650; }
 .tab-icon { position: relative; display: flex; }
