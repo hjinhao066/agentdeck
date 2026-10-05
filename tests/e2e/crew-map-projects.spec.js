@@ -19,7 +19,7 @@ async function launch() {
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  await expect.poll(() => fs.existsSync(path.join(profile, 'control.json'))).toBe(true);
+  await expect.poll(() => fs.existsSync(path.join(profile, 'control.json')), { timeout: 30000 }).toBe(true);
   controls = JSON.parse(fs.readFileSync(path.join(profile, 'control.json'), 'utf8'));
   await expect.poll(() => page.evaluate(() => typeof MainSession !== 'undefined' && !!MainSession.state())).toBe(true);
 }

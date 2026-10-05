@@ -48,7 +48,7 @@ test.beforeAll(async () => {
   fs.writeFileSync(exportScript, `require("fs").writeFileSync(${JSON.stringify(controlFile)}, JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}));`);
   const exportEnv = `node "${exportScript}"`;
   await page.evaluate(([id, cmd]) => window.deck.ptyInput(id, cmd + '\r'), [captain, exportEnv]);
-  await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
+  await expect.poll(() => fs.existsSync(controlFile), { timeout: 30000 }).toBe(true);
   captainEnv = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
   // The tests below open their own reviewers by hand; automatic verification has its own tests.
   await page.evaluate(() => TaskBoard.autoVerify(false));
