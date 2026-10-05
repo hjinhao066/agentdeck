@@ -357,7 +357,12 @@ async function release(repo, options, runCommand = run) {
       const checks = async (waitSeconds) => {
         report.testLockWaitSeconds = waitSeconds;
         await logRun('unit', 'npm', ['test'], npmEnv);
-        await logRun('smoke', 'npm', ['run', 'test:smoke'], npmEnv);
+        if (runCommand === run) {
+          await withTestLock(async (wait) => {
+            report.e2eLockWaitSeconds = wait;
+            await logRun('smoke', 'npm', ['run', 'test:smoke'], npmEnv);
+          }, plan.branch, '/tmp/agentdeck-e2e.lock');
+        } else await logRun('smoke', 'npm', ['run', 'test:smoke'], npmEnv);
       };
       // Injected runners execute fixture commands, not machine tests.
       if (runCommand === run) await withTestLock(checks, plan.branch);

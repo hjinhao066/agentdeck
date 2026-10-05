@@ -12,7 +12,7 @@ test('background receipts leave a half-written terminal sentence and chat messag
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     columns: [{ id: 'receipt-worker', title: 'Worker', cmd: fake, cwd: profile, role: 'manual' }],
   }));
-  const env = { ...process.env, AGENTDECK_TEST_PROMPTS_FILE: promptsFile, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: promptsFile, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
   delete env.ELECTRON_RUN_AS_NODE;
   let app, listener;
   const captured = () => fs.existsSync(promptsFile) ? fs.readFileSync(promptsFile, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : [];

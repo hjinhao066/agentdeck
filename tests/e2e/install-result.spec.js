@@ -20,7 +20,7 @@ test('installation waits across restart, rejects early complete, and records suc
   }));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns, resumeOnRestart: true,
     mainSession: { colId: 'captain', cmd: fake, gen: 1, fresh: false, crewMarked: true, tasks, pending: [], inflight: [], waitlist: [] } }));
-  const env = { ...process.env };
+  const env = { ...process.env, ZDOTDIR: profile };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   delete env.ELECTRON_RUN_AS_NODE;
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;

@@ -15,7 +15,7 @@ test.beforeAll(async () => {
       { id: 'silent-worker', title: 'Quiet worker', cmd: statusAgent, cwd: profile, role: 'manual', captainCrew: true },
     ], mainSession: { colId: 'captain', cmd: fake, gen: 1, pending: [], inflight: [], fresh: false,
       crewMarked: true, waitlist: [], tasks: [] } }));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();

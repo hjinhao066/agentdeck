@@ -72,7 +72,7 @@ test.beforeAll(async () => {
       ],
     },
   }));
-  const env = { ...process.env };
+  const env = { ...process.env, ZDOTDIR: profile };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
   delete env.ELECTRON_RUN_AS_NODE;
@@ -131,7 +131,7 @@ test('a closed card stops the stale local task and gives the captain a specific 
 test('a second application restart resumes the unfinished card once again', async () => {
   const before = delivered().filter((row) => row.colId === 'worker-live' && row.text.includes('重发')).length;
   await quitAndWait(app);
-  const env = { ...process.env };
+  const env = { ...process.env, ZDOTDIR: profile };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
   delete env.ELECTRON_RUN_AS_NODE;
@@ -183,7 +183,7 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
     mainSession: { colId: 'cap2', cmd: fake, gen: 1, fresh: false, crewMarked: true, pending: [], inflight: [], waitlist: [],
       tasks: [{ id: 'fallback-task', colId: 'fallback-worker', title: 'fallback probe', gen: 1, status: 'queued',
         instruction: 'EXACT UNSENT SUPPLEMENT', boardId: 'fallback-card', boardAttempt: 'fallback-attempt' }] } }));
-  const env = { ...process.env };
+  const env = { ...process.env, ZDOTDIR: profile2 };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = captured;
   delete env.ELECTRON_RUN_AS_NODE;

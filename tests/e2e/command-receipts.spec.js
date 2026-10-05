@@ -16,7 +16,7 @@ test.beforeAll(async () => {
     { id: 'submit-worker', title: 'Command worker', cmd: fake, cwd: profile, role: 'manual' },
     { id: 'other-worker', title: 'Other worker', cmd: fake, cwd: profile, role: 'manual' },
   ] }));
-  const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
@@ -227,7 +227,7 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
   expect(fs.existsSync(path.join(dir, 'submit-worker.json'))).toBe(false);
   // Simulate a file left by an abnormal exit, then start the isolated app again.
   fs.writeFileSync(path.join(dir, 'stale.json'), '{}', { mode: 0o600 });
-  const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
