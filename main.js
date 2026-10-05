@@ -758,7 +758,16 @@ app.whenReady().then(async () => {
     getSessions: () => requestMobile('sessions'),
     getTasks: () => taskStore.list(),
     getOutput: (id) => requestMobile('output', { id }),
-    getCaptain: () => requestMobile('captain-history'),
+    getCaptain: async () => {
+      const data = await requestMobile('captain-history');
+      for (const turn of data.turns || []) {
+        const file = turn.longFile; delete turn.longFile;
+        // Only a file this app saved itself; the clipped text stays if it is gone.
+        if (!file || path.dirname(path.resolve(String(file))) !== path.join(app.getPath('userData'), 'long-prompts')) continue;
+        try { turn.user = fs.readFileSync(file, 'utf8').slice(0, 20000); } catch (_) {}
+      }
+      return data;
+    },
     getQuota: () => requestMobile('quota'),
     sendCaptain: (message, images) => requestMobile('captain', { message, images }),
     // Like pasted screenshots, phone images reach the Captain as file paths.

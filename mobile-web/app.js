@@ -598,6 +598,109 @@
       section.append(heading, lanes); projects.append(section);
     }
   }
+  // The desktop saves one "turn" per injected prompt: your message, every
+  // dispatch card, every automatic receipt delivery. Here they are folded back
+  // into what happened: your message, and one reply block from the Captain.
+  const SAME_ROUND_MS = 30 * 60 * 1000;
+  function groupTurns(turns) {
+    const groups = [];
+    let group = null, last = 0;
+    for (const turn of turns) {
+      const isUser = !turn.kind && (turn.user || (turn.images || []).length);
+      if (isUser) { group = { id: turn.id, user: turn.user || '', images: turn.images || [], replies: [], tasks: [], notices: 0, steps: [], pending: false, interrupted: false }; groups.push(group); }
+      else if (!group || (turn.ts && last && turn.ts - last > SAME_ROUND_MS)) { group = { id: turn.id, user: '', images: [], replies: [], tasks: [], notices: 0, steps: [], pending: false, interrupted: false }; groups.push(group); }
+      if (turn.ts) last = turn.ts;
+      if (turn.kind === 'task') { group.tasks.push(turn.task || {}); continue; }
+      if (turn.kind === 'notice') { group.notices += 1; if (turn.reply) group.steps.push(turn.reply); continue; }
+      if (turn.reply) group.replies.push(turn.reply);
+      for (const step of turn.steps || []) group.steps.push(step);
+      group.pending = !turn.done && !turn.interrupted;
+      group.interrupted = !!turn.interrupted;
+    }
+    return groups;
+  }
+  function processSummary(group) {
+    const parts = [];
+    if (group.tasks.length) parts.push('派了 ' + group.tasks.length + ' 件活');
+    const receipts = group.tasks.filter((t) => t.summary).length;
+    if (receipts) parts.push('收到 ' + receipts + ' 份回执');
+    if (group.steps.length) parts.push(group.steps.length + ' 步操作');
+    return parts.length ? '过程：' + parts.join('，') : '';
+  }
+  function processDetails(group) {
+    const summary = processSummary(group);
+    if (!summary) return null;
+    const details = node('details', 'process');
+    details.append(node('summary', '', summary));
+    const list = node('ul', 'process-list');
+    for (const task of group.tasks) {
+      const item = node('li', task.failed ? 'process-failed' : '');
+      item.append(node('strong', '', task.title || '任务'));
+      if (task.summary) item.append(node('span', '', ' — ' + task.summary));
+      list.append(item);
+    }
+    for (const step of group.steps) list.append(node('li', 'process-step', step));
+    details.append(list);
+    return details;
+  }
+  function renderGroup(group) {
+    const row = node('article', 'captain-turn');
+    if (group.id) row.dataset.turnId = group.id;
+    if (group.images.filter((id) => imageId.test(id)).length) {
+      const strip = node('div', 'sent-images');
+      group.images.filter((id) => imageId.test(id)).forEach((id, i) => {
+        const open = node('a', 'sent-image'), img = node('img');
+        open.href = '/api/image?id=' + id; open.target = '_blank'; open.rel = 'noopener noreferrer';
+        img.src = open.href; img.alt = '你发的图片 ' + (i + 1);
+        // Old images are cleared from the desktop after a while.
+        img.addEventListener('error', () => { open.remove(); if (!strip.childElementCount) strip.remove(); });
+        open.append(img); strip.append(open);
+      });
+      row.append(strip);
+    }
+    if (group.user) {
+      const prompt = node('div', 'chat-message user-message');
+      const text = node('p', 'chat-text', group.user);
+      prompt.append(node('span', 'chat-label', '你'), text);
+      // Long messages fold to a few lines; the whole text stays in the page.
+      if (group.user.length > 500 || group.user.split('\n').length > 10) {
+        text.classList.add('clamped');
+        const toggle = node('button', 'expand-toggle', '展开全文');
+        toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false');
+        toggle.addEventListener('click', () => {
+          const open = text.classList.toggle('clamped') === false;
+          toggle.textContent = open ? '收起' : '展开全文'; toggle.setAttribute('aria-expanded', String(open));
+        });
+        prompt.append(toggle);
+      }
+      row.append(prompt);
+    }
+    const body = group.replies.join('\n\n');
+    const process = processDetails(group);
+    if (body || process || group.pending || group.interrupted) {
+      const reply = node('div', 'chat-message captain-message');
+      reply.append(node('span', 'chat-label', '队长'));
+      if (body) {
+        reply.append(markdown(body));
+        const actions = node('div', 'turn-actions');
+        actions.append(iconButton('copy', '复制队长回复', (button) => copyText(button, body, '复制队长回复')));
+        if (group.interrupted) actions.append(node('span', 'turn-state', '已中断'));
+        reply.append(actions);
+      } else if (group.interrupted && !process) {
+        reply.append(node('p', 'chat-text turn-state', '回复已中断。'));
+      }
+      if (group.pending) {
+        const pending = node('p', 'chat-text pending');
+        const typing = node('span', 'typing'); typing.setAttribute('aria-hidden', 'true');
+        typing.append(node('i'), node('i'), node('i'));
+        pending.append(typing, node('span', '', body ? '处理中…' : '队长正在处理…'));
+        reply.append(pending);
+      }
+      if (process) reply.append(process);
+      row.append(reply);
+    }
+    return row;
+  }
   function renderCaptain() {
     const captain = sessions.find((s) => s.isMain);
     const conversation = $('captain-turns');
@@ -610,48 +713,7 @@
       if (!loaded && offline) conversation.append(empty('暂时连不上桌面端，正在自动重连…'));
       else if (!captain && loaded) conversation.append(empty('尚未创建队长。先在桌面端创建队长。'));
       else if (!captainData.turns.length) conversation.append(empty(loaded ? '还没有对话。发一条指令，让队长开始安排。' : ''));
-      for (const turn of captain ? captainData.turns : []) {
-        const row = node('article', 'captain-turn');
-        if (turn.id) row.dataset.turnId = turn.id;
-        const images = (turn.images || []).filter((id) => imageId.test(id));
-        if (images.length) {
-          const strip = node('div', 'sent-images');
-          images.forEach((id, i) => {
-            const open = node('a', 'sent-image'), img = node('img');
-            open.href = '/api/image?id=' + id; open.target = '_blank'; open.rel = 'noopener noreferrer';
-            img.src = open.href; img.alt = '你发的图片 ' + (i + 1);
-            // Old images are cleared from the desktop after a while.
-            img.addEventListener('error', () => { open.remove(); if (!strip.childElementCount) strip.remove(); });
-            open.append(img); strip.append(open);
-          });
-          row.append(strip);
-        }
-        if (turn.user) {
-          const prompt = node('div', 'chat-message user-message');
-          prompt.append(node('span', 'chat-label', '你'), node('p', 'chat-text', turn.user));
-          row.append(prompt);
-        }
-        const reply = node('div', 'chat-message captain-message');
-        reply.append(node('span', 'chat-label', '队长'));
-        if (turn.reply) {
-          reply.append(markdown(turn.reply));
-          const actions = node('div', 'turn-actions');
-          actions.append(iconButton('copy', '复制队长回复', (button) => copyText(button, turn.reply, '复制队长回复')));
-          if (turn.interrupted) actions.append(node('span', 'turn-state', '已中断'));
-          else if (!turn.done) actions.append(node('span', 'turn-state', '处理中…'));
-          reply.append(actions);
-        } else if (turn.interrupted || turn.done) {
-          reply.append(node('p', 'chat-text turn-state', turn.interrupted ? '回复已中断。' : '本次处理已结束。'));
-        } else {
-          const pending = node('p', 'chat-text pending');
-          const typing = node('span', 'typing'); typing.setAttribute('aria-hidden', 'true');
-          typing.append(node('i'), node('i'), node('i'));
-          pending.append(typing, node('span', '', '队长正在处理…'));
-          reply.append(pending);
-        }
-        row.append(reply);
-        conversation.append(row);
-      }
+      for (const group of captain ? groupTurns(captainData.turns) : []) conversation.append(renderGroup(group));
       conversation.scrollTop = follow ? conversation.scrollHeight : scrollTop;
     }
     // Offline keeps the draft editable (flaky mobile networks) but blocks sending.

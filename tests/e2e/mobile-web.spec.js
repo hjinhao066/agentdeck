@@ -12,7 +12,7 @@ const captures = () => {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : [];
 };
 
-async function launch() {
+async function launch(extraTurns = [], before = () => {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-mobile-e2e-'));
   // Keep the browser's origin stable across an isolated app restart.
   const reservation = net.createServer();
@@ -32,7 +32,8 @@ async function launch() {
     ],
   }));
   fs.mkdirSync(path.join(profile, 'chats'));
-  fs.writeFileSync(path.join(profile, 'chats', 'mobile-captain.json'), JSON.stringify({ v: 1, id: 'mobile-captain', turns: [{
+  before(profile);
+  fs.writeFileSync(path.join(profile, 'chats', 'mobile-captain.json'), JSON.stringify({ v: 1, id: 'mobile-captain', turns: [...extraTurns, {
     id: 'mobile-history', ts: Date.now() - 60_000, user: '外出期间请检查队员的执行情况。',
     reply: '队长测试回复：界面任务正在核对，登录验收等待安排。\n<script>window.captainInjected=true</script>', done: true, atts: [],
   }, {
@@ -995,4 +996,71 @@ test('the reload icon reloads the whole page and keeps the unsent text and finis
   await expect(mobile.locator('#captain-view')).toBeVisible();
   await expect(mobile.getByLabel('给队长的消息')).toHaveValue('');
   await expect(mobile.locator('.attachment')).toHaveCount(0);
+});
+
+test('a long exchange reads as one message and one Captain reply, with the process folded', async () => {
+  const T = Date.now() - 6 * 3600_000, min = 60_000;
+  const full = Array.from({ length: 40 }, (_, i) => `第 ${i + 1} 段：手机网页端要和电脑端一致，一来一回，别把派活标题当成我说的话。`).join('\n');
+  const task = (n, title, summary) => ({ kind: 'task', id: 'task-' + n, ts: T + n * min, user: title, done: true, atts: [], reply: summary,
+    task: { colId: 'w' + n, title, status: 'done', receipt: { summary, failed: '', question: '', files: [], images: [], explicit: true } } });
+  let longFile = '';
+  await launch([
+    { id: 'demo-user', ts: T, user: full.slice(0, 2000) + `\n…（全文 ${full.length} 字，见附件）`, reply: '收到，我先拆成三件活。', done: true, atts: [], steps: ['Read(board.md)', 'Bash(git status)'] },
+    task(1, '手机网页额度显示接手收尾', '额度表格已核对。'),
+    task(2, '登录与鉴权验收', '鉴权通过。'),
+    task(3, '深浅主题截图', '截图已生成。'),
+    { kind: 'notice', id: 'notice-1', ts: T + 5 * min, user: '永动机', reply: '已切换座位。', done: true, atts: [] },
+    { id: 'receipt-1', ts: T + 8 * min, user: '', reply: '三件活都回来了：额度和鉴权没问题。', done: true, atts: [] },
+    { id: 'receipt-2', ts: T + 9 * min, user: '', reply: '截图也齐了，可以验收。', done: true, atts: [] },
+    { id: 'bg-1', ts: T + 4 * 3600_000, user: '', reply: '后台回执：夜间巡检完成，没有异常。', done: true, atts: [] },
+    { id: 'bg-2', ts: T + 4 * 3600_000 + min, user: '', reply: '补充：磁盘空间充足。', done: true, atts: [] },
+  ], (dir) => {
+    fs.mkdirSync(path.join(dir, 'long-prompts'));
+    longFile = path.join(dir, 'long-prompts', 'prompt-20260101-000000-abc123.txt');
+    fs.writeFileSync(longFile, full);
+  });
+  // The clipped copy points at the saved file, as the desktop writes it.
+  const chatFile = path.join(profile, 'chats', 'mobile-captain.json');
+  const chat = JSON.parse(fs.readFileSync(chatFile, 'utf8'));
+  chat.turns[0].atts = [longFile]; fs.writeFileSync(chatFile, JSON.stringify(chat));
+  await desktop.reload();
+  await expect(desktop.locator('.column.is-main')).toHaveCount(1, { timeout: 20000 });
+  await login();
+  const log = mobile.locator('#captain-turns');
+  await expect(log).not.toContainText('本次处理已结束');
+  const first = log.locator('.captain-turn').first();
+  // One bubble with the whole text (not the clipped copy), folded until expanded.
+  await expect(first.locator('.user-message')).toHaveCount(1);
+  await expect(first.locator('.user-message .chat-text')).toHaveText(full);
+  await expect(first.locator('.user-message .chat-text')).toHaveClass(/clamped/);
+  await first.getByRole('button', { name: '展开全文' }).click();
+  await expect(first.locator('.user-message .chat-text')).not.toHaveClass(/clamped/);
+  await first.getByRole('button', { name: '收起' }).click();
+  // The Captain's words in order, in one block; task titles are not messages.
+  await expect(first.locator('.captain-message')).toHaveCount(1);
+  await expect(first.locator('.captain-message')).toContainText('收到，我先拆成三件活。');
+  await expect(first.locator('.captain-message')).toContainText('截图也齐了，可以验收。');
+  await expect(first.locator('.user-message')).not.toContainText('手机网页额度显示接手收尾');
+  await expect(log.locator('.user-message', { hasText: '手机网页额度显示接手收尾' })).toHaveCount(0);
+  await expect(first.locator('.process > summary')).toHaveText(/过程：派了 3 件活/);
+  await expect(first.locator('.process-list')).toBeHidden();
+  await first.locator('.process > summary').click();
+  await expect(first.locator('.process-list')).toContainText('手机网页额度显示接手收尾');
+  await first.locator('.process > summary').click();
+  // Background talk without a message of yours: left-aligned, merged, no empty bubble.
+  const background = log.locator('.captain-turn', { hasText: '后台回执：夜间巡检完成' });
+  await expect(background.locator('.user-message')).toHaveCount(0);
+  await expect(background.locator('.captain-message')).toContainText('补充：磁盘空间充足。');
+  await mobile.locator('#captain-turns').evaluate((el) => { el.scrollTop = 0; });
+  await first.scrollIntoViewIfNeeded();
+  for (const theme of ['light', 'dark']) {
+    await mobile.evaluate((t) => { document.documentElement.dataset.theme = t; }, theme);
+    await first.evaluate((el) => el.scrollIntoView());
+    await screenshot(`chat-flow-${theme}`);
+    await first.getByRole('button', { name: '展开全文' }).click();
+    await first.locator('.process > summary').click();
+    await screenshot(`chat-flow-expanded-${theme}`);
+    await first.getByRole('button', { name: '收起' }).click();
+    await first.locator('.process > summary').click();
+  }
 });

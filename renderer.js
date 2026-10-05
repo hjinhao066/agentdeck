@@ -3229,8 +3229,15 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
       const col = columns.find((c) => c.isMain);
       const entry = col && terms.get(col.id);
       result = col ? { id: col.id, title: columnLabel(col), status: entry?.state || 'idle',
-        turns: ChatUI.turnsOf(col.id).slice(-20).map((turn) => ({ id: turn.id, ts: turn.ts,
-          user: String(turn.user || '').slice(-8000), reply: String(turn.reply || '').slice(-16000),
+        turns: ChatUI.turnsOf(col.id).slice(-80).map((turn) => ({ id: turn.id, ts: turn.ts,
+          // Dispatch cards and notices are process, not messages: send their facts, not a fake "user" text.
+          ...(turn.kind === 'task' && turn.task ? { kind: 'task', task: { title: String(turn.task.title || '').slice(0, 120), status: turn.task.status || '',
+            summary: String(turn.task.receipt?.failed || turn.task.receipt?.summary || '').slice(0, 400), failed: !!turn.task.receipt?.failed } } : {}),
+          ...(turn.kind === 'notice' ? { kind: 'notice' } : {}),
+          ...(Array.isArray(turn.steps) && turn.steps.length ? { steps: turn.steps.slice(-30).map((x) => String(x).slice(0, 240)) } : {}),
+          // A long message is stored clipped, with the full text in a file; main swaps it back in.
+          ...(/（全文 \d+ 字，见附件）$/.test(String(turn.user || '')) && /prompt-[\w-]+\.txt$/.test(String((turn.atts || []).slice(-1)[0] || '')) ? { longFile: turn.atts.slice(-1)[0] } : {}),
+          user: turn.kind === 'task' || turn.kind === 'notice' ? '' : String(turn.user || '').slice(0, 20000), reply: String(turn.reply || '').slice(-16000),
           // Only images the phone uploaded, by server id; other attachment paths stay private.
           images: (turn.atts || []).map((p) => /[\\/]mobile-uploads[\\/]([a-f0-9]{32}\.(?:jpg|png|gif|webp))$/.exec(p)?.[1]).filter(Boolean),
           done: !!turn.done, interrupted: !!turn.interrupted })) } : { turns: [], status: 'unavailable' };

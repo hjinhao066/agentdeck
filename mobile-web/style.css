@@ -349,3 +349,17 @@ textarea:disabled { opacity: .6; }
 @keyframes pulse { 50% { opacity: .35; } }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .refreshing svg, .dot[data-status="working"], .typing i { animation: none; } .switch, .switch::after, .upload-bar, .drawer, .scrim { transition: none; } }
+
+/* Folded long message, and the one-line process fold under a Captain reply. */
+.user-message { display: flex; flex-direction: column; align-items: flex-start; }
+.chat-text.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; line-clamp: 8; overflow: hidden; }
+.expand-toggle { align-self: flex-end; min-height: 44px; margin: -6px -8px -12px 0; padding: 0 8px; border: 0; background: transparent; color: var(--orange); font-size: 13px; }
+.process { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.process > summary { display: flex; align-items: center; min-height: 36px; cursor: pointer; list-style: none; }
+.process > summary::-webkit-details-marker { display: none; }
+.process > summary::after { content: "›"; margin-left: 4px; transition: transform .15s; }
+.process[open] > summary::after { transform: rotate(90deg); }
+.process-list { margin: 0 0 6px; padding-left: 18px; line-height: 1.5; }
+.process-list li + li { margin-top: 3px; }
+.process-failed { color: var(--red); }
+.process-step { overflow-wrap: anywhere; }
