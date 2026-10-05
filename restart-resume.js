@@ -21,7 +21,7 @@
   const WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
   const unquote = (w) => String(w).replace(/^["']|["']$/g, '');
   const programName = (w) => unquote(w).replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
-  const PROVIDERS = { claude: 'Claude', grok: 'Grok', 'cursor-agent': 'Cursor', codex: 'Codex', agy: 'Antigravity', gemini: 'Antigravity' };
+  const PROVIDERS = { claude: 'Claude', grok: 'Grok', 'cursor-agent': 'Cursor', codex: 'Codex', agy: 'Antigravity', gemini: 'Gemini' };
 
   function wordsOf(cmd) { return String(cmd || '').match(WORDS) || []; }
   function providerOf(cmd) {
@@ -57,29 +57,50 @@
     return !config || config.resumeOnRestart !== false;
   }
 
-  // Drop flags that would reattach some conversation, so a resend really
-  // starts a new one. agy's -c is "continue", but only when it is a bare flag;
-  // `agy -c conf.toml` is left alone because that test treats -c as a value.
+  // Remove provider-specific session selectors, including flags that create
+  // an explicit id. A resend must not reuse an old resume or creation id.
   function freshCommand(cmd) {
     const words = wordsOf(cmd);
     if (!words.length) return String(cmd || '');
     const name = programName(words[0]);
     if (!PROVIDERS[name]) return String(cmd || '');
     const out = [words[0]];
+    const valueFlags = {
+      claude: ['--resume', '-r', '--session-id'],
+      grok: ['--resume', '-r', '--session-id', '-s'],
+      'cursor-agent': ['--resume'],
+      codex: [],
+      agy: ['--conversation'],
+      gemini: ['--resume', '-r'],
+    }[name];
+    const bareFlags = ['--continue'];
+    if (name === 'claude' || name === 'agy') bareFlags.push('-c');
+    if (name === 'codex') bareFlags.push('--last', '--all');
+    let removeSessionArgument = false;
     for (let i = 1; i < words.length; i++) {
       const w = words[i];
-      if (['cursor-agent', 'codex'].includes(name) && /^resume$/i.test(w)) {
-        if (words[i + 1] && !words[i + 1].startsWith('-')) i++;
+      const flag = w.split('=')[0];
+      if (valueFlags.includes(flag)) {
+        if (!w.includes('=') && words[i + 1] && !words[i + 1].startsWith('-')) i++;
         continue;
       }
-      if (name === 'codex' && w === '--last') continue;
-      if (/^--(continue|resume|conversation)=/.test(w)) continue;
-      if (w === '--continue' || w === '--resume' || w === '--conversation' || (name === 'claude' && (w === '-c' || w === '-r'))) {
-        const takesValue = w === '--resume' || w === '--conversation' || w === '-r';
-        if (takesValue && words[i + 1] && !words[i + 1].startsWith('-')) i++;
+      if (bareFlags.includes(w)) {
+        if (name === 'codex' && w === '--last') removeSessionArgument = false;
         continue;
       }
-      if ((name === 'agy' || name === 'gemini') && w === '-c' && (!words[i + 1] || words[i + 1].startsWith('-'))) continue;
+      if (name === 'codex' && ['-c', '--config', '-m', '--model', '-p', '--profile', '-s', '--sandbox', '-C', '--cd', '-a', '--ask-for-approval', '--local-provider', '--remote', '--remote-auth-token-env', '--enable', '--disable', '--add-dir', '-i', '--image'].includes(w)) {
+        out.push(w);
+        if (words[i + 1]) out.push(words[++i]);
+        continue;
+      }
+      if ((name === 'codex' && /^(?:resume|fork)$/i.test(w)) || (name === 'cursor-agent' && i === 1 && w === 'resume')) {
+        removeSessionArgument = true;
+        continue;
+      }
+      if (removeSessionArgument && !w.startsWith('-')) {
+        removeSessionArgument = false;
+        continue;
+      }
       out.push(w);
     }
     return out.join(' ');
@@ -100,7 +121,8 @@
     if (name === 'grok') return head + ' -r ' + sessionId + suffix;
     if (name === 'cursor-agent') return head + ' --resume ' + sessionId + suffix;
     if (name === 'codex') return head + ' resume ' + sessionId + suffix;
-    if (name === 'agy' || name === 'gemini') return head + ' --conversation ' + sessionId + suffix;
+    if (name === 'agy') return head + ' --conversation ' + sessionId + suffix;
+    if (name === 'gemini') return head + ' --resume ' + sessionId + suffix;
     return String(cmd || '');
   }
 
@@ -133,11 +155,11 @@
     if (mode === 'resend') {
       lines.push('卡片任务：' + String(input && input.title || '（无标题）').replace(/\s+/g, ' ').trim().slice(0, 120));
       const body = String(input && input.task || '').trim();
-      if (body) lines.push(body.slice(0, 4000));
-      lines.push('最后回执：' + (String(input && input.receipt || '').trim().slice(0, 500) || '（没有回执）'));
+      if (body) lines.push(body);
+      lines.push('最后回执：' + (String(input && input.receipt || '').trim() || '（没有回执）'));
     }
     const pending = String(input && input.pendingText || '').trim();
-    if (pending) lines.push('重启前还没送达的指令：\n' + pending.slice(0, 4000));
+    if (pending) lines.push('重启前还没送达的指令：\n' + pending);
     return lines.join('\n');
   }
   function checkpointMessage() {
@@ -147,10 +169,10 @@
     ].join('\n');
   }
   function checkpointSummary() {
-    return CHECKPOINT_TOKEN + ' 重启前停在安全点，重启后会自动续上。';
+    return CHECKPOINT_TOKEN + ' 应用已记录重启检查点，尚未确认队员停在安全点；重启后会自动续上。';
   }
   function failureNote(reason) {
-    return '续接失败：' + (reason || '没有自动重派') + '。没有静默停在安全点，也没有再开一个会话。';
+    return '续接失败：' + (reason || '重发仍未送达') + '。已通知队长，请检查该会话。';
   }
 
   function latestTasks(tasks) {
@@ -158,14 +180,14 @@
     for (const task of Array.isArray(tasks) ? tasks : []) if (task && task.colId) latest.set(task.colId, task);
     return latest;
   }
-  function planResume(columns, tasks, claims) {
+  function planResume(columns, tasks, claims, runId) {
     const latest = latestTasks(tasks);
     const plans = [];
     for (const col of Array.isArray(columns) ? columns : []) {
       if (!col || col.isMain || !col.captainCrew || !col.coldSpawned || !col.cmd || col.archived) continue;
       const task = latest.get(col.id);
       if (!shouldResume(task)) continue;
-      if (claimDisposition(claims && claims[col.id]) === 'skip' || claimDisposition(claims && claims[col.id]) === 'fail') continue;
+      if (claimDisposition(claims && claims[col.id], task.id, runId) === 'skip' || claimDisposition(claims && claims[col.id], task.id, runId) === 'fail') continue;
       plans.push({ id: col.id, title: task.title || col.title || '', taskId: task.id || '' });
     }
     return plans;
@@ -181,7 +203,8 @@
     }
     return plans;
   }
-  function claimDisposition(claim) {
+  function claimDisposition(claim, taskId, runId) {
+    if (taskId && (claim?.taskId !== taskId || claim?.runId !== runId)) return 'send';
     if (!claim || !claim.phase) return 'send';
     if (claim.phase === 'armed') return 'retry';
     if (claim.phase === 'retrying') return 'fail';
@@ -216,9 +239,9 @@
       colId: input.colId,
       taskId: input.task && input.task.id || '',
       title: input.title || (input.task && input.task.title) || '',
-      task: String(input.detail || '').slice(0, 4000),
-      receipt: String(input.receipt || '').slice(0, 500),
-      pendingText: String(input.pendingText || '').slice(0, 4000),
+      task: String(input.detail || ''),
+      receipt: String(input.receipt || ''),
+      pendingText: String(input.pendingText || ''),
       boardId: input.boardId || (input.task && input.task.boardId) || '',
       mode: choice.mode === 'leave' ? 'resend' : choice.mode,
       provider: choice.provider || providerOf(input.cmd) || '未知',
@@ -265,7 +288,7 @@
     shouldResume, holdsAcrossRestart, shouldPark, resumeEnabled,
     freshCommand, resumeCommand, trueResumeNote, resendNote, launchChoice, resumeMessage,
     checkpointMessage, checkpointSummary, failureNote,
-    planResume, planPark, claimDisposition, nextBatch, ledgerState, ignoreQuota,
+    latestTasks, planResume, planPark, claimDisposition, nextBatch, ledgerState, ignoreQuota,
     emptyManifest, parseManifest, manifestEntry, createQuitGate,
   };
 });

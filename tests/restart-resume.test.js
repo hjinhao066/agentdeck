@@ -65,7 +65,7 @@ test('without a session id the restart opens a new session and the message carri
     assert.doesNotMatch(choice.launch, /resume|conversation|--last|(?:^|\s)-r(?:\s|$)|(?:^|\s)-c(?:\s|$)/);
   }
   assert.equal(R.launchChoice({ cmd: 'agy -c conf.toml --model gemini-3.8-flash-high', sessionId: '', task: task('a', 'working') }).launch,
-    'agy -c conf.toml --model gemini-3.8-flash-high');
+    'agy conf.toml --model gemini-3.8-flash-high');
   const text = R.resumeMessage({ mode: 'resend', provider: 'Codex', title: '永动机', task: '把续接做完', receipt: '上次停在测试', pendingText: '再补一句' });
   assert.match(text, /重发：Codex/);
   assert.match(text, /把续接做完/);
@@ -79,6 +79,31 @@ test('without a session id the restart opens a new session and the message carri
   assert.equal(R.launchChoice({ cmd: 'claude', sessionId: id, task: task('a', 'working'), enabled: false }).mode, 'leave');
 });
 
+test('fresh and resume commands clear stale provider resume and creation selectors', () => {
+  const old = '22222222-2222-4222-8222-222222222222';
+  const cases = [
+    [`claude --session-id ${old} -r ${old} --model opus`, 'claude --model opus', `claude --resume ${id} --model opus`],
+    [`claude --session-id=${old} --resume=${old} -c --model opus`, 'claude --model opus', `claude --resume ${id} --model opus`],
+    [`grok -s ${old} -r ${old} --temp 0`, 'grok --temp 0', `grok -r ${id} --temp 0`],
+    [`grok --session-id=${old} --resume=${old}`, 'grok', `grok -r ${id}`],
+    [`cursor-agent --resume ${old} --force`, 'cursor-agent --force', `cursor-agent --resume ${id} --force`],
+    [`codex resume ${old} --yolo`, 'codex --yolo', `codex resume ${id} --yolo`],
+    [`codex resume --model gpt-5 ${old} --yolo`, 'codex --model gpt-5 --yolo', `codex resume ${id} --model gpt-5 --yolo`],
+    [`codex --yolo resume ${old}`, 'codex --yolo', `codex resume ${id} --yolo`],
+    [`codex -c 'model=\"gpt-5\"' resume ${old}`, `codex -c 'model=\"gpt-5\"'`, `codex resume ${id} -c 'model=\"gpt-5\"'`],
+    ['codex resume --last --all --yolo', 'codex --yolo', `codex resume ${id} --yolo`],
+    [`agy --conversation=${old} -c --model flash`, 'agy --model flash', `agy --conversation ${id} --model flash`],
+    [`gemini -r ${old} --model flash`, 'gemini --model flash', `gemini --resume ${id} --model flash`],
+  ];
+  for (const [cmd, fresh, resume] of cases) {
+    assert.equal(R.freshCommand(cmd), fresh, cmd);
+    assert.equal(R.resumeCommand(cmd, id), resume, cmd);
+    assert.equal(R.launchChoice({ cmd, task: task('a', 'working') }).launch, fresh, cmd);
+  }
+  assert.equal(R.providerOf('gemini'), 'Gemini');
+  assert.equal(R.freshCommand('codex -c model="gpt-5" --model resume'), 'codex -c model="gpt-5" --model resume');
+});
+
 test('a claim is sent once, retried once, then failed closed so it cannot be dispatched again', () => {
   assert.equal(R.claimDisposition(null), 'send');
   assert.equal(R.claimDisposition({ phase: 'armed' }), 'retry');
@@ -87,7 +112,7 @@ test('a claim is sent once, retried once, then failed closed so it cannot be dis
   assert.equal(R.claimDisposition({ phase: 'failed' }), 'skip');
   const columns = [crew('live'), crew('done-claim')];
   const tasks = [task('live', 'paused'), task('done-claim', 'paused')];
-  assert.deepEqual(R.planResume(columns, tasks, { 'done-claim': { phase: 'sent' } }).map((p) => p.id), ['live']);
+  assert.deepEqual(R.planResume(columns, tasks, { 'done-claim': { phase: 'sent', taskId: 'k-done-claim', runId: 'run' } }, 'run').map((p) => p.id), ['live']);
   assert.deepEqual(R.nextBatch(['a', 'b', 'c'], 0, 2), ['a', 'b']);
   assert.deepEqual(R.nextBatch(['a', 'b', 'c'], 1, 2), ['a']);
   assert.deepEqual(R.nextBatch(['a'], 2, 2), []);

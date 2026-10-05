@@ -708,6 +708,10 @@
       Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
       update(task);
     }
+    task.instruction = text;
+    task.instructionSent = false;
+    persistResumeEntry(col, task);
+    try { window.deck.saveConfigSync(host.config); } catch (_) {}
     let batch = dispatches.get(col.id);
     if (batch && batch.items.every((i) => i.task.status !== 'queued')) { dispatches.delete(col.id); batch = null; }
     if (batch && !batch.sending) { batch.items.push({ task, text }); return task; }
@@ -728,11 +732,12 @@
         if (!last) return;
         supersede(last);
         sentItems.forEach(({ task: t }) => {
+          t.instructionSent = true;
           t.status = t === last ? 'working' : 'done';
-          if (t === last) { t.turnId = turn ? turn.id : ''; t.startedAt = Date.now(); }
+          if (t === last) { t.instruction = sentItems.map((i) => i.text).join('\n\n'); t.turnId = turn ? turn.id : ''; t.startedAt = Date.now(); }
           else { t.doneAt = Date.now(); t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], images: [], failed: '', explicit: true }; }
           update(t);
-          if (t === last) autoBoardEvent(t, 'started');
+          if (t === last) { persistResumeEntry(col, t); autoBoardEvent(t, 'started'); }
         });
       },
       onGiveUp: () => {
@@ -796,7 +801,7 @@
       await boardRequest('bind', { id: metadata.boardId, project: metadata.project, session_id: id, attempt_id: requestId,
         assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
     }
-    const col = host.createSession({ ...metadata, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
+    const col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
     if (waiting) { waiting.boardId = metadata.boardId || ''; waiting.boardAttempt = requestId; }
     dispatch(col, text, title, waiting);
     return col;
@@ -1043,6 +1048,7 @@
     if (message.action === 'session-exit') {
       if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
       if (message.code !== 0) {
+        if (fallbackResume(caller, task, `原对话启动失败（exit ${message.code}）`)) return response;
         if (task.status === 'asking') task.status = 'working';
         const entry = host.terms.get(caller.id);
         // The exit command may beat the status tick; read the current terminal.
@@ -1058,10 +1064,13 @@
       task.progress = message.message;
       caller.progress = message.message;
       task.endedAt = 0;
+      persistResumeEntry(caller, task);
       update(task);
       return response;
     }
     const receipt = M.commandReceipt(message);
+    delete task.progress; // this authenticated receipt is newer than prior progress
+    task.resumeSubmission = true; // cancel delayed delivery before the asynchronous board write
     await recordReceiptForBoard(task, receipt);
     // A real submission may follow a question or the no-receipt notice. Replace
     // an unread automatic notice so the Captain sees the authoritative result.
@@ -1074,108 +1083,152 @@
     return response;
   }
 
-  // Cold start vs a reload that kept the PTY. A continue is not a new dispatch:
-  // the same task and the same board card stay open, and a claim on disk stops
-  // a second launch from sending the instruction again.
+  // Only tasks present at renderer initialization belong to this cold-start
+  // batch. New/tell/archive restoration use ordinary dispatch, never this queue.
   let resumeManifest = window.RestartResume ? window.RestartResume.emptyManifest() : { version: 1, claims: {}, entries: [] };
+  const coldTasks = new Map();
   const resumeWaiting = new Map();
+  const resumeOps = new Map();
+  let resumeRun = '';
   let resumeInflight = 0;
   let resumeTimer = null;
   function loadResumeManifest() {
     const R = window.RestartResume;
-    if (!R || !window.deck || !window.deck.restartManifestLoad) return;
+    if (!R) return;
     try { resumeManifest = R.parseManifest(JSON.stringify(window.deck.restartManifestLoad() || null)); }
     catch (_) { resumeManifest = R.emptyManifest(); }
+    resumeRun = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+    coldTasks.clear();
+    const coldCrew = new Set(host.columns().filter((col) => col.captainCrew && !col.isMain && !col.archived).map((col) => col.id));
+    for (const task of R.latestTasks(state()?.tasks).values()) {
+      if (coldCrew.has(task.colId) && R.shouldResume(task)) coldTasks.set(task.colId, task.id);
+      delete task.resumeSubmission;
+      delete task.resumeFallback;
+      delete task.resumeFailed;
+      delete task.resumeDeadline;
+    }
   }
   function saveResumeManifest() {
     try { window.deck.restartManifestSave(resumeManifest); } catch (_) {}
   }
   function latestTask(colId) {
-    const s = state();
-    let found = null;
-    if (s) for (const t of s.tasks) if (t.colId === colId) found = t;
-    return found;
+    return state()?.tasks.findLast((t) => t.colId === colId) || null;
   }
   function pendingInstruction(colId) {
-    const batch = dispatches.get(colId);
-    if (!batch) return '';
-    return batch.items.filter((item) => item.task && item.task.status === 'queued').map((item) => item.text).join('\n\n');
+    return (state()?.tasks || []).filter((t) => t.colId === colId && !t.instructionSent && window.RestartResume.shouldResume(t))
+      .map((t) => t.instruction || '').filter(Boolean).join('\n\n');
   }
-  function noteBoard(col, task, note, reopen) {
-    const id = (task && task.boardId) || (col && col.boardId);
-    if (!id || !col) return;
-    window.deck.taskBoard('resumeNote', {
-      id, session_id: col.id, attempt_id: (task && task.boardAttempt) || col.boardAttempt || '', note, reopen: !!reopen,
+  function persistResumeEntry(col, task) {
+    const R = window.RestartResume;
+    if (!R || !col || !task) return;
+    const prior = resumeManifest.entries.find((e) => e.colId === col.id);
+    const receipt = task.progress || (task.receipt && !task.receipt.checkpoint ? task.receipt.summary || task.receipt.failed || task.receipt.question : '');
+    const entry = R.manifestEntry({
+      colId: col.id, cmd: col.cmd, cwd: col.cwd || '', sessionId: col.modelSessionId,
+      title: task.title, detail: col.captainTaskPrompt || prior?.task || col.taskPrompt || task.instruction || '',
+      receipt: receipt || prior?.receipt || col.lastReceipt?.summary || '', pendingText: pendingInstruction(col.id), task,
+    });
+    resumeManifest.entries = resumeManifest.entries.filter((e) => e.colId !== col.id);
+    resumeManifest.entries.push(entry);
+    saveResumeManifest();
+  }
+  function activeResume(col, task, op) {
+    return host.columns().includes(col) && latestTask(col.id) === task && window.RestartResume.shouldResume(task) &&
+      !task.resumeSubmission && (!op || resumeOps.get(col.id) === op);
+  }
+  function noteBoard(col, task, note) {
+    if (!task.boardId && !col.boardId) return;
+    boardWrites = boardWrites.catch(() => {}).then(() => {
+      if (!activeResume(col, task)) return;
+      return window.deck.taskBoard('resumeNote', {
+        id: task.boardId || col.boardId, session_id: col.id, attempt_id: task.boardAttempt || col.boardAttempt || '', note,
+      });
     }).catch(() => {});
   }
   function noteResumeFailure(col, task, reason) {
-    const R = window.RestartResume;
-    if (!task || task.resumeFailed) return;
+    if (!activeResume(col, task) || task.resumeFailed) return;
     task.resumeFailed = true;
     delete task.restartHold;
-    if (col) resumeWaiting.delete(col.id);
-    const failed = R.failureNote(reason);
-    if (col) resumeManifest.claims[col.id] = { phase: 'failed', at: Date.now(), taskId: task.id };
+    resumeWaiting.delete(col.id);
+    const failed = window.RestartResume.failureNote(reason);
+    resumeManifest.claims[col.id] = { phase: 'failed', runId: resumeRun, taskId: task.id, at: Date.now() };
     saveResumeManifest();
-    task.status = 'failed';
-    task.receipt = { summary: '', files: [], images: [], failed, explicit: true, source: 'resume' };
-    if (col) col.lastReceipt = { ...task.receipt, ts: Date.now() };
-    update(task);
+    settle(task, { summary: '', files: [], images: [], failed, explicit: true, source: 'resume' });
     host.showToast(failed);
-    const id = task.boardId || (col && col.boardId);
-    if (id && col) window.deck.taskBoard('event', {
-      id, session_id: col.id, attempt_id: task.boardAttempt || col.boardAttempt || '', type: 'failed', message: failed, source: 'resume',
-    }).catch(() => {});
   }
   function restartLaunch(col, isFresh) {
     const R = window.RestartResume;
-    if (!R || !col || isFresh || !R.resumeEnabled(host.config)) return { mode: 'leave' };
-    return R.launchChoice({ cmd: col.cmd, sessionId: col.modelSessionId, task: latestTask(col.id), enabled: true });
+    const task = col && latestTask(col.id);
+    if (!R || !col || !R.resumeEnabled(host.config) || !col.captainCrew || col.isMain ||
+        coldTasks.get(col.id) !== task?.id || (isFresh && !task.resumeFallback)) return { mode: 'leave' };
+    const owner = col.modelSessionOwner === col.id && col.modelSessionCwd === (col.cwd || '') &&
+      !host.columns().some((c) => c !== col && String(c.modelSessionId || '').toLowerCase() === String(col.modelSessionId || '').toLowerCase() && R.providerOf(c.cmd) === R.providerOf(col.cmd));
+    return R.launchChoice({ cmd: col.cmd, sessionId: owner && !task.resumeFallback ? col.modelSessionId : null, task, enabled: true });
   }
   function notePtySurvived(col) {
     if (!col) return;
+    coldTasks.delete(col.id);
     resumeWaiting.delete(col.id);
     const task = latestTask(col.id);
     if (task) delete task.restartHold;
   }
-  function noteColdColumn(col) {
+  function noteColdColumn(col, isFresh) {
     const R = window.RestartResume;
-    if (!col || col.isMain || !col.captainCrew || !R || !R.resumeEnabled(host.config)) return;
-    const task = latestTask(col.id);
-    if (!task || !R.shouldResume(task)) return;
-    const how = R.claimDisposition(resumeManifest.claims[col.id]);
+    const task = col && latestTask(col.id);
+    if (!col || col.isMain || !col.captainCrew || !R || !R.resumeEnabled(host.config) ||
+        coldTasks.get(col.id) !== task?.id || (isFresh && !task.resumeFallback) || !R.shouldResume(task) || task.resumeSubmission) return;
+    if (resumeWaiting.has(col.id) || resumeOps.has(col.id)) return;
+    const how = R.claimDisposition(resumeManifest.claims[col.id], task.id, resumeRun);
     if (how === 'skip') return;
-    if (how === 'fail') { noteResumeFailure(col, task, '上次续接没有送达'); return; }
     task.restartHold = true;
-    task.resumeDeadline = task.resumeDeadline || Date.now() + 30000;
-    if (task.status !== 'paused' && R.isCheckpointClosure(task)) { task.status = 'paused'; task.doneAt = 0; task.endedAt = 0; }
+    task.resumeDeadline = Date.now() + 30000;
+    if (R.isCheckpointClosure(task)) { task.status = 'paused'; task.doneAt = 0; task.endedAt = 0; }
     resumeWaiting.set(col.id, how);
     clearTimeout(resumeTimer);
     resumeTimer = setTimeout(flushResume, 600);
   }
   async function resumeBody(col, task, stored) {
     const entry = {
-      mode: stored.mode === 'resume' ? 'resume' : 'resend',
-      provider: stored.provider || window.RestartResume.providerOf(col.cmd) || '未知',
-      title: stored.title || task.title || '',
-      task: stored.task || '',
-      receipt: stored.receipt || '',
-      pendingText: stored.pendingText || '',
+      mode: col.restartMode === 'resume' && !task.resumeFallback ? 'resume' : 'resend',
+      provider: window.RestartResume.providerOf(col.cmd) || '未知',
+      title: task.title || stored.title || '', task: stored.task || task.instruction || col.taskPrompt || '',
+      receipt: stored.receipt || '', pendingText: pendingInstruction(col.id) || stored.pendingText || '',
     };
-    if (entry.mode === 'resume') return entry;
-    const boardId = stored.boardId || task.boardId || col.boardId;
-    if (boardId && !entry.task) {
+    const boardId = task.boardId || col.boardId;
+    if (boardId) {
       try {
         const card = (await window.TaskBoard.list({ archived: true })).find((item) => item.id === boardId);
         if (card) {
-          entry.task = card.detail || '';
-          entry.title = entry.title || card.title || '';
+          if (card.archived || card.attempt_closed || card.status === 'done' || (card.status === 'review' && !card.review_session) ||
+              (card.session_id && card.session_id !== col.id) || (card.attempt_id && task.boardAttempt && card.attempt_id !== task.boardAttempt)) return null;
+          entry.task = card.detail || entry.task;
           if (!entry.receipt) entry.receipt = card.latest_receipt || '';
         }
       } catch (_) {}
     }
-    if (!entry.receipt && task.receipt && !task.receipt.checkpoint) entry.receipt = task.receipt.summary || task.receipt.failed || '';
+    if (task.instruction && !entry.task.includes(task.instruction) && !entry.pendingText.includes(task.instruction)) entry.task += '\n最后送达的任务指令：\n' + task.instruction;
+    if (!entry.receipt && task.receipt && !task.receipt.checkpoint) entry.receipt = task.receipt.summary || task.receipt.failed || task.receipt.question || '';
     return entry;
+  }
+  function fallbackResume(col, task, reason) {
+    if (!activeResume(col, task) || col.restartMode !== 'resume' || task.resumeFallback || !host.restartWorker) return false;
+    task.resumeFallback = true;
+    const op = resumeOps.get(col.id);
+    if (op) op.release();
+    resumeOps.delete(col.id);
+    resumeWaiting.delete(col.id);
+    delete resumeManifest.claims[col.id];
+    col.restartMode = 'resend';
+    delete col.modelSessionId;
+    delete col.modelSessionOwner;
+    delete col.modelSessionCwd;
+    task.resumeDeadline = Date.now() + 30000;
+    task.status = 'paused';
+    persistResumeEntry(col, task);
+    host.showToast(reason + '；新开会话并重发同一卡片任务和最后回执');
+    try { host.restartWorker(col); }
+    catch (_) { noteResumeFailure(col, task, '新会话启动失败'); }
+    return true;
   }
   function flushResume() {
     const R = window.RestartResume;
@@ -1185,12 +1238,11 @@
     for (const [id, how] of resumeWaiting) {
       const col = host.columns().find((c) => c.id === id && c.captainCrew && !c.isMain);
       const task = latestTask(id);
-      const term = host.terms.get(id);
-      if (!col || !task || !R.shouldResume(task)) { resumeWaiting.delete(id); continue; }
-      if (!term || !term.alive) {
-        if (task.resumeDeadline && Date.now() > task.resumeDeadline) {
+      if (!col || !task || !activeResume(col, task)) { resumeWaiting.delete(id); continue; }
+      if (!host.terms.get(id)?.alive) {
+        if (Date.now() > task.resumeDeadline) {
           resumeWaiting.delete(id);
-          noteResumeFailure(col, task, '终端没有在时限内起来');
+          if (!fallbackResume(col, task, '原终端未能启动')) noteResumeFailure(col, task, '终端没有在时限内起来');
         } else waiting = true;
         continue;
       }
@@ -1198,39 +1250,68 @@
     }
     for (const item of R.nextBatch(ready, resumeInflight, R.BATCH)) {
       resumeWaiting.delete(item.id);
-      resumeInflight += 1;
-      let released = false;
-      const release = () => { if (released) return; released = true; resumeInflight -= 1; flushResume(); };
-      const slot = setTimeout(release, 45000);
       const col = host.columns().find((c) => c.id === item.id);
       const task = latestTask(item.id);
-      const stored = (resumeManifest.entries || []).find((entry) => entry.colId === item.id) || {};
-      // restartMode was decided before a resend assigned a brand-new Claude id.
-      // Re-reading that id here would call a new conversation a true resume.
-      const mode = col.restartMode === 'resume' ? 'resume' : (stored.mode === 'resume' && col.restartMode !== 'resend' ? 'resume' : 'resend');
-      resumeBody(col, task, { ...stored, mode, provider: stored.provider || R.providerOf(col.cmd) || '未知' }).then((entry) => {
+      resumeInflight += 1;
+      let released = false;
+      const op = { release() {
         if (released) return;
-        resumeManifest.claims[item.id] = { phase: item.how === 'retry' ? 'retrying' : 'armed', at: Date.now(), taskId: task.id, mode: entry.mode };
+        released = true;
+        clearTimeout(op.timer);
+        if (resumeOps.get(col.id) === op) resumeOps.delete(col.id);
+        resumeInflight -= 1;
+        flushResume();
+      } };
+      resumeOps.set(col.id, op);
+      const fail = () => {
+        if (activeResume(col, task, op)) {
+          if (!fallbackResume(col, task, '续接指令没有送进原对话')) noteResumeFailure(col, task, '新会话的重发指令也未能送达');
+        }
+        op.release();
+      };
+      op.timer = setTimeout(fail, 45000);
+      const stored = resumeManifest.entries.find((e) => e.colId === col.id && e.taskId === task.id) || {};
+      resumeBody(col, task, stored).then((entry) => {
+        if (released) return;
+        if (!entry || !activeResume(col, task, op)) { op.release(); return; }
+        resumeManifest.entries = resumeManifest.entries.filter((e) => e.colId !== col.id);
+        resumeManifest.entries.push(R.manifestEntry({ colId: col.id, cmd: col.cmd, cwd: col.cwd || '', sessionId: col.modelSessionId,
+          task, title: entry.title, detail: entry.task, receipt: entry.receipt, pendingText: entry.pendingText }));
+        resumeManifest.claims[col.id] = { phase: 'armed', runId: resumeRun, taskId: task.id, mode: entry.mode, at: Date.now() };
         saveResumeManifest();
-        host.sendWhenReady(col, R.resumeMessage({ ...entry, retry: item.how === 'retry' }), {
-          silent: true, guardUserInput: true, timeout: 45000,
-          onSent: () => {
-            clearTimeout(slot);
-            resumeManifest.claims[item.id] = { phase: 'sent', at: Date.now(), taskId: task.id, mode: entry.mode };
-            saveResumeManifest();
+        host.sendWhenReady(col, R.resumeMessage(entry), {
+          silent: true, force: true, guardUserInput: true, timeout: 45000, suffix: M.RECEIPT_CONTRACT,
+          cancelled: () => released || !activeResume(col, task, op),
+          onSent: (turn) => {
+            if (released || !activeResume(col, task, op)) { op.release(); return; }
+            resumeManifest.claims[col.id] = { phase: 'sent', runId: resumeRun, taskId: task.id, mode: entry.mode, at: Date.now() };
+            for (const t of state().tasks) {
+              if (t.colId !== col.id || !R.shouldResume(t) || t === task) continue;
+              t.instructionSent = true;
+              t.status = 'done';
+              t.doneAt = Date.now();
+              t.receipt = { summary: '已合并到后面的补充指令，一起送达。', files: [], failed: '', explicit: true };
+              update(t);
+            }
+            if (entry.pendingText) task.instruction = entry.pendingText;
+            task.instructionSent = true;
             task.status = 'working';
-            task.restartHold = true;
+            task.turnId = turn?.id || '';
+            task.startedAt = Date.now();
+            task.endedAt = 0;
+            delete task.processEnded;
             task.resumeGraceUntil = Date.now() + 20000;
             const summary = entry.mode === 'resume' ? R.trueResumeNote(entry.provider) : R.resendNote(entry.provider);
             task.receipt = { summary, files: [], images: [], failed: '', explicit: true, checkpoint: true, source: 'restart' };
             col.lastReceipt = { ...task.receipt, ts: Date.now() };
+            persistResumeEntry(col, task);
             update(task);
-            noteBoard(col, task, summary, true);
-            release();
+            noteBoard(col, task, summary);
+            op.release();
           },
-          onGiveUp: () => { clearTimeout(slot); noteResumeFailure(col, task, '续接指令没有送进会话'); release(); },
+          onGiveUp: fail,
         });
-      }).catch(() => { clearTimeout(slot); noteResumeFailure(col, task, '续接指令没有送进会话'); release(); });
+      }).catch(fail);
     }
     if (waiting) resumeTimer = setTimeout(flushResume, 400);
   }
@@ -1242,35 +1323,42 @@
       for (const col of host.columns()) {
         if (!Object.prototype.hasOwnProperty.call(sessions, col.id)) continue;
         if (!['Cursor', 'Codex', 'Antigravity'].includes(R.providerOf(col.cmd))) continue;
-        if (sessions[col.id]) col.modelSessionId = sessions[col.id];
-        else delete col.modelSessionId;
+        if (sessions[col.id] && col.modelSessionOwner === col.id) col.modelSessionId = sessions[col.id];
+        else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; }
       }
     }
-    const entries = [];
+    const parking = [];
     for (const plan of R.planPark(host.columns(), s.tasks)) {
       const task = latestTask(plan.id);
       const col = host.columns().find((c) => c.id === plan.id);
       if (!task || !col) continue;
-      const prior = (task.receipt && !task.receipt.checkpoint && (task.receipt.summary || task.receipt.failed)) || '';
+      // Snapshot full queued bodies and the prior receipt BEFORE changing status.
+      persistResumeEntry(col, task);
+      const batch = dispatches.get(col.id);
+      if (batch) batch.cancelled = true;
       task.status = 'paused';
       task.restartHold = true;
       task.doneAt = 0;
       task.endedAt = 0;
       task.receipt = { summary: R.checkpointSummary(), files: [], images: [], failed: '', explicit: true, checkpoint: true, source: 'restart' };
       col.lastReceipt = { ...task.receipt, ts: Date.now() };
-      entries.push(R.manifestEntry({
-        colId: col.id, cmd: col.cmd, cwd: col.cwd || '', sessionId: col.modelSessionId, boardId: task.boardId || col.boardId || '',
-        title: task.title, detail: col.taskPrompt || '', receipt: prior, pendingText: pendingInstruction(col.id), task, enabled: true,
-      }));
       const term = host.terms.get(col.id);
-      if (term && term.alive) {
-        try { host.sendWhenReady(col, plan.message, { silent: true, guardUserInput: true, timeout: 800, onGiveUp: () => {} }); } catch (_) {}
+      if (term?.alive) {
+        parking.push(new Promise((resolve) => {
+          const timer = setTimeout(resolve, 800);
+          const finish = () => { clearTimeout(timer); resolve(); };
+          try { host.sendWhenReady(col, plan.message, { silent: true, guardUserInput: true, timeout: 800,
+            cancelled: () => !activeResume(col, task), onSent: finish, onGiveUp: finish }); } catch (_) { finish(); }
+        }));
       }
     }
-    resumeManifest = { version: 1, claims: resumeManifest.claims || {}, entries };
+    resumeManifest.entries = resumeManifest.entries.filter((e) => R.shouldResume(latestTask(e.colId)));
+    // A completed send only belongs to this run, never the next reboot.
+    resumeManifest.claims = {};
     saveResumeManifest();
     save();
     try { window.deck.saveConfigSync(host.config); } catch (_) {}
+    return Promise.all(parking);
   }
 
   // ---- heartbeat: called for every column on the 1.5s status loop ----
@@ -1316,7 +1404,7 @@
       if (task.status === 'paused' || task.restartHold) {
         if (!entry.alive) {
           if (!task.resumeDeadline || Date.now() <= task.resumeDeadline) continue;
-          noteResumeFailure(col, task, '终端没有在时限内起来');
+          if (!fallbackResume(col, task, '原终端未能启动')) noteResumeFailure(col, task, '终端没有在时限内起来');
           continue;
         }
         if (task.status === 'paused') continue;

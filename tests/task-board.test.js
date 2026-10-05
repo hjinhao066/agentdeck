@@ -464,14 +464,15 @@ test('a restart note keeps the same open attempt and does not unarchive or steal
   assert.equal(noted.card.session_id, 'worker');
   assert.match(noted.card.latest_receipt, /^重发：Codex/);
   event(card.id, 'complete', '功能已做完并推送。等待队长验收。');
-  assert.equal(store.resumeNote({ id: card.id, session_id: 'worker', attempt_id: 'a1', note: '真续接：Claude 已恢复。' }).ignored, true);
+  assert.equal(store.resumeNote({ id: card.id, session_id: 'worker', attempt_id: 'a1', note: '真续接：Claude 已恢复。', reopen: true }).ignored, true);
   assert.equal(store.list()[0].status, 'done');
   const checkpoint = add({ title: 'checkpoint' });
   bind(checkpoint.id, 'a-stop', 'worker-safe');
   event(checkpoint.id, 'complete', 'AGENTDECK-CHECKPOINT 重启前停在安全点。', 'a-stop', 'worker-safe');
   const reopened = store.resumeNote({ id: checkpoint.id, session_id: 'worker-safe', attempt_id: 'a-stop', note: '真续接：Claude 已用原会话号恢复同一条对话。', reopen: true });
-  assert.equal(reopened.card.status, 'doing');
-  assert.equal(reopened.card.attempt_closed, false);
+  assert.equal(reopened.ignored, true, 'complete closes the attempt even if a late callback requests reopen');
+  assert.equal(reopened.card.status, 'done');
+  assert.equal(reopened.card.attempt_closed, true);
   assert.equal(reopened.card.session_id, 'worker-safe');
   store.archive({ done: true });
   const archived = store.list({ archived: true }).find((item) => item.archived);

@@ -17,58 +17,67 @@ function temp(t) {
   return root;
 }
 
-test('cursor, codex and agy ids bind only when one conversation matches the column cwd', (t) => {
+test('only a launch-owned Cursor or Codex id with matching file cwd is retained', (t) => {
   const root = temp(t);
   const work = path.join(root, 'work');
-  const other = path.join(root, 'other');
   fs.mkdirSync(path.join(root, 'chats', 'hash', cursorId), { recursive: true });
-  fs.mkdirSync(path.join(root, 'chats', 'hash', otherId), { recursive: true });
   fs.writeFileSync(path.join(root, 'chats', 'hash', cursorId, 'meta.json'), JSON.stringify({ cwd: work, updatedAtMs: 5000 }));
-  fs.writeFileSync(path.join(root, 'chats', 'hash', otherId, 'meta.json'), JSON.stringify({ cwd: other, updatedAtMs: 5000 }));
   fs.mkdirSync(path.join(root, 'sessions'), { recursive: true });
   fs.writeFileSync(path.join(root, 'sessions', 'rollout.jsonl'), JSON.stringify({
     type: 'session_meta', payload: { session_id: codexId, cwd: work },
   }) + '\n{"type":"noise"}\n');
-  fs.mkdirSync(path.join(root, 'conversations'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'conversations', agyId + '.db'), Buffer.from('noise file://' + encodeURI(work) + ' tail'));
-  const now = Date.now();
-  for (const file of [
-    path.join(root, 'chats', 'hash', cursorId, 'meta.json'),
-    path.join(root, 'chats', 'hash', otherId, 'meta.json'),
-    path.join(root, 'sessions', 'rollout.jsonl'),
-    path.join(root, 'conversations', agyId + '.db'),
-  ]) fs.utimesSync(file, now / 1000, now / 1000);
-
-  const columns = [
-    { id: 'cursor', provider: 'Cursor', cwd: work, since: 0, sessionId: '' },
-    { id: 'codex', provider: 'Codex', cwd: work, since: 0, sessionId: '' },
-    { id: 'agy', provider: 'Antigravity', cwd: work, since: 0, sessionId: '' },
-    { id: 'elsewhere', provider: 'Cursor', cwd: path.join(root, 'missing'), since: 0, sessionId: '' },
-  ];
-  const found = S.resolveSessions(columns, {
-    platform: 'darwin',
-    lookbackMs: 24 * 3600 * 1000,
-    roots: { cursor: path.join(root, 'chats'), codex: path.join(root, 'sessions'), agy: path.join(root, 'conversations') },
-  });
-  assert.equal(found.cursor, cursorId);
-  assert.equal(found.codex, codexId);
-  assert.equal(found.agy, agyId);
-  assert.equal(found.elsewhere, null);
+  const found = S.resolveSessions([
+    { id: 'cursor', provider: 'Cursor', cwd: work, sessionId: cursorId, owner: 'cursor' },
+    { id: 'codex', provider: 'Codex', cwd: work, sessionId: codexId, owner: 'codex' },
+  ], { platform: 'darwin', roots: { cursor: path.join(root, 'chats'), codex: path.join(root, 'sessions') } });
+  assert.deepEqual(found, { cursor: cursorId, codex: codexId });
 });
 
-test('two conversations in one cwd are not guessed, and a stored id is kept', (t) => {
+test('Codex reads a complete large session_meta line and ignores non-metadata records', (t) => {
   const root = temp(t);
-  const work = path.join(root, 'work');
-  const records = [
-    { provider: 'Codex', id: codexId, cwd: work, at: 10 },
-    { provider: 'Codex', id: otherId, cwd: work, at: 20 },
-    { provider: 'Cursor', id: cursorId, cwd: work, at: 10 },
+  const cwd = path.join(root, 'work');
+  fs.writeFileSync(path.join(root, 'large.jsonl'), JSON.stringify({ type: 'session_meta', payload: {
+    id: codexId, cwd, base_instructions: { text: '长指令'.repeat(10000) },
+  } }) + '\n{"payload":{"id":"ignored"}}\n');
+  fs.writeFileSync(path.join(root, 'not-meta.jsonl'), JSON.stringify({ type: 'message', payload: { id: otherId, cwd } }));
+  assert.deepEqual(S.listCodex(root), [{ provider: 'Codex', id: codexId, cwd, at: fs.statSync(path.join(root, 'large.jsonl')).mtimeMs }]);
+});
+
+test('a unique cwd candidate cannot prove ownership, including two same-cwd columns', () => {
+  const records = [{ provider: 'Codex', id: codexId, cwd: '/work', at: 10 }];
+  assert.deepEqual(S.assignSessions([
+    { id: 'a', provider: 'Codex', cwd: '/work' },
+    { id: 'b', provider: 'Codex', cwd: '/work' },
+  ], records, 'linux'), { a: null, b: null });
+  assert.deepEqual(S.assignSessions([{ id: 'a', provider: 'Codex', cwd: '/work' }], records, 'linux'), { a: null });
+});
+
+test('stored ids require the right owner, provider, cwd and an existing file', () => {
+  const record = { provider: 'Codex', id: codexId, cwd: '/work', at: 10 };
+  const col = { id: 'a', provider: 'Codex', cwd: '/work', sessionId: codexId, owner: 'a' };
+  assert.deepEqual(S.assignSessions([col], [record], 'linux'), { a: codexId });
+  for (const change of [{ owner: '' }, { owner: 'b' }, { cwd: '/elsewhere' }, { provider: 'Cursor' }, { sessionId: otherId }]) {
+    assert.deepEqual(S.assignSessions([{ ...col, ...change }], [record], 'linux'), { a: null });
+  }
+  assert.deepEqual(S.assignSessions([col], [], 'linux'), { a: null });
+  assert.deepEqual(S.resolveSessions([col], {}), {});
+});
+
+test('duplicated session ids reject every claimant regardless of column order or cwd', () => {
+  const cols = [
+    { id: 'a', owner: 'a', provider: 'Codex', sessionId: codexId, cwd: '/work' },
+    { id: 'b', owner: 'b', provider: 'Codex', sessionId: codexId, cwd: '/other' },
   ];
-  const ambiguous = S.assignSessions([
-    { id: 'a', provider: 'Codex', cwd: work, since: 0, sessionId: '' },
-    { id: 'b', provider: 'Cursor', cwd: work, since: 0, sessionId: cursorId },
-  ], records, 'darwin');
-  assert.equal(ambiguous.a, null);
-  assert.equal(ambiguous.b, cursorId);
-  assert.equal(S.resolveSessions([{ id: 'a', provider: 'Codex', cwd: work }], {}).a, undefined);
+  const records = [{ provider: 'Codex', id: codexId, cwd: '/work', at: 10 }];
+  assert.deepEqual(S.assignSessions(cols, records, 'linux'), { a: null, b: null });
+  assert.deepEqual(S.assignSessions(cols.slice().reverse(), records, 'linux'), { b: null, a: null });
+});
+
+test('a database containing a matching file URL never proves agy ownership', (t) => {
+  const root = temp(t);
+  fs.writeFileSync(path.join(root, agyId + '.db'), Buffer.from('SQLite format 3\0 file:///work'));
+  assert.deepEqual(S.listAgy(root), []);
+  assert.deepEqual(S.resolveSessions([
+    { id: 'a', owner: 'a', provider: 'Antigravity', cwd: '/work', sessionId: agyId },
+  ], { roots: { agy: root } }), { a: null });
 });

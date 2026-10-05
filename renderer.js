@@ -214,6 +214,9 @@ if (saved) {
       agentEffort: c.agentEffort,
       claudeConfigDir: c.claudeConfigDir,
       modelSessionId: c.modelSessionId,
+      modelSessionOwner: c.modelSessionOwner,
+      modelSessionCwd: c.modelSessionCwd,
+      captainTaskPrompt: c.captainTaskPrompt,
       sessionWatchSince: Number.isFinite(c.sessionWatchSince) ? c.sessionWatchSince : 0,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
       // Relaunch always starts each session in the terminal.
@@ -1992,8 +1995,10 @@ function buildColumn(col, isFresh) {
             : window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
         const { launch, resumedAgent, showLegacyWarning } = plan;
         if (col.modelSessionId !== plan.sessionId) {
-          if (plan.sessionId) col.modelSessionId = plan.sessionId;
-          else delete col.modelSessionId;
+          if (plan.sessionId) {
+            col.modelSessionId = plan.sessionId;
+            if (!resumedAgent) { col.modelSessionOwner = col.id; col.modelSessionCwd = col.cwd || ''; }
+          } else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; }
           saveConfig();
         }
 
@@ -2041,7 +2046,7 @@ function buildColumn(col, isFresh) {
           saveConfig();
         }
         queueInitialPrompt(col, col.cmd ? 700 : 0);
-        MainSession.noteColdColumn(col);
+        MainSession.noteColdColumn(col, isFresh);
       }
     };
     reconnect();
@@ -2641,10 +2646,24 @@ function attachRename(titleEl, col) {
     }, { once: true });
   });
 }
-// cwd change needs a fresh shell; rebuild just this column (new id so the old
-// pty's exit event can't bleed into the new terminal).
-// opts.freshChat: the conversation stays under the old id (ChatUI.retireChat
-// ran first) and the new id starts an empty one.
+// A failed reattach needs a new PTY but keeps the card, column id and chat.
+// Dispose old listeners before killing so its exit cannot settle the new run.
+function restartWorker(col) {
+  const entry = terms.get(col.id);
+  if (entry) {
+    (entry.disposers || []).forEach((fn) => { try { fn(); } catch (_) {} });
+    entry.term.dispose();
+    terms.delete(col.id);
+  }
+  window.deck.ptyKill(col.id);
+  const fresh = buildColumn(col, true);
+  if (entry) entry.wrap.replaceWith(fresh);
+  else deckEl.appendChild(fresh);
+  saveConfig();
+  updateColumnStyles();
+}
+// cwd change needs a fresh shell with a new id, so old exit events cannot bleed in.
+// opts.freshChat keeps the retired conversation under the old id.
 function respawnColumn(col, opts) {
   const t = terms.get(col.id);
   const wasBoardSelected = selectedBoardId === col.id;
@@ -3470,7 +3489,7 @@ const deckHost = {
   createSession, sendWhenReady,
   sendPrompt: (col, text) => ChatUI.sendPrompt(col, text),
   // 队长
-  createMain, respawnColumn, agentInForeground, isBackstage, userComposing, dumpScreen,
+  createMain, respawnColumn, restartWorker, agentInForeground, isBackstage, userComposing, dumpScreen,
   quotaText: () => QuotaCore.text(config.quotas, Date.now(), config.claudeSeats, claudeCaptainSeatId()),
   captainTurnStarted, captainTurnDone, captainColumnVisible,
   manualPromptSent, manualTurnDone,
@@ -3478,8 +3497,8 @@ const deckHost = {
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
 MainSession.init(deckHost);
-window.deck.onParkForRestart((sessions) => {
-  try { MainSession.parkForRestart(sessions); }
+window.deck.onParkForRestart(async (sessions) => {
+  try { await MainSession.parkForRestart(sessions); }
   finally { window.deck.parkForRestartDone(); }
 });
 ClaudeSeats.init(deckHost);

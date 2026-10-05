@@ -48,22 +48,37 @@ function listCursor(root, since) {
   return records;
 }
 
+// A session_meta line includes base instructions and can be much larger than
+// one read buffer. Read through the first newline, with a cap for damaged files.
+function firstLine(file) {
+  const limit = 8 * 1024 * 1024;
+  const chunks = [];
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    for (let at = 0; at < limit;) {
+      const buf = Buffer.alloc(Math.min(16384, limit - at));
+      const n = fs.readSync(fd, buf, 0, buf.length, at);
+      if (!n) return Buffer.concat(chunks).toString('utf8');
+      const end = buf.subarray(0, n).indexOf(10);
+      chunks.push(buf.subarray(0, end < 0 ? n : end));
+      if (end >= 0) return Buffer.concat(chunks).toString('utf8');
+      at += n;
+    }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+  return '';
+}
+
 function listCodex(root, since) {
   const out = { seen: 0, files: [] };
   walk(root, (name) => name.endsWith('.jsonl'), since || 0, out);
   const records = [];
   for (const file of out.files) {
-    let line = '';
-    try {
-      const fd = fs.openSync(file.full, 'r');
-      const buf = Buffer.alloc(4096);
-      const n = fs.readSync(fd, buf, 0, 4096, 0);
-      fs.closeSync(fd);
-      line = buf.slice(0, n).toString('utf8').split('\n')[0];
-    } catch (_) { continue; }
     let row = null;
-    try { row = JSON.parse(line); } catch (_) { continue; }
-    const payload = row && row.payload;
+    try { row = JSON.parse(firstLine(file.full)); } catch (_) { continue; }
+    const payload = row && row.type === 'session_meta' && row.payload;
     const id = payload && (payload.session_id || payload.id);
     if (!UUID.test(id) || !payload || typeof payload.cwd !== 'string') continue;
     records.push({ provider: 'Codex', id, cwd: payload.cwd, at: file.at });
@@ -71,23 +86,10 @@ function listCodex(root, since) {
   return records;
 }
 
-function listAgy(root, since) {
-  const out = { seen: 0, files: [] };
-  walk(root, (name) => name.endsWith('.db'), since || 0, out);
-  const records = [];
-  for (const file of out.files) {
-    const id = path.basename(file.full, '.db');
-    if (!UUID.test(id)) continue;
-    let text = '';
-    try { text = fs.readFileSync(file.full).toString('utf8'); } catch (_) { continue; }
-    const cwds = [];
-    for (const match of text.matchAll(/file:\/\/[^\u0000-\u001f\s"\\]+/g)) {
-      try { cwds.push(decodeURIComponent(match[0].slice('file://'.length))); } catch (_) {}
-    }
-    if (!cwds.length) continue;
-    records.push({ provider: 'Antigravity', id, cwd: cwds, at: file.at });
-  }
-  return records;
+function listAgy() {
+  // Arbitrary file:// strings in a conversation database include referenced
+  // files and other workspaces. They cannot certify the conversation's cwd.
+  return [];
 }
 
 function cwdMatches(record, cwd, platform) {
@@ -95,25 +97,27 @@ function cwdMatches(record, cwd, platform) {
   return paths.some((item) => sameCwd(item, cwd, platform));
 }
 
-// columns: { id, provider, cwd, since, sessionId }
-// A stored id is kept when that conversation file is still there. Otherwise
-// exactly one unused file for the same cwd counts; two files do not.
+// columns: { id, provider, cwd, sessionId, owner }
+// Only an identity captured for this column at launch can be retained. A file
+// for the same cwd, even a unique file, may belong to an external terminal.
 function assignSessions(columns, records, platform) {
   const list = Array.isArray(records) ? records : [];
-  const used = new Set();
-  const out = {};
-  for (const col of Array.isArray(columns) ? columns : []) {
-    if (!col || !col.id) continue;
-    out[col.id] = null;
+  const cols = (Array.isArray(columns) ? columns : []).filter((col) => col && col.id);
+  const owners = new Map();
+  for (const col of cols) {
     if (!UUID.test(col.sessionId || '')) continue;
-    const found = list.some((record) => record.provider === col.provider && record.id === col.sessionId);
-    if (found) { out[col.id] = col.sessionId; used.add(col.sessionId); }
+    const key = col.provider + ':' + col.sessionId.toLowerCase();
+    owners.set(key, (owners.get(key) || 0) + 1);
   }
-  for (const col of Array.isArray(columns) ? columns : []) {
-    if (!col || out[col.id]) continue;
-    const matches = list.filter((record) => record.provider === col.provider && !used.has(record.id) &&
-      record.at >= (col.since || 0) && cwdMatches(record, col.cwd, platform));
-    if (matches.length === 1) { out[col.id] = matches[0].id; used.add(matches[0].id); }
+  const out = {};
+  for (const col of cols) {
+    out[col.id] = null;
+    if (col.owner !== col.id || !UUID.test(col.sessionId || '')) continue;
+    const key = col.provider + ':' + col.sessionId.toLowerCase();
+    if (owners.get(key) !== 1) continue;
+    const matches = list.filter((record) => record.provider === col.provider &&
+      String(record.id).toLowerCase() === col.sessionId.toLowerCase());
+    if (matches.length === 1 && cwdMatches(matches[0], col.cwd, platform)) out[col.id] = col.sessionId;
   }
   return out;
 }
