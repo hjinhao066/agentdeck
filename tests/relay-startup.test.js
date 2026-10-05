@@ -137,7 +137,7 @@ test('restart preserves the original deadline, observations and consecutive fail
   assert.deepEqual(result.state.failures, ['us', 'cn']);
 });
 
-test('03:51 rotation with no delivered captain prompt is retried by 03:54 instead of waiting until 10:25', () => {
+test('hypothetical 03:51 startup stall is retried by 03:54 instead of waiting until 10:25', () => {
   const switchedAt = Date.UTC(2026, 9, 5, 10, 51);
   let state = begin({}, 'cn', switchedAt);
   state = R.normalize(JSON.parse(JSON.stringify(state)));

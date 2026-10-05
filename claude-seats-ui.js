@@ -243,13 +243,11 @@
         weeklyTrusted: true, weeklyRemaining: q.weeklyRemaining, weeklyRemainingAt: q.weeklyRemainingAt, weeklyResetAt: q.weeklyResetAt, threshold: settings.threshold }, now);
       if (q.resumedAt) state = P.observe(state, { seatId: info.id, at: q.resumedAt, resumed: true }, now);
       host.config.perpetualCaptainState = state;
-      const weekly = (host.config.quotas[window.QuotaCore.seatKey(info.id)]?.sample?.windows || [])
-        .find((w) => w.key === 'weekly' || w.label === '每周');
       const loginScreen = host.columns().some((col) => col.claudeSeatId === info.id &&
         /select\s+login\s+method/i.test(host.terms.get(col.id)?.lastScreen || ''));
       return { id: info.id, loggedIn: info.loggedIn,
         onboardingComplete: info.onboardingComplete !== false && !loginScreen,
-        weeklyResetAt: q.weeklyTrusted ? weekly?.resetAt : undefined, ...q };
+        ...q };
     });
     return { settings, state: host.config.perpetualCaptainState, currentId: current().id, seats: candidates, now };
   }
@@ -407,7 +405,7 @@
           quota: entry?.state === 'quota' || activity === 'quota', exited: entry?.alive === false,
           promptSent: startup.attempt.promptSent,
           output: startup.attempt.output || (startup.attempt.promptSent && !entry?.sendingPrompt && !entry?.injecting &&
-            (activity === 'working' || entry?.state === 'working') &&
+            (activity === 'working' || entry?.state === 'working' || /^\s*[⏺●•]\s+\S/m.test(entry?.lastScreen || '')) &&
             entry?.lastOutputAt > (startup.attempt.promptSentAt || startup.attempt.at)) });
         if (JSON.stringify(result.state) !== JSON.stringify(startup)) { state.relayStartup = result.state; host.flushConfig(); }
         if (result.action === 'stop') { await stopRotation('连续 3 次队长启动失败'); return; }

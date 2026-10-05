@@ -311,6 +311,42 @@ test('long initial Thinking activity counts only after prompt delivery and survi
   assert.equal(h.notifications.length, 0);
 });
 
+test('a short silent captain brief reply proves startup without onTurnDone, while prompt and chrome do not', async () => {
+  const R = require('../relay-startup-core');
+  for (const marker of ['⏺', '●', '•']) {
+    const h = seatRelay({ quotas: { cn: [80, 60], us2: [80, 60], us: [80, 60] } });
+    h.state.relayStartup = R.begin({ failures: ['us'] }, { colId: h.state.colId, targetId: 'cn', at: h.clock.now });
+    const promptSentAt = h.clock.now + 1000, entry = h.entry();
+    h.clock.now = promptSentAt + 1;
+    Object.assign(entry, { state: 'done', lastScreen: marker + ' 队长已就绪。', lastOutputAt: h.clock.now });
+    await h.api.refresh();
+    await h.api.automaticTick();
+    assert.equal(h.state.relayStartup.attempt.output, false, 'reply without a delivered prompt');
+    Object.assign(h.state.relayStartup.attempt, { promptSent: true, promptSentAt });
+    entry.lastScreen = 'Claude Code\n❯ 你是队长，请读看板接续\n? for shortcuts';
+    await h.api.automaticTick();
+    assert.equal(h.state.relayStartup.attempt.output, false, 'prompt echo and chrome only');
+    entry.lastScreen = marker + ' 队长已就绪。';
+    entry.lastOutputAt = promptSentAt;
+    await h.api.automaticTick();
+    assert.equal(h.state.relayStartup.attempt.output, false, 'reply predates prompt delivery');
+    entry.lastOutputAt = h.clock.now;
+    for (const pending of ['sendingPrompt', 'injecting']) {
+      entry[pending] = true;
+      await h.api.automaticTick();
+      assert.equal(h.state.relayStartup.attempt.output, false, pending);
+      entry[pending] = false;
+    }
+    await h.api.automaticTick();
+    assert.equal(h.state.relayStartup.attempt.output, true);
+    h.clock.now = h.state.relayStartup.attempt.deadline;
+    await h.api.automaticTick();
+    assert.deepEqual(h.state.relayStartup, R.normalize());
+    assert.equal(h.handoffs.length, 0);
+    assert.equal(h.notifications.length, 0);
+  }
+});
+
 test('a new user task or draft during seat refresh cancels switching without counting a startup failure', async () => {
   for (const change of ['busy', 'draft']) {
     const h = seatRelay({ quotas: { cn: [0, 60], us2: [80, 60], us: [80, 60] } });
