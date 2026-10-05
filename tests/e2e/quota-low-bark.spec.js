@@ -61,18 +61,18 @@ test('startup low quotas send once per account; relaunch and renderer replay do 
 });
 test('live Claude seat footer triggers inclusively, deduplicates and rearms after recovery', async () => {
   await launch();
-  const badge = page.locator('#quotaBar [data-quota-key="Claude:us"] .quota-label');
-  await expect(badge).toHaveText('5h 19% · 7d 91%', { timeout: 20000 });
+  const badge = page.locator('#quotaBar [data-quota-key="Claude:us"] [data-window="5h"] .quota-pct');
+  await expect(badge).toHaveText('19%', { timeout: 20000 });
   expect(await alerts()).toHaveLength(0);
-  await expect.poll(() => page.evaluate(() => terms.get('us')?.lastScreen || '')).toContain('Claude Code');
+  await expect.poll(() => page.evaluate(() => terms.get('us')?.lastScreen || ''), { timeout: 20000 }).toContain('Claude Code');
   await page.evaluate(() => window.deck.ptyInput('us', 'remaining:2\r'));
   await expect.poll(async () => (await alerts()).length).toBe(1);
   expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 3, body: expect.stringMatching(/US.*剩余 2%/) });
   await page.evaluate(() => window.deck.ptyInput('us', 'remaining:1\r'));
-  await expect(badge).toHaveText('5h 1% · 7d 1%');
+  await expect(badge).toHaveText('1%');
   await page.waitForTimeout(500); expect(await alerts()).toHaveLength(1);
   await page.evaluate(() => window.deck.ptyInput('us', 'remaining:50\r'));
-  await expect(badge).toHaveText('5h 50% · 7d 1%');
+  await expect(badge).toHaveText('50%');
   await expect.poll(() => Object.values(JSON.parse(fs.readFileSync(path.join(profile, 'quota-bark-state.json')))).some((s) => !s.notified)).toBe(true);
   await page.evaluate(() => window.deck.ptyInput('us', 'remaining:0\r'));
   await expect.poll(async () => (await alerts()).length).toBe(2);

@@ -33,6 +33,9 @@ test('submission schema rejects invalid results and files instead of silently cu
   assert.deepEqual(M.commandReceipt({ result: 'ok', files: ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a'] }).files, ['/tmp/a b', 'C:\\work\\a', '\\\\server\\share\\a', '~/a']);
   for (const command of ['complete --result', 'ask --question', 'progress --message']) assert.ok(M.RECEIPT_CONTRACT.includes(command));
   assert.ok(M.RECEIPT_CONTRACT.includes('$env:AGENTDECK_BOARD_CLI'));
+  assert.match(M.RECEIPT_CONTRACT, /不要 unset、覆盖或清掉 AGENTDECK_/);
+  assert.match(M.RECEIPT_CONTRACT, /只在子进程里清/);
+  assert.match(M.RECEIPT_CONTRACT, /按当前终端认回自己的凭据/);
 });
 
 test('submission CLI uses its receipt token and transports exact text, files and failure', async () => {
@@ -86,6 +89,16 @@ test('quota output is recognized for Claude, Codex, Cursor and Antigravity', () 
   assert.equal(M.terminalActivity('I will test quota exceeded handling'), '');
 });
 
+test('Cursor monthly exhaustion creates a failure receipt with its native reason, including on exit', () => {
+  const sample = fs.readFileSync(path.join(__dirname, 'fixtures/cursor-monthly-limit.txt'), 'utf8').trim();
+  assert.equal(M.terminalActivity(sample, 'cursor-agent --model grok-4.7'), 'quota');
+  const receipt = M.resourceReceipt(sample, 'cursor-agent --model grok-4.7');
+  assert.equal(receipt.source, 'quota');
+  assert.equal(receipt.failed, '额度用尽：' + sample);
+  assert.equal(M.resourceFailure(receipt.failed, 'quota'), 'quota');
+  assert.equal(M.resourceReceipt(sample + '\n→ Add a follow-up ctrl+c to stop', 'cursor-agent'), null);
+});
+
 test('internal exit reports queue durably without waiting on a quitting renderer', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-exit-cli-'));
   try {
@@ -99,4 +112,58 @@ test('internal exit reports queue durably without waiting on a quitting renderer
     assert.equal(request.action, 'session-exit'); assert.equal(request.code, 7); assert.equal(request.token, 'exit-token');
     assert.equal(fs.existsSync(path.join(dir, 'responses')), false);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('quota/login/throttle failures are classified from errors, with ordinary defect counterexamples', () => {
+  for (const [line, kind] of [['Error: Quota exceeded', 'quota'], ["You've hit your usage limit", 'quota'], ['API Error: 401 Unauthorized', 'auth'], ['Not logged in. Please run /login', 'auth'], ['Error: rate_limit_error', 'rate_limit'], ['请求被限流', 'rate_limit']]) {
+    assert.equal(M.resourceFailure(line, 'automatic'), kind, line); assert.equal(M.terminalActivity(line), 'quota', line);
+  }
+  for (const line of ['Test failed: quota exceeded message was missing', 'I will test quota exceeded handling', 'Authentication test assertion failed', 'exit 7', 'Missing login button', 'Unexpected HTTP response']) assert.equal(M.resourceFailure(line, 'automatic'), '', line);
+  assert.equal(M.resourceFailure('provider unavailable', 'quota'), 'quota');
+  for (const source of ['command', '', 'review']) assert.equal(M.resourceFailure('401 Unauthorized\n429 Too many requests\nQuota exceeded', source), '', source);
+  assert.equal(M.terminalActivity('Not logged in\n→ Working ctrl+c to stop'), 'working');
+});
+
+test('resource screen evidence survives a rapid process exit, but old errors followed by work do not mask crashes', () => {
+  for (const [screen, label] of [['API Error: 401 Unauthorized', '未登录'], ['429 Too many requests', '请求被限流'], ['RESOURCE_EXHAUSTED: quota exhausted', '额度用尽']]) {
+    const receipt = M.resourceReceipt(screen);
+    assert.equal(receipt.source, 'quota'); assert.ok(receipt.failed.startsWith(label));
+  }
+  for (const screen of ['Assertion failed', 'Quota exceeded\n→ Running tests ctrl+c to stop', 'Not logged in\nusage limit reset']) assert.equal(M.resourceReceipt(screen), null);
+});
+
+test('ordinary leading resource words do not create quota state or automatic failure receipts', () => {
+  const Q = require('../quota-core');
+  for (const line of ['Rate limit handling test fails in api.js', 'Unauthorized access test still failing',
+    'Limit reached check broken', 'Usage limit reached check broken', 'Quota exhausted handling test fails',
+    'Rate limit reached check is broken', '401 Unauthorized access test still failing', '429 Too many requests test fails',
+    'RATE_LIMITED\\|function resourceError', 'grep -n "RATE_LIMITED\\|function resourceError" quota-core.js']) {
+    for (const decorated of [line, '⏺ ' + line, '│ ' + line]) {
+      assert.equal(M.terminalActivity(decorated), '', decorated);
+      assert.equal(M.resourceReceipt(decorated), null, decorated);
+      assert.equal(M.resourceFailure(decorated, 'automatic'), '', decorated);
+      assert.equal(Q.screen('Claude', decorated, []).exhausted, false, decorated);
+    }
+  }
+});
+
+test('native error codes, reset suffixes and login instructions retain automatic detection', () => {
+  for (const [line, kind] of [
+    ["You've hit your usage limit. To continue using Codex, upgrade your plan.", 'quota'],
+    ['Usage limit reached. Resets in 3h', 'quota'], ['Rate limit reached. Resets in 1h', 'rate_limit'],
+    ['API Error: 429 {"type":"error","error":{"type":"rate_limit_error","message":"Too many requests"}}', 'rate_limit'],
+    ['API Error: 401 {"type":"error","error":{"type":"authentication_error","message":"Invalid API key"}}', 'auth'],
+    ['429 {"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded"}}', 'quota'],
+    ['Not logged in. Please run /login', 'auth'], ['API Error: 401 Unauthorized', 'auth'],
+    ['Not logged in · Please run /login', 'auth'], ["Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY.", 'auth'],
+    ["You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at 3:10 PM.", 'quota'],
+    ["You've hit your usage limit. To get more access now, send a request to your admin or try again at 5pm.", 'quota'],
+    ["You've hit your session limit · resets 9:20pm", 'quota'], ['Usage limit reached · limit resets 3:10pm', 'quota'],
+  ]) {
+    assert.equal(M.resourceFailure(line, 'automatic'), kind, line);
+    assert.equal(M.terminalActivity(line), 'quota', line);
+    const receipt = M.resourceReceipt(line);
+    assert.equal(receipt.source, 'quota', line);
+    assert.equal(M.resourceFailure(receipt.failed, receipt.source), kind, 'generated receipt: ' + line);
+  }
 });

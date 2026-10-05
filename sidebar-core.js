@@ -3,15 +3,17 @@
 // the sidebar (队长 and the sessions it opened, folders top to bottom, then
 // loose sessions), so swiping left and right walks the list you see. No DOM, no Electron: runs in the page and tests.
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports ? require('./claude-seats-core') : root.ClaudeSeatsCore);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.SidebarCore = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (S) {
   'use strict';
 
   const MAX_FOLDERS = 100;
   const MAX_ARCHIVED = 500;
   const FONT_DEFAULT = 13;
+  // Hermes web console (private, owner-only); opened in the system browser.
+  const HERMES_HUB_URL = 'https://hub.18-139-28-180.sslip.io/';
   function normalizeFontSize(size) {
     return typeof size === 'number' && Number.isFinite(size) ? Math.max(10, Math.min(20, size)) : FONT_DEFAULT;
   }
@@ -138,6 +140,57 @@
     return folders.filter((f) => f.id !== folderId);
   }
 
+  // Crew under 队长, one group per visible model (and Claude seat, when pinned).
+  // Groups with more people working come first; inside a group, recent activity first.
+  function crewModelGroups(members, seats) {
+    const configured = S.normalize(seats);
+    const map = new Map();
+    for (const raw of Array.isArray(members) ? members : []) {
+      if (!raw || raw.id == null) continue;
+      const label = String(raw.label || '').trim() || '未识别';
+      const metadata = configured.find((s) => s.id === raw.seat);
+      const seat = metadata?.id || '';
+      const key = label + '\u001f' + seat;
+      let group = map.get(key);
+      if (!group) {
+        group = {
+          key, label, seat, seatName: metadata?.name || '', flag: metadata?.icon || '',
+          iconProvider: raw.iconProvider || '',
+          working: 0, lastActive: 0, members: [],
+        };
+        map.set(key, group);
+      }
+      if (!group.iconProvider && raw.iconProvider) group.iconProvider = raw.iconProvider;
+      const lastActive = Number(raw.lastActive) || 0;
+      group.members.push({ id: raw.id, lastActive });
+      if (raw.working) group.working += 1;
+      if (lastActive > group.lastActive) group.lastActive = lastActive;
+    }
+    const byRecent = (a, b) => b.lastActive - a.lastActive || String(a.id).localeCompare(String(b.id));
+    const groups = [...map.values()];
+    for (const group of groups) {
+      group.members.sort(byRecent);
+      group.ids = group.members.map((member) => member.id);
+      delete group.members;
+    }
+    groups.sort((a, b) => b.working - a.working || b.lastActive - a.lastActive || a.label.localeCompare(b.label) || a.seat.localeCompare(b.seat));
+    return groups;
+  }
+
+  function normalizeCollapsedModels(raw) {
+    const out = [];
+    const seen = new Set();
+    for (const key of Array.isArray(raw) ? raw : []) {
+      if (typeof key !== 'string') continue;
+      const cleanKey = key.replace(/[\u0000-\u001e\u007f]/g, '').trim();
+      if (!cleanKey || cleanKey.length > 160 || seen.has(cleanKey)) continue;
+      seen.add(cleanKey);
+      out.push(cleanKey);
+      if (out.length >= 40) break;
+    }
+    return out;
+  }
+
   function normalizeArchived(raw) {
     const out = [];
     const seen = new Set();
@@ -151,7 +204,7 @@
   }
 
   return {
-    MAX_FOLDERS, FONT_DEFAULT, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
-    orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, normalizeArchived,
+    MAX_FOLDERS, FONT_DEFAULT, HERMES_HUB_URL, normalizeFontSize, validId, activityLine, newFolderId, normalizeFolders, folderOf, groupSessions,
+    orderedColumns, captainOf, moveColumn, nextFolderName, removeFolder, crewModelGroups, normalizeCollapsedModels, normalizeArchived,
   };
 });

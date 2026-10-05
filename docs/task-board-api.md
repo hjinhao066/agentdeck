@@ -3,7 +3,8 @@
 本层不创建界面。界面作者直接调用 `window.TaskBoard`，所有文件读写通过
 受主页面校验的 preload IPC 到主进程；页面不持有 Node、任意 IPC 或可选文件路径。
 默认 `dispatcher=gemini`，可改回 `captain`。自动流转和心跳均不调用模型；
-只有明确开始卡片时，Gemini 调度模式会开模型会话。
+只有明确开始卡片时，Gemini 调度模式会开模型会话；带 `verify` 的卡片进入待验收后，
+心跳会让主界面自动开一个审查会话（见「自动验收」）。
 
 ## 文件与字段
 
@@ -19,7 +20,7 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | project | 文件项目名；建卡后不可改 |
 | title / detail | 标题 / 完整任务说明 |
 | status | `todo` 待办、`doing` 进行中（也是「开始」入口）、`review` 待验收、`needs_user` 等用户、`done` 完成 |
-| flag | `null` 正常、`failed` 失败、`blocked` 前置未完成、`held` 挂起 |
+| flag | `null` 正常、`failed` 失败、`blocked` 前置未完成、`held` 挂起、`quota` 额度/登录/限流问题 |
 | order | 项目内非负数字，允许小数插入；界面按 project/order/id 排序 |
 | depends_on | 前置卡片 ID 数组，允许跨项目；不能缺失或成环 |
 | assignee | `null` 或 `{agent, model}`；未显式指定模型时先为 `default`，识别到本会话实际模型后更新，不猜账号配置 |
@@ -32,8 +33,14 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | important | 可选 boolean，默认 false；明确标为重要的卡片交队长调度，与 verify 独立 |
 
 程序还保存 `attempt_id`、`review_session`、`attempt_closed`、`last_event`、
-`last_failure_attempt`、`consecutive_failures`、`dispatch_session_id`、
-`dispatch_claim`、`start_previous_status`；迁移卡另有 `migration_source`。
+`last_failure_attempt`、`consecutive_failures`、`session_host`、`session_bound_at`、
+`dispatch_session_id`、`dispatch_host`、`dispatch_bound_at`、
+`dispatch_claim`、`dispatch_wait`（额度排队提示）、`resource_failure`（quota/auth/rate_limit）、`start_previous_status`；迁移卡另有 `migration_source`。
+自动验收另存（只在 `verify=true` 的卡片上出现）：`review_round`（第几轮验收，每次执行回执进入待验收加一）、
+`exec_receipt`（本轮执行会话的回执全文、文件、会话 id、尝试 id 和执行者 `{agent, model}`；审查会话绑定后
+`session_id`/`assignee` 会换成审查者，所以单独留一份）、`review_claim`（本轮审查认领 `{round, key, owner, delivered}`）、
+`review_block`（选不出审查者或结论不明确时的 `{round, reason}`，界面显示给队长）、`review_reject`（审查员不通过的
+原话 `{round, findings, key, owner, delivered}`，用于自动返工）。
 客户端编辑时保留这些字段以及未知字段，不自行构造或删除流转标记。
 
 每次读写重读磁盘，无长期数据缓存；本机进程锁放系统临时目录，写入使用同目录
@@ -59,9 +66,14 @@ await TaskBoard.update(card.id, { title: '新标题', order: 1.5 }, card.updated
 // update 只允许 title/detail/order/depends_on/verify/important，必须提供旧 updated。
 await TaskBoard.move(card.id, 'doing', card.updated); // 进入开始，由心跳发现
 await TaskBoard.archiveDone('agentdeck');
-await TaskBoard.startCard(card.id); // 拖到开始优先用这个接口，即时认领、调度
+await TaskBoard.startCard(card.id); // 显式开始，按 dispatcher 设置调度
+await TaskBoard.requestStart(card.id); // 拖到进行中：与 startCard 使用同一派活路径
+await TaskBoard.reorder(card.id, { before: otherCard.id }); // 同项目排序，也可 after；无锚点放末尾
+await TaskBoard.answer(card.id, '用户的答案'); // 回答需要你，交给队长继续推进
 TaskBoard.settings();              // {dispatcher:'gemini'}
 TaskBoard.settings('captain');     // 持久化到本机 config.json
+TaskBoard.autoVerify();            // true；默认开启自动验收
+TaskBoard.autoVerify(false);       // 总开关，持久化到本机 config.json，心跳下一次巡检生效
 const unsubscribe = TaskBoard.onChange(() => refreshFromTaskBoard());
 unsubscribe();
 ```
@@ -71,10 +83,14 @@ unsubscribe();
 | `list(filter = {})` | 可选 `project`、`status`、`archived`；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
 | `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
 | `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
-| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；清除旧会话绑定，移入 doing 时检查前置 |
+| `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；移入 doing 时保留未归档会话作为占用标记并检查前置；其他移动清除绑定 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
-| `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {ignored: true, card?}>` |
+| `startCard(id)` | 必须已有队长；拒绝 archived/done/held/review 卡和前置未完成的卡 | `Promise<{card, dispatcher, session_id?} \| {queued:true, card} \| {ignored:true, card?, occupied?:true}>`；occupied 表示未归档会话占用 |
+| `requestStart(id)` | 拖到进行中的入口；必须已有队长，沿用开始校验 | 同 `startCard`；按当前 dispatcher 派活 |
+| `reorder(id, anchor = {})` | 可选 before 或 after 卡片 ID，只接受同项目锚点，两者不可同时提供；无锚点放项目末尾 | `Promise<{card, notices}>`；只改 order，必要时重排项目内序号 |
+| `answer(id, reply)` | 非空答案，必须已有队长 | 通知队长；需要你的卡回到 doing，活跃会话保留绑定，无绑定时认领并通知队长 |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
+| `autoVerify(enabled?)` | 布尔；省略则只读，缺省 true（不接受其他类型） | 同步返回当前是否开启；关闭后心跳不再认领审查、不再自动返工，已开的会话不受影响 |
 | `onChange(callback)` | 文件变化通知；回调不接收卡片正文 | 同步返回取消订阅函数 |
 
 `add` 忽略输入中的初始状态、会话绑定和 order；需建卡后通过对应接口修改。
@@ -107,19 +123,37 @@ ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题�
 任务看板列出全部任务。纯逻辑在 `task-board-ui-core.js`（有单元测试），界面在
 `task-board-ui.js`。
 
-- 布局：每个项目一条泳道，横向五列 待办 / 进行中 / 待验收 / 需要你 / 完成，列头
-  显示总数并在滚动时固定。项目名不分大小写（`AgentDeck` 与 `agentdeck` 同一条
-  泳道，显示多数卡片用的写法）；颜色用 `CrewMapCore.projectHue(项目名)`，同样不分
-  大小写，与架构图一致。窗口窄于五列最小宽度时横向滚动，卡片不挤压、不重叠。
-- 卡片：标题（最多两行）、负责会话的模型徽标和会话名（会话不在时显示 assignee 或
-  「会话已关闭」，未派活显示「未派活」）、最近回执摘要（最多两行）、标签（失败、
-  等「X」完成、可并行、挂起、返工次数）和更新时间。失败卡留在原状态列，左侧红条。
-- 点有会话的卡片（或键盘 Enter）关闭看板并跳到那一列；已归档的会话先恢复。
-- 筛选项目、按最近更新 / 任务顺序排序、刷新图标；只读视图不拖拽、不建卡、不编辑、
-  不归档，不写任务数据。
-- 打开时订阅 `onChange`，关闭时取消订阅。打开后焦点进入项目筛选框，Esc 或关闭
+- 布局：顶部是「全部 / 各项目」筛选条（带数量，筛选后任务和统计同步更新）和需要你/完成统计，
+  下面一条「需要你」提醒条，再下面是固定的全局列头：待办 / 进行中 / 待验收 / 需要你 / 完成。
+  每个项目是一个可折叠分组，标题栏横贯整个看板（36–40px）：折叠箭头、项目色点、名称、
+  「N 件待完成」，右侧是各状态数量（需要你为红色，可点开该组第一个问题）。所有分组共用同一套
+  列宽，列头在滚动时固定。点标题栏折叠/展开，折叠状态记在本机；顶部有「展开全部 / 收起全部」
+  图标。完成列默认折成一个数量，点列头展开。没有任何待办的项目归入底部可展开的「已完成的
+  Agent」（它们不参与拖动排序）。空列只显示一个淡色短横线。容器宽度小于 740px（含详情抽屉
+  打开且窗口较窄时）各分组的列改为在标题栏下竖排，每列自带标签。项目名不分大小写；颜色用
+  `CrewMapCore.projectHue(项目名)`，与架构图一致，只用于小色点。
+- 卡片：标题（16px，最多两行）加一行「最近动态 + 更新时间」。动态依次取：失败原因、挂起、
+  等「X」完成、最近回执、运行状态（队员正在干活 / 已派给队员 / 还没有队员在做）、说明。
+  「进行中」卡片的小圆点只表示是否真有队员在做，运行提示与它一致。失败卡显示失败标记和原因，
+  红色边框；额度/登录/限流显示对应标记。「需要你」卡片这一行显示问题。每格默认显示 3 张，
+  其余用「展开剩余 N 项」。卡片很窄时（详情抽屉打开）更新时间隐藏，动态占满整行，时间仍在
+  悬停提示里。「谁在做」只出现在悬停提示和详情抽屉里。
+- 「需要你」提醒条：每个等待中的卡片是一个按钮，点开该卡详情；「处理」打开第一个。
+- 点卡片（或键盘 Enter）打开详情抽屉，显示完整说明、负责会话和相关文件；通过会话入口
+  跳到对应终端，已归档的会话先恢复。「需要你」把问题放在答案框上方，发送后交给队长继续推进。
+- 项目筛选、项目折叠和拖动排序、完成列开关、已完成区开关保存在本机 config.json；卡片列内拖动排序通过
+  `reorder` 保存到任务正本，跨列拖动遵守原流转校验。拖到进行中调用 `requestStart`，与显式开始一样按当前 dispatcher 派活；依赖未完成时提示原因并留在原列。
+  Alt+方向键提供卡片排序/状态移动；无操作时只读任务数据，刷新不改卡片。
+- 打开时订阅 `onChange`，关闭时取消订阅。打开后焦点进入项目筛选入口，Esc 或关闭
   图标关闭并返回侧边栏入口；键盘切换终端列也关闭看板。当前筛选项目没有可见卡片时，
   同一次刷新自动切回全部项目。
+
+界面里的复制、刷新、关闭、展开/收起等常见动作一律是图标按钮（复制为两个重叠方框，成功后短暂变勾），
+都带悬停提示、`aria-label`、键盘焦点和不小于 28px 的点击面积。
+
+复制路径和编号统一使用 `deck.clipboardWrite(text)`，同步读取使用 `deck.clipboardRead()`；
+两者都走 release 的 `clipboard:write-sync` / `clipboard:read-sync` 主进程通道。
+隔离测试 profile 使用私有剪贴板，复制失败不会显示成功。
 
 ## 命令
 
@@ -142,6 +176,9 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 不裁剪列表或说明。`--project` 无卡片时仅为会话项目元数据；有 `--task-id` 时必须
 匹配卡片项目，省略则从卡片继承。重复请求不会重新派活，旧会话/旧尝试的回执
 不会改当前卡。`new` 排队时保留关联，真正开会话时再次校验前置和 held 状态。
+队长的 `task move ... --status doing` 会消费自动开始边沿，不开调度员；队长随后
+`new --task-id` 或 `tell` 安排返工（verify 卡的审查不通过由自动验收直接返工，不需要这一步）。`new` 拒绝仍活跃的执行/审查尝试；旧会话已归档
+或旧尝试已失败时允许替换，即使旧数据漏写 attempt_closed。
 
 ## 流转
 
@@ -150,22 +187,65 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 | 指令真正送到执行会话 | doing；排队不会假装已开工 |
 | 执行 complete | verify=true → review，否则 done；记录第一句结果 |
 | ask | needs_user；写第一句问题，完整问题仍给队长 |
-| complete --failed / 崩溃 / 额度用尽 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
+| 普通 complete --failed / 崩溃 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
+| quota/process/automatic 来源的额度用尽 / 未登录 / 限流（执行、审查或调度） | doing + quota，保留连续失败计数，不计返工、不触发 held；失败原因给队长。command 的失败文案不做资源分类，照常累计失败 |
 | 所有前置 done | 后续 todo 的 blocked 自动清除，可开始（不会偷偷启动） |
-| review 卡片 new --task-id | 绑定审查会话；审查期间仍 review |
+| review 卡片 new --task-id | 绑定审查会话；审查期间仍 review（verify 卡片通常由「自动验收」开，不必手动） |
 | 审查 complete | done，清除连续失败次数 |
-| 审查 complete --failed / 队长从 review move 回 doing | rework_count+1，doing + failed；队长用 new 或原会话 tell 返工 |
+| 审查 complete --failed / 队长从 review move 回 doing | rework_count+1，doing + failed；自动验收的审查员不通过会自动返工，其余由队长用 new 或原会话 tell 返工 |
+| 自动验收：verify 卡进入 review | 心跳认领本轮，主界面开一个不同提供方的审查会话；选不出则停在 review 并写明原因 |
+| 自动验收：审查员写「通过」 | done |
+| 自动验收：审查员不通过 | 原话发回原执行会话（已归档先恢复）返工；返工 complete 后进入下一轮审查 |
 | 连续失败达到两次 | doing + held，通知队长，不派活、不重试 |
 | held 后队长明确 move 到 todo/doing | 解挂，清零连续失败次数，保留累计 rework_count |
 | 已结束却三分钟无命令回执 | needs_user，只有「已结束，未提交回执」，不把屏幕当成功结果 |
 
 验收失败后的执行完成不会清除验收失败计数，两轮验收都失败仍会挂起。
-执行/验收会话的选择由队长或调度员安排；这些状态和阈值不由 AI 判断。
+执行会话的选择由队长或调度员安排，验收会话的选择见「自动验收」；这些状态和阈值不由 AI 判断。
 停止/归档一个忙会话的卡片不会假装成功，需要队长明确更新卡片。
+
+## 自动验收
+
+带 `--verify`（`verify=true`）的卡片，执行会话交回执进入「待验收」后，不需要队长动手：
+
+1. **认领（心跳，不调用模型）**：每轮验收只认领一次。条件：`status=review`、`verify`、未归档、无 flag、
+   带本轮 `review_round` 和 `exec_receipt`、还没有审查会话绑定（`review_session` 不为真）、本轮没有认领也没有
+   `review_block`、本机没有别的会话正在这张卡上干活。认领先原子写入 `review_claim`（带本机 hostname），再通知主界面；
+   尚未送达的认领在重启后原样再送一次，不会重新认领。没带 `--verify` 的卡、手动移进 review 的卡、升级前就停在
+   review 的旧卡（没有 `exec_receipt`）都不会被自动认领。
+2. **选审查者**：必须和执行会话**不同提供方/模型**。按「谁做的模型」分家族（Anthropic / OpenAI / Google / xAI；
+   看模型名，看不出再看 agent：Cursor 里跑的 Claude 算 Anthropic，agy 里跑的 GPT-OSS 算 OpenAI），
+   执行者的家族看不出来也不猜。候选按调度员分工表的顺序：Gemini 3.8 Flash（队长说明第 16 条的默认验收者，不耗
+   Claude 额度）、Codex GPT-6.1 Sol、Claude Opus 5.5（终审模型）、Antigravity 的 Opus 4.6 Thinking（审查模型）。
+   跳过同家族的，也跳过按 `commandQuota` 判断已用尽的（未知不算用尽）。选不出就写 `review_block`（原因里列出每个
+   候选为什么不行）、给队长一条通知、卡片留在 review，不会自己审自己，也不会直接算完成；额度之后恢复不会自动再试，
+   由队长手动 `new --task-id` 开审查会话（绑定后 `review_block` 清除）。
+3. **开会话**：走和 `new` 同一个入口（`placeSession`）：并发上限、内存吃紧暂停、额度用尽都进同一个排队，
+   不绕过。会话标题「审查：卡片标题」，`--reviews` 指向被审查会话，工作目录沿用执行会话。尝试 id 固定为
+   `auto-review-<卡片id>-r<轮次>`，所以重启、额度恢复、心跳重跑只会落到同一个尝试上。排队中的审查会话在真正开之前
+   会再确认这一轮仍是待验收，否则放弃。连续三次开不出来也转 `review_block` 交队长。
+4. **审查任务**包含：卡片标题和说明、执行会话回执全文和它列的文件、被审查的会话 id 和执行者，以及固定验收要求：
+   亲自核对文件存在、提交已推送、只跑相关测试（不跑全量 E2E）、截图落盘、有没有删用例或放宽断言；只审不改；
+   结论的第一个词必须是「通过」或「不通过」，不通过要列具体问题。
+5. **结论**：`complete` 以「通过」开头 → done。`complete --failed`，或 `complete` 以「不通过」开头 → 不通过。
+   没写明确结论的回执**不算通过**：卡片留在 review，写 `review_block` 并通知队长。
+   不通过按原有规则 `rework_count+1`、doing + failed，并把审查员的原话（`review_reject.findings`，不裁剪）
+   连同固定说明发回原执行会话；原会话已归档就先恢复再绑定卡片（尝试 id `auto-rework-<卡片id>-r<轮次>`）。
+   返工后会话交回执，进入下一轮并自动开新的审查会话。只有审查员亲手写的结论才会发回；审查会话崩溃、额度用尽
+   不是审查意见，按原有失败规则处理并通知队长，不自动返工。
+6. **挂起**：连续两轮不通过仍按原有阈值 `held`，通知队长，不再自动返工或重审。
+   原执行会话已经找不到时，不通过的原话作为通知交队长，不重试。
+
+不重复靠四层：持久化的认领/返工标记（每轮一个）、固定尝试 id（`new` 按它去重，`bind` 对同一尝试幂等）、
+队列里已有这张卡的请求就不再排、已有以该尝试 id 创建的会话就只补标记。队长已经手动开了（或排了）审查会话的卡，
+自动开审查直接放弃。队长任何 `task move` 或重新绑定都会取代尚未送出的自动返工。
+
+总开关 `TaskBoard.autoVerify(false)`（本机 config.json 的 `taskBoard.autoVerify`，缺省开启）。
+调试日志只记 `task-board review claimed id=… round=…`，不含卡片正文。
 
 ## startCard、心跳与调度
 
-需要已存在的队长。默认 Gemini 开后台 Antigravity
+需要已存在的队长。`requestStart`（拖动或键盘移到进行中）与 `startCard` 共用派活入口、认领和配额排队逻辑。默认 Gemini 开后台 Antigravity
 `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`，使用与队长相同的
 模型分工表，把卡片整理成一件任务，执行 `new --task-id ... --project ...`。
 该会话没有队长 control token，只允许自己的 complete/ask/progress，以及为
@@ -174,12 +254,37 @@ important=true、空 detail、需要用户澄清、已有失败的卡片交队�
 说不清也用 ask 转交。并发满时交队长安排。dispatcher=captain 时只给后台回执
 通道发「用户要开始卡片 X」，不向输入框注入。
 
+自动调度和 `new` 开会话前读取本机被动额度观测，按命令所选 provider 和当前
+Claude 席位判断。额度明确已用尽，或剩余不高于同级换模型阈值时，换成对照表里
+另一家能用的模型再开；会话标题和回执写「原本派X，因额度换成Y」，并通知队长。
+「未知」不换走，也不能当作替换目标。对照表里没有独立额度池的模型（Cursor 的
+Claude、agy 的 claude-sonnet-4-6 与 gpt-oss-120b-medium）可以当作替换。
+`--command` 点名模型时不自动换，只排队并说明原因。没有可换模型且已用尽时仍不开
+PTY，显示「额度用尽，稍后自动开」。
+调度卡保留未送出的 dispatch_claim，队长列心跳/任务库巡检在额度恢复或出现可换
+模型后重试；排队执行会话同样等到能开再开工，其他已能开的排队任务仍能先执行。
+未知额度不等于可用，但也不伪造用尽状态；Cursor/Antigravity 只使用已支持的模型额度池。
+队长在等待期间手动 new 绑定或排队同一卡片，会消费认领，旧调度请求不再开会话。
+
 主进程监听 tasks 目录（含原子 rename），100ms 合并通知，另每 60 秒巡检。
 发现外部卡片新进入 doing 且没有执行/调度会话、没有 failed/held/blocked 时，
-先原子写入 `dispatch_claim`，再通知同一个 startCard 入口。普通内容更新、队员
+先原子写入 `dispatch_claim`，再通知同一个 startCard 入口。派出前重查认领键及 doing 状态，卡片被拖回或认领被替换后丢弃旧请求；并重查
+执行/调度指针和本机未归档的卡片关联会话，刚开的执行或审查会话也阻止重复调度。
+未归档的已完成会话仍阻止自动调度，但允许队长显式 new 替换。普通内容更新、队员
 开工事件、重复文件通知均不启动调度。同一卡片同一次开始只认领一次；退出重开
 保留 delivered 标记，尚未送出的本机认领在有队长后接续。再次开始必须先回 todo，
-再通过 startCard 或移入 doing。历史迁移卡已标认领完成，避免重复派旧活。
+再通过 startCard 或移入 doing；只要仍有关联的未归档调度员或队员会话，拖回再开始也不会叠开会话。历史迁移卡已标认领完成，避免重复派旧活。
+新执行/调度绑定由主进程记录本机 hostname，不接受调用方指定归属。已关闭的尝试若本机
+找不到旧会话，移回 doing 时清除旧绑定；未关闭的本机旧会话缺失时也可直接 new 重绑，
+无需先移动卡片。旧版本无 hostname 的绑定，用本机归档和 mainSession.tasks 的派活记录
+证明归属：曾在本机派活、当前列已消失的 id 视为关闭。明确属于另一台机器，或既无机器
+归属也无本机记录的未关闭绑定继续保护，不能仅凭本机 ledger 缺失就覆盖远端工作。
+新绑定尚未开工、配置尚未落盘的 15 秒内保留占用；已开工或有本机删除记录时无需等待。
+心跳单次扫描复用一份会话配置，下次扫描重新读取。
+拖到进行中遇到旧会话占用时，界面提示队长检查未归档会话，不再声称有队员正在做。
+终端状态与侧栏额度采样共用原生错误识别，只接受完整额度提示、原生重置/重试后缀、
+登录指引或明确的 API 错误码/错误类型；Rate limit、Unauthorized、Limit reached 等
+普通回复的主题前缀不再触发额度失败回执或额度缓存。
 日志通过已有主进程诊断日志（系统临时目录 `agentdeck-notify.log`）记录
 `task-board start claimed`、卡片 ID、项目和认领键，
 不记录卡片正文或能力 token；无变化不调用模型、不产生日志。
@@ -207,8 +312,12 @@ npm run test:e2e -- tests/e2e/task-board.spec.js tests/e2e/command-receipts.spec
 npm audit
 ```
 
+自动验收另有单测 `tests/auto-verify.test.js`（家族与选择、结论解析、认领/轮次/返工状态、心跳重复触发和重启）
+和 `tests/auto-verify-session.test.js`（真实任务库 + 心跳 + `main-session.js` 的整条链路：不同提供方、排队与内存/额度、
+重启恢复、选不出审查者、归档执行会话恢复、两轮失败挂起）。
 task-board spec 覆盖依赖解锁、回执原文、两轮验收挂起、异常退出/额度失败、
 旧会话回执、Gemini 单卡权限和排队、外部原子写入、认领去重、设置持久化、
-同步冲突后流转重试。其 Gemini 可执行文件替换为 stand-in；它验证调度入口与
+同步冲突后流转重试；自动验收两条用例（用替身审查员，页面里临时替换候选表）：一轮不通过返工、
+二轮通过，以及选不出审查者后手动接手。该 spec 开头把 `autoVerify` 关掉，因为其余用例自己手动开审查会话。其 Gemini 可执行文件替换为 stand-in；它验证调度入口与
 权限，不代表已实测真实 Gemini 模型或两台机器同时同步。全量 E2E 留给合并
 main 时运行；本分支验证不包含打包运行、安装或物理 Windows 设备。

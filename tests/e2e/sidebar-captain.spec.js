@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -55,14 +56,15 @@ test.beforeAll(async () => {
     config.crewOpen = true;
     Sidebar.render();
   });
-  for (const [i, model] of ['Grok 4.7', 'Flash 3.8', 'GPT-6.1 Sol'].entries()) {
-    await expect(page.locator(`.nav-crew [data-col-id="worker-${i}"] .agent-model-label`)).toHaveText(model, { timeout: 15000 });
+  for (const model of ['Grok 4.7', 'Flash 3.8', 'GPT-6.1 Sol']) {
+    await expect(page.locator('.nav-crew .crew-model .agent-model-label', { hasText: model })).toHaveCount(1, { timeout: 15000 });
   }
+  await expect(page.locator('.nav-crew .colnav-item .agent-model-label')).toHaveCount(0);
   await page.evaluate(() => [0, 1, 2].forEach((i) => window.deck.ptyInput(`worker-${i}`, 'keep working\r')));
 });
 
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -82,11 +84,13 @@ test('Captain badge repairs poisoned model cache using its own custom statusline
   await expect(sidebar.locator('.agent-model-label')).toHaveText('Opus 5.5');
 });
 
-test('Captain arrow folds without selecting it; live counts stay visible, its row still opens chat', async ({}, testInfo) => {
+test('Captain arrow folds without selecting it; live counts stay on its one-line row, its row still opens chat', async ({}, testInfo) => {
   const row = page.locator('.captain-item');
   const fold = row.locator('.captain-fold');
   const counts = row.locator('.crew-counts');
-  await expect(counts).toHaveText('3 干活中', { timeout: 15000 });
+  // One line: a tiny working count; the full breakdown is its tooltip.
+  await expect(counts).toHaveAttribute('title', '3 干活中', { timeout: 15000 });
+  await expect(counts).toHaveText('3');
   await expect(page.locator('.crew-head, .nav-crew .nav-folder-name, .nav-crew .nav-folder-ico')).toHaveCount(0);
   await expect(row).not.toContainText('后台');
   await expect(fold).toHaveAttribute('title', '收起队员列表');
@@ -107,14 +111,15 @@ test('Captain arrow folds without selecting it; live counts stay visible, its ro
   await page.evaluate(() => window.deck.ptyInput('worker-1', '\x1b'));
   await expect.poll(() => page.evaluate(() => terms.get('worker-1').state)).toBe('done');
   await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'failed'; Sidebar.refreshCrew(); });
-  await expect(counts).toHaveText('2 干活中 · 1 失败');
+  await expect(counts).toHaveAttribute('title', '2 干活中 · 1 失败');
+  await expect(row).toHaveAttribute('title', /^队长 · 2 干活中 · 1 失败/);
   const dir = process.env.AGENTDECK_SCREENSHOT_DIR || testInfo.outputDir;
   fs.mkdirSync(dir, { recursive: true });
   await page.mouse.move(800, 100);
   await page.evaluate(() => document.activeElement?.blur());
   await page.locator('#colNav').screenshot({ path: path.join(dir, 'sidebar-folded.png') });
   await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'done'; Sidebar.refreshCrew(); });
-  await expect(counts).toHaveText('2 干活中 · 1 完成');
+  await expect(counts).toHaveAttribute('title', '2 干活中 · 1 完成');
   await fold.focus();
   await page.keyboard.press('Enter');
   await expect(page.locator('.nav-crew .colnav-item')).toHaveCount(3);
@@ -122,47 +127,53 @@ test('Captain arrow folds without selecting it; live counts stay visible, its ro
   await page.evaluate(() => ChatUI.setMode('captain', 'term'));
   await row.locator('.cn-label').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('captain');
-  await expect(page.locator('.column[data-col-id="captain"]')).toHaveClass(/chat-mode/);
+  await expect(page.locator('.column[data-col-id="captain"]')).not.toHaveClass(/chat-mode/);
   await expect(fold).toHaveAttribute('aria-expanded', 'true');
   await page.evaluate(() => {
     MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'working';
     window.deck.ptyInput('worker-1', 'keep working\r');
   });
-  await expect(counts).toHaveText('3 干活中');
+  await expect(counts).toHaveAttribute('title', '3 干活中');
 });
 
-test('worker titles use two full-width lines above metadata at default, minimum and wide sidebar widths', async ({}, testInfo) => {
+test('worker titles stay on one line with the time; the model is the group header', async ({}, testInfo) => {
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 760));
   for (const width of [252, 200, 420]) {
     await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
-    const rows = page.locator('.nav-crew .colnav-item');
-    await expect(rows.locator('.cn-label')).toHaveText(titles);
+    const labels = await page.locator('.nav-crew .colnav-item .cn-label').allTextContents();
+    expect(labels.slice().sort()).toEqual(titles.slice().sort());
     for (let i = 0; i < titles.length; i++) {
-      const row = rows.nth(i);
+      const row = page.locator(`.nav-crew [data-col-id="worker-${i}"]`);
       await page.mouse.move(800, 100);
       await page.evaluate(() => document.activeElement?.blur());
       await expect(row.locator('.cn-meta')).toHaveText(/\d+ 分钟/);
+      await expect(row.locator('.agent-model-label')).toHaveCount(0);
       const check = async () => row.evaluate((el) => {
         const label = el.querySelector('.cn-label');
-        const badge = el.querySelector('.cn-badge');
-        const l = label.getBoundingClientRect(), b = badge.getBoundingClientRect(), r = el.getBoundingClientRect();
         const meta = el.querySelector('.cn-meta');
+        const sub = el.querySelector('.cn-sub');
+        const l = label.getBoundingClientRect(), r = el.getBoundingClientRect();
         const m = meta.getBoundingClientRect();
-        return { titleWidth: l.width, modelBelow: b.top >= l.bottom,
-          timeBelow: getComputedStyle(meta).display === 'none' || m.top >= l.bottom,
-          contained: l.right <= r.right, clamped: getComputedStyle(label).webkitLineClamp === '2',
+        const mid = (b) => b.top + b.height / 2;
+        const metaHidden = getComputedStyle(meta).display === 'none';
+        return { titleWidth: l.width,
+          sameLine: metaHidden || Math.abs(mid(l) - mid(m)) <= 2,
+          subHidden: getComputedStyle(sub).display === 'none',
+          contained: l.right <= r.right + 1 && (metaHidden || m.right <= r.right + 1),
+          clamped: getComputedStyle(label).whiteSpace === 'nowrap' && getComputedStyle(label).textOverflow === 'ellipsis' && getComputedStyle(label).overflow === 'hidden',
           lines: l.height / parseFloat(getComputedStyle(label).lineHeight),
           fontSize: parseFloat(getComputedStyle(label).fontSize),
-          navFontSize: parseFloat(getComputedStyle(document.querySelector('.nav-row')).fontSize) };
+          navFontSize: parseFloat(getComputedStyle(document.querySelector('.nav-row')).fontSize),
+          nowrap: getComputedStyle(el).flexWrap === 'nowrap' };
       });
-      expect(await check()).toMatchObject({ modelBelow: true, timeBelow: true, contained: true, clamped: true });
+      expect(await check()).toMatchObject({ sameLine: true, subHidden: true, contained: true, clamped: true, nowrap: true });
       const layout = await check();
-      expect(layout.titleWidth).toBeGreaterThan(120);
-      expect(layout.lines).toBeLessThanOrEqual(2.01);
+      expect(layout.titleWidth).toBeGreaterThan(width === 200 ? 60 : 100);
+      expect(layout.lines).toBeLessThanOrEqual(1.35);
       expect(layout.fontSize).toBe(12.5);
       expect(layout.fontSize).toBeLessThan(layout.navFontSize);
       await row.hover();
-      expect(await check()).toMatchObject({ modelBelow: true, clamped: true });
+      expect(await check()).toMatchObject({ sameLine: true, subHidden: true, clamped: true, nowrap: true });
       for (const button of await row.locator('.cn-actions button').all()) {
         await expect(button).toHaveAttribute('aria-label', /.+/);
         await expect(button).toHaveAttribute('title', /.+/);
@@ -180,10 +191,54 @@ test('worker titles use two full-width lines above metadata at default, minimum 
     await page.evaluate(() => document.activeElement?.blur());
     const dir = process.env.AGENTDECK_SCREENSHOT_DIR || testInfo.outputDir;
     fs.mkdirSync(dir, { recursive: true });
-    await expect(rows.locator('.cn-sub')).toHaveText(['✻ Doing…', '✻ Doing…', '✻ Doing…']);
+    await expect(page.locator('.nav-crew .colnav-item .cn-sub')).toHaveText(['✻ Doing…', '✻ Doing…', '✻ Doing…']);
     await page.evaluate(() => { document.getElementById('navList').scrollTop = 0; });
     await page.locator('#colNav').screenshot({ path: path.join(dir, `sidebar-${width}.png`) });
   }
+});
+
+test('each model is one collapsible header and a member click still opens that session', async () => {
+  await page.evaluate(() => { config.crewOpen = true; config.crewModelsCollapsed = []; config.navWidth = 252; applyNavWidth(); Sidebar.render(); });
+  const headers = page.locator('.nav-crew .crew-model');
+  await expect(headers).toHaveCount(3);
+  for (const [model, id] of [['Grok 4.7', 'worker-0'], ['Flash 3.8', 'worker-1'], ['GPT-6.1 Sol', 'worker-2']]) {
+    const head = headers.filter({ has: page.locator('.agent-model-label', { hasText: model }) });
+    await expect(head).toHaveCount(1);
+    await expect(head.locator('.crew-model-icon svg')).toHaveCount(1);
+    await expect(head.locator('.crew-model-count')).toHaveText('1');
+    await expect(head.locator('.crew-model-count')).toHaveAttribute('aria-label', new RegExp(model.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '：1 干活中'));
+    const fold = head.locator('.crew-model-fold');
+    await expect(fold).toHaveAttribute('aria-label', '收起 ' + model);
+    await expect(fold).toHaveAttribute('aria-expanded', 'true');
+    await expect(fold).toHaveText('');
+    await expect(fold.locator('svg')).toHaveCount(1);
+    const box = await fold.boundingBox();
+    expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(24);
+    await fold.focus();
+    await expect(fold).toBeFocused();
+    const row = page.locator(`.nav-crew [data-col-id="${id}"]`);
+    await expect(row.locator('.cn-sub')).toBeHidden();
+    await expect(row).toHaveAttribute('title', new RegExp(titles[Number(id.slice(-1))].replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    const line = await row.evaluate((el) => {
+      const parts = ['.cn-dot', '.cn-label', '.cn-meta'].map((sel) => el.querySelector(sel).getBoundingClientRect());
+      const mid = (b) => b.top + b.height / 2;
+      return parts.every((b, i) => Math.abs(mid(b) - mid(parts[0])) <= 2) && getComputedStyle(el).flexWrap === 'nowrap';
+    });
+    expect(line).toBe(true);
+  }
+  const flash = headers.filter({ has: page.locator('.agent-model-label', { hasText: 'Flash 3.8' }) });
+  const focused = await page.evaluate(() => focusedId);
+  await flash.locator('.crew-model-fold').click();
+  await expect(flash.locator('.crew-model-fold')).toHaveAttribute('aria-expanded', 'false');
+  await expect(flash.locator('.crew-model-fold')).toHaveAttribute('aria-label', '展开 Flash 3.8');
+  await expect(page.locator('.nav-crew [data-col-id="worker-1"]')).toHaveCount(0);
+  await expect(page.locator('.nav-crew [data-col-id="worker-0"]')).toHaveCount(1);
+  expect(await page.evaluate(() => focusedId)).toBe(focused);
+  await flash.locator('.crew-model-fold').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.nav-crew [data-col-id="worker-1"]')).toHaveCount(1);
+  await page.locator('.nav-crew [data-col-id="worker-1"] .cn-label').click();
+  await expect.poll(() => page.evaluate(() => focusedId)).toBe('worker-1');
 });
 
 test('Captain metadata and counts stay inside its row when the sidebar list overflows or folds', async () => {
@@ -206,17 +261,18 @@ test('Captain metadata and counts stay inside its row when the sidebar list over
         }).filter((b) => b.visible);
         const next = captain.nextElementSibling.hidden ? captain.nextElementSibling.nextElementSibling : captain.nextElementSibling;
         return { contained: parts.every((b) => b.top >= r.top && b.bottom <= r.bottom && b.left >= r.left && b.right <= r.right),
-          ordered: parts[1].top >= parts[0].bottom && parts[3].top >= parts[1].bottom,
+          oneLine: parts.every((b) => Math.abs((b.top + b.bottom) / 2 - (parts[0].top + parts[0].bottom) / 2) <= 2),
           separate: next.getBoundingClientRect().top >= r.bottom };
       });
-      expect(layout, `width=${width}, open=${open}`).toEqual({ contained: true, ordered: true, separate: true });
+      expect(layout, `width=${width}, open=${open}`).toEqual({ contained: true, oneLine: true, separate: true });
     }
   }
 });
 
 test('subtitles hide controls-only screens and show new real progress', async () => {
   await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
-  const sub = page.locator('.nav-crew [data-col-id="worker-0"] .cn-sub');
+  const row = page.locator('.nav-crew [data-col-id="worker-0"]');
+  const sub = row.locator('.cn-sub');
   const writeScreen = (text) => page.evaluate((value) => new Promise((resolve) => {
     terms.get('worker-0').term.write('\x1b[2J\x1b[H' + value.replace(/\n/g, '\r\n'), resolve);
   }), text);
@@ -226,7 +282,8 @@ test('subtitles hide controls-only screens and show new real progress', async ()
   await expect(sub).toBeHidden();
   await writeScreen('✻ 正在跑侧边栏回归测试…\n────────────────────\n> \n────────────────────\nThinking: xhigh\n← for agents · ? for shortcuts ⚠…');
   await expect(sub).toHaveText('✻ 正在跑侧边栏回归测试…', { timeout: 10000 });
-  await expect(sub).toBeVisible();
+  await expect(sub).toBeHidden();
+  await expect(row).toHaveAttribute('title', /省钱中心每日产出与通知清理\n✻ 正在跑侧边栏回归测试…/);
 });
 
 test('sidebar text shortcuts scale metadata with titles, clamp safely and share native menu routing', async ({}, testInfo) => {
@@ -267,10 +324,10 @@ test('sidebar text shortcuts scale metadata with titles, clamp safely and share 
     for (const open of [true, false]) {
       await page.evaluate((value) => { config.crewOpen = value; Sidebar.render(); }, open);
       expect(await page.evaluate(() => {
-        const rows = [...document.querySelectorAll('.captain-item, .nav-crew .colnav-item')];
+        const rows = [...document.querySelectorAll('.captain-item, .nav-crew .colnav-item, .nav-crew .crew-model')];
         return rows.every((row) => {
           const r = row.getBoundingClientRect();
-          const parts = [...row.querySelectorAll('.cn-label, .cn-badge, .cn-meta, .crew-counts, .cn-sub')]
+          const parts = [...row.querySelectorAll('.cn-label, .cn-badge, .cn-meta, .crew-counts, .cn-sub, .crew-model-name, .crew-model-count, .crew-model-flag')]
             .filter((el) => getComputedStyle(el).display !== 'none').map((el) => el.getBoundingClientRect());
           const next = row.nextElementSibling;
           return parts.every((p) => p.left >= r.left && p.right <= r.right + 1 && p.top >= r.top && p.bottom <= r.bottom + 1) &&
@@ -328,7 +385,7 @@ test('sidebar font preference survives an isolated application restart', async (
     flushConfig();
   }, FAKE);
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).sidebarFontSize).toBe(16);
-  await application.close();
+  await closeElectron(application);
   application = null;
   const env = { ...process.env, AGENTDECK_DEMO_FILE: path.join(profile, 'demo.md') };
   delete env.ELECTRON_RUN_AS_NODE;

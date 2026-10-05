@@ -4,6 +4,25 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const M = require('../main-core');
 
+test('replayed TUI chrome is excluded until fresh output follows the current replay separator', () => {
+  for (const separator of [
+    '── 上次输出回放，进程已结束──',
+    '── 上次输出回放，进程已结束（模型上下文将通过 CLI 恢复）──',
+    '── 上次输出回放；此栏未绑定模型会话，本次将新开对话 ──',
+    '以上为上次会话的输出',
+  ]) {
+    const replay = 'Claude Code\n✻ Doing…\nProceed? (y/n)\n' + separator;
+    assert.equal(M.afterReplay(replay, 'win32'), '');
+    assert.equal(M.afterReplay(replay + '\nPS C:\\test>', 'win32'), 'PS C:\\test>');
+    assert.equal(M.afterReplay(replay + '\nClaude Code\n❯', 'win32'), 'Claude Code\n❯');
+    assert.equal(M.terminalActivity(M.afterReplay(replay, 'win32')), '');
+  }
+  assert.equal(M.afterReplay('Claude Code\n✻ Doing…', 'win32'), 'Claude Code\n✻ Doing…');
+  const current = 'Claude Code\n── 上次输出回放，进程已结束──\nPS C:\\test>';
+  assert.equal(M.afterReplay(current, 'darwin'), current);
+  assert.equal(M.afterReplay('old\n以上为上次会话的输出\nlive', 'darwin'), 'live');
+});
+
 test('context tokens come from an explicit used/total status, not percentages or session quotas', () => {
   for (const [footer, used] of [
     ['Context: 29% · 290k/1000k | Session: 8%', 290000],
@@ -123,6 +142,7 @@ test('a cleared 队长 is relaunched fresh: resume flags are dropped, everything
   assert.equal(M.freshCommand('codex resume chat-1 --dangerously-bypass-approvals-and-sandbox'), 'codex --dangerously-bypass-approvals-and-sandbox');
   assert.equal(M.freshCommand('codex resume --last --dangerously-bypass-approvals-and-sandbox'), 'codex --dangerously-bypass-approvals-and-sandbox');
   assert.equal(M.freshCommand('codex resume'), 'codex');
+  assert.equal(M.freshCommand('agy --conversation abc --model gemini-3.8-flash-high'), 'agy --model gemini-3.8-flash-high');
   // -c / -r mean something else to other tools
   assert.equal(M.freshCommand('agy -c conf.toml --model gemini-3.8-flash-high'), 'agy -c conf.toml --model gemini-3.8-flash-high');
   assert.equal(M.freshCommand('node "/x/fake agent.js"  --flag'), 'node "/x/fake agent.js"  --flag');
@@ -224,7 +244,7 @@ test('队长\'s Antigravity commands carry the effort in the model id, never --e
   assert.equal(C('/opt/bin/agy --effort medium'), '/opt/bin/agy --model gemini-3.8-flash-medium');
   // already right, or not Antigravity: untouched
   for (const cmd of ['agy --dangerously-skip-permissions --model gemini-3.8-flash-medium', 'claude --dangerously-skip-permissions --effort high',
-    'cursor-agent --force --model claude-sonnet-5-5-high', 'codex --dangerously-bypass-approvals-and-sandbox', '']) {
+    'cursor-agent --force --model claude-sonnet-5-5-high', 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox', '']) {
     assert.equal(C(cmd), cmd, cmd);
   }
 });
@@ -232,17 +252,34 @@ test('队长\'s Antigravity commands carry the effort in the model id, never --e
 test('队长\'s Codex commands always run without confirmation prompts, never with the flag twice', () => {
   const C = (cmd) => M.checkCommand(cmd).cmd;
   // GPT-6 Luna: `codex -m gpt-6-luna` would otherwise stop at the first approval
-  assert.equal(C('codex -m gpt-6-luna'), 'codex --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  assert.equal(C('codex'), 'codex --dangerously-bypass-approvals-and-sandbox');
-  assert.equal(C('/opt/bin/codex -m gpt-6-luna'), '/opt/bin/codex --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  // already has one of the two spellings (a duplicate fails to start)
-  for (const cmd of ['codex --dangerously-bypass-approvals-and-sandbox', 'codex -m gpt-6-luna --yolo', 'codex --yolo']) assert.equal(C(cmd), cmd, cmd);
+  assert.equal(C('codex -m gpt-6-luna'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
+  assert.equal(C('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(C('/opt/bin/codex -m gpt-6-luna'), '/opt/bin/codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
+  // already has one of the two spellings (a duplicate fails to start); --no-daemon is still added once
+  assert.equal(C('codex --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+  assert.equal(C('codex -m gpt-6-luna --yolo'), 'codex --no-daemon -m gpt-6-luna --yolo');
+  assert.equal(C('codex --yolo'), 'codex --no-daemon --yolo');
+  assert.equal(C('codex --no-daemon --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
 });
 
-test('队长 cannot hand work to Claude 4.x or Haiku in any CLI', () => {
-  for (const cmd of ['agy --dangerously-skip-permissions --model claude-sonnet-4-6', 'agy --model claude-opus-4-6-thinking',
-    'claude --model haiku', 'claude --model=claude-haiku-4-5', 'claude --model claude-sonnet-4-5-20250929',
-    'cursor-agent --force --model sonnet-4.6-thinking', 'claude --model "claude-3-5-sonnet"']) {
+test('agy can use its tested legacy models while every other CLI still rejects old Claude models', () => {
+  for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium']) {
+    assert.equal(M.checkCommand(`agy --dangerously-skip-permissions --model ${id}`).cmd,
+      `agy --dangerously-skip-permissions --model ${id}`, id);
+  }
+  for (const id of ['claude-sonnet-4-6', 'claude-opus-4-6-thinking']) {
+    for (const cmd of [`claude --model ${id}`, `cursor-agent --force --model ${id}`, `codex --model ${id}`]) {
+      const r = M.checkCommand(cmd);
+      assert.ok(r.error && !r.cmd, cmd);
+      assert.match(r.error, /gemini-3\.8-flash-high[\s\S]*claude-opus-5-5-high/, 'says what to use instead');
+    }
+  }
+  assert.equal(M.checkCommand('cursor-agent --model gpt-oss-120b-medium').cmd,
+    'cursor-agent --model gpt-oss-120b-medium');
+  for (const cmd of ['agy --model haiku', 'agy --model claude-haiku-4-5', 'agy --model claude-sonnet-4-5-20250929',
+    'agy --model claude-opus-4-5', 'claude --model haiku', 'claude --model=claude-haiku-4-5',
+    'claude --model claude-sonnet-4-5-20250929', 'cursor-agent --force --model sonnet-4.6-thinking',
+    'codex --model claude-3-5-sonnet', 'claude --model "claude-3-5-sonnet"']) {
     const r = M.checkCommand(cmd);
     assert.ok(r.error && !r.cmd, cmd);
     assert.match(r.error, /gemini-3\.8-flash-high[\s\S]*claude-opus-5-5-high/, 'says what to use instead');
@@ -277,7 +314,7 @@ test('background sessions with work still out hold a slot; finished ones free it
     { colId: '', status: 'waiting' },                                      // queued, no column yet
   ];
   assert.deepEqual([...M.activeCrew(tasks, crew)].sort(), ['a', 'c', 'd']);
-  assert.equal(M.MAX_ACTIVE, 15);
+  assert.equal(M.MAX_ACTIVE, 30);
 });
 
 test('a finished background session is archived only after 10 quiet minutes with its receipt read', () => {
@@ -298,7 +335,7 @@ test('a finished background session is archived only after 10 quiet minutes with
 
 test('队长 is told about background work, the limit and automatic archiving', () => {
   const text = M.instructions();
-  assert.match(text, /后台跑[^\n]*最多 15 个会话在干活[^\n]*自动排队/);
+  assert.match(text, /后台跑[^\n]*最多 30 个会话在干活[^\n]*自动排队/);
   assert.match(text, /10 分钟后会自动归档[^\n]*tell 发给它会自动恢复/);
 });
 
@@ -405,10 +442,32 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /--model claude-opus-5-5 --effort high/);
   assert.ok(!text.includes('默认模型是 Opus'));
   assert.match(text, /开工后用 peek 看状态行确认模型/);
+  assert.match(text, /claude-sonnet-4-6/);
+  assert.match(text, /claude-opus-4-6-thinking/);
+  assert.match(text, /gpt-oss-120b-medium/);
+  assert.match(text, /agy 绝不能加 --effort/);
+  assert.match(text, /Gemini 周额度用尽时/);
+  assert.match(text, /--command 点名的不换，只排队/);
   assert.match(text, /用户交代的任务默认先记进/);
   assert.match(text, /鸡毛蒜皮/);
   assert.match(text, /截图真的落盘/);
   assert.match(text, /最多返工 2 轮/);
+  assert.match(text, /回复「队长已就绪」后立即自主接续/);
+  assert.match(text, /不要等用户说“继续”/);
+  assert.match(text, /上次被打断或交接列出的未完成工作重新派起来/);
+  assert.match(text, /额度紧时保持 3–5 个活并行/);
+  assert.match(text, /额度多时开十几个/);
+  assert.match(text, /测试全过并进入打包后停止派新活/);
+  assert.match(text, /存档后直接安装并重启/);
+  assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
+  // chat-ui replaces prompts longer than 8000 with a file pointer. The closing
+  // paragraph must stay inside the pasted briefing on both platforms.
+  for (const platform of ['darwin', 'win32']) {
+    const brief = M.instructions(platform);
+    assert.ok(brief.length <= 8000, platform);
+    assert.ok((brief + '\n\n读看板继续。').length <= 8000, platform + ' saver');
+    assert.ok(!brief.endsWith('然后等用户的指令。'));
+  }
 });
 
 test('Captain explains one-level projects, declared review targets and provider sub-agent defaults', () => {
@@ -452,9 +511,79 @@ test('manual reset requires fresh success evidence, including low-context clear 
   assert.equal(M.contextResetEvidence('Claude', 'Context: 290k/1000k', 'Context: 145k/1000k', ''), false);
 });
 
+test('manual reset preserves ConPTY row boundaries without accepting horizontal quoted success text', () => {
+  // Captured Windows stand-in reset: ConPTY goes straight from the success
+  // text to the input rule using CUP, with no newline between them.
+  const packet = '\x1b[H\x1b[?25h\x1b[?25l⏺ (no content)\x1b[3;1H────────────────\r\n> \r\n────────────────\x1b[33m\r\nContext: 23%\x1b[m';
+  assert.equal(M.contextResetEvidence('Claude', 'Context: 23%', 'Context: 23%', packet, 'win32'), true);
+  assert.equal(M.contextResetEvidence('Claude', 'Context: 23%', 'Context: 23%', packet, 'darwin'), false);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1H⏺ Conversation cleared\x1b[3;1H────', 'win32'), true);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1HUser: \x1b[1;7HConversation cleared\x1b[3;1H────', 'win32'), false);
+  assert.equal(M.contextResetEvidence('Claude', '', '', '\x1b[1;1H⏺ Conversation cleared\x1b[3;1HFailed to start new session', 'win32'), false);
+});
+
 
 test('Codex reset evidence reads its native footer below the prompt, never a quoted status', () => {
   assert.equal(M.codexContextFooter('• example 100% context left\n› Ask Codex to do anything\n\n  ⏎ send   98% context left'), '\n  ⏎ send   98% context left');
   assert.equal(M.codexContextFooter('• 100% context left'), '');
   assert.equal(M.codexContextFooter('› old prompt\n100% context left\n› current prompt\n98% context left'), '98% context left');
+});
+
+test('native rate limit waits are quota state and a newer working line wins', () => {
+  assert.equal(M.terminalActivity('API Error: 429 rate_limit_error: Too many requests'), 'quota');
+  assert.equal(M.terminalActivity('Rate limit reached.\n✻ Doing…'), 'working');
+  assert.equal(M.terminalActivity('The report mentions rate_limit errors.'), '');
+
+});
+
+test('archivable: a failed or stopped session needs its card done or taken over; a done one does not', () => {
+  const now = 10_000_000, min = 60_000;
+  const old = { sentAt: now - 30 * min, doneAt: now - 20 * min };
+  const mk = (status, extra) => ({ tasks: [{ colId: 'a', status, boardId: 'c1', ...old, ...extra }], pending: [], inflight: [] });
+  assert.equal(M.archivable(mk('done'), 'a', 0, now), true);
+  for (const status of ['failed', 'stopped']) {
+    assert.equal(M.archivable(mk(status), 'a', 0, now), false, status + ' with no card information');
+    assert.equal(M.archivable(mk(status), 'a', 0, now, M.ARCHIVE_AFTER, { c1: { status: 'doing', session_id: 'a' } }), false, status + ' nobody took over');
+    assert.equal(M.archivable(mk(status), 'a', 0, now, M.ARCHIVE_AFTER, { c1: { status: 'done' } }), true, status + ' card done');
+    assert.equal(M.archivable(mk(status), 'a', 0, now, M.ARCHIVE_AFTER, { c1: { status: 'doing', session_id: 'b' } }), true, status + ' card bound to another session');
+    const taken = { ...mk(status), tasks: [...mk(status).tasks, { colId: 'b', status: 'working', boardId: 'c1', sentAt: now - 10 * min }] };
+    assert.equal(M.archivable(taken, 'a', 0, now), true, status + ' same card sent to another session');
+    assert.equal(M.archivable(mk(status, { boardId: '' }), 'a', 0, now, M.ARCHIVE_AFTER, { '': { status: 'done' } }), false, status + ' without a card stays');
+    assert.equal(M.needsCardCheck(mk(status), 'a'), true);
+  }
+  assert.equal(M.needsCardCheck(mk('done'), 'a'), false);
+  assert.equal(M.needsCardCheck(mk('failed', { boardId: '' }), 'a'), false);
+});
+
+test('archivable: a successor who also failed is not a takeover; the newest failure stays', () => {
+  const now = 10_000_000, min = 60_000;
+  const task = (colId, status, ago) => ({ colId, status, boardId: 'c1', sentAt: now - ago * min, doneAt: status === 'working' ? 0 : now - ago * min });
+  const quiet = (tasks) => ({ tasks, pending: [], inflight: [] });
+  const doing = (session_id) => ({ c1: { status: 'doing', session_id } });
+  const gone = (s, colId, cards) => M.archivable(s, colId, 0, now, M.ARCHIVE_AFTER, cards);
+
+  // A failed, B took over and is working. The binding can still name A.
+  let s = quiet([task('a', 'failed', 40), task('b', 'working', 30)]);
+  assert.equal(gone(s, 'a', doing('a')), true, 'A archives once B is working');
+  assert.equal(gone(s, 'b', doing('a')), false, 'B is still working');
+
+  // B also failed. A may leave; B stays even though the card still names A.
+  for (const status of ['failed', 'stopped']) {
+    s = quiet([task('a', 'failed', 40), task('b', status, 30)]);
+    assert.equal(gone(s, 'a', doing('a')), true, 'earlier failure may archive after B ' + status);
+    assert.equal(gone(s, 'b', doing('a')), false, 'newest ' + status + ' stays while the card is open');
+    assert.equal(gone(s, 'b', doing('b')), false, 'newest ' + status + ' stays when the card names B');
+  }
+
+  // C takes over. B archives whether or not the binding has caught up.
+  s = quiet([task('a', 'failed', 40), task('b', 'failed', 30), task('c', 'working', 20)]);
+  assert.equal(gone(s, 'b', doing('a')), true, 'B archives once C is working');
+  assert.equal(gone(s, 'c', doing('c')), false, 'C is still working');
+
+  // Card completed: every finished attempt on it archives.
+  s = quiet([task('a', 'failed', 40), task('b', 'failed', 30), task('c', 'done', 20)]);
+  const done = { c1: { status: 'done', session_id: 'c' } };
+  assert.equal(gone(s, 'a', done), true, 'A archives when the card is done');
+  assert.equal(gone(s, 'b', done), true, 'B archives when the card is done');
+  assert.equal(gone(s, 'c', done), true, 'C archives when the card is done');
 });

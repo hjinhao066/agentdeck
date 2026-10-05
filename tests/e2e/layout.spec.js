@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
@@ -41,7 +42,7 @@ async function launchWithCols(colCount, fitCols = 3) {
 
 async function closeApp() {
   if (application) {
-    try { await application.close(); } catch (_) {}
+    try { await closeElectron(application); } catch (_) {}
     application = null;
   }
   if (profile) {
@@ -129,7 +130,7 @@ test.describe('Equal-split layout regression with active raw-terminal column', (
   }
 
   for (const count of [2, 5]) {
-    test(`compact test: equal ${count}-split layout geometry holds with raw terminal`, async () => {
+    test(`compact test: equal ${count}-split layout geometry holds with raw terminal`, count === 2 ? { tag: '@smoke' } : {}, async () => {
       await launchWithCols(count, count);
 
       await page.evaluate(() => ChatUI.setMode('col-0', 'term'));
@@ -147,6 +148,20 @@ test.describe('Equal-split layout regression with active raw-terminal column', (
 
       expect(maxW - minW).toBeLessThanOrEqual(2);
       expect(Math.abs(last.colWidths[0] - expected)).toBeLessThanOrEqual(2);
+      await test.step('an unfocused column view toggle follows its visible label in both directions', async () => {
+        const col = page.locator('.column[data-col-id="col-0"]');
+        const toggle = col.locator('.view-toggle');
+        await page.evaluate(() => ChatUI.setMode('col-0', 'chat'));
+        await page.locator('.colnav-item[data-col-id="col-1"]').click();
+        await expect(col).toHaveClass(/chat-mode/);
+        await expect(toggle).toHaveText('终端');
+        await toggle.click();
+        await expect(col).not.toHaveClass(/chat-mode/);
+        await page.locator('.colnav-item[data-col-id="col-1"]').click();
+        await expect(toggle).toHaveText('对话');
+        await toggle.click();
+        await expect(col).toHaveClass(/chat-mode/);
+      });
     });
   }
 

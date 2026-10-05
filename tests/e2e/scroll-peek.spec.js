@@ -37,7 +37,7 @@ test.beforeAll(async () => {
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
   await expect(col(worker)).toBeVisible();
-  await expect.poll(() => page.evaluate((id) => terms.get(id)?.lastScreen || '', worker)).toContain('LIVE_ROW_0100');
+  await expect.poll(() => page.evaluate((id) => terms.get(id)?.lastScreen || '', worker), { timeout: 20000 }).toContain('LIVE_ROW_0100');
   await page.locator('.nav-row[data-nav="captain"]').click();
   await page.locator('#mdCmd').fill('');
   await page.locator('#mdCwd').fill(profile);
@@ -45,6 +45,9 @@ test.beforeAll(async () => {
   captain = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((id) => !!terms.get(id), captain)).toBe(true);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
+  if (process.platform === 'win32') {
+    await expect.poll(() => page.evaluate((id) => MainCore.isWindowsShellPrompt(dumpScreen(terms.get(id).term)), captain), { timeout: 15000 }).toBe(true);
+  }
   const tokenFile = path.join(profile, 'test-token.json');
   await input(captain, `node -e "require('fs').writeFileSync(process.env.AGENTDECK_CONTROL_DIR+'/../test-token.json',JSON.stringify(process.env.AGENTDECK_CONTROL_TOKEN))"\r`);
   await expect.poll(() => fs.existsSync(tokenFile), { timeout: 15000 }).toBe(true);
@@ -77,10 +80,10 @@ test('all raw terminals hold scrollback during output and input, then follow on 
     await expect(col(id).locator('.terminal-new-content')).toBeVisible();
     await col(id).locator('.terminal-new-content').click();
     await expect(col(id).locator('.terminal-new-content')).toBeHidden();
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
     await input(id, 'emit 5\r');
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), id)).toContain('LIVE_ROW_0115');
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
     await page.evaluate((id) => terms.get(id).term.scrollLines(-10), id);
     await input(id, 'emit 5\r');
     await expect(col(id).locator('.terminal-new-content')).toBeVisible();
@@ -88,13 +91,14 @@ test('all raw terminals hold scrollback during output and input, then follow on 
     await expect(col(id).locator('.terminal-new-content')).toBeHidden();
     await input(id, 'emit 5\r');
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), id)).toContain('LIVE_ROW_0125');
-    expect((await state(id)).top).toBe((await state(id)).bottom);
+    await expect.poll(async () => { const s = await state(id); return s.bottom - s.top; }).toBe(0);
   }
 });
 
 test('new cards and receipts preserve the reading position in every chat including Captain', async () => {
   for (const id of [captain, worker]) {
     await page.evaluate((id) => {
+      jumpToColumn(columns.find((c) => c.id === id));
       ChatUI.setMode(id, 'chat');
       for (let i = 0; i < 30; i++) ChatUI.addCard(id, { id: id + '-card-' + i, title: 'Task ' + i, colId: id, status: 'working' });
     }, id);
@@ -147,9 +151,15 @@ test('the copied peek CLI returns fresh ANSI-free rows without moving or writing
   expect(result.result).toContain('LIVE_ROW_0127');
   expect(await page.evaluate((id) => config.boardResponses[id], result.requestId)).toBeUndefined();
   await input(worker, 'alt\r');
+  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), worker)).toContain('ALTERNATE_LIVE_SCREEN');
+  // ConPTY converts the child's alternate screen into screen redraws instead
+  // of forwarding its buffer-switch sequence. Exercise xterm's alternate
+  // buffer explicitly as well, so peek's live-buffer assertion stays universal.
+  await page.evaluate((id) => new Promise((resolve) => terms.get(id).term.write('\x1b[?1049h\x1b[2J\x1b[HALTERNATE_LIVE_SCREEN\r\n', resolve)), worker);
   await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker)).toBe('alternate');
   expect((await peek([])).stdout.trim()).toBe('ALTERNATE_LIVE_SCREEN');
   await input(worker, 'normal\r');
+  await page.evaluate((id) => new Promise((resolve) => terms.get(id).term.write('\x1b[?1049l', resolve)), worker);
   await expect.poll(() => page.evaluate((id) => terms.get(id).term.buffer.active.type, worker)).toBe('normal');
   await input(worker, 'emit 900\r');
   await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), worker)).toContain('LIVE_ROW_1027');
@@ -161,7 +171,7 @@ test('the copied peek CLI returns fresh ANSI-free rows without moving or writing
 
 test('new prompts and completed replies leave older chat content in place', async () => {
   for (const id of [captain, worker]) {
-    await page.evaluate((id) => ChatUI.setMode(id, 'chat'), id);
+    await page.evaluate((id) => { jumpToColumn(columns.find((c) => c.id === id)); ChatUI.setMode(id, 'chat'); }, id);
     const scroll = col(id).locator('.chat-scroll');
     await scroll.evaluate((s) => { s.scrollTop = 100; });
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));

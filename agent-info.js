@@ -1,10 +1,10 @@
 // Pure helper for live provider & model identity badges and formatting.
 // Runs in the browser (window.AgentInfo) and in Node.js test runners.
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports ? require('./claude-seats-core') : root.ClaudeSeatsCore);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.AgentInfo = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (S) {
   'use strict';
 
   const PROVIDER_ICONS = {
@@ -301,7 +301,16 @@
     };
   }
 
-  function renderBadge(badgeEl, info, context) {
+  function iconProviderFor(model, provider) {
+    const name = model || '';
+    if (/^(?:Opus|Sonnet|Haiku)\b/i.test(name)) return 'Claude';
+    if (/^Grok\b/i.test(name)) return 'Grok';
+    if (/^(?:GPT-|o[13]\b)/i.test(name)) return 'Codex';
+    if (/^(?:Gemini\b|Flash\b|Pro\b)/i.test(name)) return 'Antigravity';
+    return provider || '';
+  }
+
+  function renderBadge(badgeEl, info, context, seats) {
     if (!badgeEl) return;
     if (!info || !info.provider || info.isShell) {
       badgeEl.hidden = true;
@@ -312,20 +321,18 @@
       return;
     }
 
-    if (!badgeEl.hidden && badgeEl.dataset.infoKey === info.key && badgeEl.title === (info.tooltip || '')) return;
+    const seat = context === 'sidebar' && info.seat ? S.normalize(seats).find((s) => s.id === info.seat.id) : null;
+    const key = `${info.key}:${seat?.name || ''}:${seat?.icon || ''}`;
+    if (!badgeEl.hidden && badgeEl.dataset.infoKey === key && badgeEl.title === (info.tooltip || '')) return;
     const providerClass = 'provider-' + info.provider.toLowerCase();
     const baseClass = context === 'sidebar' ? 'cn-badge' : 'col-badge';
     badgeEl.className = `agent-badge ${baseClass} ${providerClass}`;
     badgeEl.title = info.tooltip || '';
     badgeEl.hidden = false;
-    badgeEl.dataset.infoKey = info.key;
+    badgeEl.dataset.infoKey = key;
 
     const model = info.shortModel || '';
-    let iconProvider = info.provider;
-    if (/^(?:Opus|Sonnet|Haiku)\b/i.test(model)) iconProvider = 'Claude';
-    else if (/^Grok\b/i.test(model)) iconProvider = 'Grok';
-    else if (/^(?:GPT-|o[13]\b)/i.test(model)) iconProvider = 'Codex';
-    else if (/^(?:Gemini\b|Flash\b|Pro\b)/i.test(model)) iconProvider = 'Antigravity';
+    const iconProvider = iconProviderFor(model, info.provider);
 
     const iconSvg = PROVIDER_ICONS[iconProvider] || '';
     const labelText = info.shortModel || '';
@@ -338,12 +345,12 @@
       badgeEl.appendChild(label);
     }
     if (context === 'sidebar' && info.seat) {
-      const flag = { cn: '🇨🇳', us: '🇺🇸' }[info.seat.id];
+      const flag = seat?.icon;
       if (flag) {
         const label = document.createElement('span');
         label.className = 'agent-seat-label';
-        label.textContent = flag;
-        label.title = `当前账号：${info.seat.id.toUpperCase()} · ${info.seat.configDir}`;
+        label.textContent = `${flag} ${seat.name}`;
+        label.title = `当前账号：${seat.name} · ${info.seat.configDir}`;
         label.setAttribute('aria-label', label.title);
         label.setAttribute('role', 'img');
         label.tabIndex = 0;
@@ -386,6 +393,7 @@
     inferProvider,
     extractModel,
     shortModelName,
+    iconProviderFor,
     extractEffort,
     formatTooltip,
     resolveAgentInfo,

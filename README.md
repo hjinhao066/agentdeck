@@ -61,15 +61,31 @@ the middle:
   even during silent background tools. Wrapped rows are joined; old scrollback
   and replayed output do not keep a finished session yellow. Once the busy
   indicator disappears, the existing two-tick debounce permits green.
+  Codex's `Worked for …` divider followed by its ready prompt excludes prior
+  turn indicators above that divider; new busy or confirmation rows below it
+  still block delivery. Ordinary `tell` and `tell --now` use this same readiness.
+  Cursor's `→ Add a follow-up … ctrl+c to stop` input row is busy evidence;
+  only its ready input row can end a submitted turn, including during silent
+  initialization. Thinking/Waiting/Running rows anywhere on the live screen
+  override its ready row; a running turn also waits for ten seconds of quiet.
+  `ledger` marks an assignment complete after its command receipt and shows a
+  separate terminal status if that agent is still running or waiting. Cursor's
+  session status stays working while its terminal is busy, retaining the receipt.
 - **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
-  one row per provider (icon, name, remaining percentage — the lowest known
-  window — or 正常 / 已用尽 / 未知). With the sidebar collapsed, a gauge icon in
-  the top bar (tinted by the provider closest to running out) opens the same
+  one row per provider: a brand-coloured icon plus name (Claude seats show only
+  the flag, with a crown on the Captain's seat), then a 5h and a 7d cell, with
+  "5h / 7d" named once in the header. Each cell is remaining % + reset time over
+  a thin bar; used up is ⊘ + reset time in red with the row tinted red, a window
+  with no number is — over an empty bar. If the whole row has no numeric windows
+  or recovery time, the 5h cell shows 正常 / 已用尽 / 未知 / 过期 instead. With the
+  sidebar collapsed, a gauge icon in the top bar (tinted by the provider closest to running out) opens the same
   rows in a popover. Hover, click or focus a row for
-  each window, reset time, model, masked account, source, confidence and sample time.
+  each window with its exact reset time/date, account, seat, source, sample time,
+  confidence and Captain rotation plan in one tooltip; config dir/model
+  diagnostics stay in the row's data-detail.
   Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
   Claude shows a separate item per `claudeSeats` configuration, with both
-  5-hour/weekly percentages, resets in the tooltip, and the running Captain’s
+  5-hour/weekly percentages and resets, and the running Captain’s
   seat marked. No configuration shows one `~/.claude` item; missing seat usage
   says 未登录/无数据. Remaining ≤20% is
   amber and ≤10% is red. AgentDeck passively reads live TUI screens first, then
@@ -95,13 +111,31 @@ the middle:
   output; restoring replays that output and relaunches the agent. New Claude and
   Grok columns resume their own saved model session by ID; older columns without
   an ID start fresh and show a warning. Delete removes the session and its conversation.
+  Click and automatic archive recheck the live screen, open turns, drafts,
+  delivery and recent output of the session and its children before stopping
+  a PTY. A completion receipt alone does not permit archiving a busy terminal;
+  the Captain's explicit `archive --id` remains the authorized override.
 - **Schedule** sends a prompt to a session (or a fresh one) once, on chosen
   weekdays at a time, or every N minutes/hours. It runs only while AgentDeck is
   open; a run that was due while it was closed is shown as missed, not fired
   late. A busy session is retried for up to 30 minutes.
-- **Artifacts** lists files and links that agents mentioned in their replies.
+- **Artifacts** has two tabs. 回执交付 collects the files the crew listed in
+  their receipts (the 「文件：」 list `ledger` prints), grouped by project, with no
+  action from anyone: it reads each session's last receipt, 队长's task list and
+  the task cards in 队长's conversations, so receipts from before this feature
+  count too. A path appears once, under the session that delivered it last
+  (Windows paths ignore case and slash direction); sessions without a project
+  go under 未分组; a file no longer on disk stays listed, greyed out and
+  labelled. Each row previews on the right and has icon buttons to copy the
+  path, show it in Finder/Explorer and jump to the session. 回复里提到的 is the
+  earlier collection: files and links the agents mentioned in their replies.
 - **Skills** lists every `SKILL.md` the agent CLIs on this machine can see, so
   you can read one rendered or edit its full Markdown and save it (⌘S). See below.
+
+私人手机网页端：设置齿轮 →「手机网页端」开启，仅监听 `127.0.0.1`。
+可通过 VPS HTTPS + 自动恢复的 SSH 隧道在外访问，手机无需 VPN；入口口令、
+设备 token 登录及 CSRF 保护。聊天式界面：查看队长对话、会话、只读看板与队员输出，并给队长派活。
+部署、首次登录、吊销和回滚见 [手机网页端说明](docs/mobile-web.md)。
 
 ## Skills
 
@@ -134,14 +168,65 @@ skipped.
 [任务看板接口说明](docs/task-board-api.md)。正本是 `~/.agents/boards/tasks/<项目名>.json`；
 `new --task-id ... --project ...` 绑定卡片，命令回执自动流转，文件监听和每 60 秒巡检
 发现外部开始操作。`TaskBoard.startCard(id)` 默认用 Gemini Flash 调度，设置可改回队长。
-看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：按项目分泳道、
-按状态分五列，点卡片跳到对应会话；架构图只画正在跑的会话，看板列出全部任务。
+队长 `task move` 回 doing 不自动开调度员；未归档的关联会话阻止重复自动调度。
+额度/登录/限流失败不累计连续失败；开新会话前检查所选 provider/Claude 席位额度，
+已用尽的任务排队到额度恢复，显示「额度用尽，稍后自动开」。
+会话恢复干活时，自动生成的「已结束，未提交回执」提示会从回执栏及任务卡清除；真实命令回执保留。
+Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；运行中的回合需静默至少 10 秒才判空闲。
+提交完成回执后，任务仍为完成，但 Cursor 会话只要还在运行就继续显示「干活中」。
+看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：每个项目是一个
+可折叠分组（标题栏显示未完成数和各状态数量，折叠状态会记住，可一键展开/收起全部），分组共用
+同一套状态列（待办 / 进行中 / 待验收 / 需要你，完成默认折成数量）和固定列头；卡片是标题加一行
+最近动态和更新时间，每格默认 3 张，其余「展开剩余 N 项」。「需要你」在顶部提醒条和分组红色数量
+里突出，点开对应卡片详情，可直接回答并交给队长继续推进。项目可拖动排序，卡片可在列内排序或
+拖到其他状态；拖到「进行中」会通知队长安排。全部做完的项目归入底部「已完成的 Agent」。
+详情中的会话入口可跳到对应终端。架构图只画正在跑的会话，看板列出全部任务。
+终端架构图（A 版，日夜两套）：队长在顶部居中，下面是项目分组，组内按窗口宽度排 3/2/1 列卡片网格；
+没有会话在干活/待补充/排队的项目默认收进底部「非活跃项目」托盘（真实数量，点 chip 展开到画布，失败项目标红）；
+项目里再有会话开工会自动重新显示，不动你的视角。画布右下角（图例行右侧）有缩小/比例/放大/「适应画布」；
+首次进入自动适应一次，没手动拖动或缩放过时实时更新会重新适应，动过之后保持你的视角。
+卡片标题最多两行，「···」或失败卡片的「查看」打开详情浮层（完整回执、文件、实时活动、打开终端；Esc 关闭）。
+架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）；
+失败或停下的会话要等它的看板卡片已完成、或同一张卡已由另一个会话接手才自动归档，没人接手的失败留在图上等队长处理。
+项目框标题的数字只统计图上还在的会话（不含已归档历史），和队长框一致。
+项目名不分大小写（AgentDeck 和 agentdeck 是同一个项目框，显示最早那个会话写的写法，已存数据不改）；
+项目里没有任何干活、待补充、排队、失败、停下、空闲的会话（全部已完成或已归档）时，项目框从图上消失，有新会话再出现；「显示已归档」时仍列出全部项目。
+连线是细蓝线，只有执行中的线路有少量移动光点，审查是紫色虚线；悬停卡片高亮它的路径。
+架构图标签右边的清单图标从右侧滑出「版本进度」抽屉（架构图让出位置，不被遮住；Esc 或关闭图标收起，
+开合状态会记住）。版本取 agentdeck 项目卡片里提到的、比当前 App 新的最小版本号（如 1.1.4）。
+纳入这一版的卡：① 点名——`version` 字段、标题或说明写了这个版本号；② 在做——agentdeck 里进行中、
+待验收或等你的卡，且没写更晚的版本号；③ 已纳入——之前在这一版里出现过，做完也留着打勾；
+④ 前置——上面这些卡 `depends_on` 的卡（顺着依赖链找，跨项目也算）。归档卡只算完成的。
+抽屉顶部是百分比和按状态分段的进度条，下面按 需要处理 / 进行中 / 待验收 / 待办 / 已完成 分组，
+每张卡显示标题、状态点（完成打勾）、负责模型、最近回执一句话和耗时（从建卡算起），
+看板文件变化时实时刷新。规则也写在抽屉底部「哪些卡算进这一版」里。
 
-队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸 两个独立 Claude 席位，
+侧边栏队长行只占一行：皇冠、状态点、队长、小数字徽章（干活中的队员数）、模型胶囊和切换账号按钮；
+各状态计数、最近活动时间和当前状态行放在悬停提示里。
+
+队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸、US2 🇺🇸（美国二号）三个独立 Claude 席位，
 或 ChatGPT（Codex GPT-6.1 Sol）：
 先存进度看板，再重开队长读看板继续，运行中的队员保持原席位。
-侧边栏底部齿轮统一配置席位名称、目录和Relay名称。
+侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。旧 CN/US 配置自动补 US2，额度区同时显示旗帜与名称以区分 US/US2；未登录 US2 不影响现有席位。
+用户登录步骤见 [Claude 席位](CLAUDE_SEATS.md)；队长 `new --agent claude --seat us2` 可指定席位，`quota` 显示三席独立额度。默认开启「永动机」：
+当前 Claude 的可信 5 小时剩余 ≤3% 或真实限流时，在队长空闲后自动接力
+下一个可用 Claude 席位（US2 → US → CN → US2，未登录或用尽跳过）；所有已登录席位都用尽才交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。
+设置可关闭或改阈值。每次轮换留横幅、对话记录及普通 Bark 提醒，10 分钟内不回切同一目标。
+默认打开「优先用快到期的席位」图标开关：当前和目标席位的 5 小时余额、每周额度和重置时间都可信时，
+队长空闲后优先使用重置至少早 10 分钟、还有可用额度的席位；同边界抖动不切换，数据未知时只保留低额度切换。
+每周剩余 ≤ 阈值的席位不能接力，也不预热。额度详情有一行说明当前席位、预热和切换策略。
 首次第二账号登录、凭据隔离和 quota-bar 数据接口见 [CLAUDE_SEATS.md](CLAUDE_SEATS.md)。
+
+席位设置默认开启「额度窗口预热」：有账号及目录归属证明的 5 小时窗口重置约
+一分钟后，配置列表中的席位没有 Claude 会话占用时，后台用 Sonnet 5.5 / low 发送一个字母请求。
+当前队长的窗口到点后也会在它空闲、同席位没有其他会话时补一次；普通输入恢复会取消补请求。
+新官方采样确认新窗口已开始计时后，再按上述规则去使用另一个更快到期的窗口。
+每个窗口成功一次，失败最多重试一次；未知重置时间不发送。请求不创建可见列或队员，
+额度详情显示已预热及 CLI 原生返回的下次重置时间。席位开始普通会话会取消预热子进程。
+永动机和预热直接消费官方额度分支保存的 `config.quotas['Claude:<seatId>'].sample`，
+复用 `fiveHour` 的剩余百分比、绝对重置时间及成功采样时间；不另行查询额度。
+官方采样核对席位、配置目录和凭据槽位指纹；账号或目录变化后，旧采样不能触发自动操作，
+该限制保存到磁盘并跨重启保留。新官方采样确认所有窗口可用后，可解除旧的无期限限流记录。
 
 One standing column, opened from the sidebar entry 队长 (creating it the first
 time, with the agent you pick; afterwards it only returns to it). Once created it
@@ -150,6 +235,11 @@ one, always the first column of the deck. You tell it what
 you want; it hands the work to other columns and brings back short receipts. It
 does not do the work in its own column. On restart, an existing Captain is briefed
 again with the current provider, model and effort instructions.
+
+在队长设置中可关闭「重启后自动续上」。冷启动只恢复退出前尚未完成的队员任务，每批最多两个；正常新建和归档恢复仍走普通派发。完整任务、最后回执和未送达补充指令保存到私有配置与 `restart-resume.json`，不截断正文。每轮启动按任务记录送达 claim，连续重启仍能续派；`complete` 已关闭的卡片不会被迟到的续接复活。
+
+真续接要求列自己的明确会话号及工作目录归属；无法证明归属时新开重发，不从全局最近会话或唯一工作目录猜号。Codex metadata 完整读取首行，agy 数据库中的任意文件 URL 不作为归属凭据。原会话启动失败或 45 秒未送达时，同列重开一次并重发卡片任务、最后回执和补充正文；重发仍失败则向队长交失败回执。退出给收尾指令最多 800ms 的送达机会；应用暂停不代表队员已确认安全停工。退出等待页面落盘最多 1.5 秒，另有独立进程 5 秒 OS 退出兜底。
+
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
@@ -224,6 +314,13 @@ again with the current provider, model and effort instructions.
   another listener, keeping exactly one active. A timeout prints nothing and exits
   successfully; omit `--timeout` to wait indefinitely. The timeout is in seconds
   (other legacy CLI commands retain their existing timeout units).
+  Codex execution session IDs do not by themselves wake an idle model. An
+  opt-in [native Codex Captain host](docs/native-codex-captain.md) owns a private
+  app-server and uses native tool-output turns for 60-second whole-board checks.
+  It confirms stable receipt IDs only after successful turns; it does not inject
+  receipt text into terminal input. Existing Codex columns need an intentional
+  Captain command switch after runtime integration; installing the script alone
+  does not connect them. Claude's existing listener channel is unchanged.
   An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
   Additions waiting for the same session are combined in order into one prompt,
@@ -319,8 +416,11 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   `(no content)` even when no numeric decrease is available.
 - On confirmation, the pre-command conversation is saved to Captain history
   without replacing the column or PTY. Unread receipts, questions and live task
-  cards carry over. The current instructions are sent once, followed by
-  `先跑 ledger、读看板里的队长交接再接续。` The delivery waits for an idle
+  cards carry over. The current instructions are sent once. Their closing
+  paragraph tells the Captain to read the handoff, inspect the ledger and
+  receipts, restart interrupted work, and keep dispatching. That paragraph is
+  not appended again: the combined text would exceed the inline prompt limit
+  and be replaced by a file pointer. The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
   including attachments, and rechecks these guards when sending.
 - Raw terminal history recall, Tab completion and cursor edits make the tracked
@@ -363,11 +463,13 @@ The queue verification and command semantics are documented in
 
 ## Chat view and side pane
 
-Columns open in the saved global view (chat by default). The icon button to the
-right of 自由 / 2–5 switches every column to terminal, then back to chat. Its
-icon and tooltip show the next action. New columns follow that global choice,
-including after relaunch. A column’s own 终端/对话 toggle overrides only that
-column for the current run; the next global click unifies all columns again.
+Sessions open in terminal view on startup, when selected after another session
+or page, and when created or restored. The icon button to the right of 自由 / 2–5
+switches every current column to terminal, then back to chat. Its icon and
+tooltip show the next action. A column’s own 终端/对话 toggle switches only
+that column; it stays in that view until you leave for another session or page.
+The next global click unifies all current columns again. The global choice resets
+to terminal on the next app launch.
 Each turn in chat shows
 your prompt (pinned while you read its answer) and the agent's final reply,
 rendered as Markdown, not commands or tool output. The real terminal is still
@@ -391,7 +493,9 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`
   (Antigravity's effort is the model id's suffix, `-low|-medium|-high`; given
   `--effort` beside such an id it silently runs a different model), `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
-  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`.
+  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`
+  (`--no-daemon` keeps each column off the shared Codex server, which otherwise
+  keeps a stale environment and cannot submit that column's receipt).
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -521,10 +625,14 @@ restored sessions. A shared Codex app server uses its own process environment
 and can lose the current terminal's receipt/control channel variables. Embedded
 servers inherit the column environment. This does not edit Codex user settings.
 
-The bridge still prefers environment credentials. If a shell policy filters the
-tokens, it reads `board-control/credentials/<terminal-id>.json` for the explicit
-`AGENTDECK_TERMINAL_ID` only. The standalone bridge can locate its own profile
-without `CONTROL_DIR`; it never searches other profiles or guesses an identity.
+The bridge prefers environment credentials when this process's controlling
+terminal has no private file. If a shell policy filters the tokens, the
+standalone bridge reads the credential file indexed by that tty
+(`board-control/credentials/by-tty/`), never by `AGENTDECK_TERMINAL_ID`: a
+shared Codex daemon keeps a stale terminal id and must not select another
+column. An empty `CONTROL_DIR` does not search the home profile. The managed
+copy can locate its own profile without `CONTROL_DIR`; it never searches other
+profiles.
 Files are private (0600, directory 0700 on POSIX), rotate when a PTY starts, and
 are removed on spawn failure, PTY exit, archive/kill, quit and the next app startup.
 Workers retain submission-only capabilities; only the Captain has control access.
@@ -544,6 +652,7 @@ older downloader does not pull in the vulnerable HTTP cache dependency chain.
 
 ```sh
 npm test
+npm run test:smoke
 npm run test:e2e
 npm audit
 npm start
@@ -551,11 +660,24 @@ npm run dist:win
 npm run dist:mac
 ```
 
+### 发版流程
+
+全量 `npm run test:e2e` 大约 191 项，单线程要 30 分钟以上，本机内存紧时还会超时。小版本不要拿它当发版门禁。
+
+- **功能分支**：只跑 `npm test`，再加上和这次改动相关的 E2E spec。不要在功能分支上跑全量 E2E。
+- **发版**（小版本打包前）：跑 `npm test` 和 `npm run test:smoke`。冒烟复用现有用例，用 Playwright 标签 `@smoke` 标出，不另抄一份测试。命令是 `playwright test --grep @smoke --workers=1`，单 worker，目标 5 分钟内。覆盖：应用能启动并显示主界面；队长用 board-cli `new` / `tell` 派活且队员收到；队员回执回到队长；会话归档后能恢复；终端能显示输出；额度区能显示；任务看板能打开。
+- **全量**：`npm run test:e2e` 夜里跑，或换一台机器跑。冒烟通过不能代替全量。
+
+冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
+
 Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
 `npx electron-builder --mac --config.mac.identity=null --publish never`.
 CI builds are unsigned and not notarized; they are not equivalent to a signed
-local installation. Windows CI produces an NSIS installer.
+local installation. Windows CI produces an NSIS installer. Its build step sets
+`ELECTRON_BUILDER_7Z_FILTER=BCJ`: the NSIS decoder cannot read the ARM64 filter
+that newer 7-Zip selects for bundled ARM64 PTY binaries. Use the same setting
+for local Windows packaging and compare the installed files with the CI payload.
 
 Test a packaged app with `AGENTDECK_TEST_EXECUTABLE` set to its executable before
 running `npm run test:e2e`. Tests use temporary userData and empty shell columns,
@@ -564,6 +686,17 @@ activating the app; each spec opens its own instance, and CI runs the suite once
 against source and once against the packaged app. With `--test-user-data=<dir>` the
 Skills page scans `<dir>/skills-home` instead of the real home folder, so tests
 never list or edit the user's own skills.
+
+Windows E2E shell probes run script files rather than inline `node -e` code,
+so PowerShell cannot reinterpret JavaScript quotes or Windows path backslashes.
+The stand-in agent uses raw input like a real TUI. ConPTY may convert alternate
+screen switches to redraws; peek tests check real PTY output and the xterm
+alternate buffer separately. A ConPTY terminal name is not a foreground-process
+name, so shell readiness is verified by the command's output.
+The first automatic prompt in a Windows terminal waits for 500 ms of quiet TUI
+output, avoiding startup input loss. Later prompts keep the existing delivery checks.
+ConPTY reset evidence, replay filtering and deck navigation fixes apply only on
+Windows; macOS keeps its existing reset, status and navigation behavior.
 
 Security boundaries: the renderer is sandboxed with a restrictive CSP and no
 Node integration. Main IPC accepts only the deck's local main frame. Session
@@ -605,3 +738,7 @@ from a phone. Cards and sessions carry `deviceId` for those later steps.
 
 
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
+
+Claude's macOS quota reader and seat-isolated Relay are described in
+[Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and
+`board-cli quota` are remaining; `↻` identifies each window's next reset.

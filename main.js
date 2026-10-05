@@ -5,26 +5,51 @@ const os = require('os');
 const crypto = require('crypto');
 const { execFile, execFileSync, spawn } = require('child_process');
 const { validId, trustedSender, privateFile, boundedAppend } = require('./security');
+const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = require('./board-credentials');
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
+const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
 const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const BoardCore = require('./board-core');
 const ClaudeSeatsCore = require('./claude-seats-core');
-const { seatEnvironment, registerSeatsIpc } = require('./claude-seats-main');
+const QuotaCore = require('./quota-core');
+const PerpetualCaptainCore = require('./perpetual-captain-core');
+const { seatEnvironment, credentialLocation, initializeOnboarding, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { createWarmupService } = require('./quota-warmup-service');
+const { createQuotaWarmupRunner } = require('./quota-warmup-main');
+const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
+
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
-const { TaskStore } = require('./task-board');
+const { TaskStore, localSessions } = require('./task-board');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
+const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
+const { createMemoryPressure } = require('./memory-pressure');
+const RestartResume = require('./restart-resume');
+const AgentSessions = require('./agent-sessions');
 let mainWindow = null;
 let notifications = null;
 let notifyUser = null;
 let sidePane = null;
 let claudeQuotaRefresh = null, claudeQuotaTimer = null;
+let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
+
 let pendingFocusColumn = null;
+let mobileWeb = null;
+const mobileRequests = new Map();
+function requestMobile(op, input) {
+  if (!mainWindow || mainWindow.isDestroyed() || !boardRendererReady) return Promise.reject(new Error('AgentDeck 尚未准备好，请稍后刷新。'));
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    const timer = setTimeout(() => { mobileRequests.delete(id); reject(new Error('AgentDeck 响应超时，请稍后重试。')); }, 5000);
+    mobileRequests.set(id, { resolve, reject, timer });
+    send('mobile-web:request', { id, op, input });
+  });
+}
 
 // Isolated test instance: `AgentDeck.exe --test-user-data=<absdir>` runs with
 // its own userData (own config/sessions AND own single-instance lock), so an
@@ -32,10 +57,15 @@ let pendingFocusColumn = null;
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 // Test profiles must never write the user's shared board.
-const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined);
+function readLocalConfig() {
+  const file = path.join(app.getPath('userData'), 'config.json');
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+}
+const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
 let fleetClient = null;
+let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
   const result = taskStore[payload.op](payload.input || {});
   if (fleetClient && payload.op !== 'list') fleetClient.noteResult(result);
   return result;
@@ -69,6 +99,8 @@ function handleMain(channel, handler) {
     return handler(event, payload);
   });
 }
+const memoryPressure = createMemoryPressure({ platform: process.platform, execFile });
+handleMain('memory-pressure', () => memoryPressure.read());
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -199,10 +231,10 @@ function shellArgs() {
   return ['-NoLogo', '-NoExit', '-EncodedCommand', b64];
 }
 
+const ptySeats = new Map();
 const ptys = new Map(); // columnId -> pty process
 const managedSessions = new Map(); // columnId -> unguessable board-control token
 const receiptSessions = new Map(); // every column: submission only, never control
-const { clearCredentials, removeCredentials, writeCredentials } = require('./board-credentials');
 let boardControlDir = '';
 let boardCliPath = '';
 let boardRendererReady = false;
@@ -224,30 +256,35 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {}
-  if (ptys.has(id)) return; // already running (e.g. a stray re-spawn)
+  const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  let selectedSeat, binding;
+  try {
+    let cfg = {};
+    try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
+    catch (e) { if (e.code !== 'ENOENT') throw e; }
+    selectedSeat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === (seatId || cfg.activeClaudeSeatId || 'cn'));
+    if (!selectedSeat) throw new Error('席位不存在');
+    binding = credentialLocation(selectedSeat, seatHome).keychainService;
+  } catch (_) {
+    send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
+    send('pty:exit', { id }); return;
+  }
+  if (ptys.has(id)) {
+    if (ptySeats.get(id) === binding) return;
+    killPty(id, true);
+  }
   const dir = cwd && fs.existsSync(cwd) ? cwd : HOME;
+  if (selectedSeat && !credentialLocation(selectedSeat, seatHome).isDefault) initializeOnboarding(selectedSeat, seatHome, dir);
+  if (selectedSeat) quotaWarmup?.cancel(selectedSeat.id);
+
   const token = managed ? crypto.randomBytes(24).toString('hex') : '';
   const receiptToken = crypto.randomBytes(24).toString('hex');
   receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
   let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
-  if (seatId) {
-    try {
-      let cfg = {};
-      try { cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8')); }
-      catch (e) { if (e.code !== 'ENOENT') throw e; }
-      const seat = configDir ? { id: seatId, configDir } : ClaudeSeatsCore.normalize(cfg.claudeSeats).find((s) => s.id === seatId);
-      if (!seat) throw new Error('席位不存在');
-      terminalEnv = seatEnvironment(terminalEnv, seat, tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME);
-    } catch (_) {
-      managedSessions.delete(id);
-      receiptSessions.delete(id);
-      send('pty:data', { id, data: '\r\n[AgentDeck] 席位配置无效，请检查席位设置。\r\n' });
-      send('pty:exit', { id });
-      return;
-    }
-  }
+  terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
+
   // Never inherit an outer deck's managed capability into an independent shell.
   for (const key of ['AGENTDECK_MANAGED', 'AGENTDECK_CONTROL_TOKEN', 'AGENTDECK_RECEIPT_TOKEN', 'AGENTDECK_CONTROL_DIR', 'AGENTDECK_BOARD_CLI']) delete terminalEnv[key];
   terminalEnv.AGENTDECK_RECEIPT_TOKEN = receiptToken;
@@ -262,7 +299,6 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   }
   let p;
   try {
-    writeCredentials(boardControlDir, id, receiptToken, token);
     p = pty.spawn(shellFile(), shellArgs(), {
       name: 'xterm-256color',
       cols: cols || 80,
@@ -283,6 +319,11 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     send('pty:exit', { id, reason: `shell 启动失败: ${err.message}` });
     return;
   }
+  // A bad cwd exits before the next turn of the event loop. Listen first;
+  // writing the tty credential does disk I/O and would miss that exit.
+  const tty = ttyFromPty(p);
+  ptys.set(id, p);
+  ptySeats.set(id, binding);
   p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
@@ -290,6 +331,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
     if (ptys.get(id) === p) {
       writeSession(id, ptyBuffers.get(id));
       ptys.delete(id);
+      ptySeats.delete(id);
       managedSessions.delete(id);
       receiptSessions.delete(id);
       removeCredentials(boardControlDir, id);
@@ -299,7 +341,8 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
       send('pty:exit', { id, reason: `终端进程退出（exit ${exitCode}${signal ? `，signal ${signal}` : ''}）` });
     }
   });
-  ptys.set(id, p);
+  try { writeCredentials(boardControlDir, id, receiptToken, token, tty); }
+  catch (_) { removeCredentials(boardControlDir, id); }
 }
 
 function send(channel, payload) {
@@ -314,6 +357,7 @@ function killPty(id, keepReplay) {
   const p = ptys.get(id);
   if (p) { try { p.kill(); } catch (_) {} ptys.delete(id); }
   ptyBuffers.delete(id);
+  ptySeats.delete(id);
   managedSessions.delete(id);
   receiptSessions.delete(id);
   removeCredentials(boardControlDir, id);
@@ -385,7 +429,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-task', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -431,6 +475,8 @@ function setupBoardControl() {
     for (const file of ['board-credentials.js', 'security.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
+    fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));
+    fs.copyFileSync(path.join(__dirname, 'scripts', 'codex-captain-host.js'), path.join(toolsDir, 'codex-captain-host.js'));
   } catch (err) {
     nlog(`board-control setup failed: ${err.message}`);
   }
@@ -439,7 +485,12 @@ function setupBoardControl() {
     if (!boardRendererReady) return false;
     send('task-board:start', input);
     return false; // Renderer acknowledges through the durable dispatched marker.
-  }, onChange: () => send('task-board:changed', {}) });
+  }, onChange: () => { send('task-board:changed', {}); notifyNeedsUserCards(); },
+  // Automatic verification: the renderer opens the reviewer / sends the rework,
+  // then marks the durable claim delivered. Off when the local setting says so.
+  onReview: (input) => { if (!boardRendererReady) return false; send('task-board:review', input); return false; },
+  onRework: (input) => { if (!boardRendererReady) return false; send('task-board:rework', input); return false; },
+  autoVerify: () => readLocalConfig().taskBoard?.autoVerify !== false });
   heartbeat.start();
   app.once('before-quit', () => heartbeat.close());
 }
@@ -593,6 +644,22 @@ function resolveClick(msg, allowAncestor) {
   return exact ? { target: exact, fallback: false } : null;
 }
 
+// Open a plain directory so the user can see inside it. Judge the real path:
+// a directory whose last segment has an extension (.app, .bundle, .workflow —
+// any dot followed by a letter, not an allow-list) is a package and is only
+// selected, as is a symlink that lands on one. A numeric tail such as
+// agentdeck-1.1.9 is a version, not an extension. Files, and any realpath or
+// stat failure, are selected too.
+function revealOpens(target) {
+  try {
+    const real = fs.realpathSync(target);
+    if (!fs.statSync(real).isDirectory()) return false;
+    return !/^\.[A-Za-z]/.test(path.extname(path.basename(real)));
+  } catch (_) {
+    return false;
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1600,
@@ -677,7 +744,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (isWin) app.setAppUserModelId('com.jinhao.agentdeck');
   if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
@@ -686,7 +753,7 @@ app.whenReady().then(() => {
   const configPath = path.join(app.getPath('userData'), 'config.json');
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
-    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR,
+    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
     onChatSaved: (id, chat) => {
       if (!fleetClient || typeof fleetClient.noteCaptain !== 'function') return;
       let captain = false;
@@ -699,12 +766,13 @@ app.whenReady().then(() => {
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
-  registerSeatsIpc({ handleMain, home: seatHome, userData: app.getPath('userData'),
+  registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
+    getColumn: (id) => seatConfig().columns?.find((c) => c.id === id),
     onUsageRecorded: () => { quotaRead = null; } });
   if (!tudArg) {
     claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
-    const refresh = () => claudeQuotaRefresh.tick().catch(() => {});
+    const refresh = () => claudeQuotaRefresh.tick().then(() => send('quota:updated', claudeQuotaRefresh.samples())).catch(() => {});
     refresh();
     claudeQuotaTimer = setInterval(refresh, 30000);
     claudeQuotaTimer.unref();
@@ -712,6 +780,89 @@ app.whenReady().then(() => {
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
+  let mobileSettings = notificationConfig.mobileWeb || { enabled: false };
+  // The tunnel installer supplies only the public origin and this machine's
+  // phone-entry name and path prefix, never login secrets. The prefix and name
+  // come from endpoint.json on every (re)configure and are never kept in
+  // config.json, so a rollback is one edit to endpoint.json. A malformed prefix
+  // is passed on as-is so the service refuses to start rather than ignoring it.
+  const endpointFile = path.join(HOME, '.config', 'agentdeck-remote', 'endpoint.json');
+  const withEndpoint = (settings) => tudArg ? settings : withEndpointSettings(settings, readEndpoint(endpointFile));
+  mobileSettings = withEndpoint(mobileSettings);
+  const loginItemMessage = process.platform === 'win32' ? '请在 Windows 设置的「启动」应用中允许 AgentDeck 自动启动。' : '请在 macOS 登录项中允许 AgentDeck 自动启动。';
+  let mobileInitializing = true;
+  let mobileStartupError = '';
+  mobileWeb = new MobileWebServer({
+    getSessions: () => requestMobile('sessions'),
+    getTasks: () => taskStore.list(),
+    getOutput: (id) => requestMobile('output', { id }),
+    getCaptain: async () => {
+      const data = await requestMobile('captain-history');
+      for (const turn of data.turns || []) {
+        const file = turn.longFile; delete turn.longFile;
+        // Only a file this app saved itself; the clipped text stays if it is gone.
+        if (!file || path.dirname(path.resolve(String(file))) !== path.join(app.getPath('userData'), 'long-prompts')) continue;
+        try { turn.user = fs.readFileSync(file, 'utf8').slice(0, 20000); } catch (_) {}
+      }
+      return data;
+    },
+    getQuota: () => requestMobile('quota'),
+    sendCaptain: (message, images) => requestMobile('captain', { message, images }),
+    // Like pasted screenshots, phone images reach the Captain as file paths.
+    uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
+    getBoardVersion: () => boardVersionOf(taskStore.dir),
+    machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() },
+    saveSettings: (settings) => {
+      mobileSettings = settings;
+      if (mobileInitializing && !settings.enabled) return;
+      notificationConfig = { ...seatConfig(), mobileWeb: persistable(settings) };
+      fs.writeFileSync(configPath + '.tmp', JSON.stringify(notificationConfig, null, 2), { mode: 0o600 });
+      fs.chmodSync(configPath + '.tmp', 0o600);
+      fs.renameSync(configPath + '.tmp', configPath);
+      // Restore the private web service after a Mac or Windows login. Isolated
+      // tests must never change the real app's login item.
+      if (!tudArg && app.isPackaged && supportsLoginItem(process.platform) && settings.enabled && settings.publicOrigin) {
+        try { app.setLoginItemSettings({ openAtLogin: true }); mobileStartupError = ''; }
+        catch (_) { mobileStartupError = loginItemMessage; }
+      }
+    },
+  });
+  await mobileWeb.configure(mobileSettings);
+  mobileInitializing = false;
+  // Only the trusted desktop settings page can enable the listener. The web
+  // page has fixed read/send operations and never sees an Electron IPC bridge.
+  handleMain('mobile-web:settings', async (_event, input) => {
+    if (input !== undefined) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid mobile web setting.');
+      if (typeof input.enabled === 'boolean') await mobileWeb.configure(withEndpoint({ ...mobileSettings, enabled: input.enabled }));
+      else if (typeof input.publicOrigin === 'string') await mobileWeb.configure(withEndpoint({ ...mobileSettings, publicOrigin: input.publicOrigin }));
+      else if (input.revoke === true) await mobileWeb.revokeDevices();
+      else throw new Error('Invalid mobile web setting.');
+    }
+    const status = mobileWeb.status();
+    status.startupError = mobileStartupError;
+    if (!tudArg && app.isPackaged && supportsLoginItem(process.platform) && status.enabled && status.publicOrigin) {
+      try {
+        const login = app.getLoginItemSettings();
+        if (!login.openAtLogin || login.status === 'requires-approval') status.startupError = loginItemMessage;
+      } catch (_) { status.startupError = loginItemMessage; }
+    }
+    if (!tudArg && status.publicOrigin) {
+      try {
+        const access = JSON.parse(fs.readFileSync(path.join(HOME, '.config', 'agentdeck-remote', 'vps-access.json'), 'utf8'));
+        status.gatewayUser = typeof access.username === 'string' ? access.username : '';
+        status.gatewayPassword = typeof access.password === 'string' ? access.password : '';
+      } catch (_) {}
+    }
+    return status;
+  });
+  onMain('mobile-web:response', (_event, payload) => {
+    const pending = mobileRequests.get(payload?.requestId);
+    if (!pending) return;
+    mobileRequests.delete(payload.requestId); clearTimeout(pending.timer);
+    if (typeof payload.error === 'string' && payload.error) pending.reject(new Error(payload.error));
+    else pending.resolve(payload.result);
+  });
   const quotaAlertPath = path.join(app.getPath('userData'), 'quota-bark-state.json');
   let quotaAlertState = {};
   try {
@@ -741,30 +892,143 @@ app.whenReady().then(() => {
     } catch (_) { send('toast', { text: '额度 Bark 去重记录无法保存，未发送提醒。' }); }
   };
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
+  let warmupCaptain = { id: '', idle: false, at: 0 };
+  const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
+    warmupCaptain.id === seatConfig().mainSession?.colId ? warmupCaptain.id : '';
+  quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
+  if (tudArg) { app.testWarmupRuns = []; app.testWarmupResults = []; }
+  quotaWarmup = createWarmupService({
+    stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
+    logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
+    getSettings: () => seatConfig().quotaWarmup,
+    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
+    getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome, tudArg ? 'test' : process.platform),
+      quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
+      tudArg ? async () => [] : undefined),
+    run: tudArg ? async (seat) => {
+      // Isolated UI tests can supply deterministic results from the Electron
+      // harness; no test profile is allowed to call a real account.
+      app.testWarmupRuns.push({ seatId: seat.id, configDir: seat.configDir });
+      return app.testWarmupResults.shift() || { ok: false, status: 'test-disabled' };
+    } : (seat, options) => quotaWarmupRunner.run(seat, options),
+  });
+  handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
+  handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
+    const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === colId);
+    if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
+    const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
+    warmupCaptain = { id: colId, idle, at: Date.now() };
+    if (!idle) quotaWarmup.cancel(col.claudeSeatId || cfg.activeClaudeSeatId);
+    else if (changed) quotaWarmup.tick().catch(() => {});
+    return true;
+  });
+  if (tudArg) app.testQuotaWarmup = quotaWarmup;
+  quotaWarmupTimer = setInterval(() => quotaWarmup.tick().catch(() => {}), 30_000);
+  quotaWarmupTimer.unref();
+  if (tudArg) app.testRelayAlerts = [];
+  const sendRelayBark = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testRelayAlerts.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  handleMain('captain:relay-notify', (_e, { colId, message }) => {
+    if (colId !== notificationConfig.mainSession?.colId || !notificationConfig.columns?.some((c) => c.id === colId && c.isMain) ||
+      typeof message !== 'string' || !message.trim() || message.length > 1000) throw new Error('无效队长轮换提醒');
+    return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
+  });
+  const needsUserBarkPath = path.join(app.getPath('userData'), 'needs-user-bark-state.json');
+  let needsUserBarkState = { entries: {} };
+  let needsUserBarkStateLoaded = false;
+  try {
+    if (fs.statSync(needsUserBarkPath).size <= 65536) {
+      const value = JSON.parse(fs.readFileSync(needsUserBarkPath, 'utf8'));
+      if (value && typeof value.entries === 'object' && !Array.isArray(value.entries)) {
+        const entries = {};
+        for (const [id, entry] of Object.entries(value.entries)) {
+          if (/^[A-Za-z0-9_-]{1,160}$/.test(id) && typeof entry === 'string' && entry.length <= 200) entries[id] = entry;
+        }
+        needsUserBarkState = { entries };
+        needsUserBarkStateLoaded = true;
+      }
+    }
+  } catch (_) {}
+  if (tudArg) app.testNeedsUserAlerts = [];
+  const sendNeedsUserBark = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testNeedsUserAlerts.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  const observeNeedsUser = createNeedsUserBark({ state: needsUserBarkState, sendBark: sendNeedsUserBark,
+    suppressInitial: !needsUserBarkStateLoaded,
+    onError: (message) => send('toast', { text: message }),
+    saveState: (value) => {
+      fs.writeFileSync(needsUserBarkPath + '.tmp', JSON.stringify(value), { mode: 0o600 });
+      fs.renameSync(needsUserBarkPath + '.tmp', needsUserBarkPath);
+    } });
+  notifyNeedsUserCards = () => {
+    try {
+      observeNeedsUser(taskStore.list(), { enabled: barkEnabled(notificationConfig), ready: barkReady(notificationConfig) });
+    } catch (_) { send('toast', { text: '需要你的手机提醒没能记下，未发送。' }); }
+  };
+  notifyNeedsUserCards();
+
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
     catch (_) { e.returnValue = null; }
   });
-  onMain('save-config', (_e, cfg) => {
+  const writeConfig = (cfg) => {
+    cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
+    if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
     // silently reset the whole deck layout to defaults on next launch).
-    try {
-      fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), 'utf-8');
-      fs.renameSync(configPath + '.tmp', configPath);
-    } catch (_) {}
+    fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
+    fs.chmodSync(configPath + '.tmp', 0o600);
+    fs.renameSync(configPath + '.tmp', configPath);
     checkQuotaBark();
+    notifyNeedsUserCards();
+  };
+  onMain('save-config', (_e, cfg) => { try { writeConfig(cfg); } catch (_) {} });
+  onMain('save-config-sync', (e, cfg) => { try { writeConfig(cfg); e.returnValue = true; } catch (_) { e.returnValue = false; } });
+  const manifestPath = path.join(app.getPath('userData'), 'restart-resume.json');
+  onMain('restart-manifest-load', (e) => {
+    try { e.returnValue = RestartResume.parseManifest(fs.readFileSync(manifestPath, 'utf8')); }
+    catch (_) { e.returnValue = RestartResume.emptyManifest(); }
   });
+  onMain('restart-manifest-save', (e, doc) => {
+    try {
+      const clean = RestartResume.parseManifest(JSON.stringify(doc));
+      fs.writeFileSync(manifestPath + '.tmp', JSON.stringify(clean), { encoding: 'utf-8', mode: 0o600 });
+      fs.chmodSync(manifestPath + '.tmp', 0o600);
+      fs.renameSync(manifestPath + '.tmp', manifestPath);
+      e.returnValue = true;
+    } catch (_) { e.returnValue = false; }
+  });
+  // The deck page has no clipboard module of its own. Test profiles get a
+  // private clipboard: a test run never reads or replaces what the user copied.
+  let testClipboard = '';
+  onMain('clipboard:write-sync', (e, text) => {
+    if (typeof text !== 'string') { e.returnValue = null; return; }
+    if (tudArg) testClipboard = text; else clipboard.writeText(text);
+    e.returnValue = true;
+  });
+  onMain('clipboard:read-sync', (e) => { e.returnValue = tudArg ? testClipboard : clipboard.readText(); });
   onMain('env-info-sync', (e) => { e.returnValue = {
-    platform: process.platform, home: HOME,
+    platform: process.platform, home: HOME, version: app.getVersion(),
+    build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
   }; });
 
   // Test profiles never read the user's quota caches or conversation logs.
   handleMain('quota:local', async () => {
     if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
     await claudeQuotaRefresh?.tick();
+
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
@@ -778,8 +1042,23 @@ app.whenReady().then(() => {
     }
     return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || [])]);
   });
+  handleMain('quota:refresh', async (_e, { seatId } = {}) => {
+    if (tudArg) return [];
+    if (seatId && !ClaudeSeatsCore.normalize(seatConfig().claudeSeats).some((s) => s.id === seatId)) throw new Error('席位不存在');
+    await claudeQuotaRefresh.tick({ force: true, seatId });
+    quotaRead = null;
+    return claudeQuotaRefresh.samples().filter((s) => !seatId || s.seatId === seatId);
+  });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
-  onMain('pty:input', (_e, { id, data }) => { const p = ptys.get(id); if (p) p.write(data); });
+  onMain('pty:input', (_e, { id, data }) => {
+    if (id === warmupCaptain.id) {
+      warmupCaptain.idle = false;
+      const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === id);
+      quotaWarmup.cancel(col?.claudeSeatId || cfg.activeClaudeSeatId);
+    }
+    const p = ptys.get(id); if (p) p.write(data);
+  });
+
   onMain('pty:resize', (_e, { id, cols, rows }) => {
     const p = ptys.get(id);
     if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch (_) {} }
@@ -795,7 +1074,7 @@ app.whenReady().then(() => {
       try { result = await pending.notifyPromise; }
       catch (err) { error = err.message; }
     }
-    const verbatim = action === 'main-briefing' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-task';
+    const verbatim = action === 'main-briefing' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task';
     pendingBoardCommands.delete(requestId);
     if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
@@ -1113,13 +1392,10 @@ app.whenReady().then(() => {
     // no-op, not a Finder window on some unrelated folder.
     const r = resolveClick(msg, true);
     if (!r) { send('toast', { text: '路径不存在：' + shortText(msg && msg.raw) }); return; }
-    if (r.fallback) send('toast', { text: '该路径不完整存在，已打开最深的真实一层：' + r.target });
-    try {
-      const stat = fs.statSync(r.target);
-      // A directory opens in Finder; a file is revealed within its parent folder.
-      if (stat.isDirectory()) shell.openPath(r.target);
-      else shell.showItemInFolder(r.target);
-    } catch (_) {}
+    const open = revealOpens(r.target);
+    if (r.fallback) send('toast', { text: '该路径不完整存在，已' + (open ? '打开' : '定位到') + '最深的真实一层：' + r.target });
+    if (open) shell.openPath(r.target);
+    else shell.showItemInFolder(r.target);
   });
 
   // Electron's default View accelerators zoom the entire page before the
@@ -1183,19 +1459,104 @@ function startFleet(configPath) {
   fleetClient.start();
 }
 
-app.on('before-quit', () => {
+// Ask the page to record in-flight crew, then quit on a later turn. A nested
+// app.quit() inside this handler is a no-op, and a timer that gives up once
+// the page has answered never reaches the real exit. The timeout always
+// schedules the same quit as the page's ack.
+let quitGate = null;
+let quitWatchdog = null;
+// Electron maps process.exit to app.exit; neither can break stuck native
+// teardown or a blocked main loop. A separate Node-mode process owns the hard
+// deadline. Its stdin is held open only by this process, so a normal exit
+// cancels the deadline and cannot leave a timer targeting a reused PID.
+function armQuitWatchdog() {
+  if (quitWatchdog) return;
+  const deadlineMs = 5000;
+  const script = `
+    const target = Number(process.argv[1]);
+    if (target !== process.ppid || !Number.isSafeInteger(target) || target < 1) process.exit(1);
+    const timer = setTimeout(() => {
+      if (process.stdin.readableEnded || process.ppid !== target) return process.exit(0);
+      try { process.kill(target, 'SIGKILL'); } catch (_) {}
+      process.exit(0);
+    }, ${deadlineMs});
+    process.stdin.on('end', () => { clearTimeout(timer); process.exit(0); });
+    process.stdin.resume();
+  `;
+  quitWatchdog = spawn(process.execPath, ['-e', script, String(process.pid)], {
+    env: { ELECTRON_RUN_AS_NODE: '1', ...(isWin ? { SystemRoot: process.env.SystemRoot } : {}) },
+    stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true,
+  });
+  quitWatchdog.on('error', () => {});
+  quitWatchdog.stdin.on('error', () => {});
+  quitWatchdog.unref();
+  quitWatchdog.stdin.unref();
+  // Also cover a watchdog spawn failure while the main loop is responsive.
+  setTimeout(() => { try { process.kill(process.pid, 'SIGKILL'); } catch (_) {} }, deadlineMs).unref();
+}
+app.prependListener('before-quit', armQuitWatchdog);
+function readResumeEnabled() {
+  try { return RestartResume.resumeEnabled(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))); }
+  catch (_) { return true; }
+}
+function parkedSessions() {
+  if (tudArg) return null;
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'));
+    const lookback = 14 * 24 * 3600 * 1000;
+    const columns = (cfg.columns || []).filter((col) => col && !col.isMain && col.captainCrew).map((col) => ({
+      id: col.id, provider: RestartResume.providerOf(col.cmd), cwd: col.cwd || '',
+      since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '', owner: col.modelSessionOwner || '',
+    })).filter((col) => ['Cursor', 'Codex', 'Antigravity'].includes(col.provider));
+    return AgentSessions.resolveSessions(columns, { roots: AgentSessions.defaultRoots(os.homedir()), lookbackMs: lookback });
+  } catch (_) { return {}; }
+}
+quitGate = RestartResume.createQuitGate({
+  timeoutMs: 1500,
+  schedule: (fn, ms) => { const timer = setTimeout(fn, ms); return () => clearTimeout(timer); },
+  later: (fn) => { setImmediate(fn); },
+  onPark: () => { send('park-for-restart', { sessions: parkedSessions() }); },
+  quit: () => {
+    app.quit();
+    // Try normal Electron teardown first; the OS watchdog remains armed if
+    // either Electron exit path returns without ending the real process.
+    setTimeout(() => { try { app.exit(0); } catch (_) {} }, 1000);
+  },
+});
+onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
+app.on('before-quit', (event) => {
+  if (quitGate.beforeQuit(event, readResumeEnabled()) !== 'cleanup') return;
   if (fleetClient && fleetClient.stop) fleetClient.stop();
   clearInterval(claudeQuotaTimer);
   claudeQuotaRefresh?.dispose();
+  if (mobileWeb) mobileWeb.close();
+  for (const pending of mobileRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error('AgentDeck 已关闭。')); }
+  mobileRequests.clear();
+  clearInterval(quotaWarmupTimer);
+  quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
+
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
   // Final flush of each column's recent output so the next launch can replay it
   // (the periodic flush already covers crashes that skip this handler).
   for (const [id, buf] of ptyBuffers) writeSession(id, buf);
   for (const [id, p] of ptys) {
+    // kill() only signals the shell. The master fd stays open and keeps
+    // the process alive after will-quit, so Playwright never sees the exit.
     try { p.kill(); } catch (_) {}
+    // Windows destroy() calls kill() again; closing one ConPTY twice corrupts
+    // the native heap. POSIX still needs destroy() to release its master fd.
+    try { if (!isWin && typeof p.destroy === 'function') p.destroy(); } catch (_) {}
+
     removeCredentials(boardControlDir, id);
     try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // clear watch-ai spools on exit
   }
+  ptys.clear();
+});
+// before-quit already removed credentials and closed PTY masters. Exit
+// immediately so inspector sockets cannot keep quit waiting. The independent
+// watchdog still enforces the deadline if native teardown does not finish.
+app.on('will-quit', () => {
+  app.exit(0);
 });
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });

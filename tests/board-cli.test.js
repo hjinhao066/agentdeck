@@ -32,6 +32,34 @@ test('manual terminal cannot access the control channel', async () => {
   assert.match(result.stderr, /Only conductor-managed terminals/);
 });
 
+test('briefing sends a read-only Captain request and prints the full instructions and handoff', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-briefing-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const briefing = require('../main-core').instructions(process.platform) + '\n队长交接：继续当前任务，重挂回执监听。';
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file));
+      requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: briefing }));
+    }
+  }, 20);
+  try {
+    const result = await runCli(['briefing'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' });
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout, briefing + '\n');
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].action, 'main-briefing');
+    assert.equal(requests[0].token, 'test-token');
+    assert.equal(requests[0].message, undefined);
+    assert.equal(requests[0].task, undefined);
+    const denied = await runCli(['briefing'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.equal(denied.code, 1);
+    assert.match(denied.stderr, /Only conductor-managed terminals/);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('quota uses one read-only Captain request and prints the four provider lines', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-cli-'));
   fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
@@ -197,6 +225,7 @@ test('peek sends the id and default or requested row count and prints only live 
 
 test('Captain stop/archive and tell flags use the authenticated request channel', async () => {
   for (const [args, expected] of [
+    [['new', '--title', 'US2 task', '--task', 'Inspect', '--seat', 'us2'], { action: 'main-new', seatId: 'us2' }],
     [['new', '--title', 'Review', '--task', 'Inspect', '--project', '登录项目', '--reviews', 'worker-a, worker-b,worker-a'], { action: 'main-new', title: 'Review', task: 'Inspect', project: '登录项目', reviews: ['worker-a', 'worker-b'] }],
     [['stop', '--id', 'worker'], { action: 'main-stop', to: 'worker' }],
     [['archive', '--id', 'worker'], { action: 'main-archive', to: 'worker' }],
@@ -226,10 +255,10 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
 });
 
 test('new rejects empty project names and malformed review declarations before requesting', async () => {
-  for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a']]) {
+  for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a'], ['--seat'], ['--seat', '../bad']]) {
     const result = await runCli(['new', '--title', 'Review', '--task', 'Inspect', ...options], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /new --(project|reviews) requires/);
+    assert.match(result.stderr, /new --(project|reviews|seat) requires/);
   }
 });
 
@@ -280,9 +309,10 @@ test('notify-user routes local, urgent and fixed test requests without key data'
   ]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-notify-cli-'));
     fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+    fs.writeFileSync(path.join(dir, 'requests', 'unpublished.json.123.tmp'), '{');
     const requests = [];
     const server = setInterval(() => {
-      for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+      for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
         const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
         fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
         fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: 'sent' }));
@@ -291,6 +321,7 @@ test('notify-user routes local, urgent and fixed test requests without key data'
     try {
       const r = await runCli(['notify-user', ...args], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' });
       assert.equal(r.code, 0); assert.equal(r.stdout, 'sent\n'); assert.equal(requests.length, 1);
+      assert.equal(fs.readFileSync(path.join(dir, 'requests', 'unpublished.json.123.tmp'), 'utf8'), '{');
       const { id, token, createdAt, ...payload } = requests[0];
       assert.equal(token, 'captain-test'); assert.deepEqual(payload, { action: 'main-notify-user', ...expected });
     } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }

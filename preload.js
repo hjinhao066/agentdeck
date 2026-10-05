@@ -1,12 +1,25 @@
-const { contextBridge, ipcRenderer, clipboard, webUtils } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('deck', {
   loadConfig: () => ipcRenderer.sendSync('load-config-sync'),
   saveConfig: (cfg) => ipcRenderer.send('save-config', cfg),
+  saveConfigSync: (cfg) => ipcRenderer.sendSync('save-config-sync', cfg),
+  restartManifestLoad: () => ipcRenderer.sendSync('restart-manifest-load'),
+  restartManifestSave: (doc) => ipcRenderer.sendSync('restart-manifest-save', doc),
+  onParkForRestart: (cb) => ipcRenderer.on('park-for-restart', (_e, m) => cb(m && m.sessions)),
+  parkForRestartDone: () => ipcRenderer.send('park-for-restart-done'),
+  mobileWebSettings: (input) => ipcRenderer.invoke('mobile-web:settings', input),
+  onMobileRequest: (cb) => ipcRenderer.on('mobile-web:request', (_e, m) => cb(m)),
+  mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
+  memoryPressure: () => ipcRenderer.invoke('memory-pressure'),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
-  clipboardWrite: (t) => clipboard.writeText(t),
-  clipboardRead: () => clipboard.readText(),
+  quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
+  onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
+  // Electron gives a preload no `clipboard` module, so main reads and writes
+  // it. A failed write throws: a copy button must not report success for it.
+  clipboardWrite: (t) => { if (ipcRenderer.sendSync('clipboard:write-sync', t) !== true) throw new Error('Clipboard write failed.'); },
+  clipboardRead: () => ipcRenderer.sendSync('clipboard:read-sync') || '',
   // Resolve a dropped File's real filesystem path (File.path is deprecated).
   getPathForFile: (file) => webUtils.getPathForFile(file),
   // Retired bridge: main only removes old spools; it never writes new ones.
@@ -44,6 +57,8 @@ contextBridge.exposeInMainWorld('deck', {
   chatDelete: (id) => ipcRenderer.send('chat:delete', { id }),
   // Right-hand pane: file preview, embedded browser.
   previewRead: (raw, id, cont) => ipcRenderer.invoke('preview:read', { raw, id, cont }),
+  // Artifacts: which delivered files are still on disk (0 gone, 1 file, 2 folder).
+  artifactsStat: (paths) => ipcRenderer.invoke('artifacts:stat', { paths }),
   sideBrowserOpen: (url) => ipcRenderer.send('side:browser-open', { url }),
   sideBrowserPdf: (raw, id, cont) => ipcRenderer.send('side:browser-pdf', { raw, id, cont }),
   sideBrowserBounds: (b) => ipcRenderer.send('side:browser-bounds', b),
@@ -59,7 +74,11 @@ contextBridge.exposeInMainWorld('deck', {
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   claudeSeatUsage: (seatId) => ipcRenderer.invoke('seats:usage', { seatId }),
-  recordClaudeSeatUsage: (seatId, usage, configDir) => ipcRenderer.invoke('seats:record-usage', { seatId, usage, configDir }),
+  claudeWarmupStatus: () => ipcRenderer.invoke('seats:warmup-status'),
+  claudeWarmupIdle: (colId, idle) => ipcRenderer.invoke('seats:warmup-idle', { colId, idle }),
+  recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
+  captainRelayNotify: (colId, message) => ipcRenderer.invoke('captain:relay-notify', { colId, message }),
+
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   // keepReplay: save the output first (archiving), so restoring can replay it.
@@ -69,7 +88,7 @@ contextBridge.exposeInMainWorld('deck', {
   // A prompt too long for the terminal is saved as a private .txt; returns its path.
   saveLongPrompt: (text) => ipcRenderer.invoke('prompt:save-long', { text }),
   // Hot-reload support: check if a pty survived a renderer reload, replay its buffer.
-  ptyIsAlive: (id) => ipcRenderer.invoke('pty:is-alive', { id }),
+  ptyIsAlive: (id, seatId) => ipcRenderer.invoke('pty:is-alive', { id, seatId }),
   ptyForeground: (id) => ipcRenderer.invoke('pty:foreground', { id }),
   ptyReplay: (id) => ipcRenderer.invoke('pty:replay', { id }),
   reloadRenderer: () => ipcRenderer.send('reload-renderer'),
@@ -90,6 +109,8 @@ contextBridge.exposeInMainWorld('deck', {
   taskBoard: (op, input) => ipcRenderer.invoke('task-board:request', { op, input }),
   fleetState: () => ipcRenderer.invoke('fleet:state'),
   onTaskStart: (cb) => ipcRenderer.on('task-board:start', (_e, m) => cb(m)),
+  onTaskReview: (cb) => ipcRenderer.on('task-board:review', (_e, m) => cb(m)),
+  onTaskRework: (cb) => ipcRenderer.on('task-board:rework', (_e, m) => cb(m)),
   onTasksChanged: (cb) => {
     const listener = () => cb();
     ipcRenderer.on('task-board:changed', listener);

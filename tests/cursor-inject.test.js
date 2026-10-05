@@ -94,3 +94,78 @@ test('ChatUI enforces minWait >= 700ms for Cursor Agent paste settling', () => {
   assert.match(chatUiSrc, /const minWait = isCursor \? 700 :/);
   assert.match(chatUiSrc, /if \(isCursor\) \{[\s\S]*?setTimeout\([\s\S]*?window\.deck\.ptyInput\(col\.id, '\\r'\);[\s\S]*?600\);/);
 });
+
+// ---- narrow columns: a wrapped Cursor prompt is still idle, a busy one never is ----
+const vm = require('vm');
+const M = require('../main-core');
+const ctx = vm.createContext({ MainCore: M });
+vm.runInContext(rendererSrc.slice(rendererSrc.indexOf('const WORKING_RE'), rendererSrc.indexOf('const DOT_TIP')), ctx);
+const CURSOR = 'cursor-agent --force --model claude-opus-5-5-high';
+const idle = (screen, cmd = CURSOR, state = 'plain') => ctx.terminalIdle({ cmd }, { alive: true, state, lastScreen: screen });
+
+// Real cursor-agent screens captured at 30 columns (a 260px column, the minimum width).
+const NARROW = {
+  'claude-opus-5-5-high': ['  Cursor Agent', '  v2026.10.01-e373342', '  Tip: Use subagents to', '  parallelize work and', '  preserve context.', '', '  → Plan, search, build', '    anything', '', '  Claude      Run Everything', '  Opus 5.5', '  300K High', '  ~'],
+  'grok-4.7-high-fast': ['  Cursor Agent', '  v2026.10.01-e373342', '  Tip: Use /debug to', '  instrument and debug', '  complex problems.', '', '  → Plan, search, build', '    anything', '', '  Grok 4.7    Run Everything', '  256K High', '  Fast', '  ~'],
+};
+
+test('a Cursor prompt wrapped by a narrow column is idle, for every model', () => {
+  for (const [model, rows] of Object.entries(NARROW)) {
+    const screen = rows.join('\n');
+    assert.equal(AGENT_IDLE_RE.test(screen), false, `${model}: no whole marker on the raw wrapped screen`);
+    assert.equal(M.cursorActivity(screen), 'idle', model);
+    assert.equal(idle(screen), true, model);
+  }
+  assert.equal(idle('  → Plan, search,\n    build\n    anything\n\n  Run Everything'), true, 'wrapped over three rows');
+  assert.equal(idle('  → Add a follow-up\n\n  Claude Opus 5.5 300K High   Run Everything'), true, 'unwrapped is unchanged');
+});
+
+test('a busy narrow Cursor screen with a wrapped prompt is never idle and gets nothing injected', () => {
+  const prompt = ['', '  → Plan, search, build', '    anything', '', '  Claude      Run Everything', '  Opus 5.5', '  ~'];
+  for (const busyRow of ['  ⠋ Reading…', '  ⠰⠳ Grepping  32.91k tokens', '  ⠀⠞ Thinking  4k tokens', '  ⠠⠛ Running  3k tokens', '  ⠋ Editing...', '  ctrl+c to stop', '正在运行命令 gh run watch']) {
+    const screen = [busyRow, ...prompt].join('\n');
+    assert.equal(M.cursorActivity(screen) === 'idle', false, busyRow);
+    assert.equal(idle(screen), false, busyRow);
+  }
+  for (const prose of ['  ✻ Thinking… (4s)', '  Running…', '  Editing...', '  Working (4s • esc to interrupt)', 'Working on the parser', 'Searching for the call site', 'Reading 3 files']) {
+    const screen = [prose, ...prompt].join('\n');
+    assert.equal(M.cursorActivity(screen), 'idle', prose);
+    assert.equal(idle(screen), true, prose);
+  }
+  // the stop hint wraps with the prompt, or states already say so
+  assert.equal(idle('  → Add a follow-up   ctrl+c to\n    stop\n\n  Run Everything'), false);
+  assert.equal(M.cursorActivity('  → Add a follow-up   ctrl+c to\n    stop'), 'working');
+  assert.equal(idle(NARROW['claude-opus-5-5-high'].join('\n'), CURSOR, 'working'), false);
+  assert.equal(idle(NARROW['claude-opus-5-5-high'].join('\n'), CURSOR, 'input'), false);
+  assert.equal(idle(NARROW['claude-opus-5-5-high'].join('\n'), CURSOR, 'quota'), false);
+});
+
+test('only the rows right after the prompt are joined, and the words need boundaries', () => {
+  // footer rows are not continuation: "Plan, search, build" + a footer row is no prompt
+  assert.equal(M.cursorActivity('  → Plan, search, build\n  anything else\n  ~'), '');
+  assert.equal(M.cursorActivity('  → Rebuild anything'), '');
+  assert.equal(M.cursorActivity('  → Plan, search, build anything now'), '');
+  assert.equal(AGENT_IDLE_RE.test('Rebuild anything'), false);
+  assert.equal(AGENT_IDLE_RE.test('Plan, search, build anything'), true);
+  assert.equal(AGENT_IDLE_RE.test('Build anything'), true);
+  assert.equal(AGENT_IDLE_RE.test('Add a follow-up'), true);
+  assert.equal(M.cursorActivity('Starting cursor-agent...\n  Cursor Agent\n  v2026.10.01'), '');
+});
+
+test('a Cursor screen whose footer matches the idle marker is still not idle while a busy row is on it', () => {
+  const busyWrapped = '  ⠋ Reading…\n\n  → Plan, search, build\n    anything\n\n  Composer 2   Run Everything';
+  assert.equal(AGENT_IDLE_RE.test(busyWrapped), true, 'the footer alone would pass the marker');
+  assert.equal(idle(busyWrapped), false);
+  assert.equal(idle('Status stand-in ready\n❯\nClaude Code'), true, 'a Cursor screen without an arrow row keeps the marker rule');
+  assert.equal(idle('  ⠋ Editing...\n❯\nClaude Code'), false, 'a braille status row above the footer is still busy');
+  assert.equal(idle('Editing the next file.\n❯\nClaude Code'), true, 'the word Editing in the reply is not a status row');
+});
+
+test('first-task delivery (whenTerminalReady) and sendWhenReady share the busy-aware check', () => {
+  assert.match(rendererSrc, /const ready = entry && entry\.alive && \(!col\.cmd \|\| terminalIdle\(col, entry\)\);/);
+  assert.match(rendererSrc, /const cursorReady = isCursor && terminalIdle\(col, entry\) && /);
+  const claude = '✻ Contemplating… (11m 27s · esc to interrupt)\n❯';
+  assert.equal(idle(claude, 'claude', 'working'), false, 'working state blocks any agent');
+  assert.equal(idle('Working… (4s • esc to interrupt)\nClaude Code', 'claude'), false, 'busy rows block even before the state catches up');
+  assert.equal(idle('bypass permissions on\n❯', 'claude'), true);
+});

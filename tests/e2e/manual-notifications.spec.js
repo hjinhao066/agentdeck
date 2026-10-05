@@ -57,7 +57,7 @@ test('a real composer submission alerts once, plays a gentle sound, and clicking
   }
   await application.evaluate(({ app }) => app.testCaptainNotification.emit('click'));
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('manual-0');
-  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('manual-0').wrap.querySelector('.composer textarea'))).toBe(true);
+  await expect.poll(() => page.evaluate(() => document.activeElement === terms.get('manual-0').el.querySelector('.xterm-helper-textarea'))).toBe(true);
   await page.waitForTimeout(2000);
   expect(await alerts()).toHaveLength(1);
 });

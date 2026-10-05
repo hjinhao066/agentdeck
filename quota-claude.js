@@ -5,10 +5,11 @@ const fs = require('fs/promises');
 const https = require('https');
 const { execFile } = require('child_process');
 const os = require('os');
+const { createHash } = require('crypto');
 const S = require('./claude-seats-core');
 const M = require('./claude-seats-main');
 const Q = require('./quota-core');
-const INTERVAL_MS = 15 * 60_000;
+const INTERVAL_MS = 5 * 60_000;
 const MAX_BYTES = 64 * 1024;
 async function readCredentials(seat, home, platform = process.platform, exec = execFile) {
   const loc = M.credentialLocation(seat, home);
@@ -39,6 +40,18 @@ async function readCredentials(seat, home, platform = process.platform, exec = e
       !Number.isFinite(auth.expiresAt) || auth.expiresAt <= Date.now()) return null;
   return auth.accessToken;
 }
+function officialUsage(data, seat, service, at) {
+  const windows = [['fiveHour', '5 小时', data?.five_hour], ['weekly', '每周', data?.seven_day]].map(([key, label, w]) => {
+    const absolute = typeof w?.resets_at === 'number' || typeof w?.resets_at === 'string' && /^\d{4}-\d\d-\d\dT/.test(w.resets_at);
+    const resetAt = absolute ? Q.resetTime(w.resets_at, at) : null;
+    if (Q.percent(w?.utilization) === null || !resetAt) throw new Error('invalid-usage');
+    return { key, label, used: w.utilization, remaining: Math.round((100 - w.utilization) * 10) / 10,
+      exhausted: w.utilization === 100, resetAt, resetText: new Date(resetAt).toISOString() };
+  });
+  return { provider: 'Claude', scope: 'claude', seatId: seat.id, configDir: seat.configDir,
+    credentialKey: createHash('sha256').update(service).digest('hex').slice(0, 16),
+    at, source: Q.CLAUDE_OAUTH_SOURCE, confidence: '高（官方采样）', official: true, windows };
+}
 function requestUsage(token, get = https.get, timeoutMs = 8000) {
   return new Promise((resolve) => {
     let request, response, bytes = 0, body = '', done = false;
@@ -68,15 +81,8 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
         res.on('end', () => {
           try {
             const data = JSON.parse(body), at = Date.now();
-            const windows = [['five_hour', 'fiveHour'], ['seven_day', 'weekly']].map(([field, key]) => {
-              const w = data?.[field];
-              if (Q.percent(w?.utilization) === null) return null;
-              const absolute = typeof w.resets_at === 'number' || typeof w.resets_at === 'string' && /^\d{4}-\d\d-\d\dT/.test(w.resets_at);
-              const resetAt = absolute ? Q.resetTime(w.resets_at, at) : null;
-              return { key, remaining: 100 - w.utilization,
-                resetText: resetAt ? new Date(resetAt).toISOString() : '' };
-            }).filter(Boolean);
-            finish(windows.length ? { at, source: Q.CLAUDE_OAUTH_SOURCE, windows } : null);
+            const windows = officialUsage(data, { id: 'default' }, '', at).windows.map((w) => ({ key: w.key, remaining: 100 - w.used, resetText: w.resetText }));
+            finish({ at, source: Q.CLAUDE_OAUTH_SOURCE, windows });
           } catch (_) { finish(); }
         });
       });
@@ -99,7 +105,7 @@ function boundUsage(seat, home, value) {
   if (!value?.accountKey) return null;
   try {
     const loc = M.credentialLocation(seat, home);
-    if (value.accountKey !== M.usageAccountKey(loc) || value.configDir !== loc.dir) return null;
+    if (value.accountKey !== M.usageAccountKey(loc) || (value.configDir !== loc.dir && value.configDir !== seat.configDir)) return null;
     return { ...M.sanitizeUsage(value), accountKey: value.accountKey, configDir: loc.dir };
   } catch (_) { return null; }
 }
@@ -107,35 +113,48 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
   const entries = new Map();
   let stopped = false;
   function sync() {
-    const seats = S.normalize(getSeats());
+    const services = new Set();
+    const seats = S.normalize(getSeats()).filter((seat) => {
+      try {
+        const service = M.credentialLocation(seat, home).keychainService;
+        if (services.has(service)) return false;
+        services.add(service); return true;
+      } catch (_) { return false; }
+    });
     for (const [id, entry] of entries) if (!seats.some((s) => s.id === id && s.configDir === entry.seat.configDir)) entries.delete(id);
-    for (const seat of seats) if (!entries.has(seat.id)) entries.set(seat.id, { seat, due: 0, usage: M.readUsage(seat, home) });
+    for (const seat of seats) if (!entries.has(seat.id)) entries.set(seat.id, { seat, due: 0, usage: M.readUsage(seat, home), failures: 0 });
     return entries;
   }
-  async function tick() {
+  async function tick({ force = false, seatId } = {}) {
     if (stopped) return;
-    await Promise.all([...sync().values()].map((entry) => {
+    await Promise.all([...sync().values()].filter((entry) => !seatId || entry.seat.id === seatId).map((entry) => {
       if (entry.pending) return entry.pending;
-      if (now() < entry.due) return;
+      if (!force && now() < entry.due) return;
       entry.due = now() + INTERVAL_MS;
       entry.pending = (async () => {
         let value = null;
         try { value = await read(entry.seat, home); } catch (_) {}
         if (!stopped && entries.get(entry.seat.id) === entry) {
-          // Failed/unbound reads have no authority over an exhaustion latch.
-          entry.usage = boundUsage(entry.seat, home, value && { ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE });
-          if (entry.usage) {
-            try { write(entry.seat, home, entry.usage); } catch (_) {}
+          const usage = boundUsage(entry.seat, home, value && { ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE });
+          if (usage) {
+            entry.usage = usage; entry.failures = 0; entry.failure = null;
+            try { write(entry.seat, home, usage); } catch (_) {}
+          } else {
+            entry.failures++;
+            entry.failure = { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
+              at: now(), failureOnly: true, failures: entry.failures, checkedAt: now(), failure: '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
           }
         }
       })().finally(() => { entry.pending = null; });
       return entry.pending;
     }));
   }
-  return { tick, samples: () => stopped ? [] : [...sync().values()].flatMap(({ seat, usage }) => {
+  return { tick, samples: () => stopped ? [] : [...sync().values()].flatMap(({ seat, usage, failure }) => {
+    if (failure) return [failure];
     const bound = boundUsage(seat, home, usage);
-    return bound ? [{ ...Q.cacheClaude(bound, bound.at), seatId: seat.id, configDir: seat.configDir, accountKey: bound.accountKey, accountBound: true }] : [];
+    return bound ? [{ ...Q.cacheClaude(bound, bound.at), seatId: seat.id, configDir: seat.configDir, accountKey: bound.accountKey,
+      credentialKey: createHash('sha256').update(M.credentialLocation(seat, home).keychainService).digest('hex').slice(0, 16), accountBound: true, official: true }] : [];
   }),
     dispose: () => { stopped = true; entries.clear(); } };
 }
-module.exports = { INTERVAL_MS, readCredentials, requestUsage, readSeat, createRefresh };
+module.exports = { INTERVAL_MS, officialUsage, readCredentials, requestUsage, readSeat, createRefresh };

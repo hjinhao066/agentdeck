@@ -1,3 +1,4 @@
+const closeElectron = require('./fixtures/close-electron');
 const { test, expect, _electron: electron } = require('@playwright/test');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -25,11 +26,15 @@ test.beforeAll(async () => {
   // Export the Captain capability through its real PTY, never through page IPC.
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
-  const exportEnv = `node -e 'require("fs").writeFileSync(${JSON.stringify(controlFile)}, JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}))'`;
+  // Run a file so PowerShell's native argument quoting cannot strip the JS
+  // quotes or reinterpret the backslashes in a Windows path.
+  const exportScript = path.join(profile, 'export-control.js');
+  fs.writeFileSync(exportScript, `require('fs').writeFileSync(process.argv[2], JSON.stringify({AGENTDECK_CONTROL_DIR:process.env.AGENTDECK_CONTROL_DIR,AGENTDECK_CONTROL_TOKEN:process.env.AGENTDECK_CONTROL_TOKEN}));`);
+  const exportEnv = `node "${exportScript}" "${controlFile}"`;
   await page.evaluate(([id, c]) => window.deck.ptyInput(id, c + '\r'), [captain, exportEnv]);
   await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterAll(async () => { if (app) await closeElectron(app); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 
 function cli(args, env) {
   return new Promise((resolve) => {
@@ -124,6 +129,15 @@ test('screen templates, Doing and open turns cannot produce receipts; ended turn
   expect(probe.openTurn).toBe('working'); expect(probe.beforeDeadline).toBe('working'); expect(probe.doing).toBe('working'); expect(probe.classified).toBe('working');
   expect(probe.status).toBe('stopped'); expect(probe.receipt.summary).toBe('已结束，未提交回执');
   expect(probe.receipt.files).toEqual([]);
+  const resumed = await page.evaluate(() => {
+    const t = config.mainSession.tasks.at(-1);
+    MainSession.onTick('submit-worker', { ...terms.get('submit-worker'), alive: true, state: 'working',
+      lastScreen: '→ Add a follow-up ctrl+c to stop' });
+    return { status: t.status, receipt: t.receipt || null,
+      lastReceipt: columns.find((c) => c.id === 'submit-worker').lastReceipt || null,
+      pending: config.mainSession.pending.filter((p) => p.taskId === t.id && p.source === 'fallback') };
+  });
+  expect(resumed).toEqual({ status: 'working', receipt: null, lastReceipt: null, pending: [] });
   // A late command wins over the automatic no-receipt notice.
   expect((await cli(['complete', '--result', '真实结果🙂'], workerEnv())).code).toBe(0);
   expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.summary)).toBe('真实结果🙂');
@@ -150,24 +164,31 @@ test('quota exhausted at startup fails the unsent task instead of leaving it que
 
 const filteredEnv = (env) => ({ ...env, AGENTDECK_RECEIPT_TOKEN: '', AGENTDECK_CONTROL_TOKEN: '', AGENTDECK_CONTROL_DIR: '' });
 
-test('filtered tokens use private per-terminal credentials for progress, ask and complete without granting worker control', async () => {
+test('a terminal id cannot select private credentials; this column tty is the only file key', async () => {
   const env = filteredEnv(workerEnv());
+  const cred = JSON.parse(fs.readFileSync(path.join(profile, 'board-control', 'credentials', 'submit-worker.json'), 'utf8'));
+  expect(cred.terminalId).toBe('submit-worker');
+  expect(cred.receiptToken).toBe(workerEnv().AGENTDECK_RECEIPT_TOKEN);
+  if (process.platform === 'win32') expect(cred.tty).toBe('');
+  else {
+    expect(cred.tty).toMatch(/^\/dev\/(?:ttys\d+|tty\d+|pts\/\d+)$/);
+    expect(fs.readdirSync(path.join(profile, 'board-control', 'credentials', 'by-tty')).some((name) => name.endsWith('.json'))).toBe(true);
+  }
   await dispatch('filtered command environment');
-  expect((await cli(['progress', '--message', 'filtered progress'], env)).code).toBe(0);
-  expect((await cli(['ask', '--question', 'filtered question'], env)).code).toBe(0);
-  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).status)).toBe('asking');
-  expect((await cli(['complete', '--result', 'filtered completed'], env)).code).toBe(0);
-  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.summary)).toBe('filtered completed');
-  expect((await cli(['ledger'], env)).code).toBe(1);
-  expect((await cli(['new', '--title', 'Forbidden', '--task', 'no worker control'], env)).stderr).toContain('cannot control');
-  expect((await cli(['complete', '--result', 'no identity'], { ...env, AGENTDECK_TERMINAL_ID: '' })).code).toBe(1);
+  for (const args of [['progress', '--message', 'filtered progress'], ['ask', '--question', 'filtered question'], ['complete', '--result', 'filtered completed'], ['ledger'], ['new', '--title', 'Forbidden', '--task', 'no worker control']]) {
+    const denied = await cli(args, env);
+    expect(denied.code).toBe(1);
+    expect(denied.stderr).toContain('independent');
+  }
   const captain = await page.evaluate(() => MainSession.mainCol().id);
-  expect((await cli(['ledger'], { ...env, AGENTDECK_TERMINAL_ID: captain })).code).toBe(0);
-  expect((await cli(['receipts'], { ...env, AGENTDECK_TERMINAL_ID: captain })).stdout).toContain('filtered completed');
+  expect((await cli(['ledger'], { ...env, AGENTDECK_TERMINAL_ID: captain })).code).toBe(1);
+  expect((await cli(['receipts'], { ...env, AGENTDECK_TERMINAL_ID: captain })).stderr).toContain('independent');
+  expect((await cli(['complete', '--result', 'env completed'], workerEnv())).code).toBe(0);
+  expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.summary)).toBe('env completed');
   expect(await page.evaluate(() => columns.some((c) => c.title === 'Forbidden'))).toBe(false);
 });
 
-test('archive revokes credentials and restore rotates them; filtered receipts work after restoration', async () => {
+test('archive revokes credentials and restore rotates them; a terminal id still cannot submit', async () => {
   const previous = workerEnv();
   const credentialFile = path.join(profile, 'board-control', 'credentials', 'submit-worker.json');
   await page.evaluate(() => MainSession.handle({ action: 'main-archive', to: 'submit-worker' }, MainSession.mainCol()));
@@ -176,11 +197,15 @@ test('archive revokes credentials and restore rotates them; filtered receipts wo
   await page.evaluate(() => restoreArchived('submit-worker', false, true));
   await expect.poll(() => workerEnv().AGENTDECK_RECEIPT_TOKEN !== previous.AGENTDECK_RECEIPT_TOKEN).toBe(true);
   expect(workerEnv().control).toBe(false);
+  const rotated = JSON.parse(fs.readFileSync(credentialFile, 'utf8'));
+  expect(rotated.receiptToken).toBe(workerEnv().AGENTDECK_RECEIPT_TOKEN);
+  if (process.platform !== 'win32') expect(rotated.tty).toMatch(/^\/dev\/(?:ttys\d+|tty\d+|pts\/\d+)$/);
   await dispatch('restored command environment');
   expect((await cli(['complete', '--result', 'stale token'], previous)).stderr).toContain('not conductor-managed');
-  expect((await cli(['progress', '--message', 'restored progress'], filteredEnv(workerEnv()))).code).toBe(0);
-  expect((await cli(['ask', '--question', 'restored question'], filteredEnv(workerEnv()))).code).toBe(0);
-  expect((await cli(['complete', '--result', 'restored completed'], filteredEnv(workerEnv()))).code).toBe(0);
+  expect((await cli(['complete', '--result', 'no tty'], filteredEnv(workerEnv()))).code).toBe(1);
+  expect((await cli(['progress', '--message', 'restored progress'], workerEnv())).code).toBe(0);
+  expect((await cli(['ask', '--question', 'restored question'], workerEnv())).code).toBe(0);
+  expect((await cli(['complete', '--result', 'restored completed'], workerEnv())).code).toBe(0);
   expect(await page.evaluate(() => config.mainSession.tasks.at(-1).receipt.summary)).toBe('restored completed');
 });
 
@@ -196,7 +221,9 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
   expect(reason).toMatch(/启动失败|终端进程退出/);
   expect(fs.existsSync(file)).toBe(false);
   const previous = workerEnv().AGENTDECK_RECEIPT_TOKEN;
-  await app.close(); app = null;
+  const electronProcess = app.process();
+  await closeElectron(app); app = null;
+  expect(electronProcess.exitCode).toBe(0);
   expect(fs.existsSync(path.join(dir, 'submit-worker.json'))).toBe(false);
   // Simulate a file left by an abnormal exit, then start the isolated app again.
   fs.writeFileSync(path.join(dir, 'stale.json'), '{}', { mode: 0o600 });
@@ -208,5 +235,9 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
   await expect.poll(() => workerEnv().AGENTDECK_RECEIPT_TOKEN !== previous).toBe(true);
   expect(fs.existsSync(path.join(dir, 'stale.json'))).toBe(false);
   await dispatch('after app restart');
-  expect((await cli(['complete', '--result', 'restarted completed'], filteredEnv(workerEnv()))).code).toBe(0);
+  const restarted = JSON.parse(fs.readFileSync(path.join(dir, 'submit-worker.json'), 'utf8'));
+  expect(restarted.receiptToken).toBe(workerEnv().AGENTDECK_RECEIPT_TOKEN);
+  if (process.platform !== 'win32') expect(restarted.tty).toMatch(/^\/dev\/(?:ttys\d+|tty\d+|pts\/\d+)$/);
+  expect((await cli(['complete', '--result', 'no tty'], filteredEnv(workerEnv()))).code).toBe(1);
+  expect((await cli(['complete', '--result', 'restarted completed'], workerEnv())).code).toBe(0);
 });

@@ -73,12 +73,34 @@ function deleteChat(dir, id) {
   try { fs.unlinkSync(privateFile(dir, id, '.json')); } catch (_) {}
 }
 
+// ---- delivered files: are they still on disk? ----
+// One answer per path: 0 gone, 1 file, 2 folder. Only absolute paths are looked
+// at, and nothing but this is told to the page.
+const MAX_STAT_PATHS = 2000;
+async function statPaths(paths, home) {
+  const one = async (raw) => {
+    if (typeof raw !== 'string' || !raw || raw.length > 2000) return 0;
+    let p = raw.trim().replace(/^file:\/\//, '');
+    if (/^~(?:[\\/]|$)/.test(p)) p = home + p.slice(1);
+    if (!path.isAbsolute(p)) return 0;
+    for (const cand of new Set([p, p.replace(/:\d+(?::\d+)?$/, '')])) {
+      try { return (await fs.promises.stat(cand)).isDirectory() ? 2 : 1; } catch (_) {}
+    }
+    return 0;
+  };
+  const list = Array.isArray(paths) ? paths.slice(0, MAX_STAT_PATHS) : [];
+  const out = [];
+  // a batch at a time: a few hundred paths must not open a few hundred handles at once
+  for (let i = 0; i < list.length; i += 64) out.push(...await Promise.all(list.slice(i, i + 64).map(one)));
+  return out;
+}
+
 // ---- IPC ----
 const isWebUrl = (u) => typeof u === 'string' && u.length <= 4096 && /^https?:\/\//i.test(u);
 const clampInt = (n, max) => Math.max(0, Math.min(max, Math.round(Number(n) || 0)));
 
 function registerSideIpc(ctx) {
-  const { onMain, handleMain, send, getWindow, resolveClick, session, WebContentsView, chatDir } = ctx;
+  const { onMain, handleMain, send, getWindow, resolveClick, session, WebContentsView, chatDir, home } = ctx;
   let view = null;
   let allowedFile = '';
   let lastBounds = { x: 0, y: 0, width: 0, height: 0, visible: false };
@@ -104,6 +126,7 @@ function registerSideIpc(ctx) {
     if (!r) return { ok: false, error: '路径不存在：' + msg.raw.slice(0, 80) };
     try { return readPreview(r.target, msg.raw); } catch (error) { return { ok: false, error: error.message }; }
   });
+  handleMain('artifacts:stat', (_e, msg) => statPaths(msg && msg.paths, home));
 
   // The embedded browser is a separate sandboxed view with its own cookie jar,
   // so a page opened here never sees the deck's bridge.
@@ -198,4 +221,4 @@ function registerSideIpc(ctx) {
   };
 }
 
-module.exports = { readPreview, loadAllChats, saveChat, deleteChat, registerSideIpc, MAX_TEXT_BYTES };
+module.exports = { readPreview, statPaths, loadAllChats, saveChat, deleteChat, registerSideIpc, MAX_TEXT_BYTES };

@@ -32,13 +32,17 @@ async function launch(flags = '', restart = false) {
   const env = { ...process.env, AGENTDECK_TEST_PROMPTS_FILE: promptsFile,
     AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir };
   delete env.ELECTRON_RUN_AS_NODE;
-  application = await electron.launch({ args: [ROOT, `--test-user-data=${profile}`], env });
+  application = await electron.launch({
+    executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env,
+  });
   page = await application.firstWindow();
   await expect(page.locator('.column.is-main')).toHaveCount(1, { timeout: 20000 });
   await expect.poll(() => briefs().length, { timeout: 20000 }).toBe(previousBriefs + 1);
   await ready();
+  await page.evaluate(() => ChatUI.setMode('rebrief-captain', 'chat'));
 }
-async function send(text) { await composer().fill(text); await composer().press('Enter'); await expect.poll(() => prompts().includes(text)).toBe(true); await ready(); }
+async function send(text) { await page.evaluate(() => ChatUI.setMode('rebrief-captain', 'chat')); await composer().fill(text); await composer().press('Enter'); await expect.poll(() => prompts().includes(text)).toBe(true); await ready(); }
 async function raw(text) {
   await page.evaluate(() => ChatUI.setMode('rebrief-captain', 'term'));
   const terminal = page.locator('.column.is-main .xterm-helper-textarea');
@@ -47,7 +51,7 @@ async function raw(text) {
 }
 async function rebrief(count) {
   await expect.poll(() => briefs().length, { timeout: 20000 }).toBe(count);
-  expect(briefs().at(-1)).toContain('先跑 ledger、读看板里的队长交接再接续');
+  expect(briefs().at(-1)).toContain('不要等用户说“继续”');
   await ready();
 }
 async function cli(args, env) {

@@ -34,7 +34,8 @@ if (process.env.AGENTDECK_TEST_HISTORY_FLAGS_FILE) {
   }));
 }
 // A TUI redraws the current screen; old prompts must not look like a live menu.
-process.stdout.write('\x1b[?1049h');
+const delayedStart = process.argv.includes('--delayed-start');
+if (!delayedStart) process.stdout.write('\x1b[?1049h');
 process.on('exit', () => process.stdout.write('\x1b[?1049l'));
 const captainStatusline = process.argv.includes('--captain-statusline');
 let model = captainStatusline ? 'Opus 5.5' : 'Fake';
@@ -42,6 +43,21 @@ let contextUsed = 23000;
 const codex = process.argv.includes('--codex-reset');
 let resetMenu = false;
 function box() {
+  if (process.argv.includes('--onboarding-probe')) {
+    let complete = false;
+    try { complete = JSON.parse(require('fs').readFileSync(require('path').join(process.env.CLAUDE_CONFIG_DIR, '.claude.json'), 'utf8')).hasCompletedOnboarding === true; } catch (_) {}
+    if (!complete || process.argv.includes('--force-login-method')) {
+      process.stdout.write('Claude Code\nSelect login method\n❯ 1. Claude account with subscription\n  2. Anthropic console\n');
+      return;
+    }
+    process.stdout.write('Claude Code startup input ready\n');
+  }
+  if (process.argv.includes('--codex-completed')) {
+    process.stdout.write('◦ Working (11m 27s • esc to interrupt)\n' +
+      '─ Worked for 34m 29s • 12:52 ─\n› Ask Codex to do anything\n' +
+      'GPT-6.1-Sol high · ~ · 修复僵尸调度会话派卡\n? for shortcuts  ⚠ 3 · f2\n');
+    return;
+  }
   if (codex) {
     process.stdout.write(`OpenAI Codex\n\n› Ask Codex to do anything\n\n  ⏎ send   ⌃J newline   ${100 - Math.round(contextUsed / 10000)}% context left\n`);
     return;
@@ -69,9 +85,17 @@ function answer() {
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   if (process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text }) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
-  if (process.argv.includes('--board-probe') && first.startsWith('BOARD ')) {
-    const args = JSON.parse(first.slice(6));
-    const result = require('child_process').spawnSync(process.execPath, [process.env.AGENTDECK_BOARD_CLI, ...args], { encoding: 'utf8', timeout: 15000 });
+  if (first === 'show login method') {
+    process.stdout.write('\x1b[2J\x1b[HClaude Code\nSelect login method\n❯ 1. Claude account with subscription\n  2. Anthropic console\n');
+    box(); return;
+  }
+  if (process.argv.includes('--board-probe') && (first.startsWith('BOARD ') || first.startsWith('BOARD-NO-ENV '))) {
+    const fallback = first.startsWith('BOARD-NO-ENV ');
+    const args = JSON.parse(first.slice(fallback ? 13 : 6));
+    const env = { ...process.env };
+    if (fallback) for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
+    const result = require('child_process').spawnSync(process.execPath, [process.env.AGENTDECK_BOARD_CLI, ...args], { env, encoding: 'utf8', timeout: 15000 });
+    if (process.env.AGENTDECK_TEST_BOARD_RESULTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_BOARD_RESULTS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, args, stdout: result.stdout, stderr: result.stderr, code: result.status }) + '\n');
     process.stdout.write('\x1b[2J\x1b[H\n⏺ BOARD RESULT\n' + (result.stdout || result.stderr || 'no result') + '\n');
     box(); return;
   }
@@ -96,7 +120,12 @@ function answer() {
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
   if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
-  if (/ask me/.test(text)) { process.stdout.write('\nProceed with the change? (y/n) '); return; }
+  if (/ask me/.test(text)) {
+    // Redraw the confirmation like the other TUI replies. Raw input has no
+    // console echo to separate this turn from the previous input box/footer.
+    process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n\nProceed with the change? (y/n) ');
+    return;
+  }
   if (first === 'gemini confirmation regression') {
     process.stdout.write('\x1b[2J\x1b[HThinking: waiting for confirmation\n⠋ Working\nAntigravity\n');
     setTimeout(() => {
@@ -119,11 +148,24 @@ function answer() {
     box();
     return;
   }
+  if (first.startsWith('work with tools')) {
+    // Claude Code shape: tool calls and a note before the final markdown reply.
+    const doc = process.env.AGENTDECK_DEMO_FILE || '/tmp/note.md';
+    process.stdout.write('\n⏺ Reading the plan first.\n⏺ Update(notes/plan.md)\n  ⎿  Added 12 lines, removed 3 lines\n' +
+      '⏺ Write(' + doc + ')\n  ⎿  Wrote 140 lines to ' + doc + '\n⏺ Bash(npm test)\n  ⎿  254 passing\n' +
+      '⏺ **Done with tools.** Preview at https://example.com/docs/page and the notes in ' + doc + '\n\n  > quoted line\n\n  ```js\n  const answer = 42;\n  ```\n');
+    box();
+    return;
+  }
   let out = '\n⏺ GOT ' + first.slice(-40) + '\n  wrote ' + process.env.AGENTDECK_DEMO_FILE + '\n';
   if (text.includes('AgentDeck 约定') && !process.argv.includes('--screen-only')) {
     const args = [process.env.AGENTDECK_BOARD_CLI, 'complete', '--result', 'stand-in finished ' + first.slice(0, 30)];
     if (process.env.AGENTDECK_DEMO_FILE) args.push('--files', process.env.AGENTDECK_DEMO_FILE);
-    require('child_process').execFile(process.execPath, args, (error) => { if (error) process.stderr.write('Receipt submission failed\n'); });
+    require('child_process').execFile(process.execPath, args, (error, stdout, stderr) => {
+      if (process.env.AGENTDECK_TEST_RECEIPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_RECEIPTS_FILE,
+        JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, code: error?.code || 0, stdout, stderr }) + '\n');
+      if (error) process.stderr.write('Receipt submission failed\n');
+    });
   }
   if (process.argv.includes('--screen-only')) out += '\n  【回执】\n  摘要：screen template must be ignored\n  文件：无\n';
   process.stdout.write(out);
@@ -178,14 +220,21 @@ function listen() {
       }
       if (incoming.includes('\x03')) process.exit(0);
     });
-  } else readline.createInterface({ input: process.stdin }).on('line', (line) => {
-    if (!line.trim() && !lines.length) return;
-    lines.push(line);
-    clearTimeout(timer);
-    timer = setTimeout(answer, 250);
-  });
+  } else {
+    // Real agent TUIs disable the console's cooked input/echo. In ConPTY the
+    // cooked echo otherwise scrolls long Captain briefings through the screen
+    // and leaves them in later replies even after the stand-in redraws.
+    // No output stream: readline handles raw editing keys without echoing them.
+    readline.createInterface({ input: process.stdin, terminal: true }).on('line', (line) => {
+      if (!line.trim() && !lines.length) return;
+      lines.push(line);
+      clearTimeout(timer);
+      timer = setTimeout(answer, 250);
+    }).on('SIGINT', () => process.exit(0));
+  }
 }
 function start() {
+  if (delayedStart) process.stdout.write('\x1b[?1049h');
   console.log('Welcome to ' + (codex ? 'Codex' : provider) + ' (test stand-in)');
   if (process.argv.includes('--quota-on-start')) console.log("You've hit your usage limit · resets 5pm");
   box();
@@ -197,4 +246,5 @@ if (process.argv.includes('--trust-dialog')) {
   process.stdout.write('Do you trust the contents of this directory?\n  ▶ [a] Trust this workspace\n    [q] Quit\n  Use arrow keys to navigate, Enter to select\n');
   process.stdin.setRawMode(true);
   process.stdin.once('data', () => { process.stdin.setRawMode(false); process.stdin.removeAllListeners('data'); process.stdin.pause(); process.stdout.write('\x1b[2J\x1b[H'); start(); });
-} else start();
+} else if (delayedStart) setTimeout(start, 6000);
+else start();

@@ -337,4 +337,9 @@ test('Claude sidebar identity carries the pinned seat; Cursor Opus remains Curso
   assert.equal(cursor.seat, null);
   const Q = require('../quota-core');
   assert.equal(Q.screen(cursor.provider, "You've hit your session limit · resets 9:20pm", ['Model: claude-opus-5-5-high'], Date.now(), cursor.rawModel), null);
+  assert.equal(AgentInfo.iconProviderFor('Opus 5.5', 'Cursor'), 'Claude');
+  assert.equal(AgentInfo.iconProviderFor('Grok 4.7', 'Cursor'), 'Grok');
+  assert.equal(AgentInfo.iconProviderFor('GPT-6.1 Sol', 'Cursor'), 'Codex');
+  assert.equal(AgentInfo.iconProviderFor('Flash 3.8', 'Cursor'), 'Antigravity');
+  assert.equal(AgentInfo.iconProviderFor('Fake', 'Claude'), 'Claude');
 });

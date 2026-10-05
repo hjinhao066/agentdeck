@@ -7,6 +7,7 @@ const S = require('./claude-seats-core');
 const { validId } = require('./security');
 const { saveChat } = require('./side-main');
 const { accountIdentity } = require('./quota-codex');
+const { AUTONOMOUS_CONTINUATION } = require('./main-core');
 
 function directory(seat, home) {
   const raw = seat.configDir.replace(/^~(?=$|[\\/])/, home);
@@ -26,6 +27,49 @@ function credentialLocation(seat, home) {
     credentialsPath: path.join(dir, '.credentials.json'), usagePath: path.join(dir, 'agentdeck-usage.json'),
     keychainService: 'Claude Code-credentials' + (isDefault ? '' : '-' + crypto.createHash('sha256').update(dir).digest('hex').slice(0, 8)) };
 }
+function onboardingComplete(seat, home) {
+  try {
+    const loc = credentialLocation(seat, home);
+    return JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).hasCompletedOnboarding === true;
+  } catch (_) { return false; }
+}
+function initializeOnboarding(seat, home, projectDir) {
+  const loc = credentialLocation(seat, home);
+  if (loc.isDefault) return onboardingComplete(seat, home);
+  let account, existing, defaults;
+  try {
+    existing = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8'));
+    account = existing.oauthAccount;
+  } catch (_) { return false; }
+  if (!account || typeof account !== 'object') return false;
+  try { defaults = JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')); }
+  catch (_) { return existing.hasCompletedOnboarding === true; }
+  let changed = false;
+  if (existing.hasCompletedOnboarding === undefined && defaults.hasCompletedOnboarding === true) {
+    existing.hasCompletedOnboarding = true;
+    if (typeof defaults.lastOnboardingVersion === 'string') existing.lastOnboardingVersion = defaults.lastOnboardingVersion;
+    changed = true;
+  }
+  const trusted = typeof projectDir === 'string' && path.isAbsolute(projectDir) &&
+    defaults.projects?.[projectDir]?.hasTrustDialogAccepted === true;
+  if (trusted && existing.projects?.[projectDir]?.hasTrustDialogAccepted !== true &&
+      existing.projects?.[projectDir]?.hasTrustDialogAccepted !== false) {
+    existing.projects ||= {};
+    existing.projects[projectDir] ||= {};
+    existing.projects[projectDir].hasTrustDialogAccepted = true;
+    changed = true;
+  }
+  if (!changed) return existing.hasCompletedOnboarding === true;
+  const temp = loc.metadataPath + `.agentdeck-tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    fs.writeFileSync(temp, JSON.stringify(existing, null, 2), { mode: 0o600, flag: 'wx' });
+    fs.renameSync(temp, loc.metadataPath);
+    return existing.hasCompletedOnboarding === true;
+  } catch (_) {
+    try { fs.unlinkSync(temp); } catch (_) {}
+    return false;
+  }
+}
 const AUTH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_HOST_CREDS_FILE', 'CLAUDE_CODE_HOST_GATEWAY_LINEAGE'];
 function seatEnvironment(env, seat, home) {
@@ -35,19 +79,34 @@ function seatEnvironment(env, seat, home) {
   else result.CLAUDE_CONFIG_DIR = loc.dir;
   return result;
 }
-function hasKeychain(service) {
-  // No -w/-g: check metadata only, never fetch a password into the renderer.
-  return new Promise((resolve) => execFile('security', ['find-generic-password', '-s', service],
-    { timeout: 2000 }, (error) => resolve(!error)));
+function credentialStatus(service, execFileImpl = execFile) {
+  return new Promise((resolve) => execFileImpl('security', ['find-generic-password', '-s', service, '-w'],
+    { timeout: 2000, maxBuffer: 1024 * 1024 }, (error, stdout) => {
+      if (error) return resolve({ present: false, loginReason: error.code === 44 ? '此席位没有登录凭据' : '', authReason: '无法核实此席位钥匙串，请检查钥匙串访问权限' });
+      try {
+        const oauth = JSON.parse(stdout).claudeAiOauth;
+        const access = typeof oauth?.accessToken === 'string' && !!oauth.accessToken;
+        const refresh = typeof oauth?.refreshToken === 'string' && !!oauth.refreshToken;
+        const expired = Number.isFinite(oauth?.expiresAt) && oauth.expiresAt <= Date.now();
+        const valid = (access && !expired) || refresh;
+        resolve({ present: valid, loginReason: valid ? '' : expired ? '此席位访问令牌已过期且没有刷新令牌' : '此席位没有可用的 OAuth 凭据' });
+      } catch (_) { resolve({ present: false, loginReason: '此席位凭据格式无效' }); }
+    }));
 }
-async function seatInfo(seat, home, platform = process.platform, keychain = hasKeychain) {
+async function seatInfo(seat, home, platform = process.platform, keychain = credentialStatus) {
   const loc = credentialLocation(seat, home);
-  let email = '';
+  let email = '', accountKey = '';
   try {
     if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) email = S.maskEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
+    accountKey = usageAccountKey(loc) || '';
   } catch (_) {}
-  const present = !!email && (fs.existsSync(loc.credentialsPath) || (platform === 'darwin' && await keychain(loc.keychainService)));
-  return { ...seat, configDir: loc.dir, maskedEmail: email, loggedIn: !!email && !!present, usagePath: loc.usagePath };
+  const status = platform === 'darwin' ? await keychain(loc.keychainService) : fs.existsSync(loc.credentialsPath);
+  const present = typeof status === 'object' ? status.present : !!status;
+  return { ...seat, configDir: loc.dir, maskedEmail: email, accountKey, onboardingComplete: onboardingComplete(seat, home),
+    credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present,
+    loginReason: typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
+    authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
+
 }
 const USAGE_SOURCES = ['Claude /usage', 'Claude 会话状态行'];
 function sanitizeUsage(value) {
@@ -65,12 +124,15 @@ function usageAccountKey(loc) {
     ? crypto.createHash('sha256').update(account.accountUuid).digest('hex').slice(0, 16)
     : accountIdentity(account?.emailAddress).accountKey;
 }
-function writeUsage(seat, home, value) {
+function writeUsage(seat, home, value, sourceColumnId) {
   const loc = credentialLocation(seat, home), file = loc.usagePath;
   const accountKey = usageAccountKey(loc);
   if (!accountKey) throw new Error('无法确认用量所属账号');
   if (value?.source === 'Claude OAuth usage' && (value.accountKey !== accountKey || value.configDir !== loc.dir)) throw new Error('OAuth 用量所属账号或目录已变更');
+  if (sourceColumnId !== undefined && !validId(sourceColumnId)) throw new Error('无效用量来源会话');
   const safe = { ...sanitizeUsage(value), accountKey, configDir: loc.dir };
+  if (sourceColumnId) safe.sourceColumnId = sourceColumnId;
+
   fs.writeFileSync(file + '.tmp', JSON.stringify(safe), { mode: 0o600 });
   fs.renameSync(file + '.tmp', file);
 }
@@ -78,7 +140,9 @@ function readUsage(seat, home) {
   try {
     const loc = credentialLocation(seat, home), value = JSON.parse(fs.readFileSync(loc.usagePath, 'utf8'));
     if (!value.accountKey || value.accountKey !== usageAccountKey(loc) || value.configDir !== loc.dir) return null;
-    return { ...sanitizeUsage(value), accountKey: value.accountKey, configDir: value.configDir };
+    return { ...sanitizeUsage(value), accountBound: true, accountKey: value.accountKey, configDir: seat.configDir,
+      ...(validId(value.sourceColumnId) ? { sourceColumnId: value.sourceColumnId } : {}) };
+
   }
   catch (_) { return null; }
 }
@@ -91,20 +155,23 @@ function checkpoint(home, userData, payload) {
   const board = path.join(home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
   fs.mkdirSync(path.dirname(board), { recursive: true, mode: 0o700 });
   const line = (x) => String(x || '').replace(/[\r\n|]/g, ' ').slice(0, 600);
+  const latest = payload.chat.turns?.findLast((t) => t.kind !== 'task' && t.kind !== 'notice' && t.user);
   const text = '# AgentDeck 队长Relay接续\n\n## 在做什么\n席位Relay；先读本看板，再按需读取上一任队长的完整对话。\n\n'
     + `上任会话：${payload.colId}\n完整对话：${path.join(userData, 'chats', payload.colId + '.json')}\n`
     + `使用 board-cli read --id ${payload.colId} 可读取之前的队长对话。\n\n`
+    + `## 队长交接\n${line(payload.relayMessage || '手动 Relay')}\n最近指令：${line(latest?.user)}\n先读 briefing 和本交接，检查 ledger；旧监听失效后重挂恰好一个后台 receipts --wait --timeout 300。\n\n`
     + '## 谁在做\n| 会话 | 事项 | 状态 | 回执/提问 |\n| --- | --- | --- | --- |\n'
     + payload.tasks.map((t) => `| ${line(t.colId)} | ${line(t.title)} | ${line(t.status)} | ${line(t.receipt?.question || t.receipt?.failed || t.receipt?.summary)} |`).join('\n')
-    + '\n\n## 卡在哪\n未处理回执和提问在 AgentDeck 中保留；额度用尽的会话保持原席位。\n\n## 等用户拍板什么\n见任务表中的提问及队长待处理回执。\n\n## 下一步\n读看板继续；先运行 ledger 和 receipts，核对正在跑的队员，不重复派活。\n\n'
+    + `\n\n## 卡在哪\n未处理回执和提问在 AgentDeck 中保留；额度用尽的会话保持原席位。\n\n## 等用户拍板什么\n见任务表中的提问及队长待处理回执。\n\n## 下一步\n${AUTONOMOUS_CONTINUATION}\n\n`
     + `## 指针\nAgentDeck 对话目录：${path.join(userData, 'chats')}\n\n## 最后更新时间与更新记录\n${new Date().toISOString()} AgentDeck：Relay前存档。\n`;
   fs.writeFileSync(board + '.tmp', text, { mode: 0o600 });
   fs.renameSync(board + '.tmp', board);
   return board;
 }
-function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, onUsageRecorded = () => {} }) {
+function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, getColumn, platform = process.platform, onUsageRecorded = () => {} }) {
+
   const find = (id) => { const seat = S.normalize(getSeats()).find((s) => s.id === id); if (!seat) throw new Error('席位不存在'); return seat; };
-  handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home))));
+  handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home, platform))));
   handleMain('seats:validate', (_e, { seats }) => {
     const normalized = S.normalize(seats);
     if (!Array.isArray(seats) || normalized.length !== seats.length) throw new Error('席位列表无效');
@@ -117,10 +184,13 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
     return checkpoint(home, userData, payload);
   });
   handleMain('seats:usage', (_e, { seatId }) => readUsage(find(seatId), home));
-  handleMain('seats:record-usage', (_e, { seatId, configDir, usage }) => {
+  handleMain('seats:record-usage', (_e, { colId, seatId, configDir, usage }) => {
     const seat = find(seatId);
     if (configDir !== seat.configDir) throw new Error('会话席位目录已变更，不能归入新目录');
-    writeUsage(seat, home, usage); onUsageRecorded(); return true;
+    const column = validId(colId) && getColumn?.(colId);
+    if (!column || column.claudeSeatId !== seatId || column.claudeConfigDir !== configDir) throw new Error('用量来源会话与席位快照不匹配');
+    writeUsage({ ...seat, configDir: column.claudeConfigDir }, home, usage, colId); onUsageRecorded(); return true;
+
   });
 }
-module.exports = { directory, credentialLocation, seatEnvironment, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, checkpoint, registerSeatsIpc };

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { TaskStore, newCard, projectName } = require('../task-board');
+const { TaskStore, newCard, projectName, localSessions } = require('../task-board');
 const { TaskHeartbeat } = require('../task-heartbeat');
 const { initialCards, migrate } = require('../scripts/migrate-task-boards');
 const M = require('../main-core');
@@ -82,14 +82,31 @@ test('Captain rejection, process failure and quota failure deduplicate attempts 
   assert.equal(failed.card.flag, 'held'); assert.equal(failed.card.rework_count, 1);
   const q = add(); bind(q.id, 'quota'); event(q.id, 'failed', 'RESOURCE_EXHAUSTED', 'quota', 'worker', 'quota');
   const repeated = event(q.id, 'failed', 'usage limit', 'quota', 'worker', 'process');
-  assert.equal(repeated.card.consecutive_failures, 1);
+  assert.equal(repeated.card.consecutive_failures, 0);
   bind(q.id, 'retry'); assert.equal(event(q.id, 'complete', 'late', 'quota').ignored, true);
-  assert.equal(event(q.id, 'failed', 'failed again', 'retry').card.flag, 'held');
+  assert.equal(event(q.id, 'failed', 'failed again', 'retry').card.flag, 'failed');
 });
 test('fallback never declares success and an authoritative late completion wins', (t) => {
   const { add, bind, event } = fixture(t); const c = add(); bind(c.id);
   assert.equal(event(c.id, 'fallback').card.status, 'needs_user');
   assert.equal(event(c.id, 'complete', 'actual result').card.status, 'done');
+});
+test('restarting after a fallback clears latest_receipt, while command receipts survive', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  const card = add(); bind(card.id); event(card.id, 'started'); event(card.id, 'fallback');
+  assert.equal(event(card.id, 'started', '', 'a1', 'worker', 'resume-1').card.latest_receipt, '');
+  assert.equal(store.list()[0].status, 'doing');
+  // A pre-fix app could already have written started while retaining the notice.
+  store.mutate((docs) => { store.find(docs, card.id).latest_receipt = '已结束，未提交回执'; return {}; });
+  assert.equal(event(card.id, 'started', '', 'a1', 'worker', 'resume-fallback-2').card.latest_receipt, '');
+  event(card.id, 'fallback');
+  bind(card.id, 'a2');
+  assert.equal(event(card.id, 'started', '', 'a2').card.latest_receipt, '');
+  for (const result of ['实际完成了修改。', '已结束，未提交回执']) {
+    const real = add({ verify: true }); bind(real.id); event(real.id, 'complete', result);
+    bind(real.id, 'review', 'reviewer');
+    assert.equal(event(real.id, 'started', '', 'review', 'reviewer').card.latest_receipt, result);
+  }
 });
 test('runtime model identity fills default models without allowing a stale session to change the reviewer', (t) => {
   const { store, add, bind, event } = fixture(t); const c = add({ verify: true }); bind(c.id);
@@ -183,7 +200,7 @@ test('dispatcher question/crash update the card; a delegated worker is never cha
   store.dispatch({ id: c.id, session_id: 'dispatcher-1' });
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-1', question: 'Needs clarification?' }).card.status, 'needs_user');
   store.dispatch({ id: c.id, session_id: 'dispatcher-2' });
-  assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-2', failed: 'quota exhausted' }).card.flag, 'failed');
+  assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-2', failed: 'quota exhausted', source: 'automatic' }).card.flag, 'quota');
   store.dispatch({ id: c.id, session_id: 'dispatcher-3' }); bind(c.id);
   assert.equal(store.dispatcherReceipt({ id: c.id, session_id: 'dispatcher-3', failed: 'old dispatcher quit' }).ignored, true);
   assert.equal(store.list()[0].session_id, 'worker');
@@ -202,4 +219,304 @@ test('migration reads only the three requested Markdown sources, preserves origi
   assert.ok(migrate(root).every((r) => r.skipped));
   assert.deepEqual(initialCards('hermes-savings-v2', sources['hermes-savings-v2']).map((c) => c.id), initialCards('hermes-savings-v2', sources['hermes-savings-v2']).map((c) => c.id));
   assert.equal(new TaskStore(path.join(root, 'tasks')).list().some((c) => /VPS/.test(c.title)), false);
+});
+test('reorder places a card before/after a sibling, persists, and leaves other cards untouched', (t) => {
+  const { store, add } = fixture(t);
+  const [a, b, c, d] = ['a', 'b', 'c', 'd'].map((id) => add({ id, title: id }));
+  const order = () => store.list({ project: '测试项目' }).map((x) => x.id);
+  assert.deepEqual(order(), ['a', 'b', 'c', 'd']);
+  store.reorder({ id: 'd', before: 'b' });
+  assert.deepEqual(order(), ['a', 'd', 'b', 'c']);
+  const after = store.list();
+  for (const x of [a, b, c]) assert.equal(after.find((y) => y.id === x.id).updated, x.updated, 'neighbours are not rewritten');
+  assert.notEqual(after.find((y) => y.id === 'd').updated, d.updated);
+  store.reorder({ id: 'a', after: 'c' });
+  assert.deepEqual(order(), ['d', 'b', 'c', 'a']);
+  store.reorder({ id: 'c', before: 'd' });
+  assert.deepEqual(order(), ['c', 'd', 'b', 'a']);
+  store.reorder({ id: 'c' });
+  assert.deepEqual(order(), ['d', 'b', 'a', 'c'], 'no anchor = end of the project');
+  assert.deepEqual(new TaskStore(store.dir).list().map((x) => x.id), ['d', 'b', 'a', 'c'], 'order survives a fresh read');
+  // already in place: nothing is written
+  const before = store.list().find((x) => x.id === 'b').updated;
+  store.reorder({ id: 'b', after: 'd' });
+  assert.equal(store.list().find((x) => x.id === 'b').updated, before);
+  // status and session binding are not touched by a reorder
+  store.move({ id: 'b', status: 'doing' });
+  store.reorder({ id: 'b' });
+  assert.equal(store.list().find((x) => x.id === 'b').status, 'doing');
+});
+test('reorder renumbers when no number fits between neighbours and rejects other projects', (t) => {
+  const { store, add } = fixture(t);
+  ['a', 'b', 'c'].forEach((id) => add({ id, title: id }));
+  const other = add({ id: 'x', project: 'other' });
+  // equal orders (as hand-written or migrated boards may have): ids break the tie
+  for (const id of ['a', 'b', 'c']) { const card = store.list().find((x) => x.id === id); store.update({ id, updated: card.updated, patch: { order: 0 } }); }
+  store.reorder({ id: 'c', before: 'b' });
+  const cards = store.list({ project: '测试项目' });
+  assert.deepEqual(cards.map((x) => x.id), ['a', 'c', 'b']);
+  assert.deepEqual(cards.map((x) => x.order), [0, 1, 2]);
+  store.reorder({ id: 'b', before: 'a' });
+  assert.deepEqual(store.list({ project: '测试项目' }).map((x) => x.id), ['b', 'a', 'c']);
+  assert.ok(store.list().every((x) => Number.isFinite(x.order) && x.order >= 0));
+  assert.throws(() => store.reorder({ id: 'a', before: other.id }), /own project/);
+  assert.throws(() => store.reorder({ id: 'a', before: 'a' }), /own project/);
+  assert.throws(() => store.reorder({ id: 'a', before: 'b', after: 'c' }), /either/);
+  assert.throws(() => store.reorder({ id: 'missing' }), /Unknown task/);
+});
+
+test('move preserves live execution/review/dispatcher fences and heartbeat never re-dispatches them', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  for (const state of ['working', 'done', 'held', 'review', 'dispatcher']) {
+    const c = add({ verify: state === 'review' });
+    if (state === 'dispatcher') store.dispatch({ id: c.id, session_id: 'dispatch-' + state });
+    else {
+      bind(c.id, state, 'worker-' + state); event(c.id, 'started', '', state, 'worker-' + state);
+      if (state === 'done' || state === 'review') event(c.id, 'complete', 'Done', state, 'worker-' + state);
+      if (state === 'held') {
+        event(c.id, 'failed', 'Broken', state, 'worker-' + state);
+        bind(c.id, 'held2', 'worker-held2'); event(c.id, 'failed', 'Still broken', 'held2', 'worker-held2');
+      }
+    }
+    store.sessions = () => [{ id: 'worker-' + state }, { id: 'worker-held2' }, { id: 'dispatch-' + state }];
+    const before = store.list().find((x) => x.id === c.id);
+    const moved = store.move({ id: c.id, status: 'doing' }).card;
+    assert.equal(moved.session_id, before.session_id); assert.equal(moved.dispatch_session_id, before.dispatch_session_id);
+    const starts = []; new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan();
+    assert.equal(starts.length, 0, state); assert.equal(store.claim({ id: c.id }).ignored, true);
+    assert.equal(store.dispatch({ id: c.id, session_id: 'duplicate' }).ignored, true);
+    if (state === 'working') assert.throws(() => bind(c.id, 'replacement'), /active execution/);
+    if (['done', 'held', 'review'].includes(state)) assert.equal(bind(c.id, 'replacement-' + state).card.session_id, 'worker');
+  }
+});
+
+test('Captain move consumes start edge before a subsequent new, even without a session', (t) => {
+  const { store, add, bind } = fixture(t); const c = add();
+  store.move({ id: c.id, status: 'done' });
+  const moved = store.move({ id: c.id, status: 'doing', suppressDispatch: true }).card;
+  assert.equal(moved.dispatch_claim.delivered, true);
+  const starts = []; new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan();
+  assert.equal(starts.length, 0); assert.equal(bind(c.id).card.session_id, 'worker');
+  const unbound = add(); store.move({ id: unbound.id, status: 'doing' });
+  new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan();
+  assert.equal(starts.length, 1, 'ordinary external starts still dispatch');
+});
+
+test('archived and failed legacy attempts can bind anew; live reviewers and just-created associated workers cannot', (t) => {
+  const { store, add, bind, event, root } = fixture(t);
+  const archived = add(); bind(archived.id); event(archived.id, 'started');
+  store.sessions = () => [{ id: 'worker', archived: true }];
+  assert.equal(bind(archived.id, 'fresh', 'fresh-worker').card.attempt_id, 'fresh');
+  store.sessions = () => [];
+  const failed = add(); bind(failed.id); event(failed.id, 'failed', 'Broken');
+  // Old board versions sometimes failed to close the attempt.
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards.find((c) => c.id === failed.id).attempt_closed = false; fs.writeFileSync(file, JSON.stringify(doc));
+  assert.equal(bind(failed.id, 'retry').card.attempt_id, 'retry');
+  const failedSession = add(); bind(failedSession.id, 'legacy-session');
+  store.sessions = () => [{ id: 'worker', lastReceipt: { failed: 'quota exhausted' } }];
+  assert.equal(bind(failedSession.id, 'new-session-attempt').card.attempt_id, 'new-session-attempt');
+  store.sessions = () => [{ id: 'worker', active: true, boardId: failedSession.id, lastReceipt: { failed: 'old quota error' } }];
+  assert.throws(() => bind(failedSession.id, 'duplicate-new-session'), /active execution/);
+  const orphan = add(); store.sessions = () => [{ id: 'just-created', boardId: orphan.id, active: true }];
+  assert.equal(store.claim({ id: orphan.id }).ignored, true);
+  assert.throws(() => bind(orphan.id), /active execution/);
+  store.sessions = () => [{ id: 'just-created', boardId: orphan.id, active: true, archived: true }];
+  assert.equal(bind(orphan.id).card.session_id, 'worker');
+});
+
+test('resource failures in execution and review preserve the failure streak and never hold or count rework', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  for (const [reason, source, kind] of [['RESOURCE_EXHAUSTED: quota exhausted', 'quota', 'quota'], ['API Error: 401 Unauthorized', 'process', 'auth'], ['Not logged in. Please run /login', 'automatic', 'auth'], ['429 Too many requests', 'process', 'rate_limit']]) {
+    const c = add({ verify: true }); bind(c.id); event(c.id, 'failed', 'Real defect');
+    bind(c.id, 'execution2'); event(c.id, 'complete', 'Fixed', 'execution2');
+    for (let i = 0; i < 2; i++) {
+      const attempt = 'resource-' + i; bind(c.id, attempt, 'reviewer');
+      const failed = event(c.id, 'failed', reason, attempt, 'reviewer', source).card;
+      assert.equal(failed.flag, 'quota'); assert.equal(failed.resource_failure, kind);
+      assert.equal(failed.consecutive_failures, 1); assert.equal(failed.rework_count, 0);
+      assert.equal(event(c.id, 'failed', 'process exited', attempt, 'reviewer', 'process').card.consecutive_failures, 1);
+    }
+    bind(c.id, 'real-defect'); assert.equal(event(c.id, 'failed', 'Assertion failed', 'real-defect').card.flag, 'held');
+  }
+});
+
+test('dispatcher resource receipts do not hold; real dispatcher crashes do, and pending quota claims are durable', (t) => {
+  const { store, add } = fixture(t); const c = add(); const key = store.claim({ id: c.id }).card.dispatch_claim.key;
+  store.dispatchWait({ id: c.id, key, message: '额度用尽，稍后自动开' });
+  assert.equal(store.list()[0].dispatch_claim.delivered, false);
+  const starts = []; new TaskHeartbeat(store, { onStart: (i) => starts.push(i) }).scan(); assert.equal(starts[0].key, key);
+  for (let i = 0; i < 2; i++) {
+    store.dispatch({ id: c.id, session_id: 'quota-' + i });
+    const failed = store.dispatcherReceipt({ id: c.id, session_id: 'quota-' + i, failed: 'Not logged in', source: 'quota' }).card;
+    assert.equal(failed.flag, 'quota'); assert.equal(failed.consecutive_failures, 0);
+  }
+  for (let i = 0; i < 2; i++) {
+    store.dispatch({ id: c.id, session_id: 'crash-' + i });
+    store.dispatcherReceipt({ id: c.id, session_id: 'crash-' + i, failed: 'exit 7', source: 'process' });
+  }
+  assert.equal(store.list()[0].flag, 'held');
+});
+
+test('a pending heartbeat claim loses to a manual binding or a newer claim', (t) => {
+  const { store, add, bind } = fixture(t); const c = add(); const starts = [];
+  store.move({ id: c.id, status: 'doing' });
+  const h = new TaskHeartbeat(store, { onStart: (i) => { starts.push(i); return false; } }); h.scan();
+  bind(c.id); h.scan(); assert.equal(starts.length, 1);
+  assert.equal(store.list()[0].dispatch_claim.delivered, true);
+});
+
+for (const reason of ['Rate limit handling test fails in api.js', 'Unauthorized access test still failing',
+  'Limit reached check broken', 'npm test 失败\n401 Unauthorized']) {
+  test(`command failure counts toward held without resource classification: ${reason}`, (t) => {
+    const { store, add, bind, event } = fixture(t); const c = add({ verify: true });
+    bind(c.id); event(c.id, 'complete', 'Ready for review');
+    for (let i = 1; i <= 2; i++) {
+      if (i === 2) { bind(c.id, 'repair'); event(c.id, 'complete', 'Reworked', 'repair'); }
+      bind(c.id, 'review-' + i, 'reviewer');
+      const failed = event(c.id, 'failed', reason, 'review-' + i, 'reviewer').card;
+      assert.equal(failed.resource_failure, null);
+      assert.equal(failed.consecutive_failures, i); assert.equal(failed.rework_count, i);
+      assert.equal(failed.flag, i === 2 ? 'held' : 'failed');
+    }
+    assert.throws(() => store.claim({ id: c.id }), /held/);
+  });
+}
+
+test('closed missing workers release occupancy on done to doing; foreign open attempts stay fenced', (t) => {
+  const { store, add, bind, event } = fixture(t); const c = add();
+  bind(c.id); event(c.id, 'complete', 'Done on another machine');
+  assert.equal(store.occupied(store.list()[0]), false);
+  const moved = store.move({ id: c.id, status: 'doing' }).card;
+  assert.equal(moved.session_id, null); assert.equal(moved.attempt_id, null);
+  const starts = []; new TaskHeartbeat(store, { onStart: (input) => starts.push(input) }).scan();
+  assert.equal(starts.length, 1);
+  const open = add(); bind(open.id, 'open', 'remote-worker');
+  const file = path.join(store.dir, '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards.find((card) => card.id === open.id).session_host = os.hostname() + '-other-machine';
+  fs.writeFileSync(file, JSON.stringify(doc));
+  assert.equal(store.occupied(store.list().find((card) => card.id === open.id)), true);
+  assert.equal(store.move({ id: open.id, status: 'doing' }).card.session_id, 'remote-worker');
+});
+
+test('heartbeat reads session config once per scan and refreshes it on the next scan', (t) => {
+  const { store, add } = fixture(t); const starts = []; let reads = 0;
+  const cards = [add(), add(), add()];
+  cards.forEach((c) => store.move({ id: c.id, status: 'doing' }));
+  store.sessions = () => { reads++; return reads === 1 ? [] : [{ id: 'new-worker', boardId: cards[0].id }]; };
+  const h = new TaskHeartbeat(store, { onStart: (input) => { starts.push(input); return false; } });
+  h.scan(); assert.equal(reads, 1); assert.equal(starts.length, 3);
+  h.scan(); assert.equal(reads, 2); assert.equal(starts.length, 5);
+  assert.equal(h.pending.has(cards[0].id), false);
+});
+
+test('a finished unarchived worker reports occupancy rather than active execution', (t) => {
+  const { store, add, bind, event } = fixture(t); const c = add();
+  bind(c.id); event(c.id, 'complete', 'Done');
+  store.sessions = () => [{ id: 'worker', boardId: c.id, active: false }];
+  store.move({ id: c.id, status: 'todo' });
+  assert.equal(store.activeAttempt(store.list()[0]), false);
+  assert.equal(store.claim({ id: c.id, newEntry: true }).occupied, true);
+});
+
+test('missing local open workers in doing or needs_user can bind directly without a move', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  for (const status of ['doing', 'needs_user']) {
+    const c = add(); bind(c.id, 'old-' + status, 'gone-' + status);
+    event(c.id, status === 'doing' ? 'started' : 'ask', 'Need an answer', 'old-' + status, 'gone-' + status);
+    assert.equal(bind(c.id, 'new-' + status, 'replacement-' + status).card.session_host, os.hostname());
+    assert.equal(event(c.id, 'complete', 'late old reply', 'old-' + status, 'gone-' + status).ignored, true);
+  }
+});
+
+test('legacy missing local workers are identified by local task history, not remote absence', (t) => {
+  const { store, add, bind, event, root } = fixture(t); const c = add();
+  bind(c.id, 'legacy', 'old-local'); event(c.id, 'started', '', 'legacy', 'old-local');
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  delete doc.cards[0].session_host; fs.writeFileSync(file, JSON.stringify(doc));
+  store.sessions = () => localSessions({ columns: [{ id: 'live' }], archived: [{ id: 'archived' }],
+    mainSession: { tasks: [{ colId: 'old-local', status: 'working' }, { colId: 'old-local' }, { colId: 'live', status: 'working' }] } });
+  assert.deepEqual(store.sessions().map((s) => s.id), ['live', 'archived', 'old-local']);
+  assert.equal(bind(c.id, 'fresh', 'new-local').card.session_id, 'new-local');
+  // No owner and no local history is not proof that a legacy remote worker ended.
+  const after = JSON.parse(fs.readFileSync(file)); delete after.cards[0].session_host;
+  fs.writeFileSync(file, JSON.stringify(after));
+  assert.throws(() => bind(c.id, 'unsafe-takeover', 'other'), /active execution/);
+});
+
+test('foreign-machine open workers remain fenced even though absent from local sessions', (t) => {
+  const { store, add, bind, event, root } = fixture(t); const c = add();
+  bind(c.id, 'remote', 'remote-worker'); event(c.id, 'started', '', 'remote', 'remote-worker');
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards[0].session_host = os.hostname() + '-other-machine'; fs.writeFileSync(file, JSON.stringify(doc));
+  assert.throws(() => bind(c.id, 'duplicate', 'local-worker'), /active execution/);
+  assert.equal(store.move({ id: c.id, status: 'doing' }).card.session_id, 'remote-worker');
+  assert.equal(store.claim({ id: c.id }).ignored, true);
+});
+
+test('a restart note keeps the same open attempt and does not unarchive or steal another session', (t) => {
+  const { store, add, bind, event } = fixture(t);
+  const card = add();
+  bind(card.id);
+  const noted = store.resumeNote({ id: card.id, session_id: 'worker', attempt_id: 'a1', note: '重发：Codex 无法续上原对话，这是新会话。下面重发卡片任务。' });
+  assert.equal(noted.card.status, 'doing');
+  assert.equal(noted.card.attempt_closed, false);
+  assert.equal(noted.card.session_id, 'worker');
+  assert.match(noted.card.latest_receipt, /^重发：Codex/);
+  event(card.id, 'complete', '功能已做完并推送。等待队长验收。');
+  assert.equal(store.resumeNote({ id: card.id, session_id: 'worker', attempt_id: 'a1', note: '真续接：Claude 已恢复。', reopen: true }).ignored, true);
+  assert.equal(store.list()[0].status, 'done');
+  const checkpoint = add({ title: 'checkpoint' });
+  bind(checkpoint.id, 'a-stop', 'worker-safe');
+  event(checkpoint.id, 'complete', 'AGENTDECK-CHECKPOINT 重启前停在安全点。', 'a-stop', 'worker-safe');
+  const reopened = store.resumeNote({ id: checkpoint.id, session_id: 'worker-safe', attempt_id: 'a-stop', note: '真续接：Claude 已用原会话号恢复同一条对话。', reopen: true });
+  assert.equal(reopened.ignored, true, 'complete closes the attempt even if a late callback requests reopen');
+  assert.equal(reopened.card.status, 'done');
+  assert.equal(reopened.card.attempt_closed, true);
+  assert.equal(reopened.card.session_id, 'worker-safe');
+  store.archive({ done: true });
+  const archived = store.list({ archived: true }).find((item) => item.archived);
+  if (archived) assert.equal(store.resumeNote({ id: archived.id, session_id: 'worker', attempt_id: archived.attempt_id, note: '重发：不会拉回归档。', reopen: true }).ignored, true);
+});
+
+test('a bind reservation fences startup but expires if the local session was never created', (t) => {
+  const { store, add, bind, root } = fixture(t); const c = add(); bind(c.id);
+  assert.throws(() => bind(c.id, 'race', 'duplicate'), /active execution/);
+  const file = path.join(root, 'tasks', '测试项目.json'), doc = JSON.parse(fs.readFileSync(file));
+  doc.cards[0].session_bound_at = Date.now() - 15_001; fs.writeFileSync(file, JSON.stringify(doc));
+  assert.equal(bind(c.id, 'recover', 'replacement').card.session_id, 'replacement');
+});
+test('project matching ignores case for list, archive and bind, and never rewrites the stored name', (t) => {
+  const { store, add, bind } = fixture(t);
+  const card = add({ project: 'AgentDeck' }), other = add({ project: 'Hermes' });
+  assert.deepEqual(store.list({ project: 'agentdeck' }).map((c) => c.id), [card.id]);
+  assert.deepEqual(store.list({ project: 'AGENTDECK' }).map((c) => c.id), [card.id]);
+  assert.deepEqual(store.list({ project: 'agentdeck2' }), [], 'a different name is a different project');
+  assert.throws(() => store.bind({ id: card.id, project: 'hermes', attempt_id: 'a1', session_id: 'w', assignee: { agent: 'codex', model: 'm' } }), /differs from the card project/);
+  assert.equal(store.bind({ id: card.id, project: 'agentdeck', attempt_id: 'a1', session_id: 'w', assignee: { agent: 'codex', model: 'm' } }).card.id, card.id);
+  store.move({ id: other.id, status: 'done' });
+  store.archive({ done: true, project: 'HERMES' });
+  assert.equal(store.list({ archived: true }).find((c) => c.id === other.id).archived, true);
+  assert.equal(store.list({ archived: true }).find((c) => c.id === card.id).project, 'AgentDeck');
+  assert.equal(store.list({ archived: true }).find((c) => c.id === other.id).project, 'Hermes');
+});
+
+test('dispatch reservations ignore consumed or replaced start claims before validating readiness', (t) => {
+  const { store, add, bind } = fixture(t);
+  for (const status of ['todo', 'done']) {
+    const card = add();
+    const key = store.claim({ id: card.id }).card.dispatch_claim.key;
+    store.move({ id: card.id, status });
+    assert.equal(store.dispatch({ id: card.id, key, session_id: 'stale-' + status }).ignored, true);
+    assert.equal(store.list().find((c) => c.id === card.id).status, status);
+    assert.equal(store.list().find((c) => c.id === card.id).dispatch_session_id, null);
+  }
+  const card = add();
+  const old = store.claim({ id: card.id }).card.dispatch_claim.key;
+  store.move({ id: card.id, status: 'todo' });
+  const key = store.claim({ id: card.id }).card.dispatch_claim.key;
+  assert.equal(store.dispatch({ id: card.id, key: old }).ignored, true);
+  assert.equal(store.dispatch({ id: card.id, key }).ignored, undefined);
+  bind(card.id);
+  assert.equal(store.dispatch({ id: card.id, key, session_id: 'stale-after-bind' }).ignored, true);
 });

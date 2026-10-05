@@ -39,6 +39,8 @@ async function launch(flags = '', settings) {
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await application.firstWindow();
+  await page.waitForFunction(() => typeof ChatUI !== 'undefined' && typeof terms !== 'undefined' && terms.get('saver-captain')?.wrap?.isConnected);
+  await page.evaluate(() => ChatUI.setMode('saver-captain', 'chat'));
   await expect(page.locator('.column.is-main .tui-footer')).toContainText('23k/1000k', { timeout: 20000 });
   await expect.poll(() => page.evaluate(() => terms.get('saver-captain')?.state), { timeout: 20000 }).toBe('done');
   // The Captain's initial briefing has completed, without any real AI CLI.
@@ -66,7 +68,7 @@ test('archives progress, waits for acknowledgement, sends /clear, rebriefs witho
   const clear = sent.indexOf('/clear');
   const brief = sent.findIndex((p, i) => i > clear && p.startsWith('你是 AgentDeck'));
   expect(archive).toBeLessThan(clear); expect(clear).toBeLessThan(brief);
-  expect(sent[brief]).toBe(sent.find((p) => p.startsWith('你是 AgentDeck')) + '\n\n读看板继续。先跑 ledger、读看板里的队长交接再接续。');
+  expect(sent[brief]).toBe(sent.find((p) => p.startsWith('你是 AgentDeck')) + '\n\n读看板继续。');
   expect(sent[brief]).toContain('不读大文件正文，只看报告的结论段；查进度优先 peek');
   expect(archivePrompts()).toHaveLength(1);
   expect(await page.evaluate(() => columns.map((c) => c.id))).toEqual(before);

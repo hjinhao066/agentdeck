@@ -10,7 +10,9 @@ let application, page, profile, controls, reviewerId;
 test.describe.configure({ mode: 'serial' });
 
 async function launch() {
-  const env = { ...process.env, AGENTDECK_TEST_CONTROL_ENV_FILE: path.join(profile, 'control.json') };
+  const env = { ...process.env, AGENTDECK_TEST_CONTROL_ENV_FILE: path.join(profile, 'control.json'),
+    AGENTDECK_TEST_PROMPT_COLUMNS_FILE: path.join(profile, 'received.jsonl'),
+    AGENTDECK_TEST_RECEIPTS_FILE: path.join(profile, 'receipts.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -68,9 +70,11 @@ test('two project groups contain 3 workers + 1 declared reviewer and 2 workers, 
   await expect(page.locator('.cm-edges .cm-edge.review[data-from="a3"]')).toHaveCount(0);
   const geometry = await page.evaluate(() => {
     const l = CrewMap.layout();
-    return { groups: l.groups.map((g) => ({ key: g.key, x: g.x, right: g.x + g.w })), a: l.nodes.get('a1'), r: l.nodes.get('r1'), cap: l.captain };
+    return { groups: l.groups.map((g) => ({ key: g.key, x: g.x, right: g.x + g.w, y: g.y, bottom: g.y + g.h })), a: l.nodes.get('a1'), r: l.nodes.get('r1'), cap: l.captain };
   });
-  expect(geometry.groups[0].right).toBeLessThan(geometry.groups[1].x);
+  // beside each other or one below the other, depending on the window; never overlapping
+  const [g0, g1] = geometry.groups;
+  expect(g0.right <= g1.x || g1.right <= g0.x || g0.bottom <= g1.y || g1.bottom <= g0.y).toBe(true);
   expect(geometry.cap.y).toBeLessThan(geometry.a.y);
   expect(geometry.a.y + geometry.a.h).toBeLessThan(geometry.r.y);
   await expect(page.locator('.cm-edges .cm-edge.return[data-from="r1"]')).toHaveCount(1);
@@ -78,44 +82,40 @@ test('two project groups contain 3 workers + 1 declared reviewer and 2 workers, 
   await shot('two-projects-expanded.png');
 });
 
-test('successful projects default to one summary row; toggle is accessible and persists across reload', async () => {
+test('a finished project leaves the map, and comes back when one of its sessions works again', async () => {
   await page.evaluate(() => {
     MainSession.state().tasks.find((t) => t.colId === 'b1').status = 'done';
     CrewMap.refresh();
   });
-  await expect(group('报表服务')).toHaveClass(/collapsed/);
-  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('2 已完成');
+  await expect(group('报表服务')).toHaveCount(0);
   await expect(node('b1')).toHaveCount(0);
-  const toggle = group('报表服务').getByRole('button', { name: '展开项目：报表服务' });
-  await expect(toggle).toHaveAttribute('title', '展开项目：报表服务');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await shot('completed-project-collapsed.png');
-  await toggle.focus();
-  await page.keyboard.press('Enter');
+  await expect(page.locator('.cm-tray')).toBeHidden();
+  await expect(group('客户门户')).toHaveCount(1);
+  await shot('completed-project-gone.png');
+  await page.evaluate(() => {
+    MainSession.state().tasks.find((t) => t.colId === 'b1').status = 'working';
+    CrewMap.refresh();
+  });
+  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('1 干活中 · 1 已完成');
   await expect(node('b1')).toBeVisible();
-  await expect.poll(() => page.evaluate(async () => (await window.deck.loadConfig()).crewMap.collapsedProjects['报表服务'])).toBe(false);
-  await page.reload();
-  await page.evaluate(() => showView('board'));
-  await expect(group('报表服务')).not.toHaveClass(/collapsed/);
   await expect(node('r1')).toHaveClass(/review/);
   expect(await page.evaluate(() => columns.find((c) => c.id === 'r1').reviews)).toEqual(['a1', 'a2']);
-  await group('报表服务').getByRole('button', { name: '折叠项目：报表服务' }).click();
-  await expect(group('报表服务')).toHaveClass(/collapsed/);
-  await group('报表服务').getByRole('button', { name: '展开项目：报表服务' }).click();
-  await expect(node('b1')).toBeVisible();
 });
 
 test('project cards open real sessions where the user can speak directly', async () => {
   await node('a1').click();
   await expect.poll(() => page.evaluate(() => [activeView, focusedId])).toEqual(['terminals', 'a1']);
   const column = page.locator('.column[data-col-id="a1"]');
+  await column.locator('.view-toggle').click();
+  await expect(column).toHaveClass(/chat-mode/);
   await column.locator('.composer textarea').fill('用户直接交代的新说明');
   await column.locator('.composer textarea').press('Enter');
   await expect(column.locator('.msg.user .bubble')).toContainText('用户直接交代的新说明');
   await page.evaluate(() => showView('board'));
 });
 
-test('real authenticated new CLI stores project/reviews, rejects unknown targets, and archive/tell preserve metadata', async () => {
+test('real authenticated new CLI stores project/reviews, rejects unknown targets, and archive/tell preserve metadata', async ({}, testInfo) => {
+  try {
   await expect(cli(['new', '--title', 'invalid', '--task', 'Inspect', '--command', FAKE, '--reviews', 'missing'])).rejects.toThrow(/找不到可审查的会话/);
   await cli(['new', '--title', '专项审查', '--task', 'Inspect only declared sessions', '--command', FAKE, '--cwd', profile, '--project', '客户门户', '--reviews', 'a1,a3']);
   reviewerId = await page.evaluate(() => columns.find((c) => columnLabel(c) === '专项审查').id);
@@ -128,12 +128,27 @@ test('real authenticated new CLI stores project/reviews, rejects unknown targets
   await cli(['tell', '--to', reviewerId, '--message', 'Verify once again']);
   await expect.poll(() => page.evaluate((id) => columns.find((c) => c.id === id)?.project, reviewerId)).toBe('客户门户');
   await expect.poll(() => page.evaluate((id) => MainSession.state().tasks.filter((t) => t.colId === id).at(-1).status, reviewerId), { timeout: 20000 }).toBe('done');
+  } catch (error) {
+    const state = await page.evaluate((id) => {
+      const e = terms.get(id);
+      return { screen: e && dumpScreen(e.term), state: e?.state, lastScreen: e?.lastScreen,
+        sending: e?.sendingPrompt, injecting: e?.injecting, typing: e?.typing,
+        alive: e?.alive, inputBox: e && visibleInputBox(e), composing: userComposing(id),
+        tasks: MainSession.state().tasks.filter(t => t.colId === id), turns: ChatUI.turnsOf(id) };
+    }, reviewerId);
+    const file = path.join(profile, 'received.jsonl');
+    const received = fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(p => p.colId === reviewerId) : [];
+    const receiptsFile = path.join(profile, 'receipts.jsonl');
+    const receipts = fs.existsSync(receiptsFile) ? fs.readFileSync(receiptsFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter(p => p.colId === reviewerId) : [];
+    await testInfo.attach('reviewer-state', { body: JSON.stringify({ state, received, receipts }, null, 2), contentType: 'application/json' });
+    throw error;
+  }
 });
 
 test('new at the concurrency limit retains project/reviews in queue and applies them when the slot opens', async () => {
   await page.evaluate(() => {
     // Isolated stand-ins for occupied slots: no agent launches and no real data.
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < MainCore.MAX_ACTIVE; i++) {
       const id = 'busy-' + i;
       columns.push({ id, title: id, captainCrew: true });
       MainSession.state().tasks.push({ id: 'slot-' + i, colId: id, status: 'working', sentAt: Date.now(), gen: 1 });

@@ -74,7 +74,10 @@ test('configured urgent delivers critical/4/minuet with local toggles off; repla
   const close = page.getByRole('button', { name: '关闭设置', exact: true });
   await expect(close).toHaveAttribute('title', '关闭设置');
   await expect(close.locator('svg')).toHaveCount(1);
-  expect((await close.boundingBox()).width).toBeGreaterThanOrEqual(36);
+  await close.evaluate((el) => Promise.all(el.closest('dialog').getAnimations().map((a) => a.finished)));
+  expect(await close.evaluate((el) => el.offsetWidth)).toBeGreaterThanOrEqual(36);
+  // Windows DIP coordinates can report 36px as 35.99993896484375.
+  expect((await close.boundingBox()).width).toBeGreaterThanOrEqual(process.platform === 'win32' ? 36 - 0.0001 : 36);
   await pathInput.fill(file);
   await page.getByLabel('Bark 本机密钥文件路径（barkKeyFile）', { exact: true }).press('Tab');
   await page.getByRole('switch', { name: '系统通知', exact: true }).uncheck();

@@ -4,7 +4,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { readCredentials } = require('./board-credentials');
+const { resolveBoardAuth, controllingTerminal } = require('./board-credentials');
+
 
 function fail(message, code = 1) {
   process.stderr.write(`[AgentDeck Board] ${message}\n`);
@@ -40,16 +41,12 @@ function sleep(ms) {
 }
 
 async function request(command, waitForCompletion) {
-  // The standalone copy knows its profile directory even when a shell policy
-  // removes CONTROL_DIR. Never discover another profile or terminal's file.
-  const controlDir = process.env.AGENTDECK_CONTROL_DIR ||
-    (path.basename(__filename) === 'agentdeck-board.js' && path.basename(__dirname) === 'tools' ? path.dirname(__dirname) : '');
-  const submission = ['complete', 'ask', 'progress', 'session-exit'].includes(command.action);
-  let token = (submission && process.env.AGENTDECK_RECEIPT_TOKEN) || process.env.AGENTDECK_CONTROL_TOKEN || (command.action === 'main-new' && process.env.AGENTDECK_RECEIPT_TOKEN);
-  if (!token) {
-    const credentials = readCredentials(controlDir, process.env.AGENTDECK_TERMINAL_ID);
-    if (credentials) token = (submission && credentials.receiptToken) || credentials.controlToken || (command.action === 'main-new' && credentials.receiptToken);
-  }
+  const auth = resolveBoardAuth({
+    env: process.env, tty: controllingTerminal(), filename: __filename, action: command.action,
+  });
+  const controlDir = auth.controlDir;
+  const token = auth.token;
+
   if (!controlDir || !token) {
     fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
   }
@@ -111,9 +108,9 @@ function usage() {
     '  task move --id <card-id> --status todo|doing|review|needs_user|done\n' +
     '  task archive --done [--project "Project"]\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
-    '  quota                                    passive subscription status, one provider per line\n' +
+    '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
     '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
@@ -123,6 +120,8 @@ function usage() {
     '  peek --id <session-id> [--lines 40]       live terminal output, plain text (1–1000 rows)\n' +
     '  receipts                                 receipts not yet seen\n' +
     '  receipts --wait [--timeout seconds]       block for unread receipts/questions; empty on timeout\n' +
+    '  receipts --snapshot                      native host: non-consuming JSON batch with stable ids\n' +
+    '  receipts --ack \'["receipt-id"]\'           native host: acknowledge only successfully handled ids\n' +
     '  answer --to <session-id> --key y|n|1-9|enter|esc   answer a confirmation prompt\n'
   );
 }
@@ -250,6 +249,17 @@ async function main() {
     return;
   }
   if (action === 'ledger' || action === 'receipts') {
+    if (action === 'receipts' && (args.snapshot !== undefined || args.ack !== undefined)) {
+      if (args.wait !== undefined || args.timeout !== undefined || args.snapshot !== undefined && args.ack !== undefined) fail('Native receipt snapshot/ack cannot be combined with wait.');
+      let receiptIds;
+      if (args.ack !== undefined) {
+        try { receiptIds = JSON.parse(args.ack); } catch (_) { fail('receipts --ack requires a JSON array of receipt ids.'); }
+        if (!Array.isArray(receiptIds) || receiptIds.length > 50 || receiptIds.some((id) => typeof id !== 'string' || !/^[a-z0-9-]{1,100}$/.test(id))) fail('Invalid receipt ids.');
+      } else if (args.snapshot !== true) fail('receipts --snapshot takes no value.');
+      const response = await request({ action: receiptIds ? 'main-receipts-ack' : 'main-receipts-snapshot', receiptIds }, false);
+      process.stdout.write(`${response.result || ''}\n`);
+      return;
+    }
     if (action === 'receipts' && args.wait === true) {
       const seconds = args.timeout === undefined ? undefined : (typeof args.timeout === 'string' && args.timeout.trim() ? Number(args.timeout) : NaN);
       if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0 || seconds > Number.MAX_SAFE_INTEGER / 1000)) fail('receipts --timeout must be a non-negative number of seconds.');
@@ -275,8 +285,10 @@ async function main() {
     if (!title || !task) fail('new requires --title and --task.');
     for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
+    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
     const response = await request({
       action: 'main-new', title, task,
+      ...(args.seat !== undefined ? { seatId: args.seat } : {}),
       project: typeof args.project === 'string' ? args.project.trim() : '',
       reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],
       agent: typeof args.agent === 'string' ? args.agent : '',

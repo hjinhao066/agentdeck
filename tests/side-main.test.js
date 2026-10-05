@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { readPreview, loadAllChats, saveChat, deleteChat, MAX_TEXT_BYTES } = require('../side-main');
+const { readPreview, statPaths, loadAllChats, saveChat, deleteChat, MAX_TEXT_BYTES } = require('../side-main');
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-side-'));
 test.after(() => fs.rmSync(tmp, { recursive: true, force: true }));
@@ -33,6 +33,20 @@ test('large text files are cut at the cap and flagged', () => {
   const r = readPreview(file, 'big.txt');
   assert.equal(r.truncated, true);
   assert.equal(r.text.length, MAX_TEXT_BYTES);
+});
+
+test('delivered paths are reported as gone, file or folder, and nothing else', async () => {
+  const home = path.join(tmp, 'home');
+  fs.mkdirSync(path.join(home, 'out', 'shots'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'out', 'report.md'), '# r');
+  const file = path.join(home, 'out', 'report.md');
+  assert.deepEqual(await statPaths([
+    file, file + ':12', 'file://' + file, '~/out/report.md', '~/out/shots', path.join(home, 'out', 'shots') + path.sep,
+    path.join(home, 'out', 'deleted.md'), 'out/report.md', '', 42, null, 'x'.repeat(2001),
+    process.platform === 'win32' ? '/Users/someone/a.md' : 'C:\\Users\\someone\\a.md',
+  ], home), [1, 1, 1, 1, 2, 2, 0, 0, 0, 0, 0, 0, 0]);
+  assert.deepEqual(await statPaths('not a list', home), []);
+  assert.equal((await statPaths(Array.from({ length: 2500 }, () => file), home)).length, 2000);
 });
 
 test('conversations round trip, stay private, and bad ids never touch disk', () => {

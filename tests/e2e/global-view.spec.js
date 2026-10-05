@@ -47,8 +47,8 @@ test.afterEach(async () => {
   fs.rmSync(profile, { recursive: true, force: true });
 });
 
-test('global button follows its own choice across mixed and fully overridden columns', async () => {
-  await expectGlobal('chat');
+test('global button follows its live choice across mixed and fully overridden columns', async () => {
+  await expectGlobal('term');
   const chatIcon = await globalButton().innerHTML();
   const geometry = await page.evaluate(() => {
     const split = document.getElementById('tbSplit').getBoundingClientRect();
@@ -58,28 +58,24 @@ test('global button follows its own choice across mixed and fully overridden col
   expect(geometry.buttonLeft).toBeGreaterThan(geometry.splitRight);
   expect(geometry.gap).toBeLessThan(1);
   await column('view-0').locator('.view-toggle').click();
-  await expect(page.locator('.column.chat-mode')).toHaveCount(2);
-  await globalButton().click();
-  await expectGlobal('term');
-  expect(await globalButton().innerHTML()).not.toBe(chatIcon);
-  await column('view-1').locator('.view-toggle').click();
-  await expect(column('view-1')).toHaveClass(/chat-mode/);
-  await expect(column('view-0')).not.toHaveClass(/chat-mode/);
-  await expect(column('view-2')).not.toHaveClass(/chat-mode/);
-  expect(await page.evaluate(() => config.globalViewMode)).toBe('term');
+  await expect(page.locator('.column.chat-mode')).toHaveCount(1);
   await globalButton().click();
   await expectGlobal('chat');
-  // Even when every local override is terminal, the saved global choice is chat.
-  for (const id of ['view-0', 'view-1', 'view-2']) await column(id).locator('.view-toggle').click();
-  await expect(page.locator('.column.chat-mode')).toHaveCount(0);
+  expect(await globalButton().innerHTML()).not.toBe(chatIcon);
+  await column('view-1').locator('.view-toggle').click();
+  await expect(column('view-1')).not.toHaveClass(/chat-mode/);
+  await expect(column('view-0')).toHaveClass(/chat-mode/);
+  await expect(column('view-2')).toHaveClass(/chat-mode/);
+  expect(await page.evaluate(() => config.globalViewMode)).toBe('chat');
   await globalButton().click();
   await expectGlobal('term');
   await globalButton().click();
   await expectGlobal('chat');
 });
 
-test('new manual and Captain columns follow both global choices', async () => {
+test('new manual and Captain columns always start in terminal mode', async () => {
   await globalButton().click();
+  await expectGlobal('chat');
   const terminalId = await page.evaluate(() => addAndFocusColumn().id);
   await expect(page.locator('.column')).toHaveCount(4);
   await expect(column(terminalId)).not.toHaveClass(/chat-mode/);
@@ -89,18 +85,19 @@ test('new manual and Captain columns follow both global choices', async () => {
   const backgroundId = await page.evaluate((cmd) => createSession({ title: 'Background', cmd, captainCrew: true }, true).id, FAKE);
   await expect(column(backgroundId)).toHaveClass(/backstage/);
   await expect(column(backgroundId)).not.toHaveClass(/chat-mode/);
-  await globalButton().click();
-  await expectGlobal('chat', 6);
   const chatId = await page.evaluate(() => addAndFocusColumn().id);
-  await expect(column(chatId)).toHaveClass(/chat-mode/);
+  await expect(column(chatId)).not.toHaveClass(/chat-mode/);
   await page.locator('.nav-row[data-nav="new"]').click();
   await expect(page.locator('.column')).toHaveCount(8);
-  await expectGlobal('chat', 8);
+  // Existing conversations keep their explicit chat selection. Only the five
+  // newly created columns must start in terminals.
+  await expect(page.locator('.column.chat-mode')).toHaveCount(3);
+  for (const id of ['view-0', 'view-1', 'view-2']) await expect(column(id)).toHaveClass(/chat-mode/);
 });
 
-test('saved terminal and chat choices survive actual quit and relaunch', async () => {
+test('every app launch returns sessions to terminal mode', async () => {
   await globalButton().click();
-  await expectGlobal('term');
+  await expectGlobal('chat');
   await column('view-0').locator('.view-toggle').click();
   await application.close();
   application = null;
@@ -115,21 +112,33 @@ test('saved terminal and chat choices survive actual quit and relaunch', async (
   await application.close();
   application = null;
   await launch();
-  await expectGlobal('chat');
+  await expectGlobal('term');
 });
 
 test('global changes preserve terminal objects, draft and side-pane terminal ownership', async () => {
+  // Keep toolbar controls reachable when the right pane leaves a narrow deck.
+  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 760));
+  await column('view-0').locator('.view-toggle').click();
   await column('view-0').locator('.composer textarea').fill('unsent draft');
   await page.evaluate(() => {
     window.originalTerminals = [...terms.values()].map((t) => t.term);
     SidePane.show('terminal', true);
   });
   await expect(page.locator('.side-tab[data-tab="terminal"]')).toHaveClass(/active/);
-  await globalButton().click();
-  await expectGlobal('term');
-  for (const id of ['view-0', 'view-1', 'view-2']) await expect(column(id).locator('.term .xterm')).toHaveCount(1);
+  await expect.poll(() => globalButton().evaluate((button) => {
+    const r = button.getBoundingClientRect(), bar = document.getElementById('topBar').getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return r.left >= bar.left && r.right <= bar.right && r.top >= bar.top && r.bottom <= bar.bottom && button.contains(hit);
+  })).toBe(true);
   await globalButton().click();
   await expectGlobal('chat');
+  await expect(page.locator('#sideTerminal .xterm')).toHaveCount(1);
+  await expect(column('view-0').locator('.term .xterm')).toHaveCount(0);
+  for (const id of ['view-1', 'view-2']) await expect(column(id).locator('.term .xterm')).toHaveCount(1);
+  await globalButton().click();
+  await expectGlobal('term');
+  await expect(page.locator('#sideTerminal .xterm')).toHaveCount(0);
+  for (const id of ['view-0', 'view-1', 'view-2']) await expect(column(id).locator('.term .xterm')).toHaveCount(1);
   await expect(column('view-0').locator('.composer textarea')).toHaveValue('unsent draft');
   expect(await page.evaluate(() => [...terms.values()].every((t, i) => t.term === window.originalTerminals[i]))).toBe(true);
   expect(await page.evaluate(() => ChatUI.turnsOf('view-0').length)).toBe(0);

@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+  <meta name="color-scheme" content="dark light">
+  <meta id="theme-color" name="theme-color" content="#ffffff">
+  <title>AgentDeck</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="app" class="app">
+    <header class="app-header">
+      <button id="menu" class="icon-button" type="button" title="打开侧边栏" aria-label="打开侧边栏" aria-haspopup="dialog" aria-controls="drawer" aria-expanded="false"></button>
+      <button id="back" class="icon-button" type="button" title="返回" aria-label="返回" hidden></button>
+      <div class="title-block">
+        <span id="title-dot" class="dot" aria-hidden="true"></span>
+        <div class="title-text"><h1 id="view-title">队长</h1><span id="view-meta" class="view-meta"></span></div>
+        <button id="seat-chip" class="seat-chip" type="button" aria-haspopup="dialog" aria-controls="drawer" hidden><span id="seat-chip-text" class="seat-chip-text"></span></button>
+      </div>
+      <div class="header-actions">
+        <button id="copy" class="icon-button" type="button" title="复制输出" aria-label="复制输出" hidden></button>
+        <button id="reload" class="icon-button" type="button" title="重新加载页面" aria-label="重新加载页面"></button>
+        <button id="refresh" class="icon-button" type="button" title="刷新" aria-label="刷新"></button>
+      </div>
+    </header>
+    <div id="attention" class="attention" role="region" aria-label="等你处理" hidden></div>
+    <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+    <main class="views">
+      <section id="captain-view" class="view" aria-label="队长对话">
+        <div id="captain-turns" class="conversation" role="region" aria-label="最近队长对话" tabindex="0"></div>
+      </section>
+      <section id="output-view" class="view" aria-label="队员输出" hidden>
+        <pre id="outputText" class="output" tabindex="0"></pre>
+      </section>
+      <section id="board-view" class="view board" aria-label="任务看板" hidden><div id="projects"></div></section>
+      <section id="more-view" class="view page" aria-label="更多" hidden>
+        <div class="settings-group">
+          <button id="quota-entry" class="settings-row" type="button" aria-haspopup="dialog" aria-controls="drawer"><span class="row-icon" aria-hidden="true"></span><span class="row-title">额度</span><span id="quota-entry-text" class="row-tag"></span><span class="row-chevron" aria-hidden="true"></span></button>
+        </div>
+        <div class="settings-group">
+          <button id="theme" class="settings-row" type="button" role="switch" aria-checked="false"><span class="row-icon" aria-hidden="true"></span><span class="row-title">深色模式</span><span class="switch" aria-hidden="true"></span></button>
+        </div>
+        <div class="settings-group">
+          <button id="logout" class="settings-row danger" type="button"><span class="row-icon" aria-hidden="true"></span><span class="row-title">退出此设备</span></button>
+        </div>
+        <p class="settings-note">消息只发给队长；队员输出和任务看板为只读。</p>
+      </section>
+    </main>
+    <form id="message-form" class="composer">
+      <p id="send-status" class="send-status" role="status" aria-live="polite"></p>
+      <div id="attachments" class="attachments" role="list" aria-label="待发送的图片" hidden></div>
+      <div class="composer-box">
+        <button id="attach" class="icon-button" type="button" title="添加图片" aria-label="添加图片"></button>
+        <input id="image-input" type="file" accept="image/*" multiple hidden>
+        <textarea id="message" name="message" rows="1" maxlength="8000" aria-label="给队长的消息" placeholder="给队长发消息"></textarea>
+        <button id="send" class="icon-button send-button" type="submit" title="发送" aria-label="给队长发送消息" disabled></button>
+      </div>
+    </form>
+    <nav id="tabbar" class="tabbar" aria-label="主导航">
+      <button class="tab" type="button" data-view="captain"><span class="tab-icon" aria-hidden="true"></span><span class="tab-label">对话</span></button>
+      <button class="tab" type="button" data-view="sessions" aria-haspopup="dialog" aria-controls="drawer"><span class="tab-icon" aria-hidden="true"><span id="sessions-badge" class="tab-badge" hidden></span></span><span class="tab-label">会话</span></button>
+      <button class="tab" type="button" data-view="board"><span class="tab-icon" aria-hidden="true"></span><span class="tab-label">看板</span></button>
+      <button class="tab" type="button" data-view="more"><span class="tab-icon" aria-hidden="true"></span><span class="tab-label">更多</span></button>
+    </nav>
+    <div id="scrim" class="scrim" aria-hidden="true"></div>
+    <aside id="drawer" class="drawer" role="dialog" aria-modal="true" aria-label="侧边栏" inert>
+      <div class="drawer-head"><span class="drawer-brand">AgentDeck</span><button id="drawer-close" class="icon-button" type="button" title="关闭侧边栏" aria-label="关闭侧边栏"></button></div>
+      <div class="drawer-top">
+        <button id="drawer-captain" class="nav-row" type="button"><span class="row-icon crown" aria-hidden="true"></span><span id="captain-dot" class="dot" aria-hidden="true"></span><span class="row-title">队长</span><span id="captain-state" class="row-tag"></span></button>
+      </div>
+      <div id="sessions" class="session-list" role="region" aria-label="队员会话"></div>
+      <section id="quota" class="quota" aria-labelledby="quota-title" tabindex="-1">
+        <div class="quota-heading"><h2 id="quota-title">额度</h2><span id="quota-note" class="quota-heading-note" role="status"></span><button id="quota-refresh" class="icon-button" type="button" title="刷新额度" aria-label="刷新额度"></button></div>
+        <div id="quota-columns" class="quota-columns" aria-hidden="true" hidden><span>5h</span><span>7d</span></div>
+        <div id="quota-rows" class="quota-rows" role="list" aria-label="订阅剩余额度"></div>
+      </section>
+      <div class="drawer-foot"><span id="version" class="drawer-version"></span></div>
+      <div id="quota-sheet-scrim" class="quota-sheet-scrim" aria-hidden="true" hidden></div>
+      <div id="quota-sheet" class="quota-sheet" role="dialog" aria-modal="true" aria-labelledby="quota-sheet-title" hidden>
+        <div class="quota-sheet-head"><span id="quota-sheet-icon" class="quota-icon" aria-hidden="true"></span><h2 id="quota-sheet-title"></h2><span id="quota-sheet-captain" class="quota-sheet-captain" hidden><span class="quota-captain" aria-hidden="true"></span>队长在用</span><button id="quota-sheet-close" class="icon-button" type="button" title="关闭详情" aria-label="关闭详情"></button></div>
+        <dl id="quota-sheet-body" class="quota-sheet-body"></dl>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>

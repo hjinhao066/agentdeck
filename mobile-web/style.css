@@ -1,0 +1,365 @@
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --surface: #ffffff; --soft: #f4f3f1; --raised: #f7f6f4; --text: #1d1d1f;
+  --secondary: #55555a; --muted: #6b6b70; --line: #e6e5e2;
+  --bubble: #f1efec; --orange: #c36922; --orange-soft: #fff2e7; --on-orange: #ffffff; --working: #d4a500;
+  --composer-min: 44px; --composer-line: 24px; --tab-active: #a85514;
+  --green: #158058; --red: #bc3a43; --focus: #2f6fde; --shadow: 0 8px 28px rgba(0, 0, 0, .12);
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --mono: SFMono-Regular, Menlo, Consolas, "PingFang SC", monospace;
+  /* Taken from the desktop app (style.css), so the sidebar, status dots and
+     quota rows look the same on both ends. */
+  --rail: #f7f7f7; --hairline: rgba(0, 0, 0, .07); --row-hover: rgba(0, 0, 0, .05); --row-active: rgba(0, 0, 0, .07); --backdrop: rgba(20, 20, 20, .32);
+  --st-plain: #6b7280; --st-working: #ffd400; --st-input: #f4212e; --st-done: #00ba7c; --st-exited: #5c6670; --crown: #e0a91c;
+  --quota-low: #765000; --quota-out: #a02020; --quota-low-fill: #c98a1b; --quota-out-fill: #d04a44; --quota-track: rgba(0, 0, 0, .09); --quota-fill: rgba(0, 0, 0, .42);
+  --brand-claude: #c96442; --brand-chatgpt: #0d8a6a; --brand-gemini: #3a72e8;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #171717; --surface: #1d1d1d; --soft: #2a2a2a; --raised: #232323; --text: #ececec;
+  --secondary: #bdbdbd; --muted: #9a9a9a; --line: #313131;
+  --bubble: #2c2b2a; --orange: #e6a16e; --orange-soft: #33261d; --on-orange: #1b1b1b; --working: #e0b84a; --tab-active: #e6a16e;
+  --green: #4bc898; --red: #ff8087; --focus: #76b0ff; --shadow: 0 8px 28px rgba(0, 0, 0, .5);
+  --rail: #1b1b1b; --hairline: rgba(255, 255, 255, .07); --row-hover: rgba(255, 255, 255, .07); --row-active: rgba(255, 255, 255, .09); --backdrop: rgba(0, 0, 0, .5);
+  --quota-low: #f4cc77; --quota-out: #ffb4aa; --quota-low-fill: #e0a437; --quota-out-fill: #f07167; --quota-track: rgba(255, 255, 255, .1); --quota-fill: rgba(255, 255, 255, .78);
+  --brand-claude: #e08562; --brand-chatgpt: #19c37d; --brand-gemini: #5b9bff;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; }
+button, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+button:disabled { cursor: default; }
+button:focus-visible, textarea:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+[hidden] { display: none !important; }
+svg { display: block; width: 22px; height: 22px; flex-shrink: 0; }
+h1, h2, h3, h4, p { margin: 0; }
+
+/* The shell fills the visual viewport so the composer sits on the keyboard. */
+.app { position: fixed; top: 0; left: 0; right: 0; margin: 0 auto; max-width: 760px; height: var(--app-height, 100dvh);
+  transform: translateY(var(--app-top, 0px)); display: flex; flex-direction: column; background: var(--bg); overflow: hidden; overflow: clip; }
+@media (min-width: 761px) { .app { border-left: 1px solid var(--line); border-right: 1px solid var(--line); } }
+
+.icon-button { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px; color: var(--secondary); background: transparent; flex-shrink: 0; }
+.icon-button:hover:not(:disabled) { color: var(--text); background: var(--soft); }
+.icon-button:disabled { opacity: .4; }
+.refreshing svg { animation: rotate 1s linear infinite; }
+
+.app-header { flex: none; display: flex; align-items: center; gap: 2px; min-height: 44px; padding: env(safe-area-inset-top) 2px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+.title-block { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 0 4px; }
+.title-text { flex: 0 1 auto; }
+/* 44px tall for the finger; the visible pill is the small label inside. */
+.seat-chip { flex: none; display: inline-flex; align-items: center; height: 44px; margin-left: auto; padding: 0 4px; border: 0; border-radius: 12px; background: transparent; }
+.seat-chip-text { display: inline-flex; align-items: center; height: 22px; padding: 0 8px; border-radius: 11px; border: 1px solid var(--line); background: var(--raised); color: var(--secondary); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.seat-chip[data-level="low"] .seat-chip-text { color: var(--orange); border-color: color-mix(in srgb, var(--orange) 45%, transparent); background: var(--orange-soft); }
+.seat-chip[data-level="out"] .seat-chip-text { color: var(--quota-out); border-color: color-mix(in srgb, var(--quota-out-fill) 50%, transparent); background: color-mix(in srgb, var(--quota-out-fill) 12%, transparent); }
+.seat-chip[data-level="none"] .seat-chip-text { color: var(--muted); }
+.title-text { min-width: 0; display: flex; flex-direction: column; }
+.title-text h1 { font-size: 16px; line-height: 1.25; font-weight: 650; letter-spacing: -.2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-meta { font-size: 12px; line-height: 1.3; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-meta:empty { display: none; }
+.header-actions { display: flex; }
+
+.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--st-plain); }
+/* Desktop status colours: yellow working, red waiting on you or out of quota, green done. */
+.dot[data-status="working"] { background: var(--st-working); animation: pulse 1.6s ease-in-out infinite; }
+.dot[data-status="done"] { background: var(--st-done); }
+.dot[data-status="input"], .dot[data-status="asking"] { background: var(--st-input); box-shadow: 0 0 0 3px color-mix(in srgb, var(--st-input) 24%, transparent); }
+.dot[data-status="quota"] { background: var(--st-input); }
+.dot[data-status="failed"] { background: transparent; box-shadow: inset 0 0 0 2px var(--st-input); }
+.dot[data-status="none"] { background: var(--line); }
+/* Desktop unreachable: a hollow ring, since the last known status is stale. */
+.dot[data-status="offline"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+
+.attention { flex: none; display: flex; gap: 8px; padding: 4px 12px; overflow-x: auto; scrollbar-width: none; border-bottom: 1px solid var(--line); background: var(--orange-soft); }
+.attention::-webkit-scrollbar { display: none; }
+.attention-chip { flex: none; display: inline-flex; align-items: center; gap: 7px; max-width: 78vw; min-height: 44px; padding: 0 14px; border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent); border-radius: 22px; background: var(--surface); font-size: 13px; }
+.attention-chip .chip-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attention-chip .chip-state { color: var(--orange); white-space: nowrap; }
+
+.notice { flex: none; margin: 8px 12px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; font-size: 13px; color: var(--secondary); background: var(--raised); overflow-wrap: anywhere; }
+.notice.error { border-color: var(--red); color: var(--red); }
+
+.views { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* Conversation */
+/* Positioned, so the visually hidden labels scroll inside it instead of
+   stretching the shell (a scrollable shell lets focus shift the drawer). */
+.conversation { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 10px 16px 6px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+.conversation > :first-child { margin-top: auto; }
+.captain-turn { display: flex; flex-direction: column; }
+.captain-turn + .captain-turn { margin-top: 20px; }
+.user-message { align-self: flex-end; max-width: 86%; padding: 9px 14px; border-radius: 20px 20px 6px 20px; background: var(--bubble); }
+.captain-message { margin-top: 10px; }
+/* Images the user sent sit above their bubble, right-aligned like it. */
+.sent-images { align-self: flex-end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 86%; }
+.sent-images + .user-message { margin-top: 6px; }
+.sent-image { display: block; border-radius: 14px; overflow: hidden; background: var(--soft); border: 1px solid var(--line); }
+/* Fixed sizes: an image that loads late must not change the height of the
+   conversation, or the newest reply slides out of view. */
+.sent-image img { display: block; width: 104px; height: 104px; object-fit: cover; }
+.sent-image:only-child img { width: 168px; height: 168px; }
+.sent-image:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.chat-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.chat-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.65; }
+.captain-message .chat-text { padding-right: 4px; }
+.markdown { white-space: normal; }
+.markdown > * + * { margin-top: 10px; }
+.markdown p { white-space: pre-wrap; }
+.markdown .md-heading { font-weight: 650; }
+.markdown ul, .markdown ol { margin-bottom: 0; padding-left: 22px; }
+.markdown li + li { margin-top: 4px; }
+.markdown blockquote { margin: 0; padding-left: 12px; border-left: 3px solid var(--line); color: var(--secondary); white-space: pre-wrap; }
+.markdown a { color: var(--orange); text-decoration: underline; text-underline-offset: 2px; overflow-wrap: anywhere; }
+.md-code { font: 13px/1.5 var(--mono); padding: 1px 5px; border-radius: 5px; background: var(--soft); overflow-wrap: anywhere; }
+.code-block { border: 1px solid var(--line); border-radius: 12px; background: var(--raised); overflow: hidden; }
+.code-bar { display: flex; align-items: center; justify-content: space-between; padding-left: 12px; font: 12px var(--mono); color: var(--muted); border-bottom: 1px solid var(--line); }
+.code-bar .icon-button { color: var(--muted); }
+.code-bar svg { width: 18px; height: 18px; }
+.code-block pre { margin: 0; padding: 10px 12px; overflow-x: auto; font: 13px/1.55 var(--mono); white-space: pre; tab-size: 2; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+/* Tables keep their columns and scroll sideways inside the reply. */
+.table-wrap { max-width: 100%; overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+.markdown table { min-width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.5; }
+.markdown th, .markdown td { padding: 7px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+.markdown th { font-weight: 600; white-space: nowrap; background: var(--raised); }
+.markdown td { min-width: 7em; }
+.markdown th + th, .markdown td + td { border-left: 1px solid var(--line); }
+.markdown tbody tr:last-child td { border-bottom: 0; }
+.markdown td .md-code, .markdown th .md-code { overflow-wrap: normal; }
+.markdown hr { height: 0; margin: 16px 0; border: 0; border-top: 1px solid var(--line); }
+.markdown > hr + * { margin-top: 0; }
+.turn-actions { display: flex; align-items: center; gap: 4px; margin: -4px 0 -12px -12px; }
+.turn-actions .icon-button { color: var(--muted); }
+.turn-actions svg { width: 18px; height: 18px; }
+.turn-state { font-size: 12px; color: var(--muted); }
+.pending { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.typing { display: inline-flex; gap: 4px; }
+.typing i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: blink 1.2s infinite both; }
+.typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
+.empty { margin: auto; max-width: 300px; text-align: center; color: var(--muted); font-size: 14px; line-height: 1.7; padding: 24px 8px; }
+
+/* Worker output */
+.output { flex: 1; min-height: 0; margin: 0; overflow: auto; overscroll-behavior: contain; padding: 14px 16px; font: 13px/1.7 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); background: var(--bg); scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+
+/* Composer. The tab bar below it owns the bottom safe area. */
+.composer { flex: none; padding: 4px 8px 2px; background: var(--bg); }
+.send-status { font-size: 12px; line-height: 1.4; color: var(--muted); padding: 0 8px 4px; overflow-wrap: anywhere; }
+.send-status:empty { display: none; }
+/* Padding leaves room for the remove buttons and their focus rings. */
+.attachments { --thumb: 72px; display: flex; align-items: flex-end; gap: 8px; padding: 20px 14px 8px 4px; overflow-x: auto; scrollbar-width: none; }
+/* Keyboard up: smaller thumbnails keep the conversation readable. A failed
+   one stays full size, because it has to fit two separate touch targets. */
+.keyboard-open .attachments { gap: 14px; }
+.keyboard-open .attachment:not([data-state="failed"]) { --thumb: 48px; }
+.attachments::-webkit-scrollbar { display: none; }
+.attachment { position: relative; flex: none; width: var(--thumb); height: var(--thumb); }
+.attachment img { display: block; width: var(--thumb); height: var(--thumb); object-fit: cover; border-radius: 14px; border: 1px solid var(--line); background: var(--soft); }
+.attachment[data-state="uploading"] img { opacity: .6; }
+.attachment[data-state="failed"] img { opacity: .35; border-color: var(--red); }
+.upload-track { position: absolute; left: 8px; right: 8px; bottom: 8px; height: 4px; border-radius: 2px; background: color-mix(in srgb, var(--text) 25%, transparent); overflow: hidden; }
+.upload-bar { display: block; height: 100%; border-radius: 2px; background: var(--orange); transition: width .15s linear; }
+/* 44px touch targets; the visible disc is smaller and sits on the corner.
+   Remove ends 28px below the top edge and retry fills the 44px below that,
+   so the two never share a point. */
+.attachment-remove { position: absolute; top: -16px; right: -10px; color: var(--bg); }
+.attachment-remove::before { content: ""; position: absolute; inset: 11px; border-radius: 50%; background: var(--text); }
+.attachment-remove svg { position: relative; width: 12px; height: 12px; stroke-width: 2.6; }
+.attachment-remove:hover:not(:disabled) { background: transparent; color: var(--bg); }
+.attachment-retry { position: absolute; left: 0; bottom: 0; width: 100%; height: 44px; border-radius: 0 0 14px 14px; color: var(--red); }
+.attachment-retry:hover:not(:disabled) { background: transparent; color: var(--red); }
+.composer-box { display: flex; align-items: flex-end; gap: 2px; padding: 0; border: 1px solid var(--line); border-radius: 23px; background: var(--raised); }
+.composer-box:focus-within { border-color: color-mix(in srgb, var(--orange) 55%, var(--line)); }
+#attach { border-radius: 50%; }
+/* Six lines at most, and never more than 30% of the visible height, so the
+   composer stays small when the soft keyboard shrinks the viewport. */
+textarea { flex: 1; min-width: 0; height: var(--composer-min); min-height: var(--composer-min); max-height: min(calc(var(--composer-line) * 6 + 20px), calc(var(--app-height, 100dvh) * .3)); resize: none; margin: 0; padding: 10px 0; border: 0; outline: 0; background: transparent; color: var(--text); font-size: 16px; line-height: var(--composer-line); overflow-y: auto; }
+/* With the keyboard up there is less room: four lines, so images plus a long
+   draft still leave the conversation visible. */
+.keyboard-open textarea { max-height: min(calc(var(--composer-line) * 4 + 20px), calc(var(--app-height, 100dvh) * .3)); }
+textarea:focus-visible { outline: 0; }
+textarea::placeholder { color: var(--muted); }
+textarea:disabled { opacity: .6; }
+.send-button { border-radius: 50%; color: var(--on-orange); }
+.send-button::before { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--orange); }
+.send-button svg { position: relative; width: 20px; height: 20px; }
+.send-button:hover:not(:disabled) { background: transparent; color: var(--on-orange); }
+.send-button:disabled { opacity: 1; color: var(--muted); }
+.send-button:disabled::before { background: var(--soft); }
+
+/* Tab bar: pinned to the bottom, its background runs under the home indicator. */
+.tabbar { flex: none; display: flex; padding: 0 4px env(safe-area-inset-bottom); background: var(--bg); border-top: 1px solid var(--line); }
+.keyboard-open .tabbar { display: none; }
+.tab { flex: 1; min-width: 0; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; padding: 3px 0 2px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); }
+.tab[aria-current="page"] { color: var(--tab-active); }
+.tab[aria-current="page"] .tab-label { font-weight: 650; }
+.tab-icon { position: relative; display: flex; }
+.tab-icon svg { width: 24px; height: 24px; }
+.tab-label { font-size: 11px; line-height: 1.2; }
+.tab-badge { position: absolute; top: -4px; left: 14px; min-width: 17px; height: 17px; padding: 0 5px; border-radius: 9px; border: 1.5px solid var(--bg); box-sizing: content-box; background: var(--red); color: var(--bg); font: 650 11px/17px var(--sans); text-align: center; }
+
+/* Sidebar drawer: the desktop sidebar's three parts, top to bottom. */
+.scrim { position: absolute; inset: 0; z-index: 20; background: var(--backdrop); opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility 0s .2s; }
+.drawer { position: absolute; top: 0; bottom: 0; left: 0; z-index: 21; width: min(88%, 340px); display: flex; flex-direction: column;
+  padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--rail); border-right: 1px solid var(--hairline); box-shadow: var(--shadow);
+  transform: translateX(-102%); visibility: hidden; transition: transform .22s ease, visibility 0s .22s; }
+/* Visible at once on open, so focus can move in; hidden only after sliding out. */
+.drawer-open .scrim { opacity: 1; visibility: visible; transition: opacity .2s ease; }
+.drawer-open .drawer { transform: none; visibility: visible; transition: transform .22s ease; }
+.drawer-head { flex: none; display: flex; align-items: center; justify-content: space-between; min-height: 52px; padding: 0 4px 0 18px; }
+.drawer-brand { font-size: 15px; font-weight: 650; letter-spacing: -.2px; }
+.drawer-top { flex: none; padding: 0 8px 4px; }
+.nav-row { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 10px; border: 0; border-radius: 7px; background: transparent; color: var(--secondary); text-align: left; }
+.nav-row .row-title { flex: 1; font-weight: 550; color: var(--text); }
+.nav-row:hover, .session-row:hover { background: var(--row-hover); }
+.nav-row.active, .session-row.active { background: var(--row-active); color: var(--text); }
+.row-icon.crown { color: var(--crown); }
+.nav-row .dot, .session-row > .dot { width: 7px; height: 7px; }
+.session-list { flex: 1; min-height: 72px; overflow-y: auto; overscroll-behavior: contain; padding: 0 8px 10px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+.session-list .empty { padding: 20px 8px; font-size: 13px; }
+.nav-section { display: flex; align-items: center; gap: 6px; height: 28px; margin-top: 10px; padding: 0 10px; color: var(--muted); font-size: 12px; font-weight: 500; }
+.nav-section-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-section-count { font-size: 11px; font-variant-numeric: tabular-nums; }
+.session-row { width: 100%; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 5px 10px 5px 14px; border: 0; border-radius: 7px; background: transparent; color: var(--secondary); text-align: left; }
+.row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.row-title { font-size: 14.5px; font-weight: 500; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.session-row .row-title { color: var(--text); }
+.row-sub { font-size: 12px; line-height: 1.4; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-tag { flex: none; font-size: 12px; color: var(--muted); }
+.row-tag.alert { color: var(--orange); }
+.row-tag.failed { color: var(--red); }
+.nav-row:focus-visible, .session-row:focus-visible, .quota-row:focus-visible { outline-offset: -2px; }
+
+/* Quota: pinned to the bottom of the drawer; it scrolls by itself when the
+   rows do not fit. Rows follow the desktop sidebar's compact panel: 5h and 7d
+   named once on top, then per account a percentage, its reset time and a thin
+   meter in each column. */
+.quota { --quota-cell: 92px; --quota-gap: 14px; flex: 0 1 auto; display: flex; flex-direction: column; min-height: 96px; max-height: 60%; padding: 2px 8px 6px; border-top: 1px solid var(--hairline); outline: 0; }
+.quota:focus-visible { box-shadow: inset 0 2px 0 var(--focus); }
+.quota-heading { flex: none; display: flex; align-items: center; gap: 8px; padding-left: 10px; }
+.quota-heading h2 { color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: .02em; }
+.quota-heading-note { flex: 1; min-width: 0; font-size: 11.5px; color: var(--muted); }
+.quota-heading .icon-button svg { width: 18px; height: 18px; }
+.quota-columns { flex: none; display: flex; justify-content: flex-end; gap: var(--quota-gap); padding: 0 10px 4px; color: var(--muted); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.quota-columns span { width: var(--quota-cell); }
+.quota-rows { min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; gap: 2px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+.quota-empty { padding: 8px 10px 12px; font-size: 12.5px; color: var(--muted); }
+.quota-item { flex: none; border-radius: 10px; }
+.quota-item[data-status="out"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
+.quota-row { width: 100%; display: flex; flex-wrap: wrap; align-items: center; column-gap: 8px; min-height: 48px; padding: 6px 10px; border: 0; border-radius: 10px; background: transparent; text-align: left; font-size: 14px; }
+.quota-row:hover { background: var(--row-hover); }
+.quota-icon { display: flex; flex: none; color: var(--secondary); }
+.quota-icon svg { width: 16px; height: 16px; }
+[data-provider="Claude"] .quota-icon { color: var(--brand-claude); }
+[data-provider="Codex"] .quota-icon { color: var(--brand-chatgpt); }
+[data-provider="Antigravity"] .quota-icon { color: var(--brand-gemini); }
+.quota-name { display: inline-flex; align-items: center; gap: 5px; flex: 1 1 0; min-width: 0; color: var(--text); white-space: nowrap; }
+.quota-name-text { overflow: hidden; text-overflow: ellipsis; }
+.quota-captain { display: inline-flex; flex: none; color: var(--crown); }
+.quota-captain svg { width: 13px; height: 13px; }
+.quota-values { display: grid; grid-template-columns: repeat(2, var(--quota-cell)); column-gap: var(--quota-gap); align-items: center; flex: none; font-variant-numeric: tabular-nums; }
+.quota-cell, .quota-status { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.quota-cell[data-window="5h"] { grid-column: 1; }
+.quota-cell[data-window="7d"] { grid-column: 2; }
+.quota-status { grid-column: 1 / -1; }
+.quota-line { display: flex; align-items: center; gap: 6px; height: 18px; line-height: 18px; white-space: nowrap; overflow: hidden; }
+.quota-pct { color: var(--text); font-size: 14px; font-weight: 650; }
+.quota-reset { color: var(--secondary); font-size: 12.5px; }
+.quota-ban { display: inline-flex; color: var(--quota-out); }
+.quota-ban svg { width: 14px; height: 14px; stroke-width: 2.2; }
+.quota-meter { position: relative; height: 3px; border-radius: 2px; background: var(--quota-track); overflow: hidden; }
+.quota-meter::after { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: var(--pct, 0%); border-radius: 2px; background: var(--quota-fill); }
+[data-level="low"] .quota-pct { color: var(--quota-low); }
+[data-level="danger"] .quota-pct { color: var(--quota-out); }
+[data-level="out"] .quota-reset { color: var(--quota-out); font-size: 14px; font-weight: 650; }
+[data-level="none"] .quota-pct, [data-level="none"] .quota-reset, .quota-status .quota-line { color: var(--muted); font-weight: 500; }
+.quota-status .quota-line { font-size: 13px; }
+[data-level="low"] > .quota-meter::after { background: var(--quota-low-fill); }
+[data-level="danger"] > .quota-meter::after { background: var(--quota-out-fill); }
+[data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 55%, transparent); }
+[data-level="none"] > .quota-meter::after { opacity: .45; }
+.quota-row-note { flex: 0 0 100%; padding: 3px 0 0 24px; font-size: 12px; line-height: 1.45; color: var(--muted); overflow-wrap: anywhere; }
+
+/* Details of one account: a sheet that rises over the drawer. */
+.quota-sheet-scrim { position: absolute; inset: 0; z-index: 1; background: var(--backdrop); }
+.quota-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; max-height: 80%; overflow-y: auto; overscroll-behavior: contain; padding: 4px 6px calc(14px + env(safe-area-inset-bottom)) calc(18px + env(safe-area-inset-left)); border-radius: 18px 18px 0 0; background: var(--surface); box-shadow: var(--shadow); }
+.quota-sheet-head { display: flex; align-items: center; gap: 8px; min-height: 52px; }
+.quota-sheet-head h2 { min-width: 0; font-size: 16px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.quota-sheet-captain { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 12px; color: var(--secondary); }
+.quota-sheet-head .icon-button { margin-left: auto; }
+.quota-sheet-body { margin: 0; padding-right: 12px; }
+.sheet-line { display: flex; align-items: baseline; gap: 12px; padding: 9px 0; border-top: 1px solid var(--hairline); font-size: 14px; line-height: 1.45; }
+.sheet-key { flex: none; width: 52px; color: var(--muted); font-size: 13px; }
+.sheet-value { flex: 1; min-width: 0; margin: 0; display: flex; flex-direction: column; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.sheet-main { color: var(--text); font-weight: 600; }
+.sheet-sub { color: var(--secondary); font-size: 13px; }
+.sheet-line:not([data-level]) .sheet-main { font-weight: 400; }
+.sheet-line[data-level="low"] .sheet-main { color: var(--quota-low); }
+.sheet-line[data-level="danger"] .sheet-main, .sheet-line[data-level="out"] .sheet-main { color: var(--quota-out); }
+.sheet-line[data-level="none"] .sheet-main { color: var(--muted); font-weight: 500; }
+.drawer-foot { flex: none; display: flex; align-items: center; min-height: 36px; padding: 0 18px; border-top: 1px solid var(--hairline); }
+.drawer-version { font-size: 12.5px; font-weight: 600; color: var(--secondary); }
+
+/* More page */
+.page { overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 24px; }
+.settings-group { margin: 12px 8px 0; border: 1px solid var(--line); border-radius: 14px; background: var(--raised); overflow: hidden; }
+.settings-row { width: 100%; display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 0 14px; border: 0; background: transparent; text-align: left; }
+.settings-row:hover:not(:disabled) { background: var(--soft); }
+.settings-row:disabled { opacity: .5; }
+.settings-row:focus-visible { outline-offset: -2px; border-radius: 14px; }
+.settings-row .row-title { flex: 1; font-weight: 450; }
+.settings-row.danger { color: var(--red); }
+.row-icon { display: flex; color: var(--secondary); }
+.danger .row-icon { color: inherit; }
+.row-icon svg { width: 20px; height: 20px; }
+.settings-row .row-tag { font-variant-numeric: tabular-nums; }
+.settings-row .row-tag[data-level="low"] { color: var(--orange); }
+.settings-row .row-tag[data-level="out"] { color: var(--quota-out); }
+.row-chevron { display: flex; color: var(--muted); }
+.row-chevron svg { width: 16px; height: 16px; }
+.switch { position: relative; flex: none; width: 46px; height: 28px; border-radius: 14px; background: var(--line); transition: background .15s; }
+.switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 24px; height: 24px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0, 0, 0, .3); transition: transform .15s; }
+[aria-checked="true"] .switch { background: var(--green); }
+[aria-checked="true"] .switch::after { transform: translateX(18px); }
+.settings-note { margin: 14px 22px 0; font-size: 12px; line-height: 1.6; color: var(--muted); }
+
+/* Board (read-only) */
+.board { overflow-y: auto; overflow-x: hidden; padding: 16px 16px 24px; }
+.project + .project { margin-top: 24px; }
+.project-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 12px; }
+.project-heading h2 { font-size: 15px; overflow-wrap: anywhere; }
+.project-heading > span { color: var(--muted); font: 11px var(--mono); white-space: nowrap; }
+/* Lanes bleed to the screen edges so a card is never clipped by the padding. */
+.board-lanes { display: flex; align-items: flex-start; gap: 12px; overflow-x: auto; margin: 0 -16px; padding: 2px 16px 14px; scroll-padding: 0 16px; scroll-snap-type: x proximity; scrollbar-color: var(--orange) var(--soft); scrollbar-width: thin; }
+.board-lane { width: min(80vw, 280px); flex: 0 0 min(80vw, 280px); scroll-snap-align: start; }
+@media (max-width: 600px) { .board-lane.is-empty { display: none; } }
+.lane-heading { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 550; padding: 10px 2px 10px; border-top: 2px solid var(--line); }
+.board-lane[data-status="doing"] .lane-heading { border-top-color: var(--orange); }
+.board-lane[data-status="done"] .lane-heading { border-top-color: var(--green); }
+.lane-count { color: var(--muted); font: 11px var(--mono); background: var(--soft); padding: 2px 6px; border-radius: 4px; }
+.task-card { padding: 12px 14px; margin-bottom: 8px; background: var(--raised); border: 1px solid var(--line); border-radius: 12px; }
+.task-card h4 { font-size: 14px; font-weight: 550; line-height: 1.55; overflow-wrap: anywhere; }
+.task-assignee { font: 10px/1.6 var(--mono); color: var(--muted); margin-top: 8px; overflow-wrap: anywhere; }
+.task-receipt { color: var(--secondary); font-size: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.task-flag { display: inline-block; font-size: 10px; color: var(--orange); margin-bottom: 6px; }
+.task-flag.failed { color: var(--red); }
+.lane-empty { font-size: 12px; color: var(--muted); padding: 14px 4px; }
+
+@keyframes rotate { to { transform: rotate(360deg); } }
+@keyframes pulse { 50% { opacity: .35; } }
+@keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .refreshing svg, .dot[data-status="working"], .typing i { animation: none; } .switch, .switch::after, .upload-bar, .drawer, .scrim { transition: none; } }
+
+/* Folded long message, and the one-line process fold under a Captain reply. */
+.user-message { display: flex; flex-direction: column; align-items: flex-start; }
+.chat-text.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; line-clamp: 8; overflow: hidden; }
+.expand-toggle { align-self: flex-end; min-height: 44px; margin: -6px -8px -12px 0; padding: 0 8px; border: 0; background: transparent; color: var(--orange); font-size: 13px; }
+.process { margin-top: 2px; font-size: 12px; color: var(--muted); }
+.process > summary { display: flex; align-items: center; min-height: 36px; cursor: pointer; list-style: none; }
+.process > summary::-webkit-details-marker { display: none; }
+.process > summary::after { content: "›"; margin-left: 4px; transition: transform .15s; }
+.process[open] > summary::after { transform: rotate(90deg); }
+.process-list { margin: 0 0 6px; padding-left: 18px; line-height: 1.5; }
+.process-list li + li { margin-top: 3px; }
+.process-failed { color: var(--red); }
+.process-step { overflow-wrap: anywhere; }

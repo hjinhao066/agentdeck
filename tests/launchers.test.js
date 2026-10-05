@@ -119,6 +119,10 @@ test('Codex app launches bypass shell wrappers without duplicating their --yolo 
   assert.equal(B.launchInput(cmd, 'linux'), '\x15command "codex" --no-daemon --dangerously-bypass-approvals-and-sandbox\r');
   assert.equal(B.shellLaunchCommand('codex resume --last --yolo', 'darwin'), 'command "codex" --no-daemon resume --last --yolo');
   assert.equal(B.shellLaunchCommand(cmd, 'win32'), cmd);
+  assert.equal(B.shellLaunchCommand('codex --no-daemon --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
+  assert.equal(B.shellLaunchCommand('/opt/bin/codex --yolo', 'darwin'), '/opt/bin/codex --no-daemon --yolo');
+  assert.equal(B.shellLaunchCommand('command "codex" --yolo', 'darwin'), 'command "codex" --no-daemon --yolo');
+
   for (const custom of ['node fake-agent.js', './codex-wrapper.sh']) {
     assert.equal(B.shellLaunchCommand(custom, 'darwin'), custom);
   }
@@ -174,23 +178,23 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.ok(text.includes('claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high'));
   assert.ok(text.includes('cursor-agent --force --model grok-4.7-high-fast'));
   // Codex: --agent codex (default GPT-6.1 Sol) or the Luna command; the bypass flag is named only to forbid writing it
-  assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*不要手动拼接 --dangerously-bypass-approvals-and-sandbox/);
+  assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*--dangerously-bypass-approvals-and-sandbox[^\n]*--no-daemon[^\n]*不要手动拼接/);
   assert.ok(!text.includes(B.commandForAgent('codex')), 'no ready-made codex command with the flag to copy');
   assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex \| --command/);
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [
+    'claude-opus-4-6-thinking',
     'claude-opus-5-5', 'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
-    'claude-opus-5-5-xhigh', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high', 'claude-sonnet-5-5-max',
-    'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
+    'claude-opus-5-5-xhigh', 'claude-sonnet-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high',
+    'claude-sonnet-5-5-max', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
     'gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'grok-4.7-high-fast',
   ]);
-  // the old Claude models are named only to forbid them
-  assert.match(text, /不要用 Claude 4\.x 和 Haiku[^\n]*new 会直接拒绝/);
+  assert.match(text, /Claude Code、Cursor、Codex 命令仍禁止 Claude 4\.x 和 Haiku/);
   // Antigravity has no 5.5 models
   const agyLine = text.split('\n').find((l) => l.includes('Antigravity：'));
   assert.ok(!/5-5|5\.5/.test(agyLine));
-  assert.match(agyLine, /只用 Gemini 3\.8 Flash，绝不用 Gemini 3\.1 Pro/);
+  assert.match(agyLine, /claude-sonnet-4-6[^\n]*claude-opus-4-6-thinking[^\n]*gpt-oss-120b-medium/);
   assert.ok(!text.includes('gemini-3.1-pro-high'));
   // who gets what
   const route = (needle) => text.split('\n').find((l) => l.startsWith('   - ') && l.includes(needle)) || '';
@@ -198,7 +202,8 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(route('重要代码'), /Sonnet 5\.5[^\n]*核心改动/);
   assert.match(route('批量写代码'), /GPT-6\.1 Sol[^\n]*写测试[^\n]*CI/);
   assert.match(route('简单的轻量代码'), /GPT-6 Luna/);
-  assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*放开用/);
+  assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*不用 Gemini 3\.1 Pro/);
+  assert.match(route('检索、整理'), /Gemini 周额度用尽时[^\n]*GPT-OSS[^\n]*Sonnet 4\.6[^\n]*Opus 4\.6/);
   assert.match(route('脏活'), /Cursor Grok 4\.7[^\n]*抓数据/);
   assert.match(text, /Claude Code：[^\n]*--model claude-opus-5-5 --effort high[^\n]*--model claude-sonnet-5-5[^\n]*开工后用 peek/);
   assert.match(text, /Cursor CLI：[^\n]*1–2 分钟可能没有任何输出[^\n]*别急着判定卡死/);
@@ -208,7 +213,9 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(text, /派活前可跑 quota，避开已用尽或快用尽/);
   // progress boards, concurrency, scraping fallbacks and stuck-session patience
   assert.match(text, /13\. 开工先跑 ledger 和 task list[^\n]*tasks\/<项目名>\.json[^\n]*状态由程序随命令回执自动改/);
-  assert.match(text, /14\. [^\n]*sysctl vm\.swapusage[^\n]*free 剩不到 1GB 就少开/);
+  assert.match(text, /14\. [^\n]*内存压力等级[^\n]*不要因为 swap 用了几个 G 就少开[^\n]*kern\.memorystatus_vm_pressure_level[^\n]*全量 E2E/);
+  assert.ok(!text.includes('vm.swapusage'));
+  assert.ok(!text.includes('剩不到 1GB'));
   assert.match(text, /GitHub 现成工具、OpenCLI、agent-reach[^\n]*Muse\.ai 或 ChatGPT 浏览器/);
   assert.match(text, /3\. 先弄懂再派活：[^\n]*表述不清、模棱两可、你没完全理解，先问清楚[^\n]*更好的办法[^\n]*有把握把活做好，才把任务拆开派下去[^\n]*自己决定，不拿去问用户/);
   assert.match(text, /4\. 派活单步原则：一个会话一次只派一件活/);
@@ -242,8 +249,8 @@ test('队长 picks the effort: simple medium, ordinary code high, complex or fai
   // Antigravity's tier is the model id's suffix, never --effort (it would switch models)
   const agy = lines.find((l) => l.includes('Antigravity：'));
   assert.match(agy, /gemini-3\.8-flash-low、gemini-3\.8-flash-medium、gemini-3\.8-flash-high/);
-  assert.match(agy, /不要加 --effort/);
-  assert.match(M.instructions(), /Antigravity 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max），不能加 --effort/);
+  assert.match(agy, /绝对不要给 agy 加 --effort/);
+  assert.match(M.instructions(), /Antigravity 的 Gemini Flash 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max）/);
 });
 
 test('队长 instructions call the board CLI the way the column\'s shell reads env vars', () => {

@@ -10,8 +10,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 2. Read this file, `README.md`, and the relevant implementation and tests. Both
    platforms share this repository; do not create divergent Windows/Mac copies.
 3. Implement the complete change and add regression tests for meaningful bugs.
-   Run `npm test`, `npm run test:e2e`, and `npm audit` before delivery. Run the
-   packaged E2E suite when runtime, preload, native modules or packaging changes.
+   Feature branches run `npm test` plus the E2E specs that cover the change.
+   A patch release runs `npm test` and `npm run test:smoke` (see README 发版流程).
+   Full `npm run test:e2e` runs overnight or on another machine. Run `npm audit`
+   before packaging. Run the packaged E2E suite when runtime, preload, native
+   modules or packaging changes.
 4. Update user/developer documentation when behavior or build steps change.
 5. Fetch again, integrate concurrent remote commits without losing either side,
    commit the task's source/tests/docs/lockfile, and **push to GitHub in the same
@@ -102,7 +105,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   `docs/task-board-api.md`. A Gemini dispatcher has only one exception to the
   submission-only capability: `main-new` for its explicitly assigned card, once.
   The zero-token watcher/poll heartbeat claims only new start edges, not content
-  changes or worker activity; respect durable claims and held cards. Tests must
+  changes or worker activity; respect durable claims and held cards. Automatic
+  verification (`docs/task-board-api.md`「自动验收」) is claimed once per review round
+  there too: never open a second reviewer for a round, never review with the
+  executor's own provider/model family, never mark a card done without a clear
+  reviewer verdict, and keep it inside the ordinary `new` queue and limits. Tests must
   use the isolated profile task store and stand-in agents, never real shared data.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded

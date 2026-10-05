@@ -1,5 +1,6 @@
 // Full-width pages that slide over the deck: Schedule (prompts sent to a
-// session at set times) and Artifacts (files and links the agents mentioned).
+// session at set times) and Artifacts (files the crew delivered with their
+// receipts, plus files and links the agents mentioned).
 // The deck stays mounted underneath, so terminals keep their size and status.
 (function () {
   'use strict';
@@ -43,6 +44,7 @@
   function hide() {
     if (!current) return;
     current = null;
+    recheckDisk = null; shownTab = null;
     view.hidden = true;
     view.textContent = '';
     window.Sidebar.markPage(null);
@@ -63,6 +65,7 @@
     (actions || []).forEach((a) => right.appendChild(a));
     const close = el('button', 'page-close');
     close.type = 'button'; close.title = '关闭 (Esc)'; close.innerHTML = host.ICONS.close;
+    close.setAttribute('aria-label', close.title);
     close.addEventListener('click', hide);
     right.appendChild(close);
     head.append(titles, right);
@@ -119,7 +122,9 @@
       }
       main.appendChild(meta);
       const actions = el('div', 'sched-actions');
-      actions.append(btn('立即运行', () => runManually(s.id)), btn('编辑', () => openEditor(s)));
+      const edit = btn('', () => openEditor(s), 'tool-action');
+      edit.title = '编辑定时任务'; edit.setAttribute('aria-label', edit.title); edit.innerHTML = host.ICONS.edit;
+      actions.append(btn('立即运行', () => runManually(s.id)), edit);
       card.append(sw, main, actions);
       box.appendChild(card);
     });
@@ -314,20 +319,248 @@
   }
 
   // ---- Artifacts ----
+  // Two sources, two tabs: the files the crew handed in with their receipts
+  // (grouped by project), and whatever the agents mentioned in their replies.
   const TYPE_LABEL = { web: '网页', markdown: 'MD', pdf: 'PDF', image: '图片', text: '' };
+  const GROUP_ROWS = 30;            // rows a project shows before 「显示其余」
+  let artifactTab = null;           // the tab the user picked; null: whichever has something
+  let shownTab = null;              // the tab on screen while the page is open
+  let shownList = '';
+  const onDisk = new Map();         // path key -> 0 gone, 1 file, 2 folder (absent: not checked yet)
+  const shownAll = new Set();       // projects showing every row
+  let diskRun = 0;
+  let recheckDisk = null;
+  const collapsed = () => host.config.artifactsCollapsed || [];
+
   function artifactTile(a) {
     const tile = el('div', 'art-tile t-' + a.type);
     if (a.type === 'web') tile.appendChild(icon('globe'));
     else if (a.type === 'image') tile.appendChild(icon('image'));
+    else if (a.type === 'dir') tile.appendChild(icon('folder'));
     else {
       const ext = C.extOf(a.name).toUpperCase();
       tile.appendChild(el('span', 'art-ext', a.type === 'pdf' ? 'PDF' : a.type === 'markdown' ? 'MD' : (ext || '').slice(0, 4) || '▤'));
     }
     return tile;
   }
-  function renderArtifacts() {
-    const all = C.collectArtifacts(window.ChatUI.artifactSources(), host.findLinks);
-    const body = frame('Artifacts', 'agent 在回复里提到的文件和链接都收在这里。点一下在右侧预览，⌘ 点击用系统应用打开。');
+  // Icon-only actions: the title is both the tooltip and the accessible name.
+  function toolButton(iconName, title, onClick) {
+    const b = el('button', 'icon-btn art-tool');
+    b.type = 'button'; b.title = title; b.innerHTML = host.ICONS[iconName] || '';
+    b.setAttribute('aria-label', title);
+    b.addEventListener('click', (e) => { e.stopPropagation(); onClick(e, b); });
+    return b;
+  }
+  function copyButton(title, text) {
+    return toolButton('copy', title, (_e, b) => {
+      try { host.clipboardWrite(text); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+      b.innerHTML = host.ICONS.check; b.classList.add('done');
+      b.title = '已复制'; b.setAttribute('aria-label', '已复制');
+      clearTimeout(b.checkTimer);
+      b.checkTimer = setTimeout(() => {
+        b.innerHTML = host.ICONS.copy; b.classList.remove('done');
+        b.title = title; b.setAttribute('aria-label', title);
+      }, 1200);
+    });
+  }
+  const revealTitle = () => (host.platform === 'darwin' ? '在访达中显示' : host.platform === 'win32' ? '在资源管理器中显示' : '在文件管理器中显示');
+  const modKey = () => (host.platform === 'darwin' ? '⌘' : 'Ctrl');
+  // shown, never copied: a path under the home folder reads better as ~/…
+  const shortPath = (p) => (host.home && p.startsWith(host.home) && /^[\\/]/.test(p.slice(host.home.length)) ? '~' + p.slice(host.home.length) : p);
+  // A refresh rebuilds the page: whatever had the keyboard focus gets it back.
+  function keepingFocus(build) {
+    const at = document.activeElement && view.contains(document.activeElement) ? document.activeElement.dataset.fk : '';
+    build();
+    const next = at && [...view.querySelectorAll('[data-fk]')].find((n) => n.dataset.fk === at);
+    if (next) next.focus();
+  }
+
+  function deliverySources() {
+    const session = (c, archived) => ({ id: c.id, title: host.columnLabel(c), project: c.project, archived, lastReceipt: c.lastReceipt });
+    const main = host.config.mainSession;
+    return {
+      sessions: [...host.columns().map((c) => session(c, false)), ...host.archived().map((a) => session(a, true))],
+      tasks: main && Array.isArray(main.tasks) ? main.tasks : [],
+      chats: [...window.ChatUI.artifactSources(), ...window.ChatUI.captainArchives()],
+    };
+  }
+
+  // quiet: a refresh from the deck (a turn ended, a card changed). The page is
+  // rebuilt only when what it lists has changed.
+  function renderArtifacts(quiet) {
+    const mentions = C.collectArtifacts(window.ChatUI.artifactSources(), host.findLinks);
+    const delivered = C.collectDeliveries(C.deliveryReceipts(deliverySources()), host.home);
+    // chosen once per visit: a receipt arriving must not switch tabs under the reader
+    const tab = artifactTab || shownTab || (delivered.total ? 'delivered' : 'mentioned');
+    const listed = JSON.stringify([tab, delivered, mentions]);
+    if (quiet && listed === shownList && view.firstChild) return;
+    shownList = listed;
+    const top = shownTab === tab && !view.hidden ? view.scrollTop : 0;
+    recheckDisk = null;
+    keepingFocus(() => {
+      const body = frame('Artifacts', `队员在回执里交付的文件按项目收在这里，回复里提到的文件和链接也在。点一下在右侧预览，${modKey()} 点击用系统应用打开。`);
+      const tabs = el('div', 'art-tabs');
+      tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Artifacts 来源');
+      const pick = (key) => { artifactTab = key; render(); };
+      [['delivered', '回执交付', delivered.total], ['mentioned', '回复里提到的', mentions.length]].forEach(([key, label, n]) => {
+        const b = el('button', 'art-tab' + (tab === key ? ' active' : ''));
+        b.type = 'button'; b.dataset.tab = key; b.dataset.fk = 'tab:' + key; b.tabIndex = tab === key ? 0 : -1;
+        b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(tab === key));
+        b.append(el('span', null, label), el('span', 'seg-count', String(n)));
+        b.addEventListener('click', () => pick(key));
+        tabs.appendChild(b);
+      });
+      tabs.addEventListener('keydown', (e) => {
+        if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+        e.preventDefault();
+        pick(tab === 'delivered' ? 'mentioned' : 'delivered');
+        view.querySelector('.art-tab.active').focus();
+      });
+      body.appendChild(tabs);
+      const panel = el('div', 'art-panel');
+      panel.setAttribute('role', 'tabpanel');
+      body.appendChild(panel);
+      if (tab === 'delivered') renderDelivered(panel, delivered); else renderMentioned(panel, mentions);
+    });
+    shownTab = tab;
+    view.scrollTop = top;
+  }
+
+  // ---- 回执交付: project -> files ----
+  function goneWhy(f) {
+    const foreign = /^(?:[A-Za-z]:[\\/]|\\\\)/.test(f.path) ? host.platform !== 'win32' : host.platform === 'win32' && !f.path.startsWith('~');
+    return foreign
+      ? { flag: '另一台电脑上的路径', why: '这是另一台电脑上的路径，这台电脑上没有这个文件，不能预览。路径还可以复制。' }
+      : { flag: '已不在磁盘上', why: '这个文件已经不在磁盘上（被移走、改名或删除了），不能预览。路径还可以复制。' };
+  }
+  function deliveredRow(f, now) {
+    const state = onDisk.get(f.key);
+    const gone = state === 0 ? goneWhy(f) : null;
+    const row = el('div', 'dl-row' + (gone ? ' gone' : ''));
+    row.setAttribute('role', 'listitem');
+    row.dataset.path = f.path;
+
+    const main = el('button', 'dl-main');
+    main.type = 'button'; main.dataset.fk = 'file:' + f.key;
+    const name = el('div', 'dl-name');
+    name.appendChild(el('span', 'art-name', f.name));
+    if (gone) name.appendChild(el('span', 'dl-flag', gone.flag));
+    const text = el('div', 'dl-text');
+    // LRM marks keep a right-to-left (ellipsis on the left) path in order
+    text.append(name, el('div', 'art-path', '\u200e' + shortPath(f.path) + '\u200e'));
+    main.append(artifactTile({ type: state === 2 ? 'dir' : f.type, name: f.name }), text);
+    main.title = gone ? gone.why : f.path;
+    if (gone) main.setAttribute('aria-disabled', 'true');
+    main.addEventListener('click', (e) => {
+      if (gone) host.showToast(gone.why);
+      else window.SidePane.openLink({ kind: 'file', text: f.path }, e, f.colId);
+    });
+
+    const who = f.gone ? (f.task || '已删除的会话') : f.session + (f.archived ? '（已归档）' : '');
+    const said = f.failed ? '没做成：' + f.failed : f.summary;
+    const when = f.ts ? new Date(f.ts).toLocaleString() : '';
+    const by = el('div', 'dl-by');
+    by.append(el('div', 'dl-session', who + (f.gone && f.task ? '（会话已删除）' : '')), el('div', 'dl-receipt', said.replace(/\s+/g, ' ')));
+    by.title = ['会话：' + (f.gone ? '已删除' : who), f.task && '任务：' + f.task, said && '回执：' + (said.length > 300 ? said.slice(0, 300) + '…' : said), when && '交付：' + when].filter(Boolean).join('\n');
+    const time = el('time', 'dl-time', SC.formatWhen(f.ts, now) || '时间未知');
+    if (when) { time.title = '交付于 ' + when; time.dateTime = new Date(f.ts).toISOString(); }
+
+    const actions = el('div', 'dl-actions');
+    const jump = toolButton('chat', f.gone ? '交付它的会话已经删除' : '跳到交付它的会话', () => {
+      if (f.gone) { host.showToast('交付这个文件的会话已经删除了，文件记录还留在这里。'); return; }
+      hide();
+      window.ChatUI.reveal(f.colId);
+    });
+    if (f.gone) jump.setAttribute('aria-disabled', 'true');
+    actions.append(
+      copyButton('复制路径', f.path),
+      toolButton('folderOpen', gone ? '打开它原来所在的文件夹' : revealTitle(), () => window.deck.revealPath(f.path, f.colId)),
+      jump);
+    row.append(main, by, time, actions);
+    return row;
+  }
+  function renderDelivered(panel, delivered) {
+    if (!delivered.total) {
+      const empty = el('div', 'page-empty');
+      empty.append(icon('artifacts', 'page-empty-ico'), el('strong', null, '还没有交付的文件'),
+        el('span', null, '队员在回执里交付的文件会自动按项目收在这里，以前的回执也算，不用你和队员做任何事。'));
+      panel.appendChild(empty);
+      return;
+    }
+    const files = delivered.groups.flatMap((g) => g.files);
+    const summary = el('div', 'dl-summary');
+    const list = el('div', 'dl-list');
+    panel.append(summary, list);
+    const fill = () => {
+      const now = Date.now();
+      const projects = delivered.groups.filter((g) => g.key).length;
+      const lost = files.filter((f) => onDisk.get(f.key) === 0).length;
+      summary.textContent = [`${delivered.total} 个文件`, projects && `${projects} 个项目`, lost && `${lost} 个已不在磁盘上`].filter(Boolean).join(' · ');
+      list.textContent = '';
+      delivered.groups.forEach((g) => {
+        const open = !collapsed().includes(g.key);
+        const sec = el('section', 'dl-group');
+        sec.dataset.project = g.key;
+        const head = el('button', 'dl-head');
+        head.type = 'button'; head.dataset.fk = 'project:' + g.key;
+        head.setAttribute('aria-expanded', String(open));
+        head.title = open ? '收起这个项目' : '展开这个项目';
+        const dot = el('span', 'dl-dot');
+        if (g.key) dot.style.setProperty('--project-hue', window.CrewMapCore.projectHue(g.key));
+        head.append(icon('chevDown', 'dl-chev'), dot, el('span', 'dl-project', g.name || '未分组'), el('span', 'dl-count', String(g.files.length)));
+        const lostHere = g.files.filter((f) => onDisk.get(f.key) === 0).length;
+        if (lostHere) head.appendChild(el('span', 'dl-lost', `${lostHere} 个已不在磁盘上`));
+        head.append(el('span', 'tb-spacer'), el('span', 'dl-latest', '最近 ' + (SC.formatWhen(g.ts, now) || '时间未知')));
+        const rows = el('div', 'dl-rows');
+        rows.setAttribute('role', 'list'); rows.setAttribute('aria-label', (g.name || '未分组') + ' 的文件');
+        rows.hidden = !open;
+        const every = shownAll.has(g.key) || g.files.length <= GROUP_ROWS + 5;
+        (every ? g.files : g.files.slice(0, GROUP_ROWS)).forEach((f) => rows.appendChild(deliveredRow(f, now)));
+        if (!every) {
+          const more = el('button', 'dl-more', `显示其余 ${g.files.length - GROUP_ROWS} 个`);
+          more.type = 'button'; more.dataset.fk = 'more:' + g.key;
+          more.addEventListener('click', () => { shownAll.add(g.key); fill(); });
+          rows.appendChild(more);
+        }
+        head.addEventListener('click', () => {
+          const opening = collapsed().includes(g.key);
+          host.config.artifactsCollapsed = opening ? collapsed().filter((k) => k !== g.key) : [...collapsed(), g.key];
+          host.saveConfig();
+          rows.hidden = !opening;
+          head.setAttribute('aria-expanded', String(opening));
+          head.title = opening ? '收起这个项目' : '展开这个项目';
+        });
+        const h = el('h2', 'dl-h');
+        h.appendChild(head);
+        sec.append(h, rows);
+        list.appendChild(sec);
+      });
+    };
+    fill();
+    // Files get moved and deleted behind the page's back: ask the disk now, and
+    // again whenever the window comes back to the front.
+    const check = async () => {
+      const run = ++diskRun;
+      let changed = false;
+      for (let at = 0; at < files.length; at += 1000) {
+        const part = files.slice(at, at + 1000);
+        let res;
+        try { res = await window.deck.artifactsStat(part.map((f) => f.path)); } catch (_) { return; }
+        if (run !== diskRun || current !== 'artifacts' || !Array.isArray(res)) return;
+        part.forEach((f, i) => {
+          if (res[i] === undefined || onDisk.get(f.key) === res[i]) return;
+          onDisk.set(f.key, res[i]);
+          changed = true;
+        });
+      }
+      if (changed) { const top = view.scrollTop; keepingFocus(fill); view.scrollTop = top; }
+    };
+    recheckDisk = check;
+    check();
+  }
+
+  // ---- 回复里提到的: files and links from the replies ----
+  function renderMentioned(panel, all) {
     const bar = el('div', 'art-bar');
     const counts = { all: all.length, file: all.filter((a) => a.kind === 'file').length, web: all.filter((a) => a.kind === 'url').length };
     [['all', '全部'], ['file', '文件'], ['web', '网页']].forEach(([key, label]) => {
@@ -340,12 +573,13 @@
     bar.appendChild(el('span', 'tb-spacer'));
     const search = el('input', 'art-search');
     search.type = 'text'; search.placeholder = '筛选文件名、路径或对话'; search.value = artifactFilter.q; search.spellcheck = false;
+    search.dataset.fk = 'search';
     search.addEventListener('input', () => { artifactFilter.q = search.value; fill(); });
     search.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
     bar.appendChild(search);
-    body.appendChild(bar);
+    panel.appendChild(bar);
     const grid = el('div', 'art-grid');
-    body.appendChild(grid);
+    panel.appendChild(grid);
     function fill() {
       grid.textContent = '';
       const q = artifactFilter.q.trim().toLowerCase();
@@ -364,6 +598,11 @@
         card.tabIndex = 0;
         card.dataset.kind = a.kind;
         card.title = a.text;
+        const tools = el('div', 'art-tools');
+        tools.appendChild(copyButton(a.kind === 'url' ? '复制网址' : '复制路径', a.text));
+        if (a.kind === 'file') tools.appendChild(toolButton('folderOpen', revealTitle(), () => window.deck.revealPath(a.text, a.colId)));
+        const top = el('div', 'art-top');
+        top.append(artifactTile(a), tools);
         const text = el('div', 'art-text');
         // LRM marks keep a right-to-left (ellipsis on the left) path in order
         text.append(el('div', 'art-name', a.name), el('div', 'art-path', '\u200e' + a.text + '\u200e'));
@@ -373,10 +612,10 @@
         jump.type = 'button';
         jump.addEventListener('click', (e) => { e.stopPropagation(); hide(); window.ChatUI.reveal(a.colId, a.turnId, 'reply'); });
         foot.appendChild(jump);
-        card.append(artifactTile(a), text, foot);
+        card.append(top, text, foot);
         const open = (e) => window.SidePane.openLink({ kind: a.kind, text: a.text }, e, a.colId);
         card.addEventListener('click', open);
-        card.addEventListener('keydown', (e) => { if (e.key === 'Enter') open(e); });
+        card.addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target === card) open(e); });
         grid.appendChild(card);
       });
     }
@@ -394,6 +633,7 @@
         hide();
       }
     });
+    window.addEventListener('focus', () => { if (current === 'artifacts' && recheckDisk) recheckDisk(); });
     // Give the terminals a moment to come up before sending anything.
     setTimeout(() => {
       tick(true);
@@ -404,6 +644,6 @@
   window.Pages = {
     init, show, hide, toggle, render, openEditor, tick,
     current: () => current,
-    refresh: () => { if (current === 'artifacts') render(); },
+    refresh: () => { if (current === 'artifacts') renderArtifacts(true); },
   };
 })();

@@ -7,15 +7,28 @@
   const DEFAULTS = [
     { id: 'cn', name: 'CN', icon: '🇨🇳', configDir: '~/.claude' },
     { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us' },
+    { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2' },
   ];
-  const CODEX_COMMAND = 'codex --model gpt-6.1-sol --dangerously-bypass-approvals-and-sandbox';
+  function codexCommand(effort = 'high') {
+    return `codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=${effort === 'xhigh' ? 'xhigh' : 'high'} --dangerously-bypass-approvals-and-sandbox`;
+  }
+  const CODEX_COMMAND = codexCommand();
   const CLAUDE_COMMAND = 'claude --model claude-opus-5-5 --effort high --dangerously-skip-permissions';
+  function relayCodexCommand(command, effort) {
+    const words = String(command).match(/(?:[^\s"']|"[^"]*"|'[^']*')+/g) || [];
+    const program = (words[0] === 'command' ? words[1] : words[0]) || '';
+    const name = program.replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '');
+    return name.toLowerCase() === 'codex'
+      ? (words[0] === 'command' ? 'command ' : '') + codexCommand(effort).replace(/^codex/, program) : command;
+  }
   function normalize(value) {
     const ids = new Set();
     const seats = (Array.isArray(value) ? value : DEFAULTS).slice(0, 8).filter((s) => {
       if (!s || !/^[a-zA-Z0-9_-]{1,40}$/.test(s.id) || ids.has(s.id) || typeof s.configDir !== 'string' || !s.configDir.trim() || /[\x00-\x1f]/.test(s.configDir)) return false;
       ids.add(s.id); return true;
-    }).map((s) => ({ id: s.id, name: String(s.name || s.id).slice(0, 80), icon: String(s.icon || (s.id === 'us' ? '🇺🇸' : s.id === 'cn' ? '🇨🇳' : '')).slice(0, 12), configDir: s.configDir.trim() }));
+    }).map((s) => ({ id: s.id, name: String(s.name || s.id).slice(0, 80), icon: String(s.icon || DEFAULTS.find((d) => d.id === s.id)?.icon || '').slice(0, 12), configDir: s.configDir.trim() }));
+    // Upgrade saved two-seat profiles without changing names, paths or active seat.
+    if (seats.length === 2 && ids.has('cn') && ids.has('us')) seats.push({ ...DEFAULTS[2] });
     return seats.length ? seats : DEFAULTS.map((s) => ({ ...s }));
   }
   function active(config) {
@@ -80,5 +93,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+
 });
