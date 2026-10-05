@@ -203,8 +203,13 @@ test('the summary and the task list are the same snapshot: the counts match the 
   assert.match(text, /下面各节都取自这一份快照，另标了时间的除外/);
   // the one part with a clock of its own says so, and says what came after it
   assert.match(text, /来源：队长维护的 \/b\/decisions\.md（最后修改 10-04 21:19；此后还有 1 条用户消息没整理进来，以原文为准）/);
-  assert.match(text, /必须由用户决定 1 条：\n {2}- \S+｜等用户的｜用哪个域名？｜不阻塞其他卡/);
-  assert.match(text, /队员在等队长回答 1 条/);
+  // a crew question sits on its card and in the Captain's inbox: one line, the Captain's to answer
+  // first, and not handed to the user by the program
+  assert.match(text, new RegExp(`队员在等队长回答 1 条（卡着后续动作，先处理：已有授权能定或有把握的直接 tell / answer 回答，涉及不可逆的事或拿不准的才请用户决定）：\\n {2}- 提问｜s-ask｜${ask.id}｜「等用户的」｜用哪个域名？｜不阻塞其他卡`));
+  assert.match(text, /必须由用户决定：无（队长没有记录）/);
+  assert.match(text, new RegExp(`【暂停（队员提问，等回答）】${ask.id}[^\\n]*\\n[^\\n]*\\n[^\\n]*\\n {2}阻塞：队员提问：用哪个域名？\\n {2}下一步：先看清问题：已有授权能定或有把握就 tell s-ask 回答`));
+  assert.equal(stats.asks, 1); assert.equal(stats.forUser, 0);
+  assert.ok(!text.split('\n').find((l) => l.startsWith('7. ')).includes(ask.id), 'an open question is dealt with first, not parked');
   // compact: no padded table cells anywhere
   assert.ok(!/ {3,}\|| \| {2,}/.test(text)); assert.ok(!/\| --- \|/.test(text));
 });
@@ -321,7 +326,8 @@ test('the length budget squeezes explanations, never an unfinished task, a block
     for (const id of ids) assert.ok(section(built.text, 4).includes(id), 'every unfinished card is still named: ' + id);
     for (const limit of limits) assert.ok(built.text.includes(limit), limit);
     for (const q of questions) assert.ok(built.text.includes(q), q);
-    assert.match(built.text, /队长记录｜是否买第二张重置卡｜不阻塞/);
+    assert.match(built.text, /必须由用户决定 1 条（队长记录）：\n {2}- 是否买第二张重置卡｜不阻塞/);
+    assert.equal(built.state.stats.asks, questions.length, 'each question once, however many places hold it');
     assert.match(built.text, /前置卡未完成：/); assert.match(built.text, /连续失败 2 次，等队长拍板/);
     assert.match(built.text, /未读回执和提问 1 条/); assert.match(built.text, /上任已取走、可能没处理完的回执 1 条/);
     assert.equal(cardLines(built.text).length, built.state.stats.cards + built.state.stats.loose);
