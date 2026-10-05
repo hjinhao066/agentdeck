@@ -76,8 +76,9 @@ the middle:
   the flag, with a crown on the Captain's seat), then a 5h and a 7d cell, with
   "5h / 7d" named once in the header. Each cell is remaining % + reset time over
   a thin bar; used up is ⊘ + reset time in red with the row tinted red, a window
-  with no number is — over an empty bar. With the sidebar collapsed, a gauge icon in
-  the top bar (tinted by the provider closest to running out) opens the same
+  with no number is — over an empty bar. If the whole row has no numeric windows
+  or recovery time, the 5h cell shows 正常 / 已用尽 / 未知 / 过期 instead. With the
+  sidebar collapsed, a gauge icon in the top bar (tinted by the provider closest to running out) opens the same
   rows in a popover. Hover, click or focus a row for
   each window with its exact reset time/date, account, seat, source, sample time,
   confidence and Captain rotation plan in one tooltip; config dir/model

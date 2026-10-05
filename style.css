@@ -349,7 +349,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-line { display: flex; align-items: center; gap: 5px; height: 14px; line-height: 14px; overflow: hidden; }
 .quota-pct { color: var(--text); font-weight: 600; }
 .quota-reset { color: var(--text-2); font-size: 10.5px; }
-.quota-none { color: var(--text-2); }
+.quota-none { color: var(--text-2); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .quota-ban { display: inline-flex; color: var(--quota-out); }
 .quota-ban svg { width: 12px; height: 12px; }
 .quota-meter { position: relative; display: block; height: 3px; border-radius: 2px; background: var(--quota-track); overflow: hidden; }

@@ -1,5 +1,5 @@
 // Sidebar quota panel layout: 5h/7d named once, % + reset over a thin bar, ⊘ for used up,
-// — for no number, brand icons, and every long explanation in the hover/focus details.
+// Status for numberless rows, brand icons, and every long explanation in the hover/focus details.
 // All numbers and accounts are injected offline fixtures; the only agent is the stand-in.
 const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs'), os = require('os'), path = require('path');
@@ -40,7 +40,7 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
   // 1. "5h" / "7d" appear once, in the header; rows carry only values.
   await expect(page.locator('#quotaBar .quota-cols')).toHaveCount(1);
   await expect(page.locator('#quotaBar .quota-cols')).toHaveText('5h7d');
-  for (const text of await page.locator('#quotaBar .quota-item .quota-values').allInnerTexts()) expect(text).not.toMatch(/5h|7d|用尽|正常/);
+  for (const text of await page.locator('#quotaBar .quota-item .quota-values').allInnerTexts()) expect(text).not.toMatch(/5h|7d/);
   // Normal and low cells: % + reset time over a bar; ≤20% is yellow, ≤10% red.
   await expect(cell('Claude:us', '5h').locator('.quota-pct')).toHaveText('88%');
   await expect(cell('Claude:us', '5h').locator('.quota-reset')).toHaveText(/^\d\d:\d\d$/);
@@ -57,11 +57,12 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
     await expect(cell(key, '5h')).toHaveText(/^\d\d:\d\d$/);
     expect(await row(key).evaluate((e) => getComputedStyle(e).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
   }
-  // No number: — over an empty bar.
-  for (const [key, w] of [['Codex', '5h'], ['Cursor', '5h'], ['Cursor', '7d'], ['Antigravity', '7d']]) {
+  // Missing windows keep —; a healthy numberless provider shows its status.
+  for (const [key, w] of [['Codex', '5h'], ['Cursor', '7d'], ['Antigravity', '7d']]) {
     await expect(cell(key, w)).toHaveText('—');
     await expect(cell(key, w).locator('.quota-meter')).toHaveAttribute('style', '--pct: 0%;');
   }
+  await expect(cell('Cursor', '5h')).toHaveText('正常');
   // Claude rows are icon + flag and name (US and US2 share a flag) plus a crown on the Captain's seat.
   await expect(row('Claude:cn').locator('.quota-name')).toHaveText('🇨🇳 CN');
   await expect(row('Claude:us').locator('.quota-name')).toHaveText('🇺🇸 US');
@@ -161,4 +162,42 @@ test('sidebar bottom row: settings is a standard gear icon button sized like its
     }
     await page.evaluate(() => applyTheme('dark'));
   }
+});
+
+
+test('numberless quota rows keep status words distinct without changing numeric cells or row height', async () => {
+  for (const provider of ['Cursor', 'Codex']) {
+    for (const [kind, text] of [['normal', '正常'], ['exhausted', '已用尽'], ['unknown', '未知'], ['expired', '过期']]) {
+      await page.evaluate(({ provider, kind }) => {
+        const at = Date.now();
+        const entry = { scope: QuotaCore.SCOPES[provider], sample: { provider, scope: QuotaCore.SCOPES[provider], at: kind === 'expired' ? at - QuotaCore.FRESH_MS - 1000 : at, windows: [], source: '离线回归样本' } };
+        if (kind === 'exhausted') entry.blocked = { at, source: '离线回归样本' };
+        config.quotas = kind === 'unknown' ? {} : { [provider]: entry };
+        renderQuotaBar();
+      }, { provider, kind });
+      await expect(cell(provider, '5h').locator('.quota-none')).toHaveText(text);
+      await expect(cell(provider, '7d')).toHaveText('—');
+      await expect(cell(provider, '5h').locator('.quota-meter')).toHaveAttribute('style', '--pct: 0%;');
+      expect(await row(provider).evaluate((e) => e.getBoundingClientRect().height)).toBe(30);
+      await expect(row(provider).getByRole('tooltip', { includeHidden: true }).locator('.qt-meta')).toHaveCount(1);
+    }
+  }
+  await page.evaluate(() => {
+    const at = Date.now();
+    config.quotas = {
+      Cursor: { scope: QuotaCore.SCOPES.Cursor, sample: { provider: 'Cursor', scope: QuotaCore.SCOPES.Cursor, at, windows: [] } },
+      Codex: { scope: QuotaCore.SCOPES.Codex, sample: { provider: 'Codex', scope: QuotaCore.SCOPES.Codex, at, windows: [{ key: 'weekly', label: '每周', remaining: 37, exhausted: false, resetAt: at + 86400000 }] } },
+    };
+    renderQuotaBar();
+  });
+  await expect(cell('Codex', '5h')).toHaveText('—');
+  await expect(cell('Codex', '7d').locator('.quota-pct')).toHaveText('37%');
+  await expect(cell('Cursor', '5h')).toHaveText('正常');
+  await page.evaluate(() => { config.navWidth = 200; applyNavWidth(); });
+  const compact = await cell('Cursor', '5h').locator('.quota-none').evaluate((e) => {
+    const s = getComputedStyle(e); return [s.whiteSpace, s.textOverflow, s.overflow];
+  });
+  expect(compact).toEqual(['nowrap', 'ellipsis', 'hidden']);
+  expect(await row('Cursor').evaluate((e) => [e.getBoundingClientRect().height, e.scrollWidth <= e.clientWidth])).toEqual([30, true]);
+  await page.evaluate(() => { config.navWidth = 252; applyNavWidth(); document.activeElement?.blur(); });
 });

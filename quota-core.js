@@ -395,10 +395,11 @@
       const cellOut = ((w.exhausted || w.remaining <= 0) && (!w.resetAt || w.resetAt > now)) || (key === '5h' && !!blocked && !weeklyOut);
       return { key, remaining: w.remaining, out: cellOut, resetAt: (cellOut && key === '5h' && blocked ? recovery || w.resetAt : w.resetAt) || null };
     }).filter(Boolean);
-    // Shared fallback for a row that has no 5-hour cell to show: weekly % (Codex), 正常 (Grok), else — when truly unknown.
+    // Shared row fallback: prefer numbers, otherwise distinguish exhausted, expired and unknown samples.
     const fiveHour = pick(/5 小时$/), weekly = pick(/每周$/);
     const shortRemaining = fiveHour ?? weekly;
-    const shortText = shortRemaining === null ? (state === 'normal' ? '正常' : '—') : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
+    const expired = sample && trusted && (!fresh || sample.windows?.some((w) => w.resetAt && w.resetAt <= now));
+    const shortText = shortRemaining === null ? (out ? '已用尽' : expired ? '过期' : statusText) : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
     return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, account: entry.account || '', source: evidence?.source || '', confidence: confidence || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
   function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
