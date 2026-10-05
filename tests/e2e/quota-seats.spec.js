@@ -73,7 +73,8 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
     };
   });
   await page.reload();
-  await agentsReady();
+  // The US replay is deliberately held; screen readiness is checked after
+  // releasing it so this wait cannot deadlock the replay race fixture.
   await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   await expect(seat('us')).toHaveAttribute('data-detail', /us\*\*\*@example.com/);
@@ -91,6 +92,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   });
   await expect.poll(() => page.evaluate(() => window.quotaStatuslineArrived)).toBe(true);
   await app.evaluate(({ app }) => { app.releaseQuotaReplay(); app.restoreQuotaReplay(); });
+  await agentsReady();
   await expect.poll(() => page.evaluate(() => dumpScreen(terms.get('us-column').term))).toContain('5h剩余 83%');
   await expect.poll(async () => {
     await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
