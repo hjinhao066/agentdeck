@@ -147,6 +147,7 @@ if (saved) {
   // in the terminal, even when an older config saved chat mode.
   config.globalViewMode = 'term';
   if (saved.theme) config.theme = saved.theme;
+  config.calmMotion = saved.calmMotion === true;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
   // widths from the old, narrower sidebar fall back to the new default
@@ -566,6 +567,31 @@ function applyTheme(theme) {
   terms.forEach(({ term }) => { term.options.theme = TERM_THEME[theme]; });
   saveConfig();
 }
+
+// ---- 动效 ----
+// 任务看板 and 终端架构图 hold still when the user turns motion off with the toolbar
+// button, or when the system asks for 减少动态效果 (then the button only says so).
+const MOTION_ICON = {
+  on: S('<path d="M11 4l1.7 4.3L17 10l-4.3 1.7L11 16l-1.7-4.3L5 10l4.3-1.7z"/><path d="M18.5 15v4M16.5 17h4"/>'),
+  off: S('<path d="M11 4l1.7 4.3L17 10l-4.3 1.7L11 16l-1.7-4.3L5 10l4.3-1.7z"/><path d="M18.5 15v4M16.5 17h4"/><path d="M4 4l16 16"/>'),
+};
+const systemCalm = window.matchMedia('(prefers-reduced-motion: reduce)');
+function applyMotion(off, redraw) {
+  config.calmMotion = !!off;
+  if (off) document.documentElement.setAttribute('data-motion', 'off'); else document.documentElement.removeAttribute('data-motion');
+  const still = off || systemCalm.matches;
+  const label = systemCalm.matches ? '系统已开启「减少动态效果」，动效保持关闭' : off ? '开启动效（现在是静止的）' : '关闭动效（卡片和连线保持静止）';
+  document.querySelectorAll('[data-motion-toggle]').forEach((b) => {
+    b.innerHTML = still ? MOTION_ICON.off : MOTION_ICON.on;
+    b.title = label; b.setAttribute('aria-label', label);
+    if (systemCalm.matches) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
+  });
+  if (!redraw) return;
+  saveConfig();
+  TaskBoardUI.redraw(); // the lights on its lines are drawn by script; the map's are all in the stylesheet
+}
+document.querySelectorAll('[data-motion-toggle]').forEach((b) => b.addEventListener('click', () => { if (!systemCalm.matches) applyMotion(!config.calmMotion, true); }));
+systemCalm.addEventListener('change', () => applyMotion(config.calmMotion, true));
 
 // ---- Text size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
 const FONT_MIN = 8, FONT_MAX = 32, FONT_DEFAULT = 13;
@@ -3532,6 +3558,7 @@ buildChrome();
 setNavCollapsed(config.navCollapsed); // sets class + width
 attachNavResize(document.getElementById('navResizer'));
 applyTheme(config.theme);
+applyMotion(config.calmMotion);
 const deckHost = {
   columns: () => columns, terms, config, saveConfig, flushConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName, seatLaunchCommand,
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,

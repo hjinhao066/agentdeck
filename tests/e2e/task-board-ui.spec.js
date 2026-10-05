@@ -131,6 +131,9 @@ test.afterEach(async () => {
 // news and time; 需要你 may take two lines for its question), and every tool
 // action is an icon button with a tooltip, a name and a real target.
 async function assertBoardLayout(minCard, stacked = false) {
+  // the board slides in when it opens and cards glide after new data: measure it at rest
+  await expect.poll(() => page.evaluate(() => { const view = document.getElementById('taskBoardView');
+    return document.getAnimations().filter((a) => a.effect && a.effect.target && view.contains(a.effect.target) && a.effect.getComputedTiming().iterations !== Infinity && a.playState === 'running').length; })).toBe(0);
   const g = await page.evaluate(() => {
     const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const shown = (n) => !n.hidden && getComputedStyle(n).display !== 'none' && n.getBoundingClientRect().width > 0;

@@ -120,7 +120,6 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   for (const c of controls) {
     expect(c.label).toBeTruthy(); expect(c.title).toBeTruthy(); expect(Math.min(c.w, c.h)).toBeGreaterThanOrEqual(32);
     if (c.cm === 'reset') expect(c.text).toMatch(/^\d+%$/);
-    else if (c.cm === 'fit') { expect(c.svg).toBe(true); expect(c.text).toBe('适应画布'); }
     else { expect(c.svg).toBe(true); expect(c.text).toBe(''); }
   }
 

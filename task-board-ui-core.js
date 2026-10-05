@@ -1,7 +1,8 @@
 // Pure helpers behind the 任务看板 view: project groups (one per project,
 // case-insensitive, in the user's order) crossed with the five status columns,
 // the project overview, the finished-projects area, the 需要你 reminder, a
-// card's activity line, drag/drop targets and dependency/parallel marks. Cards come
+// card's activity line, drag/drop targets, dependency/parallel marks, the
+// dependency lines and their routes, and the progress meter. Cards come
 // from TaskBoard.list (docs/task-board-api.md). No DOM: runs in the page and
 // in tests.
 (function (root, factory) {
@@ -170,7 +171,79 @@
     const finished = project ? [] : laneList.filter((l) => l.total > 0 && l.open === 0);
     const active = laneList.filter((l) => !finished.includes(l));
     const alerts = laneList.flatMap((l) => l.columns.find((c) => c.key === 'needs_user').cards.map((item) => ({ card: item.card, question: item.question, lane: l.key, name: l.name })));
-    return { columns, lanes: laneList, active, finished, finishedDone: finished.reduce((n, l) => n + l.counts.done, 0), alerts, projects: all.map((l) => ({ key: l.key, name: l.name, total: l.total, open: l.open, counts: l.counts })), project, total, open: total - columns.find((c) => c.key === 'done').count };
+    return { columns, lanes: laneList, active, finished, finishedDone: finished.reduce((n, l) => n + l.counts.done, 0), alerts, links: dependencyLinks(laneList, index), projects: all.map((l) => ({ key: l.key, name: l.name, total: l.total, open: l.open, counts: l.counts })), project, total, open: total - columns.find((c) => c.key === 'done').count };
+  }
+
+  // The lines the board draws between cards: one per shown card and each
+  // unfinished prerequisite that is still a live card (an archived or unknown
+  // one has nowhere to be drawn from). `tone` says how the prerequisite is
+  // doing: 'stuck' (failed, out of quota, or waiting on the user), 'flow'
+  // (being worked on or reviewed), else 'idle' (not started, or held).
+  function dependencyLinks(lanes, index) {
+    const links = [];
+    lanes.forEach((lane) => lane.columns.forEach((col) => col.cards.forEach((item) => item.waits.forEach((w) => {
+      const dep = index.get(w.id);
+      if (!dep || dep.archived) return;
+      const status = columnOf(dep);
+      const tone = dep.flag === 'failed' || dep.flag === 'quota' || status === 'needs_user' ? 'stuck'
+        : dep.flag !== 'held' && (status === 'doing' || status === 'review') ? 'flow' : 'idle';
+      links.push({ from: dep.id, to: item.card.id, lane: projectKey(dep.project), status, tone });
+    }))));
+    return links;
+  }
+
+  // The way a dependency line runs from the prerequisite (rect `a`) to the card
+  // waiting on it (rect `b`), both {x, y, w, h} in one coordinate space: out of
+  // a's side, along the gap beside a's column, into b's side. Cards in one
+  // column are joined by a bracket in the gap on their left. `slot` fans out
+  // lines sharing a gap so they read as a bundle, not as one line.
+  function linkRoute(a, b, gap = 10, slot = 0) {
+    const ay = a.y + a.h / 2, by = b.y + b.h / 2;
+    const fan = Math.min(2, Math.max(0, slot)) * 1.5;
+    const sameColumn = a.x < b.x + b.w && b.x < a.x + a.w;
+    let points;
+    if (sameColumn) {
+      const cx = Math.min(a.x, b.x) - gap / 2 - fan;
+      points = [[a.x, ay], [cx, ay], [cx, by], [b.x, by]];
+    } else if (a.x > b.x) {
+      const cx = a.x - gap / 2 - fan;
+      points = [[a.x, ay], [cx, ay], [cx, by], [b.x + b.w, by]];
+    } else {
+      const cx = a.x + a.w + gap / 2 + fan;
+      points = [[a.x + a.w, ay], [cx, ay], [cx, by], [b.x, by]];
+    }
+    if (Math.abs(ay - by) < 1) points = [points[0], points[3]];
+    const round = (n) => Math.round(n * 10) / 10;
+    points = points.map(([x, y]) => [round(x), round(y)]);
+    let length = 0;
+    for (let i = 1; i < points.length; i++) length += Math.abs(points[i][0] - points[i - 1][0]) + Math.abs(points[i][1] - points[i - 1][1]);
+    return { points, length: round(length), d: roundedPath(points, 7) };
+  }
+  // An SVG path through right-angled points with every corner rounded (the
+  // radius shrinks to fit a short segment).
+  function roundedPath(points, radius) {
+    const n = (v) => String(Math.round(v * 10) / 10);
+    let d = `M${n(points[0][0])} ${n(points[0][1])}`;
+    for (let i = 1; i < points.length; i++) {
+      const [x, y] = points[i];
+      if (i === points.length - 1) { d += ` L${n(x)} ${n(y)}`; break; }
+      const [px, py] = points[i - 1], [nx, ny] = points[i + 1];
+      const before = Math.hypot(x - px, y - py), after = Math.hypot(nx - x, ny - y);
+      const r = Math.min(radius, before / 2, after / 2);
+      if (r < 0.5) { d += ` L${n(x)} ${n(y)}`; continue; }
+      d += ` L${n(x - (x - px) / before * r)} ${n(y - (y - py) / before * r)} Q${n(x)} ${n(y)} ${n(x + (nx - x) / after * r)} ${n(y + (ny - y) / after * r)}`;
+    }
+    return d;
+  }
+
+  // How far the shown cards are: the share that is done, and one segment per
+  // status for the spectrum bar (finished work first, then what is moving).
+  const METER_ORDER = ['done', 'review', 'doing', 'needs_user', 'todo'];
+  function progress(columns) {
+    const count = (key) => { const c = columns.find((x) => x.key === key); return c ? c.count : 0; };
+    const total = columns.reduce((n, c) => n + c.count, 0);
+    const done = count('done');
+    return { total, done, percent: total ? Math.floor(done / total * 100) : 0, segments: METER_ORDER.map((key) => ({ key, label: labelOf(key), count: count(key) })).filter((s) => s.count > 0) };
   }
 
   // The one line of recent news a card shows under its title: why it failed,
@@ -218,5 +291,5 @@
     return m && m !== 'default' ? String(m) : '';
   }
 
-  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, userQuestion, receiptText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
+  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, dependencyLinks, linkRoute, roundedPath, progress, userQuestion, receiptText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
 });
