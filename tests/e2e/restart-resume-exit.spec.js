@@ -21,20 +21,9 @@ for (const mode of ['ack', 'no-ack', 'blocked-main-loop', 'closed-watchdog-stdin
         id: 'exit-fake', title: 'isolated exit agent', cmd: fake, cwd: profile,
       }],
     }));
-    const args = [root, `--test-user-data=${profile}`];
-    if (mode === 'closed-watchdog-stdin') {
-      const preload = path.join(profile, 'watchdog-eof.cjs');
-      fs.writeFileSync(preload, `const cp = require('child_process');
-const spawn = cp.spawn;
-cp.spawn = function(file, args, options) {
-  const child = spawn.call(this, file, args, options);
-  if (options?.env?.ELECTRON_RUN_AS_NODE === '1' && args?.[0] === '-e') child.stdin.end();
-  return child;
-};`);
-      args.unshift('-r', preload);
-    }
+    const args = [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [root]), `--test-user-data=${profile}`];
     try {
-      application = await electron.launch({ args, env });
+      application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args, env });
       await application.evaluate(({ app }) => {
         const quit = app.quit.bind(app);
         app.quit = () => { setTimeout(quit, 50); };
@@ -42,7 +31,7 @@ cp.spawn = function(file, args, options) {
       const page = await application.firstWindow();
       await expect.poll(() => page.evaluate(() => typeof window.MainSession === 'object').catch(() => false)).toBe(true);
       if (!['blocked-main-loop', 'closed-watchdog-stdin'].includes(mode)) {
-        await expect.poll(() => page.evaluate(() => !!terms.get('exit-fake')?.alive)).toBe(true);
+        await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && !!terms.get('exit-fake')?.alive)).toBe(true);
       }
       child = application.process();
       const start = Date.now();
@@ -54,6 +43,22 @@ cp.spawn = function(file, args, options) {
         // app.close disconnects the debugger before the asynchronous quit.
         // Disk records survive that disconnect and the real process exit.
         const record = (kind) => process.getBuiltinModule('fs').appendFileSync(eventFile, JSON.stringify({ kind, at: Date.now() }) + '\n');
+        if (mode === 'closed-watchdog-stdin') {
+          // The app captures spawn at startup. Intercept the underlying child
+          // method so the actual packaged watchdog also sees a closed stdin.
+          const cp = process.getBuiltinModule('child_process');
+          const spawn = cp.ChildProcess.prototype.spawn;
+          cp.ChildProcess.prototype.spawn = function (options) {
+            const result = spawn.call(this, options);
+            if (options.envPairs?.includes('ELECTRON_RUN_AS_NODE=1') &&
+                options.args?.[1] === '-e' && options.args.at(-1) === String(process.pid)) {
+              this.stdin.end();
+              cp.ChildProcess.prototype.spawn = spawn;
+              record('watchdog-stdin-closed');
+            }
+            return result;
+          };
+        }
         if (mode === 'no-ack') ipcMain.removeAllListeners('park-for-restart-done');
         else ipcMain.on('park-for-restart-done', () => record('ack'));
         app.on('before-quit', () => record('before-quit'));
@@ -69,6 +74,7 @@ cp.spawn = function(file, args, options) {
       await closing;
       expect(Date.now() - start).toBeLessThan(8000);
       const records = fs.readFileSync(eventFile, 'utf8').trim().split('\n').map(JSON.parse);
+      if (mode === 'closed-watchdog-stdin') expect(records.some((record) => record.kind === 'watchdog-stdin-closed')).toBe(true);
       if (mode === 'ack') expect(records.some((record) => record.kind === 'ack')).toBe(true);
       if (mode === 'no-ack') {
         expect(records.some((record) => record.kind === 'ack')).toBe(false);

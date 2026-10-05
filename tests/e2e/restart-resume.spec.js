@@ -77,7 +77,8 @@ test.beforeAll(async () => {
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({
-    args: [path.resolve(__dirname, '../..'), `--test-user-data=${profile}`],
+    executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`],
     env,
   });
   page = await app.firstWindow();
@@ -134,7 +135,7 @@ test('a second application restart resumes the unfinished card once again', asyn
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
   delete env.ELECTRON_RUN_AS_NODE;
-  app = await electron.launch({ args: [path.resolve(__dirname, '../..'), `--test-user-data=${profile}`], env });
+  app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
   await expect.poll(() => delivered().filter((row) => row.colId === 'worker-live' && row.text.includes('重发')).length, { timeout: 30000 }).toBe(before + 1);
   expect(delivered().some((row) => row.colId === 'worker-done' && row.text.includes('刚重启'))).toBe(false);
@@ -188,7 +189,7 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
   delete env.ELECTRON_RUN_AS_NODE;
   let application, window;
   try {
-    application = await electron.launch({ args: [path.resolve(__dirname, '../..'), `--test-user-data=${profile2}`], env });
+    application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile2}`], env });
     window = await application.firstWindow();
     await expect.poll(() => window.evaluate(() => MainSession.state()?.tasks.at(-1)?.status).catch(() => ''), { timeout: 30000 }).toBe('done');
     const calls = fs.readFileSync(launches, 'utf8').trim().split('\n').map(JSON.parse);
