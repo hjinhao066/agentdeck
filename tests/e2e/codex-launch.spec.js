@@ -19,8 +19,8 @@ function records(name) {
 test.afterEach(async ({}, testInfo) => {
   if (page && !page.isClosed() && testInfo.status !== testInfo.expectedStatus) {
     const screens = await page.evaluate(async () => Promise.all(columns.map(async (c) => ({
-      id: c.id, cmd: c.cmd, state: terms.get(c.id)?.state, screen: (await window.deck.ptyReplay(c.id)).slice(-4000),
-    }))));
+      id: c.id, cmd: c.cmd, state: terms.get(c.id)?.state, screen: String(await window.deck.ptyReplay(c.id) || '').slice(-4000),
+    })))).catch((error) => ({ error: error.message }));
     await testInfo.attach('isolated-launch-diagnostics', { body: JSON.stringify({ screens, argv: records('argv.jsonl') }), contentType: 'application/json' });
   }
   if (application) {
@@ -32,7 +32,7 @@ test.afterEach(async ({}, testInfo) => {
       } catch (_) {}
     }, 10000);
     try {
-      if (page && !page.isClosed()) await page.evaluate(() => columns.forEach((c) => window.deck.ptyKill(c.id)));
+      if (page && !page.isClosed()) await page.evaluate(() => columns.forEach((c) => window.deck.ptyKill(c.id))).catch(() => {});
       await closeElectron(application);
     } finally { clearTimeout(force); }
   }
@@ -79,7 +79,7 @@ require(${JSON.stringify(FAKE)});
         AGENTDECK_TEST_BOARD_RESULTS_FILE: path.join(profile, 'board-results.jsonl') },
     });
     page = await application.firstWindow();
-    await page.waitForFunction(() => typeof MainSession !== 'undefined' && typeof BoardCore !== 'undefined' && terms.get('codex-launch-shell')?.alive);
+    await page.waitForFunction(() => typeof MainSession !== 'undefined' && typeof BoardCore !== 'undefined' && typeof terms !== 'undefined' && terms.get('codex-launch-shell')?.alive);
     // Preserve the selected preset's arguments while substituting an isolated CLI.
     await page.evaluate((bin) => {
       const original = BoardCore.commandForAgent;
