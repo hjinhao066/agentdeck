@@ -20,6 +20,7 @@
     crown: '<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>',
     gauge: '<path d="M4 18a9 9 0 1 1 16 0"/><path d="m12 13 4-5"/><circle cx="12" cy="13" r="1.2"/>',
     chevron: '<path d="m9 6 6 6-6 6"/>',
+    ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
     // A page with one arrow: tells reloading the page apart from refresh's two arrows.
     reload: '<rect x="2.5" y="2.5" width="19" height="19" rx="4"/><path d="M17.4 12a5.4 5.4 0 1 1-5.4-5.4c1.5 0 3 .6 4 1.6l1.4 1.4"/><path d="M17.4 6.6v3h-3"/>',
   };
@@ -42,7 +43,6 @@
   // Quota rows as the desktop sidebar shows them; quotaFailed means the last read did not arrive.
   let quota = { rows: [], version: '' }, quotaLoaded = false, quotaFailed = false, quotaBusy = false, quotaSignature, chipSignature;
   let drawerOpen = false, drawerOpener = null;
-  const expandedQuota = new Set();
   const systemTheme = window.matchMedia('(prefers-color-scheme: dark)');
   let savedTheme;
   try { savedTheme = localStorage.getItem('agentdeck-mobile-theme'); } catch (_) { /* Storage can be unavailable in private browsers. */ }
@@ -63,6 +63,8 @@
   $('menu').innerHTML = svg('sidebar');
   $('drawer-close').innerHTML = svg('close');
   $('quota-refresh').innerHTML = svg('refresh');
+  $('quota-sheet-close').innerHTML = svg('close');
+  $('quota-sheet-captain').querySelector('.quota-captain').innerHTML = svg('crown');
   $('drawer-captain').querySelector('.row-icon').innerHTML = svg('crown');
   $('quota-entry').querySelector('.row-icon').innerHTML = svg('gauge');
   $('quota-entry').querySelector('.row-chevron').innerHTML = svg('chevron');
@@ -335,28 +337,35 @@
   const cellLevel = (row, cell) => cell.out ? 'out' : dimmed(row) ? 'none' : cell.remaining <= 10 ? 'danger' : cell.remaining <= 20 ? 'low' : 'ok';
   function meter(cell) {
     const el = node('span', 'quota-meter'); el.setAttribute('aria-hidden', 'true');
-    el.style.setProperty('--pct', (cell.out ? 0 : Math.max(2, Math.min(100, cell.remaining))) + '%');
+    el.style.setProperty('--pct', (cell.out || cell.missing ? 0 : Math.max(2, Math.min(100, cell.remaining))) + '%');
     return el;
   }
-  // One explicit line whenever a row is not plain live numbers.
+  // The line under a row is kept for what the cells cannot say: the numbers are old or the last read failed.
   function quotaNote(row, now) {
     const parts = [];
-    if (row.status === 'out') parts.push('已用尽', row.recoveryAt > now ? longReset(row.recoveryAt, now) + '恢复' : '恢复时间未知');
     if (row.failed) parts.push('查询失败');
-    if (row.status === 'stale' || row.status === 'expired') parts.push('数据已旧', sampledText(row, now));
-    else if (row.status === 'unknown') parts.push('未知', '暂无采样');
-    else if (row.status === 'nodigits') parts.push('未见用尽报错', '此来源不提供百分比');
-    else if (row.failed) parts.push(sampledText(row, now));
-    return parts.join(' · ');
+    if (row.status === 'stale' || row.status === 'expired') parts.push('数据已旧');
+    return parts.length ? [...parts, sampledText(row, now)].join(' · ') : '';
+  }
+  const windowName = (key) => key === '5h' ? '5 小时' : '每周';
+  // Always the two columns of the header. An account that only reported "used up" shows that under 5h.
+  function quotaCells(row) {
+    const blockedOnly = row.status === 'out' && !row.cells.length;
+    return ['5h', '7d'].map((key) => row.cells.find((cell) => cell.key === key) || (blockedOnly && key === '5h' ? { key, out: true, resetAt: row.recoveryAt } : { key, missing: true }));
+  }
+  const emptyText = (row) => row.status === 'nodigits' ? '未见用尽' : '未知';
+  function cellSpoken(cell, now) {
+    return windowName(cell.key) + (cell.missing ? '未知' : (cell.out ? '已用尽' : '剩余 ' + percentText(cell)) + (cell.resetAt > now ? '，' + longReset(cell.resetAt, now) + (cell.out ? '恢复' : '重置') : ''));
   }
   function quotaLabel(row, now) {
-    const windows = row.cells.map((cell) => (cell.key === '5h' ? '5 小时' : '每周') + (cell.out ? '已用尽' : '剩余 ' + percentText(cell)) + (cell.resetAt > now ? '，' + longReset(cell.resetAt, now) + '重置' : ''));
-    return [row.name + (row.captain ? '（队长在用）' : ''), ...windows, quotaNote(row, now) || (row.cells.length ? '' : '未知')].filter(Boolean).join('；');
+    const windows = row.cells.length || row.status === 'out' ? quotaCells(row).filter((cell) => !cell.missing).map((cell) => cellSpoken(cell, now)) : [emptyText(row)];
+    return [row.name + (row.captain ? '（队长在用）' : ''), ...windows, quotaNote(row, now), '查看详情'].filter(Boolean).join('；');
   }
+  function providerIcon(row) { const icon = node('span', 'quota-icon'); icon.setAttribute('aria-hidden', 'true'); icon.innerHTML = providerIcons[row.provider] || ''; return icon; }
   function renderQuota() {
     const now = Date.now();
     // Reset clocks change by the minute; nothing else needs a redraw.
-    const signature = JSON.stringify([quota, quotaLoaded, quotaFailed, [...expandedQuota], Math.floor(now / 60000)]);
+    const signature = JSON.stringify([quota, quotaLoaded, quotaFailed, Math.floor(now / 60000)]);
     if (signature !== quotaSignature) {
       quotaSignature = signature;
       const box = $('quota-rows');
@@ -364,53 +373,94 @@
       box.replaceChildren();
       $('version').textContent = quota.version ? 'V' + quota.version : '';
       $('quota-note').textContent = quotaFailed ? '未能更新' : '';
+      $('quota-columns').hidden = !quota.rows.length;
       if (!quota.rows.length) box.append(node('p', 'quota-empty', quotaFailed ? '暂时读不到额度。' : quotaLoaded ? '桌面端还没有额度数据。' : ''));
-      quota.rows.forEach((row, index) => {
+      for (const row of quota.rows) {
         const item = node('div', 'quota-item'); item.setAttribute('role', 'listitem');
         item.dataset.quotaKey = row.key; item.dataset.status = row.status; item.dataset.provider = row.provider;
         if (dimmed(row)) item.dataset.dim = 'true';
         if (row.captain) item.dataset.captain = 'true';
-        const open = expandedQuota.has(row.key), detailId = 'quota-detail-' + index;
         const button = node('button', 'quota-row'); button.type = 'button';
-        button.setAttribute('aria-expanded', String(open)); button.setAttribute('aria-controls', detailId);
-        button.setAttribute('aria-label', quotaLabel(row, now)); button.title = open ? '收起详情' : '展开详情';
-        const icon = node('span', 'quota-icon'); icon.setAttribute('aria-hidden', 'true');
-        icon.innerHTML = providerIcons[row.provider === 'Cursor' ? 'Grok' : row.provider] || '';
+        button.setAttribute('aria-haspopup', 'dialog'); button.setAttribute('aria-controls', 'quota-sheet');
+        button.setAttribute('aria-label', quotaLabel(row, now)); button.title = '查看详情';
         const name = node('span', 'quota-name');
         name.append(node('span', 'quota-name-text', [row.flag, row.short].filter(Boolean).join(' ')));
         if (row.captain) { const crown = node('span', 'quota-captain'); crown.title = '队长在用'; crown.innerHTML = svg('crown'); name.append(crown); }
         const values = node('span', 'quota-values');
-        for (const cell of row.cells) {
-          const el = node('span', 'quota-cell'); el.dataset.window = cell.key; el.dataset.level = cellLevel(row, cell);
-          el.append(node('span', 'quota-key', cell.key), node('span', 'quota-pct', percentText(cell)));
-          if (cell.resetAt > now) el.append(node('span', 'quota-reset', shortReset(cell.resetAt, now)));
-          el.append(meter(cell)); values.append(el);
+        if (row.cells.length || row.status === 'out') {
+          for (const cell of quotaCells(row)) {
+            const el = node('span', 'quota-cell'); el.dataset.window = cell.key;
+            el.dataset.level = cell.missing ? 'none' : cellLevel(row, cell);
+            const line = node('span', 'quota-line');
+            if (cell.missing) { el.dataset.missing = 'true'; line.append(node('span', 'quota-pct', '—')); }
+            else if (cell.out) {
+              const ban = node('span', 'quota-ban'); ban.innerHTML = svg('ban');
+              line.append(ban, node('span', 'quota-reset', cell.resetAt > now ? shortReset(cell.resetAt, now) : '用尽'));
+            } else {
+              line.append(node('span', 'quota-pct', percentText(cell)));
+              if (cell.resetAt > now) line.append(node('span', 'quota-reset', shortReset(cell.resetAt, now)));
+            }
+            el.append(line, meter(cell)); values.append(el);
+          }
+        } else {
+          // No number from any source: say so across both columns instead of showing one.
+          const status = node('span', 'quota-status'); status.dataset.level = 'none';
+          status.append(node('span', 'quota-line', emptyText(row)), meter({ out: true })); values.append(status);
         }
-        if (!row.cells.length) {
-          const status = node('span', 'quota-status', row.status === 'out' ? '已用尽' : row.status === 'nodigits' ? '未见用尽' : '未知');
-          status.dataset.level = row.status === 'out' ? 'out' : 'none'; values.append(status);
-        }
-        button.append(icon, name, values);
+        button.append(providerIcon(row), name, values);
         const note = quotaNote(row, now);
-        if (note) button.append(node('span', 'quota-row-note' + (row.status === 'out' ? ' out' : ''), note));
-        button.addEventListener('click', () => { if (open) expandedQuota.delete(row.key); else expandedQuota.add(row.key); renderQuota(); });
-        const detail = node('div', 'quota-detail'); detail.id = detailId; detail.hidden = !open;
-        const head = node('p', 'quota-detail-head', row.name);
-        if (row.captain) head.append(node('span', 'quota-detail-captain', '队长在用'));
-        detail.append(head);
-        for (const cell of row.cells) {
-          const line = node('p', 'quota-detail-line'); line.dataset.level = cellLevel(row, cell);
-          line.append(node('span', 'quota-detail-key', cell.key === '5h' ? '5 小时' : '每周'), node('span', 'quota-pct', cell.out ? '已用尽' : '剩余 ' + percentText(cell)),
-            node('span', 'quota-detail-reset', cell.resetAt > now ? longReset(cell.resetAt, now) + '重置' : '重置时间未知'));
-          detail.append(line);
-        }
-        if (!row.cells.length) detail.append(node('p', 'quota-detail-line', row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : '暂无额度数据，等待桌面端下次采样'));
-        detail.append(node('p', 'quota-detail-foot', [row.account, sampledText(row, now) + (row.status === 'stale' || row.status === 'expired' ? '（数据已旧）' : '')].filter(Boolean).join(' · ')));
-        item.append(button, detail); box.append(item);
-      });
+        if (note) button.append(node('span', 'quota-row-note', note));
+        button.addEventListener('click', () => openSheet(row.key));
+        item.append(button); box.append(item);
+      }
       if (focused) box.querySelector('[data-quota-key="' + CSS.escape(focused) + '"] .quota-row')?.focus();
+      renderSheet();
     }
     renderSeat();
+  }
+  // Details of one account, in a sheet over the drawer: full name, both windows
+  // with exact reset times, masked account, where the numbers came from and when.
+  let sheetKey = null;
+  function renderSheet() {
+    const row = sheetKey && quota.rows.find((r) => r.key === sheetKey);
+    if (!row) { if (sheetKey) closeSheet(); return; }
+    const now = Date.now();
+    $('quota-sheet-icon').replaceChildren(...providerIcon(row).childNodes);
+    $('quota-sheet').dataset.provider = row.provider;
+    $('quota-sheet-title').textContent = row.name;
+    $('quota-sheet-captain').hidden = !row.captain;
+    const body = $('quota-sheet-body'); body.replaceChildren();
+    const line = (key, value, level, sub) => {
+      const el = node('div', 'sheet-line'); if (level) el.dataset.level = level;
+      const text = node('dd', 'sheet-value'); text.append(node('span', 'sheet-main', value));
+      if (sub) text.append(node('span', 'sheet-sub', sub));
+      el.append(node('dt', 'sheet-key', key), text); body.append(el);
+    };
+    for (const cell of quotaCells(row)) {
+      if (cell.missing) line(windowName(cell.key), '未知', 'none', row.cells.length || row.status === 'out' ? '此来源未提供这个窗口' : '');
+      else line(windowName(cell.key), cell.out ? '已用尽' : '剩余 ' + percentText(cell), cellLevel(row, cell),
+        cell.resetAt > now ? longReset(cell.resetAt, now) + (cell.out ? '恢复' : '重置') : (cell.out ? '恢复' : '重置') + '时间未知');
+    }
+    const state = [row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : row.status === 'unknown' ? '暂无额度数据，等待桌面端下次采样' : '',
+      row.status === 'stale' || row.status === 'expired' ? '数据已旧，数字仅供参考' : '', row.failed ? '最近一次查询失败' : '', quotaFailed ? '手机暂时连不上桌面端' : ''].filter(Boolean).join('；');
+    if (state) line('状态', state, 'none');
+    line('账号', row.account || '未知');
+    line('来源', row.source || '未知');
+    line('采样', row.sampledAt ? sampledText(row, now).slice(3) : '暂无采样');
+  }
+  function openSheet(key) {
+    sheetKey = key; renderSheet();
+    if (!sheetKey) return;
+    for (const el of $('drawer').children) el.inert = el.id !== 'quota-sheet';
+    $('quota-sheet').hidden = false; $('quota-sheet-scrim').hidden = false;
+    $('quota-sheet-close').focus({ preventScroll: true });
+  }
+  function closeSheet(restore = true) {
+    if (!sheetKey) return;
+    const key = sheetKey; sheetKey = null;
+    $('quota-sheet').hidden = true; $('quota-sheet-scrim').hidden = true;
+    for (const el of $('drawer').children) el.inert = false;
+    if (restore) $('quota-rows').querySelector('[data-quota-key="' + CSS.escape(key) + '"] .quota-row')?.focus({ preventScroll: true });
   }
   // The small indicator next to the title: the seat the Captain is on and
   // its 5-hour remainder. It only opens the quota rows; it adds no height.
@@ -463,6 +513,7 @@
   }
   function closeDrawer(restore = true) {
     if (!drawerOpen) return;
+    closeSheet(false);
     setDrawer(false);
     if (restore && drawerOpener?.isConnected && !drawerOpener.hidden) drawerOpener.focus({ preventScroll: true });
     drawerOpener = null;
@@ -474,7 +525,10 @@
   $('scrim').addEventListener('click', () => closeDrawer());
   $('drawer-captain').addEventListener('click', () => { closeDrawer(false); showView('captain'); $('menu').focus({ preventScroll: true }); });
   $('quota-refresh').addEventListener('click', refreshQuota);
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && drawerOpen) { event.preventDefault(); closeDrawer(); } });
+  $('quota-sheet-close').addEventListener('click', () => closeSheet());
+  $('quota-sheet-scrim').addEventListener('click', () => closeSheet());
+  // Escape closes the details first, then the drawer.
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && drawerOpen) { event.preventDefault(); if (sheetKey) closeSheet(); else closeDrawer(); } });
   // A right swipe that starts at the left edge opens the drawer; a left swipe
   // on the open drawer or the scrim closes it. Mostly-vertical moves scroll.
   let swipe = null;

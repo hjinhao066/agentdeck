@@ -437,7 +437,13 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await expect(drawer.locator('#version')).toHaveText(/^V\d+\.\d+\.\d+/);
   // Quota: one row per account, in the desktop's order, the Captain's seat marked.
   const rows = drawer.locator('.quota-item');
-  await expect(rows.locator('.quota-name-text')).toHaveText(['🇨🇳 CN', '🇺🇸 US', 'Codex', 'Grok', 'Gemini']);
+  await expect(rows.locator('.quota-name-text')).toHaveText(['🇨🇳 CN', '🇺🇸 US', 'Codex', 'Cursor', 'Gemini']);
+  // 5h and 7d are named once, right above the two columns of every row.
+  await expect(drawer.locator('#quota-columns span')).toHaveText(['5h', '7d']);
+  console.log(JSON.stringify(await mobile.evaluate(() => ['#quota', '#quota-columns', '#quota-rows', '.quota-row', '.quota-name', '.quota-values', '.quota-cell'].map((q) => { const el = document.querySelector(q), r = el.getBoundingClientRect(); return [q, Math.round(r.left), Math.round(r.right), el.clientWidth, el.scrollHeight, el.clientHeight]; }))));
+  await mobile.screenshot({ path: '/private/tmp/claude-501/-Users-jinhao/e1ddb07d-bb7a-4bba-b1ca-305fdb7d5a17/scratchpad/dbg.png' });
+  expect(await drawer.locator('#quota-columns span').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left))))
+    .toEqual(await rows.nth(0).locator('.quota-cell').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left))));
   await expect(drawer.locator('.quota-item[data-captain="true"]')).toHaveAttribute('data-quota-key', 'Claude:cn');
   await expect(rows.nth(0).locator('.quota-captain')).toHaveAttribute('title', '队长在用');
   await expect(rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('26%');
@@ -446,36 +452,41 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await expect(rows.nth(0).locator('.quota-cell[data-window="7d"] .quota-reset')).toHaveText(/^周[日一二三四五六]$/);
   expect(await rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-meter').evaluate((el) => el.style.getPropertyValue('--pct'))).toBe('26%');
   await expect(rows.nth(0).locator('.quota-row-note')).toHaveCount(0);
-  // Exhausted: red, with the time it comes back.
+  // Exhausted: a red cell with the no-entry mark and the time it comes back, on a tinted row.
   await expect(rows.nth(1)).toHaveAttribute('data-status', 'out');
-  await expect(rows.nth(1).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-level', 'out');
-  await expect(rows.nth(1).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('用尽');
-  await expect(rows.nth(1).locator('.quota-row-note')).toHaveText(/^已用尽 · \d\d:\d\d（2 小时 \d+ 分后）恢复$/);
-  const red = await rows.nth(1).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color);
-  expect(red).toBe(await rows.nth(1).locator('.quota-cell[data-window="5h"] .quota-pct').evaluate((el) => getComputedStyle(el).color));
+  const outCell = rows.nth(1).locator('.quota-cell[data-window="5h"]');
+  await expect(outCell).toHaveAttribute('data-level', 'out');
+  await expect(outCell.locator('.quota-ban svg')).toHaveCount(1);
+  await expect(outCell.locator('.quota-pct')).toHaveCount(0);
+  await expect(outCell.locator('.quota-reset')).toHaveText(/^\d\d:\d\d$/);
+  await expect(rows.nth(1).locator('.quota-row')).toHaveAttribute('aria-label', /5 小时已用尽，\d\d:\d\d（2 小时 \d+ 分后）恢复/);
+  await expect(rows.nth(1).locator('.quota-cell[data-window="7d"] .quota-pct')).toHaveText('40%');
+  const red = await outCell.locator('.quota-reset').evaluate((el) => getComputedStyle(el).color);
+  expect(red).toBe(await outCell.locator('.quota-ban').evaluate((el) => getComputedStyle(el).color));
   expect(red).not.toBe(await rows.nth(0).locator('.quota-pct').first().evaluate((el) => getComputedStyle(el).color));
-  // A weekly-only account shows the weekly cell alone.
-  await expect(rows.nth(2).locator('.quota-cell')).toHaveCount(1);
-  await expect(rows.nth(2).locator('.quota-cell')).toHaveAttribute('data-level', 'danger');
-  await expect(rows.nth(2).locator('.quota-cell .quota-pct')).toHaveText('8%');
-  // Unknown and out-of-date rows say so in grey and never show a percentage as usable.
+  expect(await rows.nth(1).evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(await rows.nth(0).evaluate((el) => getComputedStyle(el).backgroundColor));
+  // A weekly-only account keeps both columns: a dash and an empty meter under 5h, never a number.
+  await expect(rows.nth(2).locator('.quota-cell')).toHaveCount(2);
+  await expect(rows.nth(2).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-missing', 'true');
+  await expect(rows.nth(2).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('—');
+  expect(await rows.nth(2).locator('.quota-cell[data-window="5h"] .quota-meter').evaluate((el) => el.style.getPropertyValue('--pct'))).toBe('0%');
+  await expect(rows.nth(2).locator('.quota-cell[data-window="7d"]')).toHaveAttribute('data-level', 'danger');
+  await expect(rows.nth(2).locator('.quota-cell[data-window="7d"] .quota-pct')).toHaveText('8%');
+  // Unknown and out-of-date rows say 未知 in grey and never show a percentage.
   await expect(rows.nth(3)).toHaveAttribute('data-status', 'unknown');
+  await expect(rows.nth(3).locator('.quota-cell')).toHaveCount(0);
   await expect(rows.nth(3).locator('.quota-status')).toHaveText('未知');
-  await expect(rows.nth(3).locator('.quota-row-note')).toHaveText('未知 · 暂无采样');
+  await expect(rows.nth(3).locator('.quota-row-note')).toHaveCount(0);
   await expect(rows.nth(4)).toHaveAttribute('data-status', 'expired');
   await expect(rows.nth(4).locator('.quota-cell')).toHaveCount(0);
   await expect(rows.nth(4).locator('.quota-status')).toHaveText('未知');
   await expect(rows.nth(4).locator('.quota-row-note')).toHaveText(/^数据已旧 · 采样 \d\d:\d\d$/);
   const grey = await rows.nth(4).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color);
-  expect(await rows.nth(4).locator('.quota-status').evaluate((el) => getComputedStyle(el).color)).toBe(grey);
-  // A row opens its details in place: full name, exact reset times, masked account.
-  await rows.nth(0).locator('.quota-row').click();
-  await expect(rows.nth(0).locator('.quota-row')).toHaveAttribute('aria-expanded', 'true');
-  await expect(rows.nth(0).locator('.quota-detail')).toContainText('Claude 🇨🇳 CN');
-  await expect(rows.nth(0).locator('.quota-detail')).toContainText('队长在用');
-  await expect(rows.nth(0).locator('.quota-detail')).toContainText(/5 小时剩余 26%\d\d:\d\d（2 小时 \d+ 分后）重置/);
-  await expect(rows.nth(0).locator('.quota-detail-foot')).toHaveText(/^h\*\*\*@gmail\.com · 采样 \d\d:\d\d$/);
-  await expect(drawer).not.toContainText('hjinhao');
+  expect(await rows.nth(4).locator('.quota-status .quota-line').evaluate((el) => getComputedStyle(el).color)).toBe(grey);
+  await expect(drawer).not.toContainText(/NaN|undefined/);
+  // Brand colours on the marks, as on the desktop.
+  const iconColor = (index) => rows.nth(index).locator('.quota-icon').evaluate((el) => getComputedStyle(el).color);
+  expect(new Set([await iconColor(0), await iconColor(2), await iconColor(3), await iconColor(4)]).size).toBe(4);
   // Everything stays inside the drawer; tools are 44px icon buttons with a name.
   for (const [width, height] of [[390, 844], [430, 932]]) {
     await mobile.setViewportSize({ width, height });
@@ -488,7 +499,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
     expect(quotaBox.y + quotaBox.height).toBeLessThanOrEqual(foot.y + 1);
     expect(foot.y + foot.height).toBeLessThanOrEqual(height);
     expect(await drawer.locator('.quota-row, .session-row, .nav-row').evaluateAll((els) => els.every((el) => el.scrollWidth <= el.clientWidth && el.getBoundingClientRect().height >= 44))).toBe(true);
-    for (const button of await drawer.locator('.icon-button').evaluateAll((els) => els.map((el) => ({ ...el.getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label'), title: el.title, text: el.textContent.trim() })))) {
+    for (const button of await drawer.locator('.icon-button:visible').evaluateAll((els) => els.map((el) => ({ ...el.getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label'), title: el.title, text: el.textContent.trim() })))) {
       expect(button.width).toBeGreaterThanOrEqual(44); expect(button.height).toBeGreaterThanOrEqual(44);
       expect(button.label).toBeTruthy(); expect(button.title).toBeTruthy(); expect(button.text).toBe('');
     }
@@ -498,8 +509,51 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
     }
   }
   await mobile.setViewportSize({ width: 390, height: 844 });
+  // A row opens its details in a sheet: full name, exact reset times, masked account, source and sample time.
+  const sheet = mobile.locator('#quota-sheet');
+  await expect(sheet).toBeHidden();
   await rows.nth(0).locator('.quota-row').click();
-  await expect(rows.nth(0).locator('.quota-detail')).toBeHidden();
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toHaveAttribute('aria-modal', 'true');
+  await expect(mobile.locator('#quota-sheet-close')).toBeFocused();
+  await expect(mobile.locator('#quota-sheet-title')).toHaveText('Claude 🇨🇳 CN');
+  await expect(mobile.locator('#quota-sheet-captain')).toHaveText('队长在用');
+  const lines = sheet.locator('.sheet-line');
+  await expect(lines).toHaveText([/^5 小时剩余 26%\d\d:\d\d（2 小时 \d+ 分后）重置$/, /^每周剩余 61%\d\d-\d\d \d\d:\d\d（[23] 天后）重置$/, '账号h***@gmail.com', '来源Claude OAuth usage', /^采样\d\d:\d\d$/]);
+  await expect(sheet).not.toContainText('hjinhao');
+  expect(await mobile.locator('#drawer').evaluate((el) => [...el.children].every((child) => child.id === 'quota-sheet' || child.inert))).toBe(true);
+  for (const button of await sheet.locator('.icon-button').evaluateAll((els) => els.map((el) => ({ ...el.getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label'), title: el.title, text: el.textContent.trim() })))) {
+    expect(button.width).toBeGreaterThanOrEqual(44); expect(button.height).toBeGreaterThanOrEqual(44);
+    expect(button.label).toBe('关闭详情'); expect(button.title).toBe('关闭详情'); expect(button.text).toBe('');
+  }
+  const sheetBox = await sheet.boundingBox(), drawerBox = await drawer.boundingBox();
+  expect(sheetBox.x).toBeGreaterThanOrEqual(drawerBox.x); expect(sheetBox.x + sheetBox.width).toBeLessThanOrEqual(drawerBox.x + drawerBox.width + 1);
+  expect(Math.round(sheetBox.y + sheetBox.height)).toBe(844);
+  expect(await sheet.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+  for (const theme of ['dark', 'light']) {
+    await mobile.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    await screenshot(`quota-detail-390-${theme}`);
+  }
+  // Escape closes the sheet only and hands focus back to its row; the drawer stays.
+  await mobile.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  await expect(drawer).toBeVisible();
+  await expect(rows.nth(0).locator('.quota-row')).toBeFocused();
+  expect(await mobile.locator('#drawer').evaluate((el) => [...el.children].some((child) => child.inert))).toBe(false);
+  // Exhausted and unknown accounts say so in words; the close icon and a tap outside both close.
+  await rows.nth(1).locator('.quota-row').click();
+  await expect(lines.nth(0)).toHaveText(/^5 小时已用尽\d\d:\d\d（2 小时 \d+ 分后）恢复$/);
+  await expect(lines.nth(0)).toHaveAttribute('data-level', 'out');
+  await screenshot('quota-detail-out-390-light');
+  await mobile.locator('#quota-sheet-close').click();
+  await expect(sheet).toBeHidden();
+  await rows.nth(3).locator('.quota-row').click();
+  await expect(mobile.locator('#quota-sheet-title')).toHaveText('Cursor Grok');
+  await expect(lines).toHaveText(['5 小时未知', '每周未知', '状态暂无额度数据，等待桌面端下次采样', '账号未知', '来源未知', '采样暂无采样']);
+  await mobile.locator('#quota-sheet-scrim').click({ position: { x: 20, y: 20 } });
+  await expect(sheet).toBeHidden();
+  await expect(drawer).toBeVisible();
+  await mobile.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   // Side by side with the desktop sidebar the rows were taken from.
   if (process.env.AGENTDECK_MOBILE_SCREENSHOT_DIR) {
     const dir = path.resolve(process.env.AGENTDECK_MOBILE_SCREENSHOT_DIR);
@@ -508,12 +562,12 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
       await desktop.evaluate((value) => applyTheme(value), theme);
       await mobile.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
       const images = [await desktop.locator('#colNav').screenshot(), await drawer.screenshot()].map((data) => 'data:image/png;base64,' + data.toString('base64'));
-      const sheet = await browser.newPage({ viewport: { width: 760, height: 980 } });
-      await sheet.setContent(`<body style="margin:0;padding:24px;font:14px -apple-system,sans-serif;background:${theme === 'dark' ? '#0e0e0e;color:#ddd' : '#ececec;color:#222'}"><div style="display:flex;gap:32px;align-items:flex-start">
+      const page = await browser.newPage({ viewport: { width: 760, height: 980 } });
+      await page.setContent(`<body style="margin:0;padding:24px;font:14px -apple-system,sans-serif;background:${theme === 'dark' ? '#0e0e0e;color:#ddd' : '#ececec;color:#222'}"><div style="display:flex;gap:32px;align-items:flex-start">
         <figure style="margin:0"><figcaption style="margin-bottom:10px">桌面端侧边栏</figcaption><img src="${images[0]}" style="height:844px"></figure>
         <figure style="margin:0"><figcaption style="margin-bottom:10px">手机端侧边栏（390×844）</figcaption><img src="${images[1]}" style="height:844px"></figure></div></body>`);
-      await sheet.screenshot({ path: path.join(dir, `compare-desktop-vs-mobile-${theme}.png`), fullPage: true });
-      await sheet.close();
+      await page.screenshot({ path: path.join(dir, `compare-desktop-vs-mobile-${theme}.png`), fullPage: true });
+      await page.close();
     }
     await mobile.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   }
@@ -584,6 +638,9 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   // Same grey as the note in whichever theme is showing.
   expect(await rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-pct').evaluate((el) => getComputedStyle(el).color))
     .toBe(await rows.nth(0).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color));
+  await rows.nth(0).locator('.quota-row').click();
+  await expect(mobile.locator('#quota-sheet .sheet-line').nth(2)).toHaveText('状态数据已旧，数字仅供参考');
+  await mobile.keyboard.press('Escape');
   for (const [width, height] of [[390, 844], [430, 932]]) {
     await mobile.setViewportSize({ width, height });
     for (const theme of ['dark', 'light']) {

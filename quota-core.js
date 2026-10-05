@@ -415,7 +415,7 @@
     return m ? `${m[1]}***@${m[2]}` : '';
   }
   // Rows for the phone page: the same summaries as the desktop sidebar, cut down
-  // to display fields. No config directory, account key, source or raw detail.
+  // to display fields. No config directory, account key or raw detail.
   function mobile(store, now = Date.now(), seats, captainSeatId = null, captainProvider = '') {
     return items(seats).map(({ provider, seat, key }) => {
       const q = summary(store || {}, provider, now, seat, captainSeatId);
@@ -425,10 +425,10 @@
       const status = q.out ? 'out' : q.cells.length ? (q.stale ? 'stale' : q.state) : q.state === 'normal' ? 'nodigits' : q.sampledAt ? 'expired' : 'unknown';
       return { key, provider,
         name: seat ? (named ? `Claude ${seat.name}` : 'Claude') : { Codex: 'Codex', Cursor: 'Cursor Grok', Antigravity: 'Gemini' }[provider],
-        short: seat ? plain || 'Claude' : { Codex: 'Codex', Cursor: 'Grok', Antigravity: 'Gemini' }[provider], flag,
+        short: seat ? plain || 'Claude' : { Codex: 'Codex', Cursor: 'Cursor', Antigravity: 'Gemini' }[provider], flag,
         captain: seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider,
         status, failed: q.failures > 0, cells: q.cells.map((c) => ({ key: c.key, remaining: c.remaining, out: !!c.out, resetAt: c.resetAt || null })),
-        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account) };
+        recoveryAt: q.recoveryAt || null, sampledAt: q.sampledAt || null, account: maskAccount(q.account), source: q.source };
     });
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }

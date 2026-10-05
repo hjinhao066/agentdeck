@@ -73,9 +73,15 @@
       <div id="sessions" class="session-list" role="region" aria-label="队员会话"></div>
       <section id="quota" class="quota" aria-labelledby="quota-title" tabindex="-1">
         <div class="quota-heading"><h2 id="quota-title">额度</h2><span id="quota-note" class="quota-heading-note" role="status"></span><button id="quota-refresh" class="icon-button" type="button" title="刷新额度" aria-label="刷新额度"></button></div>
+        <div id="quota-columns" class="quota-columns" aria-hidden="true" hidden><span>5h</span><span>7d</span></div>
         <div id="quota-rows" class="quota-rows" role="list" aria-label="订阅剩余额度"></div>
       </section>
       <div class="drawer-foot"><span id="version" class="drawer-version"></span></div>
+      <div id="quota-sheet-scrim" class="quota-sheet-scrim" aria-hidden="true" hidden></div>
+      <div id="quota-sheet" class="quota-sheet" role="dialog" aria-modal="true" aria-labelledby="quota-sheet-title" hidden>
+        <div class="quota-sheet-head"><span id="quota-sheet-icon" class="quota-icon" aria-hidden="true"></span><h2 id="quota-sheet-title"></h2><span id="quota-sheet-captain" class="quota-sheet-captain" hidden><span class="quota-captain" aria-hidden="true"></span>队长在用</span><button id="quota-sheet-close" class="icon-button" type="button" title="关闭详情" aria-label="关闭详情"></button></div>
+        <dl id="quota-sheet-body" class="quota-sheet-body"></dl>
+      </div>
     </aside>
   </div>
 </body>

@@ -550,15 +550,17 @@ test('phone rows carry display fields only: masked account, no config dir, and n
   const rows = Q.mobile(store, now, seats, 'cn');
   assert.deepEqual(rows.map((r) => [r.key, r.name, r.short, r.flag, r.captain, r.status]), [
     ['Claude:cn', 'Claude 🇨🇳 CN', 'CN', '🇨🇳', true, 'normal'], ['Claude:us', 'Claude 🇺🇸 US', 'US', '🇺🇸', false, 'out'],
-    ['Codex', 'Codex', 'Codex', '', false, 'normal'], ['Cursor', 'Cursor Grok', 'Grok', '', false, 'unknown'], ['Antigravity', 'Gemini', 'Gemini', '', false, 'unknown']]);
+    ['Codex', 'Codex', 'Codex', '', false, 'normal'], ['Cursor', 'Cursor Grok', 'Cursor', '', false, 'unknown'], ['Antigravity', 'Gemini', 'Gemini', '', false, 'unknown']]);
   assert.deepEqual(rows[0].cells.map((c) => [c.key, c.remaining, c.out]), [['5h', 26, false], ['7d', 61, false]]);
   assert.deepEqual([rows[0].account, rows[1].account, rows[2].account, rows[3].account], ['h***@gmail.com', 'u***@example.com', 'c***@example.com', '']);
   assert.equal(rows[1].cells[0].out, true);
   assert.equal(rows[1].recoveryAt, now + 2 * 3600000);
+  // Where the numbers came from, as the desktop names it; nothing when there are none.
+  assert.deepEqual(rows.map((r) => r.source), [Q.CLAUDE_OAUTH_SOURCE, Q.CLAUDE_OAUTH_SOURCE, '会话屏幕', '', '']);
   assert.deepEqual(rows[2].cells.map((c) => c.key), ['7d']);
   for (const row of rows) {
-    assert.deepEqual(Object.keys(row).sort(), ['account', 'captain', 'cells', 'failed', 'flag', 'key', 'name', 'provider', 'recoveryAt', 'sampledAt', 'short', 'status']);
-    assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|hjinhao|OAuth/);
+    assert.deepEqual(Object.keys(row).sort(), ['account', 'captain', 'cells', 'failed', 'flag', 'key', 'name', 'provider', 'recoveryAt', 'sampledAt', 'short', 'source', 'status']);
+    assert.doesNotMatch(JSON.stringify(row), /\.claude|account-|-cred|hjinhao/);
   }
   // Past the freshness window an official sample keeps its numbers but is marked old; a screen sample loses them.
   const later = Q.mobile(store, now + 31 * 60000, seats, 'cn');

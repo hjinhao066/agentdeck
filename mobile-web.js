@@ -52,7 +52,7 @@ function quotaView(data, now) {
     status: QUOTA_STATUS.includes(row.status) ? row.status : 'unknown', failed: row.failed === true,
     cells: (Array.isArray(row.cells) ? row.cells : []).filter((cell) => cell && ['5h', '7d'].includes(cell.key) && QuotaCore.percent(cell.remaining) !== null).slice(0, 2)
       .map((cell) => ({ key: cell.key, remaining: cell.remaining, out: cell.out === true, resetAt: time(cell.resetAt) })),
-    recoveryAt: time(row.recoveryAt), sampledAt: time(row.sampledAt), account: QuotaCore.maskAccount(row.account),
+    recoveryAt: time(row.recoveryAt), sampledAt: time(row.sampledAt), account: QuotaCore.maskAccount(row.account), source: text(row.source, 60),
   }));
   return { rows, version: /^\d+\.\d+\.\d+[\w.-]{0,20}$/.test(data?.version || '') ? data.version : '', now };
 }
