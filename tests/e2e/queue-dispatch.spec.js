@@ -56,15 +56,17 @@ test.beforeAll(async () => {
   await page.evaluate(() => TaskBoard.autoVerify(false));
 });
 test.afterAll(async () => {
-  // This suite verifies dispatch, not restart/quit. Close its PTYs before exiting
-  // the isolated app so macOS window closure cannot leave the test host alive.
+  // This suite verifies dispatch, not restart/quit. Quit only its isolated app
+  // so macOS window closure cannot leave the test host alive.
   if (app) {
     const child = app.process();
+    const exited = child.exitCode !== null || child.signalCode !== null ? Promise.resolve() : new Promise((resolve) => child.once('exit', resolve));
     const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
     try {
-      await page.evaluate(() => { for (const col of columns) window.deck.ptyKill(col.id); }).catch(() => {});
-      await app.evaluate(({ app }) => app.quit()).catch(() => {});
-      await app.close().catch(() => {});
+      // evaluate/close can await a CDP reply after app.quit has already closed
+      // that target. The process exit is the authoritative cleanup completion.
+      app.evaluate(({ app }) => app.quit()).catch(() => {});
+      await exited;
     } finally { clearTimeout(timer); }
   }
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
