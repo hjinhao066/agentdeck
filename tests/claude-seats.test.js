@@ -157,8 +157,11 @@ test('durable checkpoint saves full interrupted history and compact board before
   const file = M.checkpoint(home, userData, { colId: 'captain-old', chat, tasks: [{ colId: 'worker', title: 'Work', status: 'asking', receipt: { question: 'Which branch?' } }] });
   assert.match(fs.readFileSync(file, 'utf8'), /Which branch\?/);
   assert.match(fs.readFileSync(file, 'utf8'), /read --id captain-old/);
-  assert.match(fs.readFileSync(file, 'utf8'), /回复「队长已就绪」后立即自主接续/);
-  assert.match(fs.readFileSync(file, 'utf8'), /存档后直接安装并重启/);
+  // the handoff states how to start from the live state; the standing habits stay in the briefing
+  assert.match(fs.readFileSync(file, 'utf8'), /队员在等队长回答 1 条[^\n]*\n {2}- 提问｜worker｜「Work」｜Which branch\?/);
+  assert.match(fs.readFileSync(file, 'utf8'), /启动方式：有已授权待办：照下面的顺序核对后主动续接，不用等用户说继续。/);
+  assert.match(fs.readFileSync(file, 'utf8'), /触发：席位 Relay/);
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /存档后直接安装并重启|重新派起来/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'chats', 'captain-old.json'))).turns[0].interrupted, true);
   assert.throws(() => M.checkpoint(home, userData, { colId: '../unsafe', chat, tasks: [] }), /无效/);
 });

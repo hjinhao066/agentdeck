@@ -243,7 +243,7 @@ again with the current provider, model and effort instructions.
 
 - It controls every session (ones it opened, ones you opened, terminals you started
   yourself) through `node "$AGENTDECK_BOARD_CLI" ledger | new | tell | read |
-  receipts | answer | peek | quota | briefing | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
+  receipts | answer | peek | quota | briefing | handoff | stop | archive` (`node "$env:AGENTDECK_BOARD_CLI" …` in Windows PowerShell
   columns), run in its own terminal. Only the 队长's terminal holds the
   control capability token those commands need. Every column has a separate
   submission-only token, so a worker can report its own task without controlling
@@ -417,8 +417,9 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
 - On confirmation, the pre-command conversation is saved to Captain history
   without replacing the column or PTY. Unread receipts, questions and live task
   cards carry over. The current instructions are sent once. Their closing
-  paragraph tells the Captain to read the handoff, inspect the ledger and
-  receipts, restart interrupted work, and keep dispatching. That paragraph is
+  paragraph tells the Captain to run `handoff` first and follow its takeover
+  steps: report ready when nothing is open, carry on unprompted when authorised
+  work is out, and leave paused or cancelled work alone. That paragraph is
   not appended again: the combined text would exceed the inline prompt limit
   and be replaced by a file pointer. The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
@@ -433,7 +434,15 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
 instructions, with original newlines. It is read-only: it does not send input,
 consume receipts or save the response to config. Only the Captain capability can
 use it. When the user says `你是队长`, first run `ledger` to verify that this
-terminal is the Captain, then read `briefing` and the board's Captain handoff. An
+terminal is the Captain, then read `briefing` and `handoff`.
+
+`node "$AGENTDECK_BOARD_CLI" handoff` prints the Captain handoff built from the
+live state and rewrites `~/.agents/boards/agentdeck-captain-handoff.md`: one
+record per unfinished task card (task state, review verdict, current session,
+next step), unread and unconfirmed receipts, open questions and the takeover
+steps. It is read-only for sessions and cards. The same text is written when a
+seat Relay replaces the Captain. The briefing holds the stable rules, the
+handoff the changing state; see [docs/relay-handoff.md](docs/relay-handoff.md). An
 installed version that returns
 `Unknown action` for `briefing` needs this feature integrated and installed; a
 source branch alone does not change the running app.

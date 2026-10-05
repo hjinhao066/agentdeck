@@ -212,15 +212,19 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(text, /quota.*只读各家订阅额度/);
   assert.match(text, /派活前可跑 quota，避开已用尽或快用尽/);
   // progress boards, concurrency, scraping fallbacks and stuck-session patience
-  assert.match(text, /13\. 开工先跑 ledger 和 task list[^\n]*tasks\/<项目名>\.json[^\n]*状态由程序随命令回执自动改/);
+  assert.match(text, /13\. 任务看板：[^\n]*tasks\/<项目名>\.json[^\n]*记了卡的活 new 必须带 --task-id 和 --project，恢复已有任务不重复建卡[^\n]*状态由程序随命令回执自动改/);
   assert.match(text, /14\. [^\n]*内存压力等级[^\n]*不要因为 swap 用了几个 G 就少开[^\n]*kern\.memorystatus_vm_pressure_level[^\n]*全量 E2E/);
   assert.ok(!text.includes('vm.swapusage'));
   assert.ok(!text.includes('剩不到 1GB'));
   assert.match(text, /GitHub 现成工具、OpenCLI、agent-reach[^\n]*Muse\.ai 或 ChatGPT 浏览器/);
-  assert.match(text, /3\. 先弄懂再派活：[^\n]*表述不清、模棱两可、你没完全理解，先问清楚[^\n]*更好的办法[^\n]*有把握把活做好，才把任务拆开派下去[^\n]*自己决定，不拿去问用户/);
+  // A clear goal goes straight out; gaps a look at the project can close are checked, not asked.
+  assert.match(text, /3\. 目标清楚就派活：[^\n]*明确且已获授权，直接拆开派下去[^\n]*先派人检查[^\n]*影响目标、范围、授权或关键结果又查不出来的才问用户[^\n]*已有授权不因 Relay、重启或清空而重新确认，也不因此扩大[^\n]*自己决定，不拿去问用户/);
+  assert.match(text, /7\. 派完马上用一两句话告诉用户交给了哪个会话、已启动还是在排队[^\n]*命令没成功返回不说已启动/);
+  assert.match(text, /9\. [^\n]*先看清它问的是什么，不盲按 y 或 enter/);
+  assert.match(text, /10\. [^\n]*已有明确报错（进程退出、参数非法、认证失败、限流）或停在等输入时不用等，直接按原因处理/);
   assert.match(text, /4\. 派活单步原则：一个会话一次只派一件活/);
   assert.match(text, /5\. 界面类的活要写明图标规则：[^\n]*任务正文里必须写明[^\n]*复制=两个重叠方框、删除=垃圾桶、编辑=铅笔[^\n]*tooltip[^\n]*无障碍名称[^\n]*不用「复制」这类文字按钮/);
-  assert.ok(text.indexOf('3. 先弄懂再派活') < text.indexOf('4. 派活单步原则'), 'clarify rule comes before the dispatch rules');
+  assert.ok(text.indexOf('3. 目标清楚就派活') < text.indexOf('4. 派活单步原则'), 'the ask-or-dispatch rule comes before the dispatch rules');
   assert.match(text, /10\. 判断会话卡没卡先用 peek，至少等 5 分钟/);
   assert.match(text, /「待补充」[^\n]*自动执行/);
   assert.ok(text.length < 8000, 'goes out as a prompt, not a file');

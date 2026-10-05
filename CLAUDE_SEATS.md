@@ -96,9 +96,10 @@ ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能�
 切到 ChatGPT 后 activeClaudeSeatId 保留上次 Claude 席位，显式新开 Claude 队员时用它；
 未指定 agent 的队员沿用 Codex。返回 Claude 时复用之前的 Claude 命令（没有则显式 Opus 5.5）。
 
-默认接续看板是 `~/.agents/boards/agentdeck-captain-handoff.md`，不覆盖项目看板。
-包含会话 id、任务状态和短回执，并指向私有 userData/chats 下完整对话。
-回到应用时仍携带最近一次Relay的看板路径。
+交接文件是 `~/.agents/boards/agentdeck-captain-handoff.md`，由程序整份重写，不覆盖项目看板。
+它按任务卡汇总当前状态（每张卡一条：任务状态、验收结论、当前会话、下一步），并指向私有 userData/chats 下的完整对话；
+用户的有效决定由队长记在同目录的 `agentdeck-captain-decisions.md`，程序只读。内容和规则见 [队长交接](docs/relay-handoff.md)。
+回到应用时仍携带最近一次交接的文件路径；队长随时可用 `handoff` 命令按当前实况重新生成。
 
 已接入 1.0.0 的 token-saver：`MainSession.checkpointForSeatSwitch(snapshot)`
 与自动省上下文共用互斥状态。空闲 Claude 队长复用 `ARCHIVE_PROMPT`，只接受
@@ -126,11 +127,10 @@ Bark 密钥文件路径复用 `barkKeyFile`，只保存路径；每次切换发�
   轮换记录及冷却时间存本机配置，重载不清掉防抖。手动选择仍可明确覆盖自动策略。
 
 自动切换使用 Relay 本地持久存档，不再要求额度临界的模型多跑一次存档回合：
-完整旧对话保存成功后，写 `agentdeck-captain-handoff.md` 的队长交接、最近指令、
-任务和短回执，再重开**仅队长**的 PTY。重开前再次检查空闲与草稿。
-新队长自动收到当前提示词及读取 `briefing`、看板交接、`ledger` 的接续指令，
-并被要求先确认旧监听已退出，再重挂恰好一个后台 `receipts --wait --timeout 300`。
-旧令牌撤销，新队长拿新控制令牌；队员及未读回执、提问、排队任务保持原样。
+完整旧对话保存成功后，用同一份状态快照写 `agentdeck-captain-handoff.md`，再重开**仅队长**的 PTY。重开前再次检查空闲与草稿。
+新队长自动收到当前提示词，以及先运行 `handoff`、照「接手动作」核对后续接的指令。
+旧令牌撤销，旧终端里的回执监听随之失效，新队长拿新控制令牌并重挂恰好一个后台 `receipts --wait --timeout 300`；
+队员及未读回执、提问、排队任务保持原样。已被后台通道取走、但旧队长没有处理迹象的回执不会重发，改为列在交接里。
 每次切换留下带目标、原因和时间的横幅与持久对话记录。
 存档失败保留原队长，一分钟后才重试，不会每个 heartbeat 弹提示。
 

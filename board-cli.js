@@ -53,14 +53,16 @@ async function request(command, waitForCompletion) {
   const id = `${Date.now()}-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
   const requestFile = path.join(controlDir, 'requests', `${id}.json`);
   const responseFile = path.join(controlDir, 'responses', `${id}.json`);
-  atomicJson(requestFile, { id, token, createdAt: Date.now(), ...command });
+  const timeoutMs = Math.max(5000, Number(command.timeoutMs) || (waitForCompletion ? 6 * 60 * 60 * 1000 : 30000));
+  const deadline = command.expiresAt === undefined ? Date.now() + timeoutMs : Math.min(Date.now() + timeoutMs, command.expiresAt);
+  // The app reads `deadline`: a Captain command that changes something is not
+  // run once this process has stopped waiting for it.
+  atomicJson(requestFile, { id, token, createdAt: Date.now(), ...(LATE_GUARDED.includes(command.action) ? { deadline } : {}), ...command });
   // The launch wrapper can run while Electron is quitting. Its exit status is
   // already durably queued; never keep the shell alive waiting for a renderer
   // that is shutting down. User complete/ask/progress still wait for acceptance.
   if (command.action === 'session-exit') return { done: true };
 
-  const timeoutMs = Math.max(5000, Number(command.timeoutMs) || (waitForCompletion ? 6 * 60 * 60 * 1000 : 30000));
-  const deadline = command.expiresAt === undefined ? Date.now() + timeoutMs : Math.min(Date.now() + timeoutMs, command.expiresAt);
   let announcedChild = false;
   while (true) {
     try {
@@ -86,8 +88,13 @@ async function request(command, waitForCompletion) {
     try { fs.unlinkSync(responseFile); } catch (_) {}
     return { done: true, result: '' };
   }
+  // The request may still be in the app's queue; it will not be run past its
+  // deadline. Rarely it took effect just before, so look before sending it again.
+  if (LATE_GUARDED.includes(command.action)) fail(`Timed out waiting for board request ${id}. 这条命令过期后不会再被执行；重发前先用 ledger 确认它是否刚好已经生效。`, 2);
   fail(`Timed out waiting for board request ${id}.`, 2);
 }
+
+const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'];
 
 function usage() {
   process.stdout.write(
@@ -110,6 +117,7 @@ function usage() {
     '  ledger                                   every session: id, title, state, last receipt\n' +
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
+    '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
@@ -264,11 +272,13 @@ async function main() {
       const seconds = args.timeout === undefined ? undefined : (typeof args.timeout === 'string' && args.timeout.trim() ? Number(args.timeout) : NaN);
       if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0 || seconds > Number.MAX_SAFE_INTEGER / 1000)) fail('receipts --timeout must be a non-negative number of seconds.');
       const expiresAt = seconds === undefined ? undefined : Date.now() + seconds * 1000;
+      // Tells the app which listener this is: a newer one in the same terminal takes over.
+      const watcher = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`, watcherStartedAt = Date.now();
       // One background CLI process, short authenticated reads: a cancelled
       // watcher leaves no long-lived request that could eat a later receipt.
       do {
         const pollExpiresAt = Math.min(Date.now() + 5000, expiresAt === undefined ? Infinity : expiresAt);
-        const response = await request({ action: 'main-receipts', wait: true, expiresAt: pollExpiresAt }, false);
+        const response = await request({ action: 'main-receipts', wait: true, expiresAt: pollExpiresAt, watcher, watcherStartedAt }, false);
         if (response.result) { process.stdout.write(`${response.result}\n`); return; }
         if (expiresAt !== undefined && Date.now() >= expiresAt) return;
         await sleep(Math.min(1000, expiresAt === undefined ? 1000 : Math.max(0, expiresAt - Date.now())));
@@ -335,7 +345,7 @@ async function main() {
     return;
   }
 
-  if (action === 'quota' || action === 'briefing') {
+  if (action === 'quota' || action === 'briefing' || action === 'handoff') {
     const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);
     return;

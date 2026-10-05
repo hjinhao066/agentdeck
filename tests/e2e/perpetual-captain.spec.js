@@ -142,11 +142,12 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   await screenshot('perpetual-02-us-automatic');
   const board = path.join(home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
   expect(fs.readFileSync(board, 'utf8')).toContain('继续跑的任务');
-  expect(fs.readFileSync(board, 'utf8')).toContain('## 队长交接');
+  expect(fs.readFileSync(board, 'utf8')).toContain('# AgentDeck 队长交接');
+  expect(fs.readFileSync(board, 'utf8')).toContain('触发：席位 Relay');
   expect(fs.readFileSync(board, 'utf8')).toContain('CN → US');
   const firstArchive = JSON.parse(fs.readFileSync(path.join(profile, 'chats', CN + '.json')));
   expect(firstArchive.captainArchive).toBe(true);
-  await expect.poll(() => promptsFor(usId).some((p) => p.includes('briefing') && p.includes('读看板继续') && p.includes('重挂恰好一个后台 receipts --wait --timeout 300')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => promptsFor(usId).some((p) => p.includes('handoff') && p.includes('briefing') && p.includes('读看板继续') && p.includes('重挂恰好一个后台 receipts --wait --timeout 300')), { timeout: 20000 }).toBe(true);
   await idle(usId);
   // CN's still-running worker consumes its reserve after the threshold Relay.
   // Only actual exhaustion of both seats can send the Captain to Codex.
@@ -171,7 +172,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   expect(notices[0].reply).toMatch(/\d{1,2}:\d{2}/);
   await expect.poll(() => promptsFor(codexId).some((p) => p.includes('briefing') && p.includes('重挂恰好一个后台 receipts --wait --timeout 300')), { timeout: 20000 }).toBe(true);
   await boardViaAgent(codexId, ['ledger'], '不中断的队员');
-  await boardViaAgent(codexId, ['briefing'], '回复「队长已就绪」后立即自主接续');
+  await boardViaAgent(codexId, ['briefing'], '照它的「接手动作」做');
   if (process.platform === 'win32') {
     // Windows has no controlling tty: a supplied column id must not recover a
     // private capability. The real Captain PTY calls above still succeed.
@@ -181,7 +182,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
     // Recovery belongs to the Captain's own controlling PTY, never the external test runner.
     await expect(boardWithoutCapabilities(codexId, ['ledger'])).rejects.toThrow(/independent|conductor-managed/);
     await boardViaAgent(codexId, ['ledger'], '不中断的队员', true);
-    await boardViaAgent(codexId, ['briefing'], '读看板继续', true);
+    await boardViaAgent(codexId, ['briefing'], '动态状态和恢复顺序看 handoff', true);
   }
   const alerts = await application.evaluate(({ app }) => app.testRelayAlerts);
   expect(alerts).toHaveLength(2);

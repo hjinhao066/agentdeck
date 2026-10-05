@@ -118,7 +118,7 @@ let config = {
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
-  concurrencyCap: MainCore.concurrencyCap(),
+  concurrencyCap: MainCore.concurrencyCap(), captainHandoffBudget: MainCore.handoffBudget(),
 };
 const saved = window.deck.loadConfig();
 config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
@@ -162,6 +162,7 @@ if (saved) {
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
+  config.captainHandoffBudget = MainCore.handoffBudget(saved.captainHandoffBudget);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher) || saved.taskBoard?.autoVerify === false) {
@@ -3326,12 +3327,12 @@ window.deck.onBoardCommand(async (message) => {
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-handoff' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task');
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-handoff') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;

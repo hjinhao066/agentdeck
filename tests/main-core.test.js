@@ -452,13 +452,35 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /鸡毛蒜皮/);
   assert.match(text, /截图真的落盘/);
   assert.match(text, /最多返工 2 轮/);
-  assert.match(text, /回复「队长已就绪」后立即自主接续/);
-  assert.match(text, /不要等用户说“继续”/);
-  assert.match(text, /上次被打断或交接列出的未完成工作重新派起来/);
+  // How to start depends on the live state, so the closing paragraph points at handoff:
+  // nothing to do means a short "ready"; authorised work means carry on without being told.
+  assert.match(text, /开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项/);
+  assert.match(text, /有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派/);
+  assert.doesNotMatch(text, /重新派起来|持续自主拆解并派活/);
+  assert.match(text, /有活可派时至少保持 3 个并行/);
   assert.match(text, /额度紧时保持 3–5 个活并行/);
   assert.match(text, /额度多时开十几个/);
-  assert.match(text, /测试全过并进入打包后停止派新活/);
-  assert.match(text, /存档后直接安装并重启/);
+  // Release habits the user set: one step per release from 1.2 on, and the crew
+  // keeps working until only the install itself is left.
+  assert.match(text, /1\.1\.11 之后每版进一位，叫 1\.2、1\.3、1\.4/);
+  assert.match(text, /打包、核对、冒烟和安装脚本都做完、只差执行安装（约 5 分钟内能重启）才通知队员存档停下，之前照常干活、照常派新活/);
+  assert.doesNotMatch(text, /测试全过并进入打包后停止派新活/);
+  assert.match(text, /存档后直接安装并重启，不再请示/);
+  // The Captain's boundary is one rule, with the one exception the user set.
+  assert.match(text, /1\. 不要在这一列里改文件[^\n]*实际工作和返工都交给别的会话[^\n]*例外：各家都没额度而你还有额度时可以亲自动手，活不能停/);
+  assert.match(text, /仍不通过，换更强模型的队员接手，最后才找用户/);
+  assert.doesNotMatch(text, /自己处理/);
+  // Stable rules here, live state in handoff; history may be read whenever recovery needs it.
+  assert.match(text, /17\. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff/);
+  assert.match(text, /read --id 会话id \[--turns 3\] \[--find 关键词\]   读某个会话已保存的对话；恢复、诊断、验收、核对矛盾或用户追问时按需读/);
+  assert.doesNotMatch(text, /只在用户追问细节时用/);
+  assert.match(text, /会话结束、任务完成、验收通过、交付到哪一步（提交、合并、打包、安装）是四件事，分开判断；审查结束但不通过就是要返工/);
+  assert.match(text, /谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关/);
+  assert.match(text, /汇报核对完的会话立即 archive，还在验收的先留着/);
+  // Commands as the CLI takes them: one line each, the keys answer really accepts.
+  assert.equal(text.split('\n').filter((line) => / briefing /.test(line) || / handoff /.test(line)).length, 1);
+  assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc/);
+  assert.ok(!/ {4,}\S/.test(text.split('\n').filter((line) => line.includes('AGENTDECK_BOARD_CLI')).join('\n')), 'no alignment padding in the command list');
   assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
   // chat-ui replaces prompts longer than 8000 with a file pointer. The closing
   // paragraph must stay inside the pasted briefing on both platforms.
