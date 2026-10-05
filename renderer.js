@@ -2070,7 +2070,10 @@ function buildColumn(col, isFresh) {
     // Buttons/grip/inline-rename keep their own behavior.
     wrap.addEventListener('mousedown', (e) => {
       if (e.target.closest('.icon-btn') || e.target.closest('.grip') || e.target.closest('[contenteditable="true"]')) return;
-      if (focusedId !== col.id && !e.target.closest('.view-toggle')) ChatUI.setMode(col.id, 'term');
+      // A click in the chat composer must not flip the column back to the
+      // terminal. That hid the textarea on Windows, where the column is not
+      // focused yet when Playwright fills it.
+      if (focusedId !== col.id && !e.target.closest('.view-toggle') && !e.target.closest('.chat')) ChatUI.setMode(col.id, 'term');
       if (!ChatUI.onColumnMouseDown(col, e)) { term.focus(); focusedId = col.id; syncNav(); }
     });
 
@@ -2252,7 +2255,7 @@ function shellQuote(p) {
   // Windows paths use backslashes. POSIX single quotes would be typed literally
   // into the agent, so a bare simple path stays bare and spaces use cmd quotes.
   if (env.platform === 'win32') {
-    if (/^[A-Za-z0-9_./:@%+,=\\-]+$/.test(p)) return p;
+    if (/^[A-Za-z0-9_./:@%+,=~\\-]+$/.test(p)) return p;
     return '"' + p.replace(/"/g, '""') + '"';
   }
   if (/^[A-Za-z0-9_./:@%+,=-]+$/.test(p)) return p;
@@ -2513,9 +2516,14 @@ async function agentInForeground(col, allowShell) {
   if (env.platform === 'win32') {
     if (!entry) return false;
     const screen = MainCore.windowsAgentOutput(entry.lastScreen);
+    if (MainCore.isWindowsShellPrompt(screen)) return false;
     // A narrow ConPTY wraps "Plan, search, build anything" across rows. The
     // idle regex wants that phrase intact; cursorActivity already joins it.
     if (AGENT_IDLE_RE.test(screen)) return true;
+    // After a finished turn the footer can scroll out of the 40-line window
+    // while the status light is already done. The next queued prompt still
+    // belongs to this agent, not to a shell.
+    if (entry.hasWorked && (entry.state === 'done' || entry.state === 'quota')) return true;
     return /\bcursor-agent\b/i.test(col.cmd || '') && MainCore.cursorActivity(screen) === 'idle';
   }
   try {

@@ -24,6 +24,16 @@ const claudeScreen = [
   '  ⏵⏵ bypass permissions on (shift+tab to cycle)',
 ];
 
+test('a narrow column wrap of the archive prompt still leaves only 已存档', () => {
+  const prompt = '把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档';
+  const cols = 28;
+  const lines = [];
+  let rest = '> ' + prompt;
+  while (rest) { lines.push(rest.slice(0, cols)); rest = rest.slice(cols); }
+  lines.push('⏺ 已存档', '', '─'.repeat(20), '> ', '─'.repeat(20), 'Context: 23k/1000k | Session: 26.0%', 'Claude Code');
+  assert.equal(C.extractReply(lines, prompt, cols), '已存档');
+});
+
 test('Claude style screen keeps only the final reply, joined into one paragraph', () => {
   const reply = C.extractReply(claudeScreen, 'fix the bug in app.js', 80);
   assert.equal(reply, 'Fixed the null check in `app.js` line 42. The handler now returns early when the input is empty, so the crash no longer happens.');

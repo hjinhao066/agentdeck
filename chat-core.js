@@ -77,8 +77,16 @@
       if (lines[i].trim()) seen++;
       if (!flat(lines[i]).includes(needle)) continue;
       let end = i;
-      // the TUI wraps a long prompt onto indented continuation rows
-      while (end + 1 < lines.length && end - i < 10 && /^ {2,}\S/.test(lines[end + 1]) && !BULLET.test(lines[end + 1])) end++;
+      // A long prompt wraps. Indented continuations are the usual TUI shape;
+      // a narrow ConPTY column wraps without indenting, and those rows are
+      // still the prompt while they only complete the text that was sent.
+      const sentFlat = (sent[0] || '').replace(/\s+/g, '');
+      while (end + 1 < lines.length && end - i < 12 && !BULLET.test(lines[end + 1])) {
+        const indented = /^ {2,}\S/.test(lines[end + 1]);
+        const got = lines.slice(i, end + 2).map(flat).join('').replace(/\s+/g, '');
+        if (!indented && (!sentFlat || !sentFlat.startsWith(got))) break;
+        end++;
+      }
       // a multi-line prompt echoes every line: run to the echo of its last one
       if (sent.length > 1) {
         const tail = sent[sent.length - 1].slice(0, 18);

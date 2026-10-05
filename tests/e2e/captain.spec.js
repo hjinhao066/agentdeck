@@ -94,13 +94,21 @@ test('the Captain row cannot be dragged into a folder or onto the archive, nor a
   const folder = await page.evaluate(() => Sidebar.createFolder(false).id);
   const row = page.locator('.colnav-item.captain-item');
   const first = () => page.evaluate(() => ({ id: columns[0].id, folderId: columns[0].folderId || null, deck: deckEl.querySelector('.column').dataset.colId }));
+  const pointerDrag = async (fromLoc, toLoc) => {
+    const a = await fromLoc.boundingBox();
+    const b = await toLoc.boundingBox();
+    await fromLoc.evaluate((el, pts) => {
+      const fire = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse',
+        button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y,
+      }));
+      fire('pointerdown', pts.start.x, pts.start.y);
+      for (let i = 1; i <= 8; i++) fire('pointermove', pts.start.x + (pts.end.x - pts.start.x) * i / 8, pts.start.y + (pts.end.y - pts.start.y) * i / 8);
+      fire('pointerup', pts.end.x, pts.end.y);
+    }, { start: { x: a.x + 30, y: a.y + a.height / 2 }, end: { x: b.x + 30, y: b.y + b.height / 2 } });
+  };
   for (const target of [`.nav-folder-head[data-folder-id="${folder}"]`, '.nav-section[data-section="archived"]']) {
-    const from = await row.boundingBox();
-    const to = await page.locator(target).boundingBox();
-    await page.mouse.move(from.x + 30, from.y + from.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(to.x + 30, to.y + to.height / 2, { steps: 6 });
-    await page.mouse.up();
+    await pointerDrag(row, page.locator(target));
     expect(await first()).toEqual({ id: mainId, folderId: null, deck: mainId });
   }
   await page.evaluate(() => archiveColumn(MainSession.mainCol()));
@@ -194,10 +202,15 @@ test('a session the Captain only told something keeps its place; its own session
   const drag = async (from, to) => {
     const a = await from.boundingBox();
     const b = await to.boundingBox();
-    await page.mouse.move(a.x + 30, a.y + a.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(b.x + 30, b.y + b.height / 2, { steps: 6 });
-    await page.mouse.up();
+    await from.evaluate((el, pts) => {
+      const fire = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+        bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse',
+        button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y,
+      }));
+      fire('pointerdown', pts.start.x, pts.start.y);
+      for (let i = 1; i <= 8; i++) fire('pointermove', pts.start.x + (pts.end.x - pts.start.x) * i / 8, pts.start.y + (pts.end.y - pts.start.y) * i / 8);
+      fire('pointerup', pts.end.x, pts.end.y);
+    }, { start: { x: a.x + 30, y: a.y + a.height / 2 }, end: { x: b.x + 30, y: b.y + b.height / 2 } });
   };
   await drag(crew(child), page.locator('.nav-section[data-section="loose"]'));
   await expect(crew(child)).toHaveCount(0);

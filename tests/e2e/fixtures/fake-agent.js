@@ -207,6 +207,11 @@ function listen() {
   } else {
     // Real agent TUIs disable cooked echo. ConPTY otherwise reprints the whole
     // prompt into the screen, so a later reply is no longer exactly「已存档」.
+    // ConPTY echoes the typed line into the screen unless raw mode is on, and
+    // that echo makes an archive reply no longer exactly「已存档」.
+    if (process.platform === 'win32' && process.stdin.isTTY) {
+      try { process.stdin.setRawMode(true); } catch (_) {}
+    }
     const sink = new Writable({ write(_chunk, _enc, cb) { cb(); } });
     readline.createInterface({ input: process.stdin, output: sink, terminal: true }).on('line', (line) => {
       if (!line.trim() && !lines.length) return;

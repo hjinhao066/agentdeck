@@ -679,6 +679,7 @@
       if (label && label.isContentEditable) return;
       closeMenu();
       const pointerId = e.pointerId, startX = e.clientX, startY = e.clientY;
+      try { item.setPointerCapture(pointerId); } catch (_) {}
       let dragging = false, drop = null, ended = false;
       const onMove = (ev) => {
         if (ev.pointerId !== pointerId) return;

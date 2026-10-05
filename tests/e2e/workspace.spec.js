@@ -176,17 +176,18 @@ test('dragging a session into a folder moves its column, and the order persists'
   const target = page.locator('.nav-folder-head');
   const from = await row.boundingBox();
   const to = await target.boundingBox();
-  await page.mouse.move(from.x + 40, from.y + from.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(from.x + 40, from.y - 20, { steps: 4 });
-  await page.mouse.move(to.x + 60, to.y + to.height / 2, { steps: 6 });
-  const debug = await page.evaluate(([x, y]) => {
-    const n = document.elementFromPoint(x, y);
-    return { at: n && n.className, drop: [...document.querySelectorAll('.drop-into,.drop-before,.drop-after')].map((e) => e.className),
-      body: document.body.className, rows: [...document.querySelectorAll('#navList > *')].map((e) => e.className + ':' + Math.round(e.getBoundingClientRect().top)) };
-  }, [to.x + 60, to.y + to.height / 2]);
-  await page.mouse.up();
-  await expect(page.locator('.nav-folder .colnav-item[data-col-id="ws-d"]')).toBeVisible().catch((e) => { console.log('DRAG', JSON.stringify({ from, to, debug })); throw e; });
+  // Playwright's mouse path does not deliver pointer moves to sidebar rows on
+  // Windows Electron. The product listens for pointer events, so drive those.
+  await row.evaluate((el, pts) => {
+    const fire = (type, x, y) => el.dispatchEvent(new PointerEvent(type, {
+      bubbles: true, cancelable: true, composed: true, pointerId: 1, pointerType: 'mouse',
+      button: 0, buttons: type === 'pointerup' ? 0 : 1, clientX: x, clientY: y,
+    }));
+    fire('pointerdown', pts.start.x, pts.start.y);
+    for (let i = 1; i <= 8; i++) fire('pointermove', pts.start.x + (pts.end.x - pts.start.x) * i / 8, pts.start.y + (pts.end.y - pts.start.y) * i / 8);
+    fire('pointerup', pts.end.x, pts.end.y);
+  }, { start: { x: from.x + 40, y: from.y + from.height / 2 }, end: { x: to.x + 60, y: to.y + to.height / 2 } });
+  await expect(page.locator('.nav-folder .colnav-item[data-col-id="ws-d"]')).toBeVisible();
   expect(await deckOrder()).toEqual(['ws-d', 'ws-a', 'ws-b', 'ws-c']);
   // moving it never restarted its terminal
   expect(await alive('ws-d')).toBe(true);

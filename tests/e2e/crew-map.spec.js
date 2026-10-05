@@ -70,9 +70,13 @@ test('the board opens on the map: 队长 on top, a line to each session, review 
   expect(await status('c2003')).toBe('working');
   expect(await status('c2004')).toBe('failed');
   await expect(page.locator('.cm-node[data-node-id="c2002"] .cm-line')).toHaveText('提问：用哪个库？');
-  // the reviewer sits a row below what it reviews
-  const y = (id) => page.locator(`.cm-node[data-node-id="${id}"]`).evaluate((n) => n.offsetTop);
-  expect(await y('c2003')).toBeGreaterThan(await y('c2001'));
+  // the reviewer sits a row below what it reviews. offsetTop is 0 while a
+  // hover transform is applied, so compare the laid-out border box.
+  await page.mouse.move(0, 0);
+  await expect.poll(async () => page.evaluate(() => {
+    const top = (id) => document.querySelector(`.cm-node[data-node-id="${id}"]`).getBoundingClientRect().top;
+    return top('c2003') > top('c2001');
+  })).toBe(true);
   await expect(page.locator('.cm-node[data-node-id="c1999"]')).toHaveCount(0);
   await page.locator('.cm-fold').click();
   await expect(page.locator('.cm-node.archived[data-node-id="c1999"]')).toBeVisible();
