@@ -124,7 +124,7 @@ test.afterEach(async () => {
 
 test('automatic CN → US → Codex preserves worker and handoff, then returns to restored Claude while idle', async () => {
   test.setTimeout(150000);
-  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 3, preferEarlier: true });
+  expect(await page.evaluate(() => config.perpetualCaptain)).toEqual({ enabled: true, threshold: 3, preferEarlier: true, order: ['us2', 'us', 'cn'] });
   await page.evaluate((id) => {
     config.mainSession.tasks = [{ id: 'keep-task', colId: id, title: '继续跑的任务', status: 'working', gen: 1, startedAt: Date.now() }];
     sendWhenReady(columns.find((c) => c.id === id), 'keep working', { guardUserInput: true });
