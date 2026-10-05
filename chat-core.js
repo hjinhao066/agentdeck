@@ -320,6 +320,8 @@
     const list = (v) => (Array.isArray(v) ? (command ? v.filter((x) => typeof x === 'string') : v.filter((x) => typeof x === 'string').map((x) => x.slice(0, 500)).slice(0, 10)) : []);
     return {
       colId: str(t.colId, 160), title: str(t.title, 120), status: str(t.status, 20), ...(typeof t.progress === 'string' ? { progress: t.progress } : {}),
+      // optional: which project the work was for and when its receipt came in (Artifacts groups by them)
+      ...(str(t.project, 120) ? { project: str(t.project, 120) } : {}), ...(Number.isFinite(t.doneAt) && t.doneAt > 0 ? { doneAt: t.doneAt } : {}),
       receipt: r ? { summary: str(r.summary, command ? Infinity : 400), failed: str(r.failed, command ? Infinity : 240), question: str(r.question, command ? Infinity : 400), files: list(r.files), images: list(r.images), explicit: !!r.explicit, ...(command ? { source: 'command' } : {}) } : null,
     };
   }
@@ -544,8 +546,78 @@
     return [...seen.values()].sort((a, b) => b.ts - a.ts).slice(0, limit);
   }
 
+  // ---- deliveries: the files the crew listed in their receipts, by project ----
+  // One file per path. A Windows path ignores case and slash direction, "~" is
+  // the home folder, and a trailing ":line" or slash does not make a new file.
+  const WIN_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/;
+  const ABS_PATH = /^(?:file:\/\/)?(?:\/(?!\/)|~[\\/]|[A-Za-z]:[\\/]|\\\\)/;
+  function pathKey(text, home) {
+    let p = String(text == null ? '' : text).trim().replace(/^file:\/\//, '');
+    if (home && /^~(?:[\\/]|$)/.test(p)) p = home + p.slice(1);
+    p = p.replace(/:\d+(?::\d+)?$/, '');
+    if (WIN_PATH.test(p)) return p.replace(/\//g, '\\').replace(/(?!^)\\+/g, '\\').replace(/\\$/, '').toLowerCase();
+    return p.replace(/\/{2,}/g, '/').replace(/(?!^)\/$/, '');
+  }
+  // Every receipt that listed files, from the three places a receipt is kept:
+  // the session it came from (what `ledger` prints), 队长's task list, and the
+  // task cards in 队长's conversations (the only record once a session is gone).
+  //   sessions: [{ id, title, project, archived, lastReceipt }]
+  //   tasks:    config.mainSession.tasks
+  //   chats:    [{ colId, turns }] holding task cards
+  function deliveryReceipts({ sessions = [], tasks = [], chats = [] }) {
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const out = [];
+    const add = (colId, receipt, ts, task, project) => {
+      // absolute paths only: receipts read off the screen by older versions also hold relative names and stray lines
+      const files = receipt && Array.isArray(receipt.files) ? receipt.files.filter((f) => typeof f === 'string' && ABS_PATH.test(f.trim())) : [];
+      if (!files.length) return;
+      const session = byId.get(colId);
+      out.push({
+        colId: colId || '', session: session ? session.title : '', archived: !!(session && session.archived), gone: !session,
+        project: String(project || (session && session.project) || '').replace(/\s+/g, ' ').trim(),
+        ts: Number(ts) || 0, files, task: String(task || ''), summary: String(receipt.summary || ''), failed: String(receipt.failed || ''),
+      });
+    };
+    for (const s of sessions) add(s.id, s.lastReceipt, s.lastReceipt && s.lastReceipt.ts, '', s.project);
+    for (const t of tasks) add(t.colId, t.receipt, t.doneAt || t.sentAt, t.title, t.project);
+    for (const chat of chats) {
+      for (const turn of chat.turns || []) {
+        if (turn.kind === 'task' && turn.task) add(turn.task.colId, turn.task.receipt, turn.task.doneAt || turn.ts, turn.task.title || turn.user, turn.task.project);
+      }
+    }
+    return out;
+  }
+  // -> { total, groups: [{ key, name, ts, files: [{ key, path, name, type, colId,
+  //      session, archived, gone, ts, task, summary, failed }] }] }, newest first;
+  // files without a project come last as the group with key ''.
+  function collectDeliveries(receipts, home) {
+    const seen = new Map();
+    for (const r of receipts) {
+      for (const raw of r.files) {
+        const path = raw.trim(), key = pathKey(path, home);
+        if (!key) continue;
+        const prev = seen.get(key);
+        // the same receipt is kept in several places: the copy that knows more wins a tie
+        if (prev && (prev.ts > r.ts || (prev.ts === r.ts && (prev.project || !r.project) && (!prev.gone || r.gone)))) continue;
+        const name = artifactName('file', path);
+        seen.set(key, {
+          key, path, name, type: fileKind(name), colId: r.colId, session: r.session, archived: r.archived, gone: r.gone,
+          project: r.project, ts: r.ts, task: r.task, summary: r.summary, failed: r.failed,
+        });
+      }
+    }
+    const groups = new Map();
+    for (const f of [...seen.values()].sort((a, b) => b.ts - a.ts || a.name.localeCompare(b.name))) {
+      const key = f.project.toLowerCase();
+      if (!groups.has(key)) groups.set(key, { key, name: f.project, ts: f.ts, files: [] });
+      groups.get(key).files.push(f);
+    }
+    const list = [...groups.values()].sort((a, b) => !a.key - !b.key || b.ts - a.ts);
+    return { total: seen.size, groups: list };
+  }
+
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // a turn's work and timing in the chat view

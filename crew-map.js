@@ -13,6 +13,8 @@
   // Auto-fit never shrinks below this: card body text (13px) stays at 11px or more on screen.
   // What does not fit at this scale is reached by panning (drag, wheel, trackpad).
   const FIT_MIN = 0.85;   // card grid inside a project
+  // Spacing given up when the roomy map just misses the window at FIT_MIN and this brings all of it in.
+  const TIGHT = { captainH: 92, fanY: 40, rowGap: 12, padBottom: 12 };
   const DRAG_PX = 4;
   let host = null;
   let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn, trayEl, popEl;
@@ -333,11 +335,15 @@
       const summary = el('span', 'cm-project-summary', C.summaryLine(g.counts));
       summary.title = summary.textContent;
       tally(summary, summary.textContent);
-      head.append(toggle, el('span', 'cm-project-name', g.name), summary);
+      const name = el('span', 'cm-project-name', g.name);
+      name.title = g.name;
+      head.append(toggle, name, summary);
       head.title = '拖动：移动项目和其中的卡片';
       group.addEventListener('pointerdown', (e) => startProjectDrag(e, group, g));
       group.appendChild(head);
       projectsEl.appendChild(group);
+      // the name does not fit beside the full tally: the tally drops its labels
+      if (name.scrollWidth > name.clientWidth) head.classList.add('compact');
     });
   }
 
@@ -357,21 +363,38 @@
     canvasEl.classList.toggle('cm-smooth', !!on);
     if (on) smoothT = setTimeout(() => canvasEl.classList.remove('cm-smooth'), 400);
   }
-  // Fit actual bounds, including manual moves, gap-routed lines and optional return cables.
-  function fit(smooth) {
-    if (!lay) return;
-    const boxes = [lay.captain, ...lay.groups, ...lay.nodes.values(), lay.fold].filter(Boolean);
-    const points = C.routes(lastMap, lay, dims).filter((r) => r.type !== 'return' || showReturn).flatMap((r) => r.points);
-    const bounds = {
+  // Where the window's bottom edge (the tray, the legend row) cuts a map too tall for it:
+  // a card shows whole with 16px to spare above the edge, or is plainly cut (24px or more
+  // of it out of sight), never flush against the edge. The 16px kept above 队长 gives way
+  // for the first; the map slides down for the second.
+  function cutShift(v) {
+    const clear = 16 * v.scale, cut = 24 * v.scale;
+    const gaps = [...lay.nodes.values()].map((b) => vpEl.clientHeight - (v.y + (b.y + b.h) * v.scale)).filter((g) => g > -cut && g < clear);
+    if (!gaps.length) return 0;
+    const whole = gaps.filter((g) => g >= 0);
+    return whole.length ? Math.min(...whole) - clear : cut + Math.max(...gaps);
+  }
+  // Actual bounds of a layout, including manual moves, gap-routed lines and optional return cables.
+  const FIT_INSET = { top: 8, right: 8, bottom: 8, left: 8 };
+  function fitBounds(l) {
+    const boxes = [l.captain, ...l.groups, ...l.nodes.values(), l.fold].filter(Boolean);
+    const points = C.routes(lastMap, l, dims).filter((r) => r.type !== 'return' || showReturn).flatMap((r) => r.points);
+    return {
       left: Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 16,
       top: Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 16,
       right: Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 16,
       bottom: Math.max(...boxes.map((b) => b.y + b.h), ...points.map((p) => p[1])) + 16,
     };
-    const inset = { top: 8, right: 8, bottom: 8, left: 8 };
+  }
+  function fit(smooth) {
+    if (!lay) return;
+    const bounds = fitBounds(lay), inset = FIT_INSET;
     view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, { min: FIT_MIN, max: 1 });
     // held at the floor and still too tall: start at the top (队长 and the first rows), not mid-map
-    if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) view.y = inset.top - bounds.top * view.scale;
+    if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) {
+      view.y = inset.top - bounds.top * view.scale;
+      view.y += cutShift(view);
+    }
     userView = false;
     glide(smooth === true);
     applyView();
@@ -382,16 +405,25 @@
   // map at close to the best scale this window allows.
   function autoLayout(map) {
     const vw = vpEl.clientWidth, vh = vpEl.clientHeight;
-    const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: Math.max((vw - 16) / FIT_MIN - 2 * dims.pad, dims.nodeW + 2 * GRID.padX), grid: true, center: true, tray: true };
     const widest = vw >= 1040 ? 3 : vw >= 700 ? 2 : 1;
-    const options = [];
-    for (let cols = widest; cols >= 1; cols--) {
-      const candidate = C.layout(map, { ...base, columnsPerProject: cols });
-      options.push({ candidate, scale: Math.max(0.01, Math.min(1, (vw - 16) / candidate.width, (vh - 16) / candidate.height)) });
-    }
-    const best = Math.max(...options.map((o) => o.scale));
-    // the widest grid whose scale is within 12% of the best this window allows
-    return (options.find((o) => o.scale >= best * 0.88) || options[0]).candidate;
+    const pick = (spacing) => {
+      const base = { ...dims, ...GRID, ...spacing, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: Math.max((vw - 16) / FIT_MIN - 2 * dims.pad, dims.nodeW + 2 * GRID.padX), grid: true, center: true, tray: true };
+      const options = [];
+      for (let cols = widest; cols >= 1; cols--) {
+        const candidate = C.layout(map, { ...base, columnsPerProject: cols });
+        options.push({ candidate, scale: Math.max(0.01, Math.min(1, (vw - 16) / candidate.width, (vh - 16) / candidate.height)) });
+      }
+      const best = Math.max(...options.map((o) => o.scale));
+      // the widest grid whose scale is within 12% of the best this window allows
+      return (options.find((o) => o.scale >= best * 0.88) || options[0]).candidate;
+    };
+    // Roomy while the whole map shows at FIT_MIN or better; tight when only that brings
+    // it all in; a map too tall either way stays roomy and is panned.
+    const whole = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= FIT_MIN;
+    const roomy = pick({});
+    if (whole(roomy)) return roomy;
+    const tight = pick(TIGHT);
+    return whole(tight) ? tight : roomy;
   }
   function zoomAt(cx, cy, factor) {
     const scale = Math.min(C.MAX_SCALE, Math.max(C.MIN_SCALE, view.scale * factor));

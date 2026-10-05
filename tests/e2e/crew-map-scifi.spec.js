@@ -38,7 +38,7 @@ async function launch() {
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [column('cap', '队长', { isMain: true, captainCrew: false, cmd: FAKE + ' --captain-statusline' }), ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
-      tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: crew[i][2], sentAt: now - 3_600_000 + i * 240_000, doneAt: now - 600_000 + i * 30_000, turnId: '', receipt: receipt(crew[i][2]) })) },
+      tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: crew[i][2], sentAt: now - 3_600_000 + i * 240_000, doneAt: now - 60_000 + i * 1000, turnId: '', receipt: receipt(crew[i][2]) })) },
   }));
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({

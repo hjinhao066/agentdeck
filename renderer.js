@@ -116,7 +116,7 @@ let config = {
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
-  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [],
+  folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
   concurrencyCap: MainCore.concurrencyCap(),
 };
@@ -163,7 +163,9 @@ if (saved) {
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
-  if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher)) config.taskBoard = { dispatcher: saved.taskBoard.dispatcher };
+  if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher) || saved.taskBoard?.autoVerify === false) {
+    config.taskBoard = { ...(['captain', 'gemini'].includes(saved.taskBoard.dispatcher) ? { dispatcher: saved.taskBoard.dispatcher } : {}), ...(saved.taskBoard.autoVerify === false ? { autoVerify: false } : {}) };
+  }
   if (saved.taskBoardView && typeof saved.taskBoardView === 'object') {
     const v = saved.taskBoardView;
     config.taskBoardView = {
@@ -173,6 +175,8 @@ if (saved) {
       completedOpen: v.completedOpen === true,
     };
   }
+  // Artifacts: the projects the user folded away
+  config.artifactsCollapsed = (Array.isArray(saved.artifactsCollapsed) ? saved.artifactsCollapsed : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500);
   if (saved.activeView === 'board') config.activeView = 'board';
   if (saved.side && typeof saved.side === 'object') config.side = saved.side;
   config.boardPositions = BoardCore.normalizeBoardPositions(saved.boardPositions);
@@ -3440,7 +3444,7 @@ const deckHost = {
   columns: () => columns, terms, config, saveConfig, flushConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName, seatLaunchCommand,
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
   clipboardWrite: (text) => window.deck.clipboardWrite(text),
-  platform: env.platform,
+  platform: env.platform, home: env.home,
   focusedId: () => focusedId,
   setFocused: (id) => { focusedId = id; syncNav(); },
   layout: () => { updateColumnStyles(); fitAll(); syncChromeState(); },

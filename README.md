@@ -119,7 +119,16 @@ the middle:
   weekdays at a time, or every N minutes/hours. It runs only while AgentDeck is
   open; a run that was due while it was closed is shown as missed, not fired
   late. A busy session is retried for up to 30 minutes.
-- **Artifacts** lists files and links that agents mentioned in their replies.
+- **Artifacts** has two tabs. 回执交付 collects the files the crew listed in
+  their receipts (the 「文件：」 list `ledger` prints), grouped by project, with no
+  action from anyone: it reads each session's last receipt, 队长's task list and
+  the task cards in 队长's conversations, so receipts from before this feature
+  count too. A path appears once, under the session that delivered it last
+  (Windows paths ignore case and slash direction); sessions without a project
+  go under 未分组; a file no longer on disk stays listed, greyed out and
+  labelled. Each row previews on the right and has icon buttons to copy the
+  path, show it in Finder/Explorer and jump to the session. 回复里提到的 is the
+  earlier collection: files and links the agents mentioned in their replies.
 - **Skills** lists every `SKILL.md` the agent CLIs on this machine can see, so
   you can read one rendered or edit its full Markdown and save it (⌘S). See below.
 
@@ -177,6 +186,11 @@ Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；�
 项目里再有会话开工会自动重新显示，不动你的视角。画布右下角（图例行右侧）有缩小/比例/放大/「适应画布」；
 首次进入自动适应一次，没手动拖动或缩放过时实时更新会重新适应，动过之后保持你的视角。
 卡片标题最多两行，「···」或失败卡片的「查看」打开详情浮层（完整回执、文件、实时活动、打开终端；Esc 关闭）。
+架构图只留当前的活：做完的队长会话没有新指令 10 分钟后自动归档（AgentDeck 重启后也照此处理，重启时已超时的在终端安静约 1 分钟后归档）；
+失败或停下的会话要等它的看板卡片已完成、或同一张卡已由另一个会话接手才自动归档，没人接手的失败留在图上等队长处理。
+项目框标题的数字只统计图上还在的会话（不含已归档历史），和队长框一致。
+项目名不分大小写（AgentDeck 和 agentdeck 是同一个项目框，显示最早那个会话写的写法，已存数据不改）；
+项目里没有任何干活、待补充、排队、失败、停下、空闲的会话（全部已完成或已归档）时，项目框从图上消失，有新会话再出现；「显示已归档」时仍列出全部项目。
 连线是细蓝线，只有执行中的线路有少量移动光点，审查是紫色虚线；悬停卡片高亮它的路径。
 架构图标签右边的清单图标从右侧滑出「版本进度」抽屉（架构图让出位置，不被遮住；Esc 或关闭图标收起，
 开合状态会记住）。版本取 agentdeck 项目卡片里提到的、比当前 App 新的最小版本号（如 1.1.4）。

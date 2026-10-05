@@ -56,13 +56,13 @@ function requestMobile(op, input) {
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 // Test profiles must never write the user's shared board.
-const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => {
+function readLocalConfig() {
   const file = path.join(app.getPath('userData'), 'config.json');
-  const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-  return localSessions(cfg);
-} });
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+}
+const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
   return taskStore[payload.op](payload.input || {});
 });
 
@@ -479,7 +479,12 @@ function setupBoardControl() {
     if (!boardRendererReady) return false;
     send('task-board:start', input);
     return false; // Renderer acknowledges through the durable dispatched marker.
-  }, onChange: () => send('task-board:changed', {}) });
+  }, onChange: () => send('task-board:changed', {}),
+  // Automatic verification: the renderer opens the reviewer / sends the rework,
+  // then marks the durable claim delivered. Off when the local setting says so.
+  onReview: (input) => { if (!boardRendererReady) return false; send('task-board:review', input); return false; },
+  onRework: (input) => { if (!boardRendererReady) return false; send('task-board:rework', input); return false; },
+  autoVerify: () => readLocalConfig().taskBoard?.autoVerify !== false });
   heartbeat.start();
   app.once('before-quit', () => heartbeat.close());
 }
@@ -633,6 +638,22 @@ function resolveClick(msg, allowAncestor) {
   return exact ? { target: exact, fallback: false } : null;
 }
 
+// Open a plain directory so the user can see inside it. Judge the real path:
+// a directory whose last segment has an extension (.app, .bundle, .workflow —
+// any dot followed by a letter, not an allow-list) is a package and is only
+// selected, as is a symlink that lands on one. A numeric tail such as
+// agentdeck-1.1.9 is a version, not an extension. Files, and any realpath or
+// stat failure, are selected too.
+function revealOpens(target) {
+  try {
+    const real = fs.realpathSync(target);
+    if (!fs.statSync(real).isDirectory()) return false;
+    return !/^\.[A-Za-z]/.test(path.extname(path.basename(real)));
+  } catch (_) {
+    return false;
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1600,
@@ -725,7 +746,7 @@ app.whenReady().then(async () => {
   setupBoardControl();
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
-    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR,
+    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
   });
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
@@ -1322,13 +1343,10 @@ app.whenReady().then(async () => {
     // no-op, not a Finder window on some unrelated folder.
     const r = resolveClick(msg, true);
     if (!r) { send('toast', { text: '路径不存在：' + shortText(msg && msg.raw) }); return; }
-    if (r.fallback) send('toast', { text: '该路径不完整存在，已打开最深的真实一层：' + r.target });
-    try {
-      const stat = fs.statSync(r.target);
-      // A directory opens in Finder; a file is revealed within its parent folder.
-      if (stat.isDirectory()) shell.openPath(r.target);
-      else shell.showItemInFolder(r.target);
-    } catch (_) {}
+    const open = revealOpens(r.target);
+    if (r.fallback) send('toast', { text: '该路径不完整存在，已' + (open ? '打开' : '定位到') + '最深的真实一层：' + r.target });
+    if (open) shell.openPath(r.target);
+    else shell.showItemInFolder(r.target);
   });
 
   // Electron's default View accelerators zoom the entire page before the
@@ -1356,6 +1374,37 @@ app.whenReady().then(async () => {
 // the page has answered never reaches the real exit. The timeout always
 // schedules the same quit as the page's ack.
 let quitGate = null;
+let quitWatchdog = null;
+// Electron maps process.exit to app.exit; neither can break stuck native
+// teardown or a blocked main loop. A separate Node-mode process owns the hard
+// deadline. Its stdin is held open only by this process, so a normal exit
+// cancels the deadline and cannot leave a timer targeting a reused PID.
+function armQuitWatchdog() {
+  if (quitWatchdog) return;
+  const deadlineMs = 5000;
+  const script = `
+    const target = Number(process.argv[1]);
+    if (target !== process.ppid || !Number.isSafeInteger(target) || target < 1) process.exit(1);
+    const timer = setTimeout(() => {
+      if (process.stdin.readableEnded || process.ppid !== target) return process.exit(0);
+      try { process.kill(target, 'SIGKILL'); } catch (_) {}
+      process.exit(0);
+    }, ${deadlineMs});
+    process.stdin.on('end', () => { clearTimeout(timer); process.exit(0); });
+    process.stdin.resume();
+  `;
+  quitWatchdog = spawn(process.execPath, ['-e', script, String(process.pid)], {
+    env: { ELECTRON_RUN_AS_NODE: '1', ...(isWin ? { SystemRoot: process.env.SystemRoot } : {}) },
+    stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true,
+  });
+  quitWatchdog.on('error', () => {});
+  quitWatchdog.stdin.on('error', () => {});
+  quitWatchdog.unref();
+  quitWatchdog.stdin.unref();
+  // Also cover a watchdog spawn failure while the main loop is responsive.
+  setTimeout(() => { try { process.kill(process.pid, 'SIGKILL'); } catch (_) {} }, deadlineMs).unref();
+}
+app.prependListener('before-quit', armQuitWatchdog);
 function readResumeEnabled() {
   try { return RestartResume.resumeEnabled(JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))); }
   catch (_) { return true; }
@@ -1367,7 +1416,7 @@ function parkedSessions() {
     const lookback = 14 * 24 * 3600 * 1000;
     const columns = (cfg.columns || []).filter((col) => col && !col.isMain && col.captainCrew).map((col) => ({
       id: col.id, provider: RestartResume.providerOf(col.cmd), cwd: col.cwd || '',
-      since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '',
+      since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '', owner: col.modelSessionOwner || '',
     })).filter((col) => ['Cursor', 'Codex', 'Antigravity'].includes(col.provider));
     return AgentSessions.resolveSessions(columns, { roots: AgentSessions.defaultRoots(os.homedir()), lookbackMs: lookback });
   } catch (_) { return {}; }
@@ -1379,9 +1428,9 @@ quitGate = RestartResume.createQuitGate({
   onPark: () => { send('park-for-restart', { sessions: parkedSessions() }); },
   quit: () => {
     app.quit();
-    // If Electron swallowed quit, the process must still end. Playwright waits
-    // on that, and a swallowed quit used to sit until the test timeout.
-    setTimeout(() => { try { app.exit(0); } catch (_) {} process.exit(0); }, 1000);
+    // Try normal Electron teardown first; the OS watchdog remains armed if
+    // either Electron exit path returns without ending the real process.
+    setTimeout(() => { try { app.exit(0); } catch (_) {} }, 1000);
   },
 });
 onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
@@ -1414,11 +1463,9 @@ app.on('before-quit', (event) => {
   ptys.clear();
 });
 // before-quit already removed credentials and closed PTY masters. Exit
-// immediately so inspector sockets cannot keep quit waiting. app.exit()
-// returns without ending the process once the chat page is still tearing
-// down, so follow it with process.exit.
+// immediately so inspector sockets cannot keep quit waiting. The independent
+// watchdog still enforces the deadline if native teardown does not finish.
 app.on('will-quit', () => {
   app.exit(0);
-  process.exit(0);
 });
 app.on('window-all-closed', () => { if (!isMac) app.quit(); });

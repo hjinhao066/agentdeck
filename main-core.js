@@ -240,7 +240,7 @@
       '10. 判断会话卡没卡先用 peek，至少等 5 分钟！会话启动、复杂分析或大模型深度思考时，终端可能数分钟内没有完整文本输出，这完全正常，绝对不要急着判定会话卡死；排查状态优先使用轻量 peek 察看终端滚动尾部，至少观察 5 分钟以上再做介入或重试。',
       `11. 你开的会话在后台跑，用户平时看不到它们，靠你的汇报了解进度。同一时间最多 ${limit} 个会话在干活：再 new 会自动排队，有空位时 AgentDeck 自动开新会话并把任务发过去，不用你重派。用 tell 给还在忙的会话追加指令会标记为「待补充」，等它空下来自动执行。`,
       `12. 做完的会话没有新指令 ${ARCHIVE_AFTER / 60_000} 分钟后会自动归档（终端关掉，对话保留）；以后用 tell 发给它会自动恢复。`,
-      '13. 开工先跑 ledger 和 task list。用户交代的任务默认先记进看板，用 task add 记入 ~/.agents/boards/tasks/<项目名>.json（鸡毛蒜皮可直接做）；new 必须带 --task-id 卡片id、--project 项目名。状态由程序随命令回执自动改，不花 token 挪卡。需要验收就建卡时 --verify：执行回执后进 review，再 new --task-id 同一卡片开审查会话；通过 complete 进 done，不通过 complete --failed 回 doing 返工。也可 task move 回 doing 驳回；连续失败两次 held，先由队长决定，不自动重试。Markdown 看板是迁移来源和项目背景，不再靠编辑它驱动状态。不要写密钥和长日志。',
+      '13. 开工先跑 ledger 和 task list。用户交代的任务默认先记进看板，用 task add 记入 ~/.agents/boards/tasks/<项目名>.json（鸡毛蒜皮可直接做）；new 必须带 --task-id 卡片id、--project 项目名。状态由程序随命令回执自动改，不花 token 挪卡。需要验收就建卡时 --verify：执行回执后进 review，程序自动开一个和执行会话不同提供方的审查会话（和 new 一样受并发上限、内存吃紧暂停约束），不要自己再开审查，也不用 tell 返工：审查通过进 done；不通过时审查员的原话自动发回原执行会话返工（已归档会自动恢复），交回后自动再审；连续失败两次 held，先由队长决定，不再自动重试。选不出审查者（同一提供方或额度用尽）时卡片停在 review 并写明原因，这时才由你 new --task-id 同一卡片手动开审查会话；也可 task move 回 doing 驳回。没带 --verify 的重要活按第 16 条自己验收。Markdown 看板是迁移来源和项目背景，不再靠编辑它驱动状态。不要写密钥和长日志。',
       `14. 并发上限 ${limit}（设置里的同时干活上限）。把控看内存压力等级，不要看 swap 还剩多少：压缩和 swap 增长都属正常，不要因为 swap 用了几个 G 就少开。macOS 可只读 sysctl -n kern.memorystatus_vm_pressure_level（1 正常、2 警告照常开、4 危急先别开）。危急时自动开新会话会暂停，排队卡片写「内存吃紧，稍后自动开」，压力下来后自动补位，不用重派。Windows 没有这个指标，只按上限和 ledger 里干活的会话数把控。真正要避免的是多组全量 E2E 同时跑。`,
       '15. 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。ledger 和旧回执超出摘要 300 字或 5 个文件路径的部分用 read 按需查；命令回执保持原样，提交摘要要简短，不要整段重读旧对话。',
       '16. 重要的活完成后，派 Gemini 3.8 Flash（agy --dangerously-skip-permissions --model gemini-3.8-flash-high）验收：文件确实存在、测试真的通过、截图真的落盘。验收不通过，把具体问题打回原队员，最多返工 2 轮；仍不通过，队长换更强模型或自己处理，最后才找用户。验收通过再汇报。',
@@ -410,14 +410,46 @@
       finished: items.filter((it) => !busy(it)).sort((a, b) => finished(b) - finished(a)).map((it) => it.id),
     };
   }
+  // A failed or stopped assignment stays on the map until someone has dealt with
+  // it: its board card is done (or archived), or the same card was handed to
+  // another session that is still working, queued, waiting, or already done.
+  // A later attempt that also failed is not that handover: earlier failures may
+  // leave, and the newest one stays until the card is finished or really taken
+  // over. A binding that still names an earlier failure is not a handover.
+  // cards: { id: { status, archived, session_id } }.
+  // Without a card nobody can take over, so it stays for 队长 to decide.
+  function handledElsewhere(s, last, colId, cards) {
+    if (!last.boardId) return false;
+    const card = cards && cards[last.boardId];
+    if (card && (card.status === 'done' || card.archived)) return true;
+    const tasks = s.tasks || [];
+    const other = (t) => t && t.boardId === last.boardId && t.colId && t.colId !== colId;
+    const openOrDone = ['queued', 'waiting', 'working', 'quota', 'input', 'asking', 'done'];
+    if (tasks.some((t) => other(t) && (t.sentAt || 0) >= (last.sentAt || 0) && openOrDone.includes(t.status))) return true;
+    // Strictly earlier failures may leave. An equal timestamp is not "later",
+    // so two failures at the same moment both stay.
+    if (tasks.some((t) => other(t) && (t.sentAt || 0) > (last.sentAt || 0) && (t.status === 'failed' || t.status === 'stopped'))) return true;
+    if (!(card && card.session_id && card.session_id !== colId)) return false;
+    const bound = tasks.filter((t) => t && t.colId === card.session_id && t.boardId === last.boardId).at(-1);
+    if (bound && (bound.status === 'failed' || bound.status === 'stopped') && (bound.sentAt || 0) <= (last.sentAt || 0)) return false;
+    return true;
+  }
   // Whether a finished background session can be archived now: its last card
-  // is closed, 队长 has its receipt, nothing ran for ARCHIVE_AFTER.
+  // is closed, 队长 has its receipt, nothing ran for ARCHIVE_AFTER. A failed or
+  // stopped one also needs handledElsewhere.
   // s: { tasks, pending, inflight }; lastActive: its last turn's time.
-  function archivable(s, colId, lastActive, now, after = ARCHIVE_AFTER) {
+  function archivable(s, colId, lastActive, now, after = ARCHIVE_AFTER, cards = null) {
     const last = latestTasks(s.tasks).get(colId);
     if (!last || OPEN.includes(last.status)) return false;
     if ([...(s.pending || []), ...(s.inflight || [])].some((p) => p.colId === colId)) return false;
-    return now - Math.max(last.doneAt || 0, last.sentAt || 0, lastActive || 0) >= after;
+    if (now - Math.max(last.doneAt || 0, last.sentAt || 0, lastActive || 0) < after) return false;
+    return last.status === 'done' || handledElsewhere(s, last, colId, cards);
+  }
+  // Failed or stopped with a board card nobody has resolved yet: worth looking
+  // up the card (see archivable).
+  function needsCardCheck(s, colId) {
+    const last = latestTasks(s.tasks).get(colId);
+    return !!last && (last.status === 'failed' || last.status === 'stopped') && !!last.boardId;
   }
 
   // Earlier 队长 conversations (config.captainHistory). Only this metadata is
@@ -751,7 +783,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });

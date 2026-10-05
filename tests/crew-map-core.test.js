@@ -127,6 +127,7 @@ function reviewScenario(extra = {}) {
       task('k3', 'c3003', 'done', 3, { receipt: { summary: '审查通过', files: [] } }),
     ],
     prompts: { c3003: '请审查 /demo/login.js 和 /demo/register.js' },
+    showArchived: true,   // all of them are done: only the archive view still lists such a project
     ...extra,
   });
 }
@@ -245,19 +246,44 @@ function noSharedStretch(routes) {
 }
 
 
-test('completed projects fold to a summary, including archived sessions; failed/stopped do not', () => {
-  const map = C.buildCrewMap({ captain, columns: [col('b', 'bad', { project: '失败' }), col('s', 'stop', { project: '停下' })],
+test('a project with nothing left to do leaves the map; failed or stopped ones stay', () => {
+  const input = { captain, columns: [col('b', 'bad', { project: '失败' }), col('s', 'stop', { project: '停下' }), col('d', 'fin', { project: '做完' })],
     archived: [{ id: 'a', title: 'old', captainCrew: true, project: '完成' }],
-    tasks: [task('a', 'a', 'done', 1), task('b', 'b', 'failed', 2), task('s', 's', 'stopped', 3)] });
+    tasks: [task('a', 'a', 'done', 1), task('b', 'b', 'failed', 2), task('s', 's', 'stopped', 3), task('d', 'd', 'done', 4)] };
+  const map = C.buildCrewMap(input);
+  assert.deepEqual(map.projects.map((g) => g.key), ['失败', '停下']);
+  assert.deepEqual(map.nodes.map((n) => n.id), ['b', 's']);
+  assert.deepEqual(map.edges.filter((e) => e.type === 'dispatch').map((e) => e.to), ['b', 's']);
   const lay = C.layout(map);
-  assert.equal(lay.groups.find((g) => g.key === '完成').collapsed, true);
-  assert.equal(lay.nodes.has('a'), false);
-  assert.equal(lay.nodes.has('b'), true);
-  assert.equal(lay.nodes.has('s'), true);
-  assert.equal(C.routes(map, lay).some((r) => r.from === 'a' || r.to === 'a'), false);
-  assert.equal(C.layout(map, { collapsedProjects: { '完成': false } }).nodes.has('a'), true);
+  assert.equal(lay.nodes.has('d') || lay.nodes.has('a'), false);
+  assert.equal(C.routes(map, lay).some((r) => r.from === 'd' || r.to === 'd'), false);
+  assert.equal(map.captain.line, '1 失败 · 1 已停下', 'the top box counts what is on the map');
+  // the archive view still lists every project
+  assert.deepEqual(C.buildCrewMap({ ...input, showArchived: true }).projects.map((g) => g.key).sort(), ['停下', '做完', '失败', '完成'].sort());
+  // a new session in a finished project brings its box back
+  const back = C.buildCrewMap({ ...input, tasks: [...input.tasks, task('n', 'd', 'working', 5)] });
+  assert.deepEqual(back.projects.map((g) => g.key), ['失败', '停下', '做完']);
+  // an archived session does not keep a project on the map; a queued or waiting one does
+  const waiting = C.buildCrewMap({ captain, columns: [], tasks: [task('q', '', 'waiting', 1, { project: '排队' })] });
+  assert.deepEqual(waiting.projects.map((g) => g.key), ['排队']);
   const saved = C.normalizeSaved({ collapsedProjects: { '完成': false, '失败': true, junk: 'yes' } });
   assert.deepEqual(saved.collapsedProjects, { '完成': false, '失败': true });
+});
+
+test('project names are grouped without regard to case, shown as the earliest session spelled it', () => {
+  const map = C.buildCrewMap({ captain, columns: [col('a', 'one', { project: 'agentdeck', state: 'working' }), col('b', 'two', { project: 'AgentDeck', state: 'working' }), col('c', 'three', { project: 'AGENTDECK' }), col('d', 'other', { project: 'Hermes', state: 'working' })],
+    tasks: [task('t1', 'b', 'working', 1), task('t2', 'a', 'working', 2), task('t3', 'c', 'done', 3), task('t4', 'd', 'working', 5)] });
+  assert.deepEqual(map.projects.map((g) => [g.key, g.nodes.length]), [['AgentDeck', 3], ['Hermes', 1]]);
+  assert.ok(map.nodes.filter((n) => n.project === 'AgentDeck').length === 3);
+  assert.deepEqual(map.projects[0].counts, { working: 2, done: 1 });
+  assert.equal(C.layout(map).groups.length, 2);
+  // different names stay different, and an empty name is its own project
+  const other = C.buildCrewMap({ captain, columns: [col('a', 'x', { project: 'agentdeck', state: 'working' }), col('b', 'y', { project: 'agentdeck2', state: 'working' }), col('c', 'z', { project: '', state: 'working' })], tasks: [] });
+  assert.equal(other.projects.length, 3);
+  // the input is never rewritten
+  const column = col('e', 'e', { project: 'Late', state: 'working' });
+  C.buildCrewMap({ captain, columns: [col('f', 'f', { project: 'late', state: 'working' }), column], tasks: [task('x', 'f', 'working', 9), task('y', 'e', 'working', 1)] });
+  assert.equal(column.project, 'Late');
 });
 
 test('waiting work carries project and declared reviews; session metadata survives task pruning', () => {
@@ -273,7 +299,7 @@ test('waiting work carries project and declared reviews; session metadata surviv
 });
 
 test('review-sounding titles and prompts alone create no review links', () => {
-  const map = C.buildCrewMap({ captain, columns: [col('a', '登录接口'), col('r', '审查登录接口')], tasks: [], prompts: { r: 'review a 登录接口' } });
+  const map = C.buildCrewMap({ captain, columns: [col('a', '登录接口'), col('r', '审查登录接口')], tasks: [], showArchived: true, prompts: { r: 'review a 登录接口' } });
   assert.equal(map.nodes.find((n) => n.id === 'r').review, false);
   assert.deepEqual(map.edges.filter((e) => e.type === 'review'), []);
 });
@@ -282,15 +308,18 @@ test('archived project summaries survive task pruning; declared user-opened targ
   const archivedMap = C.buildCrewMap({ captain, columns: [], tasks: [], archived: [
     { id: 'old', title: 'old', captainCrew: true, project: '完成', lastReceipt: { summary: '成功', explicit: true } },
   ] });
-  assert.equal(archivedMap.projects[0].completed, true);
-  assert.equal(C.layout(archivedMap).groups[0].collapsed, true);
+  assert.deepEqual(archivedMap.projects, [], 'a finished, archived project is not on the map');
+  assert.equal(archivedMap.archivedCount, 1);
+  const withArchive = C.buildCrewMap({ captain, columns: [], tasks: [], showArchived: true, archived: [{ id: 'old', title: 'old', captainCrew: true, project: '完成', lastReceipt: { summary: '成功', explicit: true } }] });
+  assert.equal(withArchive.projects[0].completed, true);
+  assert.equal(C.layout(withArchive).groups[0].collapsed, true);
   const failedMap = C.buildCrewMap({ captain, columns: [], tasks: [], showArchived: true, archived: [
     { id: 'failed', title: 'failed', captainCrew: true, project: '失败', lastReceipt: { failed: '检查失败', explicit: true } },
   ] });
   assert.equal(failedMap.projects[0].completed, false);
   assert.equal(failedMap.nodes[0].line, '失败：检查失败');
   assert.equal(failedMap.edges.find((e) => e.type === 'return').kind, 'failed');
-  const map = C.buildCrewMap({ captain, columns: [col('manual', 'user', { captainCrew: false }), col('r', 'inspection', { reviews: ['manual'] })], tasks: [] });
+  const map = C.buildCrewMap({ captain, columns: [col('manual', 'user', { captainCrew: false }), col('r', 'inspection', { reviews: ['manual'], state: 'working' })], tasks: [] });
   assert.deepEqual(map.edges.filter((e) => e.type === 'review'), [{ from: 'manual', to: 'r', type: 'review' }]);
 });
 
@@ -389,15 +418,16 @@ function trayMap() {
 
 test('a project with nothing working, waiting on an answer or queued is inactive and goes to the tray with real counts', () => {
   const map = trayMap();
-  assert.deepEqual(map.projects.filter((p) => p.inactive).map((p) => p.key).sort(), ['ai-unified-map', 'hermes-quality', 'opencli', 'type4me-windows']);
+  assert.deepEqual(map.projects.filter((p) => p.inactive).map((p) => p.key).sort(), ['hermes-quality'], 'finished projects are not on the map at all');
+  assert.deepEqual(map.projects.map((p) => p.key).sort(), ['agentdeck', 'hermes-quality']);
   assert.equal(map.projects.find((p) => p.key === 'agentdeck').inactive, false);
   const tray = C.trayProjects(map, {});
-  assert.deepEqual(tray.map((p) => [p.key, p.failed, p.expanded]), [['type4me-windows', 0, false], ['ai-unified-map', 0, false], ['hermes-quality', 1, false], ['opencli', 0, false]]);
-  assert.equal(C.traySummary(tray), '4 个项目（3 个已完成 · 1 个失败）');
+  assert.deepEqual(tray.map((p) => [p.key, p.failed, p.expanded]), [['hermes-quality', 1, false]]);
+  assert.equal(C.traySummary(tray), '1 个项目（1 个失败）');
   assert.equal(C.traySummary([]), '0 个项目');
   // a user-opened project stays listed (chip pressed), a user-folded active project is not a tray project
-  const opened = C.trayProjects(map, { opencli: false });
-  assert.equal(opened.find((p) => p.key === 'opencli').expanded, true);
+  const opened = C.trayProjects(map, { 'hermes-quality': false });
+  assert.equal(opened.find((p) => p.key === 'hermes-quality').expanded, true);
   assert.deepEqual(C.trayProjects(map, { agentdeck: true }).map((p) => p.key), tray.map((p) => p.key));
   assert.equal(C.isCollapsed({ key: 'x', inactive: true, completed: false }, {}, true), true);
   assert.equal(C.isCollapsed({ key: 'x', inactive: false, completed: false }, {}, true), false);
@@ -515,11 +545,31 @@ test('computeFit shows the bounds whole and centred, clear of the insets, never 
 test('the signature changes when a project turns inactive, and the detail text keeps the whole receipt', () => {
   const long = '修'.repeat(300);
   const a = C.buildCrewMap({ captain, columns: [col('a', 'A', { project: 'P', state: 'working' })], tasks: [task('t', 'a', 'working', 1)] });
-  const b = C.buildCrewMap({ captain, columns: [col('a', 'A', { project: 'P', state: 'done' })], tasks: [task('t', 'a', 'done', 1, { receipt: { summary: long } })] });
+  const b = C.buildCrewMap({ captain, columns: [col('a', 'A', { project: 'P', state: 'done' })], tasks: [task('t', 'a', 'stopped', 1, { receipt: { summary: long } })] });
   assert.notEqual(C.signature(a), C.signature(b));
   assert.equal(b.projects[0].inactive, true);
   assert.ok(b.nodes[0].line.length <= 140);
   assert.equal(b.nodes[0].full, long);
   assert.equal(C.receiptFull({ receipt: { failed: ' 坏了 ' } }), '失败：坏了');
   assert.equal(C.receiptFull(null, { summary: '旧' }), '旧');
+});
+
+test('a project box counts only the sessions still on the map, like 队长 box; archived history is left out', () => {
+  const archived = [1, 2, 3].map((i) => ({ id: `old${i}`, title: `旧${i}`, captainCrew: true, project: 'p', archivedAt: i }));
+  const map = C.buildCrewMap({
+    captain,
+    columns: [col('a', '干活', { project: 'p', state: 'working' }), col('b', '做完', { project: 'p' })],
+    archived,
+    tasks: [task('t1', 'a', 'working', 10, { project: 'p' }), task('t2', 'b', 'done', 11, { project: 'p', receipt: { summary: 'ok' } }),
+      task('o1', 'old1', 'failed', 1, { project: 'p', receipt: { failed: 'x' } }), task('o2', 'old2', 'done', 2, { project: 'p' }), task('o3', 'old3', 'stopped', 3, { project: 'p' })],
+  });
+  const p = map.projects.find((x) => x.key === 'p');
+  assert.deepEqual(p.counts, { working: 1, done: 1 });
+  assert.equal(C.summaryLine(p.counts), '1 干活中 · 1 已完成');
+  assert.equal(map.captain.line, C.summaryLine(p.counts), 'same figures as the top box');
+  assert.equal(map.archivedCount, 3);
+  // showing the archive does not change the tally
+  const shown = C.buildCrewMap({ captain, columns: [col('a', '干活', { project: 'p' })], archived, showArchived: true, tasks: [task('t1', 'a', 'working', 10, { project: 'p' }), task('o1', 'old1', 'failed', 1, { project: 'p' })] });
+  assert.deepEqual(shown.projects[0].counts, { working: 1 });
+  assert.equal(shown.nodes.length, 4);
 });

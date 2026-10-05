@@ -57,6 +57,8 @@ contextBridge.exposeInMainWorld('deck', {
   chatDelete: (id) => ipcRenderer.send('chat:delete', { id }),
   // Right-hand pane: file preview, embedded browser.
   previewRead: (raw, id, cont) => ipcRenderer.invoke('preview:read', { raw, id, cont }),
+  // Artifacts: which delivered files are still on disk (0 gone, 1 file, 2 folder).
+  artifactsStat: (paths) => ipcRenderer.invoke('artifacts:stat', { paths }),
   sideBrowserOpen: (url) => ipcRenderer.send('side:browser-open', { url }),
   sideBrowserPdf: (raw, id, cont) => ipcRenderer.send('side:browser-pdf', { raw, id, cont }),
   sideBrowserBounds: (b) => ipcRenderer.send('side:browser-bounds', b),
@@ -106,6 +108,8 @@ contextBridge.exposeInMainWorld('deck', {
   // Fixed shared task store; no caller-selected paths or arbitrary IPC.
   taskBoard: (op, input) => ipcRenderer.invoke('task-board:request', { op, input }),
   onTaskStart: (cb) => ipcRenderer.on('task-board:start', (_e, m) => cb(m)),
+  onTaskReview: (cb) => ipcRenderer.on('task-board:review', (_e, m) => cb(m)),
+  onTaskRework: (cb) => ipcRenderer.on('task-board:rework', (_e, m) => cb(m)),
   onTasksChanged: (cb) => {
     const listener = () => cb();
     ipcRenderer.on('task-board:changed', listener);
