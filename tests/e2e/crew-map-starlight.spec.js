@@ -80,7 +80,7 @@ async function open(width, height, theme) {
   await expect(page.locator('#crewMap')).toBeVisible();
 }
 // a glide has landed: the view's own (cm-smooth) and every frame and card's
-const settled = () => expect.poll(() => page.evaluate(() => !document.querySelector('.cm-canvas.cm-smooth') && ![...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].some((n) => n.getAnimations().some((a) => !a.animationName && !(a instanceof CSSTransition) && a.playState === 'running')))).toBe(true);
+const settled = () => expect.poll(() => page.evaluate(() => !document.querySelector('.cm-canvas.cm-smooth') && ![...document.querySelectorAll('.cm-node, .cm-pane, .cm-project, .cm-edges')].some((n) => n.getAnimations().some((a) => a.effect && Number.isFinite(a.effect.getComputedTiming().iterations) && a.playState === 'running')))).toBe(true);
 // Running lights are frozen at a set point of their cycle, so a picture shows them lit the same way every time.
 async function shot(name) {
   if (!shots) return;

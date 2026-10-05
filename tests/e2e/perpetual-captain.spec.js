@@ -125,7 +125,10 @@ test.beforeEach(async () => {
   await confirmedQuotas();
   await expect.poll(() => records('seat-env.jsonl').some((r) => r.colId === WORKER), { timeout: 20000 }).toBe(true);
 });
-test.afterEach(async () => {
+test.afterEach(async ({}, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus && profile) {
+    await testInfo.attach('captured-prompts', { body: JSON.stringify(records('prompt-columns.jsonl'), null, 2), contentType: 'application/json' });
+  }
   if (application) {
     const child = application.process(), force = setTimeout(() => {
       // Playwright launches this Electron in its own process group. Close its
