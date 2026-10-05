@@ -19,10 +19,18 @@ function runtime(t, dispatcher = 'gemini') {
   let quotaOut = false, afterRequest;
   const window = {
     MainCore: M, BoardCore: B,
-    QuotaCore: { commandQuota: () => ({ out: quotaOut }) },
+    QuotaCore: {
+      commandQuota: () => ({ out: quotaOut }),
+      // This harness flags every command out together, so there is no same-tier peer to switch to.
+      quotaFallback: (_store, cmd) => quotaOut
+        ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
+        : { action: 'open', cmd, note: '' },
+    },
     ChatUI: { addCard() {}, updateCard() {}, hasDraft: () => false, turnsOf: () => [] },
     deck: {
       onTaskStart() {},
+      onTaskReview() {},
+      onTaskRework() {},
       taskBoard: async (op, input) => {
         requests.push({ op, input });
         const result = store[op](input);
