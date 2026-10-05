@@ -82,36 +82,24 @@ test('two project groups contain 3 workers + 1 declared reviewer and 2 workers, 
   await shot('two-projects-expanded.png');
 });
 
-test('finished projects go to the bottom tray; the chip and the project toggle are accessible and persist across reload', async () => {
+test('a finished project leaves the map, and comes back when one of its sessions works again', async () => {
   await page.evaluate(() => {
     MainSession.state().tasks.find((t) => t.colId === 'b1').status = 'done';
     CrewMap.refresh();
   });
   await expect(group('报表服务')).toHaveCount(0);
   await expect(node('b1')).toHaveCount(0);
-  await expect(page.locator('.cm-tray-sum')).toHaveText('1 个项目（1 个已完成）');
-  const chip = page.locator('.cm-chip[data-project="报表服务"]');
-  await expect(chip).toHaveAttribute('title', '展开到画布：报表服务');
-  await expect(chip).toHaveAttribute('aria-pressed', 'false');
-  await shot('completed-project-in-tray.png');
-  await chip.focus();
-  await page.keyboard.press('Enter');
-  await expect(chip).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.cm-tray')).toBeHidden();
+  await expect(group('客户门户')).toHaveCount(1);
+  await shot('completed-project-gone.png');
+  await page.evaluate(() => {
+    MainSession.state().tasks.find((t) => t.colId === 'b1').status = 'working';
+    CrewMap.refresh();
+  });
+  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('1 干活中 · 1 已完成');
   await expect(node('b1')).toBeVisible();
-  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('2 已完成');
-  await expect.poll(() => page.evaluate(async () => (await window.deck.loadConfig()).crewMap.collapsedProjects['报表服务'])).toBe(false);
-  await page.reload();
-  await page.evaluate(() => showView('board'));
-  await expect(group('报表服务')).not.toHaveClass(/collapsed/);
   await expect(node('r1')).toHaveClass(/review/);
   expect(await page.evaluate(() => columns.find((c) => c.id === 'r1').reviews)).toEqual(['a1', 'a2']);
-  const toggle = group('报表服务').getByRole('button', { name: '折叠项目：报表服务' });
-  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  await toggle.click();
-  await expect(group('报表服务')).toHaveCount(0);
-  await expect(chip).toHaveAttribute('aria-pressed', 'false');
-  await chip.click();
-  await expect(node('b1')).toBeVisible();
 });
 
 test('project cards open real sessions where the user can speak directly', async () => {

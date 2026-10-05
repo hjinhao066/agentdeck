@@ -406,14 +406,46 @@
       finished: items.filter((it) => !busy(it)).sort((a, b) => finished(b) - finished(a)).map((it) => it.id),
     };
   }
+  // A failed or stopped assignment stays on the map until someone has dealt with
+  // it: its board card is done (or archived), or the same card was handed to
+  // another session that is still working, queued, waiting, or already done.
+  // A later attempt that also failed is not that handover: earlier failures may
+  // leave, and the newest one stays until the card is finished or really taken
+  // over. A binding that still names an earlier failure is not a handover.
+  // cards: { id: { status, archived, session_id } }.
+  // Without a card nobody can take over, so it stays for 队长 to decide.
+  function handledElsewhere(s, last, colId, cards) {
+    if (!last.boardId) return false;
+    const card = cards && cards[last.boardId];
+    if (card && (card.status === 'done' || card.archived)) return true;
+    const tasks = s.tasks || [];
+    const other = (t) => t && t.boardId === last.boardId && t.colId && t.colId !== colId;
+    const openOrDone = ['queued', 'waiting', 'working', 'quota', 'input', 'asking', 'done'];
+    if (tasks.some((t) => other(t) && (t.sentAt || 0) >= (last.sentAt || 0) && openOrDone.includes(t.status))) return true;
+    // Strictly earlier failures may leave. An equal timestamp is not "later",
+    // so two failures at the same moment both stay.
+    if (tasks.some((t) => other(t) && (t.sentAt || 0) > (last.sentAt || 0) && (t.status === 'failed' || t.status === 'stopped'))) return true;
+    if (!(card && card.session_id && card.session_id !== colId)) return false;
+    const bound = tasks.filter((t) => t && t.colId === card.session_id && t.boardId === last.boardId).at(-1);
+    if (bound && (bound.status === 'failed' || bound.status === 'stopped') && (bound.sentAt || 0) <= (last.sentAt || 0)) return false;
+    return true;
+  }
   // Whether a finished background session can be archived now: its last card
-  // is closed, 队长 has its receipt, nothing ran for ARCHIVE_AFTER.
+  // is closed, 队长 has its receipt, nothing ran for ARCHIVE_AFTER. A failed or
+  // stopped one also needs handledElsewhere.
   // s: { tasks, pending, inflight }; lastActive: its last turn's time.
-  function archivable(s, colId, lastActive, now, after = ARCHIVE_AFTER) {
+  function archivable(s, colId, lastActive, now, after = ARCHIVE_AFTER, cards = null) {
     const last = latestTasks(s.tasks).get(colId);
     if (!last || OPEN.includes(last.status)) return false;
     if ([...(s.pending || []), ...(s.inflight || [])].some((p) => p.colId === colId)) return false;
-    return now - Math.max(last.doneAt || 0, last.sentAt || 0, lastActive || 0) >= after;
+    if (now - Math.max(last.doneAt || 0, last.sentAt || 0, lastActive || 0) < after) return false;
+    return last.status === 'done' || handledElsewhere(s, last, colId, cards);
+  }
+  // Failed or stopped with a board card nobody has resolved yet: worth looking
+  // up the card (see archivable).
+  function needsCardCheck(s, colId) {
+    const last = latestTasks(s.tasks).get(colId);
+    return !!last && (last.status === 'failed' || last.status === 'stopped') && !!last.boardId;
   }
 
   // Earlier 队长 conversations (config.captainHistory). Only this metadata is
@@ -747,7 +779,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });

@@ -144,6 +144,15 @@
     });
     all.sort((a, b) => a.firstSentAt - b.firstSentAt || (a.id < b.id ? -1 : 1));
 
+    // AgentDeck and agentdeck are one project; the spelling shown is the one the
+    // earliest session used. Stored names are never rewritten.
+    const spelling = new Map();
+    all.forEach((n) => {
+      const key = n.project.toLowerCase();
+      if (!spelling.has(key)) spelling.set(key, n.project);
+      n.project = spelling.get(key);
+    });
+
     const reviews = detectReviews(all);
     all.forEach((n) => { n.review = reviews.reviewers.has(n.id); });
 
@@ -152,15 +161,23 @@
       if (!projects.has(n.project)) projects.set(n.project, { key: n.project, name: n.project || '其他', nodes: [], counts: {} });
       const p = projects.get(n.project);
       p.nodes.push(n);
-      p.counts[n.status] = (p.counts[n.status] || 0) + 1;
+      // the same tally as 队长's box: sessions still on the map, not archived history
+      if (!n.archived) p.counts[n.status] = (p.counts[n.status] || 0) + 1;
     });
     // inactive: nothing in it is running, waiting on an answer or queued
     projects.forEach((p) => { p.completed = p.nodes.every((n) => n.status === 'done'); p.inactive = !p.nodes.some((n) => ACTIVE.includes(n.status)); });
+    // A project with nothing left to do (every session on the map is done) leaves
+    // the map; a new session brings it back. A failed, stopped or idle one still
+    // needs 队长, so it stays. The archive view shows every project.
+    const gone = new Set();
+    if (!input.showArchived) projects.forEach((p, key) => { if (!p.nodes.some((n) => !n.archived && n.status !== 'done')) gone.add(key); });
+    gone.forEach((key) => projects.delete(key));
+    const onMap = all.filter((n) => !gone.has(n.project));
 
     // An archived session a visible review still links to stays (faded): the chain stays whole.
-    const current = new Set(all.filter((n) => !n.archived).map((n) => n.id));
+    const current = new Set(onMap.filter((n) => !n.archived).map((n) => n.id));
     const linked = new Set(reviews.edges.filter((e) => current.has(e.from) || current.has(e.to)).flatMap((e) => [e.from, e.to]));
-    const visible = all.filter((n) => input.showArchived || !n.archived || linked.has(n.id) || projects.get(n.project).completed);
+    const visible = onMap.filter((n) => input.showArchived || !n.archived || linked.has(n.id));
     const shown = new Set(visible.map((n) => n.id));
     const captainId = input.captain ? input.captain.id : '';
     const review = reviews.edges.filter((e) => shown.has(e.from) && shown.has(e.to));
@@ -174,7 +191,7 @@
         .map((n) => ({ from: n.id, to: captainId, type: 'return', kind: n.returned })) : []),
     ];
     const counts = {};
-    all.filter((n) => !n.archived).forEach((n) => { counts[n.status] = (counts[n.status] || 0) + 1; });
+    onMap.filter((n) => !n.archived).forEach((n) => { counts[n.status] = (counts[n.status] || 0) + 1; });
     let captain = null;
     if (input.captain) {
       const c = input.captain;

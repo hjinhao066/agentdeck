@@ -741,15 +741,28 @@
       if (pumpAgain) { pumpAgain = false; pump(); }
     }
   }
+  // Board cards, kept for the archive check of failed/stopped sessions: whether
+  // the card got done or went to another session. Refreshed at most every 20 s.
+  let cardCache = null, cardsAt = 0, cardsLoading = false;
+  function refreshCards() {
+    if (cardsLoading || Date.now() - cardsAt < 20_000) return;
+    cardsLoading = true; cardsAt = Date.now();
+    window.TaskBoard.list({ archived: true }).then((list) => {
+      cardCache = Object.fromEntries((Array.isArray(list) ? list : []).map((c) => [c.id, { status: c.status, archived: !!c.archived, session_id: c.session_id || '' }]));
+    }, () => {}).finally(() => { cardsLoading = false; });
+  }
   // A finished background session is archived once 队长 has its receipt and
   // nothing happened for M.ARCHIVE_AFTER; never one you are looking at.
+  // After a restart its terminal is a fresh one that never worked this run
+  // (state 'plain'), which counts as finished too.
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (entry && entry.alive && (entry.state !== 'done' || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd))) return;
+    if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd))) return;
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
-    if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER)) host.archiveColumn(col, { quiet: true });
+    if (M.needsCardCheck(s, col.id)) refreshCards();
+    if (M.archivable(s, col.id, host.lastTurnTs(col.id), Date.now(), M.ARCHIVE_AFTER, cardCache)) host.archiveColumn(col, { quiet: true });
   }
   // `tell` to a background session that was archived brings it back first.
   function archivedCrew(ref) {
@@ -1242,7 +1255,7 @@
         if (metadata.boardId) {
           const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === metadata.boardId);
           if (!card) throw new Error('找不到卡片：' + metadata.boardId);
-          if (metadata.project && metadata.project !== card.project) throw new Error('--project differs from the card project.');
+          if (metadata.project && metadata.project.trim().toLowerCase() !== String(card.project).trim().toLowerCase()) throw new Error('--project differs from the card project.');
           metadata.project = card.project;
           if (s.waitlist.some((w) => w.metadata?.boardId === card.id && w.requestId !== message.id)) throw new Error('这张卡片已经在排队。');
           if (card.archived || card.flag === 'held' || card.flag === 'blocked' || card.status === 'done') throw new Error('卡片尚不可开始，请检查前置任务或显式移回待办。');
