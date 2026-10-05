@@ -2,6 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const closeElectron = require('./fixtures/close-electron');
 
 // Real renderer, isolated userData and PTYs running only the stand-in TUI.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
@@ -95,7 +96,8 @@ async function launch(scenario) {
   const now = Date.now();
   const column = (id, title, extra = {}) => ({ id, title, displayTitle: title, manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true, ...extra });
   const workers = titles.map((title, i) => column('v3-' + i, title, { project: scenario === 'A' ? i < 5 ? '客户门户' : '报表服务' : '', reviews: scenario === 'A' && i === 4 ? ['v3-0', 'v3-1'] : scenario === 'A' && i === 9 ? ['v3-5', 'v3-6'] : [] }));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3,
+  // These are layout states, not restartable tasks with a saved instruction.
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [column('cap', '队长', { isMain: true, captainCrew: false }), ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '', receipt: states[i] === 'done' ? { summary: '已完成实现、单元测试和端到端验证。还核对了长段中文回执在两行内显示完整字符，超出的说明应当使用省略号，避免任何文字被裁掉半截。', files: [], explicit: true } : states[i] === 'failed' ? { failed: '测试环境缺少数据访问权限，请队长处理后再继续运行迁移验证。', files: [], explicit: true } : null })) },
   }));
@@ -106,11 +108,12 @@ async function launch(scenario) {
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
+  await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(11);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(11);
 }
 test.afterEach(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
   application = null;
 });
@@ -149,10 +152,11 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
       await page.mouse.move(g.viewport.x + g.viewport.width / 2, g.viewport.y + g.viewport.height / 2);
       await expect.poll(async () => {
         const over = await lowest() - (g.viewport.bottom - edge);
-        // a wheel step lands 1x or 2x depending on the platform: go half way and close in
+        // A wheel step lands 1x or 2x: halve the gap, polling every 100ms
+        // instead of backing off to 1s before the remaining steps have landed.
         if (over > 0) await page.mouse.wheel(0, Math.ceil(over / 2) + 1);
         return over <= 0;
-      }).toBe(true);
+      }, { intervals: [100] }).toBe(true);
       expect(await page.evaluate(() => CrewMap.userMoved())).toBe(true);
       const end = await geometry(), last = end.nodes.reduce((m, n) => (n.bottom > m.bottom ? n : m));
       expect(last.y, 'last card in view').toBeGreaterThanOrEqual(end.viewport.y);
