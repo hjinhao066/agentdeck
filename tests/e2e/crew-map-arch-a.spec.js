@@ -132,18 +132,30 @@ test('night and day: the A palette, a 3-column grid, finished projects in the tr
 
 test('pipes: hovering a card lights its own path; only the running lines carry moving dots', async () => {
   await open(1920, 1080, 'dark');
-  await expect(page.locator('.cm-edges .cm-pulse')).toHaveCount(await page.locator('.cm-edges .cm-edge.dispatch.st-working').count() + 1);
-  const dash = await page.locator('.cm-pulse').first().evaluate((n) => { const s = getComputedStyle(n); return { array: s.strokeDasharray, cap: s.strokeLinecap, w: parseFloat(s.strokeWidth), anim: s.animationName }; });
-  expect(dash.cap).toBe('round'); expect(dash.w).toBeGreaterThanOrEqual(4); expect(dash.anim).toBe('cm-flow'); expect(dash.array).toMatch(/^0\.1/);
-  const done = await page.locator('.cm-edges .cm-edge.dispatch.st-failed').first().evaluate((n) => { const s = getComputedStyle(n); return { op: parseFloat(s.opacity), anim: s.animationName }; });
-  expect(done.op).toBeLessThan(1); expect(done.anim).toBe('none');
-  const review = await page.evaluate(() => getComputedStyle(document.querySelector('.cm-legend .cm-edge.review')).strokeDasharray);
-  expect(review).not.toBe('none');
+  await settled();
+  // One read per frame: a status tick can replace the wiring between two locators,
+  // and a detached path reports a blank opacity. The numbers are unchanged.
+  await expect.poll(() => page.evaluate(() => {
+    const styleOf = (sel) => { const n = document.querySelector(sel); if (!n || !n.isConnected) return null; const s = getComputedStyle(n); return { op: parseFloat(s.opacity), anim: s.animationName, array: s.strokeDasharray, cap: s.strokeLinecap, w: parseFloat(s.strokeWidth) }; };
+    const pulse = styleOf('.cm-edges .cm-pulse'), failed = styleOf('.cm-edges .cm-edge.dispatch.st-failed');
+    const review = document.querySelector('.cm-legend .cm-edge.review');
+    const pulses = document.querySelectorAll('.cm-edges .cm-pulse').length;
+    const working = document.querySelectorAll('.cm-edges .cm-edge.dispatch.st-working').length;
+    return !!(pulse && failed && review && pulses === working + 1 && pulse.cap === 'round' && pulse.w >= 4 && pulse.anim === 'cm-flow' && /^0\.1/.test(pulse.array) && failed.op < 1 && failed.anim === 'none' && getComputedStyle(review).strokeDasharray !== 'none');
+  })).toBe(true);
   await expect(page.locator('.cm-edges.cm-hovering')).toHaveCount(0);
-  await nodes().nth(4).hover();
-  await expect(page.locator('.cm-edges.cm-hovering')).toHaveCount(1);
-  expect(await page.locator('.cm-hl-path').count()).toBeGreaterThanOrEqual(1);
-  expect(await page.locator('.cm-edge.hl').count()).toBeGreaterThanOrEqual(1);
+  await expect.poll(async () => {
+    await nodes().nth(4).hover();
+    const hit = await page.evaluate(() => ({
+      hovering: document.querySelectorAll('.cm-edges.cm-hovering').length,
+      path: document.querySelectorAll('.cm-hl-path').length,
+      edge: document.querySelectorAll('.cm-edge.hl').length,
+    }));
+    expect(hit.hovering).toBe(1);
+    expect(hit.path).toBeGreaterThanOrEqual(1);
+    expect(hit.edge).toBeGreaterThanOrEqual(1);
+    return true;
+  }).toBe(true);
   await shot('arch-a-hover-dark', true);
   await page.mouse.move(2, 2);
   await expect(page.locator('.cm-edges.cm-hovering')).toHaveCount(0);
