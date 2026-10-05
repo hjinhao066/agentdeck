@@ -725,7 +725,7 @@
     if (!col || !entry?.alive || briefing || delivering || tokenSaving || entry.sendingPrompt || entry.injecting ||
       host.userComposing(col.id) || window.ChatUI.hasDraft(col.id) ||
       !['done', 'quota'].includes(entry.state) || Date.now() - (entry.lastOutputAt || 0) < 3000) return false;
-    const activity = M.terminalActivity(entry.lastScreen, col?.cmd) || (M.claudeBackgroundTasks(entry.lastScreen, col?.cmd) ? 'working' : '');
+    const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
     if (activity === 'working' || (activity === 'quota' && entry.state !== 'quota')) return false;
     return entry.state === 'quota' || !window.ChatUI.turnsOf(col.id).some((t) => !t.done);
   }

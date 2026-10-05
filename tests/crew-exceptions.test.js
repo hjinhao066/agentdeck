@@ -16,7 +16,7 @@ function world(saved) {
   const s = saved || { colId: 'captain', gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] };
   const terms = new Map([[worker.id, { alive: true, state: 'working', lastOutputAt: now, lastScreen: '' }]]);
   const window = { MainCore: M, BoardCore: B, deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, ChatUI: {
-    updateCard() {}, turnsOf: () => turns, sendPrompt: async (...args) => { prompts.push(args); return sent; },
+    hasDraft: () => false, updateCard() {}, turnsOf: () => turns, sendPrompt: async (...args) => { prompts.push(args); return sent; },
   } };
   const context = vm.createContext({ window, Date: class extends Date { static now() { return now; } } });
   const source = fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8')
@@ -188,4 +188,11 @@ test('only Claude live footer background counts are activity; old prose and fini
     '❯ \n0 shells still running', '❯ \n1 shell completed', '1 shell still running',
     '❯ 1. Allow\n1 shell still running']) assert.equal(M.claudeBackgroundTasks(screen, 'claude'), false, screen);
   assert.equal(M.claudeBackgroundTasks('❯ \n1 shell still running', 'cursor-agent'), false);
+});
+
+test('Captain long-lived receipt listener does not block its normal idle Relay', () => {
+  const w = world();
+  w.terms.set(w.captain.id, { alive: true, state: 'done', lastOutputAt: 1,
+    lastScreen: '❯ \n⏵⏵ bypass permissions on · 1 shell, 1 monitor still running' });
+  assert.equal(w.api.relayIdle(), true);
 });
