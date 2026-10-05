@@ -2543,15 +2543,24 @@ async function agentInForeground(col, allowShell) {
 // Schedule and 队长: wait until the session can take a prompt (agent at its
 // idle prompt, not busy or asking something), then send it like the composer
 // does. opts are passed to ChatUI.sendPrompt, plus timeout/onSent/onGiveUp
-// and allowShell (see agentInForeground).
+// and allowShell (see agentInForeground). keepWaiting turns timeout into a
+// one-time reminder; only an exited or removed terminal ends that queue.
 function sendWhenReady(col, text, opts) {
   const o = opts || {};
   const started = Date.now();
   const id = col.id;
+  let reminded = false;
   const check = async () => {
     if (o.cancelled && o.cancelled()) return;
-    if (!columns.includes(col) || col.id !== id) return;
+    if (!columns.includes(col) || col.id !== id) {
+      if (o.keepWaiting) o.onGiveUp?.('这个会话已经关闭、归档或被替换');
+      return;
+    }
     const entry = terms.get(col.id);
+    if (o.keepWaiting && entry && !entry.alive) {
+      o.onGiveUp?.(entry.exitReason || '这个会话的终端已经退出');
+      return;
+    }
     if (entry && entry.alive) {
       const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working' && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
       const quiet = Date.now() - (entry.lastOutputAt || 0);
@@ -2575,9 +2584,13 @@ function sendWhenReady(col, text, opts) {
       }
     }
     if (Date.now() - started > (o.timeout || 120_000)) {
-      if (o.onGiveUp) o.onGiveUp();
-      else showToast(`没发出去：「${columnLabel(col)}」一直没准备好`);
-      return;
+      if (o.keepWaiting) {
+        if (!reminded) { reminded = true; o.onWaiting?.(); }
+      } else {
+        if (o.onGiveUp) o.onGiveUp();
+        else showToast(`没发出去：「${columnLabel(col)}」一直没准备好`);
+        return;
+      }
     }
     setTimeout(check, 500);
   };
@@ -3327,7 +3340,7 @@ window.deck.onBoardCommand(async (message) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
         if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task' || message.action === 'main-queue');
+        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task' || message.action === 'main-queue' || message.action === 'main-read');
       },
       (error) => {
         const response = { done: true, error: error.message };
