@@ -19,7 +19,7 @@ test.beforeAll(async () => {
     claudeSeats: [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/.claude-us' }],
     columns: ['Claude', 'Codex', 'Cursor', 'Antigravity'].map((p) => ({ id: `quota-${p}`, taskId: `task-${p}`, title: `${p} stand-in`, cmd: `node "${FAKE}" ${p}`, cwd: profile, width: 600, role: 'manual' })),
   }));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env,

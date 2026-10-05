@@ -21,7 +21,7 @@ async function launchWithCols(colCount, fitCols = 3) {
     })),
   }));
 
-  const env = { ...process.env, AGENTDECK_DEMO_FILE: demoFile };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_DEMO_FILE: demoFile };
   delete env.ELECTRON_RUN_AS_NODE;
 
   application = await electron.launch({

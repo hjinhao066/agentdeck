@@ -11,7 +11,7 @@ test('independent PTYs keep CLI history and let statusline output reach the foot
     columns: [{ id: 'env-agent', title: 'env-agent', cmd: fake, cwd: profile, role: 'manual' }],
   }));
   const flagsFile = path.join(profile, 'history-flags.json');
-  const childEnv = { ...process.env, CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SKIP_PROMPT_HISTORY: '1', AGENTDECK_TEST_HISTORY_FLAGS_FILE: flagsFile };
+  const childEnv = { ...process.env, ZDOTDIR: profile, CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SKIP_PROMPT_HISTORY: '1', AGENTDECK_TEST_HISTORY_FLAGS_FILE: flagsFile };
   delete childEnv.ELECTRON_RUN_AS_NODE;
   let application;
   try {
@@ -33,7 +33,7 @@ test('independent PTYs keep CLI history and let statusline output reach the foot
 test('a test instance renders normally but stays invisible and click-through on the desktop', { tag: '@smoke' }, async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-env-'));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns: [] }));
-  const env = { ...process.env };
+  const env = { ...process.env, ZDOTDIR: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   let application;
   try {
