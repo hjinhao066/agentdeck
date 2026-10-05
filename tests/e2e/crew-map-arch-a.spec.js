@@ -2,6 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const closeElectron = require('./fixtures/close-electron');
 
 // 架构图 A 版: one busy project on the canvas; finished projects are off the map, one with a failure waits in the bottom tray.
 // Real renderer, isolated userData, stand-in TUI. Screenshots when AGENTDECK_CREW_MAP_SHOTS is set.
@@ -69,7 +70,7 @@ const setTask = (colId, status) => page.evaluate(([id, st]) => { MainSession.sta
 const nodes = () => page.locator('.cm-node:not(.kind-captain)');
 
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 test.describe.configure({ mode: 'serial' });
@@ -162,10 +163,11 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   await page.mouse.move(base.vp.x + base.vp.width / 2, base.vp.y + 200);
   await expect.poll(async () => {
     const over = (await read()).pane.bottom - (base.vp.bottom - edge);
-    // a wheel step lands 1x or 2x depending on the platform: go half way and close in
+    // A wheel step lands 1x or 2x: halve the gap, polling every 100ms
+    // instead of backing off to 1s before the remaining steps have landed.
     if (over > 0) await page.mouse.wheel(0, Math.ceil(over / 2) + 1);
     return over <= 0;
-  }).toBe(true);
+  }, { intervals: [100] }).toBe(true);
   const end = await read();
   expect(end.card.w6.y).toBeGreaterThanOrEqual(end.vp.y);
   expect(end.card.w6.bottom).toBeLessThanOrEqual(end.tray.y - edge);

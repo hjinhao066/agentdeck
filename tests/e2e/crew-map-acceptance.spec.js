@@ -2,6 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const closeElectron = require('./fixtures/close-electron');
 
 // Real renderer, isolated userData and PTYs running only the stand-in TUI.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
@@ -110,7 +111,7 @@ async function launch(scenario) {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(11);
 }
 test.afterEach(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
   application = null;
 });
@@ -149,10 +150,11 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
       await page.mouse.move(g.viewport.x + g.viewport.width / 2, g.viewport.y + g.viewport.height / 2);
       await expect.poll(async () => {
         const over = await lowest() - (g.viewport.bottom - edge);
-        // a wheel step lands 1x or 2x depending on the platform: go half way and close in
+        // A wheel step lands 1x or 2x: halve the gap, polling every 100ms
+        // instead of backing off to 1s before the remaining steps have landed.
         if (over > 0) await page.mouse.wheel(0, Math.ceil(over / 2) + 1);
         return over <= 0;
-      }).toBe(true);
+      }, { intervals: [100] }).toBe(true);
       expect(await page.evaluate(() => CrewMap.userMoved())).toBe(true);
       const end = await geometry(), last = end.nodes.reduce((m, n) => (n.bottom > m.bottom ? n : m));
       expect(last.y, 'last card in view').toBeGreaterThanOrEqual(end.viewport.y);

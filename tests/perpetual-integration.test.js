@@ -48,6 +48,52 @@ test('relay waits for a live idle Captain and a quiet screen', () => {
   entry.state = 'done'; entry.lastOutputAt = Date.now(); assert.equal(api.relayIdle(), false);
 });
 
+function seatRelay() {
+  const now = Date.now(), P = require('../perpetual-captain-core'), Q = require('../quota-core');
+  let col = { id: 'captain', isMain: true, cmd: S.CLAUDE_COMMAND, claudeSeatId: 'cn' };
+  const state = { colId: col.id, tasks: [] }, handoffs = [];
+  const seats = ['cn', 'us'].map((id) => ({ id, name: id.toUpperCase(), loggedIn: true,
+    onboardingComplete: true, configDir: '/test/' + id, accountKey: id + '-account' }));
+  const config = { claudeSeats: seats, quotas: {}, perpetualCaptain: P.normalizeSettings(),
+    perpetualCaptainState: {}, captainRelayCodex: { name: 'ChatGPT', command: 'codex' } };
+  for (const seat of seats) config.quotas[Q.seatKey(seat.id)] = { provider: 'Claude', scope: 'claude',
+    configDir: seat.configDir, accountKey: seat.accountKey, blocked: { at: now, resetAt: now + 3600000,
+      configDir: seat.configDir, accountKey: seat.accountKey, sourceColumnId: seat.id + '-terminal' } };
+  const window = { ClaudeSeatsCore: S, PerpetualCaptainCore: P, QuotaCore: Q,
+    AgentInfo: { resolveAgentInfo: () => ({ provider: 'Claude' }) },
+    deck: { claudeSeats: async () => seats, claudeWarmupStatus: async () => [],
+      claudeSeatUsage: async () => null, captainRelayNotify: async () => ({ ok: true }) },
+    MainSession: { mainCol: () => col, state: () => state, relayIdle: () => true,
+      pauseForSeatSwitch() {}, relayEffort: () => 'high', checkpointForSeatSwitch: async () => '/test/handoff.md',
+      clearContext(options) {
+        handoffs.push(options); col = { ...col, id: 'replacement', cmd: options.command };
+        state.colId = col.id; state.relayTargetId = options.relayTargetId; return col;
+      } },
+    ChatUI: { snapshotForHandoff: () => ({}), addNotice() {} }, dispatchEvent() {} };
+  const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }),
+    querySelectorAll: () => [] }, setInterval() {}, CustomEvent: class {} });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../claude-seats-ui.js'), 'utf8'), context);
+  window.ClaudeSeats.init({ config, columns: () => [col], terms: new Map(),
+    userComposing: () => false, flushConfig() {}, showToast() {} });
+  return { api: window.ClaudeSeats, state, config, handoffs };
+}
+
+test('automatic exhausted-seat Relay reaches Codex through the UI validation and handoff', async () => {
+  const { api, state, config, handoffs } = seatRelay();
+  assert.equal(await api.switchSeat('chatgpt', { automatic: true }), true);
+  assert.equal(state.relayTargetId, 'chatgpt');
+  assert.equal(config.perpetualCaptainState.lastSwitch.reason, 'claude-unavailable');
+  assert.equal(handoffs.length, 1);
+  assert.equal(handoffs[0].command, S.codexCommand('high'));
+});
+
+test('the quota banner action cannot bypass its Claude-only target validation', async () => {
+  const { api, state, handoffs } = seatRelay();
+  assert.equal(await api.switchSeat('chatgpt', { validateRotation: true }), false);
+  assert.equal(state.colId, 'captain');
+  assert.equal(handoffs.length, 0);
+});
+
 test('quoted and absolute Codex Relay commands keep their binary and use fixed Sol/high or xhigh', () => {
   for (const effort of ['high', 'xhigh']) {
     for (const program of ['codex', 'command codex', '"codex"', 'command "codex"',
