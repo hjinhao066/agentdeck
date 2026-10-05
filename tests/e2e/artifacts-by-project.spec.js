@@ -347,27 +347,40 @@ test('files and links mentioned in replies are still collected, with the same ic
   await page.keyboard.press('Escape');
 });
 
-test('show locates a folder, an app bundle and a command file instead of opening them', async () => {
+test('show opens a plain directory and only locates packages, links to them, and command files', async () => {
   const dir = path.join(out, 'locate-me');
+  const versioned = path.join(out, 'agentdeck-1.1.9');
   const app = path.join(out, 'LocateMe.app');
+  const bundle = path.join(out, 'Notes.workflow');
+  const link = path.join(out, 'alias-to-app');
   const command = path.join(out, 'run.command');
   fs.mkdirSync(dir);
+  fs.mkdirSync(versioned);
   fs.mkdirSync(path.join(app, 'Contents', 'MacOS'), { recursive: true });
   fs.writeFileSync(path.join(app, 'Contents', 'Info.plist'), '<plist/>');
   fs.writeFileSync(path.join(app, 'Contents', 'MacOS', 'LocateMe'), '#!/bin/sh\necho launched\n');
+  fs.mkdirSync(bundle);
+  fs.symlinkSync(app, link);
   fs.writeFileSync(command, '#!/bin/sh\necho launched\n');
   await openArtifacts();
-  await page.evaluate(({ dir, app, command }) => {
+  await page.evaluate(({ dir, versioned, app, bundle, link, command }) => {
     const col = columns.find((c) => c.id === 'w-misc');
-    col.lastReceipt = { summary: '只定位，不打开。', files: [dir, app, command], explicit: true, source: 'command', ts: Date.now() };
+    col.lastReceipt = { summary: '目录打开，包只定位。', files: [dir, versioned, app, bundle, link, command], explicit: true, source: 'command', ts: Date.now() };
     Pages.refresh();
-  }, { dir, app, command });
+  }, { dir, versioned, app, bundle, link, command });
   await application.evaluate(() => { global.revealOps = []; });
-  for (const [name, target] of [['locate-me', dir], ['LocateMe.app', app], ['run.command', command]]) {
+  const cases = [
+    ['locate-me', dir, 'open'],
+    ['agentdeck-1.1.9', versioned, 'open'],
+    ['LocateMe.app', app, 'show'],
+    ['Notes.workflow', bundle, 'show'],
+    ['alias-to-app', link, 'show'],
+    ['run.command', command, 'show'],
+  ];
+  for (const [name, target, op] of cases) {
     await row(name).getByRole('button', { name: revealLabel }).click();
-    await expect.poll(() => application.evaluate(() => global.revealOps.at(-1))).toEqual({ op: 'show', p: target });
+    await expect.poll(() => application.evaluate(() => global.revealOps.at(-1))).toEqual({ op, p: target });
   }
-  expect(await application.evaluate(() => global.revealOps.some((x) => x.op === 'open'))).toBe(false);
 });
 
 test('with no receipts the page says so and opens on the replies tab', async () => {
