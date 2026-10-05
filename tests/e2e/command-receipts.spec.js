@@ -242,7 +242,7 @@ test('PTY startup failure and quit revoke credentials; app restart removes crash
   expect((await cli(['complete', '--result', 'restarted completed'], workerEnv())).code).toBe(0);
 });
 
-test('a day-long receipt wait returns promptly for a labelled abnormal receipt and duplicates stay quiet', async () => {
+test('a day-long receipt wait returns promptly for a labelled abnormal receipt and later registration replaces the old listener', async () => {
   // The preceding restart rotates the Captain capability; export its current
   // credential through the real PTY again instead of reusing the old snapshot.
   fs.rmSync(controlFile, { force: true });
@@ -256,8 +256,11 @@ test('a day-long receipt wait returns promptly for a labelled abnormal receipt a
   const waiting = cli(['receipts', '--wait', '--timeout', '86400'], control);
   // Allow the first authenticated poll to register before producing the event.
   await expect.poll(() => fs.readdirSync(path.join(profile, 'board-control', 'receipt-listeners')).filter((name) => name.endsWith('.json')).length).toBe(1);
-  const duplicate = await cli(['receipts', '--wait', '--timeout', '86400'], control);
-  expect(duplicate).toEqual({ code: 0, stdout: '', stderr: '' });
+  const replacement = cli(['receipts', '--wait', '--timeout', '86400'], control);
+  const superseded = await waiting;
+  expect(superseded.code).toBe(0); expect(superseded.stderr).toBe('');
+  expect(superseded.stdout).toContain('已有更新的回执监听在运行');
+  expect(superseded.stdout).toContain('不要为它重挂');
   const started = Date.now();
   await page.evaluate(() => {
     const task = config.mainSession.tasks.at(-1), entry = terms.get('submit-worker');
@@ -266,10 +269,11 @@ test('a day-long receipt wait returns promptly for a labelled abnormal receipt a
     task.endedAt = 0;
     MainSession.onTick(task.colId, { ...entry, alive: true, state: 'working', lastOutputAt: quiet, lastScreen: '' });
   });
-  const received = await waiting;
+  const received = await replacement;
   expect(Date.now() - started).toBeLessThan(10000);
   expect(received.code, received.stderr).toBe(0); expect(received.stdout).toContain('异常回执（长时间无输出）');
   expect(received.stdout).toContain('submit-worker');
+  expect(received.stdout).not.toContain('已有更新的回执监听');
   const task = await page.evaluate(() => config.mainSession.tasks.at(-1));
   expect(task.status).toBe('working');
   expect((await cli(['complete', '--result', 'silence check complete'], workerEnv())).code).toBe(0);

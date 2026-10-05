@@ -38,7 +38,7 @@ async function launch() {
       tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: crew[i][2], sentAt: now - (60 - i * 4) * 60_000, doneAt: now - (30 - i * 2) * 1000, turnId: '',
         receipt: crew[i][2] === 'done' ? { summary: crew[i][3], files: ['/tmp/demo/report.md'], explicit: true } : crew[i][2] === 'failed' ? { failed: crew[i][3], files: [], explicit: true } : null })) },
   }));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,

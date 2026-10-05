@@ -440,6 +440,7 @@ test('handoff asks the Captain channel for the live handoff and prints it whole,
 
 test('one receipts --wait process is one listener: every poll carries the same id and start time, and it leaves when told it was replaced', async () => {
   const dir = controlDir('agentdeck-listener-cli-');
+  ReceiptListener.initialize(dir);
   const notice = require('../main-core').LISTENER_SUPERSEDED;
   const server = serve(dir, (_request, n) => ({ done: true, result: n >= 3 ? notice : '' }));
   try {

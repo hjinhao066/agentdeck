@@ -100,7 +100,7 @@ async function launch(scenario) {
     columns: [column('cap', '队长', { isMain: true, captainCrew: false }), ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '', receipt: states[i] === 'done' ? { summary: '已完成实现、单元测试和端到端验证。还核对了长段中文回执在两行内显示完整字符，超出的说明应当使用省略号，避免任何文字被裁掉半截。', files: [], explicit: true } : states[i] === 'failed' ? { failed: '测试环境缺少数据访问权限，请队长处理后再继续运行迁移验证。', files: [], explicit: true } : null })) },
   }));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,

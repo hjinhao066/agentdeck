@@ -72,7 +72,7 @@ test.beforeAll(async () => {
         id: `task-${i}`, colId: `worker-${i}`, title, status: i === 2 ? 'queued' : 'working', sentAt: now - (3 - i) * 60000, gen: 1,
       })) },
   }));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,

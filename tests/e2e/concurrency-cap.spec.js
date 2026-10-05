@@ -21,7 +21,7 @@ test.beforeAll(async () => {
     columns: [{ id: 'cap', title: '队长', isMain: true, cmd: FAKE, cwd: profile }],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], tasks: [], fresh: false, crewMarked: true, waitlist: [] },
   }));
-  const env = { ...process.env };
+  const env = { ...process.env, ZDOTDIR: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,

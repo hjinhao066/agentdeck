@@ -34,7 +34,7 @@ async function launch(flags = '', settings) {
       { id: 'saver-worker', title: 'Worker', cmd: FAKE, cwd: profile },
     ],
   }));
-  const env = { ...process.env, AGENTDECK_TEST_PROMPTS_FILE: promptsFile, AGENTDECK_TEST_BOARD_FILE: boardFile };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: promptsFile, AGENTDECK_TEST_BOARD_FILE: boardFile };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });

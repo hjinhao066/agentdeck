@@ -29,7 +29,7 @@ async function launch(flags = '', restart = false) {
     }));
   }
   const previousBriefs = briefs().length;
-  const env = { ...process.env, AGENTDECK_TEST_PROMPTS_FILE: promptsFile,
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: promptsFile,
     AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile, AGENTDECK_TEST_RECEIPT_ENV_DIR: receiptDir };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({

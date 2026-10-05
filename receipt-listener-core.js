@@ -43,8 +43,9 @@ function alive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false;
   try { process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; }
 }
-function leasePath(dir, token) {
-  return path.join(dir, 'receipt-listeners', crypto.createHash('sha256').update(token).digest('hex') + '.json');
+function leasePrefix(token) { return crypto.createHash('sha256').update(token).digest('hex') + '.'; }
+function leasePath(dir, token, lease) {
+  return path.join(dir, 'receipt-listeners', leasePrefix(token) + lease.id + '.json');
 }
 function instancePath(dir) { return path.join(dir, 'receipt-listener-instance.json'); }
 function initialize(dir) {
@@ -63,93 +64,102 @@ function releasePath(file, lease) { return file + '.' + lease.id + '.released'; 
 function released(file, lease) { return sameLease(read(releasePath(file, lease)), lease); }
 function removeLease(file, lease) {
   // Called only by the application, the sole writer that removes lease paths.
-  // CLI processes can publish an absent path, but never unlink/replace one.
+  // Each CLI owns a nonce path; an old release never removes a newer listener.
   if (sameLease(read(file), lease)) { try { fs.unlinkSync(file); } catch (_) {} }
   try { fs.unlinkSync(releasePath(file, lease)); } catch (_) {}
+  try { fs.unlinkSync(file + '.superseded'); } catch (_) {}
 }
 
 // The lock belongs to a capability generation, never to a reusable column id.
 // No process is signalled: an old CLI detects its revoked lease and exits itself.
+const SUPERSEDED_NOTICE = '【AgentDeck 监听】已有更新的回执监听在运行，这个旧监听已自动退出。不要为它重挂。';
 function claim(dir, token, ownerPid = 0) {
   const instance = read(instancePath(dir));
   if (!instance || !alive(instance.pid)) throw new Error('AgentDeck receipt listener host is not running.');
-  const file = leasePath(dir, token);
   const lease = { id: crypto.randomBytes(16).toString('hex'), pid: process.pid, instanceId: instance.id, ...(ownerPid ? { ownerPid } : {}) };
-  const tmp = file + '.' + lease.id + '.tmp';
+  const file = leasePath(dir, token, lease), tmp = file + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(lease), { flag: 'wx', mode: 0o600 });
   let locallyReleased = false;
   try {
-    // Publish a fully written lease atomically: concurrent claimers cannot
-    // mistake an empty/partial write for a stale lock.
+    // Publish a complete independent candidate. Only the authenticated host's
+    // first registration decides its order; process clocks and claim timing do not.
     fs.linkSync(tmp, file);
-    return {
-      lease,
-      valid: () => {
-        const current = read(instancePath(dir));
-        return !locallyReleased && current?.id === instance.id && current?.pid === instance.pid && alive(instance.pid)
-          && (!ownerPid || alive(ownerPid)) && sameLease(read(file), lease);
-      },
-      release: () => {
-        if (locallyReleased) return;
-        locallyReleased = true;
-        if (!sameLease(read(file), lease)) return;
-        // A nonce-specific tombstone cannot remove a replacement lease.
-        try { fs.writeFileSync(releasePath(file, lease), JSON.stringify(lease), { flag: 'wx', mode: 0o600 }); } catch (_) {}
-      },
-    };
-  } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    return null;
   } finally { try { fs.unlinkSync(tmp); } catch (_) {} }
-}
-
-function retiring(dir, token) {
-  const file = leasePath(dir, token), lease = read(file);
-  if (!lease) return true; // The app may have reaped it just after claim returned EEXIST.
-  return released(file, lease) || !alive(lease.pid) || lease.ownerPid && !alive(lease.ownerPid);
+  const generationAlive = () => {
+    const current = read(instancePath(dir));
+    return !locallyReleased && current?.id === instance.id && current?.pid === instance.pid && alive(instance.pid)
+      && (!ownerPid || alive(ownerPid)) && sameLease(read(file), lease);
+  };
+  return {
+    lease,
+    superseded: () => generationAlive() && sameLease(read(file + '.superseded'), lease),
+    valid: () => generationAlive() && !sameLease(read(file + '.superseded'), lease),
+    release: () => {
+      if (locallyReleased) return;
+      locallyReleased = true;
+      if (!sameLease(read(file), lease)) return;
+      try { fs.writeFileSync(releasePath(file, lease), JSON.stringify(lease), { flag: 'wx', mode: 0o600 }); } catch (_) {}
+    },
+  };
 }
 
 function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = alive) {
-  const listeners = new Map(), statuses = new Map();
+  const listeners = new Map(), statuses = new Map(), registered = new Map();
+  let sequence = 0;
   function owns(entry) {
     return entry && entry.lease.instanceId === instance.id && pidAlive(entry.lease.pid)
       && (!entry.lease.ownerPid || pidAlive(entry.lease.ownerPid))
       && !released(entry.file, entry.lease)
+      && !sameLease(read(entry.file + '.superseded'), entry.lease)
       && sameLease(read(entry.file), entry.lease) && now() - entry.seenAt < 30_000;
+  }
+  function candidates(token) {
+    return fs.readdirSync(path.join(dir, 'receipt-listeners'))
+      .filter((name) => name.startsWith(leasePrefix(token)) && name.endsWith('.json'))
+      .map((name) => path.join(dir, 'receipt-listeners', name));
   }
   function remove(id, token) {
     const entry = listeners.get(id);
-    if (token) {
-      const file = leasePath(dir, token), lease = read(file);
+    const capability = token || entry?.token;
+    if (capability) for (const file of candidates(capability)) {
+      const lease = read(file);
       if (lease) removeLease(file, lease);
     }
-    if (entry) removeLease(entry.file, entry.lease);
     listeners.delete(id); statuses.delete(id);
   }
   return {
     reap(tokens) {
       // Also covers a CLI that dies before its first authenticated poll.
-      for (const token of tokens) {
-        const file = leasePath(dir, token), existed = fs.existsSync(file), lease = read(file);
-        if (!lease) { if (existed) { try { fs.unlinkSync(file); } catch (_) {} } }
+      for (const token of tokens) for (const file of candidates(token)) {
+        const lease = read(file);
+        if (!lease) { try { fs.unlinkSync(file); } catch (_) {} }
         else if (lease.instanceId !== instance.id || !pidAlive(lease.pid) || lease.ownerPid && !pidAlive(lease.ownerPid) || released(file, lease)) removeLease(file, lease);
-        // A delayed old release can only leave its own nonce marker behind.
-        const current = read(file), prefix = path.basename(file) + '.';
-        for (const name of fs.readdirSync(path.dirname(file))) {
-          if (!name.startsWith(prefix) || !name.endsWith('.released')) continue;
-          const marker = path.join(path.dirname(file), name);
-          if (!sameLease(read(marker), current || {})) { try { fs.unlinkSync(marker); } catch (_) {} }
-        }
+      }
+      for (const name of fs.readdirSync(path.join(dir, 'receipt-listeners'))) {
+        if (!name.endsWith('.released') && !name.endsWith('.superseded')) continue;
+        const marker = path.join(dir, 'receipt-listeners', name);
+        const file = marker.replace(/(?:\.[a-f0-9]{32}\.released|\.superseded)$/, '');
+        if (!sameLease(read(marker), read(file) || {})) { try { fs.unlinkSync(marker); } catch (_) {} }
       }
     },
     register(id, token, lease) {
       if (!lease || typeof lease.id !== 'string' || !/^[a-f0-9]{32}$/.test(lease.id) || !Number.isSafeInteger(lease.pid)) return false;
-      const entry = { file: leasePath(dir, token), lease, seenAt: now() };
+      const entry = { file: leasePath(dir, token, lease), token, lease, seenAt: now() };
       if (!owns(entry)) return false;
+      let seq = registered.get(entry.file);
+      if (seq === undefined) registered.set(entry.file, seq = ++sequence);
+      entry.seq = seq;
       const current = listeners.get(id);
-      if (current && current.lease.id !== lease.id && owns(current)) return false;
+      if (current && current.lease.id !== lease.id && owns(current)) {
+        if (current.seq > seq) return false;
+        fs.writeFileSync(current.file + '.superseded', JSON.stringify(current.lease), { mode: 0o600 });
+      }
       listeners.set(id, entry);
       return true;
+    },
+    isCurrent(id, lease) {
+      const entry = listeners.get(id);
+      return sameLease(entry?.lease, lease) && owns(entry);
     },
     tick(captains) {
       const ids = new Set(captains);
@@ -174,4 +184,4 @@ function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = aliv
   };
 }
 
-module.exports = { initialize, claim, createRegistry, alive, agentOwnerPid, retiring };
+module.exports = { initialize, claim, createRegistry, alive, agentOwnerPid, SUPERSEDED_NOTICE };

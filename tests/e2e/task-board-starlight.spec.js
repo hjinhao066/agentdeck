@@ -118,7 +118,7 @@ function seed(dir, many, long) {
   for (const [key, cards] of Object.entries(boards)) {
     const project = (long && LONG[key]) || key;
     cards.forEach((c) => { c.project = project; });
-    fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ version: 1, project, cards }, null, 2));
+    fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, version: 1, project, cards }, null, 2));
   }
   return Object.values(boards).flat();
 }
@@ -137,7 +137,7 @@ async function launch({ many = false, empty = false, long = false } = {}) {
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: 'working', sentAt: now - 60_000 + i, turnId: '', receipt: null })) },
   }));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,

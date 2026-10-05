@@ -14,11 +14,11 @@ test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-suggestion-tell-'));
   captured = path.join(profile, 'prompts.jsonl'); control = path.join(profile, 'control.json');
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ fitWindow: true, fitCols: 2,
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, fitWindow: true, fitCols: 2,
     columns: [{ id: 'cap', title: '队长', cmd: FAKE, cwd: profile, isMain: true }],
     mainSession: { colId: 'cap', gen: 1, cmd: FAKE, fresh: false, crewMarked: true,
       tasks: [], pending: [], inflight: [], waitlist: [] } }));
-  const env = { ...process.env, AGENTDECK_TEST_PROMPT_COLUMNS_FILE: captured, AGENTDECK_TEST_CONTROL_ENV_FILE: control };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPT_COLUMNS_FILE: captured, AGENTDECK_TEST_CONTROL_ENV_FILE: control };
   delete env.ELECTRON_RUN_AS_NODE;
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_') && key !== 'AGENTDECK_TEST_PROMPT_COLUMNS_FILE' && key !== 'AGENTDECK_TEST_CONTROL_ENV_FILE') delete env[key];
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,

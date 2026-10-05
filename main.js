@@ -407,6 +407,11 @@ function writeBoardResponse(requestId, payload) {
 let processingBoardRequests = false;
 function dispatchPendingBoardCommands() {
   for (const [id, pending] of pendingBoardCommands) {
+    if (pending.listenerLease && !receiptListeners?.isCurrent(pending.command.callerId, pending.listenerLease)) {
+      pendingBoardCommands.delete(id);
+      writeBoardResponse(id, { done: true, result: '', listenerStopped: true });
+      continue;
+    }
     if (pending.command.action === 'main-receipts' && pending.command.wait && Date.now() >= pending.command.expiresAt) {
       pendingBoardCommands.delete(id);
       continue;
@@ -462,6 +467,7 @@ function processBoardRequests() {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
+      const listenerLease = action === 'main-receipts' && request.wait ? request.listener : null;
       delete request.token;
       delete request.listener; // Listener process identity stays in the main process.
       if (pendingBoardCommands.size >= 256) {
@@ -473,7 +479,7 @@ function processBoardRequests() {
       // It stays here until the renderer acknowledges it with board:response;
       // board:ready replays pending commands after a hot reload.
       if (!pendingBoardCommands.has(command.id)) {
-        pendingBoardCommands.set(command.id, { command, delivered: false });
+        pendingBoardCommands.set(command.id, { command, delivered: false, ...(listenerLease ? { listenerLease } : {}) });
       }
     }
     dispatchPendingBoardCommands();

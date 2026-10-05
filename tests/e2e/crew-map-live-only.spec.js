@@ -47,7 +47,7 @@ test.beforeAll(async () => {
       ],
     },
   }));
-  const env = { ...process.env };
+  const env = { ...process.env, ZDOTDIR: profile };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
     executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,

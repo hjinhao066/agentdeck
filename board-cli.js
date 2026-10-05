@@ -42,8 +42,12 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function listenerStopped() {
+  return { done: true, result: receiptListener?.superseded() ? ReceiptListener.SUPERSEDED_NOTICE : '', listenerStopped: true };
+}
+
 async function request(command, waitForCompletion) {
-  if (receiptListener && !receiptListener.valid()) return { done: true, result: '', listenerStopped: true };
+  if (receiptListener && !receiptListener.valid()) return listenerStopped();
   const auth = resolveBoardAuth({
     env: process.env, tty: controllingTerminal(), filename: __filename, action: command.action,
   });
@@ -81,7 +85,7 @@ async function request(command, waitForCompletion) {
     if (receiptListener && !receiptListener.valid()) {
       try { fs.unlinkSync(requestFile); } catch (_) {}
       try { fs.unlinkSync(responseFile); } catch (_) {}
-      return { done: true, result: '', listenerStopped: true };
+      return listenerStopped();
     }
     try {
       const response = JSON.parse(fs.readFileSync(responseFile, 'utf8'));
@@ -310,15 +314,8 @@ async function main() {
       try {
         const ownerPid = ReceiptListener.agentOwnerPid();
         receiptListener = ReceiptListener.claim(auth.controlDir, auth.token, ownerPid);
-        // Give the application one housekeeping turn to retire a completed or
-        // dead listener; a genuinely live duplicate still exits immediately.
-        for (let attempt = 0; !receiptListener && attempt < 4 && ReceiptListener.retiring(auth.controlDir, auth.token); attempt++) {
-          await sleep(250);
-          receiptListener = ReceiptListener.claim(auth.controlDir, auth.token, ownerPid);
-        }
       }
       catch (error) { fail(error.message); }
-      if (!receiptListener) return; // A listener in this Captain generation already owns delivery.
       const release = () => receiptListener?.release();
       process.once('exit', release);
       for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { release(); process.exit(0); });
@@ -329,7 +326,11 @@ async function main() {
       do {
         const pollExpiresAt = Math.min(Date.now() + 5000, expiresAt === undefined ? Infinity : expiresAt);
         const response = await request({ action: 'main-receipts', wait: true, expiresAt: pollExpiresAt, listener: receiptListener.lease, watcher, watcherStartedAt }, false);
-        if (response.listenerStopped) return;
+        if (response.listenerStopped) {
+          const stopped = listenerStopped();
+          if (stopped.result) process.stdout.write(`${stopped.result}\n`);
+          return;
+        }
         if (response.result) { process.stdout.write(`${response.result}\n`); return; }
         if (expiresAt !== undefined && Date.now() >= expiresAt) return;
         await sleep(Math.min(1000, expiresAt === undefined ? 1000 : Math.max(0, expiresAt - Date.now())));
