@@ -12,8 +12,13 @@ On macOS the main process reads each seat's separate Keychain service and sends
 CN's default service is `Claude Code-credentials`. Other services append the first
 8 hex characters of SHA256 of the absolute normalized configuration directory.
 No token crosses IPC or enters config/cache/logs. The reader never logs a raw
-exception or HTTP response, refreshes tokens, runs login/logout, or modifies the
-Keychain. Requests refuse redirects and time out after 8 seconds.
+exception or HTTP response, runs login/logout, or prints a credential. Requests
+refuse redirects and time out after 8 seconds. When the stored access token is
+expired and the refresh token is still in date, the reader posts one refresh to
+`https://platform.claude.com/v1/oauth/token` and writes the rotated credential
+back to that seat's Keychain item (macOS, secret on stdin) or credential file.
+A refresh that fails leaves the previous usage sample untouched. An idle seat
+therefore stays queryable after Claude itself has exited.
 
 Sampling happens on startup, about every five minutes, refresh-button clicks, and
 new CLI exhaustion observations for the affected seat. Concurrent requests for a
@@ -82,11 +87,13 @@ Relay keeps its existing durable checkpoint/new-column behavior. Config writes
 are flushed before the spawn IPC to avoid racing recently edited seat settings.
 
 Valid Keychain OAuth credentials work even without profile email metadata. An
-expired access token with a refresh token is still treated as logged in: Claude
-owns refresh/rotation. Missing credentials, malformed credentials, or expired
-access without a refresh token give a seat-specific login reason. A locked or
-unreadable Keychain gives a verification/access-permission reason, not a login
-instruction. An API network/401/403 failure only affects usage sampling.
+expired access token with a refresh token is still treated as logged in. The
+usage reader refreshes that token itself so an idle seat does not depend on a
+running Claude process. Missing credentials, malformed credentials, or an
+expired access token without a live refresh token give a seat-specific login
+reason. A locked or unreadable Keychain gives a verification/access-permission
+reason, not a login instruction. An API network/401/403 failure only affects
+usage sampling.
 
 This branch does not restart installed AgentDeck or migrate running terminals.
 These process-binding fixes take effect when the new runtime is installed and
