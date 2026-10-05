@@ -1922,8 +1922,16 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-projects { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .cm-project-head { position: relative; z-index: 1; height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 10px; user-select: none; pointer-events: none; }
 .cm-project-head > * { pointer-events: auto; background: var(--cm-headbg); border-radius: 8px; }
-.cm-project-name { display: inline-flex; align-items: center; gap: 9px; flex: 0 0 auto; min-width: 0; max-width: 70%; padding: 4px 8px 4px 6px; font-size: 17px; font-weight: 640; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cm-project-summary { display: inline-flex; align-items: center; gap: 12px; flex: 0 1 auto; min-width: 0; padding: 4px 8px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; }
+/* The tally always shows whole. When the name does not fit beside it the labels go first
+   (icon + number, the label left to the hover text and screen readers); a name still too
+   long for what is left ends in an ellipsis. */
+.cm-project-name { display: block; flex: 0 1 auto; min-width: 0; padding: 4px 8px 4px 6px; font-size: 17px; font-weight: 640; line-height: 22px; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-project-name::before { vertical-align: -3px; margin-right: 9px; }
+.cm-project-summary { display: inline-flex; align-items: center; gap: 12px; flex: 0 0 auto; padding: 4px 8px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.cm-project-head.compact .cm-project-summary { gap: 10px; padding: 4px 6px; }
+.cm-project-head.compact .cm-count-sep { display: none; }
+.cm-project-head.compact .cm-count { position: relative; gap: 4px; }
+.cm-project-head.compact .cm-count-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .cm-project-summary .cm-count b { font-size: 13.5px; }
 .cm-project-toggle { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: var(--cm-headbg); color: var(--cm-text-dim); cursor: pointer; transition: color .15s ease; }
 .cm-project-toggle:hover { color: var(--cm-text); }

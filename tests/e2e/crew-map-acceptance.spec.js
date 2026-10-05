@@ -27,31 +27,47 @@ async function geometry() {
     const nodes = [...document.querySelectorAll('.cm-node')].map((n) => ({ id: n.dataset.nodeId, ...rect(n) }));
     const groups = [...document.querySelectorAll('.cm-project')].map((n) => { const pane = document.querySelector(`.cm-pane[data-project="${CSS.escape(n.dataset.project)}"]`); return { id: n.dataset.project, ...rect(n), color: getComputedStyle(pane).backgroundColor, border: getComputedStyle(pane).borderColor }; });
     const texts = [...document.querySelectorAll('.cm-node')].flatMap((card) => [...card.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-live, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: card.dataset.nodeId, cls: n.className, captain: card.classList.contains('kind-captain'), ...rect(n), parent: rect(card), lineHeight: parseFloat(getComputedStyle(n).lineHeight), localHeight: n.offsetHeight, clamp: getComputedStyle(n).webkitLineClamp })));
-    return { viewport, nodes, groups, texts, scale: CrewMap.view().scale, bodyPx: parseFloat(getComputedStyle(document.querySelector('.cm-node:not(.kind-captain) .cm-line')).fontSize) };
+    const heads = [...document.querySelectorAll('.cm-project-head')].map((h) => { const sum = h.querySelector('.cm-project-summary'), name = h.querySelector('.cm-project-name'); return { id: h.parentElement.dataset.project, ...rect(h), sumClient: sum.clientWidth, sumScroll: sum.scrollWidth, sumRight: sum.getBoundingClientRect().right, counts: [...sum.querySelectorAll('.cm-count')].map((c) => ({ cls: c.className, ...rect(c.querySelector('b')) })), nameCut: name.scrollWidth > name.clientWidth + 1, nameOverflow: getComputedStyle(name).textOverflow }; });
+    const below = [...document.querySelectorAll('.cm-tray, .cm-legend')].filter((n) => !n.hidden).map((n) => n.getBoundingClientRect().y);
+    return { viewport, nodes, groups, heads, below, texts, scale: CrewMap.view().scale, bodyPx: parseFloat(getComputedStyle(document.querySelector('.cm-node:not(.kind-captain) .cm-line')).fontSize) };
   });
 }
 async function assertLayout() {
   const g = await geometry();
   const overlaps = (a, b) => a.x < b.right - 1 && a.right > b.x + 1 && a.y < b.bottom - 1 && a.bottom > b.y + 1;
-  // Auto-fit never goes below 85% (card body text is 13px: 11px or more on screen). Whatever
-  // fits is wholly inside the viewport with the fit's own 8px inset on every side (the
-  // controls sit on the legend row below the viewport, so nothing else needs reserving);
-  // what does not fit at the floor is reached by panning, see "panning reaches" below.
+  // Auto-fit never goes below 85% (card body text is 13px: 11px or more on screen). The
+  // controls sit on the legend row below the viewport, so the only thing the map keeps
+  // clear of is the viewport's own edge: the fit's 8px inset plus the 16px the map carries
+  // around itself, on every side (21.8px at 86%). A map too tall at the floor starts at the
+  // top and is cut at the bottom edge: there a card is either whole with 16px (map px) to
+  // spare, or plainly cut by 24px or more, never flush against the tray or the legend row.
   expect(g.scale).toBeGreaterThanOrEqual(0.85 - 1e-6);
   expect(g.bodyPx * g.scale).toBeGreaterThanOrEqual(11 - 1e-6);
-  const fits = g.scale > 0.85 + 1e-3;
+  const fits = g.scale > 0.85 + 1e-3, edge = 8 + 16 * g.scale;
+  for (const y of g.below) expect(y, 'tray and legend row sit under the viewport').toBeGreaterThanOrEqual(g.viewport.bottom - 0.5);
   for (const list of [g.nodes, g.groups]) for (let i = 0; i < list.length; i++) {
     const a = list[i];
     if (fits) {
-      expect(a.x, a.id + ' left').toBeGreaterThanOrEqual(g.viewport.x + 8 - 0.5);
-      expect(a.y, a.id + ' top').toBeGreaterThanOrEqual(g.viewport.y + 8 - 0.5);
-      expect(a.right, a.id + ' right').toBeLessThanOrEqual(g.viewport.right - 8 + 0.5);
-      expect(a.bottom, a.id + ' bottom').toBeLessThanOrEqual(g.viewport.bottom - 8 + 0.5);
+      expect(a.x, a.id + ' left').toBeGreaterThanOrEqual(g.viewport.x + edge - 0.5);
+      expect(a.y, a.id + ' top').toBeGreaterThanOrEqual(g.viewport.y + edge - 0.5);
+      expect(a.right, a.id + ' right').toBeLessThanOrEqual(g.viewport.right - edge + 0.5);
+      expect(a.bottom, a.id + ' bottom').toBeLessThanOrEqual(g.viewport.bottom - edge + 0.5);
+    } else if (list === g.nodes) {
+      const gap = g.viewport.bottom - a.bottom;
+      expect(gap >= 16 * g.scale - 0.5 || gap <= -24 * g.scale + 0.5, `${a.id} ends ${gap.toFixed(1)}px above the bottom edge`).toBe(true);
     }
     for (const b of list.slice(i + 1)) expect(overlaps(a, b), `${a.id}/${b.id} overlap`).toBe(false);
   }
+  // a project's tally is never clipped: every count shows whole inside the title strip,
+  // and a name too long for what is left ends in an ellipsis
+  for (const h of g.heads) {
+    expect(h.sumScroll, h.id + ' tally clipped').toBeLessThanOrEqual(h.sumClient + 1);
+    expect(h.sumRight, h.id + ' tally inside the strip').toBeLessThanOrEqual(h.right + 0.5);
+    for (const c of h.counts) { expect(c.width, h.id + ' ' + c.cls).toBeGreaterThan(0); expect(c.x).toBeGreaterThanOrEqual(h.x); expect(c.right).toBeLessThanOrEqual(h.right + 0.5); }
+    if (h.nameCut) expect(h.nameOverflow).toBe('ellipsis');
+  }
   const cap = g.nodes.find((n) => n.id === 'cap');
-  expect(cap.y, '队长 stays in view').toBeGreaterThanOrEqual(g.viewport.y);
+  expect(cap.y, '队长 stays in view').toBeGreaterThanOrEqual(g.viewport.y + 8 - 0.5);
   for (const t of g.texts) {
     expect(t.bottom, `${t.id} ${t.cls} fits card`).toBeLessThanOrEqual(t.parent.bottom - 2);
     if (['cm-title', 'cm-line'].includes(t.cls) && !t.captain) {
@@ -113,7 +129,11 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
     await expect(page.locator('.cm-node[data-status="queued"]')).toHaveCount(2);
     await expect(page.locator('.cm-node[data-status="failed"]')).toHaveCount(2);
     const g = await assertLayout();
-    if (scenario === 'A') { expect(g.groups[0].color).not.toBe(g.groups[1].color); expect(g.groups[0].border).not.toBe(g.groups[1].border); }
+    if (scenario === 'A') {
+      expect(g.groups[0].color).not.toBe(g.groups[1].color); expect(g.groups[0].border).not.toBe(g.groups[1].border);
+      // each project has a failure: its count stays in the title strip at every width
+      for (const h of g.heads) expect(h.counts.some((c) => /st-failed/.test(c.cls)), h.id + ' failed count').toBe(true);
+    }
     else expect(new Set(g.nodes.filter((n) => n.id !== 'cap').map((n) => Math.round(n.y))).size).toBeGreaterThan(1);
     expect(await page.locator('.cm-edges .cm-edge.dispatch').count()).toBe(10);
     expect(await page.locator('.cm-edges .cm-edge.review').count()).toBe(scenario === 'A' ? 4 : 0);
@@ -123,12 +143,21 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
     evidence.push({ scenario, width, height, theme, ...g });
     await screenshot(`${scenario}-${width}x${height}-${theme}`);
     if (g.scale <= 0.85 + 1e-3) {
-      // held at the floor: the rest is one wheel scroll away, with the card in whole view
-      const last = g.nodes.reduce((m, n) => (n.bottom > m.bottom ? n : m));
+      // held at the floor: the rest is a wheel scroll away, and the last project comes to
+      // rest with the same margin above the bottom edge as a map that fits, nothing over it
+      const edge = 8 + 16 * g.scale, lowest = () => page.evaluate(() => Math.max(...[...document.querySelectorAll('.cm-pane')].map((n) => n.getBoundingClientRect().bottom)));
       await page.mouse.move(g.viewport.x + g.viewport.width / 2, g.viewport.y + g.viewport.height / 2);
-      await page.mouse.wheel(0, Math.max(0, last.bottom - g.viewport.bottom + 24));
-      await expect.poll(async () => { const r = await page.locator(`.cm-node[data-node-id="${last.id}"]`).boundingBox(); return r.y + r.height <= g.viewport.bottom && r.y >= g.viewport.y; }).toBe(true);
+      await expect.poll(async () => {
+        const over = await lowest() - (g.viewport.bottom - edge);
+        // a wheel step lands 1x or 2x depending on the platform: go half way and close in
+        if (over > 0) await page.mouse.wheel(0, Math.ceil(over / 2) + 1);
+        return over <= 0;
+      }).toBe(true);
       expect(await page.evaluate(() => CrewMap.userMoved())).toBe(true);
+      const end = await geometry(), last = end.nodes.reduce((m, n) => (n.bottom > m.bottom ? n : m));
+      expect(last.y, 'last card in view').toBeGreaterThanOrEqual(end.viewport.y);
+      expect(last.bottom, 'last card clear of the bottom edge').toBeLessThanOrEqual(end.viewport.bottom - edge);
+      expect(await page.evaluate(([id, x, y]) => !!document.elementFromPoint(x, y).closest(`.cm-node[data-node-id="${id}"]`), [last.id, last.x + last.width / 2, last.bottom - 4]), 'nothing covers the last card').toBe(true);
       await page.locator('[data-cm="fit"]').click();
       await settled();
     }
