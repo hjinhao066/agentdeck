@@ -1097,6 +1097,8 @@
     const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit'));
     if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return null;
     const response = { done: true, result: 'Submission recorded.' };
+    if (['complete', 'ask', 'progress'].includes(message.action) &&
+        window.RestartResume?.bindSessionIdentity(caller, message.modelSessionIds, host.columns())) save();
     if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
     if (message.action === 'session-exit') {
       if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
@@ -1145,6 +1147,8 @@
   let resumeRun = '';
   let resumeInflight = 0;
   let resumeTimer = null;
+  const RESUME_START_TIMEOUT = 30000;
+  const RESUME_SEND_TIMEOUT = 45000;
   function loadResumeManifest() {
     const R = window.RestartResume;
     if (!R) return;
@@ -1202,6 +1206,7 @@
     if (!activeResume(col, task) || task.resumeFailed) return;
     task.resumeFailed = true;
     delete task.restartHold;
+    delete task.resumeDeadline;
     resumeWaiting.delete(col.id);
     const failed = window.RestartResume.failureNote(reason);
     resumeManifest.claims[col.id] = { phase: 'failed', runId: resumeRun, taskId: task.id, at: Date.now() };
@@ -1234,7 +1239,7 @@
     const how = R.claimDisposition(resumeManifest.claims[col.id], task.id, resumeRun);
     if (how === 'skip') return;
     task.restartHold = true;
-    task.resumeDeadline = Date.now() + 30000;
+    task.resumeDeadline = Date.now() + RESUME_START_TIMEOUT;
     if (R.isCheckpointClosure(task)) { task.status = 'paused'; task.doneAt = 0; task.endedAt = 0; }
     resumeWaiting.set(col.id, how);
     clearTimeout(resumeTimer);
@@ -1252,8 +1257,11 @@
       try {
         const card = (await window.TaskBoard.list({ archived: true })).find((item) => item.id === boardId);
         if (card) {
-          if (card.archived || card.attempt_closed || card.status === 'done' || (card.status === 'review' && !card.review_session) ||
-              (card.session_id && card.session_id !== col.id) || (card.attempt_id && task.boardAttempt && card.attempt_id !== task.boardAttempt)) return null;
+          const reason = card.archived ? '卡片已归档' : card.attempt_closed ? '卡片本轮任务已关闭' :
+            card.status === 'done' ? '卡片已完成' : card.status === 'review' && !card.review_session ? '卡片已进入待验收' :
+            card.session_id && card.session_id !== col.id ? '卡片已转交会话 ' + card.session_id :
+            card.attempt_id && task.boardAttempt && card.attempt_id !== task.boardAttempt ? '卡片已进入另一轮任务' : '';
+          if (reason) return { blocked: `续派已停止：会话 ${col.id} 的任务 ${task.id} 停在卡片 ${boardId} 核验处，${reason}。未发送续接指令。` };
           entry.task = card.detail || entry.task;
           if (!entry.receipt) entry.receipt = card.latest_receipt || '';
         }
@@ -1264,7 +1272,7 @@
     return entry;
   }
   function fallbackResume(col, task, reason) {
-    if (!activeResume(col, task) || col.restartMode !== 'resume' || task.resumeFallback || !host.restartWorker) return false;
+    if (!task.restartHold || !activeResume(col, task) || col.restartMode !== 'resume' || task.resumeFallback || !host.restartWorker) return false;
     task.resumeFallback = true;
     const op = resumeOps.get(col.id);
     if (op) op.release();
@@ -1275,7 +1283,8 @@
     delete col.modelSessionId;
     delete col.modelSessionOwner;
     delete col.modelSessionCwd;
-    task.resumeDeadline = Date.now() + 30000;
+    delete col.modelSessionSource;
+    task.resumeDeadline = Date.now() + RESUME_START_TIMEOUT;
     task.status = 'paused';
     persistResumeEntry(col, task);
     host.showToast(reason + '；新开会话并重发同一卡片任务和最后回执');
@@ -1292,11 +1301,13 @@
       const col = host.columns().find((c) => c.id === id && c.captainCrew && !c.isMain);
       const task = latestTask(id);
       if (!col || !task || !activeResume(col, task)) { resumeWaiting.delete(id); continue; }
+      if (Date.now() > task.resumeDeadline) {
+        resumeWaiting.delete(id);
+        if (!fallbackResume(col, task, '续接启动等待超时')) noteResumeFailure(col, task, '启动或批次等待超过 30 秒');
+        continue;
+      }
       if (!host.terms.get(id)?.alive) {
-        if (Date.now() > task.resumeDeadline) {
-          resumeWaiting.delete(id);
-          if (!fallbackResume(col, task, '原终端未能启动')) noteResumeFailure(col, task, '终端没有在时限内起来');
-        } else waiting = true;
+        waiting = true;
         continue;
       }
       ready.push({ id, how });
@@ -1322,18 +1333,33 @@
         }
         op.release();
       };
-      op.timer = setTimeout(fail, 45000);
+      task.resumeDeadline = Date.now() + RESUME_SEND_TIMEOUT;
+      op.timer = setTimeout(fail, RESUME_SEND_TIMEOUT);
       const stored = resumeManifest.entries.find((e) => e.colId === col.id && e.taskId === task.id) || {};
       resumeBody(col, task, stored).then((entry) => {
         if (released) return;
         if (!entry || !activeResume(col, task, op)) { op.release(); return; }
+        if (entry.blocked) {
+          task.resumeSubmission = true;
+          delete task.restartHold;
+          delete task.resumeDeadline;
+          resumeManifest.claims[col.id] = { phase: 'stopped', runId: resumeRun, taskId: task.id, at: Date.now() };
+          resumeManifest.entries = resumeManifest.entries.filter((e) => e.colId !== col.id);
+          saveResumeManifest();
+          // The card was closed or reassigned elsewhere; only close our stale
+          // local task and report the stop, never write a new card event.
+          task.status = 'paused';
+          settle(task, { summary: entry.blocked, files: [], images: [], failed: '', explicit: false, source: 'restart' }, true);
+          op.release();
+          return;
+        }
         resumeManifest.entries = resumeManifest.entries.filter((e) => e.colId !== col.id);
         resumeManifest.entries.push(R.manifestEntry({ colId: col.id, cmd: col.cmd, cwd: col.cwd || '', sessionId: col.modelSessionId,
           task, title: entry.title, detail: entry.task, receipt: entry.receipt, pendingText: entry.pendingText }));
         resumeManifest.claims[col.id] = { phase: 'armed', runId: resumeRun, taskId: task.id, mode: entry.mode, at: Date.now() };
         saveResumeManifest();
         host.sendWhenReady(col, R.resumeMessage(entry), {
-          silent: true, force: true, guardUserInput: true, timeout: 45000, suffix: M.RECEIPT_CONTRACT,
+          silent: true, force: true, guardUserInput: true, timeout: RESUME_SEND_TIMEOUT, suffix: M.RECEIPT_CONTRACT,
           cancelled: () => released || !activeResume(col, task, op),
           onSent: (turn) => {
             if (released || !activeResume(col, task, op)) { op.release(); return; }
@@ -1352,6 +1378,8 @@
             task.turnId = turn?.id || '';
             task.startedAt = Date.now();
             task.endedAt = 0;
+            delete task.restartHold;
+            delete task.resumeDeadline;
             delete task.processEnded;
             task.resumeGraceUntil = Date.now() + 20000;
             const summary = entry.mode === 'resume' ? R.trueResumeNote(entry.provider) : R.resendNote(entry.provider);
@@ -1366,7 +1394,7 @@
         });
       }).catch(fail);
     }
-    if (waiting) resumeTimer = setTimeout(flushResume, 400);
+    if (waiting || resumeWaiting.size) resumeTimer = setTimeout(flushResume, 400);
   }
   function parkForRestart(sessions) {
     const R = window.RestartResume;
@@ -1376,8 +1404,12 @@
       for (const col of host.columns()) {
         if (!Object.prototype.hasOwnProperty.call(sessions, col.id)) continue;
         if (!['Cursor', 'Codex', 'Antigravity'].includes(R.providerOf(col.cmd))) continue;
+        // The renderer may have captured an authenticated id more recently
+        // than the debounced config read by the shutdown process.
+        if (col.modelSessionSource === 'agent-env' && col.modelSessionOwner === col.id &&
+            col.modelSessionCwd === (col.cwd || '') && R.validSessionId(col.modelSessionId)) continue;
         if (sessions[col.id] && col.modelSessionOwner === col.id) col.modelSessionId = sessions[col.id];
-        else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; }
+        else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; delete col.modelSessionSource; }
       }
     }
     const parking = [];

@@ -327,3 +327,34 @@ test('notify-user routes local, urgent and fixed test requests without key data'
     } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
   }
 });
+
+
+test('worker receipts carry provider-injected UUIDs and never emit unrelated or malformed environment data', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-session-env-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file));
+      requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true }));
+    }
+  }, 10);
+  const ids = { Codex: '11111111-1111-4111-8111-111111111111', Cursor: '22222222-2222-4222-8222-222222222222', Antigravity: '33333333-3333-4333-8333-333333333333' };
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_RECEIPT_TOKEN: 'receipt-token',
+    CODEX_THREAD_ID: ids.Codex, CURSOR_CONVERSATION_ID: ids.Cursor, ANTIGRAVITY_CONVERSATION_ID: ids.Antigravity, UNRELATED_SESSION_SECRET: 'must-not-leave-process' };
+  try {
+    for (const args of [['progress', '--message', 'working'], ['ask', '--question', 'which?'], ['complete', '--result', 'done']]) {
+      const result = await runCli(args, env);
+      assert.equal(result.code, 0, result.stderr);
+      assert.deepEqual(requests.at(-1).modelSessionIds, ids);
+      assert.equal(requests.at(-1).token, 'receipt-token');
+      assert.ok(!JSON.stringify(requests.at(-1)).includes(env.UNRELATED_SESSION_SECRET));
+    }
+    assert.equal((await runCli(['status'], env)).code, 0);
+    assert.equal(requests.at(-1).modelSessionIds, undefined);
+    assert.equal((await runCli(['progress', '--message', 'working'], { ...env, CODEX_THREAD_ID: 'bad', CURSOR_CONVERSATION_ID: '', ANTIGRAVITY_CONVERSATION_ID: 'bad' })).code, 0);
+    assert.equal(requests.at(-1).modelSessionIds, undefined);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});

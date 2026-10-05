@@ -115,11 +115,25 @@ function assignSessions(columns, records, platform) {
     if (col.owner !== col.id || !UUID.test(col.sessionId || '')) continue;
     const key = col.provider + ':' + col.sessionId.toLowerCase();
     if (owners.get(key) !== 1) continue;
+    // An authenticated command from this exact column carried the provider's
+    // shell-tool id. This also works after a crash and with newer stores that
+    // no longer write meta.json / legacy rollout files.
+    if (col.source === 'agent-env' && typeof col.capturedCwd === 'string' &&
+        (col.capturedCwd === col.cwd || sameCwd(col.capturedCwd, col.cwd, platform))) {
+      out[col.id] = col.sessionId;
+      continue;
+    }
     const matches = list.filter((record) => record.provider === col.provider &&
       String(record.id).toLowerCase() === col.sessionId.toLowerCase());
     if (matches.length === 1 && cwdMatches(matches[0], col.cwd, platform)) out[col.id] = col.sessionId;
   }
   return out;
+}
+
+function clearInheritedSessionIds(env) {
+  const clean = { ...env };
+  for (const key of ['CODEX_THREAD_ID', 'CURSOR_CONVERSATION_ID', 'ANTIGRAVITY_CONVERSATION_ID']) delete clean[key];
+  return clean;
 }
 
 function defaultRoots(home) {
@@ -143,5 +157,5 @@ function resolveSessions(columns, options) {
 }
 
 module.exports = {
-  sameCwd, listCursor, listCodex, listAgy, assignSessions, defaultRoots, resolveSessions,
+  sameCwd, clearInheritedSessionIds, listCursor, listCodex, listAgy, assignSessions, defaultRoots, resolveSessions,
 };

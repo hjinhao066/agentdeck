@@ -278,7 +278,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
-  let terminalEnv = { ...ENV, AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  let terminalEnv = { ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
   terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
 
   // Never inherit an outer deck's managed capability into an independent shell.
@@ -1456,6 +1456,7 @@ function parkedSessions() {
     const columns = (cfg.columns || []).filter((col) => col && !col.isMain && col.captainCrew).map((col) => ({
       id: col.id, provider: RestartResume.providerOf(col.cmd), cwd: col.cwd || '',
       since: Number(col.sessionWatchSince) || Date.now() - lookback, sessionId: col.modelSessionId || '', owner: col.modelSessionOwner || '',
+      source: col.modelSessionSource || '', capturedCwd: col.modelSessionCwd || '',
     })).filter((col) => ['Cursor', 'Codex', 'Antigravity'].includes(col.provider));
     return AgentSessions.resolveSessions(columns, { roots: AgentSessions.defaultRoots(os.homedir()), lookbackMs: lookback });
   } catch (_) { return {}; }

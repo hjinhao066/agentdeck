@@ -217,6 +217,7 @@ if (saved) {
       modelSessionId: c.modelSessionId,
       modelSessionOwner: c.modelSessionOwner,
       modelSessionCwd: c.modelSessionCwd,
+      modelSessionSource: c.modelSessionSource,
       captainTaskPrompt: c.captainTaskPrompt,
       sessionWatchSince: Number.isFinite(c.sessionWatchSince) ? c.sessionWatchSince : 0,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
@@ -1991,17 +1992,22 @@ function buildColumn(col, isFresh) {
         if (choice.mode === 'resume' || choice.mode === 'resend') col.restartMode = choice.mode;
         if (choice.mode === 'resend') col.sessionWatchSince = Date.now();
         else if (!col.sessionWatchSince) col.sessionWatchSince = Date.now();
+        const provider = window.RestartResume.providerOf(col.cmd);
+        const ownsCapturedId = col.modelSessionOwner === col.id && col.modelSessionCwd === (col.cwd || '') &&
+          !config.columns.some((other) => other.id !== col.id && window.RestartResume.providerOf(other.cmd) === provider &&
+            String(other.modelSessionId || '').toLowerCase() === String(col.modelSessionId || '').toLowerCase());
+        const capturedId = !['Codex', 'Cursor', 'Antigravity'].includes(provider) || ownsCapturedId ? col.modelSessionId : null;
         const plan = choice.mode === 'resume'
           ? { launch: choice.launch, sessionId: choice.sessionId, resumedAgent: true, showLegacyWarning: false }
           : choice.mode === 'resend'
             ? { ...window.AgentInfo.planAgentLaunch(choice.launch, null, true, false, () => window.crypto.randomUUID()), resumedAgent: false, showLegacyWarning: true }
-            : window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
+            : window.AgentInfo.planAgentLaunch(col.cmd || '', capturedId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
         const { launch, resumedAgent, showLegacyWarning } = plan;
         if (col.modelSessionId !== plan.sessionId) {
           if (plan.sessionId) {
             col.modelSessionId = plan.sessionId;
-            if (!resumedAgent) { col.modelSessionOwner = col.id; col.modelSessionCwd = col.cwd || ''; }
-          } else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; }
+            if (!resumedAgent) { col.modelSessionOwner = col.id; col.modelSessionCwd = col.cwd || ''; delete col.modelSessionSource; }
+          } else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; delete col.modelSessionSource; }
           saveConfig();
         }
 

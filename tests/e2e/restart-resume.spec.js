@@ -28,7 +28,8 @@ test.beforeAll(async () => {
     created: '2026-10-04T06:00:00.000Z', updated: '2026-10-04T06:00:00.000Z', archived: false,
     consecutive_failures: 0, important: false, attempt_id: 'attempt-1', review_session: false, attempt_closed: false,
   };
-  fs.writeFileSync(path.join(profile, 'tasks', 'agentdeck.json'), JSON.stringify({ version: 1, project: 'agentdeck', cards: [card] }));
+  const closedCard = { ...card, id: 't-closed', title: '在别处已完成', status: 'done', session_id: 'worker-closed', attempt_closed: true, latest_receipt: '另一处已经完成' };
+  fs.writeFileSync(path.join(profile, 'tasks', 'agentdeck.json'), JSON.stringify({ version: 1, project: 'agentdeck', cards: [card, closedCard] }));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     resumeOnRestart: true,
     taskBoard: { dispatcher: 'captain' },
@@ -36,12 +37,16 @@ test.beforeAll(async () => {
       { ...column('cap', '队长'), isMain: true, captainCrew: false },
       column('worker-live', '永动机', { boardId: 't-live', boardAttempt: 'attempt-1' }),
       column('worker-done', '已做完'),
+      column('worker-closed', '卡片已关闭', { boardId: 't-closed', boardAttempt: 'attempt-1' }),
+      column('worker-exit', '送达后异常退出', { cmd: fake + ' --exit-after-task' }),
     ],
     mainSession: {
       colId: 'cap', cmd: fake, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: [
         crewTask('k-live', 'worker-live', '永动机', 'working', '上次写到一半', 't-live'),
         crewTask('k-done', 'worker-done', '已做完', 'done', '功能已做完并推送。等待队长验收。'),
+        crewTask('k-closed', 'worker-closed', '卡片已关闭', 'paused', '停在安全点', 't-closed'),
+        crewTask('k-exit', 'worker-exit', '送达后异常退出', 'working', '原任务仍在进行'),
       ],
     },
   }));
@@ -81,6 +86,24 @@ test('a cold start resends an in-flight card into a new session and leaves finis
   expect(live).toMatch(/^worker-live\s+「永动机」\s+干活中(?:\s|$)/); // release ledger also exposes the terminal's idle state
 });
 
+test('a closed card stops the stale local task and gives the captain a specific receipt', async () => {
+  await expect.poll(() => page.evaluate(() => window.MainSession.state().tasks.find((t) => t.id === 'k-closed')?.status)).toBe('stopped');
+  const task = await page.evaluate(() => window.MainSession.state().tasks.find((t) => t.id === 'k-closed'));
+  expect(task.receipt.summary).toContain('卡片 t-closed 核验处');
+  expect(task.receipt.summary).toContain('卡片本轮任务已关闭');
+  expect(task.restartHold).toBeUndefined();
+  const receipts = await page.evaluate(() => {
+    const s = window.MainSession.state();
+    return [...s.pending, ...s.inflight].filter((r) => r.taskId === 'k-closed');
+  });
+  expect(receipts).toHaveLength(1);
+  expect(receipts[0].summary).toBe(task.receipt.summary);
+  expect(delivered().some((row) => row.colId === 'worker-closed' && row.text.includes('刚重启'))).toBe(false);
+  const card = await page.evaluate(() => window.TaskBoard.list({ archived: true }).then((cards) => cards.find((c) => c.id === 't-closed')));
+  expect(card.status).toBe('done');
+  expect(card.latest_receipt).toBe('另一处已经完成');
+});
+
 
 test('a second application restart resumes the unfinished card once again', async () => {
   const before = delivered().filter((row) => row.colId === 'worker-live' && row.text.includes('重发')).length;
@@ -96,6 +119,16 @@ test('a second application restart resumes the unfinished card once again', asyn
   const manifest = JSON.parse(fs.readFileSync(path.join(profile, 'restart-resume.json'), 'utf8'));
   expect(manifest.claims['worker-live'].taskId).toBe('k-live');
   expect(manifest.claims['worker-live'].phase).toBe('sent');
+  expect(delivered().some((row) => row.colId === 'worker-closed' && row.text.includes('刚重启'))).toBe(false);
+});
+
+test('a worker terminal exit after resume delivery is recorded as ordinary task failure', async () => {
+  await expect.poll(() => page.evaluate(() => window.MainSession.state().tasks.find((t) => t.id === 'k-exit')?.status), { timeout: 20000 }).toBe('failed');
+  const task = await page.evaluate(() => window.MainSession.state().tasks.find((t) => t.id === 'k-exit'));
+  expect(task.receipt.source).toBe('process');
+  expect(task.receipt.failed).not.toContain('续接失败');
+  expect(task.receipt.failed).toContain('exit 7');
+  expect(delivered().filter((row) => row.colId === 'worker-exit' && row.text.includes('重发'))).toHaveLength(1);
 });
 
 test('a rejected resume launches a new CLI in the same column and its complete closes the same card', async ({}, testInfo) => {
