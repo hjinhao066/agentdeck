@@ -10,7 +10,7 @@ for (const mode of ['ack', 'no-ack', 'blocked-main-loop', 'closed-watchdog-stdin
   test(`restart shutdown exits the actual process with ${mode}`, async () => {
     test.skip(mode === 'closed-watchdog-stdin' && process.platform === 'win32', 'POSIX reparenting guards the EOF deadline');
     const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-restart-exit-'));
-    const records = [];
+    const eventFile = path.join(profile, 'quit-events.jsonl');
     let application, child, deadline, closing;
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
@@ -39,10 +39,6 @@ cp.spawn = function(file, args, options) {
         const quit = app.quit.bind(app);
         app.quit = () => { setTimeout(quit, 50); };
       });
-      application.on('console', (message) => {
-        const text = message.text();
-        if (text.startsWith('QUIT_TEST_EVENT ')) records.push(JSON.parse(text.slice('QUIT_TEST_EVENT '.length)));
-      });
       const page = await application.firstWindow();
       await expect.poll(() => page.evaluate(() => typeof window.MainSession === 'object').catch(() => false)).toBe(true);
       if (!['blocked-main-loop', 'closed-watchdog-stdin'].includes(mode)) {
@@ -54,8 +50,10 @@ cp.spawn = function(file, args, options) {
         child.once('exit', (code, signal) => { clearTimeout(deadline); resolve({ code, signal }); });
         deadline = setTimeout(() => reject(new Error(`${mode}: actual Electron process did not exit within 8 seconds`)), 8000);
       });
-      await application.evaluate(({ app, ipcMain }, mode) => {
-        const record = (kind) => console.log('QUIT_TEST_EVENT ' + JSON.stringify({ kind, at: Date.now() }));
+      await application.evaluate(({ app, ipcMain }, { mode, eventFile }) => {
+        // app.close disconnects the debugger before the asynchronous quit.
+        // Disk records survive that disconnect and the real process exit.
+        const record = (kind) => process.getBuiltinModule('fs').appendFileSync(eventFile, JSON.stringify({ kind, at: Date.now() }) + '\n');
         if (mode === 'no-ack') ipcMain.removeAllListeners('park-for-restart-done');
         else ipcMain.on('park-for-restart-done', () => record('ack'));
         app.on('before-quit', () => record('before-quit'));
@@ -65,11 +63,12 @@ cp.spawn = function(file, args, options) {
           // Only the independent watchdog can meet the deadline in this case.
           setImmediate(() => { const end = Date.now() + 15000; while (Date.now() < end) {} });
         });
-      }, mode);
+      }, { mode, eventFile });
       closing = application.close();
       const result = await exited;
       await closing;
       expect(Date.now() - start).toBeLessThan(8000);
+      const records = fs.readFileSync(eventFile, 'utf8').trim().split('\n').map(JSON.parse);
       if (mode === 'ack') expect(records.some((record) => record.kind === 'ack')).toBe(true);
       if (mode === 'no-ack') {
         expect(records.some((record) => record.kind === 'ack')).toBe(false);
