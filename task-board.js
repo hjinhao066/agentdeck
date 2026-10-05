@@ -386,6 +386,9 @@ class TaskStore {
       const card = this.find(docs, input.id);
       if (card.session_id !== input.session_id || card.attempt_id !== input.attempt_id) return { card, ignored: true, notices: [] };
       if (!['started', 'ask', 'complete', 'failed', 'fallback'].includes(input.type)) throw new Error('Invalid task event.');
+      // A resource stop is already final for runtime failures from this attempt.
+      // A later written command verdict may still report a real defect.
+      if (card.attempt_closed && card.resource_failure && input.type === 'failed' && input.source !== 'command') return { card, ignored: true, notices: [] };
       const eventKey = input.attempt_id + ':' + input.type + ':' + (input.source || '') + ':' + crypto.createHash('sha256').update(input.message || '').digest('hex');
       if (card.last_event === eventKey || card.attempt_closed && !['complete', 'failed'].includes(input.type)) return { card, ignored: true, notices: [] };
       const authoritative = input.type === 'complete' && input.source === 'command' && /:failed:(?:quota|process|automatic):/.test(card.last_event || '');
