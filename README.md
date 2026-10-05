@@ -493,9 +493,11 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`
   (Antigravity's effort is the model id's suffix, `-low|-medium|-high`; given
   `--effort` beside such an id it silently runs a different model), `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
-  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`
-  (`--no-daemon` keeps each column off the shared Codex server, which otherwise
-  keeps a stale environment and cannot submit that column's receipt).
+  never `agent`, which other tools also install), Codex with the managed options
+  supported by its local `--help`. AgentDeck probes the executable once per app
+  run, removes unsupported saved options, and adds the bypass option and
+  `--no-daemon` only when available. Older Windows Codex versions can launch
+  without `--no-daemon`; model and resume arguments are preserved.
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -620,10 +622,14 @@ The bundled xterm does not play audio for terminal BEL.
 
 ### Codex receipt environment
 
-AgentDeck adds `--no-daemon` to Codex launches, including custom commands and
-restored sessions. A shared Codex app server uses its own process environment
+AgentDeck adds `--no-daemon` to Codex launches when the local executable lists
+it in `--help`, including custom commands and restored sessions. Unsupported
+managed options are removed before launch; a failed help probe falls back to
+launching without those options. A shared Codex app server uses its own process environment
 and can lose the current terminal's receipt/control channel variables. Embedded
 servers inherit the column environment. This does not edit Codex user settings.
+See [Windows compatibility](docs/windows-codex-launch.md) for the version-specific
+investigation and verification procedure.
 
 The bridge prefers environment credentials when this process's controlling
 terminal has no private file. If a shell policy filters the tokens, the
