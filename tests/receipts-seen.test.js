@@ -19,7 +19,7 @@ function boot() {
   };
   const terms = new Map([[captain.id, { alive: true, state: 'done', lastOutputAt: 0, lastScreen: '' }]]);
   const window = {
-    deck: { onTaskStart() {} }, MainCore: M, BoardCore: B, Sidebar: { render() {} },
+    deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: M, BoardCore: B, Sidebar: { render() {} },
     ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {}, addCard() {}, retireChat: () => null, captainArchives: () => [] },
   };
   const elements = new Map();
