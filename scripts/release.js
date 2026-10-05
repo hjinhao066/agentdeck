@@ -21,7 +21,10 @@ function canonical(file) {
   const suffix = [];
   let existing = path.resolve(file);
   while (!fs.existsSync(existing)) { suffix.unshift(path.basename(existing)); existing = path.dirname(existing); }
-  return path.join(fs.realpathSync(existing), ...suffix);
+  // Git for Windows expands 8.3 aliases in getcwd (GetLongPathNameW). JS realpath
+  // keeps the typed alias, so GitHub's RUNNER~1 temp does not match the checkout
+  // and an output directory inside the repo is accepted.
+  return path.join(fs.realpathSync.native(existing), ...suffix);
 }
 
 function parseArgs(argv) {
@@ -77,7 +80,11 @@ function planRelease(repo, options) {
   const common = canonical(path.resolve(repo, git(repo, 'rev-parse', '--git-common-dir')));
   // Output must not pollute a source checkout, including a different existing worktree.
   const checkouts = git(repo, 'worktree', 'list', '--porcelain').split('\n').filter((s) => s.startsWith('worktree ')).map((s) => canonical(s.slice(9)));
-  const inside = (root, candidate) => candidate === root || candidate.startsWith(root + path.sep);
+  // path.relative is case-insensitive on Windows; a prefix compare is not.
+  const inside = (root, candidate) => {
+    const rel = path.relative(root, candidate);
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+  };
   if (checkouts.some((root) => inside(root, output)) || inside(worktree, output) || inside(common, output)) {
     throw new Error('Release output must be outside source worktrees and the git directory');
   }
