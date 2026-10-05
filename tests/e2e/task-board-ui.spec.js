@@ -137,17 +137,29 @@ async function assertBoardLayout(minCard, stacked = false) {
   const g = await page.evaluate(() => {
     const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const shown = (n) => !n.hidden && getComputedStyle(n).display !== 'none' && n.getBoundingClientRect().width > 0;
-    const bar = [...document.querySelector('#taskBoardView .tbv-filters').children].filter(shown).map((n) => ({ cls: n.className, ...rect(n) }));
+    const barGroups = [...document.querySelector('#taskBoardView .tbv-filters').children].filter(shown);
+    // Project chips wrap as whole controls; their strip is no longer a single-line control.
+    const bar = barGroups.flatMap((n) => n.classList.contains('tbv-projects') ? [...n.querySelectorAll('.tbv-chip')].filter(shown) : [n]).map((n) => ({ cls: n.className, ...rect(n) }));
+    const chips = [...document.querySelectorAll('#taskBoardView .tbv-chip')].filter(shown);
+    const chipNames = chips.map((n) => { const name = n.querySelector('.tbv-chip-name'); return { text: name.textContent, scrollWidth: name.scrollWidth, clientWidth: name.clientWidth }; });
     const cells = [...document.querySelectorAll('.tbv-cell')].filter(shown).map((cell) => ({ cell: rect(cell), cards: [...cell.querySelectorAll('.tbv-card')].map((card) => ({ id: card.dataset.cardId, status: card.dataset.status, ...rect(card),
       title: parseFloat(getComputedStyle(card.querySelector('.tbv-title')).fontSize),
       laneName: parseFloat(getComputedStyle(document.querySelector('.tbv-lane-name')).fontSize),
       parts: [...card.querySelectorAll('.tbv-title, .tbv-question, .tbv-activity, .tbv-tag, .tbv-time')].filter(shown).map((p) => ({ cls: p.className, ...rect(p) })) })) }));
     const icons = [...document.querySelectorAll('#taskBoardView .tbv-icon')].filter(shown).map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, svg: !!n.querySelector('svg'), text: n.textContent.trim(), w: n.getBoundingClientRect().width, h: n.getBoundingClientRect().height }));
-    return { view: rect(document.getElementById('taskBoardView')), bar, cells, icons, heads: [...document.querySelectorAll('.tbv-head')].filter(shown).map(rect), grid: rect(document.querySelector('.tbv-lanes')),
+    return { view: rect(document.getElementById('taskBoardView')), bar, barGroups: barGroups.map((n) => ({ cls: n.className, ...rect(n) })), projects: rect(document.querySelector('#taskBoardView .tbv-projects')), chipCount: chips.length, chipNames, cells, icons, heads: [...document.querySelectorAll('.tbv-head')].filter(shown).map(rect), grid: rect(document.querySelector('.tbv-lanes')),
       laneHeads: [...document.querySelectorAll('.tbv-lane-head')].map(rect),
       lanes: [...document.querySelectorAll('.tbv-lane:not(.collapsed) .tbv-cells')].map((c) => [...c.children].map(rect)) };
   });
   const overlaps = (a, b) => a.x < b.right - 1 && a.right > b.x + 1 && a.y < b.bottom - 1 && a.bottom > b.y + 1;
+  expect(g.bar.filter((n) => n.cls.split(' ').includes('tbv-chip')).length, 'every visible project chip is measured').toBe(g.chipCount);
+  expect(g.projects.x, 'project strip inside window').toBeGreaterThanOrEqual(g.view.x);
+  expect(g.projects.right, 'project strip inside window').toBeLessThanOrEqual(g.view.right);
+  for (const name of g.chipNames) expect(name.scrollWidth, name.text + ' shown whole').toBeLessThanOrEqual(name.clientWidth);
+  for (let i = 0; i < g.barGroups.length; i++) {
+    expect(g.barGroups[i].right, g.barGroups[i].cls + ' inside window').toBeLessThanOrEqual(g.view.right);
+    for (const b of g.barGroups.slice(i + 1)) expect(overlaps(g.barGroups[i], b), `${g.barGroups[i].cls}/${b.cls} overlap`).toBe(false);
+  }
   for (let i = 0; i < g.bar.length; i++) {
     expect(g.bar[i].height, g.bar[i].cls + ' single line').toBeLessThanOrEqual(34);
     expect(g.bar[i].right, g.bar[i].cls + ' inside window').toBeLessThanOrEqual(g.view.right);

@@ -206,6 +206,8 @@ function answer() {
   if (text.includes('AgentDeck 约定') && process.argv.includes('--exit-after-task')) setTimeout(() => process.exit(7), 500);
 }
 function listen() {
+  // Raw PTY chunks can split a UTF-8 character; decode the stream across chunks.
+  process.stdin.setEncoding('utf8');
   if (process.argv.includes('--interruptible')) {
     process.stdin.setRawMode(true);
     let incoming = '';
