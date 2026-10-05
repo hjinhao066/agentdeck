@@ -96,8 +96,9 @@ test('cache invalidates on dependency bytes, mode, commit or damaged artifact', 
   const binary = path.join(repo, 'node_modules/native.node'); write(binary, 'one');
   const first = fingerprint(repo);
   write(binary, 'two'); assert.notEqual(fingerprint(repo), first);
+  const second = fingerprint(repo);
   if (process.platform !== 'win32') {
-    const second = fingerprint(repo); fs.chmodSync(binary, 0o755); assert.notEqual(fingerprint(repo), second);
+    fs.chmodSync(binary, 0o755); assert.notEqual(fingerprint(repo), second);
   }
   const third = fingerprint(repo); write(path.join(repo, 'main.js'), 'changed');
   git(repo, 'add', 'main.js'); git(repo, 'commit', '-qm', 'runtime changed');
