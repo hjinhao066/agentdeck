@@ -838,7 +838,7 @@
       return { level: null, critical: false };
     }
   }
-  function refreshWaitingNotes() {
+  function refreshWaitingNotes(changed = false) {
     const s = state();
     if (!s) return;
     const active = M.activeCrew(s.tasks, crewIds()).size;
@@ -847,10 +847,10 @@
       const plan = openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata);
       const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
       const reason = queueReason(plan, w.title, active, ahead) || '等待派发';
-      if (task && task.waitReason !== reason) { task.waitReason = reason; update(task); }
+      if (task && task.waitReason !== reason) { task.waitReason = reason; update(task); changed = true; }
       if (plan.action !== 'queue') ahead++;
     }
-    window.Sidebar?.render?.();
+    if (changed) window.Sidebar?.render?.();
   }
   function queueReason(plan, title, active, ahead) {
     return plan.action === 'queue' ? quotaQueueText(plan, title) : memoryHold
@@ -922,10 +922,10 @@
     const reason = queueReason(plan, title, active, ahead);
     if (reason) {
       await enqueue(title, cmd, cwd, requestId, task, metadata, reason);
-      refreshWaitingNotes();
+      refreshWaitingNotes(true);
       return { queued: true, plan, result: reason };
     }
-    if (wasHold !== memoryHold) refreshWaitingNotes();
+    if (wasHold !== memoryHold) refreshWaitingNotes(true);
     const shown = plan.action === 'switch' ? notedTitle(title, plan.note) : title;
     const col = await openSession(shown, plan.cmd, cwd, requestId, task, null, launchMeta(metadata, plan));
     announceSwitch(col, shown, plan);
@@ -969,8 +969,9 @@
           } catch (error) { settle(task, { failed: error.message, summary: '', files: [], explicit: true }); }
         },
       });
+      const wasHold = memoryHold;
       memoryHold = pressure.level === 4 && s.waitlist.length > 0;
-      refreshWaitingNotes();
+      refreshWaitingNotes(wasHold !== memoryHold);
       save();
     } finally {
       pumping = false;
@@ -1726,8 +1727,9 @@
         return { done: true, result: host.quotaText() };
       case 'main-queue': {
         if (message.op === 'list') {
+          const wasHold = memoryHold;
           memoryHold = (await readMemoryPressure()).critical;
-          refreshWaitingNotes();
+          refreshWaitingNotes(wasHold !== memoryHold);
           return { done: true, result: JSON.stringify(s.waitlist.map((w) => ({
             taskId: w.metadata?.boardId || w.taskId, queueId: w.taskId, title: w.title, command: w.cmd,
             seat: w.metadata?.claudeSeatId || '', reason: s.tasks.find((t) => t.id === w.taskId)?.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold),

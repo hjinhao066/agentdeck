@@ -93,6 +93,37 @@ test('waiting notes follow current memory, occupied slots and recovered quota', 
   assert.match((await h.queue())[0].reason, /额度用尽/);
 });
 
+test('idle quota queue ticks do not redraw the sidebar, but changed waiting state does', async (t) => {
+  const h = runtime(t), card = h.add();
+  let renders = 0;
+  h.window.Sidebar = { render: () => renders++ };
+  h.window.ChatUI.readFooter = () => [];
+  await h.assign(card);
+  renders = 0;
+  const tick = async () => {
+    h.window.MainSession.onTick(h.captain.id, { alive: true, state: 'plain' });
+    await new Promise((resolve) => setImmediate(resolve));
+  };
+  for (let i = 0; i < 5; i++) await tick();
+  assert.equal(renders, 0);
+  assert.equal(h.state.waitlist.length, 1);
+  assert.match(h.state.tasks[0].waitReason, /额度用尽/);
+
+  h.pressure = 4;
+  await tick();
+  assert.equal(renders, 1);
+  assert.equal(h.window.MainSession.memoryHeld(), true);
+  await tick();
+  assert.equal(renders, 1);
+
+  h.out.clear();
+  await tick();
+  assert.equal(renders, 2);
+  assert.match(h.state.tasks[0].waitReason, /内存吃紧/);
+  await tick();
+  assert.equal(renders, 2);
+});
+
 test('concurrent replacements leave one request and a concurrent done move cancels it', async (t) => {
   const h = runtime(t), card = h.add();
   h.out.add('next-held'); h.out.add('last-held');
