@@ -83,9 +83,11 @@ async function shot(name) {
     const at = { 'cm-breathe': 0.5, 'cm-edge-flow': 0.45, 'cm-flow': 0.3, 'cm-flow-review': 0.3, 'cm-spin': 0.12, 'cm-ping': 0.2, 'sky-twinkle': 0.6 };
     document.getAnimations().forEach((a, i) => {
       const target = a.effect && a.effect.target;
-      if (!target || !document.getElementById('crewMap').contains(target)) return;
+      if (!target) return;
       const t = a.effect.getComputedTiming();
+      // anything that ends is shown ended, wherever it is (a theme switch fades the app's own chrome too)
       if (t.iterations !== Infinity) { a.finish(); return; }
+      if (!document.getElementById('crewMap').contains(target)) return;
       a.pause();
       a.currentTime = ((at[a.animationName] == null ? 0.5 : at[a.animationName]) + (a.animationName === 'cm-flow' ? (i % 4) * 0.17 : 0)) * t.duration;
     });

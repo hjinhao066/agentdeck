@@ -29,9 +29,11 @@ async function screenshot(name, hovering) {
     const at = { 'tbv-breathe': 0.5, 'tbv-flow': 0.42, 'tbv-ping': 0.2, 'sky-twinkle': 0.6, 'tbv-twinkle-soft': 0.8, 'tbv-breathe-soft': 0.5 };
     document.getAnimations().forEach((a, i) => {
       const target = a.effect && a.effect.target;
-      if (!target || !document.getElementById('taskBoardView').contains(target)) return;
+      if (!target) return;
       const t = a.effect.getComputedTiming();
+      // anything that ends is shown ended, wherever it is (a theme switch fades the app's own chrome too)
       if (t.iterations !== Infinity) { a.finish(); return; }
+      if (!document.getElementById('taskBoardView').contains(target)) return;
       const spark = target.classList.contains('tbv-spark');
       a.pause();
       a.currentTime = (spark ? 0.3 + (i % 5) * 0.09 : at[a.animationName] || 0.5) * t.duration;

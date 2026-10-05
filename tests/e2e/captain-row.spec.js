@@ -221,7 +221,11 @@ test('版本进度 icon button next to 架构图 slides in a drawer with the nex
   await expect(drawer.locator('.vd-group[data-group="review"]')).toHaveCount(0);
 
   // A monitor, not a popover: clicking the map leaves it open. Esc folds it.
-  await page.mouse.click(300, 600);
+  // (an empty spot of the map: a click on a card would open that session's column instead)
+  const spot = await page.evaluate(() => { const v = document.querySelector('#crewMap .cm-viewport').getBoundingClientRect();
+    for (let y = v.bottom - 6; y > v.top; y -= 12) for (let x = v.left + 6; x < v.right; x += 12) { const n = document.elementFromPoint(x, y); if (n && n.closest('.cm-viewport') && !n.closest('.cm-node, .cm-pane, .cm-project, .cm-pop, .cm-hint, .cm-tray, .vd')) return [x, y]; }
+    return null; });
+  await page.mouse.click(spot[0], spot[1]);
   await expect(drawer).toBeVisible();
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem('agentdeck.versionDrawer')).open)).toBe(true);
   await drawer.focus();
