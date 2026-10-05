@@ -740,6 +740,8 @@ Offline edits persist in `fleet-state.json`. A request retains its operation ID
 and original payload until acknowledged, even across a process restart; later
 edits wait separately and are rebased on the accepted card. Snapshot downloads
 preserve pending edits, including changes made by other local board writers.
+Older revisioned task snapshots restored by Git keep their older revision when
+submitted, so they cannot silently replace newer server edits.
 Repeated operations do not increment a card revision or add a second conflict.
 All conflicting alternatives and captain turns are retained. Older transcript
 prefixes cannot shorten newer history; divergent saves retain the prior version

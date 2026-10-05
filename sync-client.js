@@ -163,7 +163,8 @@ class FleetClient {
     this.taskOutbox.set(card.id, {
       opId: 'op-' + crypto.randomUUID(),
       cardId: card.id,
-      expectedRevision: base ? base.revision : 0,
+      // A Git-restored older cache is not a fresh edit on our newer base.
+      expectedRevision: base ? Math.min(base.revision, Number.isInteger(card.revision) ? card.revision : base.revision) : 0,
       set,
     });
     this._persist();

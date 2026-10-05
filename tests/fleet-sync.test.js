@@ -297,3 +297,24 @@ test('restored revisioned cards are retained and re-uploaded when client state a
   await win.client.syncOnce();
   assert.equal(win.tasks.list()[0].title, card.title);
 });
+
+test('a Git-restored older task snapshot cannot overwrite a newer accepted edit', async (t) => {
+  const { root, server, tokenFile } = await hub(t);
+  const mac = machine(root, 'mac', 'dev-mac', 'darwin', server.url, tokenFile);
+  const win = machine(root, 'win', 'dev-win', 'win32', server.url, tokenFile);
+  mac.client.noteResult(mac.tasks.add({ project: 'agentdeck', title: 'old snapshot title' }));
+  await mac.client.syncOnce();
+  const older = mac.tasks.list()[0];
+  edit(mac, { title: 'newer accepted title' });
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  // A separate writer replaces the cache without going through noteResult.
+  mac.tasks.upsertSynced(older);
+  await mac.client.syncOnce();
+  await win.client.syncOnce();
+  for (const side of [mac, win]) {
+    const card = side.tasks.list()[0];
+    assert.equal(card.title, 'newer accepted title');
+    assert.ok(card.conflicts.some((item) => item.fields.title.other === 'old snapshot title'));
+  }
+});
