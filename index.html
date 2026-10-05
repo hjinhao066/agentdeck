@@ -19,9 +19,10 @@
     <label class="notify-setting"><span>提示音</span><input type="checkbox" role="switch" id="captainSoundEnabled" aria-label="提示音" /></label>
     <label class="notify-setting"><span>选择提示音</span><select id="captainSoundTone" aria-label="选择提示音"><option value="Glass">Glass</option><option value="Tink">Tink</option></select></label>
     <p class="notify-settings-note">队员安静地在后台工作。正在前台看该会话时静音；30 秒内不重复响铃。Windows 使用系统默认提示音。</p>
+    <label class="notify-setting"><span>需要你推到手机</span><input type="checkbox" role="switch" id="needsUserBark" aria-label="需要你推到手机" checked /></label>
     <label class="bark-key-setting" for="barkKeyFile">Bark 本机密钥文件路径（barkKeyFile）</label>
     <input type="text" id="barkKeyFile" placeholder="~/.secrets/bark-key.txt" autocomplete="off" spellcheck="false" aria-describedby="barkKeyNote" />
-    <p id="barkKeyNote">这里只保存路径，文件仅含设备 key。留空则不发手机提醒；支持绝对路径和 ~/。手机需开启 Bark 重要警告权限。队长可用 notify-user --test 发送【测试】通知（critical，音量 3）。</p>
+    <p id="barkKeyNote">这里只保存路径，文件仅含设备 key。留空则不发手机提醒；支持绝对路径和 ~/。手机需开启 Bark 重要警告权限。看板卡片进入「需要你」时自动推送，可用上面的开关关闭。队长可用 notify-user --test 发送【测试】通知（critical，音量 3）。</p>
     <h3>队长省上下文</h3>
     <label class="sd-check"><input id="csEnabled" type="checkbox" />自动存看板并清空上下文</label>
     <label for="csThreshold">上下文阈值（k tokens，默认 150）</label>

@@ -8,6 +8,7 @@ const { validId, trustedSender, privateFile, boundedAppend } = require('./securi
 const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = require('./board-credentials');
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
+const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
 
 const { registerSideIpc } = require('./side-main');
@@ -59,6 +60,7 @@ function readLocalConfig() {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 }
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
+let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
   return taskStore[payload.op](payload.input || {});
@@ -477,7 +479,7 @@ function setupBoardControl() {
     if (!boardRendererReady) return false;
     send('task-board:start', input);
     return false; // Renderer acknowledges through the durable dispatched marker.
-  }, onChange: () => send('task-board:changed', {}),
+  }, onChange: () => { send('task-board:changed', {}); notifyNeedsUserCards(); },
   // Automatic verification: the renderer opens the reviewer / sends the rework,
   // then marks the durable claim delivered. Off when the local setting says so.
   onReview: (input) => { if (!boardRendererReady) return false; send('task-board:review', input); return false; },
@@ -925,6 +927,42 @@ app.whenReady().then(async () => {
       typeof message !== 'string' || !message.trim() || message.length > 1000) throw new Error('无效队长轮换提醒');
     return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
   });
+  const needsUserBarkPath = path.join(app.getPath('userData'), 'needs-user-bark-state.json');
+  let needsUserBarkState = { entries: {} };
+  let needsUserBarkStateLoaded = false;
+  try {
+    if (fs.statSync(needsUserBarkPath).size <= 65536) {
+      const value = JSON.parse(fs.readFileSync(needsUserBarkPath, 'utf8'));
+      if (value && typeof value.entries === 'object' && !Array.isArray(value.entries)) {
+        const entries = {};
+        for (const [id, entry] of Object.entries(value.entries)) {
+          if (/^[A-Za-z0-9_-]{1,160}$/.test(id) && typeof entry === 'string' && entry.length <= 200) entries[id] = entry;
+        }
+        needsUserBarkState = { entries };
+        needsUserBarkStateLoaded = true;
+      }
+    }
+  } catch (_) {}
+  if (tudArg) app.testNeedsUserAlerts = [];
+  const sendNeedsUserBark = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testNeedsUserAlerts.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  const observeNeedsUser = createNeedsUserBark({ state: needsUserBarkState, sendBark: sendNeedsUserBark,
+    suppressInitial: !needsUserBarkStateLoaded,
+    onError: (message) => send('toast', { text: message }),
+    saveState: (value) => {
+      fs.writeFileSync(needsUserBarkPath + '.tmp', JSON.stringify(value), { mode: 0o600 });
+      fs.renameSync(needsUserBarkPath + '.tmp', needsUserBarkPath);
+    } });
+  notifyNeedsUserCards = () => {
+    try {
+      observeNeedsUser(taskStore.list(), { enabled: barkEnabled(notificationConfig), ready: barkReady(notificationConfig) });
+    } catch (_) { send('toast', { text: '需要你的手机提醒没能记下，未发送。' }); }
+  };
+  notifyNeedsUserCards();
 
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
@@ -944,6 +982,7 @@ app.whenReady().then(async () => {
       fs.renameSync(configPath + '.tmp', configPath);
     } catch (_) {}
     checkQuotaBark();
+    notifyNeedsUserCards();
   });
   // The deck page has no clipboard module of its own. Test profiles get a
   // private clipboard: a test run never reads or replaces what the user copied.
