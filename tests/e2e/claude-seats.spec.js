@@ -220,8 +220,11 @@ test('settings rename all placeholders in one config and survive renderer reload
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：甲席');
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toContainText('乙席');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
+  await expect(page.locator('#claudeSeatMenu')).toBeHidden();
   await page.evaluate((id) => ChatUI.setMode(id, 'chat'), cn);
-  await page.locator(`.column[data-col-id="${cn}"] .composer textarea`).fill('keep draft');
+  const composer = page.locator(`.column[data-col-id="${cn}"] .composer textarea`);
+  await expect(composer).toBeVisible();
+  await composer.fill('keep draft');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
   await expect(page.locator('#toast')).toContainText('再交班');
 });
@@ -356,7 +359,9 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === id).configDir).toBe(dir);
   for (const width of [200, 252]) {
     await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
-    const geometry = await row.evaluate((e) => ({ scroll: e.scrollWidth, width: e.clientWidth, values: e.querySelector('.quota-values').getBoundingClientRect().left, name: e.querySelector('.quota-name').getBoundingClientRect().right }));
+    // .quota-values is display:contents in the compact panel, so it has no box.
+    // Measure the first value cell, which is what must sit to the right of the name.
+    const geometry = await row.evaluate((e) => ({ scroll: e.scrollWidth, width: e.clientWidth, values: e.querySelector('.quota-cell, .quota-status').getBoundingClientRect().left, name: e.querySelector('.quota-name').getBoundingClientRect().right }));
     expect(await page.locator('.captain-item').evaluate((e) => e.querySelector('.agent-seat-label').getBoundingClientRect().right <= e.querySelector('.claude-seat-rotate').getBoundingClientRect().left)).toBe(true);
     await screenshot(`us2-quota-width-${width}`);
     expect(geometry.scroll <= geometry.width && geometry.values >= geometry.name, JSON.stringify({ width, geometry })).toBe(true);
