@@ -61,7 +61,10 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect.poll(async () => {
     await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
     return seat('us').locator('[data-window="5h"] .quota-pct').textContent();
-  }, { timeout: 20000 }).toBe('83%');
+  }, { timeout: 20000 }).toBe('83%').catch(async error => {
+    console.log('QUOTA_STATUSLINE_DIAGNOSTIC', JSON.stringify(await page.evaluate(() => { const entry = terms.get('us-column'); return { column: columns.find(c => c.id === 'us-column'), alive: entry.alive, cols: entry.term.cols, rows: entry.term.rows, lastOutputAt: entry.lastOutputAt, footerLines: entry.footerLines, lastScreen: entry.lastScreen, screen: dumpScreen(entry.term), quota: config.quotas['Claude:us'] }; })));
+    throw error;
+  });
   await expect(seat('us')).toHaveAttribute('data-detail', /会话状态行/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   const after = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);

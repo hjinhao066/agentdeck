@@ -111,7 +111,7 @@ test('Relay revokes the old Captain and listener, preserves independent tokens, 
   expect((await cli(['ledger'], { AGENTDECK_TERMINAL_ID: newId }).done).code).toBe(1);
   const replacementEnv = { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: fresh.controlToken };
   const replacement = await cli(['receipts', '--wait', '--timeout', '10'], replacementEnv).done;
-  expect(replacement.code).toBe(0);
+  expect(replacement.code, replacement.stderr + replacement.stdout).toBe(0);
   expect(replacement.stdout).toContain('handoff-protected-receipt');
   expect(await page.evaluate(() => config.mainSession.pending.length)).toBe(0);
 });
