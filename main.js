@@ -1306,13 +1306,10 @@ app.whenReady().then(async () => {
     // no-op, not a Finder window on some unrelated folder.
     const r = resolveClick(msg, true);
     if (!r) { send('toast', { text: '路径不存在：' + shortText(msg && msg.raw) }); return; }
-    if (r.fallback) send('toast', { text: '该路径不完整存在，已打开最深的真实一层：' + r.target });
-    try {
-      const stat = fs.statSync(r.target);
-      // A directory opens in Finder; a file is revealed within its parent folder.
-      if (stat.isDirectory()) shell.openPath(r.target);
-      else shell.showItemInFolder(r.target);
-    } catch (_) {}
+    if (r.fallback) send('toast', { text: '该路径不完整存在，已定位到最深的真实一层：' + r.target });
+    // Locate only, in the parent. Opening a directory would launch an .app,
+    // and following a symlink, alias or .command would run it.
+    shell.showItemInFolder(r.target);
   });
 
   // Electron's default View accelerators zoom the entire page before the

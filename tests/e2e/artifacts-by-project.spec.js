@@ -43,8 +43,9 @@ async function launch(dir, extra = {}) {
   // Finder / Explorer must not open during a test run: record what would be shown.
   await application.evaluate(({ shell }) => {
     global.revealed = [];
-    shell.showItemInFolder = (p) => { global.revealed.push(p); };
-    shell.openPath = async (p) => { global.revealed.push(p); return ''; };
+    global.revealOps = [];
+    shell.showItemInFolder = (p) => { global.revealed.push(p); global.revealOps.push({ op: 'show', p }); };
+    shell.openPath = async (p) => { global.revealed.push(p); global.revealOps.push({ op: 'open', p }); return ''; };
   });
 }
 function cli(args, env) {
@@ -344,6 +345,29 @@ test('files and links mentioned in replies are still collected, with the same ic
   await expect(page.locator('.art-tab.active')).toHaveText(/回执交付/);
   await expect(page.locator('.art-tab.active')).toBeFocused();
   await page.keyboard.press('Escape');
+});
+
+test('show locates a folder, an app bundle and a command file instead of opening them', async () => {
+  const dir = path.join(out, 'locate-me');
+  const app = path.join(out, 'LocateMe.app');
+  const command = path.join(out, 'run.command');
+  fs.mkdirSync(dir);
+  fs.mkdirSync(path.join(app, 'Contents', 'MacOS'), { recursive: true });
+  fs.writeFileSync(path.join(app, 'Contents', 'Info.plist'), '<plist/>');
+  fs.writeFileSync(path.join(app, 'Contents', 'MacOS', 'LocateMe'), '#!/bin/sh\necho launched\n');
+  fs.writeFileSync(command, '#!/bin/sh\necho launched\n');
+  await openArtifacts();
+  await page.evaluate(({ dir, app, command }) => {
+    const col = columns.find((c) => c.id === 'w-misc');
+    col.lastReceipt = { summary: '只定位，不打开。', files: [dir, app, command], explicit: true, source: 'command', ts: Date.now() };
+    Pages.refresh();
+  }, { dir, app, command });
+  await application.evaluate(() => { global.revealOps = []; });
+  for (const [name, target] of [['locate-me', dir], ['LocateMe.app', app], ['run.command', command]]) {
+    await row(name).getByRole('button', { name: revealLabel }).click();
+    await expect.poll(() => application.evaluate(() => global.revealOps.at(-1))).toEqual({ op: 'show', p: target });
+  }
+  expect(await application.evaluate(() => global.revealOps.some((x) => x.op === 'open'))).toBe(false);
 });
 
 test('with no receipts the page says so and opens on the replies tab', async () => {
