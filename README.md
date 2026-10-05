@@ -792,13 +792,13 @@ node scripts/release.js 1.2 --base origin/release/1.1.11 origin/fix/example
 
 已手动审查并合并的发布分支可用 `node scripts/release.js 1.2.0 --prepared --output <源码外独立目录>`。要求当前分支为 `release/1.2.0`、工作区干净、package.json 与 lockfile 三处版本一致；该模式不创建 worktree、不合分支、不升版本，保留依赖准备、持锁单测/单 worker 冒烟、audit、打包及校验/耗时报告。可加 `--dry-run`；不可与分支列表、`--base`、`--worktree` 共用。
 
-流程：同步 package.json 与 lockfile 版本 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本和 JSON/Markdown 逐步耗时报告。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
+流程：同步 package.json 与 lockfile 版本 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
 
 `release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 或 E2E 命令时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。
 
 子进程清除现役 `AGENTDECK_*` 凭据；调用者环境保留，仍能提交自己的回执。同一 worktree 的依赖安装可复用；成功测试和构建只有在完整 Git tree、依赖文件/权限、Node/平台/系统/签名与测试环境都相同时复用，DMG 还须通过哈希校验。首次依赖指纹计算与门禁重叠执行，异步遍历并分块读取依赖，哈希期间持续读取测试和 audit 的输出；audit 每次运行，缓存包每次重新核对。
 
-发版脚本不合 main、不打 tag、不推送、不安装、不退出或启动应用。结果默认在相邻 `reports/agentdeck-1.2/`，内含 `install-1.2.sh`，它调用仓库的正式安装引擎。安装统一用此入口或 `scripts/restart-agentdeck.sh`，回滚用 `scripts/rollback-agentdeck.sh`；禁止会话临时手写安装脚本、添加 launchd 失败重启任务。
+发版脚本不合 main、不打 tag、不推送、不安装、不退出或启动应用；正式执行会更新 VPS 的手机静态总台，并写出 mobile-deploy-result.json。结果默认在相邻 `reports/agentdeck-1.2/`，内含 `install-1.2.sh`，它调用仓库的正式安装引擎。安装统一用此入口或 `scripts/restart-agentdeck.sh`，回滚用 `scripts/rollback-agentdeck.sh`；禁止会话临时手写安装脚本、添加 launchd 失败重启任务。
 
 手动指定发布产物时运行：
 

@@ -12,6 +12,12 @@ const { parseArgs, planRelease, isolatedEnv, withTestLock, verifyArchive, finger
 const digest = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
+function mobileReceipt(args, cwd) {
+  const stamp = { version: JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'))).version,
+    commit: git(cwd, 'rev-parse', 'HEAD'), builtAt: '2026-10-05T18:00:00.000Z' };
+  write(path.join(args[args.indexOf('--output') + 1], 'mobile-deploy-result.json'),
+    JSON.stringify({ status: 'passed', release: stamp, online: stamp }));
+}
 function fixture(t, version = '1.1.11') {
   // Keep os.tmpdir()'s own spelling. Windows CI's temp is an 8.3 alias (RUNNER~1);
   // pre-resolving it would hide the checkout containment check.
@@ -186,11 +192,15 @@ test('conflicts stop before tests/build and retain both worktrees', { skip: proc
 test('full isolated rehearsal: serial tests with parallel audit, cache reuse, damaged build and failing gate', { skip: process.platform !== 'darwin' }, async (t) => {
   const { root, repo, options } = fixture(t);
   const calls = [];
-  let active = 0, maxActive = 0, failUnit = false;
+  let active = 0, maxActive = 0, failUnit = false, failMobile = false;
   const packed = path.join(root, 'fixture.asar');
   const runner = async (command, args, cwd) => {
     const operation = `${command === 'npm' ? 'npm' : path.basename(command)} ${args.join(' ')}`;
     calls.push(operation);
+    if (args[0] === 'scripts/mobile-release.js') {
+      if (failMobile) throw new Error('fixture mobile failure');
+      mobileReceipt(args, cwd);
+    }
     if (args[0] === 'ci') {
       fs.mkdirSync(path.join(cwd, 'node_modules/electron/dist/Electron.app'), { recursive: true });
       write(path.join(cwd, 'node_modules/@electron/asar/index.js'), `module.exports = require(${JSON.stringify(require.resolve('@electron/asar'))});`);
@@ -223,6 +233,13 @@ test('full isolated rehearsal: serial tests with parallel audit, cache reuse, da
   t.diagnostic(`Cached fixture (mock build/OS commands): ${JSON.stringify({ elapsedSeconds: report.elapsedSeconds, steps: report.steps })}`);
   assert.equal(report.dependenciesCached, true); assert.equal(report.testsCached, true); assert.equal(report.buildCached, true);
   assert.ok(calls.includes('npm audit')); assert.ok(!calls.some((c) => /dist:mac|test:smoke|npm test|npm ci/.test(c)));
+  assert.ok(calls.some((c) => c.includes('scripts/mobile-release.js')), 'cached desktop build still deploys mobile');
+  failMobile = true;
+  await assert.rejects(release(repo, options, runner), /fixture mobile failure/);
+  report = JSON.parse(fs.readFileSync(path.join(options.output, 'release-report.json')));
+  assert.equal(report.status, 'failed'); assert.equal(report.mobile.status, 'failed');
+  assert.match(fs.readFileSync(path.join(options.output, 'release-report.md'), 'utf8'), /🔴 Mobile: failed/);
+  failMobile = false;
   write(path.join(options.output, 'fixture.dmg'), 'corrupt');
   calls.length = 0; await release(repo, options, runner);
   assert.ok(calls.some((c) => c.includes('dist:mac')));
@@ -248,6 +265,7 @@ test('prepared release runs packaging gates while preserving checkout, commit an
     assert.equal(cwd, fs.realpathSync.native(repo));
     assert.equal(Object.keys(env || {}).some((key) => key.startsWith('AGENTDECK_')), false);
     calls.push([command, ...args]);
+    if (args[0] === 'scripts/mobile-release.js') mobileReceipt(args, cwd);
     if (args[0] === 'ci') {
       fs.mkdirSync(path.join(cwd, 'node_modules/electron/dist/Electron.app'), { recursive: true });
       write(path.join(cwd, 'node_modules/@electron/asar/index.js'), `module.exports = require(${JSON.stringify(require.resolve('@electron/asar'))});`);
@@ -270,7 +288,8 @@ test('prepared release runs packaging gates while preserving checkout, commit an
   assert.equal(report.sha256, digest('prepared image'));
   assert.ok(report.steps.some((step) => step.name === 'prepared-checkout'));
   assert.ok(report.steps.every((step) => step.status === 'passed' && step.seconds >= 0));
-  for (const gate of ['unit', 'smoke', 'audit', 'build', 'verify-package']) assert.ok(report.steps.some((step) => step.name === gate), gate);
+  for (const gate of ['unit', 'smoke', 'audit', 'build', 'verify-package', 'mobile-deploy']) assert.ok(report.steps.some((step) => step.name === gate), gate);
+  assert.equal(report.mobile.online.version, '1.2.0');
   assert.ok(!report.steps.some((step) => ['worktree', 'version'].includes(step.name) || step.name.startsWith('merge-')));
   assert.ok(calls.findIndex((call) => call.join(' ') === 'npm test') < calls.findIndex((call) => call.join(' ') === 'npm run test:smoke'));
   assert.ok(calls.some((call) => call[0] === 'codesign' && call.includes('--deep') && call.includes('--strict')));

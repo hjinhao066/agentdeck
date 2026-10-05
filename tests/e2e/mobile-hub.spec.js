@@ -293,6 +293,98 @@ test('a computer that is not logged in or has no captain cannot be sent to', asy
   expect(hub.machines.win.posts('api/captain')).toHaveLength(0);
 });
 
+for (const tasks of ['missing cards', '404']) {
+  test(`older snapshots without optional fields stay readable with quota 404 and tasks ${tasks}`, async ({ browser }) => {
+    await open(browser, { login: [] });
+    const missing = { csrf: false, captain: false };
+    const calls = { snapshots: 0, quota: 0, tasks: 0 };
+    // The 1.1.7 machine contract already required apiVersion, machine and
+    // sessions. Keep those, but omit advisory metadata and newer turn details.
+    // Intercept before login so no successful full snapshot can mask a failure.
+    await page.route(/\/(mac|win)\/api\/snapshot$/, async (route) => {
+      const response = await route.fetch();
+      if (response.status() !== 200) return route.fulfill({ response });
+      calls.snapshots++;
+      const snapshot = await response.json();
+      delete snapshot.now; delete snapshot.boardVersion;
+      const { id, label, platform } = snapshot.machine;
+      snapshot.machine = { id, label, platform };
+      snapshot.sessions = snapshot.sessions.map(({ id, title, status, isMain }) => ({ id, title, status, isMain }));
+      if (snapshot.captain) {
+        delete snapshot.captain.title;
+        snapshot.captain.turns = snapshot.captain.turns
+          .filter((turn) => turn.user || (turn.reply && turn.kind !== 'notice'))
+          .map(({ id, ts, user, reply, done, interrupted }) => ({ id, ts, user, reply, done, interrupted }));
+      }
+      if (missing.csrf) delete snapshot.csrfToken;
+      if (missing.captain) delete snapshot.captain;
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.route(/\/(mac|win)\/api\/quota$/, (route) => {
+      calls.quota++;
+      return route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"Not found."}' });
+    });
+    await page.route(/\/(mac|win)\/api\/tasks$/, (route) => {
+      calls.tasks++;
+      return route.fulfill({ status: tasks === '404' ? 404 : 200, contentType: 'application/json', body: tasks === '404' ? '{"error":"Not found."}' : '{}' });
+    });
+    await expect(machineCard('Mac').getByLabel('Mac 的登录 token')).toBeVisible();
+    await expect(machineCard('Windows').getByLabel('Windows 的登录 token')).toBeVisible();
+    await signIn('mac'); await signIn('win');
+    await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
+    await expect(machineCard('Mac')).toContainText('在线');
+    await expect(machineCard('Windows')).toContainText('在线');
+    await expect(page.locator('.quota')).toHaveCount(0);
+    expect(calls.snapshots).toBeGreaterThanOrEqual(2);
+    expect(calls.quota).toBeGreaterThanOrEqual(2);
+    expect(calls.tasks).toBeGreaterThanOrEqual(2);
+
+    await nav('会话');
+    await expect(page.getByRole('region', { name: 'Mac 的会话' }).getByRole('button')).toHaveCount(3);
+    await expect(page.getByRole('region', { name: 'Windows 的会话' }).getByRole('button')).toHaveCount(2);
+    await nav('看板');
+    await expect(page.locator('#board-sources')).toHaveText('还没有读到任何一台电脑的看板。');
+    await expect(page.locator('#projects')).toContainText('暂无任务');
+    await expect(page.locator('.task-card')).toHaveCount(0);
+    await nav('队长');
+    await expect(page.locator('#captain-turns')).toContainText('出门前看一下三端方案的进度。');
+    await expect(page.locator('#captain-turns')).toContainText('Mac 队长测试回复');
+    await sendTo('Windows').click();
+    await expect(page.locator('#captain-turns')).toContainText('检查隧道守护脚本。');
+    await expect(page.locator('#captain-turns')).toContainText('Windows 队长测试回复');
+    await sendTo('Mac').click();
+
+    // Losing the safety credential must keep existing messages readable while
+    // refusing both a click and a programmatic form submission.
+    await page.getByLabel('给队长的消息').fill('缺少安全凭据时这条消息不能发送。');
+    await expect(page.locator('#send')).toBeEnabled();
+    missing.csrf = true;
+    await refresh();
+    await expect(page.locator('#send')).toBeDisabled();
+    await expect(page.locator('#send-hint')).toContainText('安全校验还没就绪');
+    await expect(page.locator('#captain-turns')).toContainText('Mac 队长测试回复');
+    await page.evaluate(() => document.getElementById('message-form').requestSubmit());
+    await expect(page.getByLabel('给队长的消息')).toHaveValue('缺少安全凭据时这条消息不能发送。');
+    expect(hub.machines.mac.posts('api/captain')).toHaveLength(0);
+    expect(hub.machines.win.posts('api/captain')).toHaveLength(0);
+
+    // A build with no captain object is still a usable page, with an explicit
+    // empty state and no write path. Other computers are never used as fallback.
+    missing.captain = true;
+    await refresh();
+    await expect(page.locator('#captain-turns')).toContainText('Mac 还没有队长');
+    await expect(page.locator('#send')).toBeDisabled();
+    await expect(page.locator('#send-hint')).toContainText('Mac 的队长还没启动');
+    await page.evaluate(() => document.getElementById('message-form').requestSubmit());
+    await expect(page.getByLabel('给队长的消息')).toHaveValue('缺少安全凭据时这条消息不能发送。');
+    expect(hub.machines.mac.messages).toEqual([]);
+    expect(hub.machines.win.messages).toEqual([]);
+    await nav('总览');
+    await expect(machineCard('Mac')).toContainText('在线');
+    expect(problems).toEqual([]);
+  });
+}
+
 test('machine choice is remembered, content is not, and keyboard focus stays visible', async ({ browser }) => {
   await open(browser);
   const { mac, win } = hub.machines;

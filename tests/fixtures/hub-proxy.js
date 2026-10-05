@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'] };
+  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
 // The headers the VPS adds to the static hub (design §3.5); the hub must work under them.
 const HUB_HEADERS = { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -151,7 +151,7 @@ function defaults() {
   ];
 }
 
-async function startHub({ port = 0, machines = defaults() } = {}) {
+async function startHub({ port = 0, machines = defaults(), directory = HUB } = {}) {
   const fakes = {};
   for (const options of machines) fakes[options.id] = await fakeMachine(options);
   const proxy = http.createServer((req, res) => {
@@ -159,8 +159,10 @@ async function startHub({ port = 0, machines = defaults() } = {}) {
     if (!fake) {
       const asset = req.method === 'GET' && STATIC[req.url.split('?')[0]];
       if (!asset) { res.writeHead(404, HUB_HEADERS); return res.end(); }
+      const file = path.join(directory, asset[0]);
+      if (!fs.existsSync(file)) { res.writeHead(404, HUB_HEADERS); return res.end(); }
       res.writeHead(200, { ...HUB_HEADERS, 'Content-Type': asset[1] });
-      return res.end(fs.readFileSync(path.join(HUB, asset[0])));
+      return res.end(fs.readFileSync(file));
     }
     const offline = () => { if (!res.headersSent) json(res, 502, { offline: true }); else res.end(); };
     if (fake.mode === 'down') return offline();

@@ -2,7 +2,7 @@
 
 给 `https://agentdeck.18-139-28-180.sslip.io/` 加上按路径分流：`/` 是静态总台，`/mac/*` → VPS `127.0.0.1:43122`（Mac 隧道），`/win/*` → VPS `127.0.0.1:43123`（Windows 隧道）。方案见 `~/reports/agentdeck-three-ends/DESIGN.md`。
 
-**本目录只是文件和脚本，没有任何东西被执行过。** 开发时没有连过 VPS，也没有动现役 Caddy、sshd 或 AgentDeck；上线（块 E）要等队长和用户批准。
+本目录最初是三端上线准备包；入口现已上线。日常静态发布使用正式 [部署与版本核对流程](../../docs/mobile-release.md)：`scripts/release.js` 自动执行，或 `npm run mobile:deploy -- --ref <已验收ref> --output <源码外目录>` 单独发布。旧 `deploy-hub.sh` 保留为底层手工工具，不具备版本构建/公网验收门禁；普通静态更新不调用 Caddy/sshd 安装脚本。
 
 | 文件 | 作用 |
 | --- | --- |
