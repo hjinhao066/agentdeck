@@ -37,13 +37,13 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude').locator('[data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
 
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
-  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('——');
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('未知—');
   await expect(page.locator('#quotaBar [data-seat-id="us2"] .quota-name')).toHaveText('🇺🇸 US2');
   await expect(badge('Codex').locator('.quota-values')).toContainText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider)).toHaveAttribute('data-state', 'normal');
-  // No number: both cells read — over an empty bar; 正常 moves into the details.
+  // No number: the 5h cell shows the status word, 7d reads —; the details still say 未见用尽.
   for (const provider of ['Cursor', 'Antigravity']) {
-    await expect(badge(provider).locator('.quota-values')).toHaveText('——');
+    await expect(badge(provider).locator('.quota-values')).toHaveText('正常—');
     await expect(badge(provider).getByRole('tooltip', { includeHidden: true })).toContainText('未见用尽');
   }
   // Codex that reports only the weekly window shows that number, marked as weekly.
