@@ -86,7 +86,8 @@ test('state changes show up on the next status tick', async () => {
 });
 
 test('a canvas: cards drag and stay put, the view pans and zooms, all kept in config', async () => {
-  const card = page.locator('.cm-node[data-node-id="c2004"]');
+  // 代码审查 sits alone on its row: room to move sideways inside the project
+  const card = page.locator('.cm-node[data-node-id="c2003"]');
   const before = await card.evaluate((n) => [n.offsetLeft, n.offsetTop]);
   const box = await card.boundingBox();
   await page.mouse.move(box.x + 30, box.y + 30);
@@ -97,7 +98,7 @@ test('a canvas: cards drag and stay put, the view pans and zooms, all kept in co
   expect(after[0]).toBeGreaterThan(before[0] + 50);
   // dragging is not a click: the board stays open
   expect(await page.evaluate(() => activeView)).toBe('board');
-  expect(await page.evaluate(() => config.crewMap.positions.c2004)).toEqual({ x: after[0], y: after[1] });
+  expect(await page.evaluate(() => config.crewMap.positions.c2003)).toEqual({ x: after[0], y: after[1] });
   const v0 = await page.evaluate(() => CrewMap.view());
   await page.locator('[data-cm="in"]').click();
   expect((await page.evaluate(() => CrewMap.view())).scale).toBeGreaterThan(v0.scale);
