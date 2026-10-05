@@ -30,7 +30,8 @@ const IMAGE_LIMITS = { bytes: 4 * 1024 * 1024, perMessage: 6, keepMs: 30 * 24 * 
   maxFiles: 200, maxTotalBytes: 200 * 1024 * 1024, evictAfterMs: 24 * 60 * 60 * 1000 };
 const IMAGE_ID = /^[a-f0-9]{32}\.(jpg|png|gif|webp)$/;
 const IMAGE_TYPES = { jpg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp' };
-const ASSETS = { '/': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
+// core.js is the hub's rule module: both pages group the conversation and clean replies the same way.
+const ASSETS = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['hub/core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/style.css': ['style.css', 'text/css; charset=utf-8'] };
 
 function matches(value, expected) {
   if (typeof value !== 'string' || typeof expected !== 'string') return false;

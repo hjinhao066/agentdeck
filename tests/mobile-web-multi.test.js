@@ -113,7 +113,7 @@ test('prefixed requests with a wrong explicit credential are not counted before 
 
 test('unauthenticated prefixed routes are JSON 401 and never serve the embedded login page or bundled assets; loopback keeps the legacy page', async (t) => {
   const m = await start(t, '/win/', 'Windows');
-  for (const route of ['', 'api/snapshot', 'api/auth', 'api/captain', 'api/sessions', 'api/tasks', 'api/output?id=captain', 'app.js', 'style.css', 'other']) {
+  for (const route of ['', 'api/snapshot', 'api/auth', 'api/captain', 'api/sessions', 'api/tasks', 'api/output?id=captain', 'app.js', 'core.js', 'style.css', 'other']) {
     const response = await get(m, route);
     assert.equal(response.status, 401, route);
     assert.match(response.headers['content-type'], /^application\/json/);
@@ -121,7 +121,7 @@ test('unauthenticated prefixed routes are JSON 401 and never serve the embedded 
     assert.ok(!response.text.includes('登录 token'));
   }
   const auth = { Authorization: `Bearer ${m.status.token}` };
-  for (const route of ['', 'app.js', 'style.css']) assert.equal((await get(m, route, auth)).status, 404, route);
+  for (const route of ['', 'app.js', 'core.js', 'style.css']) assert.equal((await get(m, route, auth)).status, 404, route);
   const direct = await raw(m.status, '/', { proxy: false });
   assert.equal(direct.status, 401);
   assert.match(direct.text, /登录 token/);
@@ -360,7 +360,7 @@ test('without basePath the legacy login page, cookie and routes are byte for byt
   const response = await raw(status, '/login', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: PUBLIC_ORIGIN }, body: JSON.stringify({ token: status.token }) });
   assert.match(response.headers['set-cookie'][0], /^__Host-agentdeck_mobile=[a-f0-9]{64}; HttpOnly; Secure; SameSite=Strict; Path=\/; Max-Age=2592000$/);
   const cookie = response.headers['set-cookie'][0].split(';')[0];
-  for (const route of ['/', '/app.js', '/style.css']) assert.equal((await raw(status, route, { headers: { Cookie: cookie } })).status, 200, route);
+  for (const route of ['/', '/app.js', '/core.js', '/style.css']) assert.equal((await raw(status, route, { headers: { Cookie: cookie } })).status, 200, route);
   assert.equal((await raw(status, '/mac/api/sessions', { headers: { Cookie: cookie } })).status, 404);
   const cookieOnly = (name) => raw(status, '/api/sessions', { headers: { Cookie: `${name}=${cookie.split('=')[1]}` } });
   assert.equal((await cookieOnly('__Secure-agentdeck_mac')).status, 401);
