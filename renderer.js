@@ -3723,13 +3723,14 @@ function renderQuotaBar() {
       const state = q.out ? 'exhausted' : q.state;
       const recovery = q.recoveryAt > now ? q.recoveryAt : null;
       // Always a 5h and a 7d cell: % + reset time over a thin bar. Used up = ⊘ + reset time;
-      // no number = —. An account-wide block with no 5-hour window shows in the 5h cell.
+      // No numeric windows: show the row status in 5h. Account-wide blocks with a reset keep their recovery time.
       const blockedOnly = q.out && !q.cells.some((c) => c.out);
       const row = ['5h', '7d'].map((key) => {
         const c = q.cells.find((v) => v.key === key) || (key === '5h' && blockedOnly ? { key, out: true, resetAt: recovery } : null);
         const cell = el('span', 'quota-cell'); cell.dataset.window = key; cell.dataset.level = c ? level(c) : 'none';
         const line = el('span', 'quota-line');
-        if (!c) line.append(el('span', 'quota-none', '—'));
+        if (key === '5h' && !q.cells.length && !recovery) line.append(el('span', 'quota-none', q.shortText));
+        else if (!c) line.append(el('span', 'quota-none', '—'));
         else if (c.out) { const ban = el('span', 'quota-ban'); ban.innerHTML = ICONS.ban; line.append(ban); }
         else line.append(el('span', 'quota-pct', pct(c)));
         if (c?.resetAt > now) line.append(el('span', 'quota-reset', shortReset(c.resetAt)));

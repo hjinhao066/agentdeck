@@ -401,7 +401,7 @@ test('any exhausted window (5-hour or weekly) shows exhausted with the recovery 
   assert.deepEqual([ok.out, ok.fiveHour, ok.recoveryAt, ok.statusText], [false, 41, null, '正常']);
 });
 
-test('sidebar row value: 5-hour %, else weekly %, else 正常 when nothing is exhausted, else dash', () => {
+test('sidebar row value: 5-hour %, else weekly %, else 正常 when nothing is exhausted, else a distinct status word', () => {
   const weeklyOnly = {};
   Q.observe(weeklyOnly, Q.cacheCodex({ type: 'event_msg', timestamp: new Date(now).toISOString(), payload: { type: 'token_count', rate_limits: { limit_id: 'codex', primary: { used_percent: 85, window_minutes: 10080, resets_at: now / 1000 + 86400 }, secondary: null } } }), now);
   const codex = Q.summary(weeklyOnly, 'Codex', now);
@@ -415,11 +415,14 @@ test('sidebar row value: 5-hour %, else weekly %, else 正常 when nothing is ex
   const sampled = Q.summary(grok, 'Cursor', now);
   assert.deepEqual([sampled.shortText, sampled.shortRemaining, sampled.state], ['正常', null, 'normal']);
   assert.deepEqual(sampled.cells, []);
-  // Truly unknown (never sampled, or a stale numberless sample) is the only dash.
-  assert.equal(Q.summary({}, 'Cursor', now).shortText, '—');
-  assert.equal(Q.summary({}, 'Codex', now).shortText, '—');
-  assert.equal(Q.summary(grok, 'Cursor', now + Q.FRESH_MS + 1).shortText, '—');
-  // Exhaustion still wins: the renderer shows the recovery time instead of this value.
+  // Missing and expired samples must not look like healthy or exhausted quota.
+  assert.equal(Q.summary({}, 'Cursor', now).shortText, '未知');
+  assert.equal(Q.summary({}, 'Codex', now).shortText, '未知');
+  assert.equal(Q.summary(grok, 'Cursor', now + Q.FRESH_MS + 1).shortText, '过期');
+  grok.Cursor.blocked = { at: now, source: '会话屏幕' };
+  assert.equal(Q.summary(grok, 'Cursor', now).shortText, '已用尽');
+  assert.equal(Q.summary(grok, 'Cursor', now + Q.FRESH_MS + 1).shortText, '已用尽');
+  // Exhaustion with a known reset keeps the recovery time in the renderer.
   Q.observe(grok, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now + 1, 'grok-4.7-high-fast'), now + 1);
   assert.equal(Q.summary(grok, 'Cursor', now + 1).out, true);
 });
