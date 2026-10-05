@@ -685,6 +685,16 @@
     return completed >= 0 && lines.slice(completed + 1).some((line) => /^\s*›\s/.test(line))
       ? lines.slice(completed + 1).join('\n') : text;
   }
+  // Claude's live footer counts background work after its ready prompt.
+  // Ignore quoted/output rows above that prompt, and zero/completed counts.
+  function claudeBackgroundTasks(screen, cmd) {
+    if (cmd && !/\bclaude\b/i.test(cmd)) return false;
+    const lines = String(screen || '').split('\n').slice(-20);
+    const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*❯(?:\s|$)/.test(line));
+    if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
+    return lines.slice(prompt + 1).some((line) =>
+      /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line));
+  }
   function terminalActivity(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
     const lines = String(screen || '').split('\n').slice(-20);
@@ -801,7 +811,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, resourceReceipt,
     receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });

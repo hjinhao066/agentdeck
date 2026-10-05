@@ -430,6 +430,11 @@ again with the current provider, model and effort instructions.
   ended without a command receipt gets a three-minute grace period. Only a
   finished, uninterrupted turn can trigger the
   fallback: “已结束，未提交回执”, with no screen content or inferred files.
+  Claude workers whose live footer still reports background shells/monitors/tasks
+  running remain busy even after the model's reply. They produce no missing-command
+  receipt and cannot auto-archive; the three-minute grace starts after their
+  background work ends. Old quoted counters and zero/completed counts are ignored.
+  The Captain's own permanent receipt listener does not keep its foreground busy.
   Screen 【回执】/【提问】 blocks, examples, contract echoes and Doing… never count
   as submissions. A late command replaces the fallback notice. Prompt submission
   waits for the paste redraw

@@ -105,7 +105,7 @@ function claim(dir, token, ownerPid = 0) {
 
 function retiring(dir, token) {
   const file = leasePath(dir, token), lease = read(file);
-  if (!lease) return fs.existsSync(file);
+  if (!lease) return true; // The app may have reaped it just after claim returned EEXIST.
   return released(file, lease) || !alive(lease.pid) || lease.ownerPid && !alive(lease.ownerPid);
 }
 

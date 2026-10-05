@@ -104,6 +104,72 @@ test('ordinary resource words on a worker screen do not fail its assignment or h
   expect(await page.evaluate(() => MainCore.resourceReceipt(statusScreen(terms.get('silent-worker').term)))).toBeNull();
 });
 
+test('Claude background shell and monitor footer keeps the turn open and protects completed cards from archive', async () => {
+  await page.evaluate(() => { columns.find((c) => c.id === 'silent-worker').cmd = 'claude'; });
+  try {
+    await page.evaluate(() => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: 'background claude rows=80' }, MainSession.mainCol()));
+    await expect.poll(() => page.evaluate(() => statusScreen(terms.get('silent-worker').term))).toContain('1 shell, 1 monitor still running');
+    await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state)).toBe('working');
+    // Exercise the real status and ChatUI loops beyond the quiet-turn fallback.
+    await page.waitForTimeout(7500);
+    const active = await page.evaluate(() => {
+      const entry = terms.get('silent-worker'), task = config.mainSession.tasks.at(-1);
+      const old = Date.now() - 11 * 60000;
+      entry.lastOutputAt = task.sentAt = task.startedAt = task.endedAt = old;
+      MainSession.onTick('silent-worker', entry);
+      return { state: entry.state, turnDone: ChatUI.turnsOf('silent-worker').at(-1)?.done,
+        taskStatus: task.status, endedAt: task.endedAt, receipt: task.receipt || null,
+        captainClassification: classify(statusScreen(entry.term), { hasWorked: true }, 'claude', true),
+        nav: navItems.get('silent-worker').dot.className };
+    });
+    expect(active).toMatchObject({ state: 'working', turnDone: false, taskStatus: 'working', endedAt: 0, receipt: null, captainClassification: 'done' });
+    expect(active.nav).toContain('working');
+
+    await page.evaluate(() => MainSession.submit({ action: 'complete', result: 'completed card with background tools' }, columns.find((c) => c.id === 'silent-worker')));
+    const protectedCard = await page.evaluate(() => {
+      const col = columns.find((c) => c.id === 'silent-worker'), entry = terms.get(col.id);
+      const task = config.mainSession.tasks.at(-1), turn = ChatUI.turnsOf(col.id).at(-1);
+      task.doneAt = task.sentAt = turn.ts = Date.now() - 11 * 60000;
+      // A completed historical turn must not independently protect this card:
+      // the live background footer alone prevents automatic/quiet archive.
+      turn.done = true;
+      config.mainSession.pending = []; config.mainSession.inflight = [];
+      entry.state = 'done'; entry.lastOutputAt = 1;
+      const otherwiseArchivable = MainCore.archivable(config.mainSession, col.id, turn.ts, Date.now());
+      MainSession.onTick(col.id, entry);
+      archiveColumn(col, { quiet: true });
+      return { otherwiseArchivable, present: columns.includes(col), archived: (config.archived || []).some((c) => c.id === col.id) };
+    });
+    expect(protectedCard).toEqual({ otherwiseArchivable: true, present: true, archived: false });
+    await page.evaluate(() => window.deck.ptyInput('silent-worker', 'finish\r'));
+    await expect.poll(() => page.evaluate(() => statusScreen(terms.get('silent-worker').term))).not.toContain('still running');
+    await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 15000 }).toBe('done');
+
+    // A second assignment has no command receipt: only losing the background
+    // footer starts its normal three-minute fallback grace period.
+    await page.evaluate(() => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: 'background claude rows=80' }, MainSession.mainCol()));
+    await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state)).toBe('working');
+    await expect.poll(() => page.evaluate(() => statusScreen(terms.get('silent-worker').term))).toContain('still running');
+    await page.evaluate(() => window.deck.ptyInput('silent-worker', 'finish\r'));
+    await expect.poll(() => page.evaluate(() => statusScreen(terms.get('silent-worker').term))).not.toContain('still running');
+    await expect.poll(() => page.evaluate(() => terms.get('silent-worker').state), { timeout: 15000 }).toBe('done');
+    await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('silent-worker').at(-1)?.done), { timeout: 15000 }).toBe(true);
+    expect(await page.evaluate(() => config.mainSession.tasks.at(-1).status)).toBe('working');
+    const fallback = await page.evaluate(() => {
+      const entry = terms.get('silent-worker'), task = config.mainSession.tasks.at(-1), now = Date.now();
+      task.endedAt = entry.lastOutputAt = now - 179000;
+      MainSession.onTick('silent-worker', entry);
+      const beforeDeadline = task.status;
+      task.endedAt = entry.lastOutputAt = now - 181000;
+      MainSession.onTick('silent-worker', entry);
+      return { beforeDeadline, status: task.status, source: task.receipt?.source, summary: task.receipt?.summary };
+    });
+    expect(fallback).toEqual({ beforeDeadline: 'working', status: 'stopped', source: 'fallback', summary: '已结束，未提交回执' });
+  } finally {
+    await page.evaluate((cmd) => { const col = columns.find((c) => c.id === 'silent-worker'); if (col) col.cmd = cmd; }, statusAgent);
+  }
+});
+
 test('Cursor remains working in ledger after command completion until the live terminal finishes', async () => {
   await page.evaluate(() => { columns.find((c) => c.id === 'silent-worker').cmd = 'cursor-agent --force'; });
   await page.evaluate(() => MainSession.handle({ action: 'main-tell', to: 'silent-worker', message: 'busy cursor rows=80' }, MainSession.mainCol()));

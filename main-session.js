@@ -725,7 +725,7 @@
     if (!col || !entry?.alive || briefing || delivering || tokenSaving || entry.sendingPrompt || entry.injecting ||
       host.userComposing(col.id) || window.ChatUI.hasDraft(col.id) ||
       !['done', 'quota'].includes(entry.state) || Date.now() - (entry.lastOutputAt || 0) < 3000) return false;
-    const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
+    const activity = M.terminalActivity(entry.lastScreen, col?.cmd) || (M.claudeBackgroundTasks(entry.lastScreen, col?.cmd) ? 'working' : '');
     if (activity === 'working' || (activity === 'quota' && entry.state !== 'quota')) return false;
     return entry.state === 'quota' || !window.ChatUI.turnsOf(col.id).some((t) => !t.done);
   }
@@ -1042,7 +1042,7 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd))) return;
+    if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) return;
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.needsCardCheck(s, col.id)) refreshCards();
@@ -1645,7 +1645,7 @@
     if (col && col.captainCrew) maybeArchive(col, entry);
     // The no-command notice is provisional. A live working session supersedes
     // it, including when it resumes the same instruction after a quiet gap.
-    if (entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'working')) {
+    if (entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'working' || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) {
       const stale = col?.lastReceipt?.source === 'fallback';
       if (stale) delete col.lastReceipt;
       const task = s.tasks.findLast((t) => t.colId === id);
@@ -1720,8 +1720,8 @@
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
       if (!task.processEnded && (entry.state === 'working' || activity === 'working')) { task.endedAt = 0; continue; }
-      // Never parse a screen/reply for receipts. A finished turn (or a real
-      // zero process exit) gets a three-minute grace period for its command.
+      // Never parse a screen/reply for receipts. Only a finished turn with
+      // no foreground or background work starts the command grace period.
       const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
       const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
       if (!ended || turn && !turn.done && !task.processEnded) continue;
@@ -1762,7 +1762,7 @@
     if (!task || CLOSED.includes(task.status) || turn.interrupted) return;
     const entry = host.terms.get(colId);
     const col = host.columns().find((c) => c.id === colId);
-    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, col?.cmd)) return;
+    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd)) return;
     task.endedAt = Date.now();
   }
 

@@ -11,24 +11,26 @@ function world(saved) {
   let now = 10_000_000, composing = false, sent = true;
   const captain = { id: 'captain', isMain: true, cmd: 'claude' };
   const worker = { id: 'worker', cmd: 'codex' };
-  const columns = [captain, worker], prompts = [];
+  const columns = [captain, worker], prompts = [], archived = [];
+  const turns = [];
   const s = saved || { colId: 'captain', gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] };
   const terms = new Map([[worker.id, { alive: true, state: 'working', lastOutputAt: now, lastScreen: '' }]]);
   const window = { MainCore: M, BoardCore: B, ChatUI: {
-    updateCard() {}, turnsOf: () => [], sendPrompt: async (...args) => { prompts.push(args); return sent; },
+    updateCard() {}, turnsOf: () => turns, sendPrompt: async (...args) => { prompts.push(args); return sent; },
   } };
   const context = vm.createContext({ window, Date: class extends Date { static now() { return now; } } });
   const source = fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8')
     .replace('  window.MainSession = {', '  window.__test = { setHost(h) { host = h; }, remindMissingListener, normalize };\n  window.MainSession = {');
   vm.runInContext(source, context);
   window.__test.setHost({ config: { mainSession: s }, terms, columns: () => columns, saveConfig() {},
+    isBackstage: () => true, focusedId: () => 'captain', lastTurnTs: () => 1, archiveColumn: (col) => archived.push(col.id),
     columnLabel: (c) => c.id, userComposing: () => composing, agentInForeground: async () => true });
   const api = window.MainSession;
   function task(status = 'working') {
     const t = { id: 'task-' + s.tasks.length, colId: worker.id, gen: 1, status, title: 'probe', startedAt: now, sentAt: now };
     s.tasks.push(t); return t;
   }
-  return { api, s, worker, captain, terms, prompts, task,
+  return { api, s, worker, captain, terms, prompts, task, turns, archived,
     relay() { s.colId = captain.id = 'captain-new'; },
     advance(ms) { now += ms; }, input(value) { composing = value; }, sent(value) { sent = value; },
     restore() { window.__test.normalize(); },
@@ -157,4 +159,33 @@ test('a new Captain with unread receipts gets its own missing-listener reminder 
   w.relay();
   await w.api.handle({ action: 'main-receipt-listener-status', alive: false }, w.captain);
   w.remind(); await flush(); assert.equal(w.prompts.length, 2);
+});
+
+test('Claude background shell/monitor work blocks missing-receipt notices and auto archive until it finishes', () => {
+  const w = world(), t = w.task();
+  w.worker.cmd = 'claude'; w.worker.captainCrew = true;
+  t.turnId = 'turn'; t.endedAt = 1;
+  w.turns.push({ id: 'turn', done: true });
+  Object.assign(w.terms.get('worker'), { state: 'done', lastScreen: '❯ \n⏵⏵ bypass permissions on · 1 shell, 1 monitor still running' });
+  w.advance(11 * 60_000); w.tick();
+  assert.equal(t.status, 'working'); assert.equal(t.endedAt, 0);
+  assert.equal(w.s.pending.length, 0); assert.equal(w.archived.length, 0);
+  // Even an authoritative completed task must retain its running background tools.
+  t.status = 'done'; t.doneAt = 1; w.tick(); assert.equal(w.archived.length, 0);
+  t.status = 'working';
+  w.terms.get('worker').lastScreen = '❯ \n⏵⏵ bypass permissions on';
+  w.tick(); assert.equal(t.status, 'working');
+  w.advance(179_999); w.tick(); assert.equal(t.status, 'working');
+  w.advance(1); w.tick(); assert.equal(t.status, 'stopped');
+  assert.equal(w.s.pending[0].summary, '已结束，未提交回执');
+});
+
+test('only Claude live footer background counts are activity; old prose and finished/zero counts are idle', () => {
+  for (const footer of ['1 shell, 1 monitor still running', '2 shells still running', '1 task still running', '1 agent still running']) {
+    assert.equal(M.claudeBackgroundTasks('❯ \n' + footer, 'claude'), true, footer);
+  }
+  for (const screen of ['I saw 1 shell, 1 monitor still running\n❯ \nbypass permissions on',
+    '❯ \n0 shells still running', '❯ \n1 shell completed', '1 shell still running',
+    '❯ 1. Allow\n1 shell still running']) assert.equal(M.claudeBackgroundTasks(screen, 'claude'), false, screen);
+  assert.equal(M.claudeBackgroundTasks('❯ \n1 shell still running', 'cursor-agent'), false);
 });

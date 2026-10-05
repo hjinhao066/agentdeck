@@ -1607,7 +1607,7 @@ app.on('before-quit', (event) => {
   clearInterval(quotaWarmupTimer);
   quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
   chatgptWebExecutor?.dispose();
-  receiptListeners?.dispose();
+  receiptListeners?.dispose(); receiptListeners = null;
 
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }

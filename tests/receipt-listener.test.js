@@ -48,6 +48,7 @@ test('a capability generation owns exactly one listener; release allows a replac
   assert.equal(first.valid(), false);
   assert.equal(Listener.claim(dir, 'captain'), null); // Only the application can retire it.
   registry.reap(['captain']);
+  assert.equal(Listener.retiring(dir, 'captain'), true, 'reaped between claim and retry still permits replacement');
   const replacement = Listener.claim(dir, 'captain');
   first.release(); // An old exit handler cannot revoke a replacement.
   assert.ok(replacement.valid());
