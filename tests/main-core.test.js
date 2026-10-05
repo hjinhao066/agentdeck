@@ -536,3 +536,36 @@ test('archivable: a failed or stopped session needs its card done or taken over;
   assert.equal(M.needsCardCheck(mk('done'), 'a'), false);
   assert.equal(M.needsCardCheck(mk('failed', { boardId: '' }), 'a'), false);
 });
+
+test('archivable: a successor who also failed is not a takeover; the newest failure stays', () => {
+  const now = 10_000_000, min = 60_000;
+  const task = (colId, status, ago) => ({ colId, status, boardId: 'c1', sentAt: now - ago * min, doneAt: status === 'working' ? 0 : now - ago * min });
+  const quiet = (tasks) => ({ tasks, pending: [], inflight: [] });
+  const doing = (session_id) => ({ c1: { status: 'doing', session_id } });
+  const gone = (s, colId, cards) => M.archivable(s, colId, 0, now, M.ARCHIVE_AFTER, cards);
+
+  // A failed, B took over and is working. The binding can still name A.
+  let s = quiet([task('a', 'failed', 40), task('b', 'working', 30)]);
+  assert.equal(gone(s, 'a', doing('a')), true, 'A archives once B is working');
+  assert.equal(gone(s, 'b', doing('a')), false, 'B is still working');
+
+  // B also failed. A may leave; B stays even though the card still names A.
+  for (const status of ['failed', 'stopped']) {
+    s = quiet([task('a', 'failed', 40), task('b', status, 30)]);
+    assert.equal(gone(s, 'a', doing('a')), true, 'earlier failure may archive after B ' + status);
+    assert.equal(gone(s, 'b', doing('a')), false, 'newest ' + status + ' stays while the card is open');
+    assert.equal(gone(s, 'b', doing('b')), false, 'newest ' + status + ' stays when the card names B');
+  }
+
+  // C takes over. B archives whether or not the binding has caught up.
+  s = quiet([task('a', 'failed', 40), task('b', 'failed', 30), task('c', 'working', 20)]);
+  assert.equal(gone(s, 'b', doing('a')), true, 'B archives once C is working');
+  assert.equal(gone(s, 'c', doing('c')), false, 'C is still working');
+
+  // Card completed: every finished attempt on it archives.
+  s = quiet([task('a', 'failed', 40), task('b', 'failed', 30), task('c', 'done', 20)]);
+  const done = { c1: { status: 'done', session_id: 'c' } };
+  assert.equal(gone(s, 'a', done), true, 'A archives when the card is done');
+  assert.equal(gone(s, 'b', done), true, 'B archives when the card is done');
+  assert.equal(gone(s, 'c', done), true, 'C archives when the card is done');
+});
