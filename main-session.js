@@ -2118,6 +2118,13 @@
   function init(h) {
     host = h;
     normalize();
+    const attempt = state()?.relayStartup?.attempt;
+    if (attempt && attempt.colId === mainCol()?.id) {
+      // A rebuilt PTY must prove it received the briefing and started work;
+      // old-process output cannot satisfy its watchdog after a restart.
+      attempt.promptSent = false; attempt.output = false; delete attempt.promptSentAt;
+      save();
+    }
     loadResumeManifest();
     initDialog();
     if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? `读看板继续：${state().seatCheckpoint}` : '');

@@ -9,8 +9,10 @@ const { execFileSync } = require('child_process');
 const B = require('../board-core');
 const S = require('../claude-seats-core');
 
-function session({ tasks = [], pending = [] } = {}) {
-  const col = { id: 'captain', isMain: true, cmd: '' };
+function session({ tasks = [], pending = [], cmd = '', relayStartup } = {}) {
+  const col = { id: 'captain', isMain: true, cmd };
+  const config = { mainSession: { colId: col.id, tasks, pending, ...(relayStartup ? { relayStartup } : {}) } };
+  const sends = [], saves = [];
   const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - 5000, lastScreen: '' };
   const elements = new Map();
   const window = { deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: require('../main-core'), BoardCore: B,
@@ -20,9 +22,11 @@ function session({ tasks = [], pending = [] } = {}) {
     querySelectorAll: () => [],
   } });
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
-  window.MainSession.init({ config: { mainSession: { colId: col.id, tasks, pending } },
-    columns: () => [col], terms: new Map([[col.id, entry]]), userComposing: () => false });
-  return { api: window.MainSession, entry };
+  window.MainSession.init({ config, platform: 'darwin',
+    columns: () => [col], terms: new Map([[col.id, entry]]), userComposing: () => false,
+    sendWhenReady: (column, text, options) => sends.push({ colId: column.id, text, options }),
+    saveConfig: () => saves.push(JSON.parse(JSON.stringify(config))) });
+  return { api: window.MainSession, entry, sends, saves };
 }
 const task = (id, title, status, failed) => ({ id, colId: 'worker-' + id, title, status, receipt: failed ? { failed } : undefined });
 
@@ -46,6 +50,38 @@ test('relay waits for a live idle Captain and a quiet screen', () => {
   entry.alive = false; assert.equal(api.relayIdle(), false);
   entry.alive = true; entry.state = 'working'; assert.equal(api.relayIdle(), false);
   entry.state = 'done'; entry.lastOutputAt = Date.now(); assert.equal(api.relayIdle(), false);
+});
+
+test('MainSession restart clears old PTY startup evidence and records a newly delivered brief without extending the deadline', () => {
+  const R = require('../relay-startup-core'), at = Date.now() - 60_000;
+  const saved = R.begin({ failures: ['us', 'us2'] }, { colId: 'captain', targetId: 'cn', at });
+  Object.assign(saved.attempt, { promptSent: true, promptSentAt: at + 1000, output: true });
+  const h = session({ cmd: S.CLAUDE_COMMAND, relayStartup: JSON.parse(JSON.stringify(saved)) });
+  let startup = h.api.state().relayStartup;
+  assert.equal(startup.attempt.deadline, saved.attempt.deadline);
+  assert.equal(startup.attempt.at, at);
+  assert.deepEqual(startup.failures, ['us', 'us2']);
+  assert.equal(startup.attempt.promptSent, false);
+  assert.equal(startup.attempt.output, false);
+  assert.equal(startup.attempt.promptSentAt, undefined);
+  assert.equal(h.saves.length, 1);
+  assert.deepEqual(h.saves[0].mainSession.relayStartup, startup);
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.sends[0].colId, 'captain');
+  assert.ok(h.sends[0].text.includes('队长'));
+  assert.equal(h.sends[0].options.silent, true);
+  assert.equal(h.sends[0].options.guardUserInput, true);
+  const beforeSend = Date.now();
+  h.sends[0].options.onSent();
+  startup = h.api.state().relayStartup;
+  assert.equal(startup.attempt.promptSent, true);
+  assert.ok(startup.attempt.promptSentAt >= beforeSend);
+  assert.ok(startup.attempt.promptSentAt <= Date.now());
+  assert.equal(startup.attempt.output, false);
+  assert.equal(startup.attempt.deadline, saved.attempt.deadline);
+  assert.deepEqual(startup.failures, ['us', 'us2']);
+  assert.equal(h.saves.length, 2);
+  assert.deepEqual(h.saves[1].mainSession.relayStartup, startup);
 });
 
 function seatRelay(options = {}) {
