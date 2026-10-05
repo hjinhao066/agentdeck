@@ -153,5 +153,20 @@ test('warmup state is pure and survives JSON round trips; malformed and out-of-s
   assert.equal(JSON.stringify(state), before);
   assert.deepEqual(W.normalizeState(JSON.parse(JSON.stringify(started))), started);
   for (const malformed of [undefined, null, 0, 'invalid']) assert.deepEqual(W.normalizeState(malformed), { seats: {} });
-  assert.deepEqual(W.normalizeState({ seats: { other: { ...state.seats.cn }, us: { ...state.seats.cn, configDir: '~/.claude-us' } } }), { seats: {} });
+  assert.deepEqual(W.normalizeState({ seats: { '../bad': { ...state.seats.cn }, us: { ...state.seats.cn, configDir: '~/.claude-us' } } }), { seats: {} });
+});
+
+test('warmup accepts US2 and custom seats, skips missing login, and keeps per-seat state', () => {
+  const us2 = { ...us, id: 'us2', configDir: '/home/test/.claude-us2', accountKey: 'us2-account' };
+  const custom = { ...us2, id: 'custom', configDir: '/home/test/custom' };
+  let state = observed();
+  for (const seat of [us, us2, custom]) state = W.observe(state, observation(seat), RESET);
+  assert.equal(choose(state, { seats: [{ ...cn, occupied: true }, { ...us, warmupEligible: false }, us2, custom] }).seatId, 'us2');
+  assert.equal(choose(state, { seats: [{ ...us2, loggedIn: false }, custom] }).seatId, 'custom');
+  assert.deepEqual(W.normalizeState(JSON.parse(JSON.stringify(state))), state);
+  const d = choose(state, { seats: [us2] });
+  state = W.finish(W.begin(state, d), { ...d, success: true }, DUE);
+  assert.equal(state.seats.us2.status, 'succeeded');
+  assert.equal(state.seats.us.attempts, 0);
+  assert.equal(choose(state, { seats: [us2] }), null);
 });

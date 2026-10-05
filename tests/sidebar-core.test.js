@@ -159,3 +159,10 @@ test('Hermes hub link is the https console address the main process will open', 
   assert.match(S.HERMES_HUB_URL, /^https:\/\/hub\.18-139-28-180\.sslip\.io\/$/);
   assert.match(S.HERMES_HUB_URL, /^https?:\/\//i); // same guard as main's open-external
 });
+
+test('same-flag seats group separately using configured seat metadata', () => {
+  const seats = [{ id: 'us', name: 'US', icon: '🇺🇸', configDir: '/us' }, { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '/us2' },
+    { id: 'extra', name: 'Extra', icon: '⭐', configDir: '/extra' }];
+  const groups = S.crewModelGroups(seats.map((seat) => ({ id: seat.id, seat: seat.id, label: 'Opus 5.5' })), seats);
+  assert.deepEqual(groups.map((g) => [g.seat, g.seatName, g.flag]), [['extra', 'Extra', '⭐'], ['us', 'US', '🇺🇸'], ['us2', 'US2', '🇺🇸']]);
+});

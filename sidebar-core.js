@@ -3,10 +3,10 @@
 // the sidebar (队长 and the sessions it opened, folders top to bottom, then
 // loose sessions), so swiping left and right walks the list you see. No DOM, no Electron: runs in the page and tests.
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports ? require('./claude-seats-core') : root.ClaudeSeatsCore);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.SidebarCore = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (S) {
   'use strict';
 
   const MAX_FOLDERS = 100;
@@ -142,18 +142,19 @@
 
   // Crew under 队长, one group per visible model (and Claude seat, when pinned).
   // Groups with more people working come first; inside a group, recent activity first.
-  function crewModelGroups(members) {
-    const flags = { us: '🇺🇸', cn: '🇨🇳' };
+  function crewModelGroups(members, seats) {
+    const configured = S.normalize(seats);
     const map = new Map();
     for (const raw of Array.isArray(members) ? members : []) {
       if (!raw || raw.id == null) continue;
       const label = String(raw.label || '').trim() || '未识别';
-      const seat = raw.seat === 'us' || raw.seat === 'cn' ? raw.seat : '';
+      const metadata = configured.find((s) => s.id === raw.seat);
+      const seat = metadata?.id || '';
       const key = label + '\u001f' + seat;
       let group = map.get(key);
       if (!group) {
         group = {
-          key, label, seat, flag: flags[seat] || '',
+          key, label, seat, seatName: metadata?.name || '', flag: metadata?.icon || '',
           iconProvider: raw.iconProvider || '',
           working: 0, lastActive: 0, members: [],
         };

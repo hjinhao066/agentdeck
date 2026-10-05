@@ -47,12 +47,12 @@ test('two actually exhausted Claude seats relay to Codex', () => {
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0)] }).targetId, P.CODEX_ID);
   assert.equal(choose({ state: exhausted({}, 'us'), seats: [quota('cn', 0), unknown('us')] }).targetId, P.CODEX_ID);
 });
-test('low positive percentages or an unknown unlogged seat do not count as two exhausted Claude seats', () => {
+test('low positive quotas prevent Codex fallback; missing logins are skipped', () => {
   assert.equal(choose({ seats: [quota('cn', 3), quota('us', 2)] }), null);
   assert.equal(choose({ seats: [quota('cn', 0), quota('us', 2)] }), null);
   assert.equal(choose({ seats: [quota('cn', 3), { ...unknown('us'), loggedIn: false }] }), null);
-  assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn'), { ...unknown('us'), loggedIn: false }] }), null);
-  assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn')] }), null);
+  assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn'), { ...unknown('us'), loggedIn: false }] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ state: exhausted({}, 'cn'), seats: [unknown('cn')] }).targetId, P.CODEX_ID);
 });
 test('a persisted trusted zero proves exhaustion until its reset, then the Claude seat becomes usable', () => {
   let state = P.observe({}, { seatId: 'cn', at: NOW, remaining: 0, trusted: true, resetAt: NOW + 3600_000 }, NOW);
@@ -385,4 +385,20 @@ test('strategy details use plain language and show the reset, threshold and week
   const text = P.strategyText({ currentId: 'cn', seats, warmups: [{ seatId: 'us', resetAt: NOW + 3600000, status: 'pending' }], now: NOW });
   assert.match(text, /正在用 CN/); assert.match(text, /US .*重置后自动预热/); assert.match(text, /CN 剩 3% 时切到 US/);
   assert.match(P.strategyText({ currentId: 'cn', seats: [seats[0], { ...seats[1], weeklyRemaining: 0 }] }), /每周额度不足，不切换也不预热/);
+});
+
+test('three Claude seats cycle CN to US to US2 to CN, skipping unavailable seats', () => {
+  for (const [currentId, next] of [['cn', 'us'], ['us', 'us2'], ['us2', 'cn']]) {
+    const seats = ['cn', 'us', 'us2'].map((id) => quota(id, id === currentId ? 0 : 80));
+    assert.equal(choose({ currentId, seats }).targetId, next);
+    seats.find((s) => s.id === next).loggedIn = false;
+    assert.notEqual(choose({ currentId, seats }).targetId, next);
+    seats.find((s) => s.id === next).loggedIn = true;
+    seats.find((s) => s.id === next).remaining = 0;
+    assert.notEqual(choose({ currentId, seats }).targetId, next);
+  }
+  assert.equal(choose({ currentId: 'us', seats: [quota('cn', 0), quota('us', 0), quota('us2', 60)] }).targetId, 'us2');
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), { ...unknown('us2'), loggedIn: false }] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 0)] }).targetId, P.CODEX_ID);
+  assert.equal(choose({ seats: [quota('cn', 0), quota('us', 0), quota('us2', 2)] }), null);
 });

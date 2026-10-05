@@ -867,7 +867,7 @@ app.whenReady().then(async () => {
     getSettings: () => seatConfig().quotaWarmup,
     getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
     getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
-    readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome),
+    readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome, tudArg ? 'test' : process.platform),
       quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
     occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
       tudArg ? async () => [] : undefined),

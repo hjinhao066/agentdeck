@@ -100,7 +100,7 @@
   }
   const startingCards = new Map();
   const quotaStarts = new Map();
-  const commandQuota = (cmd) => window.QuotaCore.commandQuota(host.config.quotas, cmd, host.config.claudeSeats, host.config.activeClaudeSeatId);
+  const commandQuota = (cmd, seatId) => window.QuotaCore.commandQuota(host.config.quotas, cmd, host.config.claudeSeats, seatId || host.config.activeClaudeSeatId);
   // `notice(card)`: the words for 队长 when the user asked for the start on the
   // task board itself; such a start never opens a dispatcher session.
   async function startCard(id, heartbeat, notice) {
@@ -702,7 +702,7 @@
     }
     const task = addTask(null, title);
     Object.assign(task, metadata);
-    if (commandQuota(cmd)?.out) task.waitReason = '额度用尽，稍后自动开';
+    if (commandQuota(cmd, metadata.claudeSeatId)?.out) task.waitReason = '额度用尽，稍后自动开';
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
     save();
   }
@@ -723,7 +723,7 @@
         cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
         take: () => {
           if (state() !== s) return null;
-          const index = s.waitlist.findIndex((w) => !commandQuota(w.cmd)?.out);
+          const index = s.waitlist.findIndex((w) => !commandQuota(w.cmd, w.metadata?.claudeSeatId)?.out);
           return index < 0 ? null : s.waitlist.splice(index, 1)[0];
         },
         open: async (w) => {
@@ -1228,6 +1228,16 @@
         const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : nativeCaptain(s.cmd) ? window.BoardCore.commandForAgent('codex') : s.cmd));
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;
+        if (message.seatId !== undefined) {
+          const seat = window.ClaudeSeatsCore.normalize(host.config.claudeSeats).find((s) => s.id === message.seatId);
+          if (!seat) throw new Error('找不到 --seat 席位，请先查看席位设置。');
+          const provider = window.AgentInfo.inferProvider(cmd);
+          if (provider && provider !== 'Claude') throw new Error('--seat 仅用于 Claude 会话。');
+          const info = (await window.deck.claudeSeats()).find((s) => s.id === seat.id);
+          if (!info?.loggedIn) throw new Error(`${seat.name} 未登录，请先在此席位配置目录下登录。`);
+          metadata.claudeSeatId = seat.id;
+          metadata.claudeConfigDir = seat.configDir;
+        }
         const cwd = window.BoardCore.cleanText(message.cwd, 1000);
         if (metadata.boardId) {
           const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === metadata.boardId);
@@ -1242,7 +1252,7 @@
         const pressure = await readMemoryPressure();
         const wasHold = memoryHold;
         memoryHold = pressure.critical;
-        const quotaHeld = commandQuota(cmd)?.out;
+        const quotaHeld = commandQuota(cmd, metadata.claudeSeatId)?.out;
         if (quotaHeld || pressure.critical || s.waitlist.length || freeSlots() <= 0) {
           await enqueue(title, cmd, cwd, message.id, task, metadata);
           if (wasHold !== memoryHold) refreshWaitingNotes();

@@ -76,9 +76,13 @@ function answer() {
   if (process.env.AGENTDECK_TEST_PROMPTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPTS_FILE, JSON.stringify(text) + '\n');
   if (process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, text }) + '\n');
   const first = (text.split('\n').find((l) => l.trim()) || '').trim();
-  if (process.argv.includes('--board-probe') && first.startsWith('BOARD ')) {
-    const args = JSON.parse(first.slice(6));
-    const result = require('child_process').spawnSync(process.execPath, [process.env.AGENTDECK_BOARD_CLI, ...args], { encoding: 'utf8', timeout: 15000 });
+  if (process.argv.includes('--board-probe') && (first.startsWith('BOARD ') || first.startsWith('BOARD-NO-ENV '))) {
+    const fallback = first.startsWith('BOARD-NO-ENV ');
+    const args = JSON.parse(first.slice(fallback ? 13 : 6));
+    const env = { ...process.env };
+    if (fallback) for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
+    const result = require('child_process').spawnSync(process.execPath, [process.env.AGENTDECK_BOARD_CLI, ...args], { env, encoding: 'utf8', timeout: 15000 });
+    if (process.env.AGENTDECK_TEST_BOARD_RESULTS_FILE) require('fs').appendFileSync(process.env.AGENTDECK_TEST_BOARD_RESULTS_FILE, JSON.stringify({ colId: process.env.AGENTDECK_COL_ID, args, stdout: result.stdout, stderr: result.stderr, code: result.status }) + '\n');
     process.stdout.write('\x1b[2J\x1b[H\n⏺ BOARD RESULT\n' + (result.stdout || result.stderr || 'no result') + '\n');
     box(); return;
   }

@@ -595,6 +595,20 @@ test('phone rows carry display fields only: masked account, no config dir, and n
   for (const [value, masked] of [['a@b.co', 'a***@b.co'], ['hj***@gmail.com', 'h***@gmail.com'], ['未识别', ''], ['a b@c.d', ''], [null, ''], ['x@y@z', '']]) assert.equal(Q.maskAccount(value), masked);
 });
 
+test('an upgraded CN/US profile lists US2 in both the desktop items and the phone rows', () => {
+  const seats = require('../claude-seats-core').normalize([
+    { id: 'cn', name: 'CN', configDir: '~/.claude' },
+    { id: 'us', name: 'US', configDir: '~/.claude-us' },
+  ]);
+  const keys = ['Claude:cn', 'Claude:us', 'Claude:us2', 'Codex', 'Cursor', 'Antigravity'];
+  assert.deepEqual(Q.items(seats).map((item) => item.key), keys);
+  const rows = Q.mobile({}, now, seats);
+  assert.deepEqual(rows.map((row) => row.key), keys);
+  assert.equal(rows[2].short, 'US2');
+  assert.equal(rows[2].flag, '🇺🇸');
+  assert.equal(rows[2].status, 'unknown');
+});
+
 test('summary exposes the evidence source and confidence for the panel details', () => {
   const store = {};
   Q.observe(store, Q.screen('Codex', '', [], now), now);

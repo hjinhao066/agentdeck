@@ -3571,7 +3571,7 @@ function updateAgentIdentityBadge(id, entry, screenText) {
   const info = window.AgentInfo.resolveAgentInfo(col, entry, screenText, footer, replies);
   if (entry.badgeEl) window.AgentInfo.renderBadge(entry.badgeEl, info, 'header');
   const nav = navItems.get(id);
-  if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar');
+  if (nav && nav.badge) window.AgentInfo.renderBadge(nav.badge, info, 'sidebar', config.claudeSeats);
   if (info.provider && (col.agentProvider !== info.provider ||
       (info.rawModel && col.agentModel !== info.rawModel) ||
       (info.effort && col.agentEffort !== info.effort))) {
@@ -3714,12 +3714,12 @@ function renderQuotaBar() {
         item.append(label, values, tip); bar.append(item);
       }
       const q = summaries[index];
-      // Account = provider icon + flag only; the seat's full name stays in the tooltip.
-      const flag = seat && seat.id !== 'default' ? (seat.name.match(/\p{Regional_Indicator}{2}/u)?.[0] || seat.name.slice(0, 2)) : '';
+      // Include the seat name: multiple subscriptions can share the same flag.
+      const seatLabel = seat ? seat.name : '';
       const captain = seat ? seat.id === captainSeatId : !!captainProvider && captainProvider === provider;
       const name = item.querySelector('.quota-name');
       const crown = el('span', 'quota-captain'); crown.innerHTML = ICONS.crown;
-      fill(name, [seat ? flag : NAMES[provider], ...(captain ? [crown] : [])]);
+      fill(name, [seat ? seatLabel : NAMES[provider], ...(captain ? [crown] : [])]);
       const state = q.out ? 'exhausted' : q.state;
       const recovery = q.recoveryAt > now ? q.recoveryAt : null;
       // Always a 5h and a 7d cell: % + reset time over a thin bar. Used up = ⊘ + reset time;
@@ -4082,7 +4082,7 @@ CrewMap.init({
   mainState: () => MainSession.state(),
   activityLine: lastActivityLine,
   agentInfo: (col, entry) => window.AgentInfo.resolveAgentInfo(col, entry || null, null),
-  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar'),
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
   visible: () => activeView === 'board',
   save: saveConfig,
   enterCanvas: () => { if (activeView === 'board') renderBoardGraph(); },
@@ -4120,7 +4120,7 @@ TaskBoardUI.init({
   prefs: () => config.taskBoardView,
   savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
   copy: (text) => window.deck.clipboardWrite(text),
-  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar'),
+  renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
   openSession: openTaskSession,
   showBoard: (mode) => {
     TaskBoardUI.close();

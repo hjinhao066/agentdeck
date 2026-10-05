@@ -81,7 +81,7 @@ async function shot(name) {
 
 test('top bar keeps only the core controls, the free layout is an icon and quota lives in the sidebar', async () => {
   await expect(page.locator('#topBar .quota-item')).toHaveCount(0);
-  await expect(page.locator('#colNav #quotaBar .quota-item')).toHaveCount(5);
+  await expect(page.locator('#colNav #quotaBar .quota-item')).toHaveCount(6);
   const free = page.locator('#tbSplit .split-btn[data-cols="0"]');
   await expect(free.locator('svg')).toBeVisible();
   expect((await free.textContent()).trim()).toBe('');
@@ -94,7 +94,7 @@ test('top bar keeps only the core controls, the free layout is an icon and quota
   const g = await expectTidy();
   expect(g.ids).toEqual(['boardViewBtn', 'navCollapseBtn', '新对话 (Cmd+N)', '0', '2', '3', '4', '5', 'globalViewToggle', 'sideToggleBtn']);
   await expect(page.locator('#broadcastBtn')).toBeVisible(); // moved to the sidebar footer
-  await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-name')).toHaveText('🇨🇳');
+  await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-name')).toHaveText('🇨🇳 CN');
   await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-captain svg')).toBeVisible();
   await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('aria-label', /^🇨🇳 CN（队长）：/);
   await expect(page.locator('#quotaBar [data-provider="Codex"]')).toHaveAttribute('data-state', 'danger');
@@ -171,7 +171,8 @@ test('collapsed sidebar keeps a gauge icon whose popover lists every quota', asy
   const pop = page.locator('#quotaPop');
   await expect(pop).toBeVisible();
   await expect(rail).toHaveAttribute('aria-expanded', 'true');
-  await expect(pop.locator('.quota-item')).toHaveCount(5);
+  await expect(pop.locator('.quota-item')).toHaveCount(6);
+  await expect(pop.locator('[data-seat-id="us2"]')).toHaveCount(1);
   await expect(pop.locator('[data-seat-id="us"] .quota-values')).toHaveText('——');
   await expect(pop.locator('[data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(pop.locator('[data-provider="Codex"]')).toHaveAttribute('aria-label', /^ChatGPT：/);

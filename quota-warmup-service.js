@@ -24,7 +24,7 @@ function createWarmupService({ stateFile, logFile, getSettings, getSeats, readSe
   const identityMatches = (info, d) => info?.accountKey === d.accountKey && dirKey(info?.configDir) === dirKey(d.configDir);
   async function sample() {
     const result = [];
-    for (const seat of getSeats().filter((s) => ['cn', 'us'].includes(s.id))) {
+    for (const seat of getSeats()) {
       let info;
       try { info = await readSeat(seat); } catch (_) { continue; }
       const owner = state.owners?.[seat.id];

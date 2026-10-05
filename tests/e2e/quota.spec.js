@@ -38,6 +38,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
 
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('——');
+  await expect(page.locator('#quotaBar [data-seat-id="us2"] .quota-name')).toHaveText('🇺🇸 US2');
   await expect(badge('Codex').locator('.quota-values')).toContainText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider)).toHaveAttribute('data-state', 'normal');
   // No number: both cells read — over an empty bar; 正常 moves into the details.
@@ -108,7 +109,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude').getByRole('tooltip')).not.toContainText(/配置目录|模型/);
   await expect(badge('Cursor')).toHaveAttribute('aria-label', /^Grok 4\.7：/);
   await expect(badge('Antigravity')).toHaveAttribute('aria-label', /^Gemini：/);
-  await expect(badge('Claude').locator('.quota-name')).toHaveText('🇨🇳');
+  await expect(badge('Claude').locator('.quota-name')).toHaveText('🇨🇳 CN');
   await expect(badge('Claude')).toHaveAttribute('data-detail', /模型：claude-opus-5-5-high；账号：cn?\*\*\*@example.test/);
   // The isolated profile is barred from reading the user's real quota caches.
   expect((await page.evaluate(() => window.deck.quotaLocal())).filter(q => q.windows).map(q => q.seatId)).toEqual(['cn']);
@@ -187,7 +188,7 @@ test('Cursor and agy errors latch provider-wide through normal redraw and reload
   expect(await page.evaluate(() => config.quotas.Antigravity.blocked.resetAt)).toBe(resetAt);
 });
 
-test('Captain quota CLI returns both Claude seats and changes no tasks, receipts or cached board responses', async () => {
+test('Captain quota CLI returns all three Claude seats and changes no tasks, receipts or cached board responses', async () => {
   await page.locator('.nav-row[data-nav="captain"]').click();
   await expect(page.locator('#mainDialog')).toBeVisible();
   await page.locator('#mdCmd').fill('');
@@ -208,8 +209,8 @@ test('Captain quota CLI returns both Claude seats and changes no tasks, receipts
   fs.writeFileSync(script, `require('fs').writeFileSync(process.argv[2],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}));`);
   const command = `node "${script}" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
-  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未知[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
-  expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(5);
+  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未知[^\n]*\nClaude \/ 🇺🇸 US2：未知[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
+  expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(6);
   const after = await page.evaluate(() => [config.mainSession.tasks, config.mainSession.pending, config.boardResponses]);
   expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
   // Other startup/exit acknowledgements may arrive concurrently. The quota

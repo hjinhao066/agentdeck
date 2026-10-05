@@ -2,7 +2,7 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --quota-probe --token-saver`;
+const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --quota-probe --token-saver --board-probe`;
 let application, page, profile, home;
 const cn = 'seat-captain';
 async function closeApplication() {
@@ -57,6 +57,7 @@ test.beforeEach(async ({}, testInfo) => {
   fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"}}');
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"}}');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    claudeSeats: require('../../claude-seats-core').normalize().slice(0, 2), // saved legacy profile
     perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     columns: [
@@ -95,6 +96,7 @@ test('rotation exposes current seat and masked emails; an unlogged seat cannot r
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：CN');
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"]')).toHaveAttribute('title', 'CN · c***@example.test');
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toHaveAttribute('title', 'US · u***@example.test');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"]')).toBeDisabled();
   await screenshot('relay-cn-us-chatgpt');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
   fs.unlinkSync(path.join(home, '.claude-us', '.credentials.json'));
@@ -276,8 +278,8 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
 test('sidebar flags follow Captain Relay immediately while workers retain their seat and directory', async () => {
   const captainFlag = () => page.locator('.captain-item .agent-seat-label');
   const workerFlag = page.locator('[data-col-id="seat-worker"] .agent-seat-label');
-  await expect(captainFlag()).toHaveText('🇨🇳');
-  await expect(workerFlag).toHaveText('🇨🇳');
+  await expect(captainFlag()).toHaveText('🇨🇳 CN');
+  await expect(workerFlag).toHaveText('🇨🇳 CN');
   await expect(captainFlag()).toHaveAttribute('title', '当前账号：CN · ~/.claude');
   await expect(captainFlag()).toHaveAttribute('aria-label', '当前账号：CN · ~/.claude');
   await page.evaluate(() => window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'));
@@ -285,9 +287,9 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   await idle(cn);
   const before = fs.readFileSync(path.join(home, '.claude/.credentials.json'), 'utf8');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(true);
-  await expect(captainFlag()).toHaveText('🇺🇸');
+  await expect(captainFlag()).toHaveText('🇺🇸 US');
   await expect(captainFlag()).toHaveAttribute('title', '当前账号：US · ~/.claude-us');
-  await expect(workerFlag).toHaveText('🇨🇳');
+  await expect(workerFlag).toHaveText('🇨🇳 CN');
   expect(await page.evaluate(() => columns.find(c => c.id === 'seat-worker').claudeConfigDir)).toBe('~/.claude');
   expect(await page.evaluate(() => window.deck.ptyIsAlive('seat-worker'))).toBe(true);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).filter(r => r.colId === 'seat-worker')).toHaveLength(1);
@@ -312,4 +314,52 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   await expect.poll(() => capture('seat-env.jsonl')).toContain(id);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find(r => r.colId === id).configDir).toBe(null);
   await expect(page.locator(`[data-col-id="${id}"] .agent-seat-label`)).toHaveAttribute('title', '当前账号：CN · ~/.claude');
+});
+
+test('US2 is migrated into settings and quota, then new --seat and Relay use its isolated login', async () => {
+  const row = page.locator('#quotaBar [data-seat-id="us2"]');
+  await expect(row.locator('.quota-name')).toHaveText('🇺🇸 US2');
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-name')).toHaveText('🇺🇸 US');
+  await page.locator('#settingsBtn').click();
+  await page.locator('#claudeSeatsSettings').click();
+  await expect(page.locator('#claudeSeatSettings [data-seat-id="us2"] input').nth(0)).toHaveValue('US2');
+  await expect(page.locator('#claudeSeatSettings [data-seat-id="us2"] input').nth(2)).toHaveValue('~/.claude-us2');
+  await page.locator('#claudeSeatSettings button[aria-label="关闭"]').click();
+  async function board(args, text) {
+    await idle(cn);
+    await page.evaluate(([id, command]) => window.deck.ptyInput(id, 'BOARD ' + JSON.stringify(command) + '\r'), [cn, args]);
+    await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\n/g, ''), cn), { timeout: 20000 }).toContain(text);
+  }
+  await board(['quota'], 'US2');
+  await board(['new', '--title', 'US2 not logged', '--task', 'finish', '--seat', 'us2', '--command', FAKE], 'US2 未登录');
+  expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'US2 not logged'))).toBe(false);
+  const dir = path.join(home, '.claude-us2');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.credentials.json'), '{}'); // fake isolated login
+  fs.writeFileSync(path.join(dir, '.claude.json'), '{"oauthAccount":{"emailAddress":"us2@example.test"}}');
+  require('../../claude-seats-main').writeUsage({ id: 'us2', configDir: '~/.claude-us2' }, home, { at: Date.now(), windows: [
+    { key: 'fiveHour', remaining: 100, resetText: 'in 1h' }, { key: 'weekly', remaining: 100, resetText: 'in 4d' },
+  ] });
+  await page.evaluate(() => ClaudeSeats.refresh());
+  await board(['new', '--title', 'US2 worker', '--task', 'finish task', '--seat', 'us2', '--command', FAKE], '已开新会话');
+  const worker = await page.evaluate(() => columns.find((c) => c.displayTitle === 'US2 worker').id);
+  await expect.poll(() => capture('seat-env.jsonl')).toContain(worker);
+  expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === worker)).toMatchObject({ configDir: dir, authOverridePresent: false });
+  await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
+  await expect(page.locator('.nav-crew .crew-model-flag[aria-label="当前账号：US2"]')).toHaveText('🇺🇸 US2');
+  await idle(cn);
+  expect(await page.evaluate(() => ClaudeSeats.switchSeat('us2'))).toBe(true);
+  await expect(page.locator('.captain-item .agent-seat-label')).toHaveText('🇺🇸 US2');
+  await expect(row.locator('.quota-name')).toContainText('US2');
+  const id = await page.evaluate(() => config.mainSession.colId);
+  await expect.poll(() => capture('seat-env.jsonl')).toContain(id);
+  expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === id).configDir).toBe(dir);
+  for (const width of [200, 252]) {
+    await page.evaluate((w) => { config.navWidth = w; applyNavWidth(); }, width);
+    const geometry = await row.evaluate((e) => ({ scroll: e.scrollWidth, width: e.clientWidth, values: e.querySelector('.quota-values').getBoundingClientRect().left, name: e.querySelector('.quota-name').getBoundingClientRect().right }));
+    expect(await page.locator('.captain-item').evaluate((e) => e.querySelector('.agent-seat-label').getBoundingClientRect().right <= e.querySelector('.claude-seat-rotate').getBoundingClientRect().left)).toBe(true);
+    await screenshot(`us2-quota-width-${width}`);
+    expect(geometry.scroll <= geometry.width && geometry.values >= geometry.name, JSON.stringify({ width, geometry })).toBe(true);
+  }
+  await screenshot('us2-seat-quota-and-sidebar');
 });

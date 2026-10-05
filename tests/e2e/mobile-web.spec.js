@@ -378,7 +378,7 @@ test('isolated desktop settings, authenticated mobile views and light/dark portr
 async function seedQuota(state) {
   await desktop.evaluate((kind) => {
     const now = Date.now(), old = now - 45 * 60000;
-    config.claudeSeats = [{ id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude' }, { id: 'us', name: '🇺🇸 US', configDir: '~/.claude-us' }];
+    config.claudeSeats = ClaudeSeatsCore.normalize([{ id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude' }, { id: 'us', name: '🇺🇸 US', configDir: '~/.claude-us' }]);
     columns.find((c) => c.isMain).agentProvider = 'Claude';
     for (const key of Object.keys(config.quotas)) delete config.quotas[key];
     const official = (id, dir, at, five, week, account) => QuotaCore.observe(config.quotas, { ...QuotaCore.cacheClaude({ source: QuotaCore.CLAUDE_OAUTH_SOURCE, windows: [
@@ -408,7 +408,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   expect(text).toContain('h***@gmail.com');
   expect(text).not.toMatch(/hjinhao|\.claude|account"?:\s*"[^"*]*@|cn-account|cn-cred|configDir|token/);
   expect(JSON.parse(text).rows.map((row) => [row.key, row.status, row.captain])).toEqual([
-    ['Claude:cn', 'normal', true], ['Claude:us', 'out', false], ['Codex', 'danger', false], ['Cursor', 'unknown', false], ['Antigravity', 'expired', false]]);
+    ['Claude:cn', 'normal', true], ['Claude:us', 'out', false], ['Claude:us2', 'unknown', false], ['Codex', 'danger', false], ['Cursor', 'unknown', false], ['Antigravity', 'expired', false]]);
   await mobile.getByRole('button', { name: '刷新', exact: true }).click();
   // The seat indicator sits beside the title and adds no height to the header.
   const chip = mobile.locator('#seat-chip');
@@ -438,7 +438,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await expect(drawer.locator('#version')).toHaveText(/^V\d+\.\d+\.\d+/);
   // Quota: one row per account, in the desktop's order, the Captain's seat marked.
   const rows = drawer.locator('.quota-item');
-  await expect(rows.locator('.quota-name-text')).toHaveText(['🇨🇳 CN', '🇺🇸 US', 'Codex', 'Cursor', 'Gemini']);
+  await expect(rows.locator('.quota-name-text')).toHaveText(['🇨🇳 CN', '🇺🇸 US', '🇺🇸 US2', 'Codex', 'Cursor', 'Gemini']);
   // 5h and 7d are named once, right above the two columns of every row.
   await expect(drawer.locator('#quota-columns span')).toHaveText(['5h', '7d']);
   // Read header and cells in ONE pass: the drawer slides in, and two separate reads straddle the animation.
@@ -468,28 +468,33 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   expect(red).toBe(await outCell.locator('.quota-ban').evaluate((el) => getComputedStyle(el).color));
   expect(red).not.toBe(await rows.nth(0).locator('.quota-pct').first().evaluate((el) => getComputedStyle(el).color));
   expect(await rows.nth(1).evaluate((el) => getComputedStyle(el).backgroundColor)).not.toBe(await rows.nth(0).evaluate((el) => getComputedStyle(el).backgroundColor));
+  // US2 is the upgraded third seat: same flag as US, named, unknown until it has a sample.
+  await expect(rows.nth(2)).toHaveAttribute('data-quota-key', 'Claude:us2');
+  await expect(rows.nth(2)).toHaveAttribute('data-status', 'unknown');
+  await expect(rows.nth(2).locator('.quota-cell')).toHaveCount(0);
+  await expect(rows.nth(2).locator('.quota-status')).toHaveText('未知');
   // A weekly-only account keeps both columns: a dash and an empty meter under 5h, never a number.
-  await expect(rows.nth(2).locator('.quota-cell')).toHaveCount(2);
-  await expect(rows.nth(2).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-missing', 'true');
-  await expect(rows.nth(2).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('—');
-  expect(await rows.nth(2).locator('.quota-cell[data-window="5h"] .quota-meter').evaluate((el) => el.style.getPropertyValue('--pct'))).toBe('0%');
-  await expect(rows.nth(2).locator('.quota-cell[data-window="7d"]')).toHaveAttribute('data-level', 'danger');
-  await expect(rows.nth(2).locator('.quota-cell[data-window="7d"] .quota-pct')).toHaveText('8%');
+  await expect(rows.nth(3).locator('.quota-cell')).toHaveCount(2);
+  await expect(rows.nth(3).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-missing', 'true');
+  await expect(rows.nth(3).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('—');
+  expect(await rows.nth(3).locator('.quota-cell[data-window="5h"] .quota-meter').evaluate((el) => el.style.getPropertyValue('--pct'))).toBe('0%');
+  await expect(rows.nth(3).locator('.quota-cell[data-window="7d"]')).toHaveAttribute('data-level', 'danger');
+  await expect(rows.nth(3).locator('.quota-cell[data-window="7d"] .quota-pct')).toHaveText('8%');
   // Unknown and out-of-date rows say 未知 in grey and never show a percentage.
-  await expect(rows.nth(3)).toHaveAttribute('data-status', 'unknown');
-  await expect(rows.nth(3).locator('.quota-cell')).toHaveCount(0);
-  await expect(rows.nth(3).locator('.quota-status')).toHaveText('未知');
-  await expect(rows.nth(3).locator('.quota-row-note')).toHaveCount(0);
-  await expect(rows.nth(4)).toHaveAttribute('data-status', 'expired');
+  await expect(rows.nth(4)).toHaveAttribute('data-status', 'unknown');
   await expect(rows.nth(4).locator('.quota-cell')).toHaveCount(0);
   await expect(rows.nth(4).locator('.quota-status')).toHaveText('未知');
-  await expect(rows.nth(4).locator('.quota-row-note')).toHaveText(/^数据已旧 · 采样 \d\d:\d\d$/);
-  const grey = await rows.nth(4).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color);
-  expect(await rows.nth(4).locator('.quota-status .quota-line').evaluate((el) => getComputedStyle(el).color)).toBe(grey);
+  await expect(rows.nth(4).locator('.quota-row-note')).toHaveCount(0);
+  await expect(rows.nth(5)).toHaveAttribute('data-status', 'expired');
+  await expect(rows.nth(5).locator('.quota-cell')).toHaveCount(0);
+  await expect(rows.nth(5).locator('.quota-status')).toHaveText('未知');
+  await expect(rows.nth(5).locator('.quota-row-note')).toHaveText(/^数据已旧 · 采样 \d\d:\d\d$/);
+  const grey = await rows.nth(5).locator('.quota-row-note').evaluate((el) => getComputedStyle(el).color);
+  expect(await rows.nth(5).locator('.quota-status .quota-line').evaluate((el) => getComputedStyle(el).color)).toBe(grey);
   await expect(drawer).not.toContainText(/NaN|undefined/);
   // Brand colours on the marks, as on the desktop.
   const iconColor = (index) => rows.nth(index).locator('.quota-icon').evaluate((el) => getComputedStyle(el).color);
-  expect(new Set([await iconColor(0), await iconColor(2), await iconColor(3), await iconColor(4)]).size).toBe(4);
+  expect(new Set([await iconColor(0), await iconColor(3), await iconColor(4), await iconColor(5)]).size).toBe(4);
   // Everything stays inside the drawer; tools are 44px icon buttons with a name.
   for (const [width, height] of [[390, 844], [430, 932]]) {
     await mobile.setViewportSize({ width, height });
@@ -550,7 +555,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await screenshot('quota-detail-out-390-light');
   await mobile.locator('#quota-sheet-close').click();
   await expect(sheet).toBeHidden();
-  await rows.nth(3).locator('.quota-row').click();
+  await rows.nth(4).locator('.quota-row').click();
   await expect(mobile.locator('#quota-sheet-title')).toHaveText('Cursor Grok');
   await expect(lines).toHaveText(['5 小时未知', '每周未知', '状态暂无额度数据，等待桌面端下次采样', '账号未知', '来源未知', '采样暂无采样']);
   await mobile.locator('#quota-sheet-scrim').click({ position: { x: 20, y: 20 } });
@@ -578,7 +583,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await mobile.route('**/api/quota', (route) => route.abort());
   await drawer.getByRole('button', { name: '刷新额度', exact: true }).click();
   await expect(mobile.locator('#quota-note')).toHaveText('未能更新');
-  await expect(rows).toHaveCount(5);
+  await expect(rows).toHaveCount(6);
   await expect(rows.nth(0).locator('.quota-cell[data-window="5h"]')).toHaveAttribute('data-level', 'none');
   await mobile.unroute('**/api/quota');
   await drawer.getByRole('button', { name: '刷新额度', exact: true }).click();

@@ -24,7 +24,7 @@ function records(file) {
   return fs.existsSync(target) ? fs.readFileSync(target, 'utf8').split('\n').filter(Boolean).map(JSON.parse) : [];
 }
 function cache(id, extra = {}) {
-  const configDir = path.join(home, id === 'cn' ? '.claude' : '.claude-us');
+  const configDir = path.join(home, id === 'cn' ? '.claude' : `.claude-${id}`);
   fs.writeFileSync(path.join(configDir, 'agentdeck-usage.json'), JSON.stringify({
     at: Date.now() - 120_000, accountKey: accountKey(id), configDir,
     windows: [{ key: 'fiveHour', remaining: 80, resetText: new Date(Date.now() - 90_000).toISOString() },
@@ -88,7 +88,7 @@ test.beforeEach(async () => {
   profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-warmup-e2e-')));
   home = path.join(profile, 'seats-home');
   for (const id of ['cn', 'us']) {
-    const dir = path.join(home, id === 'cn' ? '.claude' : '.claude-us');
+    const dir = path.join(home, id === 'cn' ? '.claude' : `.claude-${id}`);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, '.credentials.json'), '{}'); // isolated existence fixture
     const metadata = id === 'cn' ? path.join(home, '.claude.json') : path.join(dir, '.claude.json');
@@ -267,5 +267,22 @@ test('two failed requests abandon the same reset window, including across isolat
   expect(records('quota-warmup.log').map((r) => [r.attempt, r.outcome])).toEqual([[1, 'failed'], [2, 'failed']]);
   await refresh();
   await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('data-detail', /预热失败 · 本窗口已放弃/);
+  await expect(page.locator('.column')).toHaveCount(1);
+});
+
+test('US2 idle warmup uses its own directory exactly once and skips its missing login', async () => {
+  const dir = path.join(home, '.claude-us2');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'us2@example.test', accountUuid: accountUuid('us2') } }));
+  cache('us2');
+  await tick();
+  expect(await runs()).toHaveLength(0);
+  fs.writeFileSync(path.join(dir, '.credentials.json'), '{}');
+  await tick([{ ok: true }]);
+  await tick();
+  expect((await runs()).map((r) => r.seatId)).toEqual(['us2']);
+  expect((await snapshot()).find((s) => s.seatId === 'us2')).toMatchObject({ status: 'succeeded', attempts: 1 });
+  await refresh();
+  await expect(page.locator('#quotaBar [data-seat-id="us2"] .quota-name')).toHaveText('🇺🇸 US2');
   await expect(page.locator('.column')).toHaveCount(1);
 });

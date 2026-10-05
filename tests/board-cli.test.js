@@ -225,6 +225,7 @@ test('peek sends the id and default or requested row count and prints only live 
 
 test('Captain stop/archive and tell flags use the authenticated request channel', async () => {
   for (const [args, expected] of [
+    [['new', '--title', 'US2 task', '--task', 'Inspect', '--seat', 'us2'], { action: 'main-new', seatId: 'us2' }],
     [['new', '--title', 'Review', '--task', 'Inspect', '--project', '登录项目', '--reviews', 'worker-a, worker-b,worker-a'], { action: 'main-new', title: 'Review', task: 'Inspect', project: '登录项目', reviews: ['worker-a', 'worker-b'] }],
     [['stop', '--id', 'worker'], { action: 'main-stop', to: 'worker' }],
     [['archive', '--id', 'worker'], { action: 'main-archive', to: 'worker' }],
@@ -254,10 +255,10 @@ test('Captain stop/archive and tell flags use the authenticated request channel'
 });
 
 test('new rejects empty project names and malformed review declarations before requesting', async () => {
-  for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a']]) {
+  for (const options of [['--project'], ['--project='], ['--reviews'], ['--reviews='], ['--reviews', 'a,'], ['--reviews', '../a'], ['--seat'], ['--seat', '../bad']]) {
     const result = await runCli(['new', '--title', 'Review', '--task', 'Inspect', ...options], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /new --(project|reviews) requires/);
+    assert.match(result.stderr, /new --(project|reviews|seat) requires/);
   }
 });
 

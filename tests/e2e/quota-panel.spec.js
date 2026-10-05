@@ -62,9 +62,10 @@ test('compact quota rows: header once, used-up / low / no-data cells, brand icon
     await expect(cell(key, w)).toHaveText('—');
     await expect(cell(key, w).locator('.quota-meter')).toHaveAttribute('style', '--pct: 0%;');
   }
-  // 5. Claude rows are icon + flag (+ crown on the Captain's seat); others icon + name.
-  await expect(row('Claude:cn').locator('.quota-name')).toHaveText('🇨🇳');
-  await expect(row('Claude:us').locator('.quota-name')).toHaveText('🇺🇸');
+  // Claude rows are icon + flag and name (US and US2 share a flag) plus a crown on the Captain's seat.
+  await expect(row('Claude:cn').locator('.quota-name')).toHaveText('🇨🇳 CN');
+  await expect(row('Claude:us').locator('.quota-name')).toHaveText('🇺🇸 US');
+  await expect(row('Claude:us2').locator('.quota-name')).toHaveText('🇺🇸 US2');
   await expect(row('Claude:us').locator('.quota-captain svg')).toBeVisible();
   await expect(row('Claude:cn').locator('.quota-captain')).toHaveCount(0);
   for (const [key, name] of [['Codex', 'ChatGPT'], ['Cursor', 'Grok 4.7'], ['Antigravity', 'Gemini']]) await expect(row(key).locator('.quota-name')).toHaveText(name);

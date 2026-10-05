@@ -1,9 +1,9 @@
 // Passive subscription observations only; context percentages are never quotas.
 (function (root, factory) {
-  const api = factory();
+  const api = factory(typeof module === 'object' && module.exports ? require('./claude-seats-core') : root.ClaudeSeatsCore);
   if (typeof module === 'object' && module.exports) module.exports = api;
   if (root) root.QuotaCore = api;
-})(typeof globalThis !== 'undefined' ? globalThis : this, function () {
+})(typeof globalThis !== 'undefined' ? globalThis : this, function (S) {
   'use strict';
   const PROVIDERS = ['Claude', 'Codex', 'Cursor', 'Antigravity'];
   const FRESH_MS = 15 * 60_000;
@@ -19,7 +19,7 @@
       if (!s || !/^[a-zA-Z0-9_-]{1,40}$/.test(s.id) || ids.has(s.id) || typeof s.configDir !== 'string' || !s.configDir.trim() || /[\x00-\x1f]/.test(s.configDir)) return false;
       ids.add(s.id); return true;
     }).map((s) => {
-      const flag = { us: '🇺🇸', cn: '🇨🇳' }[s.id];
+      const flag = s.icon || S.normalize().find((seat) => seat.id === s.id)?.icon;
       const name = String(s.name || (flag ? s.id.toUpperCase() : s.id)).slice(0, 80);
       return { id: s.id, name: flag && !name.includes(flag) ? `${flag} ${name}` : name, configDir: s.configDir.trim() };
     });

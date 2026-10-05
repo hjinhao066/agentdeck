@@ -216,7 +216,7 @@
       `   ${cli} briefing                        只读当前队长说明；Relay 后先读 briefing 和看板交接，再重挂后台回执监听`,
 
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
-      `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--task-id 卡片id] [--cwd 目录] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--agent 和 --command 都不写就用和你一样的 agent`,
+      `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--task-id 卡片id] [--cwd 目录] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--seat 指定已登录 Claude 席位，省略沿用当前席位；--agent 和 --command 都不写就用和你一样的 agent`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   把指令发进已有的会话。--replace 清掉尚未送达的待补充指令，只保留这一条；--now 先中断当前操作，再在输入框就绪时立即发指令，可与 --replace 同用。普通待补充指令会合并成一条发送`,
       `   ${cli} stop --id 会话id                 发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,
       `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
