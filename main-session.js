@@ -1719,7 +1719,7 @@
       }
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
-      if (!task.processEnded && (entry.state === 'working' || activity === 'working')) { task.endedAt = 0; continue; }
+      if (!task.processEnded && (entry.state === 'working' || activity === 'working' || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) { task.endedAt = 0; continue; }
       // Never parse a screen/reply for receipts. Only a finished turn with
       // no foreground or background work starts the command grace period.
       const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);

@@ -127,6 +127,9 @@ test('revoked Captain generation and stale listener polls clear ownership withou
   const old = Listener.claim(dir, 'captain');
   registry.register('captain', 'captain', old.lease);
   registry.tick([]); assert.equal(old.valid(), false);
+  const unregistered = Listener.claim(dir, 'not-yet-polled');
+  registry.remove('not-yet-polled', 'not-yet-polled');
+  assert.equal(unregistered.valid(), false, 'agent exit also revokes a lease before its first poll');
   const stale = Listener.claim(dir, 'captain');
   registry.register('captain', 'captain', stale.lease);
   now = 30000; registry.tick(['captain']); assert.equal(stale.valid(), false);

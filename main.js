@@ -449,6 +449,7 @@ function processBoardRequests() {
         writeBoardResponse(request.id, { done: true, error: 'Receipt capability allows only complete, ask and progress; it cannot control other sessions.' });
         continue;
       }
+      if (action === 'session-exit' && Number.isInteger(request.code)) receiptListeners?.remove(caller[0], managedSessions.get(caller[0]));
       if (action === 'main-receipts' && request.wait && !receiptListeners?.register(caller[0], request.token, request.listener)) {
         writeBoardResponse(request.id, { done: true, result: '', listenerStopped: true });
         continue;

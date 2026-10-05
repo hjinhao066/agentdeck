@@ -117,8 +117,12 @@ function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = aliv
       && !released(entry.file, entry.lease)
       && sameLease(read(entry.file), entry.lease) && now() - entry.seenAt < 30_000;
   }
-  function remove(id) {
+  function remove(id, token) {
     const entry = listeners.get(id);
+    if (token) {
+      const file = leasePath(dir, token), lease = read(file);
+      if (lease) removeLease(file, lease);
+    }
     if (entry) removeLease(entry.file, entry.lease);
     listeners.delete(id); statuses.delete(id);
   }
