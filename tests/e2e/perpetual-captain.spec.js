@@ -171,7 +171,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   expect(notices[0].reply).toMatch(/\d{1,2}:\d{2}/);
   await expect.poll(() => promptsFor(codexId).some((p) => p.includes('briefing') && p.includes('重挂恰好一个后台 receipts --wait --timeout 300')), { timeout: 20000 }).toBe(true);
   await boardViaAgent(codexId, ['ledger'], '不中断的队员');
-  await boardViaAgent(codexId, ['briefing'], '现在回复「队长已就绪」，然后立即执行');
+  await boardViaAgent(codexId, ['briefing'], '回复「队长已就绪」后立即自主接续');
   if (process.platform === 'win32') {
     // Windows has no controlling tty: a supplied column id must not recover a
     // private capability. The real Captain PTY calls above still succeed.

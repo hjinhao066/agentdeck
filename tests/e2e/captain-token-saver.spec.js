@@ -68,7 +68,7 @@ test('archives progress, waits for acknowledgement, sends /clear, rebriefs witho
   const clear = sent.indexOf('/clear');
   const brief = sent.findIndex((p, i) => i > clear && p.startsWith('你是 AgentDeck'));
   expect(archive).toBeLessThan(clear); expect(clear).toBeLessThan(brief);
-  expect(sent[brief]).toBe(sent.find((p) => p.startsWith('你是 AgentDeck')) + '\n\n读看板继续。' + await page.evaluate(() => MainCore.REBRIEF_NOTE));
+  expect(sent[brief]).toBe(sent.find((p) => p.startsWith('你是 AgentDeck')) + '\n\n读看板继续。');
   expect(sent[brief]).toContain('不读大文件正文，只看报告的结论段；查进度优先 peek');
   expect(archivePrompts()).toHaveLength(1);
   expect(await page.evaluate(() => columns.map((c) => c.id))).toEqual(before);

@@ -458,6 +458,14 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /测试全过并进入打包后停止派新活/);
   assert.match(text, /存档后直接安装并重启/);
   assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
+  // chat-ui replaces prompts longer than 8000 with a file pointer. The closing
+  // paragraph must stay inside the pasted briefing on both platforms.
+  for (const platform of ['darwin', 'win32']) {
+    const brief = M.instructions(platform);
+    assert.ok(brief.length <= 8000, platform);
+    assert.ok((brief + '\n\n读看板继续。').length <= 8000, platform + ' saver');
+    assert.ok(!brief.endsWith('然后等用户的指令。'));
+  }
 });
 
 test('Captain explains one-level projects, declared review targets and provider sub-agent defaults', () => {
