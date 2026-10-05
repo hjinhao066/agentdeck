@@ -16,7 +16,7 @@ test.beforeEach(async () => {
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
-  await expect(page.locator('#quotaBar [data-seat-id]')).toHaveCount(2);
+  await expect(page.locator('#quotaBar [data-seat-id]')).toHaveCount(3);
   // Test-only main-process transport replacement: real isolated file store,
   // credential selection, GET parser, poller and IPC; never real credentials/network.
   await app.evaluate(({ ipcMain, app }, { profile }) => {
@@ -76,7 +76,7 @@ test('both idle seats show independent fresh windows, resets and visible sample 
     await page.locator('#topBar').screenshot({ path: path.join(process.env.AGENTDECK_REFRESH_SHOTS, 'idle-seat-quota.png') });
   }
   await app.evaluate(() => globalThis.seatRefreshTest.poller.tick());
-  expect(await app.evaluate(() => globalThis.seatRefreshTest.calls.slice().sort())).toEqual(['cn', 'us']);
+  expect(await app.evaluate(() => globalThis.seatRefreshTest.calls.slice().sort())).toEqual(['cn', 'us', 'us2']);
   // The refreshed US seat has no terminal at all; Captain and worker stay CN.
   expect(await page.evaluate(() => columns.every(c => c.claudeSeatId === 'cn'))).toBe(true);
   expect(await page.evaluate(() => ChatUI.turnsOf('worker').length)).toBe(0);
@@ -97,7 +97,7 @@ test('one-seat authentication failure emits no new authoritative sample; previou
   await expect(seat('us')).toHaveAttribute('data-detail', /5h 40% ↻[\s\S]*7d 90% ↻[\s\S]*查询失败：[\s\S]*连续 1 次[\s\S]*保留上次数字[\s\S]*数据已旧/);
   expect(await page.evaluate(() => config.quotas['Claude:us'].sample.at)).toBe(at - 31 * 60000);
   await page.reload();
-  await expect(page.locator('#quotaBar [data-seat-id]')).toHaveCount(2);
+  await expect(page.locator('#quotaBar [data-seat-id]')).toHaveCount(3);
   await page.evaluate(async (at) => { Date.now = () => at; await readQuotaCache(); }, at);
   await expect(seat('us')).toHaveAttribute('data-state', 'normal');
   await expect(seat('us')).toHaveAttribute('data-detail', /数据已旧/);
@@ -109,7 +109,7 @@ test('one-seat authentication failure emits no new authoritative sample; previou
   await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('40%');
   await expect(seat('us')).not.toHaveAttribute('data-detail', /数据已旧|查询失败/);
   expect(await page.evaluate(() => config.quotas['Claude:us'].sample.at)).toBe(later);
-  expect(await app.evaluate(() => globalThis.seatRefreshTest.calls.slice().sort())).toEqual(['cn', 'cn', 'cn', 'us', 'us', 'us']);
+  expect(await app.evaluate(() => globalThis.seatRefreshTest.calls.slice().sort())).toEqual(['cn', 'cn', 'cn', 'us', 'us', 'us', 'us2', 'us2', 'us2']);
   expect(await page.evaluate(() => config.mainSession.colId)).toBe('captain');
   expect(await page.evaluate(() => Promise.all(['captain', 'worker'].map(id => window.deck.ptyIsAlive(id))))).toEqual([true, true]);
 });
