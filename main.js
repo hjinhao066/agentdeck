@@ -243,8 +243,9 @@ const PTY_BUFFER_MAX = 200_000; // ~200 KB per pty (plenty for a full screen)
 
 function bufferAppend(id, data) {
   let buf = ptyBuffers.get(id);
-  if (!buf) { buf = { chunks: [], totalSize: 0 }; ptyBuffers.set(id, buf); }
+  if (!buf) { buf = { chunks: [], totalSize: 0, sequence: 0 }; ptyBuffers.set(id, buf); }
   boundedAppend(buf, data, PTY_BUFFER_MAX);
+  return ++buf.sequence;
 }
 
 function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
@@ -320,7 +321,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   const tty = ttyFromPty(p);
   ptys.set(id, p);
   ptySeats.set(id, binding);
-  p.onData((data) => { bufferAppend(id, data); send('pty:data', { id, data }); });
+  p.onData((data) => { const sequence = bufferAppend(id, data); send('pty:data', { id, data, sequence }); });
   p.onExit(({ exitCode, signal }) => {
     // Ignore a late exit from an older PTY generation. This matters if a
     // column is respawned quickly with the same id.
@@ -1095,9 +1096,9 @@ app.whenReady().then(async () => {
     try { return p ? String(p.process || '').slice(0, 64) : ''; } catch (_) { return ''; }
   });
   // Return all buffered output for a pty so the renderer can replay it.
-  handleMain('pty:replay', (_e, { id }) => {
-    const buf = ptyBuffers.get(id);
-    return buf ? buf.chunks.join('') : null;
+  handleMain('pty:replay', (_e, { id, snapshot }) => {
+    const buf = ptyBuffers.get(id), data = buf ? buf.chunks.join('') : null;
+    return snapshot ? { data, sequence: buf?.sequence || 0 } : data;
   });
   // Saved session replay from the previous app run: read once, then delete so
   // a hot reload (where the pty is still alive) can never double-replay it.

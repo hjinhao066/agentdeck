@@ -1,7 +1,7 @@
 # Long-standing E2E failures
 
-Base: local `release/1.1.11` at `e6794ae` (the release branch had not
-been pushed when this worktree was created).
+Base: `release/1.1.11` / `origin/release/1.1.11` at `e6794ae`. The
+remote branch was pushed after this worktree was created.
 
 ## Automatic Captain relay — product regression
 
@@ -30,3 +30,33 @@ control token on macOS as well as Windows. Use that token to receive the
 pending receipt; require terminal-ID-only access to fail on every platform.
 Keep rejection of old capabilities, independent-token isolation, receipt
 preservation, successful replacement receipt delivery, and queue clearing.
+
+## Account-owned statusline after reload — product race
+
+The 83% assertion is correct: CLAUDE_SEATS.md assigns native `5h剩余` /
+`7d剩余` statuslines to the session's own login, whereas the stand-in's
+machine-wide Session/Weekly footer cannot override an account-bound cache.
+The fallback cache in this fixture is 19%.
+
+Renderer reload previously wrote incoming live PTY output immediately while
+awaiting the surviving PTY's buffered replay. A new 83% statusline could arrive
+before that older replay, which then overwrote the new screen. Depending on
+subsequent redraws and the 1.5s sampling tick, the quota would remain 19% or
+recover, explaining the intermittent baseline failure.
+
+PTY chunks now carry a monotonically increasing sequence in their in-memory
+buffer. The renderer requests a snapshot containing both data and its sequence,
+queues live chunks until replay parsing completes, then applies only chunks
+newer than the snapshot. Output already included in replay is not duplicated.
+The existing string-only `ptyReplay(id)` calls keep their return type; the
+renderer opts into `ptyReplay(id, true)`. Cold saved-session replay also drains
+new output after its replay separator.
+
+The quota-seats E2E holds an old replay snapshot in the isolated main process,
+sends a real PTY statusline once, and releases the snapshot only after the IPC
+data arrives. Its stand-in then suppresses unrelated redraws and PTY echo so
+a later Captain rebrief cannot rescue a broken replay. The test requires both
+the actual terminal screen and the account-bound quota to retain 83%, with the
+other seat still exhausted and unchanged. Original numeric assertions remain.
+The isolated test application has an owned-process shutdown fallback, matching
+the Captain spec, so native teardown cannot hang the test worker indefinitely.

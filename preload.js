@@ -90,7 +90,7 @@ contextBridge.exposeInMainWorld('deck', {
   // Hot-reload support: check if a pty survived a renderer reload, replay its buffer.
   ptyIsAlive: (id, seatId) => ipcRenderer.invoke('pty:is-alive', { id, seatId }),
   ptyForeground: (id) => ipcRenderer.invoke('pty:foreground', { id }),
-  ptyReplay: (id) => ipcRenderer.invoke('pty:replay', { id }),
+  ptyReplay: (id, snapshot = false) => ipcRenderer.invoke('pty:replay', { id, snapshot }),
   reloadRenderer: () => ipcRenderer.send('reload-renderer'),
 
   // Transient feedback messages (e.g. clicked path doesn't exist).
@@ -98,7 +98,7 @@ contextBridge.exposeInMainWorld('deck', {
   onFontSize: (cb) => ipcRenderer.on('font-size', (_e, m) => cb(m.delta)),
   // External "jump to this column" request (popup-notification click).
   onFocusColumn: (cb) => ipcRenderer.on('focus-column', (_e, m) => cb(m.id)),
-  onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data)),
+  onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data, m.sequence)),
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, m) => cb(m.id, m.reason)),
   // Capability-checked commands emitted by conductor-managed terminals via
   // board-cli.js. Manual terminals never receive the control token.
