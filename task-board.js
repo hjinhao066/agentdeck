@@ -387,7 +387,10 @@ class TaskStore {
   }
   dispatch(input) {
     return this.mutate((docs) => {
-      const card = this.find(docs, input.id); this.ready(docs, card);
+      const card = this.find(docs, input.id);
+      // A move or a Captain bind may consume the claim while a start is awaiting IPC.
+      if (input.key !== undefined && (card.status !== 'doing' || card.dispatch_claim?.key !== input.key || card.dispatch_claim.delivered)) return { card, ignored: true, notices: [] };
+      this.ready(docs, card);
       if (this.occupied(card)) return { card, ignored: true, notices: [] };
       if (input.session_id) {
         if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
