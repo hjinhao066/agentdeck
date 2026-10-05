@@ -28,7 +28,7 @@ function world(t, extra = {}) {
 
 function boot(w) {
   const sends = [], toasts = [], timers = [], restarts = [];
-  const app = { w, sends, toasts, timers, restarts, blockedList: null };
+  const app = { w, sends, toasts, timers, restarts, blockedList: null, now: Date.now() };
   const window = {
     MainCore: M, RestartResume: R,
     ChatUI: { updateCard() {}, addCard() {}, turnsOf: () => [] },
@@ -40,13 +40,14 @@ function boot(w) {
       taskBoard: async (op, input) => op === 'list' && app.blockedList ? app.blockedList : w.store[op](input),
     },
   };
-  const context = vm.createContext({ window, document: {}, console, setTimeout(fn, ms) { const timer = { fn, ms, cancelled: false }; timers.push(timer); return timer; }, clearTimeout(timer) { if (timer) timer.cancelled = true; } });
+  const context = vm.createContext({ window, document: {}, console, Date: class extends Date { static now() { return app.now; } }, setTimeout(fn, ms) { const timer = { fn, ms, cancelled: false }; timers.push(timer); return timer; }, clearTimeout(timer) { if (timer) timer.cancelled = true; } });
   const source = fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8').replace('  window.MainSession = {', '  window.__test = { setHost(h) { host = h; }, loadResumeManifest, flushResume, dispatch, pendingInstruction };\n  window.MainSession = {');
   vm.runInContext(source, context);
   const host = {
     config: w.config, columns: () => w.config.columns,
     terms: new Map(w.config.columns.map((c) => [c.id, { alive: true, state: 'done', lastScreen: '' }])),
     columnLabel: (c) => c.id, saveConfig() {}, flushConfig() {}, showToast: (m) => toasts.push(m),
+    isBackstage: () => false, dumpScreen: (term) => term.lastScreen || '',
     sendWhenReady(col, text, opts) { sends.push({ col, text, opts }); },
     restartWorker(col) { restarts.push(col.id); delete col.modelSessionId; col.restartMode = 'resend'; window.MainSession.noteColdColumn(col, true); return true; },
   };
@@ -183,13 +184,12 @@ test('fresh columns and ordinary archive restores do not enter application resta
   assert.equal(app.sends.length, 0, 'a task introduced after startup is not a cold-start task');
 });
 
-for (const reason of ['exit', 'exit-after-send', 'timeout', 'slot-timeout']) test('failed true resume (' + reason + ') opens a fresh worker and resends the full task and last receipt once', async (t) => {
+for (const reason of ['exit', 'timeout', 'slot-timeout']) test('failed true resume (' + reason + ') opens a fresh worker and resends the full task and last receipt once', async (t) => {
   const body = '原始任务正文'.repeat(1100) + ' ORIGINAL TASK END';
   const receipt = '上次进度'.repeat(180) + ' LAST RECEIPT END';
   const w = world(t, { detail: body, col: { restartMode: 'resume', modelSessionId: '01234567-89ab-cdef-0123-456789abcdef' }, task: { receipt: { summary: receipt, explicit: true, source: 'command' } } });
   const app = w.boot(); await app.resume();
   assert.ok(app.sends[0]);
-  if (reason === 'exit-after-send') await app.deliver();
   if (reason.startsWith('exit')) await app.api.submit({ action: 'session-exit', code: 1 }, app.col());
   else if (reason === 'slot-timeout') app.timers.find((timer) => timer.ms === 45000 && !timer.cancelled).fn();
   else app.sends[0].opts.onGiveUp();
@@ -198,6 +198,78 @@ for (const reason of ['exit', 'exit-after-send', 'timeout', 'slot-timeout']) tes
   const text = await app.deliver();
   assert.ok(text.includes(body), 'entire card task survives fallback'); assert.ok(text.includes(receipt), 'entire last receipt survives fallback');
   assert.equal(app.task().status, 'working'); assert.equal(app.card().status, 'doing');
+});
+
+for (const mode of ['resume', 'resend']) for (const failure of ['command-exit', 'terminal-exit', 'quota']) {
+  test('delivered ' + mode + ' treats subsequent ' + failure + ' as ordinary task failure', async (t) => {
+    const w = world(t, { col: { restartMode: mode } }); const app = w.boot();
+    await app.resume(); await app.deliver();
+    assert.equal(app.task().restartHold, undefined);
+    assert.equal(app.task().resumeDeadline, undefined);
+    if (failure === 'command-exit') await app.api.submit({ action: 'session-exit', code: 7 }, app.col());
+    else {
+      app.now += 4 * 60 * 60 * 1000;
+      const entry = app.host.terms.get('worker');
+      if (failure === 'terminal-exit') Object.assign(entry, { alive: false, exitReason: 'ordinary task crashed' });
+      else entry.state = 'quota';
+      app.api.onTick('worker', entry);
+      await tick();
+    }
+    assert.deepEqual(app.restarts, []);
+    assert.equal(app.task().status, 'failed');
+    assert.equal(app.task().receipt.source, failure === 'quota' ? 'quota' : 'process');
+    assert.ok(!app.task().receipt.failed.includes('续接'));
+    assert.equal(w.config.mainSession.pending.at(-1).source, app.task().receipt.source);
+    assert.equal(w.manifest.claims.worker.phase, 'sent');
+    app.sends[0].opts.onGiveUp(); await tick();
+    assert.deepEqual(app.restarts, [], 'late delivery failure callbacks cannot retry a delivered task');
+  });
+}
+
+for (const alive of [false, true]) test('startup and batch wait expire after 30 seconds (terminal alive: ' + alive + ')', async (t) => {
+  const w = world(t); const app = w.boot();
+  if (alive) {
+    for (const id of ['busy-1', 'busy-2']) {
+      const col = { id, captainCrew: true, cmd: 'codex' };
+      w.config.columns.push(col);
+      w.config.mainSession.tasks.push({ id: id + '-task', colId: id, gen: 1, status: 'working' });
+      app.host.terms.set(id, { alive: true });
+    }
+    app.internals.loadResumeManifest();
+    for (const col of w.config.columns.slice(1)) app.api.noteColdColumn(col, false);
+    app.internals.flushResume(); await tick();
+  } else app.host.terms.get('worker').alive = false;
+  app.api.noteColdColumn(w.col, false); app.internals.flushResume(); await tick();
+  assert.equal(w.config.mainSession.tasks[0].restartHold, true);
+  assert.equal(app.sends.some((s) => s.col.id === 'worker'), false);
+  app.now += 30001;
+  app.internals.flushResume(); await tick();
+  const task = w.config.mainSession.tasks[0];
+  assert.equal(task.status, 'failed');
+  assert.equal(task.receipt.source, 'resume');
+  assert.ok(task.receipt.failed.includes('30 秒'));
+  assert.ok(w.config.mainSession.pending.some((p) => p.taskId === 'task' && p.failed.includes('30 秒')));
+});
+
+for (const [change, reason] of [
+  [{ archived: true }, '卡片已归档'], [{ attempt_closed: true }, '本轮任务已关闭'],
+  [{ status: 'done' }, '卡片已完成'], [{ status: 'review', review_session: false }, '待验收'],
+  [{ session_id: 'other-worker' }, '转交会话 other-worker'], [{ attempt_id: 'other-attempt' }, '另一轮任务'],
+]) test('closed or reassigned card reports a stopped continuation: ' + reason, async (t) => {
+  const w = world(t); const app = w.boot();
+  app.blockedList = Promise.resolve([{ ...app.card(), ...change }]);
+  await app.resume();
+  assert.equal(app.sends.length, 0);
+  assert.equal(app.task().status, 'stopped');
+  assert.equal(app.task().restartHold, undefined);
+  assert.ok(app.task().receipt.summary.includes(reason));
+  assert.ok(app.task().receipt.summary.includes('卡片 card 核验处'));
+  assert.equal(w.config.mainSession.pending.filter((p) => p.taskId === 'task').length, 1);
+  assert.equal(app.card().status, 'doing', 'the stale task must not mutate the board');
+  await app.resume();
+  assert.equal(w.config.mainSession.pending.filter((p) => p.taskId === 'task').length, 1);
+  const reboot = app.persist(); await reboot.resume();
+  assert.equal(reboot.sends.length, 0, 'the stale task remains closed after another restart');
 });
 
 test('failure to deliver the fresh fallback notifies the captain and stops retrying', async (t) => {
@@ -225,6 +297,22 @@ test('restart identity requires the column owner and cwd, and rejects duplicate 
   w.config.columns.push({ id: 'other', cmd: 'claude', modelSessionId: id.toUpperCase() });
   assert.equal(app.api.restartLaunch(col, false).mode, 'resend');
 });
+
+for (const [cmd, provider] of [['codex', 'Codex'], ['cursor-agent', 'Cursor'], ['agy', 'Antigravity']]) {
+  test(provider + ' authenticated progress captures the owned id for crash and clean restart', async (t) => {
+    const id = 'abcdefab-1234-4123-8123-abcdefabcdef';
+    const w = world(t, { col: { cmd, cwd: '/repo' } }); const app = w.boot();
+    await app.api.submit({ action: 'progress', message: '已完成一半', modelSessionIds: { [provider]: id } }, app.col());
+    assert.equal(app.col().modelSessionId, id);
+    assert.equal(app.col().modelSessionSource, 'agent-env');
+    const crashed = app.persist();
+    assert.equal(crashed.api.restartLaunch(crashed.col(), false).mode, 'resume');
+    crashed.api.parkForRestart({ worker: null });
+    assert.equal(crashed.col().modelSessionId, id, 'stale shutdown disk metadata cannot erase newer authenticated proof');
+    const parked = crashed.persist();
+    assert.equal(parked.api.restartLaunch(parked.col(), false).mode, 'resume');
+  });
+}
 
 test('the latest question replaces earlier progress in the restart snapshot', async (t) => {
   const w = world(t); const app = w.boot();

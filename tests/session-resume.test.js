@@ -64,6 +64,29 @@ test('planAgentLaunch never claims an unbound or user-selected session was resum
     assert.deepEqual(AgentInfo.planAgentLaunch(cmd, firstId, false, false, () => nextId),
       { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: false });
   }
-  assert.deepEqual(AgentInfo.planAgentLaunch('codex', firstId, false, false, () => nextId),
+  assert.deepEqual(AgentInfo.planAgentLaunch('codex', null, false, false, () => nextId),
     { launch: 'codex', sessionId: null, resumedAgent: false, showLegacyWarning: false });
+});
+
+
+test('captured Codex, Cursor and agy identities resume exactly; fresh launches never invent ids', () => {
+  for (const [cmd, launch] of [
+    ['codex --model gpt-5', `codex resume ${firstId} --model gpt-5`],
+    ['cursor-agent --force', `cursor-agent --resume ${firstId} --force`],
+    ['agy --model gemini-3.8-flash-high', `agy --conversation ${firstId} --model gemini-3.8-flash-high`],
+  ]) {
+    const noId = () => { throw new Error('provider creates its own identity'); };
+    assert.deepEqual(AgentInfo.planAgentLaunch(cmd, firstId, false, false, noId),
+      { launch, sessionId: firstId, resumedAgent: true, showLegacyWarning: false });
+    assert.deepEqual(AgentInfo.planAgentLaunch(launch, firstId, false, false, noId),
+      { launch, sessionId: firstId, resumedAgent: true, showLegacyWarning: false });
+    for (const [fresh, skipped] of [[true, false], [false, true]]) {
+      assert.deepEqual(AgentInfo.planAgentLaunch(cmd, firstId, fresh, skipped, noId),
+        { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: false });
+    }
+    for (const unknown of [null, '', 'not-a-uuid']) {
+      assert.deepEqual(AgentInfo.planAgentLaunch(cmd, unknown, false, false, noId),
+        { launch: cmd, sessionId: null, resumedAgent: false, showLegacyWarning: false });
+    }
+  }
 });

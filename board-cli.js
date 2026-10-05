@@ -53,7 +53,17 @@ async function request(command, waitForCompletion) {
   const id = `${Date.now()}-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
   const requestFile = path.join(controlDir, 'requests', `${id}.json`);
   const responseFile = path.join(controlDir, 'responses', `${id}.json`);
-  atomicJson(requestFile, { id, token, createdAt: Date.now(), ...command });
+  // CLI shell tools inject their current conversation id. Attach it only to
+  // authenticated worker submissions; the receiver binds its own provider.
+  const modelSessionIds = {};
+  if (['complete', 'ask', 'progress'].includes(command.action)) {
+    for (const [provider, key] of [['Codex', 'CODEX_THREAD_ID'], ['Cursor', 'CURSOR_CONVERSATION_ID'], ['Antigravity', 'ANTIGRAVITY_CONVERSATION_ID']]) {
+      const value = process.env[key];
+      if (typeof value === 'string' && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(value)) modelSessionIds[provider] = value;
+    }
+  }
+  atomicJson(requestFile, { id, token, createdAt: Date.now(), ...command,
+    ...(Object.keys(modelSessionIds).length ? { modelSessionIds } : {}) });
   // The launch wrapper can run while Electron is quitting. Its exit status is
   // already durably queued; never keep the shell alive waiting for a renderer
   // that is shutting down. User complete/ask/progress still wait for acceptance.
@@ -108,9 +118,12 @@ function usage() {
     '  task move --id <card-id> --status todo|doing|review|needs_user|done\n' +
     '  task archive --done [--project "Project"]\n' +
     '  ledger                                   every session: id, title, state, last receipt\n' +
+    '  queue list                               unsent new-session requests, ids, commands and reasons\n' +
+    '  queue cancel --task-id <card-or-queue-id> cancel an unsent request\n' +
+    '                                           new on a queued card replaces a changed command/model; task move to done/todo cancels it\n' +
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "launch"]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
     '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
@@ -220,6 +233,16 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'queue') {
+    const op = args._[1];
+    if (!['list', 'cancel'].includes(op)) fail('queue requires list or cancel.');
+    const taskId = args['task-id'];
+    if (op === 'cancel' && (typeof taskId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(taskId))) fail('queue cancel requires --task-id <card-or-queue-id>.');
+    if (op === 'list' && taskId !== undefined) fail('queue list takes no --task-id.');
+    const response = await request({ action: 'main-queue', op, ...(op === 'cancel' ? { taskId } : {}) }, false);
+    process.stdout.write(`${response.result}\n`);
+    return;
+  }
   if (action === 'task') {
     const op = args._[1];
     if (!['add', 'list', 'move', 'archive'].includes(op)) fail('task requires add, list, move or archive.');
@@ -283,11 +306,17 @@ async function main() {
     const title = String(args.title || '').trim();
     const task = String(args.task || args._.slice(1).join(' ')).trim();
     if (!title || !task) fail('new requires --title and --task.');
+    if (String(args.agent).toLowerCase() === 'chatgpt-web') {
+      const { validatePublicTask } = require('./chatgpt-web-core');
+      try { validatePublicTask(task); validatePublicTask(title); } catch (error) { fail(error.message); }
+    }
     for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
     if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
+    if (args['web-mode'] !== undefined && (!['chat', 'deep-research'].includes(args['web-mode']) || args.agent !== 'chatgpt-web')) fail('new --web-mode requires --agent chatgpt-web and chat or deep-research.');
     const response = await request({
       action: 'main-new', title, task,
+      ...(args['web-mode'] !== undefined ? { webMode: args['web-mode'] } : {}),
       ...(args.seat !== undefined ? { seatId: args.seat } : {}),
       project: typeof args.project === 'string' ? args.project.trim() : '',
       reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],

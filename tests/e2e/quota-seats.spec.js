@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
 const fs = require('fs'), os = require('os'), path = require('path');
 const ROOT = path.resolve(__dirname, '../..'), FAKE = path.join(__dirname, 'fixtures/quota-agent.js');
 let app, page, profile, home;
@@ -9,6 +10,13 @@ function writeCache(id, remaining) {
   ] });
 }
 const seat = id => page.locator(`#quotaBar [data-seat-id="${id}"]`);
+async function agentsReady() {
+  // Persisted quota UI is ready before terminal mount/replay. Direct PTY
+  // commands must wait for the running fixture, including after a reload.
+  for (const id of ['us-column', 'cn-column']) {
+    await expect.poll(() => page.evaluate(id => typeof terms === 'undefined' ? '' : terms.get(id)?.lastScreen || '', id), { timeout: 20000 }).toContain('Claude Code');
+  }
+}
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-quota-seats-'));
   home = path.join(profile, 'seats-home');
@@ -26,8 +34,9 @@ test.beforeAll(async () => {
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
   page = await app.firstWindow();
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterAll(async () => { if (app) await closeElectron(app); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 test('each Claude seat keeps its own windows and reset times, marks the real Captain seat and survives reload', async () => {
+  await agentsReady();
   await expect(seat('us').locator('[data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
   await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
@@ -37,7 +46,7 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/); // Switching the next seat is not switching the running Captain.
   // The same shared footer cannot populate the other seat.
   await page.evaluate(() => window.deck.ptyInput('cn-column', 'quota-data\r'));
-  await page.waitForTimeout(1800);
+  await expect.poll(() => page.evaluate(() => terms.get('cn-column')?.lastScreen || '')).toContain('Session: 35%');
   await expect(seat('cn')).toHaveAttribute('data-state', 'unknown');
   writeCache('cn', [65, 30]);
   await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
@@ -49,7 +58,23 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   await expect(seat('us')).toHaveAttribute('data-state', 'warning');
   await page.evaluate(() => flushConfig());
+  // Hold the old replay snapshot so a real PTY redraw reaches the renderer
+  // first. Reload must not paint this older snapshot over the new statusline.
+  await app.evaluate(({ ipcMain, app }) => {
+    const replay = ipcMain._invokeHandlers.get('pty:replay');
+    ipcMain.removeHandler('pty:replay');
+    ipcMain.handle('pty:replay', async (event, payload) => {
+      const snapshot = await replay(event, payload);
+      if (payload.id === 'us-column') await new Promise(resolve => { app.releaseQuotaReplay = resolve; });
+      return snapshot;
+    });
+    app.restoreQuotaReplay = () => {
+      ipcMain.removeHandler('pty:replay'); ipcMain.handle('pty:replay', replay);
+    };
+  });
   await page.reload();
+  // The US replay is deliberately held; screen readiness is checked after
+  // releasing it so this wait cannot deadlock the replay race fixture.
   await expect(seat('us')).toHaveAttribute('aria-label', /^🇺🇸 US（队长）：/);
   await expect(seat('cn')).toHaveAttribute('data-state', 'exhausted');
   await expect(seat('us')).toHaveAttribute('data-detail', /us\*\*\*@example.com/);
@@ -57,7 +82,18 @@ test('each Claude seat keeps its own windows and reset times, marks the real Cap
   expect(text).toMatch(/Claude \/ 🇨🇳 CN：已用尽[^\n]*上次采样：5h 65%/);
   expect(text).toMatch(/Claude \/ 🇺🇸 US：19%[^\n]*5h 19%/);
   // The Captain's own statusline is recorded under its seat's account only.
-  await page.evaluate(() => window.deck.ptyInput('us-column', 'statusline\r'));
+  await expect.poll(() => app.evaluate(({ app }) => typeof app.releaseQuotaReplay)).toBe('function');
+  await page.evaluate(() => {
+    window.quotaStatuslineArrived = false;
+    window.deck.onPtyData((id, data) => {
+      if (id === 'us-column' && data.includes('5h剩余 83%')) window.quotaStatuslineArrived = true;
+    });
+    window.deck.ptyInput('us-column', 'statusline-once\r');
+  });
+  await expect.poll(() => page.evaluate(() => window.quotaStatuslineArrived)).toBe(true);
+  await app.evaluate(({ app }) => { app.releaseQuotaReplay(); app.restoreQuotaReplay(); });
+  await agentsReady();
+  await expect.poll(() => page.evaluate(() => dumpScreen(terms.get('us-column').term))).toContain('5h剩余 83%');
   await expect.poll(async () => {
     await page.evaluate(async () => { for (const q of await window.deck.quotaLocal()) QuotaCore.observe(config.quotas, q); renderQuotaBar(); });
     return seat('us').locator('[data-window="5h"] .quota-pct').textContent();

@@ -114,7 +114,7 @@ button { font: inherit; }
   -webkit-app-region: drag;
 }
 body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
-#navHead .rail-btn, #navTop, #navList, #navBottom, .nav-results { -webkit-app-region: no-drag; }
+#navHead .rail-btn, #navTop, #navList, #navBottom, #fleetStatus, .nav-results { -webkit-app-region: no-drag; }
 
 .rail-btn {
   -webkit-app-region: no-drag;
@@ -318,6 +318,20 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 #tbRight { display: flex; align-items: center; gap: 2px; }
 /* Quota rows: a compact block at the bottom of the sidebar (one row per
    provider / Claude seat). The same rows show in #quotaPop while collapsed. */
+#fleetStatus { flex: 0 0 auto; max-height: 168px; overflow: auto; padding: 6px 8px 4px; border-top: 1px solid var(--hairline); }
+.fleet-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.fleet-row { display: flex; align-items: center; gap: 6px; min-height: 22px; padding: 0 6px; color: var(--text-2); font-size: 11.5px; }
+.fleet-dot { width: 8px; height: 8px; border-radius: 999px; flex: 0 0 auto; background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
+.fleet-row.online .fleet-dot { background: #2f8a4a; box-shadow: none; }
+.fleet-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fleet-state { margin-left: auto; color: var(--muted); white-space: nowrap; }
+.fleet-row.online .fleet-state { color: var(--text); }
+.fleet-notice, .fleet-history { margin: 2px 6px 0; color: var(--muted); font-size: 11px; line-height: 1.35; }
+.fleet-notice.error { color: #c4473a; }
+.fleet-notice.warn { color: #9a6a00; }
+:root:not([data-theme="light"]) .fleet-notice.error { color: #f08a7e; }
+:root:not([data-theme="light"]) .fleet-notice.warn { color: #e8b44f; }
+.fleet-history { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #navQuota { flex: 0 0 auto; padding: 6px 8px 6px; border-top: 1px solid var(--hairline); -webkit-app-region: no-drag; }
 .quota-defs { position: absolute; width: 0; height: 0; overflow: hidden; }
 .nq-title { padding: 0 6px 3px; color: var(--muted); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
@@ -522,6 +536,8 @@ body.nav-collapsed #quotaRailBtn { display: inline-flex; }
 .dot.working, .cn-dot.working, .cp-agent-dot.working { background: var(--st-working); }
 .dot.input,   .cn-dot.input,   .cp-agent-dot.input   { background: var(--st-input); }
 .dot.quota, .cn-dot.quota, .cp-agent-dot.quota { background: var(--st-input); }
+.dot.failed, .cn-dot.failed, .cp-agent-dot.failed { background: var(--st-input); }
+.dot.stopped, .cn-dot.stopped, .cp-agent-dot.stopped { background: var(--st-plain); }
 .dot.done,    .cn-dot.done,    .cp-agent-dot.done    { background: var(--st-done); }
 .dot.exited,  .cn-dot.exited,  .cp-agent-dot.exited  { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-exited); }
 /* The pulse lives on a ::after halo animating transform/opacity only, so it
@@ -2895,6 +2911,8 @@ button.tbv-lane-n b { color: var(--tbv-need); }
 }
 .tbv-tag.failed { color: var(--tbv-fail); border-color: color-mix(in srgb, var(--tbv-fail-lit) 55%, transparent); background: color-mix(in srgb, var(--tbv-fail-lit) 14%, transparent); font-weight: 600; }
 .tbv-tag.held { border-style: dashed; }
+.tbv-tag.wait { color: var(--tbv-doing); border-color: color-mix(in srgb, var(--tbv-doing-lit) 50%, transparent); background: color-mix(in srgb, var(--tbv-doing-lit) 12%, transparent); }
+.tbv-tag.conflict { color: var(--tbv-need); border-color: color-mix(in srgb, var(--tbv-need-lit) 55%, transparent); background: color-mix(in srgb, var(--tbv-need-lit) 14%, transparent); font-weight: 600; }
 .tbv-model { flex: 0 0 auto; max-width: 140px; padding: 1px 6px; border-radius: 5px; background: var(--tbv-chip-hi); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 
 /* Dependency lines: from the card being waited on to the card that waits, drawn under the cards.

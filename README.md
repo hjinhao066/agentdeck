@@ -4,6 +4,46 @@ A Windows/macOS multi-column terminal app for running AI agents side by side.
 Each column has its own shell, output history and input. The Conductor Board
 adds explicit task relationships without taking control of manual terminals.
 
+The Captain can delegate public research to the local, already signed-in ChatGPT
+web subscription without a Claude/Codex model turn:
+
+```sh
+node "$AGENTDECK_BOARD_CLI" new --agent chatgpt-web --title "公开调研" --task "解释水的冰点，附公开来源链接。"
+# Optional: use the existing skill's verified Deep Research workflow.
+node "$AGENTDECK_BOARD_CLI" new --agent chatgpt-web --web-mode deep-research --title "公开研究" --task "需要研究的公开问题"
+```
+
+`chatgpt-web` is a native executor, not a shell command. It reuses
+`~/.agents/skills/ask-chatgpt-web/` and `~/.agents/tools/ask-chatgpt-web/cli.mjs`
+(install that tool's dependencies first). Default chat waits up to 30 minutes;
+Deep Research waits up to 60 minutes, automatically confirms the research plan
+once, and must pass the skill's actual mode/report verification. Both require
+the actual **6 Pro** selection; there is no model fallback. `--command` and
+`--seat` cannot be combined with this executor. The UI session selector is unchanged.
+
+The task body is the exact research question, without the terminal worker
+instruction suffix. The Captain must review it for credentials and sensitive
+personal information before dispatch; obvious credentials are rejected before
+storage/sending. Only public research is supported. `ledger`, `peek`, `receipts`,
+`tell`, `stop`, and board-card `--task-id` use the usual session/receipt lifecycle.
+`tell` submits a new question, not a follow-up in the prior webpage. `tell --now`
+cancels the current question and sends the new one ahead of that session's queued
+questions; `--replace` drops those queued questions (`--replace --now` does both).
+Failed receipts show “没做成” in the ledger and status dot; cancelled work shows
+“已中断”. A report excerpt and the absolute full Markdown path return through the existing completion
+channel. Reports stay local under `~/reports/agentdeck-chatgpt-web/<run-id>/`.
+
+Requests in one app execute FIFO, one at a time, with at least 60 seconds after
+the previous request ends. The existing skill also protects the local browser
+with its own lock/cooldown/pending-request checks. A conflicting external request,
+login problem, quota limit, or timeout returns a distinct failed receipt; it is
+not retried. A restart never resends a question that was already handed to the
+executor. Failed/suspended requests may keep their dedicated browser tab: the
+user must confirm generation has ended and close it before another request.
+Missing login requires the user to log in manually; AgentDeck never logs in,
+reads cookies/storage, or records browser credentials. Webpage stdout/stderr and
+raw diagnostics are not copied into AgentDeck logs or conversations.
+
 ## Layout
 
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
@@ -228,6 +268,7 @@ Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；�
 用户登录步骤见 [Claude 席位](CLAUDE_SEATS.md)；队长 `new --agent claude --seat us2` 可指定席位，`quota` 显示三席独立额度。默认开启「永动机」：
 当前 Claude 的可信 5 小时剩余 ≤3% 或真实限流时，在队长空闲后自动接力
 下一个可用 Claude 席位（US2 → US → CN → US2，未登录或用尽跳过）；所有已登录席位都用尽才交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。
+额度区的手动轮换按钮只在 Claude 席位之间切换；所有 Claude 席位用尽后的 Codex 接力由永动机执行，或从 Relay 菜单明确选择。
 设置可关闭或改阈值。每次轮换留横幅、对话记录及普通 Bark 提醒，10 分钟内不回切同一目标。
 默认打开「优先用快到期的席位」图标开关：当前和目标席位的 5 小时余额、每周额度和重置时间都可信时，
 队长空闲后优先使用重置至少早 10 分钟、还有可用额度的席位；同边界抖动不切换，数据未知时只保留低额度切换。
@@ -255,7 +296,7 @@ again with the current provider, model and effort instructions.
 
 在队长设置中可关闭「重启后自动续上」。冷启动只恢复退出前尚未完成的队员任务，每批最多两个；正常新建和归档恢复仍走普通派发。完整任务、最后回执和未送达补充指令保存到私有配置与 `restart-resume.json`，不截断正文。每轮启动按任务记录送达 claim，连续重启仍能续派；`complete` 已关闭的卡片不会被迟到的续接复活。
 
-真续接要求列自己的明确会话号及工作目录归属；无法证明归属时新开重发，不从全局最近会话或唯一工作目录猜号。Codex metadata 完整读取首行，agy 数据库中的任意文件 URL 不作为归属凭据。原会话启动失败或 45 秒未送达时，同列重开一次并重发卡片任务、最后回执和补充正文；重发仍失败则向队长交失败回执。退出给收尾指令最多 800ms 的送达机会；应用暂停不代表队员已确认安全停工。退出等待页面落盘最多 1.5 秒，另有独立进程 5 秒 OS 退出兜底。
+真续接要求列自己的明确会话号及工作目录归属；无法证明归属时新开重发，不从全局最近会话或唯一工作目录猜号。Codex、Cursor、Antigravity 的 `complete` / `ask` / `progress` 会携带各自 shell 工具环境中的 `CODEX_THREAD_ID` / `CURSOR_CONVERSATION_ID` / `ANTIGRAVITY_CONVERSATION_ID`，经本列回执认证后保存归属，并支持重启及归档恢复时续接原对话。新终端不继承父进程的这三个 ID；还没提交过回执、CLI 没注入有效 UUID、目录变化或 ID 与另一列重复时，仍新开重发。Codex metadata 完整读取首行，agy 数据库中的任意文件 URL 不作为归属凭据。每次尝试的终端启动和批次排队最多等待 30 秒，获得槽位后卡片核验与指令送达最多等待 45 秒。原会话启动失败或未能按时送达时，同列重开一次并重发卡片任务、最后回执和补充正文；重发仍失败则向队长交失败回执。指令送达即算续接成功，之后的进程退出或额度耗尽按普通任务失败处理，不再新开重发。卡片已关闭、归档、待验收或转交时，停止旧任务并向队长提交含会话、任务、卡片和停派原因的回执，不改动已关闭或转交的卡片。退出给收尾指令最多 800ms 的送达机会；应用暂停不代表队员已确认安全停工。退出等待页面落盘最多 1.5 秒，另有独立进程 5 秒 OS 退出兜底。
 
 
 - It controls every session (ones it opened, ones you opened, terminals you started
@@ -292,9 +333,19 @@ again with the current provider, model and effort instructions.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   The 队长 can read observed subscription quotas with `quota` and switches
-  provider when a worker reports a limit. At most 15 background sessions work at
+  provider when a worker reports a limit. At most the configured concurrency limit (default 30) background sessions work at
   once: a further `new` waits (its card says 等空位, the only thing called 排队) and starts by itself, oldest
-  first, when one finishes. A finished background session is archived after 10
+  first among available providers, when one finishes. Quota-held requests do not
+  block available providers. `queue list` shows unsent requests with their card/queue
+  ids, launch commands and wait reasons; `queue cancel --task-id <card-or-queue-id>`
+  cancels one (repeating it is harmless). `new --task-id` with a changed launch command,
+  model or Claude seat replaces the old queued request and starts when its provider
+  and a slot are available. An unchanged command is refused. Moving a card to
+  `done` or `todo` through `task move` or the board UI cancels its unsent request.
+  Queue responses distinguish quota, critical memory, the actual occupied-slot
+  count and earlier executable requests; the concurrency limit is not an active count.
+  Live sessions waiting on exhausted quota keep their lifecycle/archiving protection
+  but release their work slot. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have
   open); `tell` to it restores it first, and `ledger` lists those and the waiting work.
   Archiving ends the terminal, so a session that is working, waiting on an
@@ -340,6 +391,11 @@ again with the current provider, model and effort instructions.
   does not connect them. Claude's existing listener channel is unchanged.
   An instruction added to a session that is still busy
   shows as 待补充 and goes in when the session frees up.
+  It does not expire while waiting: after 30 minutes the Captain receives a
+  single 仍在排队 reminder, and delivery continues waiting for an idle prompt.
+  If the session exits or becomes unavailable, its failure card keeps the full
+  unsent instruction. The receipt includes `read --id <task-id>` to retrieve it
+  even after the worker has gone; unsent text is not in the worker's chat history.
   Additions waiting for the same session are combined in order into one prompt,
   with one receipt contract; their cards point to the last card for the result.
   `tell --to <session-id> --message "…" --replace` cancels all unsent additions
@@ -510,9 +566,11 @@ mouse-report fragments are cleaned when loaded, preserving adjacent text.
   --dangerously-skip-permissions --effort high`, `agy --dangerously-skip-permissions --model gemini-3.8-flash-high`
   (Antigravity's effort is the model id's suffix, `-low|-medium|-high`; given
   `--effort` beside such an id it silently runs a different model), `grok --permission-mode bypassPermissions`, `cursor-agent --force --model claude-opus-5-5-high` (`cursor-agent`,
-  never `agent`, which other tools also install), `codex --no-daemon --dangerously-bypass-approvals-and-sandbox`
-  (`--no-daemon` keeps each column off the shared Codex server, which otherwise
-  keeps a stale environment and cannot submit that column's receipt).
+  never `agent`, which other tools also install), Codex with the managed options
+  supported by its local `--help`. AgentDeck probes the executable once per app
+  run, removes unsupported saved options, and adds the bypass option and
+  `--no-daemon` only when available. Older Windows Codex versions can launch
+  without `--no-daemon`; model and resume arguments are preserved.
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
@@ -637,10 +695,14 @@ The bundled xterm does not play audio for terminal BEL.
 
 ### Codex receipt environment
 
-AgentDeck adds `--no-daemon` to Codex launches, including custom commands and
-restored sessions. A shared Codex app server uses its own process environment
+AgentDeck adds `--no-daemon` to Codex launches when the local executable lists
+it in `--help`, including custom commands and restored sessions. Unsupported
+managed options are removed before launch; a failed help probe falls back to
+launching without those options. A shared Codex app server uses its own process environment
 and can lose the current terminal's receipt/control channel variables. Embedded
 servers inherit the column environment. This does not edit Codex user settings.
+See [Windows compatibility](docs/windows-codex-launch.md) for the version-specific
+investigation and verification procedure.
 
 The bridge prefers environment credentials when this process's controlling
 terminal has no private file. If a shell policy filters the tokens, the
@@ -687,6 +749,27 @@ npm run dist:mac
 
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
+本机 Mac 可用一条命令准备发版（先收齐已验收的分支，避免边合边反复测试、打包）：
+
+```sh
+node scripts/release.js --base origin/release/1.1.11 origin/fix/example --dry-run
+node scripts/release.js --base origin/release/1.1.11 origin/fix/example
+# 显式版本也接受 1.2 或 1.2.0；从 1.2.0 默认进到 1.3.0
+node scripts/release.js 1.2 --base origin/release/1.1.11 origin/fix/example
+```
+
+先自行 `git fetch origin`，再指定基线；默认基线是当前 HEAD。省略版本号时进一位次版本号：1.1.11 → 1.2.0，分支/目录对外叫 `release/1.2` / `agentdeck-release-1.2`，不再生成 1.1.12。脚本把基线和待合分支解析成固定提交，在独立 worktree 依次合并；冲突即停止，报告列出文件，手动解决并提交后按原命令续跑。已有目录必须属于同一发布计划，其他 worktree 和历史报告不会被覆盖。`--worktree DIR` / `--output DIR` 可另选绝对路径，输出须在源码目录外。`--dry-run` 只读，不创建目录、不测试、不打包。
+
+已手动审查并合并的发布分支可用 `node scripts/release.js 1.2.0 --prepared --output <源码外独立目录>`。要求当前分支为 `release/1.2.0`、工作区干净、package.json 与 lockfile 三处版本一致；该模式不创建 worktree、不合分支、不升版本，保留依赖准备、持锁单测/单 worker 冒烟、audit、打包及校验/耗时报告。可加 `--dry-run`；不可与分支列表、`--base`、`--worktree` 共用。
+
+流程：同步 package.json 与 lockfile 版本 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本和 JSON/Markdown 逐步耗时报告。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
+
+`release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 或 E2E 命令时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。
+
+子进程清除现役 `AGENTDECK_*` 凭据；调用者环境保留，仍能提交自己的回执。同一 worktree 的依赖安装可复用；成功测试和构建只有在完整 Git tree、依赖文件/权限、Node/平台/系统/签名与测试环境都相同时复用，DMG 还须通过哈希校验。首次依赖指纹计算与门禁重叠执行，异步遍历并分块读取依赖，哈希期间持续读取测试和 audit 的输出；audit 每次运行，缓存包每次重新核对。
+
+脚本不合 main、不打 tag、不推送、不安装、不退出或启动应用。结果默认在相邻 `reports/agentdeck-1.2/`，内含 `install-1.2.sh`；安装脚本要求先退出 AgentDeck，校验 DMG/签名/版本/asar，备份配置与会话数据，复制并校验完整新程序，再通过重命名保留旧程序、替换安装。失败还原旧程序，产生 `install-timing.tsv`（整秒计时）。安装完成后由发布操作者启动应用并检查持续存活；这些真实安装/启动耗时须加入最终报告，不能用 fixture 演练耗时冒充。
+
 Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
 `npx electron-builder --mac --config.mac.identity=null --publish never`.
@@ -703,6 +786,10 @@ activating the app; each spec opens its own instance, and CI runs the suite once
 against source and once against the packaged app. With `--test-user-data=<dir>` the
 Skills page scans `<dir>/skills-home` instead of the real home folder, so tests
 never list or edit the user's own skills.
+Fixture cleanup first requests normal Electron quit, then kills only its isolated process tree
+after 10 seconds if native teardown stalls, with an explicit warning in the test log.
+This cleanup is not a graceful-shutdown assertion; `restart-resume-exit.spec.js`
+checks actual exit separately and does not use that fallback.
 
 Windows E2E shell probes run script files rather than inline `node -e` code,
 so PowerShell cannot reinterpret JavaScript quotes or Windows path backslashes.
@@ -725,6 +812,69 @@ AI contributors must follow [AGENTS.md](AGENTS.md), including immediate commit
 and GitHub synchronization after every completed change.
 
 See [CONDUCTOR_BOARD.md](CONDUCTOR_BOARD.md) for managed task operations.
+
+## Two-machine sync (1.2)
+
+Mac and Windows each run AgentDeck and talk to one sync service (the existing
+VPS is the intended deployment target, reached over WireGuard). This branch
+does not deploy that service or configure either installed app. The app heartbeats every sync round, every 10
+seconds, and the service marks a machine offline 45 seconds after its last
+heartbeat, which covers shutdown and sleep. Task cards, their fields, and
+saved captain transcripts are shared; a change is visible on the other side
+within a minute. Edits to different fields of the same card merge. Edits to
+the same field stay as two copies and the card shows 冲突. The sidebar section
+两机 shows online/offline, the last-seen time, and any sync error.
+
+The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
+to the WireGuard address when it is deployed; the default listen address is
+loopback. Each desktop keeps its settings in `userData/fleet.json` (not the
+deck `config.json`, which the window rewrites):
+
+```json
+{ "baseUrl": "https://sync.example", "tokenFile": "/absolute/path/to/token" }
+```
+
+The token file contains only the token. It is not committed, not passed on the
+command line, and not written into logs or task JSON. `~/.agents` git sync is
+unchanged and is not the live channel. This build does not choose which
+computer runs a task, move work off a sleeping machine, or switch captains
+from a phone. Cards and sessions carry `deviceId` for those later steps.
+
+Offline edits persist in `fleet-state.json`. A request retains its operation ID
+and original payload until acknowledged, even across a process restart; later
+edits wait separately and are rebased on the accepted card. Snapshot downloads
+preserve pending edits, including changes made by other local board writers.
+Older revisioned task snapshots restored by Git keep their older revision when
+submitted, so they cannot silently replace newer server edits.
+Repeated operations do not increment a card revision or add a second conflict.
+All conflicting alternatives and captain turns are retained. Older transcript
+prefixes cannot shorten newer history; divergent saves retain the prior version
+in the history record's `alternatives`. Credential-shaped fields are stripped,
+but transcript prose is preserved, so sync only to a trusted private service.
+Requests time out after 10 seconds and retry on subsequent sync rounds.
+If the hub loses a card or rolls back behind a pending edit's revision, the
+client discards that edit's old base and queues the complete local card with a
+new operation ID and revision zero for the next round. Newer local fields are
+retained as conflicts if an older hub copy already exists. A failed individual
+task or transcript upload stays queued and visible as a sync error while other
+uploads and snapshot downloads continue. Store ID indexes have no prototype,
+including after loading JSON, so prototype-shaped IDs are ordinary keys.
+
+Serialize local verification with the whole-machine `/tmp/agentdeck-test.lock`
+before running unit tests, E2E, or the transport smoke. Record the owning PID,
+branch and start time in `owner`, and remove that file and directory on exit.
+
+Run `node scripts/fleet-two-machine-smoke.js --ssh winpc --report /absolute/report.md`
+for a repeatable native Mac/Windows transport check. It uses fresh temporary
+stores and credentials and an SSH reverse forward bound to loopback. It verifies
+the production 10-second sync interval, 45-second offline lease, two-way task and
+captain history propagation, conflicts, operation replay, and offline outbox
+recovery after a peer process restart. It removes its temporary directories and
+forward when done. Omit `--ssh` to rehearse with a separate local Node process;
+`--quick` shortens timers only for that local rehearsal. This does not exercise
+the Windows Electron UI or install, rebuild, or restart either installed app.
+
+
 
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
 

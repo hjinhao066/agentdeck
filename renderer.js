@@ -158,6 +158,7 @@ if (saved) {
   if (Array.isArray(saved.schedules)) config.schedules = saved.schedules;
   config.navArchivedOpen = !!saved.navArchivedOpen;
   config.crewModelsCollapsed = SidebarCore.normalizeCollapsedModels(saved.crewModelsCollapsed);
+  config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
@@ -217,6 +218,7 @@ if (saved) {
       modelSessionId: c.modelSessionId,
       modelSessionOwner: c.modelSessionOwner,
       modelSessionCwd: c.modelSessionCwd,
+      modelSessionSource: c.modelSessionSource,
       captainTaskPrompt: c.captainTaskPrompt,
       sessionWatchSince: Number.isFinite(c.sessionWatchSince) ? c.sessionWatchSince : 0,
       displayTitle: c.displayTitle || (c.manualTitle ? c.title : ''),
@@ -469,9 +471,15 @@ function toggleZoom(id) {
   if (t) { focusColumnInput(id); focusedId = id; syncNav(); }
 }
 
-window.deck.onPtyData((id, data) => {
+function writePtyData(id, t, data, at) {
+  t.lastOutputAt = at; MainSession.onOutput(id, data); t.term.write(data);
+}
+window.deck.onPtyData((id, data, sequence) => {
   const t = terms.get(id);
-  if (t) { t.lastOutputAt = Date.now(); MainSession.onOutput(id, data); t.term.write(data); }
+  if (!t) return;
+  const at = Date.now();
+  if (t.pendingPtyData) t.pendingPtyData.push({ data, sequence, at });
+  else writePtyData(id, t, data, at);
 });
 window.deck.onPtyExit((id, reason) => {
   const t = terms.get(id);
@@ -517,8 +525,9 @@ function terminalIdle(col, entry) {
   const screen = MainCore.codexStatusScreen(entry.lastScreen, col.cmd);
   return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
 }
-const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
+const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
 function classify(text, entry, cmd) {
+  if (cmd === 'chatgpt-web') return entry?.webExecutorState || 'plain';
   text = MainCore.codexStatusScreen(text, cmd);
   const activity = MainCore.terminalActivity(text, cmd);
   if (activity === 'quota') return activity;
@@ -1901,11 +1910,11 @@ function buildColumn(col, isFresh) {
       }
     }, { capture: true, passive: true });
     terms.set(col.id, {
-      term, fit, search, el: termEl, wrap, titleEl: title, badgeEl, dot, timerEl, alive: true, state: 'plain', disposers,
+      term, fit, search, el: termEl, wrap, titleEl: title, badgeEl, dot, timerEl, alive: true, state: 'plain', disposers, webExecutorReady: col.executor === 'chatgpt-web' ? false : undefined,
       // Status-machine memory: hasWorked separates green "just finished" from
       // gray "idle since launch"; idleTicks debounces working→done (~3s);
       // workStart/workedMs drive the header timer; lastDump skips redundant IPC.
-      hasWorked: false, idleTicks: 0, workStart: 0, workedMs: 0, doneAt: 0, lastDump: '',
+      hasWorked: false, idleTicks: 0, workStart: 0, workedMs: 0, doneAt: 0, lastDump: '', pendingPtyData: [],
     });
 
     const newOutput = document.createElement('button');
@@ -1969,19 +1978,32 @@ function buildColumn(col, isFresh) {
     // garbage like `1;2c56;3R54;3R54;…`, which the shell echoes, which gets
     // SAVED on quit and replayed again next launch, snowballing every restart.
     let replayMuted = false;
+    const finishReplay = (sequence = 0) => {
+      const entry = terms.get(col.id);
+      if (!entry || entry.term !== term) return;
+      const pending = entry.pendingPtyData;
+      entry.pendingPtyData = null;
+      replayMuted = false;
+      // Output already in the snapshot must not be painted twice. Later
+      // redraws are applied only after the old replay has finished parsing.
+      for (const chunk of pending) if (!chunk.sequence || chunk.sequence > sequence)
+        writePtyData(col.id, entry, chunk.data, chunk.at);
+    };
     const reconnect = async () => {
       const alive = await window.deck.ptyIsAlive(col.id);
       if (alive) {
         // Hot-reload path: pty survived, replay its buffered output and resize.
-        const replay = await window.deck.ptyReplay(col.id);
+        const snapshot = await window.deck.ptyReplay(col.id, true);
+        const replay = snapshot.data;
         if (replay) {
           replayMuted = true;
           term.write(replay, () => {
             updateAgentIdentityBadge(col.id, terms.get(col.id), dumpScreen(term));
-            replayMuted = false;
+            finishReplay(snapshot.sequence);
           });
-        }
+        } else finishReplay(snapshot.sequence);
         window.deck.ptyResize(col.id, term.cols, term.rows);
+        if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
         MainSession.notePtySurvived(col);
       } else {
         // Fresh spawn. If the previous app run left a saved session for this
@@ -1991,17 +2013,22 @@ function buildColumn(col, isFresh) {
         if (choice.mode === 'resume' || choice.mode === 'resend') col.restartMode = choice.mode;
         if (choice.mode === 'resend') col.sessionWatchSince = Date.now();
         else if (!col.sessionWatchSince) col.sessionWatchSince = Date.now();
+        const provider = window.RestartResume.providerOf(col.cmd);
+        const ownsCapturedId = col.modelSessionOwner === col.id && col.modelSessionCwd === (col.cwd || '') &&
+          !config.columns.some((other) => other.id !== col.id && window.RestartResume.providerOf(other.cmd) === provider &&
+            String(other.modelSessionId || '').toLowerCase() === String(col.modelSessionId || '').toLowerCase());
+        const capturedId = !['Codex', 'Cursor', 'Antigravity'].includes(provider) || ownsCapturedId ? col.modelSessionId : null;
         const plan = choice.mode === 'resume'
           ? { launch: choice.launch, sessionId: choice.sessionId, resumedAgent: true, showLegacyWarning: false }
           : choice.mode === 'resend'
             ? { ...window.AgentInfo.planAgentLaunch(choice.launch, null, true, false, () => window.crypto.randomUUID()), resumedAgent: false, showLegacyWarning: true }
-            : window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
+            : window.AgentInfo.planAgentLaunch(col.executor === 'chatgpt-web' ? '' : col.cmd || '', capturedId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
         const { launch, resumedAgent, showLegacyWarning } = plan;
         if (col.modelSessionId !== plan.sessionId) {
           if (plan.sessionId) {
             col.modelSessionId = plan.sessionId;
-            if (!resumedAgent) { col.modelSessionOwner = col.id; col.modelSessionCwd = col.cwd || ''; }
-          } else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; }
+            if (!resumedAgent) { col.modelSessionOwner = col.id; col.modelSessionCwd = col.cwd || ''; delete col.modelSessionSource; }
+          } else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; delete col.modelSessionSource; }
           saveConfig();
         }
 
@@ -2021,21 +2048,33 @@ function buildColumn(col, isFresh) {
               : showLegacyWarning
                 ? '\r\n\x1b[33m── 上次输出回放；此栏未绑定模型会话，本次将新开对话 ──\x1b[0m\r\n'
                 : '\r\n\x1b[2m── 上次输出回放，进程已结束──\x1b[0m\r\n';
-            term.write(replayMsg, () => { replayMuted = false; });
+            term.write(replayMsg, () => finishReplay());
           });
-        }
+        } else finishReplay();
         // 队长 gets a control token too; the columns it drives never do.
-        const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
+        const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
+        if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
-        if (launch) {
+        if (launch && col.executor !== 'chatgpt-web') {
           // Capture the id: if the user edits the column within 700ms,
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
           const spawnId = col.id;
-          setTimeout(() => { if (terms.has(spawnId)) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, BoardCore.shellLaunchCommand(launch, env.platform)), env.platform) + '\r'); }, 700);
+          terms.get(spawnId).launchPending = true;
+          const start = async () => {
+            const entry = terms.get(spawnId);
+            if (!entry || !entry.alive || col.id !== spawnId) return;
+            if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
+            const prepared = await window.deck.prepareLaunch(spawnId, launch).catch(() => null);
+            if (col.id !== spawnId || terms.get(spawnId) !== entry || !entry.alive) return;
+            if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
+            if (prepared !== null) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, prepared), env.platform) + '\r');
+            entry.launchPending = false;
+          };
+          setTimeout(start, 700);
         }
         if (!isFresh && col.role !== 'manual' && !col.taskCompleted) {
           // A cold restart killed the old CLI caller. Re-deliver managed
@@ -2534,7 +2573,11 @@ function removeFolder(folderId) {
 async function agentInForeground(col, allowShell) {
   if (allowShell && !col.cmd) return true;
   const entry = terms.get(col.id);
-  if (env.platform === 'win32') return !!entry && AGENT_IDLE_RE.test(MainCore.windowsAgentOutput(entry.lastScreen));
+  if (entry?.launchPending) return false;
+  if (env.platform === 'win32') {
+    if (BoardCore.codexProgram(col.cmd, 'win32')) return !!entry && MainCore.windowsCodexReady(entry.lastScreen);
+    return !!entry && AGENT_IDLE_RE.test(MainCore.windowsAgentOutput(entry.lastScreen));
+  }
   try {
     return !MainCore.isShellProcess(await window.deck.ptyForeground(col.id));
   } catch (_) { return false; }
@@ -2543,15 +2586,24 @@ async function agentInForeground(col, allowShell) {
 // Schedule and 队长: wait until the session can take a prompt (agent at its
 // idle prompt, not busy or asking something), then send it like the composer
 // does. opts are passed to ChatUI.sendPrompt, plus timeout/onSent/onGiveUp
-// and allowShell (see agentInForeground).
+// and allowShell (see agentInForeground). keepWaiting turns timeout into a
+// one-time reminder; only an exited or removed terminal ends that queue.
 function sendWhenReady(col, text, opts) {
   const o = opts || {};
   const started = Date.now();
   const id = col.id;
+  let reminded = false;
   const check = async () => {
     if (o.cancelled && o.cancelled()) return;
-    if (!columns.includes(col) || col.id !== id) return;
+    if (!columns.includes(col) || col.id !== id) {
+      if (o.keepWaiting) o.onGiveUp?.('这个会话已经关闭、归档或被替换');
+      return;
+    }
     const entry = terms.get(col.id);
+    if (o.keepWaiting && entry && !entry.alive) {
+      o.onGiveUp?.(entry.exitReason || '这个会话的终端已经退出');
+      return;
+    }
     if (entry && entry.alive) {
       const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working' && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
       const quiet = Date.now() - (entry.lastOutputAt || 0);
@@ -2575,9 +2627,13 @@ function sendWhenReady(col, text, opts) {
       }
     }
     if (Date.now() - started > (o.timeout || 120_000)) {
-      if (o.onGiveUp) o.onGiveUp();
-      else showToast(`没发出去：「${columnLabel(col)}」一直没准备好`);
-      return;
+      if (o.keepWaiting) {
+        if (!reminded) { reminded = true; o.onWaiting?.(); }
+      } else {
+        if (o.onGiveUp) o.onGiveUp();
+        else showToast(`没发出去：「${columnLabel(col)}」一直没准备好`);
+        return;
+      }
     }
     setTimeout(check, 500);
   };
@@ -3327,7 +3383,7 @@ window.deck.onBoardCommand(async (message) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
         if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task');
+        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task' || message.action === 'main-queue' || message.action === 'main-read');
       },
       (error) => {
         const response = { done: true, error: error.message };
@@ -3845,6 +3901,10 @@ setInterval(() => {
         entry.idleTicks = 0;
         if (st === 'quota') entry.workStart = 0;
         else if (!entry.workStart) { entry.workStart = Date.now(); entry.workedMs = 0; }
+      } else if (st === 'failed' || st === 'stopped') {
+        entry.idleTicks = 0;
+        entry.workStart = 0;
+        entry.workedMs = 0;
       } else if (st === 'done') {
         // Debounce: hold yellow through the short gaps between tool calls so
         // the dot never flickers green mid-task (~3s ≈ watch-ai's stability window).

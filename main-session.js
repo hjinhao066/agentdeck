@@ -56,6 +56,7 @@
   }
   async function boardRequest(op, input) {
     const result = await window.deck.taskBoard(op, input);
+    if (op === 'move' && ['done', 'todo'].includes(result.card?.status)) cancelWaiting((w) => w.metadata?.boardId === result.card.id, '卡片已移到' + result.card.status + '，取消排队。');
     for (const notice of result.notices || []) boardNotice(notice);
     return result;
   }
@@ -101,6 +102,14 @@
       boardEvent(task, e.type, e.message, e.source, e.files).then(() => { if (task.pendingBoardEvent === e) delete task.pendingBoardEvent; }, () => {}).finally(() => { delete task.boardRetrying; save(); });
     }
   }
+  // Serialize queue decisions and opening so two new requests cannot both claim
+  // the last slot, or race a cancellation against an in-flight board bind.
+  let queueWrites = Promise.resolve();
+  function withQueue(run) {
+    const result = queueWrites.then(run);
+    queueWrites = result.catch(() => {});
+    return result;
+  }
   const startingCards = new Map();
   const quotaStarts = new Map();
   const commandQuota = (cmd, seatId) => window.QuotaCore.commandQuota(host.config.quotas, cmd, host.config.claudeSeats, seatId || host.config.activeClaudeSeatId);
@@ -123,6 +132,7 @@
   // Automatic reviewers are already chosen for family and remaining quota.
   // A fully exhausted pool still waits; a low pool must not swap that reviewer.
   function openPlan(cmd, seatId, explicit, metadata) {
+    if (metadata?.executor === 'chatgpt-web') return { action: 'open', cmd, note: '' };
     if (metadata?.autoReviewRound) {
       return commandQuota(cmd, seatId)?.out
         ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
@@ -214,7 +224,7 @@
     list: (filter = {}) => window.deck.taskBoard('list', filter),
     add: (input) => boardRequest('add', input),
     update: (id, patch, updated) => boardRequest('update', { id, patch, updated }),
-    move: (id, status, updated) => boardRequest('move', { id, status, updated }),
+    move: (id, status, updated) => withQueue(() => boardRequest('move', { id, status, updated })),
     archiveDone: (project) => boardRequest('archive', { done: true, ...(project ? { project } : {}) }),
     startCard,
     reorder: (id, anchor = {}) => boardRequest('reorder', { id, ...anchor }),
@@ -283,10 +293,17 @@
     const executor = sessionById(card.exec_receipt?.session_id);
     const title = window.BoardCore.cleanText('审查：' + card.title, 80).replace(/\s+/g, ' ');
     const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round };
-    await placeSession(title, checked.cmd, executor?.cwd || '', attempt, AV.reviewPrompt({ card, receipt: card.exec_receipt }), metadata);
+    const placed = await withQueue(async () => {
+      const current = await findCard(id);
+      if (state() !== s || !current || current.review_claim?.key !== input.key || current.review_claim.delivered ||
+        current.status !== 'review' || current.review_round !== claim.round || current.review_session === true ||
+        s.waitlist.some((w) => w.metadata?.boardId === id) || [...host.columns(), ...(host.config.archived || [])].some((c) => c.boardId === id && c.boardAttempt === attempt)) return false;
+      await placeSession(title, checked.cmd, executor?.cwd || '', attempt, AV.reviewPrompt({ card, receipt: card.exec_receipt }), metadata);
+      return true;
+    });
     host.flushConfig?.();   // the queue entry is on disk before the claim is marked delivered
     await boardRequest('reviewDispatched', { id, key: input.key });
-    return { card, reviewer: picked.candidate.id };
+    return placed ? { card, reviewer: picked.candidate.id } : { card, ignored: true };
   }
   async function startReview(id, input) {
     try { return await runVerify('review', id, input, startReviewOnce); }
@@ -740,7 +757,39 @@
     save();
     return task;
   }
-  function dispatch(col, text, title, waiting) {
+  // Web work bypasses terminal input and the CLI receipt suffix completely.
+  function webTaskState(task) {
+    if (!task) return 'plain';
+    if (['working', 'queued'].includes(task.status)) return 'working';
+    return task.status === 'asking' ? 'input' : task.status;
+  }
+  function startWebTask(col, immediate) {
+    const tasks = state()?.tasks || [];
+    if (tasks.some((t) => t.colId === col.id && t.status === 'working')) return;
+    const task = immediate || tasks.find((t) => t.colId === col.id && t.status === 'queued');
+    const entry = host.terms.get(col.id);
+    if (!task || !entry?.alive || entry.webExecutorReady === false || entry.webExecutorStopping) return;
+    task.instructionSent = true;
+    task.status = 'working';
+    task.startedAt = Date.now();
+    task.progress = '正在排队等待 ChatGPT 网页';
+    entry.webExecutorState = 'working';
+    entry.state = 'working';
+    entry.hasWorked = true;
+    update(task);
+    autoBoardEvent(task, 'started');
+    try { window.deck.saveConfigSync(host.config); } catch (_) {}
+    Promise.resolve().then(() => {
+      if (task.status !== 'working' || !host.columns().includes(col)) return;
+      return window.deck.chatgptWebRun({ id: col.id, taskId: task.id, task: task.instruction, mode: col.webMode || 'chat' });
+    }).catch(() => {
+      if (task.status !== 'working') return;
+      settle(task, { summary: '', files: [], images: [], failed: 'ChatGPT 网页执行器未能启动，请检查本机工具是否可用。', explicit: true, source: 'process' });
+    });
+  }
+  function dispatch(col, text, title, waiting, immediate = false) {
+    if (col.executor === 'chatgpt-web') window.ChatGPTWebCore.validatePublicTask(text);
+    const supplement = state().tasks.some((t) => t.colId === col.id && t.startedAt);
     const task = waiting || addTask(col, title);
     if (waiting) {
       Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
@@ -748,6 +797,12 @@
     }
     task.instruction = text;
     task.instructionSent = false;
+    task.supplement = supplement;
+    if (col.executor === 'chatgpt-web') {
+      update(task);
+      startWebTask(col, immediate ? task : null);
+      return task;
+    }
     persistResumeEntry(col, task);
     try { window.deck.saveConfigSync(host.config); } catch (_) {}
     let batch = dispatches.get(col.id);
@@ -762,7 +817,7 @@
       return sentItems.map((i) => i.text).join('\n\n');
     }, {
       cancelled: () => batch.cancelled || batch.items.every((i) => i.task.status === 'stopped' || i.task.status === 'failed'),
-      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000,
+      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000, keepWaiting: true,
       onSent: (turn) => {
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
         if (batch.cancelled || sentItems.every((i) => i.task.status === 'stopped' || i.task.status === 'failed')) return;
@@ -778,9 +833,13 @@
           if (t === last) { persistResumeEntry(col, t); autoBoardEvent(t, 'started'); }
         });
       },
-      onGiveUp: () => {
+      onGiveUp: (reason) => {
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
-        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: '30 分钟内一直发不出去：那一列的 agent 一直在忙或没有运行', explicit: true }));
+        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: reason || '这个会话已无法接收指令', explicit: true, source: 'process' }));
+      },
+      onWaiting: () => {
+        const task = batch.items.find((i) => i.task.status === 'queued')?.task;
+        if (task) { push(task, { summary: '补充指令等待超过 30 分钟，仍在排队；会话空闲后自动送达。', source: 'queue' }); save(); }
       },
       onDeferred: () => { batch.sending = false; },
     });
@@ -822,11 +881,25 @@
       return { level: null, critical: false };
     }
   }
-  function refreshWaitingNotes() {
+  function refreshWaitingNotes(changed = false) {
     const s = state();
     if (!s) return;
-    s.tasks.forEach((t) => { if (t.status === 'waiting') update(t); });
-    window.Sidebar?.render?.();
+    const active = M.activeCrew(s.tasks, crewIds()).size;
+    let ahead = 0;
+    for (const w of s.waitlist) {
+      const plan = openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata);
+      const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
+      const reason = queueReason(plan, w.title, active, ahead) || '等待派发';
+      if (task && task.waitReason !== reason) { task.waitReason = reason; update(task); changed = true; }
+      if (plan.action !== 'queue') ahead++;
+    }
+    if (changed) window.Sidebar?.render?.();
+  }
+  function queueReason(plan, title, active, ahead) {
+    return plan.action === 'queue' ? quotaQueueText(plan, title) : memoryHold
+      ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
+      : active >= M.MAX_ACTIVE ? `已排队：现在有 ${active} 个会话占用干活名额，上限 ${M.MAX_ACTIVE}；有空位时自动开新会话「${title}」。`
+      : ahead ? `已排队：前面有 ${ahead} 条可执行任务，当前 ${active} 个会话占用干活名额；按顺序自动开新会话「${title}」。` : '';
   }
   async function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -844,11 +917,28 @@
     dispatch(col, text, title, waiting);
     return col;
   }
+  // Only unsent new-session requests are cancelled here; supplements have their own lifecycle.
+  function cancelWaiting(matches, reason) {
+    const s = state();
+    if (!s) return 0;
+    const removed = s.waitlist.filter(matches);
+    s.waitlist = s.waitlist.filter((w) => !removed.includes(w));
+    for (const w of removed) {
+      const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
+      if (!task) continue;
+      task.status = 'stopped';
+      task.doneAt = Date.now();
+      task.receipt = { summary: reason, files: [], images: [], failed: '', explicit: true };
+      update(task);
+    }
+    if (removed.length) { save(); host.flushConfig?.(); }
+    return removed.length;
+  }
   // A queued request keeps its text in config.json; a long one goes to a file first.
-  async function enqueue(title, cmd, cwd, requestId, text, metadata = {}) {
+  async function enqueue(title, cmd, cwd, requestId, text, metadata = {}, reason = '') {
     const s = state();
     let body = text;
-    if (body.length > 8000) {
+    if (body.length > 8000 && metadata.executor !== 'chatgpt-web') {
       const file = await window.deck.saveLongPrompt(body).catch(() => '');
       if (!file) throw new Error('任务太长，存文件失败，没有排上队。');
       body = `${body.slice(0, 300).replace(/\s+/g, ' ').trim()}…\n（这件活共 ${text.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
@@ -857,24 +947,28 @@
     const task = addTask(null, title);
     Object.assign(task, metadata);
     const held = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
-    if (held.action === 'queue') task.waitReason = held.reason === 'explicit' ? held.note : '额度用尽，稍后自动开';
+    task.waitReason = held.action === 'queue' ? quotaQueueText(held, title) : reason;
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
     save();
   }
   // The one way in for a new session: past the limit, behind work already waiting,
   // at quota or under critical memory it queues, otherwise it opens at once.
-  async function placeSession(title, cmd, cwd, requestId, task, metadata) {
+  async function placeSession(title, cmd, cwd, requestId, task, metadata, replaced) {
     const s = state();
     const pressure = await readMemoryPressure();
     const wasHold = memoryHold;
     memoryHold = pressure.critical;
     const plan = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
-    if (plan.action === 'queue' || pressure.critical || s.waitlist.length || freeSlots() <= 0) {
-      await enqueue(title, cmd, cwd, requestId, task, metadata);
-      if (wasHold !== memoryHold) refreshWaitingNotes();
-      return { queued: true, plan, critical: pressure.critical };
+    const active = M.activeCrew(s.tasks, crewIds()).size;
+    // Quota-held requests do not block a different available provider.
+    const ahead = s.waitlist.filter((w) => w !== replaced && openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue').length;
+    const reason = queueReason(plan, title, active, ahead);
+    if (reason) {
+      await enqueue(title, cmd, cwd, requestId, task, metadata, reason);
+      refreshWaitingNotes(true);
+      return { queued: true, plan, result: reason };
     }
-    if (wasHold !== memoryHold) refreshWaitingNotes();
+    if (wasHold !== memoryHold) refreshWaitingNotes(true);
     const shown = plan.action === 'switch' ? notedTitle(title, plan.note) : title;
     const col = await openSession(shown, plan.cmd, cwd, requestId, task, null, launchMeta(metadata, plan));
     announceSwitch(col, shown, plan);
@@ -883,7 +977,8 @@
   // Start waiting work as slots free up, oldest first. Critical memory pressure waits.
   let pumping = false;
   let pumpAgain = false;
-  async function pump() {
+  function pump() { return withQueue(pumpOnce); }
+  async function pumpOnce() {
     const s = state();
     if (!s || !s.waitlist.length) return;
     if (pumping) { pumpAgain = true; return; }
@@ -891,7 +986,6 @@
     try {
       const pressure = await readMemoryPressure();
       if (state() !== s || !s.waitlist.length) return;
-      const wasHold = memoryHold;
       const active = M.activeCrew(s.tasks, crewIds()).size;
       await M.fillQueue({
         cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
@@ -906,7 +1000,7 @@
           const plan = openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata);
           if (plan.action === 'queue') {
             s.waitlist.unshift(w);
-            task.waitReason = plan.reason === 'explicit' ? plan.note : '额度用尽，稍后自动开';
+            task.waitReason = quotaQueueText(plan, w.title);
             update(task);
             return;
           }
@@ -918,8 +1012,9 @@
           } catch (error) { settle(task, { failed: error.message, summary: '', files: [], explicit: true }); }
         },
       });
+      const wasHold = memoryHold;
       memoryHold = pressure.level === 4 && s.waitlist.length > 0;
-      if (wasHold !== memoryHold) refreshWaitingNotes();
+      refreshWaitingNotes(wasHold !== memoryHold);
       save();
     } finally {
       pumping = false;
@@ -968,6 +1063,9 @@
   const CLOSED = ['done', 'failed', 'stopped', 'asking'];
   function settle(task, receipt, boardRecorded = false) {
     if (CLOSED.includes(task.status)) return;
+    if (receipt.failed && task.instructionSent === false && task.instruction) {
+      receipt = { ...receipt, undeliveredInstruction: task.instruction, undeliveredTaskId: task.id };
+    }
     if (task.boardId && !boardRecorded) {
       const type = receipt.failed ? 'failed' : receipt.question ? 'ask' : receipt.source === 'fallback' ? 'fallback' : 'complete';
       autoBoardEvent(task, type, receipt.failed || receipt.question || receipt.summary, receipt.source || 'automatic');
@@ -986,8 +1084,13 @@
     if (col && !receipt.question) col.lastReceipt = { ...receipt, ts: task.doneAt };
     push(task, receipt.question
       ? { question: receipt.question, source: receipt.source }
-      : { summary: receipt.summary, files: receipt.files, failed: receipt.failed, source: receipt.source });
+      : { summary: receipt.summary, files: receipt.files, failed: receipt.failed, source: receipt.source, ...(receipt.undeliveredTaskId ? { undeliveredTaskId: receipt.undeliveredTaskId } : {}) });
     update(task);
+    if (col?.executor === 'chatgpt-web') {
+      const entry = host.terms.get(col.id);
+      if (entry) { entry.webExecutorState = webTaskState(task); entry.state = entry.webExecutorState; }
+      startWebTask(col);
+    }
   }
   // Queue something for 队长's background reader (or the legacy quiet-moment injection).
   function push(task, item) {
@@ -1094,14 +1197,26 @@
   async function submit(message, caller) {
     const s = state();
     if (!s || isMain(caller)) return null;
-    const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit'));
-    if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return null;
+    const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit' && t.restartHold) && (caller.executor !== 'chatgpt-web' || !message.taskId || t.id === message.taskId));
+    if (caller.executor === 'chatgpt-web' && (!message.taskId || !task || CLOSED.includes(task.status))) return { done: true, result: 'Submission ignored: web task is no longer active.' };
     const response = { done: true, result: 'Submission recorded.' };
-    if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
+    if (['complete', 'ask', 'progress'].includes(message.action) &&
+        window.RestartResume?.bindSessionIdentity(caller, message.modelSessionIds, host.columns())) save();
     if (message.action === 'session-exit') {
       if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
+      if (message.code !== 0 && task && fallbackResume(caller, task, `原对话启动失败（exit ${message.code}）`)) return response;
+      // The agent can exit back into a live shell. Its unsent additions must
+      // fail too, without attaching the old turn's exit to the newest addition.
+      for (const queued of s.tasks) {
+        if (queued.colId === caller.id && queued.status === 'queued' && !queued.restartHold) {
+          settle(queued, { summary: '', files: [], images: [], failed: `agent 进程已退出（exit ${message.code}），补充指令未送达`, explicit: true, source: 'process' });
+        }
+      }
+    }
+    if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return message.action === 'session-exit' ? response : null;
+    if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
+    if (message.action === 'session-exit') {
       if (message.code !== 0) {
-        if (fallbackResume(caller, task, `原对话启动失败（exit ${message.code}）`)) return response;
         if (task.status === 'asking') task.status = 'working';
         const entry = host.terms.get(caller.id);
         // The exit command may beat the status tick; read the current terminal.
@@ -1145,6 +1260,8 @@
   let resumeRun = '';
   let resumeInflight = 0;
   let resumeTimer = null;
+  const RESUME_START_TIMEOUT = 30000;
+  const RESUME_SEND_TIMEOUT = 45000;
   function loadResumeManifest() {
     const R = window.RestartResume;
     if (!R) return;
@@ -1173,7 +1290,7 @@
   }
   function persistResumeEntry(col, task) {
     const R = window.RestartResume;
-    if (!R || !col || !task) return;
+    if (!R || !col || !task || col.executor === 'chatgpt-web') return;
     const prior = resumeManifest.entries.find((e) => e.colId === col.id);
     const receipt = task.progress || (task.receipt && !task.receipt.checkpoint ? task.receipt.summary || task.receipt.failed || task.receipt.question : '');
     const entry = R.manifestEntry({
@@ -1202,6 +1319,7 @@
     if (!activeResume(col, task) || task.resumeFailed) return;
     task.resumeFailed = true;
     delete task.restartHold;
+    delete task.resumeDeadline;
     resumeWaiting.delete(col.id);
     const failed = window.RestartResume.failureNote(reason);
     resumeManifest.claims[col.id] = { phase: 'failed', runId: resumeRun, taskId: task.id, at: Date.now() };
@@ -1212,6 +1330,7 @@
   function restartLaunch(col, isFresh) {
     const R = window.RestartResume;
     const task = col && latestTask(col.id);
+    if (col?.executor === 'chatgpt-web') return { mode: 'leave' };
     if (!R || !col || !R.resumeEnabled(host.config) || !col.captainCrew || col.isMain ||
         coldTasks.get(col.id) !== task?.id || (isFresh && !task.resumeFallback)) return { mode: 'leave' };
     const owner = col.modelSessionOwner === col.id && col.modelSessionCwd === (col.cwd || '') &&
@@ -1224,8 +1343,30 @@
     resumeWaiting.delete(col.id);
     const task = latestTask(col.id);
     if (task) delete task.restartHold;
+    if (col.executor === 'chatgpt-web') {
+      const entry = host.terms.get(col.id);
+      if (entry) entry.webExecutorState = state()?.tasks.some((t) => t.colId === col.id && t.status === 'working') ? 'working' : webTaskState(task);
+      Promise.resolve(window.deck.chatgptWebStatus(col.id)).then((status) => {
+        const running = state()?.tasks.find((t) => t.colId === col.id && t.status === 'working');
+        if (status?.active && running?.id === status.taskId) {
+          running.progress = status.progress || running.progress;
+          update(running);
+        } else if (running && status?.receipt && status.receipt.taskId === running.id) {
+          submit({ action: 'complete', taskId: running.id, ...status.receipt }, col);
+        } else if (running && !status?.active) {
+          settle(running, { summary: '', files: [], images: [], failed: '网页执行器没有正在运行的任务；请检查已保存报告及保留请求页后再安排任务。', explicit: true, source: 'process' });
+        } else startWebTask(col);
+      }).catch(() => {});
+    }
   }
   function noteColdColumn(col, isFresh) {
+    if (col?.executor === 'chatgpt-web') {
+      if (!isFresh) for (const task of (state()?.tasks || []).filter((t) => t.colId === col.id && t.instructionSent && !CLOSED.includes(t.status))) {
+        settle(task, { summary: '', files: [], images: [], failed: 'AgentDeck 已重启，网页任务已中断；请检查保留的请求页后再安排任务，系统不会自动重发。', explicit: true, source: 'process' });
+      }
+      startWebTask(col);
+      return;
+    }
     const R = window.RestartResume;
     const task = col && latestTask(col.id);
     if (!col || col.isMain || !col.captainCrew || !R || !R.resumeEnabled(host.config) ||
@@ -1234,7 +1375,7 @@
     const how = R.claimDisposition(resumeManifest.claims[col.id], task.id, resumeRun);
     if (how === 'skip') return;
     task.restartHold = true;
-    task.resumeDeadline = Date.now() + 30000;
+    task.resumeDeadline = Date.now() + RESUME_START_TIMEOUT;
     if (R.isCheckpointClosure(task)) { task.status = 'paused'; task.doneAt = 0; task.endedAt = 0; }
     resumeWaiting.set(col.id, how);
     clearTimeout(resumeTimer);
@@ -1252,8 +1393,11 @@
       try {
         const card = (await window.TaskBoard.list({ archived: true })).find((item) => item.id === boardId);
         if (card) {
-          if (card.archived || card.attempt_closed || card.status === 'done' || (card.status === 'review' && !card.review_session) ||
-              (card.session_id && card.session_id !== col.id) || (card.attempt_id && task.boardAttempt && card.attempt_id !== task.boardAttempt)) return null;
+          const reason = card.archived ? '卡片已归档' : card.attempt_closed ? '卡片本轮任务已关闭' :
+            card.status === 'done' ? '卡片已完成' : card.status === 'review' && !card.review_session ? '卡片已进入待验收' :
+            card.session_id && card.session_id !== col.id ? '卡片已转交会话 ' + card.session_id :
+            card.attempt_id && task.boardAttempt && card.attempt_id !== task.boardAttempt ? '卡片已进入另一轮任务' : '';
+          if (reason) return { blocked: `续派已停止：会话 ${col.id} 的任务 ${task.id} 停在卡片 ${boardId} 核验处，${reason}。未发送续接指令。` };
           entry.task = card.detail || entry.task;
           if (!entry.receipt) entry.receipt = card.latest_receipt || '';
         }
@@ -1264,7 +1408,7 @@
     return entry;
   }
   function fallbackResume(col, task, reason) {
-    if (!activeResume(col, task) || col.restartMode !== 'resume' || task.resumeFallback || !host.restartWorker) return false;
+    if (!task.restartHold || !activeResume(col, task) || col.restartMode !== 'resume' || task.resumeFallback || !host.restartWorker) return false;
     task.resumeFallback = true;
     const op = resumeOps.get(col.id);
     if (op) op.release();
@@ -1275,7 +1419,8 @@
     delete col.modelSessionId;
     delete col.modelSessionOwner;
     delete col.modelSessionCwd;
-    task.resumeDeadline = Date.now() + 30000;
+    delete col.modelSessionSource;
+    task.resumeDeadline = Date.now() + RESUME_START_TIMEOUT;
     task.status = 'paused';
     persistResumeEntry(col, task);
     host.showToast(reason + '；新开会话并重发同一卡片任务和最后回执');
@@ -1292,11 +1437,13 @@
       const col = host.columns().find((c) => c.id === id && c.captainCrew && !c.isMain);
       const task = latestTask(id);
       if (!col || !task || !activeResume(col, task)) { resumeWaiting.delete(id); continue; }
+      if (Date.now() > task.resumeDeadline) {
+        resumeWaiting.delete(id);
+        if (!fallbackResume(col, task, '续接启动等待超时')) noteResumeFailure(col, task, '启动或批次等待超过 30 秒');
+        continue;
+      }
       if (!host.terms.get(id)?.alive) {
-        if (Date.now() > task.resumeDeadline) {
-          resumeWaiting.delete(id);
-          if (!fallbackResume(col, task, '原终端未能启动')) noteResumeFailure(col, task, '终端没有在时限内起来');
-        } else waiting = true;
+        waiting = true;
         continue;
       }
       ready.push({ id, how });
@@ -1322,18 +1469,33 @@
         }
         op.release();
       };
-      op.timer = setTimeout(fail, 45000);
+      task.resumeDeadline = Date.now() + RESUME_SEND_TIMEOUT;
+      op.timer = setTimeout(fail, RESUME_SEND_TIMEOUT);
       const stored = resumeManifest.entries.find((e) => e.colId === col.id && e.taskId === task.id) || {};
       resumeBody(col, task, stored).then((entry) => {
         if (released) return;
         if (!entry || !activeResume(col, task, op)) { op.release(); return; }
+        if (entry.blocked) {
+          task.resumeSubmission = true;
+          delete task.restartHold;
+          delete task.resumeDeadline;
+          resumeManifest.claims[col.id] = { phase: 'stopped', runId: resumeRun, taskId: task.id, at: Date.now() };
+          resumeManifest.entries = resumeManifest.entries.filter((e) => e.colId !== col.id);
+          saveResumeManifest();
+          // The card was closed or reassigned elsewhere; only close our stale
+          // local task and report the stop, never write a new card event.
+          task.status = 'paused';
+          settle(task, { summary: entry.blocked, files: [], images: [], failed: '', explicit: false, source: 'restart' }, true);
+          op.release();
+          return;
+        }
         resumeManifest.entries = resumeManifest.entries.filter((e) => e.colId !== col.id);
         resumeManifest.entries.push(R.manifestEntry({ colId: col.id, cmd: col.cmd, cwd: col.cwd || '', sessionId: col.modelSessionId,
           task, title: entry.title, detail: entry.task, receipt: entry.receipt, pendingText: entry.pendingText }));
         resumeManifest.claims[col.id] = { phase: 'armed', runId: resumeRun, taskId: task.id, mode: entry.mode, at: Date.now() };
         saveResumeManifest();
         host.sendWhenReady(col, R.resumeMessage(entry), {
-          silent: true, force: true, guardUserInput: true, timeout: 45000, suffix: M.RECEIPT_CONTRACT,
+          silent: true, force: true, guardUserInput: true, timeout: RESUME_SEND_TIMEOUT, suffix: M.RECEIPT_CONTRACT,
           cancelled: () => released || !activeResume(col, task, op),
           onSent: (turn) => {
             if (released || !activeResume(col, task, op)) { op.release(); return; }
@@ -1352,6 +1514,8 @@
             task.turnId = turn?.id || '';
             task.startedAt = Date.now();
             task.endedAt = 0;
+            delete task.restartHold;
+            delete task.resumeDeadline;
             delete task.processEnded;
             task.resumeGraceUntil = Date.now() + 20000;
             const summary = entry.mode === 'resume' ? R.trueResumeNote(entry.provider) : R.resendNote(entry.provider);
@@ -1366,7 +1530,7 @@
         });
       }).catch(fail);
     }
-    if (waiting) resumeTimer = setTimeout(flushResume, 400);
+    if (waiting || resumeWaiting.size) resumeTimer = setTimeout(flushResume, 400);
   }
   function parkForRestart(sessions) {
     const R = window.RestartResume;
@@ -1376,15 +1540,19 @@
       for (const col of host.columns()) {
         if (!Object.prototype.hasOwnProperty.call(sessions, col.id)) continue;
         if (!['Cursor', 'Codex', 'Antigravity'].includes(R.providerOf(col.cmd))) continue;
+        // The renderer may have captured an authenticated id more recently
+        // than the debounced config read by the shutdown process.
+        if (col.modelSessionSource === 'agent-env' && col.modelSessionOwner === col.id &&
+            col.modelSessionCwd === (col.cwd || '') && R.validSessionId(col.modelSessionId)) continue;
         if (sessions[col.id] && col.modelSessionOwner === col.id) col.modelSessionId = sessions[col.id];
-        else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; }
+        else { delete col.modelSessionId; delete col.modelSessionOwner; delete col.modelSessionCwd; delete col.modelSessionSource; }
       }
     }
     const parking = [];
     for (const plan of R.planPark(host.columns(), s.tasks)) {
       const task = latestTask(plan.id);
       const col = host.columns().find((c) => c.id === plan.id);
-      if (!task || !col) continue;
+      if (!task || !col || col.executor === 'chatgpt-web') continue;
       // Snapshot full queued bodies and the prior receipt BEFORE changing status.
       persistResumeEntry(col, task);
       const batch = dispatches.get(col.id);
@@ -1432,6 +1600,11 @@
       retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return;
     }
     const col = host.columns().find((c) => c.id === id);
+    if (col?.executor === 'chatgpt-web') {
+      startWebTask(col);
+      if (col.captainCrew) maybeArchive(col, entry);
+      return;
+    }
     if (col && col.captainCrew) maybeArchive(col, entry);
     // The no-command notice is provisional. A live working session supersedes
     // it, including when it resumes the same instruction after a quiet gap.
@@ -1468,7 +1641,7 @@
         if (window.RestartResume && window.RestartResume.ignoreQuota(task, Date.now())) continue;
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
-        if (task.status === 'queued' && col?.lastReceipt?.source === 'quota') continue;
+        if (task.status === 'queued' && (task.supplement || col?.lastReceipt?.source === 'quota')) continue;
         if (task.status === 'asking') task.status = 'working';
         settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen, col?.cmd) });
         continue;
@@ -1599,7 +1772,7 @@
     return host.columns().filter((c) => !c.isMain).map((c) => {
       const entry = host.terms.get(c.id);
       const terminalState = entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain';
-      const task = latest.get(c.id);
+      const task = c.executor === 'chatgpt-web' ? state()?.tasks.findLast((t) => t.colId === c.id && ['working', 'queued'].includes(t.status)) || latest.get(c.id) : latest.get(c.id);
       // A receipt completes the assignment; Cursor's session can still be
       // running tools or writing its final response after submitting it.
       const completed = task?.status === 'done' && task.receipt?.source === 'command';
@@ -1607,7 +1780,7 @@
         (terminalState === 'working' || M.terminalActivity(entry.lastScreen, c.cmd) === 'working');
       const resumedState = window.RestartResume ? window.RestartResume.ledgerState(terminalState, !!(entry && entry.alive), task) : terminalState;
       return {
-        id: c.id, title: host.columnLabel(c), state: cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
+        id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? webTaskState(task) : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };
@@ -1627,6 +1800,7 @@
       if (old) { col = host.restoreArchived(old.id, false, true); restored = true; }
     }
     if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
+    if (col.executor === 'chatgpt-web') window.ChatGPTWebCore.validatePublicTask(text);
     // Refuse before rebinding. bind() consumes a pending automatic rework, so a
     // prompt or a bare shell must not mark that rework delivered when nothing was sent.
     const entry = host.terms.get(col.id);
@@ -1653,11 +1827,15 @@
     if (message.now) {
       await handle({ action: 'main-stop', to: col.id, keepQueued: true }, caller);
     }
-    dispatch(col, text, host.columnLabel(col));
+    dispatch(col, text, host.columnLabel(col), null, message.now);
     return { done: true, result: message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
   }
   // Resolves to the response payload, or rejects with a message for the caller.
-  async function handle(message, caller) {
+  function handle(message, caller) {
+    return ['main-new', 'main-queue', 'main-task'].includes(message.action)
+      ? withQueue(() => handleOnce(message, caller)) : handleOnce(message, caller);
+  }
+  async function handleOnce(message, caller) {
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     switch (message.action) {
@@ -1669,6 +1847,20 @@
         return { done: true, result: briefingText() };
       case 'main-quota':
         return { done: true, result: host.quotaText() };
+      case 'main-queue': {
+        if (message.op === 'list') {
+          const wasHold = memoryHold;
+          memoryHold = (await readMemoryPressure()).critical;
+          refreshWaitingNotes(wasHold !== memoryHold);
+          return { done: true, result: JSON.stringify(s.waitlist.map((w) => ({
+            taskId: w.metadata?.boardId || w.taskId, queueId: w.taskId, title: w.title, command: w.cmd,
+            seat: w.metadata?.claudeSeatId || '', reason: s.tasks.find((t) => t.id === w.taskId)?.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold),
+          })), null, 2) };
+        }
+        if (message.op !== 'cancel' || typeof message.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(message.taskId)) throw new Error('queue cancel 需要 --task-id 卡片或排队 id。');
+        const count = cancelWaiting((w) => w.taskId === message.taskId || w.metadata?.boardId === message.taskId, '队长已取消排队。');
+        return { done: true, result: count ? `已取消 ${count} 条排队：${message.taskId}。` : `没有这条排队：${message.taskId}。` };
+      }
       case 'main-task': {
         if (!['add', 'list', 'move', 'archive'].includes(message.op)) throw new Error('Invalid task operation.');
         const result = await boardRequest(message.op, { ...message.input, ...(message.op === 'move' ? { suppressDispatch: true } : {}) });
@@ -1686,6 +1878,7 @@
         const entry = host.terms.get(id);
         if (!archive && (!entry || !entry.alive)) throw new Error('这个会话的终端已经退出。');
         if (!message.keepQueued) cancelSupplement(id);
+        if (col.executor === 'chatgpt-web' && entry) entry.webExecutorStopping = true;
         // Close cards before Esc/PTY exit so no delayed dispatch or receipt can
         // revive work that the Captain explicitly cancelled.
         s.tasks.forEach((t) => {
@@ -1696,8 +1889,13 @@
           update(t);
         });
         s.pending = s.pending.filter((p) => p.colId !== id);
+        if (col.executor === 'chatgpt-web') {
+          try { await window.deck.chatgptWebCancel(id); }
+          finally { if (entry) entry.webExecutorStopping = false; }
+        }
         if (archive) host.archiveColumn(col, { captain: true, quiet: true });
-        else window.deck.ptyInput(id, '\x1b');
+        else if (col.executor !== 'chatgpt-web') window.deck.ptyInput(id, '\x1b');
+        if (col.executor === 'chatgpt-web' && entry) { entry.webExecutorState = 'stopped'; entry.state = 'stopped'; }
         save();
         return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }
@@ -1750,10 +1948,20 @@
         if (!entry || !entry.alive) throw new Error('这个会话的终端已退出，没有实时输出。');
         const lines = message.lines === undefined ? 40 : message.lines;
         if (!Number.isInteger(lines) || lines < 1 || lines > 1000) throw new Error('peek --lines 必须是 1–1000 的整数。');
+        if (col.executor === 'chatgpt-web') {
+          const task = s.tasks.findLast((t) => t.colId === col.id && t.status === 'working') || latestTask(col.id);
+          return { done: true, result: task?.receipt ? M.receiptsForModel([{ title: task.title, colId: col.id, ...task.receipt }]) : task?.progress || 'ChatGPT 网页任务等待开始。' };
+        }
         return { done: true, result: host.dumpScreen(entry.term, lines) };
       }
       case 'main-read': {
         const find = window.BoardCore.cleanText(message.find, 200);
+        // Unsent prompts never became chat turns. Recover them by the task id
+        // printed in the failure receipt, including after the worker is gone.
+        const undelivered = s.tasks.find((t) => t.id === message.to && t.receipt?.undeliveredTaskId)?.receipt
+          || [...window.ChatUI.turnsOf(s.colId), ...(window.ChatUI.captainArchives?.() || []).flatMap((chat) => chat.turns)]
+            .find((t) => t.id === message.to && t.task?.receipt?.undeliveredTaskId)?.task.receipt;
+        if (undelivered) return { done: true, result: undelivered.undeliveredInstruction };
         if (message.to === 'captain-history') {
           if (!find.trim()) throw new Error('查队长历史需要 --find 关键词，避免把所有旧对话带回上下文。');
           const turns = window.ChatUI.captainArchives().flatMap((chat) => chat.turns.map((t) => ({ ...t, sourceId: chat.id })))
@@ -1783,9 +1991,18 @@
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
+        let prior;
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
-        if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
+        if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell', 'chatgpt-web'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex、chatgpt-web，或用 --command 写完整启动命令。`);
+        if (agent === 'chatgpt-web') {
+          if (message.command || message.seatId !== undefined) throw new Error('chatgpt-web 不支持 --command 或 --seat；使用本机已登录的 ChatGPT 网页。');
+          window.ChatGPTWebCore.validatePublicTask(title);
+          window.ChatGPTWebCore.validatePublicTask(task);
+          if (message.webMode !== undefined && !['chat', 'deep-research'].includes(message.webMode)) throw new Error('--web-mode 只支持 chat 或 deep-research。');
+          metadata.executor = 'chatgpt-web';
+          metadata.webMode = message.webMode || 'chat';
+        } else if (message.webMode !== undefined) throw new Error('--web-mode 仅用于 chatgpt-web。');
         const custom = window.BoardCore.cleanText(message.command, 1000);
         const explicitCommand = !!custom;
         if (explicitCommand) metadata.quotaExplicit = true;
@@ -1808,18 +2025,20 @@
           if (!card) throw new Error('找不到卡片：' + metadata.boardId);
           if (metadata.project && metadata.project.trim().toLowerCase() !== String(card.project).trim().toLowerCase()) throw new Error('--project differs from the card project.');
           metadata.project = card.project;
-          if (s.waitlist.some((w) => w.metadata?.boardId === card.id && w.requestId !== message.id)) throw new Error('这张卡片已经在排队。');
           if (card.archived || card.flag === 'held' || card.flag === 'blocked' || card.status === 'done') throw new Error('卡片尚不可开始，请检查前置任务或显式移回待办。');
+          prior = s.waitlist.find((w) => w.metadata?.boardId === card.id && w.requestId !== message.id);
+          if (prior) {
+            if (!isMain(caller)) throw new Error('调度员已经派过这张卡片；只有队长可以替换排队。');
+            if (prior.cmd === cmd && (prior.metadata?.claudeSeatId || '') === (metadata.claudeSeatId || '')) throw new Error('这张卡片已经在排队；换命令/模型可替换，或用 queue cancel --task-id 取消。');
+          }
         }
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
         // Past the limit, behind work already waiting, at quota, or under critical memory: queue it.
         // placeSession applies same-tier fallback unless the command was named with --command.
-        const placed = await placeSession(title, cmd, cwd, message.id, task, metadata);
+        const placed = await placeSession(title, cmd, cwd, message.id, task, metadata, prior);
+        if (prior) cancelWaiting((w) => w === prior, '队长已换命令/模型，替换旧排队。');
         if (placed.queued) {
-          const result = placed.plan?.action === 'queue' ? quotaQueueText(placed.plan, title) : placed.critical
-            ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
-            : `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。`;
-          return { done: true, result };
+          return { done: true, result: placed.result };
         }
         const opened = placed.title || title;
         const result = placed.plan?.action === 'switch'
@@ -1832,6 +2051,7 @@
       case 'main-answer': {
         const col = findTarget(message.to);
         if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
+        if (col.executor === 'chatgpt-web') throw new Error('ChatGPT 网页会话不接受按键回答，请在网页处理需要用户操作的提示。');
         const entry = host.terms.get(col.id);
         if (!entry || entry.state !== 'input') throw new Error(`「${host.columnLabel(col)}」现在没有停在确认提示上；要给它指令用 tell。`);
         const key = String(message.key || '').trim().toLowerCase();
@@ -1868,6 +2088,7 @@
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));
     else if (r) {
       if (r.failed) card.appendChild(el('div', 'task-failed', r.failed));
+      if (r.undeliveredTaskId) card.appendChild(el('div', 'task-note', `取回未送达指令原文：read --id ${r.undeliveredTaskId}`));
       if (r.summary) card.appendChild(el('div', 'task-summary', r.summary));
       if (!r.explicit && !r.failed) card.appendChild(el('div', 'task-note', '会话已结束，等待命令回执超过 3 分钟。'));
       if (r.files && r.files.length) {

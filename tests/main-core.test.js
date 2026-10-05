@@ -228,6 +228,10 @@ test('Windows agent detection discards stale chrome and recognizes wrapped shell
   const codexChrome = 'OpenAI Codex\n› Ask Codex to do anything\n  100% context left';
   assert.equal(M.windowsAgentOutput(codexChrome + '\nPS C:\\work> '), '');
   assert.equal(M.windowsAgentOutput('PS C:\\work> codex --dangerously-bypass-approvals-and-sandbox\n' + codexChrome), codexChrome);
+  assert.equal(M.windowsCodexReady('PS C:\\long-path\n\\codex-launch\\codex.cmd --no-daemon'), false);
+  assert.equal(M.windowsCodexReady('PS C:\\work> codex\n' + codexChrome), true);
+  assert.equal(M.windowsCodexReady('PS C:\\work> codex\nWelcome to Codex CLI (test stand-in)'), true);
+  assert.equal(M.windowsCodexReady(codexChrome + '\nPS C:\\work> '), false);
 });
 
 test('队长\'s Antigravity commands carry the effort in the model id, never --effort', () => {
@@ -249,17 +253,11 @@ test('队长\'s Antigravity commands carry the effort in the model id, never --e
   }
 });
 
-test('队长\'s Codex commands always run without confirmation prompts, never with the flag twice', () => {
-  const C = (cmd) => M.checkCommand(cmd).cmd;
-  // GPT-6 Luna: `codex -m gpt-6-luna` would otherwise stop at the first approval
-  assert.equal(C('codex -m gpt-6-luna'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  assert.equal(C('codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
-  assert.equal(C('/opt/bin/codex -m gpt-6-luna'), '/opt/bin/codex --no-daemon --dangerously-bypass-approvals-and-sandbox -m gpt-6-luna');
-  // already has one of the two spellings (a duplicate fails to start); --no-daemon is still added once
-  assert.equal(C('codex --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
-  assert.equal(C('codex -m gpt-6-luna --yolo'), 'codex --no-daemon -m gpt-6-luna --yolo');
-  assert.equal(C('codex --yolo'), 'codex --no-daemon --yolo');
-  assert.equal(C('codex --no-daemon --dangerously-bypass-approvals-and-sandbox'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox');
+test('captain command checks leave Codex capabilities to the local launch probe', () => {
+  for (const cmd of ['codex', 'codex -m gpt-6-luna', '/opt/bin/codex -m gpt-6-luna',
+    'codex --yolo', 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox']) {
+    assert.equal(M.checkCommand(cmd).cmd, cmd);
+  }
 });
 
 test('agy can use its tested legacy models while every other CLI still rejects old Claude models', () => {
@@ -303,7 +301,7 @@ test('sessions 队长 opened before they were marked are found from its first ca
   assert.deepEqual([...M.openedByCaptain(columns, undefined)], []);
 });
 
-test('background sessions with work still out hold a slot; finished ones free it', () => {
+test('background sessions with work still out hold a slot; finished and quota waits free it', () => {
   const crew = new Set(['a', 'b', 'c', 'd']);
   const tasks = [
     { colId: 'a', status: 'done' }, { colId: 'a', status: 'working' },   // latest card counts
@@ -315,6 +313,17 @@ test('background sessions with work still out hold a slot; finished ones free it
   ];
   assert.deepEqual([...M.activeCrew(tasks, crew)].sort(), ['a', 'c', 'd']);
   assert.equal(M.MAX_ACTIVE, 30);
+});
+
+test('four working sessions and twenty-six quota waits leave twenty-six admission slots', () => {
+  const tasks = Array.from({ length: 30 }, (_, i) => ({ colId: 'c' + i, status: i < 4 ? 'working' : 'quota' }));
+  const crew = new Set(tasks.map((t) => t.colId));
+  const active = M.activeCrew(tasks, crew).size;
+  assert.equal(active, 4);
+  assert.deepEqual(M.admission({ cap: 30, active, waiting: 2 }), { limit: 30, free: 26, start: 2, paused: false });
+  for (const task of tasks.slice(4)) assert.equal(M.archivable({ tasks }, task.colId, 0, Date.now()), false);
+  tasks.push({ colId: 'c4', status: 'working' });
+  assert.equal(M.activeCrew(tasks, crew).size, 5);
 });
 
 test('a finished background session is archived only after 10 quiet minutes with its receipt read', () => {
@@ -431,7 +440,7 @@ test('quota wait and Claude queued-message chrome are not completion', () => {
   assert.equal(M.terminalActivity('Usage limit reached\nAutomatic continue cancelled\nClaude Code'), '');
   assert.equal(M.statusLabel('quota'), '额度用尽/等待');
   const tasks = [{ colId: 'a', status: 'quota' }];
-  assert.equal(M.activeCrew(tasks, new Set(['a'])).size, 1);
+  assert.equal(M.activeCrew(tasks, new Set(['a'])).size, 0);
   assert.equal(M.archivable({ tasks }, 'a', 0, Date.now()), false);
 });
 

@@ -69,6 +69,10 @@ contextBridge.exposeInMainWorld('deck', {
   skillsRead: (key) => ipcRenderer.invoke('skills:read', { key }),
   skillsSave: (key, text, hash) => ipcRenderer.invoke('skills:save', { key, text, hash }),
 
+  chatgptWebRun: (payload) => ipcRenderer.invoke('chatgpt-web:run', payload),
+  chatgptWebCancel: (id) => ipcRenderer.invoke('chatgpt-web:cancel', { id }),
+  chatgptWebStatus: (id) => ipcRenderer.invoke('chatgpt-web:status', { id }),
+
   ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir }),
   claudeSeats: () => ipcRenderer.invoke('seats:list'),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
@@ -79,6 +83,7 @@ contextBridge.exposeInMainWorld('deck', {
   recordClaudeSeatUsage: (colId, seatId, configDir, usage) => ipcRenderer.invoke('seats:record-usage', { colId, seatId, usage, configDir }),
   captainRelayNotify: (colId, message) => ipcRenderer.invoke('captain:relay-notify', { colId, message }),
 
+  prepareLaunch: (id, command) => ipcRenderer.invoke('pty:prepare-launch', { id, command }),
   ptyInput: (id, data) => ipcRenderer.send('pty:input', { id, data }),
   ptyResize: (id, cols, rows) => ipcRenderer.send('pty:resize', { id, cols, rows }),
   // keepReplay: save the output first (archiving), so restoring can replay it.
@@ -90,7 +95,7 @@ contextBridge.exposeInMainWorld('deck', {
   // Hot-reload support: check if a pty survived a renderer reload, replay its buffer.
   ptyIsAlive: (id, seatId) => ipcRenderer.invoke('pty:is-alive', { id, seatId }),
   ptyForeground: (id) => ipcRenderer.invoke('pty:foreground', { id }),
-  ptyReplay: (id) => ipcRenderer.invoke('pty:replay', { id }),
+  ptyReplay: (id, snapshot = false) => ipcRenderer.invoke('pty:replay', { id, snapshot }),
   reloadRenderer: () => ipcRenderer.send('reload-renderer'),
 
   // Transient feedback messages (e.g. clicked path doesn't exist).
@@ -98,7 +103,7 @@ contextBridge.exposeInMainWorld('deck', {
   onFontSize: (cb) => ipcRenderer.on('font-size', (_e, m) => cb(m.delta)),
   // External "jump to this column" request (popup-notification click).
   onFocusColumn: (cb) => ipcRenderer.on('focus-column', (_e, m) => cb(m.id)),
-  onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data)),
+  onPtyData: (cb) => ipcRenderer.on('pty:data', (_e, m) => cb(m.id, m.data, m.sequence)),
   onPtyExit: (cb) => ipcRenderer.on('pty:exit', (_e, m) => cb(m.id, m.reason)),
   // Capability-checked commands emitted by conductor-managed terminals via
   // board-cli.js. Manual terminals never receive the control token.
@@ -107,6 +112,7 @@ contextBridge.exposeInMainWorld('deck', {
   boardReady: () => ipcRenderer.send('board:ready'),
   // Fixed shared task store; no caller-selected paths or arbitrary IPC.
   taskBoard: (op, input) => ipcRenderer.invoke('task-board:request', { op, input }),
+  fleetState: () => ipcRenderer.invoke('fleet:state'),
   onTaskStart: (cb) => ipcRenderer.on('task-board:start', (_e, m) => cb(m)),
   onTaskReview: (cb) => ipcRenderer.on('task-board:review', (_e, m) => cb(m)),
   onTaskRework: (cb) => ipcRenderer.on('task-board:rework', (_e, m) => cb(m)),
