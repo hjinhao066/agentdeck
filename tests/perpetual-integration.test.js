@@ -15,7 +15,7 @@ function session({ tasks = [], pending = [], cmd = '', relayStartup } = {}) {
   const sends = [], saves = [];
   const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - 5000, lastScreen: '' };
   const elements = new Map();
-  const window = { deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: require('../main-core'), BoardCore: B,
+  const window = { deck: { saveConfigSync: () => true, onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: require('../main-core'), BoardCore: B,
     ChatUI: { hasDraft: () => false, turnsOf: () => [] } };
   const context = vm.createContext({ window, document: {
     getElementById: (id) => { if (!elements.has(id)) elements.set(id, { addEventListener() {} }); return elements.get(id); },
@@ -82,6 +82,31 @@ test('MainSession restart clears old PTY startup evidence and records a newly de
   assert.deepEqual(startup.failures, ['us', 'us2']);
   assert.equal(h.saves.length, 2);
   assert.deepEqual(h.saves[1].mainSession.relayStartup, startup);
+});
+
+test('host listener and installation messages cannot prove Relay work; a Captain CLI command can', async () => {
+  const R = require('../relay-startup-core'), at = Date.now() - 60_000;
+  const h = session({ cmd: S.CLAUDE_COMMAND, relayStartup: R.begin({}, { colId: 'captain', targetId: 'cn', at }) });
+  const captain = { id: 'captain', isMain: true };
+  h.sends[0].options.onSent();
+  for (const alive of [false, true]) {
+    await h.api.handle({ action: 'main-receipt-listener-status', alive, nativeWeb: true }, captain);
+    assert.equal(h.api.state().relayStartup.attempt.output, false);
+  }
+  const result = await h.api.handle({ action: 'main-install-result', result: 'Installation verified',
+    installResult: { id: 'independent-install', status: 'success', targetVersion: '1.2.1' } }, captain);
+  assert.equal(result.done, true);
+  assert.equal(h.api.state().lastInstallResultId, 'independent-install');
+  assert.equal(h.api.state().pending.at(-1).summary, 'Installation verified');
+  assert.equal(h.api.state().relayStartup.attempt.output, false);
+  const noWork = R.check(h.api.state().relayStartup, { colId: captain.id, now: at + R.STARTUP_MS });
+  assert.equal(noWork.action, 'retry');
+  assert.equal(noWork.state.reason, 'no-output');
+  const briefing = await h.api.handle({ action: 'main-briefing' }, captain);
+  assert.equal(briefing.done, true);
+  assert.ok(briefing.result.includes('队长'));
+  assert.equal(h.api.state().relayStartup.attempt.output, true);
+  assert.equal(R.check(h.api.state().relayStartup, { colId: captain.id, now: at + R.STARTUP_MS }).action, 'healthy');
 });
 
 function seatRelay(options = {}) {

@@ -1915,7 +1915,8 @@
   async function handleOnce(message, caller) {
     const s = state();
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
-    if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id) {
+    if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id &&
+        !['main-receipt-listener-status', 'main-install-result'].includes(message.action)) {
       s.relayStartup.attempt.output = true; save();
     }
     switch (message.action) {
