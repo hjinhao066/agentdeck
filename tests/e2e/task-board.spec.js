@@ -376,7 +376,7 @@ test('new selected Claude seat queues at quota and the queue opens after recover
     expect(await command(['new', '--task-id', c.id, '--title', 'Wait at quota', '--task', 'test', '--command', FAKE])).toContain('额度用尽，稍后自动开');
     expect((await card(c.id)).session_id).toBeFalsy();
     const other = await add('Other provider can proceed');
-    expect(await command(['new', '--task-id', other.id, '--title', 'Available provider', '--task', 'test', '--command', FAKE + ' --worker'])).toContain('已排队');
+    expect(await command(['new', '--task-id', other.id, '--title', 'Available provider', '--task', 'test', '--command', FAKE + ' --worker'])).toContain('已开新会话');
     await page.evaluate(() => MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)));
     await expect.poll(async () => (await card(other.id)).session_id).toBeTruthy();
     expect((await card(c.id)).session_id).toBeFalsy();

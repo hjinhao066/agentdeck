@@ -303,7 +303,7 @@ test('sessions 队长 opened before they were marked are found from its first ca
   assert.deepEqual([...M.openedByCaptain(columns, undefined)], []);
 });
 
-test('background sessions with work still out hold a slot; finished ones free it', () => {
+test('background sessions with work still out hold a slot; finished and quota waits free it', () => {
   const crew = new Set(['a', 'b', 'c', 'd']);
   const tasks = [
     { colId: 'a', status: 'done' }, { colId: 'a', status: 'working' },   // latest card counts
@@ -315,6 +315,17 @@ test('background sessions with work still out hold a slot; finished ones free it
   ];
   assert.deepEqual([...M.activeCrew(tasks, crew)].sort(), ['a', 'c', 'd']);
   assert.equal(M.MAX_ACTIVE, 30);
+});
+
+test('four working sessions and twenty-six quota waits leave twenty-six admission slots', () => {
+  const tasks = Array.from({ length: 30 }, (_, i) => ({ colId: 'c' + i, status: i < 4 ? 'working' : 'quota' }));
+  const crew = new Set(tasks.map((t) => t.colId));
+  const active = M.activeCrew(tasks, crew).size;
+  assert.equal(active, 4);
+  assert.deepEqual(M.admission({ cap: 30, active, waiting: 2 }), { limit: 30, free: 26, start: 2, paused: false });
+  for (const task of tasks.slice(4)) assert.equal(M.archivable({ tasks }, task.colId, 0, Date.now()), false);
+  tasks.push({ colId: 'c4', status: 'working' });
+  assert.equal(M.activeCrew(tasks, crew).size, 5);
 });
 
 test('a finished background session is archived only after 10 quiet minutes with its receipt read', () => {
@@ -431,7 +442,7 @@ test('quota wait and Claude queued-message chrome are not completion', () => {
   assert.equal(M.terminalActivity('Usage limit reached\nAutomatic continue cancelled\nClaude Code'), '');
   assert.equal(M.statusLabel('quota'), '额度用尽/等待');
   const tasks = [{ colId: 'a', status: 'quota' }];
-  assert.equal(M.activeCrew(tasks, new Set(['a'])).size, 1);
+  assert.equal(M.activeCrew(tasks, new Set(['a'])).size, 0);
   assert.equal(M.archivable({ tasks }, 'a', 0, Date.now()), false);
 });
 
