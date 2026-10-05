@@ -18,7 +18,7 @@ function runtime(task, terminalState, lastReceipt) {
   const state = { colId: captain.id, tasks: [task], pending: [], waitlist: [] };
   window.MainSession.init({ config: { mainSession: state, folders: [] }, saveConfig() {},
     columns: () => [captain, worker], terms: entries, userComposing: () => false, columnLabel: (c) => c.id });
-  return { api: window.MainSession, captain, worker, state, boardEvents, entry: entries.get(worker.id) };
+  return { api: window.MainSession, window, captain, worker, state, boardEvents, entry: entries.get(worker.id) };
 }
 function ledger(task, terminalState) {
   const { api, captain } = runtime(task, terminalState);
@@ -107,4 +107,23 @@ for (const status of ['success', 'failed']) test(`runtime installation ${status}
   assert.equal(task.installResultId, 'install-1');
   assert.equal(boardEvents.filter((e) => e.op === 'event').length, 1);
   assert.equal(state.pending.filter((p) => p.taskId === task.id).length, 1);
+});
+
+
+test('installation registration and receipt refuse acknowledgement when synchronous persistence fails', async () => {
+  const task = { id: 'install-task', gen: 1, colId: 'worker', status: 'working', startedAt: 1 };
+  const { api, window, worker, captain } = runtime(task, 'working');
+  const registration = { action: 'progress', message: '安装待核对', installId: 'install-1', targetVersion: '1.2.0' };
+  window.deck.saveConfigSync = () => false;
+  await assert.rejects(api.submit(registration, worker), /持久保存/);
+  window.deck.saveConfigSync = () => true;
+  await api.submit(registration, worker);
+  const message = { action: 'main-install-result', result: '安装成功', installResult: {
+    id: 'install-1', taskId: task.id, columnId: worker.id, targetVersion: '1.2.0', status: 'success',
+  } };
+  window.deck.saveConfigSync = () => false;
+  await assert.rejects(api.handle(message, captain), /持久保存/);
+  window.deck.saveConfigSync = () => true;
+  await api.handle(message, captain);
+  assert.equal(task.status, 'done');
 });

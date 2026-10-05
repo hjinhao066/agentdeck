@@ -57,10 +57,16 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
       };
       const message = summary(r);
       if (!ack.receipt) {
-        await deliver({ id: 'install-' + r.id, action: 'main-install-result', callerId: captain.id, installResult: r, result: message });
+        await deliver({ id: 'install-' + r.id + '-' + Date.now(), action: 'main-install-result', callerId: captain.id, installResult: r, result: message });
         ack.receipt = true; saveAck();
       }
-      if ((r.status === 'failed' || r.operation === 'rollback') && !r.notificationSent && !ack.notification) {
+      const finished = typeof r.finishedAt === 'number' ? r.finishedAt : Date.parse(r.finishedAt);
+      const installerNotifying = r.notificationPending === true && Number.isFinite(finished) && Date.now() - finished < 15000;
+      if (!installerNotifying && (r.status === 'failed' || r.operation === 'rollback') && !r.notificationSent && !ack.notification &&
+          (ack.notificationAttempts || 0) < 3 && Date.now() >= (ack.nextNotificationAt || 0)) {
+        ack.notificationAttempts = (ack.notificationAttempts || 0) + 1;
+        ack.nextNotificationAt = Date.now() + 60000;
+        saveAck();
         ack.notification = await notify({ id: 'install-alert-' + r.id, callerId: captain.id, message, urgent: true });
       }
       saveAck();

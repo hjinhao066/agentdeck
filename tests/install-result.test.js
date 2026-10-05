@@ -58,6 +58,9 @@ test('failed receipt delivery is retried and never acknowledged; notification fa
   await assert.rejects(poll(), /renderer/);
   assert.equal(fs.existsSync(f.file + '.ack.json'), false);
   await assert.rejects(poll(), /network/);
+  const ack = JSON.parse(fs.readFileSync(f.file + '.ack.json'));
+  ack.nextNotificationAt = 0;
+  fs.writeFileSync(f.file + '.ack.json', JSON.stringify(ack));
   await poll();
   assert.equal(deliveries, 2);
   assert.equal(notifications, 2);
@@ -70,4 +73,33 @@ test('a result cannot settle a different task or a different installation identi
     deliver: async () => count++, notify: async () => true })();
   assert.equal(count, 0);
   assert.equal(fs.existsSync(f.file + '.ack.json'), false);
+});
+
+
+test('failed phone notifications have a durable three-attempt limit and never replay receipts', async (t) => {
+  const f = fixture(t); f.write({ status: 'failed' });
+  let delivered = 0, notified = 0;
+  const poll = createResultMonitor({ file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => delivered++, notify: async () => { notified++; return false; } });
+  for (let i = 0; i < 5; i++) {
+    await poll();
+    const ack = JSON.parse(fs.readFileSync(f.file + '.ack.json'));
+    ack.nextNotificationAt = 0;
+    fs.writeFileSync(f.file + '.ack.json', JSON.stringify(ack));
+  }
+  assert.equal(delivered, 1);
+  assert.equal(notified, 3);
+});
+
+
+test('phone fallback waits for the installer notification attempt but records the receipt immediately', async (t) => {
+  const f = fixture(t); f.write({ status: 'failed', notificationPending: true, finishedAt: Date.now() });
+  let delivered = 0, notified = 0;
+  const poll = createResultMonitor({ file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => delivered++, notify: async () => { notified++; return true; } });
+  await poll();
+  assert.equal(delivered, 1); assert.equal(notified, 0);
+  f.write({ status: 'failed', notificationPending: true, finishedAt: Date.now() - 16000 });
+  await poll();
+  assert.equal(delivered, 1); assert.equal(notified, 1);
 });

@@ -753,11 +753,20 @@ node scripts/release.js 1.2 --base origin/release/1.1.11 origin/fix/example
 
 发版脚本不合 main、不打 tag、不推送、不安装、不退出或启动应用。结果默认在相邻 `reports/agentdeck-1.2/`，内含 `install-1.2.sh`，它调用仓库的正式安装引擎。安装统一用此入口或 `scripts/restart-agentdeck.sh`，回滚用 `scripts/rollback-agentdeck.sh`；禁止会话临时手写安装脚本、添加 launchd 失败重启任务。
 
+手动指定发布产物时运行：
+
+```sh
+bash scripts/restart-agentdeck.sh --go --dmg /absolute/path/AgentDeck-X.Y.Z-arm64.dmg --sha256 <SHA256> --version X.Y.Z
+bash scripts/rollback-agentdeck.sh --go --backup /absolute/path/backup
+```
+
+不带 `--go` 只显示计划，不再内置历史版本的 DMG 路径或校验值。
+
 正式安装引擎 `scripts/install-agentdeck.js` 使用一次性 detached 子进程，不注册 launchd，也没有 KeepAlive 或失败自动重启。校验 DMG/签名/目标版本/asar、备份旧应用与用户数据后，最多尝试安装三次；失败恢复旧应用并退出。结果原子写入 userData 的 `install-result.json`，包含目标版本、现役版本、进程状态、尝试次数与失败原因。成功要求目标应用已启动并持续存活，磁盘上出现新版本并不算完成。真实安装证据须加入最终报告，不能用 fixture 测试冒充。
 
 安装会话开始前通过 `progress --install-id ID --target-version VERSION --message "安装待核对"` 登记待核对（正式脚本负责调用）。普通 `complete` 无法结束待核对的任务；应用启动后读取并持续检查结果文件，匹配原任务后提交成功或失败回执。停在安全点、准备安装均只用 `progress`，不用 `complete`。安装失败或回滚走 `notify-user --urgent`；应用停机时复用同一 Bark 发送器离线推送，说明目标版本、失败原因和现役版本。密钥仍从本机配置的密钥文件读取。
 
-入口使用稳定的安装标识和 `install-entry.lock`／`install.lock`／`install-claims` 阻止并发、崩溃后重入及同一安装包重新计数；不会自动删除遗留锁。发现上次 pending、未确认结果或已有 claim 时会拒绝开始，请先检查日志、结果与所属进程，处理失败原因后再由维护者清理相应标记。托管会话必须使用支持待核对协议的应用版本；旧版不能确认登记时安全退出，不以普通 progress 冒充成功登记。`--with-data` 仅允许独立终端使用，避免覆盖正在运行的任务控制状态。
+入口使用稳定的安装标识和 `install-entry.lock`／`install.lock`／`install-claims` 阻止并发、崩溃后重入及同一安装包重新计数；不会自动删除遗留锁。发现上次 pending、未确认结果或已有 claim 时会拒绝开始，请先检查日志、结果与所属进程，处理失败原因后再由维护者清理相应标记。托管会话必须使用支持待核对协议的应用版本；旧版不能确认登记时安全退出，不以普通 progress 冒充成功登记。`--with-data` 仅允许独立终端使用，避免覆盖正在运行的任务控制状态。 若回滚到尚未包含结果读取机制的旧二进制，它不能自动提交新协议回执；离线 Bark 仍报告失败，结果文件保留，卡片不得据此冒报成功。
 
 Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and

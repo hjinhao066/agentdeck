@@ -1238,8 +1238,8 @@
     if (message.action === 'progress') {
       if (typeof message.message !== 'string' || !message.message.trim()) throw new Error('progress requires --message.');
       if (message.installId !== undefined) {
-        if (!/^[A-Za-z0-9_-]{1,160}$/.test(message.installId) || typeof message.targetVersion !== 'string' || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(message.targetVersion)) throw new Error('Invalid installation identity.');
-        if (task.pendingInstall && task.pendingInstall.id !== message.installId) throw new Error('已有安装正在等待核对。');
+        if (typeof message.installId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(message.installId) || typeof message.targetVersion !== 'string' || !/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/.test(message.targetVersion)) throw new Error('Invalid installation identity.');
+        if (task.pendingInstall && (task.pendingInstall.id !== message.installId || task.pendingInstall.targetVersion !== message.targetVersion)) throw new Error('已有安装正在等待核对。');
         task.pendingInstall = { id: message.installId, targetVersion: message.targetVersion, createdAt: Date.now() };
         response.result = JSON.stringify({ taskId: task.id, columnId: caller.id });
       }

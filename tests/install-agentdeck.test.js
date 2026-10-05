@@ -88,12 +88,15 @@ test('relaunching the formal CLI cannot reset the same artifact retry budget', (
   const id = crypto.createHash('sha256').update(JSON.stringify([f.options.appPath, dmg, sha, '1.2.0', false])).digest('hex');
   const claim = path.join(f.options.data, 'install-claims', id);
   fs.mkdirSync(path.dirname(claim), { recursive: true }); fs.writeFileSync(claim, 'already exhausted');
+  const previous = { id, status: 'failed', attempts: 3, reason: 'already exhausted' };
+  fs.writeFileSync(path.join(f.options.data, 'install-result.json'), JSON.stringify(previous));
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('AGENTDECK_')));
   Object.assign(env, { AGENTDECK_APP: f.options.appPath, AGENTDECK_DATA: f.options.data, AGENTDECK_BACKUPS: f.options.backups });
   for (let attempt = 0; attempt < 2; attempt++) {
     const child = spawnSync(process.execPath, [path.join(__dirname, '../scripts/install-agentdeck.js'), '--go', '--dmg', dmg, '--sha256', sha, '--version', '1.2.0'], { env, encoding: 'utf8' });
     assert.equal(child.status, 1); assert.match(child.stderr, /already attempted/);
     assert.equal(fs.existsSync(path.join(f.options.data, 'install-entry.lock')), false);
+    assert.deepEqual(f.result(), previous);
   }
   assert.equal(f.ops.version(f.options.appPath), '1.1.11');
 });
