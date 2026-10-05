@@ -17,7 +17,7 @@ function boot() {
       fresh: false, crewMarked: true, waitlist: [],
     },
   };
-  const terms = new Map([[captain.id, { alive: true, state: 'done', lastOutputAt: 0, lastScreen: '' }]]);
+  const terms = new Map([[captain.id, { alive: true, state: 'done', lastOutputAt: 0, lastScreen: '' }]]), prompts = [];
   const window = {
     deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: M, BoardCore: B, Sidebar: { render() {} },
     ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {}, addCard() {}, retireChat: () => null, captainArchives: () => [] },
@@ -36,7 +36,7 @@ function boot() {
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   const host = {
     config, platform: 'darwin', saveConfig() {}, columns: () => columns, terms, userComposing: () => false,
-    columnLabel: (col) => col.id, showToast() {}, sendWhenReady() {}, jumpToColumn() {},
+    columnLabel: (col) => col.id, showToast() {}, sendWhenReady: (_col, text, options) => { prompts.push(text); options?.onSent?.(); }, jumpToColumn() {},
     respawnColumn(col) {
       col.isMain = false;
       const fresh = { id: 'captain-us', isMain: true, cmd: col.cmd || 'claude' };
@@ -46,7 +46,7 @@ function boot() {
     },
   };
   window.MainSession.init(host);
-  return { api: window.MainSession, config, captain, columns, host };
+  return { api: window.MainSession, config, captain, columns, host, prompts };
 }
 
 function receipt(summary) {
@@ -103,4 +103,28 @@ test('Relay keeps the seen set: already-read receipts are not resent and unread 
   const next = await api.handle({ action: 'main-receipts', wait: true }, caller);
   assert.match(next.result, /still-unread/);
   assert.doesNotMatch(next.result, /already-taken/);
+});
+
+for (const [status, readBeforeRelay] of [['working', true], ['working', false], ['queued', true], ['queued', false]]) test('Relay reminds unresolved ' + status + ' input once when its previous notification was ' + (readBeforeRelay ? 'read' : 'unread'), async () => {
+  const { api, config, captain, columns, host, prompts } = boot();
+  const worker = { id: 'worker', cmd: 'codex' }; columns.push(worker);
+  const entry = { alive: true, state: 'input', lastOutputAt: Date.now(), lastScreen: 'Delete 40 files? [y/n]' };
+  host.terms.set(worker.id, entry);
+  const task = { id: 'input-task', colId: worker.id, gen: 1, status, title: 'decision', sentAt: Date.now() };
+  config.mainSession.tasks.push(task);
+  api.onTick(worker.id, entry);
+  assert.equal(task.status, status === 'queued' ? 'queued' : 'input'); assert.equal(config.mainSession.pending.length, 1);
+  if (readBeforeRelay) await api.handle({ action: 'main-receipts', wait: true }, captain);
+  // An upgrade may still carry the previous version's permanent gate.
+  config.mainSession.exceptionSeen = ['worker:input'];
+  const fresh = api.clearContext({ seatId: 'us', checkpointPath: '/tmp/captain-checkpoint.md' });
+  assert.equal(config.mainSession.pending.length, 1);
+  assert.equal(config.mainSession.pending[0].taskId, task.id);
+  const text = prompts.at(-1);
+  assert.match(text, /receipts --wait 监听（不设超时）/);
+  assert.match(text, /没有才安静重挂，不用向用户汇报/);
+  assert.doesNotMatch(text, /--timeout 300/);
+  assert.match((await api.handle({ action: 'main-receipts', wait: true }, fresh)).result, /Delete 40 files/);
+  api.onTick(worker.id, entry);
+  assert.equal(config.mainSession.pending.length, 0, 'the same unresolved prompt does not repeat within the new context');
 });

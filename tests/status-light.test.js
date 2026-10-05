@@ -273,3 +273,10 @@ test('Codex completed divider excludes historical busy evidence from status and 
   assert.equal(classify(codexIdle + '\nProceed? (y/n)', { hasWorked: true }, 'codex'), 'input');
   assert.equal(classify(busy[0] + '\n› Ask Codex to do anything\n? for shortcuts', { hasWorked: true }, 'codex'), 'working');
 });
+
+test('Claude background tools keep workers busy while the Captain can keep its permanent receipt listener', () => {
+  const screen = '❯ \n⏵⏵ bypass permissions on · 1 shell, 1 monitor still running';
+  assert.equal(classify(screen, { hasWorked: true }, 'claude'), 'working');
+  assert.equal(classify(screen, { hasWorked: true }, 'claude', true), 'done');
+  assert.equal(classify('1 shell, 1 monitor still running\n❯ \nbypass permissions on', { hasWorked: true }, 'claude'), 'done');
+});

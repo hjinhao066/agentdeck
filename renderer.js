@@ -517,7 +517,7 @@ const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|\bBuild a
 // read by MainCore.cursorActivity, which also copes with a wrapped prompt.
 function terminalIdle(col, entry) {
   if (!entry || !entry.alive || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota') return false;
-  if (MainCore.terminalActivity(entry.lastScreen, col.cmd)) return false;
+  if (MainCore.terminalActivity(entry.lastScreen, col.cmd) || (!col.isMain && MainCore.claudeBackgroundTasks(entry.lastScreen, col.cmd))) return false;
   if (/\bcursor-agent\b/i.test(col.cmd || '')) {
     const live = MainCore.cursorActivity(entry.lastScreen);
     return live === 'idle' || (live !== 'working' && !MainCore.cursorBusy(entry.lastScreen) && AGENT_IDLE_RE.test(entry.lastScreen || ''));
@@ -526,7 +526,7 @@ function terminalIdle(col, entry) {
   return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
 }
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
-function classify(text, entry, cmd) {
+function classify(text, entry, cmd, isCaptain = false) {
   if (cmd === 'chatgpt-web') return entry?.webExecutorState || 'plain';
   text = MainCore.codexStatusScreen(text, cmd);
   const activity = MainCore.terminalActivity(text, cmd);
@@ -543,6 +543,7 @@ function classify(text, entry, cmd) {
   }
   if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
+  if (!isCaptain && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
   // or work without a ready prompt, never evidence that the turn finished.
   if (/\bcursor-agent\b/i.test(cmd || '') && entry?.hasWorked) return 'working';
@@ -3382,12 +3383,12 @@ window.deck.onBoardCommand(async (message) => {
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
-        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-receipt-listener-status' || message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task' || message.action === 'main-queue' || message.action === 'main-read');
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'main-receipt-listener-status' || message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;
@@ -3895,7 +3896,7 @@ setInterval(() => {
     const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;
     entry.lastScreen = cursorScreen;
     if (entry.alive) {
-      let st = classify(liveText, entry, cmd);
+      let st = classify(liveText, entry, cmd, !!columns.find((c) => c.id === id)?.isMain);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;

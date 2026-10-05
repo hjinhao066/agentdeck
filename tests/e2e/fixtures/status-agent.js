@@ -10,7 +10,7 @@ const markers = {
   cursor: '⠰⠳ Grepping  32.91k tokens',
 };
 let lastProvider = '';
-function draw(marker, rows = process.stdout.rows || 24, cursorBusy = false) {
+function draw(marker, rows = process.stdout.rows || 24, cursorBusy = false, background = false) {
   const bottom = Math.max(8, rows - 4);
   const prompt = lastProvider === 'cursor' ? '→ Add a follow-up' + (cursorBusy ? '              ctrl+c to stop' : '') : '❯';
   // Cursor paints its spinner in the status band, just above the prompt.
@@ -22,7 +22,7 @@ function draw(marker, rows = process.stdout.rows || 24, cursorBusy = false) {
     return;
   }
   process.stdout.write('\x1b[2J\x1b[H' + marker + '\r\n');
-  process.stdout.write(`\x1b[${bottom};1H` + '─'.repeat(30) + '\r\n' + prompt + '\r\n' + '─'.repeat(30) + '\r\nClaude Code');
+  process.stdout.write(`\x1b[${bottom};1H` + '─'.repeat(30) + '\r\n' + prompt + '\r\n' + '─'.repeat(30) + '\r\n' + (background ? '1 shell, 1 monitor still running' : 'Claude Code'));
 }
 let incoming = '', pasted = '', lines = [], timer;
 process.stdin.on('data', (data) => {
@@ -49,6 +49,11 @@ process.stdin.on('data', (data) => {
       return;
     }
     if (/silent startup/.test(text)) { process.stdout.write('\x1b[2J\x1b[H'); return; }
+    if (/background claude/.test(text)) {
+      lastProvider = 'claude';
+      draw('⏺ Round finished. Background tools continue.', Number(/\brows=(\d+)\b/.exec(text)?.[1]) || undefined, false, true);
+      return;
+    }
     if (provider) lastProvider = provider;
     // Windows Node may retain the original stdout.rows after a PTY resize.
     // The test supplies the intended height for its tall-screen scenario.

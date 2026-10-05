@@ -157,6 +157,9 @@ test('durable checkpoint saves full interrupted history and compact board before
   const file = M.checkpoint(home, userData, { colId: 'captain-old', chat, tasks: [{ colId: 'worker', title: 'Work', status: 'asking', receipt: { question: 'Which branch?' } }] });
   assert.match(fs.readFileSync(file, 'utf8'), /Which branch\?/);
   assert.match(fs.readFileSync(file, 'utf8'), /read --id captain-old/);
+  assert.match(fs.readFileSync(file, 'utf8'), /receipts --wait 监听（不设超时）/);
+  assert.match(fs.readFileSync(file, 'utf8'), /没有才安静重挂，不用向用户汇报/);
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /--timeout 300/);
   assert.match(fs.readFileSync(file, 'utf8'), /回复「队长已就绪」后立即自主接续/);
   assert.match(fs.readFileSync(file, 'utf8'), /存档后直接安装并重启/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'chats', 'captain-old.json'))).turns[0].interrupted, true);

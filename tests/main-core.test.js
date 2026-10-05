@@ -117,12 +117,13 @@ test('队长 instructions name the commands', () => {
 test('Captain maintains one Bash background receipt listener, including timeout and reset', () => {
   for (const platform of ['darwin', 'win32']) {
     const text = M.instructions(platform);
-    assert.ok(text.includes('node "$AGENTDECK_BOARD_CLI" receipts --wait --timeout 300'));
+    assert.ok(text.includes('node "$AGENTDECK_BOARD_CLI" receipts --wait（不设超时'));
+    assert.ok(!text.includes('--timeout 300'));
     assert.ok(!text.includes('node "$env:AGENTDECK_BOARD_CLI" receipts --wait'));
     assert.match(text, /run_in_background: true/);
     assert.match(text, /恰好一个后台监听/);
     assert.match(text, /处理完立即再/);
-    assert.match(text, /超时空输出也立即重挂/);
+    assert.match(text, /空输出退出，先检查已有监听，没有才安静立即重挂，不用向用户汇报/);
     assert.match(text, /不附在用户消息里/);
   }
   const legacy = M.instructions('darwin', undefined, true);

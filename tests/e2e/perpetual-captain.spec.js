@@ -172,7 +172,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   expect(fs.readFileSync(board, 'utf8')).toContain('CN → US');
   const firstArchive = JSON.parse(fs.readFileSync(path.join(profile, 'chats', CN + '.json')));
   expect(firstArchive.captainArchive).toBe(true);
-  await expect.poll(() => promptsFor(usId).some((p) => p.includes('briefing') && p.includes('读看板继续') && p.includes('重挂恰好一个后台 receipts --wait --timeout 300')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => promptsFor(usId).some((p) => p.includes('briefing') && p.includes('读看板继续') && p.includes('重挂恰好一个后台 receipts --wait') && p.includes('不设超时') && p.includes('不用向用户汇报') && !p.includes('--timeout 300')), { timeout: 20000 }).toBe(true);
   await idle(usId);
   // CN's still-running worker consumes its reserve after the threshold Relay.
   // Only actual exhaustion of both seats can send the Captain to Codex.
@@ -195,7 +195,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   expect(notices[0].reply).toContain('Claude');
   expect(Number.isFinite(notices[0].ts)).toBe(true);
   expect(notices[0].reply).toMatch(/\d{1,2}:\d{2}/);
-  await expect.poll(() => promptsFor(codexId).some((p) => p.includes('briefing') && p.includes('重挂恰好一个后台 receipts --wait --timeout 300')), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => promptsFor(codexId).some((p) => p.includes('briefing') && p.includes('重挂恰好一个后台 receipts --wait') && p.includes('不设超时') && p.includes('不用向用户汇报') && !p.includes('--timeout 300')), { timeout: 20000 }).toBe(true);
   await boardViaAgent(codexId, ['ledger'], '不中断的队员');
   await boardViaAgent(codexId, ['briefing'], '回复「队长已就绪」后立即自主接续');
   if (process.platform === 'win32') {

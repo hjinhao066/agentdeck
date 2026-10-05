@@ -34,6 +34,8 @@ const { createMemoryPressure } = require('./memory-pressure');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
 const { createExecutor: createChatGPTWebExecutor } = require('./chatgpt-web-executor');
+const ReceiptListener = require('./receipt-listener-core');
+let receiptListeners = null;
 let chatgptWebExecutor = null;
 let mainWindow = null;
 let notifications = null;
@@ -348,6 +350,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
       ptyLaunchDirs.delete(id);
       ptySeats.delete(id);
       managedSessions.delete(id);
+      receiptListeners?.remove(id);
       receiptSessions.delete(id);
       removeCredentials(boardControlDir, id);
       if (notifications) notifications.cancel(id);
@@ -376,6 +379,7 @@ function killPty(id, keepReplay) {
   ptyBuffers.delete(id);
   ptySeats.delete(id);
   managedSessions.delete(id);
+  receiptListeners?.remove(id);
   receiptSessions.delete(id);
   removeCredentials(boardControlDir, id);
   try { fs.unlinkSync(spoolPath(id)); } catch (_) {} // drop its watch-ai spool
@@ -402,9 +406,12 @@ function writeBoardResponse(requestId, payload) {
 
 let processingBoardRequests = false;
 function dispatchPendingBoardCommands() {
-  if (!boardRendererReady) return;
-  for (const pending of pendingBoardCommands.values()) {
-    if (pending.delivered) continue;
+  for (const [id, pending] of pendingBoardCommands) {
+    if (pending.command.action === 'main-receipts' && pending.command.wait && Date.now() >= pending.command.expiresAt) {
+      pendingBoardCommands.delete(id);
+      continue;
+    }
+    if (!boardRendererReady || pending.delivered) continue;
     pending.delivered = true;
     send('board:command', pending.command);
   }
@@ -443,6 +450,11 @@ function processBoardRequests() {
         writeBoardResponse(request.id, { done: true, error: 'Receipt capability allows only complete, ask and progress; it cannot control other sessions.' });
         continue;
       }
+      if (action === 'session-exit' && Number.isInteger(request.code)) receiptListeners?.remove(caller[0], managedSessions.get(caller[0]));
+      if (action === 'main-receipts' && request.wait && !receiptListeners?.register(caller[0], request.token, request.listener)) {
+        writeBoardResponse(request.id, { done: true, result: '', listenerStopped: true });
+        continue;
+      }
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
@@ -451,6 +463,7 @@ function processBoardRequests() {
         continue;
       }
       delete request.token;
+      delete request.listener; // Listener process identity stays in the main process.
       if (pendingBoardCommands.size >= 256) {
         writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
         continue;
@@ -467,6 +480,8 @@ function processBoardRequests() {
   } catch (_) {
   } finally {
     processingBoardRequests = false;
+    receiptListeners?.reap(managedSessions.values());
+    receiptListeners?.tick(managedSessions.keys());
   }
 }
 
@@ -489,7 +504,17 @@ function setupBoardControl() {
       }
     }
     clearCredentials(boardControlDir);
-    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
+    const listenerInstance = ReceiptListener.initialize(boardControlDir);
+    receiptListeners = ReceiptListener.createRegistry(boardControlDir, listenerInstance, (callerId, alive) => {
+      // At most one undelivered status per Captain while the renderer reloads.
+      for (const [id, pending] of pendingBoardCommands) {
+        if (pending.command.action === 'main-receipt-listener-status' && pending.command.callerId === callerId) pendingBoardCommands.delete(id);
+      }
+      const id = 'listener-status-' + crypto.randomBytes(12).toString('hex');
+      pendingBoardCommands.set(id, { command: { id, callerId, action: 'main-receipt-listener-status', alive, nativeWeb: true }, delivered: false });
+      dispatchPendingBoardCommands();
+    });
+    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js', 'receipt-listener-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
     fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));
@@ -1615,6 +1640,7 @@ app.on('before-quit', (event) => {
   clearInterval(quotaWarmupTimer);
   quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
   chatgptWebExecutor?.dispose();
+  receiptListeners?.dispose(); receiptListeners = null;
 
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }

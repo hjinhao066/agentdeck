@@ -16,6 +16,9 @@
   let tokenSaverPaused = false;  // cancel/failure: no retry until usage falls below the threshold
   let contextReset = null;
   let mobileDelivery = null;
+  let listenerStatus = null;
+  let listenerReminder = false;
+  let listenerReminderSending = false;
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -358,6 +361,7 @@
     s.pending = Array.isArray(s.pending) ? s.pending : [];
     s.inflight = Array.isArray(s.inflight) ? s.inflight : [];
     s.receiptsSeen = normalizeSeenIds(s.receiptsSeen);
+    delete s.exceptionSeen; // Retire the old session-wide gate; new events must reach the Captain.
     // A turn open at shutdown cannot acknowledge legacy injection. Receipts the
     // background channel already returned stay read across relaunch. Items still
     // in pending were never taken, including ones that arrived while restarting.
@@ -693,7 +697,8 @@
     // An acknowledged notification can still need a decision. Remind the new
     // context once, even if the old Captain already finished its own reply.
     carried.forEach((t) => {
-      if (t.status === 'input' && !s.pending.some((p) => p.colId === t.colId && p.waiting)) {
+      const waitingInput = t.status === 'input' || (t.status === 'queued' && t.blockedAsked && host.terms.get(t.colId)?.state === 'input');
+      if (waitingInput && !s.pending.some((p) => p.colId === t.colId && p.waiting)) {
         push(t, { waiting: confirmationExcerpt(host.terms.get(t.colId)) });
       } else if (t.status === 'asking' && t.receipt?.question && !s.pending.some((p) => p.colId === t.colId && p.question)) {
         push(t, { question: t.receipt.question });
@@ -722,7 +727,7 @@
     save();
     window.Sidebar.render();
     brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status)))
-      + (rotation ? `\n${options.relayMessage || ''}\n先运行 ${M.boardCli(host.platform)} briefing，再读看板继续：${options.checkpointPath}。先确认旧监听已退出，然后重挂恰好一个后台 receipts --wait --timeout 300 监听。` : ''));
+      + (rotation ? `\n${options.relayMessage || ''}\n先运行 ${M.boardCli(host.platform)} briefing，再读看板继续：${options.checkpointPath}。先确认旧监听已退出，再用 Bash（run_in_background: true）重挂恰好一个后台 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。` : ''));
     host.showToast(rotation ? `已${host.config.captainRelayLabel || 'Relay'}；进度看板、队员和回执已保留` : '队长的模型上下文已清空；派出去的活、回执和之前的对话都还在');
     return fresh;
   }
@@ -1052,7 +1057,7 @@
   function maybeArchive(col, entry) {
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
-    if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd))) return;
+    if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) return;
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.needsCardCheck(s, col.id)) refreshCards();
@@ -1110,7 +1115,11 @@
   function push(task, item) {
     const s = state();
     if (!s || task.gen !== s.gen) return;
-    s.pending.push({ taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
+    const anomaly = M.exceptionReason(item);
+    // Input/exit/quota events are deduplicated by task status/blockedAsked.
+    // Never suppress a new task's failure or a decision the new Captain needs.
+    s.pending.push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
+    return true;
   }
   // Hand every pending receipt to 队长's model as text; they count as in
   // flight until its turn ends.
@@ -1234,15 +1243,19 @@
     if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return message.action === 'session-exit' ? response : null;
     if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
     if (message.action === 'session-exit') {
-      if (message.code !== 0) {
+      if (task.status === 'stopped' && task.receipt?.source === 'fallback') {
+        task.status = 'working';
+        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+      }
+      if (!CLOSED.includes(task.status) || task.status === 'asking') {
         if (task.status === 'asking') task.status = 'working';
         const entry = host.terms.get(caller.id);
         // The exit command may beat the status tick; read the current terminal.
         const screen = entry?.term ? host.dumpScreen(entry.term, 40) : entry?.lastScreen;
-        const receipt = { summary: '', files: [], images: [], failed: `agent 进程异常退出（exit ${message.code}）`, explicit: true, source: 'process', ...M.resourceReceipt(screen, caller.cmd) };
+        const receipt = { summary: '', files: [], images: [], failed: `agent 进程已退出（exit ${message.code}），未提交回执`, explicit: true, source: 'process', ...M.resourceReceipt(screen, caller.cmd) };
         await recordReceiptForBoard(task, receipt);
         settle(task, receipt, true);
-      } else { task.endedAt = Date.now(); task.processEnded = true; update(task); }
+      }
       return response;
     }
     if (message.action === 'progress') {
@@ -1612,6 +1625,26 @@
     return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
       .map((l) => l.slice(0, 140)).join('\n') || '（看不到提示内容）';
   }
+  // The app sends only authenticated listener liveness, never terminal output.
+  // A dead listener costs no model turns until unread work has waited three minutes.
+  function remindMissingListener(entry) {
+    const s = state(), col = mainCol();
+    if (!s || !col || nativeCaptain(col.cmd) || s.legacyReceiptInjection || !listenerStatus ||
+        listenerStatus.colId !== col.id || Date.now() - listenerStatus.at > 30_000) return;
+    if (listenerStatus.alive || !s.pending.length) { listenerReminder = false; return; }
+    if (listenerReminder || listenerReminderSending || Date.now() - Math.min(...s.pending.map((p) => p.ts || Date.now())) < 3 * 60_000 ||
+        !entry.alive || entry.sendingPrompt || ['working', 'quota', 'input'].includes(entry.state) ||
+        M.terminalActivity(entry.lastScreen, col.cmd) || briefing === col.id || host.userComposing(col.id)) return;
+    listenerReminderSending = true;
+    Promise.resolve(host.agentInForeground(col, false)).then((ok) => {
+      if (!ok || mainCol() !== col || listenerStatus?.alive || !s.pending.length || !entry.alive ||
+          entry.sendingPrompt || ['working', 'quota', 'input'].includes(entry.state) || host.userComposing(col.id)) return false;
+      return window.ChatUI.sendPrompt(col, '', null, {
+        prefix: '【AgentDeck 回执监听提醒】后台回执监听已退出，未读回执已等待三分钟。请立即读取 receipts 处理，再用 run_in_background: true 重挂恰好一个 receipts --wait 监听。',
+        force: true, guardUserInput: true,
+      });
+    }).then((sent) => { if (sent && listenerStatus?.colId === col.id) listenerReminder = true; }, () => {}).finally(() => { listenerReminderSending = false; });
+  }
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
@@ -1622,6 +1655,7 @@
           startCard(cardId, input).catch((error) => host.showToast(error.message));
         }
       }
+      remindMissingListener(entry);
       retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return;
     }
     const col = host.columns().find((c) => c.id === id);
@@ -1633,7 +1667,7 @@
     if (col && col.captainCrew) maybeArchive(col, entry);
     // The no-command notice is provisional. A live working session supersedes
     // it, including when it resumes the same instruction after a quiet gap.
-    if (entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'working')) {
+    if (entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'working' || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) {
       const stale = col?.lastReceipt?.source === 'fallback';
       if (stale) delete col.lastReceipt;
       const task = s.tasks.findLast((t) => t.colId === id);
@@ -1651,7 +1685,13 @@
       }
     }
     for (const task of s.tasks) {
-      if (task.colId !== id || task.pendingInstall || !['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
+      if (task.colId !== id || task.pendingInstall) continue;
+      if (task.status === 'stopped' && task.receipt?.source === 'fallback' &&
+          (!entry.alive || entry.state === 'quota' || M.terminalActivity(entry.lastScreen, col?.cmd) === 'quota')) {
+        task.status = 'working';
+        s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'fallback');
+      }
+      if (!['queued', 'working', 'paused', 'quota', 'input', 'asking'].includes(task.status)) continue;
       if (task.status === 'paused' || task.restartHold) {
         if (!entry.alive) {
           if (!task.resumeDeadline || Date.now() <= task.resumeDeadline) continue;
@@ -1670,6 +1710,15 @@
         if (task.status === 'asking') task.status = 'working';
         settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen, col?.cmd) });
         continue;
+      }
+      const quietSince = Math.max(entry.lastOutputAt || 0, task.startedAt || task.sentAt || 0);
+      const quietLimit = M.silenceTimeout(col?.cmd);
+      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' &&
+          (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
+        if (push(task, { summary: `已连续 ${quietLimit / 60_000} 分钟没有任何终端输出，请检查会话；可能仍在深度思考，未自动中断或重派。`, source: 'watchdog' })) {
+          task.silenceNotifiedAt = quietSince; // Fresh output or a new task rearms the watchdog.
+          save();
+        }
       }
       if (task.status === 'queued') {
         // Not delivered yet and the session is stopped on a dialog (Cursor asks "Do you
@@ -1695,9 +1744,9 @@
       }
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
-      if (!task.processEnded && (entry.state === 'working' || activity === 'working')) { task.endedAt = 0; continue; }
-      // Never parse a screen/reply for receipts. A finished turn (or a real
-      // zero process exit) gets a three-minute grace period for its command.
+      if (!task.processEnded && (entry.state === 'working' || activity === 'working' || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) { task.endedAt = 0; continue; }
+      // Never parse a screen/reply for receipts. Only a finished turn with
+      // no foreground or background work starts the command grace period.
       const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
       const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
       if (!ended || turn && !turn.done && !task.processEnded) continue;
@@ -1741,7 +1790,7 @@
     if (!task || CLOSED.includes(task.status) || turn.interrupted) return;
     const entry = host.terms.get(colId);
     const col = host.columns().find((c) => c.id === colId);
-    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, col?.cmd)) return;
+    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd)) return;
     task.endedAt = Date.now();
   }
 
@@ -1889,6 +1938,12 @@
         persistInstallation();
         return { done: true, result: 'Installation result recorded.' };
       }
+      case 'main-receipt-listener-status':
+        if (!isMain(caller) || typeof message.alive !== 'boolean') throw new Error('无效回执监听状态');
+        if (listenerStatus?.colId !== caller.id) listenerReminder = false;
+        listenerStatus = { colId: caller.id, alive: message.alive, at: Date.now() };
+        if (message.alive) listenerReminder = false;
+        return { done: true };
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
         return { done: true, visible: host.captainColumnVisible(caller.id),

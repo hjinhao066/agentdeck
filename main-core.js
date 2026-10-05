@@ -238,7 +238,7 @@
       '7. 派完马上用一两句话告诉用户交给了哪个会话，不要等结果；用户可以接着派活。',
       legacyReceiptInjection
         ? '8. 已显式开启旧回执注入回退：队员的回执和提问会在输入框为空且 agent 空闲时自动发给你（以【AgentDeck 新回执】开头），也会附在用户的下一条消息里。不要再挂 receipts --wait 后台监听。看完用一两句话告诉用户结果；需要接着做的，直接派下去。回答用几句话，不要把别的会话的全文、长日志或文件正文搬进来。'
-        : `8. 回执走后台通道，不经过你的输入框，也不附在用户消息里。开工后立即用 Claude Code 的 Bash 工具（run_in_background: true）运行 ${bashCli} receipts --wait --timeout 300（Bash 中用 POSIX 环境变量写法，包括 Windows）；始终保持恰好一个后台监听，不要在终端输入框里运行它，不要重复挂多个。命令有未读回执/提问就输出【AgentDeck 新回执】并退出，Bash 的后台完成通知会唤醒你；读取该任务的输出，处理完立即再用 run_in_background: true 挂一个。超时空输出也立即重挂；恢复会话或清空上下文后先检查是否已有监听，只在没有时启动。若当前工具不支持后台完成通知，明确告知用户并用 receipts 按需读取，不能改用输入框注入。看完用一两句话告诉用户结果；需要接着做的，直接派下去。回答用几句话，不要把别的会话的全文、长日志或文件正文搬进来。`,
+        : `8. 回执走后台通道，不经过你的输入框，也不附在用户消息里。开工后立即用 Claude Code 的 Bash 工具（run_in_background: true）运行 ${bashCli} receipts --wait（不设超时；Windows 的 Bash 也用 POSIX 环境变量）；始终保持恰好一个后台监听，不要在终端输入框里运行或重复挂。命令有未读回执/提问/异常就输出【AgentDeck 新回执】并退出，Bash 的后台完成通知会唤醒你；读该任务输出，处理完立即再用同样方式挂一个。若显式设置超时后空输出退出，先检查已有监听，没有才安静立即重挂，不用向用户汇报；应用监测队员异常，不靠你轮询；无监听且回执积压三分钟时，应用提醒一次读取并重挂；恢复或清空后先检查已有监听，只在没有时启动。工具不支持后台完成通知时，告知用户并按需读 receipts，不能输入框注入。看完简要告诉用户结果，接着派活；不要搬入会话全文、长日志或文件正文。`,
       '9. 队员向你提问、或停在确认/权限提示时，你来拿主意：有把握就用 tell 或 answer 回复它，让它接着干；没把握，或者涉及删除数据、花钱、对外发布这类不可逆的事，再请用户决定，并说清要用户决定什么。',
       '10. 判断会话卡没卡先用 peek，至少等 5 分钟！会话启动、复杂分析或大模型深度思考时，终端可能数分钟内没有完整文本输出，这完全正常，绝对不要急着判定会话卡死；排查状态优先使用轻量 peek 察看终端滚动尾部，至少观察 5 分钟以上再做介入或重试。',
       `11. 你开的会话在后台跑，用户平时看不到它们，靠你的汇报了解进度。同一时间最多 ${limit} 个会话在干活：再 new 会自动排队，有空位时 AgentDeck 自动开新会话并把任务发过去，不用你重派。用 tell 给还在忙的会话追加指令会标记为「待补充」，等它空下来自动执行。`,
@@ -552,13 +552,14 @@
   function receiptsForModel(items) {
     if (!items.length) return '';
     const lines = items.map((r) => {
+      const anomaly = r.anomaly ? '异常回执（' + ({ process: '进程退出未交回执', quota: '额度用尽', auth: '未登录', rate_limit: '限流', input: '确认/权限提示', no_output: '长时间无输出' }[r.anomaly] || r.anomaly) + '）：' : '';
       if (r.question) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 向你提问：${r.question}`;
-      if (r.waiting) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 停在确认提示上：\n${r.waiting.split('\n').map((l) => '    ' + l).join('\n')}`;
+      if (r.waiting) return `- 「${oneLine(r.title, 60)}」(${r.colId}) ${anomaly}停在确认提示上：\n${r.waiting.split('\n').map((l) => '    ' + l).join('\n')}`;
       const compact = modelReceipt(r);
       const body = r.source === 'command'
         ? (r.failed ? '没做成，' + r.failed + (r.summary ? '\n  摘要：' + r.summary : '') : r.summary)
         : compact.summary;
-      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${body}`];
+      const parts = [`- 「${oneLine(r.title, 60)}」(${r.colId})：${anomaly}${body}`];
       const files = r.source === 'command' ? r.files || [] : compact.files;
       if (files.length) parts.push(`  文件：${files.join('；')}`);
       if (r.undeliveredTaskId) parts.push(`  取回未送达指令原文：read --id ${r.undeliveredTaskId}`);
@@ -684,6 +685,16 @@
     return completed >= 0 && lines.slice(completed + 1).some((line) => /^\s*›\s/.test(line))
       ? lines.slice(completed + 1).join('\n') : text;
   }
+  // Claude's live footer counts background work after its ready prompt.
+  // Ignore quoted/output rows above that prompt, and zero/completed counts.
+  function claudeBackgroundTasks(screen, cmd) {
+    if (cmd && !/\bclaude\b/i.test(cmd)) return false;
+    const lines = String(screen || '').split('\n').slice(-20);
+    const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*❯(?:\s|$)/.test(line));
+    if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
+    return lines.slice(prompt + 1).some((line) =>
+      /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line));
+  }
   function terminalActivity(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
     const lines = String(screen || '').split('\n').slice(-20);
@@ -708,6 +719,21 @@
     const reason = String(screen || '').split('\n').filter((line) => terminalActivity(line) === 'quota').join('\n').trim();
     const label = { auth: '未登录', rate_limit: '请求被限流' }[resourceFailure(reason, 'quota')] || '额度用尽';
     return { failed: label + (reason ? '：' + reason : '，agent 无法继续当前任务'), source: 'quota' };
+  }
+
+  // Conservative silence windows: status spinners may stay busy during deep thinking.
+  function silenceTimeout(cmd) {
+    if (/\b(?:agy|gemini|cursor-agent)\b/i.test(cmd || '')) return 15 * 60_000;
+    if (/\bcodex\b/i.test(cmd || '')) return 30 * 60_000;
+    if (/\bclaude\b/i.test(cmd || '')) return 20 * 60_000;
+    return 30 * 60_000;
+  }
+  function exceptionReason(receipt) {
+    if (receipt.waiting) return 'input';
+    if (receipt.source === 'watchdog') return 'no_output';
+    if (receipt.source === 'quota') return resourceFailure(receipt.failed, 'quota');
+    if (receipt.source === 'process') return resourceFailure(receipt.failed, 'process') || 'process';
+    return '';
   }
 
   function statusLabel(state) { return STATUS[state] || STATUS.plain; }
@@ -785,7 +811,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
-    receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, resourceReceipt,
+    receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });
