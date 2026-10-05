@@ -670,6 +670,23 @@ npm run dist:mac
 
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
+本机 Mac 可用一条命令准备发版（先收齐已验收的分支，避免边合边反复测试、打包）：
+
+```sh
+node scripts/release.js --base origin/release/1.1.11 origin/fix/example --dry-run
+node scripts/release.js --base origin/release/1.1.11 origin/fix/example
+# 显式版本也接受 1.2 或 1.2.0；从 1.2.0 默认进到 1.3.0
+node scripts/release.js 1.2 --base origin/release/1.1.11 origin/fix/example
+```
+
+先自行 `git fetch origin`，再指定基线；默认基线是当前 HEAD。省略版本号时进一位次版本号：1.1.11 → 1.2.0，分支/目录对外叫 `release/1.2` / `agentdeck-release-1.2`，不再生成 1.1.12。脚本把基线和待合分支解析成固定提交，在独立 worktree 依次合并；冲突即停止，报告列出文件，手动解决并提交后按原命令续跑。已有目录必须属于同一发布计划，其他 worktree 和历史报告不会被覆盖。`--worktree DIR` / `--output DIR` 可另选绝对路径，输出须在源码目录外。`--dry-run` 只读，不创建目录、不测试、不打包。
+
+流程：同步 package.json 与 lockfile 版本 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本和 JSON/Markdown 逐步耗时报告。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
+
+子进程清除现役 `AGENTDECK_*` 凭据；调用者环境保留，仍能提交自己的回执。同一 worktree 的依赖安装可复用；成功测试和构建只有在完整 Git tree、依赖文件/权限、Node/平台/系统/签名与测试环境都相同时复用，DMG 还须通过哈希校验。首次依赖指纹计算与门禁重叠执行；audit 每次运行，缓存包每次重新核对。
+
+脚本不合 main、不打 tag、不推送、不安装、不退出或启动应用。结果默认在相邻 `reports/agentdeck-1.2/`，内含 `install-1.2.sh`；安装脚本要求先退出 AgentDeck，校验 DMG/签名/版本/asar，备份配置与会话数据，复制并校验完整新程序，再通过重命名保留旧程序、替换安装。失败还原旧程序，产生 `install-timing.tsv`（整秒计时）。安装完成后由发布操作者启动应用并检查持续存活；这些真实安装/启动耗时须加入最终报告，不能用 fixture 演练耗时冒充。
+
 Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
 `npx electron-builder --mac --config.mac.identity=null --publish never`.
