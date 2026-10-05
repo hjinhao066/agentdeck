@@ -577,32 +577,54 @@
   }
 
   // Cursor keeps the input visible while tools run. Its stop hint shares the
-  // prompt row, and completed tool/spinner rows may remain above that prompt.
-  // A narrow column makes Cursor wrap the prompt text onto indented rows
-  // ("→ Plan, search, build" / "    anything"): only those rows are joined to
-  // the prompt, never the rest of the screen.
+  // prompt row, and completed tool rows may remain in the reply above it.
+  // A narrow column wraps the prompt onto indented rows ("→ Plan, search,
+  // build" / "    anything"): only those rows are joined to the prompt.
   const CURSOR_PROMPT = /^(?:Add a follow-up(?: — \/plan to review and build)?|Plan, search, build anything|Build anything)$/i;
-  // Only live activity chrome: ordinary bullets and completed tool rows are
-  // not spinners. Read the entire screen, including a tall/narrow footer.
-  const CURSOR_BUSY = /^\s*[│┃]?\s*[⠀-⣿]+\s*\S|^\s*[│┃]?\s*(?:[◦●•✻✽✳✶✢✺∴*·]\s*)?(?:Thinking|Waiting|Reading|Editing|Running|Working|Grepping|Searching|Writing|Generating|Planning|Responding|Updating|Doing)(?:…|\.\.\.|\s*\(|\s+\d|\s+(?:for|on)\b|\s*$)|^\s*(?:正在运行|正在思考)[^\n]*|^\s*esc to (?:interrupt|cancel)\s*$|^\s*[│┃]?\s*(?:→[^\n]*?)?c\s*t\s*r\s*l\s*\+\s*c\s+t\s*o\s+s\s*t\s*o\s*p\b\s*[│┃]?\s*$|[↑↓]\s*[\d.]+k?\s+tokens/im;
-  const cursorBusy = (screen) => CURSOR_BUSY.test(String(screen || ''));
-  function cursorActivity(screen) {
-    // A ready-looking prompt also appears while Cursor is waiting on tools.
-    // Busy evidence always wins, even when the prompt itself is not wrapped.
-    if (cursorBusy(screen)) return 'working';
-    const lines = String(screen || '').split('\n').filter((line) => line.trim());
+  // Live chrome sits in a short band above the prompt (spinner, command block,
+  // tip). The reply further up is the answer, even when it reuses the same words.
+  const CURSOR_STATUS_ABOVE = 12;
+  const CURSOR_VERBS = 'Thinking|Waiting|Reading|Editing|Running|Working|Grepping|Searching|Writing|Generating|Planning|Responding|Updating|Doing';
+  // Braille spinner, then Cursor's own activity verb. "Working on" / "Searching
+  // for" / "Reading 3" in the answer have no spinner cell, so they are not busy.
+  const CURSOR_SPINNER = new RegExp(String.raw`^\s*[│┃]?\s*[⠀-⣿]+\s+(?:${CURSOR_VERBS})\b`, 'im');
+  // Command block painted in that band: Chinese status, or the shell-wait line.
+  const CURSOR_COMMAND = /^\s*(?:正在运行|正在思考)[^\n]*$|^\s*Waiting\s+(?:for shell\b|\d[^\n]*\bfor shell\b)\s*$/im;
+  // The stop hint is its own status row, or the tail of the prompt row. A sentence
+  // that merely mentions the keys does not match.
+  const CURSOR_STOP = /^\s*[│┃]?\s*(?:→[^\n]*?)?c\s*t\s*r\s*l\s*\+\s*c\s+t\s*o\s+s\s*t\s*o\s*p\b\s*[│┃]?\s*$/im;
+  function cursorPrompt(lines) {
     for (let i = lines.length - 1; i >= 0; i--) {
       const row = /^(\s*)[│┃]?\s*→\s*(.*?)[│┃]?\s*$/.exec(lines[i]);
       if (!row) continue;
       const indent = row[1].length;
       const rest = [row[2].trim()];
       for (let j = i + 1; j < lines.length && j <= i + 3 && /^\s*/.exec(lines[j])[0].length > indent + 1 && !/^\s*[│┃]?\s*→/.test(lines[j]); j++) rest.push(lines[j].replace(/[│┃]\s*$/, '').trim());
-      const text = rest.join(' ').replace(/\s+/g, ' ').trim();
-      if (/\bctrl\+c to stop\s*$/i.test(text)) return 'working';
-      if (!CURSOR_PROMPT.test(text)) return '';
-      return 'idle';
+      return { index: i, text: rest.join(' ').replace(/\s+/g, ' ').trim() };
     }
-    return '';
+    return null;
+  }
+  // Bottom status band only. A tall footer lives under the prompt and must not
+  // push the spinner out; reply lines above the band are ignored.
+  function cursorStatusBand(screen) {
+    const lines = String(screen || '').split('\n');
+    const prompt = cursorPrompt(lines);
+    const from = prompt ? Math.max(0, prompt.index - CURSOR_STATUS_ABOVE) : Math.max(0, lines.length - CURSOR_STATUS_ABOVE);
+    return { prompt, band: lines.slice(from).join('\n') };
+  }
+  function cursorBusy(screen) {
+    const { prompt, band } = cursorStatusBand(screen);
+    if (CURSOR_SPINNER.test(band) || CURSOR_COMMAND.test(band) || CURSOR_STOP.test(band)) return true;
+    // Wrapped "ctrl+c to / stop" is joined onto the current prompt, not an older quote.
+    return !!(prompt && /\bctrl\+c to stop\s*$/i.test(prompt.text));
+  }
+  function cursorActivity(screen) {
+    // Busy chrome wins over the ready prompt, but only inside the status band.
+    if (cursorBusy(screen)) return 'working';
+    const prompt = cursorPrompt(String(screen || '').split('\n'));
+    if (!prompt) return '';
+    if (!CURSOR_PROMPT.test(prompt.text)) return '';
+    return 'idle';
   }
 
   function resourceFailure(reason, source = '') {

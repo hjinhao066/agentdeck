@@ -122,10 +122,15 @@ test('a Cursor prompt wrapped by a narrow column is idle, for every model', () =
 
 test('a busy narrow Cursor screen with a wrapped prompt is never idle and gets nothing injected', () => {
   const prompt = ['', '  → Plan, search, build', '    anything', '', '  Claude      Run Everything', '  Opus 5.5', '  ~'];
-  for (const busyRow of ['  ⠋ Reading…', '  ⠰⠳ Grepping  32.91k tokens', '  ✻ Thinking… (4s)', '  Running…', '  Editing...', '  Working (4s • esc to interrupt)', '  ctrl+c to stop']) {
+  for (const busyRow of ['  ⠋ Reading…', '  ⠰⠳ Grepping  32.91k tokens', '  ⠀⠞ Thinking  4k tokens', '  ⠠⠛ Running  3k tokens', '  ⠋ Editing...', '  ctrl+c to stop', '正在运行命令 gh run watch']) {
     const screen = [busyRow, ...prompt].join('\n');
     assert.equal(M.cursorActivity(screen) === 'idle', false, busyRow);
     assert.equal(idle(screen), false, busyRow);
+  }
+  for (const prose of ['  ✻ Thinking… (4s)', '  Running…', '  Editing...', '  Working (4s • esc to interrupt)', 'Working on the parser', 'Searching for the call site', 'Reading 3 files']) {
+    const screen = [prose, ...prompt].join('\n');
+    assert.equal(M.cursorActivity(screen), 'idle', prose);
+    assert.equal(idle(screen), true, prose);
   }
   // the stop hint wraps with the prompt, or states already say so
   assert.equal(idle('  → Add a follow-up   ctrl+c to\n    stop\n\n  Run Everything'), false);
@@ -152,7 +157,8 @@ test('a Cursor screen whose footer matches the idle marker is still not idle whi
   assert.equal(AGENT_IDLE_RE.test(busyWrapped), true, 'the footer alone would pass the marker');
   assert.equal(idle(busyWrapped), false);
   assert.equal(idle('Status stand-in ready\n❯\nClaude Code'), true, 'a Cursor screen without an arrow row keeps the marker rule');
-  assert.equal(idle('Editing...\n❯\nClaude Code'), false);
+  assert.equal(idle('  ⠋ Editing...\n❯\nClaude Code'), false, 'a braille status row above the footer is still busy');
+  assert.equal(idle('Editing the next file.\n❯\nClaude Code'), true, 'the word Editing in the reply is not a status row');
 });
 
 test('first-task delivery (whenTerminalReady) and sendWhenReady share the busy-aware check', () => {
