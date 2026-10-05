@@ -87,6 +87,7 @@ function syncedCard(input) {
   for (const key of ['attempt_id', 'dispatch_session_id']) if (typeof input[key] === 'string' && input[key]) card[key] = idValue(input[key]);
   if (typeof input.attempt_closed === 'boolean') card.attempt_closed = input.attempt_closed;
   if (typeof input.review_session === 'boolean') card.review_session = input.review_session;
+  if (typeof input.review_verdict === 'boolean') card.review_verdict = input.review_verdict;
   if (typeof input.last_event === 'string' && input.last_event.length <= 500) card.last_event = input.last_event;
   if (typeof input.last_failure_attempt === 'string' && input.last_failure_attempt.length <= 200) card.last_failure_attempt = input.last_failure_attempt;
   if (typeof input.start_previous_status === 'string' && STATUSES.includes(input.start_previous_status)) card.start_previous_status = input.start_previous_status;
@@ -248,15 +249,17 @@ class TaskStore {
       sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
   }
   failure(card, attempt, reason, rework, source = '') {
-    if (card.last_failure_attempt === attempt) return;
+    const duplicate = card.last_failure_attempt === attempt;
     card.last_failure_attempt = attempt;
     card.resource_failure = resourceFailure(reason, source) || null;
     if (card.resource_failure) {
       card.status = 'doing'; card.flag = 'quota'; card.latest_receipt = sentence(reason);
       return;
     }
-    card.consecutive_failures = (card.consecutive_failures || 0) + 1;
-    if (rework) card.rework_count++;
+    if (!duplicate) {
+      card.consecutive_failures = (card.consecutive_failures || 0) + 1;
+      if (rework) card.rework_count++;
+    }
     card.status = 'doing';
     card.flag = card.consecutive_failures >= 2 ? 'held' : 'failed';
     card.latest_receipt = sentence(reason);
@@ -271,7 +274,7 @@ class TaskStore {
       const wasHeld = card.flag === 'held';
       if (input.status === 'doing') {
         if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('Predecessor cards are not all done.');
-        if (wasReview) this.failure(card, 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
+        if (wasReview) this.failure(card, card.review_round && card.exec_receipt ? AutoVerify.reviewAttemptId(card.id, card.review_round) : 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
         else { card.flag = null; if (wasHeld) card.consecutive_failures = 0; }
       } else card.flag = null;
       card.status = input.status;
@@ -352,11 +355,22 @@ class TaskStore {
       if (card.attempt_id === input.attempt_id) return { card, notices: [] };
       if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
-      const review = card.status === 'review';
+      const explicitReview = Array.isArray(input.reviews) && input.reviews.length > 0;
+      if (explicitReview && input.review_round !== (card.review_round || 0)) throw new Error('这张卡片已经不在这一轮待验收了，审查会话没有开。');
+      if (explicitReview && card.exec_receipt && !input.reviews.includes(card.exec_receipt.session_id)) throw new Error('--reviews must include the original execution session.');
+      const review = explicitReview || card.status === 'review';
+      if (explicitReview) {
+        if (!card.exec_receipt) {
+          if (!input.exec_receipt || !input.reviews.includes(input.exec_receipt.session_id)) throw new Error('Review requires the original execution receipt.');
+          card.exec_receipt = input.exec_receipt;
+        }
+        card.review_round = card.review_round || 1;
+        card.status = 'review';
+      }
       if (/:fallback:/.test(card.last_event || '')) card.latest_receipt = '';
       if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
       Object.assign(card, { session_id: input.session_id, session_host: os.hostname(), session_bound_at: Date.now(), attempt_id: input.attempt_id, assignee: input.assignee,
-        review_session: review, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
+        review_session: review, review_verdict: explicitReview, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
       if (review && card.review_claim) card.review_claim.delivered = true;
@@ -378,10 +392,10 @@ class TaskStore {
       if (card.flag === 'held' && !authoritative) return { card, ignored: true, notices: [] };
       const previous = card.status;
       const notices = [];
-      // An automatic reviewer's receipt is read for its verdict: a plain failure,
+      // Automatic and explicitly declared reviewers use the same verdict flow: a plain failure,
       // or a "不通过" complete, is a rejection; a complete with no clear verdict is
       // never taken as a pass.
-      const autoReview = card.review_session === true && AutoVerify.isReviewAttempt(input.attempt_id);
+      const autoReview = card.review_session === true && (card.review_verdict === true || AutoVerify.isReviewAttempt(input.attempt_id));
       const verdict = autoReview && input.type === 'complete' ? AutoVerify.verdict(input.message) : null;
       const type = verdict === 'fail' ? 'failed' : input.type;
       if (type === 'started') {
@@ -419,12 +433,12 @@ class TaskStore {
       }
       if (type === 'failed') {
         const reason = text(input.message, 'failure', true);
-        const before = card.last_failure_attempt;
-        this.failure(card, input.attempt_id, reason, card.review_session === true, input.source);
+        const failureAttempt = autoReview && input.source === 'command' ? AutoVerify.reviewAttemptId(card.id, card.review_round) : input.attempt_id;
+        this.failure(card, failureAttempt, reason, card.review_session === true, input.source);
         // Only a reviewer's own written verdict goes back to the executor, once. A crash or
         // quota failure of the reviewer is not a finding.
-        if (autoReview && input.source === 'command' && before !== input.attempt_id && !card.resource_failure) {
-          card.review_reject = { round: card.review_round || 0, findings: reason, key: crypto.randomUUID(), owner: os.hostname(), delivered: card.flag !== 'failed', created: new Date().toISOString() };
+        if (autoReview && input.source === 'command' && card.review_reject?.attempt_id !== input.attempt_id && !card.resource_failure) {
+          card.review_reject = { round: card.review_round || 0, attempt_id: input.attempt_id, findings: reason, key: crypto.randomUUID(), owner: os.hostname(), delivered: card.flag !== 'failed', created: new Date().toISOString() };
         }
         card.attempt_closed = true;
         notices.push(`卡片 ${card.id} 失败：${reason}${card.flag === 'held' ? '；连续失败 2 次，已挂起，不再自动重试。' : ''}`);

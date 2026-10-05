@@ -157,6 +157,44 @@ test('reopening a reviewer of the same execution round does not count a second r
   assert.notEqual(app.card(card.id).flag, 'held');
 });
 
+test('an explicit review after a Captain rejection does not double-count the rejected execution round', async (t) => {
+  const w = world(t), app = w.boot(), card = await newCard(app);
+  const exec = await app.execute(card); await app.finish(exec, '执行完成');
+  app.store.move({ id: card.id, status: 'doing' });
+  assert.equal(app.card(card.id).consecutive_failures, 1);
+  const review = await manualReview(app, card, exec);
+  await app.finish(review, '不通过：缺断言');
+  assert.equal(app.card(card.id).consecutive_failures, 1);
+  assert.equal(app.card(card.id).rework_count, 1);
+  await app.scan();
+  assert.equal(app.card(card.id).session_id, exec.id);
+  assert.ok(app.texts(exec).at(-1).endsWith('不通过：缺断言'));
+});
+
+test('manual review verdict context survives restart, unclear blocks without a failure, and two actual rejected rounds still hold', async (t) => {
+  const w = world(t); let app = w.boot(); const card = await newCard(app);
+  const exec = await app.execute(card); await app.finish(exec, '第一版');
+  await manualReview(app, card, exec, 'unclear-review');
+  app = w.boot(app.persisted());
+  await app.finish(w.columns.find((c) => c.boardAttempt === 'unclear-review'), '看起来不错');
+  assert.equal(app.card(card.id).status, 'review');
+  assert.equal(app.card(card.id).review_block.round, 1);
+  assert.equal(app.card(card.id).consecutive_failures, 0);
+  await app.scan(); assert.equal(app.reviewers(card).length, 0);
+  const r1 = await manualReview(app, card, exec, 'reject-round-1');
+  await app.finish(r1, '不通过：第一版有错'); await app.scan();
+  const restored = w.columns.find((c) => c.id === exec.id);
+  await app.finish(restored, '第二版');
+  const r2 = await manualReview(app, card, restored, 'reject-round-2');
+  await app.finish(r2, '不通过：第二版仍有错');
+  const before = app.texts(restored).length;
+  await app.scan(); await app.scan();
+  assert.equal(app.card(card.id).review_round, 2);
+  assert.equal(app.card(card.id).consecutive_failures, 2);
+  assert.equal(app.card(card.id).flag, 'held');
+  assert.equal(app.texts(restored).length, before, 'held rounds never dispatch another rework');
+});
+
 test('a queued explicit reviewer retains its round across restart and cannot review a later execution', async (t) => {
   const w = world(t); let app = w.boot(); const card = await newCard(app);
   const exec = await app.execute(card); await app.finish(exec, '第一版');

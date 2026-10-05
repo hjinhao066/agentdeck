@@ -20,6 +20,21 @@ function store(t, leaseMs = LEASE_MS) {
 }
 const setOf = (extra) => ({ project: 'agentdeck', title: '共享任务', detail: '说明', status: 'todo', ...extra });
 
+test('explicit review verdict binding survives the shared store and a local synced reload', (t) => {
+  const { root, hub } = store(t);
+  const result = hub.pushTask({ opId: 'op-explicit-review', cardId: 'review-card', expectedRevision: 0, deviceId: 'dev-mac',
+    set: setOf({ status: 'review', review_session: true, review_verdict: true, review_round: 1,
+      exec_receipt: { session_id: 'executor', attempt_id: 'exec-attempt', text: '原执行全文', files: [] } }) });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.card.review_verdict, true);
+  const dir = path.join(root, 'local-tasks'), local = new TaskStore(dir);
+  local.upsertSynced(result.body.card);
+  const reloaded = new TaskStore(dir).list()[0];
+  assert.equal(reloaded.review_verdict, true);
+  assert.equal(reloaded.review_session, true);
+  assert.equal(reloaded.exec_receipt.session_id, 'executor');
+});
+
 test('heartbeat lease: a machine goes offline 45s after its last heartbeat and stays recoverable', (t) => {
   const { root, hub, advance } = store(t);
   hub.heartbeat({ id: 'dev-mac', name: 'MacBook', platform: 'darwin', version: '1.2.0', sessions: [{ id: 'cap', role: 'captain', title: '队长' }] });
