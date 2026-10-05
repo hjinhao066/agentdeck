@@ -757,6 +757,8 @@ node scripts/release.js 1.2 --base origin/release/1.1.11 origin/fix/example
 
 安装会话开始前通过 `progress --install-id ID --target-version VERSION --message "安装待核对"` 登记待核对（正式脚本负责调用）。普通 `complete` 无法结束待核对的任务；应用启动后读取并持续检查结果文件，匹配原任务后提交成功或失败回执。停在安全点、准备安装均只用 `progress`，不用 `complete`。安装失败或回滚走 `notify-user --urgent`；应用停机时复用同一 Bark 发送器离线推送，说明目标版本、失败原因和现役版本。密钥仍从本机配置的密钥文件读取。
 
+入口使用稳定的安装标识和 `install-entry.lock`／`install.lock`／`install-claims` 阻止并发、崩溃后重入及同一安装包重新计数；不会自动删除遗留锁。发现上次 pending、未确认结果或已有 claim 时会拒绝开始，请先检查日志、结果与所属进程，处理失败原因后再由维护者清理相应标记。托管会话必须使用支持待核对协议的应用版本；旧版不能确认登记时安全退出，不以普通 progress 冒充成功登记。`--with-data` 仅允许独立终端使用，避免覆盖正在运行的任务控制状态。
+
 Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
 `npx electron-builder --mac --config.mac.identity=null --publish never`.

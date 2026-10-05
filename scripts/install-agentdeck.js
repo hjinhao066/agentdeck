@@ -192,7 +192,7 @@ async function main(argv) {
       process.exitCode = result.status === 'success' ? 0 : 1;
     } catch (error) {
       const ops = macOperations(request);
-      const failure = { id: request.id, status: 'failed', targetVersion: request.targetVersion, appPath: request.appPath, taskId: request.taskId, columnId: request.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, reason: error.message };
+      const failure = { id: request.id, operation: request.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: request.targetVersion, appPath: request.appPath, taskId: request.taskId, columnId: request.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, reason: error.message };
       try { failure.activeVersion = ops.version(request.appPath); failure.running = ops.running(); } catch (_) {}
       atomicJson(path.join(request.data, 'install-result.json'), failure);
       try { failure.notificationSent = await ops.notify(failure); atomicJson(path.join(request.data, 'install-result.json'), failure); } catch (_) {}
@@ -245,9 +245,11 @@ async function main(argv) {
   const fd = fs.openSync(options.log, 'a');
   const child = spawn(process.execPath, [__filename, '--child', '--request', request], { detached: true, stdio: ['ignore', fd, fd] });
   child.on('error', async (error) => {
-    const failure = { id: options.id, status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, notificationSent: false, reason: `Installer could not start: ${error.message}` };
+    const failure = { id: options.id, operation: options.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, notificationSent: false, reason: `Installer could not start: ${error.message}` };
+    const ops = macOperations(options);
+    try { failure.activeVersion = ops.version(options.appPath); failure.running = ops.running(); } catch (_) {}
     atomicJson(path.join(options.data, 'install-result.json'), failure);
-    try { failure.notificationSent = await macOperations(options).notify(failure); atomicJson(path.join(options.data, 'install-result.json'), failure); } catch (_) {}
+    try { failure.notificationSent = await ops.notify(failure); atomicJson(path.join(options.data, 'install-result.json'), failure); } catch (_) {}
     try { fs.rmdirSync(options.entryLock); } catch (_) {}
     process.exitCode = 1;
   });
@@ -257,7 +259,7 @@ async function main(argv) {
   } catch (error) {
     if (registered && !handedOff) {
       const ops = macOperations(options);
-      const failure = { id: options.id, status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, reason: `Installer launch preparation failed: ${error.message}` };
+      const failure = { id: options.id, operation: options.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, reason: `Installer launch preparation failed: ${error.message}` };
       try { failure.activeVersion = ops.version(options.appPath); failure.running = ops.running(); } catch (_) {}
       try { atomicJson(path.join(options.data, 'install-result.json'), failure); } catch (_) {}
       try { failure.notificationSent = await ops.notify(failure); atomicJson(path.join(options.data, 'install-result.json'), failure); } catch (_) {}
