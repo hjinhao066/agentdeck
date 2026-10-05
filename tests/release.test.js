@@ -57,13 +57,48 @@ test('versions use the next minor by default; accept labels and package versions
     const plan = planRelease(repo, { ...options, version: value });
     assert.equal(plan.version, '1.2.0'); assert.equal(plan.label, '1.2'); assert.equal(plan.branch, 'release/1.2');
   }
-  for (const value of ['1.1.12', '1.2.1', '01.2', '1.2-beta']) assert.throws(() => parseArgs([value]), /Version/);
+  for (const value of ['1.1.012', '1.2.01', '01.2', '1.2-beta']) assert.throws(() => parseArgs([value]), /Version/);
   assert.throws(() => planRelease(repo, { ...options, version: '1.1' }), /newer/);
   assert.deepEqual(parseArgs(['fix/a,fix/b', 'fix/a']).branches, ['fix/a', 'fix/b']);
   assert.throws(() => parseArgs(['--base']), /Missing/);
   assert.throws(() => parseArgs(['--unknown']), /Unknown/);
   const next = fixture(t, '1.2.0');
   assert.equal(planRelease(next.repo, next.options).version, '1.3.0');
+});
+
+test('explicit patch releases are strictly newer and use distinct artifact labels', (t) => {
+  const { repo, options } = fixture(t, '1.2.0');
+  for (const version of ['1.2.1', '1.2.12', '1.3.1', '2.0.1']) {
+    const plan = planRelease(repo, { ...options, ...parseArgs([version]), worktree: options.worktree, output: options.output });
+    assert.equal(plan.version, version); assert.equal(plan.label, version); assert.equal(plan.branch, `release/${version}`);
+  }
+  for (const version of ['1.2.0', '1.1.99', '1.0.1']) assert.throws(() => planRelease(repo, { ...options, version }), /newer/);
+  const prior = fixture(t, '1.1.11');
+  assert.equal(planRelease(prior.repo, { ...prior.options, version: '1.1.12' }).version, '1.1.12');
+  const patched = fixture(t, '1.2.9');
+  assert.throws(() => planRelease(patched.repo, { ...patched.options, version: '1.2.8' }), /newer/);
+  assert.throws(() => planRelease(patched.repo, { ...patched.options, version: '1.2.9' }), /newer/);
+  assert.equal(planRelease(patched.repo, patched.options).version, '1.3.0');
+});
+
+test('prepared patch plans enforce clean checkout, exact branch and all package versions', async (t) => {
+  const { repo, root } = fixture(t, '1.2.1');
+  git(repo, 'checkout', '-qb', 'release/1.2.1');
+  const options = parseArgs(['1.2.1', '--prepared', '--dry-run', '--output', path.join(root, 'output')]);
+  const plan = planRelease(repo, options);
+  assert.equal(plan.label, '1.2.1'); assert.equal(plan.branch, 'release/1.2.1'); assert.equal(plan.version, '1.2.1');
+  assert.equal(plan.worktree, fs.realpathSync.native(repo));
+  const before = git(repo, 'show-ref');
+  await release(repo, options, () => assert.fail('runner called'));
+  assert.equal(git(repo, 'show-ref'), before); assert.deepEqual(fs.readdirSync(root), ['source']);
+  assert.equal(planRelease(repo, { ...options, version: undefined }).version, '1.2.1');
+  assert.throws(() => planRelease(repo, { ...options, version: '1.2.2' }), /release\/1.2.2/);
+  write(path.join(repo, 'local.txt'), 'uncommitted');
+  assert.throws(() => planRelease(repo, options), /must be clean/); fs.unlinkSync(path.join(repo, 'local.txt'));
+  write(path.join(repo, 'package-lock.json'), JSON.stringify({ version: '1.2.1', packages: { '': { version: '1.2.0' } } }));
+  git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'mismatched patch lock');
+  assert.throws(() => planRelease(repo, options), /versions must match/);
+  git(repo, 'checkout', '-q', 'main'); assert.throws(() => planRelease(repo, options), /must be on release/);
 });
 
 test('dry-run resolves pinned commits but writes nothing or runs commands', async (t) => {

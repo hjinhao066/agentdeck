@@ -784,13 +784,13 @@ npm run dist:mac
 ```sh
 node scripts/release.js --base origin/release/1.1.11 origin/fix/example --dry-run
 node scripts/release.js --base origin/release/1.1.11 origin/fix/example
-# 显式版本也接受 1.2 或 1.2.0；从 1.2.0 默认进到 1.3.0
+# 显式版本接受 1.2、1.2.0 或 1.2.1；从 1.2.0 默认进到 1.3.0
 node scripts/release.js 1.2 --base origin/release/1.1.11 origin/fix/example
 ```
 
-先自行 `git fetch origin`，再指定基线；默认基线是当前 HEAD。省略版本号时进一位次版本号：1.1.11 → 1.2.0，分支/目录对外叫 `release/1.2` / `agentdeck-release-1.2`，不再生成 1.1.12。脚本把基线和待合分支解析成固定提交，在独立 worktree 依次合并；冲突即停止，报告列出文件，手动解决并提交后按原命令续跑。已有目录必须属于同一发布计划，其他 worktree 和历史报告不会被覆盖。`--worktree DIR` / `--output DIR` 可另选绝对路径，输出须在源码目录外。`--dry-run` 只读，不创建目录、不测试、不打包。
+先自行 `git fetch origin`，再指定基线；默认基线是当前 HEAD。省略版本号时进一位次版本号：1.1.11 → 1.2.0，分支/目录对外叫 `release/1.2` / `agentdeck-release-1.2`，默认不生成 1.1.12；显式 patch 版本可用于补丁发版，必须严格高于基线，非零 patch 的分支/目录/安装脚本标签使用完整版本（如 1.2.1），避免覆盖 1.2 的产物。原先只接受 .0 是 1.2.0 集成时按次版本发版的约定，现正式支持补丁版本。脚本把基线和待合分支解析成固定提交，在独立 worktree 依次合并；冲突即停止，报告列出文件，手动解决并提交后按原命令续跑。已有目录必须属于同一发布计划，其他 worktree 和历史报告不会被覆盖。`--worktree DIR` / `--output DIR` 可另选绝对路径，输出须在源码目录外。`--dry-run` 只读，不创建目录、不测试、不打包。
 
-已手动审查并合并的发布分支可用 `node scripts/release.js 1.2.0 --prepared --output <源码外独立目录>`。要求当前分支为 `release/1.2.0`、工作区干净、package.json 与 lockfile 三处版本一致；该模式不创建 worktree、不合分支、不升版本，保留依赖准备、持锁单测/单 worker 冒烟、audit、打包及校验/耗时报告。可加 `--dry-run`；不可与分支列表、`--base`、`--worktree` 共用。
+已手动审查并合并的发布分支可用 `node scripts/release.js 1.2.1 --prepared --output <源码外独立目录>`。要求当前分支为与完整版本对应的 `release/1.2.1`、工作区干净、package.json 与 lockfile 三处版本一致；该模式不创建 worktree、不合分支、不升版本，保留依赖准备、持锁单测/单 worker 冒烟、audit、打包及校验/耗时报告。可加 `--dry-run`；不可与分支列表、`--base`、`--worktree` 共用。
 
 流程：同步 package.json 与 lockfile 版本 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
 

@@ -40,8 +40,8 @@ function parseArgs(argv) {
     else if (!options.version && /^\d/.test(arg)) options.version = arg;
     else options.branches.push(...arg.split(','));
   }
-  if (options.version && !/^[1-9]\d*\.(0|[1-9]\d*)(?:\.0)?$/.test(options.version)) {
-    throw new Error('Version must be MAJOR.MINOR or MAJOR.MINOR.0 (next release: 1.2 / 1.2.0; no 1.1.12)');
+  if (options.version && !/^[1-9]\d*\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$/.test(options.version)) {
+    throw new Error('Version must be MAJOR.MINOR or MAJOR.MINOR.PATCH (no leading zeros)');
   }
   for (const ref of [options.base, ...options.branches]) {
     if (!ref || ref.startsWith('-') || /[\s\x00-\x1f]/.test(ref)) throw new Error(`Invalid ref: ${ref}`);
@@ -59,13 +59,16 @@ function planRelease(repo, options) {
   const parts = /^(\d+)\.(\d+)\.(\d+)$/.exec(previous);
   if (!parts) throw new Error(`Unsupported base version: ${previous}`);
   const version = options.version ? options.version.replace(/^(\d+\.\d+)$/, '$1.0') : options.prepared ? previous : `${parts[1]}.${Number(parts[2]) + 1}.0`;
-  const [major, minor] = version.split('.').map(Number);
-  if (!options.prepared && (major < Number(parts[1]) || (major === Number(parts[1]) && minor <= Number(parts[2])))) {
+  const [major, minor, patch] = version.split('.').map(Number);
+  const previousParts = parts.slice(1).map(Number);
+  const newer = [major, minor, patch].some((value, index, values) =>
+    values.slice(0, index).every((part, i) => part === previousParts[i]) && value > previousParts[index]);
+  if (!options.prepared && !newer) {
     throw new Error(`Release ${version} must be newer than base ${previous}`);
   }
   if (options.prepared) {
     if (options.branches.length || options.worktree || options.base !== 'HEAD') throw new Error('--prepared uses the current checkout; do not supply branches, --worktree or --base');
-    if (!/^[1-9]\d*\.(0|[1-9]\d*)\.0$/.test(version)) throw new Error('Prepared release version must be MAJOR.MINOR.0');
+    if (!/^[1-9]\d*\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(version)) throw new Error('Prepared release version must be MAJOR.MINOR.PATCH');
     if (git(repo, 'branch', '--show-current') !== `release/${version}`) throw new Error(`Prepared checkout must be on release/${version}`);
     if (git(repo, 'status', '--porcelain')) throw new Error('Prepared release checkout must be clean');
     const lock = json(path.join(repo, 'package-lock.json'));
@@ -73,7 +76,7 @@ function planRelease(repo, options) {
       throw new Error('Prepared package.json and package-lock.json versions must match the release version');
     }
   }
-  const label = `${major}.${minor}`;
+  const label = patch === 0 ? `${major}.${minor}` : version;
   const merges = options.branches.map((ref) => ({ ref, commit: git(repo, 'rev-parse', '--verify', `${ref}^{commit}`) }));
   const worktree = options.prepared ? canonical(repo) : canonical(options.worktree || path.join(path.dirname(repo), `agentdeck-release-${label}`));
   const output = canonical(options.output || path.join(path.dirname(repo), 'reports', `agentdeck-${label}`));
