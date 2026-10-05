@@ -1780,83 +1780,83 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #boardView[data-mode="crew"] #boardNewTask { display: none !important; }
 #boardView:not([data-mode="crew"]) #crewMap { display: none !important; }
 
-/* 终端架构图: one calm surface, one accent, depth from light rather than from borders.
-   Whatever is running moves (spinners, light along the lines); everything else holds still. */
+/* 终端架构图 (A 版): near-black / soft-grey canvas, solid cards, thin blue wiring with a few
+   travelling dots. Whatever is running moves (spinner, dots on its line); everything else holds still.
+   Night and day share one structure; only the tokens below change. */
 #crewMap {
   flex: 1; min-height: 0; display: flex; flex-direction: column;
-  --cm-space: #0a0c11;
-  --cm-core: #7aa5ff;
-  --cm-core-2: #a78bfa;
-  --cm-card: #151921;
-  --cm-card-2: #10131a;
-  --cm-glass: rgba(21, 25, 33, 0.72);
-  --cm-rim: rgba(255, 255, 255, 0.075);
-  --cm-rim-hi: rgba(255, 255, 255, 0.14);
-  --cm-dotc: rgba(255, 255, 255, 0.07);
-  --cm-text: #eef1f7;
-  --cm-text-2: #a9b1c2;
-  --cm-text-dim: #717a8c;
-  --cm-work: #f7c14d;
-  --cm-done: #3ddc97;
-  --cm-fail: #f4737c;
+  --cm-space: #0c1016;
+  --cm-dotc: rgba(255, 255, 255, 0.045);
+  --cm-card: #151a22;
+  --cm-card-2: #121720;
+  --cm-pane: #11161d;
+  --cm-rim: #232b38;
+  --cm-rim-hi: #323d4e;
+  --cm-text: #e8ecf2;
+  --cm-text-2: #9aa4b2;
+  --cm-text-dim: #7d8696;
+  --cm-work: #f5b83d;
+  --cm-done: #3dd68c;
+  --cm-fail: #f07178;
+  --cm-fail-bg: #1e1519;
   --cm-need: #ff9a4d;
   --cm-wait: #8d96aa;
+  --cm-cap: #a78bfa;
+  --cm-cap-bg: #181629;
+  --cm-core: #7aa5ff;
+  --cm-wire: #4c7ef0;
+  --cm-wire-hi: #7aa5ff;
+  --cm-spark: #d6e4ff;
   --cm-review: #b197fc;
-  --cm-line: #39414f;
-  --cm-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 14px 32px -10px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --cm-btn: #4c7ef0;
+  --cm-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 8px 20px -12px rgba(0, 0, 0, 0.6);
   --cm-back: var(--cm-done);
   --cm-back-bad: var(--cm-fail);
   color: var(--cm-text);
 }
 :root[data-theme="light"] #crewMap {
-  --cm-space: #f2f4f8;
-  --cm-core: #3d6dff;
-  --cm-core-2: #8b5cf6;
+  --cm-space: #f6f7f9;
+  --cm-dotc: rgba(24, 34, 48, 0.07);
   --cm-card: #ffffff;
-  --cm-card-2: #fbfcfe;
-  --cm-glass: rgba(255, 255, 255, 0.78);
-  --cm-rim: rgba(20, 30, 55, 0.09);
-  --cm-rim-hi: rgba(20, 30, 55, 0.16);
-  --cm-dotc: rgba(20, 30, 55, 0.11);
-  --cm-text: #151a26;
-  --cm-text-2: #4d566a;
-  --cm-text-dim: #7b8497;
-  --cm-work: #c98a00;
-  --cm-done: #0c9f6a;
-  --cm-fail: #e0464f;
-  --cm-need: #e5700f;
-  --cm-wait: #7b8497;
+  --cm-card-2: #ffffff;
+  --cm-pane: #ffffff;
+  --cm-rim: #e2e6ec;
+  --cm-rim-hi: #cdd3dc;
+  --cm-text: #182230;
+  --cm-text-2: #475467;
+  --cm-text-dim: #667085;
+  --cm-work: #b54708;
+  --cm-done: #067647;
+  --cm-fail: #b42318;
+  --cm-fail-bg: #fef3f2;
+  --cm-need: #c4320a;
+  --cm-wait: #667085;
+  --cm-cap: #6941c6;
+  --cm-cap-bg: #f4f0ff;
+  --cm-core: #2563eb;
+  --cm-wire: #2563eb;
+  --cm-wire-hi: #1d4ed8;
+  --cm-spark: #0b2a8a;
   --cm-review: #7c5ce0;
-  --cm-line: #c3cad8;
-  --cm-shadow: 0 1px 0 #fff inset, 0 12px 28px -12px rgba(25, 40, 80, 0.22), 0 1px 3px rgba(25, 40, 80, 0.08);
+  --cm-btn: #2563eb;
+  --cm-shadow: 0 1px 2px rgba(16, 24, 40, 0.07), 0 6px 14px -8px rgba(16, 24, 40, 0.14);
 }
-/* Backdrop: a soft light behind 队长, a second one low on the right, a quiet dot grid. */
+/* Backdrop: flat, with a very faint dot grid. */
 .cm-viewport {
   position: relative; flex: 1; min-height: 0; overflow: hidden; cursor: grab; touch-action: none;
   background-color: var(--cm-space);
-  background-image:
-    radial-gradient(ellipse 80% 65% at 50% 45%, transparent 55%, rgba(0, 0, 0, 0.5) 100%),
-    radial-gradient(ellipse 46% 42% at 50% 0%, color-mix(in srgb, var(--cm-core) 20%, transparent), transparent 72%),
-    radial-gradient(ellipse 38% 36% at 92% 96%, color-mix(in srgb, var(--cm-core-2) 12%, transparent), transparent 70%),
-    radial-gradient(ellipse 34% 32% at 4% 84%, color-mix(in srgb, var(--cm-core) 7%, transparent), transparent 70%),
-    radial-gradient(circle at 50% 50%, var(--cm-dotc) 1px, transparent 1.5px);
-  background-size: 100% 100%, 100% 100%, 100% 100%, 100% 100%, 24px 24px;
-}
-:root[data-theme="light"] .cm-viewport {
-  background-image:
-    radial-gradient(ellipse 80% 65% at 50% 45%, transparent 60%, rgba(40, 60, 110, 0.10) 100%),
-    radial-gradient(ellipse 46% 42% at 50% 0%, color-mix(in srgb, var(--cm-core) 15%, transparent), transparent 72%),
-    radial-gradient(ellipse 38% 36% at 92% 96%, color-mix(in srgb, var(--cm-core-2) 10%, transparent), transparent 70%),
-    radial-gradient(ellipse 34% 32% at 4% 84%, color-mix(in srgb, var(--cm-core) 6%, transparent), transparent 70%),
-    radial-gradient(circle at 50% 50%, var(--cm-dotc) 1px, transparent 1.5px);
+  background-image: radial-gradient(circle at 50% 50%, var(--cm-dotc) 1px, transparent 1.5px);
+  background-size: 24px 24px;
 }
 .cm-viewport.panning { cursor: grabbing; }
 .cm-canvas { position: absolute; left: 0; top: 0; transform-origin: 0 0; will-change: transform; }
+.cm-canvas.cm-smooth { transition: transform 0.32s cubic-bezier(0.2, 0.7, 0.2, 1); }
 .cm-zones, .cm-edges, .cm-nodes { position: absolute; inset: 0; overflow: visible; }
 .cm-edges, .cm-zones { pointer-events: none; }
 .cm-nodes { pointer-events: none; }
 .cm-node, .cm-fold { pointer-events: auto; }
 #crewMap [hidden] { display: none; }
+#crewMap button { font-family: inherit; }
 
 /* Status icons. 干活中 spins, 待补充 pings; the rest are still. */
 .cm-ico { position: relative; flex: 0 0 auto; display: inline-grid; place-items: center; width: 14px; height: 14px; color: var(--cm-wait); }
@@ -1877,78 +1877,75 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-count-sep { font-size: 0; }
 .cm-count b { font-family: var(--mono); font-weight: 650; font-variant-numeric: tabular-nums; color: var(--cm-text); }
 
-/* Project: a quiet tinted pane. Its colour lives in the title dot and a wash along the top. */
-.cm-project {
-  position: absolute; border-radius: 20px; pointer-events: auto; touch-action: none; cursor: grab;
-  --project-color: hsl(var(--project-hue) 80% 68%);
-  background-color: hsl(var(--project-hue) 60% 62% / 0.04);
-  border: 1px solid hsl(var(--project-hue) 45% 72% / 0.16);
-  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.7);
+/* A cube in the project's own colour: project head and tray chips */
+.cm-cube, .cm-project-name::before {
+  content: ""; flex: 0 0 auto; display: inline-block; width: 18px; height: 18px; background: var(--project-color);
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M12 3 4 7.5v9L12 21l8-4.5v-9z'/%3E%3Cpath d='m4 7.5 8 4.5 8-4.5M12 12v9'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round' stroke-linecap='round'%3E%3Cpath d='M12 3 4 7.5v9L12 21l8-4.5v-9z'/%3E%3Cpath d='m4 7.5 8 4.5 8-4.5M12 12v9'/%3E%3C/svg%3E") center / contain no-repeat;
 }
-.cm-project::before {
-  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none;
-  background:
-    radial-gradient(70% 120px at 50% 0%, hsl(var(--project-hue) 85% 65% / 0.10), transparent 100%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012));
-  box-shadow: inset 0 1px 0 hsl(var(--project-hue) 80% 80% / 0.22);
-  -webkit-backdrop-filter: blur(14px) saturate(120%); backdrop-filter: blur(14px) saturate(120%);
+
+/* Project: a quiet pane tinted with the project's colour (frame, cube, a wash along the top).
+   The pane sits under the wiring; the frame with the title strip sits over it, and the labels
+   carry a solid backing so a line passing behind them is hidden, not drawn through the text. */
+.cm-pane, .cm-project {
+  position: absolute; border-radius: 18px;
+  --project-color: hsl(var(--project-hue) 78% 66%);
+  --cm-headbg: color-mix(in srgb, hsl(var(--project-hue) 45% 58%) 11%, var(--cm-space));
 }
-:root[data-theme="light"] .cm-project {
-  --project-color: hsl(var(--project-hue) 72% 46%);
-  background-color: hsl(var(--project-hue) 70% 50% / 0.035);
-  border-color: hsl(var(--project-hue) 45% 45% / 0.18);
-  box-shadow: 0 24px 50px -30px rgba(25, 40, 80, 0.30);
+.cm-pane {
+  pointer-events: none;
+  background-color: hsl(var(--project-hue) 40% 55% / 0.05);
+  background-image: linear-gradient(180deg, hsl(var(--project-hue) 70% 60% / 0.08), transparent 90px);
+  border: 1px solid hsl(var(--project-hue) 38% 62% / 0.30);
 }
-:root[data-theme="light"] .cm-project::before {
-  background:
-    radial-gradient(70% 120px at 50% 0%, hsl(var(--project-hue) 85% 55% / 0.10), transparent 100%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.70), rgba(255, 255, 255, 0.45));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+.cm-project { pointer-events: auto; touch-action: none; cursor: grab; background: transparent; }
+:root[data-theme="light"] .cm-pane, :root[data-theme="light"] .cm-project, :root[data-theme="light"] .cm-chip { --project-color: hsl(var(--project-hue) 70% 42%); }
+:root[data-theme="light"] .cm-pane, :root[data-theme="light"] .cm-project { --cm-headbg: color-mix(in srgb, hsl(var(--project-hue) 55% 50%) 8%, var(--cm-space)); }
+:root[data-theme="light"] .cm-pane {
+  background-color: hsl(var(--project-hue) 60% 50% / 0.045);
+  background-image: linear-gradient(180deg, hsl(var(--project-hue) 70% 50% / 0.08), transparent 90px);
+  border-color: hsl(var(--project-hue) 40% 45% / 0.30);
 }
-/* The title strip is its own pane above the lines: drops pass under it, never over the name. */
-.cm-project-head {
-  position: relative; z-index: 1; height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 16px 0 10px; user-select: none;
-  border-radius: 20px 20px 0 0;
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-}
-.cm-project.collapsed .cm-project-head { border-radius: 20px; }
-.cm-project-name { display: inline-flex; align-items: center; gap: 10px; min-width: 0; font-size: 15.5px; font-weight: 620; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.cm-project-name::before { content: ""; flex: 0 0 auto; width: 8px; height: 8px; border-radius: 999px; background: var(--project-color); box-shadow: 0 0 0 3px color-mix(in srgb, var(--project-color) 20%, transparent), 0 0 12px var(--project-color); }
-.cm-project-summary { display: inline-flex; align-items: center; gap: 12px; margin-left: auto; padding-left: 12px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; }
+.cm-projects { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
+.cm-project-head { position: relative; z-index: 1; height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 10px; user-select: none; pointer-events: none; }
+.cm-project-head > * { pointer-events: auto; background: var(--cm-headbg); border-radius: 8px; }
+.cm-project-name { display: inline-flex; align-items: center; gap: 9px; flex: 0 1 auto; min-width: 0; max-width: 60%; padding: 4px 8px 4px 6px; font-size: 17px; font-weight: 640; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-project-summary { display: inline-flex; align-items: center; gap: 12px; flex: 0 1 auto; min-width: 0; padding: 4px 8px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; }
 .cm-project-summary .cm-count b { font-size: 13.5px; }
-.cm-project-toggle { pointer-events: auto; flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-dim); cursor: pointer; transition: background .15s ease, color .15s ease; }
-.cm-project-toggle:hover { color: var(--cm-text); background: var(--cm-rim); }
+.cm-project-toggle { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: var(--cm-headbg); color: var(--cm-text-dim); cursor: pointer; transition: color .15s ease; }
+.cm-project-toggle:hover { color: var(--cm-text); }
 .cm-project-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
 
-/* Lines. Quiet by default; a line that carries running work lights up in the accent and flows. */
-.cm-edges .cm-edge, .cm-halo, .cm-pulse, .cm-bus { fill: none; stroke-linejoin: round; stroke-linecap: round; }
-.cm-edge.dispatch { stroke: var(--cm-line); stroke-width: 1.25; }
-.cm-edge.dispatch.st-working { stroke: color-mix(in srgb, var(--cm-core) 82%, var(--cm-space)); stroke-width: 1.9; }
-.cm-edge.dispatch.st-input { stroke: color-mix(in srgb, var(--cm-need) 75%, var(--cm-space)); stroke-width: 1.6; }
-.cm-edge.dispatch.st-queued { stroke: color-mix(in srgb, var(--cm-wait) 70%, var(--cm-space)); stroke-width: 1.25; stroke-dasharray: 2 6; }
-.cm-halos { opacity: 0.2; }
-.cm-halo { stroke: var(--cm-core); stroke-width: 9; }
-.cm-halo.core { stroke-width: 13; }
-:root[data-theme="light"] .cm-halos { opacity: 0.14; }
-/* short streaks of light travelling down a live line */
-.cm-pulse { stroke: color-mix(in srgb, var(--cm-core) 25%, #fff); stroke-width: 2.2; stroke-dasharray: 18 202; animation: cm-flow 4.4s linear infinite; }
-.cm-pulse.core { stroke-width: 2.8; }
-:root[data-theme="light"] .cm-pulse { stroke: color-mix(in srgb, var(--cm-core) 55%, #0a1a66); stroke-width: 3; }
-:root[data-theme="light"] .cm-pulse.core { stroke-width: 3.6; }
-@keyframes cm-flow { to { stroke-dashoffset: -220; } }
-.cm-bus { stroke: color-mix(in srgb, var(--cm-core) 30%, var(--cm-line)); stroke-width: 1.8; }
-.cm-bus.active { stroke: var(--cm-core); stroke-width: 2.4; }
-.cm-hub { fill: var(--cm-space); stroke: var(--cm-line); stroke-width: 1.8; }
-.cm-hub.active { fill: #fff; stroke: var(--cm-core); }
-.cm-hub-ring { fill: color-mix(in srgb, var(--cm-core) 6%, transparent); stroke: color-mix(in srgb, var(--cm-core) 25%, transparent); stroke-width: 1; }
-.cm-hub-ring.active { fill: color-mix(in srgb, var(--cm-core) 16%, transparent); stroke: color-mix(in srgb, var(--cm-core) 60%, transparent); }
-.cm-joint { fill: var(--cm-core); stroke: var(--cm-space); stroke-width: 1.5; }
-.cm-socket { fill: var(--cm-line); stroke: var(--cm-space); stroke-width: 1.5; }
-.cm-socket.st-working { fill: var(--cm-core); }
-.cm-socket.st-input { fill: var(--cm-need); }
+/* Wiring: thin blue; running lines are brighter and carry a few travelling dots; ended lines hold still and fade. */
+.cm-edges .cm-edge, .cm-halo, .cm-pulse, .cm-bus, .cm-hl-path { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.cm-edge.dispatch { stroke: var(--cm-wire); stroke-width: 1.2; opacity: 0.5; }
+.cm-edge.dispatch.st-working { stroke: var(--cm-wire-hi); stroke-width: 1.8; opacity: 1; }
+.cm-edge.dispatch.st-input { stroke: var(--cm-need); stroke-width: 1.5; opacity: 0.9; }
+.cm-edge.dispatch.st-queued { stroke: var(--cm-wait); stroke-width: 1.2; stroke-dasharray: 2 6; opacity: 0.7; }
+.cm-halos { opacity: 0.12; }
+.cm-halo { stroke: var(--cm-wire-hi); stroke-width: 8; }
+.cm-halo.core { stroke-width: 11; }
+:root[data-theme="light"] .cm-halos { display: none; }
+/* a few dots of light, one lap in about six seconds */
+.cm-pulse { stroke: var(--cm-spark); stroke-width: 4; stroke-dasharray: 0.1 260; animation: cm-flow 6s linear infinite; }
+.cm-pulse.core { stroke-width: 4.5; }
+@keyframes cm-flow { to { stroke-dashoffset: -260.1; } }
+.cm-bus { stroke: var(--cm-wire); stroke-width: 1.6; opacity: 0.55; }
+.cm-bus.active { stroke: var(--cm-wire-hi); stroke-width: 2; opacity: 1; }
+.cm-hub { fill: var(--cm-space); stroke: var(--cm-wire); stroke-width: 1.8; }
+.cm-hub.active { fill: #fff; stroke: var(--cm-wire-hi); }
+.cm-hub-ring { fill: color-mix(in srgb, var(--cm-wire) 6%, transparent); stroke: color-mix(in srgb, var(--cm-wire) 25%, transparent); stroke-width: 1; }
+.cm-hub-ring.active { fill: color-mix(in srgb, var(--cm-wire) 14%, transparent); stroke: color-mix(in srgb, var(--cm-wire) 55%, transparent); }
+:root[data-theme="light"] .cm-hub.active { fill: var(--cm-wire-hi); }
+.cm-joint { fill: var(--cm-wire-hi); stroke: var(--cm-space); stroke-width: 1.5; }
+.cm-socket { fill: var(--cm-wire); stroke: var(--cm-space); stroke-width: 1.5; opacity: 0.6; }
+.cm-socket.st-working { fill: var(--cm-wire-hi); opacity: 1; }
+.cm-socket.st-input { fill: var(--cm-need); opacity: 1; }
 .cm-socket.archived { opacity: 0.3; }
-.cm-edge.review { stroke: var(--cm-review); stroke-width: 1.4; stroke-dasharray: 4 6; opacity: 0.85; animation: cm-flow-review 2.4s linear infinite; }
-@keyframes cm-flow-review { to { stroke-dashoffset: -20; } }
+/* review: purple dashes; they flow only while the reviewer is working */
+.cm-edge.review { stroke: var(--cm-review); stroke-width: 1.5; stroke-dasharray: 5 6; opacity: 0.5; }
+.cm-edge.review.st-working { opacity: 1; animation: cm-flow-review 2.8s linear infinite; }
+@keyframes cm-flow-review { to { stroke-dashoffset: -22; } }
 .cm-edge.return { stroke: color-mix(in srgb, var(--cm-back) 70%, var(--cm-space)); stroke-width: 1.4; display: none; }
 .cm-edge.return.show { display: initial; }
 .cm-edge.return.question, .cm-edge.return.failed { stroke: color-mix(in srgb, var(--cm-back-bad) 75%, var(--cm-space)); }
@@ -1959,90 +1956,62 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #cmArrowReview path { fill: var(--cm-review); }
 #cmArrowBack path { fill: var(--cm-back); }
 #cmArrowBackBad path { fill: var(--cm-back-bad); }
+/* hovering a card: its own path stands out, the rest steps back */
+.cm-edges.cm-hovering .cm-edge:not(.hl), .cm-edges.cm-hovering .cm-bus, .cm-edges.cm-hovering .cm-socket, .cm-edges.cm-hovering .cm-chevron { opacity: 0.16; }
+.cm-edges.cm-hovering .cm-halos, .cm-edges.cm-hovering .cm-pulses { opacity: 0.1; }
+.cm-hl-path { stroke: var(--cm-wire-hi); stroke-width: 2.6; }
+.cm-hl-path.review { stroke: var(--cm-review); stroke-dasharray: 5 6; }
+.cm-hl-path.return { stroke: var(--cm-back); }
+:root[data-theme="light"] .cm-hl-path { stroke-width: 2.8; }
 
-/* Cards: one solid surface lifted by a soft shadow. Status = icon + label; only running work glows. */
+/* Cards: one solid surface. Status = icon + label; running work gets an amber rim, a failure a red one. */
 .cm-node {
   position: absolute; z-index: 2; overflow: hidden;
-  display: flex; flex-direction: column; gap: 4px; text-align: left;
-  padding: 13px 14px 11px;
-  width: 240px; height: 176px;
+  display: flex; flex-direction: column; gap: 3px; text-align: left;
+  padding: 10px 14px 12px;
+  width: 296px; height: 172px;
   --st-c: var(--cm-wait);
-  background: linear-gradient(180deg, var(--cm-card), var(--cm-card-2));
-  color: var(--cm-text); font: inherit;
+  background: var(--cm-card);
+  color: var(--cm-text);
   border: 1px solid var(--cm-rim);
-  border-radius: 14px;
+  border-radius: 12px;
   box-shadow: var(--cm-shadow);
   cursor: pointer; touch-action: none; user-select: none;
-  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+  transition: border-color .15s ease, box-shadow .15s ease;
 }
-.cm-node.st-working {
-  --st-c: var(--cm-work);
-  border-color: color-mix(in srgb, var(--cm-work) 38%, var(--cm-rim));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--cm-work) 7%, var(--cm-card)), var(--cm-card-2) 60%);
-  box-shadow: var(--cm-shadow), 0 0 0 3px color-mix(in srgb, var(--cm-work) 9%, transparent), 0 0 34px -10px color-mix(in srgb, var(--cm-work) 65%, transparent);
-}
-/* running work: a light slides along the top edge */
-.cm-node.st-working::after {
-  content: ""; position: absolute; left: 0; top: 0; width: 45%; height: 2px; pointer-events: none;
-  background: linear-gradient(90deg, transparent, var(--cm-work), transparent);
-  transform: translateX(-110%); animation: cm-scan 2.8s cubic-bezier(.45, 0, .55, 1) infinite; will-change: transform;
-}
-@keyframes cm-scan { to { transform: translateX(330%); } }
-.cm-node.st-input {
-  --st-c: var(--cm-need);
-  border-color: color-mix(in srgb, var(--cm-need) 50%, var(--cm-rim));
-  box-shadow: var(--cm-shadow), 0 0 0 3px color-mix(in srgb, var(--cm-need) 10%, transparent), 0 0 30px -10px color-mix(in srgb, var(--cm-need) 60%, transparent);
-}
-.cm-node.st-queued { border-style: dashed; border-color: var(--cm-rim-hi); background: color-mix(in srgb, var(--cm-card) 65%, transparent); box-shadow: none; }
-/* finished work steps back: flatter and quieter, still readable */
-.cm-node.st-done, .cm-node.st-stopped { --st-c: var(--cm-done); background: color-mix(in srgb, var(--cm-card) 78%, transparent); box-shadow: 0 6px 16px -10px rgba(0, 0, 0, 0.5); }
-.cm-node.st-done .cm-title, .cm-node.st-stopped .cm-title { color: var(--cm-text-2); }
-.cm-node.st-done:hover .cm-title, .cm-node.st-stopped:hover .cm-title { color: var(--cm-text); }
-:root[data-theme="light"] .cm-node.st-done, :root[data-theme="light"] .cm-node.st-stopped { box-shadow: 0 4px 12px -8px rgba(25, 40, 80, 0.2); }
-.cm-node.st-failed {
-  --st-c: var(--cm-fail);
-  border-color: color-mix(in srgb, var(--cm-fail) 40%, var(--cm-rim));
-  background: linear-gradient(180deg, color-mix(in srgb, var(--cm-fail) 9%, var(--cm-card)), var(--cm-card-2) 70%);
-}
-.cm-node:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--cm-core) 55%, var(--cm-rim)); box-shadow: var(--cm-shadow), 0 0 0 3px color-mix(in srgb, var(--cm-core) 14%, transparent); }
-.cm-node.dragging { z-index: 8; cursor: grabbing; transform: none; box-shadow: 0 24px 50px -12px rgba(0, 0, 0, 0.6), 0 0 0 2px color-mix(in srgb, var(--cm-core) 45%, transparent); transition: none; }
+.cm-node.st-working { --st-c: var(--cm-work); border-color: color-mix(in srgb, var(--cm-work) 70%, var(--cm-rim)); box-shadow: var(--cm-shadow), 0 0 0 1px color-mix(in srgb, var(--cm-work) 25%, transparent); }
+.cm-node.st-input { --st-c: var(--cm-need); border-color: color-mix(in srgb, var(--cm-need) 65%, var(--cm-rim)); }
+.cm-node.st-queued { border-style: dashed; border-color: var(--cm-rim-hi); }
+.cm-node.st-done, .cm-node.st-stopped { --st-c: var(--cm-done); }
+.cm-node.st-failed { --st-c: var(--cm-fail); background: var(--cm-fail-bg); border-color: color-mix(in srgb, var(--cm-fail) 65%, var(--cm-rim)); }
+.cm-node:hover { border-color: color-mix(in srgb, var(--cm-wire-hi) 70%, var(--cm-rim)); }
+.cm-node.dragging { z-index: 8; cursor: grabbing; box-shadow: 0 18px 36px -12px rgba(0, 0, 0, 0.5), 0 0 0 2px color-mix(in srgb, var(--cm-wire-hi) 45%, transparent); transition: none; }
 .cm-node:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
-.cm-node.review { border-left: 2px solid var(--cm-review); }
+.cm-node.review { border-left: 3px solid var(--cm-review); }
 
-/* 队长: the one hero. A gradient rim, a crest, a soft aurora behind, and the live tally. */
+/* 队长: the one purple card, a crest, the live tally. */
 .cm-node.kind-captain {
-  overflow: visible; --st-c: var(--cm-core);
+  overflow: visible; --st-c: var(--cm-cap);
   display: grid; grid-template-columns: 52px auto 1fr; grid-template-rows: 24px 40px; column-gap: 14px; row-gap: 8px;
   align-content: center; align-items: center;
   padding: 0 20px 0 18px;
-  border: 1px solid transparent; border-radius: 22px;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--cm-core) 9%, var(--cm-card)), var(--cm-card-2)) padding-box,
-    linear-gradient(135deg, var(--cm-core), color-mix(in srgb, var(--cm-core-2) 70%, transparent) 45%, color-mix(in srgb, var(--cm-core) 25%, transparent) 75%, var(--cm-core-2)) border-box;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.10) inset, 0 24px 50px -14px rgba(0, 0, 0, 0.7);
+  background: var(--cm-cap-bg);
+  border: 1.5px solid color-mix(in srgb, var(--cm-cap) 70%, transparent); border-radius: 18px;
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 10%, transparent), 0 10px 26px -14px rgba(0, 0, 0, 0.6);
 }
-:root[data-theme="light"] .cm-node.kind-captain { box-shadow: 0 1px 0 #fff inset, 0 20px 44px -16px rgba(40, 70, 160, 0.38); }
-.cm-node.kind-captain:hover { transform: none; }
-.cm-node.kind-captain::before {
-  content: ""; position: absolute; inset: -14px -28px; z-index: -1; border-radius: 48px; pointer-events: none;
-  background: linear-gradient(100deg, color-mix(in srgb, var(--cm-core) 60%, transparent), color-mix(in srgb, var(--cm-core-2) 55%, transparent));
-  filter: blur(34px); opacity: 0.5;
-  animation: cm-core 6s ease-in-out infinite; will-change: opacity, transform;
-}
-:root[data-theme="light"] .cm-node.kind-captain::before { opacity: 0.32; }
-@keyframes cm-core { 0%, 100% { opacity: 0.32; transform: scale(0.97); } 50% { opacity: 0.6; transform: scale(1.03); } }
+:root[data-theme="light"] .cm-node.kind-captain { box-shadow: 0 0 0 4px color-mix(in srgb, var(--cm-cap) 8%, transparent), 0 8px 20px -12px rgba(105, 65, 198, 0.35); }
+.cm-node.kind-captain:hover { border-color: var(--cm-cap); }
 .cm-crest {
-  grid-row: 1 / 3; grid-column: 1; width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; color: #fff;
-  background: linear-gradient(140deg, color-mix(in srgb, var(--cm-core) 85%, #fff), var(--cm-core) 40%, var(--cm-core-2));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -8px 14px rgba(0, 0, 0, 0.14), 0 8px 20px -6px color-mix(in srgb, var(--cm-core) 70%, transparent);
+  grid-row: 1 / 3; grid-column: 1; width: 52px; height: 52px; border-radius: 14px; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(140deg, #8b7cf6, #6d5be0);
 }
-.cm-crest svg { width: 26px; height: 26px; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25)); }
+.cm-crest svg { width: 26px; height: 26px; }
 .cm-node.kind-captain .cm-title {
   grid-row: 1; grid-column: 2; align-self: center;
-  font-size: 17px; font-weight: 680; line-height: 24px; letter-spacing: 0.02em;
+  font-size: 18px; font-weight: 680; line-height: 24px; letter-spacing: 0.02em;
   display: block; flex: none; min-height: 0; white-space: nowrap;
 }
-.cm-node.kind-captain .cm-top { grid-row: 1; grid-column: 3; height: 24px; gap: 10px; }
+.cm-node.kind-captain .cm-top { grid-row: 1; grid-column: 3; height: 24px; gap: 10px; padding-right: 0; }
 .cm-node.kind-captain .cm-status { flex: 1; font-size: 12.5px; }
 /* 「几个在干活」: the line that has to read at a glance */
 .cm-node.kind-captain .cm-line {
@@ -2051,7 +2020,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   font-size: 13.5px; font-weight: 500; line-height: 40px; color: var(--cm-text-2); font-style: normal;
 }
 .cm-node.kind-captain .cm-count {
-  height: 38px; gap: 7px; padding: 0 12px 0 10px; border-radius: 11px;
+  height: 38px; gap: 7px; padding: 0 12px 0 10px; border-radius: 10px;
   background: color-mix(in srgb, var(--cm-text) 5%, transparent); border: 1px solid var(--cm-rim);
 }
 .cm-node.kind-captain .cm-count .cm-ico { width: 17px; height: 17px; }
@@ -2060,47 +2029,63 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-node.kind-captain .cm-count.st-working b { color: var(--cm-work); }
 .cm-node.kind-captain .cm-count.st-input { background: color-mix(in srgb, var(--cm-need) 12%, transparent); border-color: color-mix(in srgb, var(--cm-need) 36%, transparent); color: var(--cm-text); }
 .cm-node.kind-captain .cm-count.st-input b { color: var(--cm-need); }
+.cm-node.kind-captain .cm-count.st-failed { background: color-mix(in srgb, var(--cm-fail) 10%, transparent); border-color: color-mix(in srgb, var(--cm-fail) 32%, transparent); }
 .cm-node.kind-captain .cm-count.st-failed b { color: var(--cm-fail); }
 .cm-node.kind-captain .cm-count.st-done b { color: var(--cm-done); }
 
 .cm-node.kind-waiting { background: transparent; box-shadow: none; }
-.cm-node.archived { opacity: 0.45; border-style: dashed; box-shadow: none; }
-.cm-node.archived:hover { opacity: 0.85; }
-.cm-node.archived::after { display: none; }
-.cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; height: 20px; }
-.cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12px; font-weight: 560; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; height: 20px; }
+.cm-node.archived { opacity: 0.5; border-style: dashed; box-shadow: none; }
+.cm-node.archived:hover { opacity: 0.9; }
+.cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; height: 20px; padding-right: 34px; }
+.cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12.5px; font-weight: 600; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; height: 20px; }
 .cm-status-text { overflow: hidden; text-overflow: ellipsis; }
 .st-working > .cm-top .cm-status { color: var(--cm-work); }
 .st-input > .cm-top .cm-status { color: var(--cm-need); }
 .st-done > .cm-top .cm-status { color: var(--cm-done); }
 .st-failed > .cm-top .cm-status { color: var(--cm-fail); }
 .cm-node.archived .cm-ico svg, .cm-node.archived .cm-ico::after { animation: none; }
-/* model badge: a small capsule */
-.cm-agent { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; font-size: 10.5px; color: var(--cm-text-dim); max-width: 120px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* model badge: a small capsule; the brand colour stays in its icon */
+.cm-agent { flex: 0 0 auto; margin-left: auto; display: inline-flex; align-items: center; font-size: 11px; color: var(--cm-text-2); max-width: 130px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .cm-agent .cn-badge {
-  margin-right: 0; max-width: 120px; padding: 1px 7px 1px 5px; gap: 4px; border-radius: 999px;
-  background: color-mix(in srgb, var(--cm-text) 5%, transparent); border: 1px solid var(--cm-rim);
+  margin-right: 0; max-width: 130px; padding: 2px 9px 2px 7px; gap: 5px; border-radius: 999px;
+  background: color-mix(in srgb, var(--cm-text) 6%, transparent); border: 1px solid var(--cm-rim);
 }
-.cm-agent .cn-badge .agent-model-label { max-width: 96px; font-weight: 550; }
+.cm-agent .cn-badge .agent-model-label { max-width: 104px; font-weight: 550; color: var(--cm-text); }
+.cm-node.kind-captain .cm-agent { margin-left: 0; }
+.cm-more {
+  position: absolute; top: 3px; right: 5px; z-index: 1; width: 32px; height: 32px; padding: 0; display: grid; place-items: center;
+  border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-2); cursor: pointer;
+}
+.cm-more:hover, .cm-more:focus-visible { color: var(--cm-text); background: color-mix(in srgb, var(--cm-text) 10%, transparent); }
+.cm-more:focus-visible { outline: 2px solid var(--cm-core); outline-offset: -2px; }
 .cm-title {
-  font-size: 14px; font-weight: 640; line-height: 20px; letter-spacing: -0.005em;
+  font-size: 15.5px; font-weight: 650; line-height: 20px; letter-spacing: -0.005em;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word;
   flex: 0 0 40px; min-height: 40px;
 }
 .cm-line {
-  font-size: 12px; line-height: 18px; color: var(--cm-text-2);
+  font-size: 12.5px; line-height: 18px; color: var(--cm-text-2);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word;
   flex: 0 0 36px; min-height: 36px;
 }
 .cm-line.empty { color: var(--cm-text-dim); }
-.st-failed > .cm-line:not(.empty) { color: color-mix(in srgb, var(--cm-fail) 80%, var(--cm-text)); }
+.st-failed > .cm-line:not(.empty) { color: color-mix(in srgb, var(--cm-fail) 75%, var(--cm-text)); }
 .cm-live { font-family: var(--mono); font-size: 11px; color: var(--cm-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto; height: 16px; line-height: 16px; }
-.cm-foot { flex: 0 0 auto; font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--cm-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; height: 16px; line-height: 16px; margin-top: auto; display: flex; align-items: center; justify-content: space-between; }
-.cm-returned { color: var(--cm-done); font-size: 11px; margin-left: auto; }
+.cm-foot { flex: 0 0 auto; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--cm-text-dim); white-space: nowrap; overflow: hidden; height: 28px; margin-top: auto; display: flex; align-items: center; gap: 10px; }
+.cm-time { display: inline-flex; align-items: center; gap: 5px; }
+.cm-returned { color: var(--cm-done); font-size: 12px; margin-left: auto; }
+.cm-view {
+  margin-left: auto; height: 28px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto;
+  font-size: 12.5px; font-weight: 600; color: var(--cm-fail); cursor: pointer;
+  background: transparent; border: 1px solid color-mix(in srgb, var(--cm-fail) 75%, transparent); border-radius: 8px;
+}
+.cm-returned + .cm-view { margin-left: 4px; }
+.cm-view:hover { background: color-mix(in srgb, var(--cm-fail) 14%, transparent); }
+.cm-view:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
 .cm-fold {
   position: absolute; z-index: 2; padding: 0 14px;
   border: 1px dashed var(--cm-rim-hi); border-radius: 999px;
-  background: var(--cm-glass); color: var(--cm-text-dim); font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap;
+  background: var(--cm-card); color: var(--cm-text-dim); font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap;
 }
 .cm-fold:hover { color: var(--cm-text); border-color: var(--cm-core); }
 .cm-fold:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
@@ -2109,45 +2094,102 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   display: flex; flex-direction: column; gap: 6px; color: var(--cm-text-dim); font-size: 13px; line-height: 1.5;
 }
 .cm-empty strong { color: var(--cm-text); font-size: 15px; }
-.cm-controls {
-  position: absolute; right: 16px; bottom: 14px; z-index: 10;
-  display: flex; align-items: center; gap: 2px; padding: 4px;
-  background: var(--cm-glass); border: 1px solid var(--cm-rim-hi); border-radius: 13px;
-  box-shadow: var(--cm-shadow);
-  -webkit-backdrop-filter: blur(16px) saturate(140%); backdrop-filter: blur(16px) saturate(140%);
-  cursor: default;
+
+/* Detail popover: sits in the viewport next to the card and does not zoom with the canvas. */
+.cm-pop {
+  position: absolute; z-index: 12; width: 340px; max-width: calc(100% - 16px); display: flex; flex-direction: column;
+  background: var(--cm-card); border: 1px solid var(--cm-rim-hi); border-radius: 14px; box-shadow: 0 18px 40px -14px rgba(0, 0, 0, 0.55), var(--cm-shadow);
+  cursor: default; user-select: text;
 }
-.cm-controls button {
-  min-width: 32px; height: 32px; padding: 0 6px; border: none; border-radius: 9px;
-  display: inline-flex; align-items: center; justify-content: center;
-  background: transparent; color: var(--cm-text-2); font-size: 11.5px; font-variant-numeric: tabular-nums; cursor: pointer;
-  transition: background .15s ease, color .15s ease;
+.cm-pop.st-failed { border-color: color-mix(in srgb, var(--cm-fail) 55%, var(--cm-rim-hi)); }
+.cm-pop-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 0 14px; }
+.cm-pop-head .cm-status { flex: 1; }
+.cm-pop.st-working .cm-status { color: var(--cm-work); }
+.cm-pop.st-input .cm-status { color: var(--cm-need); }
+.cm-pop.st-done .cm-status { color: var(--cm-done); }
+.cm-pop.st-failed .cm-status { color: var(--cm-fail); }
+.cm-pop-x { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-2); cursor: pointer; }
+.cm-pop-x:hover { color: var(--cm-text); background: color-mix(in srgb, var(--cm-text) 10%, transparent); }
+.cm-pop-x:focus-visible, .cm-pop-open:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
+.cm-pop-body { max-height: 280px; overflow-y: auto; padding: 4px 14px 8px; display: flex; flex-direction: column; gap: 8px; }
+.cm-pop-title { margin: 0; font-size: 15.5px; line-height: 21px; font-weight: 650; word-break: break-word; }
+.cm-pop-receipt { font-size: 13px; line-height: 20px; color: var(--cm-text-2); white-space: pre-wrap; word-break: break-word; }
+.cm-pop-receipt.empty { color: var(--cm-text-dim); }
+.cm-pop.st-failed .cm-pop-receipt:not(.empty) { color: color-mix(in srgb, var(--cm-fail) 75%, var(--cm-text)); }
+.cm-pop-live { font-family: var(--mono); font-size: 11.5px; color: var(--cm-text-dim); word-break: break-word; }
+.cm-pop-files { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.cm-pop-files li { max-width: 100%; padding: 2px 8px; border: 1px solid var(--cm-rim); border-radius: 6px; font-family: var(--mono); font-size: 11.5px; color: var(--cm-text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cm-pop-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px 12px; color: var(--cm-text-dim); font-size: 12px; border-top: 1px solid var(--cm-rim); }
+.cm-pop-open { height: 32px; padding: 0 14px; border: 0; border-radius: 8px; background: var(--cm-btn); color: #fff; font-size: 13px; font-weight: 600; cursor: pointer; }
+.cm-pop-open:hover { filter: brightness(1.1); }
+
+/* Bottom tray: projects with nothing running, one chip each */
+.cm-tray {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 10px; margin: 0 14px 8px; padding: 6px 12px 6px 6px; min-height: 48px;
+  background: var(--cm-pane); border: 1px solid var(--cm-rim); border-radius: 12px; user-select: none;
 }
-.cm-controls button:focus-visible, .cm-return-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
-.cm-controls button:hover { background: color-mix(in srgb, var(--cm-core) 14%, transparent); color: var(--cm-text); }
-.cm-controls button.on { background: color-mix(in srgb, var(--cm-core) 18%, transparent); color: var(--cm-text); }
-.cm-controls button[hidden] { display: none; }
-.cm-controls button[hidden] + .cm-sep { display: none; }
-.cm-zoom { min-width: 44px; text-align: center; font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--cm-text-2); }
-.cm-sep { width: 1px; height: 16px; margin: 0 3px; background: var(--cm-rim-hi); }
+.cm-tray-arrow { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-2); cursor: pointer; transition: background .15s ease; }
+.cm-tray-arrow svg { transition: transform .18s ease; }
+.cm-tray-arrow[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.cm-tray-arrow:hover { background: color-mix(in srgb, var(--cm-text) 8%, transparent); color: var(--cm-text); }
+.cm-tray-arrow:focus-visible, .cm-chip:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
+.cm-tray-title { display: inline-flex; align-items: baseline; gap: 10px; flex: 0 1 auto; min-width: 0; white-space: nowrap; }
+.cm-tray-title b { font-size: 15px; font-weight: 650; color: var(--cm-text); }
+.cm-tray-sum { font-size: 12.5px; color: var(--cm-text-2); overflow: hidden; text-overflow: ellipsis; }
+.cm-tray-chips { display: flex; align-items: center; gap: 8px; margin-left: auto; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 2px; }
+.cm-tray-chips::-webkit-scrollbar { display: none; }
+.cm-chip {
+  --project-color: hsl(var(--project-hue) 78% 66%);
+  flex: 0 0 auto; height: 34px; display: inline-flex; align-items: center; gap: 8px; padding: 0 12px 0 10px; cursor: pointer;
+  background: var(--cm-card); border: 1px solid var(--cm-rim); border-radius: 9px; color: var(--cm-text); font-size: 13px; font-weight: 550;
+  transition: border-color .15s ease, background .15s ease;
+}
+:root[data-theme="light"] .cm-chip { --project-color: hsl(var(--project-hue) 70% 42%); }
+.cm-chip .cm-cube { width: 16px; height: 16px; }
+.cm-chip:hover { border-color: color-mix(in srgb, var(--project-color) 60%, var(--cm-rim)); }
+.cm-chip[aria-pressed="true"] { border-color: var(--project-color); background: color-mix(in srgb, var(--project-color) 12%, var(--cm-card)); }
+.cm-chip.failed { border-color: color-mix(in srgb, var(--cm-fail) 65%, var(--cm-rim)); background: var(--cm-fail-bg); }
+.cm-chip-fail { color: var(--cm-fail); font-size: 12px; font-weight: 650; }
+.cm-chip-name { white-space: nowrap; }
+
+/* Legend row: what the marks mean on the left; zoom, fit and the rest on the right */
 .cm-legend {
-  flex: 0 0 42px; display: flex; align-items: center; gap: 14px; user-select: none;
-  padding: 0 20px; border-top: 1px solid var(--cm-rim);
-  background: var(--cm-space); color: var(--cm-text-2); font-size: 12px; white-space: nowrap; overflow: hidden;
+  flex: 0 0 52px; display: flex; align-items: center; gap: 14px; user-select: none;
+  padding: 0 14px; border-top: 1px solid var(--cm-rim);
+  background: var(--cm-space); color: var(--cm-text-2); font-size: 12px; white-space: nowrap;
 }
-.cm-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+.cm-legend-keys { flex: 1 1 0; min-width: 0; display: flex; align-items: center; gap: 14px; overflow: hidden; }
+.cm-legend-keys > span { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; }
 .cm-legend-gap { width: 6px; }
 .cm-key-svg { width: 30px; height: 12px; overflow: visible; }
 .cm-key-svg .cm-edge { animation: none; opacity: 1; }
 .cm-key-head.review { fill: var(--cm-review); }
 .cm-key-head.back { fill: var(--cm-back); }
-.cm-legend-note { margin-left: auto; overflow: hidden; text-overflow: ellipsis; color: var(--cm-text-dim); }
 .cm-return-toggle { flex: 0 0 32px; width: 32px; height: 32px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 9px; background: transparent; color: var(--cm-text-dim); cursor: pointer; }
 .cm-return-toggle:hover, .cm-return-toggle.on { color: var(--cm-done); background: color-mix(in srgb, var(--cm-done) 12%, transparent); }
+.cm-return-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
+.cm-controls {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 3px;
+  background: var(--cm-pane); border: 1px solid var(--cm-rim); border-radius: 11px; cursor: default;
+}
+.cm-controls button {
+  min-width: 32px; height: 32px; padding: 0 6px; border: none; border-radius: 8px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  background: transparent; color: var(--cm-text-2); font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.cm-controls button:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
+.cm-controls button:hover { background: color-mix(in srgb, var(--cm-text) 9%, transparent); color: var(--cm-text); }
+.cm-controls button.on { background: color-mix(in srgb, var(--cm-core) 18%, transparent); color: var(--cm-text); }
+.cm-controls button[hidden] { display: none; }
+.cm-controls .cm-zoom { min-width: 52px; font-family: var(--mono); color: var(--cm-text); }
+.cm-controls .cm-fit { padding: 0 12px 0 10px; font-weight: 550; color: var(--cm-text); }
+.cm-sep { width: 1px; height: 18px; margin: 0 3px; background: var(--cm-rim-hi); }
+@media (max-width: 1100px) { .cm-legend-keys > span:nth-child(-n+5) { display: none; } }
 @media (prefers-reduced-motion: reduce) {
-  .cm-pulse, .cm-edge.review, .cm-node.st-working::after, .cm-node.kind-captain::before, #crewMap .cm-ico svg, #crewMap .cm-ico::after { animation: none; }
-  .cm-node.st-working::after, .cm-pulse, #crewMap .cm-ico::after { display: none; }
-  .cm-node { transition: none; }
+  .cm-pulse, .cm-edge.review, #crewMap .cm-ico svg, #crewMap .cm-ico::after { animation: none; }
+  .cm-pulse, #crewMap .cm-ico::after { display: none; }
+  .cm-node, .cm-canvas.cm-smooth, .cm-tray-arrow svg { transition: none; }
 }
 /* Claude seats: account switching stays local to the Captain. */
 .seat-icon { width: 32px; height: 32px; flex: 0 0 32px; display: inline-flex; align-items: center; justify-content: center; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }

@@ -370,3 +370,152 @@ test('dispatch is one bundled tree: one port, a bus per project, lower projects 
 test('tidy drops repeats and straight-run midpoints only', () => {
   assert.deepEqual(C.tidy([[0, 0], [0, 0], [0, 5], [0, 10], [4, 10], [4, 10]]), [[0, 0], [0, 10], [4, 10]]);
 });
+
+// ---- A 版: tray, reopen on activity, fit, grid layout ----
+const A_GRID = { nodeW: 296, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 52, fanY: 64, gapY: 20, pad: 32, padX: 24, padBottom: 20, rowGap: 20, reviewGap: 52, grid: true, center: true, tray: true };
+function trayMap() {
+  const columns = [
+    ...Array.from({ length: 7 }, (_, i) => col('a' + i, 'agentdeck ' + i, { project: 'agentdeck', state: 'working' })),
+    col('t0', '豆包', { project: 'type4me-windows' }), col('m0', '地图', { project: 'ai-unified-map' }),
+    col('h0', '复核', { project: 'hermes-quality' }), col('h1', '日报', { project: 'hermes-quality' }), col('o0', '封装', { project: 'opencli' }),
+  ];
+  const tasks = [
+    ...Array.from({ length: 7 }, (_, i) => task('ta' + i, 'a' + i, 'working', i)),
+    task('tt', 't0', 'done', 10, { receipt: { summary: 'ok' } }), task('tm', 'm0', 'done', 11, { receipt: { summary: 'ok' } }),
+    task('th0', 'h0', 'done', 12, { receipt: { summary: 'ok' } }), task('th1', 'h1', 'failed', 13, { receipt: { failed: 'no' } }), task('to', 'o0', 'done', 14, { receipt: { summary: 'ok' } }),
+  ];
+  return C.buildCrewMap({ captain, columns, tasks });
+}
+
+test('a project with nothing working, waiting on an answer or queued is inactive and goes to the tray with real counts', () => {
+  const map = trayMap();
+  assert.deepEqual(map.projects.filter((p) => p.inactive).map((p) => p.key).sort(), ['ai-unified-map', 'hermes-quality', 'opencli', 'type4me-windows']);
+  assert.equal(map.projects.find((p) => p.key === 'agentdeck').inactive, false);
+  const tray = C.trayProjects(map, {});
+  assert.deepEqual(tray.map((p) => [p.key, p.failed, p.expanded]), [['type4me-windows', 0, false], ['ai-unified-map', 0, false], ['hermes-quality', 1, false], ['opencli', 0, false]]);
+  assert.equal(C.traySummary(tray), '4 个项目（3 个已完成 · 1 个失败）');
+  assert.equal(C.traySummary([]), '0 个项目');
+  // a user-opened project stays listed (chip pressed), a user-folded active project is not a tray project
+  const opened = C.trayProjects(map, { opencli: false });
+  assert.equal(opened.find((p) => p.key === 'opencli').expanded, true);
+  assert.deepEqual(C.trayProjects(map, { agentdeck: true }).map((p) => p.key), tray.map((p) => p.key));
+  assert.equal(C.isCollapsed({ key: 'x', inactive: true, completed: false }, {}, true), true);
+  assert.equal(C.isCollapsed({ key: 'x', inactive: false, completed: false }, {}, true), false);
+  assert.equal(C.isCollapsed({ key: 'x', inactive: true, completed: true }, { x: false }, true), false);
+});
+
+test('tray layout: only active projects (and the ones the user opened) take canvas room', () => {
+  const map = trayMap();
+  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3, maxWidth: 1400 });
+  assert.deepEqual(lay.groups.map((g) => g.key), ['agentdeck']);
+  assert.equal(lay.nodes.size, 7);
+  const opened = C.layout(map, { ...A_GRID, collapsedProjects: { 'hermes-quality': false }, columnsPerProject: 3, maxWidth: 1400 });
+  assert.deepEqual(opened.groups.map((g) => g.key).sort(), ['agentdeck', 'hermes-quality']);
+  assert.ok(opened.nodes.has('h0') && opened.nodes.has('h1') && !opened.nodes.has('t0'));
+  // an active project the user folded stays a one-row group on the canvas, not in the tray
+  const folded = C.layout(map, { ...A_GRID, collapsedProjects: { agentdeck: true }, columnsPerProject: 3, maxWidth: 1400 });
+  assert.equal(folded.groups[0].collapsed, true);
+  assert.equal(folded.nodes.size, 0);
+});
+
+test('grid layout: 3 columns on a wide window, rows share the column grid, groups centred under 队长', () => {
+  const map = trayMap();
+  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3, maxWidth: 1400 });
+  const xs = [...lay.nodes.values()].map((b) => b.x);
+  assert.equal(new Set(xs).size, 3);
+  const rows = new Set([...lay.nodes.values()].map((b) => b.y));
+  assert.equal(rows.size, 3);                       // 3 + 3 + 1
+  const [g] = lay.groups;
+  assert.equal(Math.min(...xs), g.x + A_GRID.padX);  // left-aligned to the grid, not centred per row
+  assert.ok(Math.abs(g.x + g.w / 2 - (lay.captain.x + lay.captain.w / 2)) <= 1, 'group centred under 队长');
+  // no overlap, every card inside its group
+  const boxes = [...lay.nodes.values()];
+  boxes.forEach((a, i) => {
+    assert.ok(a.x >= g.x && a.x + a.w <= g.x + g.w && a.y >= g.y && a.y + a.h <= g.y + g.h);
+    boxes.slice(i + 1).forEach((b) => assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y));
+  });
+  // 2 and 1 columns
+  assert.equal(new Set([...C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 2, maxWidth: 900 }).nodes.values()].map((b) => b.x)).size, 2);
+  assert.equal(new Set([...C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 1, maxWidth: 500 }).nodes.values()].map((b) => b.x)).size, 1);
+});
+
+test('grid routes: rows below the first share one channel per column, left of the cards, and reviewers use the nearest one', () => {
+  const columns = [...Array.from({ length: 7 }, (_, i) => col('w' + i, 'w' + i, { project: 'P', state: 'working' })), col('rv', 'review', { project: 'P', state: 'working', reviews: ['w0', 'w1'] })];
+  const map = C.buildCrewMap({ captain, columns, tasks: [] });
+  const lay = C.layout(map, { ...A_GRID, collapsedProjects: {}, columnsPerProject: 3, maxWidth: 1400 });
+  const routes = C.routes(map, lay, { clusterGap: 52, gapX: 24 });
+  const dispatch = routes.filter((r) => r.type === 'dispatch');
+  const channel = (id) => { const pts = dispatch.find((r) => r.to === id).points; return pts[pts.length - 3][0]; };
+  const below = [...lay.nodes].filter(([, b]) => b.row > 1);
+  assert.ok(below.length >= 4);
+  below.forEach(([id, b]) => assert.equal(channel(id), b.x - 12, id + ' enters from the channel left of its column'));
+  // every row-2+ card of a column uses the same channel
+  const byColumn = new Map();
+  below.forEach(([id, b]) => byColumn.set(b.x, [...(byColumn.get(b.x) || []), channel(id)]));
+  byColumn.forEach((list) => assert.equal(new Set(list).size, 1));
+  assert.ok(byColumn.size >= 2, 'more than one column below the first row');
+  assert.equal(channel('rv'), lay.nodes.get('rv').x - 12);
+  // first-row cards are entered from the top, at their centre
+  const [firstId, first] = [...lay.nodes].find(([, b]) => b.row === 1);
+  assert.equal(dispatch.find((r) => r.to === firstId).points.at(-1)[0], first.x + first.w / 2);
+  // the review lines carry the reviewer's own state so only a working reviewer flows
+  assert.ok(routes.filter((r) => r.type === 'review').every((r) => / st-working/.test(r.cls)));
+  assert.equal(noSharedStretch(routes), '');
+});
+
+test('reopenOnActivity: a new active session brings a folded project back; the first pass only records', () => {
+  const proj = (key, statuses) => ({ key, nodes: statuses.map(([id, status]) => ({ id, status })) });
+  const first = C.reopenOnActivity(null, [proj('P', [['a', 'done']])], { P: true });
+  assert.deepEqual(first.overrides, { P: true });
+  assert.deepEqual(first.reopened, []);
+  assert.deepEqual(first.active, { P: [] });
+  // nothing new: still folded
+  const same = C.reopenOnActivity(first.active, [proj('P', [['a', 'done']])], first.overrides);
+  assert.deepEqual(same.overrides, { P: true });
+  // a session of the folded project starts working: the saved fold is dropped, the project shows again
+  const woke = C.reopenOnActivity(same.active, [proj('P', [['a', 'working']])], same.overrides);
+  assert.deepEqual(woke.overrides, {});
+  assert.deepEqual(woke.reopened, ['P']);
+  // a queued or waiting session counts as activity too
+  assert.deepEqual(C.reopenOnActivity({ P: [] }, [proj('P', [['a', 'queued']])], { P: true }).reopened, ['P']);
+  assert.deepEqual(C.reopenOnActivity({ P: [] }, [proj('P', [['a', 'input']])], { P: true }).reopened, ['P']);
+  // work that was already running is not "new"
+  assert.deepEqual(C.reopenOnActivity({ P: ['a'] }, [proj('P', [['a', 'working']])], { P: true }).reopened, []);
+  // a project the user opened from the tray tucks itself away again once it is active
+  assert.deepEqual(C.reopenOnActivity({ P: [] }, [proj('P', [['a', 'working']])], { P: false }).overrides, {});
+  // the input is never mutated
+  const ov = { P: true };
+  C.reopenOnActivity({ P: [] }, [proj('P', [['a', 'working']])], ov);
+  assert.deepEqual(ov, { P: true });
+});
+
+test('computeFit shows the bounds whole and centred, clear of the insets, never past the zoom limits', () => {
+  const bounds = { left: 100, top: 50, right: 1100, bottom: 650 };            // 1000 × 600
+  const f = C.computeFit(bounds, { w: 2000, h: 1200 }, {}, { max: 1 });
+  assert.equal(f.scale, 1);                                                   // never zooms in past max
+  assert.equal(f.x + 100 * f.scale, (2000 - 1000) / 2);                       // centred
+  assert.equal(f.y + 50 * f.scale, (1200 - 600) / 2);
+  const small = C.computeFit(bounds, { w: 500, h: 600 }, {}, { max: 1 });
+  assert.equal(small.scale, 0.5);                                              // width limits
+  assert.equal((1100 - 100) * small.scale, 500);
+  const inset = C.computeFit(bounds, { w: 1000, h: 700 }, { top: 8, right: 8, bottom: 8, left: 8 }, { max: 1 });
+  assert.equal(inset.scale, 984 / 1000);                                       // 8px kept free on every side
+  assert.ok(inset.x + bounds.left * inset.scale >= 8 - 1e-9);
+  assert.ok(inset.x + bounds.right * inset.scale <= 1000 - 8 + 1e-9);
+  assert.ok(inset.y + bounds.top * inset.scale >= 8 - 1e-9);
+  assert.ok(inset.y + bounds.bottom * inset.scale <= 700 - 8 + 1e-9);
+  assert.equal(C.computeFit({ left: 0, top: 0, right: 100000, bottom: 10 }, { w: 500, h: 500 }, {}, { max: 1 }).scale, C.MIN_SCALE);
+  assert.ok(Number.isFinite(C.computeFit({ left: 5, top: 5, right: 5, bottom: 5 }, { w: 300, h: 300 }).scale));   // empty bounds do not break it
+});
+
+test('the signature changes when a project turns inactive, and the detail text keeps the whole receipt', () => {
+  const long = '修'.repeat(300);
+  const a = C.buildCrewMap({ captain, columns: [col('a', 'A', { project: 'P', state: 'working' })], tasks: [task('t', 'a', 'working', 1)] });
+  const b = C.buildCrewMap({ captain, columns: [col('a', 'A', { project: 'P', state: 'done' })], tasks: [task('t', 'a', 'done', 1, { receipt: { summary: long } })] });
+  assert.notEqual(C.signature(a), C.signature(b));
+  assert.equal(b.projects[0].inactive, true);
+  assert.ok(b.nodes[0].line.length <= 140);
+  assert.equal(b.nodes[0].full, long);
+  assert.equal(C.receiptFull({ receipt: { failed: ' 坏了 ' } }), '失败：坏了');
+  assert.equal(C.receiptFull(null, { summary: '旧' }), '旧');
+});

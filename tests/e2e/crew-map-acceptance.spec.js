@@ -17,12 +17,15 @@ async function resize(width, height) {
   await page.setViewportSize({ width, height });
   await expect.poll(() => page.evaluate(() => [innerWidth, innerHeight])).toEqual([width, height]);
 }
+// a fit glides for a moment; measure only once the canvas has landed
+async function settled() { await expect(page.locator('.cm-canvas.cm-smooth')).toHaveCount(0); }
 async function geometry() {
+  await settled();
   return page.evaluate(() => {
     const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const viewport = rect(document.querySelector('.cm-viewport'));
     const nodes = [...document.querySelectorAll('.cm-node')].map((n) => ({ id: n.dataset.nodeId, ...rect(n) }));
-    const groups = [...document.querySelectorAll('.cm-project')].map((n) => ({ id: n.dataset.project, ...rect(n), color: getComputedStyle(n).backgroundColor, border: getComputedStyle(n).borderColor }));
+    const groups = [...document.querySelectorAll('.cm-project')].map((n) => { const pane = document.querySelector(`.cm-pane[data-project="${CSS.escape(n.dataset.project)}"]`); return { id: n.dataset.project, ...rect(n), color: getComputedStyle(pane).backgroundColor, border: getComputedStyle(pane).borderColor }; });
     const texts = [...document.querySelectorAll('.cm-node')].flatMap((card) => [...card.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-live, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: card.dataset.nodeId, cls: n.className, captain: card.classList.contains('kind-captain'), ...rect(n), parent: rect(card), lineHeight: parseFloat(getComputedStyle(n).lineHeight), localHeight: n.offsetHeight, clamp: getComputedStyle(n).webkitLineClamp })));
     return { viewport, nodes, groups, texts, scale: CrewMap.view().scale };
   });
@@ -35,7 +38,7 @@ async function assertLayout() {
     expect(a.x, a.id + ' left').toBeGreaterThanOrEqual(g.viewport.x);
     expect(a.y, a.id + ' top').toBeGreaterThanOrEqual(g.viewport.y);
     expect(a.right, a.id + ' right').toBeLessThanOrEqual(g.viewport.right);
-    expect(a.bottom, a.id + ' bottom').toBeLessThanOrEqual(g.viewport.bottom - 50);
+    expect(a.bottom, a.id + ' bottom').toBeLessThanOrEqual(g.viewport.bottom);
     for (const b of list.slice(i + 1)) expect(overlaps(a, b), `${a.id}/${b.id} overlap`).toBe(false);
   }
   for (const t of g.texts) {
@@ -45,8 +48,14 @@ async function assertLayout() {
       expect(t.localHeight).toBe(t.lineHeight * 2);
     }
   }
-  const controls = await page.evaluate(() => [...document.querySelectorAll('.cm-controls button, .cm-return-toggle, .cm-project-toggle, #boardViewBtn, #navCollapseBtn')].filter((n) => !n.hidden).map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, icon: !!n.querySelector('svg'), text: n.textContent.trim() })));
-  for (const c of controls) { expect(c.label).toBeTruthy(); expect(c.title).toBeTruthy(); expect(c.icon).toBe(true); expect(c.text).toBe(''); }
+  const controls = await page.evaluate(() => [...document.querySelectorAll('.cm-controls button, .cm-return-toggle, .cm-project-toggle, .cm-more, .cm-tray-arrow, #boardViewBtn, #navCollapseBtn')].filter((n) => !n.hidden).map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, icon: !!n.querySelector('svg'), text: n.textContent.trim(), cm: n.dataset.cm || '' })));
+  // icon buttons everywhere; only the zoom readout and 适应画布 carry text (the spec asks for it)
+  for (const c of controls) {
+    expect(c.label).toBeTruthy(); expect(c.title).toBeTruthy();
+    if (c.cm === 'reset') expect(c.text).toMatch(/^\d+%$/);
+    else if (c.cm === 'fit') { expect(c.icon).toBe(true); expect(c.text).toBe('适应画布'); }
+    else { expect(c.icon).toBe(true); expect(c.text).toBe(''); }
+  }
   await expect(page.locator('.cm-edges .cm-edge.return.show, .cm-edges .cm-chevron')).toHaveCount(0);
   expect(await page.locator('.cm-returned').count()).toBeGreaterThan(0);
   expect(await page.locator('.cm-legend [data-cm="return"]').count()).toBe(1);
@@ -151,6 +160,7 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
   await screenshot(`${scenario}-card-position-preserved`);
   await page.locator('[data-cm="relayout"]').click();
   expect(await page.evaluate(() => [config.crewMap.positions, config.crewMap.projectPositions])).toEqual([{}, {}]);
+  await settled();
   await assertLayout(); await screenshot(`${scenario}-arranged`);
   await page.locator('#navCollapseBtn').click();
   await expect(page.locator('#boardViewBtn')).toBeVisible();

@@ -108,15 +108,21 @@ test('sci-fi crew map: bundled trunk, dispatch lines avoid other projects, motio
   const working = await style('.cm-edge.dispatch.st-working'), done = await style('.cm-edge.dispatch.st-done');
   expect(done.w).toBeLessThan(working.w);
   expect((await style('.cm-pulse')).anim).not.toBe('none');
-  // Glass project boxes; the project colour stays on the edges.
-  const glass = await page.locator('.cm-project').first().evaluate((n) => getComputedStyle(n, '::before').backdropFilter);
-  expect(glass).toContain('blur');
+  // Flat project panes (no backdrop blur: it costs frames on a zoomable canvas); 队长 has no aurora animation.
+  const flat = await page.locator('.cm-project').first().evaluate((n) => getComputedStyle(n).backdropFilter + getComputedStyle(n, '::before').backdropFilter);
+  expect(flat).not.toContain('blur');
+  expect(await page.locator('.cm-node.kind-captain').evaluate((n) => getComputedStyle(n, '::before').animationName)).toBe('none');
   // Icon controls keep their names, tooltips and a real hit area.
-  const controls = await page.locator('.cm-controls button:not([hidden]), .cm-return-toggle, .cm-project-toggle').evaluateAll((list) => list.map((n) => {
+  const controls = await page.locator('.cm-controls button:not([hidden]), .cm-return-toggle, .cm-project-toggle, .cm-more').evaluateAll((list) => list.map((n) => {
     // CSS size: the project toggles live on the zoomable canvas
-    return { label: n.getAttribute('aria-label'), title: n.title, svg: !!n.querySelector('svg'), text: n.textContent.trim(), w: n.offsetWidth, h: n.offsetHeight };
+    return { cm: n.dataset.cm || '', label: n.getAttribute('aria-label'), title: n.title, svg: !!n.querySelector('svg'), text: n.textContent.trim(), w: n.offsetWidth, h: n.offsetHeight };
   }));
-  for (const c of controls) { expect(c.label).toBeTruthy(); expect(c.title).toBeTruthy(); expect(c.svg).toBe(true); expect(c.text).toBe(''); expect(Math.min(c.w, c.h)).toBeGreaterThanOrEqual(32); }
+  for (const c of controls) {
+    expect(c.label).toBeTruthy(); expect(c.title).toBeTruthy(); expect(Math.min(c.w, c.h)).toBeGreaterThanOrEqual(32);
+    if (c.cm === 'reset') expect(c.text).toMatch(/^\d+%$/);
+    else if (c.cm === 'fit') { expect(c.svg).toBe(true); expect(c.text).toBe('适应画布'); }
+    else { expect(c.svg).toBe(true); expect(c.text).toBe(''); }
+  }
 
   // 队长's tally is alive: an icon per status, large coloured numbers, and 干活中 keeps turning.
   const captain = page.locator('.cm-node.kind-captain');

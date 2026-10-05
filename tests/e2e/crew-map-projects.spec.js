@@ -70,9 +70,11 @@ test('two project groups contain 3 workers + 1 declared reviewer and 2 workers, 
   await expect(page.locator('.cm-edges .cm-edge.review[data-from="a3"]')).toHaveCount(0);
   const geometry = await page.evaluate(() => {
     const l = CrewMap.layout();
-    return { groups: l.groups.map((g) => ({ key: g.key, x: g.x, right: g.x + g.w })), a: l.nodes.get('a1'), r: l.nodes.get('r1'), cap: l.captain };
+    return { groups: l.groups.map((g) => ({ key: g.key, x: g.x, right: g.x + g.w, y: g.y, bottom: g.y + g.h })), a: l.nodes.get('a1'), r: l.nodes.get('r1'), cap: l.captain };
   });
-  expect(geometry.groups[0].right).toBeLessThan(geometry.groups[1].x);
+  // beside each other or one below the other, depending on the window; never overlapping
+  const [g0, g1] = geometry.groups;
+  expect(g0.right <= g1.x || g1.right <= g0.x || g0.bottom <= g1.y || g1.bottom <= g0.y).toBe(true);
   expect(geometry.cap.y).toBeLessThan(geometry.a.y);
   expect(geometry.a.y + geometry.a.h).toBeLessThan(geometry.r.y);
   await expect(page.locator('.cm-edges .cm-edge.return[data-from="r1"]')).toHaveCount(1);
@@ -80,30 +82,35 @@ test('two project groups contain 3 workers + 1 declared reviewer and 2 workers, 
   await shot('two-projects-expanded.png');
 });
 
-test('successful projects default to one summary row; toggle is accessible and persists across reload', async () => {
+test('finished projects go to the bottom tray; the chip and the project toggle are accessible and persist across reload', async () => {
   await page.evaluate(() => {
     MainSession.state().tasks.find((t) => t.colId === 'b1').status = 'done';
     CrewMap.refresh();
   });
-  await expect(group('报表服务')).toHaveClass(/collapsed/);
-  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('2 已完成');
+  await expect(group('报表服务')).toHaveCount(0);
   await expect(node('b1')).toHaveCount(0);
-  const toggle = group('报表服务').getByRole('button', { name: '展开项目：报表服务' });
-  await expect(toggle).toHaveAttribute('title', '展开项目：报表服务');
-  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  await shot('completed-project-collapsed.png');
-  await toggle.focus();
+  await expect(page.locator('.cm-tray-sum')).toHaveText('1 个项目（1 个已完成）');
+  const chip = page.locator('.cm-chip[data-project="报表服务"]');
+  await expect(chip).toHaveAttribute('title', '展开到画布：报表服务');
+  await expect(chip).toHaveAttribute('aria-pressed', 'false');
+  await shot('completed-project-in-tray.png');
+  await chip.focus();
   await page.keyboard.press('Enter');
+  await expect(chip).toHaveAttribute('aria-pressed', 'true');
   await expect(node('b1')).toBeVisible();
+  await expect(group('报表服务').locator('.cm-project-summary')).toHaveText('2 已完成');
   await expect.poll(() => page.evaluate(async () => (await window.deck.loadConfig()).crewMap.collapsedProjects['报表服务'])).toBe(false);
   await page.reload();
   await page.evaluate(() => showView('board'));
   await expect(group('报表服务')).not.toHaveClass(/collapsed/);
   await expect(node('r1')).toHaveClass(/review/);
   expect(await page.evaluate(() => columns.find((c) => c.id === 'r1').reviews)).toEqual(['a1', 'a2']);
-  await group('报表服务').getByRole('button', { name: '折叠项目：报表服务' }).click();
-  await expect(group('报表服务')).toHaveClass(/collapsed/);
-  await group('报表服务').getByRole('button', { name: '展开项目：报表服务' }).click();
+  const toggle = group('报表服务').getByRole('button', { name: '折叠项目：报表服务' });
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  await expect(group('报表服务')).toHaveCount(0);
+  await expect(chip).toHaveAttribute('aria-pressed', 'false');
+  await chip.click();
   await expect(node('b1')).toBeVisible();
 });
 
