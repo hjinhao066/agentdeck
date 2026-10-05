@@ -159,7 +159,7 @@ function checkpoint(home, userData, payload) {
   const text = '# AgentDeck 队长Relay接续\n\n## 在做什么\n席位Relay；先读本看板，再按需读取上一任队长的完整对话。\n\n'
     + `上任会话：${payload.colId}\n完整对话：${path.join(userData, 'chats', payload.colId + '.json')}\n`
     + `使用 board-cli read --id ${payload.colId} 可读取之前的队长对话。\n\n`
-    + `## 队长交接\n${line(payload.relayMessage || '手动 Relay')}\n最近指令：${line(latest?.user)}\n先读 briefing 和本交接，检查 ledger；旧监听失效后重挂恰好一个后台 receipts --wait --timeout 300。\n\n`
+    + `## 队长交接\n${line(payload.relayMessage || '手动 Relay')}\n最近指令：${line(latest?.user)}\n先读 briefing 和本交接，检查 ledger；先确认旧监听已退出，再用 Bash（run_in_background: true）重挂恰好一个后台 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。\n\n`
     + '## 谁在做\n| 会话 | 事项 | 状态 | 回执/提问 |\n| --- | --- | --- | --- |\n'
     + payload.tasks.map((t) => `| ${line(t.colId)} | ${line(t.title)} | ${line(t.status)} | ${line(t.receipt?.question || t.receipt?.failed || t.receipt?.summary)} |`).join('\n')
     + `\n\n## 卡在哪\n未处理回执和提问在 AgentDeck 中保留；额度用尽的会话保持原席位。\n\n## 等用户拍板什么\n见任务表中的提问及队长待处理回执。\n\n## 下一步\n${AUTONOMOUS_CONTINUATION}\n\n`

@@ -357,7 +357,7 @@
     s.pending = Array.isArray(s.pending) ? s.pending : [];
     s.inflight = Array.isArray(s.inflight) ? s.inflight : [];
     s.receiptsSeen = normalizeSeenIds(s.receiptsSeen);
-    s.exceptionSeen = Array.isArray(s.exceptionSeen) ? s.exceptionSeen.filter((key) => typeof key === 'string') : [];
+    delete s.exceptionSeen; // Retire the old session-wide gate; new events must reach the Captain.
     // A turn open at shutdown cannot acknowledge legacy injection. Receipts the
     // background channel already returned stay read across relaunch. Items still
     // in pending were never taken, including ones that arrived while restarting.
@@ -688,7 +688,8 @@
     // An acknowledged notification can still need a decision. Remind the new
     // context once, even if the old Captain already finished its own reply.
     carried.forEach((t) => {
-      if (t.status === 'input' && !s.pending.some((p) => p.colId === t.colId && p.waiting)) {
+      const waitingInput = t.status === 'input' || (t.status === 'queued' && t.blockedAsked && host.terms.get(t.colId)?.state === 'input');
+      if (waitingInput && !s.pending.some((p) => p.colId === t.colId && p.waiting)) {
         push(t, { waiting: confirmationExcerpt(host.terms.get(t.colId)) });
       } else if (t.status === 'asking' && t.receipt?.question && !s.pending.some((p) => p.colId === t.colId && p.question)) {
         push(t, { question: t.receipt.question });
@@ -713,7 +714,7 @@
     save();
     window.Sidebar.render();
     brief(fresh, M.resetNote(retired ? oldId : '', carried.filter((t) => !CLOSED.includes(t.status)))
-      + (rotation ? `\n${options.relayMessage || ''}\n先运行 ${M.boardCli(host.platform)} briefing，再读看板继续：${options.checkpointPath}。先确认旧监听已退出，然后重挂恰好一个后台 receipts --wait --timeout 300 监听。` : ''));
+      + (rotation ? `\n${options.relayMessage || ''}\n先运行 ${M.boardCli(host.platform)} briefing，再读看板继续：${options.checkpointPath}。先确认旧监听已退出，再用 Bash（run_in_background: true）重挂恰好一个后台 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。` : ''));
     host.showToast(rotation ? `已${host.config.captainRelayLabel || 'Relay'}；进度看板、队员和回执已保留` : '队长的模型上下文已清空；派出去的活、回执和之前的对话都还在');
     return fresh;
   }
@@ -1101,12 +1102,8 @@
     const s = state();
     if (!s || task.gen !== s.gen) return;
     const anomaly = M.exceptionReason(item);
-    if (anomaly) {
-      const key = task.colId + ':' + anomaly;
-      s.exceptionSeen = Array.isArray(s.exceptionSeen) ? s.exceptionSeen : [];
-      if (s.exceptionSeen.includes(key)) return false;
-      s.exceptionSeen.push(key);
-    }
+    // Input/exit/quota events are deduplicated by task status/blockedAsked.
+    // Never suppress a new task's failure or a decision the new Captain needs.
     s.pending.push({ ...(anomaly ? { anomaly } : {}), taskId: task.id, colId: task.colId, title: task.title, ts: Date.now(), ...item });
     return true;
   }
@@ -1691,9 +1688,12 @@
       }
       const quietSince = Math.max(entry.lastOutputAt || 0, task.startedAt || task.sentAt || 0);
       const quietLimit = M.silenceTimeout(col?.cmd);
-      if (quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' &&
+      if (quietSince && task.silenceNotifiedAt !== quietSince && Date.now() - quietSince >= quietLimit && entry.state !== 'input' &&
           (task.status === 'working' || task.status === 'queued' && !task.supplement)) {
-        if (push(task, { summary: `已连续 ${quietLimit / 60_000} 分钟没有任何终端输出，请检查会话；可能仍在深度思考，未自动中断或重派。`, source: 'watchdog' })) save();
+        if (push(task, { summary: `已连续 ${quietLimit / 60_000} 分钟没有任何终端输出，请检查会话；可能仍在深度思考，未自动中断或重派。`, source: 'watchdog' })) {
+          task.silenceNotifiedAt = quietSince; // Fresh output or a new task rearms the watchdog.
+          save();
+        }
       }
       if (task.status === 'queued') {
         // Not delivered yet and the session is stopped on a dialog (Cursor asks "Do you

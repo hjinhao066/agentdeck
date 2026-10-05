@@ -9,9 +9,10 @@ CLI 使用已有的队长权限通道进行短请求轮询，空结果不写 con
 已超时的请求不会消费后来到达的回执。没有权限的终端仍被拒绝。
 
 队长提示词要求 Claude Code 通过 Bash 工具设置 `run_in_background: true`
-运行 `receipts --wait --timeout 300`，保持恰好一个监听；收到任务完成通知后
-读取任务输出、处理回执，再立即挂下一个。空输出超时也重挂，恢复会话时检查
-是否已有监听。后台通知的实际唤醒由 Claude Code 提供。
+运行 `receipts --wait`（不设超时），保持恰好一个监听；收到任务完成通知后
+读取任务输出、处理回执，再立即挂下一个。若显式设超时后空输出退出，先检查
+已有监听，没有才安静重挂，不用向用户汇报；恢复会话时同样先检查已有监听。
+后台通知的实际唤醒由 Claude Code 提供。
 
 旧输入注入路径保留为 `config.json` 中的
 `mainSession.legacyReceiptInjection: true`；缺省/false 为后台通道。

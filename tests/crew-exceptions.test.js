@@ -15,10 +15,10 @@ function world(saved) {
   const turns = [];
   const s = saved || { colId: 'captain', gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] };
   const terms = new Map([[worker.id, { alive: true, state: 'working', lastOutputAt: now, lastScreen: '' }]]);
-  const window = { MainCore: M, BoardCore: B, deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, ChatUI: {
+  const window = { MainCore: M, BoardCore: B, deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, ptyInput() {} }, ChatUI: {
     hasDraft: () => false, updateCard() {}, turnsOf: () => turns, sendPrompt: async (...args) => { prompts.push(args); return sent; },
   } };
-  const context = vm.createContext({ window, Date: class extends Date { static now() { return now; } } });
+  const context = vm.createContext({ window, setTimeout, Date: class extends Date { static now() { return now; } } });
   const source = fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8')
     .replace('  window.MainSession = {', '  window.__test = { setHost(h) { host = h; }, remindMissingListener, normalize };\n  window.MainSession = {');
   vm.runInContext(source, context);
@@ -41,7 +41,7 @@ function world(saved) {
 
 for (const [screen, reason] of [
   ["You've hit your usage limit", 'quota'], ['API Error: 401 Unauthorized', 'auth'], ['429 Too many requests', 'rate_limit'],
-]) test(reason + ' is an immediate distinct abnormal receipt, deduplicated across tasks and restored state', async () => {
+]) test(reason + ' reports once per failed task and a new task still reports after restored state', async () => {
   const w = world(), t = w.task();
   Object.assign(w.terms.get('worker'), { state: 'quota', lastScreen: screen });
   w.tick(); w.tick();
@@ -49,11 +49,18 @@ for (const [screen, reason] of [
   assert.equal(w.s.pending.length, 1); assert.equal(w.s.pending[0].anomaly, reason);
   const read = await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
   assert.match(read.result, /异常回执/); assert.match(read.result, new RegExp(screen.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  w.s.exceptionSeen = ['worker:' + reason]; // Persisted by the rejected implementation.
   const restored = world(JSON.parse(JSON.stringify(w.s)));
   restored.restore();
+  assert.equal(restored.s.exceptionSeen, undefined);
+  restored.tick(); assert.equal(restored.s.pending.length, 0, 'the already closed task must not report again');
   Object.assign(restored.terms.get('worker'), { state: 'quota', lastScreen: screen });
   const next = restored.task(); restored.tick();
-  assert.equal(next.status, 'failed'); assert.equal(restored.s.pending.length, 0);
+  assert.equal(next.status, 'failed'); assert.equal(restored.s.pending.length, 1);
+  assert.equal(restored.s.pending[0].taskId, next.id);
+  const again = await restored.api.handle({ action: 'main-receipts', wait: true }, restored.captain);
+  assert.match(again.result, /异常回执/);
+  restored.tick(); assert.equal(restored.s.pending.length, 0);
 });
 
 for (const code of [0, 7, 137]) test('exit ' + code + ' before receipt immediately reports failure even with a surviving shell', async () => {
@@ -76,15 +83,47 @@ test('PTY death reports once; a completed task does not acquire an exit failure'
   assert.equal(next.status, 'done'); assert.equal(next.receipt.summary, 'finished');
 });
 
-for (const status of ['queued', 'working']) test(status + ' confirmation/permission prompt is once per session, including after answer and repeat', () => {
+for (const status of ['queued', 'working']) test(status + ' confirmation deduplicates one wait and rearms after returning to work', async () => {
   const w = world(), t = w.task(status);
   Object.assign(w.terms.get('worker'), { state: 'input', lastScreen: 'Allow tool? [y/n]' });
   w.tick(); w.tick();
   assert.equal(w.s.pending.length, 1); assert.equal(w.s.pending[0].anomaly, 'input');
   assert.match(M.receiptsForModel(w.s.pending), /确认\/权限提示/);
+  await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
+  w.tick(); assert.equal(w.s.pending.length, 0, 'reading alone does not rearm an unresolved prompt');
   w.terms.get('worker').state = 'working'; w.tick();
-  w.terms.get('worker').state = 'input'; w.tick();
+  Object.assign(w.terms.get('worker'), { state: 'input', lastScreen: 'Delete 40 files? [y/n]' }); w.tick(); w.tick();
   assert.equal(w.s.pending.length, 1); assert.notEqual(t.status, 'failed');
+  assert.match(w.s.pending[0].waiting, /Delete 40 files/);
+});
+
+test('a new task confirmation is delivered after the previous prompt was read, answered and completed', async () => {
+  const w = world(), first = w.task();
+  Object.assign(w.terms.get('worker'), { state: 'input', lastScreen: 'Allow tool? [y/n]' });
+  w.tick(); await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
+  await w.api.handle({ action: 'main-answer', to: 'worker', key: 'enter' }, w.captain);
+  w.tick(); assert.equal(w.s.pending.length, 0, 'the old prompt is quiet during the answer grace');
+  w.terms.get('worker').state = 'working'; w.tick();
+  await w.api.submit({ action: 'complete', result: 'first done' }, w.worker);
+  assert.equal(first.status, 'done');
+  await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
+  const next = w.task();
+  Object.assign(w.terms.get('worker'), { state: 'input', lastScreen: 'Delete 40 files? [y/n]' });
+  w.tick(); w.tick();
+  assert.equal(next.status, 'input'); assert.equal(w.s.pending.length, 1);
+  const read = await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
+  assert.match(read.result, /Delete 40 files/);
+});
+
+test('an answered prompt rearms a later prompt on the same task after the answer grace', async () => {
+  const w = world(); w.task();
+  Object.assign(w.terms.get('worker'), { state: 'input', lastScreen: 'Allow tool? [y/n]' });
+  w.tick(); await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
+  await w.api.handle({ action: 'main-answer', to: 'worker', key: 'enter' }, w.captain);
+  w.tick(); assert.equal(w.s.pending.length, 0);
+  w.advance(5000); w.terms.get('worker').lastScreen = 'Delete 40 files? [y/n]';
+  w.tick(); w.tick(); assert.equal(w.s.pending.length, 1);
+  assert.match(w.s.pending[0].waiting, /Delete 40 files/);
 });
 
 test('silence thresholds vary by agent, all exceed ten minutes; no output is provisional and deduplicated', () => {
@@ -109,6 +148,32 @@ test('fresh output postpones the silence deadline, input/asking/paused and finis
     if (status === 'input') q.terms.get('worker').state = 'input';
     q.tick(); assert.equal(q.s.pending.filter((p) => p.anomaly === 'no_output').length, 0);
   }
+});
+
+test('a new task silence is reported even after its predecessor already warned and completed', async () => {
+  const w = world(); w.task();
+  const limit = M.silenceTimeout(w.worker.cmd);
+  w.advance(limit); w.tick();
+  assert.match((await w.api.handle({ action: 'main-receipts', wait: true }, w.captain)).result, /长时间无输出/);
+  await w.api.submit({ action: 'complete', result: 'first done' }, w.worker);
+  await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
+  const next = w.task(); w.advance(limit * 10); w.tick(); w.tick();
+  assert.equal(w.s.pending.length, 1); assert.equal(w.s.pending[0].taskId, next.id);
+  assert.match((await w.api.handle({ action: 'main-receipts', wait: true }, w.captain)).result, /长时间无输出/);
+});
+
+test('a silence streak stays deduplicated across restart and fresh output rearms a later streak', async () => {
+  const w = world(); w.task(); const limit = M.silenceTimeout(w.worker.cmd);
+  w.advance(limit); w.tick();
+  await w.api.handle({ action: 'main-receipts', wait: true }, w.captain);
+  const restored = world(JSON.parse(JSON.stringify(w.s))); restored.restore(); restored.advance(limit);
+  restored.tick(); assert.equal(restored.s.pending.length, 0);
+  restored.terms.get('worker').lastOutputAt += limit;
+  restored.tick(); assert.equal(restored.s.pending.length, 0);
+  restored.advance(limit - 1); restored.tick(); assert.equal(restored.s.pending.length, 0);
+  restored.advance(1); restored.tick(); restored.tick();
+  assert.equal(restored.s.pending.length, 1);
+  assert.match((await restored.api.handle({ action: 'main-receipts', wait: true }, restored.captain)).result, /长时间无输出/);
 });
 
 const flush = async () => { for (let i = 0; i < 4; i++) await new Promise(setImmediate); };

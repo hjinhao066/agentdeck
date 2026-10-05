@@ -378,8 +378,11 @@ again with the current provider, model and effort instructions.
   30 minutes for Codex/unknown agents, 20 for Claude and 15 for Gemini/agy/Cursor.
   These create labelled abnormal receipts immediately on detection. Silence
   requests inspection; it does not end, retry or reassign a thinking worker.
-  The same session/reason is reported only once, with the seen reasons retained
-  across app restarts and Captain context resets. An exit with code zero before
+  Each task's ongoing exception is reported once: answering a prompt or returning
+  to work rearms input notices, and new tasks always receive their own failure
+  receipts. Silence is deduplicated per task and last-output timestamp, retained
+  across restarts; fresh output rearms a later silence notice. Relay reminds its
+  new Captain of unresolved input even if the previous Captain read it. An exit with code zero before
   a command receipt is also an abnormal receipt, rather than a successful task.
   If unread receipts have waited three minutes with no live listener, the app
   sends one fixed reminder through the existing guarded Captain prompt path
