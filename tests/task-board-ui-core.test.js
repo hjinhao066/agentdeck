@@ -214,6 +214,10 @@ test('activity line: failure reason, hold, wait, receipt, run state, then the br
   assert.deepEqual(U.activity(c({ flag: 'quota' })), { text: '额度、登录或限流问题', tone: 'failed' });
   assert.deepEqual(U.activity(c({ flag: 'held', latest_receipt: '旧回执' }), '', ''), { text: '已挂起，等队长放行', tone: 'wait' });
   assert.deepEqual(U.activity(c({ latest_receipt: '旧回执' }), '等「X」完成', ''), { text: '等「X」完成', tone: 'wait' });
+  const blocked = { status: 'review', review_round: 2, review_block: { round: 2, reason: '没有可用的审查者。Gemini：额度用尽' }, latest_receipt: '做完了' };
+  assert.deepEqual(U.activity(c(blocked), '', ''), { text: '待验收，需队长处理：没有可用的审查者。Gemini：额度用尽', tone: 'wait' });
+  assert.deepEqual(U.activity(c({ ...blocked, review_block: { round: 1, reason: '旧轮' } }), '', ''), { text: '做完了', tone: '' }, 'a block from an earlier round is not shown');
+  assert.deepEqual(U.activity(c({ ...blocked, status: 'doing' }), '', ''), { text: '做完了', tone: '' });
   assert.deepEqual(U.activity(c({ latest_receipt: ' 已接好入口。\n第二行 ' }), '', '队员正在干活'), { text: '已接好入口。', tone: '' });
   assert.deepEqual(U.activity(c(), '', '还没有队员在做'), { text: '还没有队员在做', tone: 'quiet' }, 'a 进行中 card with no news says whether anyone is on it');
   assert.deepEqual(U.activity(c({ status: 'todo' }), '', ''), { text: '第一行说明', tone: 'quiet' });

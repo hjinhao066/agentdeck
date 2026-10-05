@@ -50,6 +50,8 @@ test.beforeAll(async () => {
   await page.evaluate(([id, cmd]) => window.deck.ptyInput(id, cmd + '\r'), [captain, exportEnv]);
   await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
   captainEnv = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
+  // The tests below open their own reviewers by hand; automatic verification has its own tests.
+  await page.evaluate(() => TaskBoard.autoVerify(false));
 });
 test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 test.afterEach(async ({}, info) => {
@@ -385,4 +387,84 @@ test('new selected Claude seat queues at quota and the queue opens after recover
       await command(['complete', '--result', 'Quota queue test done'], JSON.parse(fs.readFileSync(path.join(envDir, session + '.json'), 'utf8')));
     }
   } finally { await page.evaluate(() => { QuotaCore.commandQuota = window.queueQuotaGate; config.quotas = window.queueQuotaStore; }); }
+});
+
+// Automatic verification with a stand-in reviewer: the candidate table and the family rules are swapped in the
+// page for the test, so nothing real is started. A "Custom agent" executor is given a family of its own.
+async function autoVerifyOn(reviewerFamily) {
+  await page.evaluate(([cmd, family]) => {
+    window.testAutoVerifyBackup = { candidates: AutoVerifyCore.CANDIDATES.slice(), rules: AutoVerifyCore.FAMILY_RULES.slice() };
+    AutoVerifyCore.CANDIDATES.splice(0, AutoVerifyCore.CANDIDATES.length, { id: 'stand-in', label: '替身审查员', family, command: cmd });
+    AutoVerifyCore.FAMILY_RULES.unshift({ agent: /^Custom agent$/, family: 'e2e-executor' });
+    TaskBoard.autoVerify(true);
+  }, [FAKE, reviewerFamily]);
+}
+async function autoVerifyOff() {
+  await page.evaluate(() => {
+    TaskBoard.autoVerify(false);
+    const b = window.testAutoVerifyBackup; if (!b) return;
+    AutoVerifyCore.CANDIDATES.splice(0, AutoVerifyCore.CANDIDATES.length, ...b.candidates);
+    AutoVerifyCore.FAMILY_RULES.splice(0, AutoVerifyCore.FAMILY_RULES.length, ...b.rules);
+  });
+}
+const autoReviewers = (id) => page.evaluate((id) => columns.filter((c) => c.boardId === id && String(c.boardAttempt).startsWith('auto-review-')).map((c) => ({ id: c.id, attempt: c.boardAttempt })), id);
+// The reviewer has its task once the prompt has actually been delivered; only then can it submit.
+const sessionEnv = async (id) => {
+  await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, id), { timeout: 30000 }).toBe('working');
+  await expect.poll(() => fs.existsSync(path.join(envDir, id + '.json')), { timeout: 30000 }).toBe(true);
+  return JSON.parse(fs.readFileSync(path.join(envDir, id + '.json'), 'utf8'));
+};
+
+test('a verify card is reviewed automatically: one reviewer per round, rejection returns to the original session, a pass completes', async () => {
+  await autoVerifyOn('e2e-reviewer');
+  try {
+    const c = await add('Auto verify', true);
+    const execution = await worker(c.id, 'Executor');
+    const resultFile = path.join(profile, 'result.txt'); fs.writeFileSync(resultFile, 'done');
+    await command(['complete', '--result', 'Implemented it. Second sentence stays in the card.', '--files', resultFile], execution.env);
+    await expect.poll(async () => (await card(c.id)).review_session, { timeout: 40000 }).toBe(true);
+    const first = await card(c.id);
+    expect(first.status).toBe('review'); expect(first.session_id).not.toBe(execution.session);
+    expect(first.exec_receipt.session_id).toBe(execution.session); expect(first.exec_receipt.files).toEqual([resultFile]);
+    expect(first.exec_receipt.text).toBe('Implemented it. Second sentence stays in the card.');
+    expect(first.attempt_id).toBe(`auto-review-${c.id}-r1`);
+    await page.waitForTimeout(1500);   // more heartbeats must not open another
+    expect(await autoReviewers(c.id)).toEqual([{ id: first.session_id, attempt: `auto-review-${c.id}-r1` }]);
+    // rejection: the reviewer's words go back to the executor, which is bound to the card again
+    const reviewer1 = await sessionEnv(first.session_id);
+    await command(['complete', '--result', 'checked', '--failed', '不通过：缺少断言\n第二行问题'], reviewer1);
+    await expect.poll(async () => (await card(c.id)).attempt_id, { timeout: 40000 }).toBe(`auto-rework-${c.id}-r1`);
+    const rework = await card(c.id);
+    expect(rework.session_id).toBe(execution.session); expect(rework.review_session).toBe(false); expect(rework.rework_count).toBe(1);
+    await expect.poll(() => page.evaluate((s) => config.mainSession.tasks.findLast((t) => t.colId === s)?.status, execution.session), { timeout: 30000 }).toBe('working');
+    // the executor hands in again: round 2 gets a reviewer of its own
+    await command(['complete', '--result', 'Fixed the assertions'], execution.env);
+    await expect.poll(async () => (await autoReviewers(c.id)).length, { timeout: 40000 }).toBe(2);
+    const second = await card(c.id);
+    expect(second.review_round).toBe(2); expect(second.attempt_id).toBe(`auto-review-${c.id}-r2`);
+    await page.waitForTimeout(1500);
+    expect((await autoReviewers(c.id)).length).toBe(2);
+    await command(['complete', '--result', '通过：文件在，测试我跑过'], await sessionEnv(second.session_id));
+    expect((await card(c.id)).status).toBe('done');
+  } finally { await autoVerifyOff(); }
+});
+
+test('with no acceptable reviewer the card waits in review with the reason for the Captain, and a manual reviewer can still take it', async () => {
+  await autoVerifyOn('e2e-executor');   // the only candidate is the executor's own family
+  try {
+    const c = await add('No reviewer', true);
+    const execution = await worker(c.id, 'Executor');
+    await command(['complete', '--result', 'Implemented'], execution.env);
+    await expect.poll(async () => (await card(c.id)).review_block?.round, { timeout: 40000 }).toBe(1);
+    const blocked = await card(c.id);
+    expect(blocked.status).toBe('review'); expect(blocked.review_block.reason).toContain('同属');
+    expect(await autoReviewers(c.id)).toEqual([]);
+    expect(await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板').map((p) => p.summary))).toEqual(expect.arrayContaining([expect.stringContaining('不能自动开审查会话')]));
+    await page.waitForTimeout(1500);
+    expect(await autoReviewers(c.id)).toEqual([]); expect((await card(c.id)).status).toBe('review');
+    const manual = await worker(c.id, 'Manual review');
+    expect((await card(c.id)).review_block ?? null).toBe(null);
+    await command(['complete', '--result', 'Verified by hand'], manual.env);
+    expect((await card(c.id)).status).toBe('done');
+  } finally { await autoVerifyOff(); }
 });

@@ -163,7 +163,9 @@ if (saved) {
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
-  if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher)) config.taskBoard = { dispatcher: saved.taskBoard.dispatcher };
+  if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher) || saved.taskBoard?.autoVerify === false) {
+    config.taskBoard = { ...(['captain', 'gemini'].includes(saved.taskBoard.dispatcher) ? { dispatcher: saved.taskBoard.dispatcher } : {}), ...(saved.taskBoard.autoVerify === false ? { autoVerify: false } : {}) };
+  }
   if (saved.taskBoardView && typeof saved.taskBoardView === 'object') {
     const v = saved.taskBoardView;
     config.taskBoardView = {

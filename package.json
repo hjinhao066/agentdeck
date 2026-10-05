@@ -61,6 +61,7 @@
       "schedule-core.js",
       "pages.js",
       "main-core.js",
+      "auto-verify-core.js",
       "main-session.js",
       "task-board.js",
       "task-heartbeat.js",

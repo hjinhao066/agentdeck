@@ -13,7 +13,7 @@ function session({ tasks = [], pending = [] } = {}) {
   const col = { id: 'captain', isMain: true, cmd: '' };
   const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - 5000, lastScreen: '' };
   const elements = new Map();
-  const window = { deck: { onTaskStart() {} }, MainCore: require('../main-core'), BoardCore: B,
+  const window = { deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: require('../main-core'), BoardCore: B,
     ChatUI: { hasDraft: () => false, turnsOf: () => [] } };
   const context = vm.createContext({ window, document: {
     getElementById: (id) => { if (!elements.has(id)) elements.set(id, { addEventListener() {} }); return elements.get(id); },

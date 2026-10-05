@@ -12,7 +12,7 @@ function runtime(task, terminalState, lastReceipt) {
   const captain = { id: 'captain', isMain: true, cmd: '' };
   const worker = { id: 'worker', cmd: 'cursor-agent', lastReceipt };
   const entries = new Map([[captain.id, { alive: true, state: 'done' }], [worker.id, { alive: true, state: terminalState }]]);
-  const window = { deck: { onTaskStart() {}, taskBoard(op, input) { boardEvents.push({ op, input }); return Promise.resolve({}); } }, MainCore: M, BoardCore: B, ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {} } };
+  const window = { deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, taskBoard(op, input) { boardEvents.push({ op, input }); return Promise.resolve({}); } }, MainCore: M, BoardCore: B, ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {} } };
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   const state = { colId: captain.id, tasks: [task], pending: [], waitlist: [] };

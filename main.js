@@ -54,13 +54,13 @@ function requestMobile(op, input) {
 const tudArg = process.argv.find((a) => typeof a === 'string' && a.startsWith('--test-user-data='));
 if (tudArg) app.setPath('userData', tudArg.slice('--test-user-data='.length));
 // Test profiles must never write the user's shared board.
-const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => {
+function readLocalConfig() {
   const file = path.join(app.getPath('userData'), 'config.json');
-  const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-  return localSessions(cfg);
-} });
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
+}
+const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
   return taskStore[payload.op](payload.input || {});
 });
 
@@ -477,7 +477,12 @@ function setupBoardControl() {
     if (!boardRendererReady) return false;
     send('task-board:start', input);
     return false; // Renderer acknowledges through the durable dispatched marker.
-  }, onChange: () => send('task-board:changed', {}) });
+  }, onChange: () => send('task-board:changed', {}),
+  // Automatic verification: the renderer opens the reviewer / sends the rework,
+  // then marks the durable claim delivered. Off when the local setting says so.
+  onReview: (input) => { if (!boardRendererReady) return false; send('task-board:review', input); return false; },
+  onRework: (input) => { if (!boardRendererReady) return false; send('task-board:rework', input); return false; },
+  autoVerify: () => readLocalConfig().taskBoard?.autoVerify !== false });
   heartbeat.start();
   app.once('before-quit', () => heartbeat.close());
 }
