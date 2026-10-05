@@ -16,7 +16,7 @@ async function setLevel(level) {
 
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-concurrency-cap-'));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     columns: [{ id: 'cap', title: '队长', isMain: true, cmd: FAKE, cwd: profile }],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], tasks: [], fresh: false, crewMarked: true, waitlist: [] },

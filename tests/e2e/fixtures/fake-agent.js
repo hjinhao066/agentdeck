@@ -70,12 +70,12 @@ function box() {
   }
   if (process.argv.includes('--codex-completed')) {
     process.stdout.write('◦ Working (11m 27s • esc to interrupt)\n' +
-      '─ Worked for 34m 29s • 12:52 ─\n› Ask Codex to do anything\n' +
+      '─ Worked for 34m 29s • 12:52 ─\n› \x1b[2mAsk Codex to do anything\x1b[22m\n' +
       'GPT-6.1-Sol high · ~ · 修复僵尸调度会话派卡\n? for shortcuts  ⚠ 3 · f2\n');
     return;
   }
   if (codex) {
-    process.stdout.write(`OpenAI Codex\n\n› Ask Codex to do anything\n\n  ⏎ send   ⌃J newline   ${100 - Math.round(contextUsed / 10000)}% context left\n`);
+    process.stdout.write(`OpenAI Codex\n\n› \x1b[2mAsk Codex to do anything\x1b[22m\n\n  ⏎ send   ⌃J newline   ${100 - Math.round(contextUsed / 10000)}% context left\n`);
     return;
   }
   const w = Math.max(20, Math.min(60, (process.stdout.columns || 80) - 2));

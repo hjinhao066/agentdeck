@@ -52,7 +52,7 @@ function seed(dir) {
     hermes: [card('hermes', 'h-113', `Hermes ${targetVersion} 升级`, 'todo')],
   };
   fs.mkdirSync(dir, { recursive: true });
-  for (const [project, cards] of Object.entries(boards)) fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ version: 1, project, cards }, null, 2));
+  for (const [project, cards] of Object.entries(boards)) fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, version: 1, project, cards }, null, 2));
 }
 
 test.beforeAll(async () => {

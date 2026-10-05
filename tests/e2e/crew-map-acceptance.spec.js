@@ -96,7 +96,7 @@ async function launch(scenario) {
   const column = (id, title, extra = {}) => ({ id, title, displayTitle: title, manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true, ...extra });
   const workers = titles.map((title, i) => column('v3-' + i, title, { project: scenario === 'A' ? i < 5 ? '客户门户' : '报表服务' : '', reviews: scenario === 'A' && i === 4 ? ['v3-0', 'v3-1'] : scenario === 'A' && i === 9 ? ['v3-5', 'v3-6'] : [] }));
   // These are layout states, not restartable tasks with a saved instruction.
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [column('cap', '队长', { isMain: true, captainCrew: false }), ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '', receipt: states[i] === 'done' ? { summary: '已完成实现、单元测试和端到端验证。还核对了长段中文回执在两行内显示完整字符，超出的说明应当使用省略号，避免任何文字被裁掉半截。', files: [], explicit: true } : states[i] === 'failed' ? { failed: '测试环境缺少数据访问权限，请队长处理后再继续运行迁移验证。', files: [], explicit: true } : null })) },
   }));

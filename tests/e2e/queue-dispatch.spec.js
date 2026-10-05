@@ -32,7 +32,7 @@ async function worker(id, title = 'Worker', commandLine = FAKE, env) {
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-task-board-e2e-')); envDir = path.join(profile, 'env'); fs.mkdirSync(envDir);
   const controlFile = path.join(profile, 'captain.json');
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns: [{ id: 'task-idle-shell', title: 'Shell', cmd: '', cwd: profile, role: 'manual' }] }));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, columns: [{ id: 'task-idle-shell', title: 'Shell', cmd: '', cwd: profile, role: 'manual' }] }));
   const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_RECEIPT_ENV_DIR: envDir }; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });

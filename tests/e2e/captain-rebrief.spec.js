@@ -19,7 +19,7 @@ async function launch(flags = '', restart = false) {
     promptsFile = path.join(profile, 'prompts.jsonl'); controlFile = path.join(profile, 'control.json');
     receiptDir = path.join(profile, 'receipts'); fs.mkdirSync(receiptDir);
     const cmd = FAKE + ' --manual-reset' + flags;
-    fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
       theme: 'dark', fitWindow: true, fitCols: 2, captainTokenSaver: { enabled: false },
       mainSession: { colId: 'rebrief-captain', cmd, gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] },
       columns: [

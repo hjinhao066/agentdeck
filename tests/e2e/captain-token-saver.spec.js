@@ -25,7 +25,7 @@ async function launch(flags = '', settings) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-token-saver-'));
   promptsFile = path.join(profile, 'prompts.jsonl');
   boardFile = path.join(profile, 'board.md');
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     captainTokenSaver: settings,
     mainSession: { colId: 'saver-captain', cmd: FAKE + flags, gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] },
