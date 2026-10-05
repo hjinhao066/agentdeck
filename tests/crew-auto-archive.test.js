@@ -19,7 +19,7 @@ function runtime({ tasks, entry = {}, col = {}, cards = [], pending = [], focuse
   const term = { alive: true, state: 'plain', lastOutputAt: NOW - 30 * MIN, lastScreen: '', ...entry };
   const terms = new Map([[captain.id, { alive: true, state: 'done' }], [worker.id, term]]);
   const window = {
-    deck: { onTaskStart() {}, taskBoard: (op) => Promise.resolve(op === 'list' ? cards : {}) },
+    deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, taskBoard: (op) => Promise.resolve(op === 'list' ? cards : {}) },
     MainCore: M, BoardCore: B, ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {} },
   };
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
