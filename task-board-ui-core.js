@@ -180,6 +180,8 @@
     const firstLine = (t) => String(t || '').trim().split(/\r?\n/)[0].trim();
     if (card.flag === 'failed' || card.flag === 'quota') return { text: firstLine(receiptText(card)) || (card.flag === 'quota' ? '额度、登录或限流问题' : '执行失败，没有写明原因'), tone: 'failed' };
     if (card.flag === 'held') return { text: '已挂起，等队长放行', tone: 'wait' };
+    // An automatic review that could not be started says why and that 队长 has it.
+    if (card.status === 'review' && card.review_block && card.review_block.round === card.review_round && card.review_block.reason) return { text: '待验收，需队长处理：' + firstLine(card.review_block.reason), tone: 'wait' };
     if (waitText) return { text: waitText, tone: 'wait' };
     const receipt = firstLine(receiptText(card));
     if (receipt) return { text: receipt, tone: '' };

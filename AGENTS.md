@@ -105,7 +105,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   `docs/task-board-api.md`. A Gemini dispatcher has only one exception to the
   submission-only capability: `main-new` for its explicitly assigned card, once.
   The zero-token watcher/poll heartbeat claims only new start edges, not content
-  changes or worker activity; respect durable claims and held cards. Tests must
+  changes or worker activity; respect durable claims and held cards. Automatic
+  verification (`docs/task-board-api.md`「自动验收」) is claimed once per review round
+  there too: never open a second reviewer for a round, never review with the
+  executor's own provider/model family, never mark a card done without a clear
+  reviewer verdict, and keep it inside the ordinary `new` queue and limits. Tests must
   use the isolated profile task store and stand-in agents, never real shared data.
 - Clearing the 队长's context keeps the old chat as a `captainArchive` file under
   the old id. The 队长 column shows those read-only from the chats already loaded

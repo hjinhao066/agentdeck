@@ -4,6 +4,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { resourceFailure } = require('./main-core');
+const AutoVerify = require('./auto-verify-core');
 
 const STATUSES = ['todo', 'doing', 'review', 'needs_user', 'done'];
 function projectName(value) {
@@ -225,6 +226,9 @@ class TaskStore {
       if (wasReview && input.status === 'doing') { card.attempt_id = null; card.attempt_closed = true; }
       card.archived = false; card.resource_failure = null; card.dispatch_wait = null;
       if (input.status !== 'doing') card.dispatch_claim = null;
+      // A move is a Captain/user decision: it replaces any pending automatic rework or block.
+      if (card.review_block) card.review_block = null;
+      if (card.review_reject) card.review_reject.delivered = true;
       // CLI moves are Captain decisions, not requests for an automatic model.
       if (input.suppressDispatch && input.status === 'doing') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: new Date().toISOString() };
       touch(card);
@@ -295,6 +299,10 @@ class TaskStore {
         review_session: review, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
+      if (review && card.review_claim) card.review_claim.delivered = true;
+      // Someone (the Captain, or the automatic rework itself) took the card on.
+      if (card.review_block) card.review_block = null;
+      if (card.review_reject) card.review_reject.delivered = true;
       touch(card);
       return { card, notices: [] };
     });
@@ -309,23 +317,51 @@ class TaskStore {
       const authoritative = input.type === 'complete' && input.source === 'command' && /:failed:(?:quota|process|automatic):/.test(card.last_event || '');
       if (card.flag === 'held' && !authoritative) return { card, ignored: true, notices: [] };
       const notices = [];
-      if (input.type === 'started') {
+      // An automatic reviewer's receipt is read for its verdict: a plain failure,
+      // or a "不通过" complete, is a rejection; a complete with no clear verdict is
+      // never taken as a pass.
+      const autoReview = card.review_session === true && AutoVerify.isReviewAttempt(input.attempt_id);
+      const verdict = autoReview && input.type === 'complete' ? AutoVerify.verdict(input.message) : null;
+      const type = verdict === 'fail' ? 'failed' : input.type;
+      if (type === 'started') {
         if (/:fallback:/.test(card.last_event || '') ||
           (input.source?.startsWith('resume-fallback-') && /:started:/.test(card.last_event || '') && card.latest_receipt === '已结束，未提交回执')) card.latest_receipt = '';
         card.status = card.review_session ? 'review' : 'doing'; card.flag = null;
       }
-      if (input.type === 'ask') { card.status = 'needs_user'; card.latest_receipt = sentence(text(input.message, 'question', true)); }
-      if (input.type === 'fallback') { card.status = 'needs_user'; card.latest_receipt = '已结束，未提交回执'; }
-      if (input.type === 'complete') {
+      if (type === 'ask') { card.status = 'needs_user'; card.latest_receipt = sentence(text(input.message, 'question', true)); }
+      if (type === 'fallback') { card.status = 'needs_user'; card.latest_receipt = '已结束，未提交回执'; }
+      if (type === 'complete') {
         card.latest_receipt = sentence(text(input.message, 'result', true));
         card.status = card.review_session || !card.verify ? 'done' : 'review';
         card.flag = null; card.resource_failure = null; card.attempt_closed = true;
         // Passing execution is not a passed verification; retain review failures.
+        if (card.status === 'review' && card.verify) {
+          // A new round of verification: a fresh number, so each round gets exactly one
+          // reviewer. The full receipt and who ran it are kept because the reviewer
+          // session replaces session_id/assignee on the card.
+          card.review_round = (card.review_round || 0) + 1;
+          card.review_block = null;
+          card.exec_receipt = { text: input.message, files: Array.isArray(input.files) ? input.files.filter((f) => typeof f === 'string') : [],
+            session_id: input.session_id, attempt_id: input.attempt_id, assignee: card.assignee || null };
+        }
+        if (verdict === 'unclear') {
+          card.status = 'review';
+          card.review_block = { round: card.review_round || 0, reason: '审查会话的回执没有以「通过」或「不通过」开头，结论不明确', at: new Date().toISOString() };
+          notices.push(`卡片 ${card.id} 的审查结论不明确，已留在待验收，请队长查看审查会话的回执后处理。`);
+        }
+        // An unclear verdict is put back into review above; it is not a pass, so it
+        // must not wipe the failures that still count toward holding the card.
         if (card.status === 'done') card.consecutive_failures = 0;
       }
-      if (input.type === 'failed') {
+      if (type === 'failed') {
         const reason = text(input.message, 'failure', true);
+        const before = card.last_failure_attempt;
         this.failure(card, input.attempt_id, reason, card.review_session === true, input.source);
+        // Only a reviewer's own written verdict goes back to the executor, once. A crash or
+        // quota failure of the reviewer is not a finding.
+        if (autoReview && input.source === 'command' && before !== input.attempt_id && !card.resource_failure) {
+          card.review_reject = { round: card.review_round || 0, findings: reason, key: crypto.randomUUID(), owner: os.hostname(), delivered: card.flag !== 'failed', created: new Date().toISOString() };
+        }
         card.attempt_closed = true;
         notices.push(`卡片 ${card.id} 失败：${reason}${card.flag === 'held' ? '；连续失败 2 次，已挂起，不再自动重试。' : ''}`);
       }
@@ -388,6 +424,60 @@ class TaskStore {
         if (!input.question) notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
       }
       card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; touch(card); return { card, notices };
+    });
+  }
+  // ---- automatic verification ----
+  // A card is due a reviewer once per round: verify card, in review through the
+  // execution's own complete (it has a round number and receipt), nobody has
+  // taken the review, and this round has no claim or block yet.
+  reviewDue(card) {
+    return card.verify === true && card.status === 'review' && !card.archived && !card.flag && card.review_round > 0 && !!card.exec_receipt &&
+      card.review_session !== true && card.review_claim?.round !== card.review_round && card.review_block?.round !== card.review_round;
+  }
+  // Claimed on this machine and not yet handed to the renderer.
+  reviewPending(card) {
+    const claim = card.review_claim;
+    return card.verify === true && card.status === 'review' && !card.archived && !card.flag && card.review_session !== true && card.review_block?.round !== card.review_round &&
+      !!claim && claim.round === card.review_round && !claim.delivered && claim.owner === os.hostname();
+  }
+  reworkPending(card) {
+    const reject = card.review_reject;
+    return card.status === 'doing' && card.flag === 'failed' && !card.archived && !!reject && !reject.delivered && reject.round === card.review_round && reject.owner === os.hostname();
+  }
+  claimReview(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (!this.reviewDue(card) || this.activeAttempt(card)) return { card, ignored: true, notices: [] };
+      card.review_claim = { round: card.review_round, key: crypto.randomUUID(), owner: os.hostname(), delivered: false, created: new Date().toISOString() };
+      touch(card);
+      return { card, notices: [] };
+    });
+  }
+  reviewDispatched(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (card.review_claim?.key === input.key && !card.review_claim.delivered) { card.review_claim.delivered = true; touch(card); }
+      return { card, notices: [] };
+    });
+  }
+  // No acceptable reviewer: the card stays in review with the reason on it, for the Captain.
+  reviewBlocked(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      const claim = card.review_claim;
+      if (claim?.key !== input.key || claim.delivered || card.status !== 'review') return { card, ignored: true, notices: [] };
+      const reason = text(input.reason, 'reason', true);
+      claim.delivered = true;
+      card.review_block = { round: claim.round, reason, at: new Date().toISOString() };
+      touch(card);
+      return { card, notices: [`卡片 ${card.id}「${card.title}」待验收，但不能自动开审查会话：${reason}。请队长处理。`] };
+    });
+  }
+  reworkDispatched(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if (card.review_reject?.key === input.key && !card.review_reject.delivered) { card.review_reject.delivered = true; touch(card); }
+      return { card, notices: [] };
     });
   }
   identity(input) {

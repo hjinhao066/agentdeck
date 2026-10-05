@@ -103,6 +103,8 @@ contextBridge.exposeInMainWorld('deck', {
   // Fixed shared task store; no caller-selected paths or arbitrary IPC.
   taskBoard: (op, input) => ipcRenderer.invoke('task-board:request', { op, input }),
   onTaskStart: (cb) => ipcRenderer.on('task-board:start', (_e, m) => cb(m)),
+  onTaskReview: (cb) => ipcRenderer.on('task-board:review', (_e, m) => cb(m)),
+  onTaskRework: (cb) => ipcRenderer.on('task-board:rework', (_e, m) => cb(m)),
   onTasksChanged: (cb) => {
     const listener = () => cb();
     ipcRenderer.on('task-board:changed', listener);

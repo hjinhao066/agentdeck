@@ -3,7 +3,8 @@
 本层不创建界面。界面作者直接调用 `window.TaskBoard`，所有文件读写通过
 受主页面校验的 preload IPC 到主进程；页面不持有 Node、任意 IPC 或可选文件路径。
 默认 `dispatcher=gemini`，可改回 `captain`。自动流转和心跳均不调用模型；
-只有明确开始卡片时，Gemini 调度模式会开模型会话。
+只有明确开始卡片时，Gemini 调度模式会开模型会话；带 `verify` 的卡片进入待验收后，
+心跳会让主界面自动开一个审查会话（见「自动验收」）。
 
 ## 文件与字段
 
@@ -35,6 +36,11 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 `last_failure_attempt`、`consecutive_failures`、`session_host`、`session_bound_at`、
 `dispatch_session_id`、`dispatch_host`、`dispatch_bound_at`、
 `dispatch_claim`、`dispatch_wait`（额度排队提示）、`resource_failure`（quota/auth/rate_limit）、`start_previous_status`；迁移卡另有 `migration_source`。
+自动验收另存（只在 `verify=true` 的卡片上出现）：`review_round`（第几轮验收，每次执行回执进入待验收加一）、
+`exec_receipt`（本轮执行会话的回执全文、文件、会话 id、尝试 id 和执行者 `{agent, model}`；审查会话绑定后
+`session_id`/`assignee` 会换成审查者，所以单独留一份）、`review_claim`（本轮审查认领 `{round, key, owner, delivered}`）、
+`review_block`（选不出审查者或结论不明确时的 `{round, reason}`，界面显示给队长）、`review_reject`（审查员不通过的
+原话 `{round, findings, key, owner, delivered}`，用于自动返工）。
 客户端编辑时保留这些字段以及未知字段，不自行构造或删除流转标记。
 
 每次读写重读磁盘，无长期数据缓存；本机进程锁放系统临时目录，写入使用同目录
@@ -66,6 +72,8 @@ await TaskBoard.reorder(card.id, { before: otherCard.id }); // 同项目排序�
 await TaskBoard.answer(card.id, '用户的答案'); // 回答需要你，交给队长继续推进
 TaskBoard.settings();              // {dispatcher:'gemini'}
 TaskBoard.settings('captain');     // 持久化到本机 config.json
+TaskBoard.autoVerify();            // true；默认开启自动验收
+TaskBoard.autoVerify(false);       // 总开关，持久化到本机 config.json，心跳下一次巡检生效
 const unsubscribe = TaskBoard.onChange(() => refreshFromTaskBoard());
 unsubscribe();
 ```
@@ -82,6 +90,7 @@ unsubscribe();
 | `reorder(id, anchor = {})` | 可选 before 或 after 卡片 ID，只接受同项目锚点，两者不可同时提供；无锚点放项目末尾 | `Promise<{card, notices}>`；只改 order，必要时重排项目内序号 |
 | `answer(id, reply)` | 非空答案，必须已有队长 | 通知队长；需要你的卡回到 doing，活跃会话保留绑定，无绑定时认领并通知队长 |
 | `settings(dispatcher?)` | 仅接受 gemini/captain；省略则只读，缺省 gemini | 同步返回 `{dispatcher}`，设置写入本机 config.json |
+| `autoVerify(enabled?)` | 布尔；省略则只读，缺省 true（不接受其他类型） | 同步返回当前是否开启；关闭后心跳不再认领审查、不再自动返工，已开的会话不受影响 |
 | `onChange(callback)` | 文件变化通知；回调不接收卡片正文 | 同步返回取消订阅函数 |
 
 `add` 忽略输入中的初始状态、会话绑定和 order；需建卡后通过对应接口修改。
@@ -168,7 +177,7 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 匹配卡片项目，省略则从卡片继承。重复请求不会重新派活，旧会话/旧尝试的回执
 不会改当前卡。`new` 排队时保留关联，真正开会话时再次校验前置和 held 状态。
 队长的 `task move ... --status doing` 会消费自动开始边沿，不开调度员；队长随后
-`new --task-id` 或 `tell` 安排返工。`new` 拒绝仍活跃的执行/审查尝试；旧会话已归档
+`new --task-id` 或 `tell` 安排返工（verify 卡的审查不通过由自动验收直接返工，不需要这一步）。`new` 拒绝仍活跃的执行/审查尝试；旧会话已归档
 或旧尝试已失败时允许替换，即使旧数据漏写 attempt_closed。
 
 ## 流转
@@ -181,16 +190,58 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 | 普通 complete --failed / 崩溃 | doing + failed，给队长失败原因；同一尝试多种失败事件只计一次 |
 | quota/process/automatic 来源的额度用尽 / 未登录 / 限流（执行、审查或调度） | doing + quota，保留连续失败计数，不计返工、不触发 held；失败原因给队长。command 的失败文案不做资源分类，照常累计失败 |
 | 所有前置 done | 后续 todo 的 blocked 自动清除，可开始（不会偷偷启动） |
-| review 卡片 new --task-id | 绑定审查会话；审查期间仍 review |
+| review 卡片 new --task-id | 绑定审查会话；审查期间仍 review（verify 卡片通常由「自动验收」开，不必手动） |
 | 审查 complete | done，清除连续失败次数 |
-| 审查 complete --failed / 队长从 review move 回 doing | rework_count+1，doing + failed；队长用 new 或原会话 tell 返工 |
+| 审查 complete --failed / 队长从 review move 回 doing | rework_count+1，doing + failed；自动验收的审查员不通过会自动返工，其余由队长用 new 或原会话 tell 返工 |
+| 自动验收：verify 卡进入 review | 心跳认领本轮，主界面开一个不同提供方的审查会话；选不出则停在 review 并写明原因 |
+| 自动验收：审查员写「通过」 | done |
+| 自动验收：审查员不通过 | 原话发回原执行会话（已归档先恢复）返工；返工 complete 后进入下一轮审查 |
 | 连续失败达到两次 | doing + held，通知队长，不派活、不重试 |
 | held 后队长明确 move 到 todo/doing | 解挂，清零连续失败次数，保留累计 rework_count |
 | 已结束却三分钟无命令回执 | needs_user，只有「已结束，未提交回执」，不把屏幕当成功结果 |
 
 验收失败后的执行完成不会清除验收失败计数，两轮验收都失败仍会挂起。
-执行/验收会话的选择由队长或调度员安排；这些状态和阈值不由 AI 判断。
+执行会话的选择由队长或调度员安排，验收会话的选择见「自动验收」；这些状态和阈值不由 AI 判断。
 停止/归档一个忙会话的卡片不会假装成功，需要队长明确更新卡片。
+
+## 自动验收
+
+带 `--verify`（`verify=true`）的卡片，执行会话交回执进入「待验收」后，不需要队长动手：
+
+1. **认领（心跳，不调用模型）**：每轮验收只认领一次。条件：`status=review`、`verify`、未归档、无 flag、
+   带本轮 `review_round` 和 `exec_receipt`、还没有审查会话绑定（`review_session` 不为真）、本轮没有认领也没有
+   `review_block`、本机没有别的会话正在这张卡上干活。认领先原子写入 `review_claim`（带本机 hostname），再通知主界面；
+   尚未送达的认领在重启后原样再送一次，不会重新认领。没带 `--verify` 的卡、手动移进 review 的卡、升级前就停在
+   review 的旧卡（没有 `exec_receipt`）都不会被自动认领。
+2. **选审查者**：必须和执行会话**不同提供方/模型**。按「谁做的模型」分家族（Anthropic / OpenAI / Google / xAI；
+   看模型名，看不出再看 agent：Cursor 里跑的 Claude 算 Anthropic，agy 里跑的 GPT-OSS 算 OpenAI），
+   执行者的家族看不出来也不猜。候选按调度员分工表的顺序：Gemini 3.8 Flash（队长说明第 16 条的默认验收者，不耗
+   Claude 额度）、Codex GPT-6.1 Sol、Claude Opus 5.5（终审模型）、Antigravity 的 Opus 4.6 Thinking（审查模型）。
+   跳过同家族的，也跳过按 `commandQuota` 判断已用尽的（未知不算用尽）。选不出就写 `review_block`（原因里列出每个
+   候选为什么不行）、给队长一条通知、卡片留在 review，不会自己审自己，也不会直接算完成；额度之后恢复不会自动再试，
+   由队长手动 `new --task-id` 开审查会话（绑定后 `review_block` 清除）。
+3. **开会话**：走和 `new` 同一个入口（`placeSession`）：并发上限、内存吃紧暂停、额度用尽都进同一个排队，
+   不绕过。会话标题「审查：卡片标题」，`--reviews` 指向被审查会话，工作目录沿用执行会话。尝试 id 固定为
+   `auto-review-<卡片id>-r<轮次>`，所以重启、额度恢复、心跳重跑只会落到同一个尝试上。排队中的审查会话在真正开之前
+   会再确认这一轮仍是待验收，否则放弃。连续三次开不出来也转 `review_block` 交队长。
+4. **审查任务**包含：卡片标题和说明、执行会话回执全文和它列的文件、被审查的会话 id 和执行者，以及固定验收要求：
+   亲自核对文件存在、提交已推送、只跑相关测试（不跑全量 E2E）、截图落盘、有没有删用例或放宽断言；只审不改；
+   结论的第一个词必须是「通过」或「不通过」，不通过要列具体问题。
+5. **结论**：`complete` 以「通过」开头 → done。`complete --failed`，或 `complete` 以「不通过」开头 → 不通过。
+   没写明确结论的回执**不算通过**：卡片留在 review，写 `review_block` 并通知队长。
+   不通过按原有规则 `rework_count+1`、doing + failed，并把审查员的原话（`review_reject.findings`，不裁剪）
+   连同固定说明发回原执行会话；原会话已归档就先恢复再绑定卡片（尝试 id `auto-rework-<卡片id>-r<轮次>`）。
+   返工后会话交回执，进入下一轮并自动开新的审查会话。只有审查员亲手写的结论才会发回；审查会话崩溃、额度用尽
+   不是审查意见，按原有失败规则处理并通知队长，不自动返工。
+6. **挂起**：连续两轮不通过仍按原有阈值 `held`，通知队长，不再自动返工或重审。
+   原执行会话已经找不到时，不通过的原话作为通知交队长，不重试。
+
+不重复靠四层：持久化的认领/返工标记（每轮一个）、固定尝试 id（`new` 按它去重，`bind` 对同一尝试幂等）、
+队列里已有这张卡的请求就不再排、已有以该尝试 id 创建的会话就只补标记。队长已经手动开了（或排了）审查会话的卡，
+自动开审查直接放弃。队长任何 `task move` 或重新绑定都会取代尚未送出的自动返工。
+
+总开关 `TaskBoard.autoVerify(false)`（本机 config.json 的 `taskBoard.autoVerify`，缺省开启）。
+调试日志只记 `task-board review claimed id=… round=…`，不含卡片正文。
 
 ## startCard、心跳与调度
 
@@ -256,8 +307,12 @@ npm run test:e2e -- tests/e2e/task-board.spec.js tests/e2e/command-receipts.spec
 npm audit
 ```
 
+自动验收另有单测 `tests/auto-verify.test.js`（家族与选择、结论解析、认领/轮次/返工状态、心跳重复触发和重启）
+和 `tests/auto-verify-session.test.js`（真实任务库 + 心跳 + `main-session.js` 的整条链路：不同提供方、排队与内存/额度、
+重启恢复、选不出审查者、归档执行会话恢复、两轮失败挂起）。
 task-board spec 覆盖依赖解锁、回执原文、两轮验收挂起、异常退出/额度失败、
 旧会话回执、Gemini 单卡权限和排队、外部原子写入、认领去重、设置持久化、
-同步冲突后流转重试。其 Gemini 可执行文件替换为 stand-in；它验证调度入口与
+同步冲突后流转重试；自动验收两条用例（用替身审查员，页面里临时替换候选表）：一轮不通过返工、
+二轮通过，以及选不出审查者后手动接手。该 spec 开头把 `autoVerify` 关掉，因为其余用例自己手动开审查会话。其 Gemini 可执行文件替换为 stand-in；它验证调度入口与
 权限，不代表已实测真实 Gemini 模型或两台机器同时同步。全量 E2E 留给合并
 main 时运行；本分支验证不包含打包运行、安装或物理 Windows 设备。
