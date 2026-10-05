@@ -741,6 +741,7 @@
     return task;
   }
   function dispatch(col, text, title, waiting) {
+    const supplement = state().tasks.some((t) => t.colId === col.id && t.startedAt);
     const task = waiting || addTask(col, title);
     if (waiting) {
       Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
@@ -748,6 +749,7 @@
     }
     task.instruction = text;
     task.instructionSent = false;
+    task.supplement = supplement;
     persistResumeEntry(col, task);
     try { window.deck.saveConfigSync(host.config); } catch (_) {}
     let batch = dispatches.get(col.id);
@@ -762,7 +764,7 @@
       return sentItems.map((i) => i.text).join('\n\n');
     }, {
       cancelled: () => batch.cancelled || batch.items.every((i) => i.task.status === 'stopped' || i.task.status === 'failed'),
-      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000,
+      suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000, keepWaiting: true,
       onSent: (turn) => {
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
         if (batch.cancelled || sentItems.every((i) => i.task.status === 'stopped' || i.task.status === 'failed')) return;
@@ -778,9 +780,13 @@
           if (t === last) { persistResumeEntry(col, t); autoBoardEvent(t, 'started'); }
         });
       },
-      onGiveUp: () => {
+      onGiveUp: (reason) => {
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
-        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: '30 分钟内一直发不出去：那一列的 agent 一直在忙或没有运行', explicit: true }));
+        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: reason || '这个会话已无法接收指令', explicit: true }));
+      },
+      onWaiting: () => {
+        const task = batch.items.find((i) => i.task.status === 'queued')?.task;
+        if (task) { push(task, { summary: '补充指令等待超过 30 分钟，仍在排队；会话空闲后自动送达。', source: 'queue' }); save(); }
       },
       onDeferred: () => { batch.sending = false; },
     });
@@ -968,6 +974,9 @@
   const CLOSED = ['done', 'failed', 'stopped', 'asking'];
   function settle(task, receipt, boardRecorded = false) {
     if (CLOSED.includes(task.status)) return;
+    if (receipt.failed && task.instructionSent === false && task.instruction) {
+      receipt = { ...receipt, undeliveredInstruction: task.instruction, undeliveredTaskId: task.id };
+    }
     if (task.boardId && !boardRecorded) {
       const type = receipt.failed ? 'failed' : receipt.question ? 'ask' : receipt.source === 'fallback' ? 'fallback' : 'complete';
       autoBoardEvent(task, type, receipt.failed || receipt.question || receipt.summary, receipt.source || 'automatic');
@@ -986,7 +995,7 @@
     if (col && !receipt.question) col.lastReceipt = { ...receipt, ts: task.doneAt };
     push(task, receipt.question
       ? { question: receipt.question, source: receipt.source }
-      : { summary: receipt.summary, files: receipt.files, failed: receipt.failed, source: receipt.source });
+      : { summary: receipt.summary, files: receipt.files, failed: receipt.failed, source: receipt.source, ...(receipt.undeliveredTaskId ? { undeliveredTaskId: receipt.undeliveredTaskId } : {}) });
     update(task);
   }
   // Queue something for 队长's background reader (or the legacy quiet-moment injection).
@@ -1094,14 +1103,23 @@
   async function submit(message, caller) {
     const s = state();
     if (!s || isMain(caller)) return null;
-    const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit'));
-    if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return null;
+    const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit' && t.restartHold));
     const response = { done: true, result: 'Submission recorded.' };
-    if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
     if (message.action === 'session-exit') {
       if (!Number.isInteger(message.code)) throw new Error('Invalid agent exit code.');
+      if (message.code !== 0 && task && fallbackResume(caller, task, `原对话启动失败（exit ${message.code}）`)) return response;
+      // The agent can exit back into a live shell. Its unsent additions must
+      // fail too, without attaching the old turn's exit to the newest addition.
+      for (const queued of s.tasks) {
+        if (queued.colId === caller.id && queued.status === 'queued' && !queued.restartHold) {
+          settle(queued, { summary: '', files: [], images: [], failed: `agent 进程已退出（exit ${message.code}），补充指令未送达`, explicit: true, source: 'process' });
+        }
+      }
+    }
+    if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return message.action === 'session-exit' ? response : null;
+    if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
+    if (message.action === 'session-exit') {
       if (message.code !== 0) {
-        if (fallbackResume(caller, task, `原对话启动失败（exit ${message.code}）`)) return response;
         if (task.status === 'asking') task.status = 'working';
         const entry = host.terms.get(caller.id);
         // The exit command may beat the status tick; read the current terminal.
@@ -1468,7 +1486,7 @@
         if (window.RestartResume && window.RestartResume.ignoreQuota(task, Date.now())) continue;
         // Follow-ups queued after the failure still wait for the provider to
         // resume; a brand-new session exhausted at startup fails its first task.
-        if (task.status === 'queued' && col?.lastReceipt?.source === 'quota') continue;
+        if (task.status === 'queued' && (task.supplement || col?.lastReceipt?.source === 'quota')) continue;
         if (task.status === 'asking') task.status = 'working';
         settle(task, { summary: '', files: [], images: [], failed: '额度用尽，agent 无法继续当前任务', explicit: true, source: 'quota', ...M.resourceReceipt(entry.lastScreen, col?.cmd) });
         continue;
@@ -1754,6 +1772,12 @@
       }
       case 'main-read': {
         const find = window.BoardCore.cleanText(message.find, 200);
+        // Unsent prompts never became chat turns. Recover them by the task id
+        // printed in the failure receipt, including after the worker is gone.
+        const undelivered = s.tasks.find((t) => t.id === message.to && t.receipt?.undeliveredTaskId)?.receipt
+          || [...window.ChatUI.turnsOf(s.colId), ...(window.ChatUI.captainArchives?.() || []).flatMap((chat) => chat.turns)]
+            .find((t) => t.id === message.to && t.task?.receipt?.undeliveredTaskId)?.task.receipt;
+        if (undelivered) return { done: true, result: undelivered.undeliveredInstruction };
         if (message.to === 'captain-history') {
           if (!find.trim()) throw new Error('查队长历史需要 --find 关键词，避免把所有旧对话带回上下文。');
           const turns = window.ChatUI.captainArchives().flatMap((chat) => chat.turns.map((t) => ({ ...t, sourceId: chat.id })))
@@ -1868,6 +1892,7 @@
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));
     else if (r) {
       if (r.failed) card.appendChild(el('div', 'task-failed', r.failed));
+      if (r.undeliveredTaskId) card.appendChild(el('div', 'task-note', `取回未送达指令原文：read --to ${r.undeliveredTaskId}`));
       if (r.summary) card.appendChild(el('div', 'task-summary', r.summary));
       if (!r.explicit && !r.failed) card.appendChild(el('div', 'task-note', '会话已结束，等待命令回执超过 3 分钟。'));
       if (r.files && r.files.length) {
