@@ -212,7 +212,15 @@
     pvHead.appendChild(title);
     const actions = el('div', 'pv-actions');
     if (r.kind === 'markdown') actions.appendChild(button(mdSource ? '渲染' : '源码', '切换 Markdown 渲染和源码', () => { mdSource = !mdSource; renderPreview(); }));
-    actions.appendChild(button('在访达中显示', '', () => window.deck.revealPath(r.path, previewColId)));
+    const copy = button('', '复制路径', () => {
+      try { host.clipboardWrite(r.path); } catch (_) { host.showToast('没能复制到剪贴板'); return; }
+      copy.innerHTML = host.ICONS.check; copy.classList.add('done');
+      clearTimeout(copy.checkTimer);
+      copy.checkTimer = setTimeout(() => { copy.innerHTML = host.ICONS.copy; copy.classList.remove('done'); }, 1200);
+    }, 'icon-btn');
+    copy.innerHTML = host.ICONS.copy; copy.setAttribute('aria-label', copy.title);
+    actions.appendChild(copy);
+    actions.appendChild(button(host.platform === 'win32' ? '在资源管理器中显示' : host.platform === 'darwin' ? '在访达中显示' : '在文件管理器中显示', '', () => window.deck.revealPath(r.path, previewColId)));
     if (r.kind !== 'dir') actions.appendChild(button('编辑器打开', '', () => window.deck.openInEditor(r.line ? r.path + ':' + r.line : r.path, previewColId)));
     pvHead.appendChild(actions);
 

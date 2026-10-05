@@ -52,6 +52,8 @@ contextBridge.exposeInMainWorld('deck', {
   chatDelete: (id) => ipcRenderer.send('chat:delete', { id }),
   // Right-hand pane: file preview, embedded browser.
   previewRead: (raw, id, cont) => ipcRenderer.invoke('preview:read', { raw, id, cont }),
+  // Artifacts: which delivered files are still on disk (0 gone, 1 file, 2 folder).
+  artifactsStat: (paths) => ipcRenderer.invoke('artifacts:stat', { paths }),
   sideBrowserOpen: (url) => ipcRenderer.send('side:browser-open', { url }),
   sideBrowserPdf: (raw, id, cont) => ipcRenderer.send('side:browser-pdf', { raw, id, cont }),
   sideBrowserBounds: (b) => ipcRenderer.send('side:browser-bounds', b),

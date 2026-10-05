@@ -631,6 +631,22 @@ function resolveClick(msg, allowAncestor) {
   return exact ? { target: exact, fallback: false } : null;
 }
 
+// Open a plain directory so the user can see inside it. Judge the real path:
+// a directory whose last segment has an extension (.app, .bundle, .workflow —
+// any dot followed by a letter, not an allow-list) is a package and is only
+// selected, as is a symlink that lands on one. A numeric tail such as
+// agentdeck-1.1.9 is a version, not an extension. Files, and any realpath or
+// stat failure, are selected too.
+function revealOpens(target) {
+  try {
+    const real = fs.realpathSync(target);
+    if (!fs.statSync(real).isDirectory()) return false;
+    return !/^\.[A-Za-z]/.test(path.extname(path.basename(real)));
+  } catch (_) {
+    return false;
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1600,
@@ -723,7 +739,7 @@ app.whenReady().then(async () => {
   setupBoardControl();
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
-    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR,
+    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
   });
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
@@ -1306,13 +1322,10 @@ app.whenReady().then(async () => {
     // no-op, not a Finder window on some unrelated folder.
     const r = resolveClick(msg, true);
     if (!r) { send('toast', { text: '路径不存在：' + shortText(msg && msg.raw) }); return; }
-    if (r.fallback) send('toast', { text: '该路径不完整存在，已打开最深的真实一层：' + r.target });
-    try {
-      const stat = fs.statSync(r.target);
-      // A directory opens in Finder; a file is revealed within its parent folder.
-      if (stat.isDirectory()) shell.openPath(r.target);
-      else shell.showItemInFolder(r.target);
-    } catch (_) {}
+    const open = revealOpens(r.target);
+    if (r.fallback) send('toast', { text: '该路径不完整存在，已' + (open ? '打开' : '定位到') + '最深的真实一层：' + r.target });
+    if (open) shell.openPath(r.target);
+    else shell.showItemInFolder(r.target);
   });
 
   // Electron's default View accelerators zoom the entire page before the

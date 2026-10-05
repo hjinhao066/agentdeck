@@ -208,6 +208,92 @@ test('artifacts collect files and links from replies, newest mention wins', () =
   assert.equal(list[1].type, 'web');
 });
 
+test('delivered files: one entry per path on Mac and Windows spellings', () => {
+  const home = '/Users/me';
+  assert.equal(C.pathKey('~/reports/a.md', home), '/Users/me/reports/a.md');
+  assert.equal(C.pathKey('file:///Users/me/reports//a.md:12:3', home), '/Users/me/reports/a.md');
+  assert.equal(C.pathKey('/Users/me/reports/shots/', home), '/Users/me/reports/shots');
+  assert.notEqual(C.pathKey('/Users/me/A.md', home), C.pathKey('/Users/me/a.md', home));
+  // Windows: case and slash direction do not make a second file
+  assert.equal(C.pathKey('C:\\Users\\Me\\Reports\\a.md'), C.pathKey('c:/users/me/reports/a.md'));
+  assert.equal(C.pathKey('C:\\Users\\Me\\out\\'), 'c:\\users\\me\\out');
+  assert.equal(C.pathKey('\\\\nas\\share\\\\a.md'), '\\\\nas\\share\\a.md');
+  assert.equal(C.pathKey('~\\out\\a.md', 'C:\\Users\\Me'), 'c:\\users\\me\\out\\a.md');
+  assert.equal(C.pathKey('  ', home), '');
+});
+
+test('delivered files come from every place a receipt is kept, old receipts included', () => {
+  const receipts = C.deliveryReceipts({
+    sessions: [
+      { id: 'w1', title: '登录', project: '客户门户', archived: false, lastReceipt: { summary: '登录做完', files: ['/out/login.md'], ts: 300 } },
+      { id: 'w2', title: '旧迁移', project: '报表服务', archived: true, lastReceipt: { summary: '迁完', files: ['/out/migrate.sql'], ts: 100 } },
+      { id: 'w3', title: '没交文件', project: '', lastReceipt: { summary: '只说了一句', files: [] } },
+      { id: 'cap', title: '队长', project: '', lastReceipt: null },
+    ],
+    tasks: [
+      { id: 'k1', colId: 'w1', title: '做登录', project: '客户门户', sentAt: 200, doneAt: 300, receipt: { summary: '登录做完', files: ['/out/login.md'] } },
+      { id: 'k2', colId: 'w1', title: '还在干', sentAt: 400, receipt: null },
+      { id: 'k3', colId: 'w1', title: '在提问', sentAt: 500, receipt: { question: '用哪个库？', files: [] } },
+    ],
+    chats: [{ colId: 'cap', turns: [
+      { id: 'u1', ts: 1, user: '普通对话', reply: '看 /out/login.md' },
+      { id: 'k0', ts: 50, user: '导出报表', kind: 'task', task: { colId: 'gone', title: '导出报表', project: '报表服务', doneAt: 90, receipt: { summary: '', failed: '只导出一半', files: ['/out/half.csv', 42, '', 'tasks/G3-amend-1.md', 'Update available! Run: brew upgrade claude-code@latest'] } } },
+      { id: 'k9', ts: 60, user: '老卡片', kind: 'task', task: { colId: 'w2', title: '老卡片', receipt: { summary: '迁完', files: ['/out/migrate.sql'] } } },
+    ] }],
+  });
+  assert.deepEqual(receipts.map((r) => [r.colId, r.session, r.project, r.ts, r.files.join(','), r.gone, r.archived]), [
+    ['w1', '登录', '客户门户', 300, '/out/login.md', false, false],
+    ['w2', '旧迁移', '报表服务', 100, '/out/migrate.sql', false, true],
+    ['w1', '登录', '客户门户', 300, '/out/login.md', false, false],
+    ['gone', '', '报表服务', 90, '/out/half.csv', true, false],
+    // a card from before projects were stored: its session still knows the project, its time is when the work went out
+    ['w2', '旧迁移', '报表服务', 60, '/out/migrate.sql', false, true],
+  ]);
+  assert.deepEqual([receipts[3].task, receipts[3].failed], ['导出报表', '只导出一半']);
+  assert.deepEqual(C.deliveryReceipts({}), []);
+});
+
+test('delivered files group by project, newest first, a path once under its latest session', () => {
+  const r = (colId, session, project, ts, files, more = {}) => ({ colId, session, project, ts, files, archived: false, gone: false, task: '', summary: session + ' 的回执', failed: '', ...more });
+  const out = C.collectDeliveries([
+    r('a', 'A', 'Portal', 100, ['/out/report.md', '/out/old.png']),
+    r('b', 'B', 'portal', 300, ['/out/report.md:8', '/out/new.csv']),
+    r('c', 'C', '', 900, ['/tmp/scratch.txt']),
+    r('d', 'D', 'Reports', 200, ['C:\\out\\Sheet.xlsx', '/out/folder/']),
+    r('e', 'E', 'Reports', 250, ['c:/out/sheet.xlsx']),
+  ], '/Users/me');
+  assert.equal(out.total, 6);
+  // project names differing only in case are one project, shown as last written; no project comes last
+  assert.deepEqual(out.groups.map((g) => [g.key, g.name, g.ts, g.files.map((f) => f.name + '@' + f.session)]), [
+    ['portal', 'portal', 300, ['new.csv@B', 'report.md@B', 'old.png@A']],
+    ['reports', 'Reports', 250, ['sheet.xlsx@E', 'folder@D']],
+    ['', '', 900, ['scratch.txt@C']],
+  ]);
+  const report = out.groups[0].files[1];
+  assert.deepEqual([report.path, report.key, report.type, report.colId, report.ts, report.summary], ['/out/report.md:8', '/out/report.md', 'markdown', 'b', 300, 'B 的回执']);
+  assert.equal(out.groups[0].files[2].type, 'image');
+  assert.deepEqual(C.collectDeliveries([], ''), { total: 0, groups: [] });
+});
+
+test('the same receipt kept twice: the copy that knows its project and session wins', () => {
+  const base = { colId: 'w', session: '', project: '', ts: 50, files: ['/out/a.md'], archived: false, gone: true, task: '卡片标题', summary: '', failed: '' };
+  const known = { ...base, session: '报表导出', project: '报表服务', gone: false };
+  for (const order of [[base, known], [known, base]]) {
+    const [file] = C.collectDeliveries(order, '').groups[0].files;
+    assert.deepEqual([file.session, file.project, file.gone], ['报表导出', '报表服务', false]);
+  }
+});
+
+test('a task card remembers its project and when the receipt came in', () => {
+  const card = (task) => C.normalizeChat({ turns: [{ id: 'k', ts: 1, user: 'x', kind: 'task', task }] }, 'cap').turns[0].task;
+  const kept = card({ colId: 'w', title: 't', status: 'done', project: '客户门户', doneAt: 1234, receipt: { summary: 's', files: ['/a'], explicit: true } });
+  assert.deepEqual([kept.project, kept.doneAt], ['客户门户', 1234]);
+  // older cards have neither and stay as they were
+  const old = card({ colId: 'w', title: 't', status: 'done', receipt: null });
+  assert.equal('project' in old, false);
+  assert.equal('doneAt' in old, false);
+});
+
 test('reply markdown keeps terminal line breaks and stays escaped', () => {
   const html = C.renderMarkdown('## 结果\n第一行\n第二行 <b>x</b>\n\n- a\n- b', { breaks: true });
   assert.match(html, /<h2>结果<\/h2>/);
