@@ -103,7 +103,7 @@ async function launch(big = false) {
   const now = Date.now();
   // Large read-only fixtures have unbound doing cards. Route their heartbeat
   // notices to the stand-in Captain so they never launch a real provider CLI.
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, theme: 'dark', fitWindow: true, fitCols: 3, taskBoard: { dispatcher: 'captain' },
     columns: [{ ...column('cap', '队长', ''), isMain: true, captainCrew: false }, ...workers],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [],
       tasks: workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, turnId: '',

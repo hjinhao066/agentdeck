@@ -4,12 +4,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-test('background receipts leave a half-written terminal sentence and chat message untouched', async () => {
+test('background receipts leave a half-written terminal sentence and chat message untouched', async ({}, testInfo) => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-background-receipts-'));
   const promptsFile = path.join(profile, 'prompts.jsonl');
   const controlFile = path.join(profile, 'control-env.json');
   const fake = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     columns: [{ id: 'receipt-worker', title: 'Worker', cmd: fake, cwd: profile, role: 'manual' }],
   }));
   const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: promptsFile, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile };
@@ -24,7 +24,14 @@ test('background receipts leave a half-written terminal sentence and chat messag
     await page.locator('#mdCmd').fill(fake);
     await page.locator('#mdCwd').fill(profile);
     await page.locator('#mdCreate').click();
-    await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
+    await expect.poll(() => fs.existsSync(controlFile)).toBe(true).catch(async (error) => {
+      await testInfo.attach('captain-startup', { body: JSON.stringify(await page.evaluate(() => {
+        const col = MainSession.mainCol(), entry = col && terms.get(col.id);
+        return { col: col && { id: col.id, cmd: col.cmd }, entry: entry && { alive: entry.alive,
+          launchPending: entry.launchPending, lastScreen: entry.lastScreen, exitReason: entry.exitReason } };
+      })), contentType: 'application/json' });
+      throw error;
+    });
     const mainId = await page.evaluate(() => config.mainSession.colId);
     await expect.poll(() => captured().join('\n'), { timeout: 20000 }).toContain('run_in_background: true');
     await expect.poll(() => page.evaluate((id) => terms.get(id).sendingPrompt, mainId)).toBe(false);

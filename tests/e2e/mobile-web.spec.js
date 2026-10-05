@@ -20,7 +20,7 @@ async function launch(extraTurns = [], before = () => {}) {
   await new Promise((resolve) => reservation.listen(0, '127.0.0.1', resolve));
   const port = reservation.address().port;
   await new Promise((resolve) => reservation.close(resolve));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2, captainTokenSaver: { enabled: false },
     mobileWeb: { enabled: false, port },
     mainSession: { colId: 'mobile-captain', cmd: FAKE, gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] },

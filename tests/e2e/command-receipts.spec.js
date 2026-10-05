@@ -12,7 +12,7 @@ test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-command-e2e-'));
   receiptDir = path.join(profile, 'env'); fs.mkdirSync(receiptDir);
   controlFile = path.join(profile, 'control.json');
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns: [
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, columns: [
     { id: 'submit-worker', title: 'Command worker', cmd: fake, cwd: profile, role: 'manual' },
     { id: 'other-worker', title: 'Other worker', cmd: fake, cwd: profile, role: 'manual' },
   ] }));

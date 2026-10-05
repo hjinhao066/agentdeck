@@ -9,7 +9,7 @@ let app, page, profile;
 test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-status-light-'));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ fitWindow: true, fitCols: 2, crewOpen: true,
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, fitWindow: true, fitCols: 2, crewOpen: true,
     columns: [
       { id: 'captain', title: '队长', cmd: fake, cwd: profile, role: 'manual', isMain: true },
       { id: 'silent-worker', title: 'Quiet worker', cmd: statusAgent, cwd: profile, role: 'manual', captainCrew: true },

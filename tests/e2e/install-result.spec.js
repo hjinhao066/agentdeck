@@ -18,7 +18,7 @@ test('installation waits across restart, rejects early complete, and records suc
     gen: 1, status: 'working', startedAt: Date.now(), instructionSent: true,
     instruction: '不要重复派发的安装指令', pendingInstall: { id: status + '-install', targetVersion: '1.2.0', createdAt: Date.now() },
   }));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ columns, resumeOnRestart: true,
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, columns, resumeOnRestart: true,
     mainSession: { colId: 'captain', cmd: fake, gen: 1, fresh: false, crewMarked: true, tasks, pending: [], inflight: [], waitlist: [] } }));
   const env = { ...process.env, ZDOTDIR: profile };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];

@@ -80,6 +80,8 @@ test('Relay revokes the old Captain and listener, preserves independent tokens, 
   const oldEnv = { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: old.controlToken };
   expect((await cli(['ledger'], oldEnv).done).code).toBe(0);
   const watcher = cli(['receipts', '--wait', '--timeout', '30'], oldEnv);
+  // Register the old generation's listener before Relay retires its lease.
+  await expect.poll(() => fs.readdirSync(path.join(controlDir, 'receipt-listeners')).filter((name) => name.endsWith('.json')).length).toBe(1);
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(true);
   const newId = await page.evaluate(() => config.mainSession.colId);
   expect(newId).not.toBe(CAPTAIN);
@@ -95,11 +97,14 @@ test('Relay revokes the old Captain and listener, preserves independent tokens, 
   expect(fresh.receiptToken).not.toBe(old.receiptToken);
   expect(JSON.parse(fs.readFileSync(credentialsFile(INDEPENDENT), 'utf8'))).toEqual(independent);
   const obsolete = await watcher.done;
-  expect(obsolete.code).toBe(1);
-  expect(obsolete.stderr).toContain('Control request rejected');
+  // A retired long listener exits quietly; a fresh request with its revoked token still fails.
+  expect(obsolete).toEqual({ code: 0, stdout: '', stderr: '' });
   expect(obsolete.stdout).not.toContain('handoff-protected-receipt');
   expect(await page.evaluate(() => config.mainSession.pending.some((r) => r.summary === 'handoff-protected-receipt'))).toBe(true);
-  expect((await cli(['ledger'], { ...oldEnv, AGENTDECK_TERMINAL_ID: newId }).done).code).toBe(1);
+  const revoked = await cli(['ledger'], { ...oldEnv, AGENTDECK_TERMINAL_ID: newId }).done;
+  expect(revoked.code).toBe(1);
+  expect(revoked.stderr).toContain('Control request rejected');
+  expect(revoked.stdout).toBe('');
   expect((await cli(['ledger'], { AGENTDECK_TERMINAL_ID: CAPTAIN }).done).code).toBe(1);
   const denied = await cli(['ledger'], { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: independent.receiptToken }).done;
   expect(denied.code).toBe(1); expect(denied.stderr).toContain('Receipt capability');

@@ -486,10 +486,19 @@ for (const theme of ['dark', 'light']) {
     // 844px phone: header 52, tabs 53, the rest is content.
     expect(layout.main.height).toBeGreaterThanOrEqual(720);
     // The conversation itself gets at least 70% of the screen: no title row above it, a one-line input and slim tabs below.
-    const room = await page.evaluate(() => ({ turns: document.getElementById('captain-turns').clientHeight, screen: innerHeight, composer: document.querySelector('.composer').getBoundingClientRect().height,
-      headVisible: document.getElementById('captain-title').getBoundingClientRect().height > 1 }));
+    const room = await page.evaluate(() => {
+      const title = document.getElementById('captain-title'), wrapper = title.closest('.sr-only');
+      const bounds = wrapper?.getBoundingClientRect(), style = wrapper && getComputedStyle(wrapper);
+      // A clipped parent's child retains its natural box; verify the actual clipping contract.
+      const titleClip = wrapper && { width: bounds.width, height: bounds.height, overflow: style.overflow, clipPath: style.clipPath };
+      const clipped = bounds?.width <= 1 && bounds.height <= 1 && style.overflow === 'hidden' && style.clipPath === 'inset(50%)';
+      return { turns: document.getElementById('captain-turns').clientHeight, screen: innerHeight,
+        composer: document.querySelector('.composer').getBoundingClientRect().height,
+        titleClip, headVisible: !clipped && title.getBoundingClientRect().height > 1 };
+    });
     expect(room.turns / room.screen).toBeGreaterThanOrEqual(0.7);
     expect(room.composer).toBeLessThanOrEqual(50);
+    expect(room.titleClip).toEqual({ width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)' });
     expect(room.headVisible).toBe(false);
     await expect(page.locator('#captain-title')).toHaveText('Mac 队长');
     // The clear button only takes room while there is a draft; the input grows with it and shrinks back.

@@ -41,7 +41,7 @@ test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-projects-'));
   const column = (id, title, project, reviews = []) => ({ id, title, displayTitle: title, manualTitle: true, project, reviews, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true });
   const now = Date.now();
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     // These tasks declare map states; they are not interrupted jobs to resume.
     resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3,
     columns: [

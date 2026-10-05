@@ -46,7 +46,7 @@ test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-captain-'));
   demoFile = path.join(profile, 'report.md');
   fs.writeFileSync(demoFile, '# Report\n');
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 3,
     columns: ['x', 'y'].map((k) => ({ id: `cap-${k}`, taskId: `task-${k}`, title: `Worker ${k}`, cmd: FAKE, cwd: profile, width: 460, role: 'manual' })),
   }));

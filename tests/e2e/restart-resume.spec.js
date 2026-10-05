@@ -52,7 +52,7 @@ test.beforeAll(async () => {
   };
   const closedCard = { ...card, id: 't-closed', title: '在别处已完成', status: 'done', session_id: 'worker-closed', attempt_closed: true, latest_receipt: '另一处已经完成' };
   fs.writeFileSync(path.join(profile, 'tasks', 'agentdeck.json'), JSON.stringify({ version: 1, project: 'agentdeck', cards: [card, closedCard] }));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     resumeOnRestart: true,
     taskBoard: { dispatcher: 'captain' },
     columns: [
@@ -175,7 +175,7 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
     order: 0, depends_on: [], rework_count: 0, latest_receipt: 'EXACT LAST RECEIPT', consecutive_failures: 0,
     created: '2026-10-04T00:00:00.000Z', updated: '2026-10-04T00:00:00.000Z',
   }] }));
-  fs.writeFileSync(path.join(profile2, 'config.json'), JSON.stringify({ resumeOnRestart: true, taskBoard: { dispatcher: 'captain' },
+  fs.writeFileSync(path.join(profile2, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: true, taskBoard: { dispatcher: 'captain' },
     columns: [{ id: 'cap2', title: '队长', cmd: fake, cwd: profile2, isMain: true },
       { id: 'fallback-worker', title: 'fallback probe', cmd, cwd: profile2, captainCrew: true, role: 'manual',
         modelSessionId: sessionId, modelSessionOwner: 'fallback-worker', modelSessionCwd: profile2,
