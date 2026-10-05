@@ -169,7 +169,7 @@
     'Gemini 3.8 Flash：检索、整理、中文写作、简单到中等代码（Antigravity，不消耗 Claude 额度；不用 Gemini 3.1 Pro）。Gemini 周额度用尽时，agy GPT-OSS 120B Medium 做批量代码与测试；Sonnet 4.6 做日常代码；Opus 4.6 Thinking 做架构、复杂推理与审查。agy 第三方模型的剩余额度目前无法读取，遇到限流就换另一个已实测模型。',
     'Cursor Grok 4.7：脏活、抓数据、外部信息采集（cursor-agent --force --model grok-4.7-high-fast）。',
     '数据抓取兜底：网上的数据抓不到时，不要盲目手写无头爬虫死磕，先找 GitHub 现成工具、OpenCLI、agent-reach 技能；若仍抓不到再考虑调度 Muse.ai 或 ChatGPT 浏览器（computer use）。',
-    '额度轮换：quota 只读本机会话/缓存的被动观测，注意采样时间和可信度，未知不代表可用。某个会话说额度用完、被限流或没登录，就用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
+    '额度轮换：quota 只读本机会话/缓存的被动观测，注意采样时间和可信度，未知不代表可用，也不要因为未知就换模型。开会话时，额度已用尽或剩余不高于阈值，AgentDeck 会按同级换成另一家能用的模型，会话标题和回执写明原本派了谁；--command 点名的不换，只排队。某个会话自己报额度用完、被限流或没登录时，仍用 new 换下一个开新会话重派，并告诉用户换成了哪个。',
   ];
   // Effort tiers, lowest first. Cursor takes the tier as the model id's suffix
   // and lists exactly these ids for Opus and Sonnet.

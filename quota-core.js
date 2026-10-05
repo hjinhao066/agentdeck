@@ -13,6 +13,53 @@
   const officialRoom = (sample) => !!sample?.official && !!sample.windows?.some((w) => w.key === 'fiveHour') && sample.windows.every((w) => w.remaining > 0 && !w.exhausted);
   const SCOPES = { Claude: 'claude', Codex: 'codex', Cursor: 'grok-4.7', Antigravity: 'gemini' };
   const NAMES = { Claude: 'Claude', Codex: 'Codex / ChatGPT', Cursor: 'Cursor / Grok 4.7', Antigravity: 'Antigravity / Gemini' };
+  // Same-tier substitutes, checked before a session opens. Edit models here.
+  // Leave only when the chosen pool is clearly exhausted or at/under this remaining %.
+  // A fresh "未知" reading is not a reason to leave and is not a usable destination.
+  // Cursor Claude, agy Sonnet 4.6 and agy GPT-OSS have no meter; commandQuota does
+  // not hold them, so they stay eligible destinations. agy commands never take --effort.
+  const QUOTA_LOW_PERCENT = 20;
+  const cursorSonnet = Object.freeze({
+    id: 'cursor-sonnet', label: 'Cursor claude-sonnet-5-5-high', provider: 'Cursor',
+    command: 'cursor-agent --force --model claude-sonnet-5-5-high',
+    match: (name, model) => name === 'cursor-agent' && /^claude-sonnet-5-5(?:-(?:medium|high|xhigh|max))?$/i.test(model),
+  });
+  const QUOTA_TIERS = Object.freeze([
+    Object.freeze([
+      Object.freeze({ id: 'claude-opus', label: 'Claude Opus 5.5', provider: 'Claude',
+        command: 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high',
+        match: (name, model) => name === 'claude' && /^(?:opus|claude-opus-5-5)$/i.test(model) }),
+      Object.freeze({ id: 'cursor-opus', label: 'Cursor claude-opus-5-5-high', provider: 'Cursor',
+        command: 'cursor-agent --force --model claude-opus-5-5-high',
+        match: (name, model) => name === 'cursor-agent' && /^claude-opus-5-5(?:-(?:medium|high|xhigh|max))?$/i.test(model) }),
+    ]),
+    Object.freeze([
+      Object.freeze({ id: 'claude-sonnet', label: 'Claude Sonnet 5.5', provider: 'Claude',
+        command: 'claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high',
+        match: (name, model) => name === 'claude' && /^(?:sonnet|claude-sonnet-5-5)$/i.test(model) }),
+      cursorSonnet,
+      Object.freeze({ id: 'agy-sonnet', label: 'agy claude-sonnet-4-6', provider: 'Antigravity',
+        command: 'agy --dangerously-skip-permissions --model claude-sonnet-4-6',
+        match: (name, model) => name === 'agy' && /^claude-sonnet-4-6$/i.test(model) }),
+    ]),
+    Object.freeze([
+      Object.freeze({ id: 'gemini-flash', label: 'Gemini Flash', provider: 'Antigravity',
+        command: 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high',
+        match: (name, model) => name === 'agy' && /^gemini-[\d.]+-flash(?:-(?:low|medium|high))?$/i.test(model) }),
+      Object.freeze({ id: 'agy-gpt-oss', label: 'agy gpt-oss-120b-medium', provider: 'Antigravity',
+        command: 'agy --dangerously-skip-permissions --model gpt-oss-120b-medium',
+        match: (name, model) => name === 'agy' && /^gpt-oss-120b-medium$/i.test(model) }),
+      Object.freeze({ id: 'cursor-grok', label: 'Cursor grok-4.7-high-fast', provider: 'Cursor',
+        command: 'cursor-agent --force --model grok-4.7-high-fast',
+        match: (name, model) => name === 'cursor-agent' && /^grok-4\.7(?:-high)?(?:-fast)?$/i.test(model) }),
+    ]),
+    Object.freeze([
+      Object.freeze({ id: 'codex-sol', label: 'Codex GPT-6.1 Sol', provider: 'Codex',
+        command: 'codex --model gpt-6.1-sol --no-daemon --dangerously-bypass-approvals-and-sandbox',
+        match: (name, model) => name === 'codex' && (!model || /^gpt-6\.1(?:-sol)?$/i.test(model)) }),
+      cursorSonnet,
+    ]),
+  ]);
   function claudeSeats(value) {
     const ids = new Set();
     const seats = (Array.isArray(value) ? value : []).slice(0, 8).filter((s) => {
@@ -402,6 +449,95 @@
     const shortText = shortRemaining === null ? (out ? '已用尽' : expired ? '过期' : statusText) : `${fiveHour === null ? '周 ' : ''}${shortRemaining < 1 ? '<1' : Math.round(shortRemaining)}%`;
     return { provider, state, label, displayLabel, sampleLabel, statusText, fiveHour, weekly, shortText, shortRemaining, out, recoveryAt: out && outAt || null, sampledAt, stale: !!stale, failures: entry.officialStatus?.failure ? entry.officialStatus.failures || 1 : 0, cells, account: entry.account || '', source: evidence?.source || '', confidence: confidence || '', name: seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '', detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：${label}\n${details.join('\n')}` };
   }
+  const LAUNCH_WORDS = /(?:[^\s"'\\]|\\.|"(?:\\.|[^"])*"|'[^']*')+/g;
+  function commandIdentity(command) {
+    const words = String(command || '').match(LAUNCH_WORDS) || [];
+    let i = words[0] === 'command' ? 1 : 0;
+    let name = '';
+    for (; i < words.length; i++) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) continue;
+      name = words[i].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase();
+      break;
+    }
+    if (name === 'antigravity') name = 'agy';
+    let model = '';
+    for (let j = i + 1; j < words.length; j++) {
+      const eq = /^(?:--model|-m)=([\s\S]+)$/.exec(words[j]);
+      if (eq) { model = eq[1].replace(/^["']|["']$/g, ''); break; }
+      if (words[j] === '--model' || words[j] === '-m') { model = String(words[j + 1] || '').replace(/^["']|["']$/g, ''); break; }
+    }
+    return { name, model };
+  }
+  function tierMember(command) {
+    const { name, model } = commandIdentity(command);
+    for (const tier of QUOTA_TIERS) for (const member of tier) if (member.match(name, model)) return member;
+    return null;
+  }
+  function tierPeers(member) {
+    const seen = new Set([member.id]);
+    const peers = [];
+    for (const tier of QUOTA_TIERS) {
+      if (!tier.some((item) => item.id === member.id)) continue;
+      for (const peer of tier) if (!seen.has(peer.id)) { seen.add(peer.id); peers.push(peer); }
+    }
+    return peers;
+  }
+  // out: a window is exhausted. low: a fresh number is at/under the threshold.
+  // unknown: the pool is metered but the reading is missing, stale or expired.
+  // unmetered: this command is outside every measured pool.
+  function quotaStance(quota) {
+    if (!quota) return 'unmetered';
+    if (quota.out) return 'out';
+    if (quota.stale || quota.state === 'unknown') return 'unknown';
+    const numbers = [quota.fiveHour, quota.weekly].filter((n) => typeof n === 'number');
+    if (numbers.some((n) => n <= QUOTA_LOW_PERCENT)) return 'low';
+    if (quota.state === 'normal' || numbers.length) return 'ok';
+    return 'unknown';
+  }
+  function quotaSwitchNote(from, to) { return `原本派${from}，因额度换成${to}`; }
+  function quotaFallbackTitle(title, note, max = 120) {
+    const mark = String(note || '').replace(/\s+/g, ' ').trim();
+    const head = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!mark) return head.slice(0, max);
+    if (head.includes(mark)) return head.slice(0, max);
+    const room = max - mark.length - 1;
+    const kept = room > 0 ? head.slice(0, room).trim() : '';
+    return (kept ? `${kept} ${mark}` : mark).slice(0, max);
+  }
+  function quotaPlan(action, extra) {
+    return { action, cmd: '', note: '', from: '', to: '', provider: '', reason: action, held: '', ...extra };
+  }
+  // Tests replace QuotaCore.commandQuota; follow that replacement without looping
+  // back into it when the saved original is this function.
+  function readCommandQuota(store, command, seats, activeSeatId, now) {
+    const api = typeof globalThis !== 'undefined' ? globalThis.QuotaCore : null;
+    const fn = api && api.commandQuota;
+    if (typeof fn === 'function' && fn !== commandQuota) return fn(store, command, seats, activeSeatId, now);
+    return commandQuota(store, command, seats, activeSeatId, now);
+  }
+  // Decide before opening a PTY. options.explicit: the caller passed --command.
+  function quotaFallback(store, command, seats, activeSeatId, now = Date.now(), options = {}) {
+    const cmd = String(command || '');
+    const member = tierMember(cmd);
+    // A full path or `command` prefix hides the program from commandQuota. Probe
+    // the tier's own command so a metered pool is still the pool we judge.
+    const stance = quotaStance(readCommandQuota(store, cmd, seats, activeSeatId, now) || (member ? readCommandQuota(store, member.command, seats, activeSeatId, now) : null));
+    const base = { cmd, from: member?.label || '', provider: member?.provider || '' };
+    if (options.explicit && (stance === 'out' || stance === 'low')) {
+      const named = member ? `已用 --command 点名 ${member.label}，不自动更换` : '已用 --command 点名模型，不自动更换';
+      return quotaPlan('queue', { ...base, reason: 'explicit', held: stance, note: named });
+    }
+    if (stance !== 'out' && stance !== 'low') return quotaPlan('open', { ...base, reason: stance === 'ok' ? 'ok' : stance });
+    if (member) {
+      for (const peer of tierPeers(member)) {
+        const peerStance = quotaStance(readCommandQuota(store, peer.command, seats, activeSeatId, now));
+        if (peerStance !== 'ok' && peerStance !== 'unmetered') continue;
+        return quotaPlan('switch', { cmd: peer.command, from: member.label, to: peer.label, provider: peer.provider, reason: stance, held: stance, note: quotaSwitchNote(member.label, peer.label) });
+      }
+    }
+    if (stance === 'out') return quotaPlan('queue', { ...base, reason: 'out', held: 'out' });
+    return quotaPlan('open', { ...base, reason: 'low', held: 'low' });
+  }
   function commandQuota(store, command, seats, activeSeatId, now = Date.now()) {
     const cmd = String(command || '').trim();
     const bin = cmd.match(/^(claude|codex|cursor-agent|agy|antigravity|gemini)(?:\s|$)/i)?.[1]?.toLowerCase();
@@ -436,6 +572,6 @@
     });
   }
   function text(store, now, seats, captainSeatId) { return items(seats).map(({ provider, seat }) => summary(store, provider, now, seat, captainSeatId).detail.replace(/\n/g, ' · ')).join('\n'); }
-  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, text, maskAccount, mobile };
+  return { PROVIDERS, SCOPES, FRESH_MS, CLAUDE_OAUTH_SOURCE, freshMs, EXHAUSTED, RATE_LIMITED, resourceError, claudeSeats, seatKey, seatForColumn, items, percent, resetTime, modelName, screen, cacheClaude, cacheCodex, codexServer, cacheAntigravity, observe, summary, commandQuota, QUOTA_LOW_PERCENT, QUOTA_TIERS, quotaSwitchNote, quotaFallbackTitle, quotaFallback, text, maskAccount, mobile };
 
 });

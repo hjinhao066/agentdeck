@@ -446,6 +446,7 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /gpt-oss-120b-medium/);
   assert.match(text, /agy 绝不能加 --effort/);
   assert.match(text, /Gemini 周额度用尽时/);
+  assert.match(text, /--command 点名的不换，只排队/);
   assert.match(text, /用户交代的任务默认先记进/);
   assert.match(text, /鸡毛蒜皮/);
   assert.match(text, /截图真的落盘/);
