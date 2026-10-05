@@ -7,6 +7,7 @@ const S = require('./claude-seats-core');
 const { validId } = require('./security');
 const { saveChat } = require('./side-main');
 const { accountIdentity } = require('./quota-codex');
+const { AUTONOMOUS_CONTINUATION } = require('./main-core');
 
 function directory(seat, home) {
   const raw = seat.configDir.replace(/^~(?=$|[\\/])/, home);
@@ -161,7 +162,7 @@ function checkpoint(home, userData, payload) {
     + `## 队长交接\n${line(payload.relayMessage || '手动 Relay')}\n最近指令：${line(latest?.user)}\n先读 briefing 和本交接，检查 ledger；旧监听失效后重挂恰好一个后台 receipts --wait --timeout 300。\n\n`
     + '## 谁在做\n| 会话 | 事项 | 状态 | 回执/提问 |\n| --- | --- | --- | --- |\n'
     + payload.tasks.map((t) => `| ${line(t.colId)} | ${line(t.title)} | ${line(t.status)} | ${line(t.receipt?.question || t.receipt?.failed || t.receipt?.summary)} |`).join('\n')
-    + '\n\n## 卡在哪\n未处理回执和提问在 AgentDeck 中保留；额度用尽的会话保持原席位。\n\n## 等用户拍板什么\n见任务表中的提问及队长待处理回执。\n\n## 下一步\n读看板继续；先运行 ledger 和 receipts，核对正在跑的队员，不重复派活。\n\n'
+    + `\n\n## 卡在哪\n未处理回执和提问在 AgentDeck 中保留；额度用尽的会话保持原席位。\n\n## 等用户拍板什么\n见任务表中的提问及队长待处理回执。\n\n## 下一步\n${AUTONOMOUS_CONTINUATION}\n\n`
     + `## 指针\nAgentDeck 对话目录：${path.join(userData, 'chats')}\n\n## 最后更新时间与更新记录\n${new Date().toISOString()} AgentDeck：Relay前存档。\n`;
   fs.writeFileSync(board + '.tmp', text, { mode: 0o600 });
   fs.renameSync(board + '.tmp', board);

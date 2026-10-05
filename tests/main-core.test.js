@@ -450,6 +450,14 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /鸡毛蒜皮/);
   assert.match(text, /截图真的落盘/);
   assert.match(text, /最多返工 2 轮/);
+  assert.match(text, /回复「队长已就绪」后立即自主接续/);
+  assert.match(text, /不要等用户说“继续”/);
+  assert.match(text, /上次被打断或交接列出的未完成工作重新派起来/);
+  assert.match(text, /额度紧时保持 3–5 个活并行/);
+  assert.match(text, /额度多时开十几个/);
+  assert.match(text, /测试全过并进入打包后停止派新活/);
+  assert.match(text, /存档后直接安装并重启/);
+  assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
 });
 
 test('Captain explains one-level projects, declared review targets and provider sub-agent defaults', () => {

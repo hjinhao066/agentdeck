@@ -398,7 +398,9 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
 - On confirmation, the pre-command conversation is saved to Captain history
   without replacing the column or PTY. Unread receipts, questions and live task
   cards carry over. The current instructions are sent once, followed by
-  `先跑 ledger、读看板里的队长交接再接续。` The delivery waits for an idle
+  `REBRIEF_NOTE` tells the Captain to read its briefing and handoff, inspect the
+  ledger and receipts, restart interrupted work, and keep dispatching autonomously.
+  The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
   including attachments, and rechecks these guards when sending.
 - Raw terminal history recall, Tab completion and cursor edits make the tracked

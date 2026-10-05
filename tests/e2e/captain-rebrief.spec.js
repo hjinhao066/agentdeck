@@ -51,7 +51,7 @@ async function raw(text) {
 }
 async function rebrief(count) {
   await expect.poll(() => briefs().length, { timeout: 20000 }).toBe(count);
-  expect(briefs().at(-1)).toContain('先跑 ledger、读看板里的队长交接再接续');
+  expect(briefs().at(-1)).toContain('不要等用户说“继续”');
   await ready();
 }
 async function cli(args, env) {

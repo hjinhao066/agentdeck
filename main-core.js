@@ -63,7 +63,8 @@
   const MAX_PATH = 500;
   const TOKEN_SAVER_DEFAULT = 150_000;
   const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档';
-  const REBRIEF_NOTE = '先跑 ledger、读看板里的队长交接再接续。';
+  const AUTONOMOUS_CONTINUATION = '回复「队长已就绪」后立即自主接续，不要等用户说“继续”：先读取 briefing 与看板里的「队长交接」，检查 ledger 和 receipts，把上次被打断或交接列出的未完成工作重新派起来，然后持续自主拆解并派活。按 quota 控制并发：额度紧时保持 3–5 个活并行，额度多时开十几个。发版时测试全过并进入打包后停止派新活，只等现有任务收尾；安装包就绪后，让耗时长的会话停在安全点并记录进度，快收尾的短暂等待；存档后直接安装并重启。';
+  const REBRIEF_NOTE = AUTONOMOUS_CONTINUATION;
   function contextResetCommand(provider, text) {
     if (typeof text !== 'string' || /[\r\n]/.test(text)) return false;
     const commands = provider === 'Claude' ? '(?:clear|reset|new)' : provider === 'Codex' ? '(?:clear|new)' : '';
@@ -257,7 +258,7 @@
       `   Cursor 把档位写在模型名最后，只用这些名字：${CURSOR_MODELS.join('、')}。`,
       '   Claude Code 用 --effort 写档位。Antigravity 的 Gemini Flash 把档位写在模型名最后，只有 low、medium、high（没有 xhigh 和 max）；Claude 4.6 与 GPT-OSS 使用完整模型 ID，不追加档位。agy 绝不能加 --effort。',
       '',
-      '现在只回复一句「队长已就绪」，然后等用户的指令。',
+      `现在回复「队长已就绪」，然后立即执行：${AUTONOMOUS_CONTINUATION}`,
     ].join('\n');
   }
 
@@ -747,7 +748,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });
