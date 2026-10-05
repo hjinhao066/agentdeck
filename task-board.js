@@ -250,12 +250,12 @@ class TaskStore {
   }
   failure(card, attempt, reason, rework, source = '') {
     const duplicate = card.last_failure_attempt === attempt;
-    card.last_failure_attempt = attempt;
     card.resource_failure = resourceFailure(reason, source) || null;
     if (card.resource_failure) {
       card.status = 'doing'; card.flag = 'quota'; card.latest_receipt = sentence(reason);
       return;
     }
+    card.last_failure_attempt = attempt;
     if (!duplicate) {
       card.consecutive_failures = (card.consecutive_failures || 0) + 1;
       if (rework) card.rework_count++;
@@ -433,7 +433,7 @@ class TaskStore {
       }
       if (type === 'failed') {
         const reason = text(input.message, 'failure', true);
-        const failureAttempt = autoReview && input.source === 'command' ? AutoVerify.reviewAttemptId(card.id, card.review_round) : input.attempt_id;
+        const failureAttempt = autoReview ? AutoVerify.reviewAttemptId(card.id, card.review_round) : input.attempt_id;
         this.failure(card, failureAttempt, reason, card.review_session === true, input.source);
         // Only a reviewer's own written verdict goes back to the executor, once. A crash or
         // quota failure of the reviewer is not a finding.

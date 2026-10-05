@@ -171,6 +171,46 @@ test('an explicit review after a Captain rejection does not double-count the rej
   assert.ok(app.texts(exec).at(-1).endsWith('不通过：缺断言'));
 });
 
+test('a reviewer process failure followed by its authoritative rejection counts the round only once', async (t) => {
+  const w = world(t), app = w.boot(), card = await newCard(app);
+  const exec = await app.execute(card); await app.finish(exec, '执行完成');
+  const review = await manualReview(app, card, exec);
+  await app.api.submit({ action: 'session-exit', code: 7 }, review);
+  assert.equal(app.card(card.id).consecutive_failures, 1);
+  await app.finish(review, '不通过：缺断言');
+  assert.equal(app.card(card.id).consecutive_failures, 1);
+  assert.equal(app.card(card.id).flag, 'failed');
+  await app.scan();
+  assert.equal(app.card(card.id).session_id, exec.id);
+  assert.ok(app.texts(exec).at(-1).endsWith('不通过：缺断言'));
+});
+
+test('a reviewer quota stop does not suppress the first real rejection failure', async (t) => {
+  const w = world(t), app = w.boot(), card = await newCard(app);
+  const exec = await app.execute(card); await app.finish(exec, '执行完成');
+  const review = await manualReview(app, card, exec);
+  app.store.event({ id: card.id, session_id: review.id, attempt_id: review.boardAttempt, type: 'failed', source: 'quota', message: 'RESOURCE_EXHAUSTED' });
+  assert.equal(app.card(card.id).consecutive_failures, 0);
+  await app.finish(review, '不通过：缺断言');
+  assert.equal(app.card(card.id).consecutive_failures, 1);
+  await app.scan(); assert.equal(app.card(card.id).session_id, exec.id);
+});
+
+test('a legacy execution receipt can be reviewed, but an unrelated session cannot become this card executor', async (t) => {
+  const w = world(t), app = w.boot(), card = await newCard(app, { verify: false });
+  const exec = await app.execute(card); await app.finish(exec, '旧执行完整回执', { files: ['/repo/legacy.js'] });
+  app.store.move({ id: card.id, status: 'doing' });
+  const unrelated = await newCard(app, { title: '其他卡片' });
+  await assert.rejects(manualReview(app, unrelated, exec), /原执行会话/);
+  assert.equal(app.card(unrelated.id).session_id, null);
+  const review = await manualReview(app, card, exec);
+  assert.equal(app.card(card.id).exec_receipt.text, '旧执行完整回执');
+  await app.finish(review, '不通过：旧版缺断言'); await app.scan();
+  assert.equal(app.card(card.id).session_id, exec.id);
+  assert.equal(app.card(card.id).attempt_id, AV.reworkAttemptId(card.id, 1));
+  assert.equal(app.card(unrelated.id).session_id, null);
+});
+
 test('manual review verdict context survives restart, unclear blocks without a failure, and two actual rejected rounds still hold', async (t) => {
   const w = world(t); let app = w.boot(); const card = await newCard(app);
   const exec = await app.execute(card); await app.finish(exec, '第一版');

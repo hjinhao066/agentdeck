@@ -1999,6 +1999,7 @@
           if (card.exec_receipt && !reviews.includes(card.exec_receipt.session_id)) throw new Error('--reviews 必须包含这张卡片的原执行会话。');
           if (!card.exec_receipt) {
             const exec = sessions.find((c) => c.id === reviews[0]);
+            if (exec.boardId !== metadata.boardId) throw new Error('--reviews 必须指向这张卡片的原执行会话。');
             metadata.reviewReceipt = { session_id: exec.id, attempt_id: exec.boardAttempt || '',
               text: exec.lastReceipt?.summary || '', files: exec.lastReceipt?.files || [],
               assignee: { agent: window.BoardCore.inferAgentType(exec.cmd || ''), model: exec.cmd?.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } };
