@@ -47,7 +47,16 @@ function boot(w, persisted) {
       memoryPressure: async () => ({ level: w.pressure }), saveLongPrompt: async () => '/tmp/long-task.txt', onTasksChanged() {},
     },
     MainCore: M, BoardCore: B, AutoVerifyCore: AV,
-    QuotaCore: { commandQuota: (_store, cmd) => ({ out: [...w.out].some((p) => String(cmd).startsWith(p)) }) },
+    QuotaCore: {
+      commandQuota: (_store, cmd) => ({ out: [...w.out].some((p) => String(cmd).startsWith(p)) }),
+      // Same out-set as commandQuota. This harness does not model same-tier switches.
+      quotaFallback: (_store, cmd) => {
+        const out = [...w.out].some((p) => String(cmd).startsWith(p));
+        return out
+          ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
+          : { action: 'open', cmd, note: '' };
+      },
+    },
     ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {}, addCard() {}, readFooter: () => null }, Sidebar: { render() {} },
   };
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] }, console });
