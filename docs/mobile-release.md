@@ -62,3 +62,15 @@ npm run mobile:check -- --version 1.3.0 --commit <完整40位提交号>
 ## 验证边界
 
 单测用临时 Git 仓库、假的远端目录和 loopback HTTP 服务执行真实 tar/原子链接切换，覆盖版本不符、旧页无 stamp、资源不符、重定向、缓存头错误、上传失败、三次停止、精确回滚与发版门禁。相关 E2E 为 `mobile-hub.spec.js` / `mobile-web.spec.js` / `mobile-release.spec.js`，持全机测试锁、单 worker；最后一份将生成产物部署到假远端，以真实浏览器验证重新加载一次执行新提交的 JS，回滚后恢复旧提交。本次实现没有对真实 VPS 跑过新部署脚本，首次真实部署演练留给下一次发版。
+
+## 1.2.1 首次真实部署
+
+1.2.1 保留强制手机部署门禁，不新增跳过开关。该次集成经队长授权在打包流程中真实部署静态总台，桌面安装仍单独进行；部署前保留当前 37fbc13 页面链接和字节哈希，并核对正式回滚入口。流程仍最多三次，失败恢复原链接并停止；只操作 `/srv/agentdeck-hub`、对应 release 目录和自己的部署锁，不操作 Caddy、其他站点、隧道、WireGuard 或密钥。
+
+桌面现役仍为 1.2.0 时，发布操作者必须从公网入口核对 HTML 的 1.2.1/完整提交/构建时间和资源哈希，并确认页面能读取现役应用、缺可选字段时正常显示。明显破坏兼容性时立即使用该次回执回滚：
+
+```sh
+npm run mobile:rollback -- --receipt /Users/jinhao/reports/agentdeck-1.2.1/fast-release/mobile-deploy-result.json
+```
+
+这是新脚本首次真实 VPS 运行，不能把本机 fixture 演练当作真实上线证据；过程、回滚点、公网检查和桌面未升级的边界记录在 `/Users/jinhao/reports/agentdeck-1.2.1/receipt.md`。
