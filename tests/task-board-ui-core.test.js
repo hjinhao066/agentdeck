@@ -173,3 +173,50 @@ test('project hue is keyed by name, so both views agree on a project colour', ()
     assert.ok(h >= 0 && h < 360, p);
   }
 });
+
+test('groups: finished projects leave the active list for the completed area; a named project stays', () => {
+  const cards = [
+    card('a', { project: 'alpha', status: 'doing' }), card('a2', { project: 'alpha', status: 'done' }),
+    card('b', { project: 'beta', status: 'done' }), card('b2', { project: 'beta', status: 'done' }),
+    card('c', { project: 'gamma', status: 'done' }), card('c2', { project: 'gamma', status: 'done', archived: true }),
+    card('d', { project: 'delta', status: 'needs_user', latest_receipt: '选哪个？' }),
+  ];
+  const board = U.buildBoard(cards);
+  assert.deepEqual(board.active.map((l) => l.key), ['alpha', 'delta']);
+  assert.deepEqual(board.finished.map((l) => l.key), ['beta', 'gamma']);
+  assert.equal(board.finishedDone, 3, 'archived cards are not counted');
+  assert.deepEqual(board.lanes.map((l) => l.key), ['alpha', 'beta', 'delta', 'gamma'], 'lanes still lists every shown project');
+  assert.equal(board.open, 2);
+  assert.deepEqual(board.columns.map((c) => c.count), [0, 1, 0, 1, 4]);
+  const one = U.buildBoard(cards, { project: 'beta' });
+  assert.deepEqual(one.active.map((l) => l.key), ['beta'], 'picked by name, a finished project is shown as a normal group');
+  assert.deepEqual(one.finished, []);
+  assert.deepEqual(U.buildBoard(cards, { laneOrder: ['delta', 'gamma'] }).active.map((l) => l.key), ['delta', 'alpha']);
+});
+
+test('需要你 reminder lists every waiting card of the shown projects, in lane order', () => {
+  const cards = [
+    card('q1', { project: 'beta', status: 'needs_user', title: '配色', latest_receipt: '用哪个配色？' }),
+    card('q2', { project: 'alpha', status: 'needs_user', title: '对账', latest_receipt: '已结束，未提交回执' }),
+    card('x', { project: 'alpha', status: 'doing' }),
+  ];
+  const board = U.buildBoard(cards);
+  assert.deepEqual(board.alerts.map((a) => [a.card.id, a.lane, a.name, a.question]), [['q2', 'alpha', 'alpha', ''], ['q1', 'beta', 'beta', '用哪个配色？']]);
+  assert.deepEqual(U.buildBoard(cards, { project: 'beta' }).alerts.map((a) => a.card.id), ['q1']);
+  assert.deepEqual(U.buildBoard([card('x')]).alerts, []);
+});
+
+test('activity line: failure reason, hold, wait, receipt, run state, then the brief', () => {
+  const c = (extra) => card('a', { status: 'doing', detail: '第一行说明\n第二行', latest_receipt: '', ...extra });
+  assert.deepEqual(U.activity(c({ flag: 'failed', latest_receipt: '缺少权限\n详情' }), '等「X」完成', '队员正在干活'), { text: '缺少权限', tone: 'failed' });
+  assert.deepEqual(U.activity(c({ flag: 'failed' })), { text: '执行失败，没有写明原因', tone: 'failed' });
+  assert.deepEqual(U.activity(c({ flag: 'failed', latest_receipt: '已结束，未提交回执' })), { text: '队员停下了，但没有交结果。', tone: 'failed' });
+  assert.deepEqual(U.activity(c({ flag: 'quota' })), { text: '额度、登录或限流问题', tone: 'failed' });
+  assert.deepEqual(U.activity(c({ flag: 'held', latest_receipt: '旧回执' }), '', ''), { text: '已挂起，等队长放行', tone: 'wait' });
+  assert.deepEqual(U.activity(c({ latest_receipt: '旧回执' }), '等「X」完成', ''), { text: '等「X」完成', tone: 'wait' });
+  assert.deepEqual(U.activity(c({ latest_receipt: ' 已接好入口。\n第二行 ' }), '', '队员正在干活'), { text: '已接好入口。', tone: '' });
+  assert.deepEqual(U.activity(c(), '', '还没有队员在做'), { text: '还没有队员在做', tone: 'quiet' }, 'a 进行中 card with no news says whether anyone is on it');
+  assert.deepEqual(U.activity(c({ status: 'todo' }), '', ''), { text: '第一行说明', tone: 'quiet' });
+  assert.deepEqual(U.activity(c({ status: 'todo', detail: '' })), { text: '', tone: 'quiet' });
+  assert.equal(U.moreLabel(6), '展开剩余 6 项');
+});

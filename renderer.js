@@ -170,6 +170,7 @@ if (saved) {
       laneOrder: (Array.isArray(v.laneOrder) ? v.laneOrder : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500),
       collapsed: Object.fromEntries(Object.entries(v.collapsed && typeof v.collapsed === 'object' ? v.collapsed : {}).filter(([k, on]) => k.length <= 120 && on === true).slice(0, 500)),
       doneOpen: v.doneOpen === true,
+      completedOpen: v.completedOpen === true,
     };
   }
   if (saved.activeView === 'board') config.activeView = 'board';
