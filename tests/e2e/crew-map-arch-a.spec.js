@@ -45,7 +45,7 @@ async function launch() {
   });
   page = await application.firstWindow();
   page.on('pageerror', (e) => errors.push(e.message));
-  await expect.poll(() => page.evaluate(() => config.resumeOnRestart)).toBe(false);
+  await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart)).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size)).toBe(crew.length + 1);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(crew.length + 1);
 }
