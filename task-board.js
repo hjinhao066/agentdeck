@@ -10,6 +10,8 @@ function projectName(value) {
   if (typeof value !== 'string' || !value.trim() || value !== value.trim() || value.length > 120 || /[<>:"/\\|?*\x00-\x1f]/.test(value) || /[. ]$/.test(value) || /^(?:\.|\.\.|con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(value)) throw new Error('Invalid project name (must be a portable filename).');
   return value;
 }
+// AgentDeck and agentdeck are one project (the stored name is never rewritten).
+function sameProject(a, b) { return String(a).normalize('NFC').toLowerCase() === String(b).normalize('NFC').toLowerCase(); }
 function idValue(value) {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value)) throw new Error('Invalid task/session id.');
   return value;
@@ -81,7 +83,7 @@ class TaskStore {
     const docs = this.read();
     this.dependencies(docs, false); // Also unlock dependencies changed by the other machine.
     const cards = [...docs.values()].flatMap(({ doc }) => doc.cards);
-    return cards.filter((c) => (filter.archived === true || !c.archived) && (!filter.project || c.project === filter.project) && (!filter.status || c.status === filter.status))
+    return cards.filter((c) => (filter.archived === true || !c.archived) && (!filter.project || sameProject(c.project, filter.project)) && (!filter.status || c.status === filter.status))
       .sort((a, b) => a.project.localeCompare(b.project) || a.order - b.order || a.id.localeCompare(b.id));
   }
   write(project, doc, raw) {
@@ -233,7 +235,7 @@ class TaskStore {
     if (input.done !== true) throw new Error('archive requires --done.');
     if (input.project !== undefined) projectName(input.project);
     return this.mutate((docs) => {
-      const cards = [...docs.values()].flatMap(({ doc }) => doc.cards).filter((c) => c.status === 'done' && !c.archived && (!input.project || c.project === input.project));
+      const cards = [...docs.values()].flatMap(({ doc }) => doc.cards).filter((c) => c.status === 'done' && !c.archived && (!input.project || sameProject(c.project, input.project)));
       cards.forEach((c) => { c.archived = true; touch(c); });
       return { cards, notices: [] };
     });
@@ -282,7 +284,7 @@ class TaskStore {
     idValue(input.session_id); idValue(input.attempt_id);
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
-      if (input.project && input.project !== card.project) throw new Error('--project differs from the card project.');
+      if (input.project && !sameProject(input.project, card.project)) throw new Error('--project differs from the card project.');
       if (card.attempt_id === input.attempt_id) return { card, notices: [] };
       if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
@@ -407,4 +409,4 @@ class TaskStore {
     });
   }
 }
-module.exports = { TaskStore, STATUSES, projectName, newCard, sentence, localSessions };
+module.exports = { TaskStore, STATUSES, projectName, sameProject, newCard, sentence, localSessions };

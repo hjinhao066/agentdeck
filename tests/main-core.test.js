@@ -517,3 +517,22 @@ test('native rate limit waits are quota state and a newer working line wins', ()
   assert.equal(M.terminalActivity('The report mentions rate_limit errors.'), '');
 
 });
+
+test('archivable: a failed or stopped session needs its card done or taken over; a done one does not', () => {
+  const now = 10_000_000, min = 60_000;
+  const old = { sentAt: now - 30 * min, doneAt: now - 20 * min };
+  const mk = (status, extra) => ({ tasks: [{ colId: 'a', status, boardId: 'c1', ...old, ...extra }], pending: [], inflight: [] });
+  assert.equal(M.archivable(mk('done'), 'a', 0, now), true);
+  for (const status of ['failed', 'stopped']) {
+    assert.equal(M.archivable(mk(status), 'a', 0, now), false, status + ' with no card information');
+    assert.equal(M.archivable(mk(status), 'a', 0, now, M.ARCHIVE_AFTER, { c1: { status: 'doing', session_id: 'a' } }), false, status + ' nobody took over');
+    assert.equal(M.archivable(mk(status), 'a', 0, now, M.ARCHIVE_AFTER, { c1: { status: 'done' } }), true, status + ' card done');
+    assert.equal(M.archivable(mk(status), 'a', 0, now, M.ARCHIVE_AFTER, { c1: { status: 'doing', session_id: 'b' } }), true, status + ' card bound to another session');
+    const taken = { ...mk(status), tasks: [...mk(status).tasks, { colId: 'b', status: 'working', boardId: 'c1', sentAt: now - 10 * min }] };
+    assert.equal(M.archivable(taken, 'a', 0, now), true, status + ' same card sent to another session');
+    assert.equal(M.archivable(mk(status, { boardId: '' }), 'a', 0, now, M.ARCHIVE_AFTER, { '': { status: 'done' } }), false, status + ' without a card stays');
+    assert.equal(M.needsCardCheck(mk(status), 'a'), true);
+  }
+  assert.equal(M.needsCardCheck(mk('done'), 'a'), false);
+  assert.equal(M.needsCardCheck(mk('failed', { boardId: '' }), 'a'), false);
+});

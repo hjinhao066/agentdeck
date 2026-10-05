@@ -461,3 +461,17 @@ test('a bind reservation fences startup but expires if the local session was nev
   doc.cards[0].session_bound_at = Date.now() - 15_001; fs.writeFileSync(file, JSON.stringify(doc));
   assert.equal(bind(c.id, 'recover', 'replacement').card.session_id, 'replacement');
 });
+test('project matching ignores case for list, archive and bind, and never rewrites the stored name', (t) => {
+  const { store, add, bind } = fixture(t);
+  const card = add({ project: 'AgentDeck' }), other = add({ project: 'Hermes' });
+  assert.deepEqual(store.list({ project: 'agentdeck' }).map((c) => c.id), [card.id]);
+  assert.deepEqual(store.list({ project: 'AGENTDECK' }).map((c) => c.id), [card.id]);
+  assert.deepEqual(store.list({ project: 'agentdeck2' }), [], 'a different name is a different project');
+  assert.throws(() => store.bind({ id: card.id, project: 'hermes', attempt_id: 'a1', session_id: 'w', assignee: { agent: 'codex', model: 'm' } }), /differs from the card project/);
+  assert.equal(store.bind({ id: card.id, project: 'agentdeck', attempt_id: 'a1', session_id: 'w', assignee: { agent: 'codex', model: 'm' } }).card.id, card.id);
+  store.move({ id: other.id, status: 'done' });
+  store.archive({ done: true, project: 'HERMES' });
+  assert.equal(store.list({ archived: true }).find((c) => c.id === other.id).archived, true);
+  assert.equal(store.list({ archived: true }).find((c) => c.id === card.id).project, 'AgentDeck');
+  assert.equal(store.list({ archived: true }).find((c) => c.id === other.id).project, 'Hermes');
+});
