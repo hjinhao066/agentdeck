@@ -286,6 +286,7 @@ async function release(repo, options, runCommand = run) {
       'npm ci + Electron preparation (lock/platform cache)', 'machine test lock: npm test then npm run test:smoke (one worker); audit in parallel',
       'npm run dist:mac -- --publish never (unchanged-input cache)',
       'SHA256 + verified DMG mount/signature/packaged source in parallel', 'generate timed installer + timing report (do not execute installer)',
+      'build/upload mobile hub; preserve rollback point; verify public version/commit/build/assets (at most 3 attempts; rollback on failure)',
     ] }, null, 2));
     return;
   }
@@ -297,7 +298,7 @@ async function release(repo, options, runCommand = run) {
   }
   fs.mkdirSync(plan.output, { recursive: true });
   save(planFile, plan);
-  const report = { ...plan, startedAt: new Date().toISOString(), steps: [], status: 'running' };
+  const report = { ...plan, startedAt: new Date().toISOString(), steps: [], status: 'running', mobile: { status: 'not-deployed' } };
   const started = performance.now();
   const writeReport = () => {
     report.elapsedSeconds = +( (performance.now() - started) / 1000).toFixed(3);
@@ -307,6 +308,7 @@ async function release(repo, options, runCommand = run) {
       `\n\nWall time: ${report.elapsedSeconds}s. Parallel step durations overlap.\n` +
       (report.sha256 ? `DMG SHA256: ${report.sha256}\n` : '') +
       (report.error ? `\nFailure: ${report.error}\n` : '') +
+      `\n${report.mobile.status === 'passed' ? '🟢' : '🔴'} Mobile: ${report.mobile.status}; ${report.mobile.error || 'see mobile-deploy-result.json'}\n` +
       `\nCache hits: dependencies=${!!report.dependenciesCached}, tests=${!!report.testsCached}, build=${!!report.buildCached}.\n` +
       '\nRemoved: intermediate-merge test/build repeats; full E2E from the patch-release gate; serial audit waits; separate DMG verification pass (attach -verify performs it); one git process per runtime file; copying the old app during installation (rename preserves it). Unit and smoke run sequentially under the machine test lock.\n' +
       `\nTest lock wait: ${report.testLockWaitSeconds ?? 'cached / not reached'} seconds.\n` +
@@ -449,6 +451,10 @@ async function release(repo, options, runCommand = run) {
       await runCommand('bash', ['-n', file], plan.worktree, path.join(plan.output, 'installer-syntax.log'));
     });
     save(cacheFile, { key, dmg: path.basename(dmg), sha256: report.sha256 });
+    await step('mobile-deploy', async () => {
+      try { report.mobile = await deployMobileGate(plan, report.commit, runCommand); }
+      catch (error) { report.mobile = { status: 'failed', error: error.message }; throw error; }
+    });
     report.status = 'passed';
     console.log(`Release ${plan.version} prepared in ${plan.output}; nothing installed or restarted.`);
   } catch (error) {
@@ -456,8 +462,22 @@ async function release(repo, options, runCommand = run) {
   } finally { writeReport(); }
 }
 
+async function deployMobileGate(plan, commit, runCommand = run) {
+  const resultFile = path.join(plan.output, 'mobile-deploy-result.json');
+  // A skipped/no-op command must not reuse a previous successful receipt.
+  fs.rmSync(resultFile, { force: true });
+  await runCommand(process.execPath, ['scripts/mobile-release.js', 'deploy', '--output', plan.output,
+    '--version', plan.version, '--commit', commit], plan.worktree, path.join(plan.output, 'mobile-deploy.log'), isolatedEnv());
+  if (!fs.existsSync(resultFile)) throw new Error('Mobile was not deployed: no deployment receipt');
+  const result = json(resultFile);
+  if (result.status !== 'passed' || result.release?.version !== plan.version || result.release?.commit !== commit ||
+      result.online?.version !== plan.version || result.online?.commit !== commit || !result.release?.builtAt ||
+      result.online?.builtAt !== result.release.builtAt) throw new Error('Mobile deployment receipt does not match the release/online page');
+  return result;
+}
+
 if (require.main === module) {
   Promise.resolve().then(() => release(git(process.cwd(), 'rev-parse', '--show-toplevel'), parseArgs(process.argv.slice(2))))
-    .catch((error) => { console.error(error.message); process.exitCode = 1; });
+    .catch((error) => { console.error(`\x1b[31mRELEASE FAILED: ${error.message}\x1b[0m`); process.exitCode = 1; });
 }
-module.exports = { parseArgs, planRelease, isolatedEnv, withTestLock, included, verifyArchive, fingerprint, cachedBuild, installer, release };
+module.exports = { parseArgs, planRelease, isolatedEnv, withTestLock, included, verifyArchive, fingerprint, cachedBuild, installer, release, deployMobileGate };
