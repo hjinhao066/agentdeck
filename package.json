@@ -67,6 +67,8 @@
       "sidebar-core.js",
       "sidebar.js",
       "schedule-core.js",
+      "schedule-feed-core.js",
+      "schedule-feed.js",
       "pages.js",
       "main-core.js",
       "auto-verify-core.js",

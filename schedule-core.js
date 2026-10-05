@@ -60,6 +60,8 @@
       lastRunAt: num(s.lastRunAt),
       lastStatus: ['ok', 'missed', 'skipped', 'error'].includes(s.lastStatus) ? s.lastStatus : '',
       lastNote: clean(s.lastNote, 200),
+      // the conversation the last run went to: its reply is the run's result
+      lastColId: typeof s.lastColId === 'string' && ID_RE.test(s.lastColId) ? s.lastColId : '',
     };
   }
 

@@ -13,6 +13,7 @@ const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-ba
 const { createQuotaLowBark } = require('./quota-low-bark');
 const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
+const { registerScheduleFeedIpc } = require('./schedule-feed');
 const BoardCore = require('./board-core');
 const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
@@ -811,6 +812,9 @@ app.whenReady().then(async () => {
   });
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
+  // Likewise the tasks Schedule watches: a test profile reads only its own descriptions.
+  const feedHome = tudArg ? path.join(app.getPath('userData'), 'schedule-home') : HOME;
+  registerScheduleFeedIpc({ handleMain, dir: path.join(feedHome, '.agents', 'schedules'), home: feedHome, userData: app.getPath('userData'), env: ENV });
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';

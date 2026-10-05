@@ -159,6 +159,17 @@ the middle:
   weekdays at a time, or every N minutes/hours. It runs only while AgentDeck is
   open; a run that was due while it was closed is shown as missed, not fired
   late. A busy session is retried for up to 30 minutes.
+  Clicking a schedule opens its detail: the prompt, next and last run, and the
+  reply the last run got. Schedule also **watches tasks another scheduler runs**
+  (a cron job on another machine, for one): each is described by a JSON file in
+  `~/.agents/schedules/` and listed with its timetable, last run and
+  「待你审核 N 条」. Its detail shows the latest report (earlier ones too) and a
+  做 / 不做 with an optional reason for every numbered suggestion. A decision is
+  kept on this machine first, written by the task's own command, and sent to
+  队长 as a message; it never opens a card or starts work. When the machine
+  holding the data is out of reach the last copy is shown with 「数据截至 …」 and
+  decisions wait until it is back. See
+  [docs/schedule-watched-tasks.md](docs/schedule-watched-tasks.md).
 - **Artifacts** has two tabs. 回执交付 collects the files the crew listed in
   their receipts (the 「文件：」 list `ledger` prints), grouped by project, with no
   action from anyone: it reads each session's last receipt, 队长's task list and

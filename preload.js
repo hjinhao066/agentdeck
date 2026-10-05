@@ -68,6 +68,12 @@ contextBridge.exposeInMainWorld('deck', {
   skillsList: () => ipcRenderer.invoke('skills:list', {}),
   skillsRead: (key) => ipcRenderer.invoke('skills:read', { key }),
   skillsSave: (key, text, hash) => ipcRenderer.invoke('skills:save', { key, text, hash }),
+  // Schedule's watched tasks: reports another scheduler left, and the user's 做 / 不做 on them.
+  scheduleFeeds: (fresh) => ipcRenderer.invoke('schedule-feed:list', { fresh: !!fresh }),
+  scheduleFeedDetail: (id, options) => ipcRenderer.invoke('schedule-feed:detail', { ...(options || {}), id }),
+  scheduleFeedDecide: (id, decision) => ipcRenderer.invoke('schedule-feed:decide', { ...(decision || {}), id }),
+  scheduleFeedSettle: (id) => ipcRenderer.invoke('schedule-feed:settle', { id }),
+  scheduleFeedNotified: (id, seqs) => ipcRenderer.invoke('schedule-feed:notified', { id, seqs }),
 
   chatgptWebRun: (payload) => ipcRenderer.invoke('chatgpt-web:run', payload),
   chatgptWebCancel: (id) => ipcRenderer.invoke('chatgpt-web:cancel', { id }),
