@@ -1032,7 +1032,9 @@
     if (entry.sendingPrompt || entry.injecting || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(text, columnById(id)?.cmd)) return;
     const quiet = Date.now() - (entry.lastOutputAt || 0);
     const sawOutput = (entry.lastOutputAt || 0) - open.startedAt > 600;
-    if ((entry.state === 'done' && quiet >= 2000 && sawOutput) || quiet >= 6000) finalizeTurn(id);
+    // state done already waited out the status debounce. Cursor blink keeps
+    // lastOutputAt fresh and must not hold a finished turn open.
+    if ((entry.state === 'done' && sawOutput) || quiet >= 6000) finalizeTurn(id);
   }
   function onExit(id) { finalizeTurn(id); }
 

@@ -10,7 +10,7 @@ const M = require('../main-core');
 const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(setImmediate); };
 
 function world() {
-  let now = 1_000_000;
+  let now = 1_000_000, composing = false;
   const captain = { id: 'captain', isMain: true, cmd: 'claude' };
   const worker = { id: 'worker', cmd: 'claude' };
   const columns = [captain, worker], timers = [], delivered = [];
@@ -33,7 +33,7 @@ function world() {
     Date: class extends Date { static now() { return now; } },
     setTimeout(fn) { timers.push(fn); }, clearTimeout() {},
     env: { platform: 'darwin' }, AGENT_IDLE_RE: /Claude Code/,
-    terminalIdle: () => true, userComposing: () => false,
+    terminalIdle: () => true, userComposing: () => composing,
     agentInForeground: async (col) => terms.get(col.id)?.foreground,
   });
   const renderer = fs.readFileSync(path.resolve(__dirname, '../renderer.js'), 'utf8');
@@ -44,6 +44,8 @@ function world() {
   window.__test.setHost({ config, columns: () => columns, terms, saveConfig() {}, columnLabel: (col) => col.id,
     sendWhenReady: context.sendWhenReady, showToast() {} });
   return { config, worker, captain, terms, columns, delivered, api: window.MainSession,
+    setComposing(value) { composing = value; },
+    pushTurn(turn) { chat.turns.push(turn); },
     dispatch: (text) => window.__test.dispatch(worker, text, '补充任务'),
     async advance(ms) { now += ms; const due = timers.splice(0); for (const fn of due) await fn(); await tick(); },
     archiveCards() { archives = [{ id: 'old-captain', turns: JSON.parse(JSON.stringify(chat.turns)) }]; chat = { turns: [] }; config.mainSession.tasks = []; },
@@ -125,4 +127,52 @@ test('non-Captain scheduled delivery retains its existing bounded timeout', asyn
   w.sendWhenReady(w.worker, 'SCHEDULE', { timeout: 1000, onGiveUp() { failed++; } });
   await w.advance(1001); assert.equal(failed, 1);
   await w.advance(500); assert.equal(failed, 1);
+});
+
+const SUGGESTION_SCREEN = [
+  '接下来我打算读三份测试日志，有失败就修，然后提交回执。',
+  '要我继续，还是你想换个做法？',
+  '✻ Churned for 16s · 11:35 AM',
+  '❯\u00a0继续，读测试日志然后提交回执',
+].join('\n');
+
+test('a finished turn with suggestion text takes a tell immediately', async () => {
+  const w = world();
+  Object.assign(w.terms.get('worker'), { state: 'done', lastOutputAt: 1_000_000, lastScreen: SUGGESTION_SCREEN });
+  w.dispatch('FOLLOW UP');
+  await tick();
+  assert.deepEqual(w.delivered, ['FOLLOW UP']);
+});
+
+test('a real draft blocks tell and the timeout receipt names that draft', async () => {
+  const w = world();
+  w.setComposing(true);
+  Object.assign(w.terms.get('worker'), { state: 'done', lastOutputAt: 1_000_000, lastScreen: '❯ 真实草稿' });
+  const task = w.dispatch('SHOULD WAIT');
+  await tick();
+  assert.equal(w.delivered.length, 0);
+  await w.advance(31 * 60_000);
+  assert.equal(task.status, 'queued');
+  assert.match(w.config.mainSession.pending[0].summary, /仍在排队/);
+  assert.match(w.config.mainSession.pending[0].summary, /草稿/);
+  await w.advance(40 * 60_000);
+  assert.equal(w.config.mainSession.pending.length, 1);
+});
+
+test('an idle question with no command receipt is pushed once for that session', () => {
+  const w = world();
+  const task = w.config.mainSession.tasks[0];
+  const entry = w.terms.get('worker');
+  Object.assign(entry, { alive: true, state: 'done', lastOutputAt: 1_000_000, lastScreen: SUGGESTION_SCREEN });
+  w.api.onTick('worker', entry);
+  assert.equal(task.status, 'asking');
+  assert.equal(w.config.mainSession.pending.filter((p) => p.question).length, 1);
+  assert.equal(w.config.mainSession.pending[0].question, '要我继续，还是你想换个做法？');
+  w.api.onTick('worker', entry);
+  assert.equal(w.config.mainSession.pending.filter((p) => p.question).length, 1);
+  const again = { id: 'next', colId: 'worker', gen: 1, status: 'working', startedAt: 1, turnId: '' };
+  w.config.mainSession.tasks.push(again);
+  w.api.onTick('worker', entry);
+  assert.equal(again.status, 'working');
+  assert.equal(w.config.mainSession.pending.filter((p) => p.question).length, 1);
 });

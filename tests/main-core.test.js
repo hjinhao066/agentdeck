@@ -392,6 +392,33 @@ test('the agent\'s input box on screen: typed text counts, placeholder and caret
   assert.equal(M.inputBoxText([rule, 'text', rule], [rule, 'text', rule]), null);
 });
 
+test('Claude suggestion text is not a draft; a real prompt and an unruled typed line are', () => {
+  const suggestion = '继续，读测试日志然后提交回执';
+  const plain = ['要我继续，还是你想换个做法？', '✻ Churned for 16s', '❯\u00a0' + suggestion];
+  const masked = ['要我继续，还是你想换个做法？', '✻ Churned for 16s', '❯\u00a0' + '\u0000'.repeat(suggestion.length)];
+  assert.equal(M.inputBoxText(plain, masked), '', 'dim suggestion cells are not typed text');
+  assert.equal(M.promptRowIdle(plain.join('\n')), true, 'a prompt row is idle even when plain text still shows the suggestion');
+  assert.equal(M.inputBoxText(['done', '❯ 真实草稿'], ['done', '❯ 真实草稿']), '真实草稿');
+  assert.equal(M.inputBoxText(['❯ 1. Trust this workspace'], ['❯ 1. Trust this workspace']), null, 'a numbered menu is not an input draft');
+  assert.equal(M.tellWaitReason({ entry: { alive: true, state: 'done', lastScreen: plain.join('\n') }, composing: false, screen: plain.join('\n') }), '');
+  assert.equal(M.tellWaitReason({ entry: { alive: true, state: 'done', lastScreen: '❯ 真实草稿' }, composing: true, screen: '❯ 真实草稿' }), '输入框里有未发送的草稿');
+  assert.match(M.tellWaitReason({ entry: { alive: true, state: 'working', lastScreen: '✻ Doing…' }, composing: false, screen: '✻ Doing…' }), /干活/);
+});
+
+test('a finished reply that asks the captain yields that question once per text', () => {
+  const screen = [
+    '接下来我打算读三份测试日志，有失败就修，然后提交回执。',
+    '要我继续，还是你想换个做法？',
+    '',
+    '✻ Churned for 16s · 11:35 AM',
+    '❯\u00a0继续，读测试日志然后提交回执',
+  ].join('\n');
+  assert.equal(M.implicitCaptainQuestion(screen), '要我继续，还是你想换个做法？');
+  assert.equal(M.implicitCaptainQuestion('已经做完。\n❯\u00a0继续，读测试日志然后提交回执'), '');
+  assert.equal(M.implicitCaptainQuestion('【提问】\n问题：用哪个库？'), '');
+  assert.equal(M.implicitCaptainQuestion(M.RECEIPT_CONTRACT), '');
+});
+
 test('a receipt only counts below the task contract echoed on screen', () => {
   const echo = `${M.RECEIPT_CONTRACT}\n`;
   assert.equal(M.parseReceipt(M.afterContract(`> do it\n${echo}`)).explicit, false, 'the echo\'s own field names are not a receipt');
