@@ -36,12 +36,14 @@ test.beforeAll(async () => {
   const env = { ...process.env, AGENTDECK_TEST_RECEIPT_ENV_DIR: envDir }; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
+  await app.evaluate(({ ipcMain }) => { ipcMain.removeHandler('memory-pressure'); ipcMain.handle('memory-pressure', () => ({ level: 1 })); });
   page = await app.firstWindow();
   await page.waitForFunction(() => typeof window.MainSession === 'object' && typeof window.TaskBoard === 'object' && typeof config === 'object');
   await expect(page.locator('.column')).toHaveCount(1);
   await page.evaluate((cwd) => MainSession.create('', cwd), profile);
   const captain = await page.evaluate(() => MainSession.mainCol().id);
   await expect.poll(() => page.evaluate((id) => window.deck.ptyIsAlive(id), captain)).toBe(true);
+  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), captain)).toMatch(/[%>$#]\s*$/m);
   // A script file keeps Windows PowerShell/native argument parsing out of the
   // capability export; the environment still comes from the Captain's real PTY.
   const exportScript = path.join(profile, 'export-control.cjs');
@@ -53,7 +55,20 @@ test.beforeAll(async () => {
   // The tests below open their own reviewers by hand; automatic verification has its own tests.
   await page.evaluate(() => TaskBoard.autoVerify(false));
 });
-test.afterAll(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterAll(async () => {
+  // This suite verifies dispatch, not restart/quit. Close its PTYs before exiting
+  // the isolated app so macOS window closure cannot leave the test host alive.
+  if (app) {
+    const child = app.process();
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10000);
+    try {
+      await page.evaluate(() => { for (const col of columns) window.deck.ptyKill(col.id); }).catch(() => {});
+      await app.evaluate(({ app }) => app.quit()).catch(() => {});
+      await app.close().catch(() => {});
+    } finally { clearTimeout(timer); }
+  }
+  if (profile) fs.rmSync(profile, { recursive: true, force: true });
+});
 test.afterEach(async ({}, info) => {
   if (info.status === info.expectedStatus) return;
   await info.attach('task-board-state', { body: JSON.stringify({ cards: await list({ archived: true }), notices: await page.evaluate(() => config.mainSession.pending.filter((p) => p.title === '任务看板')) }), contentType: 'application/json' });
@@ -65,8 +80,11 @@ const assign = (id, title, cmd = FAKE, body = 'Single queue regression task') =>
 async function holdQuota(all = false) {
   await page.evaluate(({ fake, all }) => {
     window.queueOriginalQuota = QuotaCore.commandQuota;
+    window.queueOriginalFallback = QuotaCore.quotaFallback;
     QuotaCore.commandQuota = (store, cmd, ...rest) => (all ? cmd.startsWith(fake) : cmd === fake)
       ? { out: true, state: 'out' } : window.queueOriginalQuota(store, cmd, ...rest);
+    QuotaCore.quotaFallback = (store, cmd, ...rest) => (all ? cmd.startsWith(fake) : cmd === fake)
+      ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' } : window.queueOriginalFallback(store, cmd, ...rest);
   }, { fake: FAKE, all });
 }
 async function countActive(count, cap = 30) {
@@ -78,18 +96,33 @@ async function countActive(count, cap = 30) {
 }
 test.afterEach(async () => {
   if (!page) return;
+  await page.evaluate(() => {
+    for (let i = columns.length - 1; i >= 0; i--) if (columns[i].id.startsWith('fixture-occupancy-')) columns.splice(i, 1);
+    config.mainSession.tasks = config.mainSession.tasks.filter((t) => !t.colId.startsWith('fixture-occupancy-'));
+  });
   // Only this isolated profile's stand-in workers and unsent requests are touched.
   for (const w of await queue()) await command(['queue', 'cancel', '--task-id', w.queueId]);
   for (const id of await page.evaluate(() => columns.filter((c) => c.captainCrew && !c.isMain).map((c) => c.id))) await command(['archive', '--id', id]);
   await page.evaluate(() => {
     if (window.queueOriginalQuota) { QuotaCore.commandQuota = window.queueOriginalQuota; delete window.queueOriginalQuota; }
+    if (window.queueOriginalFallback) { QuotaCore.quotaFallback = window.queueOriginalFallback; delete window.queueOriginalFallback; }
     if (window.queueOriginalActive) { MainCore.activeCrew = window.queueOriginalActive; delete window.queueOriginalActive; }
     MainCore.MAX_ACTIVE = config.concurrencyCap;
   });
 });
 
 test('four occupied slots and an exhausted provider do not falsely report thirty or block an available provider', async () => {
-  await holdQuota(); await countActive(4);
+  await holdQuota();
+  const active = await page.evaluate(() => {
+    MainCore.MAX_ACTIVE = 30;
+    for (let i = 0; i < 30; i++) {
+      const id = 'fixture-occupancy-' + i;
+      columns.push({ id, captainCrew: true, cmd: '', title: id });
+      config.mainSession.tasks.push({ id: 'task-' + id, colId: id, status: i < 4 ? 'working' : 'quota' });
+    }
+    return MainCore.activeCrew(config.mainSession.tasks, new Set(columns.filter((c) => c.captainCrew).map((c) => c.id))).size;
+  });
+  expect(active).toBe(4);
   const held = await add('Quota-only head');
   expect(await assign(held.id, 'Quota-only head')).toContain('额度用尽');
   const available = await add('Available provider');
@@ -112,10 +145,12 @@ test('same command is refused; changed model replaces a quota-held card and imme
   const id = (await card(c.id)).session_id;
   expect(await page.evaluate(({ id, oldId }) => ({
     cmd: columns.find((c) => c.id === id).cmd,
-    body: columns.find((c) => c.id === id).taskPrompt,
     old: config.mainSession.tasks.find((t) => t.id === oldId).status,
-  }), { id, oldId: old.queueId })).toEqual({ cmd, body: 'ONLY_NEW_BODY', old: 'stopped' });
+  }), { id, oldId: old.queueId })).toEqual({ cmd, old: 'stopped' });
   await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, id)).toBe('working');
+  const delivered = await page.evaluate((id) => ChatUI.turnsOf(id).at(-1)?.user, id);
+  expect(delivered).toContain('ONLY_NEW_BODY');
+  expect(delivered).not.toContain('Single queue regression task');
   expect(await command(['ledger'])).not.toContain('排队等空位');
 });
 
@@ -126,7 +161,7 @@ test('replacement still held by quota keeps exactly one request and only the rep
   const changed = FAKE + ' --model next-model';
   expect(await assign(c.id, 'New held', changed)).toContain('额度用尽');
   expect(await queue()).toMatchObject([{ taskId: c.id, title: 'New held', command: changed }]);
-  await page.evaluate(() => { QuotaCore.commandQuota = window.queueOriginalQuota; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
+  await page.evaluate(() => { QuotaCore.commandQuota = window.queueOriginalQuota; QuotaCore.quotaFallback = window.queueOriginalFallback; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
   await expect.poll(async () => (await card(c.id)).session_id).toBeTruthy();
   expect(await page.evaluate((id) => columns.filter((c) => c.boardId === id).length, c.id)).toBe(1);
   expect(await queue()).toEqual([]);
@@ -147,8 +182,14 @@ test('queue cancellation supports card ids and standalone queue ids, persists, a
   expect(await command(['ledger'])).not.toContain('排队等空位');
   const w = await worker((await add('Worker cannot cancel')).id);
   const denied = await cli(['queue', 'cancel', '--task-id', c.id], w.env);
-  expect(denied.code).toBe(1); expect(denied.stderr).toContain('Receipt capability');
+  expect(denied.code).toBe(1); expect(denied.stderr).toContain('Only conductor-managed terminals');
   expect((await cli(['queue', 'list'], w.env)).code).toBe(1);
+  // Even a worker trying to present its receipt token as a control token is
+  // rejected by the main-process capability check, beyond the CLI guard.
+  const forged = { ...w.env, AGENTDECK_CONTROL_TOKEN: w.env.AGENTDECK_RECEIPT_TOKEN };
+  const serverDenied = await cli(['queue', 'cancel', '--task-id', c.id], forged);
+  expect(serverDenied.code).toBe(1); expect(serverDenied.stderr).toContain('Receipt capability');
+  expect((await cli(['queue', 'list'], forged)).code).toBe(1);
 });
 
 test('moving queued cards to done or todo via CLI or UI removes their requests and prevents delayed starts', async () => {
@@ -163,7 +204,7 @@ test('moving queued cards to done or todo via CLI or UI removes their requests a
   await page.evaluate((id) => TaskBoard.move(id, 'todo'), ui.id);
   expect(await queue()).toEqual([]);
   expect(await command(['ledger'])).not.toContain('排队等空位');
-  await page.evaluate(() => { QuotaCore.commandQuota = window.queueOriginalQuota; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
+  await page.evaluate(() => { QuotaCore.commandQuota = window.queueOriginalQuota; QuotaCore.quotaFallback = window.queueOriginalFallback; MainSession.onTick(MainSession.mainCol().id, terms.get(MainSession.mainCol().id)); });
   expect(await page.evaluate((ids) => config.mainSession.tasks.filter((t) => ids.includes(t.boardId)).map((t) => t.status), ids)).toEqual(['stopped', 'stopped', 'stopped']);
   for (const id of ids) expect((await card(id)).session_id).toBeFalsy();
 });
@@ -172,10 +213,13 @@ test('full capacity reports actual occupied slots and a runnable backlog reports
   await countActive(7, 5);
   const c = await add('Capacity reason');
   expect(await assign(c.id, 'Capacity reason')).toContain('7 个会话占用干活名额，上限 5');
-  await countActive(4, 30);
   // Keep admission within one page turn so a periodic tick cannot consume the
   // runnable head before the new request's backlog decision.
-  const behind = await page.evaluate((fake) => MainSession.handle({ action: 'main-new', id: 'backlog-probe', title: 'Backlog reason', task: 'test', command: fake }, MainSession.mainCol()), FAKE);
+  const behind = await page.evaluate((fake) => {
+    MainCore.MAX_ACTIVE = 30;
+    MainCore.activeCrew = () => new Set(Array.from({ length: 4 }, (_, i) => 'occupied-' + i));
+    return MainSession.handle({ action: 'main-new', id: 'backlog-probe', title: 'Backlog reason', task: 'test', command: fake }, MainSession.mainCol());
+  }, FAKE);
   expect(behind.result).toContain('前面有 1 条可执行任务，当前 4 个会话');
   expect(behind.result).not.toContain('30 个会话');
 });

@@ -334,6 +334,7 @@ test('queue list/cancel send Captain requests, validate ids and document replace
   const requests = [];
   const server = setInterval(() => {
     for (const file of fs.readdirSync(path.join(dir, 'requests'))) {
+      if (!file.endsWith('.json')) continue;
       const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
       fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
       fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: request.op === 'list' ? '[]' : 'cancelled' }));

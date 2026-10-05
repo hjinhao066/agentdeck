@@ -285,7 +285,9 @@ again with the current provider, model and effort instructions.
   and a slot are available. An unchanged command is refused. Moving a card to
   `done` or `todo` through `task move` or the board UI cancels its unsent request.
   Queue responses distinguish quota, critical memory, the actual occupied-slot
-  count and earlier executable requests; the concurrency limit is not an active count. A finished background session is archived after 10
+  count and earlier executable requests; the concurrency limit is not an active count.
+  Live sessions waiting on exhausted quota keep their lifecycle/archiving protection
+  but release their work slot. A finished background session is archived after 10
   minutes with nothing new once the 队长 has its receipt (never one you have
   open); `tell` to it restores it first, and `ledger` lists those and the waiting work.
   Archiving ends the terminal, so a session that is working, waiting on an

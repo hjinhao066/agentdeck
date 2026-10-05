@@ -216,8 +216,7 @@
       `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 额外发 Bark。仅必须用户亲自登录/授权或确认付款时使用；测试用 notify-user --test（【测试】，critical，音量 3）。`,
       `   ${cli} ledger                          列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task archive --done [--project "项目"]`,
-      `   ${cli} queue list；queue cancel --task-id 卡片或排队id   查看/取消未开会话的排队；同卡 new 换命令/模型会替换旧排队，移到 done/todo 自动取消`,
-      `   ${cli} briefing                        只读当前队长说明；Relay 后先读 briefing 和看板交接，再重挂后台回执监听`,
+      `   ${cli} queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令/模型会替换，移到 done/todo 撤队`,
 
       `   ${cli} quota                           只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的那家；未知不代表可用`,
       `   ${cli} new --title "一句话标题" --task "任务正文" [--project "项目名"] [--reviews 会话id[,会话id]] [--task-id 卡片id] [--cwd 目录] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex | --command "完整启动命令"]   新开一个会话并把任务作为它的第一条消息；--seat 指定已登录 Claude 席位，省略沿用当前席位；--agent 和 --command 都不写就用和你一样的 agent`,
@@ -226,7 +225,7 @@
       `   ${cli} archive --id 会话id              结束终端并归档，保留对话；即使正在干活也执行，不弹确认框`,
       `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话，只在用户追问细节时用；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
       `   ${cli} read --id captain-history --find "关键词" [--turns 3]   跨全部清空前的队长记录搜索，按需读取简短结果`,
-      `   ${cli} briefing   只读当前版本的队长提示词全文；用户说「你是队长」时先跑 ledger 验证身份，再读本命令和看板里的队长交接`,
+      `   ${cli} briefing   只读队长说明；用户说「你是队长」先跑 ledger 验证身份，再读本命令和看板交接；Relay 后读这两份，再重挂回执监听`,
       `   ${cli} peek --id 会话id [--lines 40]   只读查看终端实时屏幕/最近输出（去颜色，最多1000行）；不发任何输入，也不会恢复已归档的会话。需要检查进度或诊断卡住时才用，比 read 省上下文`,
       `   ${cli} receipts [--wait] [--timeout 秒]  取回还没看过的回执；--wait 阻塞等回执/提问，超时输出空并退出，省略 timeout 就一直等`,
       `   ${cli} answer --to 会话id --key y|n|1|2|3|enter|esc   回答停在确认或权限提示上的会话`,
@@ -389,7 +388,8 @@
   }
 
   // Background sessions with work still out: the latest card for the column
-  // is not finished (a question waits on 队长 too). Each holds a slot.
+  // is not finished (a question waits on 队长 too). Quota waits remain open
+  // for lifecycle/archiving purposes, but do not occupy a work slot.
   const OPEN = ['queued', 'working', 'quota', 'input', 'asking'];
   function latestTasks(tasks) {
     const latest = new Map();
@@ -398,7 +398,7 @@
   }
   function activeCrew(tasks, crewIds) {
     const ids = new Set();
-    latestTasks(tasks).forEach((t, colId) => { if (crewIds.has(colId) && OPEN.includes(t.status)) ids.add(colId); });
+    latestTasks(tasks).forEach((t, colId) => { if (crewIds.has(colId) && t.status !== 'quota' && OPEN.includes(t.status)) ids.add(colId); });
     return ids;
   }
   // The 后台 list: sessions at work first (in the order they were sent work),

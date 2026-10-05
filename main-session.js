@@ -292,10 +292,17 @@
     const executor = sessionById(card.exec_receipt?.session_id);
     const title = window.BoardCore.cleanText('审查：' + card.title, 80).replace(/\s+/g, ' ');
     const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round };
-    await withQueue(() => placeSession(title, checked.cmd, executor?.cwd || '', attempt, AV.reviewPrompt({ card, receipt: card.exec_receipt }), metadata));
+    const placed = await withQueue(async () => {
+      const current = await findCard(id);
+      if (state() !== s || !current || current.review_claim?.key !== input.key || current.review_claim.delivered ||
+        current.status !== 'review' || current.review_round !== claim.round || current.review_session === true ||
+        s.waitlist.some((w) => w.metadata?.boardId === id) || [...host.columns(), ...(host.config.archived || [])].some((c) => c.boardId === id && c.boardAttempt === attempt)) return false;
+      await placeSession(title, checked.cmd, executor?.cwd || '', attempt, AV.reviewPrompt({ card, receipt: card.exec_receipt }), metadata);
+      return true;
+    });
     host.flushConfig?.();   // the queue entry is on disk before the claim is marked delivered
     await boardRequest('reviewDispatched', { id, key: input.key });
-    return { card, reviewer: picked.candidate.id };
+    return placed ? { card, reviewer: picked.candidate.id } : { card, ignored: true };
   }
   async function startReview(id, input) {
     try { return await runVerify('review', id, input, startReviewOnce); }
@@ -834,8 +841,22 @@
   function refreshWaitingNotes() {
     const s = state();
     if (!s) return;
-    s.tasks.forEach((t) => { if (t.status === 'waiting') update(t); });
+    const active = M.activeCrew(s.tasks, crewIds()).size;
+    let ahead = 0;
+    for (const w of s.waitlist) {
+      const plan = openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata);
+      const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
+      const reason = queueReason(plan, w.title, active, ahead) || '等待派发';
+      if (task && task.waitReason !== reason) { task.waitReason = reason; update(task); }
+      if (plan.action !== 'queue') ahead++;
+    }
     window.Sidebar?.render?.();
+  }
+  function queueReason(plan, title, active, ahead) {
+    return plan.action === 'queue' ? quotaQueueText(plan, title) : memoryHold
+      ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
+      : active >= M.MAX_ACTIVE ? `已排队：现在有 ${active} 个会话占用干活名额，上限 ${M.MAX_ACTIVE}；有空位时自动开新会话「${title}」。`
+      : ahead ? `已排队：前面有 ${ahead} 条可执行任务，当前 ${active} 个会话占用干活名额；按顺序自动开新会话「${title}」。` : '';
   }
   async function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -889,7 +910,7 @@
   }
   // The one way in for a new session: past the limit, behind work already waiting,
   // at quota or under critical memory it queues, otherwise it opens at once.
-  async function placeSession(title, cmd, cwd, requestId, task, metadata) {
+  async function placeSession(title, cmd, cwd, requestId, task, metadata, replaced) {
     const s = state();
     const pressure = await readMemoryPressure();
     const wasHold = memoryHold;
@@ -897,14 +918,11 @@
     const plan = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
     const active = M.activeCrew(s.tasks, crewIds()).size;
     // Quota-held requests do not block a different available provider.
-    const ahead = s.waitlist.filter((w) => openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue').length;
-    const reason = plan.action === 'queue' ? quotaQueueText(plan, title) : pressure.critical
-      ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
-      : active >= M.MAX_ACTIVE ? `已排队：现在有 ${active} 个会话占用干活名额，上限 ${M.MAX_ACTIVE}；有空位时自动开新会话「${title}」。`
-      : ahead ? `已排队：前面有 ${ahead} 条可执行任务，当前 ${active} 个会话占用干活名额；按顺序自动开新会话「${title}」。` : '';
+    const ahead = s.waitlist.filter((w) => w !== replaced && openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue').length;
+    const reason = queueReason(plan, title, active, ahead);
     if (reason) {
       await enqueue(title, cmd, cwd, requestId, task, metadata, reason);
-      if (wasHold !== memoryHold) refreshWaitingNotes();
+      refreshWaitingNotes();
       return { queued: true, plan, result: reason };
     }
     if (wasHold !== memoryHold) refreshWaitingNotes();
@@ -925,7 +943,6 @@
     try {
       const pressure = await readMemoryPressure();
       if (state() !== s || !s.waitlist.length) return;
-      const wasHold = memoryHold;
       const active = M.activeCrew(s.tasks, crewIds()).size;
       await M.fillQueue({
         cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
@@ -940,7 +957,7 @@
           const plan = openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata);
           if (plan.action === 'queue') {
             s.waitlist.unshift(w);
-            task.waitReason = plan.reason === 'explicit' ? plan.note : '额度用尽，稍后自动开';
+            task.waitReason = quotaQueueText(plan, w.title);
             update(task);
             return;
           }
@@ -953,7 +970,7 @@
         },
       });
       memoryHold = pressure.level === 4 && s.waitlist.length > 0;
-      if (wasHold !== memoryHold) refreshWaitingNotes();
+      refreshWaitingNotes();
       save();
     } finally {
       pumping = false;
@@ -1709,6 +1726,8 @@
         return { done: true, result: host.quotaText() };
       case 'main-queue': {
         if (message.op === 'list') {
+          memoryHold = (await readMemoryPressure()).critical;
+          refreshWaitingNotes();
           return { done: true, result: JSON.stringify(s.waitlist.map((w) => ({
             taskId: w.metadata?.boardId || w.taskId, queueId: w.taskId, title: w.title, command: w.cmd,
             seat: w.metadata?.claudeSeatId || '', reason: s.tasks.find((t) => t.id === w.taskId)?.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold),
@@ -1832,6 +1851,7 @@
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
+        let prior;
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
@@ -1858,16 +1878,17 @@
           if (metadata.project && metadata.project.trim().toLowerCase() !== String(card.project).trim().toLowerCase()) throw new Error('--project differs from the card project.');
           metadata.project = card.project;
           if (card.archived || card.flag === 'held' || card.flag === 'blocked' || card.status === 'done') throw new Error('卡片尚不可开始，请检查前置任务或显式移回待办。');
-          const prior = s.waitlist.find((w) => w.metadata?.boardId === card.id && w.requestId !== message.id);
+          prior = s.waitlist.find((w) => w.metadata?.boardId === card.id && w.requestId !== message.id);
           if (prior) {
+            if (!isMain(caller)) throw new Error('调度员已经派过这张卡片；只有队长可以替换排队。');
             if (prior.cmd === cmd && (prior.metadata?.claudeSeatId || '') === (metadata.claudeSeatId || '')) throw new Error('这张卡片已经在排队；换命令/模型可替换，或用 queue cancel --task-id 取消。');
-            cancelWaiting((w) => w.metadata?.boardId === card.id, '队长已换命令/模型，替换旧排队。');
           }
         }
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
         // Past the limit, behind work already waiting, at quota, or under critical memory: queue it.
         // placeSession applies same-tier fallback unless the command was named with --command.
-        const placed = await placeSession(title, cmd, cwd, message.id, task, metadata);
+        const placed = await placeSession(title, cmd, cwd, message.id, task, metadata, prior);
+        if (prior) cancelWaiting((w) => w === prior, '队长已换命令/模型，替换旧排队。');
         if (placed.queued) {
           return { done: true, result: placed.result };
         }
