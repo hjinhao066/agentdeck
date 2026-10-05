@@ -440,10 +440,12 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   await expect(rows.locator('.quota-name-text')).toHaveText(['🇨🇳 CN', '🇺🇸 US', 'Codex', 'Cursor', 'Gemini']);
   // 5h and 7d are named once, right above the two columns of every row.
   await expect(drawer.locator('#quota-columns span')).toHaveText(['5h', '7d']);
-  console.log(JSON.stringify(await mobile.evaluate(() => ['#quota', '#quota-columns', '#quota-rows', '.quota-row', '.quota-name', '.quota-values', '.quota-cell'].map((q) => { const el = document.querySelector(q), r = el.getBoundingClientRect(); return [q, Math.round(r.left), Math.round(r.right), el.clientWidth, el.scrollHeight, el.clientHeight]; }))));
-  await mobile.screenshot({ path: '/private/tmp/claude-501/-Users-jinhao/e1ddb07d-bb7a-4bba-b1ca-305fdb7d5a17/scratchpad/dbg.png' });
-  expect(await drawer.locator('#quota-columns span').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left))))
-    .toEqual(await rows.nth(0).locator('.quota-cell').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left))));
+  // Read header and cells in ONE pass: the drawer slides in, and two separate reads straddle the animation.
+  const columnLefts = await mobile.evaluate(() => {
+    const left = (el) => Math.round(el.getBoundingClientRect().left);
+    return [[...document.querySelectorAll('#quota-columns span')].map(left), [...document.querySelector('.quota-item').querySelectorAll('.quota-cell')].map(left)];
+  });
+  expect(columnLefts[0]).toEqual(columnLefts[1]);
   await expect(drawer.locator('.quota-item[data-captain="true"]')).toHaveAttribute('data-quota-key', 'Claude:cn');
   await expect(rows.nth(0).locator('.quota-captain')).toHaveAttribute('title', '队长在用');
   await expect(rows.nth(0).locator('.quota-cell[data-window="5h"] .quota-pct')).toHaveText('26%');
@@ -521,7 +523,7 @@ test('sidebar: Captain, sessions by project and the desktop quota rows; exhauste
   const lines = sheet.locator('.sheet-line');
   await expect(lines).toHaveText([/^5 小时剩余 26%\d\d:\d\d（2 小时 \d+ 分后）重置$/, /^每周剩余 61%\d\d-\d\d \d\d:\d\d（[23] 天后）重置$/, '账号h***@gmail.com', '来源Claude OAuth usage', /^采样\d\d:\d\d$/]);
   await expect(sheet).not.toContainText('hjinhao');
-  expect(await mobile.locator('#drawer').evaluate((el) => [...el.children].every((child) => child.id === 'quota-sheet' || child.inert))).toBe(true);
+  expect(await mobile.locator('#drawer').evaluate((el) => [...el.children].every((child) => child.id === 'quota-sheet' || child.id === 'quota-sheet-scrim' || child.inert))).toBe(true);
   for (const button of await sheet.locator('.icon-button').evaluateAll((els) => els.map((el) => ({ ...el.getBoundingClientRect().toJSON(), label: el.getAttribute('aria-label'), title: el.title, text: el.textContent.trim() })))) {
     expect(button.width).toBeGreaterThanOrEqual(44); expect(button.height).toBeGreaterThanOrEqual(44);
     expect(button.label).toBe('关闭详情'); expect(button.title).toBe('关闭详情'); expect(button.text).toBe('');

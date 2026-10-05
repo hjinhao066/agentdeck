@@ -451,7 +451,7 @@
   function openSheet(key) {
     sheetKey = key; renderSheet();
     if (!sheetKey) return;
-    for (const el of $('drawer').children) el.inert = el.id !== 'quota-sheet';
+    for (const el of $('drawer').children) el.inert = el.id !== 'quota-sheet' && el.id !== 'quota-sheet-scrim';
     $('quota-sheet').hidden = false; $('quota-sheet-scrim').hidden = false;
     $('quota-sheet-close').focus({ preventScroll: true });
   }
