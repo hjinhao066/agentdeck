@@ -69,6 +69,10 @@ contextBridge.exposeInMainWorld('deck', {
   skillsRead: (key) => ipcRenderer.invoke('skills:read', { key }),
   skillsSave: (key, text, hash) => ipcRenderer.invoke('skills:save', { key, text, hash }),
 
+  chatgptWebRun: (payload) => ipcRenderer.invoke('chatgpt-web:run', payload),
+  chatgptWebCancel: (id) => ipcRenderer.invoke('chatgpt-web:cancel', { id }),
+  chatgptWebStatus: (id) => ipcRenderer.invoke('chatgpt-web:status', { id }),
+
   ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir }),
   claudeSeats: () => ipcRenderer.invoke('seats:list'),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),

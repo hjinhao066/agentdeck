@@ -123,6 +123,7 @@
   // Automatic reviewers are already chosen for family and remaining quota.
   // A fully exhausted pool still waits; a low pool must not swap that reviewer.
   function openPlan(cmd, seatId, explicit, metadata) {
+    if (metadata?.executor === 'chatgpt-web') return { action: 'open', cmd, note: '' };
     if (metadata?.autoReviewRound) {
       return commandQuota(cmd, seatId)?.out
         ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
@@ -740,7 +741,33 @@
     save();
     return task;
   }
+  // Web work bypasses terminal input and the CLI receipt suffix completely.
+  function startWebTask(col) {
+    const tasks = state()?.tasks || [];
+    if (tasks.some((t) => t.colId === col.id && t.status === 'working')) return;
+    const task = tasks.find((t) => t.colId === col.id && t.status === 'queued');
+    const entry = host.terms.get(col.id);
+    if (!task || !entry?.alive || entry.webExecutorReady === false) return;
+    task.instructionSent = true;
+    task.status = 'working';
+    task.startedAt = Date.now();
+    task.progress = '正在排队等待 ChatGPT 网页';
+    entry.webExecutorState = 'working';
+    entry.state = 'working';
+    entry.hasWorked = true;
+    update(task);
+    autoBoardEvent(task, 'started');
+    try { window.deck.saveConfigSync(host.config); } catch (_) {}
+    Promise.resolve().then(() => {
+      if (task.status !== 'working' || !host.columns().includes(col)) return;
+      return window.deck.chatgptWebRun({ id: col.id, taskId: task.id, task: task.instruction, mode: col.webMode || 'chat' });
+    }).catch(() => {
+      if (task.status !== 'working') return;
+      settle(task, { summary: '', files: [], images: [], failed: 'ChatGPT 网页执行器未能启动，请检查本机工具是否可用。', explicit: true, source: 'process' });
+    });
+  }
   function dispatch(col, text, title, waiting) {
+    if (col.executor === 'chatgpt-web') window.ChatGPTWebCore.validatePublicTask(text);
     const task = waiting || addTask(col, title);
     if (waiting) {
       Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
@@ -748,6 +775,11 @@
     }
     task.instruction = text;
     task.instructionSent = false;
+    if (col.executor === 'chatgpt-web') {
+      update(task);
+      startWebTask(col);
+      return task;
+    }
     persistResumeEntry(col, task);
     try { window.deck.saveConfigSync(host.config); } catch (_) {}
     let batch = dispatches.get(col.id);
@@ -848,7 +880,7 @@
   async function enqueue(title, cmd, cwd, requestId, text, metadata = {}) {
     const s = state();
     let body = text;
-    if (body.length > 8000) {
+    if (body.length > 8000 && metadata.executor !== 'chatgpt-web') {
       const file = await window.deck.saveLongPrompt(body).catch(() => '');
       if (!file) throw new Error('任务太长，存文件失败，没有排上队。');
       body = `${body.slice(0, 300).replace(/\s+/g, ' ').trim()}…\n（这件活共 ${text.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
@@ -988,6 +1020,11 @@
       ? { question: receipt.question, source: receipt.source }
       : { summary: receipt.summary, files: receipt.files, failed: receipt.failed, source: receipt.source });
     update(task);
+    if (col?.executor === 'chatgpt-web') {
+      const entry = host.terms.get(col.id);
+      if (entry) { entry.webExecutorState = 'done'; entry.state = 'done'; }
+      startWebTask(col);
+    }
   }
   // Queue something for 队长's background reader (or the legacy quiet-moment injection).
   function push(task, item) {
@@ -1094,7 +1131,8 @@
   async function submit(message, caller) {
     const s = state();
     if (!s || isMain(caller)) return null;
-    const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit'));
+    const task = s.tasks.findLast((t) => t.colId === caller.id && t.status !== 'waiting' && (t.startedAt || message.action === 'session-exit') && (caller.executor !== 'chatgpt-web' || !message.taskId || t.id === message.taskId));
+    if (caller.executor === 'chatgpt-web' && (!message.taskId || !task || CLOSED.includes(task.status))) return { done: true, result: 'Submission ignored: web task is no longer active.' };
     if (!task || task.status === 'stopped' && task.receipt?.source !== 'fallback') return null;
     const response = { done: true, result: 'Submission recorded.' };
     if (task.receipt?.source === 'command' && ['done', 'failed'].includes(task.status)) return response;
@@ -1173,7 +1211,7 @@
   }
   function persistResumeEntry(col, task) {
     const R = window.RestartResume;
-    if (!R || !col || !task) return;
+    if (!R || !col || !task || col.executor === 'chatgpt-web') return;
     const prior = resumeManifest.entries.find((e) => e.colId === col.id);
     const receipt = task.progress || (task.receipt && !task.receipt.checkpoint ? task.receipt.summary || task.receipt.failed || task.receipt.question : '');
     const entry = R.manifestEntry({
@@ -1212,6 +1250,7 @@
   function restartLaunch(col, isFresh) {
     const R = window.RestartResume;
     const task = col && latestTask(col.id);
+    if (col?.executor === 'chatgpt-web') return { mode: 'leave' };
     if (!R || !col || !R.resumeEnabled(host.config) || !col.captainCrew || col.isMain ||
         coldTasks.get(col.id) !== task?.id || (isFresh && !task.resumeFallback)) return { mode: 'leave' };
     const owner = col.modelSessionOwner === col.id && col.modelSessionCwd === (col.cwd || '') &&
@@ -1224,8 +1263,30 @@
     resumeWaiting.delete(col.id);
     const task = latestTask(col.id);
     if (task) delete task.restartHold;
+    if (col.executor === 'chatgpt-web') {
+      const entry = host.terms.get(col.id);
+      if (entry) entry.webExecutorState = state()?.tasks.some((t) => t.colId === col.id && t.status === 'working') ? 'working' : task?.receipt ? 'done' : 'plain';
+      Promise.resolve(window.deck.chatgptWebStatus(col.id)).then((status) => {
+        const running = state()?.tasks.find((t) => t.colId === col.id && t.status === 'working');
+        if (status?.active && running?.id === status.taskId) {
+          running.progress = status.progress || running.progress;
+          update(running);
+        } else if (running && status?.receipt && status.receipt.taskId === running.id) {
+          submit({ action: 'complete', taskId: running.id, ...status.receipt }, col);
+        } else if (running && !status?.active) {
+          settle(running, { summary: '', files: [], images: [], failed: '网页执行器没有正在运行的任务；请检查已保存报告及保留请求页后再安排任务。', explicit: true, source: 'process' });
+        } else startWebTask(col);
+      }).catch(() => {});
+    }
   }
   function noteColdColumn(col, isFresh) {
+    if (col?.executor === 'chatgpt-web') {
+      if (!isFresh) for (const task of (state()?.tasks || []).filter((t) => t.colId === col.id && t.instructionSent && !CLOSED.includes(t.status))) {
+        settle(task, { summary: '', files: [], images: [], failed: 'AgentDeck 已重启，网页任务已中断；请检查保留的请求页后再安排任务，系统不会自动重发。', explicit: true, source: 'process' });
+      }
+      startWebTask(col);
+      return;
+    }
     const R = window.RestartResume;
     const task = col && latestTask(col.id);
     if (!col || col.isMain || !col.captainCrew || !R || !R.resumeEnabled(host.config) ||
@@ -1384,7 +1445,7 @@
     for (const plan of R.planPark(host.columns(), s.tasks)) {
       const task = latestTask(plan.id);
       const col = host.columns().find((c) => c.id === plan.id);
-      if (!task || !col) continue;
+      if (!task || !col || col.executor === 'chatgpt-web') continue;
       // Snapshot full queued bodies and the prior receipt BEFORE changing status.
       persistResumeEntry(col, task);
       const batch = dispatches.get(col.id);
@@ -1432,6 +1493,11 @@
       retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return;
     }
     const col = host.columns().find((c) => c.id === id);
+    if (col?.executor === 'chatgpt-web') {
+      startWebTask(col);
+      if (col.captainCrew) maybeArchive(col, entry);
+      return;
+    }
     if (col && col.captainCrew) maybeArchive(col, entry);
     // The no-command notice is provisional. A live working session supersedes
     // it, including when it resumes the same instruction after a quiet gap.
@@ -1599,7 +1665,7 @@
     return host.columns().filter((c) => !c.isMain).map((c) => {
       const entry = host.terms.get(c.id);
       const terminalState = entry ? (entry.alive ? entry.state || 'plain' : 'exited') : 'plain';
-      const task = latest.get(c.id);
+      const task = c.executor === 'chatgpt-web' ? state()?.tasks.findLast((t) => t.colId === c.id && ['working', 'queued'].includes(t.status)) || latest.get(c.id) : latest.get(c.id);
       // A receipt completes the assignment; Cursor's session can still be
       // running tools or writing its final response after submitting it.
       const completed = task?.status === 'done' && task.receipt?.source === 'command';
@@ -1607,7 +1673,7 @@
         (terminalState === 'working' || M.terminalActivity(entry.lastScreen, c.cmd) === 'working');
       const resumedState = window.RestartResume ? window.RestartResume.ledgerState(terminalState, !!(entry && entry.alive), task) : terminalState;
       return {
-        id: c.id, title: host.columnLabel(c), state: cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
+        id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? (task && ['working', 'queued'].includes(task.status) ? 'working' : task?.receipt ? 'done' : 'plain') : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };
@@ -1627,6 +1693,7 @@
       if (old) { col = host.restoreArchived(old.id, false, true); restored = true; }
     }
     if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
+    if (col.executor === 'chatgpt-web') window.ChatGPTWebCore.validatePublicTask(text);
     // Refuse before rebinding. bind() consumes a pending automatic rework, so a
     // prompt or a bare shell must not mark that rework delivered when nothing was sent.
     const entry = host.terms.get(col.id);
@@ -1696,8 +1763,10 @@
           update(t);
         });
         s.pending = s.pending.filter((p) => p.colId !== id);
+        if (col.executor === 'chatgpt-web') await window.deck.chatgptWebCancel(id);
         if (archive) host.archiveColumn(col, { captain: true, quiet: true });
-        else window.deck.ptyInput(id, '\x1b');
+        else if (col.executor !== 'chatgpt-web') window.deck.ptyInput(id, '\x1b');
+        if (col.executor === 'chatgpt-web') { if (entry) entry.webExecutorState = 'done'; startWebTask(col); }
         save();
         return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }
@@ -1750,6 +1819,10 @@
         if (!entry || !entry.alive) throw new Error('这个会话的终端已退出，没有实时输出。');
         const lines = message.lines === undefined ? 40 : message.lines;
         if (!Number.isInteger(lines) || lines < 1 || lines > 1000) throw new Error('peek --lines 必须是 1–1000 的整数。');
+        if (col.executor === 'chatgpt-web') {
+          const task = s.tasks.findLast((t) => t.colId === col.id && t.status === 'working') || latestTask(col.id);
+          return { done: true, result: task?.receipt ? M.receiptsForModel([{ title: task.title, colId: col.id, ...task.receipt }]) : task?.progress || 'ChatGPT 网页任务等待开始。' };
+        }
         return { done: true, result: host.dumpScreen(entry.term, lines) };
       }
       case 'main-read': {
@@ -1785,7 +1858,15 @@
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
         // Same agent as 队长 unless it asks for another one; never a silent default.
         const agent = String(message.agent || '').trim().toLowerCase();
-        if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
+        if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell', 'chatgpt-web'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex、chatgpt-web，或用 --command 写完整启动命令。`);
+        if (agent === 'chatgpt-web') {
+          if (message.command || message.seatId !== undefined) throw new Error('chatgpt-web 不支持 --command 或 --seat；使用本机已登录的 ChatGPT 网页。');
+          window.ChatGPTWebCore.validatePublicTask(title);
+          window.ChatGPTWebCore.validatePublicTask(task);
+          if (message.webMode !== undefined && !['chat', 'deep-research'].includes(message.webMode)) throw new Error('--web-mode 只支持 chat 或 deep-research。');
+          metadata.executor = 'chatgpt-web';
+          metadata.webMode = message.webMode || 'chat';
+        } else if (message.webMode !== undefined) throw new Error('--web-mode 仅用于 chatgpt-web。');
         const custom = window.BoardCore.cleanText(message.command, 1000);
         const explicitCommand = !!custom;
         if (explicitCommand) metadata.quotaExplicit = true;
@@ -1832,6 +1913,7 @@
       case 'main-answer': {
         const col = findTarget(message.to);
         if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
+        if (col.executor === 'chatgpt-web') throw new Error('ChatGPT 网页会话不接受按键回答，请在网页处理需要用户操作的提示。');
         const entry = host.terms.get(col.id);
         if (!entry || entry.state !== 'input') throw new Error(`「${host.columnLabel(col)}」现在没有停在确认提示上；要给它指令用 tell。`);
         const key = String(message.key || '').trim().toLowerCase();

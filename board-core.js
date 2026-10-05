@@ -24,6 +24,7 @@
     codex: CODEX,
     'codex (chatgpt)': CODEX,
     chatgpt: CODEX,
+    'chatgpt-web': 'chatgpt-web',
     gemini: GEMINI,
     shell: '',
   });
@@ -120,6 +121,7 @@
     if (/^\s*grok(?:\s|$)/.test(cmd)) return 'Grok';
     if (/^\s*cursor-agent(?:\s|$)/.test(cmd)) return 'Cursor';
     if (/^\s*codex(?:\s|$)/.test(cmd)) return 'Codex';
+    if (cmd === 'chatgpt-web') return 'ChatGPT Web';
     if (/^\s*gemini(?:\s|$)/.test(cmd)) return 'Antigravity';
     return cmd ? 'Custom agent' : 'Shell';
   }

@@ -519,6 +519,7 @@ function terminalIdle(col, entry) {
 }
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
 function classify(text, entry, cmd) {
+  if (cmd === 'chatgpt-web') return entry?.webExecutorState || 'plain';
   text = MainCore.codexStatusScreen(text, cmd);
   const activity = MainCore.terminalActivity(text, cmd);
   if (activity === 'quota') return activity;
@@ -1901,7 +1902,7 @@ function buildColumn(col, isFresh) {
       }
     }, { capture: true, passive: true });
     terms.set(col.id, {
-      term, fit, search, el: termEl, wrap, titleEl: title, badgeEl, dot, timerEl, alive: true, state: 'plain', disposers,
+      term, fit, search, el: termEl, wrap, titleEl: title, badgeEl, dot, timerEl, alive: true, state: 'plain', disposers, webExecutorReady: col.executor === 'chatgpt-web' ? false : undefined,
       // Status-machine memory: hasWorked separates green "just finished" from
       // gray "idle since launch"; idleTicks debounces working→done (~3s);
       // workStart/workedMs drive the header timer; lastDump skips redundant IPC.
@@ -1982,6 +1983,7 @@ function buildColumn(col, isFresh) {
           });
         }
         window.deck.ptyResize(col.id, term.cols, term.rows);
+        if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
         MainSession.notePtySurvived(col);
       } else {
         // Fresh spawn. If the previous app run left a saved session for this
@@ -1995,7 +1997,7 @@ function buildColumn(col, isFresh) {
           ? { launch: choice.launch, sessionId: choice.sessionId, resumedAgent: true, showLegacyWarning: false }
           : choice.mode === 'resend'
             ? { ...window.AgentInfo.planAgentLaunch(choice.launch, null, true, false, () => window.crypto.randomUUID()), resumedAgent: false, showLegacyWarning: true }
-            : window.AgentInfo.planAgentLaunch(col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
+            : window.AgentInfo.planAgentLaunch(col.executor === 'chatgpt-web' ? '' : col.cmd || '', col.modelSessionId, isFresh, MainSession.skipsResume(col), () => window.crypto.randomUUID());
         const { launch, resumedAgent, showLegacyWarning } = plan;
         if (col.modelSessionId !== plan.sessionId) {
           if (plan.sessionId) {
@@ -2025,12 +2027,13 @@ function buildColumn(col, isFresh) {
           });
         }
         // 队长 gets a control token too; the columns it drives never do.
-        const boundSeat = ClaudeSeatsCore.bindColumn(col, config);
+        const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
         window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
+        if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
-        if (launch) {
+        if (launch && col.executor !== 'chatgpt-web') {
           // Capture the id: if the user edits the column within 700ms,
           // respawnColumn assigns a NEW id and this stale timer must not fire
           // into the fresh pty (whose own timer will run the command).
