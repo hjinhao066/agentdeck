@@ -468,3 +468,63 @@ test('with no acceptable reviewer the card waits in review with the reason for t
     expect((await card(c.id)).status).toBe('done');
   } finally { await autoVerifyOff(); }
 });
+
+test('a named --command queues when its quota is out and does not switch models', async () => {
+  await page.evaluate(() => {
+    const seat = QuotaCore.claudeSeats(config.claudeSeats).find((s) => s.id === config.activeClaudeSeatId) || QuotaCore.claudeSeats(config.claudeSeats)[0];
+    window.explicitQuotaStore = config.quotas;
+    config.quotas = { [QuotaCore.seatKey(seat.id)]: { scope: 'claude', configDir: seat.configDir, blocked: { at: Date.now(), resetAt: Date.now() + 600000 } } };
+  });
+  try {
+    const named = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+    const plan = await page.evaluate((cmd) => QuotaCore.quotaFallback(config.quotas, cmd, config.claudeSeats, config.activeClaudeSeatId, Date.now(), { explicit: true }), named);
+    expect(plan.action).toBe('queue');
+    const c = await add('Named model waits');
+    const result = await command(['new', '--task-id', c.id, '--title', 'Named Opus', '--task', 'test', '--command', named]);
+    expect(result).toContain('不自动更换');
+    expect(result).toContain('额度用尽，稍后自动开');
+    expect(result).not.toContain('因额度换成');
+    expect((await card(c.id)).session_id).toBeFalsy();
+  } finally {
+    await page.evaluate(() => { config.quotas = window.explicitQuotaStore; });
+  }
+});
+
+test('exhausted Gemini dispatch switches tier, marks the session and tells the captain', async () => {
+  await page.evaluate((fake) => {
+    window.switchQuotaStore = config.quotas;
+    window.switchFallback = QuotaCore.quotaFallback;
+    window.switchGate = QuotaCore.commandQuota;
+    const agy = BoardCore.commandForAgent('agy');
+    QuotaCore.commandQuota = (store, cmd, ...args) => /gemini-[\d.]+-flash(?:-(?:low|medium|high))?(?:\s|$)/.test(cmd) || cmd === agy
+      ? { out: true, state: 'exhausted', stale: false, fiveHour: 0, weekly: 0 }
+      : window.switchGate(store, cmd, ...args);
+    QuotaCore.quotaFallback = (...args) => {
+      const plan = window.switchFallback(...args);
+      window.switchPlan = plan;
+      return plan.action === 'switch' ? { ...plan, cmd: fake } : plan;
+    };
+    TaskBoard.settings('gemini');
+  }, FAKE);
+  try {
+    const c = await add('Fallback dispatcher');
+    const started = await page.evaluate((id) => TaskBoard.startCard(id), c.id);
+    expect(started.session_id).toBeTruthy();
+    const plan = await page.evaluate(() => window.switchPlan);
+    expect(plan.action).toBe('switch');
+    expect(plan.note).toBe('原本派Gemini Flash，因额度换成agy gpt-oss-120b-medium');
+    expect(plan.cmd).toContain('gpt-oss-120b-medium');
+    expect(plan.cmd).not.toContain('--effort');
+    const title = await page.evaluate((id) => { const col = columns.find((c) => c.id === id); return col.displayTitle || col.title; }, started.session_id);
+    expect(title).toContain(plan.note);
+    expect(await page.evaluate((id) => columns.find((c) => c.id === id).cmd, started.session_id)).toContain('fake-agent.js');
+    expect(await page.evaluate(() => config.mainSession.pending.map((p) => p.summary).join('\n'))).toContain(plan.note);
+  } finally {
+    await page.evaluate(() => {
+      QuotaCore.quotaFallback = window.switchFallback;
+      QuotaCore.commandQuota = window.switchGate;
+      config.quotas = window.switchQuotaStore;
+      TaskBoard.settings('captain');
+    });
+  }
+});

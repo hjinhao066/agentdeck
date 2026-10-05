@@ -104,6 +104,39 @@
   const startingCards = new Map();
   const quotaStarts = new Map();
   const commandQuota = (cmd, seatId) => window.QuotaCore.commandQuota(host.config.quotas, cmd, host.config.claudeSeats, seatId || host.config.activeClaudeSeatId);
+  function quotaPlan(cmd, seatId, explicit) {
+    const plan = window.QuotaCore.quotaFallback(host.config.quotas, cmd, host.config.claudeSeats, seatId || host.config.activeClaudeSeatId, Date.now(), { explicit: !!explicit });
+    if (plan.action !== 'switch') return plan;
+    const checked = M.checkCommand(plan.cmd);
+    return checked.error || !checked.cmd ? { ...plan, action: 'queue', reason: 'out', held: 'out', note: '', cmd: plan.cmd } : { ...plan, cmd: checked.cmd };
+  }
+  function notedTitle(title, note) { return window.QuotaCore.quotaFallbackTitle(title, note); }
+  function launchMeta(metadata, plan) {
+    const meta = { ...(metadata || {}) };
+    delete meta.quotaExplicit;
+    if (plan.action === 'switch' && plan.provider !== 'Claude') { delete meta.claudeSeatId; delete meta.claudeConfigDir; }
+    return meta;
+  }
+  function announceSwitch(col, title, plan) {
+    if (plan.action === 'switch') boardNotice(`会话 ${col.id}「${title}」。${plan.note}。`);
+  }
+  // Automatic reviewers are already chosen for family and remaining quota.
+  // A fully exhausted pool still waits; a low pool must not swap that reviewer.
+  function openPlan(cmd, seatId, explicit, metadata) {
+    if (metadata?.autoReviewRound) {
+      return commandQuota(cmd, seatId)?.out
+        ? { action: 'queue', cmd, reason: 'out', held: 'out', note: '' }
+        : { action: 'open', cmd, note: '' };
+    }
+    return quotaPlan(cmd, seatId, explicit);
+  }
+  function quotaQueueText(plan, title, dispatch = false) {
+    if (plan.reason === 'explicit') {
+      const why = plan.held === 'low' ? '额度低于阈值' : '额度用尽';
+      return `已排队：${plan.note}。${why}，稍后自动开${dispatch ? '调度会话' : `新会话「${title}」`}。`;
+    }
+    return dispatch ? '已排队：额度用尽，稍后自动开调度会话。' : `已排队：额度用尽，稍后自动开新会话「${title}」。`;
+  }
   // `notice(card)`: the words for 队长 when the user asked for the start on the
   // task board itself; such a start never opens a dispatcher session.
   async function startCard(id, heartbeat, notice) {
@@ -134,8 +167,9 @@
     }
     if (freeSlots() <= 0) { boardNotice(`用户要开始卡片 ${card.id}「${card.title}」，调度会话无空位，请队长安排。`); await boardRequest('dispatched', { id, key }); return { card, dispatcher: 'captain' }; }
     const cmd = window.BoardCore.commandForAgent('agy');
-    if (commandQuota(cmd)?.out) {
-      const waiting = await boardRequest('dispatchWait', { id, key, message: '已排队：额度用尽，稍后自动开调度会话。' });
+    const plan = quotaPlan(cmd);
+    if (plan.action === 'queue') {
+      const waiting = await boardRequest('dispatchWait', { id, key, message: quotaQueueText(plan, card.title, true) });
       if (!waiting.ignored) quotaStarts.set(id, { id, key });
       return { card: waiting.card, queued: true };
     }
@@ -145,8 +179,10 @@
     if (reserved.ignored) return { card: reserved.card, ignored: true };
     const cli = M.boardCli(host.platform);
     const prompt = M.dispatcherInstructions(host.platform, card);
-    const col = host.createSession({ id: sessionId, title: '调度：' + card.title, cmd, captainCrew: true, project: card.project, dispatcherCardId: id }, true);
-    dispatch(col, prompt + `\n整理后用 ${cli} new --task-id ${id} --project ${JSON.stringify(card.project)} --title "标题" --task "整理后的任务" --agent … 派出去，然后 complete 说明派给谁。拿不准就 ask 交队长。`, '调度：' + card.title);
+    const title = plan.action === 'switch' ? notedTitle('调度：' + card.title, plan.note) : '调度：' + card.title;
+    const col = host.createSession({ id: sessionId, title, displayTitle: title, cmd: plan.cmd, captainCrew: true, project: card.project, dispatcherCardId: id }, true);
+    if (plan.action === 'switch') announceSwitch(col, title, plan);
+    dispatch(col, prompt + `\n整理后用 ${cli} new --task-id ${id} --project ${JSON.stringify(card.project)} --title "标题" --task "整理后的任务" --agent … 派出去，然后 complete 说明派给谁。拿不准就 ask 交队长。`, title);
     await boardRequest('dispatched', { id, key });
     return { card, dispatcher: 'gemini', session_id: col.id };
   }
@@ -810,7 +846,8 @@
     }
     const task = addTask(null, title);
     Object.assign(task, metadata);
-    if (commandQuota(cmd, metadata.claudeSeatId)?.out) task.waitReason = '额度用尽，稍后自动开';
+    const held = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
+    if (held.action === 'queue') task.waitReason = held.reason === 'explicit' ? held.note : '额度用尽，稍后自动开';
     s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
     save();
   }
@@ -821,14 +858,17 @@
     const pressure = await readMemoryPressure();
     const wasHold = memoryHold;
     memoryHold = pressure.critical;
-    const quotaHeld = commandQuota(cmd, metadata.claudeSeatId)?.out;
-    if (quotaHeld || pressure.critical || s.waitlist.length || freeSlots() <= 0) {
+    const plan = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
+    if (plan.action === 'queue' || pressure.critical || s.waitlist.length || freeSlots() <= 0) {
       await enqueue(title, cmd, cwd, requestId, task, metadata);
       if (wasHold !== memoryHold) refreshWaitingNotes();
-      return { queued: true, quotaHeld, critical: pressure.critical };
+      return { queued: true, plan, critical: pressure.critical };
     }
     if (wasHold !== memoryHold) refreshWaitingNotes();
-    return { col: await openSession(title, cmd, cwd, requestId, task, null, metadata) };
+    const shown = plan.action === 'switch' ? notedTitle(title, plan.note) : title;
+    const col = await openSession(shown, plan.cmd, cwd, requestId, task, null, launchMeta(metadata, plan));
+    announceSwitch(col, shown, plan);
+    return { col, plan, title: shown };
   }
   // Start waiting work as slots free up, oldest first. Critical memory pressure waits.
   let pumping = false;
@@ -847,14 +887,25 @@
         cap: M.MAX_ACTIVE, active, waiting: s.waitlist.length, level: pressure.level,
         take: () => {
           if (state() !== s) return null;
-          const index = s.waitlist.findIndex((w) => !commandQuota(w.cmd, w.metadata?.claudeSeatId)?.out);
+          const index = s.waitlist.findIndex((w) => openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue');
           return index < 0 ? null : s.waitlist.splice(index, 1)[0];
         },
         open: async (w) => {
           const task = s.tasks.find((t) => t.id === w.taskId && t.status === 'waiting');
           if (!task || state() !== s) return;
-          try { await openSession(w.title, w.cmd, w.cwd, w.requestId, w.task, task, w.metadata || { project: w.project || '', reviews: w.reviews || [] }); }
-          catch (error) { settle(task, { failed: error.message, summary: '', files: [], explicit: true }); }
+          const plan = openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata);
+          if (plan.action === 'queue') {
+            s.waitlist.unshift(w);
+            task.waitReason = plan.reason === 'explicit' ? plan.note : '额度用尽，稍后自动开';
+            update(task);
+            return;
+          }
+          const title = plan.action === 'switch' ? notedTitle(w.title, plan.note) : w.title;
+          if (plan.action === 'switch') task.title = title;
+          try {
+            const col = await openSession(title, plan.cmd, w.cwd, w.requestId, w.task, task, launchMeta(w.metadata || { project: w.project || '', reviews: w.reviews || [] }, plan));
+            announceSwitch(col, title, plan);
+          } catch (error) { settle(task, { failed: error.message, summary: '', files: [], explicit: true }); }
         },
       });
       memoryHold = pressure.level === 4 && s.waitlist.length > 0;
@@ -1081,7 +1132,7 @@
     if (!s) return;
     if (id === s.colId) {
       for (const [cardId, input] of quotaStarts) {
-        if (!commandQuota(window.BoardCore.commandForAgent('agy'))?.out) {
+        if (quotaPlan(window.BoardCore.commandForAgent('agy')).action !== 'queue') {
           quotaStarts.delete(cardId);
           startCard(cardId, input).catch((error) => host.showToast(error.message));
         }
@@ -1434,6 +1485,8 @@
         const agent = String(message.agent || '').trim().toLowerCase();
         if (agent && !['claude', 'agy', 'antigravity', 'cursor', 'cursor-agent', 'grok', 'codex', 'gemini', 'shell'].includes(agent)) throw new Error(`不认识的 --agent：${agent.slice(0, 40)}。可用 claude、agy、cursor、grok、codex，或用 --command 写完整启动命令。`);
         const custom = window.BoardCore.cleanText(message.command, 1000);
+        const explicitCommand = !!custom;
+        if (explicitCommand) metadata.quotaExplicit = true;
         const checked = M.checkCommand(custom || (agent ? window.BoardCore.commandForAgent(agent) : nativeCaptain(s.cmd) ? window.BoardCore.commandForAgent('codex') : s.cmd));
         if (checked.error) throw new Error(checked.error);
         const cmd = checked.cmd;
@@ -1457,15 +1510,20 @@
           if (card.archived || card.flag === 'held' || card.flag === 'blocked' || card.status === 'done') throw new Error('卡片尚不可开始，请检查前置任务或显式移回待办。');
         }
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
-        // Past the limit, behind work already waiting, or critical memory: queue it.
+        // Past the limit, behind work already waiting, at quota, or under critical memory: queue it.
+        // placeSession applies same-tier fallback unless the command was named with --command.
         const placed = await placeSession(title, cmd, cwd, message.id, task, metadata);
         if (placed.queued) {
-          const result = placed.quotaHeld ? `已排队：额度用尽，稍后自动开新会话「${title}」。` : placed.critical
+          const result = placed.plan?.action === 'queue' ? quotaQueueText(placed.plan, title) : placed.critical
             ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
             : `已排队：现在已经有 ${M.MAX_ACTIVE} 个会话在干活。有空位时会自动开新会话「${title}」并把任务发过去，不用再派。`;
           return { done: true, result };
         }
-        return { done: true, result: `已开新会话 ${placed.col.id}「${title}」，任务会在它准备好后发过去。` };
+        const opened = placed.title || title;
+        const result = placed.plan?.action === 'switch'
+          ? `已开新会话 ${placed.col.id}「${opened}」。${placed.plan.note}。`
+          : `已开新会话 ${placed.col.id}「${title}」，任务会在它准备好后发过去。`;
+        return { done: true, result };
       }
       case 'main-tell':
         return tellSession(message, caller);

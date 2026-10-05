@@ -612,6 +612,164 @@ test('an upgraded CN/US profile lists US2 in both the desktop items and the phon
   assert.equal(rows[2].status, 'unknown');
 });
 
+test('same-tier quota fallback switches only on a clear shortage and names the substitute', () => {
+  const M = require('../main-core');
+  const opus = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+  const sonnet = 'claude --dangerously-skip-permissions --model claude-sonnet-5-5 --effort high';
+  const gemini = 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high';
+  const grok = 'cursor-agent --force --model grok-4.7-high-fast';
+  const sol = 'codex --model gpt-6.1-sol --no-daemon --dangerously-bypass-approvals-and-sandbox';
+  const commands = Q.QUOTA_TIERS.flat().map((member) => member.command);
+  assert.deepEqual(Q.QUOTA_TIERS.map((tier) => tier.map((member) => member.label)), [
+    ['Claude Opus 5.5', 'Cursor claude-opus-5-5-high'],
+    ['Claude Sonnet 5.5', 'Cursor claude-sonnet-5-5-high', 'agy claude-sonnet-4-6'],
+    ['Gemini Flash', 'agy gpt-oss-120b-medium', 'Cursor grok-4.7-high-fast'],
+    ['Codex GPT-6.1 Sol', 'Cursor claude-sonnet-5-5-high'],
+  ]);
+  assert.equal(Q.QUOTA_LOW_PERCENT, 20);
+  assert.equal(Q.QUOTA_TIERS[1][1], Q.QUOTA_TIERS[3][1]);
+  for (const command of commands) {
+    assert.equal(M.checkCommand(command).cmd, command, command);
+    assert.doesNotMatch(command, /haiku/i, command);
+    assert.doesNotMatch(command, /claude-opus-4/i, command);
+    if (/^(?:agy|antigravity)\b/.test(command)) assert.doesNotMatch(command, /--effort\b/, command);
+    if (/claude-(?:sonnet|opus)-4/.test(command)) assert.match(command, /^agy\b.*claude-sonnet-4-6\b/);
+  }
+  const claude = (used5h, usedWeek) => {
+    const store = {};
+    Q.observe(store, Q.screen('Claude', '', [`Session: ${used5h}% | Reset: 2hr`, `Weekly: ${usedWeek}% | Reset: 3d`], now), now);
+    return store;
+  };
+  const blocked = (provider, scope) => ({ [provider]: { scope, blocked: { at: now, resetAt: now + 60_000 } } });
+  const healthyGemini = () => {
+    const store = {};
+    Q.observe(store, Q.cacheAntigravity({ model: 'gemini-3.8-flash-high', quota: {
+      'gemini-5h': { remaining_fraction: 0.8, reset_time: new Date(now + 3_600_000).toISOString() },
+      'gemini-weekly': { remaining_fraction: 0.7, reset_time: new Date(now + 86_400_000).toISOString() },
+    } }, now), now);
+    return store;
+  };
+  const switched = Q.quotaFallback(blocked('Claude', 'claude'), opus, null, null, now);
+  assert.equal(switched.action, 'switch');
+  assert.equal(switched.note, '原本派Claude Opus 5.5，因额度换成Cursor claude-opus-5-5-high');
+  assert.equal(switched.cmd, 'cursor-agent --force --model claude-opus-5-5-high');
+  assert.equal(switched.provider, 'Cursor');
+  assert.equal(Q.quotaFallback(claude(80, 10), opus, null, null, now).action, 'switch');
+  assert.equal(Q.quotaFallback(claude(79, 10), opus, null, null, now).action, 'open');
+  assert.equal(Q.quotaFallback(claude(50, 90), opus, null, null, now).note, Q.quotaSwitchNote('Claude Opus 5.5', 'Cursor claude-opus-5-5-high'));
+  assert.equal(Q.quotaFallback({}, opus, null, null, now).action, 'open');
+  assert.equal(Q.quotaFallback(claude(85, 10), opus, null, null, now + Q.FRESH_MS + 1).action, 'open');
+  const named = Q.quotaFallback(blocked('Claude', 'claude'), opus, null, null, now, { explicit: true });
+  assert.equal(named.action, 'queue');
+  assert.equal(named.reason, 'explicit');
+  assert.equal(named.held, 'out');
+  assert.equal(named.cmd, opus);
+  assert.match(named.note, /点名 Claude Opus 5\.5，不自动更换/);
+  const namedLow = Q.quotaFallback(claude(85, 10), opus, null, null, now, { explicit: true });
+  assert.equal(namedLow.action, 'queue');
+  assert.equal(namedLow.held, 'low');
+  assert.equal(Q.quotaFallback({}, opus, null, null, now, { explicit: true }).action, 'open');
+  const toCursorSonnet = Q.quotaFallback(blocked('Claude', 'claude'), sonnet, null, null, now);
+  assert.equal(toCursorSonnet.cmd, 'cursor-agent --force --model claude-sonnet-5-5-high');
+  assert.match(toCursorSonnet.note, /^原本派Claude Sonnet 5\.5，因额度换成Cursor claude-sonnet-5-5-high$/);
+  const flashLow = 'agy --dangerously-skip-permissions --model gemini-3.8-flash-low';
+  const toOss = Q.quotaFallback(blocked('Antigravity', 'gemini'), flashLow, null, null, now);
+  assert.equal(toOss.action, 'switch');
+  assert.equal(toOss.from, 'Gemini Flash');
+  assert.equal(toOss.cmd, 'agy --dangerously-skip-permissions --model gpt-oss-120b-medium');
+  assert.doesNotMatch(toOss.cmd, /--effort/);
+  const geminiFirst = healthyGemini();
+  Q.observe(geminiFirst, Q.screen('Cursor', 'Welcome', [], now, 'grok-4.7-high-fast'), now);
+  assert.equal(Q.quotaFallback(geminiFirst, gemini, null, null, now).action, 'open');
+  const grokOut = healthyGemini();
+  Q.observe(grokOut, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now, 'grok-4.7-high-fast'), now);
+  assert.equal(Q.quotaFallback(grokOut, grok, null, null, now).cmd, gemini);
+  const grokOnly = {};
+  Q.observe(grokOnly, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now, 'grok-4.7-high-fast'), now);
+  const oss = Q.quotaFallback(grokOnly, grok, null, null, now);
+  assert.equal(oss.cmd, 'agy --dangerously-skip-permissions --model gpt-oss-120b-medium');
+  assert.doesNotMatch(oss.cmd, /--effort/);
+  assert.equal(Q.quotaFallback(blocked('Codex', 'codex'), sol, null, null, now).cmd, 'cursor-agent --force --model claude-sonnet-5-5-high');
+  assert.equal(Q.quotaFallback(blocked('Codex', 'codex'), 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox', null, null, now).to, 'Cursor claude-sonnet-5-5-high');
+  const luna = Q.quotaFallback(blocked('Codex', 'codex'), 'codex -m gpt-6-luna', null, null, now);
+  assert.equal(luna.action, 'queue');
+  assert.equal(luna.reason, 'out');
+  assert.equal(luna.cmd, 'codex -m gpt-6-luna');
+  assert.equal(Q.quotaFallback(blocked('Claude', 'claude'), 'cursor-agent --force --model claude-opus-5-5-xhigh', null, null, now).action, 'open');
+  assert.equal(Q.quotaFallback(blocked('Claude', 'claude'), '/opt/bin/claude --model "claude-opus-5-5"', null, null, now).action, 'switch');
+  const titled = Q.quotaFallbackTitle(`${'标题'.repeat(80)}`, switched.note, 120);
+  assert.ok(titled.endsWith(switched.note));
+  assert.ok(titled.length <= 120);
+  assert.equal(Q.quotaFallbackTitle('审查', ''), '审查');
+  const B = require('../board-core');
+  const modelOf = (cmd) => cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1];
+  assert.equal(B.inferAgentType(switched.cmd), 'Cursor');
+  assert.equal(modelOf(switched.cmd), 'claude-opus-5-5-high');
+  assert.equal(B.inferAgentType(toOss.cmd), 'Antigravity');
+  assert.equal(modelOf(toOss.cmd), 'gpt-oss-120b-medium');
+  assert.doesNotMatch(toOss.cmd, /--effort/);
+});
+
+test('a screen with no remaining percent is not a usable substitute', () => {
+  const grok = 'cursor-agent --force --model grok-4.7-high-fast';
+  const welcome = {};
+  Q.observe(welcome, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now, 'grok-4.7-high-fast'), now);
+  Q.observe(welcome, Q.screen('Antigravity', 'Welcome', [], now, 'gemini-3.8-flash-high'), now);
+  const picked = Q.quotaFallback(welcome, grok, null, null, now);
+  assert.equal(picked.action, 'switch');
+  assert.equal(picked.to, 'agy gpt-oss-120b-medium');
+  assert.equal(picked.cmd, 'agy --dangerously-skip-permissions --model gpt-oss-120b-medium');
+  assert.doesNotMatch(picked.cmd, /--effort/);
+  const resumed = {};
+  Q.observe(resumed, Q.screen('Cursor', 'Error: You have exceeded your usage limit. Resets in 2h', [], now, 'grok-4.7-high-fast'), now);
+  Q.observe(resumed, Q.screen('Antigravity', 'Usage limit reset', [], now, 'gemini-3.8-flash-high'), now);
+  assert.equal(Q.quotaFallback(resumed, grok, null, null, now).to, 'Gemini Flash');
+});
+
+test('stale or expired quota numbers do not trigger a switch', () => {
+  const opus = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+  const bind = (sample) => ({ ...sample, accountBound: true, accountKey: 'acc', configDir: '~/.claude', seatId: 'default', credentialKey: 'cred' });
+  const stale = {};
+  Q.observe(stale, bind(Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 15, resetText: new Date(now + 3_600_000).toISOString() },
+    { key: 'weekly', remaining: 80, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  assert.equal(Q.summary(stale, 'Claude', now + 31 * 60_000).stale, true);
+  assert.equal(Q.quotaFallback(stale, opus, null, null, now + 31 * 60_000).action, 'open');
+  const expired = {};
+  Q.observe(expired, bind(Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 0, resetText: new Date(now + 60_000).toISOString() },
+    { key: 'weekly', remaining: 10, resetText: new Date(now + 120_000).toISOString() },
+  ] }, now)), now);
+  assert.equal(Q.quotaFallback(expired, opus, null, null, now + 31 * 60_000).action, 'open');
+});
+
+test('every measured substitute being exhausted queues the original command', () => {
+  // quotaFallback follows a replaced commandQuota on the shared module. Run that
+  // replacement in a child so it cannot change other tests in this file.
+  const { spawnSync } = require('child_process');
+  const result = spawnSync(process.execPath, ['-e', `
+    const Q = require('./quota-core');
+    const assert = require('assert');
+    const now = ${JSON.stringify(now)};
+    const orig = Q.commandQuota;
+    Q.commandQuota = (store, cmd, ...args) => /cursor-agent|gpt-oss|claude-sonnet-4-6/.test(cmd)
+      ? { out: true, state: 'exhausted', stale: false, fiveHour: 0, weekly: 0 }
+      : orig(store, cmd, ...args);
+    const opus = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+    const gemini = 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high';
+    const plan = Q.quotaFallback({ Claude: { scope: 'claude', blocked: { at: now, resetAt: now + 60_000 } } }, opus, null, null, now);
+    assert.equal(plan.action, 'queue');
+    assert.equal(plan.reason, 'out');
+    assert.equal(plan.cmd, opus);
+    const flash = Q.quotaFallback({ Antigravity: { scope: 'gemini', blocked: { at: now, resetAt: now + 60_000 } } }, gemini, null, null, now);
+    assert.equal(flash.action, 'queue');
+    assert.equal(flash.cmd, gemini);
+    assert.equal(flash.to, '');
+  `], { cwd: require('path').join(__dirname, '..'), encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+});
+
 test('summary exposes the evidence source and confidence for the panel details', () => {
   const store = {};
   Q.observe(store, Q.screen('Codex', '', [], now), now);
