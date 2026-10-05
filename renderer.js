@@ -517,7 +517,7 @@ function terminalIdle(col, entry) {
   const screen = MainCore.codexStatusScreen(entry.lastScreen, col.cmd);
   return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
 }
-const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', exited: '已退出' };
+const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
 function classify(text, entry, cmd) {
   if (cmd === 'chatgpt-web') return entry?.webExecutorState || 'plain';
   text = MainCore.codexStatusScreen(text, cmd);
@@ -3848,6 +3848,10 @@ setInterval(() => {
         entry.idleTicks = 0;
         if (st === 'quota') entry.workStart = 0;
         else if (!entry.workStart) { entry.workStart = Date.now(); entry.workedMs = 0; }
+      } else if (st === 'failed' || st === 'stopped') {
+        entry.idleTicks = 0;
+        entry.workStart = 0;
+        entry.workedMs = 0;
       } else if (st === 'done') {
         // Debounce: hold yellow through the short gaps between tool calls so
         // the dot never flickers green mid-task (~3s ≈ watch-ai's stability window).

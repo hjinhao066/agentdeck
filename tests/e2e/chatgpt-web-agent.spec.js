@@ -89,6 +89,7 @@ test.afterAll(async () => {
 test('Captain CLI dispatches web sessions, peek tracks waiting, cooldown serializes requests, and receipts close the board attempt', async () => {
   const card = JSON.parse(await command(['task', 'add', '--project', 'web-e2e', '--title', 'Public web research', '--verify'])).card;
   const first = await create('Web research first', 'FIRST', card.id);
+  await page.getByRole('button', { name: '展开队员列表', exact: true }).click();
   await expect.poll(() => events().some((e) => e.event === 'begin' && e.scenario === 'FIRST'), { timeout: 15000 }).toBe(true);
   expect((await task(first)).status).toBe('working');
   const ledger = await command(['ledger']);
@@ -137,11 +138,56 @@ for (const [scenario, reason] of [
     await expect.poll(async () => (await task(id))?.status, { timeout: 15000 }).toBe('failed');
     const receipt = (await task(id)).receipt;
     expect(receipt.failed).toMatch(reason);
+    const ledgerLine = (await command(['ledger'])).split('\n').find((line) => line.startsWith(id + ' '));
+    expect(ledgerLine).toContain('没做成');
+    expect(ledgerLine).not.toContain('已完成');
+    // Exercise the idle timer's post-debounce path too: it used to turn a
+    // non-working state green once hasWorked was true, regardless of failure.
+    await page.evaluate((colId) => {
+      const entry = terms.get(colId);
+      entry.idleTicks = 2;
+      entry.workStart = Date.now() - 1000;
+      setDot(entry, 'working');
+    }, id);
+    await expect.poll(() => page.evaluate((colId) => {
+      const entry = terms.get(colId);
+      return { state: entry.state, cls: entry.dot.className, title: entry.dot.title };
+    }, id)).toEqual({ state: 'failed', cls: 'dot failed', title: '没做成' });
+    await expect(page.locator(`.colnav-item[data-col-id="${id}"] .cn-dot`)).toHaveAttribute('title', '没做成');
     expect(receipt.files || []).not.toContainEqual(expect.stringMatching(/\.md$/));
     const receipts = await command(['receipts']);
     expect(receipts).toContain(receipt.failed);
     expect(await command(['peek', '--id', id])).toMatch(reason);
     expect(events().filter((e) => e.event === 'begin' && e.scenario === scenario)).toHaveLength(1);
     if (scenario === 'LOGIN_REQUIRED') expect(receipt.failed).toMatch(/用户|手动|专用.*登录/);
+  });
+}
+
+for (const replace of [false, true]) {
+  test('web tell --now runs C before queued B' + (replace ? ' and --replace drops B' : ' then resumes B'), async () => {
+    const prefix = replace ? 'REPLACE' : 'NOW';
+    const id = await create('Web urgent ' + prefix, prefix + '_A');
+    const sessionTasks = () => page.evaluate((colId) => config.mainSession.tasks.filter((t) => t.colId === colId), id);
+    const begins = () => events().filter((e) => e.event === 'begin' && e.scenario.startsWith(prefix + '_')).map((e) => e.scenario);
+    await expect.poll(begins, { timeout: 15000 }).toEqual([prefix + '_A']);
+    const first = await task(id);
+    await command(['tell', '--to', id, '--message', '[' + prefix + '_B] Why are clouds white?']);
+    const second = await task(id);
+    expect(second.status).toBe('queued');
+    await command(['tell', '--to', id, '--now', ...(replace ? ['--replace'] : []), '--message', '[' + prefix + '_C] Why are sunsets red?']);
+    const urgent = await task(id);
+    await expect.poll(begins, { timeout: 15000 }).toEqual([prefix + '_A', prefix + '_C']);
+    const tasks = await sessionTasks();
+    expect(tasks.find((t) => t.id === first.id).status).toBe('stopped');
+    expect(tasks.find((t) => t.id === second.id).status).toBe(replace ? 'stopped' : 'queued');
+    expect(tasks.find((t) => t.id === urgent.id).status).toBe('working');
+    fs.writeFileSync(path.join(eventsDir, 'release-' + prefix + '_C'), 'release');
+    await expect.poll(async () => (await sessionTasks()).find((t) => t.id === urgent.id)?.status, { timeout: 15000 }).toBe('done');
+    if (!replace) {
+      await expect.poll(begins, { timeout: 15000 }).toEqual([prefix + '_A', prefix + '_C', prefix + '_B']);
+      fs.writeFileSync(path.join(eventsDir, 'release-' + prefix + '_B'), 'release');
+      await expect.poll(async () => (await sessionTasks()).find((t) => t.id === second.id)?.status, { timeout: 15000 }).toBe('done');
+    } else expect(begins()).toEqual([prefix + '_A', prefix + '_C']);
+    await command(['receipts']);
   });
 }

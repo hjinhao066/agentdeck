@@ -26,8 +26,11 @@ instruction suffix. The Captain must review it for credentials and sensitive
 personal information before dispatch; obvious credentials are rejected before
 storage/sending. Only public research is supported. `ledger`, `peek`, `receipts`,
 `tell`, `stop`, and board-card `--task-id` use the usual session/receipt lifecycle.
-`tell` submits a new question, not a follow-up in the prior webpage. A report
-excerpt and the absolute full Markdown path return through the existing completion
+`tell` submits a new question, not a follow-up in the prior webpage. `tell --now`
+cancels the current question and sends the new one ahead of that session's queued
+questions; `--replace` drops those queued questions (`--replace --now` does both).
+Failed receipts show “没做成” in the ledger and status dot; cancelled work shows
+“已中断”. A report excerpt and the absolute full Markdown path return through the existing completion
 channel. Reports stay local under `~/reports/agentdeck-chatgpt-web/<run-id>/`.
 
 Requests in one app execute FIFO, one at a time, with at least 60 seconds after

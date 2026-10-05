@@ -742,12 +742,17 @@
     return task;
   }
   // Web work bypasses terminal input and the CLI receipt suffix completely.
-  function startWebTask(col) {
+  function webTaskState(task) {
+    if (!task) return 'plain';
+    if (['working', 'queued'].includes(task.status)) return 'working';
+    return task.status === 'asking' ? 'input' : task.status;
+  }
+  function startWebTask(col, immediate) {
     const tasks = state()?.tasks || [];
     if (tasks.some((t) => t.colId === col.id && t.status === 'working')) return;
-    const task = tasks.find((t) => t.colId === col.id && t.status === 'queued');
+    const task = immediate || tasks.find((t) => t.colId === col.id && t.status === 'queued');
     const entry = host.terms.get(col.id);
-    if (!task || !entry?.alive || entry.webExecutorReady === false) return;
+    if (!task || !entry?.alive || entry.webExecutorReady === false || entry.webExecutorStopping) return;
     task.instructionSent = true;
     task.status = 'working';
     task.startedAt = Date.now();
@@ -766,7 +771,7 @@
       settle(task, { summary: '', files: [], images: [], failed: 'ChatGPT 网页执行器未能启动，请检查本机工具是否可用。', explicit: true, source: 'process' });
     });
   }
-  function dispatch(col, text, title, waiting) {
+  function dispatch(col, text, title, waiting, immediate = false) {
     if (col.executor === 'chatgpt-web') window.ChatGPTWebCore.validatePublicTask(text);
     const task = waiting || addTask(col, title);
     if (waiting) {
@@ -777,7 +782,7 @@
     task.instructionSent = false;
     if (col.executor === 'chatgpt-web') {
       update(task);
-      startWebTask(col);
+      startWebTask(col, immediate ? task : null);
       return task;
     }
     persistResumeEntry(col, task);
@@ -1022,7 +1027,7 @@
     update(task);
     if (col?.executor === 'chatgpt-web') {
       const entry = host.terms.get(col.id);
-      if (entry) { entry.webExecutorState = 'done'; entry.state = 'done'; }
+      if (entry) { entry.webExecutorState = webTaskState(task); entry.state = entry.webExecutorState; }
       startWebTask(col);
     }
   }
@@ -1265,7 +1270,7 @@
     if (task) delete task.restartHold;
     if (col.executor === 'chatgpt-web') {
       const entry = host.terms.get(col.id);
-      if (entry) entry.webExecutorState = state()?.tasks.some((t) => t.colId === col.id && t.status === 'working') ? 'working' : task?.receipt ? 'done' : 'plain';
+      if (entry) entry.webExecutorState = state()?.tasks.some((t) => t.colId === col.id && t.status === 'working') ? 'working' : webTaskState(task);
       Promise.resolve(window.deck.chatgptWebStatus(col.id)).then((status) => {
         const running = state()?.tasks.find((t) => t.colId === col.id && t.status === 'working');
         if (status?.active && running?.id === status.taskId) {
@@ -1673,7 +1678,7 @@
         (terminalState === 'working' || M.terminalActivity(entry.lastScreen, c.cmd) === 'working');
       const resumedState = window.RestartResume ? window.RestartResume.ledgerState(terminalState, !!(entry && entry.alive), task) : terminalState;
       return {
-        id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? (task && ['working', 'queued'].includes(task.status) ? 'working' : task?.receipt ? 'done' : 'plain') : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
+        id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? webTaskState(task) : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
         project: c.project || '', reviews: c.reviews || [],
       };
@@ -1720,7 +1725,7 @@
     if (message.now) {
       await handle({ action: 'main-stop', to: col.id, keepQueued: true }, caller);
     }
-    dispatch(col, text, host.columnLabel(col));
+    dispatch(col, text, host.columnLabel(col), null, message.now);
     return { done: true, result: message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
   }
   // Resolves to the response payload, or rejects with a message for the caller.
@@ -1753,6 +1758,7 @@
         const entry = host.terms.get(id);
         if (!archive && (!entry || !entry.alive)) throw new Error('这个会话的终端已经退出。');
         if (!message.keepQueued) cancelSupplement(id);
+        if (col.executor === 'chatgpt-web' && entry) entry.webExecutorStopping = true;
         // Close cards before Esc/PTY exit so no delayed dispatch or receipt can
         // revive work that the Captain explicitly cancelled.
         s.tasks.forEach((t) => {
@@ -1763,10 +1769,13 @@
           update(t);
         });
         s.pending = s.pending.filter((p) => p.colId !== id);
-        if (col.executor === 'chatgpt-web') await window.deck.chatgptWebCancel(id);
+        if (col.executor === 'chatgpt-web') {
+          try { await window.deck.chatgptWebCancel(id); }
+          finally { if (entry) entry.webExecutorStopping = false; }
+        }
         if (archive) host.archiveColumn(col, { captain: true, quiet: true });
         else if (col.executor !== 'chatgpt-web') window.deck.ptyInput(id, '\x1b');
-        if (col.executor === 'chatgpt-web') { if (entry) entry.webExecutorState = 'done'; startWebTask(col); }
+        if (col.executor === 'chatgpt-web' && entry) { entry.webExecutorState = 'stopped'; entry.state = 'stopped'; }
         save();
         return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }

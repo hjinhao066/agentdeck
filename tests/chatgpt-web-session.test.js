@@ -113,8 +113,57 @@ test('native stop cancels the executor and consumes its late failure receipt', a
   w.window.deck.chatgptWebCancel = async (id) => { cancelled = id; return { cancelled: true }; };
   await w.api.handle({ action: 'main-stop', to: col.id }, w.captain);
   assert.equal(cancelled, col.id); assert.equal(task.status, 'stopped'); assert.equal(w.shellInputs.length, 0);
+  assert.equal(w.terms.get(col.id).webExecutorState, 'stopped');
+  assert.equal(w.window.__test.ledgerRows()[0].state, 'stopped');
   await w.api.submit({ action: 'complete', taskId: task.id, failed: '已取消' }, col);
   assert.equal(task.status, 'stopped');
+});
+
+test('native failed receipts remain failed in the ledger and dot state, including hot reload', async () => {
+  const w = world(); await w.create(); await tick();
+  const col = w.columns[1], task = w.task();
+  await w.api.submit({ action: 'complete', taskId: task.id, result: '没有交付报告', failed: 'TIMEOUT：网页等待超时' }, col);
+  assert.equal(task.status, 'failed');
+  assert.equal(w.terms.get(col.id).state, 'failed');
+  assert.equal(w.terms.get(col.id).webExecutorState, 'failed');
+  assert.equal(w.window.__test.ledgerRows()[0].state, 'failed');
+  const ledger = (await w.api.handle({ action: 'main-ledger' }, w.captain)).result;
+  assert.match(ledger.split('\n')[0], /没做成/);
+  assert.doesNotMatch(ledger, /已完成/);
+  w.terms.get(col.id).webExecutorState = 'plain';
+  w.api.notePtySurvived(col); await tick();
+  assert.equal(w.terms.get(col.id).webExecutorState, 'failed');
+  assert.equal(w.runs.length, 1);
+});
+
+for (const replace of [false, true]) test('native tell --now prioritizes C after interrupting A' + (replace ? ' and --replace cancels B' : ' while preserving B'), async () => {
+  const w = world(); await w.create(); await tick();
+  const col = w.columns[1], first = w.task();
+  await w.api.handle({ id: 'tell-B', action: 'main-tell', to: col.id, message: 'What makes clouds white?' }, w.captain);
+  const second = w.task();
+  let releaseCancel;
+  w.window.deck.chatgptWebCancel = () => new Promise((resolve) => { releaseCancel = resolve; });
+  const telling = w.api.handle({ id: 'tell-C', action: 'main-tell', to: col.id, now: true, replace, message: 'What makes sunsets red?' }, w.captain);
+  await tick();
+  // The ordinary heartbeat must not drain B while cancellation IPC is pending.
+  w.api.onTick(col.id, w.terms.get(col.id)); await tick();
+  assert.equal(w.runs.length, 1);
+  releaseCancel({ cancelled: true }); await telling; await tick();
+  const urgent = w.task();
+  assert.equal(first.status, 'stopped');
+  assert.equal(second.status, replace ? 'stopped' : 'queued');
+  assert.equal(urgent.status, 'working');
+  assert.equal(w.runs.length, 2);
+  assert.equal(w.runs[1].taskId, urgent.id);
+  assert.equal(w.runs[1].task, 'What makes sunsets red?');
+  await w.api.submit({ action: 'complete', taskId: first.id, failed: '已取消' }, col); await tick();
+  assert.equal(urgent.status, 'working', 'late A receipt must not finish C or start B');
+  assert.equal(w.runs.length, 2);
+  await w.api.submit({ action: 'complete', taskId: urgent.id, result: 'Urgent answer' }, col); await tick();
+  assert.equal(second.status, replace ? 'stopped' : 'working');
+  assert.equal(w.runs.length, replace ? 2 : 3);
+  if (!replace) assert.equal(w.runs[2].taskId, second.id);
+  assert.equal(w.shellInputs.length, 0);
 });
 
 test('a hot renderer reload recovers the completed native receipt without repeating the question', async () => {

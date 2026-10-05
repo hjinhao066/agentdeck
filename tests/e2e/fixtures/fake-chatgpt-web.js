@@ -9,7 +9,7 @@ const input = option('--file');
 const output = option('--out');
 const eventsDir = process.env.CHATGPT_WEB_TEST_EVENTS_DIR;
 const question = fs.readFileSync(input, 'utf8');
-const scenario = question.match(/\[(FIRST|SECOND|LOGIN_REQUIRED|RATE_LIMITED|TIMEOUT)\]/)?.[1] || 'SUCCESS';
+const scenario = question.match(/\[(FIRST|SECOND|NOW_[ABC]|REPLACE_[ABC]|LOGIN_REQUIRED|RATE_LIMITED|TIMEOUT)\]/)?.[1] || 'SUCCESS';
 const startedAt = Date.now();
 const record = (event) => {
   if (!eventsDir) return;
@@ -19,7 +19,7 @@ const record = (event) => {
 
 async function main() {
   record('begin');
-  if (eventsDir && ['FIRST', 'SECOND'].includes(scenario)) {
+  if (eventsDir && (['FIRST', 'SECOND'].includes(scenario) || /^(NOW|REPLACE)_/.test(scenario))) {
     const gate = path.join(eventsDir, 'release-' + scenario);
     const deadline = Date.now() + 30000;
     while (!fs.existsSync(gate) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 25));
