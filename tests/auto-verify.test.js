@@ -177,6 +177,20 @@ test('a reviewer that finishes without a clear verdict never passes the card', (
   assert.match(result.notices[0], /结论不明确/); assert.equal(result.card.rework_count, 0); assert.equal(result.card.review_reject, undefined);
   assert.equal(store.reviewDue(get(card.id)), false);
 });
+test('an unclear verdict after a rejection does not wipe the failure count that holds the card', (t) => {
+  const { store, add, bind, event, get, executed, reviewer } = fixture(t);
+  const card = add(); executed(card.id);
+  bind(card.id, reviewer(card.id, 1), 'rev1');
+  event(card.id, 'failed', '不通过：第一轮', reviewer(card.id, 1), 'rev1');
+  bind(card.id, AV.reworkAttemptId(card.id, 1), 'worker');
+  event(card.id, 'complete', '返工完成', AV.reworkAttemptId(card.id, 1), 'worker');
+  assert.equal(get(card.id).consecutive_failures, 1); assert.equal(get(card.id).review_round, 2);
+  bind(card.id, reviewer(card.id, 2), 'rev2');
+  const unclear = event(card.id, 'complete', '看起来都不错', reviewer(card.id, 2), 'rev2').card;
+  assert.equal(unclear.status, 'review'); assert.equal(unclear.review_block.round, 2);
+  assert.equal(unclear.consecutive_failures, 1, 'not a pass, so the earlier rejection still counts');
+  assert.equal(unclear.rework_count, 1); assert.equal(store.reviewDue(unclear), false);
+});
 test('review passes with 通过; a plain failure or a "不通过" completion is a rejection that keeps the reviewer\'s full words', (t) => {
   const { store, add, bind, event, get, executed, reviewer } = fixture(t);
   const pass = add(); executed(pass.id); bind(pass.id, reviewer(pass.id, 1), 'rev');

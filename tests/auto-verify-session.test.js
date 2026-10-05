@@ -167,6 +167,27 @@ test('rejection goes back to the executor verbatim, an archived executor is rest
   assert.equal(held.status, 'doing'); assert.notEqual(app.card(card.id).status, 'done');
 });
 
+test('a rework waits out a confirmation prompt and is sent once, without being marked delivered early', async (t) => {
+  const w = world(t); const app = w.boot();
+  const card = await newCard(app);
+  const exec = await app.execute(card); await app.finish(exec, '做完'); await app.scan();
+  await app.finish(app.reviewers(card)[0], 'x', { failed: '不通过：缺断言' });
+  app.entries.get(exec.id).state = 'input';
+  await app.scan(); await app.scan();
+  assert.equal(app.texts(exec).length, 1, 'the prompt blocks the rework message');
+  assert.equal(app.card(card.id).review_reject.delivered, false);
+  assert.equal(app.card(card.id).flag, 'failed');
+  assert.equal(app.card(card.id).attempt_id, AV.reviewAttemptId(card.id, 1), 'not rebound until the message can go in');
+  app.entries.get(exec.id).state = 'done';
+  await app.scan();
+  assert.equal(app.texts(exec).length, 2);
+  assert.ok(app.texts(exec).at(-1).includes('不通过：缺断言'));
+  assert.equal(app.card(card.id).review_reject.delivered, true);
+  assert.equal(app.card(card.id).attempt_id, AV.reworkAttemptId(card.id, 1));
+  await app.scan();
+  assert.equal(app.texts(exec).length, 2, 'a later heartbeat does not send it again');
+});
+
 test('a rejection whose executor session no longer exists goes to the Captain instead of being lost or retried', async (t) => {
   const w = world(t); const app = w.boot();
   const card = await newCard(app);

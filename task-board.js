@@ -333,7 +333,6 @@ class TaskStore {
         card.status = card.review_session || !card.verify ? 'done' : 'review';
         card.flag = null; card.resource_failure = null; card.attempt_closed = true;
         // Passing execution is not a passed verification; retain review failures.
-        if (card.status === 'done') card.consecutive_failures = 0;
         if (card.status === 'review' && card.verify) {
           // A new round of verification: a fresh number, so each round gets exactly one
           // reviewer. The full receipt and who ran it are kept because the reviewer
@@ -348,6 +347,9 @@ class TaskStore {
           card.review_block = { round: card.review_round || 0, reason: '审查会话的回执没有以「通过」或「不通过」开头，结论不明确', at: new Date().toISOString() };
           notices.push(`卡片 ${card.id} 的审查结论不明确，已留在待验收，请队长查看审查会话的回执后处理。`);
         }
+        // An unclear verdict is put back into review above; it is not a pass, so it
+        // must not wipe the failures that still count toward holding the card.
+        if (card.status === 'done') card.consecutive_failures = 0;
       }
       if (type === 'failed') {
         const reason = text(input.message, 'failure', true);

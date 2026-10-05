@@ -1225,6 +1225,15 @@
       if (old) { col = host.restoreArchived(old.id, false, true); restored = true; }
     }
     if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
+    // Refuse before rebinding. bind() consumes a pending automatic rework, so a
+    // prompt or a bare shell must not mark that rework delivered when nothing was sent.
+    const entry = host.terms.get(col.id);
+    if (!restored) {
+      if (entry && entry.state === 'input' && !message.now) throw new Error(`「${host.columnLabel(col)}」停在确认提示上：有把握就用 answer 回答它，没把握就请用户去那一列处理。`);
+      if (!col.cmd && !(await host.agentInForeground(col, false))) {
+        throw new Error(`「${host.columnLabel(col)}」里只有 shell，没有在运行的 agent，不能把活发进去。请用 new 开一个新会话来做。`);
+      }
+    }
     if (col.boardId) {
       const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === col.boardId);
       if (card && (card.attempt_closed || !card.session_id) && (!restored || card.status === 'doing' && card.flag !== 'held')) {
@@ -1236,12 +1245,6 @@
     if (restored) {
       dispatch(col, text, host.columnLabel(col));
       return { done: true, result: `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。` };
-    }
-    const entry = host.terms.get(col.id);
-    if (entry && entry.state === 'input' && !message.now) throw new Error(`「${host.columnLabel(col)}」停在确认提示上：有把握就用 answer 回答它，没把握就请用户去那一列处理。`);
-    // a bare shell with no agent to start would run the text as commands
-    if (!col.cmd && !(await host.agentInForeground(col, false))) {
-      throw new Error(`「${host.columnLabel(col)}」里只有 shell，没有在运行的 agent，不能把活发进去。请用 new 开一个新会话来做。`);
     }
     const busy = entry && (entry.state === 'working' || entry.state === 'quota');
     if (message.replace) cancelSupplement(col.id);
