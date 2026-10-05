@@ -47,6 +47,7 @@ const captainStopped = (t) => !!t && t.status === 'stopped' && (['captain-stop',
 const isReviewer = (t) => AutoVerify.isReviewAttempt(t.boardAttempt) || (Array.isArray(t.reviews) && t.reviews.length > 0);
 // A crash or a quota stop of a reviewer is not a finding.
 const INFRA = ['quota', 'process', 'resume', 'automatic', 'fallback'];
+const INFRA_TEXT = /^(?:额度用尽|请求被限流|未登录|agent 进程异常退出|这个会话|续接失败|30 分钟内一直发不出去)/;
 
 const one = (value, max) => {
   const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
@@ -141,7 +142,7 @@ function sessionState(ctx, id) {
     return captainStopped(last) ? { code: 'archived', group: 'interrupted', label: '被中断·队长叫停并归档' } : { code: 'archived', group: 'ended', label: '已结束·已归档，tell 可恢复' };
   }
   if (!live.alive) return { code: 'exited', group: 'ended', label: '已结束·终端已退出' };
-  if (last && (last.status === 'paused' || last.restartHold)) return { code: 'resuming', group: 'interrupted', label: '被中断·重启后程序自动续接中' };
+  if (last && last.status === 'paused') return { code: 'resuming', group: 'interrupted', label: '被中断·重启后程序自动续接中' };
   if (live.state === 'working') return { code: 'working', group: 'running', label: '运行中' };
   if (live.state === 'input') return { code: 'input', group: 'running', label: '运行中·停在确认提示' };
   if (live.state === 'quota') return { code: 'quota', group: 'interrupted', label: '被中断·额度用尽，等待中' };
@@ -165,7 +166,7 @@ function reviewOf(t, kind) {
   const r = t.receipt || {};
   let verdict = 'pending';
   if (closed) {
-    if (t.status === 'stopped' || INFRA.includes(r.source) || !(r.failed || r.summary)) verdict = 'none';
+    if (t.status === 'stopped' || INFRA.includes(r.source) || INFRA_TEXT.test(r.failed || '') || !(r.failed || r.summary)) verdict = 'none';
     else if (r.failed) verdict = 'fail';
     else verdict = AutoVerify.verdict(r.summary);
   }
@@ -205,7 +206,11 @@ function deriveCard(card, ctx) {
   const attemptOpen = !!bound && !card.attempt_closed;
   const current = bound ? lastReal(own.filter((t) => t.colId === bound && (!card.attempt_id || !t.boardAttempt || t.boardAttempt === card.attempt_id))) : null;
   const queued = ctx.waitlist.find((w) => w.metadata?.boardId === card.id);
-  const executorId = card.review_session === true ? card.exec_receipt?.session_id || '' : bound || card.exec_receipt?.session_id || lastReal(runs)?.colId || '';
+  // A reviewer bound with new --task-id --reviews while the card was not in review:
+  // the board files it as the executor, its dispatch record says whom it reviews.
+  const misfiled = attemptOpen && card.review_session !== true && !!current && isReviewer(current);
+  const reviewing = card.review_session === true || misfiled;
+  const executorId = reviewing ? card.exec_receipt?.session_id || lastReal(runs)?.colId || '' : bound || card.exec_receipt?.session_id || lastReal(runs)?.colId || '';
   const deps = (Array.isArray(card.depends_on) ? card.depends_on : []).map((id) => ctx.cards.find((c) => c.id === id)).filter((c) => c && c.status !== 'done');
   const blockers = [], conflicts = [], roles = [];
   const role = (name, id, note) => {
@@ -218,7 +223,9 @@ function deriveCard(card, ctx) {
   // ---- verdict: board facts first, then reviews the board never saw ----
   let verdict = { code: card.verify ? 'none' : 'na', label: VERDICT[card.verify ? 'none' : 'na'] };
   const reject = card.review_reject && card.review_reject.round === round ? card.review_reject : null;
-  if (card.status === 'review') {
+  const reviewerLost = card.review_session === true && card.status === 'doing' && card.flag === 'failed' && !reject && /:failed:(?:process|automatic|resume):/.test(card.last_event || '');
+  if (reviewerLost) verdict = { code: 'none', label: `未验收（第 ${round} 轮审查会话异常退出，没有结论）` };
+  else if (card.status === 'review') {
     const block = card.review_block && card.review_block.round === round ? card.review_block : null;
     verdict = block ? { code: 'unclear', label: `未验收（第 ${round} 轮：${one(block.reason, 80)}）` }
       : { code: 'pending', label: card.review_session === true ? `未验收（第 ${round} 轮审查中）` : `未验收（第 ${round} 轮，等审查会话）` };
@@ -233,7 +240,7 @@ function deriveCard(card, ctx) {
   const openReview = reviews.filter((r) => !r.closed).at(-1) || null;
   const after = lastReview ? runs.filter((t) => (t.sentAt || 0) > lastReview.at) : [];
   // The board already recorded this rejection (flag, or a newer bound attempt).
-  const recorded = lastReview && (['failed', 'held'].includes(card.flag) || (card.status === 'doing' && (reject || card.rework_count > 0)));
+  const recorded = lastReview && !reviewerLost && (['failed', 'held'].includes(card.flag) || (card.status === 'doing' && (reject || card.rework_count > 0)));
   let unresolved = false;
   if (openReview && card.status !== 'review') verdict = { code: 'pending', label: `未验收（${openReview.id} 审查中）` };
   else if (lastReview && !recorded) {
@@ -260,10 +267,12 @@ function deriveCard(card, ctx) {
     if (card.flag === 'held') set('held', 'paused', '暂停（连续失败 2 次，已挂起）');
     else if (card.flag === 'quota') set('quota', 'paused', '暂停（额度或资源不足）');
     else if (card.flag === 'failed') {
-      if (reject && !reject.delivered) set('rework_pending', 'rework', '返工（验收不通过，审查意见待自动发回）');
+      if (reviewerLost) set('review_lost', 'review', '待验收（审查会话异常退出，没有结论）');
+      else if (reject && !reject.delivered) set('rework_pending', 'rework', '返工（验收不通过，审查意见待自动发回）');
       else if (reject || card.rework_count > 0 && card.review_round) set('rework', 'rework', '返工（验收不通过，待把意见发回原执行会话）');
       else set('failed', 'rework', '返工（上一轮执行失败，待重派）');
     } else if (attemptOpen && captainStopped(current)) set('stopped', 'paused', '暂停（已被队长叫停）');
+    else if (misfiled && holdsWork(boundState)) set('reviewing', 'review', '待验收（审查中）');
     else if (attemptOpen && boundState.code === 'resuming') set('resuming', 'doing', '执行中（重启后程序自动续接中）');
     else if (attemptOpen && holdsWork(boundState)) set('doing', card.rework_count > 0 ? 'rework' : 'doing', card.rework_count > 0 ? `返工（第 ${card.rework_count} 次返工执行中）` : '执行中');
     else if (queued || card.dispatch_wait) set('queued', 'doing', '执行中（排队等空位或额度）');
@@ -277,8 +286,9 @@ function deriveCard(card, ctx) {
   }
 
   // ---- who is on it ----
-  if (bound) role(card.review_session === true ? '审查' : '执行', bound);
-  if (card.review_session === true && card.exec_receipt?.session_id) role('原执行', card.exec_receipt.session_id);
+  if (bound) role(reviewing ? '审查' : '执行', bound);
+  if (reviewing && executorId) role('原执行', executorId);
+  if (misfiled) conflicts.push(`看板把审查会话 ${bound} 记成了执行会话，它的回执会被当成执行回执；结论以它回执的开头为准`);
   if (card.dispatch_session_id) role('调度', card.dispatch_session_id);
   for (const r of reviews) if (!r.closed || r === lastReview) role(r.kind === 'external' ? '外部审查' : '审查', r.id, r.closed ? '结论' + (r.verdict === 'none' ? '没有给出' : VERDICT[r.verdict]) : '');
   for (const t of runs) if (OPEN.includes(t.status) && t.colId && holdsWork(sessionState(ctx, t.colId))) role('执行', t.colId);
@@ -310,7 +320,8 @@ function deriveCard(card, ctx) {
 
   // ---- what to do next, and when ----
   const exec = executorId || '原执行会话';
-  const onCard = `new --task-id ${card.id} --project ${JSON.stringify(String(card.project || ''))}`;
+  // The card id alone is enough for the CLI (it takes the project from the card) and is safe to paste into a shell.
+  const onCard = `new --task-id ${card.id}`;
   const NEXT = {
     doing: [`等 ${bound} 的回执；回执后程序自动${card.verify ? '转待验收并开审查' : '置完成'}。不要另开执行者，补充用 tell`, `等 ${bound} 回执`],
     resuming: [`程序正在自动续接（真续接或重发），约 1 分钟后用 ledger 确认；不要重派`, '等自动续接，不重派'],
@@ -319,7 +330,10 @@ function deriveCard(card, ctx) {
     orphan: [`先核实：ledger，再 peek ${bound || '相关会话'}。确认没人在做，再在原卡下接手：${onCard}，任务里写清前次结果和剩余工作`, '核实后在原卡下接手'],
     stopped: [`已被队长叫停：没有用户或队长的新指令不要重派。要恢复就 tell ${bound}，或确认后在原卡下新开`, '已叫停，无新指令不重派'],
     review_wait: ['程序会自动开一个不同提供方的审查会话，不要自己开；几分钟后仍没开就看卡片上的原因', '等程序开审查'],
-    reviewing: [`等审查会话 ${bound} 的结论：通过则完成，不通过则程序把原话发回原执行会话返工`, `等 ${bound} 结论`],
+    reviewing: [misfiled
+      ? `等审查会话 ${bound} 的结论，按它回执的开头判断通过与否；看板会把这份回执当成执行回执，结论出来后用 task move --id ${card.id} 把卡片改到对应状态`
+      : `等审查会话 ${bound} 的结论：通过则完成，不通过则程序把原话发回原执行会话返工`, `等 ${bound} 结论`],
+    review_lost: [`审查会话没给出结论就退出了：task move --id ${card.id} --status review，再用 ${onCard} 指定一个审查者重审；不要当成不通过打回`, '重新指定审查者'],
     review_blocked: [`队长处理：用 ${onCard} 指定一个审查者，或 task move --id ${card.id} --status doing 打回、--status done 通过`, '队长指定审查者或手动判定'],
     rework_pending: [`程序会把审查意见自动发回 ${exec}（已归档会自动恢复），不要另开`, '等程序发回返工'],
     rework: [`把审查意见 tell 给 ${exec}（已归档会自动恢复），不要另开执行者；最多返工 2 轮`, `tell ${exec} 返工`],
@@ -408,7 +422,7 @@ function derive(snapshot) {
   const notes = parseDecisions(ctx.decisions.text);
   const dependents = (id) => ctx.cards.filter((c) => c.status !== 'done' && (c.depends_on || []).includes(id)).map((c) => c.id);
   const forUser = cards.filter((c) => c.code === 'needs_user').map((c) => ({ id: c.id, title: c.title, question: c.blockers.find((b) => b.startsWith('等用户回答：'))?.slice(6) || '', blocks: dependents(c.id) }));
-  const forCaptain = cards.filter((c) => ['held', 'review_blocked', 'needs_check', 'rework_open', 'orphan', 'failed'].includes(c.code));
+  const forCaptain = cards.filter((c) => ['held', 'review_blocked', 'review_lost', 'needs_check', 'rework_open', 'orphan', 'failed'].includes(c.code));
   const conflicts = cards.flatMap((c) => c.conflicts.map((text) => ({ id: c.id, text })));
 
   const latestUser = ctx.userTurns.reduce((max, t) => Math.max(max, t.ts || 0), 0);
@@ -462,7 +476,7 @@ function render(state, level) {
   if (ctx.captain.rotation) out.push(`- 队长轮换：${one(ctx.captain.rotation, 160)}。谁接任队长只看这项设置，和队员用什么模型无关；交接不改它`);
 
   // 2
-  const file = ctx.paths.decisions || DECISIONS_FILE;
+  const file = ctx.decisions.path || ctx.paths.decisions || DECISIONS_FILE;
   const stale = state.unsorted.length && state.recorded ? `；此后还有 ${state.unsorted.length} 条用户消息没整理进来，以原文为准` : '';
   out.push('', '## 2. 当前目标和有效决定');
   out.push(`来源：队长维护的 ${file}（${state.mtime ? '最后修改 ' + when(state.mtime) : '还没有这份文件'}${stale}）。程序原样引用，不判断语义。`);
@@ -535,7 +549,7 @@ function render(state, level) {
   else if (L.history === 'count' && started.some((c) => c.history.length)) omitted.push('旧轮次明细');
   if (!L.result && started.some((c) => c.result)) omitted.push(`结果摘要（ledger 或 task list 查）`);
   if (fresh.length) {
-    out.push(`- 【待执行】还没启动的 ${fresh.length} 张（在第 2 节授权范围内且没被暂停时再派：new --task-id 卡片id --project "项目"）：`);
+    out.push(`- 【待执行】还没启动的 ${fresh.length} 张（在第 2 节授权范围内且没被暂停时再派：new --task-id 卡片id）：`);
     for (const c of fresh) out.push(`  - ${c.id}｜${c.project}｜${one(c.title, L.title)}${c.blockers.length ? '｜' + c.blockers.join('；') : ''}`);
   }
   for (const l of state.loose) {
@@ -549,7 +563,7 @@ function render(state, level) {
   if (!state.pending.length) out.push('- 未读回执和提问：无');
   else { out.push(`- 未读回执和提问 ${state.pending.length} 条（会经 receipts 通道送达，到时再处理，不要照这里重复派活）：`); state.pending.forEach((p) => out.push(item(p))); }
   if (state.unconfirmed.length) {
-    out.push(`- ${ctx.reason === 'refresh' ? '已取走、所在轮次还没结束' : '上任已取走、可能没处理完'}的回执 ${state.unconfirmed.length} 条（不会再经通道送达，逐条核对是否已处理）：`);
+    out.push(`- ${ctx.reason === 'refresh' ? '你已取走、还没处理完' : '上任已取走、可能没处理完'}的回执 ${state.unconfirmed.length} 条（不会再经通道送达，逐条核对是否已处理）：`);
     state.unconfirmed.forEach((p) => out.push(item(p)));
   }
   if (state.carried.length) {
@@ -573,8 +587,8 @@ function render(state, level) {
   const ids = (cards) => (!cards.length ? '无' : cards.length <= 4 ? cards.map((c) => c.id).join('、')
     : `${cards.length} 张，第 4 节里标着${[...new Set(cards.map((c) => `【${c.label}】`))].join('')}的`);
   const waitFor = state.cards.filter((c) => ['doing', 'resuming', 'queued', 'dispatching', 'reviewing', 'rework_pending'].includes(c.code));
-  const takeOver = state.cards.filter((c) => ['orphan', 'failed'].includes(c.code));
-  const toReview = state.cards.filter((c) => ['review_wait', 'review_blocked', 'rework', 'rework_open'].includes(c.code));
+  const takeOver = state.cards.filter((c) => ['orphan', 'failed', 'needs_check'].includes(c.code));
+  const toReview = state.cards.filter((c) => ['review_wait', 'review_blocked', 'review_lost', 'rework', 'rework_open'].includes(c.code));
   const gated = state.cards.filter((c) => ['blocked', 'quota', 'held', 'needs_user', 'stopped', 'todo'].includes(c.code));
   const PLAN = {
     paused: '第 2 节有生效中的暂停或取消项：这些事项不续派、不重启，运行中的会话和旧的续活计划都不能推翻它。其余已授权任务照下面的顺序核对后续接；范围拿不准先问用户。',

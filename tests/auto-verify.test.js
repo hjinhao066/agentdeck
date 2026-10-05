@@ -86,7 +86,9 @@ test('the review task carries the card, the full receipt, its files, the reviewe
   const receipt = { text: '第一句。第二句很重要。\n第三行', files: ['/Users/x/a.js', '/Users/x/shot.png'], session_id: 'c-board-exec', assignee: { agent: 'Codex', model: 'gpt-6.1-sol' } };
   const text = AV.reviewPrompt({ card, receipt });
   for (const part of ['t-1', '项目', '修好登录', '详细说明', '第二句很重要。\n第三行', '/Users/x/a.js', '/Users/x/shot.png', 'c-board-exec', 'Codex / gpt-6.1-sol',
-    '确认真的存在', '已经推送', '只跑和这次改动相关', '不跑全量 E2E', '截图', '删除测试用例', '放宽断言', '只审不改', '通过', '不通过', 'complete --failed']) assert.ok(text.includes(part), part);
+    '确认真的存在', '已经推送', '只跑和这次改动相关', '不跑全量 E2E', '截图', '删除测试用例', '放宽断言', '只审不改', '通过', '不通过', 'complete --result "不通过" --failed']) assert.ok(text.includes(part), part);
+  // the CLI refuses `complete` without --result, so the reject command it is taught must carry one
+  assert.doesNotMatch(text, /complete --failed/);
   assert.ok(!text.includes('只有第一句。'));
   assert.match(AV.reviewPrompt({ card, receipt: { text: 'x', files: [] } }), /（回执没有列出文件）/);
 });

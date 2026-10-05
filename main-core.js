@@ -72,7 +72,8 @@
   const MAX_FILES = 10;
   const MAX_PATH = 500;
   const TOKEN_SAVER_DEFAULT = 150_000;
-  const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档';
+  // The last moment the outgoing context still holds the user's words: decisions go to the file the handoff quotes.
+  const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板；用户的有效决定、暂停或取消、交付状态有变化的，一并更新到 ~/.agents/boards/agentdeck-captain-decisions.md。写完只回复 已存档';
   // The closing paragraph. What to do on arrival depends on the live state, so
   // it only points at `handoff`; the stable release and concurrency habits stay here.
   const AUTONOMOUS_CONTINUATION = '开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项；Relay、清空或重启后有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派。有活可派时至少保持 3 个并行：额度紧时保持 3–5 个活并行，额度多时开十几个。发版：1.1.11 之后每版进一位，叫 1.2、1.3、1.4；打包、核对、冒烟和安装脚本都做完、只差执行安装（约 5 分钟内能重启）才通知队员存档停下，之前照常干活、照常派新活；耗时长的停在安全点并记录进度，快收尾的短暂等待；存档后直接安装并重启，不再请示。';

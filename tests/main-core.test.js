@@ -478,7 +478,8 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关/);
   assert.match(text, /汇报核对完的会话立即 archive，还在验收的先留着/);
   // Commands as the CLI takes them: one line each, the keys answer really accepts.
-  assert.equal(text.split('\n').filter((line) => / briefing /.test(line) || / handoff /.test(line)).length, 1);
+  assert.equal(text.split('\n').filter((line) => /AGENTDECK_BOARD_CLI" (?:briefing|handoff)/.test(line)).length, 1, 'handoff and briefing share one line');
+  assert.match(text, /AGENTDECK_BOARD_CLI" handoff {3}生成当前交接快照[^\n]*briefing 只读本提示词全文/);
   assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc/);
   assert.ok(!/ {4,}\S/.test(text.split('\n').filter((line) => line.includes('AGENTDECK_BOARD_CLI')).join('\n')), 'no alignment padding in the command list');
   assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);

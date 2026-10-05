@@ -36,7 +36,8 @@ const receipt = (summary, extra = {}) => ({ summary, files: [], failed: '', expl
 const session = (id, state = 'working', extra = {}) => ({ id, title: id, state, alive: true, crew: true, ...extra });
 const build = (snapshot) => H.build({ now: NOW, timeZone: 'America/Los_Angeles', ...snapshot });
 const section = (text, n) => text.slice(text.indexOf(`\n## ${n}.`), text.indexOf(`\n## ${n + 1}.`) < 0 ? undefined : text.indexOf(`\n## ${n + 1}.`));
-const cardLines = (text) => section(text, 4).split('\n').filter((l) => /^- 【/.test(l) || /^ {2}- (?:t-|[\w-]+｜)/.test(l));
+// One row per unfinished task: a record of its own, or a line under the not-started header.
+const cardLines = (text) => section(text, 4).split('\n').filter((l) => (/^- 【/.test(l) && !/^- 【待执行】还没启动的 \d+ 张/.test(l)) || /^ {2}- (?:t-|[\w-]+｜)/.test(l));
 
 test('a card executed three times is one record: who has it now, what is left, where the old rounds are', (t) => {
   const f = fixture(t);
@@ -134,6 +135,37 @@ test('a reviewer that ends with 不通过 never leaves the task done: on the boa
   rec = built.state.cards.find((c) => c.id === auto.id);
   assert.equal(rec.code, 'rework_pending'); assert.match(rec.result, /审查意见：不通过：1\) 截图没落盘/);
   assert.match(rec.next, /程序会把审查意见自动发回 worker/);
+  // a reviewer bound with new --task-id --reviews while the card was not in review: the board
+  // files it as the executor; the handoff still reads it as a review, and says the board has it wrong
+  const final = f.add({ verify: true, title: '集成与打包' });
+  f.bind(final.id, 'i1', 'packer', 'Codex', 'gpt-6.1-sol'); f.event(final.id, 'complete', 'release 分支已推送。', 'i1', 'packer'); f.live.push({ id: 'packer', archived: true });
+  f.store.move({ id: final.id, status: 'doing', suppressDispatch: true });
+  f.bind(final.id, 'i2', 'finalrev'); f.event(final.id, 'started', '', 'i2', 'finalrev');
+  assert.equal(f.get(final.id).review_session, false);
+  built = build({ cards: f.cards(), sessions: [session('finalrev')], archivedIds: ['packer'], dispatches: [
+    record('packer', 'done', { boardId: final.id, boardAttempt: 'i1', receipt: receipt('release 分支已推送。') }),
+    record('finalrev', 'working', { boardId: final.id, boardAttempt: 'i2', reviews: ['packer'] }),
+  ] });
+  rec = built.state.cards.find((c) => c.id === final.id);
+  assert.equal(rec.code, 'reviewing'); assert.equal(rec.group, 'review'); assert.equal(rec.executor, '');
+  assert.deepEqual(rec.roles.map((r) => `${r.role} ${r.id}`), ['审查 finalrev', '原执行 packer']);
+  assert.match(rec.conflicts[0], /看板把审查会话 finalrev 记成了执行会话/);
+  assert.match(rec.verdict.label, /未验收（finalrev 审查中）/);
+  // a reviewer that ran out of quota gave no verdict either: nothing is held against a finished card
+  const fine = f.add({ title: '没问题的卡' });
+  f.bind(fine.id, 'q1', 'doer'); f.event(fine.id, 'complete', '做完了。', 'q1', 'doer');
+  assert.equal(build({ cards: f.cards().filter((c) => c.id === fine.id), archivedIds: ['doer', 'broke'], dispatches: [
+    record('doer', 'done', { boardId: fine.id, boardAttempt: 'q1', receipt: receipt('做完了。') }),
+    record('broke', 'failed', { reviews: ['doer'], receipt: { summary: '', failed: '额度用尽：You\'ve hit your usage limit', explicit: true, files: [] } }),
+  ] }).state.cards.length, 0);
+  // a reviewer that crashed said nothing: the card is neither passed nor rejected
+  const crashed = f.add({ verify: true, title: '审查会话挂了的卡' });
+  f.bind(crashed.id, 'y1', 'worker2', 'Codex', 'gpt-6.1-sol'); f.event(crashed.id, 'complete', '好了。', 'y1', 'worker2'); f.live.push({ id: 'worker2', archived: true });
+  f.bind(crashed.id, AV.reviewAttemptId(crashed.id, 1), 'autorev2', 'Antigravity', 'gemini-3.8-flash-high');
+  f.event(crashed.id, 'failed', 'agent 进程异常退出（exit 7）', AV.reviewAttemptId(crashed.id, 1), 'autorev2', 'process');
+  rec = build({ cards: f.cards(), archivedIds: ['worker2', 'autorev2'] }).state.cards.find((c) => c.id === crashed.id);
+  assert.equal(rec.code, 'review_lost'); assert.equal(rec.group, 'review'); assert.equal(rec.verdict.code, 'none');
+  assert.match(rec.verdict.label, /审查会话异常退出，没有结论/); assert.match(rec.next, /不要当成不通过打回/);
 });
 
 test('the summary and the task list are the same snapshot: the counts match the rows, and every running session is on the page', (t) => {
@@ -276,9 +308,9 @@ test('the length budget squeezes explanations, never an unfinished task, a block
   }
   const blocked = f.add({ title: '被挡住的', depends_on: [ids[0]] }); ids.push(blocked.id);
   const limits = ['[10-04 22:50] Windows 升级先停，等用户回来', '[10-04 23:10] 不许动登录凭证'];
-  const decisions = { path: '/b/decisions.md', mtime: NOW, text: `## 暂停/取消/暂不启动\n${limits.map((l) => '- ' + l).join('\n')}\n## 有效决定\n- [10-04 21:00] 1.1.11 之后版本号进一位\n## 等用户决定\n- 是否买第二张重置卡｜不阻塞\n` };
+  const decisions = { path: '/b/decisions.md', mtime: NOW - 6.5 * 60_000, text: `## 暂停/取消/暂不启动\n${limits.map((l) => '- ' + l).join('\n')}\n## 有效决定\n- [10-04 21:00] 1.1.11 之后版本号进一位\n## 等用户决定\n- 是否买第二张重置卡｜不阻塞\n` };
   const userTurns = Array.from({ length: 12 }, (_, i) => ({ ts: NOW - (12 - i) * 60_000, text: `第 ${i} 条用户消息 ` + '说了很多话'.repeat(80), sourceId: 'cap-old' }));
-  const snapshot = { cards: f.cards(), dispatches, sessions, decisions, userTurns, captain: { previousId: 'cap-old', gen: 7 },
+  const snapshot = { reason: 'relay', cards: f.cards(), dispatches, sessions, decisions, userTurns, captain: { previousId: 'cap-old', gen: 7 },
     pending: [{ taskId: 'k', colId: 's1', title: '回执', summary: long }], unconfirmed: [{ receiptId: 'r-1', colId: 's5', title: '上任取走的', summary: long }] };
   const roomy = build({ ...snapshot, budget: 60000 });
   const tight = build({ ...snapshot, budget: 4000 });
@@ -333,7 +365,11 @@ test('states are told apart: the session, the task, the verdict and the delivery
   const by = (card) => built.state.cards.find((c) => c.id === card.id);
   // a session whose only record is bookkeeping and whose terminal is idle is not an executor
   assert.equal(by(quiet).code, 'orphan'); assert.match(by(quiet).conflicts[0], /卡片仍绑定 s-quiet，但它已结束·终端空闲/);
-  assert.match(by(quiet).next, /先核实[^\n]*确认没人在做，再在原卡下接手：new --task-id \S+ --project "p"，任务里写清前次结果和剩余工作/);
+  assert.match(by(quiet).next, /先核实[^\n]*确认没人在做，再在原卡下接手：new --task-id \S+，任务里写清前次结果和剩余工作/);
+  // nothing a shell would expand is pasted into a command the Captain may run: the card id alone names the project
+  const odd = f.add({ project: '$(touch x)', title: '怪项目' });
+  const oddText = build({ cards: f.cards().filter((c) => c.id === odd.id) }).text;
+  assert.ok(!/--project/.test(oddText)); assert.match(oddText, /new --task-id 卡片id）/);
   assert.equal(by(waiting).group, 'review'); assert.equal(by(waiting).verdict.code, 'pending'); assert.match(by(waiting).label, /待验收（等审查会话）/);
   assert.match(by(waiting).next, /程序会自动开一个不同提供方的审查会话，不要自己开/);
   assert.equal(by(held).code, 'held'); assert.equal(by(held).group, 'paused');

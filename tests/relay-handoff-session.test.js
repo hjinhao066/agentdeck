@@ -81,7 +81,7 @@ function boot(w, persisted) {
       const from = app.captain().id;
       const file = await app.api.checkpointForSeatSwitch({ colId: from, relayMessage: message }, { local: true });
       const fresh = app.api.clearContext({ seatId, checkpointPath: file, relayMessage: message, relayTargetId: seatId });
-      return { from, file, fresh };
+      return { from, file, fresh, id: fresh.id };
     },
     listen: (watcher, startedAt, caller) => app.handle({ action: 'main-receipts', wait: true, watcher, watcherStartedAt: startedAt }, caller),
     receipt: (summary) => app.s().pending.push({ taskId: 'task-' + summary, colId: 'worker', title: summary, ts: Date.now(), summary, files: [] }),
@@ -107,7 +107,7 @@ test('after a Relay the card that is out is named with its owner, cannot be hand
   assert.match(handoff, /摘要：未完成任务 1 条（返工 0｜待验收 0｜执行中 1｜暂停 0｜待执行 0）；在跑的队员会话 1 个/);
   assert.match(handoff, /启动方式：有已授权待办/);
   // the replacement is told who it is, where the state is, and not to redo what is out
-  const note = app.sent.filter((m) => m.id === first.fresh.id).at(-1).text;
+  const note = app.sent.filter((m) => m.id === first.id).at(-1).text;
   assert.match(note, /^你是刚接任的队长：上一任已经 Relay 到这个席位/);
   assert.match(note, /已有会话在做，不要重派/);
   assert.match(note, /先运行 node "\$AGENTDECK_BOARD_CLI" handoff 取交接快照/);
@@ -126,12 +126,12 @@ test('after a Relay the card that is out is named with its owner, cannot be hand
 
   // Relay again straight away: still one Captain, still one owner on the card
   const second = await app.relay('cn', 'Relay：US → CN；手动切换');
-  assert.notEqual(second.fresh.id, first.fresh.id);
-  assert.equal(w.columns.filter((c) => c.isMain).length, 1); assert.equal(app.s().colId, second.fresh.id); assert.equal(app.s().gen, 3);
-  await assert.rejects(app.handle({ action: 'main-tell', to: worker.id, message: '改方向' }, { id: first.fresh.id, isMain: true, cmd: 'claude' }), /只有队长可以用这个命令/);
+  assert.notEqual(second.id, first.id);
+  assert.equal(w.columns.filter((c) => c.isMain).length, 1); assert.equal(app.s().colId, second.id); assert.equal(app.s().gen, 3);
+  await assert.rejects(app.handle({ action: 'main-tell', to: worker.id, message: '改方向' }, { id: first.id, isMain: true, cmd: 'claude' }), /只有队长可以用这个命令/);
   await assert.rejects(app.handle({ action: 'main-new', id: 'third', title: '第三次', task: '做这件事', boardId: card.id, project: 'p', command: CODEX }), /already has an active execution/);
   assert.equal(columns(), 1);
-  assert.match(fs.readFileSync(second.file, 'utf8'), new RegExp(`上任会话：${first.fresh.id}`));
+  assert.match(fs.readFileSync(second.file, 'utf8'), new RegExp(`上任会话：${first.id}`));
   // the worker's receipt after two Relays still lands on the same card, once
   await app.api.submit({ action: 'complete', result: '修好了。' }, worker);
   assert.equal(app.card(card.id).status, 'done');
@@ -208,8 +208,8 @@ test('receipts the CLI took but the Captain never got to are named at the Relay,
   assert.match((await app.listen('a', 1)).result, /taken-but-never-read/);
   app.receipt('still-unread');
   const pending = app.api.handoffSnapshot('relay');
-  assert.deepEqual(pending.unconfirmed.map((p) => p.summary), ['taken-but-never-read']);
-  assert.deepEqual(pending.pending.map((p) => p.summary), ['still-unread']);
+  assert.deepEqual([...pending.unconfirmed].map((p) => p.summary), ['taken-but-never-read']);
+  assert.deepEqual([...pending.pending].map((p) => p.summary), ['still-unread']);
 
   const { file, fresh, from } = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
   const text = fs.readFileSync(file, 'utf8');
@@ -218,7 +218,7 @@ test('receipts the CLI took but the Captain never got to are named at the Relay,
   assert.ok(!text.includes('handled-by-the-old-captain'));
   assert.match(text, /已取走未确认 1 条/); assert.match(text, /启动方式：有已授权待办/);
   // the channel delivers the unread one once, and never the taken ones again
-  assert.deepEqual(app.s().pending.map((p) => p.summary), ['still-unread']);
+  assert.deepEqual([...app.s().pending].map((p) => p.summary), ['still-unread']);
   assert.equal(app.s().handoffCarry.kind, 'relay'); assert.equal(app.s().handoffCarry.fromId, from);
   const next = await app.listen('n', 1, fresh);
   assert.match(next.result, /still-unread/); assert.doesNotMatch(next.result, /taken-but-never-read|handled-by/);
@@ -233,8 +233,9 @@ test('receipts the CLI took but the Captain never got to are named at the Relay,
   const again = boot(w, app.persisted());
   assert.equal(again.s().inflight.length, 0); assert.equal(again.s().pending.length, 0);
   assert.equal(again.s().handoffCarry.kind, 'restart');
-  assert.deepEqual(again.s().handoffCarry.items.map((p) => p.summary), ['taken-but-never-read', 'taken-right-before-quit']);
-  assert.match((await again.handle({ action: 'main-handoff' })).result, /重启前（[^）]*）已取走、可能没处理完的回执 2 条/);
+  // the one the new Captain took after the Relay and never finished a turn on is carried as well
+  assert.deepEqual([...again.s().handoffCarry.items].map((p) => p.summary), ['taken-but-never-read', 'still-unread', 'taken-right-before-quit']);
+  assert.match((await again.handle({ action: 'main-handoff' })).result, /重启前（[^）]*）已取走、可能没处理完的回执 3 条/);
   assert.equal((await again.listen('z', 1)).result, '', 'and still not sent a second time');
 });
 
@@ -291,7 +292,7 @@ test('a manual clear sends again what the old context never dealt with, and not 
   app.receipt('unread');
   const fresh = app.api.clearContext({ fromEdit: true });
   assert.notEqual(fresh.id, 'captain'); assert.equal(app.s().inflight.length, 0);
-  assert.deepEqual(app.s().pending.map((p) => p.summary).sort(), ['taken-not-handled', 'typed-not-acked', 'unread']);
+  assert.deepEqual([...app.s().pending].map((p) => p.summary).sort(), ['taken-not-handled', 'typed-not-acked', 'unread']);
   const next = await app.listen('n', 1, fresh);
   assert.doesNotMatch(next.result, /handled-long-ago/);
   for (const summary of ['taken-not-handled', 'typed-not-acked', 'unread']) assert.match(next.result, new RegExp(summary));
