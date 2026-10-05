@@ -533,6 +533,14 @@
     const settled = Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0;
     return (Array.isArray(s.inflight) ? s.inflight : []).filter((p) => p && typeof p.receiptId === 'string' && seen.has(p.receiptId) && Number.isFinite(p.takenAt) && p.takenAt > settled).map(carryItem);
   }
+  // What an earlier Relay or restart already named. It stays open until 队长 has
+  // finished a stretch of work that began after it was listed: a Captain that took
+  // over and never got to work must pass it on, not drop it.
+  function carriedReceipts(s) {
+    const carry = s.handoffCarry;
+    if (!carry || !Array.isArray(carry.items) || !carry.items.length) return null;
+    return (Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0) > carry.at ? null : carry;
+  }
   function handoffSnapshot(reason, relayMessage) {
     const s = state(), col = mainCol();
     const cols = host.columns();
@@ -561,7 +569,7 @@
       archivedIds: (host.config.archived || []).map((a) => a.id),
       pending: s.pending, inflight: unreadReceipts(s.inflight, seen), unconfirmed: unconfirmedReceipts(s),
       waitlist: s.waitlist.map((w) => ({ taskId: w.taskId, title: w.title, project: w.project || '', metadata: { boardId: w.metadata?.boardId || '' } })),
-      carry: reason === 'relay' ? null : s.handoffCarry || null, userTurns: userTurns.slice(-12),
+      carry: reason === 'relay' ? carriedReceipts(s) : s.handoffCarry || null, userTurns: userTurns.slice(-12),
     };
   }
   function saverFailed(message) {
@@ -726,7 +734,7 @@
     const settled = Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0;
     const dealtWith = (p) => typeof p.receiptId === 'string' && seen.has(p.receiptId) && Number.isFinite(p.takenAt) && p.takenAt <= settled;
     const requeue = rotation ? unreadReceipts(s.inflight, seen) : s.inflight.filter((p) => !dealtWith(p));
-    const unconfirmed = rotation ? unconfirmedReceipts(s) : [];
+    const unconfirmed = rotation ? [...(carriedReceipts(s)?.items || []), ...unconfirmedReceipts(s)].slice(-50) : [];
     s.inflight = [];
     const oldId = col.id;
     if (rotation) s.handoffCarry = unconfirmed.length ? { at: Date.now(), kind: 'relay', fromId: oldId, items: unconfirmed } : null;

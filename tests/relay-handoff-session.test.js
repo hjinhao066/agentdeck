@@ -239,6 +239,38 @@ test('receipts the CLI took but the Captain never got to are named at the Relay,
   assert.equal((await again.listen('z', 1)).result, '', 'and still not sent a second time');
 });
 
+test('Relays in a row: a Captain that never got to work passes on what its predecessor left, and one that did work clears it', async (t) => {
+  const w = world(t); const app = w.boot();
+  const settle = (id) => { app.api.onTick(id, { alive: true, state: 'working', lastScreen: '' }); w.skew += 2000; app.api.onTick(id, { alive: true, state: 'done', lastScreen: '' }); };
+  // A takes a receipt and runs out of quota before reading it
+  app.receipt('left-by-a');
+  assert.match((await app.listen('a', 1)).result, /left-by-a/);
+  const toB = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
+  assert.match(fs.readFileSync(toB.file, 'utf8'), /上任已取走、可能没处理完的回执 1 条[^\n]*\n {2}- 回执｜worker｜「left-by-a」/);
+  // B is out of quota as well: it takes one more and never finishes a turn. The app moves on to C.
+  w.skew += 1000; app.receipt('left-by-b');
+  assert.match((await app.listen('b', 1, toB.fresh)).result, /left-by-b/);
+  w.skew += 1000;
+  const toC = await app.relay('us2', '永动机自动轮换：US → US2；新队长没有开工');
+  const text = fs.readFileSync(toC.file, 'utf8');
+  assert.match(text, /上任已取走、可能没处理完的回执 1 条[^\n]*\n {2}- 回执｜worker｜「left-by-b」/);
+  assert.match(text, new RegExp(`更早一次 Relay（[^）]*，当时的上任 ${toB.from}）已取走、之后也没人处理完的回执 1 条（不会再经通道送达，逐条核对是否已处理）：\\n {2}- 回执｜worker｜「left-by-a」`));
+  assert.match(text, /已取走未确认 2 条/); assert.match(text, /启动方式：有已授权待办/);
+  assert.deepEqual([...app.s().handoffCarry.items].map((p) => p.summary), ['left-by-a', 'left-by-b']);
+  assert.equal(app.s().handoffCarry.fromId, toC.from);
+  // neither is sent through the channel a second time, and C still has both on the page when it asks
+  assert.equal((await app.listen('c', 1, toC.fresh)).result, '');
+  const asked = (await app.handle({ action: 'main-handoff' })).result;
+  assert.match(asked, /left-by-a/); assert.match(asked, /left-by-b/);
+  // C works a full stretch with them in front of it: the next Relay no longer repeats them
+  w.skew += 1000; settle(toC.id); w.skew += 1000;
+  const toD = await app.relay('cn', 'Relay：US2 → CN；手动切换');
+  const last = fs.readFileSync(toD.file, 'utf8');
+  assert.doesNotMatch(last, /left-by-a|left-by-b/); assert.match(last, /已取走、可能没处理完的回执：无/);
+  assert.equal(app.s().handoffCarry, null);
+  assert.equal(w.columns.filter((c) => c.isMain).length, 1); assert.equal(app.s().gen, 4);
+});
+
 test('the handoff command: live state on demand, the same text as the file, Captain only, nothing else touched', async (t) => {
   const w = world(t); const app = w.boot();
   const card = await newCard(app, { title: '在做的' });

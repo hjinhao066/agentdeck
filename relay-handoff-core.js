@@ -358,7 +358,8 @@ function deriveCard(card, ctx) {
     const last = lastReal(own.filter((t) => t.colId === id));
     history.push({ id, outcome: !last ? '' : last.status === 'done' ? '已交回' : last.status === 'failed' ? '失败' : captainStopped(last) ? '叫停' : last.status === 'stopped' ? '未交回执' : '未结束' });
   }
-  const refs = refsIn([card.exec_receipt?.text, card.latest_receipt, ...own.map((t) => receiptText(t.receipt))].join('\n'),
+  // A running task has no receipt yet: its progress line is the only word on where the work is.
+  const refs = refsIn([card.exec_receipt?.text, card.latest_receipt, ...own.map((t) => receiptText(t.receipt)), ...own.filter((t) => OPEN.includes(t.status)).map((t) => t.progress)].join('\n'),
     [...(card.exec_receipt?.files || []), ...own.flatMap((t) => t.receipt?.files || [])]);
   return { id: card.id, project: String(card.project || ''), title: String(card.title || ''), order: Number(card.order) || 0, archived: !!card.archived,
     code, group, label, verdict, roles, executor: executors[0]?.id || '', result, blockers, conflicts, next: NEXT[0], nextShort: NEXT[1], history, refs,
@@ -516,10 +517,10 @@ function render(state, level) {
   out.push(`- 本机：${PLATFORM[ctx.platform] || ctx.platform || '待核实'}${ctx.host ? ' ' + ctx.host : ''}，正在运行 AgentDeck ${ctx.appVersion || '待核实'}（程序自报，取自本快照）。其他机器：待核实，本机看不到`);
   block(`队长记录的交付状态（${state.mtime ? when(state.mtime) + ' 的记录' : '无文件'}）`, notes.delivery, '无记录，待核实');
   const withRefs = state.cards.filter((c) => c.refs.commits.length || c.refs.branches.length || c.refs.files.length);
-  if (!withRefs.length) out.push('- 未完成任务回执里提到的分支、提交、产物：无');
-  else if (!L.refs) { out.push(`- 未完成任务回执里提到分支、提交或产物的有 ${withRefs.length} 张卡，这里不展开：task list --status doing`); omitted.push(`回执里的分支、提交、产物 ${withRefs.length} 张卡`); }
+  if (!withRefs.length) out.push('- 未完成任务的回执和进度里提到的分支、提交、产物：无');
+  else if (!L.refs) { out.push(`- 未完成任务的回执和进度里提到分支、提交或产物的有 ${withRefs.length} 张卡，这里不展开：task list --status doing`); omitted.push(`回执和进度里的分支、提交、产物 ${withRefs.length} 张卡`); }
   else {
-    out.push('- 未完成任务回执里提到的分支、提交、产物（回执自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理）：');
+    out.push('- 未完成任务的回执和进度里提到的分支、提交、产物（队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理）：');
     for (const c of withRefs) {
       const files = c.refs.files.slice(0, Math.max(1, Math.floor(L.files / 3)));
       out.push(`  - ${c.id}｜${[c.refs.branches.length ? '分支 ' + c.refs.branches.join('、') : '', c.refs.commits.length ? '提交 ' + c.refs.commits.join('、') : '', files.length ? '产物 ' + files.join('、') : ''].filter(Boolean).join('｜')}`);
@@ -569,7 +570,11 @@ function render(state, level) {
     state.unconfirmed.forEach((p) => out.push(item(p)));
   }
   if (state.carried.length) {
-    out.push(`- ${ctx.carry.kind === 'restart' ? `重启前（${when(ctx.carry.at)}）` : `上次 Relay（${when(ctx.carry.at)}，上任 ${ctx.carry.fromId || '未知'}）时`}已取走、可能没处理完的回执 ${state.carried.length} 条（不会再经通道送达；核对过就不用再看）：`);
+    const since = ctx.carry.kind === 'restart' ? `重启前（${when(ctx.carry.at)}）` : `Relay（${when(ctx.carry.at)}，${ctx.reason === 'relay' ? '当时的' : ''}上任 ${ctx.carry.fromId || '未知'}）`;
+    // At a Relay these come from before the Captain that is leaving, which never finished a turn on them.
+    out.push(ctx.reason === 'relay'
+      ? `- 更早一次${ctx.carry.kind === 'restart' ? '' : ' '}${since}已取走、之后也没人处理完的回执 ${state.carried.length} 条（不会再经通道送达，逐条核对是否已处理）：`
+      : `- ${ctx.carry.kind === 'restart' ? since : '上次 ' + since + '时'}已取走、可能没处理完的回执 ${state.carried.length} 条（不会再经通道送达；核对过就不用再看）：`);
     state.carried.forEach((p) => out.push(item(p)));
   }
   if (!state.unconfirmed.length && !state.carried.length) out.push('- 已取走、可能没处理完的回执：无');

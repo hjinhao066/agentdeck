@@ -380,10 +380,24 @@ test('states are told apart: the session, the task, the verdict and the delivery
   // delivery: what this machine runs is a fact; what a receipt claims is a claim; other machines are unknown
   assert.match(text, /本机：Mac mac\.local，正在运行 AgentDeck 1\.1\.11（程序自报，取自本快照）。其他机器：待核实，本机看不到/);
   assert.match(text, /队长记录的交付状态[^\n]*：agentdeck 1\.1\.11｜release\/1\.1\.11｜e6794ae｜已提交 是｜已合并 否｜已打包 是｜已安装 Mac：是；Windows：待核实/);
-  assert.match(text, /回执自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理/);
+  assert.match(text, /队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理/);
   assert.match(text, new RegExp(`${waiting.id}｜分支 feat/login｜提交 abc1234｜产物 /reports/login/report\\.md`));
   assert.match(text, /等队长拍板 \d+ 条（已有授权能解决，不要转给用户）/);
   assert.deepEqual(H.refsIn('提交 7eaf2c1 推到 feat/arch-a；卡 t-a3f00db4-6ef2 和会话 c1791172885031680 不算', []).commits, ['7eaf2c1']);
+});
+
+test('a task still running names the branch and commit from its progress, as a claim to check', (t) => {
+  const f = fixture(t);
+  const card = f.add({ title: '在跑的' });
+  f.bind(card.id, 'a1', 's-run'); f.event(card.id, 'started', '', 'a1', 's-run');
+  const old = f.add({ title: '早就做完的' });
+  f.bind(old.id, 'o1', 's-old'); f.event(old.id, 'complete', '已推送 feat/old-work 1234abc', 'o1', 's-old');
+  const built = build({ cards: f.cards(), sessions: [session('s-run')], archivedIds: ['s-old'], dispatches: [
+    record('s-old', 'done', { boardId: old.id, boardAttempt: 'o1', progress: '在 feat/old-work 上', receipt: receipt('已推送 feat/old-work 1234abc') }),
+    record('s-run', 'working', { boardId: card.id, boardAttempt: 'a1', progress: '已合入 release/1.2.0，提交 32918b1 推到 feat/relay-handoff-v2，报告还没写' }),
+  ] });
+  assert.match(section(built.text, 3), new RegExp(`未完成任务的回执和进度里提到的分支、提交、产物（队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理）：\\n {2}- ${card.id}｜分支 release/1\\.2\\.0、feat/relay-handoff-v2｜提交 32918b1`));
+  assert.ok(!section(built.text, 3).includes('feat/old-work'), 'a finished card is not delivery state to chase');
 });
 
 test('quota, relay roles and old messages come with their sampling time and are never restated as current', () => {
