@@ -111,7 +111,7 @@ let config = {
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
-  claudeQuotaAlert: { thresholdPercent: 2, volume: 3 }, barkKeyFile: '',
+  claudeQuotaAlert: { thresholdPercent: 2, volume: 3 }, barkKeyFile: '', needsUserBark: true,
   perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
@@ -126,6 +126,7 @@ config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
   if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
+  if (typeof saved.needsUserBark === 'boolean') config.needsUserBark = saved.needsUserBark;
   if (saved.claudeQuotaAlert && typeof saved.claudeQuotaAlert === 'object') {
     config.claudeQuotaAlert = { ...config.claudeQuotaAlert, ...saved.claudeQuotaAlert };
   }
@@ -615,6 +616,7 @@ function openNotificationSettings() {
   document.getElementById('captainSoundTone').value = settings.tone;
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
   document.getElementById('barkKeyFile').value = config.barkKeyFile;
+  document.getElementById('needsUserBark').checked = config.needsUserBark !== false;
   MainSession.openSettings();
   updateMobileWebSettings();
   dialog.showModal();
@@ -664,6 +666,7 @@ function saveNotificationSettings() {
     tone: document.getElementById('captainSoundTone').value,
   });
   config.barkKeyFile = document.getElementById('barkKeyFile').value.trim();
+  config.needsUserBark = document.getElementById('needsUserBark').checked;
   saveConfig();
 }
 function buildChrome() {
@@ -3419,7 +3422,7 @@ document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
-['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile'].forEach((id) => {
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark'].forEach((id) => {
   document.getElementById(id).addEventListener('change', saveNotificationSettings);
 });
 buildChrome();
