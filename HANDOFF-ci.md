@@ -2,7 +2,7 @@
 
 - Worktree: `/Users/jinhao/agentdeck-ci-e2e`
 - Branch: `fix/ci-e2e-flaky`，从 main `95b7192`（v1.1.6）拉出
-- 远端：`origin/fix/ci-e2e-flaky`，本地与远端都在 `4ed27dd`
+- 远端：`origin/fix/ci-e2e-flaky`。产品代码停在 `4ed27dd`；其后的提交只更新本交接，没有新的修复。
 - 未开 PR，未合 main。不要打包、安装或重启这台机器上的现役 AgentDeck。
 - 完成标准：`macos-14` 和 `windows-2022` 在**同一提交**上连续两次全绿。失败的那次不算，绿必须紧挨着。
 
@@ -101,7 +101,7 @@ Verify [37244334189](https://github.com/hjinhao066/agentdeck/actions/runs/372443
 
 ## 下一步建议
 
-1. 只等 [37247904645](https://github.com/hjinhao066/agentdeck/actions/runs/37247904645)。两边都绿的话，对**同一个** `4ed27dd` 再跑一次 “Verify and package both platforms”，不要夹新提交。连续两次都绿才算做完。
+1. 只等 [37247904645](https://github.com/hjinhao066/agentdeck/actions/runs/37247904645)。它测的是 `4ed27dd`，不是后面的交接提交。两边都绿的话，第二次用 `gh workflow run "Verify and package both platforms" --ref 4ed27dd`，让连续两次都落在这份产品代码上。不要为了交接提交再开一轮，那会把连续计数打断。
 2. 有一边红，就下那一边的 log / `test-results-*` artifact，只改还红的用例。凭据模型不要动。
 3. 仍然不要开 PR、不要合 main、不要在这台机器上打包或重启 AgentDeck。
 4. 本地要复跑时用单 worker，例如 `npx playwright test <spec> --workers=1`。清 `AGENTDECK_` 变量只能放在子进程里。
