@@ -8,8 +8,11 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 296, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 52, fanY: 64, gapY: 20, pad: 32 };
-  const GRID = { padX: 24, padBottom: 20, rowGap: 20, reviewGap: 52 };   // card grid inside a project
+  const NODE = { nodeW: 280, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16 };
+  const GRID = { padX: 24, padBottom: 20, rowGap: 20, reviewGap: 40 };   // card grid inside a project
+  // Auto-fit never shrinks below this: card body text (13px) stays at 11px or more on screen.
+  // What does not fit at this scale is reached by panning (drag, wheel, trackpad).
+  const FIT_MIN = 0.85;   // card grid inside a project
   const DRAG_PX = 4;
   let host = null;
   let viewEl, rootEl, vpEl, canvasEl, edgesEl, zonesEl, projectsEl, nodesEl, emptyEl, zoomLabel, archBtn, returnBtn, trayEl, popEl;
@@ -360,12 +363,15 @@
     const boxes = [lay.captain, ...lay.groups, ...lay.nodes.values(), lay.fold].filter(Boolean);
     const points = C.routes(lastMap, lay, dims).filter((r) => r.type !== 'return' || showReturn).flatMap((r) => r.points);
     const bounds = {
-      left: Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 24,
-      top: Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 24,
-      right: Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 24,
-      bottom: Math.max(...boxes.map((b) => b.y + b.h), ...points.map((p) => p[1])) + 24,
+      left: Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 16,
+      top: Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 16,
+      right: Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 16,
+      bottom: Math.max(...boxes.map((b) => b.y + b.h), ...points.map((p) => p[1])) + 16,
     };
-    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, { top: 8, right: 8, bottom: 8, left: 8 }, { max: 1 });
+    const inset = { top: 8, right: 8, bottom: 8, left: 8 };
+    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, { min: FIT_MIN, max: 1 });
+    // held at the floor and still too tall: start at the top (队长 and the first rows), not mid-map
+    if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) view.y = inset.top - bounds.top * view.scale;
     userView = false;
     glide(smooth === true);
     applyView();
@@ -376,7 +382,7 @@
   // map at close to the best scale this window allows.
   function autoLayout(map) {
     const vw = vpEl.clientWidth, vh = vpEl.clientHeight;
-    const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: Math.max(vw - 48, dims.nodeW + 2 * GRID.padX), grid: true, center: true, tray: true };
+    const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, maxWidth: Math.max((vw - 16) / FIT_MIN - 2 * dims.pad, dims.nodeW + 2 * GRID.padX), grid: true, center: true, tray: true };
     const widest = vw >= 1040 ? 3 : vw >= 700 ? 2 : 1;
     const options = [];
     for (let cols = widest; cols >= 1; cols--) {
@@ -384,6 +390,7 @@
       options.push({ candidate, scale: Math.max(0.01, Math.min(1, (vw - 16) / candidate.width, (vh - 16) / candidate.height)) });
     }
     const best = Math.max(...options.map((o) => o.scale));
+    // the widest grid whose scale is within 12% of the best this window allows
     return (options.find((o) => o.scale >= best * 0.88) || options[0]).candidate;
   }
   function zoomAt(cx, cy, factor) {

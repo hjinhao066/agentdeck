@@ -1909,7 +1909,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-projects { position: absolute; inset: 0; overflow: visible; pointer-events: none; }
 .cm-project-head { position: relative; z-index: 1; height: 48px; display: flex; align-items: center; gap: 6px; padding: 0 12px 0 10px; user-select: none; pointer-events: none; }
 .cm-project-head > * { pointer-events: auto; background: var(--cm-headbg); border-radius: 8px; }
-.cm-project-name { display: inline-flex; align-items: center; gap: 9px; flex: 0 1 auto; min-width: 0; max-width: 60%; padding: 4px 8px 4px 6px; font-size: 17px; font-weight: 640; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cm-project-name { display: inline-flex; align-items: center; gap: 9px; flex: 0 0 auto; min-width: 0; max-width: 70%; padding: 4px 8px 4px 6px; font-size: 17px; font-weight: 640; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cm-project-summary { display: inline-flex; align-items: center; gap: 12px; flex: 0 1 auto; min-width: 0; padding: 4px 8px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; }
 .cm-project-summary .cm-count b { font-size: 13.5px; }
 .cm-project-toggle { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: var(--cm-headbg); color: var(--cm-text-dim); cursor: pointer; transition: color .15s ease; }
@@ -1969,7 +1969,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   position: absolute; z-index: 2; overflow: hidden;
   display: flex; flex-direction: column; gap: 3px; text-align: left;
   padding: 10px 14px 12px;
-  width: 296px; height: 172px;
+  width: 280px; height: 172px;
   --st-c: var(--cm-wait);
   background: var(--cm-card);
   color: var(--cm-text);
@@ -2064,7 +2064,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   flex: 0 0 40px; min-height: 40px;
 }
 .cm-line {
-  font-size: 12.5px; line-height: 18px; color: var(--cm-text-2);
+  font-size: 13px; line-height: 18px; color: var(--cm-text-2);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word;
   flex: 0 0 36px; min-height: 36px;
 }

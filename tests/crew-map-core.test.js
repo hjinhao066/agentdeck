@@ -504,6 +504,10 @@ test('computeFit shows the bounds whole and centred, clear of the insets, never 
   assert.ok(inset.x + bounds.right * inset.scale <= 1000 - 8 + 1e-9);
   assert.ok(inset.y + bounds.top * inset.scale >= 8 - 1e-9);
   assert.ok(inset.y + bounds.bottom * inset.scale <= 700 - 8 + 1e-9);
+  // a floor keeps the text readable: too big for the window at the floor stays at the floor
+  const floored = C.computeFit({ left: 0, top: 0, right: 2000, bottom: 2000 }, { w: 1000, h: 700 }, { top: 8, right: 8, bottom: 8, left: 8 }, { min: 0.85, max: 1 });
+  assert.equal(floored.scale, 0.85);
+  assert.equal(C.computeFit({ left: 0, top: 0, right: 1000, bottom: 500 }, { w: 1200, h: 700 }, {}, { min: 0.85, max: 1 }).scale, 1);
   assert.equal(C.computeFit({ left: 0, top: 0, right: 100000, bottom: 10 }, { w: 500, h: 500 }, {}, { max: 1 }).scale, C.MIN_SCALE);
   assert.ok(Number.isFinite(C.computeFit({ left: 5, top: 5, right: 5, bottom: 5 }, { w: 300, h: 300 }).scale));   // empty bounds do not break it
 });
