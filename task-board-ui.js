@@ -11,6 +11,10 @@
 // answer box whose text goes to 队长. It covers the deck and the board view like
 // the Schedule/Artifacts pages; closing it leaves everything underneath as it
 // was. Project colours come from the crew map's palette (CrewMapCore.projectHue).
+// The look is a star chart: a still night (or dawn) sky, glass cards lit from
+// the top in their status colour, and glowing lines from a waiting card to the
+// card it waits on. Only running work moves, and nothing moves under the
+// system's reduce-motion setting.
 (function () {
   'use strict';
   const U = window.TaskBoardUICore;
@@ -24,8 +28,22 @@
     copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
     check: svg('<path d="m5 12 5 5 9-10"/>'),
   };
+  // One glyph per status: column heads, group tallies, the drawer's 移到 row.
+  const STATUS_ICON = {
+    todo: svg('<circle cx="12" cy="12" r="8.5" stroke-dasharray="3.1 3.6"/>'),
+    doing: svg('<path d="M12 3.5a8.5 8.5 0 1 1-8.5 8.5"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/>'),
+    review: svg('<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.3"/>'),
+    needs_user: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.6v5.2M12 16.3v.1"/>'),
+    done: svg('<circle cx="12" cy="12" r="8.5"/><path d="m8.2 12.4 2.6 2.6 5-5.5"/>'),
+  };
+  const statusIcon = (key, cls) => { const i = el('i', cls); i.innerHTML = STATUS_ICON[key] || ''; i.setAttribute('aria-hidden', 'true'); return i; };
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const EASE = 'cubic-bezier(.2, .8, .2, 1)';
+  const MAX_SPARKS = 14;      // travelling lights on the dependency lines
+  const MAX_GLIDES = 24;      // cards animated to a new place in one redraw
+  const reduceMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   let host = null;
-  let alertEl, viewEl, projectsEl, gridEl, headsEl, lanesEl, scrollEl, statusEl, summaryEl, emptyEl, refreshBtn, detailEl, liveEl;
+  let alertEl, viewEl, projectsEl, gridEl, headsEl, lanesEl, linksEl, meterEl, scrollEl, statusEl, summaryEl, emptyEl, refreshBtn, detailEl, liveEl;
   let open = false;
   let cards = [];
   let board = null;
@@ -41,6 +59,10 @@
   let focusAfter = null;      // selector to focus after the next render
   let unsubscribe = null;
   let seq = 0;                // only the newest list() result is drawn
+  let glideNext = false;      // the next redraw follows new data: moved cards glide
+  let hotId = null;           // the card whose dependency lines are lit
+  let lit = 0;                // moving cards drawn so far this redraw: staggers their rhythm
+  let linksQueued = false;
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -81,6 +103,7 @@
       const list = await api().list({ archived: true }); // archived cards resolve dependency names
       if (mine !== seq || !open) return;
       cards = Array.isArray(list) ? list : [];
+      glideNext = true;
       setStatus('');
     } catch (err) {
       if (mine !== seq || !open) return;
@@ -122,7 +145,7 @@
       const head = el(done ? 'button' : 'div', 'tbv-head');
       head.dataset.status = col.key;
       head.setAttribute('role', 'columnheader');
-      head.append(el('span', 'tbv-head-dot'), el('span', 'tbv-head-label', col.label), el('span', 'tbv-count', String(col.count)));
+      head.append(statusIcon(col.key, 'tbv-head-dot'), el('span', 'tbv-head-label', col.label), el('span', 'tbv-count', String(col.count)));
       if (done) {
         head.type = 'button';
         const label = prefs.doneOpen ? '收起完成列，只显示数量' : '展开完成列';
@@ -132,6 +155,7 @@
         head.onclick = toggleDone;
       }
       if (col.key === 'needs_user' && col.count) head.classList.add('alert');
+      if (!col.count) head.classList.add('zero');
       headsEl.append(head);
     });
   }
@@ -168,7 +192,7 @@
     const row = el('div', 'tbv-row');
     const [state, stateLabel] = dotState(c);
     // The dot only tells whether a doing card is really being worked on; the column already names every other status.
-    if (c.status === 'doing') { const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel; row.append(dot); }
+    if (c.status === 'doing') { const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel; row.append(dot); node.dataset.run = state; }
     row.append(el('h3', 'tbv-title', c.title));
     if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
@@ -191,6 +215,11 @@
     if (c.updated) when.dateTime = c.updated;
     sub.append(when);
     node.append(sub);
+    // Running work is the only thing that moves: its rim breathes and a light travels along its top
+    // edge. A 需要你 card carries a beacon. Neighbours are kept out of step.
+    const mark = (cls) => { const i = el('i', cls); i.setAttribute('aria-hidden', 'true'); node.append(i); node.style.setProperty('--tbv-i', String(lit++ % 7)); };
+    if (node.dataset.run === 'working') mark('tbv-flow');
+    if (c.status === 'needs_user') mark('tbv-beacon');
     const session = c.session_id ? host.session(c.session_id) : null;
     const who = session ? session.label : U.ownerLabel(c, null);
     node.title = [c.title, news !== item.waitLabel ? news : '', item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
@@ -244,6 +273,7 @@
     const section = el('section', 'tbv-lane' + (collapsed ? ' collapsed' : '') + (finished ? ' finished' : ''));
     section.dataset.project = lane.key;
     section.style.setProperty('--project-hue', hue(lane.key));
+    section.style.setProperty('--tbv-done', (lane.total ? lane.counts.done / lane.total : 0).toFixed(3));
     section.setAttribute('aria-label', `${lane.name}，${lane.total} 项`);
     const head = el('header', 'tbv-lane-head');
     const toggle = iconButton('tbv-lane-toggle', ICON.chevron, `${collapsed ? '展开' : '收起'} ${lane.name}${finished ? '' : '（Alt+↑/↓ 调整项目先后）'}`);
@@ -254,8 +284,8 @@
     U.COLUMNS.filter((c) => lane.counts[c.key]).forEach((c) => {
       // The red 需要你 count opens the group's first question.
       const asks = c.key === 'needs_user';
-      const n = el(asks ? 'button' : 'span', 'tbv-lane-n', `${c.label} `);
-      n.dataset.status = c.key; n.append(el('b', null, String(lane.counts[c.key])));
+      const n = el(asks ? 'button' : 'span', 'tbv-lane-n');
+      n.dataset.status = c.key; n.append(statusIcon(c.key, 'tbv-n-ico'), `${c.label} `, el('b', null, String(lane.counts[c.key])));
       if (asks) {
         const first = lane.columns.find((x) => x.key === 'needs_user').cards[0].card;
         n.type = 'button'; n.title = `${lane.name} 有 ${lane.counts[c.key]} 件需要你，点开「${first.title}」`; n.setAttribute('aria-label', n.title);
@@ -285,7 +315,7 @@
     bar.title = open ? '收起已完成的 Agent' : '展开已完成的 Agent';
     const chev = el('span', 'tbv-lane-toggle tbv-fold'); chev.innerHTML = ICON.chevron;
     const counts = el('div', 'tbv-lane-counts');
-    const n = el('span', 'tbv-lane-n', '已完成 '); n.dataset.status = 'done'; n.append(el('b', null, String(board.finishedDone))); counts.append(n);
+    const n = el('span', 'tbv-lane-n'); n.dataset.status = 'done'; n.append(statusIcon('done', 'tbv-n-ico'), '已完成 ', el('b', null, String(board.finishedDone))); counts.append(n);
     bar.append(chev, el('span', 'tbv-dot done'), el('h2', 'tbv-lane-name', '已完成的 Agent'), el('span', 'tbv-lane-open', `${board.finished.length} 个 · ${open ? '收起' : '展开查看'}`), counts);
     bar.onclick = () => { prefs.completedOpen = !open; savePrefs(); focusAfter = '.tbv-finished'; render(); };
     return bar;
@@ -330,12 +360,16 @@
     const active = document.activeElement;
     const keepCard = !focusAfter && active && active.classList && active.classList.contains('tbv-card') ? active.dataset.cardId : null;
     if (!focusAfter && active && alertEl.contains(active)) focusAfter = active.dataset.cardId ? `.tbv-alert-item[data-card-id="${escapeId(active.dataset.cardId)}"]` : '.tbv-alert-go';
+    const before = glideNext && !reduceMotion() ? placesOf() : null;
+    glideNext = false;
     board = U.buildBoard(cards, { project: filter.project, laneOrder: prefs.laneOrder });
     filter.project = board.project;
     renderProjects();
     renderHeads();
+    renderMeter();
     gridEl.style.setProperty('--tbv-cols', gridTemplate());
     lanesEl.innerHTML = '';
+    lit = 0;
     board.active.forEach((lane) => lanesEl.append(renderLane(lane)));
     if (board.finished.length) {
       lanesEl.append(renderFinished());
@@ -347,9 +381,145 @@
     emptyEl.hidden = board.total > 0;
     gridEl.hidden = board.total === 0;
     renderDetail();
+    drawLinks();
+    if (before && before.size) glide(before);
     const target = focusAfter ? viewEl.querySelector(focusAfter) : keepCard ? cardNode(keepCard) : null;
     focusAfter = null;
     if (target) target.focus({ preventScroll: true });
+  }
+
+  // ---- progress meter (toolbar) ----
+  // The share of the shown cards that is done, with one lit segment per status.
+  function renderMeter() {
+    const p = U.progress(board.columns);
+    meterEl.hidden = !p.total;
+    if (!p.total) return;
+    meterEl.querySelector('.tbv-meter-pct').textContent = String(p.percent);
+    meterEl.querySelector('.tbv-meter-frac').textContent = `${p.done} / ${p.total}`;
+    const bar = meterEl.querySelector('.tbv-meter-bar');
+    bar.innerHTML = '';
+    p.segments.forEach((seg) => {
+      const part = el('i'); part.dataset.status = seg.key; part.style.flexGrow = String(seg.count); part.title = `${seg.label} ${seg.count}`;
+      bar.append(part);
+    });
+    meterEl.setAttribute('aria-label', `完成进度 ${p.percent}%：${p.total} 张里完成 ${p.done} 张。${p.segments.map((x) => `${x.label} ${x.count}`).join('，')}`);
+    meterEl.title = `完成 ${p.done} / ${p.total}`;
+  }
+
+  // ---- dependency lines ----
+  // A line runs from every shown card to each card it still waits on, under
+  // the cards, in the gaps between columns. A prerequisite folded away (behind
+  // 展开剩余, or in a folded group) is reached at that fold. Hovering, focusing
+  // or opening a card lights its own lines. A light travels along a line only
+  // while the prerequisite is really being worked on.
+  function anchorOf(link) {
+    const node = cardNode(link.from);
+    if (node) return node;
+    const lane = lanesEl.querySelector(`.tbv-lane[data-project="${escapeId(link.lane)}"]`);
+    if (!lane) return null;
+    if (lane.classList.contains('collapsed')) return lane.querySelector('.tbv-lane-head .tbv-dot');
+    return lane.querySelector(`.tbv-cell[data-status="${link.status}"] .tbv-more`);
+  }
+  function drawLinks() {
+    linksEl.innerHTML = '';
+    if (!open || !board || !board.links.length || gridEl.hidden) return;
+    const origin = gridEl.getBoundingClientRect();
+    const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height }; };
+    // stacked (narrow) cells leave the lines only the board's left margin; side by side they share the column gap
+    const gap = getComputedStyle(headsEl).display === 'none' ? 18 : parseFloat(getComputedStyle(gridEl).getPropertyValue('--tbv-gap')) || 10;
+    const svgEl = document.createElementNS(SVG_NS, 'svg');
+    svgEl.setAttribute('class', 'tbv-links-svg');
+    const shape = (tag, cls, attrs) => { const n = document.createElementNS(SVG_NS, tag); n.setAttribute('class', cls); Object.entries(attrs).forEach(([k, v]) => n.setAttribute(k, String(v))); return n; };
+    const bundles = new Map(); // gap -> the cards it leads to, so lines to different cards fan out
+    const still = reduceMotion();
+    const routes = [];
+    board.links.forEach((link) => {
+      const to = cardNode(link.to), from = anchorOf(link);
+      if (!to || !from) return;
+      const a = rect(from), b = rect(to);
+      if (!a.w || !b.w) return;
+      let route = U.linkRoute(a, b, gap, 0);
+      if (route.points.length > 2) {
+        const key = Math.round(route.points[1][0]);
+        const seen = bundles.get(key) || new Map();
+        if (!seen.has(link.to)) seen.set(link.to, seen.size);
+        bundles.set(key, seen);
+        if (seen.get(link.to)) route = U.linkRoute(a, b, gap, seen.get(link.to));
+      }
+      const card = cards.find((c) => c.id === link.from);
+      const live = link.tone === 'flow' && !!card && dotState(card)[0] === 'working';
+      const g = shape('g', 'tbv-link' + (live ? ' live' : ''), { 'data-from': link.from, 'data-to': link.to, 'data-tone': link.tone });
+      const start = route.points[0], end = route.points[route.points.length - 1];
+      g.append(shape('path', 'tbv-link-halo', { d: route.d }), shape('path', 'tbv-link-line', { d: route.d }),
+        shape('circle', 'tbv-link-from', { cx: start[0], cy: start[1], r: 2.6 }), shape('circle', 'tbv-link-to', { cx: end[0], cy: end[1], r: 3.2 }));
+      svgEl.append(g);
+      if (live && !still) routes.push(route);
+    });
+    linksEl.append(svgEl);
+    routes.slice(0, MAX_SPARKS).forEach((route, i) => {
+      const dot = el('i', 'tbv-spark');
+      linksEl.append(dot);
+      let run = 0;
+      const frames = route.points.map(([x, y], k) => {
+        if (k) run += Math.abs(x - route.points[k - 1][0]) + Math.abs(y - route.points[k - 1][1]);
+        return { transform: `translate(${x}px, ${y}px)`, offset: route.length ? Math.min(1, run / route.length) : k ? 1 : 0 };
+      });
+      const timing = { duration: Math.max(2200, route.length * 16), iterations: Infinity, delay: -i * 610 };
+      dot.animate(frames, timing);
+      dot.animate([{ opacity: 0 }, { opacity: 1, offset: 0.14 }, { opacity: 1, offset: 0.82 }, { opacity: 0 }], timing);
+    });
+    lightLinks();
+  }
+  function queueLinks() {
+    if (linksQueued) return;
+    linksQueued = true;
+    requestAnimationFrame(() => { linksQueued = false; if (open && !drag) drawLinks(); });
+  }
+  // The lines of the hovered / focused card, else of the card open in the drawer.
+  function lightLinks() {
+    const id = hotId || detailId;
+    let any = false;
+    lanesEl.querySelectorAll('.tbv-card.linked').forEach((n) => n.classList.remove('linked'));
+    linksEl.querySelectorAll('.tbv-link').forEach((g) => {
+      const on = !!id && (g.dataset.from === id || g.dataset.to === id);
+      g.classList.toggle('on', on);
+      if (!on) return;
+      any = true;
+      const other = cardNode(g.dataset.from === id ? g.dataset.to : g.dataset.from);
+      if (other) other.classList.add('linked');
+    });
+    linksEl.classList.toggle('hot', any);
+  }
+  function setHot(id) { if (id === hotId) return; hotId = id; lightLinks(); }
+
+  // ---- motion ----
+  // After new data a card that changed place glides there, a card whose status
+  // changed is lit once in its new colour, and a new card fades in. Folding,
+  // filtering and resizing redraw at once.
+  function placesOf() {
+    const map = new Map();
+    lanesEl.querySelectorAll('.tbv-card').forEach((n) => { const r = n.getBoundingClientRect(); map.set(n.dataset.cardId, { x: r.left, y: r.top, mark: n.dataset.status + '/' + (n.dataset.flag || '') }); });
+    return map;
+  }
+  function glide(before) {
+    const moved = [];
+    lanesEl.querySelectorAll('.tbv-card').forEach((n) => {
+      const was = before.get(n.dataset.cardId);
+      if (!was) { n.animate([{ opacity: 0, transform: 'translateY(8px) scale(.985)' }, { opacity: 1, transform: 'none' }], { duration: 300, easing: EASE }); return; }
+      const r = n.getBoundingClientRect();
+      const dx = was.x - r.left, dy = was.y - r.top;
+      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved.push([n, dx, dy]);
+      if (was.mark !== n.dataset.status + '/' + (n.dataset.flag || '')) {
+        const flash = el('i', 'tbv-flash'); flash.setAttribute('aria-hidden', 'true');
+        n.append(flash);
+        flash.animate([{ opacity: 0 }, { opacity: 1, offset: 0.18 }, { opacity: 0 }], { duration: 1100, easing: 'ease-out' }).onfinish = () => flash.remove();
+      }
+    });
+    if (moved.length > MAX_GLIDES) return;
+    moved.forEach(([n, dx, dy]) => {
+      n.classList.add('gliding');
+      n.animate([{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'none' }], { duration: 380, easing: EASE }).onfinish = () => n.classList.remove('gliding');
+    });
   }
 
   // ---- moving cards ----
@@ -537,13 +707,14 @@
   }
 
   // ---- detail drawer ----
-  function openDetail(id) { detailId = id; detailKey = ''; renderDetail(); const first = detailEl.querySelector('textarea') || detailEl.querySelector('.tbv-d-close'); if (first) first.focus({ preventScroll: true }); }
+  function openDetail(id) { detailId = id; detailKey = ''; renderDetail(); lightLinks(); const first = detailEl.querySelector('textarea') || detailEl.querySelector('.tbv-d-close'); if (first) first.focus({ preventScroll: true }); }
   function closeDetail(refocus) {
     const id = detailId;
     detailId = null; detailKey = '';
     detailEl.hidden = true; detailEl.innerHTML = '';
     viewEl.classList.remove('has-detail');
     lanesEl.querySelectorAll('.tbv-card.selected').forEach((n) => n.classList.remove('selected'));
+    lightLinks();
     if (refocus && id) { const n = cardNode(id); if (n) n.focus({ preventScroll: true }); }
   }
   function section(title, ...children) {
@@ -655,8 +826,8 @@
 
     const moves = el('div', 'tbv-d-moves'); moves.setAttribute('role', 'group'); moves.setAttribute('aria-label', '移到');
     U.COLUMNS.forEach((col) => {
-      const b = el('button', null, col.label);
-      b.type = 'button'; b.dataset.status = col.key;
+      const b = el('button');
+      b.type = 'button'; b.dataset.status = col.key; b.append(statusIcon(col.key, 'tbv-n-ico'), col.label);
       const on = col.key === c.status;
       b.classList.toggle('active', on); b.setAttribute('aria-pressed', String(on));
       b.onclick = () => { if (!on) applyMove(c, col.key, null); };
@@ -682,11 +853,14 @@
       if (api() && api().onChange) unsubscribe = api().onChange(() => refresh());
       render();
       refresh();
+      if (!reduceMotion()) scrollEl.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: EASE });
     } else {
       if (unsubscribe) { try { unsubscribe(); } catch (_) {} }
       unsubscribe = null;
       seq++;
+      hotId = null;
       closeDetail(false);
+      linksEl.innerHTML = '';
       refreshBtn.classList.remove('busy');
     }
     host.onToggle(open);
@@ -700,6 +874,8 @@
     gridEl = viewEl.querySelector('.tbv-grid');
     headsEl = viewEl.querySelector('.tbv-heads');
     lanesEl = viewEl.querySelector('.tbv-lanes');
+    linksEl = viewEl.querySelector('.tbv-links');
+    meterEl = viewEl.querySelector('.tbv-meter');
     scrollEl = viewEl.querySelector('.tbv-scroll');
     statusEl = viewEl.querySelector('.tbv-status');
     summaryEl = viewEl.querySelector('.tbv-summary');
@@ -711,6 +887,13 @@
     detailEl = viewEl.querySelector('.tbv-detail');
     liveEl = viewEl.querySelector('.tbv-live');
     refreshBtn.onclick = () => refresh();
+    const cardAt = (e) => { const n = e.target.closest && e.target.closest('.tbv-card'); return n ? n.dataset.cardId : null; };
+    lanesEl.addEventListener('pointerover', (e) => { if (!drag) setHot(cardAt(e)); });
+    lanesEl.addEventListener('pointerleave', () => setHot(null));
+    lanesEl.addEventListener('focusin', (e) => setHot(cardAt(e)));
+    lanesEl.addEventListener('focusout', () => setHot(null));
+    // the lines follow the cards whenever the board is laid out again (window, drawer, zoom)
+    new ResizeObserver(queueLinks).observe(lanesEl);
     viewEl.querySelector('.tbv-close').onclick = () => { setOpen(false); host.focusToggle(); };
     // 架构图 / 自由画布 leave the board for the board view in that mode.
     viewEl.querySelectorAll('.board-mode button[data-view]').forEach((b) => {

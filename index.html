@@ -88,10 +88,18 @@
   <div id="deck"></div>
   <section id="pageView" hidden></section>
   <section id="taskBoardView" hidden aria-label="任务看板" tabindex="-1">
+    <div class="tbv-sky" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
     <header class="board-toolbar tbv-toolbar">
       <div class="tbv-heading">
         <div class="board-kicker tbv-kicker">全部任务</div>
         <h1>任务看板</h1>
+      </div>
+      <div class="tbv-meter" role="img" hidden>
+        <div class="tbv-meter-num"><b class="tbv-meter-pct">0</b><span>%</span></div>
+        <div class="tbv-meter-side">
+          <div class="tbv-meter-cap"><span>已完成</span><span class="tbv-meter-frac"></span></div>
+          <div class="tbv-meter-bar"></div>
+        </div>
       </div>
       <div class="board-toolbar-actions">
         <div class="board-mode" role="group" aria-label="视图">
@@ -115,9 +123,23 @@
       <div class="tbv-scroll">
         <div class="tbv-grid">
           <div class="tbv-heads" role="row"></div>
+          <div class="tbv-links" aria-hidden="true"></div>
           <div class="tbv-lanes"></div>
         </div>
         <div class="tbv-empty-board" hidden>
+          <svg class="tbv-empty-art" viewBox="0 0 240 132" fill="none" aria-hidden="true">
+            <path class="tbv-empty-line" d="M26 96 68 58 112 76 150 36 196 52 214 22"/>
+            <path class="tbv-empty-line faint" d="M112 76 132 112 178 98 196 52"/>
+            <circle class="tbv-empty-halo" cx="150" cy="36" r="15"/>
+            <circle class="tbv-empty-star" cx="26" cy="96" r="2.6"/>
+            <circle class="tbv-empty-star" cx="68" cy="58" r="3.4"/>
+            <circle class="tbv-empty-star" cx="112" cy="76" r="2.8"/>
+            <circle class="tbv-empty-star lead" cx="150" cy="36" r="5"/>
+            <circle class="tbv-empty-star" cx="196" cy="52" r="3.2"/>
+            <circle class="tbv-empty-star" cx="214" cy="22" r="2.4"/>
+            <circle class="tbv-empty-star dim" cx="132" cy="112" r="2.2"/>
+            <circle class="tbv-empty-star dim" cx="178" cy="98" r="2.4"/>
+          </svg>
           <strong>还没有任务</strong>
           <span>队长用 task add 建卡后，所有项目的任务会按项目、按状态排在这里。</span>
         </div>
