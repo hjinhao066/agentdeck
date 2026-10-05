@@ -47,6 +47,16 @@
     return '';
   }
 
+  // The same receipt, whole, for the detail popover.
+  function receiptFull(task, lastReceipt) {
+    const r = (task && task.receipt) || null;
+    const full = (s) => String(s == null ? '' : s).trim().slice(0, 4000);
+    if (r && r.question) return '提问：' + full(r.question);
+    if (r && r.failed) return '失败：' + full(r.failed);
+    if (r && r.summary) return full(r.summary);
+    return lastReceipt && lastReceipt.summary ? full(lastReceipt.summary) : '';
+  }
+
   // What came back to 队长 from a session: '' (nothing yet), 'ok', 'question', 'failed'.
   function returnKind(task, lastReceipt) {
     const r = (task && task.receipt) || null;
@@ -112,6 +122,7 @@
         provider: col.provider || '', model: col.model || '',
         status, statusLabel: STATUS_LABEL[status], detail,
         line: receiptLine(latest || remembered, col.lastReceipt),
+        full: receiptFull(latest || remembered, col.lastReceipt),
         live: !isArchived && status === 'working' ? oneLine(col.live, 90) : '',
         archived: isArchived, review: false, taskCount: list.length,
         firstSentAt: sent.length ? Math.min(...sent) : 0,
@@ -127,7 +138,7 @@
         id: 'wait:' + t.id, kind: 'waiting', title: oneLine(t.title, 120) || '排队中的活',
         project: oneLine(t.project, 120), reviews: Array.isArray(t.reviews) ? t.reviews : [],
         provider: '', model: '', status: 'queued', statusLabel: STATUS_LABEL.queued, detail: '等空位',
-        line: '', live: '', archived: false, review: false, taskCount: 1,
+        line: '', full: '', live: '', archived: false, review: false, taskCount: 1,
         firstSentAt: t.sentAt || 0, lastSentAt: t.sentAt || 0, ts: t.sentAt || 0, files: [], returned: '',
       });
     });
@@ -143,7 +154,8 @@
       p.nodes.push(n);
       p.counts[n.status] = (p.counts[n.status] || 0) + 1;
     });
-    projects.forEach((p) => { p.completed = p.nodes.every((n) => n.status === 'done'); });
+    // inactive: nothing in it is running, waiting on an answer or queued
+    projects.forEach((p) => { p.completed = p.nodes.every((n) => n.status === 'done'); p.inactive = !p.nodes.some((n) => ACTIVE.includes(n.status)); });
 
     // An archived session a visible review still links to stays (faded): the chain stays whole.
     const current = new Set(all.filter((n) => !n.archived).map((n) => n.id));
@@ -186,20 +198,75 @@
     return order.filter((s) => counts[s]).map((s) => `${counts[s]} ${STATUS_LABEL[s]}`).join(' · ') || '还没有派出去的活';
   }
 
+  // Is this project folded? A saved choice wins; otherwise finished projects
+  // fold (tray mode: every project with nothing active in it).
+  function isCollapsed(p, overrides, tray) {
+    const v = overrides && overrides[p.key];
+    return typeof v === 'boolean' ? v : !!(tray ? p.inactive : p.completed);
+  }
+
+  // The bottom tray: every inactive project that has something to show, whether
+  // it is tucked away (the default) or opened onto the canvas by the user.
+  function trayProjects(map, overrides) {
+    const shown = new Set(map.nodes.map((n) => n.id));
+    return map.projects.filter((p) => p.inactive && p.nodes.some((n) => shown.has(n.id))).map((p) => ({
+      key: p.key, name: p.name, counts: p.counts, failed: p.counts.failed || 0, expanded: !isCollapsed(p, overrides, true),
+    }));
+  }
+  // 「4 个项目（3 个已完成 · 1 个失败）」
+  function traySummary(list) {
+    const failed = list.filter((p) => p.failed).length, done = list.filter((p) => !p.failed && !p.counts.stopped).length, other = list.length - failed - done;
+    const parts = [done && `${done} 个已完成`, failed && `${failed} 个失败`, other && `${other} 个已停下`].filter(Boolean);
+    return `${list.length} 个项目` + (parts.length ? `（${parts.join(' · ')}）` : '');
+  }
+
+  // New activity brings a folded project back. prev: { key: [active node ids] }
+  // from the last render (null on the first one, which only records). A saved
+  // "folded" is dropped when a session in that project starts or resumes work;
+  // a saved "open" is dropped once the project is active, so it tucks itself
+  // away again when it finishes.
+  function reopenOnActivity(prev, projects, overrides) {
+    const active = {}, out = { ...(overrides || {}) }, reopened = [];
+    projects.forEach((p) => {
+      const ids = p.nodes.filter((n) => ACTIVE.includes(n.status)).map((n) => n.id);
+      active[p.key] = ids;
+      if (!prev) return;
+      const before = prev[p.key] || [];
+      if (out[p.key] === true && ids.some((id) => !before.includes(id))) { delete out[p.key]; reopened.push(p.key); }
+      else if (out[p.key] === false && ids.length) delete out[p.key];
+    });
+    return { active, overrides: out, reopened };
+  }
+
+  // Scale and offset that show `bounds` whole and centred in a w×h viewport,
+  // clear of `insets` (toolbars, margins). Never zooms past limits.max.
+  function computeFit(bounds, size, insets, limits) {
+    const i = { top: 0, right: 0, bottom: 0, left: 0, ...insets }, l = { min: MIN_SCALE, max: 1, ...limits };
+    const bw = Math.max(1, bounds.right - bounds.left), bh = Math.max(1, bounds.bottom - bounds.top);
+    const w = Math.max(1, size.w - i.left - i.right), h = Math.max(1, size.h - i.top - i.bottom);
+    const scale = Math.max(l.min, Math.min(l.max, w / bw, h / bh));
+    return { scale, x: i.left + (w - bw * scale) / 2 - bounds.left * scale, y: i.top + (h - bh * scale) / 2 - bounds.top * scale };
+  }
+
   // Pack projects into shelves and wrap sessions within each project. Review
   // sessions get their own rows below workers; every coordinate is group-local.
+  // grid: rows keep to one column grid (a shared line channel left of each
+  // column); center: each shelf is centred under 队长; tray: inactive folded
+  // projects and projects with nothing to show take no room on the canvas.
   function layout(map, opts) {
-    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, pad: 40, fold: false, collapsedProjects: {}, maxWidth: 0, columnsPerProject: Infinity, ...opts };
-    const pos = new Map(), groups = [];
+    const o = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, fold: false, collapsedProjects: {}, maxWidth: 0, columnsPerProject: Infinity, grid: false, center: false, tray: false, ...opts };
+    const rowGap = Number.isFinite(o.rowGap) ? o.rowGap : o.gapY, reviewGap = Number.isFinite(o.reviewGap) ? o.reviewGap : o.gapY;
+    const pos = new Map(), groups = [], shelves = [];
     const shown = new Set(map.nodes.map((n) => n.id));
-    let x = o.pad, y = o.pad + o.captainH + o.fanY, shelfH = 0, right = 0, fold = null;
+    let x = o.pad, y = o.pad + o.captainH + o.fanY, shelfH = 0, fold = null, shelf = null;
     map.projects.forEach((p) => {
-      const collapsed = typeof o.collapsedProjects[p.key] === 'boolean' ? o.collapsedProjects[p.key] : p.completed;
+      const collapsed = isCollapsed(p, o.collapsedProjects, o.tray);
       const nodes = p.nodes.filter((n) => shown.has(n.id));
       let workers = nodes.filter((n) => !n.review);
       const reviewers = nodes.filter((n) => n.review), hasFold = o.fold && !p.key;
+      if (o.tray && ((collapsed && p.inactive) || (!nodes.length && !hasFold))) return;
       const count = Math.max(workers.length + (hasFold ? 1 : 0), reviewers.length, 1);
-      const cols = Math.max(1, Math.min(count, o.columnsPerProject, o.maxWidth ? Math.floor((o.maxWidth - 88 + o.gapX) / (o.nodeW + o.gapX)) : count));
+      const cols = Math.max(1, Math.min(count, o.columnsPerProject, o.maxWidth ? Math.floor((o.maxWidth - 2 * o.padX + o.gapX) / (o.nodeW + o.gapX)) : count));
       // Reviewed outputs sit next to the review row, avoiding cables through
       // intervening cards when the worker grid wraps.
       if (workers.length > cols && reviewers.length) {
@@ -207,35 +274,49 @@
         workers = [...workers.filter((n) => !targets.has(n.id)), ...workers.filter((n) => targets.has(n.id))];
       }
       const rows = [];
-      const chunk = (list) => { for (let i = 0; i < list.length; i += cols) rows.push(list.slice(i, i + cols)); };
-      chunk([...workers, ...(hasFold ? [null] : [])]);
-      chunk(reviewers);
-      const w = collapsed ? 320 : cols * o.nodeW + (cols - 1) * o.gapX + 88;
-      const h = collapsed ? 56 : 52 + Math.max(1, rows.length) * o.nodeH + Math.max(0, rows.length - 1) * o.gapY + 28;
+      const chunk = (list, review) => { for (let i = 0; i < list.length; i += cols) rows.push({ items: list.slice(i, i + cols), review }); };
+      chunk([...workers, ...(hasFold ? [null] : [])], false);
+      chunk(reviewers, true);
+      // a review row sits a little lower: the review lines turn in that gap
+      let top = 0;
+      rows.forEach((row, r) => { if (r) top += o.nodeH + (row.review ? reviewGap : rowGap); row.top = top; });
+      const w = collapsed ? 320 : cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX;
+      const h = collapsed ? 56 : 52 + top + o.nodeH + o.padBottom;
       if (o.maxWidth && x > o.pad && x + w > o.pad + o.maxWidth) {
         x = o.pad;
         y += shelfH + o.clusterGap;
         shelfH = 0;
+        shelf = null;
       }
       const g = { ...p, x, y, w, h, collapsed };
       groups.push(g);
+      if (!shelf) shelves.push(shelf = { keys: [], right: 0 });
+      shelf.keys.push(p.key);
+      shelf.right = x + w;
       if (!collapsed) rows.forEach((row, r) => {
-        const start = x + (w - row.length * o.nodeW - Math.max(0, row.length - 1) * o.gapX) / 2;
-        row.forEach((n, i) => {
-          const bx = start + i * (o.nodeW + o.gapX), by = y + 52 + r * (o.nodeH + o.gapY);
+        const start = o.grid ? x + o.padX : x + (w - row.items.length * o.nodeW - Math.max(0, row.items.length - 1) * o.gapX) / 2;
+        row.items.forEach((n, i) => {
+          const bx = start + i * (o.nodeW + o.gapX), by = y + 52 + row.top;
           if (n) pos.set(n.id, { x: bx, y: by, anchorY: by, w: o.nodeW, h: o.nodeH, row: r + 1, project: p.key });
           else fold = { x: bx, y: by + o.nodeH / 2 - 16, w: 150, h: 32, project: p.key };
         });
       });
-      right = Math.max(right, x + w);
       x += w + o.clusterGap;
       shelfH = Math.max(shelfH, h);
     });
+    const right = Math.max(o.pad, ...shelves.map((s) => s.right));
     const returnCount = map.edges.filter((e) => e.type === 'return').length;
     const width = Math.max(o.pad + o.captainW, right) + o.pad + returnCount * 7;
     const captain = map.captain ? { x: (width - o.captainW) / 2, y: o.pad, w: o.captainW, h: o.captainH, row: 0 } : null;
-    const rowY = (r) => o.pad + o.captainH + o.fanY + 52 + (r - 1) * (o.nodeH + o.gapY);
-    return { captain, nodes: pos, groups, fold, rowY, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
+    const lay = { captain, nodes: pos, groups, fold, grid: !!o.grid, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
+    if (o.center) {
+      const mid = captain ? captain.x + captain.w / 2 : width / 2;
+      shelves.forEach((s) => { const dx = Math.round(mid - (o.pad + s.right) / 2); if (dx) s.keys.forEach((key) => translateProject(lay, key, dx, 0)); });
+      // a shelf wider than 队长 is the canvas width; a narrower one never leaves it
+      const left = Math.min(o.pad, ...groups.map((g) => g.x));
+      if (left < o.pad) { groups.forEach((g) => translateProject(lay, g.key, o.pad - left, 0)); if (captain) captain.x += o.pad - left; lay.width += o.pad - left; }
+    }
+    return lay;
   }
 
   function constrainPosition(lay, box, p) {
@@ -338,8 +419,9 @@
       const side = n.review || b.row > 1;
       // a review session is entered from the left, down the gap left of what it reviews
       const targets = n.review ? (reviewOf.get(e.to) || []).map(box) : [];
-      let lx = side ? Math.min(b.x, ...targets.map((t) => t.x)) - (n.review ? o.clusterGap : o.gapX) / 2 : 0;
-      if (side) {
+      // on a grid every column has one channel on its left, shared by the rows below the first
+      let lx = side ? (lay.grid ? b.x : Math.min(b.x, ...targets.map((t) => t.x))) - (n.review && !lay.grid ? o.clusterGap : o.gapX) / 2 : 0;
+      if (side && !lay.grid) {
         // lanes down a gap: one per session entered from it
         const used = laneUse.get(Math.round(lx)) || 0;
         laneUse.set(Math.round(lx), used + 1);
@@ -414,7 +496,7 @@
         const pts = Math.abs(it.hx - it.sx) < 1 ? [[it.sx, it.b.y + it.b.h], [it.hx, r.y - 2]]
           : [[it.sx, it.b.y + it.b.h], [it.sx, y], [it.hx, y], [it.hx, r.y - 2]];
         const n = status.get(id);
-        out.push({ type: 'review', from: it.t, to: id, cls: `review${n.archived ? ' archived' : ''}`, points: pts });
+        out.push({ type: 'review', from: it.t, to: id, cls: `review st-${n.status}${n.archived ? ' archived' : ''}`, points: pts });
       });
       ri++;
     });
@@ -462,7 +544,7 @@
   // A change in anything but the live activity line rebuilds the map.
   function signature(map) {
     const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0, x.project || '', (x.reviews || []).join(',')].join('\u0001');
-    return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${summaryLine(p.counts)}`)].join('\u0002');
+    return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${p.inactive}:${summaryLine(p.counts)}`)].join('\u0002');
   }
 
   // The project palette shared by the crew map and the task board: a golden-angle
@@ -477,5 +559,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, receiptFull, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });

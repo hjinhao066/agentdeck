@@ -52,3 +52,24 @@
 
 ## 下一步（从这里接着做）
 按 1→9 顺序改 crew-map-core.js → crew-map.js → index.html（控件挪到 .cm-legend 右侧、加托盘容器）→ style.css 架构图段 → 测试 → 截图 → 报告。
+
+## 第 3 次交接（2026-10-04，改由 Sonnet 5.5 接手）
+已完成（只动了 crew-map-core.js，`node --test tests/crew-map-core.test.js` 原有 23 项全过）：
+- buildCrewMap：节点加 `full`（完整回执，给详情浮层用）；项目加 `inactive`（无 working/input/queued）；signature 含 inactive。
+- 新纯函数并已导出：receiptFull、isCollapsed、trayProjects(map, overrides)、traySummary(list)、
+  reopenOnActivity(prev, projects, overrides) → {active, overrides, reopened}、computeFit(bounds,{w,h},insets,{min,max})。
+- layout 新选项（默认值保持旧行为，旧单测不用改）：padX(44)、padBottom(28)、rowGap/reviewGap(默认=gapY)、
+  grid（行左对齐到同一列网格，lay.grid=true）、center（每排项目在队长下居中）、
+  tray（非活跃且折叠的项目、以及没有可见节点的项目不上画布）。rowY 已删（无人使用）。
+- routes：lay.grid 时第 2 行起及审查卡片走「卡片.x - gapX/2」的共用竖向通道（无 lane 偏移）；审查线 cls 加 st-<审查者状态>。
+- 活跃但被用户手动折叠的项目仍是画布上的 320×56 折叠行（保留现有 acceptance 测试）；只有「非活跃+折叠」进托盘。
+
+还没做：
+- crew-map.js（渲染器全部：autoLayout 改 3/2/1 列并传 grid/center/tray/padX 24/rowGap 20/reviewGap 52、托盘、
+  详情浮层、卡片改 div[role=button]+···按钮+失败「查看」、悬停高亮、fit 用 computeFit + userView/平滑过渡、reopenOnActivity 接线）。
+- index.html（控件挪到 .cm-legend 右侧、加 .cm-tray 容器、适应画布带文字）。
+- style.css 架构图段（1757–2155）按上面第 8 条的日/夜变量重写。
+- 新单测（列数/托盘/reopenOnActivity/computeFit/grid 通道）与 E2E 改动（见第 5、8、9 条；relayout 后要等 .cm-smooth 消失再量）。
+- 截图、report.md 都还没有（shots 目录尚未生成）。
+
+我自己的取舍（未经用户确认，接手者可改）：实时数据变化时，用户没手动动过视角就平滑重新适应，动过则完全保留视角。
