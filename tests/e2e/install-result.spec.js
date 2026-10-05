@@ -8,6 +8,8 @@ const path = require('path');
 test('installation waits across restart, rejects early complete, and records success/failure durably', async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-install-receipt-e2e-'));
   const prompts = path.join(profile, 'prompts.jsonl');
+  const receiptEnv = path.join(profile, 'agent-env');
+  fs.mkdirSync(receiptEnv);
   const fake = `node "${path.join(__dirname, 'fixtures/fake-agent.js')}" --screen-only`;
   const columns = ['captain', 'success-worker', 'failed-worker'].map((id) => ({
     id, title: id, cmd: fake, cwd: profile, role: 'manual', isMain: id === 'captain', captainCrew: id !== 'captain',
@@ -22,12 +24,17 @@ test('installation waits across restart, rejects early complete, and records suc
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   delete env.ELECTRON_RUN_AS_NODE;
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
+  env.AGENTDECK_TEST_RECEIPT_ENV_DIR = receiptEnv;
   let app;
   try {
     app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
       args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
     const page = await app.firstWindow();
     await expect.poll(() => page.evaluate(() => !!window.MainSession?.mainCol()).catch(() => false), { timeout: 20000 }).toBe(true);
+    // Prove the stand-in agents actually started before checking that no
+    // installation instruction was resent across the cold start.
+    await expect.poll(() => ['success-worker', 'failed-worker'].every((id) =>
+      fs.existsSync(path.join(receiptEnv, id + '.json'))), { timeout: 20000 }).toBe(true);
     for (const status of ['success', 'failed']) {
       const check = await page.evaluate(async (status) => {
         const caller = columns.find((c) => c.id === status + '-worker');
