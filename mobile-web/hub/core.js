@@ -138,5 +138,99 @@
     return match ? match.label : String(owner).slice(0, 40);
   }
 
-  return { TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel };
+  // ---- conversation --------------------------------------------------------
+  // The desktop saves one "turn" per injected prompt: the user's message, every
+  // dispatch card, every automatic receipt delivery. They are folded back into
+  // what happened: the message, then one reply block from the Captain. Same
+  // rules as the single-machine page, so both ends read the same.
+  const SAME_ROUND_MS = 30 * 60 * 1000;
+  function groupTurns(turns) {
+    const groups = [];
+    let group = null, last = 0;
+    const open = (turn, user, images) => { group = { id: turn.id, user, images, replies: [], tasks: [], notices: 0, steps: [], pending: false, interrupted: false }; groups.push(group); };
+    for (const turn of Array.isArray(turns) ? turns : []) {
+      if (!turn || typeof turn !== 'object') continue;
+      const isUser = !turn.kind && (typeof turn.user === 'string' && turn.user || Array.isArray(turn.images) && turn.images.length);
+      if (isUser) open(turn, typeof turn.user === 'string' ? turn.user : '', Array.isArray(turn.images) ? turn.images.filter((id) => typeof id === 'string') : []);
+      else if (!group || (turn.ts && last && turn.ts - last > SAME_ROUND_MS)) open(turn, '', []);
+      if (turn.ts) last = turn.ts;
+      if (turn.kind === 'task') { group.tasks.push(turn.task && typeof turn.task === 'object' ? turn.task : {}); continue; }
+      if (turn.kind === 'notice') { group.notices += 1; if (turn.reply) group.steps.push(String(turn.reply)); continue; }
+      if (turn.reply) group.replies.push(String(turn.reply));
+      for (const step of Array.isArray(turn.steps) ? turn.steps : []) group.steps.push(String(step));
+      group.pending = !turn.done && !turn.interrupted;
+      group.interrupted = !!turn.interrupted;
+    }
+    return groups;
+  }
+  function processSummary(group) {
+    const parts = [];
+    if (group.tasks.length) parts.push(`派了 ${group.tasks.length} 件活`);
+    const receipts = group.tasks.filter((task) => task.summary).length;
+    if (receipts) parts.push(`收到 ${receipts} 份回执`);
+    if (group.steps.length) parts.push(`${group.steps.length} 步操作`);
+    return parts.length ? '过程：' + parts.join('，') : '';
+  }
+
+  // ---- quota ---------------------------------------------------------------
+  // Display rows only; the machine already masked the account. Anything that
+  // is not the expected shape is dropped so a odd answer never reads as usable.
+  const QUOTA_STATUS = ['out', 'stale', 'normal', 'warning', 'danger', 'nodigits', 'expired', 'unknown'];
+  function cleanQuota(data) {
+    const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+    const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
+    const rows = (data && Array.isArray(data.rows) ? data.rows : []).slice(0, 16).filter((row) => row && typeof row === 'object').map((row) => ({
+      key: text(row.key, 60), provider: text(row.provider, 20), name: text(row.name, 100), short: text(row.short, 40), flag: text(row.flag, 8),
+      captain: row.captain === true, status: QUOTA_STATUS.includes(row.status) ? row.status : 'unknown', failed: row.failed === true,
+      cells: (Array.isArray(row.cells) ? row.cells : []).filter((cell) => cell && ['5h', '7d'].includes(cell.key) && Number.isFinite(cell.remaining)).slice(0, 2)
+        .map((cell) => ({ key: cell.key, remaining: Math.max(0, Math.min(100, cell.remaining)), out: cell.out === true, resetAt: time(cell.resetAt) })),
+      recoveryAt: time(row.recoveryAt), sampledAt: time(row.sampledAt), account: text(row.account, 80), source: text(row.source, 60),
+    }));
+    return { rows, version: /^\d+\.\d+\.\d+[\w.-]{0,20}$/.test(data && data.version || '') ? data.version : '' };
+  }
+  const pad = (value) => String(value).padStart(2, '0');
+  const hm = (t) => { const d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+  const monthDay = (t) => { const d = new Date(t); return pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+  const weekday = (t) => '周' + '日一二三四五六'[new Date(t).getDay()];
+  // Same wording as the desktop rows: a clock inside 24 hours, then the weekday, then the date.
+  function shortReset(t, now) { const gap = t - now; return gap <= 86400000 ? hm(t) : gap < 6 * 86400000 ? weekday(t) : monthDay(t); }
+  function longReset(t, now) {
+    const mins = Math.max(1, Math.round((t - now) / 60000));
+    const left = mins < 60 ? mins + ' 分钟' : mins < 1440 ? Math.floor(mins / 60) + ' 小时' + (mins % 60 ? ' ' + mins % 60 + ' 分' : '') : Math.floor(mins / 1440) + ' 天';
+    return (t - now <= 86400000 ? '' : monthDay(t) + ' ') + hm(t) + '（' + left + '后）';
+  }
+  function sampledText(row, now) { return row.sampledAt ? '采样 ' + (Math.abs(now - row.sampledAt) > 86400000 ? monthDay(row.sampledAt) + ' ' : '') + hm(row.sampledAt) : '暂无采样'; }
+  // Old, missing or unreadable numbers are grey: they never read as usable.
+  const dimmed = (row, failed) => !!failed || ['stale', 'expired', 'unknown', 'nodigits'].includes(row.status);
+  const percentText = (cell) => cell.out ? '用尽' : cell.remaining < 1 ? '<1%' : Math.round(cell.remaining) + '%';
+  const cellLevel = (row, cell, failed) => cell.out ? 'out' : dimmed(row, failed) ? 'none' : cell.remaining <= 10 ? 'danger' : cell.remaining <= 20 ? 'low' : 'ok';
+  const windowName = (key) => key === '5h' ? '5 小时' : '每周';
+  const emptyText = (row) => row.status === 'nodigits' ? '未见用尽' : '未知';
+  // Always the two columns of the header. An account that only reported "used up" shows that under 5h.
+  function quotaCells(row) {
+    const blockedOnly = row.status === 'out' && !row.cells.length;
+    return ['5h', '7d'].map((key) => row.cells.find((cell) => cell.key === key) || (blockedOnly && key === '5h' ? { key, out: true, resetAt: row.recoveryAt } : { key, missing: true }));
+  }
+  // The line under a row is kept for what the cells cannot say: the numbers are old or the last read failed.
+  function quotaNote(row, now) {
+    const parts = [];
+    if (row.failed) parts.push('查询失败');
+    if (row.status === 'stale' || row.status === 'expired') parts.push('数据已旧');
+    return parts.length ? [...parts, sampledText(row, now)].join(' · ') : '';
+  }
+  function cellSpoken(cell, now) {
+    return windowName(cell.key) + (cell.missing ? '未知' : (cell.out ? '已用尽' : '剩余 ' + percentText(cell)) + (cell.resetAt > now ? '，' + longReset(cell.resetAt, now) + (cell.out ? '恢复' : '重置') : ''));
+  }
+  function quotaLabel(row, now) {
+    const windows = row.cells.length || row.status === 'out' ? quotaCells(row).filter((cell) => !cell.missing).map((cell) => cellSpoken(cell, now)) : [emptyText(row)];
+    return [row.name + (row.captain ? '（队长在用）' : ''), ...windows, quotaNote(row, now)].filter(Boolean).join('；');
+  }
+  // The "state" line of the details: why the numbers may not be trusted.
+  function quotaState(row, failed) {
+    return [row.status === 'nodigits' ? '未见用尽报错，此来源不提供百分比' : row.status === 'unknown' ? '暂无额度数据，等待桌面端下次采样' : '',
+      row.status === 'stale' || row.status === 'expired' ? '数据已旧，数字仅供参考' : '', row.failed ? '最近一次查询失败' : '', failed ? '手机暂时连不上这台电脑' : ''].filter(Boolean).join('；');
+  }
+
+  return { TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+    groupTurns, processSummary, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });

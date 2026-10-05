@@ -25,6 +25,14 @@
     board: '<path d="M4 4v16M12 4v16M20 4v16M4 8h4m4 5h4m4-5h2"/>',
     laptop: '<rect x="5" y="5" width="14" height="10" rx="1.5"/><path d="M3 19h18"/>',
     desktop: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/>',
+    crown: '<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>',
+    ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
+  };
+  // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
+  const providerIcons = {
+    Claude: '<svg viewBox="0 0 100 100" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="m19.6 66.5 19.7-11 .3-1-.3-.5h-1l-3.3-.2-11.2-.3L14 53l-9.5-.5-2.4-.5L0 49l.2-1.5 2-1.3 2.9.2 6.3.5 9.5.6 6.9.4L38 49.1h1.6l.2-.7-.5-.4-.4-.4L29 41l-10.6-7-5.6-4.1-3-2-1.5-2-.6-4.2 2.7-3 3.7.3.9.2 3.7 2.9 8 6.1L37 36l1.5 1.2.6-.4.1-.3-.7-1.1L33 25l-6-10.4-2.7-4.3-.7-2.6c-.3-1-.4-2-.4-3l3-4.2L28 0l4.2.6L33.8 2l2.6 6 4.1 9.3L47 29.9l2 3.8 1 3.4.3 1h.7v-.5l.5-7.2 1-8.7 1-11.2.3-3.2 1.6-3.8 3-2L61 2.6l2 2.9-.3 1.8-1.1 7.7L59 27.1l-1.5 8.2h.9l1-1.1 4.1-5.4 6.9-8.6 3-3.5L77 13l2.3-1.8h4.3l3.1 4.7-1.4 4.9-4.4 5.6-3.7 4.7-5.3 7.1-3.2 5.7.3.4h.7l12-2.6 6.4-1.1 7.6-1.3 3.5 1.6.4 1.6-1.4 3.4-8.2 2-9.6 2-14.3 3.3-.2.1.2.3 6.4.6 2.8.2h6.8l12.6 1 3.3 2 1.9 2.7-.3 2-5.1 2.6-6.8-1.6-16-3.8-5.4-1.3h-.8v.4l4.6 4.5 8.3 7.5L89 80.1l.5 2.4-1.3 2-1.4-.2-9.2-7-3.6-3-8-6.8h-.5v.7l1.8 2.7 9.8 14.7.5 4.5-.7 1.4-2.6 1-2.7-.6-5.8-8-6-9-4.7-8.2-.5.4-2.9 30.2-1.3 1.5-3 1.2-2.5-2-1.4-3 1.4-6.2 1.6-8 1.3-6.4 1.2-7.9.7-2.6v-.2H49L43 72l-9 12.3-7.2 7.6-1.7.7-3-1.5.3-2.8L24 86l10-12.8 6-7.9 4-4.6-.1-.5h-.3L17.2 77.4l-4.7.6-2-2 .2-3 1-1 8-5.5Z"/></svg>',
+    Antigravity: '<svg aria-hidden="true" viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M12 2C12 7.5 7.5 12 2 12C7.5 12 12 16.5 12 22C12 16.5 16.5 12 22 12C16.5 12 12 7.5 12 2Z"/></svg>',
+    Codex: '<svg viewBox="134 213 293 293" width="13" height="13" fill="currentColor" aria-hidden="true"><path d="M249.176 323.434V298.276C249.176 296.158 249.971 294.569 251.825 293.509L302.406 264.381C309.29 260.409 317.5 258.555 325.973 258.555C357.75 258.555 377.877 283.185 377.877 309.399C377.877 311.253 377.877 313.371 377.611 315.49L325.178 284.771C322.001 282.919 318.822 282.919 315.645 284.771L249.176 323.434ZM367.283 421.415V361.301C367.283 357.592 365.694 354.945 362.516 353.092L296.048 314.43L317.763 301.982C319.617 300.925 321.206 300.925 323.058 301.982L373.639 331.112C388.205 339.586 398.003 357.592 398.003 375.069C398.003 395.195 386.087 413.733 367.283 421.412V421.415ZM233.553 368.452L211.838 355.742C209.986 354.684 209.19 353.095 209.19 350.975V292.718C209.19 264.383 230.905 242.932 260.301 242.932C271.423 242.932 281.748 246.641 290.49 253.26L238.321 283.449C235.146 285.303 233.555 287.951 233.555 291.659V368.455L233.553 368.452ZM280.292 395.462L249.176 377.985V340.913L280.292 323.436L311.407 340.913V377.985L280.292 395.462ZM300.286 475.968C289.163 475.968 278.837 472.259 270.097 465.64L322.264 435.449C325.441 433.597 327.03 430.949 327.03 427.239V350.445L349.011 363.155C350.865 364.213 351.66 365.802 351.66 367.922V426.179C351.66 454.514 329.679 475.965 300.286 475.965V475.968ZM237.525 416.915L186.944 387.785C172.378 379.31 162.582 361.305 162.582 343.827C162.582 323.436 174.763 305.164 193.563 297.485V357.861C193.563 361.571 195.154 364.217 198.33 366.071L264.535 404.467L242.82 416.915C240.967 417.972 239.377 417.972 237.525 416.915ZM234.614 460.343C204.689 460.343 182.71 437.833 182.71 410.028C182.71 407.91 182.976 405.792 183.238 403.672L235.405 433.863C238.582 435.715 241.763 435.715 244.938 433.863L311.407 395.466V420.622C311.407 422.742 310.612 424.331 308.758 425.389L258.179 454.519C251.293 458.491 243.083 460.343 234.611 460.343H234.614ZM300.286 491.854C332.329 491.854 359.073 469.082 365.167 438.892C394.825 431.211 413.892 403.406 413.892 375.073C413.892 356.535 405.948 338.529 391.648 325.552C392.972 319.991 393.766 314.43 393.766 308.87C393.766 271.003 363.048 242.666 327.562 242.666C320.413 242.666 313.528 243.723 306.644 246.109C294.725 234.457 278.307 227.042 260.301 227.042C228.258 227.042 201.513 249.815 195.42 280.004C165.761 287.685 146.694 315.49 146.694 343.824C146.694 362.362 154.638 380.368 168.938 393.344C167.613 398.906 166.819 404.467 166.819 410.027C166.819 447.894 197.538 476.231 233.024 476.231C240.172 476.231 247.058 475.173 253.943 472.788C265.859 484.441 282.278 491.854 300.286 491.854Z"/></svg>',
   };
   const svg = (name) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + icons[name] + '</svg>';
   const statusNames = { working: '干活中', idle: '空闲', failed: '失败', input: '停在确认', quota: '额度用尽/等待', queued: '待补充', waiting: '排队', asking: '在问你', done: '完成', unavailable: '未启动' };
@@ -34,6 +42,8 @@
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
+  // Quota rows whose details are open, as 'machine:key'. Memory only.
+  const openQuota = new Set();
   // Messages that failed to send wait here (memory only) until the user re-edits them.
   const outbox = [];
   const signatures = new WeakMap();
@@ -119,7 +129,7 @@
   function settle(m, result, verdict = Core.classify(result)) {
     m.state = verdict.state; m.detail = verdict.detail || '';
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
-    if (m.state !== 'online') { m.snap = null; m.csrf = ''; }
+    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; }
     // A machine that no longer accepts this phone must not keep showing its board.
     if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; }
     return verdict;
@@ -145,6 +155,15 @@
         const tasks = await request(m, 'api/tasks');
         if (tasks.status === 200 && tasks.body && Array.isArray(tasks.body.cards)) { m.cards = tasks.body.cards; m.boardVersion = m.snap.boardVersion; }
       }
+      // Quota moves slowly: read it at most every 30 seconds, and on a manual refresh.
+      if (m.forceQuota || !m.quotaAt || Date.now() - m.quotaAt > 30000) {
+        m.forceQuota = false;
+        const quota = await request(m, 'api/quota');
+        // 404: an older build without the quota route; nothing to show, nothing failed.
+        if (quota.status === 200 && quota.body) { m.quota = Core.cleanQuota(quota.body); m.quotaFailed = false; }
+        else if (quota.status === 404) { m.quota = null; m.quotaFailed = false; } else m.quotaFailed = true;
+        m.quotaAt = Date.now();
+      }
     }
     m.busy = false;
     m.nextAt = Date.now() + Core.pollInterval(m.state, filter === 'all' || filter === m.id);
@@ -152,7 +171,7 @@
     if (output && output.machineId === m.id && view === 'output') loadOutput(true);
     if (m.again) poll(m);
   }
-  function refreshAll() { machines.forEach((m) => poll(m)); }
+  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; poll(m); }); }
   function renderBusy() {
     const busy = machines.some((m) => m.busy);
     $('refresh').classList.toggle('refreshing', busy);
@@ -172,28 +191,118 @@
     if (!fromFilter && filter !== 'all') { filter = id; store(KEYS.machine, id); }
     render();
   }
+  // The computer switch lives in the header: a dot and the name, one tap each.
+  // In the Captain view it picks who the message goes to, elsewhere what is shown.
   function renderBar() {
     const bar = $('machine-bar');
     bar.hidden = view === 'output';
+    $('app-header').dataset.view = view;
     const online = machines.filter((m) => m.state === 'online').length;
-    if (!changed(bar, [filter, online, machines.map((m) => [m.id, m.label, m.state])])) return;
+    const picking = view === 'captain';
+    if (!changed(bar, [view, picking ? target : filter, picking && sending, online, machines.map((m) => [m.id, m.label, m.state])])) return;
     const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.filter : null;
     bar.replaceChildren();
-    const segment = (id, name, state, caption, label) => {
+    const segment = (id, name, state, pressed, label) => {
       const button = node('button', 'segment');
       button.type = 'button'; button.dataset.filter = id;
-      button.setAttribute('aria-pressed', String(filter === id));
+      button.setAttribute('aria-pressed', String(pressed));
       button.setAttribute('aria-label', label); button.title = label;
-      const top = node('span', 'segment-name');
-      if (state) top.append(node('span', 'dot tone-' + Core.STATES[state].tone));
-      top.append(node('span', '', name));
-      button.append(top, node('span', 'segment-state', caption));
-      button.addEventListener('click', () => setFilter(id));
+      button.disabled = picking && sending;
+      if (state) button.append(node('span', 'dot tone-' + Core.STATES[state].tone));
+      button.append(node('span', 'segment-name', name));
+      button.addEventListener('click', () => picking ? setTarget(id) : setFilter(id));
       bar.append(button);
     };
-    segment('all', '全部', '', `${online}/${machines.length} 在线`, `全部电脑，${online}/${machines.length} 在线`);
-    for (const m of machines) segment(m.id, m.label, m.state, Core.STATES[m.state].short, `${m.label}，${Core.STATES[m.state].label}`);
+    // One computer at a time when writing to the Captain, so "all" has no place there.
+    if (!picking) segment('all', '全部', '', filter === 'all', `全部电脑，${online}/${machines.length} 在线`);
+    for (const m of machines) segment(m.id, m.label, m.state, (picking ? target : filter) === m.id, `${m.label}，${Core.STATES[m.state].label}`);
     if (focused) bar.querySelector(`[data-filter="${focused}"]`)?.focus();
+  }
+
+  // ---- quota ---------------------------------------------------------------
+  // The same compact table as the single-machine page: one row per account with
+  // its 5-hour and weekly remainder; tapping a row opens its details in place.
+  function providerIcon(row) { const icon = node('span', 'quota-icon'); icon.setAttribute('aria-hidden', 'true'); icon.innerHTML = providerIcons[row.provider] || ''; return icon; }
+  function quotaMeter(cell) {
+    const el = node('span', 'quota-meter'); el.setAttribute('aria-hidden', 'true');
+    el.style.setProperty('--pct', (cell.out || cell.missing ? 0 : Math.max(2, Math.min(100, cell.remaining))) + '%');
+    return el;
+  }
+  function quotaDetails(m, row, now) {
+    const body = node('dl', 'quota-detail');
+    const line = (key, value, level, sub) => {
+      const el = node('div', 'detail-line'); if (level) el.dataset.level = level;
+      const text = node('dd', 'detail-value'); text.append(node('span', 'detail-main', value));
+      if (sub) text.append(node('span', 'detail-sub', sub));
+      el.append(node('dt', 'detail-key', key), text); body.append(el);
+    };
+    for (const cell of Core.quotaCells(row)) {
+      if (cell.missing) line(Core.windowName(cell.key), '未知', 'none', row.cells.length || row.status === 'out' ? '此来源未提供这个窗口' : '');
+      else line(Core.windowName(cell.key), cell.out ? '已用尽' : '剩余 ' + Core.percentText(cell), Core.cellLevel(row, cell, m.quotaFailed),
+        cell.resetAt > now ? Core.longReset(cell.resetAt, now) + (cell.out ? '恢复' : '重置') : (cell.out ? '恢复' : '重置') + '时间未知');
+    }
+    const state = Core.quotaState(row, m.quotaFailed);
+    if (state) line('状态', state, 'none');
+    line('账号', row.account || '未知');
+    line('来源', row.source || '未知');
+    line('采样', row.sampledAt ? Core.sampledText(row, now).slice(3) : '暂无采样');
+    return body;
+  }
+  function quotaSection(m) {
+    const now = Date.now(), quota = m.quota;
+    const box = node('section', 'quota');
+    box.setAttribute('aria-label', `${m.label} 的额度`);
+    const head = node('div', 'quota-heading');
+    head.append(node('h3', '', '额度'), node('span', 'quota-note', m.quotaFailed ? '未能更新' : ''));
+    if (quota.rows.length) { const cols = node('span', 'quota-columns'); cols.setAttribute('aria-hidden', 'true'); cols.append(node('span', '', '5h'), node('span', '', '7d')); head.append(cols); }
+    box.append(head);
+    if (!quota.rows.length) { box.append(node('p', 'quota-empty', m.quotaFailed ? '暂时读不到额度。' : '这台电脑还没有额度数据。')); return box; }
+    const list = node('div', 'quota-rows'); list.setAttribute('role', 'list'); list.setAttribute('aria-label', `${m.label} 订阅剩余额度`);
+    for (const row of quota.rows) {
+      const id = m.id + ':' + row.key, open = openQuota.has(id);
+      const item = node('div', 'quota-item'); item.setAttribute('role', 'listitem');
+      item.dataset.status = row.status; item.dataset.provider = row.provider;
+      const button = node('button', 'quota-row'); button.type = 'button';
+      button.setAttribute('aria-expanded', String(open));
+      button.setAttribute('aria-label', Core.quotaLabel(row, now) + '；查看详情'); button.title = '查看详情';
+      const name = node('span', 'quota-name');
+      name.append(providerIcon(row), node('span', 'quota-name-text', [row.flag, row.short].filter(Boolean).join(' ')));
+      if (row.captain) { const crown = node('span', 'quota-captain'); crown.title = '队长在用'; crown.innerHTML = svg('crown'); name.append(crown); }
+      const values = node('span', 'quota-values');
+      if (row.cells.length || row.status === 'out') {
+        for (const cell of Core.quotaCells(row)) {
+          const el = node('span', 'quota-cell'); el.dataset.window = cell.key;
+          el.dataset.level = cell.missing ? 'none' : Core.cellLevel(row, cell, m.quotaFailed);
+          const lineEl = node('span', 'quota-line');
+          if (cell.missing) { el.dataset.missing = 'true'; lineEl.append(node('span', 'quota-pct', '—')); }
+          else if (cell.out) {
+            const ban = node('span', 'quota-ban'); ban.innerHTML = svg('ban');
+            lineEl.append(ban, node('span', 'quota-reset', cell.resetAt > now ? Core.shortReset(cell.resetAt, now) : '用尽'));
+          } else {
+            lineEl.append(node('span', 'quota-pct', Core.percentText(cell)));
+            if (cell.resetAt > now) lineEl.append(node('span', 'quota-reset', Core.shortReset(cell.resetAt, now)));
+          }
+          el.append(lineEl, quotaMeter(cell)); values.append(el);
+        }
+      } else {
+        const status = node('span', 'quota-status'); status.dataset.level = 'none';
+        status.append(node('span', 'quota-line', Core.emptyText(row)), quotaMeter({ out: true })); values.append(status);
+      }
+      button.append(name, values);
+      const note = Core.quotaNote(row, now);
+      if (note) button.append(node('span', 'quota-row-note', note));
+      const detail = quotaDetails(m, row, now); detail.hidden = !open; detail.id = 'quota-detail-' + id.replace(/[^\w-]/g, '_');
+      button.setAttribute('aria-controls', detail.id);
+      button.addEventListener('click', () => {
+        if (openQuota.has(id)) openQuota.delete(id); else openQuota.add(id);
+        signatures.delete(m.card); render();
+        // The card is rebuilt: put the focus back on the row that was tapped.
+        m.card.querySelector(`[aria-controls="${detail.id}"]`)?.focus({ preventScroll: true });
+      });
+      item.append(button, detail); list.append(item);
+    }
+    box.append(list);
+    return box;
   }
 
   // ---- overview ------------------------------------------------------------
@@ -229,7 +338,7 @@
     const banned = Math.max(0, Math.ceil((m.banUntil - Date.now()) / 60000));
     const receipt = online ? latestReceipt(m) : null;
     const signature = [m.state, m.detail, m.loginError, m.loginBusy, banned, m.logoutBusy,
-      online ? [m.snap.machine, m.snap.captain && [m.snap.captain.id, m.snap.captain.status], m.meta.workingCount, m.meta.sessionCount, receipt] : [m.meta, lastSeen(m)]];
+      online ? [m.snap.machine, m.snap.captain && [m.snap.captain.id, m.snap.captain.status], m.meta.workingCount, m.meta.sessionCount, receipt, m.quota, m.quotaFailed, [...openQuota].filter((id) => id.startsWith(m.id + ':')), Math.floor(Date.now() / 60000)] : [m.meta, lastSeen(m)]];
     if (!changed(card, signature)) return;
     card.className = 'machine-card tone-' + Core.STATES[m.state].tone;
     card.replaceChildren();
@@ -240,6 +349,7 @@
     card.append(head);
     if (online) {
       card.append(stats(m.meta.captainStatus, m.meta.workingCount, m.meta.sessionCount));
+      if (m.quota) card.append(quotaSection(m));
       const block = node('div', 'receipt');
       block.append(node('span', 'receipt-label', receipt ? '最近回执 · ' + receipt.title : '最近回执'), node('p', '', receipt ? receipt.text : '还没有队员提交回执。'));
       const foot = node('div', 'machine-foot');
@@ -307,27 +417,84 @@
   }
 
   // ---- captain -------------------------------------------------------------
-  function renderTarget() {
-    const group = $('target');
-    if (!changed(group, [target, sending, machines.map((m) => [m.id, m.label, m.state])])) return;
-    const focused = document.activeElement && document.activeElement.dataset ? document.activeElement.dataset.target : null;
-    group.replaceChildren();
-    for (const m of machines) {
-      const button = node('button', 'segment compact');
-      button.type = 'button'; button.dataset.target = m.id; button.disabled = sending;
-      button.setAttribute('aria-pressed', String(target === m.id));
-      const label = `发给 ${m.label}（${Core.STATES[m.state].label}）`;
-      button.setAttribute('aria-label', label); button.title = label;
-      button.append(node('span', 'dot tone-' + Core.STATES[m.state].tone), node('span', '', m.label), node('span', 'segment-state', Core.STATES[m.state].short));
-      button.addEventListener('click', () => setTarget(m.id));
-      group.append(button);
+  // ---- conversation groups -------------------------------------------------
+  // One round: what the user said, then a single reply block from the Captain
+  // with the dispatching and receipts folded into a one-line "process".
+  function copyText(button, text, label) {
+    navigator.clipboard.writeText(text).then(() => {
+      button.innerHTML = svg('check'); button.title = '已复制'; button.setAttribute('aria-label', '已复制'); button.classList.add('copied');
+      setTimeout(() => { button.innerHTML = svg('copy'); button.title = label; button.setAttribute('aria-label', label); button.classList.remove('copied'); }, 1600);
+    }).catch(() => notice('无法复制。可以长按文字手动选择。', true));
+  }
+  function processDetails(group) {
+    const summary = Core.processSummary(group);
+    if (!summary) return null;
+    const details = node('details', 'process');
+    details.append(node('summary', '', summary));
+    const list = node('ul', 'process-list');
+    for (const task of group.tasks) {
+      const item = node('li', task.failed ? 'process-failed' : '');
+      item.append(node('strong', '', task.title || '任务'));
+      if (task.summary) item.append(node('span', '', ' — ' + task.summary));
+      list.append(item);
     }
-    if (focused) group.querySelector(`[data-target="${focused}"]`)?.focus();
+    for (const step of group.steps) list.append(node('li', 'process-step', step));
+    details.append(list);
+    return details;
+  }
+  function renderGroup(m, group) {
+    const row = node('article', 'turn');
+    if (group.id) row.dataset.turnId = group.id;
+    if (group.user || group.images.length) {
+      const prompt = node('div', 'bubble mine');
+      prompt.append(node('span', 'bubble-label', '你'));
+      if (group.user) {
+        const text = node('p', 'bubble-text', group.user);
+        prompt.append(text);
+        // Long messages fold to a few lines; the whole text stays in the page.
+        if (group.user.length > 500 || group.user.split('\n').length > 10) {
+          text.classList.add('clamped');
+          const toggle = node('button', 'expand-toggle', '展开全文');
+          toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false');
+          toggle.addEventListener('click', () => {
+            const open = text.classList.toggle('clamped') === false;
+            toggle.textContent = open ? '收起' : '展开全文'; toggle.setAttribute('aria-expanded', String(open));
+          });
+          prompt.append(toggle);
+        }
+      }
+      if (group.images.length) prompt.append(node('span', 'bubble-state', `附 ${group.images.length} 张图片（在这台电脑上查看）`));
+      row.append(prompt);
+    }
+    const body = group.replies.join('\n\n');
+    const process = processDetails(group);
+    if (body || process || group.pending || group.interrupted) {
+      const reply = node('div', 'bubble');
+      reply.append(node('span', 'bubble-label', `${m.label} 队长`));
+      if (body) {
+        reply.append(node('p', 'bubble-text', body));
+        const actions = node('div', 'turn-actions');
+        const copy = iconButton('copy', '复制队长回复');
+        copy.addEventListener('click', () => copyText(copy, body, '复制队长回复'));
+        actions.append(copy);
+        if (group.interrupted) actions.append(node('span', 'turn-state', '已中断'));
+        reply.append(actions);
+      } else if (group.interrupted && !process) reply.append(node('p', 'bubble-text turn-state', '回复已中断。'));
+      if (group.pending) {
+        const pending = node('p', 'bubble-text pending');
+        const typing = node('span', 'typing'); typing.setAttribute('aria-hidden', 'true');
+        typing.append(node('i'), node('i'), node('i'));
+        pending.append(typing, node('span', '', body ? '处理中…' : '队长正在处理…'));
+        reply.append(pending);
+      }
+      if (process) reply.append(process);
+      row.append(reply);
+    }
+    return row;
   }
   function renderCaptain() {
     const m = byId(target);
     if (!m) return;
-    renderTarget();
     const captain = m.snap && m.snap.captain && m.snap.captain.id ? m.snap.captain : null;
     $('captain-title').textContent = `${m.label} 队长`;
     const status = $('captain-status');
@@ -343,15 +510,7 @@
       if (m.state !== 'online') conversation.append(node('p', 'empty', `${m.label} ${Core.STATES[m.state].label}，${lastSeen(m)}。对话不会存在手机里，等它恢复后再显示。`));
       else if (!captain) conversation.append(node('p', 'empty', `${m.label} 还没有队长。先在那台电脑上创建队长。`));
       else if (!turns.length && !pending.length) conversation.append(node('p', 'empty', `还没有对话。发一条指令，让 ${m.label} 队长开始安排。`));
-      for (const turn of turns) {
-        const row = node('article', 'turn');
-        if (turn.user) { const prompt = node('div', 'bubble mine'); prompt.append(node('span', 'bubble-label', '你'), node('p', 'bubble-text', turn.user)); row.append(prompt); }
-        const reply = node('div', 'bubble');
-        reply.append(node('span', 'bubble-label', `${m.label} 队长`), node('p', 'bubble-text', turn.reply || (turn.interrupted ? '回复已中断。' : turn.done ? '本次处理已结束。' : '队长正在处理…')));
-        if (turn.interrupted) reply.append(node('span', 'bubble-state', '已中断'));
-        else if (!turn.done) reply.append(node('span', 'bubble-state', '处理中'));
-        row.append(reply); conversation.append(row);
-      }
+      for (const group of Core.groupTurns(turns)) conversation.append(renderGroup(m, group));
       for (const item of pending) {
         const row = node('article', 'turn'), bubble = node('div', 'bubble mine' + (item.state === 'failed' ? ' failed' : ''));
         bubble.append(node('span', 'bubble-label', item.state === 'failed' ? `没有发给 ${m.label}` : `正在发给 ${m.label}…`), node('p', 'bubble-text', item.text));
@@ -381,7 +540,9 @@
     $('send').disabled = sending || !!block || !box.value.trim();
     $('clear').disabled = sending || !box.value;
     const hint = $('send-hint');
-    hint.textContent = sending ? `正在发给 ${m.label} 队长…` : block || sendStatus || `只发给 ${m.label} 队长。队长忙碌时，消息会排队等待。`;
+    // Nothing to say, nothing shown: the bottom is just the input.
+    hint.textContent = sending ? `正在发给 ${m.label} 队长…` : block || sendStatus;
+    hint.hidden = !hint.textContent;
     hint.classList.toggle('blocked', !sending && !!block);
   }
   $('message').addEventListener('input', () => { sendStatus = ''; updateComposer(); });
@@ -544,7 +705,7 @@
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
     machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '',
-      meta: Core.cleanMeta(meta[m.id]), current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
+      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
     machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);
     filter = byId(saved) ? saved : 'all';

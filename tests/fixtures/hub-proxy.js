@@ -30,11 +30,11 @@ function readJson(req) {
 // answers, like a half-open tunnel) | 'legacy' (an old build: no api/info, and
 // every prefixed path answers 401 because it does not know the prefix) | 'redirect'
 // (a hostile machine: every answer is a 307 to machine.redirectTo, e.g. a path on the other machine).
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true }) {
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [] }) {
   const base = `/${id}/`, cookieName = `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, boardVersion: 'b1',
+    requests: [], messages: [], sessions, cards, outputs, quota, boardVersion: 'b1',
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
     setCards(next) { machine.cards = next; machine.boardVersion = crypto.randomBytes(4).toString('hex'); },
@@ -80,6 +80,8 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (req.method === 'GET' && url.pathname === '/api/sessions') return json(res, 200, { sessions: machine.sessions });
     if (req.method === 'GET' && url.pathname === '/api/captain') return json(res, 200, machine.captain || { turns: [], status: 'unavailable' });
     if (req.method === 'GET' && url.pathname === '/api/tasks') return json(res, 200, { cards: machine.cards });
+    // Display values only, like quotaView() in mobile-web.js; the account is already masked.
+    if (req.method === 'GET' && url.pathname === '/api/quota') return json(res, 200, { rows: machine.quota, version: appVersion, now: Date.now() });
     if (req.method === 'GET' && url.pathname === '/api/output') {
       const session = machine.sessions.find((s) => s.id === url.searchParams.get('id') && !s.isMain);
       return session ? json(res, 200, { id: session.id, title: session.title, text: machine.outputs[session.id] || '' }) : json(res, 404, { error: 'Session not found.' });
@@ -112,18 +114,33 @@ function defaults() {
     card('win-tunnel', 'AgentDeck 三端', 'Windows 隧道和开机自启', 'todo', 90),
     card('weekly', '资料整理', '整理本周周报素材', 'done', 300, { latest_receipt: '素材已归档到周报目录。' }),
   ];
+  const at = (minutes) => Date.now() + minutes * 60000, ago = (minutes) => Date.now() - minutes * 60000;
+  const cell = (key, remaining, resetMinutes, extra = {}) => ({ key, remaining, out: false, resetAt: at(resetMinutes), ...extra });
+  const seat = (key, provider, name, short, flag, cells, extra = {}) => ({ key, provider, name, short, flag, captain: false, status: 'normal', failed: false, cells,
+    recoveryAt: null, sampledAt: ago(3), account: 'h***@example.com', source: 'test fixture', ...extra });
   return [
     { id: 'mac', label: 'Mac', platform: 'darwin', hostname: 'Jinhao-MacBook.local',
+      quota: [
+        seat('claude-1', 'Claude', 'Claude Max · h***@example.com', 'Max', '🇺🇸', [cell('5h', 72, 95), cell('7d', 41, 3000)], { captain: true }),
+        seat('codex-1', 'Codex', 'Codex Pro · h***@example.com', 'Pro', '🇺🇸', [cell('5h', 8, 40), cell('7d', 63, 5000)], { status: 'danger' }),
+        seat('codex-2', 'Codex', 'Codex Plus · w***@example.com', 'Plus', '🇨🇳', [cell('5h', 0, 70, { out: true }), cell('7d', 12, 4000)], { status: 'out', recoveryAt: at(70) }),
+      ],
       sessions: [
         { id: 'mac-captain', title: '队长', model: 'claude-opus', status: 'working', isMain: true, receipt: '' },
         { id: 'mac-hub', title: '三端方案 · 手机总台', model: 'claude-opus', status: 'working', isMain: false, receipt: '总览和派活界面已完成，正在补截图。' },
         { id: 'mac-docs', title: '文档 · 双机说明', model: 'gemini-pro', status: 'done', isMain: false, receipt: '双机登录说明已写好，等待验收。' },
       ],
-      turns: [{ id: 'mac-t1', ts: Date.now() - 600000, user: '出门前看一下三端方案的进度。', reply: 'Mac 队长测试回复：手机总台在做界面，文档已提交回执。\n<script>window.hubInjected=true</script>', done: true, interrupted: false }],
+      // One message, then everything the desktop injected on the way: dispatch cards, a notice, two receipts and the reply.
+      turns: [{ id: 'mac-t1', ts: Date.now() - 600000, user: '出门前看一下三端方案的进度。', reply: '', done: true, interrupted: false },
+        { id: 'mac-t2', ts: Date.now() - 590000, kind: 'task', task: { title: '手机总台前端', status: 'doing', summary: '', failed: false }, user: '', reply: '', done: true, interrupted: false },
+        { id: 'mac-t3', ts: Date.now() - 580000, kind: 'task', task: { title: '双机说明文档', status: 'review', summary: '双机登录说明已写好。', failed: false }, user: '', reply: '', done: true, interrupted: false },
+        { id: 'mac-t4', ts: Date.now() - 570000, kind: 'notice', user: '', reply: '队员回执已送达', done: true, interrupted: false },
+        { id: 'mac-t5', ts: Date.now() - 560000, user: '', reply: 'Mac 队长测试回复：手机总台在做界面，文档已提交回执。\n<script>window.hubInjected=true</script>', steps: ['读取看板', '派发两张卡'], done: true, interrupted: false }],
       outputs: { 'mac-hub': 'Mac 队员测试输出：\n✓ 总览卡片\n✓ 派活目标切换\n<img src=x onerror="window.hubInjected=true">', 'mac-docs': 'Mac 文档测试输出。' },
       // Mac synced a newer copy of win-tunnel than Windows has seen.
       cards: [...shared.filter((c) => c.id !== 'win-tunnel'), card('win-tunnel', 'AgentDeck 三端', 'Windows 隧道和开机自启', 'doing', 5, { dispatch_claim: { key: 'k2', owner: 'OWENJH', delivered: true }, assignee: { agent: 'codex', model: 'gpt' } })] },
     { id: 'win', label: 'Windows', platform: 'win32', hostname: 'OWENJH',
+      quota: [seat('codex-w', 'Codex', 'Codex Pro · o***@example.com', 'Pro', '🇺🇸', [cell('5h', 55, 120), cell('7d', 30, 4000)], { captain: true })],
       sessions: [
         { id: 'win-captain', title: '队长', model: 'codex', status: 'idle', isMain: true, receipt: '' },
         { id: 'win-tunnel', title: '隧道守护脚本', model: 'codex', status: 'failed', isMain: false, receipt: 'Windows 测试回执：计划任务 dry-run 未通过，等待重试。' },

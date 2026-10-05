@@ -26,7 +26,8 @@ const machineCard = (label) => page.getByRole('article', { name: label, exact: t
 const nav = (name) => page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name, exact: true }).click();
 const refresh = () => page.getByRole('button', { name: '刷新全部电脑', exact: true }).click();
 const segment = (label) => page.locator('#machine-bar').getByRole('button', { name: new RegExp('^' + label) });
-const sendTo = (label) => page.locator('#target').getByRole('button', { name: new RegExp('^发给 ' + label) });
+// In the Captain view the header switch is also the send target.
+const sendTo = segment;
 async function shot(name) {
   // Neither the page nor the scrolling content area may overflow sideways.
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('main, .stack, .turns')].every((el) => el.scrollWidth <= el.clientWidth))).toBe(true);
@@ -68,7 +69,7 @@ for (const theme of ['dark', 'light']) {
     await expect(machineCard('Mac')).toContainText('需要登录');
     await expect(machineCard('Windows')).toContainText('需要登录');
     await expect(segment('全部')).toHaveAttribute('aria-pressed', 'true');
-    await expect(segment('全部')).toContainText('0/2 在线');
+    await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，0/2 在线');
     // The probe is asked first, without a login, and each machine only at its own prefix.
     expect(mac.requests[0]).toEqual({ method: 'GET', url: '/mac/api/info' });
     expect(win.requests[0]).toEqual({ method: 'GET', url: '/win/api/info' });
@@ -91,12 +92,12 @@ for (const theme of ['dark', 'light']) {
     await expect(machineCard('Mac')).toContainText('在线');
     await expect(machineCard('Mac')).toContainText('最近回执');
     expect(win.posts('login')).toHaveLength(0);
-    await expect(segment('Mac')).toContainText('在线');
-    await expect(segment('Windows')).toContainText('需登录');
+    await expect(segment('Mac')).toHaveAttribute('aria-label', 'Mac，在线');
+    await expect(segment('Windows')).toHaveAttribute('aria-label', 'Windows，需要登录');
     await shot(`overview-needs-login-${theme}`);
     await signIn('win');
     await expect(machineCard('Windows')).toContainText('Windows 测试回执');
-    await expect(segment('全部')).toContainText('2/2 在线');
+    await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
     expect(mac.posts('login')).toHaveLength(2);
     await auditButtons();
     await shot(`overview-both-online-${theme}`);
@@ -117,17 +118,17 @@ for (const theme of ['dark', 'light']) {
 
     win.setMode('hang'); await refresh();
     await expect(machineCard('Windows')).toContainText('无响应（可能在睡眠）', { timeout: 15000 });
-    await expect(segment('Windows')).toContainText('无响应');
+    await expect(segment('Windows')).toHaveAttribute('aria-label', 'Windows，无响应（可能在睡眠）');
     await expect(machineCard('Mac')).toContainText('在线');
     await shot(`overview-unresponsive-${theme}`);
 
     win.setMode('online'); await refresh();
-    await expect(segment('全部')).toContainText('2/2 在线');
+    await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
   });
 
   test(`captain, grouped sessions, merged board and output (${theme})`, async ({ browser }) => {
     await open(browser, { theme });
-    await expect(segment('全部')).toContainText('2/2 在线');
+    await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
     await nav('队长');
     await expect(page.locator('#captain-title')).toHaveText('Mac 队长');
     await expect(page.locator('#captain-turns')).toContainText('Mac 队长测试回复');
@@ -186,7 +187,7 @@ for (const theme of ['dark', 'light']) {
 test('work goes only to the chosen computer and never falls over to the other one', async ({ browser }) => {
   await open(browser);
   const { mac, win } = hub.machines;
-  await expect(segment('全部')).toContainText('2/2 在线');
+  await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
   await nav('队长');
   const box = page.getByLabel('给队长的消息'), send = page.locator('#send'), hint = page.locator('#send-hint');
   // Both online: Mac is the default target.
@@ -251,7 +252,7 @@ test('work goes only to the chosen computer and never falls over to the other on
 test('a computer that answers with a redirect toward the other one is never followed, for polls and for sends', async ({ browser }) => {
   await open(browser);
   const { mac, win } = hub.machines;
-  await expect(segment('全部')).toContainText('2/2 在线');
+  await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
   await nav('队长');
   const box = page.getByLabel('给队长的消息'), send = page.locator('#send');
   // Windows turns hostile: every answer is a 307 to a path on the Mac. Followed, the hub's request would carry the
@@ -280,7 +281,7 @@ test('a computer that answers with a redirect toward the other one is never foll
 test('a computer that is not logged in or has no captain cannot be sent to', async ({ browser }) => {
   await open(browser, { login: ['mac'] });
   hub.machines.mac.captain = null;
-  await expect(segment('Mac')).toContainText('在线');
+  await expect(segment('Mac')).toHaveAttribute('aria-label', 'Mac，在线');
   await nav('队长');
   await page.getByLabel('给队长的消息').fill('测试草稿');
   await refresh();
@@ -295,7 +296,7 @@ test('a computer that is not logged in or has no captain cannot be sent to', asy
 test('machine choice is remembered, content is not, and keyboard focus stays visible', async ({ browser }) => {
   await open(browser);
   const { mac, win } = hub.machines;
-  await expect(segment('全部')).toContainText('2/2 在线');
+  await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
   await segment('Windows').click();
   await expect(machineCard('Mac')).toBeHidden();
   await nav('队长');
@@ -330,8 +331,8 @@ test('machine choice is remembered, content is not, and keyboard focus stays vis
   await nav('队长');
   await expect(sendTo('Windows')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.getByLabel('给队长的消息')).toHaveValue('');
-  await segment('全部').click();
   await nav('总览');
+  await segment('全部').click();
   await expect(machineCard('Mac')).toBeVisible();
 
   // Tab through the overview: every stop shows a focus ring.
@@ -353,7 +354,7 @@ test('machine choice is remembered, content is not, and keyboard focus stays vis
 test('logging out of one computer leaves the other signed in; logging out of all needs a second tap', async ({ browser }) => {
   await open(browser);
   const { mac, win } = hub.machines;
-  await expect(segment('全部')).toContainText('2/2 在线');
+  await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
   const exitWindows = machineCard('Windows').getByRole('button', { name: /^退出 Windows：只退出这台电脑/ });
   await expect(exitWindows).toHaveAttribute('title', /另一台不受影响/);
   await exitWindows.click();
@@ -370,3 +371,143 @@ test('logging out of one computer leaves the other signed in; logging out of all
   await expect(machineCard('Mac')).toContainText('需要登录');
   expect(mac.devices.size).toBe(0);
 });
+
+for (const theme of ['dark', 'light']) {
+  test(`compact shell: the computer status lives in the header and the bottom is only the input (${theme})`, async ({ browser }) => {
+    await open(browser, { theme });
+    await expect(segment('全部')).toHaveAttribute('aria-label', '全部电脑，2/2 在线');
+    await nav('队长');
+    // No standalone status row: the switch is inside the header, and the content starts right under it.
+    const layout = await page.evaluate(() => {
+      const box = (selector) => { const el = document.querySelector(selector); const r = el.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, height: r.height }; };
+      return { header: box('.app-header'), main: box('main'), composer: box('.composer'), nav: box('.navigation'), inHeader: !!document.querySelector('.app-header #machine-bar'),
+        targetRow: !!document.querySelector('.target-row, #target'), hintHidden: document.getElementById('send-hint').hidden,
+        composerButtons: [...document.querySelectorAll('.composer button')].map((b) => b.getAttribute('aria-label')), dots: document.querySelectorAll('#machine-bar .dot').length };
+    });
+    expect(layout.inHeader).toBe(true);
+    expect(layout.header.height).toBeLessThanOrEqual(52);
+    expect(layout.main.top).toBeCloseTo(layout.header.bottom, 0);
+    expect(layout.targetRow).toBe(false);
+    expect(layout.hintHidden).toBe(true);
+    expect(layout.composerButtons).toEqual(['清空草稿', '发送给 Mac 队长']);
+    expect(layout.dots).toBe(2);          // the captain view has no "all": one dot and a short name per computer
+    // 844px phone: header 52, tabs 66.5, the rest is content. Before this change it was 663px (header 56 + status row 56.5 + target row).
+    expect(layout.main.height).toBeGreaterThanOrEqual(720);
+    await expect(sendTo('Mac')).toHaveAttribute('aria-pressed', 'true');
+    await expect(sendTo('Mac')).toHaveAttribute('aria-label', 'Mac，在线');
+    await expect(segment('全部')).toHaveCount(0);
+    await auditButtons();
+    await shot(`hub-compact-390-${theme}-captain`);
+    // Narrow phones keep the whole switch and the three header icons on one line.
+    await page.setViewportSize({ width: 320, height: 640 });
+    expect(await page.evaluate(() => { const h = document.querySelector('.app-header'); return h.scrollWidth <= h.clientWidth && document.documentElement.scrollWidth <= innerWidth
+      && [...document.querySelectorAll('.segment-name')].every((name) => name.scrollWidth <= name.clientWidth); })).toBe(true);
+    // 360px still fits everything on the one 52px line.
+    await page.setViewportSize({ width: 360, height: 740 });
+    expect(await page.evaluate(() => { const h = document.querySelector('.app-header'); return h.getBoundingClientRect().height <= 52 && [...document.querySelectorAll('.segment-name')].every((name) => name.scrollWidth <= name.clientWidth); })).toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await nav('总览');
+    await expect(segment('全部')).toHaveAttribute('aria-pressed', 'true');
+    await shot(`hub-compact-390-${theme}-overview`);
+  });
+
+  test(`under /mac/ one round of the conversation is one message and one Captain reply (${theme})`, async ({ browser }) => {
+    await open(browser, { theme });
+    const { mac, win } = hub.machines;
+    await nav('队长');
+    const conversation = page.locator('#captain-turns');
+    // The fixture holds a message, two dispatch cards, a notice and the reply as six desktop turns; the phone shows two bubbles.
+    await expect(conversation.locator('.turn')).toHaveCount(1);
+    await expect(conversation.locator('.bubble.mine')).toHaveCount(1);
+    await expect(conversation.locator('.bubble:not(.mine)')).toHaveCount(1);
+    await expect(conversation).toContainText('出门前看一下三端方案的进度。');
+    await expect(conversation).toContainText('Mac 队长测试回复');
+    await expect(conversation).not.toContainText('本次处理已结束');
+    const process = conversation.locator('details.process');
+    await expect(process.locator('summary')).toHaveText('过程：派了 2 件活，收到 1 份回执，3 步操作');
+    await expect(process.getByText('手机总台前端')).toBeHidden();
+    await process.locator('summary').click();
+    await expect(process.getByText('手机总台前端')).toBeVisible();
+    await expect(process).toContainText('双机说明文档 — 双机登录说明已写好。');
+    await expect(process).toContainText('读取看板');
+    // The reply is copyable with an icon button: tooltip, name, check mark afterwards.
+    const copy = conversation.getByRole('button', { name: '复制队长回复', exact: true });
+    await expect(copy).toHaveAttribute('title', '复制队长回复');
+    await copy.click();
+    await expect(conversation.getByRole('button', { name: '已复制', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('Mac 队长测试回复');
+    await expect(conversation.getByRole('button', { name: '复制队长回复', exact: true })).toBeVisible({ timeout: 4000 });
+    expect(await page.evaluate(() => window.hubInjected)).toBeUndefined();
+    // The data came from this computer's own prefix only.
+    expect(mac.requests.some((request) => request.url === '/mac/api/snapshot')).toBe(true);
+    expect(win.requests.some((request) => request.url.startsWith('/mac/'))).toBe(false);
+    await auditButtons();
+    await shot(`hub-grouped-390-${theme}-captain`);
+
+    // A long message is folded to a few lines with an expand control; the other computer's conversation stays separate.
+    const long = Array.from({ length: 14 }, (_, i) => `第 ${i + 1} 行：长消息也只算一条。`).join('\n');
+    mac.captain.turns.push({ id: 'mac-long', ts: Date.now() - 1000, user: long, reply: '收到，开始处理。', done: true, interrupted: false });
+    await refresh();
+    const toggle = conversation.getByRole('button', { name: '展开全文', exact: true });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(await conversation.locator('.bubble-text.clamped').evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+    await toggle.click();
+    await expect(conversation.getByRole('button', { name: '收起', exact: true })).toHaveAttribute('aria-expanded', 'true');
+    await expect(conversation).toContainText('第 14 行：长消息也只算一条。');
+    await sendTo('Windows').click();
+    await expect(conversation).not.toContainText('第 14 行');
+    await expect(conversation.locator('.bubble.mine')).toHaveCount(1);
+  });
+
+  test(`quota table shows for each computer under its own prefix, with details in place (${theme})`, async ({ browser }) => {
+    await open(browser, { theme });
+    const { mac, win } = hub.machines;
+    const quotaOf = (label) => machineCard(label).getByRole('region', { name: `${label} 的额度` });
+    await expect(quotaOf('Mac').getByRole('listitem')).toHaveCount(3);
+    await expect(quotaOf('Windows').getByRole('listitem')).toHaveCount(1);
+    expect(mac.requests.some((request) => request.url === '/mac/api/quota')).toBe(true);
+    expect(win.requests.some((request) => request.url === '/win/api/quota')).toBe(true);
+    expect(mac.requests.concat(win.requests).filter((request) => request.url.includes('quota') && !/^\/(mac|win)\/api\/quota$/.test(request.url))).toEqual([]);
+    const max = quotaOf('Mac').getByRole('listitem').filter({ hasText: 'Max' });
+    await expect(max).toContainText('72%'); await expect(max).toContainText('41%');
+    await expect(max.getByRole('button')).toHaveAttribute('aria-label', /^Claude Max · h\*\*\*@example\.com（队长在用）；5 小时剩余 72%.*每周剩余 41%.*；查看详情$/);
+    await expect(max.locator('.quota-captain')).toHaveAttribute('title', '队长在用');
+    // Low and used-up accounts are marked in words and shape, not colour alone.
+    await expect(quotaOf('Mac').getByRole('listitem').filter({ hasText: 'Pro' })).toHaveAttribute('data-status', 'danger');
+    const plus = quotaOf('Mac').getByRole('listitem').filter({ hasText: 'Plus' });
+    await expect(plus.locator('[data-window="5h"] .quota-ban svg')).toBeVisible();
+    await expect(plus.getByRole('button')).toHaveAttribute('aria-label', /5 小时已用尽.*恢复/);
+    await expect(plus.getByRole('button')).toHaveAttribute('aria-expanded', 'false');
+    await expect(plus.locator('.quota-detail')).toBeHidden();
+    await plus.getByRole('button').click();
+    const details = quotaOf('Mac').getByRole('listitem').filter({ hasText: 'Plus' });
+    await expect(details.getByRole('button')).toHaveAttribute('aria-expanded', 'true');
+    await expect(details.locator('.quota-detail')).toContainText('账号'); await expect(details.locator('.quota-detail')).toContainText('h***@example.com');
+    await expect(details.locator('.quota-detail')).toContainText('每周'); await expect(details.locator('.quota-detail')).toContainText('剩余 12%');
+    await expect(details.getByRole('button')).toBeFocused();
+    await auditButtons();
+    await shot(`hub-quota-390-${theme}-overview`);
+    // Nothing from the quota rows is kept on the phone.
+    const dump = await page.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }));
+    for (const value of ['example.com', 'Claude Max', '72%', 'Codex']) expect(dump).not.toContain(value);
+    // Narrow screens: the table never scrolls sideways.
+    await page.setViewportSize({ width: 320, height: 640 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && [...document.querySelectorAll('.quota-row')].every((el) => el.scrollWidth <= el.clientWidth + 1) && [...document.querySelectorAll('.quota-row')].every((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth; }))).toBe(true);
+    await page.setViewportSize({ width: 390, height: 844 });
+
+    // A build without the quota route simply has no table; a failing read keeps the last rows and says so; offline hides the rows.
+    await page.route('**/win/api/quota', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{"error":"Not found."}' }));
+    await refresh();
+    await expect(quotaOf('Windows')).toHaveCount(0);
+    await expect(machineCard('Windows')).toContainText('在线');
+    await page.unroute('**/win/api/quota');
+    await page.route('**/mac/api/quota', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{}' }));
+    await refresh();
+    await expect(quotaOf('Mac').locator('.quota-note')).toHaveText('未能更新');
+    await expect(quotaOf('Mac').getByRole('listitem')).toHaveCount(3);
+    await page.unroute('**/mac/api/quota');
+    mac.setMode('down'); await refresh();
+    await expect(machineCard('Mac').locator('.quota')).toHaveCount(0);
+  });
+}
