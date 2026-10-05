@@ -60,17 +60,17 @@
     return isSafetyCheckpoint(task.receipt && task.receipt.summary);
   }
   function shouldResume(task) {
-    if (!task) return false;
+    if (!task || task.pendingInstall) return false;
     // failed / stopped / done stay closed unless this app marked a checkpoint.
     // quota and asking are still the same job; a crash never rewrites them.
     if (['failed', 'stopped', 'done'].includes(task.status)) return isCheckpointClosure(task);
     return OPEN.includes(task.status);
   }
   function holdsAcrossRestart(task) {
-    return !!task && (OPEN.includes(task.status) || isCheckpointClosure(task));
+    return !!task && !task.pendingInstall && (OPEN.includes(task.status) || isCheckpointClosure(task));
   }
   function shouldPark(task) {
-    return !!task && PARK.includes(task.status) && !(task.receipt && task.receipt.failed);
+    return !!task && !task.pendingInstall && PARK.includes(task.status) && !(task.receipt && task.receipt.failed);
   }
   function resumeEnabled(config) {
     return !config || config.resumeOnRestart !== false;

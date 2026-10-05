@@ -12,7 +12,7 @@ function runtime(task, terminalState, lastReceipt) {
   const captain = { id: 'captain', isMain: true, cmd: '' };
   const worker = { id: 'worker', cmd: 'cursor-agent', lastReceipt };
   const entries = new Map([[captain.id, { alive: true, state: 'done' }], [worker.id, { alive: true, state: terminalState }]]);
-  const window = { deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, taskBoard(op, input) { boardEvents.push({ op, input }); return Promise.resolve({}); } }, MainCore: M, BoardCore: B, ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {} } };
+  const window = { deck: { saveConfigSync: () => true, onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, taskBoard(op, input) { boardEvents.push({ op, input }); return Promise.resolve({}); } }, MainCore: M, BoardCore: B, ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {} } };
   const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   const state = { colId: captain.id, tasks: [task], pending: [], waitlist: [] };
@@ -77,4 +77,34 @@ test('a new working instruction clears the old column fallback but keeps actual 
   api.onTick(worker.id, entry);
   assert.equal(worker.lastReceipt, receipt);
   assert.equal(task.status, 'stopped');
+});
+
+test('installation registration persists before acknowledgement and blocks early completion and process failures', async () => {
+  const task = { id: 'install-task', gen: 1, colId: 'worker', status: 'working', startedAt: 1 };
+  const { api, worker, boardEvents, entry } = runtime(task, 'working');
+  const registered = await api.submit({ action: 'progress', message: '安装待核对', installId: 'install-1', targetVersion: '1.2.0' }, worker);
+  assert.deepEqual(JSON.parse(registered.result), { taskId: 'install-task', columnId: 'worker' });
+  assert.equal(task.pendingInstall.id, 'install-1');
+  await assert.rejects(api.submit({ action: 'complete', result: '马上触发' }, worker), /安装待核对/);
+  await api.submit({ action: 'session-exit', code: 1 }, worker);
+  entry.alive = false;
+  api.onTick(worker.id, entry);
+  assert.equal(task.status, 'working');
+  assert.equal(boardEvents.length, 0);
+});
+
+for (const status of ['success', 'failed']) test(`runtime installation ${status} settles exactly its registered task once`, async () => {
+  const task = { id: 'install-task', gen: 1, colId: 'worker', boardId: 'card', status: 'working', startedAt: 1 };
+  const { api, worker, captain, state, boardEvents } = runtime(task, 'working');
+  await api.submit({ action: 'progress', message: '安装待核对', installId: 'install-1', targetVersion: '1.2.0' }, worker);
+  const r = { id: 'install-1', taskId: task.id, columnId: worker.id, targetVersion: '1.2.0', status, reason: status === 'failed' ? '复制失败' : '' };
+  await assert.rejects(api.handle({ action: 'main-install-result', installResult: { ...r, id: 'other' }, result: 'wrong' }, captain), /不匹配/);
+  const message = { action: 'main-install-result', installResult: r, result: '运行结果已核对' };
+  await api.handle(message, captain);
+  await api.handle(message, captain);
+  assert.equal(task.status, status === 'success' ? 'done' : 'failed');
+  assert.equal(task.pendingInstall, undefined);
+  assert.equal(task.installResultId, 'install-1');
+  assert.equal(boardEvents.filter((e) => e.op === 'event').length, 1);
+  assert.equal(state.pending.filter((p) => p.taskId === task.id).length, 1);
 });

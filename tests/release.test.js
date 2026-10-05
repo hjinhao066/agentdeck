@@ -292,53 +292,13 @@ test('test lock records owner PID and branch and releases after success or failu
   assert.equal(fs.existsSync(lock), false);
 });
 
-test('generated installer is valid bash with signatures, hashes, live-app guard and timing', (t) => {
+test('generated installer delegates to the formal bounded installer with pinned artifact checks', (t) => {
   const { root } = fixture(t);
   const file = path.join(root, 'install.sh');
   const script = installer({ version: '1.2.0', dmg: path.join(root, "odd ' name.dmg"), sha256: 'a'.repeat(64), asarSha256: 'b'.repeat(64) });
   write(file, script); execFileSync('bash', ['-n', file]);
-  assert.match(script, /if running; then/); assert.match(script, /expected_asar=/);
-  assert.match(script, /installed-signature/); assert.match(script, /install-timing.tsv/);
-  assert.match(script, /mv "\$backup_app" "\$destination"/);
-});
-
-test('installer rehearsal replaces a complete bundle, preserves data and rolls back verification failure', { skip: process.platform !== 'darwin' }, (t) => {
-  const { root } = fixture(t);
-  const apps = path.join(root, 'apps'), home = path.join(root, 'home'), bin = path.join(root, 'bin');
-  const original = path.join(apps, 'AgentDeck.app');
-  const imageApp = path.join(root, 'image/AgentDeck.app');
-  write(path.join(original, 'old.txt'), 'old runtime');
-  write(path.join(imageApp, 'Contents/Resources/app.asar'), 'new runtime');
-  write(path.join(home, 'Library/Application Support/agentdeck/config.json'), 'user data');
-  const dmg = path.join(root, 'fixture.dmg'); write(dmg, 'fixture');
-  const stubs = {
-    pgrep: '[ -f "$FIXTURE_ROOT/live" ]',
-    hdiutil: 'if [ "$1" = attach ]; then for mount; do :; done; cp -R "$FIXTURE_ROOT/image/AgentDeck.app" "$mount/"; else rm -rf "$2/AgentDeck.app"; fi',
-    codesign: 'for target; do :; done; if [ "${FAIL_INSTALLED:-0}" = 1 ] && [ "$target" = "$FIXTURE_ROOT/apps/AgentDeck.app" ]; then exit 1; fi',
-    ditto: 'cp -R "$1" "$2"',
-    plist: 'echo 1.2.0',
-  };
-  for (const [name, body] of Object.entries(stubs)) {
-    const file = path.join(bin, name); write(file, `#!/bin/bash\nset -e\n${body}\n`); fs.chmodSync(file, 0o755);
-  }
-  const file = path.join(root, 'install.sh');
-  write(file, installer({ version: '1.2.0', dmg, sha256: digest('fixture'), asarSha256: digest('new runtime') })
-    .replaceAll('/Applications', apps).replaceAll('/usr/libexec/PlistBuddy', path.join(bin, 'plist')));
-  const env = { ...isolatedEnv(), HOME: home, PATH: `${bin}:${process.env.PATH}`, FIXTURE_ROOT: root };
-  delete env.SUDO_USER;
-  write(path.join(root, 'live'), 'running');
-  assert.throws(() => execFileSync('bash', [file], { env, stdio: 'pipe' }));
-  assert.equal(fs.readFileSync(path.join(original, 'old.txt'), 'utf8'), 'old runtime');
-  fs.unlinkSync(path.join(root, 'live'));
-  // The installed-signature failure occurs after the replacement, and must restore the old bundle.
-  assert.throws(() => execFileSync('bash', [file], { env: { ...env, FAIL_INSTALLED: '1' }, stdio: 'pipe' }));
-  assert.equal(fs.readFileSync(path.join(original, 'old.txt'), 'utf8'), 'old runtime');
-  assert.equal(fs.readdirSync(apps).filter((name) => name.includes('.new-')).length, 0);
-  execFileSync('bash', [file], { env, stdio: 'pipe' });
-  assert.equal(fs.readFileSync(path.join(original, 'Contents/Resources/app.asar'), 'utf8'), 'new runtime');
-  assert.equal(fs.readFileSync(path.join(home, 'Library/Application Support/agentdeck/config.json'), 'utf8'), 'user data');
-  assert.equal(fs.readdirSync(apps).filter((name) => name.startsWith('AgentDeck.pre-')).length, 1);
-  const timings = fs.readFileSync(path.join(root, 'install-timing.tsv'), 'utf8');
-  assert.match(timings, /stage\t\d+\t0/); assert.match(timings, /total\t\d+\t0/);
-  t.diagnostic(`Installer fixture (mock disk/signature commands; whole seconds): ${timings.trim().replaceAll('\n', '; ')}`);
+  assert.match(script, /restart-agentdeck\.sh/);
+  assert.match(script, /--sha256/); assert.match(script, /--asar-sha256/);
+  assert.match(script, /--version '1\.2\.0'/);
+  assert.doesNotMatch(script, /launchctl|KeepAlive|while|until/);
 });

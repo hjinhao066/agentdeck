@@ -215,65 +215,14 @@ function cachedBuild(cache, key, output) {
   return fs.existsSync(file) && sha(fs.readFileSync(file)) === cache.sha256;
 }
 
-function installer({ version, dmg, sha256, asarSha256 }) {
-  // Derived from the historical installers: refuses a live app, stages the
-  // entire signed bundle, backs up user data, and never launches anything.
+function installer({ version, dmg, sha256, asarSha256, scriptPath = path.join(__dirname, 'restart-agentdeck.sh') }) {
+  // Generated launchers contain only immutable artifact coordinates; the formal
+  // installer owns retries, rollback, process checks and the durable result.
   return `#!/bin/bash
 set -euo pipefail
-release_dmg=${shellQuote(dmg)}
-expected_sha=${shellQuote(sha256)}
-expected_asar=${shellQuote(asarSha256)}
-running() { pgrep -f '^/Applications/AgentDeck[.]app/Contents/' >/dev/null; }
-if running; then echo 'Quit AgentDeck before installing.' >&2; exit 1; fi
-[[ -w /Applications ]]
-timing_file=${shellQuote(path.join(path.dirname(dmg), 'install-timing.tsv'))}
-printf 'step\\tseconds\\tstatus\\n' > "$timing_file"
-install_started=$SECONDS
-timed() {
-  local name="$1" start=$SECONDS code=0
-  shift
-  "$@" || code=$?
-  printf '%s\\t%s\\t%s\\n' "$name" "$((SECONDS - start))" "$code" >> "$timing_file"
-  return "$code"
-}
-release_mount=$(mktemp -d /tmp/agentdeck-install.XXXXXX)
-release_stamp="$(date +%Y%m%d-%H%M%S)-$$"
-staged_app="/Applications/AgentDeck-${version}.new-$release_stamp.app"
-backup_app="/Applications/AgentDeck.pre-${version}-$release_stamp.app"
-destination=/Applications/AgentDeck.app
-cleanup() { local code=$?; hdiutil detach "$release_mount" >/dev/null 2>&1 || true; rmdir "$release_mount" 2>/dev/null || true; rm -rf "$staged_app"; printf 'total\\t%s\\t%s\\n' "$((SECONDS - install_started))" "$code" >> "$timing_file"; }
-trap cleanup EXIT
-verify_sha() { [[ "$(shasum -a 256 "$1" | awk '{print $1}')" == "$2" ]]; }
-timed dmg-sha256 verify_sha "$release_dmg" "$expected_sha"
-timed mount hdiutil attach "$release_dmg" -verify -noignorebadchecksums -readonly -nobrowse -mountpoint "$release_mount"
-timed source-signature codesign --verify --deep --strict "$release_mount/AgentDeck.app"
-[[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$release_mount/AgentDeck.app/Contents/Info.plist")" == '${version}' ]]
-user_home="$HOME"
-if [[ -n "\${SUDO_USER:-}" ]]; then user_home=$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory | cut -d ' ' -f 2-); fi
-data_dir="$user_home/Library/Application Support/agentdeck"
-data_backup="$user_home/AgentDeck-backups/pre-${version}-$release_stamp"
-if [[ -d "$data_dir" ]]; then
-  mkdir -p "$data_backup"
-  for item in config.json sessions chats long-prompts; do
-    if [[ -e "$data_dir/$item" ]]; then timed "backup-$item" ditto "$data_dir/$item" "$data_backup/$item"; fi
-  done
-fi
-[[ ! -e "$staged_app" && ! -e "$backup_app" ]]
-timed stage ditto "$release_mount/AgentDeck.app" "$staged_app"
-timed staged-signature codesign --verify --deep --strict "$staged_app"
-timed staged-asar-sha256 verify_sha "$staged_app/Contents/Resources/app.asar" "$expected_asar"
-if running; then echo 'AgentDeck restarted; installation canceled.' >&2; exit 1; fi
-if [[ -e "$destination" ]]; then timed preserve-old mv "$destination" "$backup_app"; fi
-if ! timed replace mv "$staged_app" "$destination"; then
-  if [[ -e "$backup_app" && ! -e "$destination" ]]; then mv "$backup_app" "$destination"; fi
-  exit 1
-fi
-if ! timed installed-signature codesign --verify --deep --strict "$destination"; then
-  mv "$destination" "$staged_app"
-  if [[ -e "$backup_app" ]]; then mv "$backup_app" "$destination"; fi
-  exit 1
-fi
-echo "Installed ${version}; user data untouched; old bundle: $backup_app. No app launched."
+installer=${shellQuote(scriptPath)}
+[[ -f "$installer" ]] || { echo 'Missing formal AgentDeck installer' >&2; exit 1; }
+exec bash "$installer" --go --dmg ${shellQuote(dmg)} --sha256 ${shellQuote(sha256)} --asar-sha256 ${shellQuote(asarSha256)} --version ${shellQuote(version)} "$@"
 `;
 }
 
@@ -285,7 +234,7 @@ async function release(repo, options, runCommand = run) {
         ['create owned release worktree', 'merge branches in order (stop on conflict)', 'commit package + lock version']),
       'npm ci + Electron preparation (lock/platform cache)', 'machine test lock: npm test then npm run test:smoke (one worker); audit in parallel',
       'npm run dist:mac -- --publish never (unchanged-input cache)',
-      'SHA256 + verified DMG mount/signature/packaged source in parallel', 'generate timed installer + timing report (do not execute installer)',
+      'SHA256 + verified DMG mount/signature/packaged source in parallel', 'generate bounded verified installer launcher (do not execute installer)',
     ] }, null, 2));
     return;
   }
@@ -310,7 +259,7 @@ async function release(repo, options, runCommand = run) {
       `\nCache hits: dependencies=${!!report.dependenciesCached}, tests=${!!report.testsCached}, build=${!!report.buildCached}.\n` +
       '\nRemoved: intermediate-merge test/build repeats; full E2E from the patch-release gate; serial audit waits; separate DMG verification pass (attach -verify performs it); one git process per runtime file; copying the old app during installation (rename preserves it). Unit and smoke run sequentially under the machine test lock.\n' +
       `\nTest lock wait: ${report.testLockWaitSeconds ?? 'cached / not reached'} seconds.\n` +
-      '\nInstallation is not executed here. The generated installer writes install-timing.tsv (whole seconds) alongside this report. Relaunch and application health checks remain the release operator\'s final step.\n' +
+      '\nInstallation is not executed here. The generated launcher uses the formal installer: at most three attempts, rollback on failure, then a durable version/process verification result in userData/install-result.json.\n' +
       '\nNo main merge, tag, push, installation or restart performed.\n');
   };
   async function step(name, action) {
@@ -445,7 +394,7 @@ async function release(repo, options, runCommand = run) {
     ]);
     await step('installer', async () => {
       const file = path.join(plan.output, `install-${plan.label}.sh`);
-      fs.writeFileSync(file, installer({ version: plan.version, dmg, sha256: report.sha256, asarSha256: report.verification.asarSha256 }), { mode: 0o755 });
+      fs.writeFileSync(file, installer({ version: plan.version, dmg, sha256: report.sha256, asarSha256: report.verification.asarSha256, scriptPath: path.join(plan.worktree, 'scripts/restart-agentdeck.sh') }), { mode: 0o755 });
       await runCommand('bash', ['-n', file], plan.worktree, path.join(plan.output, 'installer-syntax.log'));
     });
     save(cacheFile, { key, dmg: path.basename(dmg), sha256: report.sha256 });

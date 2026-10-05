@@ -68,6 +68,7 @@
       "auto-verify-core.js",
       "main-session.js",
       "restart-resume.js",
+      "install-result.js",
       "agent-sessions.js",
       "task-board.js",
       "shared-store.js",

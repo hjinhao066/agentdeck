@@ -8,6 +8,7 @@ const { validId, trustedSender, privateFile, boundedAppend } = require('./securi
 const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = require('./board-credentials');
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
+const { createResultMonitor } = require('./install-result');
 const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
 const { registerSideIpc, loadAllChats } = require('./side-main');
@@ -1118,6 +1119,10 @@ app.whenReady().then(async () => {
     }
     const verbatim = action === 'main-briefing' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read';
     pendingBoardCommands.delete(requestId);
+    if (pending?.installResolve) {
+      if (error) pending.installReject(new Error(error)); else pending.installResolve();
+      return;
+    }
     if (pending?.command.nativeWeb) return;
     if (action === 'session-exit') return; // internal one-way exit notification
     writeBoardResponse(requestId, {
@@ -1378,6 +1383,27 @@ app.whenReady().then(async () => {
       app.testCaptainAlerts.push({ type: 'bark', ...payload });
       return { ok: true, status: 200, json: async () => ({ code: 200 }) };
     } } : {}) });
+  const pollInstallResult = createResultMonitor({
+    file: path.join(app.getPath('userData'), 'install-result.json'),
+    runtime: () => ({ execPath: process.execPath, version: app.getVersion() }),
+    getConfig: readLocalConfig,
+    deliver: (command) => new Promise((resolve, reject) => {
+      if (!boardRendererReady) { reject(new Error('Renderer not ready')); return; }
+      const timer = setTimeout(() => { pendingBoardCommands.delete(command.id); reject(new Error('Installation receipt acknowledgement timed out')); }, 15000);
+      pendingBoardCommands.set(command.id, { command, delivered: false,
+        installResolve: () => { clearTimeout(timer); resolve(); },
+        installReject: (error) => { clearTimeout(timer); reject(error); } });
+      dispatchPendingBoardCommands();
+    }),
+    notify: async (command) => {
+      if (!notifyUser) return false;
+      const result = await notifyUser(command, false, command.id);
+      return result.includes('Bark 紧急提醒已发送');
+    },
+  });
+  const installResultTimer = setInterval(() => pollInstallResult().catch(() => {}), 1000);
+  installResultTimer.unref();
+  pollInstallResult().catch(() => {});
   onMain('notify-state', (_event, payload) => {
     if (payload && ptys.has(payload.id)) notifications.show(payload);
   });

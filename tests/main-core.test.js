@@ -468,6 +468,8 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /额度多时开十几个/);
   assert.match(text, /测试全过并进入打包后停止派新活/);
   assert.match(text, /存档后直接安装并重启/);
+  assert.match(text, /安装只用正式 restart-agentdeck.sh／rollback-agentdeck.sh 或发版入口/);
+  assert.match(text, /待核对不能 complete，版本启动核验后才结卡/);
   assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
   // chat-ui replaces prompts longer than 8000 with a file pointer. The closing
   // paragraph must stay inside the pasted briefing on both platforms.
