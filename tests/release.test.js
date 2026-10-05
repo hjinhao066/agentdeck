@@ -78,6 +78,8 @@ test('package inventory, committed bytes and metadata are all verified', async (
   const file = path.join(root, 'app.asar');
   await archive(repo, file);
   assert.equal(verifyArchive(repo, file, asar).sourceFilesVerified, 2);
+  assert.equal(verifyArchive(repo, file, { ...asar,
+    listPackage: (name) => asar.listPackage(name).map((entry) => entry.replace(/\//g, '\\')) }).sourceFilesVerified, 2);
   await archive(repo, file, (dir) => write(path.join(dir, 'main.js'), 'tampered'));
   assert.throws(() => verifyArchive(repo, file, asar), /source mismatch/);
   await archive(repo, file, (dir) => write(path.join(dir, 'mobile-web/extra.js'), 'extra'));
@@ -94,7 +96,9 @@ test('cache invalidates on dependency bytes, mode, commit or damaged artifact', 
   const binary = path.join(repo, 'node_modules/native.node'); write(binary, 'one');
   const first = fingerprint(repo);
   write(binary, 'two'); assert.notEqual(fingerprint(repo), first);
-  const second = fingerprint(repo); fs.chmodSync(binary, 0o755); assert.notEqual(fingerprint(repo), second);
+  if (process.platform !== 'win32') {
+    const second = fingerprint(repo); fs.chmodSync(binary, 0o755); assert.notEqual(fingerprint(repo), second);
+  }
   const third = fingerprint(repo); write(path.join(repo, 'main.js'), 'changed');
   git(repo, 'add', 'main.js'); git(repo, 'commit', '-qm', 'runtime changed');
   assert.notEqual(fingerprint(repo), third);

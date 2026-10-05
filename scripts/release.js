@@ -138,7 +138,7 @@ function verifyArchive(repo, archive, asar) {
   const commit = git(repo, 'rev-parse', 'HEAD');
   const pkg = JSON.parse(execFileSync('git', ['show', `${commit}:package.json`], { cwd: repo }));
   const files = git(repo, 'ls-files', '-z').split('\0').filter((file) => file && included(file, pkg.build.files)).sort();
-  const packedFiles = asar.listPackage(archive).map((file) => file.replace(/^\//, '')).filter((file) =>
+  const packedFiles = asar.listPackage(archive).map((file) => file.replace(/\\/g, '/').replace(/^\//, '')).filter((file) =>
     included(file, pkg.build.files) && !Object.hasOwn(asar.statFile(archive, file), 'files')).sort();
   if (JSON.stringify(files) !== JSON.stringify(packedFiles)) throw new Error('Packaged runtime file inventory mismatch');
   // One git process reads every committed blob, rather than spawning git per file.
