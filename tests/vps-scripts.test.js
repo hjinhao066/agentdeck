@@ -122,6 +122,55 @@ test('caddyfile_block.py auth：原样取出入口口令，不打印；带路径
   assert.ok(!fs.existsSync(path.join(d, 'x')));
 });
 
+// The live VPS site does not inline basicauth: it imports a root:caddy 0640 file holding only that block.
+const importStyle = (d) => {
+  const authPath = path.join(d, 'agentdeck-mobile.auth');
+  fs.writeFileSync(authPath, `basicauth {\n    phone ${HASH}\n}\n`);
+  const block = OLD_BLOCK.replace(`\tbasicauth {\n\t\tphone ${HASH}\n\t}\n`, `\timport ${authPath}\n`);
+  return { authPath, block, caddyfile: OTHER_SITES_BEFORE + block + OTHER_SITES_AFTER };
+};
+
+test('caddyfile_block.py auth：站点 import 一个只含 basicauth 的文件时，原样取出；拿不准的 import 拒绝', (t) => {
+  const d = tmp(t);
+  const { authPath, block, caddyfile } = importStyle(d);
+  assert.ok(!block.includes(HASH) && block.includes('import '));
+  const auth = (text, out = 'auth.caddy') => {
+    fs.writeFileSync(path.join(d, 'Caddyfile'), text);
+    return py(['auth', '--caddyfile', path.join(d, 'Caddyfile'), '--address', ADDRESS, '--out', path.join(d, out)]);
+  };
+  let r = auth(caddyfile);
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(!r.stdout.includes(HASH) && !r.stderr.includes(HASH));
+  assert.equal(read(path.join(d, 'auth.caddy')), `basicauth {\n\tphone ${HASH}\n}\n`);
+  // a relative import resolves next to the Caddyfile, as Caddy does
+  r = auth(caddyfile.replace(`import ${authPath}`, 'import ./agentdeck-mobile.auth'), 'rel.caddy');
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(read(path.join(d, 'rel.caddy')), `basicauth {\n\tphone ${HASH}\n}\n`);
+  // another imported file without basicauth is fine; it is just not where the credentials are
+  fs.writeFileSync(path.join(d, 'headers.caddy'), 'header X-Other yes\n');
+  r = auth(caddyfile.replace(`\timport ${authPath}\n`, `\timport ${authPath}\n\timport ${path.join(d, 'headers.caddy')}\n`), 'two.caddy');
+  assert.equal(r.status, 0, r.stderr);
+
+  const refuse = (text, why) => {
+    const out = 'x-' + Math.random().toString(36).slice(2);
+    const res = auth(text, out);
+    assert.equal(res.status, 2, `${why}: ${res.stdout}${res.stderr}`);
+    assert.ok(!fs.existsSync(path.join(d, out)), why);
+    assert.ok(!res.stdout.includes(HASH) && !res.stderr.includes(HASH), why);
+  };
+  refuse(caddyfile.replace(`\timport ${authPath}\n`, `\timport ${authPath}\n\tbasicauth {\n\t\tother ${HASH}\n\t}\n`), 'import and inline basicauth together');
+  refuse(caddyfile.replace(`import ${authPath}`, `import ${path.join(d, '*.auth')}`), 'glob import');
+  refuse(caddyfile.replace(`import ${authPath}`, `import ${authPath} arg`), 'import with arguments');
+  refuse(caddyfile.replace(`import ${authPath}`, 'import authsnippet'), 'snippet name');
+  refuse(caddyfile.replace(`import ${authPath}`, `import ${path.join(d, 'missing.auth')}`), 'missing file');
+  fs.writeFileSync(authPath, `basicauth {\n    phone ${HASH}\n}\nheader X-Extra yes\n`);
+  refuse(caddyfile, 'imported file has other directives');
+  fs.writeFileSync(authPath, `basicauth /admin/* {\n    phone ${HASH}\n}\n`);
+  refuse(caddyfile, 'imported basicauth with a matcher');
+  fs.writeFileSync(authPath, `basicauth {\n}\n`);
+  refuse(caddyfile, 'imported basicauth without entries');
+});
+
 // ---------------------------------------------------------------- install / rollback (real caddy validate)
 function caddyEnv(d, extra = {}) {
   fs.mkdirSync(path.join(d, 'log'), { recursive: true });
@@ -180,6 +229,40 @@ test('install-caddy-site.sh：备份、取出口令、只换这一段、校验�
 
   // installing again after a rollback works
   assert.equal(run(path.join(VPS, 'install-caddy-site.sh'), [], env).status, 0);
+});
+
+test('install-caddy-site.sh：现役写法（import 口令文件）--check 通过不改文件；安装原样迁移哈希；回滚还原 import 行', { skip: skipCaddy }, (t) => {
+  const d = tmp(t);
+  const { authPath, block, caddyfile } = importStyle(d);
+  const authBefore = read(authPath);
+  fs.writeFileSync(path.join(d, 'Caddyfile'), caddyfile);
+  const env = caddyEnv(d);
+  const chk = run(path.join(VPS, 'install-caddy-site.sh'), ['--check'], env);
+  assert.equal(chk.status, 0, chk.stdout + chk.stderr);
+  assert.match(chk.stdout, /caddy validate: ok/);
+  assert.ok(!(chk.stdout + chk.stderr).includes(HASH));
+  assert.equal(read(path.join(d, 'Caddyfile')), caddyfile);
+  assert.ok(!fs.existsSync(path.join(d, 'agentdeck-basicauth.caddy')) && !fs.existsSync(path.join(d, 'backups')));
+  assert.equal(reloadCount(d), 0);
+  assert.deepEqual(fs.readdirSync(d).filter((f) => f.startsWith('.')), [], 'no stray candidate files');
+
+  const inst = run(path.join(VPS, 'install-caddy-site.sh'), [], env);
+  assert.equal(inst.status, 0, inst.stdout + inst.stderr);
+  assert.ok(!(inst.stdout + inst.stderr).includes(HASH));
+  const after = read(path.join(d, 'Caddyfile'));
+  assert.ok(after.startsWith(OTHER_SITES_BEFORE) && after.endsWith(OTHER_SITES_AFTER));
+  assert.ok(!after.includes(authPath), 'the new block imports the new auth file, not the old one');
+  assert.equal(read(path.join(d, 'agentdeck-basicauth.caddy')), `basicauth {\n\tphone ${HASH}\n}\n`);
+  assert.equal(read(authPath), authBefore, 'the old auth file is left alone (rollback imports it again)');
+  const [bk] = fs.readdirSync(path.join(d, 'backups'));
+  assert.equal(read(path.join(d, 'backups', bk, 'old-block.caddy')), block);
+  assert.equal(reloadCount(d), 1);
+
+  const rb = run(path.join(VPS, 'rollback-caddy-site.sh'), [], env);
+  assert.equal(rb.status, 0, rb.stdout + rb.stderr);
+  assert.equal(read(path.join(d, 'Caddyfile')), caddyfile);
+  assert.equal(run(caddy.bin, ['validate', '--config', path.join(d, 'Caddyfile'), '--adapter', 'caddyfile']).status, 0, 'restored Caddyfile validates');
+  assert.equal(reloadCount(d), 2);
 });
 
 test('install-caddy-site.sh：重复运行结果不变，口令文件不被覆盖', { skip: skipCaddy }, (t) => {

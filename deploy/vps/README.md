@@ -61,6 +61,7 @@ CADDY_BIN=$PWD/caddy node --test --test-concurrency=1 tests/vps-caddy.test.js te
    ```bash
    ./install-caddy-site.sh --check
    ```
+   入口口令可以内联在站点里（`basicauth { … }`），也可以像现役那样 `import /etc/caddy/agentdeck-mobile.auth`（文件里只有那一条 `basicauth`）。两种都会被原样取出；`import` 带参数、通配符、片段名，或被引入的文件里除了 `basicauth` 还有别的指令，都拒绝，请手工建口令文件。旧的被引入文件不删，回滚后旧段落还会 `import` 它。
 4. **写入并 reload**
    ```bash
    ./install-caddy-site.sh
