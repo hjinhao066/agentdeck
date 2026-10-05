@@ -137,6 +137,7 @@ async function assertBoardLayout(minCard, stacked = false) {
     const bar = [...document.querySelector('#taskBoardView .tbv-filters').children].filter(shown).map((n) => ({ cls: n.className, ...rect(n) }));
     const cells = [...document.querySelectorAll('.tbv-cell')].filter(shown).map((cell) => ({ cell: rect(cell), cards: [...cell.querySelectorAll('.tbv-card')].map((card) => ({ id: card.dataset.cardId, status: card.dataset.status, ...rect(card),
       title: parseFloat(getComputedStyle(card.querySelector('.tbv-title')).fontSize),
+      laneName: parseFloat(getComputedStyle(document.querySelector('.tbv-lane-name')).fontSize),
       parts: [...card.querySelectorAll('.tbv-title, .tbv-question, .tbv-activity, .tbv-tag, .tbv-time')].filter(shown).map((p) => ({ cls: p.className, ...rect(p) })) })) }));
     const icons = [...document.querySelectorAll('#taskBoardView .tbv-icon')].filter(shown).map((n) => ({ label: n.getAttribute('aria-label'), title: n.title, svg: !!n.querySelector('svg'), text: n.textContent.trim(), w: n.getBoundingClientRect().width, h: n.getBoundingClientRect().height }));
     return { view: rect(document.getElementById('taskBoardView')), bar, cells, icons, heads: [...document.querySelectorAll('.tbv-head')].filter(shown).map(rect), grid: rect(document.querySelector('.tbv-lanes')),
@@ -156,9 +157,9 @@ async function assertBoardLayout(minCard, stacked = false) {
   else for (const cells of g.lanes) cells.forEach((c, i) => { expect(Math.abs(g.heads[i].x - c.x), 'head over its column').toBeLessThanOrEqual(1); expect(Math.abs(g.heads[i].width - c.width)).toBeLessThanOrEqual(1); });
   for (const { cell, cards } of g.cells) for (let i = 0; i < cards.length; i++) {
     const c = cards[i];
-    expect(c.title).toBe(16);
+    expect(c.title, 'card title matches the group bar name').toBe(c.laneName);
     expect(c.width, c.id + ' readable width').toBeGreaterThanOrEqual(minCard);
-    expect(c.height, c.id + ' compact').toBeLessThanOrEqual(c.status === 'needs_user' ? 100 : 84);
+    expect(c.height, c.id + ' compact').toBeLessThanOrEqual(c.status === 'needs_user' ? 88 : 76);
     expect(c.x).toBeGreaterThanOrEqual(cell.x - 0.5); expect(c.right).toBeLessThanOrEqual(cell.right + 0.5);
     for (const d of cards.slice(i + 1)) expect(overlaps(c, d), `${c.id}/${d.id} overlap`).toBe(false);
     for (const p of c.parts) { expect(p.right, `${c.id} ${p.cls} fits`).toBeLessThanOrEqual(c.right - 1); expect(p.bottom, `${c.id} ${p.cls} fits`).toBeLessThanOrEqual(c.bottom - 1); }
