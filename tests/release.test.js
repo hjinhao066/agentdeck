@@ -5,7 +5,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, fork } = require('node:child_process');
+const { once } = require('node:events');
 const asar = require('@electron/asar');
 const { parseArgs, planRelease, isolatedEnv, withTestLock, verifyArchive, fingerprint, cachedBuild, installer, release } = require('../scripts/release');
 const digest = (data) => crypto.createHash('sha256').update(data).digest('hex');
@@ -91,23 +92,51 @@ test('package inventory, committed bytes and metadata are all verified', async (
   assert.throws(() => verifyArchive(repo, file, asar), /metadata mismatch/);
 });
 
-test('cache invalidates on dependency bytes, mode, commit or damaged artifact', (t) => {
+test('cache invalidates on dependency bytes, mode, commit or damaged artifact', async (t) => {
   const { repo, root } = fixture(t);
   const binary = path.join(repo, 'node_modules/native.node'); write(binary, 'one');
-  const first = fingerprint(repo);
-  write(binary, 'two'); assert.notEqual(fingerprint(repo), first);
-  const second = fingerprint(repo);
+  const first = await fingerprint(repo);
+  assert.equal(await fingerprint(repo), first);
+  write(binary, 'two'); assert.notEqual(await fingerprint(repo), first);
+  const second = await fingerprint(repo);
   if (process.platform !== 'win32') {
-    fs.chmodSync(binary, 0o755); assert.notEqual(fingerprint(repo), second);
+    fs.chmodSync(binary, 0o755); assert.notEqual(await fingerprint(repo), second);
   }
-  const third = fingerprint(repo); write(path.join(repo, 'main.js'), 'changed');
+  const third = await fingerprint(repo); write(path.join(repo, 'main.js'), 'changed');
   git(repo, 'add', 'main.js'); git(repo, 'commit', '-qm', 'runtime changed');
-  assert.notEqual(fingerprint(repo), third);
+  assert.notEqual(await fingerprint(repo), third);
   write(path.join(root, 'fixture.dmg'), 'image');
   const cache = { key: first, dmg: 'fixture.dmg', sha256: digest('image') };
   assert.equal(cachedBuild(cache, first, root), true);
   assert.equal(cachedBuild(cache, second, root), false);
   write(path.join(root, 'fixture.dmg'), 'broken'); assert.equal(cachedBuild(cache, first, root), false);
+});
+
+test('fingerprinting drains child stdout beyond pipe capacity before hashing finishes', { timeout: 15000 }, async (t) => {
+  const { repo, root } = fixture(t);
+  // A large dependency keeps real hashing in flight; no elapsed-time threshold.
+  write(path.join(repo, 'node_modules/electron.bin'), Buffer.alloc(32 * 1024 * 1024, 1));
+  const emitter = path.join(root, 'emit.js');
+  const outputSize = 2 * 1024 * 1024;
+  write(emitter, `process.once('message', () => {
+    process.stdout.write(Buffer.alloc(${outputSize}, 120), () => process.disconnect());
+  });
+  process.send('ready');\n`);
+  const child = fork(emitter, [], { env: isolatedEnv(), stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  t.after(() => child.kill());
+  const closed = once(child, 'close');
+  let bytes = 0;
+  child.stdout.on('data', (chunk) => { bytes += chunk.length; });
+  await once(child, 'message');
+  assert.equal(bytes, 0);
+  child.send('write');
+  const key = await fingerprint(repo);
+  const bytesDuringHash = bytes;
+  assert.deepEqual(await closed, [0, null]);
+  assert.equal(bytes, outputSize);
+  assert.match(key, /^[a-f0-9]{64}$/);
+  assert.ok(bytesDuringHash > 65536, `stdout drained only ${bytesDuringHash} bytes during fingerprint`);
+  t.diagnostic(`stdout drained during fingerprint: ${bytesDuringHash}/${outputSize} bytes`);
 });
 
 test('conflicts stop before tests/build and retain both worktrees', { skip: process.platform !== 'darwin' }, async (t) => {

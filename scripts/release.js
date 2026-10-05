@@ -6,7 +6,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFile, execFileSync, spawn } = require('node:child_process');
+const { promisify } = require('node:util');
+const execFileAsync = promisify(execFile);
 
 const sha = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const json = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -163,24 +165,30 @@ function verifyArchive(repo, archive, asar) {
   return { commit, version: pkg.version, asarSha256: sha(fs.readFileSync(archive)), sourceFilesVerified: files.length, verified };
 }
 
-function hashTree(root, hash, prefix = '') {
-  for (const entry of fs.readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+async function hashTree(root, hash, prefix = '') {
+  for (const entry of (await fs.promises.readdir(root, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
     const relative = prefix + entry.name;
     const file = path.join(root, entry.name);
     hash.update(relative + '\0');
-    if (entry.isDirectory()) hashTree(file, hash, relative + '/');
-    else if (entry.isSymbolicLink()) hash.update(fs.readlinkSync(file));
-    else { hash.update(String(fs.statSync(file).mode)); hash.update(fs.readFileSync(file)); }
+    if (entry.isDirectory()) await hashTree(file, hash, relative + '/');
+    else if (entry.isSymbolicLink()) hash.update(await fs.promises.readlink(file));
+    else {
+      hash.update(String((await fs.promises.stat(file)).mode));
+      // Bound synchronous hashing to one chunk so test/audit pipes keep draining,
+      // including while reading large Electron or native binaries.
+      for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+    }
   }
 }
 
-function fingerprint(repo) {
+async function fingerprint(repo) {
   const hash = crypto.createHash('sha256');
-  hash.update(fs.readFileSync(__filename));
+  hash.update(await fs.promises.readFile(__filename));
   // The tree includes tests/config/build assets, not just build.files. Dependencies
   // are hashed too: a changed native binary must invalidate a cached DMG.
-  hash.update(git(repo, 'rev-parse', 'HEAD^{tree}'));
-  hashTree(path.join(repo, 'node_modules'), hash);
+  const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD^{tree}'], { cwd: repo, encoding: 'utf8' });
+  hash.update(stdout.trim());
+  await hashTree(path.join(repo, 'node_modules'), hash);
   hash.update(JSON.stringify({ platform: process.platform, arch: process.arch, os: os.release(), node: process.version,
     environment: Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(CSC_|APPLE_|ELECTRON_|PLAYWRIGHT_|NODE_OPTIONS$|NODE_ENV$|CI$|SOURCE_DATE_EPOCH$)/.test(key)).sort()) }));
   return hash.digest('hex');
@@ -374,7 +382,7 @@ async function release(repo, options, runCommand = run) {
       ...(gatesCached ? [] : [testing()]),
       logRun('audit', 'npm', ['audit'], npmEnv),
     ]);
-    await parallel([gates, ...(key === null ? [step('fingerprint', () => { key = fingerprint(plan.worktree); })] : [])]);
+    await parallel([gates, ...(key === null ? [step('fingerprint', async () => { key = await fingerprint(plan.worktree); })] : [])]);
     report.testsCached = gatesCached;
     if (gatesCached) await step('unit-smoke-cache', () => undefined);
     save(gatesFile, { key });
