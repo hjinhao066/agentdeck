@@ -6,6 +6,7 @@
   --ok: #17794f; --ok-soft: #e3f3ea; --warn: #96600a; --warn-soft: #fbf0d6;
   --off: #6f6c66; --off-soft: #ebe8e2; --bad: #b3353f; --bad-soft: #fbe6e7;
   --focus: #2563d9; --shadow: 0 1px 2px rgb(40 30 15 / .05), 0 6px 20px rgb(40 30 15 / .05);
+  --mine: #95ec69; --mine-ink: #0f2410;
   --crown: #e0a91c; --quota-low: #765000; --quota-out: #a02020; --quota-low-fill: #c98a1b; --quota-out-fill: #d04a44; --quota-track: rgba(0, 0, 0, .09); --quota-fill: rgba(0, 0, 0, .42);
   --brand-claude: #c96442; --brand-chatgpt: #0d8a6a; --brand-gemini: #3a72e8;
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -19,6 +20,7 @@
   --ok: #52cc9a; --ok-soft: #14291f; --warn: #f0bf55; --warn-soft: #30260f;
   --off: #9a9791; --off-soft: #262624; --bad: #ff8a90; --bad-soft: #351a1c;
   --focus: #7db2ff; --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 8px 24px rgb(0 0 0 / .25);
+  --mine: #3eb575; --mine-ink: #06170e;
   --quota-low: #f4cc77; --quota-out: #ffb4aa; --quota-low-fill: #e0a437; --quota-out-fill: #f07167; --quota-track: rgba(255, 255, 255, .1); --quota-fill: rgba(255, 255, 255, .78);
   --brand-claude: #e08562; --brand-chatgpt: #19c37d; --brand-gemini: #5b9bff;
 }
@@ -73,7 +75,8 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 .notice { margin: 10px 12px 0; padding: 10px 12px; border-radius: 12px; font-size: 13px; color: var(--secondary); background: var(--surface); border: 1px solid var(--line); overflow-wrap: anywhere; }
 .notice.error { border-color: var(--bad); color: var(--bad); background: var(--bad-soft); }
 main { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; padding: 14px 12px 20px; overscroll-behavior: contain; }
-main.fill { display: flex; overflow: hidden; padding-bottom: 10px; }
+/* The conversation: as much of the screen as the header, input and tabs can spare. */
+main.fill { display: flex; overflow: hidden; padding: 6px 6px 6px; }
 .stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .eyebrow { font-size: 11px; color: var(--muted); }
 .empty { color: var(--secondary); padding: 18px 16px; border: 1px dashed var(--line-strong); border-radius: 14px; line-height: 1.7; font-size: 13px; }
@@ -107,28 +110,38 @@ main.fill { display: flex; overflow: hidden; padding-bottom: 10px; }
 .form-help { margin-top: 8px; color: var(--muted); font-size: 12px; line-height: 1.65; }
 
 .captain-view { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.captain-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px 10px; }
-.captain-head h1 { font-size: 20px; font-weight: 650; letter-spacing: -.4px; }
-.turns { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 2px 2px 10px; scrollbar-color: var(--accent) transparent; scrollbar-width: thin; }
-.turn + .turn { margin-top: 14px; }
-.bubble { margin-right: 28px; padding: 11px 14px; border-radius: 16px 16px 16px 5px; background: var(--surface); border: 1px solid var(--line); }
-.bubble.mine { margin: 0 0 8px 40px; border-radius: 16px 16px 5px 16px; background: var(--accent-soft); border-color: transparent; }
-.bubble.failed { background: var(--bad-soft); border: 1px solid var(--bad); }
-.bubble-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+.turns { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 4px 2px 12px; scrollbar-color: var(--accent) transparent; scrollbar-width: thin; }
+.turn { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
+.turn + .turn { margin-top: 18px; }
+/* Both sides are bubbles as wide as their text: the user's on the right in a strong colour, the Captain's on the left with its name. */
+.bubble { max-width: 100%; min-width: 0; padding: 9px 13px 10px; border-radius: 18px 18px 18px 6px; background: var(--surface); border: 1px solid var(--line); }
+.bubble.mine { align-self: flex-end; max-width: 86%; display: flex; flex-direction: column; align-items: flex-start; padding: 9px 14px 10px; border: 0; border-radius: 18px 18px 6px 18px; background: var(--mine); color: var(--mine-ink); }
+.bubble.sending { opacity: .7; }
+.bubble.failed { background: var(--bad-soft); color: var(--text); border: 1px solid var(--bad); }
+.bubble-label { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; font-size: 12px; font-weight: 650; color: var(--accent); }
+.bubble-label svg { width: 13px; height: 13px; color: var(--crown); }
+.mine .bubble-label { font-weight: 500; color: inherit; }
 .bubble.failed .bubble-label { color: var(--bad); font-weight: 600; }
-.bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.7; }
-.bubble-state { display: block; margin-top: 6px; font-size: 11px; color: var(--muted); }
-.bubble-foot { display: flex; align-items: center; gap: 8px; margin: 8px -6px -6px 0; padding-top: 8px; border-top: 1px solid var(--bad); }
+.bubble-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.65; }
+.bubble-state { display: block; margin-top: 6px; font-size: 12px; opacity: .75; }
+.bubble-foot { align-self: stretch; display: flex; align-items: center; gap: 8px; margin: 8px -6px -6px 0; padding-top: 8px; border-top: 1px solid var(--bad); }
 .bubble-reason { flex: 1; font-size: 12px; line-height: 1.6; color: var(--secondary); overflow-wrap: anywhere; }
-.composer { padding: 8px; border: 1px solid var(--line); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow); }
-.composer-box { display: flex; align-items: flex-end; gap: 2px; }
-textarea { flex: 1; min-width: 0; min-height: 52px; max-height: 30dvh; resize: none; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); font-size: 16px; line-height: 1.55; }
+.reply { display: flex; flex-direction: column; align-items: flex-start; max-width: calc(100% - 16px); min-width: 0; }
+/* The input is one line that grows with the draft. */
+.composer { flex: none; }
+.composer-box { display: flex; align-items: flex-end; padding-left: 8px; border: 1px solid var(--line-strong); border-radius: 23px; background: var(--surface); }
+.composer-box:focus-within { border-color: var(--accent); }
+textarea { flex: 1; min-width: 0; height: 44px; min-height: 44px; max-height: min(140px, 30dvh); resize: none; margin: 0; padding: 10px 6px; border: 0; background: transparent; font-size: 16px; line-height: 24px; overflow-y: auto; }
+textarea:focus-visible { outline: 0; }
 textarea::placeholder { color: var(--muted); }
-.composer-actions { display: flex; flex-direction: column; }
-.send-button { background: var(--accent); color: var(--accent-ink); }
-.send-button:hover:not(:disabled) { background: var(--accent); color: var(--accent-ink); filter: brightness(1.08); }
-.send-button:disabled { background: var(--soft); color: var(--muted); opacity: 1; }
-.send-hint { margin: 6px 4px 0; font-size: 12px; line-height: 1.55; color: var(--muted); overflow-wrap: anywhere; }
+.composer .icon-button { border-radius: 50%; }
+.send-button { position: relative; color: var(--accent-ink); }
+.send-button::before { content: ""; position: absolute; inset: 5px; border-radius: 50%; background: var(--accent); }
+.send-button svg { position: relative; width: 19px; height: 19px; }
+.send-button:hover:not(:disabled) { background: transparent; color: var(--accent-ink); }
+.send-button:disabled { opacity: 1; color: var(--muted); }
+.send-button:disabled::before { background: var(--soft); }
+.send-hint { margin: 5px 10px 0; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
 .send-hint.blocked { color: var(--warn); font-weight: 550; }
 
 .group + .group { margin-top: 10px; }
@@ -178,31 +191,22 @@ textarea::placeholder { color: var(--muted); }
 .output-names h1 { font-size: 17px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
 .output { margin: 0; padding: 16px 14px; min-height: 320px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); font: 12px/1.8 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.navigation { display: flex; gap: 4px; padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
-.navigation button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 52px; padding: 7px 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 11px; }
+.navigation { display: flex; gap: 4px; padding: 2px 8px calc(2px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
+.navigation button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 48px; padding: 5px 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1.3; }
 .navigation button[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
 .nav-icon svg { width: 21px; height: 21px; }
-/* One round of the conversation: the folded message, the process line, the copy action. */
-.turn-actions { display: flex; align-items: center; gap: 4px; margin: -4px 0 -8px -12px; }
+/* Under a Captain reply: the copy action, on the bubble's left edge. */
+.turn-actions { display: flex; align-items: center; gap: 2px; margin: -7px 0 -13px -8px; }
 .turn-actions .icon-button { color: var(--muted); }
-.turn-actions svg { width: 18px; height: 18px; }
+.turn-actions svg { width: 17px; height: 17px; }
 .turn-state { font-size: 12px; color: var(--muted); }
 .pending { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.bubble-text + .pending { margin-top: 6px; }
 .typing { display: inline-flex; gap: 4px; }
 .typing i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: blink 1.2s infinite both; }
 .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
-.bubble.mine { display: flex; flex-direction: column; align-items: flex-start; }
 .bubble-text.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; line-clamp: 8; overflow: hidden; }
-.expand-toggle { align-self: flex-end; min-height: 44px; margin: -6px -8px -12px 0; padding: 0 8px; border: 0; background: transparent; color: var(--accent); font-size: 13px; }
-.process { margin-top: 2px; font-size: 12px; color: var(--muted); }
-.process > summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; list-style: none; }
-.process > summary::-webkit-details-marker { display: none; }
-.process > summary::after { content: "›"; margin-left: 4px; transition: transform .15s; }
-.process[open] > summary::after { transform: rotate(90deg); }
-.process-list { margin: 0 0 6px; padding-left: 18px; line-height: 1.5; }
-.process-list li + li { margin-top: 3px; }
-.process-failed { color: var(--bad); }
-.process-step { overflow-wrap: anywhere; }
+.expand-toggle { align-self: flex-end; min-height: 44px; margin: -6px -8px -12px 0; padding: 0 8px; border: 0; background: transparent; color: inherit; font-size: 13px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 
 /* Quota table inside a computer's card: one row per account, 5h and weekly columns. */
@@ -261,6 +265,6 @@ textarea::placeholder { color: var(--muted); }
 .detail-line[data-level="danger"] .detail-main, .detail-line[data-level="out"] .detail-main { color: var(--quota-out); }
 .detail-line[data-level="none"] .detail-main { color: var(--muted); font-weight: 500; }
 @keyframes rotate { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .refreshing svg, .typing i { animation: none; } .process > summary::after { transition: none; } .icon-button { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .refreshing svg, .typing i { animation: none; } .icon-button { transition: none; } }
 /* Tiny phones: the switch gets its own line instead of clipping the names. */
-@media (max-width: 359px) { .app-header { flex-wrap: wrap; } .brand { display: none; } .machine-bar { order: 3; flex: 1 0 100%; margin: 0; } .stats { grid-template-columns: 1fr 1fr; } .bubble.mine { margin-left: 24px; } }
+@media (max-width: 359px) { .app-header { flex-wrap: wrap; } .brand { display: none; } .machine-bar { order: 3; flex: 1 0 100%; margin: 0; } .stats { grid-template-columns: 1fr 1fr; } }

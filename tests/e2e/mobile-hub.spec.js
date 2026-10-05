@@ -483,8 +483,26 @@ for (const theme of ['dark', 'light']) {
     expect(layout.hintHidden).toBe(true);
     expect(layout.composerButtons).toEqual(['清空草稿', '发送给 Mac 队长']);
     expect(layout.dots).toBe(2);          // the captain view has no "all": one dot and a short name per computer
-    // 844px phone: header 52, tabs 66.5, the rest is content. Before this change it was 663px (header 56 + status row 56.5 + target row).
+    // 844px phone: header 52, tabs 53, the rest is content.
     expect(layout.main.height).toBeGreaterThanOrEqual(720);
+    // The conversation itself gets at least 70% of the screen: no title row above it, a one-line input and slim tabs below.
+    const room = await page.evaluate(() => ({ turns: document.getElementById('captain-turns').clientHeight, screen: innerHeight, composer: document.querySelector('.composer').getBoundingClientRect().height,
+      headVisible: document.getElementById('captain-title').getBoundingClientRect().height > 1 }));
+    expect(room.turns / room.screen).toBeGreaterThanOrEqual(0.7);
+    expect(room.composer).toBeLessThanOrEqual(50);
+    expect(room.headVisible).toBe(false);
+    await expect(page.locator('#captain-title')).toHaveText('Mac 队长');
+    // The clear button only takes room while there is a draft; the input grows with it and shrinks back.
+    const draft = page.getByLabel('给队长的消息'), clear = page.getByRole('button', { name: '清空草稿', exact: true });
+    await expect(clear).toBeHidden();
+    await draft.fill('第一行\n第二行\n第三行');
+    await expect(clear).toBeVisible();
+    await expect(clear).toHaveAttribute('title', '清空草稿');
+    expect((await draft.boundingBox()).height).toBeGreaterThan(60);
+    await auditButtons();
+    await clear.click();
+    await expect(clear).toBeHidden();
+    expect((await draft.boundingBox()).height).toBeLessThanOrEqual(46);
     await expect(sendTo('Mac')).toHaveAttribute('aria-pressed', 'true');
     await expect(sendTo('Mac')).toHaveAttribute('aria-label', 'Mac，在线');
     await expect(segment('全部')).toHaveCount(0);
@@ -515,13 +533,30 @@ for (const theme of ['dark', 'light']) {
     await expect(conversation).toContainText('出门前看一下三端方案的进度。');
     await expect(conversation).toContainText('Mac 队长测试回复');
     await expect(conversation).not.toContainText('本次处理已结束');
-    const process = conversation.locator('details.process');
-    await expect(process.locator('summary')).toHaveText('过程：派了 2 件活，收到 1 份回执，3 步操作');
-    await expect(process.getByText('手机总台前端')).toBeHidden();
-    await process.locator('summary').click();
-    await expect(process.getByText('手机总台前端')).toBeVisible();
-    await expect(process).toContainText('双机说明文档 — 双机登录说明已写好。');
-    await expect(process).toContainText('读取看板');
+    // Only the Captain's words: no process line, no receipt text, no tool steps, nothing left over from the terminal.
+    await expect(conversation.locator('details, .process')).toHaveCount(0);
+    for (const residue of ['过程：', '手机总台前端', '后来又给这个会话发了新指令', '队员回执已送达', 'git status', 'shell command', 'Background command', 'exit code', '❯']) await expect(conversation).not.toContainText(residue);
+    // Both sides are bubbles: the user's on the right, the Captain's on the left, named and no wider than its text.
+    const mine = conversation.locator('.bubble.mine'), reply = conversation.locator('.bubble:not(.mine)');
+    await expect(reply.locator('.bubble-label')).toHaveText('Mac 队长');
+    const shape = await conversation.evaluate((el) => {
+      const box = (node) => node.getBoundingClientRect(), area = box(el), mine = el.querySelector('.bubble.mine'), reply = el.querySelector('.bubble:not(.mine)');
+      const luminance = (colour) => { const [r, g, b] = colour.match(/[\d.]+/g).slice(0, 3).map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const contrast = (a, b) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+      const mineStyle = getComputedStyle(mine), page = getComputedStyle(document.body).backgroundColor;
+      return { mineRight: area.right - box(mine).right, mineLeft: box(mine).left - area.left, replyLeft: box(reply).left - area.left, replyRight: area.right - box(reply).right, areaWidth: area.width,
+        radius: parseFloat(getComputedStyle(reply).borderTopLeftRadius), border: parseFloat(getComputedStyle(reply).borderTopWidth),
+        text: contrast(mineStyle.color, mineStyle.backgroundColor), stands: contrast(mineStyle.backgroundColor, page) };
+    });
+    expect(shape.mineRight).toBeLessThanOrEqual(8); expect(shape.mineLeft).toBeGreaterThan(40);
+    expect(shape.replyLeft).toBeLessThanOrEqual(8); expect(shape.replyRight).toBeGreaterThanOrEqual(16);
+    expect(shape.radius).toBeGreaterThanOrEqual(12); expect(shape.border).toBeGreaterThanOrEqual(1);
+    // The conversation uses the width of the phone: 390 wide leaves at most 12px a side.
+    expect(shape.areaWidth).toBeGreaterThanOrEqual(366);
+    // The user's bubble is a strong colour: readable text (WCAG AA) and clearly apart from the page behind it.
+    expect(shape.text).toBeGreaterThanOrEqual(4.5);
+    expect(shape.stands).toBeGreaterThanOrEqual(theme === 'dark' ? 5 : 1.25);
+    await expect(mine).toHaveCount(1);
     // The reply is copyable with an icon button: tooltip, name, check mark afterwards.
     const copy = conversation.getByRole('button', { name: '复制队长回复', exact: true });
     await expect(copy).toHaveAttribute('title', '复制队长回复');
@@ -540,6 +575,10 @@ for (const theme of ['dark', 'light']) {
     const long = Array.from({ length: 14 }, (_, i) => `第 ${i + 1} 行：长消息也只算一条。`).join('\n');
     mac.captain.turns.push({ id: 'mac-long', ts: Date.now() - 1000, user: long, reply: '收到，开始处理。', done: true, interrupted: false });
     await refresh();
+    // A short reply is a small bubble, not a full-width block.
+    const short = conversation.locator('.bubble:not(.mine)', { hasText: '收到，开始处理。' });
+    expect((await short.boundingBox()).width).toBeLessThan(220);
+    expect(await short.locator('.bubble-text').evaluate((el) => el.getClientRects().length && el.scrollHeight <= parseFloat(getComputedStyle(el).lineHeight) + 1)).toBe(true);
     const toggle = conversation.getByRole('button', { name: '展开全文', exact: true });
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');

@@ -417,37 +417,20 @@
   }
 
   // ---- captain -------------------------------------------------------------
-  // ---- conversation groups -------------------------------------------------
-  // One round: what the user said, then a single reply block from the Captain
-  // with the dispatching and receipts folded into a one-line "process".
+  // One round: what the user said on the right, then one bubble on the left with
+  // the Captain's words. Dispatching, receipts and tool steps are not shown.
   function copyText(button, text, label) {
     navigator.clipboard.writeText(text).then(() => {
       button.innerHTML = svg('check'); button.title = '已复制'; button.setAttribute('aria-label', '已复制'); button.classList.add('copied');
       setTimeout(() => { button.innerHTML = svg('copy'); button.title = label; button.setAttribute('aria-label', label); button.classList.remove('copied'); }, 1600);
     }).catch(() => notice('无法复制。可以长按文字手动选择。', true));
   }
-  function processDetails(group) {
-    const summary = Core.processSummary(group);
-    if (!summary) return null;
-    const details = node('details', 'process');
-    details.append(node('summary', '', summary));
-    const list = node('ul', 'process-list');
-    for (const task of group.tasks) {
-      const item = node('li', task.failed ? 'process-failed' : '');
-      item.append(node('strong', '', task.title || '任务'));
-      if (task.summary) item.append(node('span', '', ' — ' + task.summary));
-      list.append(item);
-    }
-    for (const step of group.steps) list.append(node('li', 'process-step', step));
-    details.append(list);
-    return details;
-  }
   function renderGroup(m, group) {
     const row = node('article', 'turn');
     if (group.id) row.dataset.turnId = group.id;
     if (group.user || group.images.length) {
       const prompt = node('div', 'bubble mine');
-      prompt.append(node('span', 'bubble-label', '你'));
+      prompt.append(node('span', 'sr-only', '你'));
       if (group.user) {
         const text = node('p', 'bubble-text', group.user);
         prompt.append(text);
@@ -466,28 +449,29 @@
       if (group.images.length) prompt.append(node('span', 'bubble-state', `附 ${group.images.length} 张图片（在这台电脑上查看）`));
       row.append(prompt);
     }
-    const body = group.replies.join('\n\n');
-    const process = processDetails(group);
-    if (body || process || group.pending || group.interrupted) {
-      const reply = node('div', 'bubble');
-      reply.append(node('span', 'bubble-label', `${m.label} 队长`));
-      if (body) {
-        reply.append(node('p', 'bubble-text', body));
-        const actions = node('div', 'turn-actions');
-        const copy = iconButton('copy', '复制队长回复');
-        copy.addEventListener('click', () => copyText(copy, body, '复制队长回复'));
-        actions.append(copy);
-        if (group.interrupted) actions.append(node('span', 'turn-state', '已中断'));
-        reply.append(actions);
-      } else if (group.interrupted && !process) reply.append(node('p', 'bubble-text turn-state', '回复已中断。'));
+    if (group.reply || group.pending || group.interrupted) {
+      const reply = node('div', 'reply'), bubble = node('div', 'bubble');
+      const label = node('span', 'bubble-label');
+      label.innerHTML = svg('crown'); label.append(`${m.label} 队长`);
+      bubble.append(label);
+      if (group.reply) bubble.append(node('p', 'bubble-text', group.reply));
+      else if (group.interrupted) bubble.append(node('p', 'bubble-text turn-state', '回复已中断。'));
       if (group.pending) {
         const pending = node('p', 'bubble-text pending');
         const typing = node('span', 'typing'); typing.setAttribute('aria-hidden', 'true');
         typing.append(node('i'), node('i'), node('i'));
-        pending.append(typing, node('span', '', body ? '处理中…' : '队长正在处理…'));
-        reply.append(pending);
+        pending.append(typing, node('span', '', group.reply ? '处理中…' : '队长正在处理…'));
+        bubble.append(pending);
       }
-      if (process) reply.append(process);
+      reply.append(bubble);
+      if (group.reply) {
+        const actions = node('div', 'turn-actions');
+        const copy = iconButton('copy', '复制队长回复');
+        copy.addEventListener('click', () => copyText(copy, group.reply, '复制队长回复'));
+        actions.append(copy);
+        if (group.interrupted) actions.append(node('span', 'turn-state', '已中断'));
+        reply.append(actions);
+      }
       row.append(reply);
     }
     return row;
@@ -512,7 +496,7 @@
       else if (!turns.length && !pending.length) conversation.append(node('p', 'empty', `还没有对话。发一条指令，让 ${m.label} 队长开始安排。`));
       for (const group of Core.groupTurns(turns)) conversation.append(renderGroup(m, group));
       for (const item of pending) {
-        const row = node('article', 'turn'), bubble = node('div', 'bubble mine' + (item.state === 'failed' ? ' failed' : ''));
+        const row = node('article', 'turn'), bubble = node('div', 'bubble mine ' + (item.state === 'failed' ? 'failed' : 'sending'));
         bubble.append(node('span', 'bubble-label', item.state === 'failed' ? `没有发给 ${m.label}` : `正在发给 ${m.label}…`), node('p', 'bubble-text', item.text));
         if (item.state === 'failed') {
           const foot = node('div', 'bubble-foot');
@@ -521,7 +505,7 @@
             outbox.splice(outbox.indexOf(item), 1);
             const box = $('message');
             box.value = box.value ? box.value + '\n' + item.text : item.text;
-            sendStatus = ''; render(); box.focus();
+            sendStatus = ''; render(); fitComposer(); box.focus();
           });
           foot.append(node('p', 'bubble-reason', item.reason), edit); bubble.append(foot);
         }
@@ -538,15 +522,22 @@
     box.placeholder = `写给 ${m.label} 队长…`; box.disabled = sending;
     $('send').title = block || label; $('send').setAttribute('aria-label', label);
     $('send').disabled = sending || !!block || !box.value.trim();
-    $('clear').disabled = sending || !box.value;
+    $('clear').disabled = sending; $('clear').hidden = !box.value;
     const hint = $('send-hint');
     // Nothing to say, nothing shown: the bottom is just the input.
     hint.textContent = sending ? `正在发给 ${m.label} 队长…` : block || sendStatus;
     hint.hidden = !hint.textContent;
     hint.classList.toggle('blocked', !sending && !!block);
   }
-  $('message').addEventListener('input', () => { sendStatus = ''; updateComposer(); });
-  $('clear').addEventListener('click', () => { $('message').value = ''; sendStatus = ''; updateComposer(); $('message').focus(); });
+  // One line that grows with the draft; the conversation stays pinned to its newest reply.
+  function fitComposer() {
+    const box = $('message'), conversation = $('captain-turns');
+    const follow = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 48;
+    box.style.height = 'auto'; box.style.height = box.scrollHeight + 'px';
+    if (follow) conversation.scrollTop = conversation.scrollHeight;
+  }
+  $('message').addEventListener('input', () => { sendStatus = ''; updateComposer(); fitComposer(); });
+  $('clear').addEventListener('click', () => { $('message').value = ''; sendStatus = ''; updateComposer(); fitComposer(); $('message').focus(); });
   $('message-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     // The destination is fixed here, at the moment of the tap, and never changes afterwards.
@@ -554,7 +545,7 @@
     if (sending || !m || !text.trim() || Core.sendBlock(m)) return;
     const item = { id: ++outboxId, machineId: m.id, text, state: 'sending', reason: '' };
     outbox.push(item); sending = true; sendStatus = ''; $('message').value = '';
-    render();
+    render(); fitComposer();
     const result = await post(m, 'api/captain', { message: text });
     sending = false;
     if (result.status === 200 && result.body && result.body.queued) {

@@ -131,11 +131,12 @@ function defaults() {
         { id: 'mac-docs', title: '文档 · 双机说明', model: 'gemini-pro', status: 'done', isMain: false, receipt: '双机登录说明已写好，等待验收。' },
       ],
       // One message, then everything the desktop injected on the way: dispatch cards, a notice, two receipts and the reply.
+      // The reply is as the desktop reads it off the terminal: the echoed prompt, a tool summary and a notice ride along.
       turns: [{ id: 'mac-t1', ts: Date.now() - 600000, user: '出门前看一下三端方案的进度。', reply: '', done: true, interrupted: false },
         { id: 'mac-t2', ts: Date.now() - 590000, kind: 'task', task: { title: '手机总台前端', status: 'doing', summary: '', failed: false }, user: '', reply: '', done: true, interrupted: false },
-        { id: 'mac-t3', ts: Date.now() - 580000, kind: 'task', task: { title: '双机说明文档', status: 'review', summary: '双机登录说明已写好。', failed: false }, user: '', reply: '', done: true, interrupted: false },
+        { id: 'mac-t3', ts: Date.now() - 580000, kind: 'task', task: { title: '双机说明文档', status: 'review', summary: '后来又给这个会话发了新指令，结果看后面的卡片。', failed: false }, user: '', reply: '', done: true, interrupted: false },
         { id: 'mac-t4', ts: Date.now() - 570000, kind: 'notice', user: '', reply: '队员回执已送达', done: true, interrupted: false },
-        { id: 'mac-t5', ts: Date.now() - 560000, user: '', reply: 'Mac 队长测试回复：手机总台在做界面，文档已提交回执。\n<script>window.hubInjected=true</script>', steps: ['读取看板', '派发两张卡'], done: true, interrupted: false }],
+        { id: 'mac-t5', ts: Date.now() - 560000, user: '', reply: '❯ 出门前看一下三端方案的进度。\n\nRead 1 file, ran 2 shell commands\n\nBackground command "Background listener for crew\n\nreceipts" completed (exit code 0)\n\nMac 队长测试回复：手机总台在做界面，文档已提交回执。\n<script>window.hubInjected=true</script>', steps: ['Bash(git status)', '派发两张卡'], done: true, interrupted: false }],
       outputs: { 'mac-hub': 'Mac 队员测试输出：\n✓ 总览卡片\n✓ 派活目标切换\n<img src=x onerror="window.hubInjected=true">', 'mac-docs': 'Mac 文档测试输出。' },
       // Mac synced a newer copy of win-tunnel than Windows has seen.
       cards: [...shared.filter((c) => c.id !== 'win-tunnel'), card('win-tunnel', 'AgentDeck 三端', 'Windows 隧道和开机自启', 'doing', 5, { dispatch_claim: { key: 'k2', owner: 'OWENJH', delivered: true }, assignee: { agent: 'codex', model: 'gpt' } })] },

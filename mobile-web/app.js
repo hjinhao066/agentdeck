@@ -598,51 +598,10 @@
       section.append(heading, lanes); projects.append(section);
     }
   }
-  // The desktop saves one "turn" per injected prompt: your message, every
-  // dispatch card, every automatic receipt delivery. Here they are folded back
-  // into what happened: your message, and one reply block from the Captain.
-  const SAME_ROUND_MS = 30 * 60 * 1000;
-  function groupTurns(turns) {
-    const groups = [];
-    let group = null, last = 0;
-    for (const turn of turns) {
-      const isUser = !turn.kind && (turn.user || (turn.images || []).length);
-      if (isUser) { group = { id: turn.id, user: turn.user || '', images: turn.images || [], replies: [], tasks: [], notices: 0, steps: [], pending: false, interrupted: false }; groups.push(group); }
-      else if (!group || (turn.ts && last && turn.ts - last > SAME_ROUND_MS)) { group = { id: turn.id, user: '', images: [], replies: [], tasks: [], notices: 0, steps: [], pending: false, interrupted: false }; groups.push(group); }
-      if (turn.ts) last = turn.ts;
-      if (turn.kind === 'task') { group.tasks.push(turn.task || {}); continue; }
-      if (turn.kind === 'notice') { group.notices += 1; if (turn.reply) group.steps.push(turn.reply); continue; }
-      if (turn.reply) group.replies.push(turn.reply);
-      for (const step of turn.steps || []) group.steps.push(step);
-      group.pending = !turn.done && !turn.interrupted;
-      group.interrupted = !!turn.interrupted;
-    }
-    return groups;
-  }
-  function processSummary(group) {
-    const parts = [];
-    if (group.tasks.length) parts.push('派了 ' + group.tasks.length + ' 件活');
-    const receipts = group.tasks.filter((t) => t.summary).length;
-    if (receipts) parts.push('收到 ' + receipts + ' 份回执');
-    if (group.steps.length) parts.push(group.steps.length + ' 步操作');
-    return parts.length ? '过程：' + parts.join('，') : '';
-  }
-  function processDetails(group) {
-    const summary = processSummary(group);
-    if (!summary) return null;
-    const details = node('details', 'process');
-    details.append(node('summary', '', summary));
-    const list = node('ul', 'process-list');
-    for (const task of group.tasks) {
-      const item = node('li', task.failed ? 'process-failed' : '');
-      item.append(node('strong', '', task.title || '任务'));
-      if (task.summary) item.append(node('span', '', ' — ' + task.summary));
-      list.append(item);
-    }
-    for (const step of group.steps) list.append(node('li', 'process-step', step));
-    details.append(list);
-    return details;
-  }
+  // One round of the conversation is your message and one reply from the
+  // Captain, by the same rules as the hub (hub/core.js): dispatch cards,
+  // receipts, notices, tool steps and terminal residue are not shown.
+  const groupTurns = window.HubCore.groupTurns;
   function renderGroup(group) {
     const row = node('article', 'captain-turn');
     if (group.id) row.dataset.turnId = group.id;
@@ -675,28 +634,27 @@
       }
       row.append(prompt);
     }
-    const body = group.replies.join('\n\n');
-    const process = processDetails(group);
-    if (body || process || group.pending || group.interrupted) {
-      const reply = node('div', 'chat-message captain-message');
-      reply.append(node('span', 'chat-label', '队长'));
-      if (body) {
-        reply.append(markdown(body));
-        const actions = node('div', 'turn-actions');
-        actions.append(iconButton('copy', '复制队长回复', (button) => copyText(button, body, '复制队长回复')));
-        if (group.interrupted) actions.append(node('span', 'turn-state', '已中断'));
-        reply.append(actions);
-      } else if (group.interrupted && !process) {
-        reply.append(node('p', 'chat-text turn-state', '回复已中断。'));
-      }
+    if (group.reply || group.pending || group.interrupted) {
+      const reply = node('div', 'captain-reply'), bubble = node('div', 'chat-message captain-message');
+      const label = node('span', 'captain-label');
+      label.innerHTML = svg('crown'); label.append('队长');
+      bubble.append(label);
+      if (group.reply) bubble.append(markdown(group.reply));
+      else if (group.interrupted) bubble.append(node('p', 'chat-text turn-state', '回复已中断。'));
       if (group.pending) {
         const pending = node('p', 'chat-text pending');
         const typing = node('span', 'typing'); typing.setAttribute('aria-hidden', 'true');
         typing.append(node('i'), node('i'), node('i'));
-        pending.append(typing, node('span', '', body ? '处理中…' : '队长正在处理…'));
-        reply.append(pending);
+        pending.append(typing, node('span', '', group.reply ? '处理中…' : '队长正在处理…'));
+        bubble.append(pending);
       }
-      if (process) reply.append(process);
+      reply.append(bubble);
+      if (group.reply) {
+        const actions = node('div', 'turn-actions');
+        actions.append(iconButton('copy', '复制队长回复', (button) => copyText(button, group.reply, '复制队长回复')));
+        if (group.interrupted) actions.append(node('span', 'turn-state', '已中断'));
+        reply.append(actions);
+      }
       row.append(reply);
     }
     return row;

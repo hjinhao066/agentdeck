@@ -2,7 +2,7 @@
   color-scheme: light;
   --bg: #ffffff; --surface: #ffffff; --soft: #f4f3f1; --raised: #f7f6f4; --text: #1d1d1f;
   --secondary: #55555a; --muted: #6b6b70; --line: #e6e5e2;
-  --bubble: #f1efec; --orange: #c36922; --orange-soft: #fff2e7; --on-orange: #ffffff; --working: #d4a500;
+  --mine: #95ec69; --mine-ink: #0f2410; --orange: #c36922; --orange-soft: #fff2e7; --on-orange: #ffffff; --working: #d4a500;
   --composer-min: 44px; --composer-line: 24px; --tab-active: #a85514;
   --green: #158058; --red: #bc3a43; --focus: #2f6fde; --shadow: 0 8px 28px rgba(0, 0, 0, .12);
   --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -18,7 +18,7 @@
   color-scheme: dark;
   --bg: #171717; --surface: #1d1d1d; --soft: #2a2a2a; --raised: #232323; --text: #ececec;
   --secondary: #bdbdbd; --muted: #9a9a9a; --line: #313131;
-  --bubble: #2c2b2a; --orange: #e6a16e; --orange-soft: #33261d; --on-orange: #1b1b1b; --working: #e0b84a; --tab-active: #e6a16e;
+  --mine: #3eb575; --mine-ink: #06170e; --orange: #e6a16e; --orange-soft: #33261d; --on-orange: #1b1b1b; --working: #e0b84a; --tab-active: #e6a16e;
   --green: #4bc898; --red: #ff8087; --focus: #76b0ff; --shadow: 0 8px 28px rgba(0, 0, 0, .5);
   --rail: #1b1b1b; --hairline: rgba(255, 255, 255, .07); --row-hover: rgba(255, 255, 255, .07); --row-active: rgba(255, 255, 255, .09); --backdrop: rgba(0, 0, 0, .5);
   --quota-low: #f4cc77; --quota-out: #ffb4aa; --quota-low-fill: #e0a437; --quota-out-fill: #f07167; --quota-track: rgba(255, 255, 255, .1); --quota-fill: rgba(255, 255, 255, .78);
@@ -86,12 +86,17 @@ h1, h2, h3, h4, p { margin: 0; }
 /* Conversation */
 /* Positioned, so the visually hidden labels scroll inside it instead of
    stretching the shell (a scrollable shell lets focus shift the drawer). */
-.conversation { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 10px 16px 6px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
+.conversation { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 6px; scrollbar-color: var(--orange) transparent; scrollbar-width: thin; }
 .conversation > :first-child { margin-top: auto; }
 .captain-turn { display: flex; flex-direction: column; }
 .captain-turn + .captain-turn { margin-top: 20px; }
-.user-message { align-self: flex-end; max-width: 86%; padding: 9px 14px; border-radius: 20px 20px 6px 20px; background: var(--bubble); }
-.captain-message { margin-top: 10px; }
+/* Both sides are bubbles as wide as their text: yours on the right in a strong
+   colour, the Captain's on the left with its name. */
+.user-message { align-self: flex-end; max-width: 86%; padding: 9px 14px 10px; border-radius: 18px 18px 6px 18px; background: var(--mine); color: var(--mine-ink); }
+.captain-reply { align-self: flex-start; display: flex; flex-direction: column; align-items: flex-start; max-width: calc(100% - 16px); min-width: 0; margin-top: 10px; }
+.captain-message { max-width: 100%; min-width: 0; padding: 9px 13px 10px; border: 1px solid var(--line); border-radius: 18px 18px 18px 6px; background: var(--raised); }
+.captain-label { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; font-size: 12px; font-weight: 650; color: var(--orange); }
+.captain-label svg { width: 13px; height: 13px; color: var(--crown); }
 /* Images the user sent sit above their bubble, right-aligned like it. */
 .sent-images { align-self: flex-end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 86%; }
 .sent-images + .user-message { margin-top: 6px; }
@@ -103,7 +108,6 @@ h1, h2, h3, h4, p { margin: 0; }
 .sent-image:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .chat-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 15px; line-height: 1.65; }
-.captain-message .chat-text { padding-right: 4px; }
 .markdown { white-space: normal; }
 .markdown > * + * { margin-top: 10px; }
 .markdown p { white-space: pre-wrap; }
@@ -129,11 +133,12 @@ h1, h2, h3, h4, p { margin: 0; }
 .markdown td .md-code, .markdown th .md-code { overflow-wrap: normal; }
 .markdown hr { height: 0; margin: 16px 0; border: 0; border-top: 1px solid var(--line); }
 .markdown > hr + * { margin-top: 0; }
-.turn-actions { display: flex; align-items: center; gap: 4px; margin: -4px 0 -12px -12px; }
+.turn-actions { display: flex; align-items: center; gap: 2px; margin: -7px 0 -13px -8px; }
 .turn-actions .icon-button { color: var(--muted); }
-.turn-actions svg { width: 18px; height: 18px; }
+.turn-actions svg { width: 17px; height: 17px; }
 .turn-state { font-size: 12px; color: var(--muted); }
 .pending { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); }
+.markdown + .pending { margin-top: 6px; }
 .typing { display: inline-flex; gap: 4px; }
 .typing i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: blink 1.2s infinite both; }
 .typing i:nth-child(2) { animation-delay: .2s; } .typing i:nth-child(3) { animation-delay: .4s; }
@@ -350,16 +355,7 @@ textarea:disabled { opacity: .6; }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .refreshing svg, .dot[data-status="working"], .typing i { animation: none; } .switch, .switch::after, .upload-bar, .drawer, .scrim { transition: none; } }
 
-/* Folded long message, and the one-line process fold under a Captain reply. */
+/* Folded long message. */
 .user-message { display: flex; flex-direction: column; align-items: flex-start; }
 .chat-text.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 8; line-clamp: 8; overflow: hidden; }
-.expand-toggle { align-self: flex-end; min-height: 44px; margin: -6px -8px -12px 0; padding: 0 8px; border: 0; background: transparent; color: var(--orange); font-size: 13px; }
-.process { margin-top: 2px; font-size: 12px; color: var(--muted); }
-.process > summary { display: flex; align-items: center; min-height: 36px; cursor: pointer; list-style: none; }
-.process > summary::-webkit-details-marker { display: none; }
-.process > summary::after { content: "›"; margin-left: 4px; transition: transform .15s; }
-.process[open] > summary::after { transform: rotate(90deg); }
-.process-list { margin: 0 0 6px; padding-left: 18px; line-height: 1.5; }
-.process-list li + li { margin-top: 3px; }
-.process-failed { color: var(--red); }
-.process-step { overflow-wrap: anywhere; }
+.expand-toggle { align-self: flex-end; min-height: 44px; margin: -6px -8px -12px 0; padding: 0 8px; border: 0; background: transparent; color: inherit; font-size: 13px; font-weight: 650; text-decoration: underline; text-underline-offset: 3px; }

@@ -1005,15 +1005,17 @@ test('the reload icon reloads the whole page and keeps the unsent text and finis
   await expect(mobile.locator('.attachment')).toHaveCount(0);
 });
 
-test('a long exchange reads as one message and one Captain reply, with the process folded', async () => {
+test('a long exchange reads as one message and one Captain reply: bubbles on both sides, the Captain\'s words only', async () => {
   const T = Date.now() - 6 * 3600_000, min = 60_000;
   const full = Array.from({ length: 40 }, (_, i) => `第 ${i + 1} 段：手机网页端要和电脑端一致，一来一回，别把派活标题当成我说的话。`).join('\n');
   const task = (n, title, summary) => ({ kind: 'task', id: 'task-' + n, ts: T + n * min, user: title, done: true, atts: [], reply: summary,
     task: { colId: 'w' + n, title, status: 'done', receipt: { summary, failed: '', question: '', files: [], images: [], explicit: true } } });
   let longFile = '';
   await launch([
-    { id: 'demo-user', ts: T, user: full.slice(0, 2000) + `\n…（全文 ${full.length} 字，见附件）`, reply: '收到，我先拆成三件活。', done: true, atts: [], steps: ['Read(board.md)', 'Bash(git status)'] },
-    task(1, '手机网页额度显示接手收尾', '额度表格已核对。'),
+    // The reply as the desktop reads it off the terminal: a tool summary, a notice and an update banner ride along.
+    { id: 'demo-user', ts: T, user: full.slice(0, 2000) + `\n…（全文 ${full.length} 字，见附件）`, done: true, atts: [], steps: ['Read(board.md)', 'Bash(git status)'],
+      reply: 'Read 1 file, ran 2 shell commands\n\nBackground command "Background listener for crew\n\nreceipts" completed (exit code 0)\n\n收到，我先拆成三件活。\n\nUpdate available! Run: brew upgrade claude-code@latest' },
+    task(1, '手机网页额度显示接手收尾', '后来又给这个会话发了新指令，结果看后面的卡片。'),
     task(2, '登录与鉴权验收', '鉴权通过。'),
     task(3, '深浅主题截图', '截图已生成。'),
     { kind: 'notice', id: 'notice-1', ts: T + 5 * min, user: '永动机', reply: '已切换座位。', done: true, atts: [] },
@@ -1049,11 +1051,23 @@ test('a long exchange reads as one message and one Captain reply, with the proce
   await expect(first.locator('.captain-message')).toContainText('截图也齐了，可以验收。');
   await expect(first.locator('.user-message')).not.toContainText('手机网页额度显示接手收尾');
   await expect(log.locator('.user-message', { hasText: '手机网页额度显示接手收尾' })).toHaveCount(0);
-  await expect(first.locator('.process > summary')).toHaveText(/过程：派了 3 件活/);
-  await expect(first.locator('.process-list')).toBeHidden();
-  await first.locator('.process > summary').click();
-  await expect(first.locator('.process-list')).toContainText('手机网页额度显示接手收尾');
-  await first.locator('.process > summary').click();
+  // Nothing but what was said: no process line, receipts, notices, tool steps or terminal residue.
+  await expect(log.locator('details, .process')).toHaveCount(0);
+  for (const residue of ['过程：', '手机网页额度显示接手收尾', '后来又给这个会话发了新指令', '已切换座位', 'git status', 'shell command', 'Background command', 'exit code', 'Update available']) await expect(log).not.toContainText(residue);
+  // The Captain's side is a named bubble on the left with its copy action under it; yours is a strong colour on the right.
+  await expect(first.locator('.captain-message .captain-label')).toHaveText('队长');
+  await expect(first.locator('.captain-reply').getByRole('button', { name: '复制队长回复', exact: true })).toHaveAttribute('title', '复制队长回复');
+  const shape = await log.evaluate((el) => {
+    const box = (node) => node.getBoundingClientRect(), area = box(el), mine = el.querySelector('.user-message'), reply = el.querySelector('.captain-message');
+    const luminance = (colour) => { const [r, g, b] = colour.match(/[\d.]+/g).slice(0, 3).map((v) => { const c = v / 255; return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const style = getComputedStyle(mine), [hi, lo] = [luminance(style.color), luminance(style.backgroundColor)].sort((x, y) => y - x);
+    return { mineRight: area.right - box(mine).right, replyLeft: box(reply).left - area.left, replyRight: area.right - box(reply).right, replyWidth: box(reply).width,
+      radius: parseFloat(getComputedStyle(reply).borderTopLeftRadius), border: parseFloat(getComputedStyle(reply).borderTopWidth), text: (hi + 0.05) / (lo + 0.05), share: el.clientHeight / innerHeight };
+  });
+  expect(shape.mineRight).toBeLessThanOrEqual(10); expect(shape.replyLeft).toBeLessThanOrEqual(10); expect(shape.replyRight).toBeGreaterThanOrEqual(16);
+  expect(shape.radius).toBeGreaterThanOrEqual(12); expect(shape.border).toBeGreaterThanOrEqual(1);
+  expect(shape.text).toBeGreaterThanOrEqual(4.5);
+  expect(shape.share).toBeGreaterThanOrEqual(0.7);
   // Background talk without a message of yours: left-aligned, merged, no empty bubble.
   const background = log.locator('.captain-turn', { hasText: '后台回执：夜间巡检完成' });
   await expect(background.locator('.user-message')).toHaveCount(0);
@@ -1065,9 +1079,7 @@ test('a long exchange reads as one message and one Captain reply, with the proce
     await first.evaluate((el) => el.scrollIntoView());
     await screenshot(`chat-flow-${theme}`);
     await first.getByRole('button', { name: '展开全文' }).click();
-    await first.locator('.process > summary').click();
     await screenshot(`chat-flow-expanded-${theme}`);
     await first.getByRole('button', { name: '收起' }).click();
-    await first.locator('.process > summary').click();
   }
 });

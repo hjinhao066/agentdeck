@@ -117,19 +117,60 @@ test('injected dispatch cards, notices and receipts fold into one round: one mes
   const groups = Core.groupTurns([
     { id: 'u1', ts: t, user: '看一下进度', reply: '', done: true },
     { id: 'k1', ts: t + 1000, kind: 'task', task: { title: '前端', summary: '' }, done: true },
-    { id: 'k2', ts: t + 2000, kind: 'task', task: { title: '文档', summary: '写好了', failed: false }, done: true },
+    { id: 'k2', ts: t + 2000, kind: 'task', task: { title: '文档', summary: '后来又给这个会话发了新指令，结果看后面的卡片。', failed: false }, done: true },
     { id: 'n1', ts: t + 3000, kind: 'notice', reply: '回执已送达', done: true },
     { id: 'r1', ts: t + 4000, reply: '进度如下', steps: ['读看板'], done: true },
-    { id: 'u2', ts: t + 5000, user: '再查一次', reply: '', done: false },
+    { id: 'r2', ts: t + 5000, reply: '文档也好了', done: true },
+    { id: 'u2', ts: t + 6000, user: '再查一次', reply: '', done: false },
   ]);
-  assert.equal(groups.length, 2);
-  assert.equal(groups[0].user, '看一下进度');
-  assert.deepEqual(groups[0].replies, ['进度如下']);
-  assert.equal(groups[0].tasks.length, 2);
-  assert.deepEqual(groups[0].steps, ['回执已送达', '读看板']);
-  assert.equal(Core.processSummary(groups[0]), '过程：派了 2 件活，收到 1 份回执，2 步操作');
-  assert.equal(groups[1].pending, true);
-  assert.equal(Core.processSummary(groups[1]), '');
+  // Only what was said: no task titles, receipts, notices or tool steps.
+  assert.deepEqual(groups, [
+    { id: 'u1', user: '看一下进度', images: [], reply: '进度如下\n\n文档也好了', pending: false, interrupted: false },
+    { id: 'u2', user: '再查一次', images: [], reply: '', pending: true, interrupted: false },
+  ]);
+});
+
+test('a round where the Captain only dispatched work shows nothing on its side', () => {
+  const t = 1_000_000;
+  const task = (id, ts) => ({ id, ts, kind: 'task', task: { title: '活', summary: '做完了' }, done: true });
+  // After a message: the message alone. With no message at all: no round.
+  assert.deepEqual(Core.groupTurns([{ id: 'u1', ts: t, user: '派一下', reply: '', done: true }, task('k1', t + 1000)]),
+    [{ id: 'u1', user: '派一下', images: [], reply: '', pending: false, interrupted: false }]);
+  assert.deepEqual(Core.groupTurns([task('k1', t), { id: 'n1', ts: t + 1000, kind: 'notice', reply: '已切换座位', done: true }]), []);
+  // A reply that is nothing but terminal residue is no reply.
+  assert.deepEqual(Core.groupTurns([{ id: 'r1', ts: t, reply: 'Ran 2 shell commands\n\nUpdate available! Run: brew upgrade claude-code@latest', done: true }]), []);
+  // An interrupted turn is still told.
+  assert.equal(Core.groupTurns([{ id: 'r1', ts: t, reply: '', done: false, interrupted: true }])[0].interrupted, true);
+});
+
+test('terminal residue is taken out of a reply and the Captain\'s words are kept', () => {
+  const said = '昨晚那几件事做到哪了？给我一个总的进度，没做成的单独列出来。';
+  const reply = [
+    '❯ 昨晚那几件事做到哪了？给我一个总的进度，没做成', '的单独列出来。', '',
+    'Read 1 file, listed 1 directory, ran 3 shell commands', '', 'Called Gmail, ran 1 shell command', '', 'Searched for 2 patterns', '',
+    'Background command "Background listener for crew', '', 'receipts" completed (exit code 0)', '',
+    'Background command "Wait for receipts" completed (exit code 0)', '',
+    '三件事都有结果了。', '- 额度显示：已核对。', '  第二行缩进照旧。', '',
+    'Update available! Run: brew upgrade claude-code@latest', '',
+    '▐▛███▛█   Claude Code v2.1.0', '▝▜██████▀  Opus 5.5 with high effort', '*         ███▓░     ░░', '',
+    'Worked for 2m 3s • 10:22', '3 new messages (click) ↓', '下一步等截图回来就验收。  Jump to bottom (click) ↓',
+  ].join('\n');
+  assert.equal(Core.cleanReply(reply, said), '三件事都有结果了。\n- 额度显示：已核对。\n  第二行缩进照旧。\n\n下一步等截图回来就验收。');
+  // The tail of a file diff printed above the reply.
+  assert.equal(Core.cleanReply('+已归档）；c-board-1 轮换\n        + t-de2b，报告在 reports/\n    144 +\n    145  ## 卡在哪\n         保留原席位\n    147\n\n你说得对，已经派了。'), '你说得对，已经派了。');
+  // Prompts AgentDeck types itself are dropped with everything in their block.
+  assert.equal(Core.cleanReply('已读。\n\n❯ 【AgentDeck 新回执】\n- 「对账」(c1)：做完了\n- 「巡检」(c2)：没有异常\n\n两份回执都看了。'), '已读。\n\n两份回执都看了。');
+});
+
+test('cleaning a reply never eats the Captain\'s own sentences', () => {
+  // Words glued under an echo are kept unless they are the user's own text.
+  assert.equal(Core.cleanReply('❯ 帮我查一下额度\n- 已派一个队员去查。\n- 查清后告诉你。', '帮我查一下额度'), '- 已派一个队员去查。\n- 查清后告诉你。');
+  // English prose, numbered lists, indented lists and code-like lines are ordinary text.
+  for (const text of ['Ran the tests and they pass.', 'Read more in docs/a.md', '1. 第一步\n2. 第二步\n    - 缩进的子项', '  3 件事都做完了', '完成 100%\n...', 'Background commands are listed below.',
+    '> 引用用户的话', '进度：60%（3/5）', 'node scripts/release.js 1.2 --dry-run']) assert.equal(Core.cleanReply(text), text);
+  assert.equal(Core.cleanReply('第一段\r\n\r\n\r\n第二段\n'), '第一段\n\n第二段');
+  assert.equal(Core.cleanReply(undefined), '');
+  assert.equal(Core.cleanReply(null), '');
 });
 
 test('a reply that arrives long after the last message starts its own round, and odd turns are ignored', () => {
@@ -137,7 +178,7 @@ test('a reply that arrives long after the last message starts its own round, and
   const groups = Core.groupTurns([null, 'x', { id: 'u1', ts: t, user: '问', reply: '答', done: true }, { id: 'r2', ts: t + 31 * 60000, reply: '稍后的回执', done: true }]);
   assert.equal(groups.length, 2);
   assert.equal(groups[1].user, '');
-  assert.deepEqual(groups[1].replies, ['稍后的回执']);
+  assert.equal(groups[1].reply, '稍后的回执');
   assert.deepEqual(Core.groupTurns(undefined), []);
   // An images-only message is still the user's message.
   assert.equal(Core.groupTurns([{ id: 'p', ts: t, user: '', images: ['a'.repeat(32) + '.png'], reply: '', done: true }])[0].images.length, 1);

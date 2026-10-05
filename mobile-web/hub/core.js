@@ -139,37 +139,83 @@
   }
 
   // ---- conversation --------------------------------------------------------
+  // The desktop reads a reply off the terminal screen, so terminal residue can
+  // ride along with it: the echo of a typed prompt, collapsed tool summaries,
+  // background-command notices, the tail of a file diff, update banners, logo
+  // art. The phone shows the Captain's words only. When in doubt a line stays:
+  // a stray terminal line is better than a missing sentence.
+  const TOOL_CLAUSE = '(?:(?:ran|read|searched for|listed|edited|wrote|updated|fetched|created|deleted) \\d+ [a-z]+(?: [a-z]+)?|called [\\w .-]+?)';
+  const TERMINAL_LINES = [
+    new RegExp(`^${TOOL_CLAUSE}(?:, ${TOOL_CLAUSE})*$`, 'i'),      // Read 1 file, ran 3 shell commands
+    /^Running \d+ shell commands?…$/, /^⎿/,
+    /^Update available! Run: /, /^Welcome to Claude Code\b/,
+    /^Worked for (?:\d+[hms] ?)+(?:•.*)?$/,
+    /^Resume this session with:$/, /^claude --resume [\w-]+$/,
+    /^› Ask Codex to do anything$/,
+    /^How is Claude doing this session\? \(optional\)$/, /^1: Bad\s+2: Fine\s+3: Good\s+0: Dismiss$/,
+    /^You've used \d+% of your \w+ limit\b/,
+    /^[▐▛▜▝▘▗▖▞▚▙▟]/,                                               // the Claude Code logo and its caption
+    /^[*.█▓▒░▀▄\s]*[█▓▒░][*.█▓▒░▀▄\s]*$/,                           // shaded banner art
+  ];
+  // The scroll hint is drawn over a row of text, which may then be joined with the next row.
+  const OVERLAY = /\s*(?:\d+ new messages?|Jump to bottom) \(click\) ↓\s*/g;
+  const PROMPT_ECHO = /^[❯›]\s+\S/;
+  // Prompts AgentDeck itself types into the Captain: the whole block is the echo.
+  const INJECTED = /^[❯›]\s+(?:【AgentDeck |用户刚清空了你的模型上下文|读看板继续|永动机自动轮换)/;
+  const NOTICE = /^Background command "/, NOTICE_END = /(?:code \d+\)|^\d+\)|still running|completed|failed|killed|stopped)$/;
+  // A numbered row of a file diff: "    146 +", "    147  ## heading".
+  const DIFF_ROW = /^ {2,}\d{1,6}(?: [+-]| {2}\S|\s*$)/;
+  const squash = (text) => String(text).replace(/\s+/g, '');
+  // `said` is everything the user wrote in this conversation: a wrapped echo is
+  // recognised by its lines being part of it.
+  function cleanReply(text, said = '') {
+    const known = squash(said);
+    const blocks = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split(/\n[ \t]*(?:\n[ \t]*)+/);
+    // A notice cut by the screen edge ends on the next row, sometimes after an empty one.
+    let notice = false;
+    return blocks.map((block) => {
+      const lines = block.split('\n'), diff = lines.some((line) => DIFF_ROW.test(line)), kept = [];
+      let echo = false, injected = false;
+      for (const raw of lines) {
+        const line = raw.replace(OVERLAY, ''), t = line.trim(), tail = notice && NOTICE_END.test(t);
+        notice = false;
+        if (tail || !t) continue;
+        if (PROMPT_ECHO.test(t)) { echo = true; injected = INJECTED.test(t); continue; }
+        if (echo && (injected || known.includes(squash(t)))) continue;
+        echo = false;
+        if (NOTICE.test(t)) { notice = !NOTICE_END.test(t); continue; }
+        if (diff && (DIFF_ROW.test(line) || /^ {4,}|^\s*\+/.test(line))) continue;
+        if (TERMINAL_LINES.some((pattern) => pattern.test(t))) continue;
+        kept.push(line);
+      }
+      return kept.join('\n');
+    }).filter((block) => block.trim()).join('\n\n').replace(/^\n+|\s+$/g, '');
+  }
   // The desktop saves one "turn" per injected prompt: the user's message, every
   // dispatch card, every automatic receipt delivery. They are folded back into
-  // what happened: the message, then one reply block from the Captain. Same
-  // rules as the single-machine page, so both ends read the same.
+  // what was said: the message, then one reply from the Captain. Dispatch cards,
+  // notices and tool steps are process, and are not shown. Same rules as the
+  // single-machine page, so both ends read the same.
   const SAME_ROUND_MS = 30 * 60 * 1000;
   function groupTurns(turns) {
-    const groups = [];
+    const groups = [], list = (Array.isArray(turns) ? turns : []).filter((turn) => turn && typeof turn === 'object');
+    const said = list.map((turn) => typeof turn.user === 'string' ? turn.user : '').join('\n');
     let group = null, last = 0;
-    const open = (turn, user, images) => { group = { id: turn.id, user, images, replies: [], tasks: [], notices: 0, steps: [], pending: false, interrupted: false }; groups.push(group); };
-    for (const turn of Array.isArray(turns) ? turns : []) {
-      if (!turn || typeof turn !== 'object') continue;
+    const open = (turn, user, images) => { group = { id: turn.id, user, images, replies: [], pending: false, interrupted: false }; groups.push(group); };
+    for (const turn of list) {
       const isUser = !turn.kind && (typeof turn.user === 'string' && turn.user || Array.isArray(turn.images) && turn.images.length);
       if (isUser) open(turn, typeof turn.user === 'string' ? turn.user : '', Array.isArray(turn.images) ? turn.images.filter((id) => typeof id === 'string') : []);
       else if (!group || (turn.ts && last && turn.ts - last > SAME_ROUND_MS)) open(turn, '', []);
       if (turn.ts) last = turn.ts;
-      if (turn.kind === 'task') { group.tasks.push(turn.task && typeof turn.task === 'object' ? turn.task : {}); continue; }
-      if (turn.kind === 'notice') { group.notices += 1; if (turn.reply) group.steps.push(String(turn.reply)); continue; }
-      if (turn.reply) group.replies.push(String(turn.reply));
-      for (const step of Array.isArray(turn.steps) ? turn.steps : []) group.steps.push(String(step));
+      if (turn.kind) continue;
+      const reply = cleanReply(turn.reply, said);
+      if (reply) group.replies.push(reply);
       group.pending = !turn.done && !turn.interrupted;
       group.interrupted = !!turn.interrupted;
     }
-    return groups;
-  }
-  function processSummary(group) {
-    const parts = [];
-    if (group.tasks.length) parts.push(`派了 ${group.tasks.length} 件活`);
-    const receipts = group.tasks.filter((task) => task.summary).length;
-    if (receipts) parts.push(`收到 ${receipts} 份回执`);
-    if (group.steps.length) parts.push(`${group.steps.length} 步操作`);
-    return parts.length ? '过程：' + parts.join('，') : '';
+    // A round with nothing to read (only dispatching happened) leaves no trace.
+    return groups.filter((g) => g.user || g.images.length || g.replies.length || g.pending || g.interrupted)
+      .map((g) => ({ id: g.id, user: g.user, images: g.images, reply: g.replies.join('\n\n'), pending: g.pending, interrupted: g.interrupted }));
   }
 
   // ---- quota ---------------------------------------------------------------
@@ -232,5 +278,5 @@
   }
 
   return { TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
-    groupTurns, processSummary, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
+    groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });

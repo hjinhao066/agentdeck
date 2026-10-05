@@ -94,7 +94,7 @@ test('unauthenticated root is a 401 login shell, all app assets and APIs reject 
   assert.ok(!root.text.includes(status.token));
   assert.match(root.headers['content-security-policy'], /frame-ancestors 'none'/);
   assert.match(root.headers['content-security-policy'], /nonce-/);
-  for (const route of ['/app.js', '/style.css', '/api/sessions', '/api/tasks', '/api/output?id=worker', '/other']) {
+  for (const route of ['/app.js', '/core.js', '/style.css', '/api/sessions', '/api/tasks', '/api/output?id=worker', '/other']) {
     assert.equal((await request(status, route)).status, 401, route);
     assert.ok([401, 429].includes((await request(status, route, { headers: { Authorization: 'Bearer incorrect' } })).status), route);
   }
@@ -176,7 +176,7 @@ test('quota is a read-only, login-only endpoint that returns display fields with
 
 test('authenticated static files are served from a fixed allowlist with restrictive headers', async (t) => {
   const { status, auth } = await start(t);
-  for (const route of ['/', '/app.js', '/style.css']) {
+  for (const route of ['/', '/app.js', '/core.js', '/style.css']) {
     const result = await request(status, route, { headers: auth });
     assert.equal(result.status, 200, route);
     assert.equal(result.headers['x-content-type-options'], 'nosniff');
