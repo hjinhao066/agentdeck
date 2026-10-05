@@ -687,7 +687,7 @@ activating the app; each spec opens its own instance, and CI runs the suite once
 against source and once against the packaged app. With `--test-user-data=<dir>` the
 Skills page scans `<dir>/skills-home` instead of the real home folder, so tests
 never list or edit the user's own skills.
-Fixture cleanup first requests normal Electron quit, then kills only its own process
+Fixture cleanup first requests normal Electron quit, then kills only its isolated process tree
 after 10 seconds if native teardown stalls, with an explicit warning in the test log.
 This cleanup is not a graceful-shutdown assertion; `restart-resume-exit.spec.js`
 checks actual exit separately and does not use that fallback.
