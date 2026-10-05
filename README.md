@@ -118,7 +118,16 @@ the middle:
   weekdays at a time, or every N minutes/hours. It runs only while AgentDeck is
   open; a run that was due while it was closed is shown as missed, not fired
   late. A busy session is retried for up to 30 minutes.
-- **Artifacts** lists files and links that agents mentioned in their replies.
+- **Artifacts** has two tabs. 回执交付 collects the files the crew listed in
+  their receipts (the 「文件：」 list `ledger` prints), grouped by project, with no
+  action from anyone: it reads each session's last receipt, 队长's task list and
+  the task cards in 队长's conversations, so receipts from before this feature
+  count too. A path appears once, under the session that delivered it last
+  (Windows paths ignore case and slash direction); sessions without a project
+  go under 未分组; a file no longer on disk stays listed, greyed out and
+  labelled. Each row previews on the right and has icon buttons to copy the
+  path, show it in Finder/Explorer and jump to the session. 回复里提到的 is the
+  earlier collection: files and links the agents mentioned in their replies.
 - **Skills** lists every `SKILL.md` the agent CLIs on this machine can see, so
   you can read one rendered or edit its full Markdown and save it (⌘S). See below.
 

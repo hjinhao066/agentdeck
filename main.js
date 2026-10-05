@@ -723,7 +723,7 @@ app.whenReady().then(async () => {
   setupBoardControl();
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
-    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR,
+    getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
   });
   // A test profile must never list or edit the real user's skills.
   registerSkillsIpc({ handleMain, home: tudArg ? path.join(app.getPath('userData'), 'skills-home') : HOME });
