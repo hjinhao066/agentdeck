@@ -506,7 +506,7 @@ function render(state, level) {
       const rest = ctx.userTurns.slice(0, hidden);
       const late = rest.filter((t) => state.unsorted.includes(t));
       const where = [...new Set(rest.map((t) => t.sourceId || prev).filter(Boolean))];
-      out.push(`  - 另有 ${hidden} 条没摘录${late.length ? `，其中未整理的在 ${late.map((t) => when(t.ts)).join('、')}` : ''}：read --id ${where[0] || '上任会话'} --turns 10${where.length > 1 ? `（更早的在 ${where.slice(1).join('、')}）` : ''}`);
+      out.push(`  - 另有 ${hidden} 条没摘录${late.length ? `，其中未整理的在 ${late.map((t) => when(t.ts)).join('、')}` : ''}：read --id ${where[0] || '上任会话'} --turns 10${where.length > 1 ? `（另见 ${where.slice(1).join('、')}）` : ''}`);
       omitted.push(`用户消息摘录 ${hidden} 条`);
     }
   }

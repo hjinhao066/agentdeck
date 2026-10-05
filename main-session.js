@@ -34,8 +34,8 @@
   // crewMarked: sessions opened before captainCrew existed were marked once.
   // waitlist: `new` requests waiting for a free slot (settings cap, live on M.MAX_ACTIVE), oldest first;
   // each has a 'waiting' card with no column yet.
-  // captainSettledAt: when 队长 last finished a stretch of work. A receipt the CLI
-  // took after that has no sign of being dealt with.
+  // captainSettledAt: when the last stretch of work 队长 finished began. A receipt
+  // the CLI took after that has no sign of being dealt with.
   // handoffCarry: such receipts at the last Relay or restart, { at, kind, fromId, items };
   // they are never delivered again, the handoff lists them until the next Relay.
   // config.captainHistory: conversations from before a clear (MainCore.normalizeHistory).
@@ -1476,7 +1476,7 @@
   }
 
   // ---- heartbeat: called for every column on the 1.5s status loop ----
-  let captainBusy = false;   // 队长 was seen working and has not come to rest yet
+  let captainBusySince = 0;   // when 队长 was first seen working in the stretch it has not finished yet
   function confirmationExcerpt(entry) {
     return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
       .map((l) => l.slice(0, 140)).join('\n') || '（看不到提示内容）';
@@ -1486,8 +1486,9 @@
     if (!s) return;
     if (id === s.colId) {
       const busy = entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, mainCol()?.cmd) === 'working');
-      if (busy) captainBusy = true;
-      else if (captainBusy && entry.state === 'done') { captainBusy = false; s.captainSettledAt = Date.now(); save(); }
+      // Only a receipt taken before a stretch began was in front of the model for all of it.
+      if (busy) captainBusySince ||= Date.now();
+      else if (captainBusySince && entry.state === 'done') { s.captainSettledAt = Math.max(s.captainSettledAt || 0, captainBusySince); captainBusySince = 0; save(); }
       for (const [cardId, input] of quotaStarts) {
         if (quotaPlan(window.BoardCore.commandForAgent('agy')).action !== 'queue') {
           quotaStarts.delete(cardId);
@@ -1594,7 +1595,7 @@
         }
         else saverFailed('队长没有只回复「已存档」，未清空上下文');
       }
-      if (!turn.interrupted) { captainBusy = false; s.captainSettledAt = Date.now(); }
+      if (!turn.interrupted && Number.isFinite(turn.ts)) s.captainSettledAt = Math.max(s.captainSettledAt || 0, turn.ts);
       if (s.inflight.length || s.fresh) {
         s.inflight = s.inflight.filter((p) => p.deliveryTurnId !== turn.id);
         s.fresh = false;
