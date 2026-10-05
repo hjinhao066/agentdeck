@@ -297,6 +297,55 @@ test('how a new Captain starts: ready when there is nothing, straight on when au
   assert.match(brief, /Relay、清空或重启后有已授权待办，核对后主动续接，不要等用户说“继续”/);
 });
 
+test('a session still running with no record behind it is something to check first, never "nothing to do"', (t) => {
+  // exactly the case a lost dispatch record leaves behind: the terminal works, the ledger of tasks is empty
+  let built = build({ sessions: [{ id: 'worker-live', alive: true, state: 'working', crew: true, title: '尚在执行的任务' }], cards: [], dispatches: [] });
+  assert.deepEqual(built.state.stats.running, ['worker-live']); assert.equal(built.state.strays.length, 1);
+  assert.equal(built.state.plan, 'verify');
+  assert.match(built.text, /启动方式：有 1 个会话还在跑、却没有对应的任务记录（worker-live）：先 peek 核实它在做什么，再决定继续跟踪还是叫停；核实前不要报告就绪，也不要另派同样的活。/);
+  assert.doesNotMatch(built.text, /没有待办/);
+  assert.match(section(built.text, 4), /在跑、但没有对应未完成任务记录的会话：worker-live「尚在执行的任务」（运行中）。用 peek 看它在做什么/);
+  assert.match(built.text.split('\n').find((l) => l.startsWith('3. ')), /没有任务记录却在跑的会话 1 个（worker-live，先 peek）/);
+  assert.match(built.text, /在跑的队员会话 1 个/);
+  // next to real work it does not change the plan, but it is still the first thing to check
+  const f = fixture(t);
+  const card = f.add({ title: '在做的' }); f.bind(card.id, 'a1', 's1'); f.event(card.id, 'started', '', 'a1', 's1');
+  built = build({ cards: f.cards(), sessions: [session('s1'), session('worker-live')], dispatches: [record('s1', 'working', { boardId: card.id, boardAttempt: 'a1' })] });
+  assert.equal(built.state.plan, 'resume');
+  assert.match(built.text.split('\n').find((l) => l.startsWith('3. ')), /没有任务记录却在跑的会话 1 个（worker-live，先 peek）/);
+  // the user's own terminal and a session that has come to rest are not strays
+  built = build({ sessions: [session('mine', 'working', { crew: false }), session('rested', 'done')], cards: [], dispatches: [] });
+  assert.equal(built.state.plan, 'ready'); assert.equal(built.state.strays.length, 0);
+  // a task the Captain stopped is all that is left: that is not "nothing" either, and not a licence to restart it
+  const g = fixture(t);
+  const halted = g.add({ title: 'Windows 升级' }); g.bind(halted.id, 'u1', 's-win'); g.event(halted.id, 'started', '', 'u1', 's-win');
+  built = build({ cards: g.cards(), sessions: [session('s-win', 'done')],
+    dispatches: [record('s-win', 'stopped', { boardId: halted.id, boardAttempt: 'u1', receipt: receipt('队长已请求中断当前操作。', { source: 'captain-stop' }) })] });
+  assert.equal(built.state.plan, 'backlog');
+  assert.match(built.text, /启动方式：没有在跑、待验收或待处理的任务，有 0 张待执行卡、1 条暂停中的任务：[^\n]*暂停的没有新指令不重启/);
+  assert.doesNotMatch(built.text, /没有待办/);
+});
+
+test('however many receipts are waiting, each is named: past the first few by session and title, never cut off', () => {
+  const many = (prefix, n) => Array.from({ length: n }, (_, i) => ({ receiptId: prefix + i, taskId: 'k' + i, colId: 'c-' + prefix + (i % 7), title: `${prefix}-${String(i).padStart(3, '0')}`, ts: NOW - i, summary: '很长的结果。'.repeat(30) }));
+  const snapshot = { reason: 'relay', cards: [], dispatches: [], pending: many('unread', 70), unconfirmed: many('taken', 120),
+    carry: { at: NOW - 3600_000, kind: 'relay', fromId: 'cap-0', items: many('older', 90) }, captain: { previousId: 'cap-1', gen: 3 } };
+  for (const budget of [60000, 12000, 4000]) {
+    const built = build({ ...snapshot, budget });
+    for (const [prefix, n] of [['unread', 70], ['taken', 120], ['older', 90]]) {
+      for (let i = 0; i < n; i++) assert.ok(built.text.includes(`「${prefix}-${String(i).padStart(3, '0')}」`), `${prefix} ${i} at budget ${budget}`);
+    }
+    assert.match(built.text, /未读回执和提问 70 条/); assert.match(built.text, /上任已取走、可能没处理完的回执 120 条/); assert.match(built.text, /之后也没人处理完的回执 90 条/);
+    assert.equal(built.state.stats.unconfirmed, 210); assert.equal(built.state.plan, 'resume');
+    assert.match(built.text, /其余 \d+ 条只列会话和标题，内容用 read --id 会话id 查：/);
+    if (built.over) assert.match(built.text, /已超出预算：未完成任务、阻塞、限制和待决定事项一条没删/);
+  }
+  assert.ok(build({ ...snapshot, budget: 4000 }).length < build({ ...snapshot, budget: 60000 }).length);
+  // the writer in the main process passes all of them through as well
+  const src = fs.readFileSync(path.join(__dirname, '..', 'claude-seats-main.js'), 'utf8');
+  assert.doesNotMatch(src, /cap\(payload\.(?:pending|inflight|unconfirmed)/);
+});
+
 test('the length budget squeezes explanations, never an unfinished task, a blocker, a limit or an open decision', (t) => {
   const f = fixture(t);
   const ids = [], questions = [];

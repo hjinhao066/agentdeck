@@ -165,15 +165,17 @@ function handoff(home, userData, payload, options = {}) {
   // An unreadable board is said out loud; the dispatch records alone still go out.
   let cards = [], boardError = '';
   try { cards = options.cards ? options.cards() : []; } catch (error) { boardError = error.message; }
-  const cap = (value, max) => (Array.isArray(value) ? value.slice(-max) : []);
+  // Receipts, queued work and sessions go in whole: the text names every one of them,
+  // and a trimmed list would lose a result or call a live session gone.
+  const all = (value) => (Array.isArray(value) ? value : []);
   const machine = options.machine || {};
   const built = Handoff.build({
     now: Number.isFinite(payload.now) ? payload.now : Date.now(), timeZone: payload.timeZone, reason: payload.reason, cli: payload.cli, budget: payload.budget,
     platform: machine.platform || process.platform, host: machine.hostname || os.hostname(), appVersion: machine.appVersion || '', boardVersion: options.boardVersion ? options.boardVersion() : '',
     captain: { ...(payload.captain && typeof payload.captain === 'object' ? payload.captain : { previousId: payload.colId, message: payload.relayMessage || '' }) },
-    cards, boardError, dispatches: payload.tasks, sessions: cap(payload.sessions, 400), archivedIds: cap(payload.archivedIds, 5000),
-    pending: cap(payload.pending, 200), inflight: cap(payload.inflight, 200), unconfirmed: cap(payload.unconfirmed, 200), waitlist: cap(payload.waitlist, 200),
-    carry: payload.carry, userTurns: cap(payload.userTurns, 12), decisions,
+    cards, boardError, dispatches: payload.tasks, sessions: all(payload.sessions), archivedIds: all(payload.archivedIds),
+    pending: all(payload.pending), inflight: all(payload.inflight), unconfirmed: all(payload.unconfirmed), waitlist: all(payload.waitlist),
+    carry: payload.carry, userTurns: all(payload.userTurns).slice(-12), decisions,
     paths: { handoff: board, decisions: notes, chats: path.join(userData, 'chats'), tasks: options.tasksDir || path.join(dir, 'tasks') },
   });
   fs.writeFileSync(board + '.tmp', built.text, { mode: 0o600 });

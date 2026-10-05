@@ -441,10 +441,12 @@ function derive(snapshot) {
   const count = (group) => cards.filter((c) => c.group === group).length + loose.filter((l) => l.group === group).length;
   const stats = { cards: cards.length, loose: loose.length, rework: count('rework'), review: count('review'), doing: count('doing'), paused: count('paused'), todo: count('todo'),
     running: [...new Set([...cards.flatMap((c) => c.holders), ...loose.filter((l) => l.holds).map((l) => l.id), ...strays.map((s) => s.id)])],
-    pending: ctx.pending.length + redeliver.length, unconfirmed: unconfirmed.length + carried.length, asks: asks.length, forUser: notes.user.length, conflicts: conflicts.length };
+    pending: ctx.pending.length + redeliver.length, unconfirmed: unconfirmed.length + carried.length, asks: asks.length, forUser: notes.user.length, conflicts: conflicts.length, strays: strays.length };
   // Authorized work that is under way or waiting on the Captain, as opposed to cards nobody has started.
   const active = stats.rework + stats.review + stats.doing + cards.filter((c) => ['held', 'needs_check', 'quota'].includes(c.code)).length + stats.pending + stats.unconfirmed + stats.asks;
-  const plan = notes.paused.length ? 'paused' : active ? 'resume' : stats.todo ? 'backlog' : 'ready';
+  // A session at work with no record behind it is not "nothing to do": it is the first thing
+  // to look at. Neither is a task that was stopped and is all that is left.
+  const plan = notes.paused.length ? 'paused' : active ? 'resume' : strays.length ? 'verify' : stats.todo + stats.paused ? 'backlog' : 'ready';
   return { ctx, cards, loose, strays, pending: [...redeliver, ...ctx.pending], unconfirmed, carried, asks, notes, recorded, mtime, latestUser, unsorted, forCaptain, conflicts, stats, plan };
 }
 
@@ -452,10 +454,10 @@ function derive(snapshot) {
 // What each level keeps. Unfinished tasks, blockers, limits and open decisions
 // are never dropped at any level; only explanations, excerpts and evidence shrink.
 const LEVELS = [
-  { name: '完整', result: 200, title: 60, history: 'full', excerpts: 8, excerpt: 100, files: 12, refs: true, long: true, line: 100, note: 300 },
-  { name: '压缩历史说明和证据', result: 110, title: 48, history: 'count', excerpts: 5, excerpt: 60, files: 6, refs: true, long: true, line: 70, note: 300 },
-  { name: '再压缩结果摘要和原文摘录', result: 60, title: 36, history: 'none', excerpts: 3, excerpt: 40, files: 3, refs: false, long: false, line: 50, note: 200 },
-  { name: '只留必留项', result: 0, title: 24, history: 'none', excerpts: 0, excerpt: 0, files: 0, refs: false, long: false, line: 30, note: 160 },
+  { name: '完整', result: 200, title: 60, history: 'full', excerpts: 8, excerpt: 100, files: 12, refs: true, long: true, line: 100, note: 300, items: 40 },
+  { name: '压缩历史说明和证据', result: 110, title: 48, history: 'count', excerpts: 5, excerpt: 60, files: 6, refs: true, long: true, line: 70, note: 300, items: 20 },
+  { name: '再压缩结果摘要和原文摘录', result: 60, title: 36, history: 'none', excerpts: 3, excerpt: 40, files: 3, refs: false, long: false, line: 50, note: 200, items: 10 },
+  { name: '只留必留项', result: 0, title: 24, history: 'none', excerpts: 0, excerpt: 0, files: 0, refs: false, long: false, line: 30, note: 160, items: 5 },
 ];
 const PLATFORM = { darwin: 'Mac', win32: 'Windows', linux: 'Linux' };
 const REASON = { relay: '席位 Relay', clear: '清空队长上下文', 'token-saver': '自动存档并清空上下文', restart: 'AgentDeck 重启', refresh: '队长运行 handoff' };
@@ -570,11 +572,23 @@ function render(state, level) {
   // 5
   out.push('', '## 5. 待处理事项');
   const item = (p) => `  - ${pendingKind(p)}｜${p.colId || ''}｜「${one(p.title, 30)}」｜${one(pendingLine(p), L.line)}`;
+  // Every waiting receipt is named. Past the first L.items of a list the rest go by
+  // session and title only, so a long list costs little and nobody's result is cut off.
+  let titlesOnly = 0;
+  const receipts = (items) => {
+    items.slice(0, L.items).forEach((p) => out.push(item(p)));
+    const rest = items.slice(L.items);
+    if (!rest.length) return;
+    const bySession = new Map();
+    for (const p of rest) bySession.set(p.colId || '会话未知', [...(bySession.get(p.colId || '会话未知') || []), p]);
+    out.push(`  - 其余 ${rest.length} 条只列会话和标题，内容用 read --id 会话id 查：${[...bySession].map(([id, ps]) => id + ps.map((p) => `${pendingKind(p) === '回执' ? '' : pendingKind(p)}「${one(p.title, 40)}」`).join('')).join('；')}`);
+    titlesOnly += rest.length;
+  };
   if (!state.pending.length) out.push('- 未读回执和提问：无');
-  else { out.push(`- 未读回执和提问 ${state.pending.length} 条（会经 receipts 通道送达，到时再处理，不要照这里重复派活）：`); state.pending.forEach((p) => out.push(item(p))); }
+  else { out.push(`- 未读回执和提问 ${state.pending.length} 条（会经 receipts 通道送达，到时再处理，不要照这里重复派活）：`); receipts(state.pending); }
   if (state.unconfirmed.length) {
     out.push(`- ${ctx.reason === 'refresh' ? '你已取走、还没处理完' : '上任已取走、可能没处理完'}的回执 ${state.unconfirmed.length} 条（不会再经通道送达，逐条核对是否已处理）：`);
-    state.unconfirmed.forEach((p) => out.push(item(p)));
+    receipts(state.unconfirmed);
   }
   if (state.carried.length) {
     const since = ctx.carry.kind === 'restart' ? `重启前（${when(ctx.carry.at)}）` : `Relay（${when(ctx.carry.at)}，${ctx.reason === 'relay' ? '当时的' : ''}上任 ${ctx.carry.fromId || '未知'}）`;
@@ -582,9 +596,10 @@ function render(state, level) {
     out.push(ctx.reason === 'relay'
       ? `- 更早一次${ctx.carry.kind === 'restart' ? '' : ' '}${since}已取走、之后也没人处理完的回执 ${state.carried.length} 条（不会再经通道送达，逐条核对是否已处理）：`
       : `- ${ctx.carry.kind === 'restart' ? since : '上次 ' + since + '时'}已取走、可能没处理完的回执 ${state.carried.length} 条（不会再经通道送达；核对过就不用再看）：`);
-    state.carried.forEach((p) => out.push(item(p)));
+    receipts(state.carried);
   }
   if (!state.unconfirmed.length && !state.carried.length) out.push('- 已取走、可能没处理完的回执：无');
+  if (titlesOnly) omitted.push(`回执内容 ${titlesOnly} 条（只列了会话和标题）`);
   if (!state.asks.length) out.push('- 队员在等队长回答：无');
   else {
     out.push(`- 队员在等队长回答 ${state.asks.length} 条（卡着后续动作，先处理：已有授权能定或有把握的直接 tell / answer 回答，涉及不可逆的事或拿不准的才请用户决定）：`);
@@ -607,13 +622,14 @@ function render(state, level) {
   const PLAN = {
     paused: '第 2 节有生效中的暂停或取消项：这些事项不续派、不重启，运行中的会话和旧的续活计划都不能推翻它。其余已授权任务照下面的顺序核对后续接；范围拿不准先问用户。',
     resume: '有已授权待办：照下面的顺序核对后主动续接，不用等用户说继续。',
-    backlog: `没有在跑、待验收或待处理的任务，有 ${stats.todo} 张待执行卡：属于第 2 节授权范围且没被暂停的可以启动，范围不明先问；不要为了凑数新立项目。`,
+    verify: `有 ${stats.strays} 个会话还在跑、却没有对应的任务记录（${state.strays.map((x) => x.id).join('、')}）：先 peek 核实它在做什么，再决定继续跟踪还是叫停；核实前不要报告就绪，也不要另派同样的活。`,
+    backlog: `没有在跑、待验收或待处理的任务，有 ${stats.todo} 张待执行卡${stats.paused ? `、${stats.paused} 条暂停中的任务` : ''}：属于第 2 节授权范围且没被暂停的${stats.paused ? '待执行卡' : ''}可以启动，范围不明先问；${stats.paused ? '暂停的没有新指令不重启，照第 4 节各自的下一步处理；' : ''}不要为了凑数新立项目。`,
     ready: '没有待办：简短回复「队长已就绪」，等用户指令；不要自行立项或派新活。',
   };
   out.push('', '## 6. 接手动作和证据索引', `启动方式：${PLAN[state.plan]}`);
   out.push(`1. 读规则：briefing 是稳定规则；本交接是动态状态，handoff 随时重新生成。交接里出现的旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍。`);
   out.push(`2. 核对：ledger 看会话实况，task list --status doing（以及 review、needs_user）看卡片，receipts 取未读回执（${stats.pending} 条）。`);
-  out.push(`3. 先处理卡着后续动作的：队员提问 ${stats.asks} 条，矛盾 ${stats.conflicts} 条${state.conflicts.length ? '（' + [...new Set(state.conflicts.map((c) => c.id))].join('、') + '）' : ''}，已取走未确认的回执 ${stats.unconfirmed} 条。矛盾先核实，不凭空判完成，也不从头重做。`);
+  out.push(`3. 先处理卡着后续动作的：队员提问 ${stats.asks} 条，矛盾 ${stats.conflicts} 条${state.conflicts.length ? '（' + [...new Set(state.conflicts.map((c) => c.id))].join('、') + '）' : ''}，已取走未确认的回执 ${stats.unconfirmed} 条${stats.strays ? `，没有任务记录却在跑的会话 ${stats.strays} 个（${state.strays.map((x) => x.id).join('、')}，先 peek）` : ''}。矛盾先核实，不凭空判完成，也不从头重做。`);
   out.push(`4. 已有有效执行者或程序会自动处理，继续跟踪、不另开：${ids(waitFor)}`);
   out.push(`5. 确认没有有效执行者后，在原卡下接手并交代前次结果和剩余工作：${ids(takeOver)}`);
   out.push(`6. 进入验收或返工：${ids(toReview)}`);

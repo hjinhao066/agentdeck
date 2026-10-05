@@ -38,6 +38,7 @@
   // the CLI took after that has no sign of being dealt with.
   // handoffCarry: such receipts at the last Relay or restart, { at, kind, fromId, items };
   // they are never delivered again, the handoff lists them until the next Relay.
+  // Never trimmed: a receipt dropped here is a result nobody will ever see.
   // config.captainHistory: conversations from before a clear (MainCore.normalizeHistory).
   function state() {
     const s = host.config.mainSession;
@@ -363,7 +364,7 @@
     // in pending were never taken, including ones that arrived while restarting.
     const seen = new Set(s.receiptsSeen);
     const lost = unconfirmedReceipts(s);
-    if (lost.length) s.handoffCarry = { at: Date.now(), kind: 'restart', fromId: s.colId, items: [...(s.handoffCarry?.items || []), ...lost].slice(-50) };
+    if (lost.length) s.handoffCarry = { at: Date.now(), kind: 'restart', fromId: s.colId, items: [...(s.handoffCarry?.items || []), ...lost] };
     s.pending = [...unreadReceipts(s.inflight, seen), ...s.pending];
     s.inflight = [];
     s.mobileMessages = Array.isArray(s.mobileMessages) ? s.mobileMessages.filter((m) => typeof m === 'string' ? m.trim() && m.length <= 8000 : mobileImages(m?.atts).length && typeof m.text === 'string' && m.text.length <= 8000) : [];
@@ -734,7 +735,7 @@
     const settled = Number.isFinite(s.captainSettledAt) ? s.captainSettledAt : 0;
     const dealtWith = (p) => typeof p.receiptId === 'string' && seen.has(p.receiptId) && Number.isFinite(p.takenAt) && p.takenAt <= settled;
     const requeue = rotation ? unreadReceipts(s.inflight, seen) : s.inflight.filter((p) => !dealtWith(p));
-    const unconfirmed = rotation ? [...(carriedReceipts(s)?.items || []), ...unconfirmedReceipts(s)].slice(-50) : [];
+    const unconfirmed = rotation ? [...(carriedReceipts(s)?.items || []), ...unconfirmedReceipts(s)] : [];
     s.inflight = [];
     const oldId = col.id;
     if (rotation) s.handoffCarry = unconfirmed.length ? { at: Date.now(), kind: 'relay', fromId: oldId, items: unconfirmed } : null;

@@ -272,6 +272,41 @@ test('Relays in a row: a Captain that never got to work passes on what its prede
   assert.equal(w.columns.filter((c) => c.isMain).length, 1); assert.equal(app.s().gen, 4);
 });
 
+test('sixty receipts taken and never handled all reach the next Captain, the one after it, and survive a restart', async (t) => {
+  const w = world(t); const app = w.boot();
+  const names = Array.from({ length: 60 }, (_, i) => 'unprocessed-' + String(i).padStart(2, '0'));
+  const named = (text) => names.filter((n) => text.includes(`「${n}」`));
+  for (const n of names) app.receipt(n);
+  assert.equal(named((await app.listen('a', 1)).result).length, 60);
+  assert.equal(app.api.handoffSnapshot('relay').unconfirmed.length, 60);
+  const toB = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
+  let text = fs.readFileSync(toB.file, 'utf8');
+  assert.match(text, /上任已取走、可能没处理完的回执 60 条/); assert.match(text, /已取走未确认 60 条/);
+  assert.deepEqual(named(text), names, 'every one is named in the handoff, the oldest included');
+  assert.equal(app.s().handoffCarry.items.length, 60); assert.equal(app.s().inflight.length, 0); assert.equal(app.s().pending.length, 0);
+  // B never works; C still gets all sixty, and none comes through the channel again
+  w.skew += 1000;
+  const toC = await app.relay('us2', '永动机自动轮换：US → US2；新队长没有开工');
+  text = fs.readFileSync(toC.file, 'utf8');
+  assert.match(text, /已取走、之后也没人处理完的回执 60 条/);
+  assert.deepEqual(named(text), names);
+  assert.deepEqual([...app.s().handoffCarry.items].map((p) => p.summary), names);
+  assert.equal((await app.listen('c', 1, toC.fresh)).result, '');
+  assert.deepEqual(named((await app.handle({ action: 'main-handoff' })).result), names);
+  // a restart with more taken in between keeps the sixty and adds the new ones
+  w.skew += 1000;
+  for (let i = 0; i < 55; i++) app.receipt('before-quit-' + String(i).padStart(2, '0'));
+  assert.match((await app.listen('c', 1, toC.fresh)).result, /before-quit-54/);
+  const again = boot(w, app.persisted());
+  assert.equal(again.s().handoffCarry.kind, 'restart'); assert.equal(again.s().handoffCarry.items.length, 115);
+  const after = (await again.handle({ action: 'main-handoff' })).result;
+  assert.match(after, /重启前（[^）]*）已取走、可能没处理完的回执 115 条/);
+  assert.deepEqual(named(after), names); assert.ok(after.includes('「before-quit-00」') && after.includes('「before-quit-54」'));
+  // past the first few, a receipt is listed by session and title only; the text says so and says where the rest is
+  assert.match(after, /其余 \d+ 条只列会话和标题，内容用 read --id 会话id 查：/);
+  assert.equal((await again.listen('z', 1)).result, '');
+});
+
 test('the handoff command: live state on demand, the same text as the file, Captain only, nothing else touched', async (t) => {
   const w = world(t); const app = w.boot();
   const card = await newCard(app, { title: '在做的' });
