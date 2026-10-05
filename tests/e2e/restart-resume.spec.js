@@ -6,6 +6,28 @@ const path = require('path');
 const fake = `node "${path.join(__dirname, 'fixtures/fake-agent.js')}" --screen-only`;
 let app, page, profile, prompts;
 
+async function quitAndWait(application) {
+  const child = application.process();
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  // app.close first flushes tracing, then evaluates app.quit synchronously.
+  // Schedule the actual quit so that debugger call can return before teardown.
+  await application.evaluate(({ app }) => {
+    const quit = app.quit.bind(app);
+    app.quit = () => { setTimeout(quit, 50); };
+  });
+  let deadline;
+  const exited = new Promise((resolve, reject) => {
+    child.once('exit', () => { clearTimeout(deadline); resolve(); });
+    deadline = setTimeout(() => reject(new Error('Electron did not exit within 8 seconds')), 8000);
+  });
+  try {
+    await Promise.all([application.close(), exited]);
+  } finally {
+    clearTimeout(deadline);
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+  }
+}
+
 function column(id, title, extra = {}) {
   return { id, title, displayTitle: title, manualTitle: true, cmd: fake, cwd: profile, width: 460, role: 'manual', captainCrew: true, ...extra };
 }
@@ -63,7 +85,7 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
-  if (app) await app.close();
+  if (app) await quitAndWait(app);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 
@@ -107,7 +129,7 @@ test('a closed card stops the stale local task and gives the captain a specific 
 
 test('a second application restart resumes the unfinished card once again', async () => {
   const before = delivered().filter((row) => row.colId === 'worker-live' && row.text.includes('重发')).length;
-  await app.close();
+  await quitAndWait(app);
   const env = { ...process.env };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
   env.AGENTDECK_TEST_PROMPT_COLUMNS_FILE = prompts;
@@ -184,7 +206,7 @@ require(${JSON.stringify(path.join(__dirname, 'fixtures/fake-agent.js'))});`);
     await testInfo.attach('fallback-state', { body: JSON.stringify({ state, calls: fs.existsSync(launches) ? fs.readFileSync(launches, 'utf8') : null, prompts: fs.existsSync(captured) ? fs.readFileSync(captured, 'utf8') : null }, null, 2), contentType: 'application/json' });
     throw error;
   } finally {
-    if (application) await application.close();
+    if (application) await quitAndWait(application);
     fs.rmSync(profile2, { recursive: true, force: true });
   }
 });

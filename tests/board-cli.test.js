@@ -352,7 +352,8 @@ test('worker receipts carry provider-injected UUIDs and never emit unrelated or 
       assert.equal(requests.at(-1).token, 'receipt-token');
       assert.ok(!JSON.stringify(requests.at(-1)).includes(env.UNRELATED_SESSION_SECRET));
     }
-    assert.equal((await runCli(['status'], env)).code, 0);
+    // status is Captain-only; the receipt capability cannot request it.
+    assert.equal((await runCli(['status'], { ...env, AGENTDECK_RECEIPT_TOKEN: '', AGENTDECK_CONTROL_TOKEN: 'captain-token' })).code, 0);
     assert.equal(requests.at(-1).modelSessionIds, undefined);
     assert.equal((await runCli(['progress', '--message', 'working'], { ...env, CODEX_THREAD_ID: 'bad', CURSOR_CONVERSATION_ID: '', ANTIGRAVITY_CONVERSATION_ID: 'bad' })).code, 0);
     assert.equal(requests.at(-1).modelSessionIds, undefined);
