@@ -13,6 +13,8 @@ const digest = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
 function fixture(t, version = '1.1.11') {
+  // Keep os.tmpdir()'s own spelling. Windows CI's temp is an 8.3 alias (RUNNER~1);
+  // pre-resolving it would hide the checkout containment check.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-release-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, 'source');
@@ -75,7 +77,7 @@ test('prepared plans pin a clean versioned release checkout without creating or 
   const before = git(repo, 'show-ref');
   const plan = planRelease(repo, options);
   assert.equal(plan.prepared, true); assert.equal(plan.branch, 'release/1.2.0');
-  assert.equal(plan.worktree, fs.realpathSync(repo)); assert.equal(plan.version, '1.2.0');
+  assert.equal(plan.worktree, fs.realpathSync.native(repo)); assert.equal(plan.version, '1.2.0');
   assert.equal(plan.baseCommit, git(repo, 'rev-parse', 'HEAD')); assert.deepEqual(plan.merges, []);
   await release(repo, options, () => assert.fail('runner called'));
   assert.equal(git(repo, 'show-ref'), before); assert.deepEqual(fs.readdirSync(root), ['source']);
@@ -243,7 +245,7 @@ test('prepared release runs packaging gates while preserving checkout, commit an
   const lock = fs.readFileSync(path.join(repo, 'package-lock.json'));
   const packed = path.join(root, 'fixture.asar'), calls = [];
   const runner = async (command, args, cwd, log, env) => {
-    assert.equal(cwd, fs.realpathSync(repo));
+    assert.equal(cwd, fs.realpathSync.native(repo));
     assert.equal(Object.keys(env || {}).some((key) => key.startsWith('AGENTDECK_')), false);
     calls.push([command, ...args]);
     if (args[0] === 'ci') {
