@@ -354,6 +354,7 @@
     s.pending = Array.isArray(s.pending) ? s.pending : [];
     s.inflight = Array.isArray(s.inflight) ? s.inflight : [];
     s.receiptsSeen = normalizeSeenIds(s.receiptsSeen);
+    s.implicitQuestions = Array.isArray(s.implicitQuestions) ? s.implicitQuestions.filter((key) => typeof key === 'string' && key.length <= 300).slice(-100) : [];
     // A turn open at shutdown cannot acknowledge legacy injection. Receipts the
     // background channel already returned stay read across relaunch. Items still
     // in pending were never taken, including ones that arrived while restarting.
@@ -837,9 +838,10 @@
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
         batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: reason || '这个会话已无法接收指令', explicit: true, source: 'process' }));
       },
-      onWaiting: () => {
+      onWaiting: (reason) => {
         const task = batch.items.find((i) => i.task.status === 'queued')?.task;
-        if (task) { push(task, { summary: '补充指令等待超过 30 分钟，仍在排队；会话空闲后自动送达。', source: 'queue' }); save(); }
+        const why = reason || '会话还没准备好接收指令';
+        if (task) { push(task, { summary: `补充指令等待超过 30 分钟，仍在排队：${why}`, source: 'queue' }); save(); }
       },
       onDeferred: () => { batch.sending = false; },
     });
@@ -1583,6 +1585,19 @@
   }
 
   // ---- heartbeat: called for every column on the 1.5s status loop ----
+  // Same session and same question text are announced once. A later command
+  // receipt can still replace the asking card. Separate from exceptionSeen on
+  // feat/crew-exception-receipts, which dedups process/quota/silence anomalies.
+  function rememberQuestion(colId, question) {
+    const s = state();
+    if (!s) return false;
+    const key = colId + '\n' + question;
+    s.implicitQuestions = Array.isArray(s.implicitQuestions) ? s.implicitQuestions : [];
+    if (s.implicitQuestions.includes(key)) return false;
+    s.implicitQuestions.push(key);
+    if (s.implicitQuestions.length > 100) s.implicitQuestions.splice(0, s.implicitQuestions.length - 100);
+    return true;
+  }
   function confirmationExcerpt(entry) {
     return String(entry?.lastScreen || '').split('\n').map((l) => l.trimEnd()).filter((l) => l.trim()).slice(-8)
       .map((l) => l.slice(0, 140)).join('\n') || '（看不到提示内容）';
@@ -1671,12 +1686,26 @@
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
       if (!task.processEnded && (entry.state === 'working' || activity === 'working')) { task.endedAt = 0; continue; }
-      // Never parse a screen/reply for receipts. A finished turn (or a real
+      // A finished turn that asked in prose, without `ask`, is a question receipt.
+      // Formal 【回执】/【提问】 blocks on screen stay ignored. One question text
+      // per session. feat/crew-exception-receipts does not do this; it reports
+      // process, quota and silence anomalies instead.
+      if (entry.state === 'done' && task.status === 'working') {
+        const question = M.implicitCaptainQuestion(M.afterContract(entry.lastScreen));
+        if (question && rememberQuestion(task.colId, question)) {
+          settle(task, { summary: '', files: [], images: [], question, explicit: true, source: 'screen' });
+          continue;
+        }
+      }
+      // Never parse a screen for a completion receipt. A finished turn (or a real
       // zero process exit) gets a three-minute grace period for its command.
+      // Cursor blink refreshes lastOutputAt after the turn is done; that must
+      // not keep postponing the grace.
       const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
       const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
       if (!ended || turn && !turn.done && !task.processEnded) continue;
-      if (Date.now() - Math.max(ended, entry.lastOutputAt || 0) < STOP_QUIET) continue;
+      const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
+      if (Date.now() - anchor < STOP_QUIET) continue;
       settle(task, { summary: '已结束，未提交回执', files: [], images: [], failed: '', explicit: false, source: 'fallback' });
     }
   }

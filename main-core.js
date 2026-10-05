@@ -580,11 +580,17 @@
   // The agent's input box on screen, read the way the user sees it. plain and
   // masked are the same rows; masked has dim, inverse and coloured cells
   // (placeholder text, the caret) replaced by \u0000, so what is left is text
-  // someone typed. null when no box is recognised (no rule lines around a
-  // prompt row): the key tracker is then the only evidence.
+  // someone typed. null when no box is recognised: the key tracker is then
+  // the only evidence. Claude Code's current prompt is a bare ❯ row, and its
+  // gray suggestion is dim text on that row, not a draft.
   const RULE = /^[\s╭╰]*[─━═]{8,}[\s╮╯]*$/;
   const PROMPT_ROW = /^[\s│┃]*[>❯›]\s?/;
-  function inputBoxText(plain, masked) {
+  const BARE_PROMPT = /^[\s│┃]*[>❯›](?:[\t \u00a0]|$)/;
+  const MENU_PROMPT = /^[\s│┃]*[>❯›][\t \u00a0]*\d+\./;
+  function typedRemainder(maskedRow, skip) {
+    return String(maskedRow || '').slice(skip).replace(/\u0000/g, '').replace(/[│┃]\s*$/, '').trim();
+  }
+  function ruledInput(plain, masked) {
     const rules = [];
     plain.forEach((line, i) => { if (RULE.test(line)) rules.push(i); });
     if (rules.length < 2) return null;
@@ -593,8 +599,72 @@
     if (bottom - top < 2 || bottom - top > 12) return null;
     const head = PROMPT_ROW.exec(plain[top + 1]);
     if (!head) return null;
-    const rows = [masked[top + 1].slice(head[0].length), ...masked.slice(top + 2, bottom)];
-    return rows.map((r) => r.replace(/\u0000/g, '').replace(/[│┃]\s*$/, '').trim()).filter(Boolean).join('\n');
+    const rows = [typedRemainder(masked[top + 1], head[0].length), ...masked.slice(top + 2, bottom).map((row) => typedRemainder(row, 0))];
+    return rows.filter(Boolean).join('\n');
+  }
+  function barePromptText(plain, masked) {
+    if (!Array.isArray(plain) || !Array.isArray(masked)) return null;
+    let end = plain.length - 1;
+    while (end >= 0 && !String(plain[end] || '').trim()) end--;
+    for (let i = end; i >= Math.max(0, end - 8); i--) {
+      const line = String(plain[i] || '');
+      if (MENU_PROMPT.test(line)) return null;
+      const head = BARE_PROMPT.exec(line);
+      if (!head) continue;
+      return typedRemainder(masked[i], head[0].length);
+    }
+    return null;
+  }
+  function inputBoxText(plain, masked) {
+    const ruled = ruledInput(plain, masked);
+    if (ruled !== null) return ruled;
+    return barePromptText(plain, masked);
+  }
+  // Plain text still contains suggestion characters. A ❯/›/> row near the
+  // bottom is the idle prompt either way; dim-versus-typed is inputBoxText's job.
+  function promptRowIdle(screen) {
+    const lines = String(screen || '').split('\n');
+    let end = lines.length - 1;
+    while (end >= 0 && !lines[end].trim()) end--;
+    for (let i = end; i >= Math.max(0, end - 8); i--) {
+      if (MENU_PROMPT.test(lines[i])) return false;
+      if (BARE_PROMPT.test(lines[i])) return true;
+    }
+    return false;
+  }
+  function tailChrome(line) {
+    const t = String(line || '').trim();
+    if (!t) return true;
+    if (/^[─━═╭╰╮╯│┃┌┐└┘├┤┬┴┼\s]+$/.test(t)) return true;
+    if (BARE_PROMPT.test(t) || MENU_PROMPT.test(t)) return true;
+    if (/^[✻✽✳✶✢✺●*·∴]\s+/.test(t)) return true;
+    if (/^(?:Churned|Improvising|Thinking|Working|Running|Responding)\b/i.test(t) && t.length < 80) return true;
+    if (t.length <= 140 && /bypass permissions|for shortcuts|Claude Code|context left|esc to interrupt/i.test(t)) return true;
+    return false;
+  }
+  // Last sentence of a finished reply, when it is a question and not a receipt
+  // template. Empty when the tail is a statement, a prompt, or the contract.
+  function implicitCaptainQuestion(text) {
+    const lines = String(text || '').split('\n');
+    while (lines.length && tailChrome(lines[lines.length - 1])) lines.pop();
+    const paragraph = lines.join('\n').trim().split(/\n\s*\n/).map((part) => part.replace(/\s+/g, ' ').trim()).filter(Boolean).at(-1) || '';
+    if (!paragraph || /【(?:回执|提问)】|AgentDeck\s*约定/.test(paragraph)) return '';
+    const last = paragraph.split(/(?<=[。！？?!])/).map((part) => part.trim()).filter(Boolean).at(-1) || '';
+    if (last.length > 180 || last.length < 2 || BARE_PROMPT.test(last) || /^[>❯›]/.test(last)) return '';
+    if (!/[?？]["')」』）]*$/.test(last)) return '';
+    return last;
+  }
+  // Why a queued tell still cannot be typed in. Empty when nothing here blocks it.
+  function tellWaitReason({ entry, composing, foreground, screen, cmd } = {}) {
+    const text = screen != null ? screen : entry?.lastScreen;
+    if (!entry || entry.alive === false) return '终端已经退出';
+    if (entry.state === 'working' || terminalActivity(text, cmd || '') === 'working') return '终端仍显示在干活';
+    if (entry.state === 'input') return '停在确认提示上';
+    if (entry.state === 'quota' || terminalActivity(text, cmd || '') === 'quota') return '额度用尽或正在等待额度';
+    if (composing) return '输入框里有未发送的草稿';
+    if (foreground === false) return '前台还是 shell，不是 agent';
+    if (entry.state !== 'done' && !promptRowIdle(text)) return '还没有空闲提示，最近的输出让发送一直在等';
+    return '';
   }
   // The task contract is echoed above whatever the worker answers; a receipt
   // only counts below it (the echo has the receipt's own field names in it).
@@ -785,7 +855,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, afterContract, resourceFailure, terminalActivity, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, afterContract, resourceFailure, terminalActivity, resourceReceipt,
     receiptsForModel, statusLabel, ledgerText, readText, resetNote, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });

@@ -42,7 +42,23 @@ let model = captainStatusline ? 'Opus 5.5' : 'Fake';
 let contextUsed = 23000;
 const codex = process.argv.includes('--codex-reset');
 let resetMenu = false;
+let suggestion = false;
+let suggestionBlink = null;
+function suggestionBox() {
+  // New Claude Code idle screen: no ruled box, no "Claude Code" footer.
+  // The gray suggestion is dim (SGR 2) on the ❯ row. Cursor blink keeps coming.
+  process.stdout.write('接下来我打算读三份测试日志，有失败就修，然后提交回执。\n');
+  process.stdout.write('要我继续，还是你想换个做法？\n\n');
+  process.stdout.write('\x1b[38;2;153;153;153m✻ Churned for 16s\x1b[39m\n');
+  process.stdout.write('❯\u00a0\x1b[2m继续，读测试日志然后提交回执\x1b[22m\n');
+}
+function armSuggestion() {
+  suggestion = true;
+  if (!suggestionBlink) suggestionBlink = setInterval(() => process.stdout.write('\x1b[?25l\x1b[?25h'), 400);
+  suggestionBox();
+}
 function box() {
+  if (suggestion) { suggestionBox(); return; }
   if (process.argv.includes('--onboarding-probe')) {
     let complete = false;
     try { complete = JSON.parse(require('fs').readFileSync(require('path').join(process.env.CLAUDE_CONFIG_DIR, '.claude.json'), 'utf8')).hasCompletedOnboarding === true; } catch (_) {}
@@ -134,6 +150,22 @@ function answer() {
     }, 4500);
     return;
   }
+  if (process.argv.includes('--suggestion') && text.includes('AgentDeck 约定')) {
+    // The first task has to look busy long enough for one status tick, or the
+    // later idle screen never counts as a finished turn. Follow-ups stay on
+    // the suggestion prompt so a tell can land while it is showing.
+    if (suggestion) {
+      process.stdout.write('\x1b[2J\x1b[H');
+      suggestionBox();
+      return;
+    }
+    process.stdout.write('\x1b[2J\x1b[H✻ Doing…\n');
+    setTimeout(() => {
+      process.stdout.write('\x1b[2J\x1b[H');
+      armSuggestion();
+    }, 2200);
+    return;
+  }
   process.stdout.write('\x1b[2J\x1b[H');
   process.stdout.write('> ' + first + '\n'); // keep the submitted prompt above its reply
   if (first === 'empty reply regression') { box(); return; }
@@ -183,6 +215,8 @@ function listen() {
           incoming = ''; lines = []; clearTimeout(timer);
           process.stdout.write('\x1b[2J\x1b[HInterrupted by Esc\n');
           box();
+        } else if (ch === '\x15') {
+          incoming = '';
         } else if (ch === '\r' || ch === '\n') {
           if (!incoming && !lines.length) continue;
           lines.push(incoming); incoming = '';

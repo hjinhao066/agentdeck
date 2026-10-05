@@ -2613,22 +2613,34 @@ function sendWhenReady(col, text, opts) {
       // and do not fall back to quiet inference for known Cursor CLI.
       const cursorReady = isCursor && terminalIdle(col, entry) && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
       // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
-      const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (Date.now() - started > 15000 && quiet > 3000));
+      // A finished turn (state done) with a prompt row is ready even when the
+      // row still shows Claude's suggestion and cursor blink keeps lastOutputAt fresh.
+      const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (entry.state === 'done' && MainCore.promptRowIdle(entry.lastScreen)) || (Date.now() - started > 15000 && quiet > 3000));
       // ConPTY can show a fresh TUI before its startup input has settled.
       // Typing immediately can lose the prompt's leading bytes before the CLI reads them.
       const settled = env.platform !== 'win32' || entry.hasWorked || quiet >= 500;
       if (idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
-        if (o.guardUserInput && userComposing(col.id)) { setTimeout(check, 500); return; }
-        const sent = await ChatUI.sendPrompt(col, typeof text === 'function' ? text() : text, o.atts || null, o);   // a long prompt goes out as a file
-        if (sent && o.onSent) o.onSent(sent === true ? null : sent);
-        if (sent) return;
-        if (o.onDeferred) o.onDeferred();
+        // A draft blocks this attempt, but must not skip the timeout below.
+        if (!(o.guardUserInput && userComposing(col.id))) {
+          const sent = await ChatUI.sendPrompt(col, typeof text === 'function' ? text() : text, o.atts || null, o);   // a long prompt goes out as a file
+          if (sent && o.onSent) o.onSent(sent === true ? null : sent);
+          if (sent) return;
+          if (o.onDeferred) o.onDeferred();
+        }
       }
     }
     if (Date.now() - started > (o.timeout || 120_000)) {
       if (o.keepWaiting) {
-        if (!reminded) { reminded = true; o.onWaiting?.(); }
+        if (!reminded) {
+          reminded = true;
+          const nowEntry = terms.get(col.id);
+          const reason = MainCore.tellWaitReason({
+            entry: nowEntry, composing: !!(o.guardUserInput && userComposing(col.id)),
+            screen: nowEntry?.lastScreen, cmd: col.cmd,
+          }) || '会话还没准备好接收指令';
+          o.onWaiting?.(reason);
+        }
       } else {
         if (o.onGiveUp) o.onGiveUp();
         else showToast(`没发出去：「${columnLabel(col)}」一直没准备好`);

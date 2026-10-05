@@ -25,3 +25,14 @@ test('a Cursor turn cannot finish on the old ready screen while its prompt is be
     assert.equal(open.turn.done, true, 'a later genuinely idle turn can finish');
   }
 });
+
+test('cursor blink after a finished turn still closes it', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../chat-ui.js'), 'utf8');
+  const open = { turn: { done: false }, startedAt: Date.now() - 30_000 };
+  const context = vm.createContext({ views: new Map([['worker', {}]]), pending: new Map([['worker', open]]),
+    isChatMode: () => false, columnById: () => ({ cmd: 'claude' }), window: { MainCore },
+    finalizeTurn: () => { open.turn.done = true; } });
+  vm.runInContext(source.slice(source.indexOf('  function onTick(id,'), source.indexOf('  function onExit(id)')), context);
+  context.onTick('worker', { alive: true, state: 'done', lastOutputAt: Date.now() }, '❯ 继续，读测试日志然后提交回执');
+  assert.equal(open.turn.done, true);
+});
