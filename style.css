@@ -2158,13 +2158,14 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   display: flex; flex-direction: column; gap: 3px; text-align: left;
   padding: 10px 14px 12px;
   width: 280px; height: 172px;
-  --st-c: var(--cm-wait); --lit: 0%; --rim-top: var(--cm-rim-hi);
-  background-color: var(--cm-card);
+  --st-c: var(--cm-wait); --lit: 0%; --rim-top: var(--cm-rim-hi); --surface: var(--cm-card);
+  background-color: var(--surface);
   background-image:
     radial-gradient(78% 64px at 50% 0, color-mix(in srgb, var(--st-c) var(--lit), transparent), transparent),
     linear-gradient(180deg, var(--cm-sheen), transparent 38%),
-    linear-gradient(180deg, var(--rim-top), var(--cm-rim) 52%, color-mix(in srgb, var(--cm-rim) 70%, transparent));
-  background-clip: padding-box, padding-box, border-box; background-origin: border-box;
+    linear-gradient(var(--surface), var(--surface)),
+    linear-gradient(180deg, var(--rim-top), var(--cm-rim) 52%, color-mix(in srgb, var(--cm-rim) 70%, var(--surface)));
+  background-clip: padding-box, padding-box, padding-box, border-box; background-origin: border-box;
   color: var(--cm-text);
   border: 1px solid transparent;
   border-radius: 13px;
@@ -2181,7 +2182,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-node.st-queued { background-image: none; border-style: dashed; border-color: var(--cm-rim-hi); }
 .cm-node.st-done, .cm-node.st-stopped { --st-c: var(--cm-done); --rim-top: color-mix(in srgb, var(--cm-done) 34%, var(--cm-rim-hi)); }
 .cm-node.st-failed {
-  --st-c: var(--cm-fail); --lit: 16%; --rim-top: var(--cm-fail); background-color: var(--cm-fail-bg);
+  --st-c: var(--cm-fail); --lit: 16%; --rim-top: var(--cm-fail); --surface: var(--cm-fail-bg);
   box-shadow: var(--cm-shadow), 0 0 26px -12px color-mix(in srgb, var(--cm-fail) var(--cm-aura), transparent);
 }
 /* running work: the inner light breathes and a light travels along the top edge (opacity and transform only) */

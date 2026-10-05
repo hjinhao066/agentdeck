@@ -455,7 +455,6 @@
       }
     };
     for (let K = 1; K <= maxK; K++) walk([], K, 0);
-    if (!best) { tryCaps([1]); }
     const toPlan = (cuts, capsOf) => {
       const lanes = [], caps = {};
       for (let l = 0; l < capsOf.length; l++) {

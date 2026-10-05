@@ -436,6 +436,7 @@
       // still the same projects on the canvas: the hand-placed map keeps its ground
       if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l); return l; }
     }
+    if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
     const size = { w: vw - FIT_INSET.left - FIT_INSET.right, h: vh - FIT_INSET.top - FIT_INSET.bottom };
     const pick = (tight) => {
       const p = C.planLanes(map, size, { ...base, ...(tight ? TIGHT : {}), floor: FIT_MIN, max: FIT_MAX }, plan && !!plan.tight === tight ? plan : null);

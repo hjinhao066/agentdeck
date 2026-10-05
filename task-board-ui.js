@@ -60,6 +60,7 @@
   let unsubscribe = null;
   let seq = 0;                // only the newest list() result is drawn
   let glideNext = false;      // the next redraw follows new data: moved cards glide
+  let stillUntil = 0;         // the user has just dropped a card by hand: nothing glides until then
   let hotId = null;           // the card whose dependency lines are lit
   let lit = 0;                // moving cards drawn so far this redraw: staggers their rhythm
   let linksQueued = false;
@@ -360,7 +361,7 @@
     const active = document.activeElement;
     const keepCard = !focusAfter && active && active.classList && active.classList.contains('tbv-card') ? active.dataset.cardId : null;
     if (!focusAfter && active && alertEl.contains(active)) focusAfter = active.dataset.cardId ? `.tbv-alert-item[data-card-id="${escapeId(active.dataset.cardId)}"]` : '.tbv-alert-go';
-    const before = glideNext && !reduceMotion() ? placesOf() : null;
+    const before = glideNext && !reduceMotion() && Date.now() >= stillUntil ? placesOf() : null;
     glideNext = false;
     board = U.buildBoard(cards, { project: filter.project, laneOrder: prefs.laneOrder });
     filter.project = board.project;
@@ -495,7 +496,8 @@
   // ---- motion ----
   // After new data a card that changed place glides there, a card whose status
   // changed is lit once in its new colour, and a new card fades in. Folding,
-  // filtering and resizing redraw at once.
+  // filtering and resizing redraw at once, and so does a card the user has just
+  // dropped somewhere by hand (it is already there).
   function placesOf() {
     const map = new Map();
     lanesEl.querySelectorAll('.tbv-card').forEach((n) => { const r = n.getBoundingClientRect(); map.set(n.dataset.cardId, { x: r.left, y: r.top, mark: n.dataset.status + '/' + (n.dataset.flag || '') }); });
@@ -673,6 +675,8 @@
       const anchor = U.dropAnchor(d.target.ids, c.id, d.target.index);
       if (d.target.status === c.status && !anchor) return;
       d.acted = true;
+      // the card is already where the hand put it: it and the cards it pushed aside land at once
+      stillUntil = Date.now() + 1500;
       focusAfter = `.tbv-card[data-card-id="${escapeId(c.id)}"]`;
       applyMove(c, d.target.status, anchor);
     });

@@ -31,7 +31,7 @@ async function screenshot(name) {
       a.currentTime = (spark ? 0.3 + (i % 5) * 0.09 : at[a.animationName] || 0.5) * t.duration;
     });
   });
-  await page.screenshot({ path: path.join(shots, name + '.png'), animations: 'allow', scale: 'css' });
+  await page.screenshot({ path: path.join(shots, 'board-' + name + '.png'), animations: 'allow', scale: 'css' });
   await page.evaluate(() => document.getAnimations().forEach((a) => { if (a.playState === 'paused') a.play(); }));
 }
 async function resize(width, height) {
@@ -326,6 +326,8 @@ test('star chart: status light, dependency lines, meter, motion rules and both t
   await detail.locator('textarea').fill('先跑冒烟，全量放到夜里。');
   for (const theme of ['dark', 'light']) {
     await page.evaluate((t) => applyTheme(t), theme);
+    // the opened card has no lines of its own: nothing else on the board is lit or marked
+    expect(await page.evaluate(() => [...document.querySelectorAll('.tbv-card.linked, .tbv-card .tbv-flash, .tbv-link.on')].map((n) => `${n.className.baseVal || n.className} ${n.dataset.cardId || n.parentElement.dataset.cardId || n.dataset.from + '>' + n.dataset.to}`))).toEqual([]);
     await screenshot(`${theme}-1440-drawer`);
   }
   await page.evaluate(() => applyTheme('dark'));
@@ -345,6 +347,8 @@ test('star chart: status light, dependency lines, meter, motion rules and both t
   await expect(detail).toBeHidden();
 
   // narrower windows: the columns stack, the lines turn into brackets beside the cards, nothing spills
+  await page.evaluate(() => document.activeElement.blur());
+  await page.mouse.move(700, 20);
   for (const [w, h] of [[980, 700], [700, 800]]) {
     await resize(w, h);
     for (const theme of ['dark', 'light']) {
