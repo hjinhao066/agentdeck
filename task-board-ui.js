@@ -6,7 +6,7 @@
 // gathered in one folded area, a 需要你 reminder bar and a project overview
 // strip on top. Cards drag (or Alt+arrows)
 // inside a column to reorder and across columns to change status; a card
-// dragged into 进行中 is announced to 队长, never started behind his back. A
+// dragged into 进行中 follows the configured dispatcher, the same path as an explicit start. A
 // card opens a detail drawer; a 需要你 card shows its question there with an
 // answer box whose text goes to 队长. It covers the deck and the board view like
 // the Schedule/Artifacts pages; closing it leaves everything underneath as it
