@@ -4,6 +4,7 @@ const os = require('os');
 const path = require('path');
 const net = require('net');
 const { TaskStore } = require('../../task-board');
+const closeElectron = require('./fixtures/close-electron');
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 let application, desktop, browser, mobile, profile, url, token;
@@ -109,7 +110,7 @@ async function screenshot(name) {
   }
 }
 async function restartDesktop() {
-  await application.close(); application = null;
+  await closeElectron(application); application = null;
   const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: path.join(profile, 'prompts.jsonl') };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
@@ -123,7 +124,7 @@ async function restartDesktop() {
 }
 test.afterEach(async () => {
   if (browser) await browser.close(); browser = null;
-  if (application) await application.close(); application = null;
+  if (application) await closeElectron(application); application = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true }); profile = null;
 });
 
