@@ -35,7 +35,10 @@ async function archive(repo, dest, mutate = () => {}) {
   try {
     for (const file of ['package.json', 'main.js', 'mobile-web/app.js']) write(path.join(source, file), fs.readFileSync(path.join(repo, file)));
     mutate(source);
-    await asar.createPackage(source, dest);
+    // createPackage resolves before its output stream closes. A child process
+    // drains the stream before exit, matching the real builder lifecycle.
+    execFileSync(process.execPath, ['-e', 'require(process.argv[1]).createPackage(process.argv[2], process.argv[3]).catch(error => { console.error(error); process.exitCode = 1; });',
+      require.resolve('@electron/asar'), source, dest], { stdio: 'pipe' });
   } finally { fs.rmSync(source, { recursive: true, force: true }); }
 }
 
