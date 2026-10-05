@@ -15,7 +15,7 @@ function world(saved) {
   const turns = [];
   const s = saved || { colId: 'captain', gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] };
   const terms = new Map([[worker.id, { alive: true, state: 'working', lastOutputAt: now, lastScreen: '' }]]);
-  const window = { MainCore: M, BoardCore: B, ChatUI: {
+  const window = { MainCore: M, BoardCore: B, deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, ChatUI: {
     updateCard() {}, turnsOf: () => turns, sendPrompt: async (...args) => { prompts.push(args); return sent; },
   } };
   const context = vm.createContext({ window, Date: class extends Date { static now() { return now; } } });

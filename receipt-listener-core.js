@@ -57,7 +57,7 @@ function initialize(dir) {
   return instance;
 }
 function sameLease(value, lease) {
-  return value && value.id === lease.id && value.pid === lease.pid && value.instanceId === lease.instanceId && value.ownerPid === lease.ownerPid;
+  return !!value && value.id === lease.id && value.pid === lease.pid && value.instanceId === lease.instanceId && value.ownerPid === lease.ownerPid;
 }
 function releasePath(file, lease) { return file + '.' + lease.id + '.released'; }
 function released(file, lease) { return sameLease(read(releasePath(file, lease)), lease); }
