@@ -23,6 +23,14 @@ const BIG = [
   ...[['豆包语音切换', 'working'], ['钥匙串密钥迁移', 'failed']].map(([t, s]) => ['type4me-windows', t, s]),
   ['vps-ops', 'Caddy 证书续期巡检', 'working'],
 ];
+// Four projects whose names are long: each must show whole at every width.
+const NAMES = [
+  ...[['任务看板星图视觉', 'working'], ['手机网页端对话区重排', 'working'], ['额度面板并入侧栏', 'working'], ['Windows 安装包签名', 'working'], ['重启后自动续跑', 'working'],
+    ['队长接力交接 v2', 'failed'], ['CI Verify #81 失败排查', 'working'], ['1.1.12 集成与打包', 'queued'], ['Bark 提醒去重', 'done'], ['字号缩放快捷键', 'working']].map(([t, s]) => ['agentdeck', t, s]),
+  ...[['省钱中心雷达任务注册', 'working'], ['/daily 日报卡片', 'working'], ['订阅到期提醒', 'done'], ['回滚点保留策略', 'asking']].map(([t, s]) => ['hermes-savings-center', t, s]),
+  ...[['豆包语音切换', 'working'], ['钥匙串密钥迁移', 'failed']].map(([t, s]) => ['type4me-windows-installer', t, s]),
+  ['客户门户与数据工作台二期', '登录与多租户权限', 'working'],
+];
 // Ten sessions in two projects.
 const TEN = [
   ...['登录与多租户权限', '数据工作台界面', '迁移历史记录', '接口失败恢复', '导出报表', '报告筛选接口'].map((t, i) => ['客户门户', t, i === 3 ? 'failed' : i === 4 ? 'done' : 'working']),
@@ -109,6 +117,9 @@ const read = () => page.evaluate(() => {
     captain: { ...lay.captain }, canvas: { w: lay.width, h: lay.height },
     frames: [...document.querySelectorAll('.cm-pane')].map((n) => ({ key: n.dataset.project, ...rect(n) })),
     cards: [...document.querySelectorAll('.cm-node')].map((n) => ({ id: n.dataset.nodeId, ...rect(n) })),
+    heads: [...document.querySelectorAll('.cm-project > .cm-project-head')].map((h) => { const name = h.querySelector('.cm-project-name'), tally = h.querySelector('.cm-project-summary');
+      return { key: h.parentElement.dataset.project, name: name.textContent, nameScroll: name.scrollWidth, nameClient: name.clientWidth, tallyScroll: tally.scrollWidth, tallyClient: tally.clientWidth, compact: h.classList.contains('compact'),
+        nameRight: name.getBoundingClientRect().right, tallyLeft: tally.getBoundingClientRect().left, tallyRight: tally.getBoundingClientRect().right, frameRight: h.parentElement.getBoundingClientRect().right }; }),
     bodyPx: parseFloat(getComputedStyle(document.querySelector('.cm-node:not(.kind-captain) .cm-line')).fontSize),
     saved: { positions: config.crewMap.positions, projectPositions: config.crewMap.projectPositions, projectOrder: config.crewMap.projectOrder, plan: config.crewMap.plan },
     hint: document.querySelector('.cm-hint').hidden ? '' : document.querySelector('.cm-hint').textContent,
@@ -123,7 +134,23 @@ function assertNeat(g, ownZoom) {
   for (const n of g.nodes) {
     const f = g.groups.find((x) => x.key === n.project);
     expect(n.x >= f.x && n.x + n.w <= f.x + f.w && n.y >= f.y + 48 && n.y + n.h <= f.y + f.h, `${n.id} inside ${f.key}`).toBe(true);
-    expect((n.x - f.x - 24) % 304, `${n.id} on its frame's column grid`).toBe(0);
+  }
+  for (const f of g.groups) {
+    // the cards of a frame share one column grid and stand centred in it (a frame is wider than its cards when its header needs the room)
+    const own = g.nodes.filter((n) => n.project === f.key);
+    if (!own.length) continue;
+    const left = Math.min(...own.map((n) => n.x)), right = Math.max(...own.map((n) => n.x + n.w));
+    for (const n of own) expect((n.x - left) % 304, `${n.id} on its frame's column grid`).toBe(0);
+    expect(left - f.x, `${f.key}: at least the frame's padding beside its cards`).toBeGreaterThanOrEqual(24);
+    expect(Math.abs((left - f.x) - (f.x + f.w - right)), `${f.key}: cards centred in the frame`).toBeLessThanOrEqual(1);
+  }
+  // every project's name shows whole, its tally whole beside it (short form allowed), neither on the other
+  expect(g.heads.length).toBe(g.groups.length);
+  for (const h of g.heads) {
+    expect(h.nameScroll, `「${h.name}」 is not cut`).toBeLessThanOrEqual(h.nameClient);
+    expect(h.tallyScroll, `${h.key}: tally is not cut`).toBeLessThanOrEqual(h.tallyClient);
+    expect(h.nameRight, `${h.key}: name clear of its tally`).toBeLessThanOrEqual(h.tallyLeft + 0.5);
+    expect(h.tallyRight, `${h.key}: tally inside the frame`).toBeLessThanOrEqual(h.frameRight + 0.5);
   }
   const lanes = new Map();
   g.groups.forEach((f) => lanes.set(f.lane, [...(lanes.get(f.lane) || []), f]));
@@ -204,11 +231,14 @@ test('项目框横排: frames stand side by side in lanes, small ones stacked be
   expect(look).toEqual({ sky: true, blur: 0, cardAnimations: ['cm-breathe', 'cm-edge-flow'], cardProps: ['opacity', 'transform'], movingCards: 'working', stillCard: 0 });
 
   // narrower windows: what cannot show whole at readable size is never squeezed and never scrolls sideways
-  for (const [w, h] of [[1440, 900], [1280, 800], [980, 700]]) for (const theme of ['dark', 'light']) {
+  for (const [w, h] of [[1440, 900], [1280, 800], [980, 700], [700, 800]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     g = await read();
     assertNeat(g);
     expect(await linesClear()).toEqual([]);
+    // a narrow window stacks the frames in one lane, two cards wide while that fits, instead of squeezing lanes side by side
+    if (w <= 980) expect(g.plan.lanes.length, `${w}: one lane`).toBe(1);
+    if (w === 980) expect(Math.max(...Object.values(g.plan.caps)), '980: two cards wide').toBe(2);
     if (g.pageFits) assertWhole(g);
     else {
       expect(g.view.scale).toBeCloseTo(0.85, 5);
@@ -235,6 +265,27 @@ test('项目框横排: frames stand side by side in lanes, small ones stacked be
     await open(w, h, theme); await settled();
     assertNeat(await read());
     await shot(`map-1project-${w}-${theme}`);
+  }
+  expect(errors).toEqual([]);
+});
+
+test('项目名完整显示: four projects with long names at 1920, 1440, 980 and 700 in both themes; no name or tally is cut', async () => {
+  await launch(NAMES);
+  for (const [w, h] of [[1920, 1080], [1440, 900], [980, 700], [700, 800]]) for (const theme of ['dark', 'light']) {
+    await open(w, h, theme);
+    await expect(page.locator('.cm-project')).toHaveCount(4);
+    await settled();
+    const g = await read();
+    assertNeat(g);
+    expect(g.heads.map((x) => x.name)).toEqual(['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期']);
+    // the names are whole because the frames made room for them, not because the text was shrunk
+    expect(await page.evaluate(() => [...document.querySelectorAll('.cm-project-name')].map((n) => getComputedStyle(n).fontSize))).toEqual(['17px', '17px', '17px', '17px']);
+    expect(await linesClear()).toEqual([]);
+    const width = Math.max(...g.frames.map((f) => f.right), ...g.cards.map((c) => c.right)) - Math.min(...g.frames.map((f) => f.x), ...g.cards.map((c) => c.x));
+    if (g.pageFits) assertWhole(g); else expect(width, `${w}: no sideways scrolling`).toBeLessThanOrEqual(g.vp.width - 16 + 1);
+    // 队长's own row of counts is whole too
+    expect(await page.evaluate(() => [...document.querySelectorAll('.cm-node.kind-captain *')].filter((n) => n.children.length === 0 && n.scrollWidth > n.clientWidth + 1 && getComputedStyle(n).overflow !== 'visible').map((n) => n.className + ':' + n.textContent))).toEqual([]);
+    await shot(`map-names-${w}-${theme}`);
   }
   expect(errors).toEqual([]);
 });

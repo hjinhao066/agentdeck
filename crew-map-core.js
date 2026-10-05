@@ -290,7 +290,11 @@
     // a review row sits a little lower: the review lines turn in that gap
     let top = 0;
     rows.forEach((row, r) => { if (r) top += o.nodeH + (row.review ? reviewGap : rowGap); row.top = top; });
-    return { p, collapsed, cols, rows, w: collapsed ? 320 : cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX, h: collapsed ? 56 : 52 + top + o.nodeH + o.padBottom };
+    // A frame is never narrower than its own header (o.headW: what the project's whole name and its
+    // tally need); the cards then stand centred in it, `inset` in from where they would start.
+    const cardsW = cols * o.nodeW + (cols - 1) * o.gapX + 2 * o.padX;
+    const w = Math.max(collapsed ? 320 : cardsW, Math.ceil((o.headW && o.headW[p.key]) || 0));
+    return { p, collapsed, cols, rows, w, inset: collapsed ? 0 : Math.round((w - cardsW) / 2), h: collapsed ? 56 : 52 + top + o.nodeH + o.padBottom };
   }
   const LAYOUT = { nodeW: 220, nodeH: 122, captainW: 300, captainH: 96, gapX: 24, clusterGap: 52, fanY: 100, gapY: 80, padX: 44, padBottom: 28, pad: 40, fold: false, collapsedProjects: {}, columnsPerProject: Infinity, grid: false, center: false, tray: false, lane: 7 };
   // Projects in the user's own order (the keys in `order` first, in that order), the rest as the map lists them.
@@ -307,7 +311,8 @@
   // without a hole. Sessions wrap inside their frame, review sessions on rows of
   // their own; every coordinate is the canvas's. opts.lanes: [[project key, …], …]
   // (default: every project in a lane of its own), opts.caps: { key: cards wide }
-  // (default: columnsPerProject), opts.order: the user's project order.
+  // (default: columnsPerProject), opts.order: the user's project order,
+  // opts.headW: { key: the least width that frame's header needs }.
   // grid: rows keep to one column grid (a shared line channel left of each
   // column); center: the lanes are centred under 队长; tray: inactive folded
   // projects and projects with nothing to show take no room on the canvas.
@@ -345,7 +350,7 @@
         const g = { ...f.p, x, y, w: f.w, h: f.h, collapsed: f.collapsed, lane: li };
         groups.push(g);
         if (!f.collapsed) f.rows.forEach((row, r) => {
-          const start = o.grid ? x + o.padX : x + (f.w - row.items.length * o.nodeW - Math.max(0, row.items.length - 1) * o.gapX) / 2;
+          const start = o.grid ? x + o.padX + f.inset : x + (f.w - row.items.length * o.nodeW - Math.max(0, row.items.length - 1) * o.gapX) / 2;
           row.items.forEach((n, i) => {
             const bx = start + i * (o.nodeW + o.gapX), by = y + 52 + row.top;
             if (n) pos.set(n.id, { x: bx, y: by, anchorY: by, w: o.nodeW, h: o.nodeH, row: r + 1, project: f.p.key });
@@ -415,14 +420,18 @@
       if (k === 1 && n > 1) w += o.clusterGap / 2 + o.lane * (n - 2);
       const W = Math.max(o.captainW, w) + margin, H = head + h + margin;
       const scale = Math.min(availW / W, availH / H);
-      return { scale, fits: scale >= o.floor - 1e-9, overX: Math.max(0, W * o.floor - availW), overY: Math.max(0, H * o.floor - availH) };
+      return { squeezed: k > 1 && Math.max(...capsOf) === 1, scale, fits: scale >= o.floor - 1e-9, overX: Math.max(0, W * o.floor - availW), overY: Math.max(0, H * o.floor - availH) };
     };
     const better = (a, b) => {
       if (!b) return true;
       if (a.fits !== b.fits) return a.fits;
       if (a.fits) return a.scale > b.scale + 1e-6;
       if ((a.overX > 0.5) !== (b.overX > 0.5)) return a.overX <= 0.5;
-      return a.overX > 0.5 ? a.overX < b.overX - 0.5 : a.overY < b.overY - 0.5;
+      if (a.overX > 0.5) return a.overX < b.overX - 0.5;
+      // both scroll down only, and about as far: not the one that squeezes every frame to one card wide
+      // to stand lanes side by side (fewer lanes of wider frames read better, with fewer lines down the gaps)
+      if (a.squeezed !== b.squeezed && Math.abs(a.overY - b.overY) <= availH * 0.25) return !a.squeezed;
+      return a.overY < b.overY - 0.5;
     };
     let best = null;
     const roomW = availW / o.floor - margin;

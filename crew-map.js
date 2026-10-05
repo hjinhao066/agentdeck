@@ -21,7 +21,7 @@
   'use strict';
   const C = window.CrewMapCore;
   const SVG = 'http://www.w3.org/2000/svg';
-  const NODE = { nodeW: 280, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16 };
+  const NODE = { nodeW: 280, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16, lane: 12 };
   const GRID = { padX: 24, padBottom: 20, rowGap: 20, reviewGap: 40 };   // card grid inside a project
   // Auto-fit never shrinks below this: card body text (13px) stays at 11px or more on screen.
   // What does not fit at this scale is reached by panning (drag, wheel, trackpad).
@@ -40,7 +40,9 @@
   let lastSig = '';
   let lastMap = null;
   let lay = null;
-  let dims = NODE;          // NODE with 队长's width for the current tally
+  let dims = NODE;          // NODE with 队长's width (and height, when its tally wraps) for the current tally
+  let capWrap = false;      // 队长's tally stands on two rows (a narrow window)
+  const CAP_ROW = 46;       // what the second row adds to 队长's height
   let view = null;          // { x, y, scale }
   let drag = null;          // a card or the canvas being dragged
   let userView = false;     // the user panned or zoomed: live updates leave the view alone
@@ -362,8 +364,8 @@
       group.addEventListener('pointerdown', (e) => startProjectDrag(e, group, g));
       group.appendChild(head);
       projectsEl.appendChild(group);
-      // the name does not fit beside the full tally: the tally drops its labels
-      if (name.scrollWidth > name.clientWidth) head.classList.add('compact');
+      // the full tally does not fit beside the whole name: the tally drops its labels (the frame was laid out wide enough for that)
+      if (summary.scrollWidth > summary.clientWidth || name.scrollWidth > name.clientWidth) head.classList.add('compact');
     });
   }
 
@@ -421,14 +423,34 @@
     saveView();
   }
 
+  // What each project's header needs to show its whole name beside its tally in the short form
+  // (icons and numbers). The layout keeps every frame at least that wide, so a name is cut only
+  // when it alone is longer than HEAD_MAX.
+  const HEAD_MAX = 2 * NODE.nodeW + NODE.gapX + 2 * GRID.padX;
+  function headNeeds(map) {
+    const probes = map.projects.map((p) => {
+      const head = el('div', 'cm-project-head compact cm-probe');
+      const text = C.summaryLine(p.counts), summary = el('span', 'cm-project-summary', text);
+      tally(summary, text);
+      head.append(el('button', 'cm-project-toggle'), el('span', 'cm-project-name', p.name), summary);
+      projectsEl.appendChild(head);
+      return [p.key, head];
+    });
+    const out = {};
+    probes.forEach(([key, head]) => { out[key] = Math.min(HEAD_MAX, head.offsetWidth + 2); });
+    probes.forEach(([, head]) => head.remove());
+    return out;
+  }
+
   const hasManual = () => Object.keys(saved().positions).length > 0 || Object.keys(saved().projectPositions).length > 0;
   // The layout for this render. Nothing hand-placed: the plan that shows the whole map
   // largest in this window (the plan in use is kept while it is nearly as good). Something
   // hand-placed: the plan those moves were made on, whatever the window is now.
   function arrange(map) {
     const vw = vpEl.clientWidth, vh = vpEl.clientHeight;
-    const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, order: saved().projectOrder, grid: true, center: true, tray: true };
-    const build = (p) => C.layout(map, { ...base, ...(p.tight ? TIGHT : {}), lanes: p.lanes, caps: p.caps });
+    const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, order: saved().projectOrder, grid: true, center: true, tray: true, headW: headNeeds(map) };
+    const tightly = { ...TIGHT, captainH: TIGHT.captainH + (capWrap ? CAP_ROW : 0) };
+    const build = (p) => C.layout(map, { ...base, ...(p.tight ? tightly : {}), lanes: p.lanes, caps: p.caps });
     const whole = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= FIT_MIN;
     const pinned = hasManual() ? saved().plan : null;
     if (pinned) {
@@ -439,7 +461,7 @@
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
     const size = { w: vw - FIT_INSET.left - FIT_INSET.right, h: vh - FIT_INSET.top - FIT_INSET.bottom };
     const pick = (tight) => {
-      const p = C.planLanes(map, size, { ...base, ...(tight ? TIGHT : {}), floor: FIT_MIN, max: FIT_MAX }, plan && !!plan.tight === tight ? plan : null);
+      const p = C.planLanes(map, size, { ...base, ...(tight ? tightly : {}), floor: FIT_MIN, max: FIT_MAX }, plan && !!plan.tight === tight ? plan : null);
       const next = { lanes: p.lanes, caps: p.caps, tight };
       return { plan: next, lay: build(next) };
     };
@@ -669,7 +691,13 @@
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; projectsEl.innerHTML = ''; lay = null; closePop(); return; }
-    dims = { ...NODE, captainW: Math.round(captainWidth(map)) };
+    // A window narrower than 队长's one-row tally at the smallest readable size: the card takes the
+    // width there is and its tally wraps to a second row, so no count is cut and nothing scrolls sideways.
+    const natural = Math.round(captainWidth(map));
+    const room = Math.floor((vpEl.clientWidth - FIT_INSET.left - FIT_INSET.right) / FIT_MIN - 2 * NODE.pad);
+    capWrap = natural > room && room >= NODE.captainW;
+    rootEl.classList.toggle('cm-cap-wrap', capWrap);
+    dims = { ...NODE, captainW: capWrap ? room : natural, captainH: NODE.captainH + (capWrap ? CAP_ROW : 0) };
     lay = C.applyPositions(arrange(map), saved().positions, map.captain.id, saved().projectPositions);
     canvasEl.style.width = lay.width + 'px';
     canvasEl.style.height = lay.height + 'px';

@@ -2106,12 +2106,15 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
    long for what is left ends in an ellipsis. */
 .cm-project-name { display: block; flex: 0 1 auto; min-width: 0; padding: 4px 8px 4px 6px; font-size: 17px; font-weight: 640; line-height: 22px; letter-spacing: 0.005em; color: var(--cm-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cm-project-name::before { vertical-align: -3px; margin-right: 9px; }
-.cm-project-summary { display: inline-flex; align-items: center; gap: 12px; flex: 0 0 auto; padding: 4px 8px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+.cm-project-summary { display: inline-flex; align-items: center; gap: 12px; flex: 0 9999 auto; min-width: 0; overflow: hidden; padding: 4px 8px; color: var(--cm-text-2); font-size: 12.5px; font-weight: 500; white-space: nowrap; }
 .cm-project-head.compact .cm-project-summary { gap: 10px; padding: 4px 6px; }
 .cm-project-head.compact .cm-count-sep { display: none; }
 .cm-project-head.compact .cm-count { position: relative; gap: 4px; }
 .cm-project-head.compact .cm-count-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .cm-project-summary .cm-count b { font-size: 13.5px; }
+/* measured off-screen: what a header needs for its whole name beside the short tally (the frame is laid out at least that wide) */
+.cm-project-head.cm-probe { position: absolute; left: 0; top: 0; width: max-content; visibility: hidden; pointer-events: none; }
+.cm-probe .cm-project-name, .cm-probe .cm-project-summary { flex: none; overflow: visible; }
 .cm-project-toggle { flex: 0 0 32px; width: 32px; height: 32px; display: grid; place-items: center; border: 0; background: var(--cm-headbg); color: var(--cm-text-dim); cursor: pointer; transition: color .15s ease; }
 .cm-project-toggle:hover { color: var(--cm-text); }
 .cm-project-toggle:focus-visible { outline: 2px solid var(--cm-core); outline-offset: 2px; }
@@ -2262,6 +2265,9 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
   background: color-mix(in srgb, var(--cm-text) 5%, transparent); border: 1px solid var(--cm-rim);
 }
 .cm-node.kind-captain .cm-count .cm-ico { width: 17px; height: 17px; }
+/* a narrow window: 队长's tally stands on two rows instead of being cut */
+.cm-cap-wrap .cm-node.kind-captain { grid-template-rows: 24px auto; }
+.cm-cap-wrap .cm-node.kind-captain .cm-line { height: auto; flex-wrap: wrap; row-gap: 8px; overflow: visible; }
 .cm-node.kind-captain .cm-count { --n: var(--cm-text); }
 .cm-node.kind-captain .cm-count.st-working { --n: var(--cm-work); }
 .cm-node.kind-captain .cm-count.st-input { --n: var(--cm-need); }
@@ -2614,7 +2620,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 @keyframes tbv-spin { to { transform: rotate(360deg); } }
 
 .tbv-filters {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 10px; min-width: 0;
+  flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0;
   padding: 8px 16px 8px 18px; border-bottom: 1px solid var(--tbv-line); white-space: nowrap;
 }
 .tbv-lane, .tbv-chip, .tbv-detail, .tbv-ghost, .tbv-finished { --project-color: hsl(var(--project-hue, 228) 82% 68%); }
@@ -2626,11 +2632,11 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 }
 
 /* Overview strip: every project with its 进行中 / 需要你 counts; a click shows only that project. */
-.tbv-projects { flex: 1 1 auto; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 2px; overflow-x: auto; scrollbar-width: none; }
-.tbv-projects::-webkit-scrollbar { display: none; }
-.tbv-projects { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 22px), transparent); }
+/* Every chip shows whole: they wrap onto further rows, and when the bar is too narrow to hold a
+   useful row of them beside the tally and the tools, those drop to a row of their own. */
+.tbv-projects { flex: 1 1 380px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding: 2px; }
 .tbv-chip {
-  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px;
+  flex: 0 1 auto; min-width: 0; max-width: 100%; box-sizing: border-box; display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px;
   border: 1px solid var(--tbv-rim); border-radius: 14px; background: var(--tbv-chip);
   color: var(--tbv-ink-2); font: inherit; font-size: 12.5px; cursor: pointer;
   transition: background .12s ease, border-color .12s ease, color .12s ease;
@@ -2643,13 +2649,13 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #taskBoardView .tbv-chip:focus-visible { outline-offset: 0; }
 .tbv-chip.quiet:not(.active) { opacity: .66; }
 .tbv-chip .tbv-dot { flex-basis: 7px; width: 7px; height: 7px; }
-.tbv-chip-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+.tbv-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tbv-chip-n { min-width: 18px; padding: 0 5px; border-radius: 9px; font-family: var(--mono); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .tbv-chip-n.doing { color: var(--tbv-doing); background: color-mix(in srgb, var(--tbv-doing-lit) 17%, transparent); }
 .tbv-chip-n.needs { color: #1c0b02; background: var(--tbv-need-lit); box-shadow: 0 0 10px -2px color-mix(in srgb, var(--tbv-need-lit) var(--tbv-glow), transparent); }
 :root[data-theme="light"] .tbv-chip-n.needs { color: #fff; background: var(--tbv-need); }
 .tbv-chip-n + .tbv-chip-n { margin-left: -3px; }
-.tbv-summary { flex: 0 0 auto; font-size: 12px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
+.tbv-summary { flex: 0 0 auto; margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
 .tbv-status { flex: 0 0 auto; padding: 8px 20px; font-size: 12px; color: var(--tbv-fail); border-bottom: 1px solid var(--tbv-line); }
 .tbv-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
@@ -2743,10 +2749,10 @@ button.tbv-head:hover { background: var(--tbv-chip-hi); color: var(--tbv-ink); }
 .tbv-fold { display: grid; place-items: center; color: var(--icon); }
 .tbv-fold svg { width: 17px; height: 17px; }
 .tbv-dot.done { background: var(--tbv-done-lit); --project-color: var(--tbv-done-lit); }
-.tbv-lane-name { flex: 0 1 auto; margin: 0; font-size: var(--tbv-name-size); font-weight: 650; line-height: 1.2; letter-spacing: .005em; color: var(--tbv-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tbv-lane-open { flex: 0 0 auto; font-size: 12px; color: var(--tbv-ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.tbv-lane-name { flex: 0 1 auto; min-width: 0; margin: 0; font-size: var(--tbv-name-size); font-weight: 650; line-height: 1.2; letter-spacing: .005em; color: var(--tbv-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tbv-lane-open { flex: 0 9999 auto; min-width: 0; overflow: hidden; font-size: 12px; color: var(--tbv-ink-3); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .tbv-lane-open::before { content: "·"; margin-right: 8px; }
-.tbv-lane-counts { flex: 1 1 auto; display: flex; align-items: center; justify-content: flex-end; gap: 4px 14px; min-width: 0; overflow: hidden; font-size: 12px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
+.tbv-lane-counts { flex: 1 9999 auto; display: flex; align-items: center; justify-content: flex-end; gap: 4px 14px; min-width: 0; overflow: hidden; font-size: 12px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
 .tbv-lane-n { --c: var(--tbv-todo); display: inline-flex; align-items: center; gap: 5px; padding: 0; border: 0; background: transparent; font: inherit; color: inherit; white-space: nowrap; }
 .tbv-lane-n[data-status="doing"] { --c: var(--tbv-doing); }
 .tbv-lane-n[data-status="review"] { --c: var(--tbv-review); }
@@ -2789,7 +2795,7 @@ button.tbv-lane-n b { color: var(--tbv-need); }
   .tbv-cell[data-label]:not(:empty):not(.folded)::before { content: attr(data-label); padding: 3px 2px 0; font-size: 11.5px; font-weight: 650; letter-spacing: .04em; color: var(--c); }
   .tbv-lane-open::before { display: none; }
   .tbv-lane-counts { display: none; }
-  .tbv-lane-open { flex: 1 1 auto; margin-left: auto; text-align: right; }
+  .tbv-lane-open { flex: 1 9999 auto; margin-left: auto; text-align: right; }
 }
 
 /* 需要你 reminder bar: every waiting card is a button; 处理 opens the first. */
@@ -2808,14 +2814,14 @@ button.tbv-lane-n b { color: var(--tbv-need); }
 .tbv-alert-dot::after { content: ""; position: absolute; inset: 1px; border-radius: 50%; background: var(--tbv-need-lit); opacity: 0; animation: tbv-ping 2.4s ease-out infinite; }
 @keyframes tbv-ping { 0% { transform: scale(.7); opacity: .5; } 70%, 100% { transform: scale(2.3); opacity: 0; } }
 .tbv-alert-n { flex: 0 0 auto; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; }
-.tbv-alert-list { flex: 1 1 0; display: flex; align-items: center; gap: 6px; min-width: 0; padding: 3px; overflow-x: auto; scrollbar-width: none; }
-.tbv-alert-list::-webkit-scrollbar { display: none; }
+/* entries that do not fit wrap to a row below the bar's one visible row, so none is shown cut (处理 and the count still cover them) */
+.tbv-alert-list { flex: 1 1 0; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 12px 6px; min-width: 0; height: 34px; box-sizing: border-box; padding: 3px; overflow: hidden; }
 .tbv-alert-item {
-  flex: 0 1 auto; display: inline-flex; align-items: center; gap: 10px; min-width: 96px; max-width: 100%; height: 28px; padding: 0 9px;
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 10px; min-width: 0; max-width: 100%; box-sizing: border-box; height: 28px; padding: 0 9px;
   border: 0; border-radius: 8px; background: transparent; color: var(--tbv-ink); font: inherit; text-align: left; cursor: pointer;
 }
 .tbv-alert-item:hover { background: color-mix(in srgb, var(--tbv-need-lit) 18%, transparent); }
-.tbv-alert-item + .tbv-alert-item { flex-shrink: 0; max-width: 300px; }
+.tbv-alert-item:only-child { flex-shrink: 1; }
 .tbv-alert-title { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .tbv-alert-q { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--tbv-ink-2); font-size: 12.5px; }
 .tbv-alert-go {

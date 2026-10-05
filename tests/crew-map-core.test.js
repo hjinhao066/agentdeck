@@ -702,6 +702,44 @@ test('planLanes: a small map and a window too small for the map', () => {
   assert.deepEqual(C.planLanes(tray, { w: 1600, h: 900 }, { ...A_GRID, collapsedProjects: { 'hermes-quality': false } }).lanes.flat().sort(), ['agentdeck', 'hermes-quality']);
 });
 
+test('a frame is at least as wide as its header needs, its cards centred; a narrow window stands the frames in one lane', () => {
+  const map = crewOf({ agentdeck: 10, 'hermes-savings': 4, 'type4me-windows': 2, 'vps-ops': 1 });
+  // what each header measured: the whole name and its short tally
+  const headW = { agentdeck: 352, 'hermes-savings': 357, 'type4me-windows': 342.4, 'vps-ops': 230 };
+  const one = Object.fromEntries(Object.keys(headW).map((k) => [k, 1]));
+  const lay = C.layout(map, { ...ROOM, headW, lanes: [['agentdeck'], ['hermes-savings', 'type4me-windows', 'vps-ops']], caps: one });
+  // one card wide is 328: a header that needs more widens its frame, one that needs less changes nothing
+  assert.deepEqual(lay.groups.map((g) => g.w), [352, 357, 343, 328]);
+  lay.groups.forEach((g, i) => lay.groups.slice(i + 1).forEach((h) => assert.ok(g.x + g.w <= h.x || h.x + h.w <= g.x || g.y + g.h <= h.y || h.y + h.h <= g.y, `${g.key}/${h.key} overlap`)));
+  lay.nodes.forEach((n) => {
+    const g = lay.groups.find((x) => x.key === n.project);
+    assert.ok(n.x - g.x >= 24 && Math.abs((n.x - g.x) - (g.x + g.w - n.x - n.w)) <= 1, `${n.project}: its one column of cards stands centred`);
+  });
+  // the lanes are as wide as their widest frame: nothing of the second lane lies over the first
+  assert.ok(lay.groups[1].x >= lay.groups[0].x + lay.groups[0].w + 32);
+  // without header widths nothing moves
+  assert.deepEqual(C.layout(map, { ...ROOM, lanes: [['agentdeck'], ['hermes-savings', 'type4me-windows', 'vps-ops']], caps: one }).groups.map((g) => g.w), [328, 328, 328, 328]);
+  // several cards wide: the header rarely asks for more, and the cards keep the frame's padding
+  const wide = C.layout(map, { ...ROOM, headW, lanes: [Object.keys(headW)], caps: Object.fromEntries(Object.keys(headW).map((k) => [k, 2])) });
+  assert.deepEqual(wide.groups.map((g) => g.w), [632, 632, 632, 328]);
+
+  // A window that cannot show the map whole scrolls down either way. When two arrangements scroll about
+  // as far, lanes side by side that squeeze every frame to one card wide lose to one lane of wider frames.
+  const narrow = C.planLanes(map, { w: 712, h: 516 }, { ...ROOM, headW, max: 1.15 });   // a 980 x 700 window
+  assert.equal(narrow.fits, false);
+  assert.deepEqual([narrow.lanes.length, [...new Set(Object.values(narrow.caps))]], [1, [2]]);
+  const slim = C.planLanes(map, { w: 432, h: 616 }, { ...ROOM, headW, max: 1.15 });     // a 700 x 800 window
+  assert.deepEqual([slim.lanes.length, [...new Set(Object.values(slim.caps))]], [1, [1]]);
+  assert.ok((Math.max(...C.layout(map, { ...ROOM, headW, lanes: slim.lanes, caps: slim.caps }).groups.map((g) => g.w)) + 32) * 0.85 <= 432 + 1, 'the widened frames still need no sideways scrolling');
+  // where lanes side by side save a good deal of scrolling they stay
+  const laptop = C.planLanes(map, { w: 1172, h: 716 }, { ...ROOM, headW, max: 1.15 });  // a 1440 x 900 window
+  assert.deepEqual(laptop.lanes, [['agentdeck'], ['hermes-savings', 'type4me-windows', 'vps-ops']]);
+  // and a window that shows the map whole is not touched by the rule
+  const big = C.planLanes(map, { w: 1652, h: 948 }, { ...ROOM, headW, max: 1.15 });      // a 1920 x 1080 window
+  assert.equal(big.fits, true);
+  assert.ok(big.lanes.length >= 2);
+});
+
 test('planLanes keeps the plan in use while it is nearly as good, and follows the user\'s project order', () => {
   const map = crewOf({ a: 6, b: 4, c: 2 });
   const size = { w: 1652, h: 824 };

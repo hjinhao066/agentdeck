@@ -49,7 +49,9 @@ async function resize(width, height) {
 
 // Invented work in the shape the board really holds: one busy project, cards waiting on each other
 // inside a project and across projects, a failure, a question, a held card and a finished project.
-function seed(dir, many) {
+// Longer names for three of the projects: every one must show whole wherever it is written.
+const LONG = { 'hermes-savings': 'hermes-savings-center', 'type4me-windows': 'type4me-windows-installer', '客户门户': '客户门户与数据工作台二期' };
+function seed(dir, many, long) {
   const now = Date.now();
   const at = (min) => new Date(now - min * 60_000).toISOString();
   let order = 0;
@@ -113,15 +115,19 @@ function seed(dir, many) {
     for (let i = 0; i < 14; i++) boards.agentdeck.push(card('agentdeck', 'a-more' + i, `进行中的任务 ${i + 1}`, 'doing', { updated: at(5 + i), ...(i % 2 ? { session_id: running[i % 3], assignee: sonnet } : {}) }));
   }
   fs.mkdirSync(dir, { recursive: true });
-  for (const [project, cards] of Object.entries(boards)) fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ version: 1, project, cards }, null, 2));
+  for (const [key, cards] of Object.entries(boards)) {
+    const project = (long && LONG[key]) || key;
+    cards.forEach((c) => { c.project = project; });
+    fs.writeFileSync(path.join(dir, project + '.json'), JSON.stringify({ version: 1, project, cards }, null, 2));
+  }
   return Object.values(boards).flat();
 }
 
 let seeded = [];
-async function launch({ many = false, empty = false } = {}) {
+async function launch({ many = false, empty = false, long = false } = {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-task-board-star-'));
-  seeded = empty ? [] : seed(path.join(profile, 'tasks'), many);
-  const column = (id, title, project) => ({ id, title, displayTitle: title, manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true, project });
+  seeded = empty ? [] : seed(path.join(profile, 'tasks'), many, long);
+  const column = (id, title, project) => ({ id, title, displayTitle: title, manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', captainCrew: true, project: (long && LONG[project]) || project });
   const workers = [column('w-star', '星图视觉', 'agentdeck'), column('w-mobile', '手机网页端', 'agentdeck'), column('w-quota', '额度面板', 'agentdeck'), column('w-radar', '雷达任务', 'hermes-savings'), column('w-doubao', '豆包切换', 'type4me-windows')];
   const now = Date.now();
   // Unbound 进行中 cards send their heartbeat notices to the stand-in Captain, never to a real provider CLI.
@@ -459,6 +465,52 @@ test('动效开关: one icon button holds the board still, says so, and is remem
   expect(errors).toEqual([]);
 });
 
+// Every name on the board that is not whole, every pair of things in the filter bar that touch, and
+// every 需要你 entry that shows cut. Nothing here may be cut to fit: chips wrap, the tally and tools
+// drop to their own row, and an entry that does not fit the reminder bar is left out whole.
+const cutNames = () => page.evaluate(() => {
+  const view = document.getElementById('taskBoardView');
+  const shown = (n) => n.getClientRects().length > 0;
+  const rect = (n) => n.getBoundingClientRect();
+  const cut = [...view.querySelectorAll('.tbv-chip-name, .tbv-lane-name, .tbv-summary, .tbv-heading h1, .tbv-head-label, .tbv-lane-open')].filter(shown)
+    .filter((n) => n.scrollWidth > n.clientWidth).map((n) => `${n.className}「${n.textContent}」 ${n.scrollWidth}>${n.clientWidth}`);
+  const bar = rect(view.querySelector('.tbv-filters'));
+  const parts = [...view.querySelectorAll('.tbv-chip, .tbv-summary, .tbv-filters > .tbv-icon')].filter(shown).map((n) => ({ what: n.className + ' ' + n.textContent.trim().slice(0, 12), r: rect(n) }));
+  const touching = [];
+  parts.forEach((a, i) => { if (a.r.left < bar.left - 0.5 || a.r.right > bar.right + 0.5) touching.push(a.what + ' outside the bar');
+    parts.slice(i + 1).forEach((b) => { if (a.r.left < b.r.right + 4 && b.r.left < a.r.right + 4 && a.r.top < b.r.bottom && b.r.top < a.r.bottom) touching.push(a.what + ' / ' + b.what); }); });
+  const list = view.querySelector('.tbv-alert-list'), box = list && shown(list) ? rect(list) : null;
+  const entries = box ? [...list.querySelectorAll('.tbv-alert-item')].map((n) => { const r = rect(n), title = n.querySelector('.tbv-alert-title');
+    const inside = r.top >= box.top - 0.5 && r.bottom <= box.bottom + 0.5, outside = r.top >= box.bottom - 0.5;
+    return { text: title.textContent, inside, outside, cut: inside && (r.left < box.left - 0.5 || r.right > box.right + 0.5 || title.scrollWidth > title.clientWidth) }; }) : [];
+  return { cut, touching, entries: entries.filter((e) => e.cut || (!e.inside && !e.outside)).map((e) => e.text), entriesShown: entries.filter((e) => e.inside).length, chipRows: new Set([...view.querySelectorAll('.tbv-chip')].map((n) => Math.round(rect(n).top))).size };
+});
+
+test('名字完整显示: long project names at 1920, 1440, 980 and 700 in both themes; no chip, group name or reminder entry is cut', async () => {
+  await launch({ long: true });
+  await resize(1920, 1080);
+  await page.locator('#taskBoardBtn').click();
+  await expect(page.locator('.tbv-lane')).toHaveCount(4);
+  const names = ['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期', '旧项目'];
+  for (const [w, h] of [[1920, 1080], [1440, 900], [980, 700], [700, 800]]) {
+    await resize(w, h);
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate((t) => applyTheme(t), theme);
+      expect((await page.locator('.tbv-chip-name').allTextContents()).sort()).toEqual(['全部', ...names].sort());
+      expect((await page.locator('.tbv-lane[data-project] .tbv-lane-name').allTextContents()).sort()).toEqual(names.slice(0, 4).sort());
+      const got = await cutNames();
+      expect(got.cut, `${w} ${theme}: names cut`).toEqual([]);
+      expect(got.touching, `${w} ${theme}: filter bar`).toEqual([]);
+      expect(got.entries, `${w} ${theme}: reminder entries shown cut`).toEqual([]);
+      expect(got.entriesShown, `${w} ${theme}: at least one reminder entry shows`).toBeGreaterThanOrEqual(1);
+      if (w >= 1920) expect(got.chipRows, `${w}: the chips fit one row`).toBe(1);
+      expect(await page.evaluate(() => { const s = document.querySelector('.tbv-scroll'); return s.scrollWidth <= s.clientWidth + 1; }), `${w}: no sideways scrolling`).toBe(true);
+      await screenshot(`names-${w}-${theme}`);
+    }
+  }
+  expect(errors).toEqual([]);
+});
+
 test('a board of 110 cards stays in its columns and keeps its moving parts bounded', async () => {
   await launch({ many: true });
   await resize(1440, 900);
@@ -495,6 +547,10 @@ test('a board of 110 cards stays in its columns and keeps its moving parts bound
   await page.evaluate(() => { document.querySelector('.tbv-scroll').scrollTop = 0; });
   for (const theme of ['dark', 'light']) {
     await page.evaluate((t) => applyTheme(t), theme);
+    // nine projects do not fit one row of chips: they wrap, every one whole, and no reminder entry is shown cut
+    const whole = await cutNames();
+    expect([whole.cut, whole.touching, whole.entries]).toEqual([[], [], []]);
+    expect(whole.chipRows).toBeGreaterThanOrEqual(2);
     await screenshot(`${theme}-1440-many`);
   }
   await page.evaluate(() => { const s = document.querySelector('.tbv-scroll'); s.scrollTop = s.scrollHeight * 0.38; });
