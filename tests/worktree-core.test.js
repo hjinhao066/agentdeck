@@ -26,7 +26,7 @@ function setup(t) {
   fs.mkdirSync(repo);
   fs.mkdirSync(remote);
   git(repo, ['init', '-b', 'main']);
-  fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n');
+  fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n.env\nnode_modules/\n');
   fs.writeFileSync(path.join(repo, 'README'), 'hello\n');
   git(repo, ['add', '.gitignore', 'README']);
   git(repo, ['commit', '-m', 'init']);
@@ -80,8 +80,9 @@ test('a clean merged copy is listed and removed only when asked, and a dirty one
   const { repo, copies } = setup(t);
   const clean = Worktree.prepare({ repo, branch: 'agentdeck/clean', root: copies });
   const dirty = Worktree.prepare({ repo, branch: 'agentdeck/dirty', root: copies });
+  fs.mkdirSync(path.join(clean.path, 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(clean.path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
   fs.writeFileSync(path.join(dirty.path, 'notes.txt'), 'keep me\n');
-  fs.writeFileSync(path.join(clean.path, 'noise.log'), 'ignored\n');
   const listed = Worktree.clean({ root: copies });
   assert.equal(listed.apply, false);
   assert.equal(listed.removed.length, 0);

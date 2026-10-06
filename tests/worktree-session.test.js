@@ -32,8 +32,9 @@ function world(t) {
   fs.mkdirSync(repo);
   fs.mkdirSync(remote);
   git(repo, ['init', '-b', 'main']);
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.env\nnode_modules/\n');
   fs.writeFileSync(path.join(repo, 'README'), 'hello\n');
-  git(repo, ['add', 'README']);
+  git(repo, ['add', '.gitignore', 'README']);
   git(repo, ['commit', '-m', 'init']);
   git(remote, ['init', '--bare', '-b', 'main']);
   git(repo, ['remote', 'add', 'origin', remote]);
@@ -80,6 +81,13 @@ function world(t) {
       w.config.archived = [snapshot, ...(w.config.archived || []).filter((item) => item.id !== col.id)];
       const index = w.columns.indexOf(col);
       if (index >= 0) w.columns.splice(index, 1);
+    },
+    restoreArchived(id) {
+      const snapshot = (w.config.archived || []).find((item) => item.id === id);
+      w.config.archived = (w.config.archived || []).filter((item) => item.id !== id);
+      w.columns.push(snapshot);
+      entries.set(id, { alive: true, state: 'done', lastScreen: '' });
+      return snapshot;
     },
     sendWhenReady(col, text, opts) { opts?.onSent?.({ id: 'turn' }); },
   };
@@ -161,4 +169,46 @@ test('archive removes a clean copy only after its branch is pushed', async (t) =
   assert.equal(after.branch, 'feat/pushed');
   assert.match(after.base, /^[0-9a-f]{40}$/);
   assert.equal(git(app.w.repo, ['rev-parse', 'refs/heads/feat/pushed']), git(app.w.repo, ['rev-parse', 'origin/feat/pushed']));
+});
+
+test('an ignored .env survives archive, tell restore, and a restarted settling flag', async (t) => {
+  const app = world(t);
+  const card = (await app.store.add({ project: 'demo', title: '密钥', detail: '' })).card;
+  await app.handle({
+    action: 'main-new', id: 'env-req', title: '密钥', task: '本地配置', boardId: card.id, project: 'demo', command: CODEX,
+    worktree: app.w.repo, branch: 'feat/env',
+  });
+  await tick();
+  const col = app.w.columns.find((c) => !c.isMain);
+  fs.writeFileSync(path.join(col.cwd, 'ship.txt'), 'shipped\n');
+  git(col.cwd, ['add', 'ship.txt']);
+  git(col.cwd, ['commit', '-m', 'ship']);
+  git(col.cwd, ['push', '-u', 'origin', 'feat/env']);
+  const secret = path.join(col.cwd, '.env');
+  fs.writeFileSync(secret, 'TOKEN=local\n');
+  const archived = await app.handle({ action: 'main-archive', to: col.id });
+  assert.match(archived.result, /\.env/);
+  assert.equal(fs.readFileSync(secret, 'utf8'), 'TOKEN=local\n');
+  assert.equal(app.card(card.id).worktree.removed, false);
+  assert.match(app.card(card.id).worktree.reason, /\.env/);
+  const told = await app.handle({ action: 'main-tell', to: col.id, id: 'again', message: '接着改' });
+  assert.match(told.result, /已恢复/);
+  assert.equal(fs.readFileSync(secret, 'utf8'), 'TOKEN=local\n');
+  const live = app.w.columns.find((c) => c.id === col.id);
+  const again = await app.handle({ action: 'main-archive', to: live.id });
+  assert.match(again.result, /\.env/);
+  assert.equal(fs.readFileSync(secret, 'utf8'), 'TOKEN=local\n');
+
+  const restarted = JSON.parse(JSON.stringify(app.w.config.archived.find((item) => item.id === col.id)));
+  restarted.worktree.settling = true;
+  app.w.config.archived = [restarted];
+  const settled = await app.window.MainSession.settleArchivedWorktree(restarted);
+  assert.equal(settled.removed, false);
+  assert.equal(settled.settling, undefined);
+  assert.equal(fs.readFileSync(secret, 'utf8'), 'TOKEN=local\n');
+  fs.rmSync(secret);
+  const cleaned = await app.window.MainSession.settleArchivedWorktree(restarted);
+  assert.equal(cleaned.removed, true);
+  assert.equal(fs.existsSync(secret), false);
+  assert.equal(fs.existsSync(col.cwd), false);
 });

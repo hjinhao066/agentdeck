@@ -1,8 +1,9 @@
 'use strict';
 // Independent git worktrees for coding sessions. Creation is opt-in.
-// Removal never uses --force, and only happens when the tree is clean and the
-// branch is already on the trunk or on a remote. Ignored files do not block
-// removal; untracked non-ignored files do. Nothing outside the managed root
+// Removal never uses --force, and only happens when the copy has nothing a
+// person could miss and the branch is already on a real trunk or still on a
+// remote. Ignored files block removal unless they live in a regenerable
+// directory named in REGENERABLE_DIRS. Nothing outside the managed root
 // is deleted.
 const fs = require('fs');
 const os = require('os');
@@ -14,6 +15,12 @@ const BRANCH_RE = /^(?!\/)(?!.*\/\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\/$)[A-Za-z0-
 const RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const GIT_CONFIG = ['-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.eol=lf'];
+// Directories that can be rebuilt. A matching path is ignored only when that
+// segment is a directory. Anything else ignored (.env, a database, a file
+// that merely shares one of these names) keeps the copy.
+const REGENERABLE_DIRS = Object.freeze(['node_modules', 'dist', 'build', 'out', 'target', 'coverage', '.next', '.turbo', '.cache', '__pycache__']);
+const REGENERABLE = new Set(REGENERABLE_DIRS);
+const IN_PROGRESS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 
 function real(value) {
   const resolved = path.resolve(value);
@@ -133,14 +140,16 @@ function defaultTrunk(repo, options) {
   for (const name of ['main', 'master']) {
     if (refExists(repo, name, options)) return { name, sha: assertSha(git(repo, ['rev-parse', '--verify', '--end-of-options', name + '^{commit}'], options)) };
   }
-  return { name: 'HEAD', sha: assertSha(git(repo, ['rev-parse', '--verify', 'HEAD'], options)) };
+  return null;
 }
 function resolveBase(repo, base, options) {
   if (base) {
     if (typeof base !== 'string' || !base.trim() || base.length > 200 || /[\x00-\x1f\s]/.test(base) || base.startsWith('-')) throw new Error('无效的 --base。');
     return assertSha(git(repo, ['rev-parse', '--verify', '--end-of-options', base.trim() + '^{commit}'], options));
   }
-  return defaultTrunk(repo, options).sha;
+  const trunk = defaultTrunk(repo, options);
+  if (trunk) return trunk.sha;
+  return assertSha(git(repo, ['rev-parse', '--verify', 'HEAD'], options));
 }
 function defaultBranch(taskId) {
   const id = typeof taskId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(taskId)
@@ -155,20 +164,78 @@ function resolveRepo(repo, options) {
   const top = git(repo, ['rev-parse', '--show-toplevel'], options);
   return real(top);
 }
+function remoteTip(repo, remote, branch, options) {
+  if (!remote || !branch || remote.startsWith('-') || branch.startsWith('-')) return '';
+  try {
+    const out = git(repo, ['ls-remote', '--heads', remote, 'refs/heads/' + branch], options);
+    const sha = out.split('\n').map((line) => line.trim().split(/\s+/)[0]).find((item) => SHA_RE.test(item || ''));
+    return sha ? sha.toLowerCase() : '';
+  } catch (error) {
+    if (error.status !== 1 && error.status !== 2 && error.status !== 128) throw error;
+    return '';
+  }
+}
 function isPushed(repo, branch, tip, options) {
   const refs = [`origin/${branch}`];
   try { refs.unshift(git(repo, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', branch + '@{upstream}'], options)); }
   catch (error) { if (error.status !== 1 && error.status !== 128) throw error; }
   for (const ref of refs) {
-    if (!ref || ref === '@{upstream}') continue;
-    try {
-      const remote = git(repo, ['rev-parse', '--verify', '--quiet', '--end-of-options', ref + '^{commit}'], options);
-      if (gitOk(repo, ['merge-base', '--is-ancestor', tip, remote], options)) return true;
-    } catch (error) {
-      if (error.status !== 1 && error.status !== 128) throw error;
-    }
+    const slash = typeof ref === 'string' ? ref.indexOf('/') : -1;
+    if (slash <= 0) continue;
+    const remote = remoteTip(repo, ref.slice(0, slash), ref.slice(slash + 1), options);
+    if (remote && gitOk(repo, ['merge-base', '--is-ancestor', tip, remote], options)) return true;
   }
   return false;
+}
+function parseStatusZ(text) {
+  const entries = [];
+  const parts = String(text).split('\0');
+  for (let i = 0; i < parts.length; i++) {
+    const rec = parts[i];
+    if (!rec) continue;
+    if (rec.length < 4 || rec[2] !== ' ') { entries.push({ xy: '??', path: rec }); continue; }
+    const xy = rec.slice(0, 2);
+    entries.push({ xy, path: rec.slice(3) });
+    if (xy[0] === 'R' || xy[0] === 'C') i += 1;
+  }
+  return entries;
+}
+function isRegenerableIgnored(root, rel) {
+  const parts = String(rel).split(/[\\/]/).filter(Boolean);
+  let acc = root;
+  for (const part of parts) {
+    acc = path.join(acc, part);
+    if (!REGENERABLE.has(part)) continue;
+    try { if (fs.statSync(acc).isDirectory()) return true; } catch (_) { return false; }
+  }
+  return false;
+}
+function worktreeGitDir(dir, options) {
+  let line = git(dir, ['rev-parse', '--absolute-git-dir'], options);
+  return real(line);
+}
+function inProgress(dir, options) {
+  let gitDir;
+  try { gitDir = worktreeGitDir(dir, options); } catch (_) { return 'unknown'; }
+  return IN_PROGRESS.find((name) => fs.existsSync(path.join(gitDir, name))) || '';
+}
+function stashBlocks(repo, branch, options) {
+  let list = '';
+  try { list = git(repo, ['stash', 'list', '--pretty=%gs'], options); }
+  catch (error) {
+    if (error.status !== 1 && error.status !== 128) return true;
+    return true;
+  }
+  if (!list.trim()) return false;
+  const escaped = branch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp('(?:^|\\n)\\s*(?:WIP on |On )' + escaped + '(?::|\\s|$)', 'm');
+  return pattern.test(list);
+}
+function indexBlocks(dir, options) {
+  let out = '';
+  try { out = runGit(gitArgv(dir, ['ls-files', '-v', '-z']), options); }
+  catch (_) { return true; }
+  return String(out).split('\0').some((rec) => rec && rec[0] !== 'H');
 }
 function isMainWorktree(dir, options) {
   const top = path.resolve(git(dir, ['rev-parse', '--show-toplevel'], options));
@@ -177,6 +244,7 @@ function isMainWorktree(dir, options) {
   return fs.statSync(dotGit).isDirectory() && real(dotGit) === resolveCommon(dir, options);
 }
 function insideRoot(dir, root) {
+  if (typeof dir !== 'string' || !path.isAbsolute(dir) || /[\x00-\x1f]/.test(dir)) throw new Error('副本路径不在约定目录里，没有删除。');
   const abs = real(dir);
   const base = real(root);
   const rel = path.relative(base, abs);
@@ -222,15 +290,34 @@ function inspect(record, options = {}) {
     return { safe: false, reason: '副本保留：无法确认这是登记的 git 副本：' + error.message, record: normalized };
   }
   if (top !== real(normalized.path) || branch !== normalized.branch) return { safe: false, reason: '副本的路径或分支和登记的不一致，已保留。', record: normalized };
-  const dirty = runGit(gitArgv(normalized.path, ['status', '--porcelain', '--untracked-files=all', '-z']), options).length > 0;
+  let entries = [];
+  try {
+    entries = parseStatusZ(runGit(gitArgv(normalized.path, ['status', '--porcelain', '--ignored=matching', '--untracked-files=normal', '--ignore-submodules=none', '-z']), options));
+  } catch (error) {
+    return { safe: false, reason: '副本保留：无法确认工作区是否干净：' + error.message, record: normalized };
+  }
+  const dirty = entries.some((entry) => entry.xy !== '!!');
+  const ignored = entries.filter((entry) => entry.xy === '!!' && !isRegenerableIgnored(normalized.path, entry.path)).map((entry) => entry.path.replace(/[\\/]+$/, ''));
+  const progress = inProgress(normalized.path, options);
+  let stashed = false;
+  let unusualIndex = false;
+  try { stashed = stashBlocks(normalized.repo, normalized.branch, options); } catch (_) { stashed = true; }
+  try { unusualIndex = indexBlocks(normalized.path, options); } catch (_) { unusualIndex = true; }
   const tip = assertSha(git(normalized.path, ['rev-parse', 'HEAD'], options));
   const trunk = defaultTrunk(normalized.repo, options);
-  const merged = gitOk(normalized.repo, ['merge-base', '--is-ancestor', tip, trunk.sha], options);
+  const merged = !!(trunk && gitOk(normalized.repo, ['merge-base', '--is-ancestor', tip, trunk.sha], options));
   const pushed = isPushed(normalized.repo, normalized.branch, tip, options);
   const reasons = [];
   if (dirty) reasons.push('工作区有未提交的改动或未跟踪的文件');
-  if (!merged && !pushed) reasons.push('分支尚未合入主干，也未推送到远端');
-  if (reasons.length) return { safe: false, reason: '副本保留：' + reasons.join('；') + '。', record: normalized, dirty, merged, pushed };
+  if (ignored.length) {
+    const shown = ignored.slice(0, 8).join('、');
+    reasons.push('有被忽略、不能自动丢掉的文件：' + shown + (ignored.length > 8 ? ' 等 ' + ignored.length + ' 个' : ''));
+  }
+  if (progress) reasons.push(progress.startsWith('rebase') ? '正在变基' : '正在合并、拣选或还原');
+  if (stashed) reasons.push('这个分支还有 stash');
+  if (unusualIndex) reasons.push('索引里有 skip-worktree 或 assume-unchanged 的本地内容');
+  if (!merged && !pushed) reasons.push(trunk ? '分支尚未合入主干，也未推送到远端' : '没有 main/master 或 origin/HEAD 这样的主干，也未推送到远端');
+  if (reasons.length) return { safe: false, reason: ('副本保留：' + reasons.join('；') + '。').slice(0, 500), record: normalized, dirty: dirty || ignored.length > 0 || !!progress || stashed || unusualIndex, merged, pushed };
   const why = merged ? '分支已合入主干' : '分支已推送到远端';
   return { safe: true, reason: '已回收：工作区干净，且' + why + '。', record: normalized, dirty: false, merged, pushed };
 }
@@ -318,6 +405,6 @@ function formatClean(result) {
 }
 
 module.exports = {
-  GIT_CONFIG, assertBranch, normalizeRecord, location, defaultRoot, gitArgv, extendedPath,
+  GIT_CONFIG, REGENERABLE_DIRS, assertBranch, normalizeRecord, location, defaultRoot, gitArgv, extendedPath,
   prepare, inspect, reclaim, clean, formatClean, defaultTrunk,
 };

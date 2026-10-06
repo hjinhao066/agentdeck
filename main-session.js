@@ -2069,12 +2069,16 @@
     if (record.reason) out.reason = String(record.reason).slice(0, 500);
     return out;
   }
+  // In-flight only. A saved settling flag must not survive tell, archive, or restart.
+  const settlingIds = new Set();
   // Archive already stopped the terminal. Remove the copy only when it is clean
   // and the branch is on the trunk or a remote; otherwise keep it and say why.
   async function settleArchivedWorktree(col) {
     const record = col?.worktree;
-    if (!record || record.settling || record.removed) return record || null;
-    record.settling = true;
+    if (!record || record.removed) return record || null;
+    delete record.settling;
+    if (!col.id || settlingIds.has(col.id)) return record;
+    settlingIds.add(col.id);
     try {
       if (typeof window.deck.reclaimWorktree !== 'function') throw new Error('没有回收入口');
       const result = await window.deck.reclaimWorktree(record);
@@ -2082,9 +2086,11 @@
       record.reason = String(result?.reason || '').slice(0, 500);
       if (record.removed && record.repo) col.cwd = record.repo;
     } catch (error) {
-      record.settling = false;
       record.removed = false;
       record.reason = ('副本保留：回收没有完成：' + (error.message || error)).slice(0, 500);
+    } finally {
+      settlingIds.delete(col.id);
+      delete record.settling;
     }
     const archived = (host.config.archived || []).find((item) => item.id === col.id);
     if (archived) {
