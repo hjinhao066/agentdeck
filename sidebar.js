@@ -33,6 +33,15 @@
     s.innerHTML = host.ICONS[name] || '';
     return s;
   }
+  // 高优先级: a small flag in its own colour before the session's name.
+  const isPriority = (col) => !!(window.MainSession && window.MainSession.isPriority && window.MainSession.isPriority(col));
+  function priorityFlag() {
+    const flag = iconEl('flag', 'cn-prio');
+    flag.setAttribute('role', 'img');
+    flag.title = '高优先级：你点名要优先做的事';
+    flag.setAttribute('aria-label', '高优先级');
+    return flag;
+  }
   function iconButton(name, title, onClick, cls) {
     const b = el('button', 'nav-ibtn' + (cls ? ' ' + cls : ''));
     b.type = 'button'; b.title = title; b.setAttribute('aria-label', title); b.innerHTML = host.ICONS[name] || '';
@@ -254,6 +263,7 @@
       seat,
       working: !!(entry && entry.state === 'working'),
       lastActive: host.lastTurnTs(col.id) || 0,
+      urgent: isPriority(col),
     };
   }
   function collapsedModels() {
@@ -270,7 +280,7 @@
   }
   function crewShownKey(groups, waiting) {
     const held = window.MainSession.memoryHeld() ? ':mem' : '';
-    return groups.map((g) => g.key + ':' + g.seatName + ':' + g.flag + ':' + g.working + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => w.title || '').join(',') + held;
+    return groups.map((g) => g.key + ':' + g.seatName + ':' + g.flag + ':' + g.working + ':' + g.urgent + ':' + g.ids.join(',')).join('|') + '|q:' + waiting.map((w) => (window.MainSession.isHigh(w) ? '!' : '') + (w.title || '')).join(',') + held;
   }
   function cssId(key) {
     return String(key).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 80);
@@ -334,8 +344,10 @@
     wrap.appendChild(head);
     waiting.forEach((w) => {
       const item = el('div', 'colnav-item crew-waiting');
-      item.title = window.MainSession.queueTitle();
+      const urgent = window.MainSession.isHigh(w);
+      item.title = (urgent ? '高优先级，排在普通任务前面。' : '') + window.MainSession.queueTitle();
       item.append(el('span', 'cn-dot plain'), el('span', 'cn-text'), el('span', 'cn-meta', '等空位'));
+      if (urgent) { item.classList.add('prio'); item.insertBefore(priorityFlag(), item.querySelector('.cn-text')); }
       item.querySelector('.cn-text').appendChild(sessionLabel(w.title));
       wrap.appendChild(item);
     });
@@ -444,6 +456,8 @@
       iconButton('more', '更多', (e) => sessionMenu(col, label, e.currentTarget), 'nav-more'),
     );
     item.append(dot, text, meta, actions);
+    const urgent = isPriority(col);
+    if (urgent) { item.classList.add('prio'); item.insertBefore(priorityFlag(), text); }
     if (!crew) item.insertBefore(badge, dot);
     attachDrag(item, col);
     label.addEventListener('dblclick', (e) => {
@@ -454,10 +468,10 @@
     const syncTip = crew ? (line) => {
       const title = host.columnLabel(col);
       const output = String(line || '').trim();
-      const tip = output ? title + '\n' + output : title;
+      const tip = (urgent ? '【高优先级】' : '') + (output ? title + '\n' + output : title);
       item.title = tip;
       label.title = tip;
-      label.setAttribute('aria-label', title);
+      label.setAttribute('aria-label', (urgent ? '高优先级，' : '') + title);
     } : null;
     if (syncTip) syncTip('');
     host.navItems.set(col.id, { el: item, dot, label, sub, meta, badge: crew ? null : badge, syncTip });
@@ -569,6 +583,9 @@
       { label: '重命名', run: () => inlineEdit(label, host.columnLabel(col), (v) => host.renameSession(col, v)) },
       { label: '打开终端', run: () => { host.jumpToColumn(col); host.showSideTerminal(); } },
       ...(crew ? [{ label: '拉到前台（变成普通对话）', run: () => host.moveSession(col.id, { folderId: null }) }] : []),
+      ...(window.MainSession && window.MainSession.setPriority ? [{ label: '高优先级', checked: isPriority(col), run: () => {
+        window.MainSession.setPriority(col.id, isPriority(col) ? 'normal' : 'high').then(() => render(), (error) => host.showToast('没改成：' + error.message));
+      } }] : []),
       '-',
       { header: '移到文件夹' },
       ...(window.MainSession && window.MainSession.mainCol()

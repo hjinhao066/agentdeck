@@ -141,7 +141,8 @@
   }
 
   // Crew under 队长, one group per visible model (and Claude seat, when pinned).
-  // Groups with more people working come first; inside a group, recent activity first.
+  // Groups with more people working come first; inside a group, 高优先级 sessions
+  // (member.urgent) lead, then recent activity first.
   function crewModelGroups(members, seats) {
     const configured = S.normalize(seats);
     const map = new Map();
@@ -162,15 +163,16 @@
       }
       if (!group.iconProvider && raw.iconProvider) group.iconProvider = raw.iconProvider;
       const lastActive = Number(raw.lastActive) || 0;
-      group.members.push({ id: raw.id, lastActive });
+      group.members.push({ id: raw.id, lastActive, urgent: raw.urgent === true });
       if (raw.working) group.working += 1;
       if (lastActive > group.lastActive) group.lastActive = lastActive;
     }
-    const byRecent = (a, b) => b.lastActive - a.lastActive || String(a.id).localeCompare(String(b.id));
+    const byRecent = (a, b) => b.urgent - a.urgent || b.lastActive - a.lastActive || String(a.id).localeCompare(String(b.id));
     const groups = [...map.values()];
     for (const group of groups) {
       group.members.sort(byRecent);
       group.ids = group.members.map((member) => member.id);
+      group.urgent = group.members.filter((member) => member.urgent).length;
       delete group.members;
     }
     groups.sort((a, b) => b.working - a.working || b.lastActive - a.lastActive || a.label.localeCompare(b.label) || a.seat.localeCompare(b.seat));

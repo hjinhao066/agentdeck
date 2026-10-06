@@ -1,5 +1,6 @@
 :root {
   color-scheme: light;
+  --prio: #0b6bcb; --prio-ink: #ffffff;
   --bg: #ffffff; --surface: #ffffff; --soft: #f4f3f1; --raised: #f7f6f4; --text: #1d1d1f;
   --secondary: #55555a; --muted: #6b6b70; --line: #e6e5e2;
   --mine: #95ec69; --mine-ink: #0f2410; --orange: #c36922; --orange-soft: #fff2e7; --on-orange: #ffffff; --working: #d4a500;
@@ -16,6 +17,7 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
+  --prio: #4db8ff; --prio-ink: #04233a;
   --bg: #171717; --surface: #1d1d1d; --soft: #2a2a2a; --raised: #232323; --text: #ececec;
   --secondary: #bdbdbd; --muted: #9a9a9a; --line: #313131;
   --mine: #3eb575; --mine-ink: #06170e; --orange: #e6a16e; --orange-soft: #33261d; --on-orange: #1b1b1b; --working: #e0b84a; --tab-active: #e6a16e;
@@ -348,6 +350,10 @@ textarea:disabled { opacity: .6; }
 .task-receipt { color: var(--secondary); font-size: 12px; margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
 .task-flag { display: inline-block; font-size: 10px; color: var(--orange); margin-bottom: 6px; }
 .task-flag.failed { color: var(--red); }
+/* 高优先级: a solid flag chip in its own blue, and a blue edge on the card. */
+.task-prio { display: inline-flex; align-items: center; gap: 4px; margin: 0 8px 6px 0; padding: 2px 8px 2px 6px; border-radius: 6px; background: var(--prio); color: var(--prio-ink); font-size: 11px; font-weight: 700; line-height: 16px; vertical-align: middle; }
+.task-prio svg { width: 12px; height: 12px; }
+.task-card[data-priority="high"] { border-left: 3px solid var(--prio); padding-left: 12px; }
 .lane-empty { font-size: 12px; color: var(--muted); padding: 14px 4px; }
 
 /* Switching the Captain's account: the worded action, a line over the conversation when the account runs low, and the sheet. */

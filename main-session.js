@@ -75,6 +75,75 @@
     for (const notice of result.notices || []) boardNotice(notice);
     return result;
   }
+  // ---- 高优先级 ----
+  // The user named this work as urgent. With a card, the card's `important` flag
+  // is the one record (read from the board, so a change made on the other machine
+  // counts too); work handed out without a card carries the flag itself. Every
+  // session on that card shows the mark: executor, reviewer, queued request.
+  let highCards = new Set();
+  const cardIdOf = (x) => x?.boardId || x?.metadata?.boardId || '';
+  function isHigh(x) {
+    return !!x && (x.important === true || x.metadata?.important === true || highCards.has(cardIdOf(x)));
+  }
+  // A session keeps the mark until its own newest piece of work is done.
+  function sessionHigh(col) {
+    if (!col || col.isMain || !isHigh(col)) return false;
+    return state()?.tasks.findLast((t) => t.colId === col.id)?.status !== 'done';
+  }
+  function priorityChanged() {
+    const s = state();
+    if (s && Array.isArray(s.waitlist)) {
+      const sorted = M.highFirst(s.waitlist, isHigh);
+      if (sorted.some((w, i) => w !== s.waitlist[i])) { s.waitlist = sorted; save(); refreshWaitingNotes(); pump(); }
+    }
+    window.Sidebar?.render?.();
+  }
+  async function refreshPriority() {
+    let list;
+    try { list = await window.TaskBoard.list(); } catch (_) { return; }
+    const next = new Set((Array.isArray(list) ? list : []).filter((c) => c.important === true && c.status !== 'done').map((c) => c.id));
+    if (next.size === highCards.size && [...next].every((id) => highCards.has(id))) return;
+    highCards = next;
+    priorityChanged();
+  }
+  // `task priority`, and the user's own click on a card or a session. id: a card,
+  // a session, or a queued request. byUser: marking a card nobody has started
+  // tells 队长 once, since the mark means "start this now".
+  async function setPriority(id, level, byUser = false) {
+    if (!['high', 'normal'].includes(level)) throw new Error('优先级只能是 high 或 normal。');
+    const s = state();
+    const key = String(id || '').trim();
+    const high = level === 'high', word = high ? '标为高优先级' : '改回普通优先级';
+    const col = host.columns().find((c) => c.id === key && !c.isMain);
+    const waiting = s?.waitlist?.find((w) => w.taskId === key);
+    const cardId = cardIdOf(col) || cardIdOf(waiting) || key;
+    const card = /^[A-Za-z0-9_-]{1,160}$/.test(cardId) ? (await window.TaskBoard.list({ archived: true })).find((c) => c.id === cardId) : null;
+    if (card) {
+      await boardRequest('priority', { id: card.id, level });
+      await refreshPriority();
+      if (byUser && high && card.important !== true && card.status === 'todo' && !card.archived && mainCol()) {
+        boardNotice(`用户在任务看板把卡片 ${card.id}「${card.title}」标为高优先级（项目：${card.project}），它还没开始做，请立刻安排。`);
+      }
+      return `已把卡片 ${card.id}「${card.title}」${word}。`;
+    }
+    if (!col && !waiting) throw new Error(`找不到卡片或会话：${key.slice(0, 80)}。先用 task list 或 ledger 看 id。`);
+    const mark = (x) => { if (high) x.important = true; else delete x.important; };
+    if (col) {
+      mark(col);
+      // its dispatch record may carry the mark from the time it waited for a slot
+      const last = s?.tasks.findLast((t) => t.colId === col.id);
+      if (last) mark(last);
+    }
+    if (waiting) {
+      waiting.metadata = { ...(waiting.metadata || {}) };
+      mark(waiting.metadata);
+      const task = s.tasks.find((t) => t.id === waiting.taskId);
+      if (task) mark(task);
+    }
+    save();
+    priorityChanged();
+    return `已把${col ? `会话 ${col.id}「${host.columnLabel(col)}」` : `排队中的「${waiting.title}」`}${word}。`;
+  }
   let boardWrites = Promise.resolve();
   function boardEvent(task, type, message = '', source = '', files) {
     if (!task.boardId) return Promise.resolve();
@@ -246,6 +315,8 @@
     // Dragging into 进行中 uses the same routing and claims as an explicit start.
     requestStart: (id) => startCard(id),
     answer,
+    // The user's own click: mark a card 高优先级 or ordinary again.
+    setPriority: (id, level) => setPriority(id, level, true),
     settings: (dispatcher) => {
       if (dispatcher !== undefined) {
         if (!['captain', 'gemini'].includes(dispatcher)) throw new Error('dispatcher must be captain or gemini.');
@@ -586,10 +657,10 @@
       // Instruction bodies stay where they are; the handoff never quotes them.
       tasks: s.tasks.map(({ instruction, ...task }) => task),
       sessions: ledgerRows().map((row) => ({ id: row.id, title: row.title, state: row.state, terminalState: row.terminalState, alive: !!host.terms.get(row.id)?.alive,
-        crew: !!cols.find((c) => c.id === row.id)?.captainCrew, project: row.project, boardId: cols.find((c) => c.id === row.id)?.boardId || '' })),
+        crew: !!cols.find((c) => c.id === row.id)?.captainCrew, project: row.project, boardId: cols.find((c) => c.id === row.id)?.boardId || '', important: row.important })),
       archivedIds: (host.config.archived || []).map((a) => a.id),
       pending: s.pending, inflight: unreadReceipts(s.inflight, seen), unconfirmed: unconfirmedReceipts(s),
-      waitlist: s.waitlist.map((w) => ({ taskId: w.taskId, title: w.title, project: w.project || '', metadata: { boardId: w.metadata?.boardId || '' } })),
+      waitlist: s.waitlist.map((w) => ({ taskId: w.taskId, title: w.title, project: w.project || '', important: isHigh(w), metadata: { boardId: w.metadata?.boardId || '' } })),
       carry: reason === 'relay' ? carriedReceipts(s) : s.handoffCarry || null, userTurns: userTurns.slice(-12),
     };
   }
@@ -1070,7 +1141,9 @@
     Object.assign(task, metadata);
     const held = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
     task.waitReason = held.action === 'queue' ? quotaQueueText(held, title) : reason;
-    s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata });
+    s.waitlist.push({ taskId: task.id, title, cmd, cwd, requestId, task: body, project: metadata.project, reviews: metadata.reviews, metadata,
+      order: s.waitlist.reduce((max, w) => Math.max(max, w.order || 0), 0) + 1 });
+    s.waitlist = M.highFirst(s.waitlist, isHigh);   // 高优先级 waits ahead of ordinary work
     save();
   }
   // The one way in for a new session: past the limit, behind work already waiting,
@@ -1082,8 +1155,10 @@
     memoryHold = pressure.critical;
     const plan = openPlan(cmd, metadata.claudeSeatId, metadata.quotaExplicit, metadata);
     const active = M.activeCrew(s.tasks, crewIds()).size;
-    // Quota-held requests do not block a different available provider.
-    const ahead = s.waitlist.filter((w) => w !== replaced && openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue').length;
+    // Quota-held requests do not block a different available provider, and
+    // ordinary work waiting for a slot does not hold back a 高优先级 request.
+    const high = isHigh({ metadata });
+    const ahead = s.waitlist.filter((w) => w !== replaced && (!high || isHigh(w)) && openPlan(w.cmd, w.metadata?.claudeSeatId, w.metadata?.quotaExplicit, w.metadata).action !== 'queue').length;
     const reason = queueReason(plan, title, active, ahead);
     if (reason) {
       await enqueue(title, cmd, cwd, requestId, task, metadata, reason);
@@ -2021,7 +2096,7 @@
       return {
         id: c.id, title: host.columnLabel(c), state: c.executor === 'chatgpt-web' ? webTaskState(task) : cursorWorking ? 'working' : completed ? 'done' : resumedState, terminalState,
         folder: folders.get(c.folderId) || '', receipt: c.lastReceipt || null,
-        project: c.project || '', reviews: c.reviews || [],
+        project: c.project || '', reviews: c.reviews || [], important: sessionHigh(c),
       };
     });
   }
@@ -2178,6 +2253,7 @@
           return { done: true, result: JSON.stringify(s.waitlist.map((w) => ({
             taskId: w.metadata?.boardId || w.taskId, queueId: w.taskId, title: w.title, command: w.cmd,
             seat: w.metadata?.claudeSeatId || '', reason: s.tasks.find((t) => t.id === w.taskId)?.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold),
+            ...(isHigh(w) ? { priority: 'high' } : {}),
           })), null, 2) };
         }
         if (message.op !== 'cancel' || typeof message.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(message.taskId)) throw new Error('queue cancel 需要 --task-id 卡片或排队 id。');
@@ -2185,9 +2261,15 @@
         return { done: true, result: count ? `已取消 ${count} 条排队：${message.taskId}。` : `没有这条排队：${message.taskId}。` };
       }
       case 'main-task': {
-        if (!['add', 'list', 'move', 'archive'].includes(message.op)) throw new Error('Invalid task operation.');
+        if (!['add', 'list', 'move', 'archive', 'priority'].includes(message.op)) throw new Error('Invalid task operation.');
+        if (message.op === 'priority') return { done: true, result: await setPriority(message.input?.id, message.input?.level) };
         const result = await boardRequest(message.op, { ...message.input, ...(message.op === 'move' ? { suppressDispatch: true } : {}) });
-        return { done: true, result: JSON.stringify(result, null, 2) };
+        if (message.op !== 'list') refreshPriority();
+        // 高优先级 cards say so in plain words; an ordinary card has no such line.
+        const tag = (c) => (c && c.important === true ? { ...c, priority: 'high' } : c);
+        const shown = Array.isArray(result) ? result.map(tag)
+          : { ...result, ...(result.card ? { card: tag(result.card) } : {}), ...(Array.isArray(result.cards) ? { cards: result.cards.map(tag) } : {}) };
+        return { done: true, result: JSON.stringify(shown, null, 2) };
       }
       case 'main-stop':
       case 'main-archive': {
@@ -2227,7 +2309,7 @@
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
         const history = M.historyText(host.config.captainHistory);
-        const waiting = s.waitlist.map((w) => `「${w.title}」`).join('、');
+        const waiting = s.waitlist.map((w) => `${isHigh(w) ? M.PRIORITY_MARK : ''}「${w.title}」`).join('、');
         const crew = (host.config.archived || []).filter((a) => a.captainCrew).slice(0, 10)
           .map((a) => `${a.id}「${host.columnLabel(a)}」`).join('、');
         return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
@@ -2330,6 +2412,7 @@
           if (!sessions.some((c) => c.id === id && !c.isMain)) throw new Error(`找不到可审查的会话：${id}。先用 ledger 看 id；不能审查队长。`);
         }
         const metadata = { project, reviews, boardId: typeof message.boardId === 'string' ? message.boardId : '' };
+        if (message.priority !== undefined && (!['high', 'normal'].includes(message.priority) || !isMain(caller))) throw new Error('--priority 只能是 high 或 normal，且只有队长可以标。');
         if (metadata.boardId && reviews.length) {
           const card = await findCard(metadata.boardId);
           if (!card) throw new Error('找不到卡片。');
@@ -2390,12 +2473,15 @@
           if (metadata.project && metadata.project.trim().toLowerCase() !== String(card.project).trim().toLowerCase()) throw new Error('--project differs from the card project.');
           metadata.project = card.project;
           if (card.archived || card.flag === 'held' || card.flag === 'blocked' || card.status === 'done') throw new Error('卡片尚不可开始，请检查前置任务或显式移回待办。');
+          // With a card, the card carries the mark; the session reads it from there.
+          if (message.priority !== undefined) { await boardRequest('priority', { id: card.id, level: message.priority }); await refreshPriority(); }
           prior = s.waitlist.find((w) => w.metadata?.boardId === card.id && w.requestId !== message.id);
           if (prior) {
             if (!isMain(caller)) throw new Error('调度员已经派过这张卡片；只有队长可以替换排队。');
             if (prior.cmd === cmd && (prior.metadata?.claudeSeatId || '') === (metadata.claudeSeatId || '')) throw new Error('这张卡片已经在排队；换命令/模型可替换，或用 queue cancel --task-id 取消。');
           }
         }
+        if (message.priority === 'high' && !metadata.boardId) metadata.important = true;
         if (s.waitlist.some((w) => w.requestId === message.id)) return { done: true, result: `「${title}」已在排队。` };
         // Past the limit, behind work already waiting, at quota, or under critical memory: queue it.
         // placeSession applies same-tier fallback unless the command was named with --command.
@@ -2477,6 +2563,8 @@
     }
     loadResumeManifest();
     initDialog();
+    window.deck.onTasksChanged?.(() => { refreshPriority(); });
+    refreshPriority();
     if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? M.restartNote(host.platform, state().seatCheckpoint) : '');
   }
 
@@ -2484,6 +2572,8 @@
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
     isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree,
+    // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
+    isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),
 
     history: () => host.config.captainHistory || [],
     queueNote: () => M.queueNote(M.MAX_ACTIVE, memoryHold),

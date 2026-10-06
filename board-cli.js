@@ -146,18 +146,21 @@ function usage() {
     'Captain only (队长, the main session):\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, critical / volume 3\n' +
-    '  task add --project "Project" --title "Task" [--detail "Description"] [--depends id,id] [--verify]\n' +
-    '  task list [--project "Project"] [--status todo|doing|review|needs_user|done]\n' +
+    '  task add --project "Project" --title "Task" [--detail "Description"] [--depends id,id] [--verify] [--priority high]\n' +
+    '  task list [--project "Project"] [--status todo|doing|review|needs_user|done] [--priority high|normal]\n' +
     '  task move --id <card-id> --status todo|doing|review|needs_user|done\n' +
+    '  task priority --id <card-or-session-id> --level high|normal\n' +
+    '                                           高优先级: the user named it urgent. Shown on the board, sidebar and map,\n' +
+    '                                           listed first, and started before ordinary work waiting for a slot\n' +
     '  task archive --done [--project "Project"]\n' +
-    '  ledger                                   every session: id, title, state, last receipt\n' +
+    '  ledger                                   every session: id, title, state, 高优先级 mark, last receipt\n' +
     '  queue list                               unsent new-session requests, ids, commands and reasons\n' +
     '  queue cancel --task-id <card-or-queue-id> cancel an unsent request\n' +
     '                                           new on a queued card replaces a changed command/model; task move to done/todo cancels it\n' +
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
     '  worktree clean [--apply --path copy]      list copies a person may remove; deletion needs --apply and each --path\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
@@ -282,7 +285,7 @@ async function main() {
   }
   if (action === 'task') {
     const op = args._[1];
-    if (!['add', 'list', 'move', 'archive'].includes(op)) fail('task requires add, list, move or archive.');
+    if (!['add', 'list', 'move', 'archive', 'priority'].includes(op)) fail('task requires add, list, move, priority or archive.');
     const input = {};
     for (const key of ['project', 'title', 'detail', 'id', 'status']) {
       if (args[key] !== undefined) {
@@ -295,6 +298,16 @@ async function main() {
       input.depends_on = args.depends.split(',').map((v) => v.trim()).filter(Boolean);
     }
     if (args.verify !== undefined && args.verify !== true) fail('--verify is a boolean flag.');
+    if (op === 'priority') {
+      if (typeof input.id !== 'string' || !['high', 'normal'].includes(args.level)) fail('task priority requires --id <card-or-session-id> and --level high|normal.');
+      const response = await request({ action: 'main-task', op, input: { id: input.id, level: args.level } }, false);
+      process.stdout.write(`${response.result}\n`);
+      return;
+    }
+    if (args.priority !== undefined) {
+      if (!['add', 'list'].includes(op) || !['high', 'normal'].includes(args.priority)) fail('--priority is high or normal, on task add and task list. Change a card with task priority --id <id> --level high|normal.');
+      input.priority = args.priority;
+    }
     input.verify = args.verify === true;
     input.done = args.done === true;
     const response = await request({ action: 'main-task', op, input }, false);
@@ -368,6 +381,7 @@ async function main() {
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
     if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
     if (args['web-mode'] !== undefined && (!['chat', 'deep-research'].includes(args['web-mode']) || args.agent !== 'chatgpt-web')) fail('new --web-mode requires --agent chatgpt-web and chat or deep-research.');
+    if (args.priority !== undefined && !['high', 'normal'].includes(args.priority)) fail('new --priority is high or normal.');
     const worktree = args.worktree !== undefined;
     if (worktree && (typeof args.worktree !== 'string' || !args.worktree.trim())) fail('new --worktree requires a repository path.');
     if (!worktree && (args.base !== undefined || args.branch !== undefined)) fail('new --base and --branch require --worktree.');
@@ -386,6 +400,7 @@ async function main() {
       action: 'main-new', title, task,
       ...(args['web-mode'] !== undefined ? { webMode: args['web-mode'] } : {}),
       ...(args.seat !== undefined ? { seatId: args.seat } : {}),
+      ...(args.priority !== undefined ? { priority: args.priority } : {}),
       ...(worktree ? { worktree: repo, base: typeof args.base === 'string' ? args.base.trim() : '', branch: typeof args.branch === 'string' ? args.branch.trim() : '' } : {}),
       project: typeof args.project === 'string' ? args.project.trim() : '',
       reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],

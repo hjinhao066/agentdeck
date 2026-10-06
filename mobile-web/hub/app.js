@@ -814,6 +814,16 @@
   });
 
   // ---- board ---------------------------------------------------------------
+  // 高优先级 is the card's `important` flag: the user named it as urgent. An
+  // unfinished one wears a flag in its own colour and is listed first.
+  const urgentTask = (task) => task.important === true && task.status !== 'done';
+  function priorityMark() {
+    const mark = node('span', 'task-prio');
+    mark.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 21V4"/><path d="M5.5 4.6h12l-2.7 4 2.7 4h-12z" fill="currentColor"/></svg>';
+    mark.append(node('span', '', '高优先级'));
+    mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', '高优先级'); mark.title = '高优先级：你点名要优先做的事';
+    return mark;
+  }
   function renderBoard() {
     const sources = machines.filter((m) => m.cards);
     const cards = Core.mergeCards(sources).filter((card) => !card.archived);
@@ -843,9 +853,10 @@
       const section = node('section', 'project'), heading = node('div', 'project-heading');
       heading.append(node('h2', '', project), node('span', '', tasks.length + ' 项'));
       section.append(heading);
-      for (const task of tasks.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))) {
+      for (const task of tasks.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || urgentTask(b) - urgentTask(a))) {
         const card = node('article', 'task-card'); card.dataset.status = task.status;
         const top = node('div', 'task-top');
+        if (urgentTask(task)) { card.dataset.priority = 'high'; top.append(priorityMark()); }
         top.append(node('span', 'task-status', (taskStatuses.find(([status]) => status === task.status) || [0, task.status])[1]));
         if (task.flag) top.append(node('span', 'task-flag ' + task.flag, flagNames[task.flag] || task.flag));
         const owner = Core.ownerLabel(task, known);

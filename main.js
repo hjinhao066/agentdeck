@@ -73,7 +73,7 @@ const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tas
 let fleetClient = null;
 let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'priority', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree'].includes(payload.op)) throw new Error('Invalid task board operation.');
   const result = taskStore[payload.op](payload.input || {});
   if (fleetClient && payload.op !== 'list') fleetClient.noteResult(result);
   return result;

@@ -47,18 +47,28 @@ function localSessions(config) {
   }
   return sessions;
 }
+// 高优先级 is the card's `important` flag: the user named this card as urgent
+// (start it now, ahead of ordinary work). One level above ordinary; a card
+// without the field is ordinary.
+const PRIORITIES = ['high', 'normal'];
+function priorityOf(card) { return card && card.important === true ? 'high' : 'normal'; }
+function priorityLevel(value) {
+  if (!PRIORITIES.includes(value)) throw new Error('priority must be high or normal.');
+  return value;
+}
 function touch(card) { card.updated = new Date(Math.max(Date.now(), (Date.parse(card.updated) || 0) + 1)).toISOString(); }
 function newCard(input, now = new Date().toISOString()) {
   const project = projectName(input.project);
   if (input.verify !== undefined && typeof input.verify !== 'boolean') throw new Error('verify must be boolean.');
   if (input.important !== undefined && typeof input.important !== 'boolean') throw new Error('important must be boolean.');
+  if (input.priority !== undefined) priorityLevel(input.priority);
   const depends = input.depends_on || [];
   if (!Array.isArray(depends)) throw new Error('depends_on must be an array.');
   return { id: input.id ? idValue(input.id) : 't-' + crypto.randomUUID(), project,
     title: text(input.title, 'title', true), detail: text(input.detail || '', 'detail'), status: 'todo', flag: null,
     order: 0, depends_on: [...new Set(depends.map(idValue))], assignee: null, session_id: null,
     latest_receipt: '', verify: !!input.verify, rework_count: 0, created: now, updated: now, archived: false,
-    consecutive_failures: 0, important: input.important === true };
+    consecutive_failures: 0, important: input.priority !== undefined ? input.priority === 'high' : input.important === true };
 }
 
 function syncedCard(input) {
@@ -135,10 +145,11 @@ class TaskStore {
   list(filter = {}) {
     if (filter.project !== undefined) projectName(filter.project);
     if (filter.status !== undefined && !STATUSES.includes(filter.status)) throw new Error('Invalid status.');
+    if (filter.priority !== undefined) priorityLevel(filter.priority);
     const docs = this.read();
     this.dependencies(docs, false); // Also unlock dependencies changed by the other machine.
     const cards = [...docs.values()].flatMap(({ doc }) => doc.cards);
-    return cards.filter((c) => (filter.archived === true || !c.archived) && (!filter.project || sameProject(c.project, filter.project)) && (!filter.status || c.status === filter.status))
+    return cards.filter((c) => (filter.archived === true || !c.archived) && (!filter.project || sameProject(c.project, filter.project)) && (!filter.status || c.status === filter.status) && (!filter.priority || priorityOf(c) === filter.priority))
       .sort((a, b) => a.project.localeCompare(b.project) || a.order - b.order || a.id.localeCompare(b.id));
   }
   write(project, doc, raw) {
@@ -331,6 +342,16 @@ class TaskStore {
         card[key] = value;
       }
       touch(card); return { card, notices: [] };
+    });
+  }
+  // Mark a card 高优先级 or ordinary again. No `updated` check: it only flips
+  // the one flag, so it cannot overwrite somebody else's edit.
+  priority(input) {
+    const important = priorityLevel(input.level) === 'high';
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      if ((card.important === true) !== important) { card.important = important; touch(card); }
+      return { card, notices: [] };
     });
   }
   // Drag-to-reorder: put a card right before/after another card of the same
@@ -675,4 +696,4 @@ class TaskStore {
     });
   }
 }
-module.exports = { TaskStore, STATUSES, projectName, sameProject, newCard, sentence, localSessions, syncedCard };
+module.exports = { TaskStore, STATUSES, PRIORITIES, priorityOf, projectName, sameProject, newCard, sentence, localSessions, syncedCard };
