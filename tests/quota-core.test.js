@@ -837,7 +837,8 @@ test('dispatch quota gate: only 5-hour window participates in low/fallback gatin
   assert.equal(lowAuto.action, 'switch');
   assert.equal(lowAuto.to, 'Cursor claude-opus-5-5-high');
 
-  // 3. 5h 未知 → 行为不变 (放行开会话，不因未知拦截；但其它模型不自动切入该席位)
+  // 3. 5h 未知 → 行为与改动前一致：
+  // 3a. 5h 未知且周数据也未知 (空 store) → 放行开会话，不因未知拦截；但其它模型不自动切入该席位
   const unknownStore = {};
   const unkExplicit = Q.quotaFallback(unknownStore, opus, seats, 'cn', now, { explicit: true });
   assert.equal(unkExplicit.action, 'open');
@@ -845,6 +846,31 @@ test('dispatch quota gate: only 5-hour window participates in low/fallback gatin
   const unkAuto = Q.quotaFallback(unknownStore, opus, seats, 'cn', now, { explicit: false });
   assert.equal(unkAuto.action, 'open');
   assert.equal(unkAuto.reason, 'unknown');
+
+  // 3b. 5h 未知、仅周数据充裕 (剩 80%) → ok 放行，其它模型也可切入该席位
+  const weeklyOnlyOkStore = {};
+  Q.observe(weeklyOnlyOkStore, bind('cn', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'weekly', remaining: 80, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  const weeklyOnlyOkExplicit = Q.quotaFallback(weeklyOnlyOkStore, opus, seats, 'cn', now, { explicit: true });
+  assert.equal(weeklyOnlyOkExplicit.action, 'open');
+  assert.equal(weeklyOnlyOkExplicit.reason, 'ok');
+  const weeklyOnlyOkAuto = Q.quotaFallback(weeklyOnlyOkStore, opus, seats, 'cn', now, { explicit: false });
+  assert.equal(weeklyOnlyOkAuto.action, 'open');
+  assert.equal(weeklyOnlyOkAuto.reason, 'ok');
+
+  // 3c. 5h 未知、仅周数据低于阈值 (剩 15%) → low (点名排队，非点名换模型)
+  const weeklyOnlyLowStore = {};
+  Q.observe(weeklyOnlyLowStore, bind('default', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'weekly', remaining: 15, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  const weeklyOnlyLowExplicit = Q.quotaFallback(weeklyOnlyLowStore, opus, seats, 'default', now, { explicit: true });
+  assert.equal(weeklyOnlyLowExplicit.action, 'queue');
+  assert.equal(weeklyOnlyLowExplicit.held, 'low');
+  assert.equal(weeklyOnlyLowExplicit.reason, 'explicit');
+  const weeklyOnlyLowAuto = Q.quotaFallback(weeklyOnlyLowStore, opus, seats, 'default', now, { explicit: false });
+  assert.equal(weeklyOnlyLowAuto.action, 'switch');
+  assert.equal(weeklyOnlyLowAuto.to, 'Cursor claude-opus-5-5-high');
 
   // 4. 周 0% → 不可用 (5h 充裕但周额度用尽 0%，服务端会直接拒绝，算不可用 / 排队)
   const weekZeroStore = {};
