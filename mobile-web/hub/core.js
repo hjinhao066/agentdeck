@@ -277,6 +277,70 @@
       row.status === 'stale' || row.status === 'expired' ? '数据已旧，数字仅供参考' : '', row.failed ? '最近一次查询失败' : '', failed ? '手机暂时连不上这台电脑' : ''].filter(Boolean).join('；');
   }
 
-  return { TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  // ---- moving the Captain to another account ---------------------------------
+  // Each computer has its own Captain and its own accounts; everything here is
+  // about one computer's answer and is never mixed with the other's.
+  const SEAT_ID = /^[a-zA-Z0-9_-]{1,40}$/;
+  const RELAY_REASONS = ['', 'current', 'login', 'onboarding', 'exhausted', 'low', 'unknown'];
+  function cleanRelay(data) {
+    const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+    const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
+    const id = (value) => typeof value === 'string' && SEAT_ID.test(value) ? value : '';
+    const seats = (data && Array.isArray(data.seats) ? data.seats : []).slice(0, 12).filter((seat) => seat && id(seat.id)).map((seat) => {
+      const known = RELAY_REASONS.includes(seat.reason);
+      return { id: seat.id, name: text(seat.name, 80), provider: seat.provider === 'Codex' ? 'Codex' : 'Claude', account: text(seat.account, 80), current: seat.current === true,
+        // A seat is only offered when the computer says so in words this page understands.
+        selectable: seat.selectable === true && seat.current !== true && known && (seat.reason === '' || seat.reason === 'unknown'),
+        reason: known ? seat.reason : 'unknown', weekly: seat.weekly === true, recoveryAt: time(seat.recoveryAt),
+        cells: (Array.isArray(seat.cells) ? seat.cells : []).filter((cell) => cell && ['5h', '7d'].includes(cell.key) && Number.isFinite(cell.remaining)).slice(0, 2)
+          .map((cell) => ({ key: cell.key, remaining: Math.max(0, Math.min(100, cell.remaining)), out: cell.out === true, resetAt: time(cell.resetAt) })) };
+    });
+    const raw = data && data.job;
+    const job = raw && typeof raw === 'object' && /^[a-z0-9]{1,40}$/.test(raw.id || '') && ['switching', 'done', 'failed'].includes(raw.status)
+      ? { id: raw.id, status: raw.status, fromId: id(raw.fromId), fromName: text(raw.fromName, 80), targetId: id(raw.targetId), targetName: text(raw.targetName, 80),
+        startedAt: time(raw.startedAt), finishedAt: time(raw.finishedAt), error: text(raw.error, 200) } : null;
+    return { captainId: text(data && data.captainId, 256), currentId: id(data && data.currentId), switching: !!(data && data.switching === true) || !!(job && job.status === 'switching'), seats, job };
+  }
+  // "Claude US", "ChatGPT": the name people know the account by.
+  const seatLabel = (seat) => !seat ? '' : seat.provider === 'Codex' ? seat.name || 'ChatGPT' : /^claude\b/i.test(seat.name) ? seat.name : 'Claude ' + (seat.name || seat.id);
+  const currentSeat = (relay) => relay ? relay.seats.find((seat) => seat.current) || null : null;
+  // "5 小时剩 72% · 每周剩 41%"; '' when the computer has no number for it.
+  function seatQuotaText(seat) {
+    return (seat ? seat.cells : []).map((cell) => (cell.key === '5h' ? '5 小时' : '每周') + (cell.out ? '已用完' : '剩 ' + percentText(cell))).join(' · ');
+  }
+  // Why an account cannot be picked, or what to know before picking it.
+  function seatReason(seat, now) {
+    const back = seat.recoveryAt > now ? '，' + longReset(seat.recoveryAt, now) + '恢复' : '，恢复时间还不知道';
+    return { current: '队长现在就在用这个账号', login: '还没登录。要回到电脑上登录后才能用',
+      onboarding: '还停在第一次启动的引导页。要回到电脑上处理', exhausted: (seat.weekly ? '每周额度用完了' : '额度用完了') + back,
+      low: (seat.weekly ? '每周额度快用完了' : '额度快用完了') + back, unknown: '额度还不清楚，可以换过去试试' }[seat.reason] || '';
+  }
+  function seatSpoken(seat, now) {
+    return [seatLabel(seat), seat.account, seatQuotaText(seat), seatReason(seat, now), seat.selectable ? '点一下选它' : seat.current ? '' : '现在不能选'].filter(Boolean).join('；');
+  }
+  // What became of a switch this phone started. `relay` is the computer's
+  // latest answer (null when it could not be read: still unknown, keep waiting).
+  function relayOutcome(job, relay) {
+    if (!job || !relay) return { phase: 'switching', error: '' };
+    if (relay.job && relay.job.id === job.id) return { phase: relay.job.status, error: relay.job.status === 'failed' ? relay.job.error || '电脑没有完成切换。' : '' };
+    if (!job.id) return { phase: 'switching', error: '' };
+    // The computer no longer knows this switch: AgentDeck restarted on the way. The account the Captain is on now is the outcome.
+    if (relay.currentId && relay.currentId === job.targetId) return { phase: 'done', error: '' };
+    return { phase: 'failed', error: '电脑上的 AgentDeck 中途重启了，切换没有完成。' };
+  }
+  // Why the computer did not start a switch. The Captain is unchanged in every case but a timeout.
+  function relayRefusal(result, name) {
+    if (!result || result.failed) return '手机连不上入口，切换的请求没有发出去。';
+    if (result.timedOut) return `没有收到 ${name} 的确认。先看一眼下面的最新状态，不要连着再点。`;
+    if (result.status === 409 && result.body && typeof result.body.error === 'string' && result.body.error) return result.body.error.slice(0, 200);
+    if (result.status === 502) return `${name} 离线，没有切换。`;
+    if (result.status === 401) return `${name} 的登录已失效，没有切换。`;
+    if (result.status === 403) return `${name} 的安全校验已过期，没有切换。刷新后再试。`;
+    if (result.status === 404) return `${name} 的 AgentDeck 版本太旧，还不能在手机上切换队长。`;
+    return `${name} 没有接受这次切换（HTTP ${result.status}）。`;
+  }
+  const elapsedText = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + pad(s % 60); };
+
+  return { cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });

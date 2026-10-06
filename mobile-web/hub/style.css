@@ -264,7 +264,83 @@ textarea::placeholder { color: var(--muted); }
 .detail-line[data-level="low"] .detail-main { color: var(--quota-low); }
 .detail-line[data-level="danger"] .detail-main, .detail-line[data-level="out"] .detail-main { color: var(--quota-out); }
 .detail-line[data-level="none"] .detail-main { color: var(--muted); font-weight: 500; }
+
+/* Which account the Captain is on, with the one action that moves it. */
+.text-button { flex: none; min-height: 44px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface); color: var(--accent); font-size: 14px; font-weight: 650; white-space: nowrap; transition: background .15s; }
+.text-button:hover:not(:disabled) { background: var(--accent-soft); }
+.captain-seat { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 8px 8px 8px 12px; border-radius: 14px; background: var(--raised); }
+.captain-seat-info { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
+.captain-seat-label { flex: 0 0 100%; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--muted); }
+.captain-seat-label svg { width: 12px; height: 12px; color: var(--crown); }
+.captain-seat-value { font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.captain-seat-quota { font-size: 12px; color: var(--secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.captain-seat[data-level="low"] .captain-seat-quota { color: var(--quota-low); font-weight: 600; }
+.captain-seat[data-level="danger"] .captain-seat-quota, .captain-seat[data-level="out"] .captain-seat-quota { color: var(--quota-out); font-weight: 600; }
+.captain-seat[data-level="danger"], .captain-seat[data-level="out"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, var(--raised)); }
+/* In the conversation it is one slim line above the turns. */
+.captain-seat-bar { flex: none; padding: 0 2px 6px; }
+.captain-seat-bar .captain-seat { margin-top: 0; padding: 4px 4px 4px 12px; background: var(--surface); border: 1px solid var(--line); }
+.captain-seat-bar .captain-seat-info { flex-wrap: nowrap; }
+.captain-seat-bar .captain-seat-label { flex: none; font-size: 12px; }
+.captain-seat-bar .captain-seat-value { font-size: 14px; }
+.captain-seat-bar .text-button { border-color: transparent; background: transparent; }
+
+/* The switch sheet rises from the bottom, over a dimmed page. */
+.sheet { position: fixed; inset: auto 0 0 0; width: 100%; max-width: 680px; max-height: 88dvh; margin: 0 auto; padding: 0; border: 0; border-radius: 22px 22px 0 0; background: var(--surface); color: var(--text); box-shadow: 0 -8px 40px rgb(0 0 0 / .28); overflow: hidden; }
+.sheet::backdrop { background: rgb(12 10 8 / .5); }
+.sheet[open] { display: flex; animation: sheet-up .22s ease-out; }
+.sheet-body { flex: 1; min-width: 0; max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain; padding: 6px 16px calc(18px + env(safe-area-inset-bottom)); }
+.sheet-head { display: flex; align-items: center; gap: 12px; min-height: 60px; margin-right: -10px; }
+.sheet-head h2 { flex: 1; min-width: 0; font-size: 18px; font-weight: 650; letter-spacing: -.3px; line-height: 1.35; overflow-wrap: anywhere; }
+.sheet-head h2:focus-visible { outline: 0; }
+.sheet-head .machine-glyph { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+.sheet-lead { margin-top: 4px; font-size: 14px; line-height: 1.7; color: var(--secondary); overflow-wrap: anywhere; }
+.sheet-note { margin-top: 10px; font-size: 12.5px; line-height: 1.65; color: var(--muted); overflow-wrap: anywhere; }
+.sheet-note.warn { padding: 10px 12px; border-radius: 12px; background: var(--warn-soft); color: var(--warn); font-size: 13px; }
+.sheet-elapsed { margin-top: 10px; font: 13px/1.5 var(--mono); color: var(--secondary); font-variant-numeric: tabular-nums; }
+.seat-list { display: grid; gap: 8px; margin-top: 14px; }
+.seat-option { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 10px 14px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); text-align: left; transition: border-color .15s, background .15s; }
+.seat-option:not([aria-disabled="true"]):hover, .seat-option:not([aria-disabled="true"]):active { border-color: var(--accent); background: var(--accent-soft); }
+.seat-option .quota-icon svg { width: 20px; height: 20px; }
+.seat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.seat-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.seat-name { font-size: 16px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat-tag { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 11px; font-weight: 600; }
+.seat-tag svg { width: 11px; height: 11px; color: var(--crown); }
+.seat-account { font: 11px/1.5 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat-reason { font-size: 12.5px; line-height: 1.5; color: var(--secondary); overflow-wrap: anywhere; }
+.seat-reason[data-blocked="true"] { color: var(--bad); font-weight: 550; }
+.seat-values { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-variant-numeric: tabular-nums; }
+.seat-cell { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.4; }
+.seat-cell-key { font-size: 11px; color: var(--muted); }
+.seat-cell-value { min-width: 34px; text-align: right; font-weight: 650; }
+.seat-cell[data-level="low"] .seat-cell-value { color: var(--quota-low); }
+.seat-cell[data-level="danger"] .seat-cell-value, .seat-cell[data-level="out"] .seat-cell-value { color: var(--quota-out); }
+/* The account in use, and accounts that cannot be picked: greyed, but the reason stays readable. */
+.seat-option[data-current="true"] { border-color: var(--accent); background: var(--raised); cursor: default; }
+.seat-option[aria-disabled="true"] { cursor: default; }
+.seat-option[aria-disabled="true"]:not([data-current="true"]) { border-style: dashed; background: var(--raised); }
+.seat-option[aria-disabled="true"]:not([data-current="true"]) :is(.quota-icon, .seat-name, .seat-account, .seat-values) { opacity: .45; }
+.sheet-route { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 12px; }
+.sheet-route-seat { min-width: 0; padding: 9px 14px; border-radius: 12px; background: var(--raised); border: 1px solid var(--line); font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-route-seat.target { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.sheet-route-arrow { flex: none; color: var(--muted); }
+.sheet-route-arrow svg { width: 18px; height: 18px; }
+.sheet-figure { display: grid; place-items: center; width: 56px; height: 56px; margin: 4px auto 12px; border-radius: 50%; }
+.sheet-figure svg { width: 30px; height: 30px; }
+.sheet-figure.tone-ok { color: var(--ok); background: var(--ok-soft); }
+.sheet-figure.tone-bad { color: var(--bad); background: var(--bad-soft); }
+.sheet-figure.tone-accent { color: var(--accent); background: var(--accent-soft); }
+.spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; animation: rotate .9s linear infinite; }
+.sheet[data-phase="switching"] :is(.sheet-lead, .sheet-elapsed), .sheet[data-phase="done"] .sheet-lead, .sheet[data-phase="failed"] .sheet-lead { text-align: center; }
+.sheet[data-phase="failed"] .sheet-lead { color: var(--bad); font-weight: 550; }
+.sheet[data-phase="failed"] .sheet-note, .sheet[data-phase="switching"] .sheet-note:not(.warn) { text-align: center; }
+.sheet-actions { display: grid; gap: 8px; margin-top: 18px; }
+.sheet-actions .primary { margin-top: 0; }
+.secondary { width: 100%; min-height: 48px; border: 1px solid var(--line-strong); border-radius: 12px; background: transparent; color: var(--text); font-size: 15px; font-weight: 600; }
+.secondary:hover { background: var(--soft); }
+@keyframes sheet-up { from { transform: translateY(24px); opacity: .6; } }
 @keyframes rotate { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .refreshing svg, .typing i { animation: none; } .icon-button { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .refreshing svg, .typing i, .sheet[open] { animation: none; } .spinner { animation-duration: 2.4s; } .icon-button, .text-button, .seat-option { transition: none; } }
 /* Tiny phones: the switch gets its own line instead of clipping the names. */
 @media (max-width: 359px) { .app-header { flex-wrap: wrap; } .brand { display: none; } .machine-bar { order: 3; flex: 1 0 100%; margin: 0; } .stats { grid-template-columns: 1fr 1fr; } }

@@ -30,7 +30,7 @@ function readJson(req) {
 // answers, like a half-open tunnel) | 'legacy' (an old build: no api/info, and
 // every prefixed path answers 401 because it does not know the prefix) | 'redirect'
 // (a hostile machine: every answer is a 307 to machine.redirectTo, e.g. a path on the other machine).
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [] }) {
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null }) {
   const base = `/${id}/`, cookieName = `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
@@ -39,6 +39,27 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     setMode(mode) { machine.mode = mode; },
     setCards(next) { machine.cards = next; machine.boardVersion = crypto.randomBytes(4).toString('hex'); },
     posts(route) { return machine.requests.filter((r) => r.method === 'POST' && r.url === base + route); },
+    // The Captain's accounts (null: an older build without api/relay). A switch
+    // stays "switching" until the test ends it with finishRelay, like the desktop
+    // which answers at once and reports the outcome later.
+    relay: relay ? { currentId: relay.currentId, seats: relay.seats.map((seat) => ({ ...seat })), job: null, refuse: '' } : null, switches: [],
+    finishRelay(ok, error = '') {
+      const job = machine.relay.job;
+      job.status = ok ? 'done' : 'failed'; job.error = ok ? '' : error; job.finishedAt = Date.now();
+      if (!ok) return;
+      machine.relay.currentId = job.targetId;
+      // A new Captain: new id, new conversation.
+      const captainId = `${id}-captain-${machine.switches.length + 1}`;
+      machine.sessions = machine.sessions.map((s) => s.isMain ? { ...s, id: captainId, status: 'working' } : s);
+      machine.captain = { id: captainId, title: '队长', status: 'working', turns: [{ id: captainId + '-t1', ts: Date.now(), user: '', reply: `${label} 新队长测试回复：已读存档，用 ${job.targetName} 接着干。`, done: true, interrupted: false }] };
+    },
+    // AgentDeck restarted on the way: the job is forgotten, the account says what happened.
+    forgetRelay() { machine.relay.job = null; },
+  };
+  const relayState = () => {
+    const state = machine.relay;
+    return { captainId: machine.captain ? machine.captain.id : '', currentId: state.currentId, switching: !!state.job && state.job.status === 'switching', job: state.job, now: Date.now(),
+      seats: state.seats.map((seat) => seat.id === state.currentId ? { ...seat, current: true, selectable: false, reason: 'current' } : { ...seat, current: false }) };
   };
   const device = (req) => {
     const values = String(req.headers.cookie || '').split(';').map((s) => s.trim()).filter((s) => s.startsWith(cookieName + '='));
@@ -82,6 +103,21 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (req.method === 'GET' && url.pathname === '/api/tasks') return json(res, 200, { cards: machine.cards });
     // Display values only, like quotaView() in mobile-web.js; the account is already masked.
     if (req.method === 'GET' && url.pathname === '/api/quota') return json(res, 200, { rows: machine.quota, version: appVersion, now: Date.now() });
+    if (req.method === 'GET' && url.pathname === '/api/relay' && machine.relay) return json(res, 200, relayState());
+    if (req.method === 'POST' && url.pathname === '/api/relay' && machine.relay) {
+      const body = await readJson(req);
+      if (!body || Object.keys(body).some((key) => key !== 'seatId' && key !== 'expectCurrent') || typeof body.seatId !== 'string') return json(res, 400, { error: 'Seat id required.' });
+      machine.switches.push(body);
+      const state = relayState(), seat = state.seats.find((s) => s.id === body.seatId);
+      if (machine.relay.refuse) return json(res, 409, { started: false, error: machine.relay.refuse });
+      if (state.switching) return json(res, 409, { started: false, error: '电脑正在切换队长，等它结束再试' });
+      if (body.expectCurrent && body.expectCurrent !== state.currentId) return json(res, 409, { started: false, error: '队长已经不在你看到的那个账号上了，请看最新状态后再选' });
+      if (!seat || !seat.selectable) return json(res, 409, { started: false, error: '这个账号现在不能用' });
+      const name = (s) => s.provider === 'Codex' ? s.name : s.name;
+      machine.relay.job = { id: crypto.randomBytes(6).toString('hex'), status: 'switching', fromId: state.currentId, fromName: name(state.seats.find((s) => s.current) || { name: '' }),
+        targetId: seat.id, targetName: name(seat), startedAt: Date.now(), finishedAt: null, error: '' };
+      return json(res, 200, { started: true, id: machine.relay.job.id });
+    }
     if (req.method === 'GET' && url.pathname === '/api/output') {
       const session = machine.sessions.find((s) => s.id === url.searchParams.get('id') && !s.isMain);
       return session ? json(res, 200, { id: session.id, title: session.title, text: machine.outputs[session.id] || '' }) : json(res, 404, { error: 'Session not found.' });
@@ -152,6 +188,27 @@ function defaults() {
   ];
 }
 
+// Accounts for the switch tests: one in use and nearly empty, one healthy, one
+// of unknown quota, one used up, one never logged in, and ChatGPT.
+function relayFixture(currentId = 'us') {
+  const at = (minutes) => Date.now() + minutes * 60000;
+  const cell = (key, remaining, resetMinutes, out = false) => ({ key, remaining, out, resetAt: at(resetMinutes) });
+  const seat = (id, name, cells, extra = {}) => ({ id, name, provider: 'Claude', account: id[0] + '***@example.com', current: false, selectable: true, reason: '', weekly: false, recoveryAt: null, cells, ...extra });
+  return { currentId, seats: [
+    seat('us', 'US', [cell('5h', 4, 95), cell('7d', 41, 3000)]),
+    seat('cn', 'CN', [cell('5h', 72, 180), cell('7d', 63, 5000)]),
+    seat('us2', 'US2', [], { reason: 'unknown' }),
+    seat('eu', 'EU', [cell('5h', 0, 70, true), cell('7d', 12, 4000)], { selectable: false, reason: 'exhausted', recoveryAt: at(70) }),
+    seat('jp', 'JP', [], { selectable: false, reason: 'login', account: '' }),
+    seat('chatgpt', 'ChatGPT', [cell('5h', 55, 120), cell('7d', 30, 4000)], { provider: 'Codex', account: 'o***@example.com' }),
+  ] };
+}
+// The default two computers, each with its own Captain accounts.
+function withRelay() {
+  const [mac, win] = defaults();
+  return [{ ...mac, relay: relayFixture('us') }, { ...win, relay: relayFixture('chatgpt') }];
+}
+
 async function startHub({ port = 0, machines = defaults(), directory = HUB } = {}) {
   const fakes = {};
   for (const options of machines) fakes[options.id] = await fakeMachine(options);
@@ -181,10 +238,10 @@ async function startHub({ port = 0, machines = defaults(), directory = HUB } = {
     async close() { await close(proxy); for (const fake of Object.values(fakes)) await fake.close(); } };
 }
 
-module.exports = { startHub, fakeMachine, HUB_HEADERS };
+module.exports = { startHub, fakeMachine, HUB_HEADERS, relayFixture, withRelay };
 
 // node tests/fixtures/hub-proxy.js → a local hub to click through by hand.
-if (require.main === module) startHub({ port: Number(process.env.PORT) || 0 }).then((hub) => {
+if (require.main === module) startHub({ port: Number(process.env.PORT) || 0, machines: withRelay() }).then((hub) => {
   console.log(hub.url);
   for (const fake of Object.values(hub.machines)) console.log(`${fake.label} test token: ${fake.token}`);
 });

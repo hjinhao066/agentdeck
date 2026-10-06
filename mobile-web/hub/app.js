@@ -27,6 +27,10 @@
     desktop: '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M9 20h6M12 16v4"/>',
     crown: '<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>',
     ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
+    close: '<path d="M6 6l12 12M18 6 6 18"/>',
+    alert: '<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4.5m0 2.6v.2"/>',
+    done: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.8L16.2 9.5"/>',
+    arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
   const providerIcons = {
@@ -129,7 +133,7 @@
   function settle(m, result, verdict = Core.classify(result)) {
     m.state = verdict.state; m.detail = verdict.detail || '';
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
-    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; }
+    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; }
     // A machine that no longer accepts this phone must not keep showing its board.
     if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; }
     return verdict;
@@ -156,6 +160,9 @@
         if (tasks.status === 200 && tasks.body && Array.isArray(tasks.body.cards)) { m.cards = tasks.body.cards; m.boardVersion = m.snap.boardVersion; }
       }
       // Quota moves slowly: read it at most every 30 seconds, and on a manual refresh.
+      // The Captain's accounts move as slowly as quota, except while the switch sheet is open on this computer.
+      // A running switch has its own faster watch.
+      if ((!m.relayJob || m.relayJob.phase !== 'switching') && (m.forceQuota || !m.relayAt || Date.now() - m.relayAt > 30000 || (sheet && sheet.machineId === m.id))) await loadRelay(m);
       if (m.forceQuota || !m.quotaAt || Date.now() - m.quotaAt > 30000) {
         m.forceQuota = false;
         const quota = await request(m, 'api/quota');
@@ -338,7 +345,7 @@
     const banned = Math.max(0, Math.ceil((m.banUntil - Date.now()) / 60000));
     const receipt = online ? latestReceipt(m) : null;
     const signature = [m.state, m.detail, m.loginError, m.loginBusy, banned, m.logoutBusy,
-      online ? [m.snap.machine, m.snap.captain && [m.snap.captain.id, m.snap.captain.status], m.meta.workingCount, m.meta.sessionCount, receipt, m.quota, m.quotaFailed, [...openQuota].filter((id) => id.startsWith(m.id + ':')), Math.floor(Date.now() / 60000)] : [m.meta, lastSeen(m)]];
+      online ? [m.snap.machine, m.snap.captain && [m.snap.captain.id, m.snap.captain.status], m.meta.workingCount, m.meta.sessionCount, receipt, m.quota, m.quotaFailed, seatSignature(m), [...openQuota].filter((id) => id.startsWith(m.id + ':')), Math.floor(Date.now() / 60000)] : [m.meta, lastSeen(m)]];
     if (!changed(card, signature)) return;
     card.className = 'machine-card tone-' + Core.STATES[m.state].tone;
     card.replaceChildren();
@@ -349,6 +356,8 @@
     card.append(head);
     if (online) {
       card.append(stats(m.meta.captainStatus, m.meta.workingCount, m.meta.sessionCount));
+      const seat = seatRow(m);
+      if (seat) card.append(seat);
       if (m.quota) card.append(quotaSection(m));
       const block = node('div', 'receipt');
       block.append(node('span', 'receipt-label', receipt ? '最近回执 · ' + receipt.title : '最近回执'), node('p', '', receipt ? receipt.text : '还没有队员提交回执。'));
@@ -414,6 +423,196 @@
     }
     if (missed.length) notice(`${missed.join('、')} 没能退出（离线或没有回应）。等它上线后再退出一次，或在那台电脑的设置里吊销所有设备。`, true);
     render();
+  }
+
+  // ---- switching the Captain's account ---------------------------------------
+  // Each computer has its own Captain on its own accounts. The sheet belongs to
+  // one computer from the moment it opens: every request in it goes to that
+  // computer's prefix, whatever the header switch shows afterwards.
+  let sheet = null; // { machineId, step: 'pick' | 'confirm', seatId }
+  const dialog = node('dialog', 'sheet');
+  dialog.id = 'switch-sheet'; dialog.setAttribute('aria-labelledby', 'switch-title');
+  document.querySelector('.app').append(dialog);
+  const captainSeat = node('div', 'captain-seat-bar'); captainSeat.id = 'captain-seat'; captainSeat.hidden = true;
+  $('captain-turns').before(captainSeat);
+
+  async function loadRelay(m) {
+    const result = await request(m, 'api/relay');
+    // 404: an older build without the switch; the entry is simply not offered.
+    if (result.status === 200 && result.body) { m.relay = Core.cleanRelay(result.body); m.relayFailed = false; }
+    else if (result.status === 404) { m.relay = null; m.relayFailed = false; } else m.relayFailed = true;
+    m.relayAt = Date.now();
+    return result.status === 200 && result.body ? m.relay : null;
+  }
+  const seatLevel = (seat) => {
+    const cell = seat && (seat.cells.find((c) => c.key === '5h') || seat.cells[0]);
+    return !cell ? 'none' : cell.out ? 'out' : cell.remaining <= 10 ? 'danger' : cell.remaining <= 20 ? 'low' : 'ok';
+  };
+  const seatSignature = (m) => [m.relay, m.relayJob && [m.relayJob.phase, m.relayJob.targetName], m.csrf ? 1 : 0];
+  // "队长在用 Claude US · 5 小时剩 72%" with the one worded action next to it.
+  function seatRow(m, inCaptain) {
+    if (m.state !== 'online' || !m.relay || !m.relay.captainId) return null;
+    const seat = Core.currentSeat(m.relay), job = m.relayJob, busy = job && job.phase === 'switching';
+    const row = node('div', 'captain-seat'); row.dataset.level = busy ? 'none' : seatLevel(seat);
+    const info = node('div', 'captain-seat-info'), label = node('span', 'captain-seat-label');
+    label.innerHTML = svg('crown'); label.append(inCaptain ? `${m.label} 队长在用` : '队长在用');
+    const value = node('span', 'captain-seat-value', busy ? `正在换到 ${job.targetName}…` : seat ? Core.seatLabel(seat) : '账号未知');
+    info.append(label, value);
+    const quota = !busy && Core.seatQuotaText(seat);
+    if (quota) info.append(node('span', 'captain-seat-quota', quota));
+    const button = node('button', 'text-button', busy ? '查看进度' : '切换队长');
+    button.type = 'button'; button.dataset.switch = m.id; button.setAttribute('aria-haspopup', 'dialog');
+    button.setAttribute('aria-label', busy ? `查看 ${m.label} 队长的切换进度` : `切换 ${m.label} 队长`);
+    button.addEventListener('click', () => openSwitch(m));
+    row.append(info, button);
+    return row;
+  }
+  function openSwitch(m) {
+    sheet = { machineId: m.id, step: 'pick', seatId: '' };
+    signatures.delete(dialog); renderSheet();
+    if (!dialog.open) dialog.showModal();
+    // Always pick from a fresh answer of this computer, not from what was on screen.
+    if (!m.relayJob) loadRelay(m).then(() => renderSheet());
+  }
+  dialog.addEventListener('close', () => {
+    const m = sheet && byId(sheet.machineId), opener = m && document.querySelector(`[data-switch="${m.id}"]`);
+    // A finished switch has been read. A running one carries on and reports in the notice line.
+    if (m && m.relayJob && m.relayJob.phase !== 'switching') m.relayJob = null;
+    sheet = null; render();
+    (m && document.querySelector(`#${view}-view [data-switch="${m.id}"]`) || opener)?.focus({ preventScroll: true });
+  });
+  // A tap on the dimmed page closes the sheet; a tap inside it does not.
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+
+  function watchJob(m) {
+    clearTimeout(m.relayTimer);
+    const job = m.relayJob;
+    if (!job || job.phase !== 'switching') return;
+    m.relayTimer = setTimeout(async () => {
+      const relay = await loadRelay(m);
+      if (m.relayJob !== job) return;
+      job.unreachable = !relay;
+      const outcome = Core.relayOutcome(job, relay);
+      if (outcome.phase === 'switching') { render(); watchJob(m); } else finishJob(m, job, outcome);
+    }, 1500);
+  }
+  function finishJob(m, job, outcome) {
+    job.phase = outcome.phase; job.error = outcome.error;
+    // A new Captain is a new conversation: read this computer again right away.
+    m.forceQuota = true; m.nextAt = 0; poll(m);
+    if (!sheet || sheet.machineId !== m.id) {
+      const seat = Core.currentSeat(m.relay);
+      notice(job.phase === 'done' ? `${m.label} 队长已换到 ${job.targetName}。` : `${m.label} 队长没有换成：${job.error}${seat ? ` 队长现在用的是 ${Core.seatLabel(seat)}。` : ''}`, job.phase !== 'done');
+      m.relayJob = null;
+    }
+    render();
+  }
+  async function startSwitch(m, seat) {
+    const from = Core.currentSeat(m.relay);
+    const job = m.relayJob = { id: '', phase: 'switching', targetId: seat.id, targetName: Core.seatLabel(seat), fromName: Core.seatLabel(from), startedAt: Date.now(), error: '', unreachable: false };
+    render();
+    const result = await post(m, 'api/relay', { seatId: seat.id, ...(m.relay.currentId ? { expectCurrent: m.relay.currentId } : {}) });
+    if (m.relayJob !== job) return;
+    if (result.status === 200 && result.body && result.body.started === true && typeof result.body.id === 'string') { job.id = result.body.id; watchJob(m); return; }
+    // No confirmation: this computer's own record says whether a switch is running.
+    const relay = await loadRelay(m);
+    if (m.relayJob !== job) return;
+    if (result.timedOut && relay && relay.job && relay.job.status === 'switching' && relay.job.targetId === seat.id) { job.id = relay.job.id; watchJob(m); render(); return; }
+    finishJob(m, job, { phase: 'failed', error: Core.relayRefusal(result, m.label) });
+  }
+  function seatOption(m, seat, now) {
+    const button = node('button', 'seat-option'); button.type = 'button'; button.dataset.seatId = seat.id; button.dataset.provider = seat.provider;
+    if (seat.current) button.dataset.current = 'true';
+    // Not `disabled`: an account that cannot be picked still has to be reachable to read why.
+    if (!seat.selectable) button.setAttribute('aria-disabled', 'true');
+    button.setAttribute('aria-label', Core.seatSpoken(seat, now));
+    const icon = node('span', 'quota-icon'); icon.setAttribute('aria-hidden', 'true'); icon.innerHTML = providerIcons[seat.provider] || '';
+    const main = node('span', 'seat-main'), top = node('span', 'seat-top');
+    top.append(node('span', 'seat-name', Core.seatLabel(seat)));
+    if (seat.current) { const tag = node('span', 'seat-tag'); tag.innerHTML = svg('crown'); tag.append('队长在用'); top.append(tag); }
+    main.append(top);
+    if (seat.account) main.append(node('span', 'seat-account', seat.account));
+    const reason = seat.current ? '' : Core.seatReason(seat, now);
+    if (reason) { const line = node('span', 'seat-reason', reason); if (!seat.selectable) line.dataset.blocked = 'true'; main.append(line); }
+    const values = node('span', 'seat-values');
+    for (const cell of seat.cells) {
+      const el = node('span', 'seat-cell'); el.dataset.level = cell.out ? 'out' : cell.remaining <= 10 ? 'danger' : cell.remaining <= 20 ? 'low' : 'ok';
+      el.append(node('span', 'seat-cell-key', cell.key), node('span', 'seat-cell-value', Core.percentText(cell)));
+      values.append(el);
+    }
+    button.append(icon, main, values);
+    button.addEventListener('click', () => { if (!seat.selectable) return; sheet.step = 'confirm'; sheet.seatId = seat.id; renderSheet(); });
+    return button;
+  }
+  function renderSheet() {
+    if (!sheet) return;
+    const m = byId(sheet.machineId), job = m.relayJob, relay = m.relay, now = Date.now();
+    const picked = relay && relay.seats.find((seat) => seat.id === sheet.seatId && seat.selectable);
+    // The chosen account stopped being available while the question was on screen: back to the list.
+    if (!job && sheet.step === 'confirm' && !picked) sheet.step = 'pick';
+    const phase = job ? job.phase : sheet.step;
+    if (!changed(dialog, [m.id, m.label, m.state, phase, sheet.seatId, relay, m.relayFailed, job && [job.targetName, job.fromName, job.error, job.unreachable], Math.floor(now / 60000)])) return;
+    const focused = dialog.contains(document.activeElement) ? document.activeElement.dataset.seatId || document.activeElement.dataset.action : null;
+    const moved = dialog.dataset.phase !== phase;
+    dialog.dataset.phase = phase;
+    const body = node('div', 'sheet-body'), head = node('div', 'sheet-head'), title = node('h2', '', '');
+    title.id = 'switch-title'; title.tabIndex = -1;
+    const close = iconButton('close', '关闭'); close.dataset.action = 'close';
+    close.addEventListener('click', () => dialog.close());
+    head.append(glyph(m), title, close); body.append(head);
+    const text = (className, value) => { const el = node('p', className, value); body.append(el); return el; };
+    const action = (className, label, name, onClick) => { const button = node('button', className, label); button.type = 'button'; button.dataset.action = name; button.addEventListener('click', onClick); return button; };
+    const figure = (icon, tone) => { const el = node('div', 'sheet-figure tone-' + tone); if (icon) el.innerHTML = svg(icon); else el.append(node('span', 'spinner')); el.setAttribute('aria-hidden', 'true'); body.append(el); };
+    const route = (from, to) => { const el = node('div', 'sheet-route'), arrow = node('span', 'sheet-route-arrow'); arrow.innerHTML = svg('arrow'); arrow.setAttribute('aria-hidden', 'true');
+      const target = node('span', 'sheet-route-seat target', to); el.append(node('span', 'sheet-route-seat', from || '现在的账号'), arrow, target); el.setAttribute('aria-label', `从 ${from || '现在的账号'} 换到 ${to}`); body.append(el); };
+    const current = Core.currentSeat(relay);
+    if (phase === 'pick') {
+      title.textContent = `切换 ${m.label} 队长`;
+      if (!relay) text('sheet-lead', m.state !== 'online' ? `${m.label} ${Core.STATES[m.state].label}，现在换不了队长。` : m.relayFailed ? `暂时读不到 ${m.label} 的账号，稍后会自动重试。` : `正在读取 ${m.label} 的账号…`);
+      else {
+        text('sheet-lead', current ? `只换 ${m.label} 这台电脑的队长。它现在用的是 ${Core.seatLabel(current)}，要换到哪个账号？` : `只换 ${m.label} 这台电脑的队长。要换到哪个账号？`);
+        const list = node('div', 'seat-list'); list.setAttribute('role', 'group'); list.setAttribute('aria-label', `${m.label} 可以用的账号`);
+        for (const seat of relay.seats) list.append(seatOption(m, seat, now));
+        body.append(list);
+        if (!relay.seats.some((seat) => seat.selectable)) text('sheet-note warn', '现在没有别的账号可以换。等额度恢复，或回到电脑上登录别的账号。');
+        else text('sheet-note', '选好以后还会再问你一次。');
+      }
+    } else if (phase === 'confirm') {
+      title.textContent = `确认切换 ${m.label} 队长？`;
+      route(Core.seatLabel(current), Core.seatLabel(picked));
+      text('sheet-lead', `${m.label} 现在这位队长会先把进度存好再下线，新队长用 ${Core.seatLabel(picked)} 读着存档接着干。`);
+      text('sheet-note warn', '换了以后，现在这位队长正在说的话会中断，它没存下来的内容会丢。派出去的队员和任务不受影响。');
+      if (picked.reason === 'unknown') text('sheet-note', `${Core.seatLabel(picked)} 的额度还不清楚，换过去以后可能马上又不够用。`);
+      const actions = node('div', 'sheet-actions');
+      actions.append(action('primary', '确认切换', 'confirm', () => startSwitch(m, picked)), action('secondary', '先不换', 'back', () => { sheet.step = 'pick'; sheet.seatId = ''; renderSheet(); }));
+      body.append(actions);
+    } else if (phase === 'switching') {
+      title.textContent = `正在切换 ${m.label} 队长`;
+      figure('', 'accent'); route(job.fromName, job.targetName);
+      const status = text('sheet-lead', '先让现在的队长存好进度，再启动新队长。一般不到一分钟，队长正忙的时候最长要几分钟。'); status.setAttribute('role', 'status');
+      const waited = text('sheet-elapsed', '已经等了 ' + Core.elapsedText(now - job.startedAt)); waited.id = 'switch-elapsed';
+      if (job.unreachable) text('sheet-note warn', `暂时连不上 ${m.label}。恢复以后这里会自动显示结果，不用重新点。`);
+      text('sheet-note', '可以先关掉这个窗口，切换会继续，结果会显示在页面顶部。');
+    } else if (phase === 'done') {
+      title.textContent = `已换到 ${job.targetName}`;
+      figure('done', 'ok');
+      const status = text('sheet-lead', `${m.label} 的新队长已经用 ${job.targetName} 接手，正在读存档。这里会自动连到新队长。`); status.setAttribute('role', 'status');
+      const actions = node('div', 'sheet-actions');
+      actions.append(action('primary', '去看新队长', 'view', () => { dialog.close(); setTarget(m.id); showView('captain'); }));
+      body.append(actions);
+    } else {
+      title.textContent = `${m.label} 队长没有换成`;
+      figure('alert', 'bad');
+      const status = text('sheet-lead', job.error); status.setAttribute('role', 'alert');
+      text('sheet-note', current ? `${m.label} 队长现在用的还是 ${Core.seatLabel(current)}${current.id === job.targetId ? '' : '，没有变化'}。` : `${m.label} 队长的账号暂时读不到，恢复连接后会显示。`);
+      const actions = node('div', 'sheet-actions');
+      actions.append(action('secondary', '重新选账号', 'retry', () => { m.relayJob = null; sheet.step = 'pick'; sheet.seatId = ''; renderSheet(); loadRelay(m).then(() => renderSheet()); }));
+      body.append(actions);
+    }
+    dialog.replaceChildren(body);
+    // A new step is announced from its title; a refreshed list keeps the finger where it was.
+    if (moved && dialog.open) title.focus({ preventScroll: true });
+    else if (focused) dialog.querySelector(`[data-seat-id="${focused}"], [data-action="${focused}"]`)?.focus({ preventScroll: true });
   }
 
   // ---- captain -------------------------------------------------------------
@@ -483,6 +682,10 @@
     $('captain-title').textContent = `${m.label} 队长`;
     const status = $('captain-status');
     if (changed(status, [m.state, captain && captain.status])) status.replaceChildren(m.state === 'online' ? statusBadge(captain ? captain.status : 'unavailable') : pill(m.state));
+    if (changed(captainSeat, [m.id, m.state, seatSignature(m)])) {
+      const row = seatRow(m, true);
+      captainSeat.hidden = !row; captainSeat.replaceChildren(...(row ? [row] : []));
+    }
     const conversation = $('captain-turns');
     const pending = outbox.filter((item) => item.machineId === m.id);
     const turns = captain ? captain.turns || [] : [];
@@ -672,7 +875,7 @@
     if (view === 'captain') $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
   }
   function render() {
-    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderSessions(); renderBoard();
+    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderSessions(); renderBoard(); renderSheet();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
   }
   $('refresh').addEventListener('click', refreshAll);
@@ -687,6 +890,8 @@
     if (document.hidden) return;
     const now = Date.now();
     machines.forEach((m) => { if (!m.busy && now >= m.nextAt) poll(m); });
+    const m = sheet && byId(sheet.machineId), waited = document.getElementById('switch-elapsed');
+    if (waited && m && m.relayJob) waited.textContent = '已经等了 ' + Core.elapsedText(now - m.relayJob.startedAt);
   }, 1000);
 
   async function start() {
@@ -696,7 +901,7 @@
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
     machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '',
-      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
+      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
     machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);
     filter = byId(saved) ? saved : 'all';
