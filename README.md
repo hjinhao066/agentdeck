@@ -501,6 +501,38 @@ again with the current provider, model and effort instructions.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
 
+### Battery mode (电池模式)
+
+Settings → 电池模式 → 没插电时: **省电** (default) or **不限制**, plus how many sessions may be open at
+once on battery (1–10, default 3; greyed out under 不限制). Electron's `powerMonitor` reports the power source at launch and on every
+`on-battery` / `on-ac` event, so it switches at once in both directions; on `resume` and `unlock-screen`
+it asks again in case a plug change during sleep sent no event. A failed read counts as plugged in.
+Plugged in, or set to 不限制, every value below is exactly what it was before.
+
+On battery (`battery-core.js` holds the numbers; the page, main process and tests share them):
+
+- **Concurrency**: the live cap is `min(settings cap, battery cap)`. Sessions already working above it are
+  never stopped. New `new` requests join the ordinary queue, the card says 电池供电，稍后自动开, and they
+  open by themselves when a slot frees or the Mac is plugged in. Raising the battery cap or choosing 不限制
+  fills the free slots at once. Like the settings cap, it only limits opening new sessions: `tell` to an
+  open, idle crew member is not held back, so more sessions than the cap can end up working.
+- **Task text**: work handed to a session ends with 当前电池供电：不要跑全量 E2E，只跑相关单测，E2E 留到接电后
+  (decided when the text is sent, so work that waited and went out after plugging in does not carry it).
+- **Calm UI**: motion is held off (star map, board, status-light halos, drag cable) without touching the
+  user's own 动效 switch; terminal cursors stop blinking.
+- **Slower background polling** (normal → battery): status tick 1.5 s → 3 s, board request pick-up 250 ms →
+  750 ms, quota cache re-read 30 s → 2 min, Claude seat tick 30 s → 2 min (one seat is actually sampled every
+  15 min instead of 5), seat list refresh 30 s → 2 min, captain watchdog 1.5 s → 3 s. Receipts and questions
+  still arrive; they only wait a little longer for the next pick-up.
+- A small battery icon (one low charge segment, no lightning bolt, neutral color) beside 额度 in the sidebar
+  (and in the toolbar while the sidebar is collapsed) shows only while battery mode is active; hover it for
+  what is limited, click it to open settings at 电池模式.
+- `ledger` and `quota` end with one extra line only while battery mode is active: the live cap and how many
+  sessions work. Plugged in or 不限制 they print word for word what they did before.
+
+Tests simulate the power source: unit tests inject a `BatteryCore` state; the E2E starts on AC and emits
+`powerMonitor` events (`AGENTDECK_TEST_POWER=battery` starts a test instance on battery).
+
 ### Automatic context saving (Claude Code Captain)
 
 Enabled by default at **150k tokens**. Open the sidebar's **settings icon** to

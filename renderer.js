@@ -47,6 +47,7 @@ const ICONS = {
   trash: S('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'),
   panelLeft: S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 3v18"/>'),
   freeLayout: S('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 4v4M12 16v4"/><path d="M7 12h10"/><path d="m9 10-2 2 2 2M15 10l2 2-2 2"/>'),
+  battery: S('<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><rect x="4.6" y="9.6" width="4.6" height="4.8" rx=".6" fill="currentColor" stroke="none"/>'),
   gauge: S('<path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/>'),
   panelRight: S('<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M15 3v18"/>'),
   arrowUp: S('<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>'),
@@ -120,6 +121,7 @@ let config = {
   folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
   concurrencyCap: MainCore.concurrencyCap(), captainHandoffBudget: MainCore.handoffBudget(),
+  batteryMode: BatteryCore.MODE_DEFAULT, batteryConcurrency: BatteryCore.CAP_DEFAULT,
 };
 const saved = window.deck.loadConfig();
 config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
@@ -165,6 +167,8 @@ if (saved) {
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
+  config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);
+  config.batteryConcurrency = BatteryCore.normalizeCap(saved.batteryConcurrency);
   config.captainHandoffBudget = MainCore.handoffBudget(saved.captainHandoffBudget);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
@@ -240,7 +244,13 @@ if (saved) {
     }));
   }
 }
-MainCore.MAX_ACTIVE = config.concurrencyCap;
+// Battery mode: the live cap is the settings cap lowered while on battery (MainSession keeps it current).
+const battery = BatteryCore.shared;
+let onBatteryPower = false;
+try { onBatteryPower = window.deck.powerState()?.onBattery === true; } catch (_) {}
+battery.set({ onBattery: onBatteryPower, mode: config.batteryMode, cap: config.batteryConcurrency });
+MainCore.MAX_ACTIVE = BatteryCore.effectiveCap(config.concurrencyCap, battery.snapshot()).cap;
+window.deck.onPowerChanged((on) => battery.set({ onBattery: on }));
 function seatLaunchCommand(col, command) {
   const seat = ClaudeSeatsCore.bindColumn(col, config);
   if (!seat.configDir) return ''; // A removed, unbound seat must not launch under another login.
@@ -579,19 +589,23 @@ const MOTION_ICON = {
 const systemCalm = window.matchMedia('(prefers-reduced-motion: reduce)');
 function applyMotion(off, redraw) {
   config.calmMotion = !!off;
-  if (off) document.documentElement.setAttribute('data-motion', 'off'); else document.documentElement.removeAttribute('data-motion');
-  const still = off || systemCalm.matches;
-  const label = systemCalm.matches ? '系统已开启「减少动态效果」，动效保持关闭' : off ? '开启动效（现在是静止的）' : '关闭动效（卡片和连线保持静止）';
+  // On battery the motion is held still without touching the user's own setting.
+  const powerStill = battery.active();
+  if (off || powerStill) document.documentElement.setAttribute('data-motion', 'off'); else document.documentElement.removeAttribute('data-motion');
+  if (powerStill) document.documentElement.setAttribute('data-power', 'battery'); else document.documentElement.removeAttribute('data-power');
+  const still = off || systemCalm.matches || powerStill;
+  const locked = systemCalm.matches || powerStill;
+  const label = systemCalm.matches ? '系统已开启「减少动态效果」，动效保持关闭' : powerStill ? '电池供电，动效保持关闭（接电后恢复）' : off ? '开启动效（现在是静止的）' : '关闭动效（卡片和连线保持静止）';
   document.querySelectorAll('[data-motion-toggle]').forEach((b) => {
     b.innerHTML = still ? MOTION_ICON.off : MOTION_ICON.on;
     b.title = label; b.setAttribute('aria-label', label);
-    if (systemCalm.matches) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
+    if (locked) b.setAttribute('aria-disabled', 'true'); else b.removeAttribute('aria-disabled');
   });
   if (!redraw) return;
   saveConfig();
   TaskBoardUI.redraw(); // the lights on its lines are drawn by script; the map's are all in the stylesheet
 }
-document.querySelectorAll('[data-motion-toggle]').forEach((b) => b.addEventListener('click', () => { if (!systemCalm.matches) applyMotion(!config.calmMotion, true); }));
+document.querySelectorAll('[data-motion-toggle]').forEach((b) => b.addEventListener('click', () => { if (!systemCalm.matches && !battery.active()) applyMotion(!config.calmMotion, true); }));
 systemCalm.addEventListener('change', () => applyMotion(config.calmMotion, true));
 
 // ---- Text size (Ctrl on Win/Linux, Cmd on Mac; +/- adjust, 0 reset) ----
@@ -742,7 +756,13 @@ function buildChrome() {
   quotaBtn.setAttribute('aria-expanded', 'false');
   const newChatBtn = railBtn(ICONS.newChat, '新对话 (Cmd+N)', () => addAndFocusColumn());
   newChatBtn.setAttribute('aria-label', newChatBtn.title);
-  tbLeft.append(boardBtn, collapseBtn, expandBtn, quotaBtn, newChatBtn);
+  // Battery mode indicator for the collapsed sidebar; hidden unless battery mode is active.
+  const batteryBtn = railBtn(ICONS.battery, '电池模式', () => openBatterySettings());
+  batteryBtn.id = 'batteryRailBtn';
+  batteryBtn.className = 'rail-btn battery-indicator battery-rail';
+  batteryBtn.hidden = true;
+  batteryBtn.setAttribute('aria-label', '电池模式已启用，点击调整');
+  tbLeft.append(boardBtn, collapseBtn, expandBtn, quotaBtn, batteryBtn, newChatBtn);
 
   // Column widths: free (each column keeps its own width, drag the edges) or
   // N equal columns filling the deck; more than N keep that width and scroll.
@@ -1843,7 +1863,7 @@ function buildColumn(col, isFresh) {
       fontFamily: env.platform === 'win32'
         ? '"Cascadia Mono", Consolas, "Microsoft YaHei", monospace'
         : 'SFMono-Regular, "SF Mono", Menlo, Monaco, "PingFang SC", "Courier New", monospace',
-      fontSize: config.fontSize, lineHeight: 1.0, cursorBlink: true, scrollback: 12000,
+      fontSize: config.fontSize, lineHeight: 1.0, cursorBlink: !battery.active(), scrollback: 12000,
       theme: TERM_THEME[config.theme], allowProposedApi: true,
       // Option+click is our "open in editor" gesture on links; don't let xterm
       // also interpret it as click-to-move-cursor (sends arrow keys to the TUI).
@@ -3567,9 +3587,35 @@ setNavCollapsed(config.navCollapsed); // sets class + width
 attachNavResize(document.getElementById('navResizer'));
 applyTheme(config.theme);
 applyMotion(config.calmMotion);
+// Battery mode on the page: still motion, no cursor blink, and a small indicator that says what is limited.
+function renderBatteryIndicator() {
+  const snap = battery.snapshot();
+  const tip = [...BatteryCore.describe(snap, config.concurrencyCap), '点击调整'].join('\n');
+  document.querySelectorAll('.battery-indicator').forEach((b) => {
+    b.hidden = !snap.active;
+    b.title = tip;
+    b.setAttribute('aria-label', '电池模式已启用，点击调整');
+  });
+}
+function openBatterySettings() {
+  openNotificationSettings();
+  const select = document.getElementById('batteryMode');
+  select.scrollIntoView({ block: 'center' });
+  select.focus();
+}
+document.getElementById('batteryIndicator').addEventListener('click', openBatterySettings);
+function applyBattery() {
+  applyMotion(config.calmMotion, false);
+  TaskBoardUI.redraw();
+  terms.forEach((entry) => { try { entry.term.options.cursorBlink = !battery.active(); } catch (_) {} });
+  renderBatteryIndicator();
+}
+battery.onChange(applyBattery);
+renderBatteryIndicator();
 const deckHost = {
   columns: () => columns, terms, config, saveConfig, flushConfig, columnLabel, findLinks, lastActivityLine, maybeAutoName, seatLaunchCommand,
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
+  onCapChanged: renderBatteryIndicator, // the tooltip names the live cap
   clipboardWrite: (text) => window.deck.clipboardWrite(text),
   platform: env.platform, home: env.home,
   focusedId: () => focusedId,
@@ -3633,7 +3679,7 @@ document.getElementById('quotaRefresh').addEventListener('click', async (e) => {
 });
 window.addEventListener('claude-seat-usage', () => readQuotaCache().catch(() => {}));
 readQuotaCache().catch(() => {});
-setInterval(() => readQuotaCache().catch(() => {}), 30000);
+battery.every('quotaCache', () => readQuotaCache().catch(() => {}));
 syncChromeState();
 window.addEventListener('resize', () => {
   applyNavWidth();
@@ -3926,7 +3972,7 @@ function renderQuotaBar() {
   const rail = document.getElementById('quotaRailBtn');
   if (rail) rail.dataset.state = worst;
 }
-setInterval(() => {
+battery.every('statusTick', () => {
   let attn = 0;
   terms.forEach((entry, id) => {
     let text = dumpScreen(entry.term);
@@ -4046,7 +4092,7 @@ setInterval(() => {
     lastAttnCount = attn;
     try { window.deck.setAttnCount(attn); } catch (_) {}
   }
-}, 1500);
+});
 
 // ---- Keyboard shortcuts ----
 // Focus the column at index, scrolling it into view. Captured before xterm.

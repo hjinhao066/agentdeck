@@ -43,6 +43,7 @@
     "files": [
       "main.js",
       "memory-pressure.js",
+      "battery-core.js",
       "preload.js",
       "index.html",
       "renderer.js",

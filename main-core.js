@@ -59,11 +59,12 @@
     }
     return { ...decision, started };
   }
-  function queueNote(cap, held) {
-    return held ? '内存吃紧，稍后自动开' : `同时最多 ${shownCap(cap)} 个会话干活，前面有空位就自动开会话开始做。`;
+  // held: memory pressure is critical; battery: the battery cap is what is full.
+  function queueNote(cap, held, battery) {
+    return held ? '内存吃紧，稍后自动开' : battery ? '电池供电，稍后自动开' : `同时最多 ${shownCap(cap)} 个会话干活，前面有空位就自动开会话开始做。`;
   }
-  function queueTitle(cap, held) {
-    return held ? '内存吃紧，稍后自动开' : `同时最多 ${shownCap(cap)} 个会话干活，有空位就自动开`;
+  function queueTitle(cap, held, battery) {
+    return held ? '内存吃紧，稍后自动开' : battery ? '电池供电，稍后自动开' : `同时最多 ${shownCap(cap)} 个会话干活，有空位就自动开`;
   }
   // A finished background session is archived after this long with nothing new.
   const ARCHIVE_AFTER = 10 * 60_000;

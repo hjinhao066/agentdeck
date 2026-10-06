@@ -36,6 +36,15 @@
     <label for="concurrencyCap">同时干活的会话数（5–50，默认 30）</label>
     <input id="concurrencyCap" type="number" min="5" max="50" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="concurrencyCapNote" />
     <p id="concurrencyCapNote" class="hint">同时最多几个会话干活，超出的自动排队</p>
+    <h3>电池模式</h3>
+    <label for="batteryMode">没插电时</label>
+    <select id="batteryMode" aria-describedby="batteryModeNote">
+      <option value="auto">省电（默认）</option>
+      <option value="off">不限制</option>
+    </select>
+    <label for="batteryConcurrency">省电时最多同时开几个会话（1–10，默认 3）</label>
+    <input id="batteryConcurrency" type="number" min="1" max="10" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="batteryModeNote" />
+    <p id="batteryModeNote" class="hint">没插电时多的新任务先排队，已在跑的不打断；插上电立刻恢复。</p>
     <h3>重启后续上</h3>
     <label class="sd-check"><input id="resumeOnRestart" type="checkbox" />重启后自动续上在跑的队员</label>
     <p class="hint">退出前记下在干活的队员，并在时限内退出。能续上原对话的用各家自己的 resume；续不上的新开会话，并重发卡片任务和最后回执。</p>
@@ -71,7 +80,7 @@
     <div id="navList"></div>
     <section id="fleetStatus" aria-label="两机状态" aria-live="polite"></section>
     <section id="navQuota" aria-labelledby="navQuotaTitle">
-      <div class="quota-heading"><span id="navQuotaTitle" class="nq-title">额度</span><button id="quotaRefresh" type="button" title="刷新额度" aria-label="刷新额度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7h-5V2M4 17h5v5"/><path d="M20 7a9 9 0 0 0-15-3M4 17a9 9 0 0 0 15 3"/></svg></button></div>
+      <div class="quota-heading"><span class="nq-left"><span id="navQuotaTitle" class="nq-title">额度</span><button id="batteryIndicator" class="battery-indicator" type="button" hidden aria-label="电池模式已启用，点击调整" title="电池模式"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><rect x="4.6" y="9.6" width="4.6" height="4.8" rx=".6" fill="currentColor" stroke="none"/></svg></button></span><button id="quotaRefresh" type="button" title="刷新额度" aria-label="刷新额度"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7h-5V2M4 17h5v5"/><path d="M20 7a9 9 0 0 0-15-3M4 17a9 9 0 0 0 15 3"/></svg></button></div>
       <div id="quotaBar" role="group" aria-label="订阅剩余额度"></div>
       <svg class="quota-defs" width="0" height="0" aria-hidden="true" focusable="false"><defs><linearGradient id="quotaGeminiGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" style="stop-color: var(--brand-gemini-a)"/><stop offset="1" style="stop-color: var(--brand-gemini-b)"/></linearGradient></defs></svg>
     </section>
@@ -542,6 +551,7 @@
   <script src="sidebar.js"></script>
   <script src="skills-ui.js"></script>
   <script src="pages.js"></script>
+  <script src="battery-core.js"></script>
   <script src="main-core.js"></script>
   <script src="restart-resume.js"></script>
   <script src="auto-verify-core.js"></script>

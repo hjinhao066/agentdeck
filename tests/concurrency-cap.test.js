@@ -152,7 +152,7 @@ test('queued-card rendering does not probe memory; admission does', () => {
   assert.equal(render.includes('sysctl'), false);
   assert.match(src, /M\.fillQueue\(/);
   assert.match(src, /deck\.memoryPressure\(\)/);
-  assert.match(src, /M\.queueNote\(M\.MAX_ACTIVE, memoryHold\)/);
+  assert.match(src, /M\.queueNote\(M\.MAX_ACTIVE, memoryHold, capInfo\(\)\.limited\)/);
 });
 
 
