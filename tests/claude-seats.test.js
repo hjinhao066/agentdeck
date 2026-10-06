@@ -331,6 +331,9 @@ function copyFixture(t) {
 }
 const us2 = S.normalize()[2], cn = S.normalize()[0];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+// Claude Code writes project keys with forward slashes on Windows ("C:/Users/x/repo"), as it does on a real machine.
+const claudeKey = (p) => (process.platform === 'win32' ? p.replace(/\\/g, '/') : p);
+const realKey = (p) => claudeKey(fs.realpathSync.native(p));
 test('a new worktree is trusted for the seat that will run it, in the file and shape Claude Code reads', async (t) => {
   const { home, root, dir } = copyFixture(t);
   const file = path.join(home, '.claude-us2', '.claude.json');
@@ -340,9 +343,9 @@ test('a new worktree is trusted for the seat that will run it, in the file and s
   const result = await M.trustWorktree(us2, home, dir, { root });
   assert.deepEqual(result, { ok: true, changed: true });
   const after = readJson(file);
-  assert.equal(after.projects[fs.realpathSync.native(dir)].hasTrustDialogAccepted, true);
+  assert.equal(after.projects[realKey(dir)].hasTrustDialogAccepted, true);
   // everything else is exactly as it was: the parent folder, the home folder and other seats are not trusted
-  const { [fs.realpathSync.native(dir)]: _added, [dir]: _alias, ...rest } = after.projects;
+  const { [realKey(dir)]: _added, [claudeKey(dir)]: _alias, ...rest } = after.projects;
   assert.deepEqual(rest, original.projects);
   assert.deepEqual({ ...after, projects: rest }, original);
   for (const parent of [root, path.dirname(dir), path.join(root, 'repo')]) assert.equal(after.projects[parent], undefined, parent);
@@ -357,12 +360,12 @@ test('a new worktree is trusted for the seat that will run it, in the file and s
 test('the default seat keeps its trust in ~/.claude.json and a missing file is created', async (t) => {
   const { home, root, dir } = copyFixture(t);
   assert.deepEqual(await M.trustWorktree(cn, home, dir, { root }), { ok: true, changed: true });
-  assert.equal(readJson(path.join(home, '.claude.json')).projects[fs.realpathSync.native(dir)].hasTrustDialogAccepted, true);
+  assert.equal(readJson(path.join(home, '.claude.json')).projects[realKey(dir)].hasTrustDialogAccepted, true);
   assert.equal(fs.existsSync(path.join(home, '.claude', '.claude.json')), false);
   // a seat directory that does not exist yet is created for its file
   const { dir: other } = (() => { const d = path.join(home, 'agentdeck-worktrees', 'repo', 'fix', 'two'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, '.git'), 'gitdir: z'); return { dir: d }; })();
   assert.equal((await M.trustWorktree({ id: 'new', name: 'New', configDir: '~/.claude-new' }, home, other, { root })).ok, true);
-  assert.equal(readJson(path.join(home, '.claude-new', '.claude.json')).projects[fs.realpathSync.native(other)].hasTrustDialogAccepted, true);
+  assert.equal(readJson(path.join(home, '.claude-new', '.claude.json')).projects[realKey(other)].hasTrustDialogAccepted, true);
 });
 test('trust is recorded for the path as given and for its real path', { skip: process.platform === 'win32' }, async (t) => {
   const { home, root, dir } = copyFixture(t);
@@ -395,7 +398,7 @@ test('only a linked worktree inside the managed root is ever trusted; refusals t
 test('a damaged or unexpected seat file is left alone and the reason is reported', async (t) => {
   const { home, root, dir } = copyFixture(t);
   const file = path.join(home, '.claude.json');
-  for (const content of ['{ not json', '[]', 'null', '{"projects":[]}', '{"projects":{"' + fs.realpathSync.native(dir).replace(/\\/g, '\\\\') + '":"yes"}}']) {
+  for (const content of ['{ not json', '[]', 'null', '{"projects":[]}', '{"projects":{"' + realKey(dir) + '":"yes"}}']) {
     fs.writeFileSync(file, content);
     const result = await M.trustWorktree(cn, home, dir, { root });
     assert.equal(result.ok, false, content);
@@ -416,5 +419,6 @@ test('a running session holding the config lock is waited for; a dead lock is re
   fs.mkdirSync(file + '.lock');
   const old = new Date(Date.now() - 60_000); fs.utimesSync(file + '.lock', old, old);
   assert.deepEqual(await M.trustWorktree(cn, home, second, { root }), { ok: true, changed: true });
-  assert.equal(Object.keys(readJson(file).projects).length, 2);
+  // each worktree is recorded under the path as given and its real path (they differ when the temp dir has an 8.3 short name)
+  assert.deepEqual(Object.keys(readJson(file).projects).sort(), [...new Set([dir, second].flatMap((d) => [claudeKey(d), realKey(d)]))].sort());
 });
