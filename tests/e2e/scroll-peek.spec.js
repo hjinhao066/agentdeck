@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -31,7 +32,7 @@ test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-scroll-peek-'));
   const cmd = `node "${path.join(__dirname, 'fixtures', 'scroll-agent.js')}"`;
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ fitWindow: true, fitCols: 2, columns: [{ id: worker, title: 'Scroll worker', cmd, cwd: profile, role: 'manual' }] }));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, fitWindow: true, fitCols: 2, columns: [{ id: worker, title: 'Scroll worker', cmd, cwd: profile, role: 'manual' }] }));
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env });
@@ -55,7 +56,7 @@ test.beforeAll(async () => {
   expect(controlToken).toBeTruthy();
 });
 test.afterAll(async () => {
-  if (app) await app.close();
+  if (app) await closeElectron(app);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
 });
 

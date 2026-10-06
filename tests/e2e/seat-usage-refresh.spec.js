@@ -1,4 +1,5 @@
 const { test, expect, _electron: electron } = require('@playwright/test');
+const closeElectron = require('./fixtures/close-electron');
 const fs = require('fs'), os = require('os'), path = require('path');
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = path.join(__dirname, 'fixtures/fake-agent.js');
@@ -8,6 +9,7 @@ test.beforeEach(async () => {
   profile = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-seat-refresh-e2e-')));
   const home = path.join(profile, 'seats-home');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    perpetualCaptain: { enabled: false },
     claudeSeats: [{ id: 'cn', name: 'CN', configDir: path.join(home, '.claude') }, { id: 'us', name: 'US', configDir: path.join(home, '.claude-us') }],
     columns: ['captain', 'worker'].map(id => ({ id, title: id, cmd: `node "${FAKE}"`, cwd: profile, isMain: id === 'captain', claudeSeatId: 'cn' })),
     mainSession: { colId: 'captain', tasks: [], pending: [], crewMarked: true },
@@ -61,7 +63,7 @@ test.beforeEach(async () => {
   await app.evaluate(() => globalThis.seatRefreshTest.poller.tick());
   await page.evaluate(() => readQuotaCache());
 });
-test.afterEach(async () => { if (app) await app.close(); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
+test.afterEach(async () => { if (app) await closeElectron(app); if (profile) fs.rmSync(profile, { recursive: true, force: true }); });
 test('both idle seats show independent fresh windows, resets and visible sample times without sending any prompt', async () => {
   await app.evaluate(() => globalThis.seatRefreshTest.poller.tick());
   await page.evaluate(() => readQuotaCache());

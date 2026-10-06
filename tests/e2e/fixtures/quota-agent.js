@@ -1,5 +1,8 @@
 // Offline TUI stand-in. No real CLI, provider request or credential access.
 const readline = require('readline');
+// Like a real TUI, consume input without the kernel's canonical line limit.
+// The Captain briefing can exceed that limit before the next command arrives.
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
 const provider = process.argv[2];
 const west = process.argv[3] === 'cn';
 let westData = false, statusline = false;

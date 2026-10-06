@@ -25,6 +25,7 @@ test.beforeAll(async () => {
   fs.writeFileSync(path.join(home, '.claude-cn/.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'cn@example.com' } }));
   writeCache('us', [19, 91]);
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     claudeSeats: [{ id: 'us', name: '🇺🇸 US', configDir: '~/.claude' }, { id: 'cn', name: '🇨🇳 CN', configDir: '~/.claude-cn' }],
     activeClaudeSeatId: 'us', mainSession: { colId: 'us-column', tasks: [], pending: [] },
