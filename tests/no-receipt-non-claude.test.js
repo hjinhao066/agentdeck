@@ -48,7 +48,7 @@ const QUIET = 10 * 60_000;
 const flush = () => new Promise(setImmediate);
 
 for (const [name, cmd, idle] of AGENTS) {
-  test(`${name} still working, or paused at its input box, is not a missing receipt`, async () => {
+  test(`${name} still working is not a missing receipt`, async () => {
     const working = openTask();
     working.endedAt = Date.now() - QUIET;
     const busy = { alive: true, state: 'working', lastOutputAt: Date.now(), lastScreen: idle };
@@ -59,17 +59,35 @@ for (const [name, cmd, idle] of AGENTS) {
     assert.equal(working.endedAt, 0);
     await flush();
     assert.equal(live.boardEvents.some((e) => e.input.type === 'fallback'), false);
+  });
 
-    const paused = openTask();
+  test(`${name} a normally finished turn idle past three minutes reports a missing receipt`, async () => {
+    const task = openTask();
     const prompt = { alive: true, state: 'done', lastOutputAt: Date.now() - QUIET, lastScreen: idle };
-    const held = runtime({ cmd, task: paused, entry: prompt, turns: finishedTurn });
+    const held = runtime({ cmd, task, entry: prompt, turns: finishedTurn });
     held.api.onTurnDone(held.worker.id, finishedTurn[0]);
-    assert.equal(paused.endedAt, undefined);
-    paused.endedAt = Date.now() - QUIET;
+    assert.ok(task.endedAt > Date.now() - 5000);
+    task.endedAt = Date.now() - QUIET;
     held.api.onTick(held.worker.id, prompt);
-    assert.equal(paused.status, 'working');
-    assert.equal(paused.receipt, undefined);
-    assert.equal(paused.endedAt, 0);
+    assert.equal(task.status, 'stopped');
+    assert.equal(task.receipt.summary, '已结束，未提交回执');
+    assert.equal(task.receipt.source, 'fallback');
+    await flush();
+    assert.equal(held.boardEvents.at(-1).input.type, 'fallback');
+  });
+
+  test(`${name} a captain interrupt left at the input box is not a missing receipt`, async () => {
+    const interrupted = [{ id: 'turn', done: true, interrupted: true }];
+    const task = openTask();
+    const prompt = { alive: true, state: 'done', lastOutputAt: Date.now() - QUIET, lastScreen: idle };
+    const held = runtime({ cmd, task, entry: prompt, turns: interrupted });
+    held.api.onTurnDone(held.worker.id, interrupted[0]);
+    assert.equal(task.endedAt, undefined);
+    task.endedAt = Date.now() - QUIET;
+    held.api.onTick(held.worker.id, prompt);
+    assert.equal(task.status, 'working');
+    assert.equal(task.receipt, undefined);
+    assert.equal(task.endedAt, 0);
     await flush();
     assert.equal(held.boardEvents.some((e) => e.input.type === 'fallback'), false);
   });
@@ -123,6 +141,17 @@ for (const [name, cmd, idle] of AGENTS) {
     assert.equal(task.endedAt, 0);
     await flush();
     assert.equal(live.boardEvents.some((e) => e.input.type === 'fallback'), false);
+
+    const waiting = openTask();
+    waiting.endedAt = Date.now() - QUIET;
+    const lock = { alive: true, state: 'done', lastOutputAt: Date.now() - QUIET, lastScreen: `${idle}\n正在等全机测试锁` };
+    const queued = runtime({ cmd, task: waiting, entry: lock, turns: finishedTurn });
+    queued.api.onTick(queued.worker.id, lock);
+    assert.equal(waiting.status, 'working');
+    assert.equal(waiting.receipt, undefined);
+    assert.equal(waiting.endedAt, 0);
+    await flush();
+    assert.equal(queued.boardEvents.some((e) => e.input.type === 'fallback'), false);
 
     const judged = openTask();
     judged.status = 'stopped';
