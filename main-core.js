@@ -813,14 +813,18 @@
   // swaps its header with the phase: "Working", "Waiting for background
   // terminal · sleep 300", "Waiting for agents", "Compacting context"... Only
   // "Working" was read before, so a blocking wait (the agent polling a long
-  // job with `sleep 300`) looked idle. The row always carries a bullet and
-  // either the "(5m 3s • esc to interrupt)" timer or, for the wait, the header
-  // followed by "(", "·" or the end of the row. Prose in a reply does not.
+  // job with `sleep 300`) looked idle. The row always starts with a bullet and
+  // carries either the "(5m 3s • esc to interrupt)" timer (cut to "(5m 3s • esc…"
+  // on a narrow screen) or, for the wait, the header followed by "(" or "·".
+  // Only the live area just above the input box is read: the same words in
+  // older scrollback or in a reply do not mean the agent is still going.
   function codexLiveStatus(screen, cmd) {
     if (cmd && !/\bcodex\b/i.test(cmd)) return false;
-    return codexStatusScreen(screen, cmd).split('\n').some((line) =>
-      /^\s*[│┃]?\s*[◦●•]\s+[^()\n]{1,60}\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+s\s*•\s*esc to interrupt\)/.test(line) ||
-      /^\s*[│┃]?\s*[◦●•]?\s*Waiting for background terminals?\s*(?:\(|·|$)/i.test(line));
+    const lines = codexStatusScreen(screen, cmd).split('\n');
+    const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*(?:>|›)(?:\s|$)/.test(line));
+    return (prompt >= 0 ? lines.slice(Math.max(0, prompt - 10), prompt) : lines.slice(-12)).some((line) =>
+      /^\s*[│┃]?\s*[◦●•]\s+[^()\n]{1,60}\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+s\s*•\s*esc\b/.test(line) ||
+      /^\s*[│┃]?\s*[◦●•]\s*Waiting for background terminals?\s*(?:\(|·)/i.test(line));
   }
   function terminalActivity(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
