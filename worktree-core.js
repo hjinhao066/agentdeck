@@ -2,9 +2,10 @@
 // Independent git worktrees for coding sessions. Creation is opt-in.
 // Removal never uses --force, and only happens when the copy has nothing a
 // person could miss and the branch is already on a real trunk or still on a
-// remote. Ignored files block removal. The only exception is a node_modules
-// directory at the repo root or beside a package.json, and a .env file inside
-// one of those still blocks removal. Nothing outside the managed root is deleted.
+// remote. Any ignored file or directory blocks automatic removal, including
+// node_modules. A copy whose ignored content is entirely inside node_modules
+// can be listed for a person to remove one path at a time. Nothing outside
+// the managed root is deleted.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -15,9 +16,6 @@ const BRANCH_RE = /^(?!\/)(?!.*\/\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\/$)[A-Za-z0-
 const RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const GIT_CONFIG = ['-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.eol=lf'];
-// Package-manager dependencies only. Build and output directories are not
-// regenerable: people keep data and private config in them.
-const REGENERABLE_DIRS = Object.freeze(['node_modules']);
 const IGNORED_SHOWN = 8;
 const IGNORED_SCAN_LIMIT = 5000;
 const IN_PROGRESS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
@@ -206,65 +204,123 @@ function relParts(rel) {
 function toPosix(rel) {
   return relParts(rel).join('/');
 }
-function isEnvFileName(name) {
-  return /^\.env/i.test(name);
+function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return n + ' 字节';
+  const kb = n / 1024;
+  if (kb < 1024) return (Math.round(kb * 10) / 10) + ' KB';
+  const mb = kb / 1024;
+  if (mb < 1024) return (Math.round(mb * 10) / 10) + ' MB';
+  return (Math.round((mb / 1024) * 10) / 10) + ' GB';
 }
-function nodeModulesIsDependency(root, dirRel) {
-  const parts = relParts(dirRel);
-  if (!parts.length || parts[parts.length - 1] !== 'node_modules') return false;
-  if (parts.length === 1) return true;
-  try { return fs.statSync(path.join(root, ...parts.slice(0, -1), 'package.json')).isFile(); } catch (_) { return false; }
-}
-function insideDependencyNodeModules(root, rel) {
+function entryInsideNodeModules(root, rel) {
   const parts = relParts(rel);
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i] !== 'node_modules') continue;
-    if (nodeModulesIsDependency(root, parts.slice(0, i + 1).join('/'))) return true;
-  }
-  return false;
+  const idx = parts.indexOf('node_modules');
+  if (idx < 0) return false;
+  if (idx < parts.length - 1) return true;
+  try {
+    const stat = fs.lstatSync(path.join(root, ...parts));
+    return stat.isDirectory() || stat.isSymbolicLink();
+  } catch (_) { return false; }
 }
-function walkIgnored(abs, rel, mode, add, state) {
+function topRoots(rels) {
+  const sorted = [...rels].sort((a, b) => a.length - b.length);
+  const tops = [];
+  for (const rel of sorted) {
+    if (tops.some((top) => rel === top || rel.startsWith(top + '/'))) continue;
+    tops.push(rel);
+  }
+  return tops.sort();
+}
+function walkIgnored(abs, rel, state, measure) {
   if (state.capped) return;
   let stat;
-  try { stat = fs.lstatSync(abs); } catch (_) { add(rel, state); return; }
+  try { stat = fs.lstatSync(abs); } catch (_) {
+    if (measure) state.files += 1;
+    else state.add(rel);
+    return;
+  }
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
-    if (mode === 'all' || isEnvFileName(path.basename(abs))) add(rel, state);
+    if (measure) {
+      if (state.files >= IGNORED_SCAN_LIMIT) { state.capped = true; return; }
+      state.files += 1;
+      state.bytes += stat.size;
+    } else state.add(rel);
     return;
   }
   let names = [];
-  try { names = fs.readdirSync(abs); } catch (_) { add(rel, state); return; }
+  try { names = fs.readdirSync(abs); } catch (_) {
+    if (measure) state.files += 1;
+    else state.add(rel);
+    return;
+  }
+  if (!names.length) {
+    if (!measure) state.add(rel);
+    return;
+  }
   for (const name of names) {
     if (state.capped || name === '.git') continue;
-    walkIgnored(path.join(abs, name), toPosix(rel) + '/' + name, mode, add, state);
+    walkIgnored(path.join(abs, name), toPosix(rel) + '/' + name, state, measure);
   }
 }
-function blockingIgnored(root, entries) {
+function moduleSummary(roots, files, bytes, capped) {
+  const shown = roots.slice(0, 4);
+  let where = shown.join('、') || 'node_modules';
+  if (roots.length > shown.length) where += ' 等 ' + roots.length + ' 处';
+  if (!files && !capped) return '被忽略的内容都在 node_modules 里：' + where + '（空目录）。';
+  let text = '被忽略的内容都在 node_modules 里：' + where + '，共 ' + files + ' 个文件，占用 ' + formatBytes(bytes);
+  if (capped) text += '，还有更多（已超过 ' + IGNORED_SCAN_LIMIT + ' 个文件）';
+  return text + '。';
+}
+function outsideReason(paths, capped) {
+  if (!paths.length) return capped ? '有被忽略、不能自动丢掉的文件，还有更多（已超过 ' + IGNORED_SCAN_LIMIT + ' 个）' : '有被忽略、不能自动丢掉的文件';
+  const shown = paths.slice(0, IGNORED_SHOWN);
+  let text = '有被忽略、不能自动丢掉的文件：' + shown.join('、');
+  if (capped) text += ' 等，还有更多（已超过 ' + IGNORED_SCAN_LIMIT + ' 个）';
+  else if (paths.length > shown.length) text += ' 等，还有 ' + (paths.length - shown.length) + ' 个';
+  return text;
+}
+function classifyIgnored(root, entries) {
+  const ignored = [];
+  for (const entry of entries) {
+    if (entry.xy !== '!!') continue;
+    const rel = toPosix(entry.path).replace(/\/+$/, '');
+    ignored.push({ rel, inside: !!(rel && entryInsideNodeModules(root, rel)) });
+  }
+  if (!ignored.length) return { saw: false, onlyNodeModules: false, summary: '', outsideText: '' };
+  const only = ignored.every((item) => item.inside);
+  if (only) {
+    const state = { capped: false, files: 0, bytes: 0 };
+    const roots = topRoots(ignored.map((item) => item.rel));
+    for (const rel of roots) {
+      if (state.capped) break;
+      walkIgnored(path.join(root, ...relParts(rel)), rel, state, true);
+    }
+    return { saw: true, onlyNodeModules: true, summary: moduleSummary(roots, state.files, state.bytes, state.capped), outsideText: '' };
+  }
   const found = [];
   const seen = new Set();
-  const state = { capped: false };
-  function add(rel) {
+  const state = { capped: false, add(rel) {
     const norm = toPosix(rel).replace(/\/+$/, '');
     if (!norm || seen.has(norm)) return;
     if (found.length >= IGNORED_SCAN_LIMIT) { state.capped = true; return; }
     seen.add(norm);
     found.push(norm);
-  }
-  for (const entry of entries) {
-    if (entry.xy !== '!!' || state.capped) continue;
-    const rel = toPosix(entry.path).replace(/\/+$/, '');
-    if (!rel) { add(entry.path); continue; }
-    const abs = path.join(root, ...relParts(rel));
+  } };
+  const dirs = [];
+  for (const item of ignored) {
+    if (!item.rel || item.inside) { state.add(item.rel || '未知路径'); continue; }
     let stat;
-    try { stat = fs.lstatSync(abs); } catch (_) { add(rel); continue; }
-    if (stat.isSymbolicLink() || !stat.isDirectory()) {
-      if (!insideDependencyNodeModules(root, rel) || isEnvFileName(path.basename(rel))) add(rel);
-      continue;
-    }
-    const mode = path.basename(abs) === 'node_modules' && nodeModulesIsDependency(root, rel) ? 'env' : 'all';
-    walkIgnored(abs, rel, mode, add, state);
+    try { stat = fs.lstatSync(path.join(root, ...relParts(item.rel))); } catch (_) { state.add(item.rel); continue; }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) state.add(item.rel);
+    else dirs.push(item.rel);
+  }
+  for (const rel of dirs) {
+    if (state.capped) break;
+    walkIgnored(path.join(root, ...relParts(rel)), rel, state, false);
   }
   found.sort();
-  return { paths: found, capped: state.capped };
+  return { saw: true, onlyNodeModules: false, summary: '', outsideText: outsideReason(found, state.capped) };
 }
 function worktreeGitDir(dir, options) {
   let line = git(dir, ['rev-parse', '--absolute-git-dir'], options);
@@ -353,7 +409,7 @@ function inspect(record, options = {}) {
     return { safe: false, reason: '副本保留：无法确认工作区是否干净：' + error.message, record: normalized };
   }
   const dirty = entries.some((entry) => entry.xy !== '!!');
-  const ignored = blockingIgnored(normalized.path, entries);
+  const ignored = classifyIgnored(normalized.path, entries);
   const progress = inProgress(normalized.path, options);
   let stashed = false;
   let unusualIndex = false;
@@ -363,22 +419,23 @@ function inspect(record, options = {}) {
   const trunk = defaultTrunk(normalized.repo, options);
   const merged = !!(trunk && gitOk(normalized.repo, ['merge-base', '--is-ancestor', tip, trunk.sha], options));
   const pushed = isPushed(normalized.repo, normalized.branch, tip, options);
-  const reasons = [];
-  if (dirty) reasons.push('工作区有未提交的改动或未跟踪的文件');
-  if (ignored.paths.length) {
-    const shown = ignored.paths.slice(0, IGNORED_SHOWN);
-    let text = '有被忽略、不能自动丢掉的文件：' + shown.join('、');
-    if (ignored.capped) text += ' 等，还有更多（已超过 ' + IGNORED_SCAN_LIMIT + ' 个）';
-    else if (ignored.paths.length > shown.length) text += ' 等，还有 ' + (ignored.paths.length - shown.length) + ' 个';
-    reasons.push(text);
+  const published = merged || pushed;
+  const other = [];
+  if (dirty) other.push('工作区有未提交的改动或未跟踪的文件');
+  if (progress) other.push(progress.startsWith('rebase') ? '正在变基' : '正在合并、拣选或还原');
+  if (stashed) other.push('这个分支还有 stash');
+  if (unusualIndex) other.push('索引里有 skip-worktree 或 assume-unchanged 的本地内容');
+  if (!published) other.push(trunk ? '分支尚未合入主干，也未推送到远端' : '没有 main/master 或 origin/HEAD 这样的主干，也未推送到远端');
+  const held = dirty || ignored.saw || !!progress || stashed || unusualIndex;
+  if (ignored.onlyNodeModules && !other.length) {
+    const why = merged ? '分支已合入主干' : '分支已推送到远端';
+    return { safe: false, manual: true, reason: ('可手动清理：工作区没有未提交或未跟踪的改动，且' + why + '。' + ignored.summary).slice(0, 500), record: normalized, dirty: true, merged, pushed };
   }
-  if (progress) reasons.push(progress.startsWith('rebase') ? '正在变基' : '正在合并、拣选或还原');
-  if (stashed) reasons.push('这个分支还有 stash');
-  if (unusualIndex) reasons.push('索引里有 skip-worktree 或 assume-unchanged 的本地内容');
-  if (!merged && !pushed) reasons.push(trunk ? '分支尚未合入主干，也未推送到远端' : '没有 main/master 或 origin/HEAD 这样的主干，也未推送到远端');
-  if (reasons.length) return { safe: false, reason: ('副本保留：' + reasons.join('；') + '。').slice(0, 500), record: normalized, dirty: dirty || ignored.paths.length > 0 || !!progress || stashed || unusualIndex, merged, pushed };
+  const reasons = other.slice();
+  if (ignored.saw) reasons.push(ignored.onlyNodeModules ? ignored.summary.replace(/。$/, '') : ignored.outsideText);
+  if (reasons.length) return { safe: false, manual: false, reason: ('副本保留：' + reasons.join('；') + '。').slice(0, 500), record: normalized, dirty: held, merged, pushed };
   const why = merged ? '分支已合入主干' : '分支已推送到远端';
-  return { safe: true, reason: '已回收：工作区干净，且' + why + '。', record: normalized, dirty: false, merged, pushed };
+  return { safe: true, manual: false, reason: '已回收：工作区干净，且' + why + '。', record: normalized, dirty: false, merged, pushed };
 }
 function reclaim(record, options = {}) {
   const root = options.root || defaultRoot(options.home);
@@ -386,7 +443,8 @@ function reclaim(record, options = {}) {
   try { abs = insideRoot(record && record.path, root); }
   catch (error) { return { removed: false, reason: error.message, path: record && record.path, branch: record && record.branch }; }
   const state = inspect({ ...record, path: abs }, options);
-  if (!state.safe) return { removed: false, reason: state.reason, path: abs, branch: record.branch };
+  const allowed = state.safe || (options.manual === true && state.manual === true);
+  if (!allowed) return { removed: false, reason: state.reason, path: abs, branch: record.branch, manual: state.manual === true };
   try { git(state.record.repo, ['worktree', 'remove', abs], options); }
   catch (error) {
     if (!fs.existsSync(abs)) return { removed: true, reason: state.reason, path: abs, branch: state.record.branch };
@@ -422,9 +480,12 @@ function recordFromWorktree(dir, options) {
   const repo = path.dirname(resolveCommon(dir, options));
   return normalizeRecord({ repo: real(repo), path: real(dir), branch, base });
 }
-function clean({ root, apply = false, home, execFileSync: exec } = {}) {
+function clean({ root, apply = false, paths, home, execFileSync: exec } = {}) {
   const options = { execFileSync: exec };
   const base = root || defaultRoot(home);
+  const named = (Array.isArray(paths) ? paths : []).filter((item) => typeof item === 'string' && item.trim()).map((item) => real(item));
+  const confirm = apply === true && named.length > 0;
+  const manual = [];
   const safe = [];
   const kept = [];
   for (const dir of walkWorktrees(base)) {
@@ -434,27 +495,46 @@ function clean({ root, apply = false, home, execFileSync: exec } = {}) {
     let state;
     try { state = inspect(record, options); }
     catch (error) { kept.push({ path: record.path, branch: record.branch, reason: '副本保留：' + error.message }); continue; }
-    if (state.safe) safe.push({ ...record, reason: state.reason });
+    const item = { ...record, reason: state.reason };
+    if (state.manual) manual.push(item);
+    else if (state.safe) safe.push(item);
     else kept.push({ path: record.path, branch: record.branch, reason: state.reason });
   }
   const removed = [];
-  if (apply) {
-    for (const item of safe) {
-      const result = reclaim(item, { ...options, root: base });
+  if (confirm) {
+    const eligible = new Map();
+    for (const item of [...manual, ...safe]) eligible.set(real(item.path), item);
+    for (const target of named) {
+      const item = eligible.get(target);
+      if (!item) { kept.push({ path: target, reason: '没有删除：这份副本不在可清理列表里。' }); continue; }
+      const result = reclaim(item, { ...options, root: base, manual: true });
       if (result.removed) removed.push(result);
       else kept.push(result);
     }
   }
-  return { root: base, apply: apply === true, safe: apply ? [] : safe, removed, kept };
+  const gone = new Set(removed.map((item) => real(item.path)));
+  return {
+    root: base,
+    apply: apply === true,
+    named: named.length,
+    manual: manual.filter((item) => !gone.has(real(item.path))),
+    safe: safe.filter((item) => !gone.has(real(item.path))),
+    removed,
+    kept,
+  };
 }
 function formatClean(result) {
   const lines = [];
-  if (!result.apply) {
-    lines.push(result.safe.length ? `可安全清理 ${result.safe.length} 份（本次只列出，没有删除）：` : '没有可安全清理的副本。');
-    for (const item of result.safe) lines.push(`  ${item.path}  分支 ${item.branch}  ${item.reason}`);
-  } else {
+  if (result.apply && !result.named) lines.push('没有删除。要删掉某一份，必须同时带上 --apply 和 --path 副本路径。');
+  if (result.named) {
     lines.push(`已清理 ${result.removed.length} 份：`);
     for (const item of result.removed) lines.push(`  ${item.path}  分支 ${item.branch}  ${item.reason}`);
+  }
+  lines.push(result.manual.length ? `可手动清理 ${result.manual.length} 份（本次只列出，没有删除）：` : '没有可手动清理的副本。');
+  for (const item of result.manual) lines.push(`  ${item.path}  分支 ${item.branch}  ${item.reason}`);
+  if (result.safe.length) {
+    lines.push(`可自动回收 ${result.safe.length} 份（本次只列出，没有删除）：`);
+    for (const item of result.safe) lines.push(`  ${item.path}  分支 ${item.branch}  ${item.reason}`);
   }
   if (result.kept.length) {
     lines.push(`保留 ${result.kept.length} 份：`);
@@ -464,6 +544,6 @@ function formatClean(result) {
 }
 
 module.exports = {
-  GIT_CONFIG, REGENERABLE_DIRS, assertBranch, normalizeRecord, location, defaultRoot, gitArgv, extendedPath,
+  GIT_CONFIG, assertBranch, normalizeRecord, location, defaultRoot, gitArgv, extendedPath,
   prepare, inspect, reclaim, clean, formatClean, defaultTrunk,
 };

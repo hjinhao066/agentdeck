@@ -23,12 +23,24 @@ function parseArgs(argv) {
     if (!value.startsWith('--')) { out._.push(value); continue; }
     const eq = value.indexOf('=');
     if (eq > 2) {
-      out[value.slice(2, eq)] = value.slice(eq + 1);
+      const key = value.slice(2, eq);
+      const item = value.slice(eq + 1);
+      if (key === 'path') {
+        if (!Array.isArray(out.path)) out.path = [];
+        out.path.push(item);
+      } else out[key] = item;
       continue;
     }
     const key = value.slice(2);
-    if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) out[key] = argv[++i];
-    else out[key] = true;
+    let next;
+    if (i + 1 < argv.length && !argv[i + 1].startsWith('--')) next = argv[++i];
+    else next = true;
+    if (key === 'path') {
+      if (!Array.isArray(out.path)) out.path = [];
+      out.path.push(next);
+      continue;
+    }
+    out[key] = next;
   }
   return out;
 }
@@ -146,7 +158,7 @@ function usage() {
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
-    '  worktree clean [--apply]                 list copies safe to remove; --apply removes only those\n' +
+    '  worktree clean [--apply --path copy]      list copies a person may remove; deletion needs --apply and each --path\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
     '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
@@ -427,7 +439,7 @@ async function main() {
     return;
   }
   if (action === 'worktree') {
-    if (args._[1] !== 'clean') fail('worktree clean lists copies that are safe to remove. Pass --apply to remove only those.');
+    if (args._[1] !== 'clean') fail('worktree clean lists copies a person may remove. Deletion needs --apply and one --path per copy.');
     if (args.apply !== undefined && args.apply !== true) fail('worktree clean --apply takes no value.');
     let root;
     if (args.root !== undefined) {
@@ -436,7 +448,13 @@ async function main() {
       const rel = path.relative(path.resolve(os.tmpdir()), root);
       if (rel.startsWith('..') || path.isAbsolute(rel)) fail('worktree clean --root must stay inside the temp directory.');
     }
-    const result = Worktree.clean({ root, apply: args.apply === true });
+    const listed = args.path === undefined ? [] : (Array.isArray(args.path) ? args.path : [args.path]);
+    const paths = [];
+    for (const item of listed) {
+      if (typeof item !== 'string' || !item.trim()) fail('worktree clean --path requires a copy path.');
+      paths.push(path.resolve(item));
+    }
+    const result = Worktree.clean({ root, apply: args.apply === true, paths });
     process.stdout.write(Worktree.formatClean(result) + '\n');
     return;
   }

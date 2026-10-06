@@ -76,25 +76,42 @@ test('creating a copy records the repo, directory, branch and base commit', (t) 
   assert.equal(fs.existsSync(homeRepo) && created.path.startsWith(homeRepo + path.sep), false);
 });
 
-test('a clean merged copy is listed and removed only when asked, and a dirty one stays', (t) => {
+test('node_modules is listed for manual cleanup and removed only when that copy is named', (t) => {
   const { repo, copies } = setup(t);
-  const clean = Worktree.prepare({ repo, branch: 'agentdeck/clean', root: copies });
+  const deps = Worktree.prepare({ repo, branch: 'agentdeck/deps', root: copies });
+  const other = Worktree.prepare({ repo, branch: 'agentdeck/other', root: copies });
   const dirty = Worktree.prepare({ repo, branch: 'agentdeck/dirty', root: copies });
-  fs.mkdirSync(path.join(clean.path, 'node_modules', 'pkg'), { recursive: true });
-  fs.writeFileSync(path.join(clean.path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(deps.path, 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(deps.path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+  fs.mkdirSync(path.join(other.path, 'node_modules'));
+  fs.writeFileSync(path.join(other.path, 'node_modules', 'left.js'), 'keep\n');
   fs.writeFileSync(path.join(dirty.path, 'notes.txt'), 'keep me\n');
+  const blocked = Worktree.reclaim(deps, { root: copies });
+  assert.equal(blocked.removed, false, blocked.reason);
+  assert.match(blocked.reason, /可手动清理/);
+  assert.equal(fs.existsSync(path.join(deps.path, 'node_modules', 'pkg', 'index.js')), true);
   const listed = Worktree.clean({ root: copies });
   assert.equal(listed.apply, false);
   assert.equal(listed.removed.length, 0);
-  assert.ok(listed.safe.some((item) => item.path === clean.path));
+  const row = listed.manual.find((item) => item.path === deps.path);
+  assert.ok(row, listed.manual.map((item) => item.reason).join('\n'));
+  assert.equal(row.branch, 'agentdeck/deps');
+  assert.match(row.reason, /可手动清理/);
+  assert.match(row.reason, /node_modules/);
+  assert.match(row.reason, /占用/);
+  assert.ok(listed.manual.some((item) => item.path === other.path));
   assert.ok(listed.kept.some((item) => item.path === dirty.path && /未提交|未跟踪/.test(item.reason)));
-  assert.equal(fs.existsSync(clean.path), true);
-  const applied = Worktree.clean({ root: copies, apply: true });
-  assert.equal(fs.existsSync(clean.path), false);
-  assert.equal(fs.existsSync(dirty.path), true);
-  assert.ok(applied.removed.some((item) => item.path === clean.path && /已回收/.test(item.reason)));
-  assert.ok(applied.kept.some((item) => item.path === dirty.path));
   assert.match(Worktree.formatClean(listed), /没有删除/);
+  const applied = Worktree.clean({ root: copies, apply: true });
+  assert.equal(applied.removed.length, 0);
+  assert.equal(fs.existsSync(deps.path), true);
+  assert.equal(fs.existsSync(other.path), true);
+  const confirmed = Worktree.clean({ root: copies, apply: true, paths: [deps.path] });
+  assert.equal(fs.existsSync(deps.path), false);
+  assert.equal(fs.readFileSync(path.join(other.path, 'node_modules', 'left.js'), 'utf8'), 'keep\n');
+  assert.equal(fs.existsSync(dirty.path), true);
+  assert.ok(confirmed.removed.some((item) => item.path === deps.path));
+  assert.ok(confirmed.manual.some((item) => item.path === other.path));
 });
 
 test('a clean branch that is only on the remote is removed; an unpushed branch is kept', (t) => {

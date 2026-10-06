@@ -47,11 +47,92 @@ function ship(repo, copy, branch) {
   git(copy, ['push', '-u', 'origin', branch]);
 }
 
-test('the regenerable directory list is only node_modules', () => {
-  assert.deepEqual([...Worktree.REGENERABLE_DIRS], ['node_modules']);
+function listedManual(copies, target) {
+  const listed = Worktree.clean({ root: copies });
+  const row = listed.manual.find((item) => item.path === target);
+  assert.ok(row, listed.manual.map((item) => item.path).join('\n') + '\n' + listed.kept.map((item) => item.reason).join('\n'));
+  assert.match(row.reason, /可手动清理/);
+  assert.match(row.reason, /node_modules/);
+  assert.match(row.reason, /占用/);
+  assert.equal(listed.removed.length, 0);
+  return row;
+}
+
+test('node_modules is not auto-removed and is listed for manual cleanup', (t) => {
+  const { repo, copies } = setup(t);
+  const deps = Worktree.prepare({ repo, branch: 'feat/deps', root: copies });
+  fs.mkdirSync(path.join(deps.path, 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(deps.path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+  const blocked = Worktree.reclaim(deps, { root: copies });
+  kept(blocked, path.join(deps.path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+  assert.match(blocked.reason, /可手动清理/);
+  const row = listedManual(copies, deps.path);
+  assert.equal(row.branch, 'feat/deps');
+  assert.match(Worktree.formatClean(Worktree.clean({ root: copies })), new RegExp(deps.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
-test('a pushed branch still keeps ignored .env and a file named dist, and drops only node_modules', (t) => {
+test('sqlite, key, and secrets inside node_modules are listed and not auto-removed', (t) => {
+  const { repo, copies } = setup(t);
+  const deps = Worktree.prepare({ repo, branch: 'feat/secrets', root: copies });
+  ship(repo, deps.path, 'feat/secrets');
+  const dir = path.join(deps.path, 'node_modules');
+  fs.mkdirSync(dir);
+  fs.writeFileSync(path.join(dir, 'local.sqlite'), 'sqlite-bytes\n');
+  fs.writeFileSync(path.join(dir, 'server.key'), 'key-bytes\n');
+  fs.writeFileSync(path.join(dir, 'secrets.json'), '{"token":"local"}\n');
+  const blocked = Worktree.reclaim(deps, { root: copies });
+  kept(blocked, path.join(dir, 'local.sqlite'), 'sqlite-bytes\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'server.key'), 'utf8'), 'key-bytes\n');
+  assert.equal(fs.readFileSync(path.join(dir, 'secrets.json'), 'utf8'), '{"token":"local"}\n');
+  assert.match(blocked.reason, /可手动清理/);
+  assert.doesNotMatch(blocked.reason, /副本保留/);
+  listedManual(copies, deps.path);
+  const applied = Worktree.clean({ root: copies, apply: true });
+  assert.equal(applied.removed.length, 0);
+  assert.equal(fs.readFileSync(path.join(dir, 'secrets.json'), 'utf8'), '{"token":"local"}\n');
+});
+
+test('a root node_modules without package.json is not auto-removed', (t) => {
+  const { repo, copies } = setup(t);
+  assert.equal(fs.existsSync(path.join(repo, 'package.json')), false);
+  const deps = Worktree.prepare({ repo, branch: 'feat/python-modules', root: copies });
+  ship(repo, deps.path, 'feat/python-modules');
+  fs.mkdirSync(path.join(deps.path, 'node_modules'));
+  fs.writeFileSync(path.join(deps.path, 'node_modules', 'user_module.py'), 'print("mine")\n');
+  const blocked = Worktree.reclaim(deps, { root: copies });
+  kept(blocked, path.join(deps.path, 'node_modules', 'user_module.py'), 'print("mine")\n');
+  assert.match(blocked.reason, /可手动清理/);
+  listedManual(copies, deps.path);
+});
+
+test('a pushed copy with no ignored files is removed automatically', (t) => {
+  const { repo, copies } = setup(t);
+  const pushed = Worktree.prepare({ repo, branch: 'feat/empty-ignored', root: copies });
+  ship(repo, pushed.path, 'feat/empty-ignored');
+  const removed = Worktree.reclaim(pushed, { root: copies });
+  assert.equal(removed.removed, true, removed.reason);
+  assert.match(removed.reason, /已回收/);
+  assert.equal(fs.existsSync(pushed.path), false);
+});
+
+test('manual cleanup deletes nothing unless that copy is named with confirmation', (t) => {
+  const { repo, copies } = setup(t);
+  const deps = Worktree.prepare({ repo, branch: 'feat/manual', root: copies });
+  fs.mkdirSync(path.join(deps.path, 'node_modules'));
+  fs.writeFileSync(path.join(deps.path, 'node_modules', 'pkg.js'), 'module.exports = 1;\n');
+  const listed = Worktree.clean({ root: copies });
+  assert.equal(listed.removed.length, 0);
+  assert.equal(fs.existsSync(deps.path), true);
+  const applied = Worktree.clean({ root: copies, apply: true });
+  assert.equal(applied.removed.length, 0);
+  assert.match(Worktree.formatClean(applied), /没有删除/);
+  assert.equal(fs.readFileSync(path.join(deps.path, 'node_modules', 'pkg.js'), 'utf8'), 'module.exports = 1;\n');
+  const missing = Worktree.clean({ root: copies, paths: [deps.path] });
+  assert.equal(missing.removed.length, 0);
+  assert.equal(fs.existsSync(deps.path), true);
+});
+
+test('ignored files in dist, build, and out are kept and named, not offered for cleanup', (t) => {
   const { repo, copies } = setup(t);
   const secret = Worktree.prepare({ repo, branch: 'feat/secret', root: copies });
   ship(repo, secret.path, 'feat/secret');
@@ -60,19 +141,11 @@ test('a pushed branch still keeps ignored .env and a file named dist, and drops 
   const blocked = Worktree.reclaim(secret, { root: copies });
   kept(blocked, path.join(secret.path, '.env'), 'TOKEN=local\n');
   assert.equal(fs.readFileSync(path.join(secret.path, 'dist'), 'utf8'), 'not-a-build-directory\n');
+  assert.match(blocked.reason, /副本保留/);
   assert.match(blocked.reason, /\.env/);
   assert.match(blocked.reason, /dist/);
+  assert.doesNotMatch(blocked.reason, /可手动清理/);
 
-  const deps = Worktree.prepare({ repo, branch: 'feat/deps', root: copies });
-  fs.mkdirSync(path.join(deps.path, 'node_modules', 'pkg'), { recursive: true });
-  fs.writeFileSync(path.join(deps.path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
-  const removed = Worktree.reclaim(deps, { root: copies });
-  assert.equal(removed.removed, true, removed.reason);
-  assert.equal(fs.existsSync(deps.path), false);
-});
-
-test('ignored files inside dist, build, out, or node_modules block removal', (t) => {
-  const { repo, copies } = setup(t);
   const dist = Worktree.prepare({ repo, branch: 'feat/dist-env', root: copies });
   ship(repo, dist.path, 'feat/dist-env');
   fs.mkdirSync(path.join(dist.path, 'dist'));
@@ -80,6 +153,7 @@ test('ignored files inside dist, build, out, or node_modules block removal', (t)
   const distResult = Worktree.reclaim(dist, { root: copies });
   kept(distResult, path.join(dist.path, 'dist', '.env'), 'SECRET=dist\n');
   assert.match(distResult.reason, /dist\/\.env/);
+  assert.doesNotMatch(distResult.reason, /可手动清理/);
 
   const data = Worktree.prepare({ repo, branch: 'feat/build-data', root: copies });
   ship(repo, data.path, 'feat/build-data');
@@ -101,35 +175,12 @@ test('ignored files inside dist, build, out, or node_modules block removal', (t)
   kept(outResult, path.join(out.path, 'out', 'secrets.txt'), 'private config\n');
   assert.match(outResult.reason, /out\/secrets\.txt/);
 
-  const nested = Worktree.prepare({ repo, branch: 'feat/mod-env', root: copies });
-  ship(repo, nested.path, 'feat/mod-env');
-  fs.mkdirSync(path.join(nested.path, 'node_modules', 'pkg'), { recursive: true });
-  fs.writeFileSync(path.join(nested.path, 'node_modules', '.env'), 'TOKEN=inside\n');
-  fs.writeFileSync(path.join(nested.path, 'node_modules', 'pkg', '.env.local'), 'LOCAL=1\n');
-  const nestedResult = Worktree.reclaim(nested, { root: copies });
-  kept(nestedResult, path.join(nested.path, 'node_modules', '.env'), 'TOKEN=inside\n');
-  assert.equal(fs.readFileSync(path.join(nested.path, 'node_modules', 'pkg', '.env.local'), 'utf8'), 'LOCAL=1\n');
-  assert.match(nestedResult.reason, /node_modules\/\.env/);
-  assert.match(nestedResult.reason, /node_modules\/pkg\/\.env\.local/);
-
-  fs.mkdirSync(path.join(repo, 'packages', 'app'), { recursive: true });
-  fs.writeFileSync(path.join(repo, 'packages', 'app', 'package.json'), '{}\n');
-  git(repo, ['add', 'packages/app/package.json']);
-  git(repo, ['commit', '-m', 'workspace']);
-  git(repo, ['push', 'origin', 'main']);
-  const beside = Worktree.prepare({ repo, branch: 'feat/beside', base: 'main', root: copies });
-  fs.mkdirSync(path.join(beside.path, 'packages', 'app', 'node_modules'));
-  fs.writeFileSync(path.join(beside.path, 'packages', 'app', 'node_modules', 'pkg.js'), 'module.exports = 1;\n');
-  const besideResult = Worktree.reclaim(beside, { root: copies });
-  assert.equal(besideResult.removed, true, besideResult.reason);
-  assert.equal(fs.existsSync(beside.path), false);
-
-  const stray = Worktree.prepare({ repo, branch: 'feat/stray', base: 'main', root: copies });
-  fs.mkdirSync(path.join(stray.path, 'data', 'node_modules'), { recursive: true });
-  fs.writeFileSync(path.join(stray.path, 'data', 'node_modules', 'notes.txt'), 'not a package install\n');
-  const strayResult = Worktree.reclaim(stray, { root: copies });
-  kept(strayResult, path.join(stray.path, 'data', 'node_modules', 'notes.txt'), 'not a package install\n');
-  assert.match(strayResult.reason, /data\/node_modules\/notes\.txt/);
+  const listed = Worktree.clean({ root: copies });
+  for (const copy of [secret, dist, data, out]) {
+    assert.equal(listed.manual.some((item) => item.path === copy.path), false, copy.branch);
+    assert.ok(listed.kept.some((item) => item.path === copy.path), copy.branch);
+  }
+  assert.equal(listed.removed.length, 0);
 });
 
 test('stash, skip-worktree, assume-unchanged, and status config cannot hide local data', (t) => {

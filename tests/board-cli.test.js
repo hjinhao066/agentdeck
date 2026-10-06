@@ -522,6 +522,13 @@ test('new forwards --worktree only when asked, and worktree clean lists without 
   assert.match(listed.stdout, /没有删除/);
   assert.match(listed.stdout, /agentdeck\/cli/);
   assert.equal(fs.existsSync(created.path), true);
+  const applied = await runCli(['worktree', 'clean', '--apply', '--root', copies], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.equal(applied.code, 0, applied.stderr);
+  assert.match(applied.stdout, /没有删除/);
+  assert.equal(fs.existsSync(created.path), true);
+  const confirmed = await runCli(['worktree', 'clean', '--apply', '--path', created.path, '--root', copies], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.equal(confirmed.code, 0, confirmed.stderr);
+  assert.equal(fs.existsSync(created.path), false);
   const outside = await runCli(['worktree', 'clean', '--root', os.homedir()], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
   assert.notEqual(outside.code, 0);
   assert.match(outside.stderr, /temp directory/);
