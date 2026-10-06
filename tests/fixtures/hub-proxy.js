@@ -67,6 +67,8 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
   };
   const csrf = (value) => crypto.createHmac('sha256', csrfSecret).update(value).digest('hex');
   const cookie = (value, maxAge) => `${cookieName}=${value}; HttpOnly; Secure; SameSite=Strict; Path=${base}; Max-Age=${maxAge}`;
+  // 待我处理: the phone view of this machine's items (null: a build without api/attention).
+  machine.attention = null; machine.attentionWrites = [];
   const server = http.createServer(async (req, res) => {
     machine.requests.push({ method: req.method, url: req.url });
     if (machine.mode === 'hang') return;
@@ -103,6 +105,22 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (req.method === 'GET' && url.pathname === '/api/tasks') return json(res, 200, { cards: machine.cards });
     // Display values only, like quotaView() in mobile-web.js; the account is already masked.
     if (req.method === 'GET' && url.pathname === '/api/quota') return json(res, 200, { rows: machine.quota, version: appVersion, now: Date.now() });
+    // 待我处理, like mobile-web.js: read, reply, tick or put back one item.
+    if (req.method === 'GET' && url.pathname === '/api/attention' && machine.attention) return json(res, 200, { items: machine.attention, now: Date.now() });
+    if (req.method === 'POST' && url.pathname === '/api/attention' && machine.attention) {
+      const body = await readJson(req);
+      machine.attentionWrites.push(body);
+      if (machine.attentionRefuse) return json(res, 409, { error: machine.attentionRefuse });
+      if (body && body.op === 'read' && Array.isArray(body.ids)) { machine.attention.forEach((i) => { if (body.ids.includes(i.id) && !i.readAt) i.readAt = Date.now(); }); return json(res, 200, { ok: true, item: null }); }
+      const item = body && machine.attention.find((i) => i.id === body.id);
+      if (!item) return json(res, 400, { error: 'Invalid request.' });
+      const now = Date.now();
+      if (body.op === 'reply' && typeof body.text === 'string' && body.text.trim()) Object.assign(item, { done: true, doneAt: now, doneText: '你已回复', readAt: item.readAt || now, replies: [...(item.replies || []), { text: body.text.trim(), at: now, from: 'phone', seen: false }] });
+      else if (body.op === 'done') Object.assign(item, { done: true, doneAt: now, doneText: item.kind === 'report' ? '你看过了' : '你标记已处理', readAt: item.readAt || now });
+      else if (body.op === 'reopen') Object.assign(item, { done: false, doneAt: 0, doneText: '' });
+      else return json(res, 400, { error: 'Invalid request.' });
+      return json(res, 200, { ok: true, item });
+    }
     if (req.method === 'GET' && url.pathname === '/api/relay' && machine.relay) return json(res, 200, relayState());
     if (req.method === 'POST' && url.pathname === '/api/relay' && machine.relay) {
       const body = await readJson(req);
@@ -203,6 +221,27 @@ function relayFixture(currentId = 'us') {
     seat('chatgpt', 'ChatGPT', [cell('5h', 55, 120), cell('7d', 30, 4000)], { provider: 'Codex', account: 'o***@example.com' }),
   ] };
 }
+// 待我处理 items as each computer's api/attention sends them: Mac has a decision,
+// a login and two reports (one about a card), Windows a held card and an older finished one.
+function attentionFixture() {
+  const ago = (minutes) => Date.now() - minutes * 60000;
+  const item = (id, kind, label, title, minutes, extra = {}) => ({ id, kind, label, title, ask: '', detail: '', files: [], project: '', cardTitle: '', sessionTitle: '', source: 'captain',
+    created: ago(minutes), readAt: 0, done: false, doneAt: 0, doneText: '', replies: [], ...extra });
+  return {
+    mac: [
+      item('at-m1-decide', 'need', '等你拍板', '网页端登录改成「1」能做，但谁都能控制两台电脑', 12, { ask: '回复「仍要 1」，或者「改成登录一次长期有效」', project: 'agentdeck', cardTitle: '网页端登录改成 1',
+        detail: '取证结论：网页端在公网 VPS 上，登录后能给队长发指令。\n设成 1 等于任何人猜一次就能操控 Mac 和 Windows。\n更稳的做法：登录一次记住 1 年，或手机一键登录。', files: ['/Users/jinhao/reports/agentdeck-login/facts.md'] }),
+      item('at-m2-login', 'need', '等你登录或授权', '小红书要你在 Mac 的 Chrome 里登录一次', 40, { ask: '登录后点「已处理」，抓取会自己接着跑', project: 'xhs-harvest' }),
+      item('at-m3-report', 'report', '结果汇报', '小福助手排查报告回来了：结论是完全正常，但这个结论我还不认，已让它补查两件', 25, { project: '小福助手',
+        detail: '补查一：用妹妹那份真实 Excel 走一遍上传→识别→写入。\n补查二：识别失败时有没有提示。', files: ['/Users/jinhao/reports/xiaofu/check.md', '/Users/jinhao/reports/xiaofu/recheck-plan.md'], cardTitle: '小福助手 Excel 识别' }),
+      item('at-m4-report', 'report', '结果汇报', '「登录改成 1」的会话卡在确认窗口，我已替它点了「是」', 70, { project: 'agentdeck', readAt: ago(60), sessionTitle: '登录取证' }),
+    ],
+    win: [
+      item('at-w1-held', 'need', '验收卡住了', '「Muse 冒烟测试」验收没过 2 次，已经停下', 95, { ask: '决定还做不做、要不要换个做法（回复会交给队长）。', project: 'muse', source: 'card', cardTitle: 'Muse 冒烟测试' }),
+      item('at-w2-done', 'report', '结果汇报', 'Windows 隧道守护脚本 dry-run 通过了', 300, { readAt: ago(290), done: true, doneAt: ago(280), doneText: '你已回复', replies: [{ text: '好，开机自启也一起配上', at: ago(280), from: 'phone', seen: true }] }),
+    ],
+  };
+}
 // The default two computers, each with its own Captain accounts.
 function withRelay() {
   const [mac, win] = defaults();
@@ -238,7 +277,7 @@ async function startHub({ port = 0, machines = defaults(), directory = HUB } = {
     async close() { await close(proxy); for (const fake of Object.values(fakes)) await fake.close(); } };
 }
 
-module.exports = { startHub, fakeMachine, HUB_HEADERS, relayFixture, withRelay };
+module.exports = { startHub, fakeMachine, HUB_HEADERS, relayFixture, withRelay, attentionFixture };
 
 // node tests/fixtures/hub-proxy.js → a local hub to click through by hand.
 if (require.main === module) startHub({ port: Number(process.env.PORT) || 0, machines: withRelay() }).then((hub) => {
