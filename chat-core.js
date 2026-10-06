@@ -113,23 +113,63 @@
     return blocks;
   }
 
+  // What goes between two pieces of a line the terminal broke. It breaks at a
+  // space when it can, so the space comes back unless both sides are Chinese
+  // (a run cut at the right edge) or one of them is punctuation that sits tight.
+  const TIGHT = /[\u2018-\u201f\u2026\u3000-\u303f\uff00-\uffef]/;
+  function joinGap(before, after) {
+    const a = String(before).slice(-1), b = String(after)[0] || '';
+    return !a || !b || /\s/.test(a) || (isWide(a) && isWide(b)) || TIGHT.test(a) || TIGHT.test(b) ? '' : ' ';
+  }
+  const TABLE_ROW = /^\s*[|│]/;
+
   // Terminals hard-wrap long paragraphs; glue them back so the chat bubble can
-  // wrap to its own width. Lists, headings and indented code stay as they are.
+  // wrap to its own width. Lists, headings, table rows and indented code stay as they are.
   function reflow(lines, cols) {
     const limit = Math.max(20, (cols || 80) * 0.7);
     const out = [];
     let prev = null;
     for (const line of lines) {
       if (!line.trim()) { out.push(''); prev = null; continue; }
-      const special = /^\s*([-*•]|\d+[.)])\s+/.test(line) || /^#{1,6}\s/.test(line) || /^ {4,}\S/.test(line) || /^\s*(```|~~~)/.test(line);
-      if (prev !== null && !special && visibleWidth(out[out.length - 1]) >= limit) {
+      const special = /^\s*([-*•]|\d+[.)])\s+/.test(line) || /^#{1,6}\s/.test(line) || /^ {4,}\S/.test(line) || /^\s*(```|~~~)/.test(line) || TABLE_ROW.test(line);
+      if (prev !== null && !special && !TABLE_ROW.test(prev) && visibleWidth(out[out.length - 1]) >= limit) {
         const last = out[out.length - 1];
-        const gap = isWide(last.slice(-1)) || isWide(line.trim()[0]) ? '' : ' ';
-        out[out.length - 1] = last + gap + line.trim();
+        out[out.length - 1] = last + joinGap(last, line.trim()) + line.trim();
       } else {
         out.push(line);
       }
       prev = line;
+    }
+    return out;
+  }
+
+  // A table the TUI drew with box lines becomes a Markdown table while its row
+  // rules can still be read: a cell wrapped over several rows is one cell again.
+  // A table cut off by the screen edge is left as it is.
+  const BOX_TOP = /^\s*┌[─┬]*┬[─┬]*┐\s*$/, BOX_MID = /^\s*├[─┼]+┤\s*$/, BOX_END = /^\s*└[─┴]+┘\s*$/, BOX_ROW = /^\s*│.*│\s*$/;
+  const pipeRow = (cells) => '| ' + cells.map((c) => c.replace(/\|/g, '\\|')).join(' | ') + ' |';
+  const pipeTable = (rows, indent = '') => [pipeRow(rows[0]), '|' + rows[0].map(() => ' --- ').join('|') + '|', ...rows.slice(1).map(pipeRow)].map((l) => indent + l);
+  function boxTables(lines) {
+    const out = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (!BOX_TOP.test(lines[i])) { out.push(lines[i]); continue; }
+      const rows = [];
+      let cur = null, j = i + 1, closed = false;
+      for (; j < lines.length; j++) {
+        if (BOX_ROW.test(lines[j])) {
+          const cells = lines[j].trim().slice(1, -1).split('│').map((c) => c.trim());
+          if (!cur) cur = cells.map(() => '');
+          if (cells.length !== cur.length) break;
+          cells.forEach((c, k) => { if (c) cur[k] += joinGap(cur[k], c) + c; });
+        } else if (BOX_MID.test(lines[j]) || BOX_END.test(lines[j])) {
+          if (cur) rows.push(cur);
+          cur = null;
+          if (BOX_END.test(lines[j])) { closed = true; break; }
+        } else break;
+      }
+      if (!closed || !rows.length || rows.some((r) => r.length !== rows[0].length)) { out.push(lines[i]); continue; }
+      out.push(...pipeTable(rows, /^\s*/.exec(lines[i])[0]));
+      i = j;
     }
     return out;
   }
@@ -169,7 +209,7 @@
     let lines = screenLines.map(rtrim);
     const echo = findPromptEcho(lines, userText);
     if (echo >= 0) lines = lines.slice(echo + 1);
-    lines = cutInputBox(lines);
+    lines = boxTables(cutInputBox(lines));
     return lines.filter((l) => !isChrome(l));
   }
   function extractReply(screenLines, userText, cols) {
@@ -437,6 +477,98 @@
     return out + esc(code.slice(last));
   }
 
+  // ---- what a reply reads as in the chat view ----
+  // A reply is read off the terminal screen and saved as it was read. What the
+  // chat view shows is the agent's words only: `clean` is the phone hub's
+  // cleanReply (mobile-web/hub/core.js), the one set of rules both ends use.
+  // extractReply trims the reply, which takes the indent off the first row of a
+  // file diff left at its top; that row gets its indent back so the shared
+  // rules see the diff whole.
+  const DIFF_ROW = /^ {2,}\d{1,6}(?: [+-]| {2}\S|\s*$)/;
+  function shownReply(reply, said, clean) {
+    let text = String(reply == null ? '' : reply).replace(/\r\n?/g, '\n');
+    if (typeof clean !== 'function') return text;
+    const head = text.split(/\n[ \t]*\n/)[0].split('\n');
+    if (head.length > 1 && /^\S/.test(head[0]) && head.slice(1).some((l) => DIFF_ROW.test(l))) text = '    ' + text;
+    return clean(text, said || '');
+  }
+
+  // The shown reply as Markdown for the page. The TUI already drew the agent's
+  // Markdown as plain rows, so the structure is read back from their shape:
+  // a short line standing alone or right above a list is a section title, rows
+  // of │ cells are a table, and "key: value" records repeating the same keys
+  // (how the TUI draws a table too wide for it) are a table again.
+  const leading = (l) => /^ */.exec(l)[0].length;
+  // A reply drawn two columns in keeps that indent on every row except the first
+  // row of each paragraph (the shared rules trim it): take it off the rest too.
+  function dedent(lines) {
+    const inner = lines.filter((l, i) => l.trim() && i > 0 && lines[i - 1].trim());
+    const cut = inner.length ? Math.min(...inner.map(leading)) : 0;
+    return cut ? lines.map((l) => l.slice(Math.min(cut, leading(l)))) : lines;
+  }
+  const NOT_TITLE_END = /[。．.！!？?；;，,、：:…~～]$/;
+  // opening: the reply's first line, where a short one is more often "好的" than a title
+  function titleLike(line, aboveList, opening) {
+    const t = line.trim(), n = [...t].length;
+    if (n < (opening && !aboveList ? 4 : 2) || n > (aboveList ? 48 : 32)) return false;
+    if (/^(?:[-*+•>|#│]|\d+[.)]\s|```|~~~)/.test(t) || NOT_TITLE_END.test(t)) return false;
+    if (!/[A-Za-z一-鿿]/.test(t) || /^[^\s:：]{1,12}: \S/.test(t)) return false;
+    if (/https?:\/\/|\w\/\w|[~.]?\/[\w.-]+\/|\.[A-Za-z]{1,5}(?:\s|$)|\\|`|\*\*/.test(t)) return false;   // a path, a file, code, or already styled
+    if (/^[\x20-\x7e]+$/.test(t) && (!/^[A-Z0-9]/.test(t) || /[=$<>{}[\];|&]|--|\.\w{1,5}$/.test(t))) return false;   // a command, a file name
+    return true;
+  }
+  // "│ a │ b │ │ c │ d │": rows the terminal drew, possibly glued onto one line.
+  function boxRows(lines) {
+    const rows = lines.flatMap((l) => l.trim().split('│ │')).map((r) => r.replace(/^\s*│?|│?\s*$/g, '').split('│').map((c) => c.trim()));
+    return rows.length && rows[0].length > 1 && rows.every((r) => r.length === rows[0].length) ? pipeTable(rows) : null;
+  }
+  // "版本: 1.2.0 / Mac: 已装 / 版本: 1.2.1 / Mac: …": the first key repeats, every
+  // record holds the same keys in the same order. A key is what the records
+  // share right before each colon, so records glued together by reflow still split.
+  function recordRows(lines) {
+    const text = lines.join('\n');
+    const lead = /^([^\s:：]{1,12}): /.exec(text);
+    if (!lead) return null;
+    const records = text.split(lead[1] + ': ').slice(1);
+    if (records.length < 2) return null;
+    const parts = records.map((r) => r.split(/: /));
+    const count = parts[0].length;
+    if (count < 2 || count > 8 || parts.some((p) => p.length !== count)) return null;
+    const keys = [lead[1]];
+    for (let k = 0; k < count - 1; k++) {
+      // the longest ending the records share, without spaces
+      const ends = parts.map((p) => /[^\s:：]{0,12}$/.exec(p[k])[0]);
+      let key = ends[0];
+      for (const e of ends) while (key && !e.endsWith(key)) key = key.slice(1);
+      if (!key) return null;
+      keys.push(key);
+    }
+    const rows = parts.map((p) => p.map((v, k) => (k < count - 1 ? v.slice(0, v.length - keys[k + 1].length) : v).replace(/\s+/g, ' ').trim()));
+    return pipeTable([keys, ...rows]);
+  }
+  function tidyReply(text) {
+    const lines = dedent(String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n'));
+    const blocks = [];          // { lines, code } split on empty lines; a fenced block stays whole
+    let cur = null, fence = false;
+    for (const line of lines) {
+      const mark = /^\s*(```|~~~)/.test(line);
+      if (fence || mark) {
+        if (!cur || !cur.code) blocks.push((cur = { lines: [], code: true }));
+        cur.lines.push(line);
+        if (mark) { fence = !fence; if (!fence) cur = null; }
+      } else if (!line.trim()) cur = null;
+      else { if (!cur) blocks.push((cur = { lines: [] })); cur.lines.push(line); }
+    }
+    return blocks.map((b, at) => {
+      if (b.code) return b.lines.join('\n');
+      const table = b.lines.every((l) => BOX_ROW.test(l)) ? boxRows(b.lines) : recordRows(b.lines);
+      if (table) return table.join('\n');
+      const aboveList = b.lines.length > 1 && LIST_ITEM.test(b.lines[1]);
+      const title = (b.lines.length === 1 ? at < blocks.length - 1 : aboveList) && titleLike(b.lines[0], aboveList, at === 0);
+      return (title ? ['### ' + b.lines[0].trim(), ...b.lines.slice(1)] : b.lines).join('\n');
+    }).join('\n\n');
+  }
+
   // ---- markdown (for previewing .md files) ----
   const SAFE_URL = /^(https?:\/\/|mailto:)/i;
   function inline(src) {
@@ -449,6 +581,49 @@
     });
     s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
     return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
+  }
+  const tableAt = (lines, i) => /^\s*\|.*\|\s*$/.test(lines[i]) && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1] || '');
+  // A list from line `start`: items nest by their indent, an indented line that
+  // is not an item continues the one above it (a terminal wraps long items that
+  // way), and one empty line between two items does not end the list.
+  const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+  function listAt(lines, start) {
+    const root = { lists: [] };
+    const open = [];                 // lists being filled, outermost first
+    const item = () => { const l = open[open.length - 1]; return l.items[l.items.length - 1]; };
+    let i = start;
+    for (; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) {
+        if (LIST_ITEM.test(lines[i + 1] || '')) continue;
+        break;
+      }
+      const m = LIST_ITEM.exec(line);
+      const indent = /^\s*/.exec(line)[0].length;
+      if (!m) {
+        if (indent < 2 || /^\s*(#{1,6}\s|```|~~~|>)/.test(line) || tableAt(lines, i)) break;
+        while (open.length && open[open.length - 1].indent >= indent) open.pop();
+        if (!open.length) break;
+        item().text.push(line.trim());
+        continue;
+      }
+      const ordered = /\d/.test(m[2]);
+      while (open.length && open[open.length - 1].indent > indent) open.pop();
+      let list = open[open.length - 1];
+      if (!list || list.indent < indent || list.ordered !== ordered) {
+        if (list && list.indent === indent) open.pop();       // bullets turning into numbers start a list of their own
+        list = { indent, ordered, first: ordered ? parseInt(m[2], 10) : 1, items: [] };
+        (open.length ? item() : root).lists.push(list);
+        open.push(list);
+      }
+      list.items.push({ text: [m[3].trim()], lists: [] });
+    }
+    const render = (list) => {
+      const tag = list.ordered ? 'ol' : 'ul';
+      return `<${tag}${list.ordered && list.first !== 1 ? ` start="${list.first}"` : ''}>` + list.items.map((it) =>
+        `<li>${inline(it.text.reduce((a, b) => a + joinGap(a, b) + b))}${it.lists.map(render).join('')}</li>`).join('') + `</${tag}>`;
+    };
+    return { html: root.lists.map(render).join('\n'), next: i };
   }
   // breaks: keep single newlines inside a paragraph (agent replies come from a
   // terminal, where a line break is usually meant).
@@ -478,32 +653,26 @@
         html.push(`<blockquote>${inline(q.join(' '))}</blockquote>`);
         continue;
       }
-      if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1] || '')) {
-        const cells = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+      if (tableAt(lines, i)) {
+        const cells = (l) => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
         const head = cells(line);
         i += 2;
         const rows = [];
         while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
-        html.push('<table><thead><tr>' + head.map((c) => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>' +
-          rows.map((r) => '<tr>' + r.map((c) => `<td>${inline(c)}</td>`).join('') + '</tr>').join('') + '</tbody></table>');
+        // wrapped so a wide table scrolls inside the text instead of stretching it
+        html.push('<div class="md-table"><table><thead><tr>' + head.map((c) => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>' +
+          rows.map((r) => '<tr>' + head.map((_, k) => `<td>${inline(r[k] || '')}</td>`).join('') + '</tr>').join('') + '</tbody></table></div>');
         continue;
       }
-      const li = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line);
-      if (li) {
-        const ordered = /\d/.test(li[2]);
-        const items = [];
-        while (i < lines.length) {
-          const m = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
-          if (!m) break;
-          items.push(`<li style="margin-left:${Math.min(m[1].length, 8) * 4}px">${inline(m[3])}</li>`);
-          i++;
-        }
-        html.push(`<${ordered ? 'ol' : 'ul'}>${items.join('')}</${ordered ? 'ol' : 'ul'}>`);
+      if (LIST_ITEM.test(line)) {
+        const list = listAt(lines, i);
+        html.push(list.html);
+        i = list.next;
         continue;
       }
       if (!line.trim()) { i++; continue; }
       const para = [];
-      while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*(```|~~~)|\s*>|\s*([-*+]|\d+[.)])\s)/.test(lines[i])) para.push(lines[i++].trim());
+      while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*(```|~~~)|\s*>|\s*([-*+]|\d+[.)])\s)/.test(lines[i]) && !tableAt(lines, i)) para.push(lines[i++].trim());
       if (!para.length) { para.push(lines[i++]); }
       html.push(`<p>${breaks ? para.map(inline).join('<br>') : inline(para.join(' '))}</p>`);
     }
@@ -621,6 +790,8 @@
     normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
+    // the reply as the chat view shows it
+    shownReply, tidyReply, joinGap,
     // a turn's work and timing in the chat view
     extractSteps, capSteps, isToolStep, editsFromSteps, fmtDuration, turnTimeLabel, MAX_STEPS, MAX_STEP_BYTES,
   };

@@ -132,7 +132,8 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   await expect(head).toHaveAttribute('title', /1 完成/);
   // The terminal is the default view; open chat explicitly to use its card.
   await page.evaluate((id) => ChatUI.setMode(id, 'chat'), mainId);
-  // clicking the card's title opens it right after the Captain
+  // the cards sit folded behind one line; open it, then the card's title opens the session right after the Captain
+  await page.locator(`.column[data-col-id="${mainId}"] .task-run`).first().click();
   await card.locator('.task-title').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe(child);
   await expect(page.locator(`.column[data-col-id="${child}"]`)).not.toHaveClass(/backstage/);

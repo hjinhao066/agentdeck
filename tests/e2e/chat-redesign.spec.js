@@ -145,6 +145,8 @@ test('a saved new turn shows how long it worked, its folded work, and its cards'
   const card = turn.locator('.link-card');
   await expect(card).toHaveCount(1);
   await expect(card.locator('.lc-title')).toHaveText('example.com');
+  // the menu's trigger is an icon button with a label, not a word
+  expect(await card.locator('.lc-open').evaluate((b) => [b.getAttribute('aria-label'), b.title, b.textContent.trim()])).toEqual(['打开方式', '打开方式', '']);
   await card.locator('.lc-open').click();
   await expect(card.locator('.lc-menu .lc-item')).toHaveText(['侧栏打开', '系统浏览器打开', '复制链接']);
   await page.keyboard.press('Escape');

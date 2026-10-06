@@ -60,6 +60,44 @@
     return t === 'Custom agent' ? (String(col.cmd || '').trim().split(/\s+/)[0] || 'Agent') : t === 'Shell' ? '终端' : t;
   }
 
+  // ---- what a reply shows ----
+  // An agent's column shows the agent's words only: terminal residue is taken
+  // out by the phone hub's rules (ChatCore.shownReply). The saved reply is not
+  // changed. A plain shell's output is shown as it is.
+  const saidOf = new WeakMap();     // turns -> everything the user wrote there
+  const shownOf = new WeakMap();    // turn -> its reply as shown
+  function saidIn(turns) {
+    const hit = saidOf.get(turns);
+    if (hit && hit.n === turns.length) return hit.text;
+    const text = turns.map((t) => t.user || '').join('\n');
+    saidOf.set(turns, { n: turns.length, text });
+    return text;
+  }
+  const isAgentColumn = (col) => !!col && (!!col.isMain || !!col.cmd);
+  function shownReply(v, turn, turns) {
+    const reply = turn.reply || '';
+    if (!reply || !isAgentColumn(columnById(v.id))) return reply;
+    const said = saidIn(turns || chatFor(v.id).turns);
+    const hit = shownOf.get(turn);
+    if (hit && hit.reply === reply && hit.said === said) return hit.text;
+    const text = C.shownReply(reply, said, window.HubCore && window.HubCore.cleanReply);
+    shownOf.set(turn, { reply, said, text });
+    return text;
+  }
+  // A turn AgentDeck started itself (a receipt delivery) that left nothing to read.
+  const isSilent = (turn, text) => !!turn.done && !turn.interrupted && !turn.user && !(turn.atts && turn.atts.length) && !text;
+  // Who is speaking, over every reply: 队长 with its crest, any other agent by name.
+  function whoLabel(v) {
+    const col = columnById(v.id) || {};
+    const who = el('span', 'reply-who' + (col.isMain ? ' captain' : ''));
+    const mark = el('span', 'who-mark');
+    mark.setAttribute('aria-hidden', 'true');
+    const type = window.BoardCore.inferAgentType(col.cmd);
+    mark.innerHTML = col.isMain ? host.ICONS.crown : (window.AgentInfo && window.AgentInfo.PROVIDER_ICONS[type]) || host.ICONS.terminal;
+    who.append(mark, el('span', 'who-name', col.isMain ? '队长' : agentName(col)));
+    return who;
+  }
+
   // ---- view mode ----
   // The per-column mode overrides the current global choice.
   function modeOf(col) {
@@ -144,7 +182,7 @@
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false };
+    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false, clips: clipWatch() };
     scroll.addEventListener('scroll', () => {
       v.following = nearBottom(scroll);
       if (v.following) newContent.hidden = true;
@@ -195,6 +233,16 @@
 
     if (loaded) renderChat(col.id);
   }
+  // Which of your messages are cut by the bubble's height: those show the fold control.
+  function clipWatch() {
+    return new ResizeObserver((entries) => entries.forEach(({ target }) => {
+      const user = target.parentNode;
+      if (!user || user.classList.contains('expanded')) return;
+      const cut = target.scrollHeight > target.clientHeight + 1;
+      user.classList.toggle('clipped', cut);
+      target.foldControl.hidden = !cut;
+    }));
+  }
   function autosize(ta) {
     ta.style.height = 'auto';
     ta.style.height = Math.min(ta.scrollHeight, 200) + 'px';
@@ -242,8 +290,7 @@
     }
     chip.addEventListener('click', (e) => { if (!e.target.closest('.att-x')) window.SidePane.openPreview(path, colId); });
     if (onRemove) {
-      const x = el('button', 'att-x', '✕');
-      x.type = 'button'; x.title = '移除';
+      const x = svgButton('att-x', 'close', '移除附件');
       x.addEventListener('click', (e) => { e.stopPropagation(); onRemove(); });
       chip.appendChild(x);
     }
@@ -281,7 +328,7 @@
       for (const m of host.findLinks(line).sort((a, b) => a.start - b.start)) {
         if (m.start < last) continue;
         parent.append(line.slice(last, m.start));
-        const a = el('a', 'chat-link', m.text);
+        const a = el('a', m.kind === 'url' ? 'chat-link' : 'chat-link path', m.text);
         a.addEventListener('click', (e) => { e.preventDefault(); window.SidePane.openLink(m, e, colId); });
         parent.append(a);
         last = m.end;
@@ -309,14 +356,14 @@
       a.addEventListener('click', (e) => { e.preventDefault(); window.SidePane.openLink({ kind: 'url', text: a.getAttribute('href') }, e, colId); });
     });
   }
-  function renderReply(v, turn) {
+  function renderReply(v, turn, text) {
     const box = el('div', 'reply');
     if (!turn.done) {
       box.classList.add('pending');
       box.append(el('span', 'typing'), (v.live = el('span', 'live-line')));
-    } else if (turn.reply) {
+    } else if (text) {
       box.classList.add('md');
-      box.innerHTML = C.renderMarkdown(turn.reply, { breaks: true });
+      box.innerHTML = C.renderMarkdown(isAgentColumn(columnById(v.id)) ? C.tidyReply(text) : text, { breaks: true });
       linkifyTree(box, v.id);
       decorateCode(box);
     } else if (!turn.interrupted) {
@@ -325,7 +372,7 @@
     }
     if (turn.done && turn.interrupted) {
       box.classList.add('interrupted');
-      box.appendChild(el('div', 'reply-note', turn.reply
+      box.appendChild(el('div', 'reply-note', text
         ? '这一轮还没结束，终端就关掉了（退出 AgentDeck 或终端重启）。上面是关掉前已经看到的部分。'
         : '这一轮还没结束，终端就关掉了（退出 AgentDeck 或终端重启），没来得及收到回复。'));
     }
@@ -431,10 +478,10 @@
   }
 
   // ---- cards under a reply: web pages it mentions, files it changed ----
-  function webCards(v, turn) {
+  function webCards(v, text) {
     const seen = new Set();
     const urls = [];
-    for (const line of (turn.reply || '').split('\n')) {
+    for (const line of text.split('\n')) {
       for (const m of host.findLinks(line)) {
         if (m.kind === 'url' && !seen.has(m.text) && urls.length < 3) { seen.add(m.text); urls.push(m.text); }
       }
@@ -454,13 +501,9 @@
     text.append(el('span', 'lc-title', m[1] || url), el('span', 'lc-sub', path ? decodeURI(path).slice(0, 80) : '网页预览'));
     main.append(ico, text);
     main.addEventListener('click', (e) => window.SidePane.openLink({ kind: 'url', text: url }, e, v.id));
-    const pick = el('button', 'lc-open');
-    pick.type = 'button';
+    const pick = svgButton('icon-btn lc-open', 'more', '打开方式');
     pick.setAttribute('aria-haspopup', 'menu');
     pick.setAttribute('aria-expanded', 'false');
-    const chev = el('span', 'ico');
-    chev.innerHTML = host.ICONS.chevDown;
-    pick.append('打开方式', chev);
     pick.addEventListener('click', (e) => { e.stopPropagation(); openMenu(pick, [
       ['侧栏打开', 'side', () => window.SidePane.openLink({ kind: 'url', text: url }, null, v.id)],
       ['系统浏览器打开', 'globe', () => window.deck.openExternal(url)],
@@ -554,7 +597,7 @@
 
   // readOnly: a turn from a retired 队长 conversation; it is not tracked in
   // v.rows, so live updates of the current chat never touch it.
-  function turnRows(v, turn, readOnly) {
+  function turnRows(v, turn, readOnly, turns) {
     if (turn.kind === 'notice') {
       const notice = el('div', 'captain-relay-notice', turn.reply);
       notice.dataset.turn = turn.id; notice.setAttribute('role', 'status');
@@ -582,10 +625,22 @@
     // 队长's automatic receipt deliveries have no prompt of yours to show
     user.hidden = !turn.user && !(turn.atts && turn.atts.length);
     if (!user.hidden && turn.ts) wrap.appendChild(el('div', 'turn-time', C.turnTimeLabel(turn.ts)));
-    bubble.title = '点击展开 / 收起';
-    // long prompts are clipped; a click (not a text selection) expands them
-    bubble.addEventListener('click', () => { if (!String(window.getSelection())) user.classList.toggle('expanded'); });
+    // long prompts are clipped; the chevron under one, or a click on it (not a
+    // text selection), opens the rest
+    const more = svgButton('icon-btn bubble-more', 'chevDown', '展开全文');
+    more.hidden = true;
+    more.setAttribute('aria-expanded', 'false');
+    const unfold = () => {
+      const on = user.classList.toggle('expanded');
+      more.title = on ? '收起' : '展开全文';
+      more.setAttribute('aria-label', more.title);
+      more.setAttribute('aria-expanded', String(on));
+    };
+    more.addEventListener('click', unfold);
+    bubble.addEventListener('click', () => { if (!String(window.getSelection())) unfold(); });
     user.appendChild(bubble);
+    bubble.foldControl = more;
+    v.clips.observe(bubble);
     // your own message: copy it, or put it (and its attachments) back to edit
     const mine = el('div', 'msg-tools user-tools');
     const copyMine = copyButton('复制这条消息', () => turn.user || '');
@@ -597,28 +652,31 @@
       v.ta.focus();
       v.ta.setSelectionRange(v.ta.value.length, v.ta.value.length);
     });
-    mine.append(copyMine, editMine);
+    mine.append(more, copyMine, editMine);
     user.appendChild(mine);
 
-    const asst = assistantRow(v, turn);
+    const asst = assistantRow(v, turn, turns);
     wrap.append(user, asst);
-    if (!readOnly) v.rows.set(turn.id, { user, asst, turn });
+    wrap.hidden = isSilent(turn, shownReply(v, turn, turns));
+    if (!readOnly) v.rows.set(turn.id, { user, asst, turn, wrap });
     return wrap;
   }
-  function assistantRow(v, turn) {
+  function assistantRow(v, turn, turns) {
     const asst = el('div', 'msg assistant');
     asst.dataset.turn = turn.id;
-    asst.appendChild(processRow(v, turn));
-    asst.appendChild(renderReply(v, turn));
+    const text = shownReply(v, turn, turns);
+    const head = el('div', 'reply-head');
+    head.append(whoLabel(v), processRow(v, turn));
+    asst.append(head, renderReply(v, turn, text));
     if (!turn.done) return asst;
-    webCards(v, turn).forEach((card) => asst.appendChild(card));
+    webCards(v, text).forEach((card) => asst.appendChild(card));
     const edits = editCard(v, turn);
     if (edits) asst.appendChild(edits);
     const tools = el('div', 'msg-tools');
-    const copy = copyButton('复制回复', () => turn.reply || '');
+    const copy = copyButton('复制回复', () => text);
     const share = svgButton('msg-tool', 'share', '分享：把这一轮的问与答复制成 Markdown');
     share.addEventListener('click', () => {
-      host.clipboardWrite(`**我：**\n\n${turn.user || ''}\n\n**回复：**\n\n${turn.reply || ''}\n`);
+      host.clipboardWrite(`**我：**\n\n${turn.user || ''}\n\n**回复：**\n\n${text}\n`);
       flashCheck(share, 'share');
     });
     const term = svgButton('msg-tool', 'terminal', '在终端里查看');
@@ -752,6 +810,70 @@
     };
     setTimeout(check, 500);
   }
+  // ---- 队长's dispatch cards fold into one line ----
+  // The cards 队长 leaves between two messages (work handed out, receipts coming
+  // back) are process, not conversation: each run of them sits behind one line
+  // that says how many there are and how they stand, and opens on a click.
+  // The cards stay direct children of the list; the line is their sibling.
+  const RUN_STATES = [['busy', '进行中', ['working', 'queued', 'asking', 'paused']], ['wait', '排队', ['waiting']],
+    ['stuck', '卡住', ['input', 'quota']], ['failed', '没做成', ['failed']], ['done', '完成', ['done', 'stopped']]];
+  function syncRuns(v, box = v.scroll) {
+    const old = new Map([...box.children].filter((n) => n.classList.contains('task-run')).map((n) => [n.dataset.run, n]));
+    let run = [];
+    const close = () => { if (run.length) paintRun(v, box, run, old); run = []; };
+    [...box.children].forEach((n) => {
+      if (n.classList.contains('task-turn')) run.push(n);
+      // a silent receipt delivery between two cards does not split them
+      else if (!n.classList.contains('task-run') && !(n.hidden && n.classList.contains('turn'))) close();
+    });
+    close();
+    old.forEach((n) => n.remove());
+  }
+  function paintRun(v, box, cards, old) {
+    const key = cards[0].dataset.turn;
+    let line = old.get(key);
+    if (line) old.delete(key);
+    else {
+      line = el('button', 'task-run');
+      line.type = 'button';
+      line.dataset.run = key;
+      line.addEventListener('click', () => {
+        const now = !opened(v, 'openRuns').has(key);
+        if (now) opened(v, 'openRuns').add(key); else opened(v, 'openRuns').delete(key);
+        syncRuns(v, box);
+      });
+    }
+    if (line.nextSibling !== cards[0]) box.insertBefore(line, cards[0]);
+    const open = opened(v, 'openRuns').has(key);
+    const counts = RUN_STATES.map(([name, label, states]) => [name, label, cards.filter((c) => states.some((st) => c.querySelector('.task-card.st-' + st))).length]).filter((x) => x[2]);
+    const shown = `${open}|${cards.length}|${counts.map((x) => x[0] + x[2]).join(',')}`;
+    if (line.dataset.shown !== shown) {
+      line.dataset.shown = shown;
+      line.textContent = '';
+      const chev = el('span', 'ico proc-chev');
+      chev.innerHTML = host.ICONS.chevRight;
+      line.append(chev, el('span', 'run-label', '派活与回执'), el('span', 'run-count', cards.length + ' 条'));
+      counts.forEach(([name, label, n]) => {
+        const chip = el('span', 'run-state ' + name);
+        chip.append(el('i'), n + ' ' + label);
+        line.appendChild(chip);
+      });
+      line.classList.toggle('open', open);
+      line.setAttribute('aria-expanded', String(open));
+      line.title = open ? '收起派活与回执' : '展开派活与回执';
+    }
+    cards.forEach((c) => { c.hidden = !open; });
+  }
+  // A card search or a jump lands on: its run opens first.
+  function showCard(v, card) {
+    if (!card || !card.hidden || !card.classList.contains('task-turn')) return;
+    let line = card.previousElementSibling;
+    while (line && !line.classList.contains('task-run')) line = line.previousElementSibling;
+    if (!line) return;
+    opened(v, 'openRuns').add(line.dataset.run);
+    syncRuns(v, card.parentNode);
+  }
+
   // Every turn stays saved; a long chat renders its latest C.RENDER_STEP turns
   // and loads older ones a step at a time.
   function earlierButton(hidden, onClick) {
@@ -770,6 +892,7 @@
     const v = views.get(id);
     if (!v) return;
     const top = v.scroll.scrollTop;
+    v.clips.disconnect();
     v.scroll.textContent = '';
     v.rows.clear();
     v.live = null;
@@ -784,6 +907,7 @@
       v.scroll.appendChild(earlierButton(from, () => keepScroll(v.scroll, () => { v.shown += C.RENDER_STEP; renderChat(id, true); })));
     }
     turns.slice(from).forEach((t) => v.scroll.appendChild(turnRows(v, t)));
+    syncRuns(v);
     if (!keepPosition) {
       v.scroll.scrollTop = v.following ? v.scroll.scrollHeight : top;
       requestAnimationFrame(() => { if (v.following) v.scroll.scrollTop = v.scroll.scrollHeight; });
@@ -813,7 +937,8 @@
         list.textContent = '';
         const from = C.windowStart(chat.turns.length, shown);
         if (from > 0) list.appendChild(earlierButton(from, () => keepScroll(v.scroll, () => { shown += C.RENDER_STEP; fill(); })));
-        chat.turns.slice(from).forEach((t) => list.appendChild(turnRows(v, t, true)));
+        chat.turns.slice(from).forEach((t) => list.appendChild(turnRows(v, t, true, chat.turns)));
+        syncRuns(v, list);
       };
       seg.addEventListener('toggle', () => { if (seg.open && !list.childNodes.length) fill(); });
       seg.appendChild(list);
@@ -827,6 +952,7 @@
     v.shown++;
     v.scroll.querySelector('.chat-empty')?.remove();
     v.scroll.appendChild(turnRows(v, turn));
+    syncRuns(v);
     followOutput(v);
   }
   function followOutput(v) {
@@ -840,6 +966,7 @@
     const fresh = assistantRow(v, turn);
     row.asst.replaceWith(fresh);
     row.asst = fresh;
+    if (row.wrap) row.wrap.hidden = isSilent(turn, shownReply(v, turn));
     if (turn.done) { v.live = null; v.liveElapsed = null; }
     followOutput(v);
   }
@@ -1250,6 +1377,7 @@
     try { if (open && open.marker) open.marker.dispose(); } catch (_) {}
     pending.delete(id);
     clearTimeout(saveTimers.get(id)); saveTimers.delete(id);
+    views.get(id)?.clips.disconnect();
     views.delete(id);
   }
   function onColumnRemoved(id) {
@@ -1289,6 +1417,7 @@
       try { if (open.marker) open.marker.dispose(); } catch (_) {}
       open.marker = null;
     });
+    views.forEach((v) => v.clips.disconnect());
     views.clear();
   }
   // ---- 队长 (main session) cards ----
@@ -1320,6 +1449,7 @@
     if (row) {
       const fresh = turnRows(v, chat.turns[at]);
       row.user.replaceWith(fresh);
+      syncRuns(v);
       followOutput(v);
     }
     scheduleSave(id);
@@ -1488,6 +1618,7 @@
           row = v.rows.get(turnId);
         }
         if (!row) return;
+        showCard(v, row.user);
         const target = role === 'reply' ? row.asst : row.user;
         target.scrollIntoView({ block: 'center' });
         target.classList.add('flash');
