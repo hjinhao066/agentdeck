@@ -785,3 +785,10 @@ test('orderByPlace reads the order the frames were left in: column by column, to
   C.translateProject(lay, 'd', -lay.groups.find((x) => x.key === 'd').x + lay.groups[0].x, -400);   // d dragged above the first lane
   assert.deepEqual(C.orderByPlace(lay.groups), ['d', 'a', 'b', 'c']);
 });
+
+test('a web request waiting its turn is 排队 even though its terminal reads working', () => {
+  const queued = { colId: 'w', title: 'q', status: 'working', webPhase: 'queued' };
+  assert.deepEqual(C.nodeStatus(queued, { alive: true, state: 'working' }), { status: 'queued', detail: '等网页空出来' });
+  assert.equal(C.nodeStatus({ ...queued, webPhase: 'running' }, { alive: true, state: 'working' }).status, 'working');
+  assert.equal(C.nodeStatus({ ...queued, status: 'done' }, { alive: true, state: 'done' }).status, 'done');
+});

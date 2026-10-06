@@ -164,10 +164,12 @@
     const send = svgButton('cp-btn send', 'arrowUp', '发送 (Enter)');
     send.type = 'submit';
     bar.append(attach, spacer, agent, stop, send);
+    const route = col.isMain ? buildRoute(col, attach, bar) : null;
     // attachments sit above the text; deleting the text never removes them
     const attBox = el('div', 'cp-atts');
     attBox.hidden = true;
     box.append(attBox, ta, bar);
+    if (route) box.prepend(route.note);
     form.appendChild(box);
     // the agent's own status lines, read from the hidden terminal
     const footer = el('div', 'tui-footer');
@@ -182,7 +184,7 @@
     toggle.type = 'button';
     head.insertBefore(toggle, head.querySelector('.secondary'));
 
-    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false, clips: clipWatch() };
+    const v = { id: col.id, wrap, chat, scroll, newContent, following: true, attn, ta, stop, send, toggle, footer, agent, agentDot, agentLabel, attBox, atts: [], route, footerKey: '', rows: new Map(), hist: -1, live: null, shown: C.RENDER_STEP, showRetired: false, clips: clipWatch() };
     scroll.addEventListener('scroll', () => {
       v.following = nearBottom(scroll);
       if (v.following) newContent.hidden = true;
@@ -193,6 +195,7 @@
       newContent.hidden = true;
     });
     views.set(col.id, v);
+    syncRoute(v);
     applyMode(col);
 
     toggle.addEventListener('click', () => setMode(col.id, modeOf(col) === 'chat' ? 'term' : 'chat'));
@@ -752,6 +755,7 @@
     v.agentLabel.textContent = agentName(col);
     v.agent.title = col.cmd ? '这个对话里运行的是：' + col.cmd : '普通终端';
     v.ta.placeholder = '发消息给 ' + agentName(col) + '…  Enter 发送，Shift+Enter 换行';
+    if (v.route && v.route.mode) syncRoute(v);
   }
   async function launch(col, cmd, label) {
     const id = col.id;
@@ -1196,8 +1200,121 @@
   }
 
   // ---- sending ----
+  // ---- 派给: who takes what is typed into 队长's composer ----
+  // 队长 by default. 网页版 ChatGPT sends the text as one public research request
+  // through MainSession.dispatchWeb, never into 队长's terminal.
+  function buildRoute(col, attach, bar) {
+    const W = window.ChatGPTWebCore;
+    const options = [{ id: '', label: '队长安排', detail: '照常告诉队长，由它决定派给谁' },
+      ...W.MODES.map((m) => ({ id: m.id, label: W.LABEL + ' · ' + m.label, detail: m.detail }))];
+    const r = { mode: '', sending: false };
+    r.btn = el('button', 'cp-route');
+    r.btn.type = 'button';
+    r.btn.setAttribute('aria-haspopup', 'menu');
+    r.btn.setAttribute('aria-expanded', 'false');
+    r.btnLabel = el('span', 'cp-route-label');
+    const chev = el('span', 'cp-route-chev');
+    chev.innerHTML = host.ICONS.chevDown;
+    r.btn.append(r.btnLabel, chev);
+    r.menu = el('div', 'cp-menu');
+    r.menu.setAttribute('role', 'menu');
+    r.menu.setAttribute('aria-label', '派给谁');
+    r.menu.hidden = true;
+    r.items = options.map((o) => {
+      const item = el('button', 'cp-menu-item');
+      item.type = 'button';
+      item.dataset.route = o.id || 'captain';
+      item.setAttribute('role', 'menuitemradio');
+      const check = el('span', 'cp-menu-check');
+      check.innerHTML = host.ICONS.check;
+      const text = el('span', 'cp-menu-text');
+      text.append(el('span', 'cp-menu-label', o.label), el('span', 'cp-menu-detail', o.detail));
+      item.append(check, text);
+      item.addEventListener('click', () => { setRoute(col.id, o.id); closeRouteMenu(r, true); });
+      r.menu.appendChild(item);
+      return item;
+    });
+    // the notice sits on top of the composer box for as long as the web route is chosen
+    r.note = el('div', 'cp-web-note');
+    r.note.setAttribute('role', 'note');
+    r.note.hidden = true;
+    const icon = el('span', 'cp-web-icon');
+    icon.innerHTML = host.ICONS.globe;
+    const body = el('div', 'cp-web-body');
+    r.busy = el('span', 'cp-web-busy');
+    body.append(el('span', 'cp-web-warn', W.PUBLIC_NOTICE), el('span', 'cp-web-why', W.NO_SEAT_NOTE), r.busy);
+    const back = svgButton('cp-web-close', 'close', '改回交给队长');
+    back.addEventListener('click', () => { setRoute(col.id, ''); views.get(col.id)?.ta.focus(); });
+    r.note.append(icon, body, back);
+    r.attach = attach;
+    bar.insertBefore(r.btn, attach.nextSibling);
+    bar.appendChild(r.menu);
+    r.btn.addEventListener('click', () => (r.menu.hidden ? openRouteMenu(r) : closeRouteMenu(r, true)));
+    r.menu.addEventListener('keydown', (e) => {
+      const at = r.items.indexOf(document.activeElement);
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeRouteMenu(r, true); }
+      else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        r.items[(at + (e.key === 'ArrowDown' ? 1 : r.items.length - 1)) % r.items.length].focus();
+      } else if (e.key === 'Tab') closeRouteMenu(r, false);
+    });
+    document.addEventListener('mousedown', (e) => { if (!r.menu.hidden && !r.menu.contains(e.target) && !r.btn.contains(e.target)) closeRouteMenu(r, false); });
+    return r;
+  }
+  function openRouteMenu(r) {
+    r.menu.hidden = false;
+    r.btn.setAttribute('aria-expanded', 'true');
+    (r.items.find((i) => i.getAttribute('aria-checked') === 'true') || r.items[0]).focus();
+  }
+  function closeRouteMenu(r, refocus) {
+    r.menu.hidden = true;
+    r.btn.setAttribute('aria-expanded', 'false');
+    if (refocus) r.btn.focus();
+  }
+  function setRoute(id, mode) {
+    const v = views.get(id);
+    if (!v || !v.route) return;
+    v.route.mode = mode;
+    syncRoute(v);
+  }
+  // Also called when a task card changes, so the 排队 line follows the web queue.
+  function syncRoute(v) {
+    const r = v.route, W = window.ChatGPTWebCore;
+    if (!r) return;
+    const web = !!r.mode;
+    r.btnLabel.textContent = web ? W.LABEL + ' · ' + W.modeLabel(r.mode) : '派给：队长';
+    r.btn.title = web ? '这条会派给' + W.LABEL + '（' + W.modeLabel(r.mode) + '），点这里改' : '选择派给谁：队长，或' + W.LABEL;
+    r.btn.setAttribute('aria-label', r.btn.title);
+    r.btn.classList.toggle('web', web);
+    r.items.forEach((i) => i.setAttribute('aria-checked', String(i.dataset.route === (r.mode || 'captain'))));
+    r.note.hidden = !web;
+    const busy = web ? W.busyCount(window.MainSession.state()?.tasks, host.columns()) : 0;
+    r.busy.textContent = busy ? `现在有 ${busy} 件网页调研在跑，这件会排队，轮到它才发出去。` : '';
+    r.busy.hidden = !busy;
+    // no files on this route: the page only gets the text of the question
+    r.attach.disabled = web;
+    r.attach.title = web ? '网页调研只发文字问题，不能带文件' : '添加文件（会插入路径）';
+    r.attach.setAttribute('aria-label', r.attach.title);
+    v.agent.hidden = web;
+    v.send.title = web ? '派给' + W.LABEL + ' (Enter)' : '发送 (Enter)';
+    v.send.setAttribute('aria-label', v.send.title);
+    v.ta.placeholder = web ? '写下要公开调研的问题，Enter 派给' + W.LABEL + '…' : '告诉队长要做什么，一次说几件也行…';
+  }
+  function submitWeb(v) {
+    const r = v.route, text = v.ta.value.replace(/\s+$/, '');
+    if (!text.trim() || r.sending) return;
+    if (v.atts.length) { host.showToast('网页调研只发文字问题，先移除附件再派。'); return; }
+    r.sending = true;
+    window.MainSession.dispatchWeb(text, r.mode).then((done) => {
+      host.showToast(done.result);
+      if (v.ta.value.replace(/\s+$/, '') === text) { v.ta.value = ''; v.hist = -1; autosize(v.ta); }
+      r.mode = '';   // one request per choice: the next message goes to 队长 again
+    }, (err) => host.showToast(err && err.message ? err.message : '没有派出去，请再试一次。'))
+      .finally(() => { r.sending = false; syncRoute(v); });
+  }
   function submit(col) {
     const v = views.get(col.id);
+    if (v.route && v.route.mode) { submitWeb(v); return; }
     const text = v.ta.value.replace(/\s+$/, '');
     if (!text.trim() && !v.atts.length) return;
     // until the agent is up the shell is in front and would run the message as commands
@@ -1441,6 +1558,7 @@
     appendTurn(id, turn); saveNow(id);
   }
   function updateCard(id, task) {
+    if (views.get(id)?.route?.mode) syncRoute(views.get(id));
     const chat = chats.get(id);
     if (!chat) return;
     const at = chat.turns.findIndex((t) => t.id === task.id);

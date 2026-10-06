@@ -19,7 +19,25 @@ node "$AGENTDECK_BOARD_CLI" new --agent chatgpt-web --web-mode deep-research --t
 Deep Research waits up to 60 minutes, automatically confirms the research plan
 once, and must pass the skill's actual mode/report verification. Both require
 the actual **6 Pro** selection; there is no model fallback. `--command` and
-`--seat` cannot be combined with this executor. The UI session selector is unchanged.
+`--seat` cannot be combined with this executor.
+
+The same thing is available without the command line: the **派给** picker in the
+队长 column's chat composer (`派给：队长` by default) offers 网页版 ChatGPT · 普通 and
+· Deep Research. With either chosen, Enter sends the text as one web request
+through the same checks and queue as `new --agent chatgpt-web`
+(`MainSession.dispatchWeb`), never into the 队长's terminal; the title is the first
+line of the question, files cannot be attached, and the picker returns to 队长
+after each request. While it is chosen the composer shows that the request is for
+public research only and goes to the ChatGPT page, and that it uses neither a
+Claude seat nor a launch command (the launch command of such a session is locked
+in its edit dialog for the same reason).
+
+A request waiting behind another one, or behind the cooldown, is shown as
+**排队中** (card status, a hollow status dot in the column header and sidebar, the
+`排队` count of the folded card line), not 干活中, until the executor reports that
+the page has been opened for it. Underneath, its task stays `working` with
+`webPhase: 'queued'`; the executor's `progress` events carry `phase`
+(`queued`/`running`).
 
 The task body is the exact research question, without the terminal worker
 instruction suffix. The Captain must review it for credentials and sensitive

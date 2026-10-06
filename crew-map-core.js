@@ -21,6 +21,8 @@
   // Map a 队长 task (+ the live terminal, when there is one) to one of the
   // map's states. A terminal at work or at a prompt wins over an older task.
   function nodeStatus(task, term) {
+    // a web request behind another one has not been sent yet, whatever its terminal says
+    if (task && task.status === 'working' && task.webPhase === 'queued') return { status: 'queued', detail: '等网页空出来' };
     if (term && term.alive && term.state === 'working') return { status: 'working', detail: '' };
     if (term && term.alive && term.state === 'input') return { status: 'input', detail: '停在确认' };
     if (!task) return { status: term && term.state === 'done' ? 'done' : 'idle', detail: '' };

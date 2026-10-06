@@ -877,7 +877,9 @@
     task.instructionSent = true;
     task.status = 'working';
     task.startedAt = Date.now();
-    task.progress = '正在排队等待 ChatGPT 网页';
+    task.progress = '排队中：等待 ChatGPT 网页';
+    task.webPhase = 'queued';   // not on the page yet; the executor reports when it is
+    entry.webQueued = true;
     entry.webExecutorState = 'working';
     entry.state = 'working';
     entry.hasWorked = true;
@@ -890,6 +892,24 @@
     }).catch(() => {
       if (task.status !== 'working') return;
       settle(task, { summary: '', files: [], images: [], failed: 'ChatGPT 网页执行器未能启动，请检查本机工具是否可用。', explicit: true, source: 'process' });
+    });
+  }
+  // The 派给 picker in 队长's composer: the same checks and queue as
+  // `new --agent chatgpt-web`. No seat and no launch command: it only ever
+  // drives the ChatGPT page already signed in on this machine.
+  function dispatchWeb(text, mode) {
+    return withQueue(async () => {
+      const s = state(), W = window.ChatGPTWebCore;
+      if (!s) throw new Error('先创建队长，再派网页调研。');
+      const task = window.BoardCore.cleanText(text, 2_000_000);
+      const title = W.titleFor(task);
+      if (!title) throw new Error('先写下要调研的问题。');
+      W.validatePublicTask(task);
+      if (!W.MODES.some((m) => m.id === mode)) throw new Error('网页模式只能是普通或 Deep Research。');
+      const busy = W.busyCount(s.tasks, host.columns());
+      const requestId = 'ui-web-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      const placed = await placeSession(title, 'chatgpt-web', '', requestId, task, { project: '', reviews: [], boardId: '', executor: 'chatgpt-web', webMode: mode });
+      return { queued: !!placed.queued || busy > 0, colId: placed.col?.id || '', result: placed.queued ? placed.result : W.dispatchResult(busy) };
     });
   }
   function dispatch(col, text, title, waiting, immediate = false) {
@@ -1376,6 +1396,11 @@
         response.result = JSON.stringify({ taskId: task.id, columnId: caller.id });
       }
       task.progress = message.message;
+      if (caller.executor === 'chatgpt-web') {
+        task.webPhase = message.phase === 'running' ? 'running' : 'queued';
+        const entry = host.terms.get(caller.id);
+        if (entry) entry.webQueued = task.webPhase === 'queued';
+      }
       caller.progress = message.message;
       task.endedAt = 0;
       persistResumeEntry(caller, task);
@@ -1497,6 +1522,8 @@
         const running = state()?.tasks.find((t) => t.colId === col.id && t.status === 'working');
         if (status?.active && running?.id === status.taskId) {
           running.progress = status.progress || running.progress;
+          running.webPhase = status.phase === 'running' ? 'running' : 'queued';
+          if (entry) entry.webQueued = running.webPhase === 'queued';
           update(running);
         } else if (running && status?.receipt && status.receipt.taskId === running.id) {
           submit({ action: 'complete', taskId: running.id, ...status.receipt }, col);
@@ -2361,7 +2388,9 @@
   // ---- task cards in the main session's chat ----
   const STATUS_TEXT = { waiting: '等空位', queued: '待补充', working: '干活中', paused: '停在安全点', quota: '额度用尽/等待', input: '停在确认', asking: '在问队长', done: '已完成', failed: '没做成', stopped: '已停下' };
   function renderCard(task, colId) {
-    const card = el('div', 'task-card st-' + task.status);
+    // A web task behind another one is waiting its turn, not running: it shows and counts as 排队.
+    const webQueued = window.ChatGPTWebCore.isQueued(task);
+    const card = el('div', 'task-card st-' + (webQueued ? 'waiting web-queued' : task.status));
     const head = el('div', 'task-head');
     const target = host.columns().find((c) => c.id === task.colId);
     const name = el('button', 'task-title', task.title);
@@ -2369,7 +2398,7 @@
     name.title = target ? '打开这个会话' : task.status === 'waiting' ? M.queueTitle(M.MAX_ACTIVE, memoryHold) : '这个会话已经不在了';
     name.disabled = !target;
     name.addEventListener('click', () => { if (target) host.jumpToColumn(target); });
-    head.append(el('span', 'task-arrow', '→'), name, el('span', 'task-status', STATUS_TEXT[task.status] || ''));
+    head.append(el('span', 'task-arrow', '→'), name, el('span', 'task-status', webQueued ? '排队中' : STATUS_TEXT[task.status] || ''));
     card.appendChild(head);
     if (task.status === 'input') card.appendChild(el('div', 'task-note', '停在确认提示上，已交给队长判断；队长拿不准会来问你。'));
     if (task.status === 'queued') card.appendChild(el('div', 'task-note', '追加给还在忙的会话，等它空下来就发过去。'));
@@ -2409,7 +2438,7 @@
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
-    isMain, isMainId, mainCol, state, sendMessage,
+    isMain, isMainId, mainCol, state, sendMessage, dispatchWeb,
 
     history: () => host.config.captainHistory || [],
     queueNote: () => M.queueNote(M.MAX_ACTIVE, memoryHold),

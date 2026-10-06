@@ -55,9 +55,12 @@ function createExecutor(options = {}) {
   const jobs = new Map(), completed = new Map(), queue = [];
   let active = null, lastFinished = 0, closed = false;
 
-  function progress(job, message) {
+  // phase 'queued': behind another request or the cooldown, nothing sent yet.
+  // phase 'running': the skill has this request open in the page.
+  function progress(job, message, phase) {
     job.progress = message;
-    emit({ action: 'progress', callerId: job.id, taskId: job.taskId, message });
+    job.phase = phase;
+    emit({ action: 'progress', callerId: job.id, taskId: job.taskId, message, phase });
   }
   function complete(job, result, failed, files = []) {
     const receipt = { action: 'complete', callerId: job.id, taskId: job.taskId, result, ...(failed ? { failed } : {}), files };
@@ -88,14 +91,14 @@ function createExecutor(options = {}) {
     let attempted = false;
     try {
       const delay = await cooldownRemaining();
-      if (delay) { progress(job, `冷却排队：还需等待 ${Math.ceil(delay / 1000)} 秒，尚未打开提问网页。`); await wait(job, delay); }
+      if (delay) { progress(job, `冷却排队：还需等待 ${Math.ceil(delay / 1000)} 秒，尚未打开提问网页。`, 'queued'); await wait(job, delay); }
       if (job.cancelled || closed) throw new Error('INTERRUPTED');
       const dir = path.join(reportsDir, crypto.randomUUID());
       await fs.mkdir(dir, { recursive: true, mode: 0o700 });
       const question = path.join(dir, 'question.md'), report = path.join(dir, 'report.md');
       await fs.writeFile(question, job.task, { mode: 0o600, flag: 'wx' });
       job.task = ''; // keep only the skill's private input file until exit
-      progress(job, `等待 ChatGPT 网页：${job.mode === 'deep-research' ? 'Deep Research，最多 60 分钟' : '6 Pro，最多 30 分钟'}；完整报告确认后交回执。`);
+      progress(job, `等待 ChatGPT 网页：${job.mode === 'deep-research' ? 'Deep Research，最多 60 分钟' : '6 Pro，最多 30 分钟'}；完整报告确认后交回执。`, 'running');
       let code;
       try {
         if (job.cancelled || closed) throw new Error('INTERRUPTED');
@@ -125,7 +128,7 @@ function createExecutor(options = {}) {
     if (!['chat', 'deep-research'].includes(mode)) throw new Error('网页模式只能是 chat 或 deep-research。');
     const job = { id: input.id, taskId: input.taskId, mode, task: input.task };
     completed.delete(job.id); jobs.set(job.id, job); queue.push(job);
-    queueMicrotask(() => { if (jobs.get(job.id) !== job) return; progress(job, '排队等待 ChatGPT 网页：本机一次只做一个请求。'); void pump(); });
+    queueMicrotask(() => { if (jobs.get(job.id) !== job) return; progress(job, '排队等待 ChatGPT 网页：本机一次只做一个请求。', 'queued'); void pump(); });
     return { accepted: true };
   }
   function cancel(id) {
@@ -136,7 +139,7 @@ function createExecutor(options = {}) {
     else { queue.splice(queue.indexOf(job), 1); complete(job, failure('INTERRUPTED'), failure('INTERRUPTED')); }
     return true;
   }
-  function status(id) { const job = jobs.get(id); return job ? { active: true, taskId: job.taskId, progress: job.progress } : { active: false, receipt: completed.get(id) }; }
+  function status(id) { const job = jobs.get(id); return job ? { active: true, taskId: job.taskId, progress: job.progress, phase: job.phase || 'queued' } : { active: false, receipt: completed.get(id) }; }
   function dispose() { closed = true; for (const id of jobs.keys()) cancel(id); }
   return { submit, cancel, status, dispose };
 }

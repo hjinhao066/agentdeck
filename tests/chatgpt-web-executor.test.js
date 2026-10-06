@@ -148,3 +148,32 @@ test('stop followed immediately by a new question waits for the cancelled child 
   assert.equal(receipts[1].failed, undefined);
   assert.equal(s.executor.status('one').receipt.taskId, 'replacement');
 });
+
+test('a request behind another reports phase queued until the page is opened for it', async (t) => {
+  let release, calls = 0;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const events = [], receipts = [];
+  const s = await setup(t, { runCli: async (input) => { if (++calls === 1) await gate; return success(input); },
+    emit: (event) => { events.push(event); if (event.action === 'complete') receipts.push(event); } });
+  s.executor.submit(task()); s.executor.submit(task('two'));
+  while (calls === 0) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(s.executor.status('one').phase, 'running');
+  assert.equal(s.executor.status('two').phase, 'queued');
+  const phases = (id) => events.filter((e) => e.action === 'progress' && e.callerId === id).map((e) => e.phase);
+  assert.deepEqual(phases('one'), ['queued', 'running']);
+  assert.deepEqual(phases('two'), ['queued']);
+  release();
+  while (receipts.length < 2) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual(phases('two'), ['queued', 'running']);
+});
+
+test('cooldown before the page opens still counts as queued', async (t) => {
+  const s = await setup(t, { cooldownMs: 60, runCli: success });
+  await fs.mkdir(path.join(s.dir, 'state'), { recursive: true });
+  await fs.writeFile(path.join(s.dir, 'state', 'cooldown.json'), JSON.stringify({ finishedAt: Date.now() }));
+  s.executor.submit(task());
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(s.executor.status('one').phase, 'queued');
+  await s.done;
+  assert.deepEqual(s.events.filter((e) => e.action === 'progress').map((e) => e.phase), ['queued', 'queued', 'running']);
+});

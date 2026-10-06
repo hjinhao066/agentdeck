@@ -540,6 +540,9 @@ body.nav-collapsed #quotaRailBtn { display: inline-flex; }
 .dot.stopped, .cn-dot.stopped, .cp-agent-dot.stopped { background: var(--st-plain); }
 .dot.done,    .cn-dot.done,    .cp-agent-dot.done    { background: var(--st-done); }
 .dot.exited,  .cn-dot.exited,  .cp-agent-dot.exited  { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-exited); }
+/* A web request waiting its turn: a hollow yellow ring, no breathing halo. */
+.dot.working.web-queued, .cn-dot.working.web-queued { background: transparent; box-shadow: inset 0 0 0 1.5px var(--st-working); }
+.dot.working.web-queued::after, .cn-dot.working.web-queued::after { content: none; }
 /* The pulse lives on a ::after halo animating transform/opacity only, so it
    runs on the compositor — animating box-shadow would repaint the main thread
    at 60fps for as long as any agent is working (i.e. most of the day). */
@@ -681,7 +684,8 @@ dialog .preset {
   border-radius: 999px; padding: 5px 11px; font-size: 12px; cursor: pointer;
   transition: background .15s ease, border-color .15s ease;
 }
-dialog .preset:hover { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+dialog .preset:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+dialog input:disabled, dialog .preset:disabled { opacity: .45; cursor: not-allowed; }
 dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: center; margin-top: 22px; }
 .row-spacer { flex: 1; }
 .btn {
@@ -1337,6 +1341,56 @@ body.linking-board .board-port.out::before {
 }
 .cp-icon:hover { background: var(--icon-hover-bg); color: var(--text); }
 .cp-icon svg { width: 14px; height: 14px; }
+/* 派给: who takes the next message from 队长's composer (队长, or 网页版 ChatGPT). */
+.composer-bar { position: relative; }
+.cp-route {
+  display: inline-flex; align-items: center; gap: 4px; height: 26px; min-width: 0; padding: 0 6px 0 10px;
+  border: 1px solid var(--border); border-radius: 999px; background: transparent; color: var(--text-2);
+  font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer;
+}
+.cp-route:hover, .cp-route[aria-expanded="true"] { background: var(--icon-hover-bg); color: var(--text); }
+.cp-route.web { background: var(--active-bg); color: var(--text); border-color: transparent; }
+.cp-route-label { overflow: hidden; text-overflow: ellipsis; }
+.cp-route-chev { display: inline-flex; flex: 0 0 auto; }
+.cp-route-chev svg { width: 13px; height: 13px; }
+.cp-route:focus-visible, .cp-menu-item:focus-visible, .cp-web-close:focus-visible, .cp-icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.cp-icon:disabled { opacity: .4; cursor: not-allowed; }
+.cp-icon:disabled:hover { background: transparent; color: var(--icon); }
+.cp-menu {
+  position: absolute; left: 0; bottom: calc(100% + 6px); z-index: 30; width: min(300px, 100%);
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  background: var(--elev); border: 1px solid var(--hairline); border-radius: 12px; box-shadow: var(--shadow-pop);
+}
+.cp-menu[hidden] { display: none; }
+.cp-menu-item {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%; min-height: 44px; padding: 7px 10px 7px 8px;
+  border: none; border-radius: 8px; background: transparent; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.cp-menu-item:hover, .cp-menu-item:focus-visible { background: var(--icon-hover-bg); }
+.cp-menu-check { flex: 0 0 auto; width: 14px; height: 18px; display: inline-flex; align-items: center; visibility: hidden; }
+.cp-menu-check svg { width: 14px; height: 14px; }
+.cp-menu-item[aria-checked="true"] .cp-menu-check { visibility: visible; }
+.cp-menu-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.cp-menu-label { font-size: 13px; line-height: 18px; }
+.cp-menu-detail { font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+.cp-web-note {
+  display: flex; align-items: flex-start; gap: 8px; margin-bottom: 2px; padding: 7px 6px 7px 10px;
+  border-radius: 8px; background: var(--pill-bg); cursor: default;
+}
+.cp-web-note[hidden] { display: none; }
+.cp-web-icon { flex: 0 0 auto; display: inline-flex; padding-top: 2px; color: var(--st-input); }
+.cp-web-icon svg { width: 14px; height: 14px; }
+.cp-web-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 12px; line-height: 1.5; }
+.cp-web-warn { color: var(--text); }
+.cp-web-why, .cp-web-busy { color: var(--muted); }
+.cp-web-busy[hidden] { display: none; }
+.cp-web-close {
+  flex: 0 0 auto; width: 28px; height: 28px; margin: -3px 0; display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: 999px; background: transparent; color: var(--icon); cursor: pointer;
+}
+.cp-web-close:hover { background: var(--icon-hover-bg); color: var(--text); }
+.cp-web-close svg { width: 14px; height: 14px; }
 .cp-agent {
   display: inline-flex; align-items: center; gap: 6px; min-width: 0;
   font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden;
