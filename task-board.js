@@ -5,6 +5,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { resourceFailure } = require('./main-core');
 const AutoVerify = require('./auto-verify-core');
+const Worktree = require('./worktree-core');
 
 const STATUSES = ['todo', 'doing', 'review', 'needs_user', 'done'];
 function projectName(value) {
@@ -90,6 +91,7 @@ function syncedCard(input) {
   if (typeof input.review_verdict === 'boolean') card.review_verdict = input.review_verdict;
   if (typeof input.last_event === 'string' && input.last_event.length <= 500) card.last_event = input.last_event;
   if (typeof input.last_failure_attempt === 'string' && input.last_failure_attempt.length <= 200) card.last_failure_attempt = input.last_failure_attempt;
+  if (input.worktree !== undefined) card.worktree = Worktree.normalizeRecord(input.worktree);
   if (typeof input.start_previous_status === 'string' && STATUSES.includes(input.start_previous_status)) card.start_previous_status = input.start_previous_status;
   if (input.dispatch_claim && typeof input.dispatch_claim === 'object' && typeof input.dispatch_claim.key === 'string') {
     card.dispatch_claim = { key: idValue(input.dispatch_claim.key), owner: text(String(input.dispatch_claim.owner || ''), 'owner').slice(0, 200), delivered: input.dispatch_claim.delivered === true, created: typeof input.dispatch_claim.created === 'string' ? input.dispatch_claim.created : card.updated };
@@ -298,6 +300,14 @@ class TaskStore {
       return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
     });
   }
+  noteWorktree(input) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, input.id);
+      card.worktree = Worktree.normalizeRecord(input.worktree);
+      touch(card);
+      return { card, notices: [] };
+    });
+  }
   archive(input) {
     if (input.done !== true) throw new Error('archive requires --done.');
     if (input.project !== undefined) projectName(input.project);
@@ -352,7 +362,10 @@ class TaskStore {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
       if (input.project && !sameProject(input.project, card.project)) throw new Error('--project differs from the card project.');
-      if (card.attempt_id === input.attempt_id) return { card, notices: [] };
+      if (card.attempt_id === input.attempt_id) {
+        if (input.worktree) { card.worktree = Worktree.normalizeRecord(input.worktree); touch(card); }
+        return { card, notices: [] };
+      }
       if (this.activeAttempt(card)) throw new Error('Card already has an active execution or verification session.');
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       const explicitReview = Array.isArray(input.reviews) && input.reviews.length > 0;
@@ -369,6 +382,7 @@ class TaskStore {
       }
       if (/:fallback:/.test(card.last_event || '')) card.latest_receipt = '';
       if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
+      if (input.worktree) card.worktree = Worktree.normalizeRecord(input.worktree);
       Object.assign(card, { session_id: input.session_id, session_host: os.hostname(), session_bound_at: Date.now(), attempt_id: input.attempt_id, assignee: input.assignee,
         review_session: review, review_verdict: explicitReview, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;

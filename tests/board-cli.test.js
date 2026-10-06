@@ -5,7 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 const ReceiptListener = require('../receipt-listener-core');
 
 const cli = path.join(__dirname, '..', 'board-cli.js');
@@ -482,4 +482,55 @@ test('commands that change something tell the app when their CLI stops waiting; 
   }
   const cli = fs.readFileSync(path.join(__dirname, '..', 'board-cli.js'), 'utf8');
   assert.match(cli, /这条命令过期后不会再被执行；重发前先用 ledger 确认它是否刚好已经生效/);
+});
+
+test('new forwards --worktree only when asked, and worktree clean lists without deleting', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-wt-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests'));
+  fs.mkdirSync(path.join(dir, 'responses'));
+  const repo = path.join(dir, 'repo');
+  fs.mkdirSync(repo);
+  const plain = runCli(['new', '--title', 'Notes', '--task', 'Read'], { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' });
+  let request;
+  for (const deadline = Date.now() + 3000; !request && Date.now() < deadline;) {
+    const file = fs.readdirSync(path.join(dir, 'requests')).find((name) => name.endsWith('.json'));
+    if (file) request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+    else await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  assert.ok(request);
+  assert.equal(request.worktree, undefined);
+  assert.equal(request.base, undefined);
+  assert.equal(request.branch, undefined);
+  fs.writeFileSync(path.join(dir, 'responses', request.id + '.json'), JSON.stringify({ done: true, result: 'opened' }));
+  assert.equal((await plain).code, 0);
+
+  const rejected = await runCli(['new', '--title', 'Code', '--task', 'Edit', '--worktree', repo, '--cwd', repo], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.notEqual(rejected.code, 0);
+  assert.match(rejected.stderr, /do not also pass --cwd/);
+  const missing = await runCli(['new', '--title', 'Code', '--task', 'Edit', '--base', 'main'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.match(missing.stderr, /require --worktree/);
+  const badBranch = await runCli(['new', '--title', 'Code', '--task', 'Edit', '--worktree', repo, '--branch', '../x'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.match(badBranch.stderr, /无效分支名/);
+
+  const copies = path.join(dir, 'copies');
+  const Worktree = require('../worktree-core');
+  execFileSync('git', ['init', '-b', 'main'], { cwd: repo });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'init'], { cwd: repo });
+  const created = Worktree.prepare({ repo, branch: 'agentdeck/cli', root: copies });
+  const listed = await runCli(['worktree', 'clean', '--root', copies], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.equal(listed.code, 0, listed.stderr);
+  assert.match(listed.stdout, /没有删除/);
+  assert.match(listed.stdout, /agentdeck\/cli/);
+  assert.equal(fs.existsSync(created.path), true);
+  const applied = await runCli(['worktree', 'clean', '--apply', '--root', copies], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.equal(applied.code, 0, applied.stderr);
+  assert.match(applied.stdout, /没有删除/);
+  assert.equal(fs.existsSync(created.path), true);
+  const confirmed = await runCli(['worktree', 'clean', '--apply', '--path', created.path, '--root', copies], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.equal(confirmed.code, 0, confirmed.stderr);
+  assert.equal(fs.existsSync(created.path), false);
+  const outside = await runCli(['worktree', 'clean', '--root', os.homedir()], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+  assert.notEqual(outside.code, 0);
+  assert.match(outside.stderr, /temp directory/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });

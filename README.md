@@ -949,6 +949,8 @@ the Windows Electron UI or install, rebuild, or restart either installed app.
 
 
 
+Coding tasks can pass `new --worktree <repo> [--base ref] [--branch name]`. AgentDeck adds a git worktree under `~/agentdeck-worktrees/<repo>/<branch>` and starts the session there. After the session is archived, the copy is removed only when the tree has no uncommitted, untracked, stashed, or ignored files and the branch is merged into main/master (or origin's default branch) or is still present on a remote. Any ignored file or directory blocks that automatic removal, including `node_modules`. A copy whose ignored content is entirely inside `node_modules`, and whose branch is already merged or pushed, is marked manually cleanable and listed by `worktree clean` with its path, branch, a summary of the ignored content, and the size. Other ignored paths, such as `dist`, `build`, `out`, and `.env`, are kept and named, and are not offered in that list. `worktree clean` only lists. Deleting one copy requires `--apply` and `--path` for that copy, and the same checks run again. Removal never uses `git worktree remove --force`.
+
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in

@@ -26,6 +26,7 @@ const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
+const Worktree = require('./worktree-core');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
@@ -71,10 +72,24 @@ const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tas
 let fleetClient = null;
 let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
-  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched'].includes(payload.op)) throw new Error('Invalid task board operation.');
+  if (!payload || !['list', 'add', 'move', 'archive', 'update', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree'].includes(payload.op)) throw new Error('Invalid task board operation.');
   const result = taskStore[payload.op](payload.input || {});
   if (fleetClient && payload.op !== 'list') fleetClient.noteResult(result);
   return result;
+});
+handleMain('worktree:prepare', (_event, payload) => {
+  if (!payload || typeof payload !== 'object' || typeof payload.repo !== 'string') throw new Error('Invalid worktree request.');
+  return Worktree.prepare({
+    repo: payload.repo,
+    base: typeof payload.base === 'string' ? payload.base : '',
+    branch: typeof payload.branch === 'string' ? payload.branch : '',
+    taskId: typeof payload.taskId === 'string' ? payload.taskId : '',
+  });
+});
+handleMain('worktree:reclaim', (_event, payload) => {
+  const record = payload && payload.record;
+  if (!record || typeof record !== 'object') throw new Error('Invalid worktree record.');
+  return Worktree.reclaim(record);
 });
 handleMain('fleet:state', () => fleetClient ? fleetClient.snapshot() : { configured: false, devices: [], history: [], error: null, conflictCount: 0, selfId: null, lastSyncAt: null });
 
@@ -520,7 +535,7 @@ function setupBoardControl() {
       pendingBoardCommands.set(id, { command: { id, callerId, action: 'main-receipt-listener-status', alive, nativeWeb: true }, delivered: false });
       dispatchPendingBoardCommands();
     });
-    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js', 'receipt-listener-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
+    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js', 'receipt-listener-core.js', 'worktree-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
     fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));

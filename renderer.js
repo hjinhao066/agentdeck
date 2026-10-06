@@ -2529,6 +2529,9 @@ function archiveColumn(col, opts) {
   const snapshot = { ...col, role: 'manual', relationship: 'Independent manual terminal', archivedAt: Date.now() };
   config.archived = [snapshot, ...(config.archived || []).filter((a) => a.id !== col.id)];
   saveConfig();
+  if (!(opts && opts.worktreeHandled)) {
+    try { window.MainSession?.settleArchivedWorktree?.(snapshot); } catch (_) {}
+  }
   renderColNav();
   renderBoardGraph();
   if (!(opts && opts.quiet)) showToast(`已归档「${columnLabel(col)}」，在左侧「已归档」里可以恢复`);

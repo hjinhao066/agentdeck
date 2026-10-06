@@ -523,6 +523,7 @@ test('Captain briefing stays static and includes explicit models, boards and two
     const brief = M.instructions(platform);
     assert.ok(brief.length <= 8000, platform);
     assert.ok((brief + '\n\n读看板继续。').length <= 8000, platform + ' saver');
+    assert.match(brief, /写代码的活加 --worktree 仓库路径，程序会建独立副本和分支/);
     assert.ok(!brief.endsWith('然后等用户的指令。'));
   }
 });

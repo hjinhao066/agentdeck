@@ -113,6 +113,8 @@ contextBridge.exposeInMainWorld('deck', {
   boardReady: () => ipcRenderer.send('board:ready'),
   // Fixed shared task store; no caller-selected paths or arbitrary IPC.
   taskBoard: (op, input) => ipcRenderer.invoke('task-board:request', { op, input }),
+  prepareWorktree: (input) => ipcRenderer.invoke('worktree:prepare', input || {}),
+  reclaimWorktree: (record) => ipcRenderer.invoke('worktree:reclaim', { record }),
   fleetState: () => ipcRenderer.invoke('fleet:state'),
   onTaskStart: (cb) => ipcRenderer.on('task-board:start', (_e, m) => cb(m)),
   onTaskReview: (cb) => ipcRenderer.on('task-board:review', (_e, m) => cb(m)),
