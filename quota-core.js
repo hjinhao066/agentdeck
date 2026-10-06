@@ -482,7 +482,7 @@
     }
     return peers;
   }
-  // out: a window is exhausted. low: a fresh short-window (5-hour) number is at/under the threshold.
+  // out: a window is exhausted. low: a fresh short-window (5-hour, or weekly when 5-hour is unknown) number is at/under the threshold.
   // unknown: the pool is metered but the reading is missing, stale, expired, or only
   // "no error was seen" (no remaining percent). That last one is not a usable destination.
   // An explicit "usage limit reset" has no numbers but is still room.
@@ -491,7 +491,7 @@
     if (!quota) return 'unmetered';
     if (quota.out) return 'out';
     if (quota.stale || quota.state === 'unknown') return 'unknown';
-    const numbers = [quota.fiveHour].filter((n) => typeof n === 'number');
+    const numbers = (typeof quota.fiveHour === 'number' ? [quota.fiveHour] : [quota.weekly]).filter((n) => typeof n === 'number');
     if (numbers.some((n) => n <= QUOTA_LOW_PERCENT)) return 'low';
     if (numbers.length) return 'ok';
     if (quota.state === 'normal' && /CLI 显示/.test(quota.confidence || '')) return 'ok';
