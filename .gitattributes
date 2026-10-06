@@ -1,0 +1,19 @@
+# Auto-detect text files and normalize line endings to LF on checkout and commit.
+* text=auto eol=lf
+
+# Explicit binary files that should never have line endings converted
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.wasm binary
+*.node binary
+*.exe binary
+*.dmg binary
+*.zip binary
+*.7z binary
+*.tar binary
+*.gz binary
+*.pdf binary
