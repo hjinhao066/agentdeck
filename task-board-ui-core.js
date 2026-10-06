@@ -1,7 +1,7 @@
 // Pure helpers behind the 任务看板 view: project groups (one per project,
 // case-insensitive, in the user's order) crossed with the five status columns,
-// the project overview, the finished-projects area, the 需要你 reminder, a
-// card's activity line, drag/drop targets, dependency/parallel marks, the
+// the project overview, the finished-projects area, the 需要你 reminder, the
+// 高优先级 mark and its place at the top of a column, a card's activity line, drag/drop targets, dependency/parallel marks, the
 // dependency lines and their routes, and the progress meter. Cards come
 // from TaskBoard.list (docs/task-board-api.md). No DOM: runs in the page and
 // in tests.
@@ -61,6 +61,16 @@
     return projectKey(a.project).localeCompare(projectKey(b.project)) || (a.order || 0) - (b.order || 0) || String(a.id).localeCompare(String(b.id));
   }
   function sortCards(cards) { return cards.slice().sort(byOrder); }
+
+  // 高优先级 is the card's `important` flag: the user named it as urgent. One
+  // level above ordinary; a card without the field is ordinary. An unfinished
+  // one is `urgent`: it leads its column (in task order among its own kind) and
+  // carries the full mark. A finished one keeps a quiet mark and its place.
+  function isHigh(card) { return !!card && card.important === true; }
+  function isUrgent(card) { return isHigh(card) && card.status !== 'done' && !card.archived; }
+  function urgentFirst(items, cardOf = (x) => x) {
+    return [...items.filter((x) => isUrgent(cardOf(x))), ...items.filter((x) => !isUrgent(cardOf(x)))];
+  }
 
   // Unfinished prerequisites, resolved against every card we can see (archived
   // ones included, since dependencies may point at archived done cards). A
@@ -153,15 +163,17 @@
     const names = projects(allCards);
     const requestedProject = projectKey(opts.project);
     const project = names.some((p) => p.key === requestedProject) ? requestedProject : ALL;
-    const lanes = new Map(names.map((p) => [p.key, { key: p.key, name: p.name, total: 0, open: 0, counts: Object.fromEntries(COLUMNS.map((c) => [c.key, 0])), columns: COLUMNS.map((c) => ({ ...c, cards: [] })) }]));
+    const lanes = new Map(names.map((p) => [p.key, { key: p.key, name: p.name, total: 0, open: 0, urgent: 0, counts: Object.fromEntries(COLUMNS.map((c) => [c.key, 0])), columns: COLUMNS.map((c) => ({ ...c, cards: [] })) }]));
     sortCards(live).forEach((card) => {
       const lane = lanes.get(projectKey(card.project));
       const waits = waitsOn(card, index);
       const status = columnOf(card);
-      lane.columns.find((c) => c.key === status).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits), question: userQuestion(card) });
+      lane.columns.find((c) => c.key === status).cards.push({ card, waits, waitLabel: waitLabel(waits), parallel: canRunParallel(card, waits), question: userQuestion(card), high: isHigh(card), urgent: isUrgent(card) });
       lane.counts[status]++; lane.total++;
       if (status !== 'done') lane.open++;
+      if (isUrgent(card)) lane.urgent++;
     });
+    lanes.forEach((lane) => lane.columns.forEach((col) => { col.cards = urgentFirst(col.cards, (item) => item.card); }));
     const all = orderLanes([...lanes.values()], opts.laneOrder);
     const laneList = project ? all.filter((l) => l.key === project) : all;
     const columns = COLUMNS.map((c) => ({ ...c, count: laneList.reduce((n, l) => n + l.counts[c.key], 0) }));
@@ -171,7 +183,7 @@
     const finished = project ? [] : laneList.filter((l) => l.total > 0 && l.open === 0);
     const active = laneList.filter((l) => !finished.includes(l));
     const alerts = laneList.flatMap((l) => l.columns.find((c) => c.key === 'needs_user').cards.map((item) => ({ card: item.card, question: item.question, lane: l.key, name: l.name })));
-    return { columns, lanes: laneList, active, finished, finishedDone: finished.reduce((n, l) => n + l.counts.done, 0), alerts, links: dependencyLinks(laneList, index), projects: all.map((l) => ({ key: l.key, name: l.name, total: l.total, open: l.open, counts: l.counts })), project, total, open: total - columns.find((c) => c.key === 'done').count };
+    return { columns, lanes: laneList, active, finished, finishedDone: finished.reduce((n, l) => n + l.counts.done, 0), alerts, links: dependencyLinks(laneList, index), projects: all.map((l) => ({ key: l.key, name: l.name, total: l.total, open: l.open, urgent: l.urgent, counts: l.counts })), project, total, open: total - columns.find((c) => c.key === 'done').count };
   }
 
   // The lines the board draws between cards: one per shown card and each
@@ -291,5 +303,5 @@
     return m && m !== 'default' ? String(m) : '';
   }
 
-  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, waitsOn, canRunParallel, waitLabel, buildBoard, dependencyLinks, linkRoute, roundedPath, progress, userQuestion, receiptText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
+  return { COLUMNS, ALL, projectKey, columnOf, projects, filterProject, sortCards, isHigh, isUrgent, urgentFirst, waitsOn, canRunParallel, waitLabel, buildBoard, dependencyLinks, linkRoute, roundedPath, progress, userQuestion, receiptText, filePaths, activity, moreLabel, orderLanes, moveLane, dropAnchor, stepStatus, labelOf, formatUpdated, ownerLabel, modelLabel };
 });

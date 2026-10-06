@@ -86,13 +86,15 @@
         id: c.id, title: host.columnLabel(c), alive: !!(entry && entry.alive), state: entry ? entry.state || 'plain' : 'plain',
         live: entry && entry.lastScreen ? host.activityLine(entry.lastScreen) : '',
         provider: i.provider || '', model: i.shortModel || '', lastReceipt: c.lastReceipt || null, captainCrew: !!c.captainCrew, project: c.project, reviews: c.reviews,
+        important: host.isPriority(c),
       };
     });
     const archived = (host.config.archived || []).map((a) => {
       const i = info(a);
       return { id: a.id, title: host.columnLabel(a), provider: i.provider || '', model: i.shortModel || '', lastReceipt: a.lastReceipt || null, captainCrew: !!a.captainCrew, project: a.project, reviews: a.reviews, archivedAt: a.archivedAt || 0 };
     });
-    const tasks = (s && s.tasks) || [];
+    // work still waiting for a slot has no column: its own record (or its card) says whether it is 高优先级
+    const tasks = ((s && s.tasks) || []).map((t) => (t && t.status === 'waiting' && !t.colId && host.isHigh(t) ? { ...t, important: true } : t));
     let captain = null;
     if (main) {
       const entry = terms.get(main.id);
@@ -131,6 +133,17 @@
     st.title = node.statusLabel + (node.detail ? ' · ' + node.detail : '');
     top.append(st, badge(node));
     const title = el('div', 'cm-title', node.title);
+    if (node.important) {
+      // 高优先级: a solid flag chip in its own colour, leading the title; the top row keeps the status and the model.
+      const flag = el('span', 'cm-prio');
+      flag.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 21V4"/><path d="M5.5 4.6h12l-2.7 4 2.7 4h-12z" fill="currentColor"/></svg>';
+      flag.append(el('span', '', '高优'));
+      flag.setAttribute('role', 'img');
+      flag.title = '高优先级：你点名要优先做的事';
+      flag.setAttribute('aria-label', '高优先级');
+      title.prepend(flag);
+      n.classList.add('prio');
+    }
     const line = el('div', 'cm-line', node.line || (waiting ? '同时干活的会话满了，有空位就自动开' : node.status === 'working' ? '干活中，还没有回执' : captain ? '' : '还没有回执'));
     line.classList.toggle('empty', !node.line);
     const liveLine = el('div', 'cm-live', node.live ? '▸ ' + node.live : '');
@@ -174,7 +187,7 @@
       guard(more, () => togglePop(node.id));
       n.appendChild(more);
     }
-    n.title = waiting ? node.title : `${node.title}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`;
+    n.title = (node.important ? '【高优先级】' : '') + (waiting ? node.title : `${node.title}\n${node.archived ? '点击：恢复这个会话并打开它的终端' : '点击：打开这个会话的终端列'}\n拖动：移动卡片`);
     n.addEventListener('pointerdown', (e) => startCardDrag(e, n, node, box));
     n.addEventListener('click', (e) => {
       if (n.dataset.dragged) { delete n.dataset.dragged; e.preventDefault(); return; }

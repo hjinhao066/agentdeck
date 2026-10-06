@@ -30,7 +30,7 @@ Windows 使用相同的用户主目录布局，随现有 `~/.agents` 私有 git 
 | rework_count | 累计验收驳回次数 |
 | created / updated | ISO 日期；updated 可作为编辑的乐观并发版本 |
 | archived | boolean，归档不删除文件或卡片，依赖仍可引用完成卡 |
-| important | 可选 boolean，默认 false；明确标为重要的卡片交队长调度，与 verify 独立 |
+| important | 可选 boolean，默认 false。**这就是「高优先级」**：用户点名要优先、要立刻开始的卡片（只有普通和高优先级两档）。没有这个字段的旧卡片按普通处理。除了下面「高优先级」一节的标记和排序，它保留原有作用：这类卡片交队长调度，不交便宜调度员。与 verify 独立 |
 
 程序还保存 `attempt_id`、`review_session`、`attempt_closed`、`last_event`、
 `last_failure_attempt`、`consecutive_failures`、`session_host`、`session_bound_at`、
@@ -64,6 +64,7 @@ const { card } = await TaskBoard.add({
 });
 await TaskBoard.update(card.id, { title: '新标题', order: 1.5 }, card.updated);
 // update 只允许 title/detail/order/depends_on/verify/important，必须提供旧 updated。
+// 只改优先级用 priority({ id, level: 'high' | 'normal' })：不校验 updated，只翻转 important 一个字段。
 await TaskBoard.move(card.id, 'doing', card.updated); // 进入开始，由心跳发现
 await TaskBoard.archiveDone('agentdeck');
 await TaskBoard.startCard(card.id); // 显式开始，按 dispatcher 设置调度
@@ -80,8 +81,9 @@ unsubscribe();
 
 | 方法 | 参数与默认值 | 返回值 |
 | --- | --- | --- |
-| `list(filter = {})` | 可选 `project`、`status`、`archived`；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
-| `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
+| `list(filter = {})` | 可选 `project`、`status`、`archived`、`priority`（`high` 或 `normal`）；`archived: true` 表示包含归档卡，并非只返回归档卡 | `Promise<Card[]>`，按 project/order/id 排序 |
+| `add(input)` | 必填 `project`、非空 `title`；可选 `id`、`detail`（默认空）、`depends_on`（默认空数组）、`verify`、`important`（均默认 false）、`priority`（`high` 等同 `important: true`，给了就以它为准） | `Promise<{card, notices}>`；创建 todo 卡，order 为本项目最大值 + 1，有未完成前置时 flag=blocked |
+| `setPriority(id, level)` | 用户在界面上点的入口。id 是卡片、会话或排队项；level 为 `high` 或 `normal` | `Promise<string>`（一句结果）。有卡片就改卡片；把还在待办的卡片标成高优先级时给队长发一条看板通知 |
 | `update(id, patch, updated)` | patch 仅含 title/detail/order/depends_on/verify/important；updated 必填 | `Promise<{card, notices}>` |
 | `move(id, status, updated?)` | status 为五种状态之一；界面应带 updated 防止过期拖动，队长 CLI 不带该参数 | `Promise<{card, notices}>`；移入 doing 时保留未归档会话作为占用标记并检查前置；其他移动清除绑定 |
 | `archiveDone(project?)` | 省略 project 则归档全部项目中未归档的 done 卡 | `Promise<{cards, notices}>`；可重复调用 |
@@ -141,6 +143,11 @@ ID 只接受 1–160 个 ASCII 字母、数字、下划线或连字符；标题�
   红色边框；额度/登录/限流显示对应标记。「需要你」卡片这一行显示问题。每格默认显示 3 张，
   其余用「展开剩余 N 项」。卡片很窄时（详情抽屉打开）更新时间隐藏，动态占满整行，时间仍在
   悬停提示里。「谁在做」只出现在悬停提示和详情抽屉里。
+- 高优先级：未完成的高优先级卡片在标题前带实心蓝色旗标「高优」，卡片左边一条同色细边，并排在
+  同一格的最前面（两类内部仍按拖动顺序）；项目标题栏显示「旗标 + 未完成的高优先级数量」，折叠时也看得到。
+  已完成的只留一个不上色的小旗，不再前移。旗标有悬停提示和 `aria-label="高优先级"`。详情抽屉右上角的
+  旗形图标按钮（`aria-pressed`）点一下标记、再点取消。Alt+↑/↓ 和拖动不能把卡片移过两类之间的分界线。
+  蓝色只用于这个标记（`--prio`），不和干活中（黄）、失败/停在确认（红）、完成（绿）、额度（橙黄）混用。
 - 「需要你」提醒条：每个等待中的卡片是一个按钮，点开该卡详情；「处理」打开第一个。
 - 点卡片（或键盘 Enter）打开详情抽屉，显示完整说明、负责会话和相关文件；通过会话入口
   跳到对应终端，已归档的会话先恢复。「需要你」把问题放在答案框上方，发送后交给队长继续推进。
@@ -171,11 +178,15 @@ node "$AGENTDECK_BOARD_CLI" task list --project agentdeck --status todo
 node "$AGENTDECK_BOARD_CLI" new --project agentdeck --task-id t-卡片ID --title "修复 A" --task "完整任务" --agent codex
 node "$AGENTDECK_BOARD_CLI" task move --id t-卡片ID --status doing
 node "$AGENTDECK_BOARD_CLI" task archive --done --project agentdeck
+node "$AGENTDECK_BOARD_CLI" task add --project agentdeck --title "线上故障" --priority high
+node "$AGENTDECK_BOARD_CLI" task priority --id t-卡片ID或会话ID --level high   # 改回普通用 normal
+node "$AGENTDECK_BOARD_CLI" task list --priority high
+node "$AGENTDECK_BOARD_CLI" new --title "马上查告警" --task "完整任务" --priority high
 ```
 
 add 返回 JSON 对象（含 card），list 返回 JSON 数组，move/archive 返回 JSON 对象。
-CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 参数；
-这些操作使用界面接口。task list 不含归档卡，含归档查询使用 `list({archived:true})`。
+CLI 没有 task update、settings 或 start 子命令；这些操作使用界面接口。`important`
+在命令行里叫优先级：`--priority high|normal` 和 `task priority`（见下一节）。task list 不含归档卡，含归档查询使用 `list({archived:true})`。
 不裁剪列表或说明。`--project` 无卡片时仅为会话项目元数据；有 `--task-id` 时必须
 匹配卡片项目，省略则从卡片继承。重复请求不会重新派活，旧会话/旧尝试的回执
 不会改当前卡。`new` 排队时保留关联，真正开会话时再次校验前置和 held 状态。
@@ -252,6 +263,34 @@ CLI 没有 task update、settings 或 start 子命令，也没有 `--important` 
 
 总开关 `TaskBoard.autoVerify(false)`（本机 config.json 的 `taskBoard.autoVerify`，缺省开启）。
 调试日志只记 `task-board review claimed id=… round=…`，不含卡片正文。
+
+## 高优先级
+
+用户说某件事「高优先级」，意思是要队长立刻放到后台开始做。只有两档：普通和高优先级。
+
+- **存在哪**：有卡片时就是卡片的 `important` 字段（随看板同步到另一台电脑，旧版本也认得这个字段）。
+  会话不另存一份：绑在这张卡上的执行会话、审查会话和排队项都从卡片读。没挂卡直接派的活
+  （`new --priority high` 不带 `--task-id`）把标记记在**这件活**的派活记录上（排队时也在排队项上），
+  不记在会话上。所以同一个会话里：这件活还没成功完成（在做、失败、被叫停）时接着 `tell` 的指令算同一件事，
+  沿用标记；这件活完成之后再 `tell` 的是新活，按普通处理，需要的话再用 `task priority` 标。
+  会话自己的 `important` 只在它手上没有未完成的活时才用（用户给空闲会话打的标记），下一件活会把它接走。
+- **队长怎么标**：`task add --priority high` 建卡时标；`new --priority high` 派活时标（带 `--task-id`
+  就写到卡片上）；事后用 `task priority --id <卡片id|会话id|排队id> --level high|normal` 改。
+  只有队长能标，调度员不能。
+- **输出里怎么看**：`ledger` 的会话行和「排队等空位」里带 `【高优先级】`；`task list` / `task add`
+  的 JSON 给高优先级卡片多一行 `"priority": "high"`（普通卡片没有这一行），`task list --priority high`
+  只列高优先级；`queue list` 的高优先级项带 `"priority": "high"`；`handoff` 第 1 节写「用户点名高优先级 N 条」，
+  第 4 节对应的任务带 `【高优先级】` 并排在同组最前。
+- **界面**：看板卡片见上面「看板界面」；侧边栏的会话名前有蓝色小旗，同一模型分组里排在前面，
+  排队项同样；会话右键菜单有「高优先级」勾选项；终端架构图的会话卡片和排队卡片在标题前带「高优」旗标；
+  手机网页端（单机页和总台）的任务卡片带「高优先级」旗标并排在同状态最前。会话自己的那件活做完后，
+  它身上的旗标消失，之后派给它的普通活不会再带出旗标。架构图不因为优先级挪动卡片位置。
+- **排队**：等空位的活里，高优先级排在普通活前面，两类内部仍然先来先到（排队项的 `order` 是到达序号，
+  标记后又取消会回到原位）。有空位时，一条高优先级的新请求不会被排在前面的普通活挡住。
+  不打断任何已经在跑的会话，不突破同时干活上限、额度和内存暂停。
+- **用户自己点**：把一张还在待办、没人做的卡片标成高优先级，会经回执通道告诉队长一次
+  「用户在任务看板把卡片 X 标为高优先级…请立刻安排」；已经在做的卡片、取消标记、队长自己的命令都不发通知。
+- **原有路由不变**：`important` 的卡片拖到进行中仍然交队长调度，不交便宜调度员。
 
 ## startCard、心跳与调度
 

@@ -1,5 +1,6 @@
 :root {
   color-scheme: light;
+  --prio: #0b6bcb; --prio-ink: #ffffff;
   --bg: #f4f2ee; --surface: #fffefc; --raised: #f7f5f1; --soft: #ece9e3; --text: #1d1c1a;
   --secondary: #55524d; --muted: #77736c; --line: #e2ded6; --line-strong: #cfcac0;
   --accent: #b85c16; --accent-soft: #fbeedf; --accent-ink: #fffefc;
@@ -14,6 +15,7 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
+  --prio: #4db8ff; --prio-ink: #04233a;
   --bg: #0f0f0e; --surface: #191918; --raised: #20201e; --soft: #282826; --text: #ecebe8;
   --secondary: #bbb8b2; --muted: #918e88; --line: #2c2c2a; --line-strong: #3d3c39;
   --accent: #eba066; --accent-soft: #33241a; --accent-ink: #1a120c;
@@ -181,6 +183,10 @@ textarea::placeholder { color: var(--muted); }
 .task-card[data-status="needs_user"] .task-status, .task-card[data-status="review"] .task-status { background: var(--warn-soft); color: var(--warn); }
 .task-owner { margin-left: auto; background: transparent; border: 1px solid var(--line-strong); }
 .task-flag { background: var(--bad-soft); color: var(--bad); }
+/* 高优先级: a solid flag chip in its own blue, and a blue edge on the card. */
+.task-prio { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px 2px 6px; border-radius: 99px; background: var(--prio); color: var(--prio-ink); font-weight: 700; white-space: nowrap; }
+.task-prio svg { width: 12px; height: 12px; }
+.task-card[data-priority="high"] { border-left: 3px solid var(--prio); padding-left: 14px; }
 .task-card h3 { font-size: 14px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .task-assignee { font: 11px/1.6 var(--mono); color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
 .task-receipt { color: var(--secondary); font-size: 12px; line-height: 1.6; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }

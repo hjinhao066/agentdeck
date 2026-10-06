@@ -127,6 +127,8 @@
         full: receiptFull(latest || remembered, col.lastReceipt),
         live: !isArchived && status === 'working' ? oneLine(col.live, 90) : '',
         archived: isArchived, review: false, taskCount: list.length,
+        // 高优先级: the user named this work as urgent (a live session only).
+        important: !isArchived && col.important === true,
         firstSentAt: sent.length ? Math.min(...sent) : 0,
         lastSentAt: sent.length ? Math.max(...sent) : 0,
         ts: Math.max(latest ? latest.doneAt || latest.startedAt || latest.sentAt || 0 : 0, col.archivedAt || 0),
@@ -140,7 +142,7 @@
         id: 'wait:' + t.id, kind: 'waiting', title: oneLine(t.title, 120) || '排队中的活',
         project: oneLine(t.project, 120), reviews: Array.isArray(t.reviews) ? t.reviews : [],
         provider: '', model: '', status: 'queued', statusLabel: STATUS_LABEL.queued, detail: '等空位',
-        line: '', full: '', live: '', archived: false, review: false, taskCount: 1,
+        line: '', full: '', live: '', archived: false, review: false, taskCount: 1, important: t.important === true,
         firstSentAt: t.sentAt || 0, lastSentAt: t.sentAt || 0, ts: t.sentAt || 0, files: [], returned: '',
       });
     });
@@ -737,7 +739,7 @@
 
   // A change in anything but the live activity line rebuilds the map.
   function signature(map) {
-    const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0, x.project || '', (x.reviews || []).join(',')].join('\u0001');
+    const n = (x) => [x.id, x.status, x.detail, x.title, x.provider, x.model, x.line, x.archived ? 1 : 0, x.review ? 1 : 0, x.project || '', (x.reviews || []).join(','), x.important ? 1 : 0].join('\u0001');
     return [map.captain ? n(map.captain) : '', ...map.nodes.map(n), ...map.edges.map((e) => `${e.type}:${e.from}>${e.to}:${e.kind || ''}`), map.hiddenArchived, ...map.projects.map((p) => `${p.key}:${p.completed}:${p.inactive}:${summaryLine(p.counts)}`)].join('\u0002');
   }
 

@@ -362,7 +362,8 @@ function deriveCard(card, ctx) {
   // A running task has no receipt yet: its progress line is the only word on where the work is.
   const refs = refsIn([card.exec_receipt?.text, card.latest_receipt, ...own.map((t) => receiptText(t.receipt)), ...own.filter((t) => OPEN.includes(t.status)).map((t) => t.progress)].join('\n'),
     [...(card.exec_receipt?.files || []), ...own.flatMap((t) => t.receipt?.files || [])]);
-  return { id: card.id, project: String(card.project || ''), title: String(card.title || ''), order: Number(card.order) || 0, archived: !!card.archived,
+  // 高优先级: the user named this card as urgent. The next Captain must know which ones.
+  return { id: card.id, project: String(card.project || ''), title: String(card.title || ''), order: Number(card.order) || 0, archived: !!card.archived, important: card.important === true,
     code, group, label, verdict, roles, executor: executors[0]?.id || '', asker: bound || executorId, question: code === 'needs_user' ? one(card.user_question, 200) : '', result, blockers, conflicts, next: NEXT[0], nextShort: NEXT[1], history, refs,
     started: own.length > 0 || !!bound || card.status !== 'todo', holders: roles.filter((r) => holdsWork(r.state)).map((r) => r.id) };
 }
@@ -379,7 +380,7 @@ function deriveLoose(ctx, cardIds) {
     const unhandled = ['failed', 'stopped'].includes(last.status) && ctx.sessions.has(id) && !bookkeeping(last);
     if (!open && !unhandled) continue;
     const stopped = captainStopped(last);
-    out.push({ id, title: String(last.title || ''), project: String(last.project || ''), state, status: last.status, reviewer: isReviewer(last),
+    out.push({ id, title: String(last.title || ''), project: String(last.project || ''), state, status: last.status, reviewer: isReviewer(last), important: last.important === true || ctx.sessions.get(id)?.important === true,
       label: stopped ? '暂停（已被队长叫停）' : last.status === 'asking' ? '执行中（在等队长回答）' : last.status === 'failed' ? '返工（执行失败，没人处理）' : last.status === 'stopped' ? '暂停（会话结束，没交回执）' : state.code === 'resuming' ? '执行中（重启后程序自动续接中）' : '执行中',
       group: stopped || last.status === 'stopped' ? 'paused' : last.status === 'failed' ? 'rework' : 'doing',
       result: receiptText(last.receipt) || (last.progress ? '进度：' + last.progress : ''),
@@ -387,7 +388,7 @@ function deriveLoose(ctx, cardIds) {
       holds: open && holdsWork(state) });
   }
   for (const w of ctx.waitlist) if (!w.metadata?.boardId || !cardIds.has(w.metadata.boardId)) {
-    out.push({ id: '', title: String(w.title || ''), project: String(w.project || w.metadata?.project || ''), state: { code: 'none', group: 'ended', label: '还没开' }, status: 'waiting', reviewer: false,
+    out.push({ id: '', title: String(w.title || ''), project: String(w.project || w.metadata?.project || ''), state: { code: 'none', group: 'ended', label: '还没开' }, status: 'waiting', reviewer: false, important: w.important === true,
       label: '执行中（排队等空位或额度）', group: 'doing', result: '', next: '等程序自动开，不重派', holds: false });
   }
   return out;
@@ -406,7 +407,7 @@ function derive(snapshot) {
   const all = ctx.cards.map((card) => deriveCard(card, ctx));
   // Done cards leave the list unless a rejection is still open on them.
   const cards = all.filter((c) => c.group !== 'done' && !(c.archived && !c.conflicts.length))
-    .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || a.project.localeCompare(b.project) || a.order - b.order || a.id.localeCompare(b.id));
+    .sort((a, b) => GROUPS.indexOf(a.group) - GROUPS.indexOf(b.group) || b.important - a.important || a.project.localeCompare(b.project) || a.order - b.order || a.id.localeCompare(b.id));
   const cardIds = new Set(ctx.cards.map((c) => c.id));
   const loose = deriveLoose(ctx, cardIds);
   // Every running background session shows up somewhere, card or not.
@@ -442,6 +443,7 @@ function derive(snapshot) {
   const count = (group) => cards.filter((c) => c.group === group).length + loose.filter((l) => l.group === group).length;
   const stats = { cards: cards.length, loose: loose.length, rework: count('rework'), review: count('review'), doing: count('doing'), paused: count('paused'), todo: count('todo'),
     running: [...new Set([...cards.flatMap((c) => c.holders), ...loose.filter((l) => l.holds).map((l) => l.id), ...strays.map((s) => s.id)])],
+    important: cards.filter((c) => c.important).length + loose.filter((l) => l.important).length,
     pending: ctx.pending.length + redeliver.length, unconfirmed: unconfirmed.length + carried.length, asks: asks.length, forUser: notes.user.length, conflicts: conflicts.length, strays: strays.length };
   // Authorized work that is under way or waiting on the Captain, as opposed to cards nobody has started.
   const active = stats.rework + stats.review + stats.doing + cards.filter((c) => ['held', 'needs_check', 'quota'].includes(c.code)).length + stats.pending + stats.unconfirmed + stats.asks;
@@ -461,6 +463,7 @@ const LEVELS = [
   { name: '只留必留项', result: 0, title: 24, history: 'none', excerpts: 0, excerpt: 0, files: 0, refs: false, long: false, line: 30, note: 160, items: 5 },
 ];
 const PLATFORM = { darwin: 'Mac', win32: 'Windows', linux: 'Linux' };
+const HIGH = '【高优先级】';
 const REASON = { relay: '席位 Relay', clear: '清空队长上下文', 'token-saver': '自动存档并清空上下文', restart: 'AgentDeck 重启', refresh: '队长运行 handoff' };
 
 function render(state, level) {
@@ -481,7 +484,7 @@ function render(state, level) {
   if (/\d\s*%/.test(relay)) out.push('- 上面的额度百分比是轮换那一刻的采样（来源：永动机轮换判定），只说明为什么轮换；现在的额度用 quota 查，不要拿它推算');
   out.push(`- 上任会话：${prev || '无'}${prev ? `（read --id ${prev} 按需读）` : ''}`);
   out.push(`- 快照版本：队长代次 gen ${ctx.captain.gen ?? '待核实'}${ctx.captain.nextGen ? ' → ' + ctx.captain.nextGen : ''}${ctx.boardVersion ? '；看板版本 ' + ctx.boardVersion : ''}。下面各节都取自这一份快照，另标了时间的除外`);
-  out.push(`- 摘要：未完成任务 ${stats.cards + stats.loose} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）；在跑的队员会话 ${stats.running.length} 个；未读回执 ${stats.pending} 条；已取走未确认 ${stats.unconfirmed} 条；队员在等回答 ${stats.asks} 条；等用户决定 ${stats.forUser} 条；矛盾 ${stats.conflicts} 条`);
+  out.push(`- 摘要：未完成任务 ${stats.cards + stats.loose} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）；在跑的队员会话 ${stats.running.length} 个；未读回执 ${stats.pending} 条；已取走未确认 ${stats.unconfirmed} 条；队员在等回答 ${stats.asks} 条；等用户决定 ${stats.forUser} 条；矛盾 ${stats.conflicts} 条${stats.important ? `；用户点名高优先级 ${stats.important} 条（下面标了【高优先级】，先办）` : ''}`);
   if (ctx.dispatchCap && ctx.dispatches.length >= ctx.dispatchCap) out.push(`- 派活记录：本快照有 ${ctx.dispatches.length} 条。未结束的全部保留；已结束的只留最近的，更早的旧轮次和只记在派活记录里的外部审查结论不在这里，以看板卡片为准，细节 read --id 会话id`);
   out.push('- 长度：{{LENGTH}}');
   out.push(`- 命令：下文的 handoff、ledger、read 等都接在 ${cli} 后面运行`);
@@ -548,7 +551,7 @@ function render(state, level) {
   if (!state.cards.length && !state.loose.length) out.push('无');
   for (const c of started) {
     const roles = c.roles.length ? c.roles.map(who).join('；') : '无';
-    const head = `- 【${c.label}】${c.id}｜${c.project}｜${one(c.title, L.title)}`;
+    const head = `- 【${c.label}】${c.important ? HIGH : ''}${c.id}｜${c.project}｜${one(c.title, L.title)}`;
     const blocked = [...c.blockers, ...c.conflicts.map((x) => '矛盾：' + x)];
     if (L.long) {
       out.push(head, `  会话：${roles}｜验收：${c.verdict.label}`);
@@ -566,10 +569,10 @@ function render(state, level) {
   if (!L.result && started.some((c) => c.result)) omitted.push(`结果摘要（ledger 或 task list 查）`);
   if (fresh.length) {
     out.push(`- 【待执行】还没启动的 ${fresh.length} 张（在第 2 节授权范围内且没被暂停时再派：new --task-id 卡片id）：`);
-    for (const c of fresh) out.push(`  - ${c.id}｜${c.project}｜${one(c.title, L.title)}${c.blockers.length ? '｜' + c.blockers.join('；') : ''}`);
+    for (const c of fresh) out.push(`  - ${c.important ? HIGH : ''}${c.id}｜${c.project}｜${one(c.title, L.title)}${c.blockers.length ? '｜' + c.blockers.join('；') : ''}`);
   }
   for (const l of state.loose) {
-    out.push(`- 【${l.label}】没挂卡｜${l.project || '无项目'}｜${one(l.title, L.title)}｜${l.id ? `${l.reviewer ? '审查' : '执行'} ${l.id}（${l.state.label}）` : '还没开会话'}${L.result && l.result ? '｜结果：' + one(l.result, L.result) : ''}｜下一步：${l.next}`);
+    out.push(`- 【${l.label}】${l.important ? HIGH : ''}没挂卡｜${l.project || '无项目'}｜${one(l.title, L.title)}｜${l.id ? `${l.reviewer ? '审查' : '执行'} ${l.id}（${l.state.label}）` : '还没开会话'}${L.result && l.result ? '｜结果：' + one(l.result, L.result) : ''}｜下一步：${l.next}`);
   }
   if (state.strays.length) out.push(`- 在跑、但没有对应未完成任务记录的会话：${state.strays.map((s) => `${s.id}「${one(s.title, 24)}」（${s.state.label}）`).join('、')}。用 peek 看它在做什么`);
 

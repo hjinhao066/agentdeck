@@ -13,7 +13,9 @@
 // was. Project colours come from the crew map's palette (CrewMapCore.projectHue).
 // The look is a star chart: a still night (or dawn) sky, glass cards lit from
 // the top in their status colour, and glowing lines from a waiting card to the
-// card it waits on. Only running work moves, and nothing moves under the
+// card it waits on. A 高优先级 card (the user named it urgent) carries a solid
+// flag mark and leads its column; the drawer's flag button sets or clears it.
+// Only running work moves, and nothing moves under the
 // system's reduce-motion setting.
 (function () {
   'use strict';
@@ -27,6 +29,19 @@
     terminal: svg('<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>'),
     copy: svg('<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>'),
     check: svg('<path d="m5 12 5 5 9-10"/>'),
+    flag: svg('<path d="M5.5 21V4"/><path d="M5.5 4.6h12l-2.7 4 2.7 4h-12z" fill="currentColor"/>'),
+  };
+  // The 高优先级 mark: a flag with its own colour, never a status colour. An
+  // unfinished card wears it solid with a short label; a finished one keeps a quiet outline.
+  const PRIORITY_TIP = '高优先级：你点名要优先做的事，排在同一栏最前面';
+  const priorityMark = (cls, urgent, text) => {
+    const m = el('span', cls + (urgent ? '' : ' quiet'));
+    m.innerHTML = ICON.flag;
+    if (text) m.append(el('span', 'tbv-prio-text', text));
+    m.setAttribute('role', 'img');
+    m.title = urgent ? PRIORITY_TIP : '高优先级（已完成）';
+    m.setAttribute('aria-label', urgent ? '高优先级' : '高优先级，已完成');
+    return m;
   };
   // One glyph per status: column heads, group tallies, the drawer's 移到 row.
   const STATUS_ICON = {
@@ -194,6 +209,7 @@
     const [state, stateLabel] = dotState(c);
     // The dot only tells whether a doing card is really being worked on; the column already names every other status.
     if (c.status === 'doing') { const dot = el('i', 'tbv-state ' + state); dot.title = stateLabel; row.append(dot); node.dataset.run = state; }
+    if (item.high) { row.append(priorityMark('tbv-prio', item.urgent, item.urgent ? '高优' : '')); if (item.urgent) node.dataset.priority = 'high'; }
     row.append(el('h3', 'tbv-title', c.title));
     if (c.flag === 'quota') row.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
     if (c.flag === 'failed') row.append(el('span', 'tbv-tag failed', '失败'));
@@ -225,8 +241,8 @@
     if (c.status === 'needs_user') mark('tbv-beacon');
     const session = c.session_id ? host.session(c.session_id) : null;
     const who = session ? session.label : U.ownerLabel(c, null);
-    node.title = [c.title, news !== item.waitLabel ? news : '', item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
-    node.setAttribute('aria-label', `${c.title}，${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
+    node.title = [c.title, item.urgent ? '高优先级' : '', news !== item.waitLabel ? news : '', item.waitLabel, `${who}${U.modelLabel(c) ? ' · ' + U.modelLabel(c) : ''}`, c.updated ? '更新于 ' + new Date(c.updated).toLocaleString() : '', '点开看详情；拖动或 Alt+方向键 移动'].filter(Boolean).join('\n');
+    node.setAttribute('aria-label', `${c.title}，${item.urgent ? '高优先级，' : ''}${U.labelOf(c.status)}${c.flag === 'failed' ? '，失败' : ''}${c.status === 'needs_user' ? '，' + (item.question || '队长还没把问题整理出来') : ''}。回车看详情，Alt 加方向键移动`);
     node.addEventListener('click', () => { if (suppressClick) return; openDetail(c.id); });
     node.addEventListener('keydown', (e) => cardKey(e, item, lane));
     node.addEventListener('pointerdown', (e) => startCardDrag(e, node, item, lane));
@@ -297,7 +313,14 @@
       counts.append(n);
     });
     const left = el('span', 'tbv-lane-open', lane.open ? `${lane.open} 件待完成` : '都做完了');
-    head.append(toggle, el('span', 'tbv-dot'), el('h2', 'tbv-lane-name', lane.name), left, counts);
+    head.append(toggle, el('span', 'tbv-dot'), el('h2', 'tbv-lane-name', lane.name), left);
+    // Seen on a folded group too: how many 高优先级 cards are still open in it.
+    if (lane.urgent) {
+      const n = priorityMark('tbv-lane-prio', true, String(lane.urgent));
+      n.title = `${lane.name} 有 ${lane.urgent} 件高优先级还没做完`; n.setAttribute('aria-label', n.title);
+      head.append(n);
+    }
+    head.append(counts);
     head.title = filter.project ? lane.name : `${lane.name}：点一下${collapsed ? '展开' : '收起'}${finished ? '' : '，拖动可调整项目先后'}`;
     if (!filter.project) head.addEventListener('click', () => { if (suppressClick) return; toggleLane(lane, collapsed); });
     if (!finished) head.addEventListener('pointerdown', (e) => startLaneDrag(e, section, lane));
@@ -549,7 +572,12 @@
         } else await api().move(card.id, status, card.updated);
         announce(`「${card.title}」已移到${U.labelOf(status)}`);
       }
-      if (anchor) { await api().reorder(card.id, anchor); if (status === card.status) announce(`「${card.title}」已调整先后`); }
+      // 高优先级 cards lead the column: a drop on the other side of that line keeps the card's own place.
+      const other = anchor && cards.find((c) => c.id === (anchor.before != null ? anchor.before : anchor.after));
+      const mine = U.isHigh(card) && status !== 'done';
+      const crosses = !!other && U.isUrgent(other) !== mine && (mine ? anchor.after != null : anchor.before != null);
+      if (crosses && status === card.status) host.showToast('高优先级的卡片固定排在这一栏最前面');
+      else if (anchor && !crosses) { await api().reorder(card.id, anchor); if (status === card.status) announce(`「${card.title}」已调整先后`); }
     } catch (error) {
       host.showToast('没移成：' + friendly(error));
     }
@@ -572,6 +600,9 @@
     const ids = lane.columns.find((col) => col.key === c.status).cards.map((x) => x.card.id);
     const at = ids.indexOf(c.id) + (e.key === 'ArrowUp' ? -1 : 1);
     if (at < 0 || at >= ids.length) { focusAfter = null; return; }
+    // 高优先级 cards lead the column: a card cannot be moved across that line.
+    const column = lane.columns.find((col) => col.key === c.status).cards;
+    if (column[at].urgent !== item.urgent) { focusAfter = null; announce('高优先级的卡片固定排在这一栏最前面'); return; }
     if (at >= CELL_LIMIT) expanded.add(lane.key + '/' + c.status);
     applyMove(c, c.status, e.key === 'ArrowUp' ? { before: ids[at] } : { after: ids[at] });
   }
@@ -737,6 +768,19 @@
     };
     return b;
   }
+  async function setPriority(card, high) {
+    try {
+      await api().setPriority(card.id, high ? 'high' : 'normal');
+      announce(high ? `「${card.title}」已标为高优先级` : `「${card.title}」已改回普通优先级`);
+      const told = high && card.status === 'todo' && window.MainSession && window.MainSession.exists();
+      host.showToast(high ? (told ? '已标为高优先级，并告诉队长立刻安排' : '已标为高优先级') : '已改回普通优先级');
+    } catch (error) {
+      host.showToast('没改成：' + friendly(error));
+    }
+    detailKey = '';   // redraw the drawer either way: the button comes back enabled
+    focusAfter = '.tbv-d-prio';
+    await refresh();
+  }
   async function sendAnswer(card, box, button) {
     const text = box.value.trim();
     if (!text) { box.focus(); return; }
@@ -781,9 +825,15 @@
     if (c.flag === 'quota') crumb.append(el('span', 'tbv-tag failed', { auth: '登录', rate_limit: '限流' }[c.resource_failure] || '额度'));
     if (c.flag === 'failed') crumb.append(el('span', 'tbv-tag failed', '失败'));
     if (c.flag === 'held') crumb.append(el('span', 'tbv-tag held', '挂起'));
+    const high = U.isHigh(c);
+    if (high) crumb.append(priorityMark('tbv-prio', U.isUrgent(c), '高优先级'));
+    // One click sets or clears the mark; the flag is lit while it is set.
+    const prio = iconButton('tbv-d-prio', ICON.flag, high ? '取消高优先级' : '标为高优先级（排到最前，队长优先安排）');
+    prio.setAttribute('aria-pressed', String(high));
+    prio.onclick = () => { prio.disabled = true; setPriority(c, !high); };
     const close = iconButton('tbv-d-close', ICON.close, '关闭详情 (Esc)');
     close.onclick = () => closeDetail(true);
-    top.append(crumb, close);
+    top.append(crumb, prio, close);
     const body = el('div', 'tbv-d-body');
     body.append(el('h2', 'tbv-d-title', c.title));
 

@@ -765,6 +765,16 @@
       bar.append(chip);
     }
   }
+  // 高优先级 is the card's `important` flag: the user named it as urgent. An
+  // unfinished one wears a flag in its own colour and is listed first.
+  const urgentTask = (task) => task.important === true && task.status !== 'done';
+  function priorityMark() {
+    const mark = node('span', 'task-prio');
+    mark.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 21V4"/><path d="M5.5 4.6h12l-2.7 4 2.7 4h-12z" fill="currentColor"/></svg>';
+    mark.append(node('span', '', '高优先级'));
+    mark.setAttribute('role', 'img'); mark.setAttribute('aria-label', '高优先级'); mark.title = '高优先级：你点名要优先做的事';
+    return mark;
+  }
   function renderBoard() {
     const signature = JSON.stringify(cards);
     if (signature === boardSignature) return;
@@ -783,13 +793,15 @@
       const lanes = node('div', 'board-lanes');
       lanes.tabIndex = 0; lanes.setAttribute('aria-label', project + '，左右滑动查看状态列');
       for (const [status, label] of taskStatuses) {
-        const tasksInLane = tasks.filter((t) => t.status === status);
+        const inLane = tasks.filter((t) => t.status === status);
+        const tasksInLane = [...inLane.filter(urgentTask), ...inLane.filter((t) => !urgentTask(t))];
         const lane = node('section', 'board-lane' + (tasksInLane.length ? '' : ' is-empty')); lane.dataset.status = status;
         const laneTitle = node('h3', 'lane-heading');
         laneTitle.append(node('span', '', label), node('span', 'lane-count', String(tasksInLane.length)));
         lane.append(laneTitle);
         for (const task of tasksInLane) {
           const card = node('article', 'task-card'); card.dataset.taskId = task.id;
+          if (urgentTask(task)) { card.dataset.priority = 'high'; card.append(priorityMark()); }
           if (task.flag) card.append(node('span', 'task-flag ' + task.flag, flagNames[task.flag] || task.flag));
           card.append(node('h4', '', task.title));
           if (task.assignee) card.append(node('p', 'task-assignee', [task.assignee.agent, task.assignee.model].filter(Boolean).join(' · ')));

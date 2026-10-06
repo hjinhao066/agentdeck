@@ -4,6 +4,8 @@
    content, panels and menus lift with --elev, primary buttons are inverted. */
 :root[data-theme="light"] {
   color-scheme: light;
+  /* 高优先级: its own blue, never a status colour (yellow working, red failed/input, green done, orange/amber quota). */
+  --prio: #0b6bcb; --prio-ink: #ffffff; --prio-soft: rgba(11, 107, 203, .11);
   --app-bg: #ffffff;
   --rail-bg: #f7f7f7;
   --panel: #fbfbfb;
@@ -42,6 +44,7 @@
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
+  --prio: #4db8ff; --prio-ink: #04233a; --prio-soft: rgba(77, 184, 255, .16);
   --app-bg: #141414;
   --rail-bg: #1b1b1b;
   --panel: #181818;
@@ -218,6 +221,10 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 .colnav-item.cn-dragging { opacity: 0.4; }
 .colnav-item .cn-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--st-plain); flex: 0 0 auto; }
 .colnav-item .cn-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+/* 高优先级 session: a solid flag before the name; the status dot keeps its own meaning. */
+.colnav-item .cn-prio { color: var(--prio); width: 14px; height: 14px; margin: 0 -2px 0 -3px; }
+.colnav-item .cn-prio svg { width: 13px; height: 13px; }
+.colnav-item.prio .cn-label { font-weight: 600; color: var(--text); }
 .cn-label {
   min-width: 0; font-size: calc(13.5px * var(--sidebar-scale, 1));
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -2595,6 +2602,9 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .cm-top { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 0 0 auto; height: 20px; padding-right: 34px; }
 .cm-status { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex: 1; font-size: 12.5px; font-weight: 600; color: var(--cm-text-2); white-space: nowrap; overflow: hidden; height: 20px; }
 .cm-status-text { overflow: hidden; text-overflow: ellipsis; }
+/* 高优先级: a solid flag chip leading the card's title, in a blue no status uses. The card keeps its status rim and light. */
+.cm-prio { display: inline-flex; align-items: center; gap: 3px; height: 18px; margin-right: 7px; padding: 0 7px 0 5px; border-radius: 6px; background: var(--prio); color: var(--prio-ink); font-size: 11px; font-weight: 700; line-height: 18px; white-space: nowrap; vertical-align: 2px; }
+.cm-prio svg { flex: 0 0 auto; }
 /* On a card the status is always whole: it takes the width its words need and the model badge beside it gives way. */
 .cm-top > .cm-status { flex: 0 0 auto; }
 .st-working > .cm-top .cm-status { color: var(--cm-work); }
@@ -3235,6 +3245,19 @@ button.tbv-lane-n b { color: var(--tbv-need); }
 }
 .tbv-tag.failed { color: var(--tbv-fail); border-color: color-mix(in srgb, var(--tbv-fail-lit) 55%, transparent); background: color-mix(in srgb, var(--tbv-fail-lit) 14%, transparent); font-weight: 600; }
 .tbv-tag.held { border-style: dashed; }
+/* 高优先级: the one solid chip on the board, in a blue no status uses. A finished card keeps a quiet outline flag. */
+.tbv-prio { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; height: 18px; margin-top: 1px; padding: 0 6px 0 4px; border-radius: 6px; background: var(--prio); color: var(--prio-ink); font-size: 11px; font-weight: 700; line-height: 18px; white-space: nowrap; }
+.tbv-prio svg { flex: 0 0 auto; width: 12px; height: 12px; stroke-width: 2.2; }
+.tbv-prio.quiet { padding: 0 3px; background: transparent; color: var(--tbv-ink-3); }
+.tbv-card[data-priority="high"] { box-shadow: var(--tbv-shadow), inset 3px 0 0 var(--prio), 0 0 24px -9px color-mix(in srgb, var(--aura) var(--tbv-halo), transparent); }
+.tbv-card[data-priority="high"]:hover { box-shadow: var(--tbv-shadow-up), inset 3px 0 0 var(--prio), 0 0 24px -9px color-mix(in srgb, var(--aura) var(--tbv-halo), transparent); }
+@container (max-width: 150px) { .tbv-prio .tbv-prio-text { display: none; } .tbv-prio { padding: 0 3px; } }
+.tbv-lane-prio { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 7px 0 5px; border-radius: 9px; background: var(--prio-soft); color: var(--prio); font-family: var(--mono); font-size: 12px; font-weight: 700; line-height: 18px; }
+.tbv-lane-prio svg { width: 12px; height: 12px; stroke-width: 2.2; }
+.tbv-d-crumb .tbv-prio { margin-top: 0; }
+.tbv-d-prio[aria-pressed="true"] { color: var(--prio); background: var(--prio-soft); }
+.tbv-d-prio[aria-pressed="true"]:hover:not(:disabled) { color: var(--prio); background: color-mix(in srgb, var(--prio) 24%, transparent); }
+.tbv-d-prio[aria-pressed="false"] svg path { fill: none; }
 .tbv-tag.wait { color: var(--tbv-doing); border-color: color-mix(in srgb, var(--tbv-doing-lit) 50%, transparent); background: color-mix(in srgb, var(--tbv-doing-lit) 12%, transparent); }
 .tbv-tag.conflict { color: var(--tbv-need); border-color: color-mix(in srgb, var(--tbv-need-lit) 55%, transparent); background: color-mix(in srgb, var(--tbv-need-lit) 14%, transparent); font-weight: 600; }
 .tbv-model { flex: 0 0 auto; max-width: 140px; padding: 1px 6px; border-radius: 5px; background: var(--tbv-chip-hi); font-size: 11px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }

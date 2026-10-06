@@ -27,6 +27,7 @@ const ICONS = {
   down:  S('<polyline points="6 9 12 15 18 9"/>'),
   help:  S('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
   side:  S('<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/>'),
+  flag: S('<path d="M5.5 21V4"/><path d="M5.5 4.6h12l-2.7 4 2.7 4h-12z" fill="currentColor"/>'),
   tasks: S('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/><path d="M5.5 8h1.5M11 8h2M11 11.5h2M17 8h1.5"/>'),
   board: S('<rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M6 9v3h12V9M12 12v3"/>'),
   newChat: S('<path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a1 1 0 0 1 3 3l-9 9a2 2 0 0 1-.85.5l-2.87.84a.5.5 0 0 1-.62-.62l.84-2.87a2 2 0 0 1 .5-.85z"/>'),
@@ -238,6 +239,7 @@ if (saved) {
       boardId: typeof c.boardId === 'string' ? c.boardId : '',
       boardAttempt: typeof c.boardAttempt === 'string' ? c.boardAttempt : '',
       dispatcherCardId: typeof c.dispatcherCardId === 'string' ? c.dispatcherCardId : '',
+      ...(c.important === true ? { important: true } : {}),   // 高优先级, for work handed out without a card
 
       claudeSeatId: c.claudeSeatId || config.activeClaudeSeatId,
       lastReceipt: c.lastReceipt && typeof c.lastReceipt === 'object' ? c.lastReceipt : null,
@@ -4286,6 +4288,8 @@ CrewMap.init({
   columns: () => columns,
   mainCol: () => MainSession.mainCol(),
   mainState: () => MainSession.state(),
+  isPriority: (col) => MainSession.isPriority(col),
+  isHigh: (item) => MainSession.isHigh(item),
   activityLine: lastActivityLine,
   agentInfo: (col, entry) => window.AgentInfo.resolveAgentInfo(col, entry || null, null),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
