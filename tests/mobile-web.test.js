@@ -422,7 +422,7 @@ test('failed device persistence issues no cookie, and failed revocation disables
   assert.equal(revoked.error, 'Could not save device revocation.');
 });
 
-test('configuration accepts only a pathless HTTPS public origin and a long random-format token', async (t) => {
+test('configuration accepts only a pathless HTTPS public origin and rejects invalid tokens while accepting short tokens', async (t) => {
   const { server, saved } = fixture();
   t.after(() => server.close());
   for (const origin of ['http://public.example', 'https://public.example/mobile', 'https://user:pass@public.example', 'https://public.example/?token=value', 'not a url']) {
@@ -431,9 +431,62 @@ test('configuration accepts only a pathless HTTPS public origin and a long rando
     assert.match(result.error, /HTTPS origin/);
   }
   assert.equal(saved.length, 0);
-  assert.equal((await server.configure({ enabled: true, port: 0, publicOrigin: '', token: 'short-token' })).enabled, false);
+  for (const invalidToken of ['   ', 'has space', 'has\nnewline', 'a'.repeat(129)]) {
+    const bad = await server.configure({ enabled: true, port: 0, publicOrigin: '', token: invalidToken });
+    assert.equal(bad.enabled, false);
+    assert.equal(bad.error, 'Invalid login token.');
+  }
   assert.equal(saved.length, 0);
+  const ok = await server.configure({ enabled: true, port: 0, publicOrigin: '', token: 'short-token' });
+  assert.equal(ok.enabled, true);
+  assert.equal(ok.token, 'short-token');
+  assert.equal(saved.length, 1);
 });
+
+test('custom short token "1" is accepted, enables server, logs in with 30-day device cookie, and supports Bearer auth', async (t) => {
+  const { server, saved } = fixture();
+  t.after(() => server.close());
+  const configured = await server.configure({ enabled: true, port: 0, publicOrigin: '', token: '1' });
+  assert.equal(configured.enabled, true);
+  assert.equal(configured.token, '1');
+  assert.equal(configured.error, '');
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].token, '1');
+
+  // Login with token '1'
+  const res = await post(configured, '/login', { token: '1' });
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.text);
+  assert.equal(body.authenticated, true);
+  assert.ok(res.headers['set-cookie']);
+  const cookie = res.headers['set-cookie'][0];
+  assert.match(cookie, /^agentdeck_mobile=[a-f0-9]{64}; HttpOnly; SameSite=Strict; Path=\/; Max-Age=2592000$/);
+
+  // Authenticate with device cookie
+  const cookieVal = cookie.split(';')[0];
+  const authRes = await request(configured, '/api/auth', { headers: { Cookie: cookieVal } });
+  assert.equal(authRes.status, 200);
+  const authBody = JSON.parse(authRes.text);
+  assert.equal(authBody.authenticated, true);
+  assert.match(authBody.csrfToken, /^[a-f0-9]{64}$/);
+
+  // Bearer authentication with token '1'
+  const bearerRes = await request(configured, '/api/auth', { headers: { Authorization: 'Bearer 1' } });
+  assert.equal(bearerRes.status, 200);
+
+  // Wrong token is rejected
+  const wrongRes = await post(configured, '/login', { token: 'wrong' });
+  assert.equal(wrongRes.status, 401);
+});
+
+test('numeric token 1 in configure is normalized to string "1"', async (t) => {
+  const { server, saved } = fixture();
+  t.after(() => server.close());
+  const configured = await server.configure({ enabled: true, port: 0, publicOrigin: '', token: 1 });
+  assert.equal(configured.enabled, true);
+  assert.equal(configured.token, '1');
+});
+
 
 test('device and bearer uploads accepted before revocation cannot execute captain or logout writes after revocation', async (t) => {
   for (const kind of ['cookie', 'bearer']) {
