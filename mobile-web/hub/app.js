@@ -458,7 +458,8 @@
     label.innerHTML = svg('crown'); label.append(inCaptain ? `${m.label} 队长在用` : '队长在用');
     const value = node('span', 'captain-seat-value', busy ? `正在换到 ${job.targetName}…` : seat ? Core.seatLabel(seat) : '账号未知');
     info.append(label, value);
-    const quota = !busy && Core.seatQuotaText(seat);
+    // The slim line in the conversation has room for the nearest limit only.
+    const quota = !busy && Core.seatQuotaText(inCaptain && seat ? { cells: seat.cells.slice(0, 1) } : seat);
     if (quota) info.append(node('span', 'captain-seat-quota', quota));
     const button = node('button', 'text-button', busy ? '查看进度' : '切换队长');
     button.type = 'button'; button.dataset.switch = m.id; button.setAttribute('aria-haspopup', 'dialog');

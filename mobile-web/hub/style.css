@@ -282,7 +282,8 @@ textarea::placeholder { color: var(--muted); }
 .captain-seat-bar .captain-seat { margin-top: 0; padding: 4px 4px 4px 12px; background: var(--surface); border: 1px solid var(--line); }
 .captain-seat-bar .captain-seat-info { flex-wrap: nowrap; }
 .captain-seat-bar .captain-seat-label { flex: none; font-size: 12px; }
-.captain-seat-bar .captain-seat-value { font-size: 14px; }
+.captain-seat-bar .captain-seat-value { flex: none; max-width: 46%; font-size: 14px; }
+.captain-seat-bar .captain-seat-quota { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .captain-seat-bar .text-button { border-color: transparent; background: transparent; }
 
 /* The switch sheet rises from the bottom, over a dimmed page. */

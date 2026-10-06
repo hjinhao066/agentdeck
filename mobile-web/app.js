@@ -22,6 +22,10 @@
     chevron: '<path d="m9 6 6 6-6 6"/>',
     ban: '<circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/>',
     // A page with one arrow: tells reloading the page apart from refresh's two arrows.
+    swap: '<path d="M7 4 3 8l4 4"/><path d="M3 8h14"/><path d="m17 12 4 4-4 4"/><path d="M21 16H7"/>',
+    alert: '<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4.5m0 2.6v.2"/>',
+    done: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.8L16.2 9.5"/>',
+    arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
     reload: '<rect x="2.5" y="2.5" width="19" height="19" rx="4"/><path d="M17.4 12a5.4 5.4 0 1 1-5.4-5.4c1.5 0 3 .6 4 1.6l1.4 1.4"/><path d="M17.4 6.6v3h-3"/>',
   };
   // The desktop's provider marks (agent-info.js PROVIDER_ICONS), so both ends show the same icons.
@@ -495,6 +499,206 @@
     quotaBusy = false; $('quota-refresh').disabled = false; $('quota-refresh').classList.remove('refreshing');
   }
 
+  // ---- switching the Captain's account ----
+  // The Captain of this computer can be moved to another account from here.
+  // The desktop does the switch; this page asks, then follows the outcome.
+  const Core = window.HubCore;
+  let relay = null, relayFailed = false, relayJob = null, relayTimer, switchNotice = 0, sheetStep = '', sheetSeat = '', sheetSignature, entrySignature;
+  const dialog = node('dialog', 'sheet'); dialog.id = 'switch-sheet'; dialog.setAttribute('aria-labelledby', 'switch-title');
+  // Outside the shell: the drawer makes the shell's children inert, a dialog must never be.
+  document.body.append(dialog);
+  const textButton = (label, id) => { const button = node('button', 'text-button', label); button.type = 'button'; button.id = id; button.setAttribute('aria-haspopup', 'dialog'); button.addEventListener('click', openSwitch); return button; };
+  // Three ways in: next to the quota rows, in "more", and a line over the conversation when the account runs low.
+  const quotaSwitch = textButton('切换队长', 'quota-switch'); quotaSwitch.hidden = true;
+  $('quota-refresh').before(quotaSwitch);
+  const moreSwitch = node('button', 'settings-row'); moreSwitch.type = 'button'; moreSwitch.id = 'switch-entry'; moreSwitch.hidden = true; moreSwitch.setAttribute('aria-haspopup', 'dialog');
+  moreSwitch.innerHTML = '<span class="row-icon" aria-hidden="true">' + svg('swap') + '</span><span class="row-title">切换队长</span><span id="switch-entry-text" class="row-tag"></span><span class="row-chevron" aria-hidden="true">' + svg('chevron') + '</span>';
+  moreSwitch.addEventListener('click', openSwitch);
+  $('quota-entry').after(moreSwitch);
+  const seatAlert = node('div', 'seat-alert'); seatAlert.id = 'seat-alert'; seatAlert.hidden = true; seatAlert.setAttribute('role', 'status');
+  const seatAlertText = node('span', 'seat-alert-text');
+  seatAlert.append(seatAlertText, textButton('切换队长', 'alert-switch'));
+  $('attention').after(seatAlert);
+
+  async function loadRelay() {
+    try { relay = Core.cleanRelay(await api('/api/relay')); relayFailed = false; return relay; }
+    catch (_) { relayFailed = true; return null; }
+  }
+  function renderSwitchEntries() {
+    const seat = Core.currentSeat(relay), ready = !!relay && !!relay.captainId, busy = relayJob?.phase === 'switching';
+    const cell = seat && (seat.cells.find((c) => c.key === '5h') || seat.cells[0]);
+    const low = !busy && cell && (cell.out || cell.remaining <= 10);
+    const signature = JSON.stringify([ready, seat, busy && relayJob.targetName, view, offline]);
+    if (signature !== entrySignature) {
+      entrySignature = signature;
+      quotaSwitch.hidden = !ready; moreSwitch.hidden = !ready;
+      const label = busy ? '查看切换进度' : '切换队长';
+      quotaSwitch.textContent = busy ? '查看进度' : '切换队长'; quotaSwitch.setAttribute('aria-label', label);
+      $('switch-entry-text').textContent = busy ? '正在换到 ' + relayJob.targetName + '…' : seat ? Core.seatLabel(seat) : '';
+      seatAlert.hidden = !(ready && low && view === 'captain');
+      if (low) seatAlertText.textContent = '队长用的 ' + Core.seatLabel(seat) + (cell.out ? ' 额度用完了' : ' ' + (cell.key === '5h' ? '5 小时' : '每周') + '只剩 ' + Core.percentText(cell));
+    }
+    renderSheet();
+  }
+  function openSwitch() {
+    closeDrawer(false);
+    sheetStep = 'pick'; sheetSeat = ''; sheetSignature = undefined; renderSheet();
+    if (!dialog.open) dialog.showModal();
+    // Always pick from a fresh answer of the computer, not from what was on screen.
+    if (!relayJob) loadRelay().then(renderSwitchEntries);
+  }
+  dialog.addEventListener('close', () => {
+    // A finished switch has been read. A running one carries on and reports in the notice line.
+    if (relayJob && relayJob.phase !== 'switching') relayJob = null;
+    sheetStep = ''; renderSwitchEntries();
+  });
+  // A tap on the dimmed page closes the sheet; a tap inside it does not.
+  dialog.addEventListener('click', (event) => { if (event.target === dialog) dialog.close(); });
+  function watchJob() {
+    clearTimeout(relayTimer);
+    const job = relayJob;
+    if (!job || job.phase !== 'switching') return;
+    relayTimer = setTimeout(async () => {
+      const latest = await loadRelay();
+      if (relayJob !== job) return;
+      job.unreachable = !latest;
+      const outcome = Core.relayOutcome(job, latest);
+      if (outcome.phase === 'switching') { renderSwitchEntries(); watchJob(); } else finishJob(job, outcome);
+    }, 1500);
+  }
+  function finishJob(job, outcome) {
+    job.phase = outcome.phase; job.error = outcome.error;
+    if (!dialog.open) {
+      const seat = Core.currentSeat(relay);
+      notice(job.phase === 'done' ? '队长已换到 ' + job.targetName + '。' : '队长没有换成：' + job.error + (seat ? ' 队长现在用的是 ' + Core.seatLabel(seat) + '。' : ''), job.phase !== 'done');
+      relayJob = null;
+      // The regular refresh clears the notice line; the outcome of a switch stays long enough to be read.
+      clearTimeout(switchNotice); switchNotice = setTimeout(() => { switchNotice = 0; notice(''); }, 15000);
+    }
+    renderSwitchEntries();
+    // A new Captain is a new conversation: read everything again right away.
+    refresh();
+  }
+  async function startSwitch(seat) {
+    const job = relayJob = { id: '', phase: 'switching', targetId: seat.id, targetName: Core.seatLabel(seat), fromName: Core.seatLabel(Core.currentSeat(relay)), startedAt: Date.now(), error: '', unreachable: false };
+    renderSwitchEntries();
+    let refusal = '', lost = false;
+    try {
+      const result = await api('/api/relay', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ seatId: seat.id, ...(relay.currentId ? { expectCurrent: relay.currentId } : {}) }) });
+      if (result.started === true && typeof result.id === 'string') { if (relayJob === job) { job.id = result.id; watchJob(); } return; }
+      refusal = '电脑没有接受这次切换。';
+    } catch (err) { lost = err instanceof TypeError; refusal = lost ? '手机连不上电脑，不确定切换的请求有没有送到。' : err.message; }
+    if (relayJob !== job) return;
+    // No confirmation: the computer's own record says whether a switch is running.
+    const latest = await loadRelay();
+    if (relayJob !== job) return;
+    if (lost && latest?.job?.status === 'switching' && latest.job.targetId === seat.id) { job.id = latest.job.id; watchJob(); renderSwitchEntries(); return; }
+    finishJob(job, { phase: 'failed', error: refusal });
+  }
+  function seatOption(seat, now) {
+    const button = node('button', 'seat-option'); button.type = 'button'; button.dataset.seatId = seat.id; button.dataset.provider = seat.provider;
+    if (seat.current) button.dataset.current = 'true';
+    // Not `disabled`: an account that cannot be picked still has to be reachable to read why.
+    if (!seat.selectable) button.setAttribute('aria-disabled', 'true');
+    button.setAttribute('aria-label', Core.seatSpoken(seat, now));
+    const main = node('span', 'seat-main'), top = node('span', 'seat-top');
+    top.append(node('span', 'seat-name', Core.seatLabel(seat)));
+    if (seat.current) { const tag = node('span', 'seat-tag'); tag.innerHTML = svg('crown'); tag.append('队长在用'); top.append(tag); }
+    main.append(top);
+    if (seat.account) main.append(node('span', 'seat-account', seat.account));
+    const reason = seat.current ? '' : Core.seatReason(seat, now);
+    if (reason) { const line = node('span', 'seat-reason', reason); if (!seat.selectable) line.dataset.blocked = 'true'; main.append(line); }
+    const values = node('span', 'seat-values');
+    for (const cell of seat.cells) {
+      const el = node('span', 'seat-cell'); el.dataset.level = cell.out ? 'out' : cell.remaining <= 10 ? 'danger' : cell.remaining <= 20 ? 'low' : 'ok';
+      el.append(node('span', 'seat-cell-key', cell.key), node('span', 'seat-cell-value', Core.percentText(cell)));
+      values.append(el);
+    }
+    button.append(providerIcon(seat), main, values);
+    button.addEventListener('click', () => { if (!seat.selectable) return; sheetStep = 'confirm'; sheetSeat = seat.id; renderSheet(); });
+    return button;
+  }
+  function renderSheet() {
+    if (!sheetStep) return;
+    const job = relayJob, now = Date.now();
+    const picked = relay?.seats.find((seat) => seat.id === sheetSeat && seat.selectable);
+    // The chosen account stopped being available while the question was on screen: back to the list.
+    if (!job && sheetStep === 'confirm' && !picked) sheetStep = 'pick';
+    const phase = job ? job.phase : sheetStep;
+    const signature = JSON.stringify([phase, sheetSeat, relay, relayFailed, offline, job && [job.targetName, job.fromName, job.error, job.unreachable], Math.floor(now / 60000)]);
+    if (signature === sheetSignature) return;
+    sheetSignature = signature;
+    const focused = dialog.contains(document.activeElement) ? document.activeElement.dataset.seatId || document.activeElement.dataset.action : null;
+    const moved = dialog.dataset.phase !== phase;
+    dialog.dataset.phase = phase;
+    const body = node('div', 'sheet-body'), head = node('div', 'sheet-head'), title = node('h2');
+    title.id = 'switch-title'; title.tabIndex = -1;
+    const close = iconButton('close', '关闭', () => dialog.close()); close.dataset.action = 'close';
+    const mark = node('span', 'sheet-mark'); mark.innerHTML = svg('crown'); mark.setAttribute('aria-hidden', 'true');
+    head.append(mark, title, close); body.append(head);
+    const text = (className, value) => { const el = node('p', className, value); body.append(el); return el; };
+    const action = (className, label, name, onClick) => { const button = node('button', className, label); button.type = 'button'; button.dataset.action = name; button.addEventListener('click', onClick); return button; };
+    const figure = (icon, tone) => { const el = node('div', 'sheet-figure tone-' + tone); if (icon) el.innerHTML = svg(icon); else el.append(node('span', 'spinner')); el.setAttribute('aria-hidden', 'true'); body.append(el); };
+    const route = (from, to) => {
+      const el = node('div', 'sheet-route'), arrow = node('span', 'sheet-route-arrow'); arrow.innerHTML = svg('arrow'); arrow.setAttribute('aria-hidden', 'true');
+      el.append(node('span', 'sheet-route-seat', from || '现在的账号'), arrow, node('span', 'sheet-route-seat target', to));
+      el.setAttribute('aria-label', '从 ' + (from || '现在的账号') + ' 换到 ' + to); body.append(el);
+    };
+    const current = Core.currentSeat(relay);
+    if (phase === 'pick') {
+      title.textContent = '切换队长';
+      if (!relay) text('sheet-lead', offline ? '暂时连不上电脑，现在换不了队长。' : relayFailed ? '暂时读不到这台电脑的账号，稍后会自动重试。' : '正在读取这台电脑的账号…');
+      else if (!relay.captainId) text('sheet-lead', '这台电脑上还没有队长。先在电脑上创建队长。');
+      else {
+        text('sheet-lead', current ? '队长现在用的是 ' + Core.seatLabel(current) + '，要换到哪个账号？' : '要把队长换到哪个账号？');
+        const list = node('div', 'seat-list'); list.setAttribute('role', 'group'); list.setAttribute('aria-label', '可以用的账号');
+        for (const seat of relay.seats) list.append(seatOption(seat, now));
+        body.append(list);
+        if (!relay.seats.some((seat) => seat.selectable)) text('sheet-note warn', '现在没有别的账号可以换。等额度恢复，或回到电脑上登录别的账号。');
+        else text('sheet-note', '选好以后还会再问你一次。');
+      }
+    } else if (phase === 'confirm') {
+      title.textContent = '确认切换队长？';
+      route(Core.seatLabel(current), Core.seatLabel(picked));
+      text('sheet-lead', '现在这位队长会先把进度存好再下线，新队长用 ' + Core.seatLabel(picked) + ' 读着存档接着干。');
+      text('sheet-note warn', '换了以后，现在这位队长正在说的话会中断，它没存下来的内容会丢。派出去的队员和任务不受影响。');
+      if (picked.reason === 'unknown') text('sheet-note', Core.seatLabel(picked) + ' 的额度还不清楚，换过去以后可能马上又不够用。');
+      const actions = node('div', 'sheet-actions');
+      actions.append(action('primary', '确认切换', 'confirm', () => startSwitch(picked)), action('secondary', '先不换', 'back', () => { sheetStep = 'pick'; sheetSeat = ''; renderSheet(); }));
+      body.append(actions);
+    } else if (phase === 'switching') {
+      title.textContent = '正在切换队长';
+      figure('', 'accent'); route(job.fromName, job.targetName);
+      text('sheet-lead', '先让现在的队长存好进度，再启动新队长。一般不到一分钟，队长正忙的时候最长要几分钟。').setAttribute('role', 'status');
+      text('sheet-elapsed', '已经等了 ' + Core.elapsedText(now - job.startedAt)).id = 'switch-elapsed';
+      if (job.unreachable) text('sheet-note warn', '暂时连不上电脑。恢复以后这里会自动显示结果，不用重新点。');
+      text('sheet-note', '可以先关掉这个窗口，切换会继续，结果会显示在页面顶部。');
+    } else if (phase === 'done') {
+      title.textContent = '已换到 ' + job.targetName;
+      figure('done', 'ok');
+      text('sheet-lead', '新队长已经用 ' + job.targetName + ' 接手，正在读存档。对话页会自动连到新队长。').setAttribute('role', 'status');
+      const actions = node('div', 'sheet-actions');
+      actions.append(action('primary', '回到对话', 'view', () => { dialog.close(); showView('captain'); }));
+      body.append(actions);
+    } else {
+      title.textContent = '队长没有换成';
+      figure('alert', 'bad');
+      text('sheet-lead', job.error).setAttribute('role', 'alert');
+      text('sheet-note', current ? '队长现在用的还是 ' + Core.seatLabel(current) + (current.id === job.targetId ? '' : '，没有变化') + '。' : '队长的账号暂时读不到，恢复连接后会显示。');
+      const actions = node('div', 'sheet-actions');
+      actions.append(action('secondary', '重新选账号', 'retry', () => { relayJob = null; sheetStep = 'pick'; sheetSeat = ''; renderSwitchEntries(); loadRelay().then(renderSwitchEntries); }));
+      body.append(actions);
+    }
+    dialog.replaceChildren(body);
+    // A new step is announced from its title; a refreshed list keeps the finger where it was.
+    if (moved && dialog.open) title.focus({ preventScroll: true });
+    else if (focused) dialog.querySelector('[data-seat-id="' + CSS.escape(focused) + '"], [data-action="' + CSS.escape(focused) + '"]')?.focus({ preventScroll: true });
+  }
+  setInterval(() => {
+    const waited = document.getElementById('switch-elapsed');
+    if (waited && relayJob) waited.textContent = '已经等了 ' + Core.elapsedText(Date.now() - relayJob.startedAt);
+  }, 1000);
+
   // ---- drawer ----
   // Open: everything behind is inert and focus moves inside. Closed: the
   // drawer itself is inert, so it is out of the tab order and unreadable.
@@ -712,7 +916,7 @@
     $('menu').hidden = view === 'output';
     $('refresh').hidden = view === 'more';
     $('copy').hidden = view !== 'output';
-    updateHeading(); updateComposer(); renderAttention(); renderSessions(); renderSeat();
+    updateHeading(); updateComposer(); renderAttention(); renderSessions(); renderSeat(); renderSwitchEntries();
     if (view === 'captain') toBottom($('captain-turns'));
   }
   async function loadOutput(silent = false) {
@@ -743,16 +947,18 @@
     if (!loaded) notice('正在读取会话和看板…');
     try {
       // Quota follows the same polling; a failed quota read never blocks the rest.
-      const [sessionData, taskData, captain, auth] = await Promise.all([api('/api/sessions'), api('/api/tasks'), api('/api/captain'), api('/api/auth'), quotaBusy ? null : loadQuota()]);
+      const [sessionData, taskData, captain, auth] = await Promise.all([api('/api/sessions'), api('/api/tasks'), api('/api/captain'), api('/api/auth'), quotaBusy ? null : loadQuota(),
+        // A running switch has its own faster watch.
+        relayJob?.phase === 'switching' ? null : loadRelay()]);
       sessions = sessionData.sessions; cards = taskData.cards; captainData = captain; csrfToken = auth.csrfToken; loaded = true; offline = false;
-      renderSessions(); renderAttention(); renderBoard(); renderCaptain(); renderQuota(); updateHeading(); notice('');
+      renderSessions(); renderAttention(); renderBoard(); renderCaptain(); renderQuota(); renderSwitchEntries(); updateHeading(); if (!switchNotice) notice('');
       if (view === 'output') await loadOutput(true);
     } catch (err) {
       // fetch rejects with a TypeError when the desktop or tunnel is unreachable.
       offline = true;
       notice(err instanceof TypeError ? '暂时连不上桌面端，正在自动重连…' : err.message + ' 正在自动重试…', true);
       quotaFailed = true;
-      renderSessions(); renderCaptain(); renderQuota(); updateHeading();
+      renderSessions(); renderCaptain(); renderQuota(); renderSwitchEntries(); updateHeading();
     }
     finally { refreshing = false; $('refresh').disabled = false; $('refresh').classList.remove('refreshing'); }
   }
