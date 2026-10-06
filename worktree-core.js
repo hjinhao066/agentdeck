@@ -2,9 +2,9 @@
 // Independent git worktrees for coding sessions. Creation is opt-in.
 // Removal never uses --force, and only happens when the copy has nothing a
 // person could miss and the branch is already on a real trunk or still on a
-// remote. Ignored files block removal unless they live in a regenerable
-// directory named in REGENERABLE_DIRS. Nothing outside the managed root
-// is deleted.
+// remote. Ignored files block removal. The only exception is a node_modules
+// directory at the repo root or beside a package.json, and a .env file inside
+// one of those still blocks removal. Nothing outside the managed root is deleted.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -15,11 +15,11 @@ const BRANCH_RE = /^(?!\/)(?!.*\/\/)(?!.*(?:^|\/)\.\.(?:\/|$))(?!.*\/$)[A-Za-z0-
 const RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 const SHA_RE = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/i;
 const GIT_CONFIG = ['-c', 'core.longpaths=true', '-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false', '-c', 'core.eol=lf'];
-// Directories that can be rebuilt. A matching path is ignored only when that
-// segment is a directory. Anything else ignored (.env, a database, a file
-// that merely shares one of these names) keeps the copy.
-const REGENERABLE_DIRS = Object.freeze(['node_modules', 'dist', 'build', 'out', 'target', 'coverage', '.next', '.turbo', '.cache', '__pycache__']);
-const REGENERABLE = new Set(REGENERABLE_DIRS);
+// Package-manager dependencies only. Build and output directories are not
+// regenerable: people keep data and private config in them.
+const REGENERABLE_DIRS = Object.freeze(['node_modules']);
+const IGNORED_SHOWN = 8;
+const IGNORED_SCAN_LIMIT = 5000;
 const IN_PROGRESS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 
 function real(value) {
@@ -200,15 +200,71 @@ function parseStatusZ(text) {
   }
   return entries;
 }
-function isRegenerableIgnored(root, rel) {
-  const parts = String(rel).split(/[\\/]/).filter(Boolean);
-  let acc = root;
-  for (const part of parts) {
-    acc = path.join(acc, part);
-    if (!REGENERABLE.has(part)) continue;
-    try { if (fs.statSync(acc).isDirectory()) return true; } catch (_) { return false; }
+function relParts(rel) {
+  return String(rel).split(/[\\/]/).filter(Boolean);
+}
+function toPosix(rel) {
+  return relParts(rel).join('/');
+}
+function isEnvFileName(name) {
+  return /^\.env/i.test(name);
+}
+function nodeModulesIsDependency(root, dirRel) {
+  const parts = relParts(dirRel);
+  if (!parts.length || parts[parts.length - 1] !== 'node_modules') return false;
+  if (parts.length === 1) return true;
+  try { return fs.statSync(path.join(root, ...parts.slice(0, -1), 'package.json')).isFile(); } catch (_) { return false; }
+}
+function insideDependencyNodeModules(root, rel) {
+  const parts = relParts(rel);
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] !== 'node_modules') continue;
+    if (nodeModulesIsDependency(root, parts.slice(0, i + 1).join('/'))) return true;
   }
   return false;
+}
+function walkIgnored(abs, rel, mode, add, state) {
+  if (state.capped) return;
+  let stat;
+  try { stat = fs.lstatSync(abs); } catch (_) { add(rel, state); return; }
+  if (stat.isSymbolicLink() || !stat.isDirectory()) {
+    if (mode === 'all' || isEnvFileName(path.basename(abs))) add(rel, state);
+    return;
+  }
+  let names = [];
+  try { names = fs.readdirSync(abs); } catch (_) { add(rel, state); return; }
+  for (const name of names) {
+    if (state.capped || name === '.git') continue;
+    walkIgnored(path.join(abs, name), toPosix(rel) + '/' + name, mode, add, state);
+  }
+}
+function blockingIgnored(root, entries) {
+  const found = [];
+  const seen = new Set();
+  const state = { capped: false };
+  function add(rel) {
+    const norm = toPosix(rel).replace(/\/+$/, '');
+    if (!norm || seen.has(norm)) return;
+    if (found.length >= IGNORED_SCAN_LIMIT) { state.capped = true; return; }
+    seen.add(norm);
+    found.push(norm);
+  }
+  for (const entry of entries) {
+    if (entry.xy !== '!!' || state.capped) continue;
+    const rel = toPosix(entry.path).replace(/\/+$/, '');
+    if (!rel) { add(entry.path); continue; }
+    const abs = path.join(root, ...relParts(rel));
+    let stat;
+    try { stat = fs.lstatSync(abs); } catch (_) { add(rel); continue; }
+    if (stat.isSymbolicLink() || !stat.isDirectory()) {
+      if (!insideDependencyNodeModules(root, rel) || isEnvFileName(path.basename(rel))) add(rel);
+      continue;
+    }
+    const mode = path.basename(abs) === 'node_modules' && nodeModulesIsDependency(root, rel) ? 'env' : 'all';
+    walkIgnored(abs, rel, mode, add, state);
+  }
+  found.sort();
+  return { paths: found, capped: state.capped };
 }
 function worktreeGitDir(dir, options) {
   let line = git(dir, ['rev-parse', '--absolute-git-dir'], options);
@@ -297,7 +353,7 @@ function inspect(record, options = {}) {
     return { safe: false, reason: '副本保留：无法确认工作区是否干净：' + error.message, record: normalized };
   }
   const dirty = entries.some((entry) => entry.xy !== '!!');
-  const ignored = entries.filter((entry) => entry.xy === '!!' && !isRegenerableIgnored(normalized.path, entry.path)).map((entry) => entry.path.replace(/[\\/]+$/, ''));
+  const ignored = blockingIgnored(normalized.path, entries);
   const progress = inProgress(normalized.path, options);
   let stashed = false;
   let unusualIndex = false;
@@ -309,15 +365,18 @@ function inspect(record, options = {}) {
   const pushed = isPushed(normalized.repo, normalized.branch, tip, options);
   const reasons = [];
   if (dirty) reasons.push('工作区有未提交的改动或未跟踪的文件');
-  if (ignored.length) {
-    const shown = ignored.slice(0, 8).join('、');
-    reasons.push('有被忽略、不能自动丢掉的文件：' + shown + (ignored.length > 8 ? ' 等 ' + ignored.length + ' 个' : ''));
+  if (ignored.paths.length) {
+    const shown = ignored.paths.slice(0, IGNORED_SHOWN);
+    let text = '有被忽略、不能自动丢掉的文件：' + shown.join('、');
+    if (ignored.capped) text += ' 等，还有更多（已超过 ' + IGNORED_SCAN_LIMIT + ' 个）';
+    else if (ignored.paths.length > shown.length) text += ' 等，还有 ' + (ignored.paths.length - shown.length) + ' 个';
+    reasons.push(text);
   }
   if (progress) reasons.push(progress.startsWith('rebase') ? '正在变基' : '正在合并、拣选或还原');
   if (stashed) reasons.push('这个分支还有 stash');
   if (unusualIndex) reasons.push('索引里有 skip-worktree 或 assume-unchanged 的本地内容');
   if (!merged && !pushed) reasons.push(trunk ? '分支尚未合入主干，也未推送到远端' : '没有 main/master 或 origin/HEAD 这样的主干，也未推送到远端');
-  if (reasons.length) return { safe: false, reason: ('副本保留：' + reasons.join('；') + '。').slice(0, 500), record: normalized, dirty: dirty || ignored.length > 0 || !!progress || stashed || unusualIndex, merged, pushed };
+  if (reasons.length) return { safe: false, reason: ('副本保留：' + reasons.join('；') + '。').slice(0, 500), record: normalized, dirty: dirty || ignored.paths.length > 0 || !!progress || stashed || unusualIndex, merged, pushed };
   const why = merged ? '分支已合入主干' : '分支已推送到远端';
   return { safe: true, reason: '已回收：工作区干净，且' + why + '。', record: normalized, dirty: false, merged, pushed };
 }

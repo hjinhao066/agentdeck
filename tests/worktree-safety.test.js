@@ -25,7 +25,7 @@ function setup(t, branch = 'main') {
   fs.mkdirSync(repo);
   fs.mkdirSync(remote);
   git(repo, ['init', '-b', branch]);
-  fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n.env\nnode_modules/\ndist\n');
+  fs.writeFileSync(path.join(repo, '.gitignore'), '*.log\n.env\nnode_modules/\ndist\nbuild/\nout/\n');
   fs.writeFileSync(path.join(repo, 'README'), 'hello\n');
   git(repo, ['add', '.gitignore', 'README']);
   git(repo, ['commit', '-m', 'init']);
@@ -47,9 +47,8 @@ function ship(repo, copy, branch) {
   git(copy, ['push', '-u', 'origin', branch]);
 }
 
-test('the regenerable directory list stays small and does not include secrets', () => {
-  assert.deepEqual([...Worktree.REGENERABLE_DIRS], ['node_modules', 'dist', 'build', 'out', 'target', 'coverage', '.next', '.turbo', '.cache', '__pycache__']);
-  for (const name of ['.env', '.log', 'vendor', 'secrets', '.git']) assert.equal(Worktree.REGENERABLE_DIRS.includes(name), false, name);
+test('the regenerable directory list is only node_modules', () => {
+  assert.deepEqual([...Worktree.REGENERABLE_DIRS], ['node_modules']);
 });
 
 test('a pushed branch still keeps ignored .env and a file named dist, and drops only node_modules', (t) => {
@@ -64,14 +63,73 @@ test('a pushed branch still keeps ignored .env and a file named dist, and drops 
   assert.match(blocked.reason, /\.env/);
   assert.match(blocked.reason, /dist/);
 
-  const build = Worktree.prepare({ repo, branch: 'feat/build', root: copies });
-  fs.mkdirSync(path.join(build.path, 'dist'));
-  fs.writeFileSync(path.join(build.path, 'dist', 'app.js'), 'built\n');
-  fs.mkdirSync(path.join(build.path, 'node_modules'));
-  fs.writeFileSync(path.join(build.path, 'node_modules', 'pkg.js'), 'module.exports = 1;\n');
-  const removed = Worktree.reclaim(build, { root: copies });
+  const deps = Worktree.prepare({ repo, branch: 'feat/deps', root: copies });
+  fs.mkdirSync(path.join(deps.path, 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(deps.path, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+  const removed = Worktree.reclaim(deps, { root: copies });
   assert.equal(removed.removed, true, removed.reason);
-  assert.equal(fs.existsSync(build.path), false);
+  assert.equal(fs.existsSync(deps.path), false);
+});
+
+test('ignored files inside dist, build, out, or node_modules block removal', (t) => {
+  const { repo, copies } = setup(t);
+  const dist = Worktree.prepare({ repo, branch: 'feat/dist-env', root: copies });
+  ship(repo, dist.path, 'feat/dist-env');
+  fs.mkdirSync(path.join(dist.path, 'dist'));
+  fs.writeFileSync(path.join(dist.path, 'dist', '.env'), 'SECRET=dist\n');
+  const distResult = Worktree.reclaim(dist, { root: copies });
+  kept(distResult, path.join(dist.path, 'dist', '.env'), 'SECRET=dist\n');
+  assert.match(distResult.reason, /dist\/\.env/);
+
+  const data = Worktree.prepare({ repo, branch: 'feat/build-data', root: copies });
+  ship(repo, data.path, 'feat/build-data');
+  fs.mkdirSync(path.join(data.path, 'build'));
+  fs.writeFileSync(path.join(data.path, 'build', 'experiment_results.csv'), 'id,score\n');
+  const dataResult = Worktree.reclaim(data, { root: copies });
+  kept(dataResult, path.join(data.path, 'build', 'experiment_results.csv'), 'id,score\n');
+  assert.match(dataResult.reason, /build\/experiment_results\.csv/);
+  for (let i = 0; i < 8; i++) fs.writeFileSync(path.join(data.path, 'build', 'extra-' + i + '.txt'), 'x\n');
+  const many = Worktree.reclaim(data, { root: copies });
+  assert.match(many.reason, /还有 1 个/);
+  assert.equal(fs.readFileSync(path.join(data.path, 'build', 'experiment_results.csv'), 'utf8'), 'id,score\n');
+
+  const out = Worktree.prepare({ repo, branch: 'feat/out-secret', root: copies });
+  ship(repo, out.path, 'feat/out-secret');
+  fs.mkdirSync(path.join(out.path, 'out'));
+  fs.writeFileSync(path.join(out.path, 'out', 'secrets.txt'), 'private config\n');
+  const outResult = Worktree.reclaim(out, { root: copies });
+  kept(outResult, path.join(out.path, 'out', 'secrets.txt'), 'private config\n');
+  assert.match(outResult.reason, /out\/secrets\.txt/);
+
+  const nested = Worktree.prepare({ repo, branch: 'feat/mod-env', root: copies });
+  ship(repo, nested.path, 'feat/mod-env');
+  fs.mkdirSync(path.join(nested.path, 'node_modules', 'pkg'), { recursive: true });
+  fs.writeFileSync(path.join(nested.path, 'node_modules', '.env'), 'TOKEN=inside\n');
+  fs.writeFileSync(path.join(nested.path, 'node_modules', 'pkg', '.env.local'), 'LOCAL=1\n');
+  const nestedResult = Worktree.reclaim(nested, { root: copies });
+  kept(nestedResult, path.join(nested.path, 'node_modules', '.env'), 'TOKEN=inside\n');
+  assert.equal(fs.readFileSync(path.join(nested.path, 'node_modules', 'pkg', '.env.local'), 'utf8'), 'LOCAL=1\n');
+  assert.match(nestedResult.reason, /node_modules\/\.env/);
+  assert.match(nestedResult.reason, /node_modules\/pkg\/\.env\.local/);
+
+  fs.mkdirSync(path.join(repo, 'packages', 'app'), { recursive: true });
+  fs.writeFileSync(path.join(repo, 'packages', 'app', 'package.json'), '{}\n');
+  git(repo, ['add', 'packages/app/package.json']);
+  git(repo, ['commit', '-m', 'workspace']);
+  git(repo, ['push', 'origin', 'main']);
+  const beside = Worktree.prepare({ repo, branch: 'feat/beside', base: 'main', root: copies });
+  fs.mkdirSync(path.join(beside.path, 'packages', 'app', 'node_modules'));
+  fs.writeFileSync(path.join(beside.path, 'packages', 'app', 'node_modules', 'pkg.js'), 'module.exports = 1;\n');
+  const besideResult = Worktree.reclaim(beside, { root: copies });
+  assert.equal(besideResult.removed, true, besideResult.reason);
+  assert.equal(fs.existsSync(beside.path), false);
+
+  const stray = Worktree.prepare({ repo, branch: 'feat/stray', base: 'main', root: copies });
+  fs.mkdirSync(path.join(stray.path, 'data', 'node_modules'), { recursive: true });
+  fs.writeFileSync(path.join(stray.path, 'data', 'node_modules', 'notes.txt'), 'not a package install\n');
+  const strayResult = Worktree.reclaim(stray, { root: copies });
+  kept(strayResult, path.join(stray.path, 'data', 'node_modules', 'notes.txt'), 'not a package install\n');
+  assert.match(strayResult.reason, /data\/node_modules\/notes\.txt/);
 });
 
 test('stash, skip-worktree, assume-unchanged, and status config cannot hide local data', (t) => {
