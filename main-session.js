@@ -472,7 +472,8 @@
       host.config.resumeOnRestart = $('resumeOnRestart').checked;
       if (Bat() && $('batteryMode')) {
         host.config.batteryMode = Bat().normalizeMode($('batteryMode').value);
-        host.config.batteryConcurrency = Bat().normalizeCap($('batteryConcurrency').value);
+        // Greyed out under 不限制: keep the saved count rather than whatever the box holds.
+        if (!$('batteryConcurrency').disabled) host.config.batteryConcurrency = Bat().normalizeCap($('batteryConcurrency').value);
         Bat().shared.set({ mode: host.config.batteryMode, cap: host.config.batteryConcurrency });
       }
       applyConcurrencyCap($('concurrencyCap').value);

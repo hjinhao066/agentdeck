@@ -64,11 +64,17 @@ test('battery mode: plugged in nothing changes; unplugged it limits, queues, cal
   await power('on-ac');
   await expect.poll(snapshot).toMatchObject({ active: false, cap: 30, power: '', motion: '', blink: true, shown: [false, false] });
   await expect(page.locator('#batteryIndicator')).toBeHidden();
+  const captain = (action) => page.evaluate(async (action) => (await MainSession.handle({ action }, MainSession.mainCol())).result, action);
+  expect(await captain('main-ledger')).not.toContain('电池模式');
+  expect(await captain('main-quota')).not.toContain('电池模式');
 
   // ---- settings: 自动 by default, cap 1–10 default 3 ----
   await page.locator('#settingsBtn').click();
   await expect(page.locator('#batteryMode')).toHaveValue('auto');
+  await expect(page.locator('#batteryMode option[value="auto"]')).toHaveText('省电（默认）');
+  await expect(page.locator('#batteryMode option[value="off"]')).toHaveText('不限制');
   await expect(page.locator('#batteryConcurrency')).toHaveValue('3');
+  await expect(page.locator('#batteryConcurrency')).toBeEnabled();
   await page.locator('#batteryMode').scrollIntoViewIfNeeded();
   await shot('battery-settings.png');
   await page.locator('#batteryConcurrency').fill('11');
@@ -85,8 +91,10 @@ test('battery mode: plugged in nothing changes; unplugged it limits, queues, cal
   await expect.poll(snapshot).toMatchObject({ active: true, cap: 2, power: 'battery', motion: 'off', blink: false });
   const indicator = page.locator('#batteryIndicator');
   await expect(indicator).toBeVisible();
-  await expect(indicator).toHaveAttribute('title', /同时干活的会话最多 2 个[\s\S]*不跑全量 E2E[\s\S]*光标闪烁[\s\S]*轮询放慢/);
-  await expect(indicator).toHaveAttribute('aria-label', /电池供电，已启用/);
+  await expect(indicator).toHaveAttribute('title', /同时最多开 2 个会话[\s\S]*不跑全量 E2E[\s\S]*光标闪烁[\s\S]*轮询放慢[\s\S]*点击调整/);
+  await expect(indicator).toHaveAttribute('aria-label', '电池模式已启用，点击调整');
+  // The icon is a battery with one small charge segment, no lightning bolt (that would read as charging).
+  expect(await indicator.locator('svg').innerHTML()).not.toContain('M11.5 9.5');
   await indicator.focus();
   await expect(indicator).toBeFocused();
   const box = await indicator.boundingBox();
@@ -95,7 +103,30 @@ test('battery mode: plugged in nothing changes; unplugged it limits, queues, cal
   // The motion switch is held and says why; the user's own choice is untouched.
   await expect(page.locator('[data-motion-toggle]').first()).toHaveAttribute('aria-label', /电池供电，动效保持关闭/);
   expect(await page.evaluate(() => config.calmMotion)).toBe(false);
-  await shot('battery-on-sidebar.png');
+  await shot('rework1-dark-sidebar.png');
+  // Light theme: the icon stays readable and is not the quota-warning amber.
+  await page.evaluate(() => applyTheme('light'));
+  const color = await indicator.evaluate((b) => getComputedStyle(b).color);
+  expect(color).not.toBe('rgb(217, 148, 38)');
+  await shot('rework1-light-sidebar.png');
+  // Sidebar collapsed: the same indicator sits in the top bar.
+  await page.evaluate(() => setNavCollapsed(true));
+  const railIndicator = page.locator('#batteryRailBtn');
+  await expect(railIndicator).toBeVisible();
+  await expect(railIndicator).toHaveAttribute('aria-label', '电池模式已启用，点击调整');
+  await shot('rework1-light-topbar.png');
+  // Clicking it (keyboard or mouse) opens settings at 电池模式.
+  await railIndicator.focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#notificationSettings')).toBeVisible();
+  await expect(page.locator('#batteryMode')).toBeFocused();
+  await page.locator('#notificationSettingsClose').click();
+  await expect(page.locator('#notificationSettings')).toBeHidden();
+  await page.evaluate(() => { setNavCollapsed(false); applyTheme('dark'); });
+  await indicator.click();
+  await expect(page.locator('#notificationSettings')).toBeVisible();
+  await expect(page.locator('#batteryMode')).toBeFocused();
+  await page.locator('#notificationSettingsClose').click();
 
   // ---- new work past the cap waits, with the battery wording ----
   const queued = await page.evaluate((cmd) => MainSession.handle({
@@ -112,7 +143,7 @@ test('battery mode: plugged in nothing changes; unplugged it limits, queues, cal
 
   // ---- the Captain sees it in ledger and quota ----
   const ledger = await page.evaluate(async () => (await MainSession.handle({ action: 'main-ledger' }, MainSession.mainCol())).result);
-  expect(ledger).toContain('电池模式：开（电池供电），同时最多 2 个会话干活（设置上限 30）');
+  expect(ledger).toContain('电池模式：开（电池供电），同时最多开 2 个会话（设置上限 30）');
   const quota = await page.evaluate(async () => (await MainSession.handle({ action: 'main-quota' }, MainSession.mainCol())).result);
   expect(quota).toContain('电池模式：开（电池供电）');
 
@@ -142,10 +173,22 @@ test('battery mode: plugged in nothing changes; unplugged it limits, queues, cal
   // ---- setting 关闭: unplugged, but nothing is limited ----
   await page.locator('#settingsBtn').click();
   await page.locator('#batteryMode').selectOption('off');
+  // 不限制: the count does not apply, so it is greyed out and cannot block saving even when empty.
+  await expect(page.locator('#batteryConcurrency')).toBeDisabled();
+  await page.locator('#batteryMode').scrollIntoViewIfNeeded();
+  await shot('rework1-dark-settings-off.png');
+  await page.locator('#batteryConcurrency').evaluate((input) => { input.value = ''; });
   await page.locator('#csSave').click();
   await expect(page.locator('#notificationSettings')).toBeHidden();
   await expect.poll(snapshot).toMatchObject({ active: false, cap: 30, power: '', motion: '', blink: true, shown: [false, false] });
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).batteryMode).toBe('off');
   const off = await page.evaluate(async () => (await MainSession.handle({ action: 'main-ledger' }, MainSession.mainCol())).result);
-  expect(off).toContain('电池模式：关闭（设置里选了关闭）');
+  expect(off).not.toContain('电池模式');
+  expect(await captain('main-quota')).not.toContain('电池模式');
+  await page.locator('#settingsBtn').click();
+  await expect(page.locator('#batteryConcurrency')).toBeDisabled();
+  await page.locator('#batteryMode').selectOption('auto');
+  await expect(page.locator('#batteryConcurrency')).toBeEnabled();
+  await expect(page.locator('#batteryConcurrency')).toHaveValue('2');   // the saved count survived 不限制
+  await page.locator('#notificationSettingsClose').click();
 });

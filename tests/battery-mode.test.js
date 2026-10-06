@@ -90,11 +90,12 @@ test('state notifies only on a real change and survives a throwing listener', ()
 
 test('status line and tooltip say what is limited', () => {
   const on = { mode: 'auto', onBattery: true, cap: 3 };
-  assert.match(Battery.statusLine(on, 30, 2), /电池模式：开（电池供电），同时最多 3 个会话干活（设置上限 30），现在 2 个在干活/);
-  assert.match(Battery.statusLine({ ...on, onBattery: false }, 30, 2), /电池模式：未启用（接着电源，不限制），同时最多 30 个/);
-  assert.match(Battery.statusLine({ ...on, mode: 'off' }, 30), /电池模式：关闭（设置里选了关闭），同时最多 30 个/);
+  assert.match(Battery.statusLine(on, 30, 2), /电池模式：开（电池供电），同时最多开 3 个会话（设置上限 30），现在 2 个在干活/);
+  // Plugged in or 不限制: no line at all.
+  assert.equal(Battery.statusLine({ ...on, onBattery: false }, 30, 2), '');
+  assert.equal(Battery.statusLine({ ...on, mode: 'off' }, 30), '');
   const tip = Battery.describe(on, 30).join('\n');
-  assert.match(tip, /同时干活的会话最多 3 个/);
+  assert.match(tip, /同时最多开 3 个会话/);
   assert.match(tip, /不跑全量 E2E/);
   assert.match(tip, /动效.*光标闪烁/);
   assert.match(tip, /轮询放慢/);
@@ -110,7 +111,7 @@ test('the queue wording for a full battery cap', () => {
 });
 
 // ---- the Captain's queue under a battery cap (same stand-in runtime as queue-dispatch.test.js) ----
-function runtime(t, { onBattery = true, mode = 'auto', cap = 3, base = 30 } = {}) {
+function runtime(t, { onBattery = true, mode = 'auto', cap = 3, base = 30, withBattery = true } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-battery-unit-'));
   const savedCap = M.MAX_ACTIVE;
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); M.MAX_ACTIVE = savedCap; });
@@ -122,7 +123,7 @@ function runtime(t, { onBattery = true, mode = 'auto', cap = 3, base = 30 } = {}
   shared.set({ onBattery, mode, cap });
   const config = { mainSession: state, folders: [], concurrencyCap: base };
   const window = {
-    MainCore: M, BoardCore: B, BatteryCore: { ...Battery, shared },
+    MainCore: M, BoardCore: B, BatteryCore: withBattery ? { ...Battery, shared } : undefined,
     QuotaCore: { commandQuota: () => ({ out: false }), quotaFallback: (_s, cmd) => ({ action: 'open', cmd }) },
     ChatUI: { addCard() {}, updateCard() {}, hasDraft: () => false, turnsOf: () => [] },
     deck: {
@@ -251,17 +252,35 @@ test('on battery the text handed to a session ends with the E2E reminder; pluggi
   assert.equal(h.text(1), '再改一个');
 });
 
-test('ledger and quota show whether battery mode is on and the cap', async (t) => {
+test('ledger and quota add one battery line only while battery mode is on', async (t) => {
   const h = runtime(t);
   h.busy(2);
   const ledger = (await h.window.MainSession.handle({ action: 'main-ledger' }, h.captain)).result;
-  assert.match(ledger, /电池模式：开（电池供电），同时最多 3 个会话干活（设置上限 30），现在 2 个在干活/);
+  assert.match(ledger, /\n电池模式：开（电池供电），同时最多开 3 个会话（设置上限 30），现在 2 个在干活/);
   const quota = (await h.window.MainSession.handle({ action: 'main-quota' }, h.captain)).result;
   assert.match(quota, /^Claude 额度正常\n电池模式：开/);
-  h.shared.set({ onBattery: false });
-  assert.match((await h.window.MainSession.handle({ action: 'main-quota' }, h.captain)).result, /电池模式：未启用（接着电源，不限制），同时最多 30 个/);
-  h.shared.set({ onBattery: true, mode: 'off' });
-  assert.match((await h.window.MainSession.handle({ action: 'main-ledger' }, h.captain)).result, /电池模式：关闭（设置里选了关闭）/);
+});
+
+// Plugged in or 不限制, ledger/quota must read exactly as they did before battery mode existed:
+// compare with the same Captain state running without BatteryCore at all.
+async function captainOutput(t, opts) {
+  const h = runtime(t, { ...opts, cap: 2 });
+  h.busy(4);                                     // above the battery cap, so a battery line would show up
+  await h.assign(h.add());
+  h.config.captainHistory = [];
+  const ask = async (action) => (await h.window.MainSession.handle({ action }, h.captain)).result;
+  return { ledger: await ask('main-ledger'), quota: await ask('main-quota') };
+}
+test('plugged in or 不限制: ledger and quota are word for word what they were before battery mode', async (t) => {
+  const before = await captainOutput(t, { withBattery: false, onBattery: false });
+  assert.equal(before.quota, 'Claude 额度正常');
+  assert.doesNotMatch(before.ledger, /电池/);
+  for (const opts of [{ onBattery: false }, { onBattery: false, mode: 'off' }, { onBattery: true, mode: 'off' }]) {
+    const now = await captainOutput(t, opts);
+    assert.equal(now.quota, before.quota, JSON.stringify(opts));
+    const ids = (text) => text.replace(/c-board-[a-z0-9]+/g, 'CARD');   // fresh card ids each run
+    assert.equal(ids(now.ledger), ids(before.ledger), JSON.stringify(opts));
+  }
 });
 
 test('battery files ship with the app and the page loads the core before the Captain code', () => {

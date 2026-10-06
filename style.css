@@ -3243,6 +3243,8 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
 .nq-left { display: inline-flex; align-items: center; gap: 2px; }
 .battery-indicator { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; background: transparent; border: 0; border-radius: 5px; color: var(--text-2); cursor: pointer; }
 .battery-indicator[hidden] { display: none; }
+/* 不限制: the battery count does not apply, so it reads as greyed out. */
+#batteryConcurrency:disabled { opacity: .45; cursor: not-allowed; }
 .battery-indicator svg { width: 16px; height: 16px; }
 .battery-indicator:hover, .battery-indicator:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
 /* On battery: also hold the status-light halos and cables that the calm-motion switch does not cover. */
