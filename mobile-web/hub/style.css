@@ -191,7 +191,7 @@ textarea::placeholder { color: var(--muted); }
 .task-card h3 { font-size: 14px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .task-assignee { font: 11px/1.6 var(--mono); color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
 .task-receipt { color: var(--secondary); font-size: 12px; line-height: 1.6; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.board-foot { margin-top: 16px; padding: 0 4px; font-size: 12px; line-height: 1.65; color: var(--muted); }
+.board-foot, .todo-foot { margin-top: 16px; padding: 0 4px; font-size: 12px; line-height: 1.65; color: var(--muted); }
 
 .output-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 0 10px 4px; }
 .output-names { min-width: 0; }

@@ -1,4 +1,4 @@
-# 随手记待办 第一步 · 暂停时进度（2026-10-06）
+# 随手记待办 第一步 · 进度（2026-10-06，暂停已解除）
 
 分支 `feat/todo-quick-capture-1.5`（基于 origin/main 45240be）。队长要求暂停：已做 WIP 提交，未合 main、未打 tag、未打包安装、未发完成回执。
 设计：`/Users/jinhao/reports/jarvis-todo/step1.md`。格式与接口说明：`docs/todo.md`。
@@ -30,3 +30,9 @@
 4. 删掉本文件或移出仓库，正式提交、推送，发完成回执（含需用户看一眼的界面取舍：快捷键 ⌘T/Ctrl+Shift+T 只在窗口内有效；手机不能改字/删除；手机待办标签放在第三位；Mac 不在线时手机自动记到 Windows）。
 
 测试命令要在子进程里清掉 AGENTDECK_* 变量并拿 `/tmp/agentdeck-test.lock`（会话 scratchpad 里有 `clean.sh` / `locked.sh`，scratchpad 可能已被清理，照 README 重写即可）。
+
+## 恢复后（暂停解除）
+
+- 已修本分支引入的 2 处：待办页脚改用独立类 `todo-foot`（不再撞 `.board-foot`）；侧边栏「待办」挪到「搜索」下面，`#navTop` 前 4 项恢复为 `new, captain, tasks, navSearchSlot`，既有用例不改。自己的 `todo.spec.js` 按新位置断言。
+- 相关单测 166/166；全量 `npm test` 1304：1291 过、13 跳过、0 失败。
+- 电池供电，按队长要求 **E2E 留到接电后**：待重跑 `todo.spec.js`、`mobile-hub-todo.spec.js`、`mobile-hub.spec.js`、`task-board-ui.spec.js`，并在 45240be 干净副本上复跑 `sidebar-captain.spec.js`、`sidebar-title-one-line.spec.js` 取基线证据；最终截图落 `/Users/jinhao/reports/jarvis-todo/step1-screens/`。
