@@ -17,6 +17,7 @@ const BASE_PATH = /^\/[a-z0-9][a-z0-9-]{0,31}\/$/;
 // (zero-width, bidirectional), line/paragraph separator, quote or angle-bracket
 // characters, and no leading/trailing space. Length counts code points.
 const LABEL = /^(?!\s)(?!.*\s$)[^\p{Cc}\p{Cf}\p{Zl}\p{Zp}<>\uFF1C\uFF1E"'`\u00AB\u00BB\u2018-\u201F]{1,32}$/u;
+const TOKEN = /^[^\s\x00-\x1f\x7f]{1,128}$/;
 const GENERIC_LABEL = 'AgentDeck';
 const API_VERSION = 2;
 const LOGIN_ITEM_PLATFORMS = ['darwin', 'win32'];
@@ -199,7 +200,7 @@ class MobileWebServer {
     const next = { ...this.settings, ...value };
     const port = next.port;
     const origin = publicOrigin(next.publicOrigin);
-    const token = typeof next.token === 'string' ? next.token : '';
+    const token = typeof next.token === 'string' ? next.token : (typeof next.token === 'number' ? String(next.token) : '');
     // Prefix and label come only from this call, never from the previous
     // settings, so removing them from endpoint.json returns to the legacy mode
     // without restarting the app. Only undefined/'' mean "none"; null, false, 0
@@ -223,7 +224,7 @@ class MobileWebServer {
     if (origin === null) { this.error = 'Public origin must be an HTTPS origin without a path.'; return this.status(); }
     if (!validBase) { this.error = 'Invalid base path.'; return this.status(); }
     if (basePath && !validLabel) { this.error = 'Invalid machine label.'; return this.status(); }
-    if (token && !/^[a-f0-9]{64}$/.test(token)) { this.error = 'Invalid login token.'; return this.status(); }
+    if (token && !TOKEN.test(token)) { this.error = 'Invalid login token.'; return this.status(); }
     try {
       if (this.settings.enabled && !this.settings.token) this.settings.token = crypto.randomBytes(32).toString('hex');
       await this.persist();
@@ -553,4 +554,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, relayView, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable };
+module.exports = { MobileWebServer, relayView, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
