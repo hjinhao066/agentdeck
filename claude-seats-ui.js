@@ -447,9 +447,11 @@
       document.getElementById('notificationSettings').close(); openSettings();
     });
     refresh().catch(() => {});
-    setInterval(() => refresh().catch(() => {}), 30_000);
+    // Slower on battery (BatteryCore.POLL); a page without BatteryCore keeps the fixed periods.
+    const every = (key, fn, ms) => window.BatteryCore ? window.BatteryCore.shared.every(key, fn) : setInterval(fn, ms);
+    every('claudeSeatsRefresh', () => refresh().catch(() => {}), 30_000);
     // Independent of a live PTY/status tick: crashed or unstarted Captains need the watchdog too.
-    setInterval(() => automaticTick().catch(() => {}), 1500);
+    every('claudeSeatsWatchdog', () => automaticTick().catch(() => {}), 1500);
   }
   function warmupDetail(seatId) {
     const entry = warmups.find((s) => s.seatId === seatId);

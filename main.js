@@ -1,4 +1,4 @@
-const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification } = require('electron');
+const { app, BrowserWindow, WebContentsView, Menu, ipcMain, shell, dialog, clipboard, session, Notification, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -31,6 +31,7 @@ const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
 const { MobileWebServer, boardVersionOf, supportsLoginItem, readEndpoint, withEndpoint: withEndpointSettings, persistable } = require('./mobile-web');
 const { createMemoryPressure } = require('./memory-pressure');
+const Battery = require('./battery-core');
 const RestartResume = require('./restart-resume');
 const AgentSessions = require('./agent-sessions');
 const { createExecutor: createChatGPTWebExecutor } = require('./chatgpt-web-executor');
@@ -107,6 +108,21 @@ function handleMain(channel, handler) {
 }
 const memoryPressure = createMemoryPressure({ platform: process.platform, execFile });
 handleMain('memory-pressure', () => memoryPressure.read());
+
+// Battery mode: the page decides what to limit; main only needs the power source and the
+// setting to pace its own timers (`power.every`) and to tell the page when the source changes.
+// Test instances start on AC unless AGENTDECK_TEST_POWER=battery, and take on-battery /
+// on-ac from powerMonitor like a real one, so a test can emit them.
+const power = Battery.create();
+function initPower() {
+  let onBattery = false;
+  try { onBattery = tudArg ? process.env.AGENTDECK_TEST_POWER === 'battery' : powerMonitor.isOnBatteryPower(); } catch (_) {}
+  power.set({ onBattery });
+  const changed = (on) => { if (power.set({ onBattery: on })) send('power:changed', { onBattery: on }); };
+  powerMonitor.on('on-battery', () => changed(true));
+  powerMonitor.on('on-ac', () => changed(false));
+}
+onMain('power-state', (e) => { e.returnValue = { onBattery: power.snapshot().onBattery }; });
 
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
@@ -528,7 +544,7 @@ function setupBoardControl() {
   } catch (err) {
     nlog(`board-control setup failed: ${err.message}`);
   }
-  setInterval(processBoardRequests, 250);
+  power.every('boardRequests', processBoardRequests);
   const heartbeat = new TaskHeartbeat(taskStore, { log: nlog, onStart: (input) => {
     if (!boardRendererReady) return false;
     send('task-board:start', input);
@@ -797,8 +813,10 @@ app.whenReady().then(async () => {
   if (tudArg && isMac) app.setActivationPolicy('accessory');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
+  initPower();
   setupBoardControl();
   const configPath = path.join(app.getPath('userData'), 'config.json');
+  try { power.set({ mode: JSON.parse(fs.readFileSync(configPath, 'utf8')).batteryMode }); } catch (_) {}
   sidePane = registerSideIpc({
     onMain, handleMain, send, session, WebContentsView,
     getWindow: () => mainWindow, resolveClick, chatDir: () => CHAT_DIR, home: HOME,
@@ -822,11 +840,11 @@ app.whenReady().then(async () => {
     handoffOptions: { cards: () => taskStore.list({ archived: true }), tasksDir: taskStore.dir, boardVersion: () => boardVersionOf(taskStore.dir),
       machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() } } });
   if (!tudArg) {
-    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats });
+    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats,
+      intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()) });
     const refresh = () => claudeQuotaRefresh.tick().then(() => send('quota:updated', claudeQuotaRefresh.samples())).catch(() => {});
     refresh();
-    claudeQuotaTimer = setInterval(refresh, 30000);
-    claudeQuotaTimer.unref();
+    claudeQuotaTimer = power.every('claudeQuotaTick', refresh);
   }
   let quotaSeatConfig;
   let notificationConfig = {};
@@ -1041,6 +1059,7 @@ app.whenReady().then(async () => {
     cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
+    power.set({ mode: cfg?.batteryMode });
     if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
     // Atomic write: a crash mid-write must not corrupt config.json (which would
@@ -1641,7 +1660,7 @@ onMain('park-for-restart-done', () => { if (quitGate) quitGate.acked(); });
 app.on('before-quit', (event) => {
   if (quitGate.beforeQuit(event, readResumeEnabled()) !== 'cleanup') return;
   if (fleetClient && fleetClient.stop) fleetClient.stop();
-  clearInterval(claudeQuotaTimer);
+  claudeQuotaTimer?.stop();
   claudeQuotaRefresh?.dispose();
   if (mobileWeb) mobileWeb.close();
   for (const pending of mobileRequests.values()) { clearTimeout(pending.timer); pending.reject(new Error('AgentDeck 已关闭。')); }

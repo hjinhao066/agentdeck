@@ -13,6 +13,9 @@ contextBridge.exposeInMainWorld('deck', {
   mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
   memoryPressure: () => ipcRenderer.invoke('memory-pressure'),
+  // Battery mode: whether the Mac runs on battery now, and a push when it changes.
+  powerState: () => ipcRenderer.sendSync('power-state'),
+  onPowerChanged: (cb) => ipcRenderer.on('power:changed', (_e, m) => cb(!!(m && m.onBattery))),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
   quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
   onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),

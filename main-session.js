@@ -438,17 +438,39 @@
       onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
     });
   }
+  // ---- battery mode: the live cap is the settings cap, lowered while on battery ----
+  const Bat = () => window.BatteryCore;
+  const batteryNow = () => Bat()?.shared.snapshot() || { onBattery: false, mode: 'auto', cap: 3, active: false };
+  // baseCap is the settings cap; tests that set M.MAX_ACTIVE directly have no settings cap.
+  const baseCap = () => Number.isInteger(host.config.concurrencyCap) ? host.config.concurrencyCap : M.MAX_ACTIVE;
+  const capInfo = () => Bat() ? Bat().effectiveCap(baseCap(), batteryNow()) : { cap: M.MAX_ACTIVE, limited: false };
+  // Power source, setting or cap changed: new live cap, refreshed queue cards, then fill any free slot.
+  function syncEffectiveCap() {
+    M.MAX_ACTIVE = capInfo().cap;
+    refreshWaitingNotes();
+    return pump();
+  }
+  function batteryLine() {
+    const s = state();
+    return Bat().statusLine(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
+  }
   function initDialog() {
     const settings = $('notificationSettings');
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
       if (!$('concurrencyCap').reportValidity()) return;
+      if ($('batteryConcurrency') && $('batteryConcurrency').reportValidity && !$('batteryConcurrency').reportValidity()) return;
       const budgetBox = $('handoffBudget');
       if (budgetBox?.reportValidity && !budgetBox.reportValidity()) return;
       if (budgetBox && budgetBox.value !== undefined) host.config.captainHandoffBudget = M.handoffBudget(budgetBox.value);
       host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
       host.config.resumeOnRestart = $('resumeOnRestart').checked;
+      if (Bat() && $('batteryMode')) {
+        host.config.batteryMode = Bat().normalizeMode($('batteryMode').value);
+        host.config.batteryConcurrency = Bat().normalizeCap($('batteryConcurrency').value);
+        Bat().shared.set({ mode: host.config.batteryMode, cap: host.config.batteryConcurrency });
+      }
       applyConcurrencyCap($('concurrencyCap').value);
       cancelTokenSaving();
       tokenSaverPaused = false;
@@ -477,6 +499,10 @@
     $('csThreshold').value = settings.threshold / 1000;
     $('csThreshold').disabled = !settings.enabled;
     $('concurrencyCap').value = M.concurrencyCap(host.config.concurrencyCap);
+    if (Bat() && $('batteryMode')) {
+      $('batteryMode').value = Bat().normalizeMode(host.config.batteryMode);
+      $('batteryConcurrency').value = Bat().normalizeCap(host.config.batteryConcurrency);
+    }
     if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffBudget);
     const resumeBox = $('resumeOnRestart');
     if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
@@ -484,9 +510,7 @@
   function applyConcurrencyCap(raw) {
     const cap = M.concurrencyCap(raw);
     host.config.concurrencyCap = cap;
-    M.MAX_ACTIVE = cap;
-    refreshWaitingNotes();
-    pump();
+    syncEffectiveCap();
   }
 
   function saverBanner(text) {
@@ -919,7 +943,8 @@
     host.sendWhenReady(col, () => {
       batch.sending = true;
       sentItems = batch.items.filter((i) => i.task.status === 'queued');
-      return sentItems.map((i) => i.text).join('\n\n');
+      const joined = sentItems.map((i) => i.text).join('\n\n');
+      return Bat() ? Bat().withTaskNote(joined, Bat().shared.active()) : joined;
     }, {
       cancelled: () => batch.cancelled || batch.items.every((i) => i.task.status === 'stopped' || i.task.status === 'failed'),
       suffix: M.RECEIPT_CONTRACT, force: true, guardUserInput: true, requireIdle: true, timeout: 30 * 60_000, keepWaiting: true,
@@ -1004,6 +1029,7 @@
   function queueReason(plan, title, active, ahead) {
     return plan.action === 'queue' ? quotaQueueText(plan, title) : memoryHold
       ? `已排队：内存吃紧，稍后自动开新会话「${title}」。`
+      : active >= M.MAX_ACTIVE && capInfo().limited ? Bat().queueReason(title, M.MAX_ACTIVE, active)
       : active >= M.MAX_ACTIVE ? `已排队：现在有 ${active} 个会话占用干活名额，上限 ${M.MAX_ACTIVE}；有空位时自动开新会话「${title}」。`
       : ahead ? `已排队：前面有 ${ahead} 条可执行任务，当前 ${active} 个会话占用干活名额；按顺序自动开新会话「${title}」。` : '';
   }
@@ -2103,7 +2129,7 @@
       case 'main-briefing':
         return { done: true, result: briefingText() };
       case 'main-quota':
-        return { done: true, result: host.quotaText() };
+        return { done: true, result: host.quotaText() + (Bat() ? '\n' + batteryLine() : '') };
       case 'main-handoff': {
         const built = await window.deck.captainHandoff(handoffSnapshot('refresh'));
         // A later restart points 队长 at this file again.
@@ -2117,7 +2143,7 @@
           refreshWaitingNotes(wasHold !== memoryHold);
           return { done: true, result: JSON.stringify(s.waitlist.map((w) => ({
             taskId: w.metadata?.boardId || w.taskId, queueId: w.taskId, title: w.title, command: w.cmd,
-            seat: w.metadata?.claudeSeatId || '', reason: s.tasks.find((t) => t.id === w.taskId)?.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold),
+            seat: w.metadata?.claudeSeatId || '', reason: s.tasks.find((t) => t.id === w.taskId)?.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold, capInfo().limited),
           })), null, 2) };
         }
         if (message.op !== 'cancel' || typeof message.taskId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(message.taskId)) throw new Error('queue cancel 需要 --task-id 卡片或排队 id。');
@@ -2170,7 +2196,7 @@
           .map((a) => `${a.id}「${host.columnLabel(a)}」`).join('、');
         return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
           + (crew ? `\n已归档的队员（tell 会先自动恢复）：${crew}` : '')
-          + (waiting ? `\n排队等空位：${waiting}` : '') + (history ? '\n' + history : '') };
+          + (waiting ? `\n排队等空位：${waiting}` : '') + (Bat() ? '\n' + batteryLine() : '') + (history ? '\n' + history : '') };
       }
       case 'main-receipts-snapshot': {
         for (const item of s.pending) {
@@ -2366,14 +2392,14 @@
     const target = host.columns().find((c) => c.id === task.colId);
     const name = el('button', 'task-title', task.title);
     name.type = 'button';
-    name.title = target ? '打开这个会话' : task.status === 'waiting' ? M.queueTitle(M.MAX_ACTIVE, memoryHold) : '这个会话已经不在了';
+    name.title = target ? '打开这个会话' : task.status === 'waiting' ? M.queueTitle(M.MAX_ACTIVE, memoryHold, capInfo().limited) : '这个会话已经不在了';
     name.disabled = !target;
     name.addEventListener('click', () => { if (target) host.jumpToColumn(target); });
     head.append(el('span', 'task-arrow', '→'), name, el('span', 'task-status', STATUS_TEXT[task.status] || ''));
     card.appendChild(head);
     if (task.status === 'input') card.appendChild(el('div', 'task-note', '停在确认提示上，已交给队长判断；队长拿不准会来问你。'));
     if (task.status === 'queued') card.appendChild(el('div', 'task-note', '追加给还在忙的会话，等它空下来就发过去。'));
-    if (task.status === 'waiting') card.appendChild(el('div', 'task-note', task.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold)));
+    if (task.status === 'waiting') card.appendChild(el('div', 'task-note', task.waitReason || M.queueNote(M.MAX_ACTIVE, memoryHold, capInfo().limited)));
     if (task.progress && !task.receipt) card.appendChild(el('div', 'task-summary', task.progress));
     const r = task.receipt;
     if (r && r.question) card.appendChild(el('div', 'task-summary', '提问：' + r.question));
@@ -2403,17 +2429,18 @@
     }
     loadResumeManifest();
     initDialog();
+    Bat()?.shared.onChange(syncEffectiveCap);
     if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? M.restartNote(host.platform, state().seatCheckpoint) : '');
   }
 
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
-    isMain, isMainId, mainCol, state, sendMessage,
+    isMain, isMainId, mainCol, state, sendMessage, syncEffectiveCap,
 
     history: () => host.config.captainHistory || [],
-    queueNote: () => M.queueNote(M.MAX_ACTIVE, memoryHold),
-    queueTitle: () => M.queueTitle(M.MAX_ACTIVE, memoryHold),
+    queueNote: () => M.queueNote(M.MAX_ACTIVE, memoryHold, capInfo().limited),
+    queueTitle: () => M.queueTitle(M.MAX_ACTIVE, memoryHold, capInfo().limited),
     memoryHeld: () => memoryHold,
     exists: () => !!mainCol(),
     pauseForSeatSwitch: (value) => { seatChanging = !!value; },

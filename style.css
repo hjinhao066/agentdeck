@@ -3238,3 +3238,19 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
   .vd, .vd.open, .vd-seg { transition: none; }
   .vd-live::before, .vd-refresh.busy svg, .vd-dot::after { animation: none !important; }
 }
+
+/* ---- 电池模式: small indicator in the sidebar while the Mac runs on battery ---- */
+.nq-left { display: inline-flex; align-items: center; gap: 2px; }
+.battery-indicator { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; background: transparent; border: 0; border-radius: 5px; color: #d99426; cursor: help; }
+.battery-indicator[hidden] { display: none; }
+.battery-indicator svg { width: 16px; height: 16px; }
+.battery-indicator:hover, .battery-indicator:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
+/* On battery: also hold the status-light halos and cables that the calm-motion switch does not cover. */
+:root[data-power="battery"] :is(.dot.working, .cn-dot.working, .dot.input, .cn-dot.input)::after,
+:root[data-power="battery"] .vd-item:is([data-group="doing"], [data-group="attention"]) .vd-dot::after,
+:root[data-power="battery"] .vd-live::before,
+:root[data-power="battery"] .board-edge-preview,
+:root[data-power="battery"] .cm-ico:is(.st-working, .st-input)::after,
+:root[data-power="battery"] .cm-ico.st-working svg { animation: none; }
+.battery-rail { display: none; }
+body.nav-collapsed .battery-rail:not([hidden]) { display: inline-grid; }

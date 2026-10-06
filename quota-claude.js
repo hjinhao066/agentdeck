@@ -109,7 +109,7 @@ function boundUsage(seat, home, value) {
     return { ...M.sanitizeUsage(value), accountKey: value.accountKey, configDir: loc.dir };
   } catch (_) { return null; }
 }
-function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, now = Date.now }) {
+function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, now = Date.now, intervalMs = () => INTERVAL_MS }) {
   const entries = new Map();
   let stopped = false;
   function sync() {
@@ -130,7 +130,7 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
     await Promise.all([...sync().values()].filter((entry) => !seatId || entry.seat.id === seatId).map((entry) => {
       if (entry.pending) return entry.pending;
       if (!force && now() < entry.due) return;
-      entry.due = now() + INTERVAL_MS;
+      entry.due = now() + intervalMs();
       entry.pending = (async () => {
         let value = null;
         try { value = await read(entry.seat, home); } catch (_) {}

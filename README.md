@@ -490,6 +490,34 @@ again with the current provider, model and effort instructions.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
 
+### Battery mode (电池模式)
+
+Settings → 电池模式: **自动** (default) or **关闭**, plus how many sessions may work at once on
+battery (1–10, default 3). Electron's `powerMonitor` reports the power source at launch and on every
+`on-battery` / `on-ac` event, so it switches at once in both directions. Plugged in, or set to 关闭,
+every value below is exactly what it was before.
+
+On battery (`battery-core.js` holds the numbers; the page, main process and tests share them):
+
+- **Concurrency**: the live cap is `min(settings cap, battery cap)`. Sessions already working above it are
+  never stopped. New `new` requests join the ordinary queue, the card says 电池供电，稍后自动开, and they
+  open by themselves when a slot frees or the Mac is plugged in. Raising the battery cap or choosing 关闭
+  fills the free slots at once.
+- **Task text**: work handed to a session ends with 当前电池供电：不要跑全量 E2E，只跑相关单测，E2E 留到接电后
+  (decided when the text is sent, so work that waited and went out after plugging in does not carry it).
+- **Calm UI**: motion is held off (star map, board, status-light halos, drag cable) without touching the
+  user's own 动效 switch; terminal cursors stop blinking.
+- **Slower background polling** (normal → battery): status tick 1.5 s → 3 s, board request pick-up 250 ms →
+  750 ms, quota cache re-read 30 s → 2 min, Claude seat tick 30 s → 2 min (one seat is actually sampled every
+  15 min instead of 5), seat list refresh 30 s → 2 min, captain watchdog 1.5 s → 3 s. Receipts and questions
+  still arrive; they only wait a little longer for the next pick-up.
+- A small battery icon beside 额度 in the sidebar (and in the toolbar while the sidebar is collapsed) shows
+  only while battery mode is active; hover or focus it for what is limited.
+- `ledger` and `quota` end with one line: whether battery mode is on, the live cap and how many sessions work.
+
+Tests simulate the power source: unit tests inject a `BatteryCore` state; the E2E starts on AC and emits
+`powerMonitor` events (`AGENTDECK_TEST_POWER=battery` starts a test instance on battery).
+
 ### Automatic context saving (Claude Code Captain)
 
 Enabled by default at **150k tokens**. Open the sidebar's **settings icon** to
