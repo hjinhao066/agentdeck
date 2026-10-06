@@ -465,3 +465,121 @@ test('code fences carry their language for the chat code bar', () => {
   assert.ok(C.renderMarkdown('```\nplain\n```').includes('<code data-lang="">'));
   assert.ok(!C.renderMarkdown('```"><img>\nx\n```').includes('<img>'));
 });
+
+// ---- the reply as the chat view shows it (desktop 队长 page) ----
+const Hub = require('../mobile-web/hub/core.js');
+const captain = require('./fixtures/captain-chat.js');
+const captainTurns = captain.turns(1_800_000_000_000);
+const captainSaid = captainTurns.map((t) => t.user || '').join('\n');
+const shown = (reply) => C.shownReply(reply, captainSaid, Hub.cleanReply);
+const RESIDUE = /^[❯›] |\(click\) ↓|^Ran \d+ shell command|^Background command|How is Claude doing|^1: Bad|^ {2,}\d{1,6}(?: [+-]| {2}\S|\s*$)|^\s*\+|用户未反对|卡在哪|交付状态/m;
+
+test('the desktop page loads the phone hub rules and cleans replies with them, not with a second set', () => {
+  const fs = require('fs'), path = require('path');
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  const hub = html.indexOf('<script src="mobile-web/hub/core.js">');
+  assert.ok(hub > html.indexOf('<script src="chat-core.js">') && hub < html.indexOf('<script src="chat-ui.js">'));
+  const ui = fs.readFileSync(path.join(__dirname, '..', 'chat-ui.js'), 'utf8');
+  assert.match(ui, /C\.shownReply\(reply, said, window\.HubCore && window\.HubCore\.cleanReply\)/);
+  // the rules themselves are called, with what the user wrote
+  const calls = [];
+  assert.equal(C.shownReply('a\r\nb', 'said', (text, said) => { calls.push([text, said]); return 'cleaned'; }), 'cleaned');
+  assert.deepEqual(calls, [['a\nb', 'said']]);
+  // without them (a column that is not cleaned) the reply is shown as saved
+  assert.equal(C.shownReply('❯ ls\nfile', 'ls'), '❯ ls\nfile');
+  assert.equal(C.shownReply(undefined, '', Hub.cleanReply), '');
+});
+
+test('real 队长 replies lose their terminal residue and keep every sentence', () => {
+  for (const turn of captainTurns.filter((t) => !t.kind)) assert.doesNotMatch(shown(turn.reply), RESIDUE, turn.id);
+  assert.equal(shown(captainTurns.find((t) => t.id === 'f-quiet').reply), '');
+  assert.match(shown(captain.WHY), /^已按你说的换人[\s\S]*要重派。$/);
+  assert.match(shown(captain.BUG), /^你说得对，这是严重 bug[\s\S]*手机对话页修整）。$/);
+  assert.match(shown(captain.STEPS), /^你说得对，不需要等你回家[\s\S]*失败自动回滚。$/);
+  // a reply that begins inside a diff tail: its first row lost its indent to the trim and goes with the rest
+  assert.match(shown(captain.TABLE), /^那边尤其靠它。/);
+  assert.equal(shown('上），用户未反对\n    25\n    26 +- 一行改动\n\n收到。'), '收到。');
+  // an ordinary first paragraph is never mistaken for one
+  for (const text of ['第一行\n  3 件事都做完了\n\n第二段', '1. 第一步\n2. 第二步\n    - 缩进的子项', '结论：\n    npm test']) assert.equal(shown(text), text);
+});
+
+test('a reply drawn as plain rows gets its titles, lists and tables back', () => {
+  const md = (reply) => C.tidyReply(shown(reply));
+  const html = (reply) => C.renderMarkdown(md(reply), { breaks: true });
+  // short lines standing alone are section titles; a sentence is not
+  assert.deepEqual(md(captain.WHY).split('\n').filter((l) => l.startsWith('### ')), ['### 为什么一晚上没更新到 1.2', '### 昨晚 21:00 到凌晨 4:00 做完的活（约 55 张卡）', '### 没做成的']);
+  assert.doesNotMatch(md(captain.WHY), /### 已按你说的/);
+  // nested items nest, and stay inside their parent
+  assert.match(html(captain.WHY), /<li>AgentDeck 修复和功能：<ul><li>重启后旧回执重发<\/li><li>派活前看额度自动换模型<\/li><li>看板拖到“进行中”自动开会话<\/li><li>自动验收闭环<\/li><\/ul><\/li><li>AgentDeck 发版：/);
+  assert.match(html(captain.BUG), /<li>机制照你说的改：<ul><li>哪个席位用尽就跳过哪个[^<]*<\/li><li>[^<]*<\/li><li>[^<]*<\/li><\/ul><\/li><li>你问是不是换到了/);
+  // an item the terminal wrapped is one item, numbered 1 to 4 in one list
+  const steps = html(captain.STEPS);
+  assert.equal(steps.match(/<ol>/g).length, 1);
+  assert.match(steps, /<li>Mac 先装带多机支持的新版：/);
+  assert.equal(steps.match(/<li>/g).length, 4);
+  // records repeating the same keys are a table again, the glued third record included
+  const progress = md(captain.PROGRESS);
+  assert.ok(progress.includes('| 版本 | Mac | Windows | 手机网页 | 主要内容 |'));
+  assert.ok(progress.includes('| 1.2.1 | 14:04 装上 | 已升 | 已上线 | 安装防死循环、席位轮换跳过用尽席位、监听不再空转、手机对话页气泡、手机页面单独部署 |'));
+  assert.ok(progress.includes('| 1.2.2 | 15:20 装上 | 还没升 | 已上线 | Relay 交接重构、看板星图外观、“指令送不进去”修复 |'));
+  // a reply drawn two columns in: the indent is gone, the wrapped item is whole, a title sits right over its list
+  assert.match(progress, /^### 今天已经落地的\n/);
+  assert.ok(progress.includes('\n### 额度\n- Claude：CN'));
+  assert.match(html(captain.PROGRESS), /<li>1\.2\.2 收尾（Cursor Grok）：合回 main、打标签、Windows 升到 1\.2\.2。已经动了 11 个文件，正在等一条命令跑完。<\/li>/);
+  assert.equal(html(captain.PROGRESS).match(/<table>/g).length, 1);
+  // rows of │ cells glued onto one line
+  assert.ok(md(captain.TABLE).includes('| UI 任务 | 状态 |\n| --- | --- |\n| 桌面额度区改版 | 已做完并推送到分支 feat/quota-panel-compact |\n| 终端架构图重做 | 刚重开，Opus·CN |'));
+  assert.match(html(captain.TABLE), /<li>Sonnet 还没开出来：任务卡还挂在 Grok 名下，/);
+  // a line that leads into a list ("…：") stays a sentence
+  assert.doesNotMatch(md(captain.TABLE), /### 额度：/);
+});
+
+test('what is not a title, a table or a record is left as the agent wrote it', () => {
+  for (const text of ['好的', '能实现，而且就该这么做。\n\n为什么能单独上线', 'node scripts/release.js 1.2 --dry-run\n\n跑完告诉你。', '看 docs/chat-view.md\n\n里面有说明。',
+    '版本: 1.2.0\n\n只有这一条。', 'npm test\n\n- a\n- b', '```\n没做成的\n\n  缩进的代码\n```\n\n后面的话。', '名称: a: b\n名称: c']) assert.equal(C.tidyReply(text), text);
+  assert.equal(C.tidyReply('Summary\n- one\n- two'), '### Summary\n- one\n- two');
+  assert.equal(C.tidyReply('第一段。\n\n小结\n\n第二段。'), '第一段。\n\n### 小结\n\n第二段。');
+  // a title right above its paragraph; a few short lines in a row are not titles
+  assert.equal(C.tidyReply('先说结论。\n\n监听优化（Codex Sol）\n你理解得对：队员干完自动通知我，这条本来就有。\n- 改成由程序盯队员'), '先说结论。\n\n### 监听优化（Codex Sol）\n你理解得对：队员干完自动通知我，这条本来就有。\n- 改成由程序盯队员');
+  assert.equal(C.tidyReply('前言。\n\n张三\n李四\n王五'), '前言。\n\n张三\n李四\n王五');
+  assert.equal(C.tidyReply(null), '');
+  // records with different keys, or only one of them, are not a table
+  assert.equal(C.tidyReply('版本: 1\nMac: 好\n版本: 2\n手机: 好'), '版本: 1\nMac: 好\n版本: 2\n手机: 好');
+  // a cell with a bar in it stays one cell
+  assert.match(C.renderMarkdown(C.tidyReply('键: a|b\n值: 1\n键: c\n值: 2')), /<td>a\|b<\/td><td>1<\/td>/);
+});
+
+test('lists: wrapped items, nesting, numbers that carry on, and what ends a list', () => {
+  assert.equal(C.renderMarkdown('- a\n  - b\n    - c\n  - d\n- e'), '<ul><li>a<ul><li>b<ul><li>c</li></ul></li><li>d</li></ul></li><li>e</li></ul>');
+  assert.equal(C.renderMarkdown('1. a\n\n2. b\n   more\n3) c'), '<ol><li>a</li><li>b more</li><li>c</li></ol>');
+  assert.equal(C.renderMarkdown('3. c\n4. d'), '<ol start="3"><li>c</li><li>d</li></ol>');
+  assert.equal(C.renderMarkdown('- a\n1. b'), '<ul><li>a</li></ul>\n<ol><li>b</li></ol>');
+  assert.equal(C.renderMarkdown('- 中文\n  续行\n后面的话'), '<ul><li>中文续行</li></ul>\n<p>后面的话</p>');
+  assert.equal(C.renderMarkdown('- a\n\n段落'), '<ul><li>a</li></ul>\n<p>段落</p>');
+  // a table right under a sentence is still a table, wrapped so it can scroll on its own
+  assert.equal(C.renderMarkdown('看表\n| a | b |\n|---|---|\n| 1 |'), '<p>看表</p>\n<div class="md-table"><table><thead><tr><th>a</th><th>b</th></tr></thead><tbody><tr><td>1</td><td></td></tr></tbody></table></div>');
+});
+
+test('a line the terminal broke gets its space back only where one was', () => {
+  assert.equal(C.joinGap('已经动了 11', '个文件'), ' ');
+  assert.equal(C.joinGap('挂在 Grok', '名下'), ' ');
+  assert.equal(C.joinGap('这是一段中文', '继续的内容'), '');
+  assert.equal(C.joinGap('见 AgentDeck', '，然后'), '');
+  assert.equal(C.joinGap('“指令送不进去”', '修复'), '');
+  assert.equal(C.joinGap('first', 'second'), ' ');
+  assert.equal(C.joinGap('', 'x'), '');
+  const wide = '查清服务器上的现状和这台电脑在不在线以及现在手机是经哪条路连到 Windows';
+  assert.equal(C.reflow([wide, '的。'], C.visibleWidth(wide) + 2)[0], wide + ' 的。');
+});
+
+test('a table the TUI drew with box lines is saved as a Markdown table, wrapped cells whole', () => {
+  const screen = ['> 进度', '', '⏺ 两件事的状态：', '',
+    '  ┌──────────────┬──────────────────────┐', '  │ 任务         │ 状态                 │', '  ├──────────────┼──────────────────────┤',
+    '  │ 桌面额度区   │ 已做完并推送到分支   │', '  │ 改版         │ feat/quota-panel     │', '  ├──────────────┼──────────────────────┤',
+    '  │ 架构图重做   │ 刚重开               │', '  └──────────────┴──────────────────────┘', '', '  其他的我先不动。',
+    '', '────────────────────────', ' > ', '────────────────────────', '  ? for shortcuts'];
+  assert.equal(C.extractReply(screen, '进度', 44), '两件事的状态：\n\n| 任务 | 状态 |\n| --- | --- |\n| 桌面额度区改版 | 已做完并推送到分支 feat/quota-panel |\n| 架构图重做 | 刚重开 |\n\n其他的我先不动。');
+  // cut off by the screen edge, or not a table at all: left as it was
+  assert.equal(C.extractReply(['表：', '┌─────┬─────┐', '│ a   │ b   │'], 'x', 80), '表：\n│ a   │ b   │');
+  assert.equal(C.extractReply(['框：', '┌───────────┐', '│ 不是表格  │', '└───────────┘'], 'x', 80), '框：\n│ 不是表格  │');
+});

@@ -57,6 +57,13 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   `display:none`) so PTY size, status dots and notifications keep working. Bubbles
   hold only the user prompt and the agent's final reply. Left/right swipe between
   columns is the core interaction; do not change the deck wheel or scroll code.
+- A reply is saved as it was read off the screen and cleaned when shown: agent
+  columns take terminal residue out with the phone hub's `cleanReply`
+  (`mobile-web/hub/core.js`, loaded by `index.html`). One set of rules for both
+  ends; fix a rule there, never in a desktop copy. Titles, lists and tables are
+  then read back from the plain rows (`ChatCore.tidyReply`). 队长's dispatch cards
+  between two messages fold behind one `.task-run` line and stay direct children
+  of the chat list; a turn with nothing to read is hidden, never deleted.
 - Saved conversations live in `userData/chats` (private, never committed, never
   pushed to this public repo). Any cloud sync must target a separate private repo.
   Folders, archived sessions and schedules are in the local `config.json` too.
