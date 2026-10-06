@@ -20,7 +20,9 @@ function runtime(t) {
     MainCore: M, BoardCore: B,
     QuotaCore: {
       commandQuota: (_s, cmd) => ({ out: h.out.has(cmd) }),
-      quotaFallback: (_s, cmd) => h.out.has(cmd)
+      quotaFallback: (_s, cmd, _seats, _active, _now, options) => h.low?.has(cmd) && options?.explicit
+        ? { action: 'queue', cmd, reason: 'explicit', held: 'low', note: '已用 --command 点名模型，不自动更换' }
+        : h.out.has(cmd)
         ? { action: 'queue', cmd, reason: 'out', held: 'out' } : { action: 'open', cmd },
     },
     ChatUI: { addCard() {}, updateCard() {}, hasDraft: () => false, turnsOf: () => [] },
@@ -137,3 +139,12 @@ test('concurrent replacements leave one request and a concurrent done move cance
   assert.equal(h.columns.length, 1);
 });
 function storeStatus(h, card) { return h.store.list().find((c) => c.id === card.id).status; }
+
+test('explicit named command queue reason clarifies 5-hour quota is below threshold', async (t) => {
+  const h = runtime(t), card = h.add();
+  h.low = new Set(['low-cmd']);
+  const result = await h.assign(card, 'low-cmd');
+  assert.equal(result.done, true);
+  assert.match(result.result, /已用 --command 点名模型，不自动更换。5 小时额度低于阈值，稍后自动开新会话/);
+  assert.match((await h.queue())[0].reason, /5 小时额度低于阈值/);
+});

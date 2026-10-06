@@ -237,7 +237,7 @@
   }
   function quotaQueueText(plan, title, dispatch = false) {
     if (plan.reason === 'explicit') {
-      const why = plan.held === 'low' ? '额度低于阈值' : '额度用尽';
+      const why = plan.held === 'low' ? '5 小时额度低于阈值' : '额度用尽';
       return `已排队：${plan.note}。${why}，稍后自动开${dispatch ? '调度会话' : `新会话「${title}」`}。`;
     }
     return dispatch ? '已排队：额度用尽，稍后自动开调度会话。' : `已排队：额度用尽，稍后自动开新会话「${title}」。`;

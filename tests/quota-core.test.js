@@ -656,7 +656,7 @@ test('same-tier quota fallback switches only on a clear shortage and names the s
   assert.equal(switched.provider, 'Cursor');
   assert.equal(Q.quotaFallback(claude(80, 10), opus, null, null, now).action, 'switch');
   assert.equal(Q.quotaFallback(claude(79, 10), opus, null, null, now).action, 'open');
-  assert.equal(Q.quotaFallback(claude(50, 90), opus, null, null, now).note, Q.quotaSwitchNote('Claude Opus 5.5', 'Cursor claude-opus-5-5-high'));
+  assert.equal(Q.quotaFallback(claude(50, 90), opus, null, null, now).action, 'open');
   assert.equal(Q.quotaFallback({}, opus, null, null, now).action, 'open');
   assert.equal(Q.quotaFallback(claude(85, 10), opus, null, null, now + Q.FRESH_MS + 1).action, 'open');
   const named = Q.quotaFallback(blocked('Claude', 'claude'), opus, null, null, now, { explicit: true });
@@ -779,4 +779,82 @@ test('summary exposes the evidence source and confidence for the panel details',
   assert.match(q.detail, /来源：会话屏幕；低（仅未见用尽报错）；/);
   const empty = Q.summary({}, 'Cursor', now);
   assert.deepEqual([empty.source, empty.confidence], ['', '']);
+});
+
+test('dispatch quota gate: only 5-hour window participates in low/fallback gating; weekly 0% is out', () => {
+  const opus = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+  const seats = [
+    { id: 'default', name: '默认', configDir: '~/.claude' },
+    { id: 'cn', name: 'CN 席位', configDir: '~/.claude-cn' },
+    { id: 'us2', name: 'US2 席位', configDir: '~/.claude-us2' },
+  ];
+  const bind = (id, sample) => {
+    const seat = seats.find((s) => s.id === id);
+    return { ...sample, accountBound: true, accountKey: 'acc-' + id, configDir: seat.configDir, seatId: id, credentialKey: 'cred-' + id };
+  };
+
+  // 1. 5h 高+周低 → 放行 (周窗口不参与拦截、不参与自动换模型)
+  // CN 席位实测：5 小时剩 96%、周剩 14%
+  const store = {};
+  Q.observe(store, bind('cn', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 96, resetText: new Date(now + 3_600_000).toISOString() },
+    { key: 'weekly', remaining: 14, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  // US2 席位实测：5 小时剩 99%、周剩 16%
+  Q.observe(store, bind('us2', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 99, resetText: new Date(now + 3_600_000).toISOString() },
+    { key: 'weekly', remaining: 16, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+
+  // CN: 放行，不排队，不自动换模型
+  const cnExplicit = Q.quotaFallback(store, opus, seats, 'cn', now, { explicit: true });
+  assert.equal(cnExplicit.action, 'open');
+  assert.equal(cnExplicit.reason, 'ok');
+  const cnAuto = Q.quotaFallback(store, opus, seats, 'cn', now, { explicit: false });
+  assert.equal(cnAuto.action, 'open');
+  assert.equal(cnAuto.reason, 'ok');
+
+  // US2: 放行，不排队，不自动换模型
+  const us2Explicit = Q.quotaFallback(store, opus, seats, 'us2', now, { explicit: true });
+  assert.equal(us2Explicit.action, 'open');
+  assert.equal(us2Explicit.reason, 'ok');
+  const us2Auto = Q.quotaFallback(store, opus, seats, 'us2', now, { explicit: false });
+  assert.equal(us2Auto.action, 'open');
+  assert.equal(us2Auto.reason, 'ok');
+
+  // 2. 5h 低+周高 → 排队 (点名时排队且说明 5 小时额度低) / 自动换模型 (非点名时切 Cursor)
+  const low5h = {};
+  Q.observe(low5h, bind('default', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 15, resetText: new Date(now + 3_600_000).toISOString() },
+    { key: 'weekly', remaining: 80, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  const lowExplicit = Q.quotaFallback(low5h, opus, seats, 'default', now, { explicit: true });
+  assert.equal(lowExplicit.action, 'queue');
+  assert.equal(lowExplicit.held, 'low');
+  assert.equal(lowExplicit.reason, 'explicit');
+  assert.match(lowExplicit.note, /已用 --command 点名/);
+  const lowAuto = Q.quotaFallback(low5h, opus, seats, 'default', now, { explicit: false });
+  assert.equal(lowAuto.action, 'switch');
+  assert.equal(lowAuto.to, 'Cursor claude-opus-5-5-high');
+
+  // 3. 5h 未知 → 行为不变 (放行开会话，不因未知拦截；但其它模型不自动切入该席位)
+  const unknownStore = {};
+  const unkExplicit = Q.quotaFallback(unknownStore, opus, seats, 'cn', now, { explicit: true });
+  assert.equal(unkExplicit.action, 'open');
+  assert.equal(unkExplicit.reason, 'unknown');
+  const unkAuto = Q.quotaFallback(unknownStore, opus, seats, 'cn', now, { explicit: false });
+  assert.equal(unkAuto.action, 'open');
+  assert.equal(unkAuto.reason, 'unknown');
+
+  // 4. 周 0% → 不可用 (5h 充裕但周额度用尽 0%，服务端会直接拒绝，算不可用 / 排队)
+  const weekZeroStore = {};
+  Q.observe(weekZeroStore, bind('cn', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'fiveHour', remaining: 96, resetText: new Date(now + 3_600_000).toISOString() },
+    { key: 'weekly', remaining: 0, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  assert.equal(Q.commandQuota(weekZeroStore, opus, seats, 'cn', now).out, true);
+  const weekZeroExplicit = Q.quotaFallback(weekZeroStore, opus, seats, 'cn', now, { explicit: true });
+  assert.equal(weekZeroExplicit.action, 'queue');
+  assert.equal(weekZeroExplicit.held, 'out');
+  assert.equal(weekZeroExplicit.reason, 'explicit');
 });
