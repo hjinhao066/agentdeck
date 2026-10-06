@@ -485,6 +485,16 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /agy 绝不能加 --effort/);
   assert.match(text, /Gemini 周额度用尽时/);
   assert.match(text, /--command 点名的不换，只排队/);
+  // The DeepSeek 兜底 fallback: launch command is the absolute path (a bare
+  // `claude-ds` would be read as a Claude seat by the quota guard), plus --model opus.
+  assert.ok(text.includes('/Users/jinhao/.local/claude-deepseek/bin/claude-ds --dangerously-skip-permissions'));
+  assert.match(text, /DeepSeek 兜底（仅 Mac）/);
+  assert.match(text, /复杂活加 --model opus/);
+  assert.match(text, /claude-ds 不适用 Claude 小弟 --model\/--effort 规则/);
+  assert.match(text, /标题和回执写明「DeepSeek 兜底」/);
+  assert.match(text, /DeepSeek 兜底：Claude 席位、Codex、Cursor、Gemini 都用尽或低于阈值而活不能停时用/);
+  assert.match(text, /有订阅额度时不用（按量花钱）/);
+  assert.match(text, /不适合 UI 设计、最关键核心代码、终审，这些等订阅额度恢复/);
   assert.match(text, /用户交代的任务默认先记进/);
   assert.match(text, /鸡毛蒜皮/);
   assert.match(text, /截图真的落盘/);
