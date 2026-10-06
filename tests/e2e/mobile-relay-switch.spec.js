@@ -139,7 +139,8 @@ for (const theme of ['dark', 'light']) {
     await auditSheet();
     await screenshot(`single-switch-${theme}-2-pick`);
     // The account without a login does nothing when tapped.
-    await option('us2').click();
+    await option('us2').click({ force: true });
+    await option('us2').focus(); await mobile.keyboard.press('Enter');
     await expect(sheet().getByRole('heading')).toHaveText('切换队长');
 
     await option('us').click();

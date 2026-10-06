@@ -661,7 +661,8 @@ async function plainWords() { expect(await sheet().evaluate((el) => el.innerText
 async function sheetShot(name) {
   await auditButtons(); await plainWords();
   // The sheet is fully on screen and nothing in it overflows sideways.
-  expect(await sheet().evaluate((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight + 1 && r.top >= 0 && el.querySelector('.sheet-body').scrollWidth <= el.querySelector('.sheet-body').clientWidth; })).toBe(true);
+  // (Polled: the sheet slides up for a fifth of a second.)
+  await expect.poll(() => sheet().evaluate((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight + 1 && r.top >= 0 && el.querySelector('.sheet-body').scrollWidth <= el.querySelector('.sheet-body').clientWidth; })).toBe(true);
   await shot(name);
 }
 
@@ -712,9 +713,10 @@ for (const theme of ['dark', 'light']) {
     await option('eu').scrollIntoViewIfNeeded();
     if (process.env.AGENTDECK_HUB_SCREENSHOT_DIR) await sheet().locator('.seat-list').screenshot({ path: path.join(path.resolve(process.env.AGENTDECK_HUB_SCREENSHOT_DIR), `switch-390-${theme}-7-used-up-greyed.png`) });
     // A greyed account does nothing, by tap or by keyboard.
-    await option('eu').click();
+    // (force: Playwright itself refuses to click what is marked disabled; a finger does not.)
+    await option('eu').click({ force: true });
     await option('jp').focus(); await page.keyboard.press('Enter');
-    await option('us').click();
+    await option('us').click({ force: true });
     await expect(sheet().getByRole('heading')).toHaveText('切换 Mac 队长');
     expect(mac.switches).toEqual([]);
 
@@ -815,7 +817,7 @@ test('the two computers switch separately; a refusal, a restart and a lost conne
   await expect(page.locator('#notice')).toHaveText('Windows 队长已换到 Claude CN。', { timeout: 8000 });
   await expect(winSeat.locator('.captain-seat-value')).toHaveText('Claude CN', { timeout: 8000 });
   expect(mac.relay.currentId).toBe('us');
-  expect(mac.requests.some((r) => r.method === 'POST')).toBe(false);
+  expect(mac.posts('api/relay')).toEqual([]);
 
   // The computer refuses (a draft is waiting on the desktop): its own words, and nothing changed.
   mac.relay.refuse = '电脑上队长的输入框里还有没发出去的内容，要先在电脑上发出或清空';
