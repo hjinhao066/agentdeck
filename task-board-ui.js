@@ -943,6 +943,9 @@
     detailEl = viewEl.querySelector('.tbv-detail');
     liveEl = viewEl.querySelector('.tbv-live');
     refreshBtn.onclick = () => refresh();
+    // the chips' first row keeps clear of the tally and tools, which stand over its right end (style.css)
+    const toolsEl = viewEl.querySelector('.tbv-tools');
+    new ResizeObserver(() => viewEl.querySelector('.tbv-filters').style.setProperty('--tbv-tools-w', toolsEl.getBoundingClientRect().width + 'px')).observe(toolsEl);
     const cardAt = (e) => { const n = e.target.closest && e.target.closest('.tbv-card'); return n ? n.dataset.cardId : null; };
     lanesEl.addEventListener('pointerover', (e) => { if (!drag) setHot(cardAt(e)); });
     lanesEl.addEventListener('pointerleave', () => setHot(null));

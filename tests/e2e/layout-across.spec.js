@@ -166,6 +166,17 @@ for (const [label, crew] of [['1', ONE], ['4', FOUR], ['9', NINE]]) test(`架构
     expect(again.view.scale).toBeCloseTo(0.7, 5);
     await shot(`map-${label}-projects-${name}`);
   }
+  if (label === '9') {
+    // too tall for the narrow page: 智能一页 says so at the bottom, and the word goes as soon as the map is scrolled
+    await page.evaluate(() => CrewMap.page());
+    await settled();
+    expect(await page.evaluate(() => CrewMap.pageFits())).toBe(false);
+    await expect(page.locator('.cm-hint')).toBeVisible();
+    const vp = await page.locator('.cm-viewport').boundingBox();
+    await page.mouse.move(vp.x + vp.width / 2, vp.y + vp.height / 2);
+    await page.mouse.wheel(0, 200);
+    await expect(page.locator('.cm-hint')).toBeHidden({ timeout: 1000 });
+  }
   expect(errors).toEqual([]);
 });
 
@@ -227,9 +238,13 @@ for (const [label, names] of [['few', FEW], ['many', MANY]]) test(`任务看板:
   await expect(page.locator('.tbv-lane[data-project]')).toHaveCount(1);
   await page.locator('.tbv-chip[data-project=""]').click();
   await expect(page.locator('.tbv-chip[data-project=""]')).toHaveAttribute('aria-pressed', 'true');
-  // the keyboard reaches the tools and then the chips, each with a visible focus ring
-  await page.locator('.tbv-refresh').focus();
+  // the keyboard reaches the chips and then the tools, each with a visible focus ring
+  const focused = () => page.evaluate(() => { const n = document.activeElement; return [n.classList.contains('tbv-chip') ? 'chip:' + n.dataset.project : n.getAttribute('aria-label'), n.matches(':focus-visible'), getComputedStyle(n).outlineStyle]; });
+  await page.locator('#taskBoardView .tbv-close').focus();
   await page.keyboard.press('Tab');
-  expect(await page.evaluate(() => { const n = document.activeElement; return [n.classList.contains('tbv-chip'), n.dataset.project, n.matches(':focus-visible'), getComputedStyle(n).outlineStyle]; })).toEqual([true, '', true, 'solid']);
+  expect(await focused()).toEqual(['chip:', true, 'solid']);
+  await page.locator('.tbv-chip').last().focus();
+  await page.keyboard.press('Tab');
+  expect(await focused()).toEqual(['展开全部分组', true, 'solid']);
   expect(errors).toEqual([]);
 });
