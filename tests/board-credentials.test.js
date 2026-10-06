@@ -16,7 +16,7 @@ function fixture() {
   clearCredentials(dir);
   const tools = path.join(dir, 'tools');
   fs.mkdirSync(tools);
-  for (const file of ['board-cli.js', 'board-credentials.js', 'security.js', 'receipt-listener-core.js']) {
+  for (const file of ['board-cli.js', 'board-credentials.js', 'security.js', 'receipt-listener-core.js', 'worktree-core.js']) {
     fs.copyFileSync(path.resolve(__dirname, '..', file), path.join(tools, file === 'board-cli.js' ? 'agentdeck-board.js' : file));
   }
   return { dir, cli: path.join(tools, 'agentdeck-board.js'), file: path.join(dir, 'credentials', 'worker.json') };

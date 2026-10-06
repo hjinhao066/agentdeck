@@ -1008,7 +1008,15 @@
       : ahead ? `已排队：前面有 ${ahead} 条可执行任务，当前 ${active} 个会话占用干活名额；按顺序自动开新会话「${title}」。` : '';
   }
   async function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
+    if (metadata.worktreeRequest && !metadata.worktree) {
+      if (typeof window.deck.prepareWorktree !== 'function') throw new Error('这台 AgentDeck 还不能创建代码副本。');
+      const prepared = await window.deck.prepareWorktree(metadata.worktreeRequest);
+      metadata.worktree = prepared;
+      cwd = prepared.path;
+    }
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    let col = null;
+    try {
     if (metadata.autoReviewRound) {
       // An automatic reviewer that waited in the queue only starts if its round is still the open one.
       const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === metadata.boardId);
@@ -1017,12 +1025,19 @@
     if (metadata.boardId) {
       await boardRequest('bind', { id: metadata.boardId, project: metadata.project, session_id: id, attempt_id: requestId,
         reviews: metadata.reviews, review_round: metadata.reviewRound ?? metadata.autoReviewRound, exec_receipt: metadata.reviewReceipt,
+        ...(metadata.worktree ? { worktree: metadata.worktree } : {}),
         assignee: { agent: window.BoardCore.inferAgentType(cmd), model: cmd.match(/(?:--model|-m)(?:\s+|=)["']?([^\s"']+)/)?.[1] || 'default' } });
     }
-    const col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
+    col = host.createSession({ ...metadata, taskPrompt: text, captainTaskPrompt: text, id, boardAttempt: requestId, title, cmd, cwd, createdByRequestId: requestId, displayTitle: title, manualTitle: true, captainCrew: true }, true);
     if (waiting) { waiting.boardId = metadata.boardId || ''; waiting.boardAttempt = requestId; }
     dispatch(col, text, title, waiting);
     return col;
+    } catch (error) {
+      if (!col && metadata.worktree && typeof window.deck.reclaimWorktree === 'function') {
+        try { await window.deck.reclaimWorktree(metadata.worktree); } catch (_) {}
+      }
+      throw error;
+    }
   }
   // Only unsent new-session requests are cancelled here; supplements have their own lifecycle.
   function cancelWaiting(matches, reason) {
@@ -2049,6 +2064,40 @@
     dispatch(col, text, host.columnLabel(col), null, message.now);
     return { done: true, result: message.now ? `已请求中断「${host.columnLabel(col)}」，新指令在输入框就绪后立即送达。` : busy ? `「${host.columnLabel(col)}」正在干活，指令先放着（待补充），等它停下合并发送。` : `已发给「${host.columnLabel(col)}」(${col.id})。` };
   }
+  function cardWorktree(record) {
+    const out = { repo: record.repo, path: record.path, branch: record.branch, base: record.base, removed: record.removed === true };
+    if (record.reason) out.reason = String(record.reason).slice(0, 500);
+    return out;
+  }
+  // Archive already stopped the terminal. Remove the copy only when it is clean
+  // and the branch is on the trunk or a remote; otherwise keep it and say why.
+  async function settleArchivedWorktree(col) {
+    const record = col?.worktree;
+    if (!record || record.settling || record.removed) return record || null;
+    record.settling = true;
+    try {
+      if (typeof window.deck.reclaimWorktree !== 'function') throw new Error('没有回收入口');
+      const result = await window.deck.reclaimWorktree(record);
+      record.removed = result?.removed === true;
+      record.reason = String(result?.reason || '').slice(0, 500);
+      if (record.removed && record.repo) col.cwd = record.repo;
+    } catch (error) {
+      record.settling = false;
+      record.removed = false;
+      record.reason = ('副本保留：回收没有完成：' + (error.message || error)).slice(0, 500);
+    }
+    const archived = (host.config.archived || []).find((item) => item.id === col.id);
+    if (archived) {
+      archived.worktree = record;
+      if (record.removed && record.repo) archived.cwd = record.repo;
+    }
+    if (col.boardId) {
+      try { await boardRequest('noteWorktree', { id: col.boardId, worktree: cardWorktree(record) }); } catch (_) {}
+    }
+    save();
+    host.flushConfig?.();
+    return record;
+  }
   // Resolves to the response payload, or rejects with a message for the caller.
   function handle(message, caller) {
     return ['main-new', 'main-queue', 'main-task'].includes(message.action)
@@ -2156,11 +2205,13 @@
           try { await window.deck.chatgptWebCancel(id); }
           finally { if (entry) entry.webExecutorStopping = false; }
         }
-        if (archive) host.archiveColumn(col, { captain: true, quiet: true });
+        if (archive) host.archiveColumn(col, { captain: true, quiet: true, worktreeHandled: true });
         else if (col.executor !== 'chatgpt-web') window.deck.ptyInput(id, '\x1b');
         if (col.executor === 'chatgpt-web' && entry) { entry.webExecutorState = 'stopped'; entry.state = 'stopped'; }
         save();
-        return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
+        const settled = archive && col.worktree ? await settleArchivedWorktree(col) : null;
+        const note = settled?.reason ? ' ' + settled.reason : '';
+        return { done: true, result: archive ? `已结束终端并归档「${host.columnLabel(col)}」(${id})。${note}` : `已向「${host.columnLabel(col)}」(${id})发送 Esc，请求中断当前操作。` };
       }
       case 'main-ledger': {
         const archived = (host.config.archived || []).length;
@@ -2310,6 +2361,18 @@
           metadata.claudeConfigDir = seat.configDir;
         }
         const cwd = window.BoardCore.cleanText(message.cwd, 1000);
+        if (typeof message.worktree === 'string' && message.worktree.trim()) {
+          if (metadata.executor === 'chatgpt-web') throw new Error('--worktree 不能用于网页调研。');
+          if (cwd) throw new Error('--worktree 会指定工作目录，不要同时传 --cwd。');
+          metadata.worktreeRequest = {
+            repo: message.worktree.trim(),
+            base: typeof message.base === 'string' ? message.base.trim() : '',
+            branch: typeof message.branch === 'string' ? message.branch.trim() : '',
+            taskId: metadata.boardId || '',
+          };
+        } else if ((typeof message.base === 'string' && message.base.trim()) || (typeof message.branch === 'string' && message.branch.trim())) {
+          throw new Error('--base 和 --branch 需要 --worktree。');
+        }
         if (metadata.boardId) {
           const card = (await window.TaskBoard.list({ archived: true })).find((c) => c.id === metadata.boardId);
           if (!card) throw new Error('找不到卡片：' + metadata.boardId);
@@ -2409,7 +2472,7 @@
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
-    isMain, isMainId, mainCol, state, sendMessage,
+    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree,
 
     history: () => host.config.captainHistory || [],
     queueNote: () => M.queueNote(M.MAX_ACTIVE, memoryHold),

@@ -949,6 +949,8 @@ the Windows Electron UI or install, rebuild, or restart either installed app.
 
 
 
+Coding tasks can pass `new --worktree <repo> [--base ref] [--branch name]`. AgentDeck adds a git worktree under `~/agentdeck-worktrees/<repo>/<branch>` and starts the session there. After the session is archived, the copy is removed only when the tree is clean and the branch is merged into the trunk or already on a remote. `worktree clean` lists those copies and deletes nothing unless `--apply` is passed. Removal never uses `git worktree remove --force`.
+
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in

@@ -2,8 +2,10 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const Worktree = require('./worktree-core');
 const { resolveBoardAuth, controllingTerminal } = require('./board-credentials');
 const ReceiptListener = require('./receipt-listener-core');
 let receiptListener = null;
@@ -143,7 +145,8 @@ function usage() {
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '  worktree clean [--apply]                 list copies safe to remove; --apply removes only those\n' +
     '  tell --to <session-id> --message "Instruction" [--replace] [--now]\n' +
     '  stop --id <session-id>                    interrupt the current operation (Esc)\n' +
     '  archive --id <session-id>                 end the terminal and archive, without confirmation\n' +
@@ -353,10 +356,25 @@ async function main() {
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
     if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
     if (args['web-mode'] !== undefined && (!['chat', 'deep-research'].includes(args['web-mode']) || args.agent !== 'chatgpt-web')) fail('new --web-mode requires --agent chatgpt-web and chat or deep-research.');
+    const worktree = args.worktree !== undefined;
+    if (worktree && (typeof args.worktree !== 'string' || !args.worktree.trim())) fail('new --worktree requires a repository path.');
+    if (!worktree && (args.base !== undefined || args.branch !== undefined)) fail('new --base and --branch require --worktree.');
+    if (worktree && typeof args.cwd === 'string' && args.cwd.trim()) fail('new --worktree sets the working directory; do not also pass --cwd.');
+    if (worktree && args.branch !== undefined && (typeof args.branch !== 'string' || !args.branch.trim())) fail('new --branch requires a branch name.');
+    if (worktree && args.base !== undefined && (typeof args.base !== 'string' || !args.base.trim())) fail('new --base requires a branch or commit.');
+    let repo = '';
+    if (worktree) {
+      let raw = args.worktree.trim();
+      if (raw === '~') raw = os.homedir();
+      else if (raw.startsWith('~/') || raw.startsWith('~\\')) raw = path.join(os.homedir(), raw.slice(2));
+      repo = path.resolve(raw);
+      if (args.branch) { try { Worktree.assertBranch(args.branch.trim()); } catch (error) { fail(error.message); } }
+    }
     const response = await request({
       action: 'main-new', title, task,
       ...(args['web-mode'] !== undefined ? { webMode: args['web-mode'] } : {}),
       ...(args.seat !== undefined ? { seatId: args.seat } : {}),
+      ...(worktree ? { worktree: repo, base: typeof args.base === 'string' ? args.base.trim() : '', branch: typeof args.branch === 'string' ? args.branch.trim() : '' } : {}),
       project: typeof args.project === 'string' ? args.project.trim() : '',
       reviews: typeof args.reviews === 'string' ? [...new Set(args.reviews.split(',').map((id) => id.trim()))] : [],
       agent: typeof args.agent === 'string' ? args.agent : '',
@@ -406,6 +424,20 @@ async function main() {
   if (action === 'quota' || action === 'briefing' || action === 'handoff') {
     const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
+  if (action === 'worktree') {
+    if (args._[1] !== 'clean') fail('worktree clean lists copies that are safe to remove. Pass --apply to remove only those.');
+    if (args.apply !== undefined && args.apply !== true) fail('worktree clean --apply takes no value.');
+    let root;
+    if (args.root !== undefined) {
+      if (typeof args.root !== 'string' || !args.root.trim()) fail('worktree clean --root requires a path.');
+      root = path.resolve(args.root);
+      const rel = path.relative(path.resolve(os.tmpdir()), root);
+      if (rel.startsWith('..') || path.isAbsolute(rel)) fail('worktree clean --root must stay inside the temp directory.');
+    }
+    const result = Worktree.clean({ root, apply: args.apply === true });
+    process.stdout.write(Worktree.formatClean(result) + '\n');
     return;
   }
   if (action === 'status') {

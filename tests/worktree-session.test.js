@@ -1,0 +1,164 @@
+'use strict';
+// new --worktree creates a real copy and records it on the card. Archive
+// removes it only when the copy is clean and the branch has been pushed.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const vm = require('vm');
+const { execFileSync } = require('child_process');
+const B = require('../board-core');
+const M = require('../main-core');
+const AV = require('../auto-verify-core');
+const R = require('../restart-resume');
+const P = require('../perpetual-captain-core');
+const Worktree = require('../worktree-core');
+const { TaskStore, localSessions } = require('../task-board');
+
+const CODEX = 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox';
+const tick = async (n = 20) => { for (let i = 0; i < n; i++) await new Promise((resolve) => setImmediate(resolve)); };
+function git(cwd, args) {
+  return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', '-c', 'commit.gpgsign=false', ...args], {
+    cwd, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+  }).trim();
+}
+
+function world(t) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-wt-session-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const repo = path.join(root, 'demo');
+  const remote = path.join(root, 'remote.git');
+  fs.mkdirSync(repo);
+  fs.mkdirSync(remote);
+  git(repo, ['init', '-b', 'main']);
+  fs.writeFileSync(path.join(repo, 'README'), 'hello\n');
+  git(repo, ['add', 'README']);
+  git(repo, ['commit', '-m', 'init']);
+  git(remote, ['init', '--bare', '-b', 'main']);
+  git(repo, ['remote', 'add', 'origin', remote]);
+  git(repo, ['push', '-u', 'origin', 'main']);
+  const w = {
+    root, repo, remote, wt: path.join(root, 'copies'), prepares: 0,
+    dir: path.join(root, 'tasks'), config: {
+      folders: [], archived: [], captainHistory: [],
+      mainSession: { colId: 'captain', tasks: [], pending: [], inflight: [], waitlist: [], gen: 1, cmd: 'claude' },
+      concurrencyCap: 5,
+    },
+    columns: [{ id: 'captain', isMain: true, cmd: 'claude' }],
+  };
+  w.config.columns = w.columns;
+  const store = new TaskStore(w.dir, { sessions: () => localSessions(w.config) });
+  const entries = new Map(w.columns.map((c) => [c.id, { alive: true, state: 'done', lastScreen: '' }]));
+  const window = {
+    deck: {
+      onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, onTasksChanged() {},
+      taskBoard: (op, input) => Promise.resolve().then(() => store[op](input)),
+      memoryPressure: async () => ({ level: null }), saveLongPrompt: async () => '', saveConfigSync() {},
+      restartManifestLoad: () => null, restartManifestSave() {},
+      prepareWorktree: (input) => { w.prepares += 1; return Worktree.prepare({ ...input, root: w.wt }); },
+      reclaimWorktree: (record) => Worktree.reclaim(record, { root: w.wt }),
+    },
+    MainCore: M, BoardCore: B, AutoVerifyCore: AV, RestartResume: R, PerpetualCaptainCore: P,
+    QuotaCore: { commandQuota: () => ({ out: false }), quotaFallback: (_s, cmd) => ({ action: 'open', cmd, note: '' }) },
+    ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {}, addCard() {}, readFooter: () => null, captainArchives: () => [] },
+    Sidebar: { render() {} },
+  };
+  const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] }, console, Date, Intl });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
+  const host = {
+    config: w.config, platform: 'darwin', terms: entries, userComposing: () => false, columnLabel: (c) => c.displayTitle || c.title || c.id,
+    saveConfig() {}, flushConfig() {}, showToast() {}, columns: () => w.columns,
+    createSession(meta) {
+      const col = { ...meta, createdByRequestId: null };
+      w.columns.push(col);
+      entries.set(col.id, { alive: true, state: 'working', lastScreen: '' });
+      return col;
+    },
+    archiveColumn(col) {
+      const snapshot = { ...col };
+      w.config.archived = [snapshot, ...(w.config.archived || []).filter((item) => item.id !== col.id)];
+      const index = w.columns.indexOf(col);
+      if (index >= 0) w.columns.splice(index, 1);
+    },
+    sendWhenReady(col, text, opts) { opts?.onSent?.({ id: 'turn' }); },
+  };
+  window.MainSession.init(host);
+  return {
+    w, store, window, host,
+    captain: () => w.columns.find((c) => c.isMain),
+    card: (id) => store.list({ archived: true }).find((c) => c.id === id),
+    handle: (message) => window.MainSession.handle(message, w.columns.find((c) => c.isMain)),
+  };
+}
+
+test('new without --worktree does not create a copy or change the working directory', async (t) => {
+  const app = world(t);
+  const card = (await app.store.add({ project: 'demo', title: '整理笔记', detail: '' })).card;
+  const plain = path.join(app.w.root, 'plain');
+  fs.mkdirSync(plain);
+  const reply = await app.handle({ action: 'main-new', id: 'plain-req', title: '整理笔记', task: '只整理，不改代码', boardId: card.id, project: 'demo', command: CODEX, cwd: plain });
+  await tick();
+  assert.match(reply.result, /已开新会话/);
+  assert.equal(app.w.prepares, 0);
+  const col = app.w.columns.find((c) => !c.isMain);
+  assert.equal(col.cwd, plain);
+  assert.equal(col.worktree, undefined);
+  assert.equal(app.card(card.id).worktree, undefined);
+  assert.equal(fs.existsSync(app.w.wt), false);
+});
+
+test('new --worktree records the copy on the card and archive keeps a dirty tree', async (t) => {
+  const app = world(t);
+  const card = (await app.store.add({ project: 'demo', title: '改代码', detail: '' })).card;
+  const reply = await app.handle({
+    action: 'main-new', id: 'code-req', title: '改代码', task: '在副本里改', boardId: card.id, project: 'demo', command: CODEX,
+    worktree: app.w.repo, base: 'main', branch: 'feat/dirty',
+  });
+  await tick();
+  assert.match(reply.result, /已开新会话/);
+  assert.equal(app.w.prepares, 1);
+  const col = app.w.columns.find((c) => !c.isMain);
+  const recorded = app.card(card.id).worktree;
+  assert.equal(col.cwd, recorded.path);
+  assert.equal(recorded.repo, fs.realpathSync(app.w.repo));
+  assert.equal(recorded.branch, 'feat/dirty');
+  assert.equal(recorded.base, git(app.w.repo, ['rev-parse', 'main']));
+  assert.equal(recorded.path.startsWith(fs.realpathSync(app.w.wt) + path.sep), true);
+  fs.writeFileSync(path.join(recorded.path, 'dirty.txt'), 'not committed\n');
+  const archived = await app.handle({ action: 'main-archive', to: col.id });
+  assert.match(archived.result, /未提交|未跟踪/);
+  assert.equal(fs.existsSync(recorded.path), true);
+  assert.equal(fs.readFileSync(path.join(recorded.path, 'dirty.txt'), 'utf8'), 'not committed\n');
+  const after = app.card(card.id).worktree;
+  assert.equal(after.removed, false);
+  assert.match(after.reason, /未提交|未跟踪/);
+});
+
+test('archive removes a clean copy only after its branch is pushed', async (t) => {
+  const app = world(t);
+  const card = (await app.store.add({ project: 'demo', title: '推上去', detail: '' })).card;
+  await app.handle({
+    action: 'main-new', id: 'push-req', title: '推上去', task: '提交并推送', boardId: card.id, project: 'demo', command: CODEX,
+    worktree: app.w.repo, branch: 'feat/pushed',
+  });
+  await tick();
+  const col = app.w.columns.find((c) => !c.isMain);
+  const copy = col.cwd;
+  fs.writeFileSync(path.join(copy, 'ship.txt'), 'shipped\n');
+  git(copy, ['add', 'ship.txt']);
+  git(copy, ['commit', '-m', 'ship']);
+  const unpushed = Worktree.inspect(col.worktree, {});
+  assert.equal(unpushed.safe, false);
+  git(copy, ['push', '-u', 'origin', 'feat/pushed']);
+  const archived = await app.handle({ action: 'main-archive', to: col.id });
+  assert.match(archived.result, /已回收/);
+  assert.match(archived.result, /推送/);
+  assert.equal(fs.existsSync(copy), false);
+  const after = app.card(card.id).worktree;
+  assert.equal(after.removed, true);
+  assert.equal(after.repo, fs.realpathSync(app.w.repo));
+  assert.equal(after.branch, 'feat/pushed');
+  assert.match(after.base, /^[0-9a-f]{40}$/);
+  assert.equal(git(app.w.repo, ['rev-parse', 'refs/heads/feat/pushed']), git(app.w.repo, ['rev-parse', 'origin/feat/pushed']));
+});
