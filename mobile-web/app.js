@@ -538,11 +538,11 @@
       seatAlert.hidden = !(ready && low && view === 'captain');
       if (low) seatAlertText.textContent = '队长用的 ' + Core.seatLabel(seat) + (cell.out ? ' 额度用完了' : ' ' + (cell.key === '5h' ? '5 小时' : '每周') + '只剩 ' + Core.percentText(cell));
     }
-    renderSheet();
+    renderSwitchSheet();
   }
   function openSwitch() {
     closeDrawer(false);
-    sheetStep = 'pick'; sheetSeat = ''; sheetSignature = undefined; renderSheet();
+    sheetStep = 'pick'; sheetSeat = ''; sheetSignature = undefined; renderSwitchSheet();
     if (!dialog.open) dialog.showModal();
     // Always pick from a fresh answer of the computer, not from what was on screen.
     if (!relayJob) loadRelay().then(renderSwitchEntries);
@@ -615,10 +615,10 @@
       values.append(el);
     }
     button.append(providerIcon(seat), main, values);
-    button.addEventListener('click', () => { if (!seat.selectable) return; sheetStep = 'confirm'; sheetSeat = seat.id; renderSheet(); });
+    button.addEventListener('click', () => { if (!seat.selectable) return; sheetStep = 'confirm'; sheetSeat = seat.id; renderSwitchSheet(); });
     return button;
   }
-  function renderSheet() {
+  function renderSwitchSheet() {
     if (!sheetStep) return;
     const job = relayJob, now = Date.now();
     const picked = relay?.seats.find((seat) => seat.id === sheetSeat && seat.selectable);
@@ -664,7 +664,7 @@
       text('sheet-note warn', '换了以后，现在这位队长正在说的话会中断，它没存下来的内容会丢。派出去的队员和任务不受影响。');
       if (picked.reason === 'unknown') text('sheet-note', Core.seatLabel(picked) + ' 的额度还不清楚，换过去以后可能马上又不够用。');
       const actions = node('div', 'sheet-actions');
-      actions.append(action('primary', '确认切换', 'confirm', () => startSwitch(picked)), action('secondary', '先不换', 'back', () => { sheetStep = 'pick'; sheetSeat = ''; renderSheet(); }));
+      actions.append(action('primary', '确认切换', 'confirm', () => startSwitch(picked)), action('secondary', '先不换', 'back', () => { sheetStep = 'pick'; sheetSeat = ''; renderSwitchSheet(); }));
       body.append(actions);
     } else if (phase === 'switching') {
       title.textContent = '正在切换队长';
