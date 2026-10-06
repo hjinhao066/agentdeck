@@ -314,3 +314,12 @@ test('both phone pages switch through each computer\'s own api/relay, and only t
   assert.equal([...single.matchAll(/席位/g)].length, 1);
   assert.equal([...hub.matchAll(/席位/g)].length, 0);
 });
+
+test('neither phone page declares the same function twice (a later one would silently replace the earlier)', () => {
+  for (const file of ['hub/app.js', 'app.js']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'mobile-web', file), 'utf8');
+    const names = [...source.matchAll(/^ {2}(?:async )?function (\w+)\(/gm)].map((match) => match[1]);
+    assert.ok(names.length > 20, file);
+    assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [], file);
+  }
+});
