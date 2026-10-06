@@ -658,3 +658,27 @@ test('phone images work under a prefix: upload, view and send use the prefixed r
   assert.equal(send.status, 200);
   assert.deepEqual(sent, [['pic', 1]]);
 });
+
+test('each computer switches only its own Captain: api/relay answers under its own prefix, cookie and CSRF token', async (t) => {
+  const sources = (currentId) => {
+    const calls = [];
+    return { calls, options: { getRelay: () => ({ captainId: 'captain', currentId, seats: [{ id: currentId, name: currentId.toUpperCase(), current: true, reason: 'current' }, { id: 'cn', name: 'CN', selectable: true, reason: '' }] }),
+      switchRelay: (input) => { calls.push(input); return { started: true, id: 'job' + calls.length }; } } };
+  };
+  const macRelay = sources('us'), winRelay = sources('chatgpt');
+  const mac = await start(t, '/mac/', 'Mac', {}, macRelay.options), win = await start(t, '/win/', 'Windows', {}, winRelay.options);
+  const macLogin = await login(mac), winLogin = await login(win);
+  assert.equal(JSON.parse((await get(mac, 'api/relay', { Cookie: macLogin.cookie })).text).currentId, 'us');
+  assert.equal(JSON.parse((await get(win, 'api/relay', { Cookie: winLogin.cookie })).text).currentId, 'chatgpt');
+  // The other computer's prefix, cookie or CSRF token never reaches a Captain.
+  assert.equal((await raw(mac.status, '/win/api/relay', { headers: { Cookie: macLogin.cookie } })).status, 404);
+  assert.equal((await raw(mac.status, '/api/relay', { headers: { Cookie: macLogin.cookie } })).status, 404);
+  assert.equal((await get(mac, 'api/relay', { Cookie: winLogin.cookie })).status, 401);
+  assert.equal((await post(mac, 'api/relay', { seatId: 'cn' }, { Cookie: winLogin.cookie, 'X-CSRF-Token': winLogin.csrf })).status, 401);
+  assert.equal((await post(mac, 'api/relay', { seatId: 'cn' }, { Cookie: macLogin.cookie, 'X-CSRF-Token': winLogin.csrf })).status, 403);
+  assert.equal((await raw(mac.status, '/win/api/relay', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: PUBLIC_ORIGIN, Cookie: macLogin.cookie, 'X-CSRF-Token': macLogin.csrf }, body: '{"seatId":"cn"}' })).status, 404);
+  assert.deepEqual([macRelay.calls, winRelay.calls], [[], []]);
+  const switched = await post(win, 'api/relay', { seatId: 'cn', expectCurrent: 'chatgpt' }, { Cookie: winLogin.cookie, 'X-CSRF-Token': winLogin.csrf });
+  assert.deepEqual([switched.status, JSON.parse(switched.text)], [200, { started: true, id: 'job1' }]);
+  assert.deepEqual([macRelay.calls, winRelay.calls], [[], [{ seatId: 'cn', expectCurrent: 'chatgpt' }]]);
+});
