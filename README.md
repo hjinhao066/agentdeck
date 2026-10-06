@@ -242,6 +242,7 @@ skipped.
 已用尽的任务排队到额度恢复，显示「额度用尽，稍后自动开」。
 会话恢复干活时，自动生成的「已结束，未提交回执」提示会从回执栏及任务卡清除；真实命令回执保留。
 Codex 的状态行写着「Waiting for background terminal」（队员在 `sleep 300` 里等长任务）、「Waiting for agents」或「Compacting context」，或底栏有「N background terminal running」时，同样算还在干活：不发「已结束，未提交回执」，也不把会话标成已完成。队员真的干完、闲着超过三分钟没交回执，仍照常提醒。
+Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框上方的状态行会写「✻ Baked for 1m · done 8:27 AM · 1 shell, 1 monitor still running」（窄列会折成两行，中间可夹「Update available!」），输入框下方的自定义状态栏不带数字；这一行紧贴输入框时同样算还在干活（底栏的「N shell … still running」照旧认），不发「已结束，未提交回执」、不计自动归档。任务结束、状态行不再带数字后重新计三分钟，仍不交回执照常提醒。
 Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；运行中的回合需静默至少 10 秒才判空闲。
 提交完成回执后，任务仍为完成，但 Cursor 会话只要还在运行就继续显示「干活中」。
 看板页面从侧边栏「任务看板」或终端架构图右上角的「任务看板」切换打开：每个项目是一个

@@ -814,13 +814,41 @@
     return completed >= 0 && lines.slice(completed + 1).some((line) => /^\s*›\s/.test(line))
       ? lines.slice(completed + 1).join('\n') : text;
   }
-  // Claude's live footer counts background work after its ready prompt.
+  // A finished Claude turn that still has background work leaves one status
+  // row in the live area just above the prompt's top rule (a custom status
+  // line under the prompt carries no count):
+  //   ✻ Baked for 40s · done 8:27 AM · 1 shell, 1 monitor still running
+  // A narrow column wraps it ("… · 1" / "monitor still running"), and Claude
+  // may add "Update available!" between it and the rule. It is live only while
+  // nothing else sits between it and the prompt: a later reply, tool row or
+  // user message means a newer turn, and the old row is history.
+  function claudeStatusRowRunning(above) {
+    const rows = above.slice(-8);
+    let at = -1;
+    rows.forEach((line, i) => {
+      if (/^\s*[✻✽✳✶✢✺*]\s*[^\s·]+\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/.test(line)) at = i;
+    });
+    if (at < 0) return false;
+    const block = [rows[at]];
+    let i = at + 1;
+    for (; i < rows.length && block.length < 3; i++) {
+      if (!rows[i].trim() || /^\s*[─━═]{3,}\s*$/.test(rows[i]) || /^\s*Update available\b/i.test(rows[i])) break;
+      block.push(rows[i]);
+    }
+    for (; i < rows.length; i++) {
+      if (!/^\s*$|^\s*[─━═]{3,}\s*$|^\s*Update available\b/i.test(rows[i])) return false;
+    }
+    return /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(block.join(' ').replace(/\s+/g, ' '));
+  }
+  // Claude's live footer counts background work after its ready prompt, and
+  // its completed-turn status row counts it just above (claudeStatusRowRunning).
   // Ignore quoted/output rows above that prompt, and zero/completed counts.
   function claudeBackgroundTasks(screen, cmd) {
     if (cmd && !/\bclaude\b/i.test(cmd)) return false;
     const lines = String(screen || '').split('\n').slice(-20);
     const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*❯(?:\s|$)/.test(line));
     if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
+    if (claudeStatusRowRunning(lines.slice(0, prompt))) return true;
     const footer = lines.slice(prompt + 1);
     if (footer.some((line) => /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line))) return true;
     // A narrow column drops the tail of the footer ("· 1 monitor ·", "still running"
