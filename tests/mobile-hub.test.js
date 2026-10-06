@@ -173,6 +173,23 @@ test('cleaning a reply never eats the Captain\'s own sentences', () => {
   assert.equal(Core.cleanReply(null), '');
 });
 
+test('a reply that opens with the end of the turn\'s own echoed message loses only that', () => {
+  const asked = '先把安装脚本的死循环修掉，最多重试三次就停下来报告。另外换席位的时候暂时跳过已经用尽的那个，这两件事今天都要有结果。';
+  const tail = '另外换席位的时候暂时跳过已经用尽的那个，这两件事今天都要有结果。';
+  // one row, rows the terminal wrapped, and a blank row before the reply
+  assert.equal(Core.cleanReply(tail + '\n\n两件事都派出去了。', asked, asked), '两件事都派出去了。');
+  assert.equal(Core.cleanReply('  另外换席位的时候暂时跳过已经\n  用尽的那个，这两件事今天都要有结果。\n\nRan 2 shell commands\n\n两件事都派出去了。\n\n- 第一件', asked, asked), '两件事都派出去了。\n\n- 第一件');
+  // the desktop saves one turn per prompt: the phone folds them with the same rule
+  assert.equal(Core.groupTurns([{ id: 'u1', ts: 1, user: asked, reply: tail + '\n\n两件事都派出去了。', done: true }])[0].reply, '两件事都派出去了。');
+  // it has to run to the very end of this turn's message, and be more than a few characters
+  for (const reply of ['另外换席位的时候暂时跳过已经用尽的那个\n\n这条我记下了。', '都要有结果。\n\n会的。', '这两件事今天都要有结果。我已经派了。', '最多重试三次就停下来报告。\n\n好。'])
+    assert.equal(Core.cleanReply(reply, asked, asked), reply);
+  // another turn's words are not this turn's echo; an ❯ echo is still handled as before
+  assert.equal(Core.cleanReply(tail + '\n\n收到。', asked, '别的话'), tail + '\n\n收到。');
+  assert.equal(Core.cleanReply(tail + '\n\n收到。', asked), tail + '\n\n收到。');
+  assert.equal(Core.cleanReply('❯ ' + asked + '\n\n收到。', asked, asked), '收到。');
+});
+
 test('a reply that arrives long after the last message starts its own round, and odd turns are ignored', () => {
   const t = 1_000_000;
   const groups = Core.groupTurns([null, 'x', { id: 'u1', ts: t, user: '问', reply: '答', done: true }, { id: 'r2', ts: t + 31 * 60000, reply: '稍后的回执', done: true }]);

@@ -1089,8 +1089,14 @@ body.linking-board .board-port.out::before {
    pty keeps its size and status detection keeps reading the screen. */
 .column .chat { display: none; }
 /* ⌘−/⌘= scale the chat view with the terminal font (renderer sets --chat-zoom) */
-/* --chat-measure: the reading column. Turns, the composer and the status lines share its left edge. */
-.column.chat-mode .chat { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; zoom: var(--chat-zoom, 1); --chat-measure: clamp(780px, 52%, 900px); --chat-cap: #b79cff; }
+/* --chat-measure: the reading column. --chat-gutter: the least air beside it, growing with the
+   pane (20px in a slim one, 56px from about 880px up). --chat-pad is what is left on each side:
+   the reply text, your bubble, the composer box and the status lines all stand on these two edges. */
+.column.chat-mode .chat {
+  display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; zoom: var(--chat-zoom, 1); --chat-cap: #b79cff;
+  --chat-measure: clamp(780px, 52%, 900px); --chat-gutter: clamp(20px, 8% - 14px, 56px);
+  --chat-pad: max(var(--chat-gutter), calc((100% - var(--chat-measure)) / 2));
+}
 :root[data-theme="light"] .column.chat-mode .chat { --chat-cap: #6a3fd2; }
 .column.chat-mode > .term {
   position: absolute; left: 0; right: 0; top: 40px; bottom: 0;
@@ -1113,8 +1119,10 @@ body.linking-board .board-port.out::before {
 
 .chat-scroll {
   flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden;
-  display: flex; flex-direction: column; gap: 26px;
-  padding: 18px max(18px, calc((100% - var(--chat-measure)) / 2)) 16px;
+  display: flex; flex-direction: column; gap: 34px;
+  /* the scrollbar's 10px is always kept and taken off the right padding: the column stays centred */
+  scrollbar-gutter: stable;
+  padding: 24px calc(var(--chat-pad) - 10px) 20px var(--chat-pad);
 }
 .chat-scroll::-webkit-scrollbar { width: 10px; }
 .chat-scroll::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; }
@@ -1141,33 +1149,33 @@ body.linking-board .board-port.out::before {
 .turn { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .turn-time { align-self: center; font-size: 11.5px; color: var(--muted); letter-spacing: 0.01em; }
 .msg { display: flex; flex-direction: column; min-width: 0; }
-.msg.user { align-self: flex-end; align-items: flex-end; max-width: min(85%, 640px); }
+.msg.user { align-self: flex-end; align-items: flex-end; max-width: min(100%, max(78%, 300px), 600px); }
 .msg.user .bubble {
-  padding: 9px 15px; border-radius: 18px;
+  padding: 10px 16px; border-radius: 18px;
   background: var(--bubble-bg); color: var(--text);
   font-size: 14px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; user-select: text;
   max-height: 8.4em; overflow: hidden; cursor: pointer;
 }
 .msg.user.expanded .bubble { max-height: 50vh; overflow-y: auto; cursor: auto; }
-.msg.assistant { align-self: stretch; padding: 0 2px; }
+.msg.assistant { align-self: stretch; }
 .reply {
   font-size: 14.5px; line-height: 1.75; overflow-wrap: anywhere;
   color: var(--text); user-select: text;
 }
 .reply.md > :first-child { margin-top: 0; }
 .reply.md > :last-child { margin-bottom: 0; }
-.reply.md p, .reply.md ul, .reply.md ol, .reply.md blockquote, .reply.md .md-table, .reply.md pre, .reply.md .code-block { margin: 0 0 0.9em; }
+.reply.md p, .reply.md ul, .reply.md ol, .reply.md blockquote, .reply.md .md-table, .reply.md pre, .reply.md .code-block { margin: 0 0 1em; }
 /* a section title: more air above it than under it, so each section reads as one piece */
-.reply.md h1, .reply.md h2, .reply.md h3, .reply.md h4, .reply.md h5, .reply.md h6 { margin: 1.55em 0 0.5em; line-height: 1.4; font-weight: 650; letter-spacing: -0.005em; }
+.reply.md h1, .reply.md h2, .reply.md h3, .reply.md h4, .reply.md h5, .reply.md h6 { margin: 1.8em 0 0.55em; line-height: 1.4; font-weight: 650; letter-spacing: -0.005em; }
 .reply.md h1 { font-size: 1.28em; } .reply.md h2 { font-size: 1.16em; } .reply.md h3 { font-size: 1.05em; } .reply.md h4, .reply.md h5, .reply.md h6 { font-size: 1em; }
 .reply.md ul, .reply.md ol { padding-left: 1.45em; }
-.reply.md li { margin: 0.32em 0; padding-left: 0.15em; }
+.reply.md li { margin: 0.38em 0; padding-left: 0.15em; }
 .reply.md li::marker { color: var(--muted); }
 .reply.md ol > li::marker { font-variant-numeric: tabular-nums; font-size: 0.95em; }
 /* nested lists sit close under their item; the lead-in line ("…：") sits close over its list */
-.reply.md li > ul, .reply.md li > ol { margin: 0.32em 0 0.1em; }
+.reply.md li > ul, .reply.md li > ol { margin: 0.38em 0 0.1em; }
 .reply.md li > ul { list-style: circle; }
-.reply.md p + ul, .reply.md p + ol { margin-top: -0.45em; }
+.reply.md p + ul, .reply.md p + ol { margin-top: -0.5em; }
 .reply.md h1 + ul, .reply.md h2 + ul, .reply.md h3 + ul, .reply.md h1 + ol, .reply.md h2 + ol, .reply.md h3 + ol { margin-top: -0.1em; }
 .reply.md strong { font-weight: 650; }
 .reply.md code { font: 0.86em var(--mono); background: var(--pill-bg-hover); padding: 1.5px 5px; border-radius: 5px; }
@@ -1202,7 +1210,7 @@ body.linking-board .board-port.out::before {
 /* Over every reply: who is speaking, then "处理了 18分43秒 ›", the work before the
    reply, folded by default. .proc has no box of its own: its toggle sits on the
    speaker's line and its body takes the row under it. */
-.reply-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-height: 28px; margin-bottom: 6px; }
+.reply-head { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; min-height: 28px; margin-bottom: 8px; }
 .reply-who { display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text); }
 .who-mark {
   flex: 0 0 auto; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
@@ -1277,7 +1285,7 @@ body.linking-board .board-port.out::before {
 .ec-dir { color: var(--muted); }
 
 /* icon-only actions: tooltip via title, aria-label, 28px target, focus ring */
-.msg-tools { display: flex; align-items: center; gap: 2px; height: 28px; margin-top: 8px; }
+.msg-tools { display: flex; align-items: center; gap: 2px; height: 28px; margin-top: 10px; }
 .user-tools { justify-content: flex-end; margin-top: 2px; opacity: 0; transition: opacity 0.12s ease; }
 .msg.user:hover .user-tools, .user-tools:focus-within { opacity: 1; }
 .msg-tool, .icon-btn {
@@ -1299,7 +1307,7 @@ body.linking-board .board-port.out::before {
 @keyframes chat-flash { 0%, 55% { box-shadow: 0 0 0 3px var(--accent-soft); background-color: var(--accent-soft); } 100% { box-shadow: none; } }
 
 .chat-attn {
-  flex: 0 0 auto; margin: 0 max(14px, calc((100% - var(--chat-measure) - 28px) / 2)) 8px; padding: 10px 12px; border-radius: 10px;
+  flex: 0 0 auto; margin: 0 var(--chat-pad) 8px; padding: 10px 12px; border-radius: 10px;
   background: rgba(244, 33, 46, 0.08); border: 1px solid rgba(244, 33, 46, 0.32);
 }
 .attn-title { font-size: 12px; font-weight: 600; color: var(--st-input); margin-bottom: 6px; }
@@ -1315,7 +1323,7 @@ body.linking-board .board-port.out::before {
 .attn-key:hover { border-color: var(--accent); color: var(--accent); }
 
 /* Composer: Cursor-style box with the agent shown on the right. */
-.composer { flex: 0 0 auto; padding: 6px max(14px, calc((100% - var(--chat-measure) - 28px) / 2)) 6px; }
+.composer { flex: 0 0 auto; padding: 6px var(--chat-pad) 6px; }
 .composer-box {
   display: flex; flex-direction: column; gap: 4px;
   padding: 9px 10px 7px 12px; border-radius: 12px;
@@ -1356,7 +1364,7 @@ body.linking-board .board-port.out::before {
    Extends to right edge of allocated content, overflow clipped without ellipsis. */
 .tui-footer {
   flex: 0 0 auto; box-sizing: border-box; width: 100%;
-  padding: 0 0 10px max(14px, calc((100% - var(--chat-measure) - 28px) / 2));
+  padding: 0 0 10px var(--chat-pad);
   font: 11px/1.5 var(--mono); color: var(--text-2);
   user-select: text; overflow: hidden;
 }
@@ -1389,7 +1397,7 @@ body.linking-board .board-port.out::before {
 .run-state.stuck i, .run-state.failed i { background: var(--st-input); }
 .run-state.stuck, .run-state.failed { color: var(--st-input); }
 /* an opened run: its cards close together under the line */
-.task-run + .task-turn, .task-turn + .task-turn { margin-top: -18px; }
+.task-run + .task-turn, .task-turn + .task-turn { margin-top: -26px; }
 
 /* Your own long message is clipped to a few lines: it fades out at the cut and a
    chevron under it opens the rest (so does a click on the bubble). The chevron

@@ -166,11 +166,28 @@
   // A numbered row of a file diff: "    146 +", "    147  ## heading".
   const DIFF_ROW = /^ {2,}\d{1,6}(?: [+-]| {2}\S|\s*$)/;
   const squash = (text) => String(text).replace(/\s+/g, '');
+  // A message sent while the agent is still busy is echoed above the row its turn
+  // is read from: the reply then opens with the end of that echo, with no ❯ before
+  // it. `prompt` is the turn's own message. Only opening rows that run to its very
+  // end go, and a few characters are not enough: a reply may begin with your words.
+  const ECHO_TAIL_MIN = 8;
+  function echoTail(rows, prompt) {
+    const own = squash(prompt);
+    let run = '', drop = 0;
+    for (let i = 0; i < rows.length; i++) {
+      const next = run + squash(rows[i]);
+      if (!own.includes(next)) break;
+      run = next;
+      if (run.length >= ECHO_TAIL_MIN && own.endsWith(run)) drop = i + 1;
+    }
+    return drop;
+  }
   // `said` is everything the user wrote in this conversation: a wrapped echo is
   // recognised by its lines being part of it.
-  function cleanReply(text, said = '') {
+  function cleanReply(text, said = '', prompt = '') {
     const known = squash(said);
-    const blocks = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split(/\n[ \t]*(?:\n[ \t]*)+/);
+    const rows = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+    const blocks = rows.slice(prompt ? echoTail(rows, prompt) : 0).join('\n').split(/\n[ \t]*(?:\n[ \t]*)+/);
     // A notice cut by the screen edge ends on the next row, sometimes after an empty one.
     let notice = false;
     return blocks.map((block) => {
@@ -208,7 +225,7 @@
       else if (!group || (turn.ts && last && turn.ts - last > SAME_ROUND_MS)) open(turn, '', []);
       if (turn.ts) last = turn.ts;
       if (turn.kind) continue;
-      const reply = cleanReply(turn.reply, said);
+      const reply = cleanReply(turn.reply, said, typeof turn.user === 'string' ? turn.user : '');
       if (reply) group.replies.push(reply);
       group.pending = !turn.done && !turn.interrupted;
       group.interrupted = !!turn.interrupted;

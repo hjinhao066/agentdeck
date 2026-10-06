@@ -166,6 +166,31 @@ const ASKED = ['失败后安装脚本没有停，而是每十几秒重试一次�
   '另外，队长换席位这个事情你再记一下：我们当前换席位的话，暂时先跳过 US，相当于现在只在 US2 跟 CN 之间换，因为 US 已经没有额度了。这个席位的问题你应该能解决一下。',
   '还有，这 6 个小时相当于都没有干活。想办法，这个必须要有人解决：以后安装失败要第一时间告诉我，不能等我早上自己发现；队长换席位之后如果新队长没有接上，也要有人知道。'].join('\n\n');
 
+// a long message sent while 队长 was still busy: the turn was read from the middle
+// of its echo, so the saved reply opens with the end of the user's own words
+const LATE = '接着上面那件事说：课前预习的材料以后能不能自动整理成一份文档，每天晚上发到我的阅读器上，睡前直接看。另外我刚才看到另外几个会话在取课程资料的时候好像出了点问题，是不是那个网站把自动访问拦住了？它有没有公开的数据接口之类的？印象里是有的，你研究一下能不能直接走接口。这件事很重要，弄好以后后面的课程资料就不用我自己去管了，你这边直接就能拉下来。如果官方没有现成的接口，就上网搜一下，应该已经有人解决过这个问题。';
+const LATE_TAIL = LATE.slice(LATE.indexOf('印象里是有的'));
+const LATE_REPLY = [
+  LATE_TAIL,
+  '',
+  'Ran 2 shell commands',
+  '',
+  '先更正一处',
+  '',
+  '之前我说那张卡「正在自动审查」是错的，它实际没有触发自动审查。我已经手动补派了审查，它会核对编译和测试，以及会不会影响你日常的录音和粘贴。',
+  '',
+  '你这几条消息的处理：',
+  '',
+  '课程资料和课前预习',
+  '',
+  '- 取资料的会话没有被网站拦住，正在正常取材料。它用的就是网站自带的数据接口，借本机已登录的会话在后台调。',
+  '- 它已经查到两门课，下次课都是明天，所以今晚先出这两门的预习材料。',
+  '',
+  '发到阅读器',
+  '',
+  '可以做：材料整理成一份文档后，每晚定时发一份过去。这件事我记了一张卡，等预习材料的格式定下来就派。',
+].join('\n');
+
 const card = (title, status, receipt) => ({ colId: 'gone-' + title.length, title, status, project: 'agentdeck', receipt: receipt ? { files: [], images: [], failed: '', explicit: true, source: 'command', ...receipt } : null });
 
 // now: the time of the last turn. Returns the saved chat's turns.
@@ -185,10 +210,11 @@ function turns(now) {
     task('k-install', '1.2.2 安装并重启（Cursor Grok）', 'done', { summary: 'AgentDeck 安装 1.2.2 成功；Target version and running process verified；现在运行 1.2.2。' }),
     said('f-steps', '三端统一那件事不用等我回家，你直接推进，需要我做什么再告诉我。', STEPS, 31),
     said('f-table', 'UI 那几件怎么样了？交接那边交给 Sonnet 吧。', TABLE, 44),
+    said('f-late', LATE, LATE_REPLY, 144),
     said('f-progress', '现在怎么样了 推进到什么地步了', PROGRESS, 18),
     task('k-radar', 'Schedule 里看竞品雷达结果并直接审核（Opus·US2）', 'working', null),
     task('k-chat', 'Mac 桌面端队长对话页排版重做（Opus·US2）', 'queued', null),
   ];
 }
 
-module.exports = { turns, WHY, BUG, PROGRESS, STEPS, TABLE, ASKED };
+module.exports = { turns, WHY, BUG, PROGRESS, STEPS, TABLE, ASKED, LATE, LATE_TAIL };

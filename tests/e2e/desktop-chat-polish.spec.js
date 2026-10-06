@@ -108,7 +108,7 @@ test('every reply stands under 队长\'s name and crest, apart from your bubbles
   const who = turn('f-progress').locator('.reply-who.captain');
   await expect(who.locator('.who-name')).toHaveText('队长');
   await expect(who.locator('.who-mark svg')).toHaveCount(1);
-  await expect(col().locator('.msg.assistant:not([data-turn="f-quiet"]) .reply-who.captain')).toHaveCount(5);
+  await expect(col().locator('.msg.assistant:not([data-turn="f-quiet"]) .reply-who.captain')).toHaveCount(6);
   await turn('f-progress').scrollIntoViewIfNeeded();
   const g = await page.evaluate((i) => {
     const c = document.querySelector(`.column[data-col-id="${i}"]`);
@@ -132,10 +132,78 @@ test('every reply stands under 队长\'s name and crest, apart from your bubbles
   expect(g.turn.w / g.size).toBeGreaterThanOrEqual(50);
   expect(g.turn.w / g.size).toBeLessThanOrEqual(62);
   expect(Math.abs((g.turn.x - g.scroll.x) - (g.scroll.right - g.turn.right))).toBeLessThanOrEqual(12);     // the scrollbar's width
-  // the composer keeps the same axis, a little wider than the text
-  expect(Math.abs((g.composer.x + g.composer.right) / 2 - (g.turn.x + g.turn.right) / 2)).toBeLessThanOrEqual(8);
-  expect(g.composer.w).toBeGreaterThanOrEqual(g.turn.w);
-  expect(g.composer.w - g.turn.w).toBeLessThanOrEqual(40);
+  // the composer box stands on the column's own two edges: the reply's left, your bubble's right
+  expect(Math.abs(g.composer.x - g.reply.x)).toBeLessThanOrEqual(1);
+  expect(Math.abs(g.composer.right - g.bubble.right)).toBeLessThanOrEqual(1);
+});
+
+// The air beside the reading column. It depends on the pane's own width, whatever
+// took the room (a slim window, the sidebar, the right pane): 20px in a slim pane,
+// about twice what 1.2.4 left at the width 队长 is usually read at, 56px from there
+// up, and the rest of a wide pane once the column has its measure.
+test('the air beside the column grows with the pane, is the same on both sides, and never squeezes a slim one', async () => {
+  const measure = async (width, pane) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate((open) => { if (!config.navCollapsed) setNavCollapsed(true); if (SidePane.isOpen() !== open) SidePane.toggle(); }, pane);
+    await park();
+    await turn('f-late').scrollIntoViewIfNeeded();
+    return page.evaluate((i) => {
+      const c = document.querySelector(`.column[data-col-id="${i}"]`), box = c.querySelector('.chat').getBoundingClientRect();
+      const r = (sel) => c.querySelector(sel).getBoundingClientRect();
+      const reply = r('.msg.assistant[data-turn="f-late"] .reply'), bubble = r('.msg.user[data-turn="f-late"] .bubble'), composer = r('.composer-box'), status = r('.tui-footer .tf-row');
+      return { pane: box.width, left: reply.x - box.x, right: box.right - bubble.right, text: reply.width, bubble: bubble.width,
+        composer: [composer.x - box.x, box.right - composer.right], status: status.x - box.x };
+    }, ID);
+  };
+  await expect(col().locator('.tui-footer .tf-row').first()).toBeVisible({ timeout: 15000 });      // read from the terminal on the status tick
+  const side = await page.evaluate(() => { SidePane.show('preview'); const w = document.getElementById('sidePane').getBoundingClientRect().width; SidePane.hide(); return w; });
+  const seen = {};
+  for (const [name, width, pane] of [['wide', 1440, false], ['usual', 830, false], ['usual beside the right pane', 830 + side, true], ['slim', 600 + side, true], ['slimmest', 400 + side, true]]) {
+    const g = seen[name] = await measure(width, pane);
+    // one left edge for the reply, the composer box and the status lines; one right edge for your bubble and the box
+    expect(Math.abs(g.left - g.right), name).toBeLessThanOrEqual(1.5);
+    expect(Math.abs(g.composer[0] - g.left), name).toBeLessThanOrEqual(1);
+    expect(Math.abs(g.composer[1] - g.right), name).toBeLessThanOrEqual(1);
+    expect(Math.abs(g.status - g.left), name).toBeLessThanOrEqual(1);
+    expect(g.left, name).toBeGreaterThanOrEqual(19.5);
+    // the gutters never take more than 56px a side from the text unless the column already has its measure
+    expect(g.text, name).toBeGreaterThanOrEqual(Math.min(780, g.pane - 2 * 56) - 1.5);
+    expect(g.bubble, name).toBeLessThanOrEqual(g.text + 1);
+  }
+  expect(Math.abs(seen.wide.text - 780)).toBeLessThanOrEqual(1.5);
+  expect(seen.wide.left).toBeGreaterThan(300);
+  // 1.2.4 left 25px here
+  expect(seen.usual.left).toBeGreaterThanOrEqual(48);
+  expect(seen.usual.left).toBeLessThanOrEqual(56.5);
+  expect(Math.abs(seen['usual beside the right pane'].left - seen.usual.left)).toBeLessThanOrEqual(1.5);
+  expect(seen.slim.left).toBeGreaterThan(seen.slimmest.left);
+  expect(seen.slim.left).toBeLessThan(seen.usual.left);
+  expect(seen.slimmest.left).toBeLessThanOrEqual(21);
+  // a slim pane keeps what it had: your bubble may take the whole column there
+  expect(seen.slimmest.text).toBeGreaterThanOrEqual(seen.slimmest.pane - 42);
+  expect(seen.wide.bubble).toBeLessThanOrEqual(600.5);
+  await page.evaluate(() => { if (SidePane.isOpen()) SidePane.hide(); setNavCollapsed(false); });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await park();
+});
+
+test('a message sent while 队长 was busy: the end of its echo is not shown as 队长\'s reply', async () => {
+  const reply = turn('f-late').locator('.reply');
+  await turn('f-late').scrollIntoViewIfNeeded();
+  await expect(reply.locator('> :first-child')).toHaveText('先更正一处');
+  await expect(reply).not.toContainText('印象里是有的');
+  await expect(reply.locator('h3')).toHaveText(['先更正一处', '课程资料和课前预习', '发到阅读器']);
+  // your own bubble still holds the whole message, and the saved reply is as it was read
+  expect(await col().locator('.msg.user[data-turn="f-late"] .bubble').evaluate((b) => b.textContent)).toBe(captain.LATE);
+  const got = await page.evaluate((i) => {
+    const out = [], original = deckHost.clipboardWrite;
+    deckHost.clipboardWrite = (t) => out.push(t);
+    try { document.querySelector(`.column[data-col-id="${i}"] .msg.assistant[data-turn="f-late"] > .msg-tools .msg-tool`).click(); }
+    finally { deckHost.clipboardWrite = original; }
+    return { out, saved: ChatUI.turnsOf(i).find((t) => t.id === 'f-late').reply };
+  }, ID);
+  expect(got.out[0]).toMatch(/^先更正一处[\s\S]*格式定下来就派。$/);
+  expect(got.saved.startsWith(captain.LATE_TAIL)).toBe(true);
 });
 
 test('titles, nested lists, numbered steps, tables and paths are set as what they are', async () => {
