@@ -26,6 +26,7 @@ const ICONS = {
   up:    S('<polyline points="18 15 12 9 6 15"/>'),
   down:  S('<polyline points="6 9 12 15 18 9"/>'),
   help:  S('<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>'),
+  inbox: S('<path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/>'),
   side:  S('<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="15" y1="4" x2="15" y2="20"/>'),
   flag: S('<path d="M5.5 21V4"/><path d="M5.5 4.6h12l-2.7 4 2.7 4h-12z" fill="currentColor"/>'),
   tasks: S('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16M15 4v16"/><path d="M5.5 8h1.5M11 8h2M11 11.5h2M17 8h1.5"/>'),
@@ -3422,6 +3423,10 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
     } else if (op === 'captain') {
       MainSession.sendMessage(input?.message, input?.images);
       result = { queued: true };
+    } else if (op === 'attention') {
+      result = AttentionUI.mobileView();
+    } else if (op === 'attention-write') {
+      result = await AttentionUI.mobileWrite(input);
     } else if (op === 'relay') {
       result = ClaudeSeats.mobileState();
     } else if (op === 'relay-switch') {
@@ -3663,6 +3668,7 @@ const deckHost = {
 };
 SidePane.init(deckHost);
 Sidebar.init(deckHost);
+AttentionUI.init(deckHost);
 MainSession.init(deckHost);
 window.deck.onParkForRestart(async (sessions) => {
   try { await MainSession.parkForRestart(sessions); }

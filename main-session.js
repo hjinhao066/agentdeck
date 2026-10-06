@@ -70,6 +70,17 @@
     s.pending.push({ taskId: 'board-' + Date.now(), colId: s.colId, title: '任务看板', ts: Date.now(), summary: message, source: 'command' });
     save();
   }
+  // 待我处理: the user's reply to an item, or a tick on something 队长 asked of
+  // them, reaches 队长 as one receipt. Returns its id, so the page can tell
+  // when 队长 has taken it off the channel.
+  function userNotice(message) {
+    const s = state();
+    if (!s || !mainCol()) throw new Error('还没有队长：回复要交给队长，先在侧边栏创建队长。');
+    const taskId = 'attention-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    s.pending.push({ taskId, colId: s.colId, title: '待我处理', ts: Date.now(), summary: message, source: 'command' });
+    save();
+    return taskId;
+  }
   async function boardRequest(op, input) {
     const result = await window.deck.taskBoard(op, input);
     if (op === 'move' && ['done', 'todo'].includes(result.card?.status)) cancelWaiting((w) => w.metadata?.boardId === result.card.id, '卡片已移到' + result.card.status + '，取消排队。');
@@ -2357,8 +2368,13 @@
         listenerStatus = { colId: caller.id, alive: message.alive, at: Date.now() };
         if (message.alive) listenerReminder = false;
         return { done: true };
+      case 'main-inbox':
+        if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
+        return window.AttentionUI.captain(message, caller);
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
+        // The user also finds it on 待我处理 when they come back.
+        if (!message.test && window.AttentionUI) window.AttentionUI.fromNotify(message.message);
         return { done: true, visible: host.captainColumnVisible(caller.id),
           turnId: message.test ? message.id : host.terms.get(caller.id)?.captainTurnId || message.id };
       case 'main-briefing':
@@ -2706,7 +2722,7 @@
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
-    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb,
+    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),
 

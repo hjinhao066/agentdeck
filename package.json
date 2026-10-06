@@ -106,6 +106,8 @@
       "side-main.js",
       "skills-core.js",
       "skills-ui.js",
+      "attention-core.js",
+      "attention-ui.js",
       "style.css",
       "vendor/**",
       "security.js",

@@ -145,6 +145,14 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
 .nav-row-label { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nav-row-hint { margin-left: auto; font-size: calc(11px * var(--sidebar-scale, 1)); color: var(--muted); opacity: 0; transition: opacity .12s ease; }
 .nav-row:hover .nav-row-hint, .nav-search:hover .nav-row-hint { opacity: 1; }
+/* 待我处理: the count of what still needs the user; orange (the board's 需要你) while something waits on them. */
+.nav-row-badge {
+  margin-left: auto; flex: 0 0 auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--pill-bg-hover); color: var(--text-2);
+  font-size: calc(11px * var(--sidebar-scale, 1)); font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.nav-row-badge.need { background: var(--at-need); color: var(--at-need-ink); }
 .nav-search { position: relative; cursor: text; }
 .nav-search:focus-within { background: var(--pill-bg-hover); color: var(--text); }
 .nav-search input {
@@ -1599,6 +1607,101 @@ body.linking-board .board-port.out::before {
 .page-empty strong { color: var(--text); font-size: 15px; font-weight: 600; }
 .page-empty .btn { margin-top: 8px; }
 .page-empty-ico svg { width: 34px; height: 34px; stroke-width: 1.5; }
+
+/* ===== 待我处理 =====
+   要你处理 cards carry the board's 需要你 orange (a rim on the left and the "要你做" box);
+   结果汇报 carry the accent blue in their label; finished ones go quiet. Unread is a blue dot. */
+:root, :root[data-theme="dark"] { --at-need: #ffa066; --at-need-ink: #2a1300; --at-need-bg: rgba(255, 138, 76, .12); --at-need-rim: rgba(255, 138, 76, .32); }
+:root[data-theme="light"] { --at-need: #c2410c; --at-need-ink: #ffffff; --at-need-bg: rgba(249, 115, 22, .09); --at-need-rim: rgba(234, 88, 12, .28); }
+.at-page { display: flex; flex-direction: column; }
+.at-section { display: flex; align-items: flex-end; gap: 12px; margin: 28px 0 10px; }
+.at-page > .at-section:first-child { margin-top: 0; }
+.at-section-titles { flex: 1; min-width: 0; }
+.at-section h2 { display: flex; align-items: center; gap: 8px; font-size: 13.5px; font-weight: 600; color: var(--text); }
+.at-section p { margin-top: 4px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
+.at-count {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px;
+  border-radius: 999px; background: var(--pill-bg); color: var(--text-2); font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.at-sec-need .at-count { background: var(--at-need-bg); color: var(--at-need); box-shadow: inset 0 0 0 1px var(--at-need-rim); }
+.at-all { height: 28px; padding: 0 11px; font-size: 12.5px; }
+.at-list { display: flex; flex-direction: column; gap: 10px; }
+.at-card { position: relative; padding: 13px 16px 14px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--elev); }
+.at-card.at-need:not(.done)::before {
+  content: ""; position: absolute; left: -1px; top: 14px; bottom: 14px; width: 3px; border-radius: 0 3px 3px 0; background: var(--at-need);
+}
+.at-card.done { background: transparent; padding: 10px 14px 11px 16px; }
+.at-top { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.at-unread { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.at-check { display: inline-flex; color: var(--st-done); }
+.at-check svg { width: 15px; height: 15px; }
+.at-kind {
+  flex: 0 0 auto; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px;
+  background: var(--pill-bg); color: var(--text-2); font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.at-need .at-kind { background: var(--at-need-bg); color: var(--at-need); box-shadow: inset 0 0 0 1px var(--at-need-rim); }
+.at-report .at-kind { background: var(--accent-soft); color: var(--accent); }
+.at-card.done .at-kind { background: var(--pill-bg); color: var(--muted); box-shadow: none; font-weight: 500; }
+.at-meta { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; }
+.at-meta > * + *::before { content: "·"; margin-right: 6px; }
+.at-project { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.at-spacer { flex: 1; }
+.at-tools { display: flex; gap: 2px; flex: 0 0 auto; margin: -2px -6px -2px 0; }
+.at-tool.done { color: var(--st-done); }
+.at-title { margin-top: 7px; font-size: 15px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.at-card.done .at-title { margin-top: 4px; font-size: 13.5px; font-weight: 500; color: var(--text-2); }
+.at-ask {
+  margin-top: 9px; display: flex; gap: 10px; align-items: baseline; padding: 9px 12px; border-radius: 9px;
+  background: var(--at-need-bg); color: var(--text); font-size: 13.5px; line-height: 1.6; overflow-wrap: anywhere;
+}
+.at-ask-label { flex: 0 0 auto; color: var(--at-need); font-size: 12px; font-weight: 600; }
+.at-done-text { margin-top: 3px; color: var(--muted); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.at-more {
+  margin: 8px 0 0 -6px; display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px 0 4px;
+  border: none; border-radius: 7px; background: transparent; color: var(--text-2); font-size: 12.5px; cursor: pointer;
+}
+.at-more:hover { background: var(--icon-hover-bg); color: var(--text); }
+.at-chev svg { width: 14px; height: 14px; }
+.at-detail { margin-top: 6px; padding: 12px 14px; border-radius: 9px; background: var(--code-bg); display: flex; flex-direction: column; gap: 10px; }
+.at-text { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text-2); font-size: 13px; line-height: 1.7; }
+.at-files { list-style: none; display: flex; flex-direction: column; gap: 2px; margin: 0 -6px; }
+.at-file { display: flex; align-items: center; gap: 2px; }
+.at-file-main {
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 5px 8px;
+  border: none; border-radius: 7px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer;
+}
+.at-file-main:hover { background: var(--icon-hover-bg); }
+.at-file-name, .at-file-path { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-file-name { font-size: 13px; font-weight: 500; }
+.at-file-path { direction: rtl; text-align: left; font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.at-links { color: var(--muted); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.at-replies { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; border-top: 1px solid var(--hairline); }
+.at-said-head { display: flex; gap: 8px; color: var(--muted); font-size: 12px; }
+.at-said-state { margin-left: auto; }
+.at-said-state.seen { color: var(--st-done); }
+.at-said-text { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
+.at-actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+.at-actions .btn { height: 30px; }
+.at-compose { margin-top: 12px; }
+.at-reply {
+  display: block; width: 100%; min-height: 64px; resize: none; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--app-bg); color: var(--text);
+  font: inherit; font-size: 13.5px; line-height: 1.6; outline: none;
+}
+.at-reply:focus { border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }
+.at-compose-foot { margin-top: 8px; display: flex; align-items: center; gap: 6px; }
+.at-hint { color: var(--muted); font-size: 12px; }
+.at-page .btn:disabled { opacity: .45; cursor: default; }
+.at-sec-done { margin-top: 30px; }
+.at-done-toggle {
+  display: inline-flex; align-items: center; gap: 6px; height: 30px; margin-left: -4px; padding: 0 8px 0 4px;
+  border: none; border-radius: 7px; background: transparent; color: var(--text-2); font-size: 13.5px; font-weight: 600; cursor: pointer;
+}
+.at-done-toggle:hover { background: var(--icon-hover-bg); color: var(--text); }
+.at-done-toggle .ico svg { width: 15px; height: 15px; }
+.at-more-done { align-self: center; margin-top: 12px; }
+.at-page :is(.at-tool, .at-more, .at-done-toggle, .at-file-main, .btn):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.at-empty { padding: 56px 20px 40px; }
 
 .sched-list { display: flex; flex-direction: column; gap: 10px; }
 .sched-card {
