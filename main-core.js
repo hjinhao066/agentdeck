@@ -799,6 +799,9 @@
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;
+      // Antigravity keeps its ">" prompt on screen while a tool is running.
+      // "Running …" alone does not match; the status line is "Running command…".
+      if (/\bagy\b/i.test(cmd || '') && /^\s*(?:[\u2800-\u28FF]\s*)?Running command(?:…|\.{3})\s*$/i.test(line)) working = i;
       if (/press up to edit queued messages/i.test(line)) queued = true;
     });
     if (quota > resumed && quota > working) return 'quota';

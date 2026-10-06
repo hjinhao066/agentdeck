@@ -11,6 +11,13 @@
   let host = null;
   const MAX_TASKS = 120;            // cards kept in config.json; older ones drop off
   const STOP_QUIET = 3 * 60_000; // ended turns with no command receipt
+  // 0840503 keeps a Claude worker open only when its own footer says background
+  // work is still running. agy, Cursor and Codex have no such footer: after a
+  // turn, or after the Captain interrupts them, the process stays up and the
+  // input box waits for the next instruction. That is not an exit.
+  function nonClaudeHoldsOpenSession(cmd) {
+    return /\b(?:agy|antigravity|cursor-agent|codex)\b/i.test(String(cmd || ''));
+  }
   const dispatches = new Map();  // one delivery loop per session; additions merge until submission
   let tokenSaving = null;
   let tokenSaverPaused = false;  // cancel/failure: no retry until usage falls below the threshold
@@ -1886,7 +1893,11 @@
       // Never parse a screen for a completion receipt. A finished turn (or a real
       // zero process exit) gets a three-minute grace period for its command.
       // Cursor blink refreshes lastOutputAt after the turn is done; that must
-      // not keep postponing the grace.
+      // not keep postponing the grace. An agy, Cursor or Codex process that is
+      // still alive is waiting at its input box — still working, or paused by
+      // the Captain — so only a real process exit may start that grace. A dead
+      // terminal is already settled above.
+      if (!task.processEnded && entry.alive && nonClaudeHoldsOpenSession(col?.cmd)) { task.endedAt = 0; continue; }
       const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
       const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
       if (!ended || turn && !turn.done && !task.processEnded) continue;
@@ -1932,7 +1943,7 @@
     if (!task || CLOSED.includes(task.status) || turn.interrupted) return;
     const entry = host.terms.get(colId);
     const col = host.columns().find((c) => c.id === colId);
-    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd)) return;
+    if (!entry || entry.state !== 'done' || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd) || nonClaudeHoldsOpenSession(col?.cmd)) return;
     task.endedAt = Date.now();
   }
 
