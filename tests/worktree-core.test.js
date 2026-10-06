@@ -62,9 +62,9 @@ test('creating a copy records the repo, directory, branch and base commit', (t) 
   const { repo, copies } = setup(t);
   const calls = callsOf(t);
   const created = Worktree.prepare({ repo, branch: 'feat/auto', base: 'main', root: copies }, { execFileSync: recordingExec(calls) });
-  assert.equal(created.repo, fs.realpathSync(repo));
+  assert.equal(created.repo, fs.realpathSync.native(repo));
   assert.equal(created.branch, 'feat/auto');
-  assert.equal(created.path, fs.realpathSync(path.join(copies, 'demo', 'feat', 'auto')));
+  assert.equal(created.path, fs.realpathSync.native(path.join(copies, 'demo', 'feat', 'auto')));
   assert.match(created.base, /^[0-9a-f]{40}$/);
   assert.equal(created.base, git(repo, ['rev-parse', 'HEAD']));
   assert.equal(fs.readFileSync(path.join(created.path, 'README'), 'utf8'), 'hello\n');
@@ -72,7 +72,7 @@ test('creating a copy records the repo, directory, branch and base commit', (t) 
   assert.equal(git(created.path, ['status', '--porcelain']), '');
   assert.equal(git(created.path, ['branch', '--show-current']), 'feat/auto');
   const homeRepo = path.join(os.homedir(), 'agentdeck');
-  assert.equal(created.path.startsWith(fs.realpathSync(copies) + path.sep), true);
+  assert.equal(created.path.startsWith(fs.realpathSync.native(copies) + path.sep), true);
   assert.equal(fs.existsSync(homeRepo) && created.path.startsWith(homeRepo + path.sep), false);
 });
 

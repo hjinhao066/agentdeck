@@ -20,9 +20,12 @@ const IGNORED_SHOWN = 8;
 const IGNORED_SCAN_LIMIT = 5000;
 const IN_PROGRESS = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG', 'rebase-merge', 'rebase-apply'];
 
+// Canonical form of a path. git prints the long name (C:/Users/runneradmin) while a
+// temp or profile path can arrive as its 8.3 alias (C:\Users\RUNNER~1); only the
+// native call expands aliases and fixes case, so every comparison goes through it.
 function real(value) {
   const resolved = path.resolve(value);
-  try { return fs.realpathSync(resolved); } catch (_) { return resolved; }
+  try { return fs.realpathSync.native(resolved); } catch (_) { return resolved; }
 }
 function platformPath(platform) {
   return platform === 'win32' ? path.win32 : path.posix;

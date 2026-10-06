@@ -334,7 +334,12 @@ test('an idle seat refreshes an expired access token once and rewrites only that
   assert.equal(saved.claudeAiOauth.expiresAt, now + 28800000);
   assert.equal(saved.claudeAiOauth.subscriptionType, 'pro');
   assert.equal(saved.mcpOAuth.keep, 'yes');
-  assert.equal(fs.statSync(loc.credentialsPath).mode & 0o777, 0o600);
+  // Windows has no group/other permission bits (stat reports 0o666, or 0o444 when
+  // read-only; access is by ACL inherited from the profile folder), so there the
+  // check is that the rewritten file is still a normal writable file.
+  const mode = fs.statSync(loc.credentialsPath).mode & 0o777;
+  if (process.platform === 'win32') assert.equal(mode & 0o200, 0o200);
+  else assert.equal(mode, 0o600);
   assert.equal(fs.readFileSync(other.credentialsPath, 'utf8'), untouched);
   assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, now: () => now + 1000 }), 'fresh-access-token');
   assert.equal(posts.length, 1);
