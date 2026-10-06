@@ -38,7 +38,7 @@ test('each seat reads its own credential store; expired/missing/symlinked auth c
   assert.equal(await C.readCredentials(us, home, 'darwin', keychain), 'fake-keychain-2');
   assert.notEqual(services[0], services[1]);
   const file = M.credentialLocation(us, home).credentialsPath;
-  fs.writeFileSync(file, credential('expired').replace(/"expiresAt":\d+/, '"expiresAt":1'));
+  fs.writeFileSync(file, credential('expired').replace(/"expiresAt":\d+/, '"expiresAt":1').replace(',"refreshToken":"fake-never-return-refresh"', ''));
   assert.equal(await C.readCredentials(us, home, 'win32'), null);
   fs.unlinkSync(file);
   fs.symlinkSync(M.credentialLocation(cn, home).credentialsPath, file);
@@ -303,4 +303,115 @@ test('forced refresh targets one seat; normal polling includes CN and coalesces 
   await duplicates.tick();
   assert.deepEqual(duplicates.samples().map(s => s.seatId), ['cn', 'us2']);
   assert.deepEqual(calls, ['cn', 'us', 'us2', 'cn', 'cn', 'us2']);
+});
+
+function expiredCredential(extra = {}) {
+  return JSON.stringify({
+    claudeAiOauth: { accessToken: 'expired-access', refreshToken: 'fake-refresh-token', scopes: ['user:inference', 'user:profile'],
+      expiresAt: 1, refreshTokenExpiresAt: Date.now() + 86400000, subscriptionType: 'pro', ...extra },
+    mcpOAuth: { keep: 'yes' },
+  });
+}
+function refreshResponse(over = {}) {
+  return { access_token: 'fresh-access-token', refresh_token: 'rotated-refresh-token', expires_in: 28800,
+    refresh_token_expires_in: 86400 * 30, scope: 'user:inference user:profile', ...over };
+}
+test('an idle seat refreshes an expired access token once and rewrites only that credential file', async (t) => {
+  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), loc = M.credentialLocation(seat, home);
+  const other = M.credentialLocation(S.normalize()[0], home), untouched = credential('cn-stays');
+  fs.writeFileSync(loc.credentialsPath, expiredCredential());
+  fs.writeFileSync(other.credentialsPath, untouched);
+  const posts = [], now = 1_700_000_000_000;
+  const post = async (body) => { posts.push(body); return refreshResponse(); };
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, now: () => now }), 'fresh-access-token');
+  assert.deepEqual(posts.map((body) => body.grant_type), ['refresh_token']);
+  assert.equal(posts[0].refresh_token, 'fake-refresh-token');
+  assert.equal(posts[0].client_id, '9d1c250a-e61b-44d9-88ed-5944d1962f5e');
+  assert.equal(posts[0].scope, 'user:inference user:profile');
+  const saved = JSON.parse(fs.readFileSync(loc.credentialsPath, 'utf8'));
+  assert.equal(saved.claudeAiOauth.accessToken, 'fresh-access-token');
+  assert.equal(saved.claudeAiOauth.refreshToken, 'rotated-refresh-token');
+  assert.equal(saved.claudeAiOauth.expiresAt, now + 28800000);
+  assert.equal(saved.claudeAiOauth.subscriptionType, 'pro');
+  assert.equal(saved.mcpOAuth.keep, 'yes');
+  assert.equal(fs.statSync(loc.credentialsPath).mode & 0o777, 0o600);
+  assert.equal(fs.readFileSync(other.credentialsPath, 'utf8'), untouched);
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post, now: () => now + 1000 }), 'fresh-access-token');
+  assert.equal(posts.length, 1);
+});
+test('a dead refresh token, a rejected refresh, or another account leaves the stored credential unchanged', async (t) => {
+  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), loc = M.credentialLocation(seat, home);
+  const posts = [];
+  const post = async (body) => { posts.push(body); return null; };
+  fs.writeFileSync(loc.credentialsPath, expiredCredential({ refreshTokenExpiresAt: 1 }));
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post }), null);
+  assert.equal(posts.length, 0);
+  const rejected = expiredCredential();
+  fs.writeFileSync(loc.credentialsPath, rejected);
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post }), null);
+  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejected);
+  assert.equal(posts.length, 1);
+  const mismatch = async () => refreshResponse({ account: { uuid: 'someone-else' } });
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post: mismatch }), null);
+  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejected);
+  fs.writeFileSync(loc.credentialsPath, credential('still-valid'));
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { post: mismatch }), 'still-valid');
+});
+test('darwin keychain refresh passes the secret on stdin and keeps a rotated token in memory if the write fails', async (t) => {
+  const home = fixture(t), seat = S.normalize().find((item) => item.id === 'us'), raw = expiredCredential();
+  const keychain = (bin, args, opts, cb) => { assert.equal(bin, '/usr/bin/security'); assert.equal(args.at(-1), '-w'); cb(null, raw); };
+  const writes = [], posts = [];
+  const spawnImpl = (bin, args) => {
+    const child = new EventEmitter();
+    child.stdin = { write(chunk) { child.stdin.text = (child.stdin.text || '') + chunk; return true; }, end() {} };
+    child.kill = () => {};
+    writes.push({ bin, args, child });
+    queueMicrotask(() => child.emit('close', 1));
+    return child;
+  };
+  const token = await C.readCredentials(seat, home, 'darwin', keychain, {
+    post: async () => { posts.push('refresh'); return refreshResponse(); }, spawn: spawnImpl,
+  });
+  assert.equal(token, 'fresh-access-token');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].bin, '/usr/bin/security');
+  assert.deepEqual(writes[0].args.slice(0, 2).concat(writes[0].args.slice(3)), ['add-generic-password', '-a', '-s', M.credentialLocation(seat, home).keychainService, '-U', '-w']);
+  assert.equal(writes[0].args.includes('fresh-access-token') || writes[0].args.includes('rotated-refresh-token'), false);
+  const stored = writes[0].child.stdin.text;
+  assert.equal(stored, stored.split('\n')[0] + '\n' + stored.split('\n')[0] + '\n');
+  assert.equal(JSON.parse(stored.split('\n')[0]).claudeAiOauth.refreshToken, 'rotated-refresh-token');
+  assert.equal(JSON.parse(stored.split('\n')[0]).mcpOAuth.keep, 'yes');
+  assert.equal(fs.existsSync(M.credentialLocation(seat, home).credentialsPath), false);
+  assert.equal(await C.readCredentials(seat, home, 'darwin', keychain, {
+    post: async () => { posts.push('refresh'); return refreshResponse(); }, spawn: spawnImpl,
+  }), 'fresh-access-token');
+  assert.deepEqual(posts, ['refresh']);
+  assert.equal(writes.length, 2);
+});
+test('token refresh posts only to the pinned Claude Code token URL and drops auth and rate-limit bodies', async () => {
+  const calls = [];
+  const transport = (status, body) => (url, options, callback) => {
+    const req = new EventEmitter();
+    req.destroy = () => { req.destroyed = true; };
+    req.end = (payload) => {
+      calls.push({ url, options, payload });
+      queueMicrotask(() => {
+        const res = new EventEmitter();
+        res.statusCode = status; res.setEncoding = () => {}; res.destroy = () => { res.destroyed = true; };
+        callback(res);
+        if (status === 200 && !res.destroyed) { res.emit('data', body); res.emit('end'); }
+      });
+    };
+    return req;
+  };
+  const ok = await C.postRefresh({ grant_type: 'refresh_token', refresh_token: 'fake-refresh-token' }, transport(200, JSON.stringify({ access_token: 'fresh-access-token', expires_in: 10 })));
+  assert.equal(ok.access_token, 'fresh-access-token');
+  assert.equal(calls[0].url, 'https://platform.claude.com/v1/oauth/token');
+  assert.equal(calls[0].options.method, 'POST');
+  assert.equal(calls[0].options.agent, false);
+  assert.equal(JSON.parse(calls[0].payload).refresh_token, 'fake-refresh-token');
+  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(401, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), null);
+  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(429, '{"error":"rate_limited"}')), null);
+  assert.equal(calls.length, 3);
+  assert.ok(!JSON.stringify(ok).includes('fake-refresh-token'));
 });
