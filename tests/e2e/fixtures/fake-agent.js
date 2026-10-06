@@ -226,9 +226,12 @@ function listen() {
         } else incoming += ch;
       }
     });
-  } else if (process.argv.includes('--slow-paste')) {
+  } else if (process.argv.includes('--slow-paste') || process.argv.includes('--image-paste')) {
     // Emulate Cursor's async paste handling: an early Enter is consumed by the
     // paste detector. No reply is emitted until a later Enter submits the buffer.
+    // --image-paste is Claude Code reading a pasted image path: the footer says "Pasting…" and nothing
+    // else is drawn for a while, then the attachment is ready. An Enter before that is dropped too.
+    const imagePaste = process.argv.includes('--image-paste');
     process.stdout.write('\x1b[?2004h');
     process.stdin.setRawMode(true);
     let incoming = '';
@@ -241,10 +244,11 @@ function listen() {
         pasted = incoming.slice(incoming.indexOf('\x1b[200~') + 6, end);
         incoming = incoming.slice(end + 6);
         ready = false;
+        if (imagePaste) process.stdout.write('\nPasting…');
         setTimeout(() => {
           ready = true;
-          process.stdout.write('\nPaste ready\n');
-        }, 450);
+          process.stdout.write(imagePaste ? '\r\x1b[2K[Image #1] attached\n' : '\nPaste ready\n');   // the footer is redrawn in place
+        }, imagePaste ? 1800 : 450);
       }
       if (incoming.includes('\r')) {
         incoming = '';
@@ -276,9 +280,27 @@ function start() {
   box();
   listen();
 }
-// --trust-dialog: like Cursor in a folder it has not seen, a dialog comes first and
-// nothing is accepted until Enter picks "Trust this workspace".
-if (process.argv.includes('--trust-dialog')) {
+// --claude-trust-menu: Claude Code's folder-trust menu. The cursor starts on "No, exit"; only arrow keys
+// move it, Enter on the second row trusts, and Enter on the first row, a digit or y all end the session.
+if (process.argv.includes('--claude-trust-menu')) {
+  let row = 0;
+  const draw = () => process.stdout.write('\x1b[2J\x1b[H Accessing workspace:\n\n Quick safety check: Is this a project you created or one you trust?\n\n ' +
+    ['No, exit', 'Yes, I trust this folder'].map((label, i) => (i === row ? '❯ ' : '  ') + label).join('\n ') + '\n\n Enter to confirm · Esc to cancel\n');
+  draw();
+  process.stdin.setRawMode(true);
+  // a PTY may deliver several keys in one chunk: take them one at a time
+  const menuKey = (data) => {
+    for (const key of String(data).match(/\x1b\[[AB]|\x1bO[AB]|[^]/g) || []) {
+      if (key === '\x1b[B' || key === '\x1bOB') { row = 1; draw(); }
+      else if (key === '\x1b[A' || key === '\x1bOA') { row = 0; draw(); }
+      else if (key === '\r' && row === 1) {
+        process.stdin.setRawMode(false); process.stdin.removeListener('data', menuKey); process.stdin.pause(); process.stdout.write('\x1b[2J\x1b[H'); start(); return;
+      } else if (key === '\r' || /^[1-9yn]$/.test(key)) process.exit(1);
+    }
+  };
+  process.stdin.on('data', menuKey);
+} else if (process.argv.includes('--trust-dialog')) {
+  // like Cursor in a folder it has not seen, a dialog comes first and nothing is accepted until Enter picks "Trust this workspace"
   process.stdout.write('Do you trust the contents of this directory?\n  ▶ [a] Trust this workspace\n    [q] Quit\n  Use arrow keys to navigate, Enter to select\n');
   process.stdin.setRawMode(true);
   const confirmTrust = (data) => {

@@ -21,10 +21,10 @@ function cli(args) {
       else resolve(stdout);
     }));
 }
-async function startWorker(title, args) {
+async function startWorker(title, args, command = workerCommand) {
   const card = await page.evaluate(async (title) => (await window.deck.taskBoard('add', { project: 'worktree-e2e', title })).card, title);
   const response = await cli(['new', '--title', title, '--task', 'Check the temporary repository only.',
-    '--task-id', card.id, '--project', 'worktree-e2e', '--command', workerCommand, ...args]);
+    '--task-id', card.id, '--project', 'worktree-e2e', '--command', command, ...args]);
   expect(response).toContain('已开新会话');
   await expect.poll(() => page.evaluate((id) => columns.find((c) => c.boardId === id)?.id || '', card.id), { timeout: 20000 }).not.toBe('');
   const column = await page.evaluate((id) => {
@@ -115,6 +115,32 @@ test('archive safely reclaims a completely clean copy whose commit is already on
   expect(git(repo, ['worktree', 'list', '--porcelain']).match(/^worktree /gm)).toHaveLength(1);
   expect(git(repo, ['branch', '--list', 'feat/clean'])).toBe('');
   expect(fs.existsSync(path.join(repo, 'README.md'))).toBe(true);
+});
+
+test('a Claude session in a new copy finds the copy already trusted for its seat; other folders and non-Claude sessions are not touched', { skip: process.platform === 'win32' }, async () => {
+  const seatFile = path.join(profile, 'seats-home', '.claude.json');   // the default seat's global file in a test profile
+  const launches = path.join(profile, 'claude-launches.jsonl');
+  const shim = path.join(profile, 'claude-shim.js');
+  fs.writeFileSync(shim, `const fs = require('fs');
+let trusted = false, projects = [];
+try { const j = JSON.parse(fs.readFileSync(${JSON.stringify(seatFile)}, 'utf8')); projects = Object.keys(j.projects || {}); trusted = j.projects[process.cwd()].hasTrustDialogAccepted === true; } catch (_) {}
+fs.appendFileSync(${JSON.stringify(launches)}, JSON.stringify({ id: process.env.AGENTDECK_COL_ID, cwd: process.cwd(), trusted, projects }) + '\\n');
+fs.appendFileSync(${JSON.stringify(cwdFile)}, JSON.stringify({ id: process.env.AGENTDECK_COL_ID, cwd: process.cwd() }) + '\\n');
+require(${JSON.stringify(FAKE)});`);
+  fs.mkdirSync(path.join(home, 'bin'));
+  fs.writeFileSync(path.join(home, 'bin', 'claude'), `#!/bin/sh\nexec "${process.execPath}" "${shim}" --screen-only\n`, { mode: 0o755 });
+  // an absolute path to a program named claude is a Claude session to the app, but never the real CLI
+  const worker = await startWorker('Claude copy task', ['--worktree', repo, '--branch', 'feat/trusted'], `${path.join(home, 'bin', 'claude')} --model claude-opus-5-5`);
+  const launch = fs.readFileSync(launches, 'utf8').trim().split('\n').map(JSON.parse).find((r) => r.id === worker.column.id);
+  expect(launch.cwd).toBe(worker.column.cwd);
+  expect(launch.trusted).toBe(true);   // already in the seat's file when the agent started
+  // exactly that one directory: not the repo, the copy root or the user's home
+  expect(launch.projects).toEqual([worker.column.cwd]);
+  const trustedBefore = fs.readFileSync(seatFile, 'utf8');
+  // a worker that is not Claude gets a copy and no trust record
+  const other = await startWorker('Other agent copy task', ['--worktree', repo, '--branch', 'feat/untrusted']);
+  expect(fs.existsSync(other.column.cwd)).toBe(true);
+  expect(fs.readFileSync(seatFile, 'utf8')).toBe(trustedBefore);
 });
 
 test('new with only cwd preserves the requested directory and creates no code copy', async () => {

@@ -410,7 +410,14 @@ again with the current provider, model and effort instructions.
   If a new session stops on a startup dialog before the task can go in (Cursor
   asks "Do you trust this workspace?" in a folder it has not seen), nothing is
   typed into the dialog; the 队长 is sent its text once and answers with
-  `answer --key enter`, after which the task goes in.
+  `answer --key enter`, after which the task goes in. `answer --key` takes one
+  key (`y`, `n`, `1`-`9`, `enter`, `esc`, `tab`, `space`, `up`, `down`, `left`,
+  `right`) or a comma list that is pressed one key at a time, such as
+  `down,enter` or `down:2,enter`. A lone `y`/`n`/digit is still followed by
+  Enter; a list is exact. Claude Code's folder-trust menu starts on "No, exit"
+  and leaves on `1`, `2` and `y`, so only `down,enter` picks "Yes, I trust this
+  folder". For a Claude session in a copy made by `new --worktree` the menu does
+  not come up: see the code copies paragraph below.
   New sessions appear under the Captain's folding arrow and get the task as
   their first message; opening one reveals its column temporarily. The app
   appends a contract: finish without waiting on the user, then submit through
@@ -1034,6 +1041,10 @@ the Windows Electron UI or install, rebuild, or restart either installed app.
 
 
 Coding tasks can pass `new --worktree <repo> [--base ref] [--branch name]`. AgentDeck adds a git worktree under `~/agentdeck-worktrees/<repo>/<branch>` and starts the session there. After the session is archived, the copy is removed only when the tree has no uncommitted, untracked, stashed, or ignored files and the branch is merged into main/master (or origin's default branch) or is still present on a remote. Any ignored file or directory blocks that automatic removal, including `node_modules`. A copy whose ignored content is entirely inside `node_modules`, and whose branch is already merged or pushed, is marked manually cleanable and listed by `worktree clean` with its path, branch, a summary of the ignored content, and the size. Other ignored paths, such as `dist`, `build`, `out`, and `.env`, are kept and named, and are not offered in that list. `worktree clean` only lists. Deleting one copy requires `--apply` and `--path` for that copy, and the same checks run again. Removal never uses `git worktree remove --force`.
+
+Claude Code asks "do you trust this folder" once per directory and judges a linked worktree on its own path (trust for the repository or a parent folder does not carry over), with "No, exit" as the default row. So that an unattended session does not die there, AgentDeck records the answer itself right after it creates a copy and before the session starts: `projects[<copy path>].hasTrustDialogAccepted = true` in the global file of the Claude seat that will run the session (`~/.claude.json` for the default seat, `<seat dir>/.claude.json` for the others), written the way Claude Code writes it (same lock directory, atomic rename, other content untouched). Only that one directory is recorded (its real path, and the path as given when they differ); the repository, `~/agentdeck-worktrees` and the home folder are never trusted, a damaged seat file is left alone, and only a linked worktree under `~/agentdeck-worktrees` is accepted. Non-Claude agents are not touched. If the record cannot be written the task still starts and the 队长 is told once; it can then answer the menu with `answer --key down,enter`.
+
+A prompt that carries an image path (for example a screenshot) is turned into an attachment by Claude Code, which says "Pasting…" in its footer while it reads the file and drops an Enter pressed meanwhile. AgentDeck therefore waits (at most 30 s) until that footer is gone before it presses Enter, so the task is submitted instead of sitting in the input box.
 
 The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
 

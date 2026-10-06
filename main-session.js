@@ -1160,9 +1160,13 @@
   async function openSession(title, cmd, cwd, requestId, text, waiting, metadata = {}) {
     if (metadata.worktreeRequest && !metadata.worktree) {
       if (typeof window.deck.prepareWorktree !== 'function') throw new Error('这台 AgentDeck 还不能创建代码副本。');
-      const prepared = await window.deck.prepareWorktree(metadata.worktreeRequest);
+      // A Claude session asks to trust the new folder (default row: No, exit): the app records that answer
+      // for this copy in the seat that will run it, so the question never appears.
+      const seat = window.AgentInfo.inferProvider(cmd) === 'Claude' && window.ClaudeSeatsCore.bindColumn({ claudeSeatId: metadata.claudeSeatId, claudeConfigDir: metadata.claudeConfigDir }, host.config);
+      const { trust, ...prepared } = await window.deck.prepareWorktree({ ...metadata.worktreeRequest, ...(seat?.configDir ? { seatId: seat.id, configDir: seat.configDir } : {}) });
       metadata.worktree = prepared;
       cwd = prepared.path;
+      if (trust && !trust.ok) boardNotice(`代码副本 ${prepared.path} 没能预先登记 Claude 的文件夹信任（${trust.reason}）。会话若停在「是否信任此文件夹」，用 answer --key down,enter 选第二项。`);
     }
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     let col = null;
@@ -2592,10 +2596,14 @@
         const entry = host.terms.get(col.id);
         if (!entry || entry.state !== 'input') throw new Error(`「${host.columnLabel(col)}」现在没有停在确认提示上；要给它指令用 tell。`);
         const key = String(message.key || '').trim().toLowerCase();
-        const seq = { enter: '\r', esc: '\x1b', y: 'y', n: 'n' }[key] || (/^[1-9]$/.test(key) ? key : null);
-        if (!seq) throw new Error('answer 的 --key 只能是 y、n、1-9、enter、esc。');
-        window.deck.ptyInput(col.id, seq);
-        if (seq.length === 1 && seq !== '\r' && seq !== '\x1b') setTimeout(() => window.deck.ptyInput(col.id, '\r'), 60);
+        const { keys, submit } = M.answerKeys(key, { appCursor: entry.term?.modes?.applicationCursorKeysMode === true });
+        // One press at a time: a menu redraws between arrow keys, and keys that arrive together can be dropped.
+        for (let i = 0; i < keys.length; i++) {
+          if (i) await new Promise((resolve) => setTimeout(resolve, 60));
+          if (host.terms.get(col.id) !== entry || !entry.alive) throw new Error(`「${host.columnLabel(col)}」在按键途中退出了，已按 ${i} 个键。`);
+          window.deck.ptyInput(col.id, keys[i]);
+        }
+        if (submit) setTimeout(() => window.deck.ptyInput(col.id, '\r'), 60);
         s.tasks.forEach((t) => { if (t.colId === col.id && t.status === 'input') { t.status = 'working'; t.answeredAt = Date.now(); update(t); } });
         return { done: true, result: `已替「${host.columnLabel(col)}」按了 ${key}。` };
       }

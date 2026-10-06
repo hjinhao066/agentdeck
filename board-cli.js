@@ -173,7 +173,8 @@ function usage() {
     '  receipts --wait [--timeout seconds]       block for unread receipts/questions; empty on timeout\n' +
     '  receipts --snapshot                      native host: non-consuming JSON batch with stable ids\n' +
     '  receipts --ack \'["receipt-id"]\'           native host: acknowledge only successfully handled ids\n' +
-    '  answer --to <session-id> --key y|n|1-9|enter|esc   answer a confirmation prompt\n'
+    '  answer --to <session-id> --key y|n|1-9|enter|esc|up|down|tab|space   answer a confirmation prompt;\n' +
+    '                                           a comma list presses several keys, e.g. --key down,enter or down:2,enter\n'
   );
 }
 
