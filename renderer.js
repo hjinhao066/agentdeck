@@ -3386,6 +3386,10 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
     } else if (op === 'captain') {
       MainSession.sendMessage(input?.message, input?.images);
       result = { queued: true };
+    } else if (op === 'relay') {
+      result = ClaudeSeats.mobileState();
+    } else if (op === 'relay-switch') {
+      result = ClaudeSeats.mobileSwitch(input);
     } else throw new Error('未知网页操作。');
     window.deck.mobileRespond({ requestId: id, result });
   } catch (error) { window.deck.mobileRespond({ requestId: id, error: error.message }); }

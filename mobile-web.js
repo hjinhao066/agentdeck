@@ -68,6 +68,31 @@ function quotaView(data, now) {
   return { rows, version: /^\d+\.\d+\.\d+[\w.-]{0,20}$/.test(data?.version || '') ? data.version : '', now };
 }
 
+// The Captain's account switch, rebuilt field by field like the quota rows:
+// ids, display names, a masked account, why a seat cannot be picked, and the
+// last switch the phone asked for. No paths, commands or credentials.
+const SEAT_ID = /^[a-zA-Z0-9_-]{1,40}$/;
+const RELAY_REASONS = ['', 'current', 'login', 'onboarding', 'exhausted', 'low', 'unknown'];
+function relayView(data, now) {
+  const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
+  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const id = (value) => typeof value === 'string' && SEAT_ID.test(value) ? value : '';
+  const seats = (Array.isArray(data?.seats) ? data.seats : []).slice(0, 12).filter((seat) => seat && id(seat.id)).map((seat) => {
+    const reason = RELAY_REASONS.includes(seat.reason) ? seat.reason : 'unknown';
+    return { id: seat.id, name: text(seat.name, 80), provider: seat.provider === 'Codex' ? 'Codex' : 'Claude', account: QuotaCore.maskAccount(seat.account),
+      current: seat.current === true,
+      // Only a seat the desktop positively offers is selectable; an unrecognized reason never is.
+      selectable: seat.selectable === true && seat.current !== true && RELAY_REASONS.includes(seat.reason) && ['', 'unknown'].includes(seat.reason),
+      reason, weekly: seat.weekly === true, recoveryAt: time(seat.recoveryAt),
+      cells: (Array.isArray(seat.cells) ? seat.cells : []).filter((cell) => cell && ['5h', '7d'].includes(cell.key) && QuotaCore.percent(cell.remaining) !== null).slice(0, 2)
+        .map((cell) => ({ key: cell.key, remaining: cell.remaining, out: cell.out === true, resetAt: time(cell.resetAt) })) };
+  });
+  const job = data?.job && typeof data.job === 'object' && /^[a-z0-9]{1,40}$/.test(data.job.id || '') && ['switching', 'done', 'failed'].includes(data.job.status)
+    ? { id: data.job.id, status: data.job.status, fromId: id(data.job.fromId), fromName: text(data.job.fromName, 80), targetId: id(data.job.targetId), targetName: text(data.job.targetName, 80),
+      startedAt: time(data.job.startedAt), finishedAt: time(data.job.finishedAt), error: text(data.job.error, 200) } : null;
+  return { captainId: text(data?.captainId, 256), currentId: id(data?.currentId), switching: data?.switching === true || job?.status === 'switching', seats, job, now };
+}
+
 // Login-item registration is shared by the platforms whose Electron
 // `openAtLogin` can restore the private web service after a user login.
 function supportsLoginItem(platform) { return LOGIN_ITEM_PLATFORMS.includes(platform); }
@@ -125,8 +150,8 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings, getBoardVersion, machine = {}, uploadDir = '', now = Date.now }) {
-    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, saveSettings, getBoardVersion };
+  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, machine = {}, uploadDir = '', now = Date.now }) {
+    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion };
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
@@ -485,6 +510,23 @@ class MobileWebServer {
       await this.sources.sendCaptain(body.message, files);
       return this.json(res, 200, { queued: true });
     }
+    // Moving the Captain to another account. Each machine answers only for its
+    // own Captain, under its own prefix, cookie and CSRF token. The switch runs
+    // on the desktop; this call only starts it and the phone polls GET for the outcome.
+    if (req.method === 'GET' && route === '/api/relay' && this.sources.getRelay) return this.json(res, 200, relayView(await this.sources.getRelay(), this.now()));
+    if (req.method === 'POST' && route === '/api/relay' && this.sources.switchRelay) {
+      let body;
+      try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
+      if (Object.keys(body).some((key) => key !== 'seatId' && key !== 'expectCurrent') || typeof body.seatId !== 'string' || !SEAT_ID.test(body.seatId)
+        || (body.expectCurrent !== undefined && (typeof body.expectCurrent !== 'string' || !SEAT_ID.test(body.expectCurrent)))) return this.json(res, 400, { error: 'Seat id required.' });
+      if (!this.writeCredential(req, res, prefixed)) return;
+      let started;
+      // A refusal (seat used up, not logged in, already switching) is an answer, not a fault: the Captain stays where it is.
+      try { started = await this.sources.switchRelay({ seatId: body.seatId, ...(body.expectCurrent ? { expectCurrent: body.expectCurrent } : {}) }); }
+      catch (err) { return this.json(res, 409, { started: false, error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) || '没有切换。' }); }
+      if (!started || started.started !== true || !/^[a-z0-9]{1,40}$/.test(started.id || '')) return this.json(res, 409, { started: false, error: '没有切换。' });
+      return this.json(res, 200, { started: true, id: started.id });
+    }
     if (req.method === 'POST' && route === '/api/upload' && this.uploadDir) {
       let data;
       try { data = await this.read(req, /^application\/octet-stream$/i, IMAGE_LIMITS.bytes); } catch (err) { return this.json(res, err.status || 400, { error: err.status === 413 ? 'Image too large.' : 'Invalid request.' }); }
@@ -511,4 +553,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable };
+module.exports = { MobileWebServer, relayView, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable };

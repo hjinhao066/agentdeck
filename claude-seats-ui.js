@@ -171,18 +171,20 @@
     actions.append(save); d.append(actions); d.showModal();
   }
   async function switchSeat(id, options = {}) {
-    if (switching) return false;
+    // options.reason: why nothing changed, in plain words for the phone.
+    if (switching) { options.reason = '电脑正在切换队长，等它结束再试'; return false; }
     const col = window.MainSession.mainCol();
-    if (!col || id === current().id) return false;
+    if (!col) { options.reason = '这台电脑上还没有队长'; return false; }
+    if (id === current().id) { options.reason = '队长已经在这个账号上了'; return false; }
     if (options.automatic && !options.startupRetry && !window.MainSession.relayIdle()) return false;
-    if (hasDraft(col)) { host.showToast(`队长输入框里有未发送内容，发送或清空后再${label()}`); return false; }
+    if (hasDraft(col)) { options.reason = '电脑上队长的输入框里还有没发出去的内容，要先在电脑上发出或清空'; host.showToast(`队长输入框里有未发送内容，发送或清空后再${label()}`); return false; }
     switching = true;
     window.MainSession.pauseForSeatSwitch(true);
     try {
       await refresh();
       const target = id === 'chatgpt' ? { id, loggedIn: true } : seats.find((s) => s.id === id);
-      if (!target?.loggedIn) { host.showToast(`${target?.name || id}：${target?.loginReason || target?.authReason || '席位不存在'}${target?.loginReason ? '，请在此席位配置目录下登录' : ''}`); return false; }
-      if (window.MainSession.mainCol() !== col || hasDraft(col)) return false;
+      if (!target?.loggedIn) { options.reason = '这个账号还没登录，要回电脑上登录'; host.showToast(`${target?.name || id}：${target?.loginReason || target?.authReason || '席位不存在'}${target?.loginReason ? '，请在此席位配置目录下登录' : ''}`); return false; }
+      if (window.MainSession.mainCol() !== col || hasDraft(col)) { options.reason = '切换前队长或它的输入框变了，没有切换'; return false; }
       let decision = options.decision;
       if (options.automatic || options.validateRotation) {
         decision = options.startupRetry ? startupRetryDecision() : options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true);
@@ -196,7 +198,7 @@
       const board = window.MainSession.checkpointForSeatSwitch
         ? await window.MainSession.checkpointForSeatSwitch(snapshot, { local: options.automatic })
         : await window.deck.captainCheckpoint(snapshot);
-      if (window.MainSession.mainCol() !== col || hasDraft(col)) return false;
+      if (window.MainSession.mainCol() !== col || hasDraft(col)) { options.reason = '存进度的时候队长或它的输入框变了，没有切换'; return false; }
       if (typeof board !== 'string' || !board) throw new Error('checkpoint failed');
       if ((options.automatic || options.validateRotation) && (options.startupRetry ? startupRetryDecision() : options.validateRotation ? quotaRotationDecision() : rotationDecision(false, true))?.targetId !== id) return false;
       const wasClaude = isClaude(col);
@@ -216,7 +218,7 @@
       window.dispatchEvent(new CustomEvent('claude-seat-changed', { detail: { seatId: id } }));
       return true;
     } catch (_) {
-      options.failed = true;
+      options.failed = true; options.reason = '存进度或启动新队长没成功';
       host.showToast('进度存档或队长启动失败，请检查看板和对话目录'); return false;
     } finally {
       switching = false; window.MainSession.pauseForSeatSwitch(false);
@@ -461,5 +463,45 @@
       { ...info, configuredDir: host.config.claudeSeats.find((s) => s.id === info.id)?.configDir }, now) }));
     return detail + '\n' + P.strategyText({ settings: host.config.perpetualCaptain, state: host.config.perpetualCaptainState, currentId: current().id, seats: candidates, warmups, now });
   }
-  window.ClaudeSeats = { init, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick };
+  // ---- phone: the same manual switch, asked for through the mobile web service ----
+  // One job at a time, kept in memory: the phone polls it to tell switching,
+  // done and failed apart. Nothing here bypasses switchSeat's own checks.
+  let mobileJob = null;
+  const codexName = () => host.config.captainRelayCodex.name || 'ChatGPT';
+  function mobileChoices() {
+    const now = Date.now(), codex = window.QuotaCore.commandQuota(host.config.quotas, 'codex', host.config.claudeSeats);
+    return P.manualChoices({ ...rotationContext(), codex: { out: codex?.out === true, recoveryAt: codex?.recoveryAt || null }, now });
+  }
+  function mobileState() {
+    const col = window.MainSession.mainCol(), now = Date.now(), choices = col ? mobileChoices() : [];
+    const rows = window.QuotaCore.mobile(host.config.quotas, now, host.config.claudeSeats);
+    return { captainId: col?.id || '', currentId: col ? current().id : '', switching, job: mobileJob ? { ...mobileJob } : null,
+      seats: choices.map((choice) => {
+        const codex = choice.id === P.CODEX_ID, seat = codex ? null : host.config.claudeSeats.find((s) => s.id === choice.id);
+        const row = rows.find((r) => codex ? r.provider === 'Codex' : r.key === window.QuotaCore.seatKey(choice.id));
+        return { ...choice, provider: codex ? 'Codex' : 'Claude', name: codex ? codexName() : seat?.name || choice.id,
+          account: codex ? row?.account || '' : seats.find((s) => s.id === choice.id)?.maskedEmail || '', cells: row?.cells || [] };
+      }) };
+  }
+  function mobileSwitch(input = {}) {
+    const col = window.MainSession.mainCol();
+    if (!col) throw new Error('这台电脑上还没有队长');
+    if (switching || mobileJob?.status === 'switching') throw new Error('电脑正在切换队长，等它结束再试');
+    const from = current();
+    if (input.expectCurrent && input.expectCurrent !== from.id) throw new Error('队长已经不在你看到的那个账号上了，请看最新状态后再选');
+    const choice = mobileChoices().find((c) => c.id === input.seatId);
+    if (!choice) throw new Error('这台电脑上没有这个账号');
+    if (!choice.selectable) throw new Error({ current: '队长已经在这个账号上了', login: '这个账号还没登录，要回电脑上登录',
+      onboarding: '这个账号还停在首次启动的引导，要回电脑上处理', exhausted: '这个账号的额度已经用完', low: '这个账号的额度快用完了' }[choice.reason] || '这个账号现在不能用');
+    const name = (id) => id === P.CODEX_ID ? codexName() : host.config.claudeSeats.find((s) => s.id === id)?.name || id;
+    const job = mobileJob = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10), status: 'switching', fromId: from.id, fromName: name(from.id),
+      targetId: choice.id, targetName: name(choice.id), startedAt: Date.now(), finishedAt: null, error: '' };
+    const options = {};
+    switchSeat(choice.id, options).then((ok) => ok, () => false).then((ok) => {
+      job.status = ok ? 'done' : 'failed'; job.finishedAt = Date.now();
+      job.error = ok ? '' : options.reason || '电脑没有完成切换';
+    });
+    return { started: true, id: job.id };
+  }
+  window.ClaudeSeats = { init, mobileState, mobileSwitch, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick };
 })();

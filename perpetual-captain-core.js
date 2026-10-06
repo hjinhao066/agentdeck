@@ -246,6 +246,28 @@
     }
     return { targetId, recoveryAt, reason: decision?.reason || 'no-available-seat' };
   }
+  // What a person may pick by hand from the phone: every seat, and why it can
+  // or cannot take the Captain now. Unknown quota stays selectable, as in the
+  // desktop menu; only a confirmed dead end (no login, used up) is refused.
+  function manualChoices({ settings, state: value, currentId, seats = [], codex = null, now = Date.now() } = {}) {
+    const config = normalizeSettings(settings), state = normalizeState(value);
+    const soonest = (...times) => times.filter((at) => time(at) && at > now).sort((a, b) => a - b)[0] || null;
+    const list = seats.filter((seat) => seat && validId(seat.id) && seat.id !== CODEX_ID).map((seat) => {
+      const check = status(seat, state.seats[seat.id] || {}, config.threshold, now), saved = check.state;
+      const reason = seat.id === currentId ? 'current' : seat.loggedIn !== true ? 'login' : seat.onboardingComplete === false ? 'onboarding'
+        : check.exhausted ? 'exhausted' : check.low ? 'low' : !check.trusted || !check.weeklyTrusted ? 'unknown' : '';
+      const blocked = reason === 'exhausted' || reason === 'low';
+      return { id: seat.id, current: seat.id === currentId, selectable: reason === '' || reason === 'unknown', reason, weekly: blocked && check.weeklyLow,
+        recoveryAt: !blocked ? null : check.weeklyLow ? soonest(seat.weeklyResetAt, saved.weeklyLowResetAt)
+          : soonest(seat.exhaustedResetAt, saved.resetAt, seat.resetAt, saved.lowResetAt) };
+    });
+    if (codex) {
+      const reason = currentId === CODEX_ID ? 'current' : codex.out === true ? 'exhausted' : '';
+      list.push({ id: CODEX_ID, current: currentId === CODEX_ID, selectable: reason === '', reason, weekly: false,
+        recoveryAt: reason === 'exhausted' ? soonest(codex.recoveryAt) : null });
+    }
+    return list;
+  }
   function recordSwitch(value, event) {
     const state = normalizeState(value);
     if (!event || !validId(event.fromId) || !validId(event.targetId) || event.fromId === event.targetId || !time(event.at)) return state;
@@ -277,5 +299,5 @@
     if (config.preferEarlier) parts.push('有可用额度时优先用快到期的席位');
     return parts.join(' · ');
   }
-  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, DEFAULT_ROTATION_ORDER, normalizeSettings, orderSeats, normalizeState, observe, bound, seatQuota, status, decide, quotaAction, recordSwitch, strategyText };
+  return { COOLDOWN_MS, FRESH_MS, CODEX_ID, DEFAULT_ROTATION_ORDER, normalizeSettings, orderSeats, normalizeState, observe, bound, seatQuota, status, decide, quotaAction, manualChoices, recordSwitch, strategyText };
 });
