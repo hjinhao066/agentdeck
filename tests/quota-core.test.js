@@ -847,10 +847,10 @@ test('dispatch quota gate: only 5-hour window participates in low/fallback gatin
   assert.equal(unkAuto.action, 'open');
   assert.equal(unkAuto.reason, 'unknown');
 
-  // 3b. 5h 未知、仅周数据充裕 (剩 80%) → ok 放行，其它模型也可切入该席位
+  // 3b. 5h 未知、仅周数据充裕 (剩 60%) → ok 放行，其它模型也可切入该席位
   const weeklyOnlyOkStore = {};
   Q.observe(weeklyOnlyOkStore, bind('cn', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
-    { key: 'weekly', remaining: 80, resetText: new Date(now + 86_400_000).toISOString() },
+    { key: 'weekly', remaining: 60, resetText: new Date(now + 86_400_000).toISOString() },
   ] }, now)), now);
   const weeklyOnlyOkExplicit = Q.quotaFallback(weeklyOnlyOkStore, opus, seats, 'cn', now, { explicit: true });
   assert.equal(weeklyOnlyOkExplicit.action, 'open');
@@ -859,10 +859,10 @@ test('dispatch quota gate: only 5-hour window participates in low/fallback gatin
   assert.equal(weeklyOnlyOkAuto.action, 'open');
   assert.equal(weeklyOnlyOkAuto.reason, 'ok');
 
-  // 3c. 5h 未知、仅周数据低于阈值 (剩 15%) → low (点名排队，非点名换模型)
+  // 3c. 5h 未知、仅周数据低于阈值 (剩 16%) → low (点名排队，非点名换模型)
   const weeklyOnlyLowStore = {};
   Q.observe(weeklyOnlyLowStore, bind('default', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
-    { key: 'weekly', remaining: 15, resetText: new Date(now + 86_400_000).toISOString() },
+    { key: 'weekly', remaining: 16, resetText: new Date(now + 86_400_000).toISOString() },
   ] }, now)), now);
   const weeklyOnlyLowExplicit = Q.quotaFallback(weeklyOnlyLowStore, opus, seats, 'default', now, { explicit: true });
   assert.equal(weeklyOnlyLowExplicit.action, 'queue');
@@ -883,4 +883,47 @@ test('dispatch quota gate: only 5-hour window participates in low/fallback gatin
   assert.equal(weekZeroExplicit.action, 'queue');
   assert.equal(weekZeroExplicit.held, 'out');
   assert.equal(weekZeroExplicit.reason, 'explicit');
+});
+
+test('只有周窗口数据: 5 小时缺失时退回周数字，周剩 16% 和周剩 60% 判定与改动前一致', () => {
+  const opus = 'claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high';
+  const seats = [
+    { id: 'default', name: '默认', configDir: '~/.claude' },
+    { id: 'cn', name: 'CN 席位', configDir: '~/.claude-cn' },
+  ];
+  const bind = (id, sample) => {
+    const seat = seats.find((s) => s.id === id);
+    return { ...sample, accountBound: true, accountKey: 'acc-' + id, configDir: seat.configDir, seatId: id, credentialKey: 'cred-' + id };
+  };
+
+  // 1. 周剩 16% (<= 20% 阈值) → 判定 low (点名排队，非点名换模型，与改动前一致)
+  const low16Store = {};
+  Q.observe(low16Store, bind('default', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'weekly', remaining: 16, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  const q16 = Q.commandQuota(low16Store, opus, seats, 'default', now);
+  assert.equal(q16.fiveHour, null);
+  assert.equal(q16.weekly, 16);
+  const low16Explicit = Q.quotaFallback(low16Store, opus, seats, 'default', now, { explicit: true });
+  assert.equal(low16Explicit.action, 'queue');
+  assert.equal(low16Explicit.held, 'low');
+  assert.equal(low16Explicit.reason, 'explicit');
+  const low16Auto = Q.quotaFallback(low16Store, opus, seats, 'default', now, { explicit: false });
+  assert.equal(low16Auto.action, 'switch');
+  assert.equal(low16Auto.to, 'Cursor claude-opus-5-5-high');
+
+  // 2. 周剩 60% (> 20% 阈值) → 判定 ok (放行开会话，与改动前一致)
+  const ok60Store = {};
+  Q.observe(ok60Store, bind('cn', Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows: [
+    { key: 'weekly', remaining: 60, resetText: new Date(now + 86_400_000).toISOString() },
+  ] }, now)), now);
+  const q60 = Q.commandQuota(ok60Store, opus, seats, 'cn', now);
+  assert.equal(q60.fiveHour, null);
+  assert.equal(q60.weekly, 60);
+  const ok60Explicit = Q.quotaFallback(ok60Store, opus, seats, 'cn', now, { explicit: true });
+  assert.equal(ok60Explicit.action, 'open');
+  assert.equal(ok60Explicit.reason, 'ok');
+  const ok60Auto = Q.quotaFallback(ok60Store, opus, seats, 'cn', now, { explicit: false });
+  assert.equal(ok60Auto.action, 'open');
+  assert.equal(ok60Auto.reason, 'ok');
 });
