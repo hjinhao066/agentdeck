@@ -23,6 +23,9 @@ jobs:
     # Studio 2017 or newer"), so node-pty's native build fails.
     runs-on: windows-2022
     steps:
+      - name: Disable Git CRLF conversion
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4

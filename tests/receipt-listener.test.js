@@ -28,13 +28,50 @@ function cli(t, dir, args = []) {
   const result = new Promise((resolve) => child.on('close', (code) => resolve({ code, stdout, stderr })));
   return { child, result };
 }
-async function firstRequest(dir) {
-  for (let i = 0; i < 100; i++) {
-    const file = fs.readdirSync(path.join(dir, 'requests')).find((name) => name.endsWith('.json'));
-    if (file) return { file, request: JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8')) };
-    await new Promise((resolve) => setTimeout(resolve, 20));
-  }
-  assert.fail('listener did not register');
+async function firstRequest(dir, predicate) {
+  const requestsDir = path.join(dir, 'requests');
+  const inspect = () => {
+    try {
+      const files = fs.readdirSync(requestsDir).filter((name) => name.endsWith('.json'));
+      for (const file of files) {
+        try {
+          const content = fs.readFileSync(path.join(requestsDir, file), 'utf8');
+          const request = JSON.parse(content);
+          if (!predicate || predicate(request, file)) return { file, request };
+        } catch (_) {}
+      }
+    } catch (_) {}
+    return null;
+  };
+  const immediate = inspect();
+  if (immediate) return immediate;
+
+  return new Promise((resolve, reject) => {
+    let watcher = null, fallback = null, timer = null, settled = false;
+    const cleanup = () => {
+      settled = true;
+      if (watcher) { try { watcher.close(); } catch (_) {} watcher = null; }
+      if (fallback) { clearInterval(fallback); fallback = null; }
+      if (timer) { clearTimeout(timer); timer = null; }
+    };
+    const check = () => {
+      if (settled) return;
+      const found = inspect();
+      if (found) {
+        cleanup();
+        resolve(found);
+      }
+    };
+    try {
+      watcher = fs.watch(requestsDir, () => { check(); });
+      watcher.on('error', () => {});
+    } catch (_) {}
+    fallback = setInterval(check, 25);
+    timer = setTimeout(() => {
+      cleanup();
+      try { assert.fail('listener did not register'); } catch (error) { reject(error); }
+    }, 30000);
+  });
 }
 
 test('later host registration replaces exactly one listener; an old release cannot revoke it', (t) => {
@@ -157,13 +194,13 @@ test('two real CLI listeners register in order; the replaced one exits and only 
   const { dir, instance } = profile(t);
   const registry = Listener.createRegistry(dir, instance, () => {});
   const waiting = cli(t, dir, ['--timeout', '6900']);
-  const first = await firstRequest(dir);
+  const first = await firstRequest(dir, (r) => r.listener?.pid === waiting.child.pid);
   assert.equal(first.request.action, 'main-receipts');
   assert.equal(first.request.listener.pid, waiting.child.pid);
   assert.equal(registry.register('captain', 'captain-token', first.request.listener), true);
   fs.unlinkSync(path.join(dir, 'requests', first.file));
   const replacement = cli(t, dir, ['--timeout', '6900']);
-  const second = await firstRequest(dir);
+  const second = await firstRequest(dir, (r) => r.listener?.pid === replacement.child.pid);
   assert.equal(second.request.listener.pid, replacement.child.pid);
   assert.notEqual(second.request.watcher, first.request.watcher);
   assert.equal(registry.register('captain', 'captain-token', second.request.listener), true);
