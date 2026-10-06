@@ -2939,10 +2939,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .tbv-refresh.busy svg { animation: tbv-spin .8s linear infinite; }
 @keyframes tbv-spin { to { transform: rotate(360deg); } }
 
-.tbv-filters {
-  flex: 0 0 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; min-width: 0;
-  padding: 8px 16px 8px 18px; border-bottom: 1px solid var(--tbv-line); white-space: nowrap;
-}
+.tbv-filters { flex: 0 0 auto; display: flow-root; min-width: 0; padding: 6px 12px 6px 18px; border-bottom: 1px solid var(--tbv-line); }
 .tbv-lane, .tbv-chip, .tbv-detail, .tbv-ghost, .tbv-finished { --project-color: hsl(var(--project-hue, 228) 82% 68%); }
 :root[data-theme="light"] :is(.tbv-lane, .tbv-chip, .tbv-detail, .tbv-ghost, .tbv-finished) { --project-color: hsl(var(--project-hue, 228) 70% 46%); }
 /* A project's mark: a small star in its own colour. */
@@ -2952,13 +2949,15 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 }
 
 /* Overview strip: every project with its 进行中 / 需要你 counts; a click shows only that project. */
-/* Every chip shows whole: they wrap onto further rows, and when the bar is too narrow to hold a
-   useful row of them beside the tally and the tools, those drop to a row of their own. */
-.tbv-projects { flex: 1 1 380px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; padding: 2px; }
+/* Every chip shows whole, across the full width of the bar: the tally and the tools hold the right
+   end of the first row, the chips run beside them and then under them, row after row. A bar too
+   narrow for a chip beside the tools starts the chips on the next row. */
+.tbv-tools { float: right; display: flex; align-items: center; gap: 4px; height: 32px; margin-left: 10px; white-space: nowrap; }
+.tbv-projects { min-width: 0; font-size: 0; line-height: 0; }
 .tbv-chip {
-  flex: 0 1 auto; min-width: 0; max-width: 100%; box-sizing: border-box; display: inline-flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px;
-  border: 1px solid var(--tbv-rim); border-radius: 14px; background: var(--tbv-chip);
-  color: var(--tbv-ink-2); font: inherit; font-size: 12.5px; cursor: pointer;
+  min-width: 0; max-width: 100%; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 3px 6px 3px 0; padding: 0 9px;
+  border: 1px solid var(--tbv-rim); border-radius: 13px; background: var(--tbv-chip); vertical-align: top;
+  color: var(--tbv-ink-2); font: inherit; font-size: 12px; line-height: 18px; white-space: nowrap; cursor: pointer;
   transition: background .12s ease, border-color .12s ease, color .12s ease;
 }
 .tbv-chip:hover { background: var(--tbv-chip-hi); color: var(--tbv-ink); }
@@ -2970,12 +2969,13 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .tbv-chip.quiet:not(.active) { opacity: .66; }
 .tbv-chip .tbv-dot { flex-basis: 7px; width: 7px; height: 7px; }
 .tbv-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.tbv-chip-n { min-width: 18px; padding: 0 5px; border-radius: 9px; font-family: var(--mono); font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.tbv-chip-n { min-width: 16px; padding: 0 4px; border-radius: 8px; font-family: var(--mono); font-size: 10.5px; font-weight: 700; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums; }
 .tbv-chip-n.doing { color: var(--tbv-doing); background: color-mix(in srgb, var(--tbv-doing-lit) 17%, transparent); }
 .tbv-chip-n.needs { color: #1c0b02; background: var(--tbv-need-lit); box-shadow: 0 0 10px -2px color-mix(in srgb, var(--tbv-need-lit) var(--tbv-glow), transparent); }
 :root[data-theme="light"] .tbv-chip-n.needs { color: #fff; background: var(--tbv-need); }
-.tbv-chip-n + .tbv-chip-n { margin-left: -3px; }
-.tbv-summary { flex: 0 0 auto; margin-left: auto; padding-left: 8px; font-size: 12px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
+.tbv-chip-n + .tbv-chip-n { margin-left: -2px; }
+.tbv-chip .tbv-chip-n:last-child { margin-right: -3px; }
+.tbv-summary { flex: 0 0 auto; margin-right: 4px; font-size: 12px; color: var(--tbv-ink-3); font-variant-numeric: tabular-nums; }
 .tbv-status { flex: 0 0 auto; padding: 8px 20px; font-size: 12px; color: var(--tbv-fail); border-bottom: 1px solid var(--tbv-line); }
 .tbv-live { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 

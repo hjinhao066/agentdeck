@@ -466,8 +466,9 @@ test('动效开关: one icon button holds the board still, says so, and is remem
 });
 
 // Every name on the board that is not whole, every pair of things in the filter bar that touch, and
-// every 需要你 entry that shows cut. Nothing here may be cut to fit: chips wrap, the tally and tools
-// drop to their own row, and an entry that does not fit the reminder bar is left out whole.
+// every 需要你 entry that shows cut. Nothing here may be cut to fit: chips wrap across the bar's full
+// width, beside the tally and tools and then under them, and an entry that does not fit the reminder
+// bar is left out whole.
 const cutNames = () => page.evaluate(() => {
   const view = document.getElementById('taskBoardView');
   const shown = (n) => n.getClientRects().length > 0;
@@ -477,7 +478,7 @@ const cutNames = () => page.evaluate(() => {
   // a card's status tag (失败 / 额度 / 挂起 / 冲突) stays whole inside its card
   view.querySelectorAll('.tbv-card .tbv-tag').forEach((n) => { const r = rect(n), c = rect(n.closest('.tbv-card')); if (shown(n) && (r.left < c.left - 0.5 || r.right > c.right + 0.5)) cut.push(`tbv-tag「${n.textContent}」 outside its card`); });
   const bar = rect(view.querySelector('.tbv-filters'));
-  const parts = [...view.querySelectorAll('.tbv-chip, .tbv-summary, .tbv-filters > .tbv-icon')].filter(shown).map((n) => ({ what: n.className + ' ' + n.textContent.trim().slice(0, 12), r: rect(n) }));
+  const parts = [...view.querySelectorAll('.tbv-chip, .tbv-summary, .tbv-tools > .tbv-icon')].filter(shown).map((n) => ({ what: n.className + ' ' + n.textContent.trim().slice(0, 12), r: rect(n) }));
   const touching = [];
   parts.forEach((a, i) => { if (a.r.left < bar.left - 0.5 || a.r.right > bar.right + 0.5) touching.push(a.what + ' outside the bar');
     parts.slice(i + 1).forEach((b) => { if (a.r.left < b.r.right + 4 && b.r.left < a.r.right + 4 && a.r.top < b.r.bottom && b.r.top < a.r.bottom) touching.push(a.what + ' / ' + b.what); }); });

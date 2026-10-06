@@ -125,12 +125,14 @@
       </div>
     </header>
     <div class="tbv-filters">
+      <div class="tbv-tools">
+        <span class="tbv-summary" aria-live="polite"></span>
+        <button type="button" class="tbv-icon tbv-expand-all" title="展开全部分组" aria-label="展开全部分组"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg></button>
+        <button type="button" class="tbv-icon tbv-collapse-all" title="收起全部分组" aria-label="收起全部分组"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/></svg></button>
+        <button type="button" class="tbv-icon tbv-motion" data-motion-toggle title="关闭动效（卡片和连线保持静止）" aria-label="关闭动效（卡片和连线保持静止）"></button>
+        <button type="button" class="tbv-icon tbv-refresh" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></button>
+      </div>
       <div class="tbv-projects" role="group" aria-label="项目概览，点一个只看它"></div>
-      <span class="tbv-summary" aria-live="polite"></span>
-      <button type="button" class="tbv-icon tbv-expand-all" title="展开全部分组" aria-label="展开全部分组"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/></svg></button>
-      <button type="button" class="tbv-icon tbv-collapse-all" title="收起全部分组" aria-label="收起全部分组"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m7 20 5-5 5 5"/><path d="m7 4 5 5 5-5"/></svg></button>
-      <button type="button" class="tbv-icon tbv-motion" data-motion-toggle title="关闭动效（卡片和连线保持静止）" aria-label="关闭动效（卡片和连线保持静止）"></button>
-      <button type="button" class="tbv-icon tbv-refresh" title="刷新" aria-label="刷新"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></button>
     </div>
     <div class="tbv-status" role="status" hidden></div>
     <div class="tbv-alert" role="group" aria-label="需要你处理的任务" hidden></div>
@@ -221,7 +223,7 @@
           <button type="button" data-cm="reset" class="cm-zoom" title="回到 100%" aria-label="回到 100%（当前缩放）">100%</button>
           <button type="button" data-cm="in" title="放大 (⌘/Ctrl+滚轮)" aria-label="放大 (⌘/Ctrl+滚轮)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5v14"/></svg></button>
           <span class="cm-sep"></span>
-          <button type="button" data-cm="fit" class="cm-fit" title="智能一页：按当前窗口重新排布和缩放，整张图一页看全" aria-label="智能一页：按当前窗口重新排布和缩放，整张图一页看全"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><path d="m12 8.2 1.1 2.7 2.7 1.1-2.7 1.1L12 15.8l-1.1-2.7L8.2 12l2.7-1.1z" fill="currentColor" stroke="none"/></svg></button>
+          <button type="button" data-cm="fit" class="cm-fit" title="智能一页：项目按窗口宽度横向排开、排满再往下叠，缩放回到 100%" aria-label="智能一页：项目按窗口宽度横向排开、排满再往下叠，缩放回到 100%"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5a1 1 0 0 1 1-1h4M15 4h4a1 1 0 0 1 1 1v4M20 15v4a1 1 0 0 1-1 1h-4M9 20H5a1 1 0 0 1-1-1v-4"/><path d="m12 8.2 1.1 2.7 2.7 1.1-2.7 1.1L12 15.8l-1.1-2.7L8.2 12l2.7-1.1z" fill="currentColor" stroke="none"/></svg></button>
         </div>
       </footer>
     </div>

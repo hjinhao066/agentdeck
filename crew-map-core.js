@@ -383,125 +383,75 @@
     return { captain, nodes: pos, groups, fold, feeds, grid: !!o.grid, width, height: Math.max(o.pad + o.captainH, ...groups.map((g) => g.y + g.h)) + o.pad + returnCount * 7 };
   }
 
-  // Which projects share a lane and how many cards wide each lane's frames are,
-  // for a window of size {w, h}: the arrangement that shows the whole map
-  // largest (so it fills the page instead of running down it). Lanes keep the
-  // projects' order: the first lane takes the first few, the next lane the next.
-  // When nothing shows whole at limits.floor (text would get too small), the
-  // arrangement that needs no sideways scrolling and the least scrolling down.
-  // `prev` (the plan in use) is kept while it is nearly as good, so the map does
-  // not reshuffle every time a card is added. Returns { lanes, caps, fits, scale }.
-  function planLanes(map, size, opts, prev) {
-    const o = { ...LAYOUT, floor: 0.85, maxLanes: 6, maxCap: 6, ...opts };
+  // Which lane each project stands in and how many cards wide each lane's frames are, for a
+  // window size.w wide (in the canvas's own units, at the scale the map is shown at). The
+  // projects fill the lanes row by row in their order: the first ones stand across the top, the
+  // next ones under them from the left again, each close under the frame above it. The tallest
+  // lane's frames then grow a card wider for as long as the width holds it and the map gets
+  // shorter by it. Of the lane counts the width holds (opts.maxLanes at most), the one with the
+  // most lanes whose map is no more than LANE_COST times as tall as the shortest: projects
+  // stand three or four abreast wherever they can, and one big project is not left a single
+  // card wide to make room for one more lane. opts.keep (the number of lanes in use) stays
+  // while its map is within LANE_KEEP of the shortest, so a card more or less does not move
+  // every frame. The window's height is never asked.
+  // Returns { lanes, caps }.
+  const LANE_COST = 1.3, LANE_KEEP = 1.5;
+  function planAcross(map, size, opts) {
+    const o = { ...LAYOUT, maxLanes: 4, maxCap: 6, ...opts };
     const shown = new Set(map.nodes.map((n) => n.id));
     const projects = ordered(map.projects, o.order).filter((p) => frame(p, o, shown, 1));
     const n = projects.length;
-    if (!n) return { lanes: [], caps: {}, fits: true, scale: 1 };
-    const availW = Math.max(1, size.w), availH = Math.max(1, size.h);
-    const widest = Math.max(1, ...projects.map((p) => frame(p, o, shown, Infinity).cols));
-    const maxCap = Math.max(1, Math.min(o.maxCap, widest));
-    // sizes[c][i]: project i's frame with cards at most c wide; pre[c]: running heights
-    const sizes = [], pre = [];
-    for (let c = 1; c <= maxCap; c++) {
-      sizes[c] = projects.map((p) => frame(p, o, shown, c));
-      pre[c] = [0];
-      sizes[c].forEach((f, i) => pre[c].push(pre[c][i] + f.h));
+    if (!n) return { lanes: [], caps: {} };
+    const availW = Math.max(1, size.w) - 2 * o.pad;
+    const sized = new Map();
+    const at = (p, c) => { const k = c + '\u0001' + p.key; if (!sized.has(k)) sized.set(k, frame(p, o, shown, c)); return sized.get(k); };
+    const tall = (lanes, caps) => Math.max(...lanes.map((lane, l) => lane.reduce((h, p) => h + at(p, caps[l]).h, 0) + (lane.length - 1) * o.clusterGap));
+    // the lanes' width the way layout() lays them
+    const across = (lanes, caps) => {
+      let w = 0;
+      lanes.forEach((lane, l) => { w += Math.max(...lane.map((p) => at(p, caps[l]).w)) + (l ? laneGap(o, lanes[l - 1].length - 1 + lane.length - 1) : 0); });
+      return w + (lanes.length === 1 && n > 1 ? o.clusterGap / 2 + o.lane * (n - 2) : 0);
+    };
+    const plans = [];
+    for (let K = Math.min(n, Math.max(1, o.maxLanes)); K >= 1; K--) {
+      const lanes = Array.from({ length: K }, () => []);
+      projects.forEach((p, i) => lanes[i % K].push(p));
+      const caps = new Array(K).fill(1);
+      if (K > 1 && across(lanes, caps) > availW + 0.5) continue;   // too wide even one card wide; a single lane always stands
+      let best = caps.slice(), least = tall(lanes, caps);
+      for (;;) {
+        const hs = lanes.map((lane, l) => tall([lane], [caps[l]])), t = hs.indexOf(Math.max(...hs));
+        if (caps[t] >= o.maxCap || !lanes[t].some((p) => !at(p, caps[t]).collapsed && at(p, caps[t] + 1).cols > caps[t])) break;
+        caps[t]++;
+        if (across(lanes, caps) > availW + 0.5) break;
+        const h = tall(lanes, caps);
+        if (h < least - 0.5) { best = caps.slice(); least = h; }
+      }
+      plans.push({ lanes, caps: best, h: least });
     }
-    const laneH = (c, i, j) => pre[c][j] - pre[c][i] + (j - i - 1) * o.clusterGap;   // projects i..j-1
-    const head = o.captainH + o.fanY, margin = 2 * o.pad;
-    const measure = (cuts, capsOf) => {
-      // cuts: lane k holds projects cuts[k]..cuts[k+1]-1
-      let w = 0, h = 0;
-      const k = cuts.length - 1;
-      for (let l = 0; l < k; l++) {
-        const c = capsOf[l];
-        let lw = 0;
-        for (let i = cuts[l]; i < cuts[l + 1]; i++) lw = Math.max(lw, sizes[c][i].w);
-        w += lw;
-        if (l) w += laneGap(o, cuts[l] - cuts[l - 1] - 1 + cuts[l + 1] - cuts[l] - 1);
-        h = Math.max(h, laneH(c, cuts[l], cuts[l + 1]));
-      }
-      if (k === 1 && n > 1) w += o.clusterGap / 2 + o.lane * (n - 2);
-      const W = Math.max(o.captainW, w) + margin, H = head + h + margin;
-      const scale = Math.min(availW / W, availH / H);
-      return { squeezed: k > 1 && Math.max(...capsOf) === 1, scale, fits: scale >= o.floor - 1e-9, overX: Math.max(0, W * o.floor - availW), overY: Math.max(0, H * o.floor - availH) };
-    };
-    const better = (a, b) => {
-      if (!b) return true;
-      if (a.fits !== b.fits) return a.fits;
-      if (a.fits) return a.scale > b.scale + 1e-6;
-      if ((a.overX > 0.5) !== (b.overX > 0.5)) return a.overX <= 0.5;
-      if (a.overX > 0.5) return a.overX < b.overX - 0.5;
-      // both scroll down only, and about as far: not the one that squeezes every frame to one card wide
-      // to stand lanes side by side (fewer lanes of wider frames read better, with fewer lines down the gaps)
-      if (a.squeezed !== b.squeezed && Math.abs(a.overY - b.overY) <= availH * 0.25) return !a.squeezed;
-      return a.overY < b.overY - 0.5;
-    };
-    let best = null;
-    const roomW = availW / o.floor - margin;
-    const tryCaps = (capsOf) => {
-      const K = capsOf.length;
-      // the lanes' own partition: the cut that keeps the tallest lane shortest
-      const f = [new Array(n + 1).fill(Infinity)], from = [];
-      f[0][0] = 0;
-      for (let l = 1; l <= K; l++) {
-        f[l] = new Array(n + 1).fill(Infinity); from[l] = new Array(n + 1).fill(0);
-        for (let j = l; j <= n - (K - l); j++) for (let i = l - 1; i < j; i++) {
-          const v = Math.max(f[l - 1][i], laneH(capsOf[l - 1], i, j));
-          if (v < f[l][j]) { f[l][j] = v; from[l][j] = i; }
-        }
-      }
-      const cuts = [n];
-      for (let l = K, j = n; l >= 1; l--) { j = from[l][j]; cuts.unshift(j); }
-      const m = measure(cuts, capsOf);
-      if (better(m, best)) best = { ...m, cuts, capsOf: capsOf.slice() };
-    };
-    const maxK = Math.min(n, o.maxLanes);
-    const walk = (capsOf, K, widthSoFar) => {
-      if (capsOf.length === K) { tryCaps(capsOf); return; }
-      for (let c = maxCap; c >= 1; c--) {
-        const w = c * o.nodeW + (c - 1) * o.gapX + 2 * o.padX;
-        const total = widthSoFar + w + (capsOf.length ? o.clusterGap : 0);
-        // lanes that cannot fit side by side even at the floor are not worth trying (one card wide always is)
-        if (total > roomW + 0.5 && !(K === 1 && c === 1)) continue;
-        capsOf.push(c); walk(capsOf, K, total); capsOf.pop();
-      }
-    };
-    for (let K = 1; K <= maxK; K++) walk([], K, 0);
-    const toPlan = (cuts, capsOf) => {
-      const lanes = [], caps = {};
-      for (let l = 0; l < capsOf.length; l++) {
-        lanes.push(projects.slice(cuts[l], cuts[l + 1]).map((p) => p.key));
-        for (let i = cuts[l]; i < cuts[l + 1]; i++) caps[projects[i].key] = capsOf[l];
-      }
-      return { lanes, caps };
-    };
-    // the plan in use stays while it holds the same projects in the same order and is nearly as good
-    if (prev && Array.isArray(prev.lanes) && prev.lanes.every((l) => l.length) && prev.lanes.flat().join('\u0001') === projects.map((p) => p.key).join('\u0001')) {
-      const capOf = (key) => Math.max(1, Math.min(maxCap, (prev.caps || {})[key] || 1));
-      if (prev.lanes.every((keys) => keys.every((key) => capOf(key) === capOf(keys[0])))) {
-        const cuts = [0];
-        prev.lanes.forEach((keys) => cuts.push(cuts[cuts.length - 1] + keys.length));
-        const capsOf = prev.lanes.map((keys) => capOf(keys[0]));
-        const m = measure(cuts, capsOf);
-        const keep = m.fits === best.fits && (m.fits ? m.scale >= Math.min(best.scale, o.max || 1) * 0.93 : (m.overX <= 0.5) === (best.overX <= 0.5) && m.overY <= best.overY + availH * 0.25);
-        if (keep) return { ...toPlan(cuts, capsOf), fits: m.fits, scale: m.scale };
-      }
-    }
-    return { ...toPlan(best.cuts, best.capsOf), fits: best.fits, scale: best.scale };
+    const shortest = Math.min(...plans.map((p) => p.h));
+    const pick = plans.find((p) => p.lanes.length === o.keep && p.h <= shortest * LANE_KEEP) || plans.find((p) => p.h <= shortest * LANE_COST);
+    const out = { lanes: pick.lanes.map((lane) => lane.map((p) => p.key)), caps: {} };
+    pick.lanes.forEach((lane, l) => lane.forEach((p) => { out.caps[p.key] = pick.caps[l]; }));
+    return out;
   }
 
-  // The order the user has put the project frames in, read from where they stand now:
-  // column by column from the left, top to bottom inside a column. A frame belongs to
-  // the column whose frames it overlaps sideways by half its width or more.
+  // The order the user has put the project frames in, read from where they stand now, the way
+  // planAcross fills them in: the top frame of every column from the left, then the second of
+  // every column, and so on. A frame belongs to the column whose frames it overlaps sideways
+  // by half its width or more, unless it stands beside one of them (dropped half over it):
+  // then it is a column of its own, read before or after that frame by its left edge.
   function orderByPlace(groups) {
     const columns = [];
+    const beside = (a, b) => Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) >= Math.min(a.h, b.h) / 2;
     groups.slice().sort((a, b) => a.x - b.x || a.y - b.y).forEach((g) => {
-      const col = columns.find((c) => Math.min(c.right, g.x + g.w) - Math.max(c.left, g.x) >= Math.min(g.w, c.right - c.left) / 2);
+      const col = columns.find((c) => Math.min(c.right, g.x + g.w) - Math.max(c.left, g.x) >= Math.min(g.w, c.right - c.left) / 2 && !c.items.some((it) => beside(it, g)));
       if (col) { col.items.push(g); col.right = Math.max(col.right, g.x + g.w); }
       else columns.push({ left: g.x, right: g.x + g.w, items: [g] });
     });
-    return columns.flatMap((c) => c.items.sort((a, b) => a.y - b.y || a.x - b.x).map((g) => g.key));
+    columns.forEach((c) => c.items.sort((a, b) => a.y - b.y || a.x - b.x));
+    const rows = Math.max(0, ...columns.map((c) => c.items.length));
+    return Array.from({ length: rows }, (_, r) => columns.filter((c) => c.items[r]).map((c) => c.items[r].key)).flat();
   }
 
   function constrainPosition(lay, box, p) {
@@ -735,7 +685,20 @@
       ? { lanes: pl.lanes.map((l) => l.slice()), caps: Object.fromEntries(Object.entries(pl.caps || {}).filter(([k, v]) => key(k) && Number.isInteger(v) && v >= 1 && v <= 12)), tight: !!pl.tight } : null;
     return { projectPositions, mode: s.mode === 'canvas' ? 'canvas' : 'crew', positions, view, collapsedProjects, showReturn: !!s.showReturn, projectOrder, plan };
   }
-  const MIN_SCALE = 0.3, MAX_SCALE = 1.6;
+  // The map's own zoom. Its 100% is BASE_SCALE of the canvas's drawn size (cards are drawn 280px wide
+  // and shown 196px wide at 100%); the canvas, the saved view and every position stay in drawn units,
+  // so a view saved by an older version keeps the size it had on screen and only reads differently
+  // (what was 70% is 100%). The buttons step by a tenth of 100%, landing on whole tenths.
+  const BASE_SCALE = 0.7, ZOOM_STEP = 0.1;
+  const MIN_SCALE = BASE_SCALE * 0.4, MAX_SCALE = BASE_SCALE * 2.5;
+  const zoomOf = (scale) => scale / BASE_SCALE;
+  const zoomPercent = (scale) => Math.round(zoomOf(scale) * 100);
+  // The scale one press of 放大 (dir 1) or 缩小 (dir -1) goes to.
+  function zoomStep(scale, dir) {
+    const z = zoomOf(scale) / ZOOM_STEP;
+    const next = dir > 0 ? Math.floor(z + 1e-6) + 1 : Math.ceil(z - 1e-6) - 1;
+    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, next * ZOOM_STEP * BASE_SCALE));
+  }
 
   // A change in anything but the live activity line rebuilds the map.
   function signature(map) {
@@ -755,5 +718,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, projectHue, nodeStatus, receiptLine, receiptFull, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planLanes, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });

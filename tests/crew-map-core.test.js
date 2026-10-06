@@ -650,56 +650,95 @@ function bounds(map, plan) {
   return { w: Math.max(...boxes.map((b) => b.x + b.w)) - Math.min(...boxes.map((b) => b.x)) + 32, h: Math.max(...boxes.map((b) => b.y + b.h)) - Math.min(...boxes.map((b) => b.y)) + 32, lay };
 }
 
-test('planLanes: project frames stand side by side, small ones stacked beside a big one, for the largest whole view', () => {
-  // the shape the user described: one project of ten sessions, then four, two, two and one
-  const map = crewOf({ agentdeck: 10, hermes: 4, music: 2, type4me: 2, vps: 1 });
-  const wide = C.planLanes(map, { w: 2284, h: 1084 }, { ...ROOM, max: 1.15 });
-  assert.equal(wide.fits, true);
-  assert.ok(wide.lanes.length >= 2, 'more than one lane across');
-  assert.deepEqual(wide.lanes.flat(), ['agentdeck', 'hermes', 'music', 'type4me', 'vps'], 'lanes keep the projects in order');
-  assert.deepEqual(wide.lanes[0], ['agentdeck'], 'the big project has a lane to itself');
-  assert.ok(wide.lanes.slice(1).some((l) => l.length > 1), 'small projects share a lane');
-  // what it promises is what the layout takes
-  const b = bounds(map, wide);
-  assert.ok(Math.abs(Math.min(2284 / b.w, 1084 / b.h) - wide.scale) < 0.02, `${wide.scale} promised, ${Math.min(2284 / b.w, 1084 / b.h)} taken`);
-  assert.ok(wide.scale >= 0.85);
-  // far better than the old way (every project full width, one under another)
-  const stacked = bounds(map, { lanes: [wide.lanes.flat()], caps: Object.fromEntries(wide.lanes.flat().map((k) => [k, 3])) });
-  assert.ok(Math.min(2284 / stacked.w, 1084 / stacked.h) < wide.scale * 0.6);
+// project i of n in lane i % K: the plan for K lanes with every frame one card wide
+const rows = (keys, K) => ({ lanes: Array.from({ length: K }, (_, l) => keys.filter((_, i) => i % K === l)), caps: Object.fromEntries(keys.map((k) => [k, 1])) });
+// the projects of a plan read row by row
+const byRow = (plan) => Array.from({ length: Math.max(0, ...plan.lanes.map((l) => l.length)) }, (_, r) => plan.lanes.filter((l) => l[r]).map((l) => l[r])).flat();
+
+test('planAcross: frames stand across the window, as many abreast as its width holds and four at most, the rest row by row under them', () => {
+  const map = crewOf({ a: 2, b: 3, c: 4, d: 1, e: 2, f: 1 });
+  // room for four frames one card wide, not for a second card in any of them
+  const four = C.planAcross(map, { w: 1700 }, ROOM);
+  assert.deepEqual(four.lanes, [['a', 'e'], ['b', 'f'], ['c'], ['d']], 'a row of four, the fifth and sixth under the first and second');
+  assert.deepEqual(four.caps, { a: 1, b: 1, c: 1, d: 1, e: 1, f: 1 });
+  // eight small projects: narrower windows drop a lane at a time; what is planned is never wider than the window
+  const keys = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8'], small = crewOf(Object.fromEntries(keys.map((k) => [k, 1])));
+  const seen = [];
+  for (const w of [3000, 1500, 1300, 1100, 900, 760, 500, 200]) {
+    const plan = C.planAcross(small, { w }, ROOM), K = plan.lanes.length;
+    seen.push(K);
+    assert.deepEqual(byRow(plan), keys, `${w}: rows keep the projects in order`);
+    assert.deepEqual(plan.lanes, rows(keys, K).lanes, `${w}: project i stands in lane i mod ${K}`);
+    plan.lanes.forEach((lane) => assert.equal(new Set(lane.map((k) => plan.caps[k])).size, 1, `${w}: the frames of a lane are equally wide`));
+    if (K > 1) assert.ok(bounds(small, plan).w <= w + 1, `${w}: ${bounds(small, plan).w} wide`);
+    if (K < 4) assert.ok(bounds(small, rows(keys, K + 1)).w > w, `${w}: one lane more would not fit`);
+  }
+  assert.deepEqual(seen, [4, 4, 3, 2, 2, 2, 1, 1]);
+  assert.deepEqual([...new Set(Object.values(C.planAcross(small, { w: 200 }, ROOM).caps))], [1], 'a window narrower than one card still gets a plan');
+  assert.equal(C.planAcross(crewOf({ a: 1, b: 1, c: 1, d: 1, e: 1, f: 1, g: 1, h: 1, i: 1 }), { w: 9000 }, ROOM).lanes.length, 4, 'never more than four abreast');
+  assert.equal(C.planAcross(map, { w: 3000 }, { ...ROOM, maxLanes: 3 }).lanes.length, 3);
   // no frame overlaps another and every card is inside its own frame
+  const b = bounds(map, four);
   b.lay.groups.forEach((g, i) => b.lay.groups.slice(i + 1).forEach((h) => assert.ok(g.x + g.w <= h.x || h.x + h.w <= g.x || g.y + g.h <= h.y || h.y + h.h <= g.y)));
   b.lay.nodes.forEach((n) => { const g = b.lay.groups.find((x) => x.key === n.project); assert.ok(n.x >= g.x && n.x + n.w <= g.x + g.w && n.y >= g.y && n.y + n.h <= g.y + g.h); });
-  // every project in a lane is as wide as that lane allows
-  wide.lanes.forEach((keys) => assert.equal(new Set(keys.map((k) => wide.caps[k])).size, 1));
+  // the first row stands on one line, every later frame close under the one above it
+  assert.equal(new Set(b.lay.groups.filter((g) => ['a', 'b', 'c', 'd'].includes(g.key)).map((g) => g.y)).size, 1);
+  const at = (key) => b.lay.groups.find((g) => g.key === key);
+  assert.equal(at('e').y, at('a').y + at('a').h + ROOM.clusterGap);
+  assert.equal(at('f').y, at('b').y + at('b').h + ROOM.clusterGap);
+  // the window's height is not asked: one width, one plan
+  assert.deepEqual(C.planAcross(map, { w: 1700, h: 300 }, ROOM), C.planAcross(map, { w: 1700, h: 3000 }, ROOM));
 });
 
-test('planLanes: a small map and a window too small for the map', () => {
-  // one project, three sessions: one row
-  const one = C.planLanes(crewOf({ solo: 3 }), { w: 1172, h: 644 }, { ...ROOM, max: 1.15 });
-  assert.deepEqual([one.lanes, one.caps, one.fits], [[['solo']], { solo: 3 }, true]);
-  // ten sessions in two projects on a laptop window: side by side, whole
-  const two = C.planLanes(crewOf({ a: 6, b: 4 }), { w: 1652, h: 824 }, { ...ROOM, max: 1.15 });
-  assert.equal(two.fits, true);
-  assert.deepEqual(two.lanes, [['a'], ['b']]);
-  // too much for one page at readable size: no sideways scrolling, the shortest way down
-  const map = crewOf({ agentdeck: 10, hermes: 4, music: 2, type4me: 2, vps: 1 });
-  const small = C.planLanes(map, { w: 1172, h: 644 }, { ...ROOM, max: 1.15 });
-  assert.equal(small.fits, false);
-  const b = bounds(map, small);
-  assert.ok(b.w * 0.85 <= 1172 + 1, 'the map is no wider than the window at the smallest readable size');
-  for (const other of [{ lanes: [small.lanes.flat()], caps: Object.fromEntries(small.lanes.flat().map((k) => [k, 3])) }, { lanes: [small.lanes.flat()], caps: Object.fromEntries(small.lanes.flat().map((k) => [k, 2])) }]) {
-    const o = bounds(map, other);
-    assert.ok(o.w * 0.85 > 1172 + 1 || o.h >= b.h, 'no arrangement that fits the width is shorter');
-  }
-  // a window narrower than one card still gets a plan: one lane, one card wide
-  const tiny = C.planLanes(map, { w: 200, h: 300 }, { ...ROOM, max: 1.15 });
-  assert.deepEqual([tiny.lanes.length, [...new Set(Object.values(tiny.caps))]], [1, [1]]);
-  // nothing on the canvas
-  assert.deepEqual(C.planLanes(C.buildCrewMap({ captain, columns: [], tasks: [] }), { w: 800, h: 600 }, ROOM), { lanes: [], caps: {}, fits: true, scale: 1 });
+test('planAcross: the tallest lane grows a card wider while the width holds it and the map gets shorter', () => {
+  // one project, three sessions: one row when the window holds it, one under another when it does not
+  assert.deepEqual(C.planAcross(crewOf({ solo: 3 }), { w: 1674 }, ROOM), { lanes: [['solo']], caps: { solo: 3 } });
+  assert.deepEqual(C.planAcross(crewOf({ solo: 3 }), { w: 700 }, ROOM), { lanes: [['solo']], caps: { solo: 2 } });
+  assert.deepEqual(C.planAcross(crewOf({ solo: 3 }), { w: 400 }, ROOM), { lanes: [['solo']], caps: { solo: 1 } });
+  // a big project beside small ones: only its lane grows
+  const lopsided = crewOf({ big: 10, s1: 1, s2: 1, s3: 1 });
+  const big = C.planAcross(lopsided, { w: 2400 }, ROOM);
+  assert.deepEqual(big.lanes, [['big'], ['s1'], ['s2'], ['s3']]);
+  assert.ok(big.caps.big >= 3 && big.caps.s1 === 1 && big.caps.s2 === 1 && big.caps.s3 === 1, JSON.stringify(big.caps));
+  assert.ok(bounds(lopsided, big).w <= 2400 + 1);
+  // where a fourth lane would leave the big project one card wide and the map far taller, a lane is given up for a wider frame
+  const fewer = C.planAcross(lopsided, { w: 1500 }, ROOM);
+  assert.ok(bounds(lopsided, rows(['big', 's1', 's2', 's3'], 4)).w <= 1500, 'four lanes one card wide would have fitted');
+  assert.ok(fewer.lanes.length < 4 && fewer.caps.big >= 2, JSON.stringify(fewer));
+  assert.ok(bounds(lopsided, fewer).h * 1.3 < bounds(lopsided, rows(['big', 's1', 's2', 's3'], 4)).h);
+  assert.ok(bounds(lopsided, fewer).w <= 1500 + 1);
+  // the number of lanes in use is kept while it is not much worse, so a card more or less does not reshuffle the map
+  const loose = C.planAcross(lopsided, { w: 1500 }, { ...ROOM, keep: fewer.lanes.length + 1 }), fresh = C.planAcross(lopsided, { w: 1500 }, { ...ROOM, keep: 0 });
+  assert.deepEqual(fresh, fewer);
+  assert.ok(loose.lanes.length === fewer.lanes.length || bounds(lopsided, loose).h <= bounds(lopsided, fewer).h * 1.5 + 1);
+  const nine = crewOf(Object.fromEntries('abcdefghi'.split('').map((k) => [k, 1])));
+  assert.equal(C.planAcross(nine, { w: 1500 }, ROOM).lanes.length, 4);
+  assert.equal(C.planAcross(nine, { w: 1500 }, { ...ROOM, keep: 3 }).lanes.length, 3, 'three lanes in use stay: four would be no shorter');
+  assert.equal(C.planAcross(nine, { w: 1500 }, { ...ROOM, keep: 1 }).lanes.length, 4, 'one lane in use is far taller: it goes');
+  // four equal lanes and room to widen three of them: widening some would not shorten the map, so none grows
+  const even = crewOf({ a: 2, b: 2, c: 2, d: 2 });
+  assert.deepEqual(C.planAcross(even, { w: 2400 }, ROOM).caps, { a: 1, b: 1, c: 1, d: 1 });
+  assert.ok(bounds(even, { lanes: [['a'], ['b'], ['c'], ['d']], caps: { a: 2, b: 2, c: 2, d: 1 } }).w <= 2400, 'three would have fitted');
+  assert.deepEqual(C.planAcross(even, { w: 2800 }, ROOM).caps, { a: 2, b: 2, c: 2, d: 2 }, 'all four fit: one row of cards each');
+  // a card more in one project: no frame moves to another lane, though arranged afresh the map would give a lane up
+  const before = C.planAcross(crewOf({ a: 2, b: 3, c: 4, d: 1, e: 2 }), { w: 1700 }, ROOM), grown = crewOf({ a: 2, b: 3, c: 4, d: 1, e: 3 });
+  assert.deepEqual(C.planAcross(grown, { w: 1700 }, { ...ROOM, keep: before.lanes.length }).lanes, before.lanes);
+  assert.equal(C.planAcross(grown, { w: 1700 }, ROOM).lanes.length, 3);
+  // six cards wide at most, however wide the window
+  assert.equal(C.planAcross(crewOf({ solo: 12 }), { w: 9000 }, ROOM).caps.solo, 6);
+});
+
+test('planAcross: nothing on the canvas, the tray, and the user\'s own project order', () => {
+  assert.deepEqual(C.planAcross(C.buildCrewMap({ captain, columns: [], tasks: [] }), { w: 800 }, ROOM), { lanes: [], caps: {} });
   // tray rules are the layout's: a folded inactive project takes no lane
   const tray = trayMap();
-  assert.deepEqual(C.planLanes(tray, { w: 1600, h: 900 }, { ...A_GRID, collapsedProjects: {} }).lanes.flat(), ['agentdeck']);
-  assert.deepEqual(C.planLanes(tray, { w: 1600, h: 900 }, { ...A_GRID, collapsedProjects: { 'hermes-quality': false } }).lanes.flat().sort(), ['agentdeck', 'hermes-quality']);
+  assert.deepEqual(C.planAcross(tray, { w: 1600 }, { ...A_GRID, collapsedProjects: {} }).lanes.flat(), ['agentdeck']);
+  assert.deepEqual(C.planAcross(tray, { w: 1600 }, { ...A_GRID, collapsedProjects: { 'hermes-quality': false } }).lanes.flat().sort(), ['agentdeck', 'hermes-quality']);
+  // the user's order: named projects first, in that order, across the top
+  const map = crewOf({ a: 6, b: 4, c: 2 });
+  const mine = C.planAcross(map, { w: 2400 }, { ...ROOM, order: ['c', 'a'] });
+  assert.deepEqual(mine.lanes, [['c'], ['a'], ['b']]);
+  assert.deepEqual(C.layout(map, { ...ROOM, order: ['c', 'a'], lanes: mine.lanes, caps: mine.caps }).groups.map((g) => g.key), ['c', 'a', 'b']);
 });
 
 test('a frame is at least as wide as its header needs, its cards centred; a narrow window stands the frames in one lane', () => {
@@ -723,67 +762,68 @@ test('a frame is at least as wide as its header needs, its cards centred; a narr
   const wide = C.layout(map, { ...ROOM, headW, lanes: [Object.keys(headW)], caps: Object.fromEntries(Object.keys(headW).map((k) => [k, 2])) });
   assert.deepEqual(wide.groups.map((g) => g.w), [632, 632, 632, 328]);
 
-  // A window that cannot show the map whole scrolls down either way. When two arrangements scroll about
-  // as far, lanes side by side that squeeze every frame to one card wide lose to one lane of wider frames.
-  const narrow = C.planLanes(map, { w: 712, h: 516 }, { ...ROOM, headW, max: 1.15 });   // a 980 x 700 window
-  assert.equal(narrow.fits, false);
-  assert.deepEqual([narrow.lanes.length, [...new Set(Object.values(narrow.caps))]], [1, [2]]);
-  const slim = C.planLanes(map, { w: 432, h: 616 }, { ...ROOM, headW, max: 1.15 });     // a 700 x 800 window
-  assert.deepEqual([slim.lanes.length, [...new Set(Object.values(slim.caps))]], [1, [1]]);
-  assert.ok((Math.max(...C.layout(map, { ...ROOM, headW, lanes: slim.lanes, caps: slim.caps }).groups.map((g) => g.w)) + 32) * 0.85 <= 432 + 1, 'the widened frames still need no sideways scrolling');
-  // where lanes side by side save a good deal of scrolling they stay
-  const laptop = C.planLanes(map, { w: 1172, h: 716 }, { ...ROOM, headW, max: 1.15 });  // a 1440 x 900 window
-  assert.deepEqual(laptop.lanes, [['agentdeck'], ['hermes-savings', 'type4me-windows', 'vps-ops']]);
-  // and a window that shows the map whole is not touched by the rule
-  const big = C.planLanes(map, { w: 1652, h: 948 }, { ...ROOM, headW, max: 1.15 });      // a 1920 x 1080 window
-  assert.equal(big.fits, true);
-  assert.ok(big.lanes.length >= 2);
+  // the plan counts the widened frames: what it lays out is no wider than the window
+  for (const w of [2400, 1674, 1017, 617]) {   // 1920, 1440, 980 and 700 wide windows at 100%
+    const plan = C.planAcross(map, { w }, { ...ROOM, headW });
+    const lay = C.layout(map, { ...ROOM, headW, lanes: plan.lanes, caps: plan.caps });
+    if (plan.lanes.length > 1) assert.ok(Math.max(...lay.groups.map((g) => g.x + g.w)) - Math.min(...lay.groups.map((g) => g.x)) + 32 <= w + 1, `${w}: the lanes fit`);
+  }
+  assert.equal(C.planAcross(map, { w: 617 }, { ...ROOM, headW }).lanes.length, 1);
+  assert.deepEqual(C.planAcross(map, { w: 2400 }, { ...ROOM, headW }).lanes, [['agentdeck'], ['hermes-savings'], ['type4me-windows'], ['vps-ops']]);
 });
 
-test('planLanes keeps the plan in use while it is nearly as good, and follows the user\'s project order', () => {
-  const map = crewOf({ a: 6, b: 4, c: 2 });
-  const size = { w: 1652, h: 824 };
-  const best = C.planLanes(map, size, { ...ROOM, max: 1.15 });
-  assert.deepEqual([best.lanes, best.caps], [[['a'], ['b'], ['c']], { a: 2, b: 2, c: 1 }]);
-  const scaleOf = (plan) => { const b = bounds(map, plan); return Math.min(size.w / b.w, size.h / b.h); };
-  // a card more or less must not reshuffle the map: the plan in use stays while it shows the map
-  // whole and within a few percent of the best size
-  const inUse = { lanes: [['a'], ['b', 'c']], caps: { a: 2, b: 2, c: 2 } };
-  assert.ok(scaleOf(inUse) < best.scale && scaleOf(inUse) >= best.scale * 0.93, 'not the best plan, but close');
-  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, inUse).lanes, inUse.lanes);
-  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, inUse).caps, inUse.caps);
-  // a plan that would show the map larger than it is ever shown is no reason to move either
-  const roomy = { w: 3000, h: 1600 };
-  assert.deepEqual(C.planLanes(map, roomy, { ...ROOM, max: 1.15 }, inUse).lanes, inUse.lanes);
-  // a plan that no longer shows the map whole when another does is dropped
-  const poor = { lanes: [['a', 'b', 'c']], caps: { a: 1, b: 1, c: 1 } };
-  assert.ok(scaleOf(poor) < 0.85);
-  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, poor).lanes, best.lanes);
-  // a plan for other projects (one gone, one new, another order) is not kept
-  assert.deepEqual(C.planLanes(map, size, { ...ROOM, max: 1.15 }, { lanes: [['a'], ['c', 'b']], caps: { a: 3, b: 2, c: 2 } }).lanes.flat(), ['a', 'b', 'c']);
-  // the user's order: named projects first, in that order; lanes still run through it in sequence
-  const mine = C.planLanes(map, size, { ...ROOM, max: 1.15, order: ['c', 'a'] });
-  assert.deepEqual(mine.lanes.flat(), ['c', 'a', 'b']);
-  assert.deepEqual(C.layout(map, { ...ROOM, order: ['c', 'a'], lanes: mine.lanes, caps: mine.caps }).groups.map((g) => g.key), ['c', 'a', 'b']);
-});
-
-test('orderByPlace reads the order the frames were left in: column by column, top to bottom', () => {
+test('orderByPlace reads the order the frames were left in: the top of every column from the left, then the next row', () => {
   const g = (key, x, y, w = 300, h = 200) => ({ key, x, y, w, h });
-  // tidy lanes read back as they were laid out
-  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 240), g('c', 340, 0), g('d', 340, 240)]), ['a', 'b', 'c', 'd']);
+  // two columns of two read across, then down
+  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 240), g('c', 340, 0), g('d', 340, 240)]), ['a', 'c', 'b', 'd']);
   // d dragged up beside a, a little lower and overlapping the first column by less than half: it starts a column
-  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 240), g('c', 700, 0), g('d', 330, 30)]), ['a', 'b', 'd', 'c']);
+  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 240), g('c', 700, 0), g('d', 330, 30)]), ['a', 'd', 'c', 'b']);
   // c dropped roughly over the first column, between a and b
-  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 400), g('c', 40, 190), g('d', 700, 0)]), ['a', 'c', 'b', 'd']);
+  assert.deepEqual(C.orderByPlace([g('a', 0, 0), g('b', 0, 400), g('c', 40, 190), g('d', 700, 0)]), ['a', 'd', 'c', 'b']);
   // a narrow frame under a wide one belongs to its column
-  assert.deepEqual(C.orderByPlace([g('wide', 0, 0, 900), g('narrow', 500, 240, 300), g('next', 940, 0)]), ['wide', 'narrow', 'next']);
+  assert.deepEqual(C.orderByPlace([g('wide', 0, 0, 900), g('narrow', 500, 240, 300), g('next', 940, 0)]), ['wide', 'next', 'narrow']);
+  // a small frame dropped half over the top left of a big one stands beside it, not above it: it reads first, the big one next
+  assert.deepEqual(C.orderByPlace([g('big', 400, 100, 936, 820), g('small', 280, 70, 328, 244), g('c', 1400, 100), g('d', 1760, 100)]), ['small', 'big', 'c', 'd']);
   assert.deepEqual(C.orderByPlace([]), []);
-  // read from a real layout, the order is the layout's own
-  const map = crewOf({ a: 3, b: 2, c: 2, d: 1 });
-  const lay = C.layout(map, { ...ROOM, lanes: [['a', 'b'], ['c', 'd']] });
+  // read from what planAcross laid out, the order is the map's own, at every number of lanes
+  const map = crewOf({ a: 3, b: 2, c: 2, d: 1, e: 4, f: 1, g: 2 });
+  for (const w of [3000, 1500, 1100, 760, 300]) {
+    const plan = C.planAcross(map, { w }, ROOM);
+    assert.deepEqual(C.orderByPlace(C.layout(map, { ...ROOM, lanes: plan.lanes, caps: plan.caps }).groups), ['a', 'b', 'c', 'd', 'e', 'f', 'g'], `${w}: ${plan.lanes.length} lanes`);
+  }
+  const lay = C.layout(crewOf({ a: 3, b: 2, c: 2, d: 1 }), { ...ROOM, lanes: [['a', 'c'], ['b', 'd']] });
   assert.deepEqual(C.orderByPlace(lay.groups), ['a', 'b', 'c', 'd']);
-  C.translateProject(lay, 'd', -lay.groups.find((x) => x.key === 'd').x + lay.groups[0].x, -400);   // d dragged above the first lane
-  assert.deepEqual(C.orderByPlace(lay.groups), ['d', 'a', 'b', 'c']);
+  C.translateProject(lay, 'd', -lay.groups.find((x) => x.key === 'd').x + lay.groups[0].x, -900);   // d dragged above the first lane
+  assert.deepEqual(C.orderByPlace(lay.groups), ['d', 'b', 'a', 'c']);
+});
+
+test('the map\'s own zoom: 100% is 70% of the drawn size, the buttons step by tenths of it, old saved views keep their size', () => {
+  assert.equal(C.BASE_SCALE, 0.7);
+  // what the control reads: what used to read 70% is 100%
+  assert.deepEqual([0.7, 0.49, 1, 0.85, 1.4].map(C.zoomPercent), [100, 70, 143, 121, 200]);
+  assert.deepEqual([C.zoomPercent(C.MIN_SCALE), C.zoomPercent(C.MAX_SCALE)], [40, 250]);
+  // 放大 / 缩小 land on whole tenths of 100%
+  const pct = (scale, dir) => C.zoomPercent(C.zoomStep(scale, dir));
+  assert.deepEqual([pct(0.7, 1), pct(0.7, -1)], [110, 90]);
+  assert.deepEqual([pct(0.85, 1), pct(0.85, -1)], [130, 120], 'from between two steps to the next one, not a step and a bit');
+  assert.deepEqual([pct(0.5, 1), pct(0.5, -1)], [80, 70]);
+  let s = C.BASE_SCALE;
+  for (let i = 0; i < 5; i++) s = C.zoomStep(s, 1);
+  assert.equal(C.zoomPercent(s), 150);
+  for (let i = 0; i < 5; i++) s = C.zoomStep(s, -1);
+  assert.ok(Math.abs(s - C.BASE_SCALE) < 1e-9, 'five steps in and five out come back to 100%');
+  // the limits hold
+  assert.equal(C.zoomStep(C.MAX_SCALE, 1), C.MAX_SCALE);
+  assert.equal(C.zoomStep(C.MIN_SCALE, -1), C.MIN_SCALE);
+  for (let i = 0; i < 40; i++) s = C.zoomStep(s, 1);
+  assert.equal(s, C.MAX_SCALE);
+  for (let i = 0; i < 40; i++) s = C.zoomStep(s, -1);
+  assert.equal(s, C.MIN_SCALE);
+  // a view saved by 1.3 or earlier (scale in drawn units, 0.3 to 1.6) is kept as it is: same size on screen, a new reading
+  for (const old of [0.3, 0.49, 0.7, 0.85, 1, 1.15, 1.6]) assert.equal(C.normalizeSaved({ view: { x: 3, y: 4, scale: old } }).view.scale, old);
+  assert.equal(C.zoomPercent(C.normalizeSaved({ view: { x: 0, y: 0, scale: 0.7 } }).view.scale), 100);
+  assert.equal(C.normalizeSaved({ view: { x: 0, y: 0, scale: 0.01 } }).view.scale, C.MIN_SCALE);
+  assert.equal(C.normalizeSaved({ view: { x: 0, y: 0, scale: 99 } }).view.scale, C.MAX_SCALE);
 });
 
 test('a web request waiting its turn is 排队 even though its terminal reads working', () => {
