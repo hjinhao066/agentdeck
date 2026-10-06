@@ -87,6 +87,15 @@ test('Claude, Codex and agy status ignores Cursor reply wording', () => {
   assert.equal(classify(prose + '❯\nAntigravity', { hasWorked: true, lastOutputAt: 1 }, 'agy'), 'done');
 });
 
+test('Codex "Waiting for background terminal" keeps the column working, and leaving it lets the dot go green', () => {
+  const rows = ['◦ Waiting for background terminal (5m 12s • esc to interrupt) · sleep 300',
+    '◦ Waiting for background terminal · sleep 300', '◦ Waiting for agents (2m 3s • esc to interrupt)'];
+  for (const row of rows) {
+    assert.equal(classify(`• Ran sleep 300\n\n${row}\n\n› Ask Codex to do anything\n? for shortcuts`, { hasWorked: true }, 'codex'), 'working', row);
+    assert.equal(classify(`${row}\n${codexIdle}`, { hasWorked: true, lastOutputAt: 1 }, 'codex'), 'done', row);
+  }
+});
+
 test('Cursor waiting commands, soft-wrapped stop hints and short idle gaps never complete a running turn', () => {
   for (const marker of ['Waiting 2m 38s for shell', 'Waiting for shell', '  ⠀⠞ Thinking  27.62k tokens', '  ⠠⠛ Working  3k tokens', '正在运行命令 gh run watch']) {
     const screen = '$ gh run watch 123 --exit-status\n' + marker + '\n→ Add a follow-up';
