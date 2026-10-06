@@ -1338,6 +1338,8 @@
   // No length limit: a prompt longer than this is saved as a .txt file and the
   // agent gets its opening plus "read this file first".
   const LONG_PROMPT = 8000;
+  // A pasted image path is read by the agent before it accepts Enter; a big image takes a few seconds.
+  const PASTE_READ_MAX = 30_000;
   async function sendPrompt(col, prompt, atts, opts) {
     const o = opts || {};
     if (o.cancelled && o.cancelled()) return false;
@@ -1378,7 +1380,8 @@
       do {
         await new Promise((resolve) => setTimeout(resolve, bracketed ? 50 : 60));
         if (host.terms.get(col.id) !== entry || !entry.alive || (o.cancelled && o.cancelled())) return false;
-      } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)));
+      } while (bracketed && (Date.now() - pastedAt < minWait || (Date.now() - (entry.lastOutputAt || 0) < 200 && Date.now() - pastedAt < 3000)
+        || (Date.now() - pastedAt < PASTE_READ_MAX && C.pasteBusy(host.dumpScreen(entry.term, 6)))));
       if (!o.silent && window.MainSession) window.MainSession.onContextCommandSent(col, text);
       window.deck.ptyInput(col.id, '\r');
       host.manualPromptSent(col.id, turn, o.userInitiated === true);

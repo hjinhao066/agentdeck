@@ -315,6 +315,14 @@
     return (d.getFullYear() === n.getFullYear() ? '' : d.getFullYear() + '年') + md + hm;
   }
 
+  // Claude Code reads a pasted image path (an attachment) before it takes Enter: while it does,
+  // its footer says "Pasting…" and an Enter sent then is dropped, leaving the text unsent in the box.
+  // It replaces the footer, which is the last row of the screen: nothing else counts.
+  function pasteBusy(screen) {
+    const rows = String(screen || '').split('\n').map((row) => row.trim()).filter(Boolean);
+    return /^Pasting(?:…|\.{3})$/.test(rows.at(-1) || '');
+  }
+
   // Answers to a permission menu or y/n prompt are not new questions.
   function isPromptAnswer(line) {
     const t = String(line || '').trim();
@@ -790,7 +798,7 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it

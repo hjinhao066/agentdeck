@@ -603,3 +603,18 @@ test('a web task card keeps its queued/running phase and drops anything else', (
   assert.equal('webPhase' in card('later'), false);
   assert.equal('webPhase' in card(undefined), false);
 });
+
+test('a pasted image path: Claude Code says "Pasting…" in its footer while it reads the file, and Enter must wait', () => {
+  // the footer row as the real TUI drew it (claude 2.1.289), under the input box
+  const busy = ['', '────────────────────────', '❯ Try "fix lint errors"', '────────────────────────', 'Pasting…'].join('\n');
+  const idle = ['', '────────────────────────', '❯ [Image #1]看图', '────────────────────────', '  ⏵⏵ auto mode on (shift+tab to cycle)'].join('\n');
+  assert.equal(C.pasteBusy(busy), true);
+  assert.equal(C.pasteBusy('  Pasting...  '), true);
+  assert.equal(C.pasteBusy(idle), false);
+  assert.equal(C.pasteBusy(''), false);
+  assert.equal(C.pasteBusy(undefined), false);
+  // only the footer row counts: the word in an old reply, in the user's own text, or on a line the footer has since moved past is not the indicator
+  assert.equal(C.pasteBusy(['⏺ Pasting… is what the footer says', '', '❯ ', '────────', '  ? for shortcuts'].join('\n')), false);
+  assert.equal(C.pasteBusy('❯ Pasting… is slow\n────'), false);
+  assert.equal(C.pasteBusy(['Pasting…', '[Image #1] attached'].join('\n')), false);
+});

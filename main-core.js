@@ -249,15 +249,15 @@
       `   ${cli} archive --id 会话id   结束终端并归档，保留对话；正在干活也执行，不弹确认框`,
       `   ${cli} read --id 会话id [--turns 3] [--find 关键词]   读某个会话已保存的对话；恢复、诊断、验收、核对矛盾或用户追问时按需读；清空上下文前的队长对话也这样读，id 列在 ledger 最后`,
       `   ${cli} read --id captain-history --find "关键词" [--turns 3]   搜全部清空前的队长记录`,
-      `   ${cli} peek --id 会话id [--lines 40]   只读看终端实时屏幕/最近输出（去颜色，最多1000行）；不发输入，不恢复已归档会话。查进度或诊断卡住时用，省上下文`,
+      `   ${cli} peek --id 会话id [--lines 40]   只读看终端实时屏幕/最近输出（最多1000行）；不发输入，不恢复已归档会话。查进度或诊断卡住时用`,
       `   ${cli} receipts [--wait] [--timeout 秒]   取回未读回执；--wait 阻塞等回执/提问，超时输出空并退出，省略 timeout 一直等`,
-      `   ${cli} answer --to 会话id --key y|n|1-9|enter|esc   回答停在确认或权限提示上的会话`,
+      `   ${cli} answer --to 会话id --key y|n|1-9|enter|esc|up|down   回答确认或权限提示；菜单如 down,enter`,
       '3. 目标清楚就派活：目标、范围和验收要求明确且已获授权，直接拆开派下去；缺的信息能靠检查项目、产物或历史弄清的先派人检查，影响目标、范围、授权或关键结果又查不出来的才问用户。已有授权不因 Relay、重启或清空而重新确认，也不因此扩大。技术细节（模型、实现、拆法）自己决定，不拿去问用户。',
       '4. 派活单步原则：一个会话一次只派一件活，忙碌时不要连着追加。互不依赖的事拆开并行。补充用 tell 发回原会话，只转发新指令，不要再贴文件正文；改方向用 tell --replace --now，明确要停才用 stop。',
       '5. 界面类的活要写明图标规则：任务正文里必须写明——复制、删除、编辑等常见工具动作用图标按钮（复制=两个重叠方框、删除=垃圾桶、编辑=铅笔），配 tooltip 和无障碍名称，不用「复制」这类文字按钮。不写，别的模型会做成文字按钮。',
       '   大项目由你直接拆块派给正式会话，不层层外包；同一项目的会话用同一个 --project "项目名"，审查会话用 --reviews 会话id[,会话id] 明确标明审谁。',
       '   派活时说明：Claude 会话默认不要自己开 Claude 子 agent（费额度）；Codex/Gemini 会话可以开子 agent。',
-      '6. 没点名目录不传 --cwd，点名才传。写代码的活加 --worktree 仓库路径，程序会建独立副本和分支。有忽略文件（含 node_modules）不自动删；全在其中且已合入或已推送才标可手动清理。',
+      '6. 没点名目录不传 --cwd，点名才传。写代码的活加 --worktree 仓库路径，程序会建独立副本和分支。有忽略文件（含 node_modules）不自动删，全在其中且已合入/推送才可手动清理。',
       '7. 派完马上用一两句话告诉用户交给了哪个会话、已启动还是在排队，不要等结果；命令没成功返回不说已启动。用户说「高优先级」＝立刻派到后台开工：建卡或 new 加 --priority high，排队排最前。',
       legacyReceiptInjection
         ? '8. 已显式开启旧回执注入回退：队员的回执和提问会在输入框为空且 agent 空闲时自动发给你（以【AgentDeck 新回执】开头），也会附在用户的下一条消息里。不要再挂 receipts --wait 后台监听。看完用一两句话告诉用户结果；需要接着做的，直接派下去。回答用几句话，不要把别的会话的全文、长日志或文件正文搬进来。'
@@ -691,6 +691,29 @@
     if (!/[?？]["')」』）]*$/.test(last)) return '';
     return last;
   }
+  // `answer --key`: one key (y, n, 1-9, enter, esc) as before, or a comma list that can move a
+  // menu cursor first, e.g. `down,enter` or `down:2,enter`. Digits and y do not pick a row in
+  // every menu (Claude Code's folder-trust menu exits on them), so the arrows are the reliable way.
+  const ANSWER_NAMED = { enter: '\r', esc: '\x1b', tab: '\t', space: ' ' };
+  const ANSWER_ARROWS = { up: 'A', down: 'B', right: 'C', left: 'D' };
+  const ANSWER_KEYS_HELP = 'answer 的 --key 只能是 y、n、1-9、enter、esc、tab、space、up、down、left、right；多个键用逗号连起来，如 down,enter，重复用 down:2。';
+  function answerKeys(key, { appCursor = false } = {}) {
+    const parts = String(key || '').trim().toLowerCase().split(',').map((p) => p.trim());
+    if (!parts.length || parts.length > 20 || parts.some((p) => !p)) throw new Error(ANSWER_KEYS_HELP);
+    const keys = [];
+    for (const part of parts) {
+      const [name, count = '1', ...extra] = part.split(':');
+      const times = /^\d{1,2}$/.test(count) ? Number(count) : 0;
+      if (extra.length || times < 1 || times > 20) throw new Error(ANSWER_KEYS_HELP);
+      const arrow = ANSWER_ARROWS[name];
+      const seq = arrow ? (appCursor ? '\x1bO' : '\x1b[') + arrow : ANSWER_NAMED[name] || (name === 'y' || name === 'n' || /^[1-9]$/.test(name) ? name : '');
+      if (!seq || (times > 1 && !arrow)) throw new Error(ANSWER_KEYS_HELP);
+      for (let i = 0; i < times; i++) keys.push(seq);
+    }
+    if (keys.length > 40) throw new Error(ANSWER_KEYS_HELP);
+    // A lone y/n/digit is a typed answer that still needs its Enter; a list says exactly what to press.
+    return { keys, submit: parts.length === 1 && /^[yn1-9]$/.test(keys[0]) };
+  }
   // Why a queued tell still cannot be typed in. Empty when nothing here blocks it.
   function tellWaitReason({ entry, composing, foreground, screen, cmd } = {}) {
     const text = screen != null ? screen : entry?.lastScreen;
@@ -959,7 +982,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
   };
 });

@@ -515,7 +515,7 @@ test('Captain briefing stays static and includes explicit models, boards and two
   // Commands as the CLI takes them: one line each, the keys answer really accepts.
   assert.equal(text.split('\n').filter((line) => /AGENTDECK_BOARD_CLI" (?:briefing|handoff)/.test(line)).length, 1, 'handoff and briefing share one line');
   assert.match(text, /AGENTDECK_BOARD_CLI" handoff {3}生成当前交接快照[^\n]*briefing 只读本提示词全文/);
-  assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc/);
+  assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc\|up\|down[^\n]*down,enter/);
   assert.ok(!/ {4,}\S/.test(text.split('\n').filter((line) => line.includes('AGENTDECK_BOARD_CLI')).join('\n')), 'no alignment padding in the command list');
   // chat-ui replaces prompts longer than 8000 with a file pointer. The closing
   // paragraph must stay inside the pasted briefing on both platforms.
@@ -644,4 +644,24 @@ test('archivable: a successor who also failed is not a takeover; the newest fail
   assert.equal(gone(s, 'a', done), true, 'A archives when the card is done');
   assert.equal(gone(s, 'b', done), true, 'B archives when the card is done');
   assert.equal(gone(s, 'c', done), true, 'C archives when the card is done');
+});
+
+test('answer --key keeps the one-key forms and can move a menu cursor before Enter', () => {
+  // unchanged: a lone y, n or digit is typed and then submitted with Enter
+  for (const key of ['y', 'n', '1', '9', ' Y ']) assert.deepEqual(M.answerKeys(key), { keys: [key.trim().toLowerCase()], submit: true }, key);
+  assert.deepEqual(M.answerKeys('enter'), { keys: ['\r'], submit: false });
+  assert.deepEqual(M.answerKeys('esc'), { keys: ['\x1b'], submit: false });
+  // Claude Code's folder-trust menu exits on 1, 2 and y: down then Enter is what picks "Yes, I trust this folder"
+  assert.deepEqual(M.answerKeys('down,enter'), { keys: ['\x1b[B', '\r'], submit: false });
+  assert.deepEqual(M.answerKeys('DOWN, Enter').keys, ['\x1b[B', '\r']);
+  assert.deepEqual(M.answerKeys('down:2,enter').keys, ['\x1b[B', '\x1b[B', '\r']);
+  assert.deepEqual(M.answerKeys('up:3,tab,space,left,right').keys, ['\x1b[A', '\x1b[A', '\x1b[A', '\t', ' ', '\x1b[D', '\x1b[C']);
+  // a list of keys is exact: no extra Enter, even when it is a single digit followed by nothing
+  assert.deepEqual(M.answerKeys('down,2'), { keys: ['\x1b[B', '2'], submit: false });
+  // a terminal in application cursor mode wants SS3 arrows
+  assert.deepEqual(M.answerKeys('down,up', { appCursor: true }).keys, ['\x1bOB', '\x1bOA']);
+  for (const bad of ['', ' ', 'x', '0', '10', 'ctrl-c', 'down,', ',enter', 'down:0', 'down:21', 'down:x', 'down:1:2', 'enter:2', 'y:2',
+    Array(21).fill('down').join(','), Array(3).fill('down:20').join(',')]) {
+    assert.throws(() => M.answerKeys(bad), /answer 的 --key 只能是/, JSON.stringify(bad));
+  }
 });

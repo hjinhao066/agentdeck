@@ -319,3 +319,102 @@ test('US2 setup shares only brain files and its missing login stays isolated', a
   assert.equal(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'), original);
   assert.throws(() => setup(home, 'cn'), /独立席位/);
 });
+
+// ---- folder trust for a worktree the app has just created ----
+function copyFixture(t) {
+  const home = fixture(t);
+  const root = path.join(home, 'agentdeck-worktrees');
+  const dir = path.join(root, 'repo', 'fix', 'one');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, '.git'), 'gitdir: /somewhere/repo/.git/worktrees/one\n');   // a linked worktree has a .git file
+  return { home, root, dir };
+}
+const us2 = S.normalize()[2], cn = S.normalize()[0];
+const readJson = (file) => JSON.parse(fs.readFileSync(file, 'utf8'));
+test('a new worktree is trusted for the seat that will run it, in the file and shape Claude Code reads', async (t) => {
+  const { home, root, dir } = copyFixture(t);
+  const file = path.join(home, '.claude-us2', '.claude.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const original = { oauthAccount: { emailAddress: 'us2@example.test' }, numStartups: 7, projects: { [home]: { hasTrustDialogAccepted: true, lastCost: 1 }, '/other': { hasTrustDialogAccepted: false, allowedTools: ['x'] } } };
+  fs.writeFileSync(file, JSON.stringify(original), { mode: 0o600 });
+  const result = await M.trustWorktree(us2, home, dir, { root });
+  assert.deepEqual(result, { ok: true, changed: true });
+  const after = readJson(file);
+  assert.equal(after.projects[fs.realpathSync.native(dir)].hasTrustDialogAccepted, true);
+  // everything else is exactly as it was: the parent folder, the home folder and other seats are not trusted
+  const { [fs.realpathSync.native(dir)]: _added, [dir]: _alias, ...rest } = after.projects;
+  assert.deepEqual(rest, original.projects);
+  assert.deepEqual({ ...after, projects: rest }, original);
+  for (const parent of [root, path.dirname(dir), path.join(root, 'repo')]) assert.equal(after.projects[parent], undefined, parent);
+  assert.equal(fs.existsSync(path.join(home, '.claude.json')), false, 'the default seat file is not created');
+  assert.deepEqual(fs.readdirSync(path.dirname(file)).filter((name) => name.includes('.lock') || name.includes('tmp')), [], 'no lock or temp file left behind');
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  // asking again changes nothing
+  const bytes = fs.readFileSync(file, 'utf8');
+  assert.deepEqual(await M.trustWorktree(us2, home, dir, { root }), { ok: true, changed: false });
+  assert.equal(fs.readFileSync(file, 'utf8'), bytes);
+});
+test('the default seat keeps its trust in ~/.claude.json and a missing file is created', async (t) => {
+  const { home, root, dir } = copyFixture(t);
+  assert.deepEqual(await M.trustWorktree(cn, home, dir, { root }), { ok: true, changed: true });
+  assert.equal(readJson(path.join(home, '.claude.json')).projects[fs.realpathSync.native(dir)].hasTrustDialogAccepted, true);
+  assert.equal(fs.existsSync(path.join(home, '.claude', '.claude.json')), false);
+  // a seat directory that does not exist yet is created for its file
+  const { dir: other } = (() => { const d = path.join(home, 'agentdeck-worktrees', 'repo', 'fix', 'two'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, '.git'), 'gitdir: z'); return { dir: d }; })();
+  assert.equal((await M.trustWorktree({ id: 'new', name: 'New', configDir: '~/.claude-new' }, home, other, { root })).ok, true);
+  assert.equal(readJson(path.join(home, '.claude-new', '.claude.json')).projects[fs.realpathSync.native(other)].hasTrustDialogAccepted, true);
+});
+test('trust is recorded for the path as given and for its real path', { skip: process.platform === 'win32' }, async (t) => {
+  const { home, root, dir } = copyFixture(t);
+  const alias = path.join(home, 'alias-root');
+  fs.symlinkSync(root, alias);
+  const viaAlias = path.join(alias, 'repo', 'fix', 'one');
+  assert.equal((await M.trustWorktree(cn, home, viaAlias, { root: alias })).ok, true);
+  const projects = readJson(path.join(home, '.claude.json')).projects;
+  assert.deepEqual(Object.keys(projects).sort(), [viaAlias, fs.realpathSync.native(dir)].sort());
+});
+test('only a linked worktree inside the managed root is ever trusted; refusals touch nothing', async (t) => {
+  const { home, root, dir } = copyFixture(t);
+  const file = path.join(home, '.claude.json');
+  const original = JSON.stringify({ projects: { '/x': { hasTrustDialogAccepted: true } } });
+  fs.writeFileSync(file, original);
+  const plain = path.join(root, 'plain'); fs.mkdirSync(plain);
+  const repo = path.join(root, 'realrepo'); fs.mkdirSync(path.join(repo, '.git'), { recursive: true });
+  const outside = path.join(home, 'projects', 'mine'); fs.mkdirSync(outside, { recursive: true }); fs.writeFileSync(path.join(outside, '.git'), 'gitdir: x');
+  for (const [bad, options] of [
+    [root, { root }], [path.dirname(root), { root }], [home, { root }], [path.join(home, '.claude-us2'), { root }],
+    [plain, { root }], [repo, { root }], [outside, { root }], [path.join(root, 'missing'), { root }],
+    ['relative/dir', { root }], [dir, {}], [dir, { root: 'relative' }], [undefined, { root }],
+  ]) {
+    const result = await M.trustWorktree(cn, home, bad, options);
+    assert.equal(result.ok, false, String(bad));
+    assert.equal(typeof result.reason, 'string');
+  }
+  assert.equal(fs.readFileSync(file, 'utf8'), original);
+});
+test('a damaged or unexpected seat file is left alone and the reason is reported', async (t) => {
+  const { home, root, dir } = copyFixture(t);
+  const file = path.join(home, '.claude.json');
+  for (const content of ['{ not json', '[]', 'null', '{"projects":[]}', '{"projects":{"' + fs.realpathSync.native(dir).replace(/\\/g, '\\\\') + '":"yes"}}']) {
+    fs.writeFileSync(file, content);
+    const result = await M.trustWorktree(cn, home, dir, { root });
+    assert.equal(result.ok, false, content);
+    assert.match(result.reason, /席位配置文件/);
+    assert.equal(fs.readFileSync(file, 'utf8'), content, content);
+  }
+});
+test('a running session holding the config lock is waited for; a dead lock is replaced', async (t) => {
+  const { home, root, dir } = copyFixture(t);
+  const file = path.join(home, '.claude.json');
+  fs.writeFileSync(file, '{"projects":{}}');
+  fs.mkdirSync(file + '.lock');
+  setTimeout(() => fs.rmdirSync(file + '.lock'), 150);
+  assert.deepEqual(await M.trustWorktree(cn, home, dir, { root }), { ok: true, changed: true });
+  assert.equal(fs.existsSync(file + '.lock'), false);
+  // a lock nobody has touched for over ten seconds belongs to a process that is gone
+  const second = path.join(root, 'repo', 'fix', 'two'); fs.mkdirSync(second, { recursive: true }); fs.writeFileSync(path.join(second, '.git'), 'gitdir: y');
+  fs.mkdirSync(file + '.lock');
+  const old = new Date(Date.now() - 60_000); fs.utimesSync(file + '.lock', old, old);
+  assert.deepEqual(await M.trustWorktree(cn, home, second, { root }), { ok: true, changed: true });
+  assert.equal(Object.keys(readJson(file).projects).length, 2);
+});

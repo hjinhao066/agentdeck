@@ -427,6 +427,20 @@ test('a dispatched paste waits for the TUI before Enter and reaches the worker e
   await page.evaluate((i) => archiveColumn(columns.find((c) => c.id === i)), child);
 });
 
+test('a task that carries an image path: Enter waits while the agent reads the attachment, so it is submitted and not left in the input box', async () => {
+  await run(mainId, `clear; node "${CLI}" new --title "带图片" --task "look at /tmp/agentdeck-shot.png and describe it" --command "${FAKE.replace(/"/g, '')} --image-paste"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '带图片')?.id), { timeout: 15000 }).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '带图片').id);
+  const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '带图片' });
+  await expect(card).toHaveClass(/st-done/, { timeout: 30000 });
+  const replay = await page.evaluate((i) => window.deck.ptyReplay(i), child);
+  expect(replay).toContain('Pasting…');
+  expect(replay).not.toContain('Enter consumed by paste detector');
+  expect(capturedPrompts().filter((p) => p.startsWith('look at /tmp/agentdeck-shot.png'))).toHaveLength(1);
+  await expect(card.locator('.task-summary')).toContainText('stand-in finished look at /tmp/agentdeck-shot');
+  await page.evaluate((i) => archiveColumn(columns.find((c) => c.id === i)), child);
+});
+
 test('work for a session stopped on a startup dialog (Cursor: trust this workspace) is not lost: the Captain is told and answers', async () => {
   const STAND_IN = FAKE.replace(/"/g, '');
   await run(mainId, `clear; node "${CLI}" new --title "要信任" --task "work after the trust dialog" --command "${STAND_IN} --trust-dialog"`);
@@ -442,6 +456,23 @@ test('work for a session stopped on a startup dialog (Cursor: trust this workspa
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '要信任' });
   await expect(card).toHaveClass(/st-done/, { timeout: 40000 });
   expect(capturedPrompts().filter((p) => p.startsWith('work after the trust dialog'))).toHaveLength(1);
+  await page.evaluate((i) => { config.mainSession.pending = config.mainSession.pending.filter((p) => p.colId !== i); config.mainSession.inflight = config.mainSession.inflight.filter((p) => p.colId !== i); archiveColumn(columns.find((c) => c.id === i)); }, child);
+});
+
+test("Claude's folder-trust menu starts on \"No, exit\": answer can walk the cursor down and press Enter, and the task then goes in", async () => {
+  const STAND_IN = FAKE.replace(/"/g, '');
+  await run(mainId, `clear; node "${CLI}" new --title "信任菜单" --task "work after the trust menu" --command "${STAND_IN} --claude-trust-menu"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '信任菜单')?.id), { timeout: 15000 }).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '信任菜单').id);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child), { timeout: 30000 }).toBe('input');
+  expect(capturedPrompts().filter((p) => p.startsWith('work after the trust menu'))).toHaveLength(0);
+  // a cursor that is not moved first would press "No, exit": walk down twice (it stops on the last row), back up, down again, then Enter
+  await run(mainId, `clear; node "${CLI}" answer --to ${child} --key down:2,up,down,enter`);
+  await expect.poll(() => screen(mainId), { timeout: 15000 }).toContain('按了 down:2,up,down,enter');
+  const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '信任菜单' });
+  await expect(card).toHaveClass(/st-done/, { timeout: 40000 });
+  expect(await page.evaluate((i) => terms.get(i).alive, child)).toBe(true);
+  expect(capturedPrompts().filter((p) => p.startsWith('work after the trust menu'))).toHaveLength(1);
   await page.evaluate((i) => { config.mainSession.pending = config.mainSession.pending.filter((p) => p.colId !== i); config.mainSession.inflight = config.mainSession.inflight.filter((p) => p.colId !== i); archiveColumn(columns.find((c) => c.id === i)); }, child);
 });
 

@@ -71,6 +71,82 @@ function initializeOnboarding(seat, home, projectDir) {
     return false;
   }
 }
+// Claude Code asks "do you trust this folder" once per directory and keeps the answer in the seat's
+// global file, projects[<dir>].hasTrustDialogAccepted. A linked git worktree is judged on its own
+// path (trust for its repo or a parent folder does not carry over), and the menu's default row is
+// "No, exit", so an unattended session dies on it. AgentDeck records the answer for the one copy it
+// has just created, in the same file and shape Claude Code writes, before that seat's session starts.
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function trustKeys(dir, platform) {
+  let real = dir;
+  try { real = fs.realpathSync.native(dir); } catch (_) {}
+  return [...new Set([dir, real].map((value) => {
+    const key = path.resolve(value).normalize('NFC');
+    return platform === 'win32' ? key.replace(/^\\\\\?\\/, '').replace(/\\/g, '/') : key;
+  }))];
+}
+// Same lock directory convention Claude Code uses on its own file, so a running session never
+// reads a half-written file and we never overwrite its update. Stale after 10 s, like theirs.
+async function withFileLock(file, work) {
+  const lock = file + '.lock';
+  const deadline = Date.now() + 4000;
+  for (;;) {
+    try { fs.mkdirSync(lock); break; }
+    catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > 10_000) { fs.rmdirSync(lock); continue; } } catch (_) {}
+      if (Date.now() > deadline) throw new Error('席位配置文件正被占用');
+      await pause(25);
+    }
+  }
+  try { return await work(); } finally { try { fs.rmdirSync(lock); } catch (_) {} }
+}
+// Never throws: a failed registration must not stop the task, only leave the dialog in place.
+async function trustWorktree(seat, home, dir, { root, platform = process.platform } = {}) {
+  try {
+    if (typeof dir !== 'string' || !path.isAbsolute(dir) || typeof root !== 'string' || !path.isAbsolute(root)) return { ok: false, reason: '副本路径无效' };
+    const real = fs.realpathSync.native(dir), realRoot = fs.realpathSync.native(root);
+    const rel = path.relative(realRoot, real);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return { ok: false, reason: '目录不在 AgentDeck 的副本根目录里' };
+    // A linked worktree has a .git file; a real repository or a plain folder is not ours to trust.
+    if (!fs.lstatSync(path.join(real, '.git')).isFile()) return { ok: false, reason: '不是 git 副本' };
+    const loc = credentialLocation(seat, home);
+    const keys = trustKeys(dir, platform);   // the path as given and its real path, when they differ
+    fs.mkdirSync(path.dirname(loc.metadataPath), { recursive: true });
+    return await withFileLock(loc.metadataPath, () => {
+      let existing = {}, mode = 0o600;
+      try {
+        const stat = fs.statSync(loc.metadataPath);
+        if (stat.size > 8 * 1024 * 1024) return { ok: false, reason: '席位配置文件太大' };
+        mode = stat.mode & 0o777;
+        existing = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8').replace(/^\uFEFF/, ''));
+      } catch (e) {
+        if (e.code !== 'ENOENT') return { ok: false, reason: '席位配置文件读不了，没有改动' };   // damaged JSON is never overwritten
+      }
+      if (!existing || typeof existing !== 'object' || Array.isArray(existing) || (existing.projects != null && (typeof existing.projects !== 'object' || Array.isArray(existing.projects)))) return { ok: false, reason: '席位配置文件格式不对，没有改动' };
+      const projects = existing.projects || (existing.projects = {});
+      let changed = false;
+      for (const key of keys) {
+        if (projects[key] != null && (typeof projects[key] !== 'object' || Array.isArray(projects[key]))) return { ok: false, reason: '席位配置文件格式不对，没有改动' };
+        if (projects[key]?.hasTrustDialogAccepted === true) continue;
+        projects[key] = { ...projects[key], hasTrustDialogAccepted: true };
+        changed = true;
+      }
+      if (!changed) return { ok: true, changed: false };
+      const temp = loc.metadataPath + `.agentdeck-tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+      try {
+        fs.writeFileSync(temp, JSON.stringify(existing, null, 2), { mode, flag: 'wx' });
+        fs.renameSync(temp, loc.metadataPath);
+      } catch (e) {
+        try { fs.unlinkSync(temp); } catch (_) {}
+        return { ok: false, reason: '写席位配置文件失败：' + e.code };
+      }
+      return { ok: true, changed: true };
+    });
+  } catch (e) {
+    return { ok: false, reason: String(e && e.message || e).slice(0, 200) };
+  }
+}
 const AUTH_ENV = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
   'CLAUDE_SECURESTORAGE_CONFIG_DIR', 'CLAUDE_CODE_HOST_CREDS_FILE', 'CLAUDE_CODE_HOST_GATEWAY_LINEAGE'];
 function seatEnvironment(env, seat, home) {
@@ -226,4 +302,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };

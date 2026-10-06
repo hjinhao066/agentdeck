@@ -19,7 +19,7 @@ const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
-const { seatEnvironment, credentialLocation, initializeOnboarding, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
 const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
@@ -79,14 +79,23 @@ handleMain('task-board:request', (_event, payload) => {
   if (fleetClient && payload.op !== 'list') fleetClient.noteResult(result);
   return result;
 });
-handleMain('worktree:prepare', (_event, payload) => {
+handleMain('worktree:prepare', async (_event, payload) => {
   if (!payload || typeof payload !== 'object' || typeof payload.repo !== 'string') throw new Error('Invalid worktree request.');
-  return Worktree.prepare({
+  const prepared = Worktree.prepare({
     repo: payload.repo,
     base: typeof payload.base === 'string' ? payload.base : '',
     branch: typeof payload.branch === 'string' ? payload.branch : '',
     taskId: typeof payload.taskId === 'string' ? payload.taskId : '',
   });
+  // A Claude session in the new copy would stop on "trust this folder" (default row: No, exit).
+  // Record the answer for this one directory in the seat that will run it, before the session opens.
+  if (typeof payload.seatId === 'string' && typeof payload.configDir === 'string' && payload.configDir) {
+    const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+    const trust = await trustClaudeWorktree({ id: payload.seatId, configDir: payload.configDir }, seatHome, prepared.path, { root: Worktree.defaultRoot(HOME), platform: process.platform });
+    if (!trust.ok) nlog(`worktree trust not recorded: ${trust.reason}`);
+    return { ...prepared, trust: { ok: trust.ok, reason: trust.reason || '' } };
+  }
+  return prepared;
 });
 handleMain('worktree:reclaim', (_event, payload) => {
   const record = payload && payload.record;
