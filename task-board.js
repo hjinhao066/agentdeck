@@ -425,7 +425,9 @@ class TaskStore {
       // A later written command verdict may still report a real defect.
       if (card.attempt_closed && card.resource_failure && input.type === 'failed' && input.source !== 'command') return { card, ignored: true, notices: [] };
       const eventKey = input.attempt_id + ':' + input.type + ':' + (input.source || '') + ':' + crypto.createHash('sha256').update(input.message || '').digest('hex');
-      if (card.last_event === eventKey || card.attempt_closed && !['complete', 'failed'].includes(input.type)) return { card, ignored: true, notices: [] };
+      // The agent waited out its quota and carried on by itself: that stop was not final.
+      const resumed = input.type === 'started' && input.source?.startsWith('resume-quota-') && card.attempt_closed && !!card.resource_failure;
+      if (card.last_event === eventKey || card.attempt_closed && !resumed && !['complete', 'failed'].includes(input.type)) return { card, ignored: true, notices: [] };
       const authoritative = input.type === 'complete' && input.source === 'command' && /:failed:(?:quota|process|automatic):/.test(card.last_event || '');
       if (card.flag === 'held' && !authoritative) return { card, ignored: true, notices: [] };
       const previous = card.status;
@@ -444,6 +446,7 @@ class TaskStore {
         if (/:fallback:/.test(card.last_event || '') ||
           (input.source?.startsWith('resume-fallback-') && /:started:/.test(card.last_event || '') && card.latest_receipt === '已结束，未提交回执')) card.latest_receipt = '';
         card.status = card.review_session ? 'review' : 'doing'; card.flag = null;
+        if (resumed) { card.attempt_closed = false; card.resource_failure = null; card.latest_receipt = ''; }
       }
       if (type === 'ask') {
         const question = text(input.message, 'question', true);

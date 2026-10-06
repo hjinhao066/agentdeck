@@ -82,7 +82,8 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   replay the saved output; the startup prune must keep archived ids.
 - Archiving ends a terminal, so a session that is working, waiting on an answer or
   printing output is never archived, automatically or by click, and never asks first
-  (`archiveColumn` shows a notice and stops). The Captain's explicit capability-checked
+  (`archiveColumn` shows a notice and stops). The automatic archive reads the terminal itself one more time
+  before it ends one. The Captain's explicit capability-checked
   `archive --id` command can end and archive a busy worker without confirmation;
   `stop --id` only sends Esc and cancels unsent supplements. Quota waits stay open
   and block automatic delivery; assigned tasks receive failure receipts with the
@@ -131,7 +132,12 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   retain their original text and paths. Never parse screen receipt/question
   blocks. After a finished turn has waited three minutes without a command,
   report only 已结束，未提交回执. Agent crashes and quota exhaustion create failure
-  receipts. Full output, logs and file bodies never go into the 队长's context.
+  receipts. A quota receipt is provisional: Claude and Codex continue by themselves
+  when the limit resets, and once the terminal has visibly worked again (15 s, no
+  quota wait on screen) the receipt is void: the task is working, the ledger line,
+  the unread notice and the card's quota flag go (`reopenAfterQuota`). A process
+  that exited, an instruction that never went in, and failures reported by the
+  worker stay failed. Full output, logs and file bodies never go into the 队长's context.
   Automated tests must use the stand-in agent (`--command`); real CLI smoke tasks
   require an explicit user request and an isolated profile.
 - Relay handoff (`relay-handoff-core.js`, `docs/relay-handoff.md`): the app rewrites

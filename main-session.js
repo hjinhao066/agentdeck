@@ -7,6 +7,7 @@
   'use strict';
   const M = window.MainCore;
   const nativeCaptain = (cmd) => /codex-captain-host\.js["']?(?:\s|$)/.test(cmd || '');
+  const QUOTA_RESUME_CONFIRM = 15_000; // work seen this long after a quota receipt voids it
   const ACTIVE_OUTPUT_MS = 60_000;   // output this recent: not finished, whatever the status dot says
   let host = null;
   const MAX_TASKS = 120;            // cards kept in config.json; older ones drop off
@@ -1315,6 +1316,13 @@
     const s = state();
     if (!col.captainCrew || !host.isBackstage(col) || host.focusedId() === col.id) return;
     if (entry && entry.alive && (!['done', 'plain'].includes(entry.state) || entry.sendingPrompt || entry.injecting || M.terminalActivity(entry.lastScreen, col?.cmd) || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) return;
+    // The status dot and lastScreen are a few seconds old: look at the terminal itself
+    // once more before ending it.
+    if (entry && entry.alive && entry.term && host.dumpScreen) {
+      const live = host.dumpScreen(entry.term, 40);
+      if (M.terminalActivity(live, col?.cmd) || M.claudeBackgroundTasks(live, col?.cmd)) return;
+      if (host.screenState && !['done', 'plain'].includes(host.screenState(live, entry, col?.cmd))) return;
+    }
     // a dot that reads idle is only a guess: any recent output also means it is not finished
     if (entry && entry.alive && Date.now() - (entry.lastOutputAt || 0) < Math.min(ACTIVE_OUTPUT_MS, M.ARCHIVE_AFTER)) return;
     if (M.needsCardCheck(s, col.id)) refreshCards();
@@ -1530,7 +1538,7 @@
         const entry = host.terms.get(caller.id);
         // The exit command may beat the status tick; read the current terminal.
         const screen = entry?.term ? host.dumpScreen(entry.term, 40) : entry?.lastScreen;
-        const receipt = { summary: '', files: [], images: [], failed: `agent 进程已退出（exit ${message.code}），未提交回执`, explicit: true, source: 'process', ...M.resourceReceipt(screen, caller.cmd) };
+        const receipt = { summary: '', files: [], images: [], failed: `agent 进程已退出（exit ${message.code}），未提交回执`, explicit: true, source: 'process', ...M.resourceReceipt(screen, caller.cmd), exited: true };
         await recordReceiptForBoard(task, receipt);
         settle(task, receipt, true);
       }
@@ -1567,6 +1575,7 @@
       if (task.receipt?.source === 'command' && task.status !== 'asking') return response;
       s.pending = s.pending.filter((p) => p.taskId !== task.id);
       task.status = 'working';
+      task.gen = s.gen; // a closed task keeps its old Captain's generation; the real result must reach the current one
     }
     settle(task, receipt, true);
     return response;
@@ -1944,6 +1953,32 @@
       });
     }).then((sent) => { if (sent && listenerStatus?.colId === col.id) listenerReminder = true; }, () => {}).finally(() => { listenerReminderSending = false; });
   }
+  // The 额度用尽 receipt is provisional. Claude and Codex wait out the limit and
+  // continue on their own ("Usage limit reset · continuing automatically"), but
+  // the task was already closed as failed. Once the terminal has visibly worked
+  // for QUOTA_RESUME_CONFIRM with no quota wait on screen, the receipt is void:
+  // the task is working again, the ledger line, the unread notice and the card's
+  // quota flag go away. A real receipt later settles it as usual. Not for a
+  // process that exited, or an instruction that never went in.
+  function quotaResumable(task) {
+    return task?.status === 'failed' && task.receipt?.source === 'quota' && !task.receipt.exited &&
+      !task.receipt.undeliveredTaskId && task.instructionSent !== false && !task.pendingInstall;
+  }
+  function reopenAfterQuota(col, entry) {
+    const s = state();
+    const task = s?.tasks.findLast((t) => t.colId === col.id);
+    if (!quotaResumable(task)) return;
+    if (!M.quotaResumed(entry, col.cmd)) { delete task.resumeSeenAt; return; }
+    task.resumeSeenAt ||= Date.now();
+    if (Date.now() - task.resumeSeenAt < QUOTA_RESUME_CONFIRM) return;
+    delete task.receipt; delete task.doneAt; delete task.resumeSeenAt; delete task.processEnded;
+    task.status = 'working'; task.endedAt = 0;
+    task.gen = s.gen; // a closed task keeps its old Captain's generation, and its receipt would be dropped
+    if (col.lastReceipt?.source === 'quota') delete col.lastReceipt;
+    s.pending = s.pending.filter((p) => p.taskId !== task.id || p.source !== 'quota');
+    autoBoardEvent(task, 'started', '', 'resume-quota-' + Date.now());
+    update(task);
+  }
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
@@ -1962,6 +1997,7 @@
       retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return;
     }
     const col = host.columns().find((c) => c.id === id);
+    if (col) reopenAfterQuota(col, entry);
     if (col?.executor === 'chatgpt-web') {
       startWebTask(col);
       if (col.captainCrew) maybeArchive(col, entry);
@@ -2003,7 +2039,7 @@
         }
         if (task.status === 'paused') continue;
       }
-      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen, col?.cmd) }); continue; }
+      if (!entry.alive) { if (task.status === 'asking') task.status = 'working'; settle(task, { summary: '', files: [], images: [], failed: entry.exitReason || '这个会话的终端已经退出', explicit: true, source: 'process', ...M.resourceReceipt(entry.lastScreen, col?.cmd), exited: true }); continue; }
       const activity = M.terminalActivity(entry.lastScreen, col?.cmd);
       if (entry.state === 'quota' || activity === 'quota') {
         if (window.RestartResume && window.RestartResume.ignoreQuota(task, Date.now())) continue;
@@ -2480,7 +2516,9 @@
         // a 队长 conversation from before a clear: only ids listed in captainHistory
         const key = String(message.to || '').trim();
         const old = (host.config.captainHistory || []).find((h) => h.id === key) || window.ChatUI.captainArchives().find((chat) => chat.id === key);
-        if (!old && archivedCrew(key)) throw new Error(`「${host.columnLabel(archivedCrew(key))}」已归档。要接着用它就 tell 它（会自动恢复）；只是查结果，看它的回执就够了。`);
+        // An archived session keeps its saved chat (restoring it does not need the terminal).
+        const shelved = !old && archivedCrew(key);
+        if (shelved) return { done: true, result: M.readText(`${host.columnLabel(shelved)}（已归档，tell 可恢复）`, window.ChatUI.turnsOf(shelved.id), message.turns, find) };
         if (!old) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         return { done: true, result: M.readText('清空前的队长对话', window.ChatUI.turnsOf(old.id), message.turns, find) };
       }
