@@ -33,6 +33,7 @@ function parseArgs(argv) {
     const arg = argv[i];
     if (arg === '--dry-run') options.dryRun = true;
     else if (arg === '--prepared') options.prepared = true;
+    else if (arg === '--package-only') options.packageOnly = true;
     else if (['--base', '--worktree', '--output'].includes(arg)) {
       if (!argv[i + 1] || argv[i + 1].startsWith('-')) throw new Error(`Missing value for ${arg}`);
       options[arg.slice(2)] = argv[++i];
@@ -95,7 +96,7 @@ function planRelease(repo, options) {
     throw new Error('Release worktree must be separate from existing checkouts');
   }
   return { version, label, previous, branch: `release/${options.prepared ? version : label}`, baseCommit, merges, worktree, output,
-    ...(options.prepared ? { prepared: true } : {}) };
+    ...(options.prepared ? { prepared: true } : {}), ...(options.packageOnly ? { packageOnly: true } : {}) };
 }
 
 function isolatedEnv(env = process.env) {
@@ -244,8 +245,11 @@ async function release(repo, options, runCommand = run) {
         ['create owned release worktree', 'merge branches in order (stop on conflict)', 'commit package + lock version']),
       'npm ci + Electron preparation (lock/platform cache)', 'machine test lock: npm test then npm run test:smoke (one worker); audit in parallel',
       'npm run dist:mac -- --publish never (unchanged-input cache)',
-      'SHA256 + verified DMG mount/signature/packaged source in parallel', 'generate bounded verified installer launcher (do not execute installer)',
-      'build/upload mobile hub; preserve rollback point; verify public version/commit/build/assets (at most 3 attempts; rollback on failure)',
+      'SHA256 + verified DMG mount/signature/packaged source in parallel',
+      ...(plan.packageOnly ? ['skip installer generation; defer all mobile build/upload/online verification; finish package-ready'] : [
+        'generate bounded verified installer launcher (do not execute installer)',
+        'build/upload mobile hub; preserve rollback point; verify public version/commit/build/assets (at most 3 attempts; rollback on failure)',
+      ]),
     ] }, null, 2));
     return;
   }
@@ -257,7 +261,8 @@ async function release(repo, options, runCommand = run) {
   }
   fs.mkdirSync(plan.output, { recursive: true });
   save(planFile, plan);
-  const report = { ...plan, startedAt: new Date().toISOString(), steps: [], status: 'running', mobile: { status: 'not-deployed' } };
+  const report = { ...plan, startedAt: new Date().toISOString(), steps: [], status: 'running',
+    mobile: plan.packageOnly ? { status: 'deferred', reason: '--package-only: mobile build, deployment and online verification deferred' } : { status: 'not-deployed' } };
   const started = performance.now();
   const writeReport = () => {
     report.elapsedSeconds = +( (performance.now() - started) / 1000).toFixed(3);
@@ -267,11 +272,12 @@ async function release(repo, options, runCommand = run) {
       `\n\nWall time: ${report.elapsedSeconds}s. Parallel step durations overlap.\n` +
       (report.sha256 ? `DMG SHA256: ${report.sha256}\n` : '') +
       (report.error ? `\nFailure: ${report.error}\n` : '') +
-      `\n${report.mobile.status === 'passed' ? '🟢' : '🔴'} Mobile: ${report.mobile.status}; ${report.mobile.error || 'see mobile-deploy-result.json'}\n` +
+      `\n${report.mobile.status === 'passed' ? '🟢' : report.mobile.status === 'deferred' ? '⏸' : '🔴'} Mobile: ${report.mobile.status}; ${report.mobile.error || report.mobile.reason || 'see mobile-deploy-result.json'}\n` +
       `\nCache hits: dependencies=${!!report.dependenciesCached}, tests=${!!report.testsCached}, build=${!!report.buildCached}.\n` +
       '\nRemoved: intermediate-merge test/build repeats; full E2E from the patch-release gate; serial audit waits; separate DMG verification pass (attach -verify performs it); one git process per runtime file; copying the old app during installation (rename preserves it). Unit and smoke run sequentially under the machine test lock.\n' +
       `\nTest lock wait: ${report.testLockWaitSeconds ?? 'cached / not reached'} seconds.\n` +
-      '\nInstallation is not executed here. The generated launcher uses the formal installer: at most three attempts, rollback on failure, then a durable version/process verification result in userData/install-result.json.\n' +
+      (plan.packageOnly ? '\nPackage-only: no installer launcher generated; installation and mobile deployment remain deferred.\n' :
+        '\nInstallation is not executed here. The generated launcher uses the formal installer: at most three attempts, rollback on failure, then a durable version/process verification result in userData/install-result.json.\n') +
       '\nNo main merge, tag, push, installation or restart performed.\n');
   };
   async function step(name, action) {
@@ -409,18 +415,18 @@ async function release(repo, options, runCommand = run) {
         }
       }),
     ]);
-    await step('installer', async () => {
+    if (!plan.packageOnly) await step('installer', async () => {
       const file = path.join(plan.output, `install-${plan.label}.sh`);
       fs.writeFileSync(file, installer({ version: plan.version, dmg, sha256: report.sha256, asarSha256: report.verification.asarSha256, scriptPath: path.join(plan.worktree, 'scripts/restart-agentdeck.sh') }), { mode: 0o755 });
       await runCommand('bash', ['-n', file], plan.worktree, path.join(plan.output, 'installer-syntax.log'));
     });
     save(cacheFile, { key, dmg: path.basename(dmg), sha256: report.sha256 });
-    await step('mobile-deploy', async () => {
+    if (!plan.packageOnly) await step('mobile-deploy', async () => {
       try { report.mobile = await deployMobileGate(plan, report.commit, runCommand); }
       catch (error) { report.mobile = { status: 'failed', error: error.message }; throw error; }
     });
-    report.status = 'passed';
-    console.log(`Release ${plan.version} prepared in ${plan.output}; nothing installed or restarted.`);
+    report.status = plan.packageOnly ? 'package-ready' : 'passed';
+    console.log(`Release ${plan.version} prepared in ${plan.output}; ${plan.packageOnly ? 'package-ready; mobile deferred; no installer generated; ' : ''}nothing installed or restarted.`);
   } catch (error) {
     report.status = 'failed'; report.error = error.message; throw error;
   } finally { writeReport(); }

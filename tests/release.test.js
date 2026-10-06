@@ -145,6 +145,26 @@ test('isolation strips app routing only from child environment', () => {
   assert.equal(env.AGENTDECK_RECEIPT_TOKEN, 'private');
 });
 
+test('package-only is pinned in the plan and dry-run lists deferred work without writing files', async (t) => {
+  const { repo, root, options } = fixture(t);
+  const packageOptions = { ...options, ...parseArgs(['--package-only', '--dry-run']), worktree: options.worktree, output: options.output };
+  assert.equal(packageOptions.packageOnly, true);
+  assert.equal(planRelease(repo, packageOptions).packageOnly, true);
+  assert.notDeepEqual(planRelease(repo, packageOptions), planRelease(repo, options));
+  const output = [];
+  const log = t.mock.method(console, 'log', (value) => output.push(value));
+  await release(repo, packageOptions, () => assert.fail('runner called'));
+  log.mock.restore();
+  const plan = JSON.parse(output.join(''));
+  assert.equal(plan.packageOnly, true);
+  assert.ok(plan.steps.some((step) => /skip installer generation; defer all mobile/.test(step)));
+  assert.ok(!plan.steps.some((step) => /generate bounded|build\/upload mobile/.test(step)));
+  for (const gate of ['npm test', 'npm run test:smoke', 'audit', 'dist:mac', 'SHA256', 'signature', 'packaged source']) {
+    assert.ok(plan.steps.some((step) => step.includes(gate)), gate);
+  }
+  assert.deepEqual(fs.readdirSync(root), ['source']);
+});
+
 test('package inventory, committed bytes and metadata are all verified', async (t) => {
   const { repo, root } = fixture(t);
   const file = path.join(root, 'app.asar');
@@ -333,6 +353,64 @@ test('prepared release runs packaging gates while preserving checkout, commit an
   assert.deepEqual(fs.readFileSync(path.join(repo, 'package.json')), pkg);
   assert.deepEqual(fs.readFileSync(path.join(repo, 'package-lock.json')), lock);
   assert.equal(fs.existsSync(path.resolve(repo, git(repo, 'rev-parse', '--git-path', 'fast-release.json'))), false);
+});
+
+test('package-only rehearsal retains desktop gates and verification, creates no installer and never deploys mobile', { skip: process.platform !== 'darwin' }, async (t) => {
+  const { root, repo } = fixture(t, '1.2.4');
+  git(repo, 'checkout', '-qb', 'release/1.2.4');
+  const options = parseArgs(['--prepared', '--package-only', '--output', path.join(root, 'output')]);
+  const commit = git(repo, 'rev-parse', 'HEAD');
+  const packed = path.join(root, 'fixture.asar'), calls = [];
+  let failUnit = false;
+  const runner = async (command, args, cwd) => {
+    calls.push([command, ...args]);
+    assert.notEqual(args[0], 'scripts/mobile-release.js', 'package-only must not build or deploy mobile');
+    assert.notEqual(command, 'bash', 'package-only must not generate/check an installer');
+    if (args[0] === 'ci') {
+      fs.mkdirSync(path.join(cwd, 'node_modules/electron/dist/Electron.app'), { recursive: true });
+      write(path.join(cwd, 'node_modules/@electron/asar/index.js'), `module.exports = require(${JSON.stringify(require.resolve('@electron/asar'))});`);
+    }
+    if (command === 'npm' && args[0] === 'test' && failUnit) throw new Error('fixture package-only unit failure');
+    if (args.includes('dist:mac')) {
+      assert.ok(args.includes('--publish') && args.includes('never'));
+      const dir = args.find((arg) => arg.startsWith('--config.directories.output=')).split('=')[1];
+      write(path.join(dir, 'fixture.dmg'), 'package-only image'); await archive(cwd, packed);
+    }
+    if (command === 'hdiutil' && args[0] === 'attach') {
+      assert.ok(args.includes('-verify')); assert.ok(args.includes('-noignorebadchecksums'));
+      assert.ok(args.includes('-readonly'));
+      write(path.join(args.at(-1), 'AgentDeck.app/Contents/Resources/app.asar'), fs.readFileSync(packed));
+    }
+    if (command === 'hdiutil' && args[0] === 'detach') fs.rmSync(path.join(args[1], 'AgentDeck.app'), { recursive: true });
+  };
+  await release(repo, options, runner);
+  const reportFile = path.join(options.output, 'release-report.json');
+  let report = JSON.parse(fs.readFileSync(reportFile));
+  assert.equal(report.status, 'package-ready'); assert.equal(report.packageOnly, true);
+  assert.equal(report.mobile.status, 'deferred'); assert.match(report.mobile.reason, /online verification deferred/);
+  assert.equal(report.commit, commit); assert.equal(report.verification.commit, commit);
+  assert.equal(report.verification.version, '1.2.4'); assert.equal(report.verification.sourceFilesVerified, 2);
+  assert.equal(report.sha256, digest('package-only image'));
+  for (const gate of ['dependencies', 'unit', 'smoke', 'audit', 'build', 'sha256', 'verify-package']) {
+    assert.ok(report.steps.some((step) => step.name === gate && step.status === 'passed'), gate);
+  }
+  assert.ok(!report.steps.some((step) => ['installer', 'mobile-deploy'].includes(step.name)));
+  assert.ok(calls.findIndex((call) => call.join(' ') === 'npm test') < calls.findIndex((call) => call.join(' ') === 'npm run test:smoke'));
+  assert.ok(calls.some((call) => call[0] === 'codesign' && call.includes('--deep') && call.includes('--strict')));
+  assert.ok(!fs.readdirSync(options.output).some((file) => /^install-|^mobile-/.test(file)));
+  const markdown = fs.readFileSync(path.join(options.output, 'release-report.md'), 'utf8');
+  assert.match(markdown, /status: package-ready/); assert.match(markdown, /Mobile: deferred/);
+  assert.match(markdown, /no installer launcher generated/); assert.doesNotMatch(markdown, /🟢 Mobile|see mobile-deploy-result/);
+  // A different mode cannot reuse the package-only output plan and deploy by accident.
+  await assert.rejects(release(repo, { ...options, packageOnly: false }, runner), /Output contains another release/);
+  // A real failed gate remains fatal in package-only mode and cannot reach packaging.
+  write(path.join(repo, 'node_modules/native.node'), 'invalidate gates'); failUnit = true; calls.length = 0;
+  await assert.rejects(release(repo, options, runner), /fixture package-only unit failure/);
+  report = JSON.parse(fs.readFileSync(reportFile));
+  assert.equal(report.status, 'failed'); assert.equal(report.mobile.status, 'deferred');
+  assert.ok(calls.some((call) => call.join(' ') === 'npm audit'));
+  assert.ok(!calls.some((call) => call.includes('dist:mac')));
+  assert.equal(git(repo, 'rev-parse', 'HEAD'), commit); assert.equal(git(repo, 'status', '--porcelain'), '');
 });
 
 test('test lock records owner PID and branch and releases after success or failure', async (t) => {
