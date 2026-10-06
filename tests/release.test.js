@@ -348,6 +348,8 @@ test('prepared release runs packaging gates while preserving checkout, commit an
   assert.ok(!report.steps.some((step) => ['worktree', 'version'].includes(step.name) || step.name.startsWith('merge-')));
   assert.ok(calls.findIndex((call) => call.join(' ') === 'npm test') < calls.findIndex((call) => call.join(' ') === 'npm run test:smoke'));
   assert.ok(calls.some((call) => call[0] === 'codesign' && call.includes('--deep') && call.includes('--strict')));
+  assert.ok(calls.some((call) => call.includes('scripts/signing-check.js') && call.includes('--identity')));
+  assert.ok(calls.some((call) => call.some((arg) => /signing-check\.js$/.test(arg)) && call.some((arg) => /AgentDeck\.app$/.test(arg))));
   assert.equal(git(repo, 'show-ref'), refs); assert.equal(git(repo, 'worktree', 'list', '--porcelain'), worktrees);
   assert.equal(git(repo, 'status', '--porcelain'), '');
   assert.deepEqual(fs.readFileSync(path.join(repo, 'package.json')), pkg);
@@ -397,6 +399,8 @@ test('package-only rehearsal retains desktop gates and verification, creates no 
   assert.ok(!report.steps.some((step) => ['installer', 'mobile-deploy'].includes(step.name)));
   assert.ok(calls.findIndex((call) => call.join(' ') === 'npm test') < calls.findIndex((call) => call.join(' ') === 'npm run test:smoke'));
   assert.ok(calls.some((call) => call[0] === 'codesign' && call.includes('--deep') && call.includes('--strict')));
+  assert.ok(calls.some((call) => call.includes('scripts/signing-check.js') && call.includes('--identity')));
+  assert.ok(calls.some((call) => call.some((arg) => /signing-check\.js$/.test(arg)) && call.some((arg) => /AgentDeck\.app$/.test(arg))));
   assert.ok(!fs.readdirSync(options.output).some((file) => /^install-|^mobile-/.test(file)));
   const markdown = fs.readFileSync(path.join(options.output, 'release-report.md'), 'utf8');
   assert.match(markdown, /status: package-ready/); assert.match(markdown, /Mobile: deferred/);

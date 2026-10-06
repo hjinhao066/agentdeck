@@ -385,6 +385,7 @@ async function release(repo, options, runCommand = run) {
     const cacheFile = path.join(stateDir, 'fast-release-build.json');
     const cache = fs.existsSync(cacheFile) ? json(cacheFile) : null;
     let dmg;
+    await step('signing-identity', () => runCommand(process.execPath, ['scripts/signing-check.js', '--identity'], plan.worktree, path.join(plan.output, 'signing-identity.log')));
     await step('build', async () => {
       if (cachedBuild(cache, key, plan.output)) { dmg = path.join(plan.output, cache.dmg); report.buildCached = true; return; }
       // Unique output prevents accepting an old artifact after a partial build.
@@ -406,6 +407,7 @@ async function release(repo, options, runCommand = run) {
           attached = true;
           const app = path.join(mount, 'AgentDeck.app');
           await runCommand('codesign', ['--verify', '--deep', '--strict', app], plan.worktree, path.join(plan.output, 'codesign.log'));
+          await runCommand(process.execPath, ['scripts/signing-check.js', app], plan.worktree, path.join(plan.output, 'signing-requirement.log'));
           const asar = require(require.resolve('@electron/asar', { paths: [plan.worktree] }));
           report.verification = verifyArchive(plan.worktree, path.join(app, 'Contents/Resources/app.asar'), asar);
           save(path.join(plan.output, 'package-source-verification.json'), report.verification);
