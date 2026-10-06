@@ -450,17 +450,21 @@
     refreshWaitingNotes();
     return pump();
   }
+  // One line for ledger/quota while battery mode is on; plugged in or set to 不限制 they print exactly what they always did.
   function batteryLine() {
+    if (!Bat()) return '';
     const s = state();
-    return Bat().statusLine(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
+    const line = Bat().statusLine(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
+    return line ? '\n' + line : '';
   }
   function initDialog() {
     const settings = $('notificationSettings');
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
+    if ($('batteryMode')) $('batteryMode').onchange = syncBatteryField;
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
       if (!$('concurrencyCap').reportValidity()) return;
-      if ($('batteryConcurrency') && $('batteryConcurrency').reportValidity && !$('batteryConcurrency').reportValidity()) return;
+      if ($('batteryConcurrency') && !$('batteryConcurrency').disabled && $('batteryConcurrency').reportValidity && !$('batteryConcurrency').reportValidity()) return;
       const budgetBox = $('handoffBudget');
       if (budgetBox?.reportValidity && !budgetBox.reportValidity()) return;
       if (budgetBox && budgetBox.value !== undefined) host.config.captainHandoffBudget = M.handoffBudget(budgetBox.value);
@@ -502,15 +506,23 @@
     if (Bat() && $('batteryMode')) {
       $('batteryMode').value = Bat().normalizeMode(host.config.batteryMode);
       $('batteryConcurrency').value = Bat().normalizeCap(host.config.batteryConcurrency);
+      syncBatteryField();
     }
     if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffBudget);
     const resumeBox = $('resumeOnRestart');
     if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
   }
+  // 不限制: the battery count does not apply, so it is greyed out and not required (like the token-saver threshold).
+  function syncBatteryField() {
+    const off = $('batteryMode').value === 'off';
+    $('batteryConcurrency').disabled = off;
+    $('batteryConcurrency').required = !off;
+  }
   function applyConcurrencyCap(raw) {
     const cap = M.concurrencyCap(raw);
     host.config.concurrencyCap = cap;
     syncEffectiveCap();
+    host.onCapChanged?.();
   }
 
   function saverBanner(text) {
@@ -2129,7 +2141,7 @@
       case 'main-briefing':
         return { done: true, result: briefingText() };
       case 'main-quota':
-        return { done: true, result: host.quotaText() + (Bat() ? '\n' + batteryLine() : '') };
+        return { done: true, result: host.quotaText() + batteryLine() };
       case 'main-handoff': {
         const built = await window.deck.captainHandoff(handoffSnapshot('refresh'));
         // A later restart points 队长 at this file again.
@@ -2196,7 +2208,7 @@
           .map((a) => `${a.id}「${host.columnLabel(a)}」`).join('、');
         return { done: true, result: M.ledgerText(ledgerRows()) + (archived ? `\n（另有 ${archived} 个已归档的会话）` : '')
           + (crew ? `\n已归档的队员（tell 会先自动恢复）：${crew}` : '')
-          + (waiting ? `\n排队等空位：${waiting}` : '') + (Bat() ? '\n' + batteryLine() : '') + (history ? '\n' + history : '') };
+          + (waiting ? `\n排队等空位：${waiting}` : '') + batteryLine() + (history ? '\n' + history : '') };
       }
       case 'main-receipts-snapshot': {
         for (const item of s.pending) {

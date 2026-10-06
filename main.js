@@ -121,6 +121,11 @@ function initPower() {
   const changed = (on) => { if (power.set({ onBattery: on })) send('power:changed', { onBattery: on }); };
   powerMonitor.on('on-battery', () => changed(true));
   powerMonitor.on('on-ac', () => changed(false));
+  // A plug/unplug while asleep can come without an event: ask again on wake (one local query).
+  // A failed read counts as plugged in. Test instances keep the state their events set.
+  const recheck = () => { if (tudArg) return; let on = false; try { on = powerMonitor.isOnBatteryPower() === true; } catch (_) {} changed(on); };
+  powerMonitor.on('resume', recheck);
+  powerMonitor.on('unlock-screen', recheck);
 }
 onMain('power-state', (e) => { e.returnValue = { onBattery: power.snapshot().onBattery }; });
 

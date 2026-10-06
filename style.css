@@ -3241,7 +3241,7 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
 
 /* ---- 电池模式: small indicator in the sidebar while the Mac runs on battery ---- */
 .nq-left { display: inline-flex; align-items: center; gap: 2px; }
-.battery-indicator { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; background: transparent; border: 0; border-radius: 5px; color: #d99426; cursor: help; }
+.battery-indicator { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; background: transparent; border: 0; border-radius: 5px; color: var(--text-2); cursor: pointer; }
 .battery-indicator[hidden] { display: none; }
 .battery-indicator svg { width: 16px; height: 16px; }
 .battery-indicator:hover, .battery-indicator:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
