@@ -822,9 +822,7 @@
   // then 结果汇报. Every item stays tied to the computer it came from; a reply
   // or a tick goes to that computer only, never to the other one.
   let attentionDoneOpen = false, attentionHint = '', attentionHintError = false, attentionHintTimer = 0, attentionWaiting = false;
-  const attentionDrafts = new Map(), attentionOpen = new Set(), attentionBusy = new Set();
-  let attentionObserver = null;
-  const attentionTimers = new Map();
+  const attentionDrafts = new Map(), attentionOpen = new Set(), attentionBusy = new Set(), attentionErrors = new Map();
   async function loadAttention(m) {
     const result = await request(m, 'api/attention');
     m.attentionAt = Date.now();
@@ -847,8 +845,9 @@
   }
   async function attentionWrite(item, body, okText) {
     const m = byId(item.machineId);
-    if (!m || m.state !== 'online') { setAttentionHint(`${item.machineLabel} 现在不在线，等它上线再处理这一条。`, true); return false; }
-    attentionBusy.add(item.key); renderAttention();
+    // A failure is said under the item itself, where the finger is.
+    if (!m || m.state !== 'online') { attentionErrors.set(item.key, `${item.machineLabel} 现在不在线，等它上线再处理这一条。`); renderAttention(); return false; }
+    attentionBusy.add(item.key); attentionErrors.delete(item.key); renderAttention();
     const result = await post(m, 'api/attention', { ...body, id: item.id });
     attentionBusy.delete(item.key);
     if (result.status === 200 && result.body) {
@@ -857,7 +856,8 @@
       setAttentionHint(okText || '');
       return true;
     }
-    setAttentionHint(Core.attentionFailure(result, m.label), true);
+    attentionErrors.set(item.key, Core.attentionFailure(result, m.label));
+    renderAttention();
     return false;
   }
   async function sendAttentionReply(item) {
@@ -866,31 +866,33 @@
     if (await attentionWrite(item, { op: 'reply', text }, `已交给 ${item.machineLabel} 的队长，这一条打勾归到已完成。`)) attentionDrafts.delete(item.key);
     renderAttention();
   }
-  // An unread item counts as read once it has stayed on screen for a moment.
-  function watchAttention(nodes) {
-    if (attentionObserver) attentionObserver.disconnect();
-    attentionTimers.forEach(clearTimeout); attentionTimers.clear();
-    if (!nodes.length || typeof IntersectionObserver !== 'function') return;
-    attentionObserver = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        const key = entry.target.dataset.key;
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          if (!attentionTimers.has(key)) attentionTimers.set(key, setTimeout(() => { attentionTimers.delete(key); markAttentionRead([key]); }, 1500));
-        } else if (attentionTimers.has(key)) { clearTimeout(attentionTimers.get(key)); attentionTimers.delete(key); }
-      }
-    }, { threshold: [0, 0.6, 1] });
-    nodes.forEach((n) => attentionObserver.observe(n));
+  // An unread item counts as read once most of it has stayed on screen for a
+  // moment. Measured on a timer rather than observed: it holds when the browser
+  // throttles painting.
+  const attentionSeenSince = new Map();
+  function checkAttentionSeen() {
+    if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); return; }
+    const box = $('main').getBoundingClientRect(), now = Date.now(), ready = [];
+    for (const el of document.querySelectorAll('#attention-lists .at-item.unread')) {
+      const r = el.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
+      const key = el.dataset.key;
+      if (shown < Math.min(r.height * 0.6, box.height * 0.5)) { attentionSeenSince.delete(key); continue; }
+      if (!attentionSeenSince.has(key)) attentionSeenSince.set(key, now);
+      else if (now - attentionSeenSince.get(key) >= 1500) ready.push(key);
+    }
+    if (ready.length) markAttentionRead(ready);
   }
+  setInterval(checkAttentionSeen, 500);
   async function markAttentionRead(keys) {
-    if (document.hidden || view !== 'attention') return;
     for (const m of machines) {
       if (m.state !== 'online' || !Array.isArray(m.attention)) continue;
       const items = m.attention.filter((i) => keys.includes(m.id + ':' + i.id) && !i.readAt);
       if (!items.length) continue;
-      const result = await post(m, 'api/attention', { op: 'read', ids: items.map((i) => i.id) });
-      if (result.status === 200) items.forEach((i) => { i.readAt = Date.now(); });
+      // Read here at once; the computer's next answer says the same, or brings the dot back if it did not take it.
+      items.forEach((i) => { i.readAt = Date.now(); attentionSeenSince.delete(m.id + ':' + i.id); });
+      renderAttention();
+      await post(m, 'api/attention', { op: 'read', ids: items.map((i) => i.id) });
     }
-    renderAttention();
   }
   const attentionTyping = () => !!document.activeElement && $('attention-lists').contains(document.activeElement) && document.activeElement.classList.contains('at-reply');
   function attentionCopy(item) {
@@ -943,6 +945,7 @@
       }
     }
     const busy = attentionBusy.has(item.key);
+    if (attentionErrors.has(item.key)) { const error = node('p', 'at-error', attentionErrors.get(item.key)); error.setAttribute('role', 'alert'); card.append(error); }
     if (!item.done && attentionDrafts.has(item.key)) {
       const form = node('form', 'at-compose');
       const label = node('label', 'sr-only', '回复「' + item.title + '」'); label.htmlFor = 'reply-' + item.key.replace(/[^\w-]/g, '_');
@@ -954,7 +957,7 @@
       box.addEventListener('input', () => { attentionDrafts.set(item.key, box.value); send.disabled = busy || !box.value.trim(); });
       box.addEventListener('blur', () => setTimeout(() => { if (attentionWaiting && !attentionTyping()) { attentionWaiting = false; signatures.delete($('attention-lists')); renderAttention(); } }, 300));
       const cancel = iconButton('close', '不回复了', 'at-cancel');
-      cancel.addEventListener('click', () => { attentionDrafts.delete(item.key); renderAttention(); });
+      cancel.addEventListener('click', () => { attentionDrafts.delete(item.key); attentionErrors.delete(item.key); renderAttention(); });
       const row = node('div', 'at-compose-row'); row.append(box, cancel);
       form.append(label, row, send);
       form.addEventListener('submit', (event) => { event.preventDefault(); sendAttentionReply(item); });
@@ -989,7 +992,7 @@
     const why = (m) => m.attention === 'missing' && m.state === 'online' ? `${m.label} 的 AgentDeck 还没有这个页面` : `${m.label} ${Core.STATES[m.state].label}`;
     $('attention-sources').textContent = !sources.length ? (machines.some((m) => m.state === 'online') ? '正在读取…' : '还没有连上任何一台电脑。')
       : missing.length ? `现在只看得到 ${sources.map((m) => m.label).join('、')} 交回来的事；${missing.map(why).join('，')}。` : `${sources.map((m) => m.label).join(' 和 ')} 交回来的事都在这里，回复只发给那条所在的电脑。`;
-    if (!changed(lists, [view === 'attention', needs, reports, done, attentionDoneOpen, [...attentionDrafts.keys()], [...attentionOpen], [...attentionBusy], attentionHint, attentionHintError, sources.length, Math.floor(now / 60000)])) return;
+    if (!changed(lists, [view === 'attention', needs, reports, done, attentionDoneOpen, [...attentionDrafts.keys()], [...attentionOpen], [...attentionBusy], [...attentionErrors], attentionHint, attentionHintError, sources.length, Math.floor(now / 60000)])) return;
     // Rebuilding under someone typing would drop their caret and their input method's state.
     if (attentionTyping()) { attentionWaiting = true; signatures.delete(lists); return; }
     attentionWaiting = false;
@@ -1034,7 +1037,6 @@
       if (attentionDoneOpen) done.slice(0, 60).forEach((item) => lists.append(attentionCard(item, multi, now)));
     }
     if (focused) lists.querySelector(`[data-answer="${CSS.escape(focused)}"], [data-more="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
-    watchAttention(view === 'attention' ? [...lists.querySelectorAll('.at-item.unread')] : []);
   }
 
   // ---- board ---------------------------------------------------------------

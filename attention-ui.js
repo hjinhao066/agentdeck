@@ -15,8 +15,6 @@
   const opened = new Set();          // item ids whose details are unfolded
   const drafts = new Map();          // item id -> reply being written (its composer is open)
   const busy = new Set();            // item ids with a reply or tick on its way
-  let observer = null;
-  const seenTimers = new Map();
   let syncing = false, syncAgain = false;
   let redrawWaiting = false;
 
@@ -248,28 +246,22 @@
     if (next) next.focus({ preventScroll: true });
   }
 
-  // An unread item counts as read once it has stayed on screen for a moment.
-  function watchUnread(nodes) {
-    if (observer) observer.disconnect();
-    seenTimers.forEach(clearTimeout); seenTimers.clear();
-    if (!nodes.length || typeof IntersectionObserver !== 'function') return;
-    const read = new Set();
-    let flush = null;
-    observer = new IntersectionObserver((entries) => {
-      for (const entry of entries) {
-        const id = entry.target.dataset.id;
-        if (entry.isIntersecting && entry.intersectionRatio >= 0.6) {
-          if (!seenTimers.has(id)) seenTimers.set(id, setTimeout(() => {
-            seenTimers.delete(id);
-            if (document.hidden || !visible()) return;
-            read.add(id);
-            clearTimeout(flush);
-            flush = setTimeout(() => { const ids = [...read]; read.clear(); markRead(ids); }, 200);
-          }, 1500));
-        } else if (seenTimers.has(id)) { clearTimeout(seenTimers.get(id)); seenTimers.delete(id); }
-      }
-    }, { threshold: [0, 0.6, 1] });
-    nodes.forEach((n) => observer.observe(n));
+  // An unread item counts as read once most of it has stayed on screen for a
+  // moment. Measured on a timer rather than observed: it holds while the
+  // window is in the background and painting is throttled.
+  const seenSince = new Map();
+  function checkSeen() {
+    const scroller = document.getElementById('pageView');
+    if (!visible() || document.hidden || !scroller || !view) { seenSince.clear(); return; }
+    const box = scroller.getBoundingClientRect(), now = Date.now(), ready = [];
+    for (const node of view.querySelectorAll('.at-card.unread:not(.done)')) {
+      const r = node.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
+      const id = node.dataset.id;
+      if (shown < Math.min(r.height * 0.6, box.height * 0.5)) { seenSince.delete(id); continue; }
+      if (!seenSince.has(id)) seenSince.set(id, now);
+      else if (now - seenSince.get(id) >= 1500) ready.push(id);
+    }
+    if (ready.length) { ready.forEach((id) => seenSince.delete(id)); markRead(ready); }
   }
 
   async function act(id, fn) {
@@ -509,7 +501,6 @@
         }
       }
     });
-    watchUnread([...body.querySelectorAll('.at-card.unread:not(.done)')]);
   }
 
   function init(h) {
@@ -519,6 +510,7 @@
     // Cards change on disk (this machine, the other one through git, a worker's receipt).
     if (window.TaskBoard && window.TaskBoard.onChange) window.TaskBoard.onChange(() => refresh());
     setInterval(() => refresh(), 30_000);
+    setInterval(checkSeen, 500);
     setTimeout(() => refresh(), 1500);
   }
 
