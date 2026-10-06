@@ -78,17 +78,27 @@
   // ---- 高优先级 ----
   // The user named this work as urgent. With a card, the card's `important` flag
   // is the one record (read from the board, so a change made on the other machine
-  // counts too); work handed out without a card carries the flag itself. Every
-  // session on that card shows the mark: executor, reviewer, queued request.
+  // counts too); every session on that card shows the mark: executor, reviewer,
+  // queued request. Work handed out without a card carries the flag on its own
+  // dispatch record (and on its queue entry while it waits): the mark belongs to
+  // that piece of work, never to the session, so the next thing the session is
+  // told does not inherit it once the marked work is done. A session's own
+  // `important` is only a mark set while it has no unfinished work; the next
+  // piece of work it is given takes it over (addTask).
   let highCards = new Set();
   const cardIdOf = (x) => x?.boardId || x?.metadata?.boardId || '';
   function isHigh(x) {
     return !!x && (x.important === true || x.metadata?.important === true || highCards.has(cardIdOf(x)));
   }
-  // A session keeps the mark until its own newest piece of work is done.
+  // Whether a session wears the mark: its newest piece of work is unfinished and
+  // marked (itself, or through its card). With no unfinished work, only a mark
+  // put on the session since then counts.
   function sessionHigh(col) {
-    if (!col || col.isMain || !isHigh(col)) return false;
-    return state()?.tasks.findLast((t) => t.colId === col.id)?.status !== 'done';
+    if (!col || col.isMain) return false;
+    const last = state()?.tasks.findLast((t) => t.colId === col.id);
+    if (!last) return isHigh(col);
+    if (last.status === 'done') return col.important === true;
+    return last.important === true || highCards.has(last.boardId || col.boardId || '');
   }
   function priorityChanged() {
     const s = state();
@@ -129,10 +139,10 @@
     if (!col && !waiting) throw new Error(`找不到卡片或会话：${key.slice(0, 80)}。先用 task list 或 ledger 看 id。`);
     const mark = (x) => { if (high) x.important = true; else delete x.important; };
     if (col) {
-      mark(col);
-      // its dispatch record may carry the mark from the time it waited for a slot
+      // unfinished work carries the mark itself; an idle session holds it for its next piece of work
       const last = s?.tasks.findLast((t) => t.colId === col.id);
-      if (last) mark(last);
+      if (last && last.status !== 'done') { mark(last); delete col.important; }
+      else mark(col);
     }
     if (waiting) {
       waiting.metadata = { ...(waiting.metadata || {}) };
@@ -920,12 +930,21 @@
   // col null: a 'waiting' card for work queued until a slot frees up.
   function addTask(col, title) {
     const s = state();
+    // 高优先级 without a card belongs to the piece of work. A mark waiting on the
+    // session (a new `new --priority high` session, or one the user marked while
+    // idle) moves onto this record. A further instruction to a session whose
+    // marked work is still unfinished (running, failed, stopped) is part of that
+    // work and keeps the mark; after that work is done, new work is ordinary.
+    const prior = col ? s.tasks.findLast((t) => t.colId === col.id) : null;
+    const marked = !!col && (col.important === true || (!!prior && prior.important === true && prior.status !== 'done'));
+    if (col) delete col.important;
     const task = {
       id: 'k' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36),
       colId: col ? col.id : '', title: String(title || host.columnLabel(col)).slice(0, 120), gen: s.gen,
       status: col ? 'queued' : 'waiting', sentAt: Date.now(), turnId: '', receipt: null,
       project: col ? col.project || '' : '', reviews: col ? col.reviews || [] : [],
       boardId: col?.boardId || '', boardAttempt: col?.boardAttempt || '',
+      ...(marked ? { important: true } : {}),
     };
     s.tasks.push(task);
     if (s.tasks.length > MAX_TASKS) s.tasks.splice(0, s.tasks.length, ...trimTasks(s.tasks));
@@ -968,6 +987,7 @@
     const supplement = state().tasks.some((t) => t.colId === col.id && t.startedAt);
     const task = waiting || addTask(col, title);
     if (waiting) {
+      delete col.important;   // the waiting record already carries the mark
       Object.assign(task, { colId: col.id, status: 'queued', sentAt: Date.now() });
       update(task);
     }

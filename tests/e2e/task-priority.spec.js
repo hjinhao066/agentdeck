@@ -83,7 +83,7 @@ async function launch() {
   const workers = [
     column('w-plain', '整理文档', '客户门户'), column('w-norm', '工作台界面', '客户门户', { boardId: 'n-doing' }),
     column('w-hi', '登录紧急排查', '客户门户', { boardId: 'h-doing' }), column('w-review', '审查：权限越界', '客户门户', { boardId: 'h-review' }),
-    column('w-loose', '客户电话里说的急事', '客户门户', { important: true }), column('w-fail', '迁移数据', '报表服务'),
+    column('w-loose', '客户电话里说的急事', '客户门户'), column('w-fail', '迁移数据', '报表服务'),
   ];
   const states = ['working', 'working', 'working', 'working', 'working', 'failed'];
   const now = Date.now();
@@ -97,6 +97,7 @@ async function launch() {
       ],
       tasks: [
         ...workers.map((c, i) => ({ id: 'task-' + c.id, colId: c.id, gen: 1, status: states[i], sentAt: now - 60_000 + i, startedAt: now - 50_000, turnId: '', project: c.project, boardId: c.boardId || '',
+          ...(c.id === 'w-loose' ? { important: true } : {}),   // work without a card: the mark is on its dispatch record
           receipt: states[i] === 'failed' ? { summary: '', files: [], failed: '测试环境缺少数据访问权限' } : null })),
         { id: 'k-wait-n', colId: '', title: '排队的普通活', gen: 1, status: 'waiting', sentAt: now - 30_000, turnId: '', receipt: null, project: '客户门户', reviews: [] },
         { id: 'k-wait-h', colId: '', title: '排队的急事', gen: 1, status: 'waiting', sentAt: now - 20_000, turnId: '', receipt: null, project: '客户门户', reviews: [], important: true },
@@ -304,12 +305,13 @@ test('sidebar and architecture map: marked sessions and waiting work, their orde
   await expect(item).not.toHaveClass(/checked/);
   await item.click();
   await expect(row('w-plain').locator('.cn-prio')).toHaveCount(1);
-  expect(await page.evaluate(() => columns.find((c) => c.id === 'w-plain').important)).toBe(true);
+  const marks = (id) => page.evaluate((col) => [config.mainSession.tasks.findLast((t) => t.colId === col).important === true, 'important' in columns.find((c) => c.id === col)], id);
+  expect(await marks('w-plain'), 'on the work in progress, not on the session').toEqual([true, false]);
   await row('w-plain').click({ button: 'right' });
   await expect(page.locator('.ctx-menu .ctx-item.checked', { hasText: '高优先级' })).toHaveCount(1);
   await page.locator('.ctx-menu .ctx-item', { hasText: '高优先级' }).click();
   await expect(row('w-plain').locator('.cn-prio')).toHaveCount(0);
-  expect(await page.evaluate(() => 'important' in columns.find((c) => c.id === 'w-plain'))).toBe(false);
+  expect(await marks('w-plain')).toEqual([false, false]);
   // a session bound to a card changes the card, not a copy of its own
   await row('w-norm').click({ button: 'right' });
   await page.locator('.ctx-menu .ctx-item', { hasText: '高优先级' }).click();
@@ -433,8 +435,29 @@ test('the Captain marks from the command line: task add, task priority, new, and
       return now.filter(Boolean).length;
     }, { timeout: 30000 }).toBeGreaterThanOrEqual(n);
   }
-  expect(await page.evaluate(() => columns.find((c) => columnLabel(c) === '马上查一下告警').important)).toBe(true);
+  const alarm = await page.evaluate(() => columns.find((c) => columnLabel(c) === '马上查一下告警').id);
+  expect(await page.evaluate((id) => [config.mainSession.tasks.findLast((t) => t.colId === id).important === true, 'important' in columns.find((c) => c.id === id)], alarm), 'the mark came with the work, the session holds none').toEqual([true, false]);
   expect(await page.evaluate(() => 'important' in columns.find((c) => columnLabel(c) === '做登录文案')), 'bound to a card: the card carries the mark').toBe(false);
+  // The mark belongs to that piece of work. Once it is done, an ordinary instruction to the same
+  // session is ordinary: no flag on its row, none in the ledger, nothing left on the session.
+  const record = () => page.evaluate((id) => { const t = config.mainSession.tasks.findLast((x) => x.colId === id); return [t.status, !!t.startedAt, t.important === true]; }, alarm);
+  await expect.poll(async () => { const [status, started] = await record(); return started || status === 'done'; }, { timeout: 30000 }).toBe(true);
+  await page.evaluate((id) => MainSession.submit({ action: 'complete', result: '告警查完了' }, columns.find((c) => c.id === id)), alarm);
+  await expect.poll(async () => (await record())[0], { timeout: 15000 }).toBe('done');
+  expect(await page.evaluate((id) => MainSession.isPriority(columns.find((c) => c.id === id)), alarm)).toBe(false);
+  await expect(page.locator(`#captainCrewList .colnav-item[data-col-id="${alarm}"] .cn-prio`)).toHaveCount(0);
+  await ok(['tell', '--to', alarm, '--message', '顺便整理一下文档，不急']);
+  await expect.poll(async () => (await record())[0]).not.toBe('done');
+  expect((await record())[2], 'the new work is not marked').toBe(false);
+  expect(await page.evaluate((id) => [MainSession.isPriority(columns.find((c) => c.id === id)), 'important' in columns.find((c) => c.id === id)], alarm)).toEqual([false, false]);
+  await expect(page.locator(`#captainCrewList .colnav-item[data-col-id="${alarm}"]`)).toHaveCount(1);
+  await expect(page.locator(`#captainCrewList .colnav-item[data-col-id="${alarm}"] .cn-prio`)).toHaveCount(0);
+  expect(await ok(['ledger'])).toMatch(new RegExp(`${alarm} {2}「马上查一下告警」`));
+  // marked again by the Captain, it shows again
+  expect(await ok(['task', 'priority', '--id', alarm, '--level', 'high'])).toContain('标为高优先级');
+  await expect(page.locator(`#captainCrewList .colnav-item[data-col-id="${alarm}"] .cn-prio`)).toHaveCount(1);
+  expect(await ok(['ledger'])).toMatch(new RegExp(`${alarm} {2}【高优先级】「马上查一下告警」`));
+
   expect((await ok(['help']))).toContain('task priority --id <card-or-session-id> --level high|normal');
   expect(errors).toEqual([]);
 });

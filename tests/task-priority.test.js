@@ -178,7 +178,7 @@ function runtime(t) {
   const captain = { id: 'captain', isMain: true, cmd: '' }, columns = [captain];
   const state = { colId: captain.id, tasks: [], pending: [], waitlist: [] };
   const tasks = new TaskStore(path.join(root, 'tasks'), { sessions: () => columns });
-  const h = { pressure: 1, out: new Set(['held']), renders: 0 };
+  const h = { pressure: 1, out: new Set(['held']), renders: 0, turns: 0, hold: false, held: [], release() { h.hold = false; h.held.splice(0).forEach((send) => send()); } };
   const window = {
     MainCore: M, BoardCore: B,
     QuotaCore: {
@@ -199,7 +199,13 @@ function runtime(t) {
   window.MainSession.init({
     config: { mainSession: state, folders: [] }, columns: () => columns, terms: new Map(),
     saveConfig() {}, flushConfig() {}, columnLabel: (c) => c.title || c.id, userComposing: () => false, showToast() {},
-    createSession: (col) => { columns.push(col); return col; }, sendWhenReady() {},
+    createSession: (col) => { columns.push(col); return col; },
+    // the stand-in session takes every instruction at once: its dispatch record goes to work
+    // (h.hold: the session is busy, the instruction stays queued until h.release())
+    sendWhenReady: (col, text, options = {}) => {
+      const send = () => { if (typeof text === 'function') text(); if (options.onSent) options.onSent({ id: 'turn-' + (++h.turns) }); };
+      if (h.hold) h.held.push(send); else send();
+    },
   });
   let n = 0;
   const handle = (message, caller = captain) => window.MainSession.handle({ id: 'req-' + (++n), ...message }, caller);
@@ -242,7 +248,10 @@ test('a session follows its card; work without a card carries the mark itself; t
   const [bound, loose, plain] = h.columns.slice(1);
   assert.equal(h.tasks.list().find((c) => c.id === card.id).important, true, 'new --task-id --priority high marks the card');
   assert.equal(bound.important, undefined, 'the session reads the card, no second copy');
-  assert.equal(loose.important, true);
+  const recordOf = (col) => h.state.tasks.findLast((x) => x.colId === col.id);
+  assert.equal('important' in loose, false, 'without a card the mark is on the piece of work, not on the session');
+  assert.equal(recordOf(loose).important, true);
+  assert.equal('important' in recordOf(bound), false);
   assert.deepEqual([bound, loose, plain].map((c) => h.api.isPriority(c)), [true, true, false]);
   const ledger = await h.ledger();
   assert.match(ledger, new RegExp(`${bound.id} {2}【高优先级】「挂卡的活」`));
@@ -255,9 +264,11 @@ test('a session follows its card; work without a card carries the mark itself; t
   assert.equal(h.api.isPriority(bound), false);
   assert.match(await h.task('priority', { id: loose.id, level: 'normal' }), new RegExp(`已把会话 ${loose.id}「没挂卡的急事」改回普通优先级`));
   assert.equal('important' in loose, false);
-  assert.equal('important' in h.state.tasks.findLast((x) => x.colId === loose.id), false, 'its dispatch record agrees');
+  assert.equal('important' in recordOf(loose), false);
+  assert.equal(h.api.isPriority(loose), false);
   assert.match(await h.task('priority', { id: plain.id, level: 'high' }), /标为高优先级/);
   assert.equal(h.api.isPriority(plain), true);
+  assert.deepEqual([recordOf(plain).important, 'important' in plain], [true, false], 'work in progress: its record carries the mark');
 
   // once its own work is done the session no longer wears the mark
   h.state.tasks.findLast((x) => x.colId === plain.id).status = 'done';
@@ -267,6 +278,109 @@ test('a session follows its card; work without a card carries the mark itself; t
   await assert.rejects(h.assign('x', { priority: 'top' }), /--priority 只能是 high 或 normal/);
   const dispatcher = { id: 'dispatcher', dispatcherCardId: card.id };
   await assert.rejects(h.handle({ action: 'main-new', title: 'y', task: 'y', command: 'available', boardId: card.id, dispatcherCardId: card.id, priority: 'high' }, dispatcher), /只有队长可以标/);
+});
+
+// The mark belongs to a piece of work, not to the session that did it.
+test('a finished 高优先级 job leaves nothing behind: an ordinary tell to the same session is ordinary everywhere', async (t) => {
+  const h = runtime(t);
+  await h.assign('urgent first task', { priority: 'high' });
+  const col = h.columns[1];
+  const last = () => h.state.tasks.findLast((x) => x.colId === col.id);
+  assert.equal(h.api.isPriority(col), true);
+  assert.match(await h.ledger(), new RegExp(`${col.id} {2}【高优先级】「urgent first task」`));
+
+  await h.api.submit({ action: 'complete', result: 'finished' }, col);
+  assert.equal(last().status, 'done');
+  assert.equal(h.api.isPriority(col), false);
+  assert.equal('important' in col, false, 'nothing is left on the session');
+
+  // the reviewer's case: the new instruction is still waiting to go in (queued), then it is delivered (working)
+  h.hold = true;
+  assert.match((await h.handle({ action: 'main-tell', to: col.id, message: 'ordinary unrelated second task' })).result, /已发给|先放着/);
+  assert.equal(last().status, 'queued');
+  assert.equal('important' in last(), false);
+  assert.equal(h.api.isPriority(col), false, 'the new ordinary work does not wear the old mark');
+  assert.doesNotMatch(await h.ledger(), /【高优先级】/);
+  h.release();
+  assert.equal(last().status, 'working');
+  assert.equal('important' in last(), false);
+  assert.equal(h.api.isPriority(col), false);
+  assert.doesNotMatch(await h.ledger(), /【高优先级】/);
+  // the pieces the sidebar and the architecture map are drawn from
+  assert.equal(S.crewModelGroups([{ id: col.id, label: 'Opus', lastActive: 1, urgent: h.api.isPriority(col) }], [])[0].urgent, 0);
+  const map = C.buildCrewMap({ captain: { id: 'captain', title: '队长', alive: true, state: 'plain' }, tasks: h.state.tasks, showArchived: false,
+    columns: [{ id: col.id, title: 'urgent first task', alive: true, state: 'working', captainCrew: true, important: h.api.isPriority(col) }] });
+  assert.equal(map.nodes.find((n) => n.id === col.id).important, false);
+
+  // marked again by hand, the new work wears it; when that is done it is gone again
+  assert.match(await h.task('priority', { id: col.id, level: 'high' }), /标为高优先级/);
+  assert.deepEqual([h.api.isPriority(col), last().important, 'important' in col], [true, true, false]);
+  await h.api.submit({ action: 'complete', result: 'second finished' }, col);
+  assert.equal(h.api.isPriority(col), false);
+  await h.handle({ action: 'main-tell', to: col.id, message: 'a third ordinary thing' });
+  assert.equal(h.api.isPriority(col), false);
+});
+
+test('an instruction added while the marked work is unfinished is part of it; a failed job stays marked through its rework', async (t) => {
+  const h = runtime(t);
+  await h.assign('urgent job', { priority: 'high' });
+  const col = h.columns[1];
+  const last = () => h.state.tasks.findLast((x) => x.colId === col.id);
+  // a supplement while it is still at work
+  await h.handle({ action: 'main-tell', to: col.id, message: 'one more detail for the same job' });
+  assert.equal(h.state.tasks.filter((x) => x.colId === col.id).length, 2);
+  assert.equal(last().important, true);
+  assert.equal(h.api.isPriority(col), true);
+  // it fails: still to be dealt with, still marked; the rework carries the mark
+  await h.api.submit({ action: 'complete', result: 'could not finish', failed: 'tests fail' }, col);
+  assert.equal(last().status, 'failed');
+  assert.equal(h.api.isPriority(col), true);
+  await h.handle({ action: 'main-tell', to: col.id, message: 'fix the tests and finish' });
+  assert.equal(last().important, true);
+  assert.equal(h.api.isPriority(col), true);
+  await h.api.submit({ action: 'complete', result: 'done now' }, col);
+  assert.equal(h.api.isPriority(col), false);
+  await h.handle({ action: 'main-tell', to: col.id, message: 'unrelated ordinary work' });
+  assert.equal(h.api.isPriority(col), false);
+  assert.doesNotMatch(await h.ledger(), /【高优先级】/);
+});
+
+test('a session marked while it has no unfinished work hands the mark to its next piece of work, once', async (t) => {
+  const h = runtime(t);
+  await h.assign('ordinary job');
+  const col = h.columns[1];
+  const last = () => h.state.tasks.findLast((x) => x.colId === col.id);
+  await h.api.submit({ action: 'complete', result: 'finished' }, col);
+  // the user marks the idle session from the sidebar menu
+  await h.api.setPriority(col.id, 'high');
+  assert.deepEqual([col.important, h.api.isPriority(col)], [true, true]);
+  assert.equal('important' in last(), false, 'the finished record is not rewritten');
+  await h.handle({ action: 'main-tell', to: col.id, message: 'the urgent thing' });
+  assert.deepEqual([last().important, 'important' in col, h.api.isPriority(col)], [true, false, true]);
+  await h.api.submit({ action: 'complete', result: 'urgent thing done' }, col);
+  await h.handle({ action: 'main-tell', to: col.id, message: 'back to ordinary work' });
+  assert.deepEqual(['important' in last(), 'important' in col, h.api.isPriority(col)], [false, false, false]);
+  // unmarking an idle session clears it before any work takes it
+  await h.api.submit({ action: 'complete', result: 'ok' }, col);
+  await h.api.setPriority(col.id, 'high');
+  await h.api.setPriority(col.id, 'normal');
+  assert.deepEqual(['important' in col, h.api.isPriority(col)], [false, false]);
+});
+
+test('queued 高优先级 work without a card: the mark arrives on its record, not on the session, and ends with it', async (t) => {
+  const h = runtime(t);
+  h.pressure = 4;
+  await h.assign('queued urgent', { priority: 'high' });
+  h.pressure = 1;
+  h.window.ChatUI.readFooter = () => [];
+  h.api.onTick(h.captain.id, { alive: true, state: 'plain' });
+  for (let i = 0; i < 20 && h.state.waitlist.length; i++) await new Promise((resolve) => setImmediate(resolve));
+  const col = h.columns[1];
+  const last = () => h.state.tasks.findLast((x) => x.colId === col.id);
+  assert.deepEqual([last().important, 'important' in col, h.api.isPriority(col)], [true, false, true]);
+  await h.api.submit({ action: 'complete', result: 'finished' }, col);
+  await h.handle({ action: 'main-tell', to: col.id, message: 'ordinary follow-up' });
+  assert.deepEqual(['important' in last(), h.api.isPriority(col)], [false, false]);
 });
 
 test('queue: 高优先级 goes ahead of ordinary work already waiting, and is said so in queue list and ledger', async (t) => {
