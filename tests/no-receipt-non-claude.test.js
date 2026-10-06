@@ -97,6 +97,52 @@ for (const [name, cmd, idle] of AGENTS) {
   });
 }
 
+const BACKGROUND_STATUS = 'python3 run-e2e-with-lo... running';
+
+for (const [name, cmd, idle] of AGENTS) {
+  test(`${name} waiting on a background command or the test lock is not a missing receipt`, async () => {
+    const screen = `${idle}\n${BACKGROUND_STATUS}`;
+    assert.equal(M.backgroundCommandStatus(screen, cmd), true);
+    assert.equal(M.terminalActivity(screen, cmd), 'working');
+    assert.equal(M.terminalActivity(`${idle}\npython3 run-e2e-with-lo… running`, cmd), 'working');
+    assert.equal(M.backgroundCommandStatus(`${idle}\n2 background tasks running`, cmd), true);
+    assert.equal(M.backgroundCommandStatus(`${idle}\n正在等全机测试锁`, cmd), true);
+    assert.equal(M.backgroundCommandStatus(`${idle}\nwaiting for the test lock`, cmd), true);
+    // Quoted above the prompt, or a sentence that continues past "running".
+    assert.equal(M.terminalActivity(`${BACKGROUND_STATUS}\n${idle}`, cmd), '');
+    assert.equal(M.terminalActivity(`${idle}\nThe notes mention ${BACKGROUND_STATUS} in the background.`, cmd), '');
+    assert.equal(M.backgroundCommandStatus(`${idle}\nWaiting for execution to complete.`, cmd), false);
+
+    const task = openTask();
+    task.endedAt = Date.now() - QUIET;
+    const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - QUIET, lastScreen: screen };
+    const live = runtime({ cmd, task, entry, turns: finishedTurn });
+    live.api.onTick(live.worker.id, entry);
+    assert.equal(task.status, 'working');
+    assert.equal(task.receipt, undefined);
+    assert.equal(task.endedAt, 0);
+    await flush();
+    assert.equal(live.boardEvents.some((e) => e.input.type === 'fallback'), false);
+
+    const judged = openTask();
+    judged.status = 'stopped';
+    judged.receipt = { summary: '已结束，未提交回执', source: 'fallback', files: [] };
+    judged.doneAt = Date.now();
+    const again = runtime({ cmd, task: judged, entry, turns: finishedTurn });
+    again.api.onTick(again.worker.id, entry);
+    assert.equal(judged.status, 'working');
+    assert.equal(judged.receipt, undefined);
+    assert.equal(judged.endedAt, 0);
+  });
+}
+
+test('Claude and a generic session do not inherit the non-Claude background status', () => {
+  const screen = `❯\n${BACKGROUND_STATUS}`;
+  assert.equal(M.backgroundCommandStatus(screen, B.commandForAgent('claude')), false);
+  assert.equal(M.terminalActivity(screen, B.commandForAgent('claude')), '');
+  assert.equal(M.backgroundCommandStatus(`>\n${BACKGROUND_STATUS}`, 'node fake-agent.js --screen-only'), false);
+});
+
 test('Antigravity "Running command…" under the ready prompt still counts as work', async () => {
   const cmd = B.commandForAgent('agy');
   const screen = '>\nAntigravity\nRunning command...';

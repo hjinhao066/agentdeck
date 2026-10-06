@@ -790,6 +790,24 @@
     return lines.slice(prompt + 1).some((line) =>
       /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line));
   }
+  // agy, Cursor and Codex keep the input box while a background command is
+  // still going. The live signal sits under the prompt: a truncated status
+  // such as "python3 run-e2e-with-lo... running", a background-task count, or
+  // a one-line lock wait. The same words in the reply above the prompt, or a
+  // sentence that does not end on "running", are not that status bar.
+  function backgroundCommandStatus(screen, cmd) {
+    if (cmd && !/\b(?:agy|antigravity|cursor-agent|codex)\b/i.test(cmd)) return false;
+    const lines = String(screen || '').split('\n');
+    const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*(?:>|❯|›|→)(?:\s|$)/.test(line));
+    const band = (prompt >= 0 ? lines.slice(prompt + 1) : lines).slice(-12);
+    return band.some((line) => {
+      const text = line.replace(/[│┃]/g, '').trim();
+      if (!text || text.length > 140) return false;
+      if (/(?:\.{3}|…)\s*running\s*$/i.test(text)) return true;
+      if (/^\d+\s+background\s+(?:terminals?|shells?|tasks?|commands?|jobs?)\b.*\brunning\s*$/i.test(text)) return true;
+      return /^(?:waiting for (?:the )?(?:lock|test lock)|正在等(?:全机)?(?:测试)?锁)\s*$/i.test(text);
+    });
+  }
   function terminalActivity(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
     const lines = String(screen || '').split('\n').slice(-20);
@@ -805,6 +823,9 @@
       if (/press up to edit queued messages/i.test(line)) queued = true;
     });
     if (quota > resumed && quota > working) return 'quota';
+    // A background command under the ready prompt wins over Cursor's idle
+    // prompt. Otherwise that early return would hide the status bar.
+    if (backgroundCommandStatus(screen, cmd)) return 'working';
     const cursor = /\bcursor-agent\b/i.test(cmd || '') || /^\s*[│┃]?\s*→/m.test(screen) ? cursorActivity(screen) : '';
     if (cursor === 'working') return 'working';
     if (cursor === 'idle' && /\bcursor-agent\b/i.test(cmd || '')) return '';
@@ -909,7 +930,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
   };
 });

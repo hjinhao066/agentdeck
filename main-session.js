@@ -12,9 +12,10 @@
   const MAX_TASKS = 120;            // cards kept in config.json; older ones drop off
   const STOP_QUIET = 3 * 60_000; // ended turns with no command receipt
   // 0840503 keeps a Claude worker open only when its own footer says background
-  // work is still running. agy, Cursor and Codex have no such footer: after a
-  // turn, or after the Captain interrupts them, the process stays up and the
-  // input box waits for the next instruction. That is not an exit.
+  // work is still running. agy, Cursor and Codex use a different status bar
+  // ("… running", including while a command waits on the test lock). After a
+  // turn, or after the Captain interrupts them, the process also stays up at
+  // the input box. Neither of those is an exit.
   function nonClaudeHoldsOpenSession(cmd) {
     return /\b(?:agy|antigravity|cursor-agent|codex)\b/i.test(String(cmd || ''));
   }
