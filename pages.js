@@ -13,6 +13,14 @@
   let editing = null;               // schedule being edited, or null for a new one
   let sdKind = 'daily';
   const waiting = new Map();        // schedule id -> when it first found its session busy
+  const F = window.ScheduleFeedCore;
+  let feeds = null;                 // tasks other schedulers run, as last listed; null until the first answer
+  let detail = null;                // the task opened from the list: { kind: 'feed' | 'own', id, date, data }
+  let feedRun = 0;
+  const drafts = new Map();         // feed id:item id -> the reason being typed
+  const changing = new Set();       // feed id:item id -> a decided item whose 做 / 不做 are open again
+  const told = new Set();           // feed id:seq -> decisions handed to 队长 in this run of the app
+  const holding = new Set();        // feed id:seq -> decisions whose write is still being waited on
 
   const $ = (id) => document.getElementById(id);
   function el(tag, cls, text) {
@@ -37,13 +45,16 @@
   // ---- page frame ----
   function show(name) {
     current = name;
+    detail = null;
     view.hidden = false;
     render();
     window.Sidebar.markPage(name);
+    if (name === 'schedule') refreshFeeds();
   }
   function hide() {
     if (!current) return;
     current = null;
+    detail = null;
     recheckDisk = null; shownTab = null;
     view.hidden = true;
     view.textContent = '';
@@ -87,10 +98,12 @@
   const STATUS = { ok: '已发送', missed: '错过（当时没开）', skipped: '跳过（对话一直在忙）', error: '没发出去' };
 
   function renderSchedule() {
+    if (detail) { (detail.kind === 'feed' ? renderFeedDetail : renderOwnDetail)(); return; }
     const body = frame('Schedule', '到点自动把提示词发给某个对话，和你自己在输入框里发送一样。只在 AgentDeck 开着时运行。',
       [btn('新建定时任务', () => openEditor(null), 'primary')]);
     const list = schedules();
-    if (!list.length) {
+    const watched = feeds || [];
+    if (!list.length && !watched.length) {
       const empty = el('div', 'page-empty');
       empty.append(icon('clock', 'page-empty-ico'), el('strong', null, '还没有定时任务'),
         el('span', null, '比如：每个工作日早上 9 点，让 Claude 把昨天的提交整理成日报。'),
@@ -99,6 +112,14 @@
       return;
     }
     const now = Date.now();
+    if (watched.length) {
+      body.appendChild(groupHead('在别处运行', '别的电脑或别的调度器在跑，这里看每次的结果；需要你拿主意的可以直接回。'));
+      const box = el('div', 'sched-list');
+      watched.forEach((f) => box.appendChild(feedCard(f, now)));
+      body.appendChild(box);
+    }
+    if (!list.length) return;
+    if (watched.length) body.appendChild(groupHead('由 AgentDeck 发送', ''));
     const box = el('div', 'sched-list');
     list.forEach((s) => {
       const card = el('div', 'sched-card' + (s.enabled ? '' : ' off'));
@@ -107,8 +128,10 @@
       sw.type = 'button'; sw.title = s.enabled ? '暂停' : '启用';
       sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', String(s.enabled));
       sw.addEventListener('click', () => setEnabled(s.id, !s.enabled));
-      const main = el('div', 'sched-main');
-      main.appendChild(el('div', 'sched-name', s.name || s.prompt.split('\n')[0].slice(0, 80)));
+      const main = el('button', 'sched-main sched-open');
+      main.type = 'button'; main.title = '查看详情'; main.dataset.fk = 'own:' + s.id;
+      main.addEventListener('click', () => openDetail({ kind: 'own', id: s.id }));
+      main.appendChild(el('div', 'sched-name', scheduleTitle(s)));
       const rest = s.name ? s.prompt : s.prompt.split('\n').slice(1).join(' ');
       if (rest.trim()) main.appendChild(el('div', 'sched-prompt', rest.replace(/\s+/g, ' ')));
       const meta = el('div', 'sched-meta');
@@ -130,6 +153,444 @@
     });
     body.appendChild(box);
   }
+  const scheduleTitle = (s) => s.name || s.prompt.split('\n')[0].slice(0, 80);
+  function groupHead(title, note) {
+    const h = el('div', 'sched-group');
+    h.appendChild(el('h2', null, title));
+    if (note) h.appendChild(el('p', null, note));
+    return h;
+  }
+  // ---- Schedule: tasks another scheduler runs, watched here ----
+  // The list and every detail are asked twice: first for what this machine
+  // already holds (at once), then for the task's own folder (a remote one takes
+  // seconds). Nothing on the page waits for the second answer.
+  // Rebuilding the page under someone typing a reason would drop their caret
+  // and break an IME composition: the redraw waits until they leave the box.
+  let redrawWaiting = false;
+  const typingReason = () => !!document.activeElement && view.contains(document.activeElement) && document.activeElement.classList.contains('sx-reason');
+  function redraw() {
+    if (typingReason()) { redrawWaiting = true; return; }
+    redrawWaiting = false;
+    const top = view.scrollTop;
+    keepingFocus(render);
+    view.scrollTop = top;
+  }
+  async function loadFeeds(fresh) {
+    let r;
+    try { r = await window.deck.scheduleFeeds(fresh); } catch (_) { return; }
+    if (!r || !r.ok || !Array.isArray(r.feeds)) return;
+    feeds = r.feeds;
+    tellCaptain();
+    if (current === 'schedule' && !detail) redraw();
+  }
+  function refreshFeeds() { return loadFeeds(false).then(() => loadFeeds(true)); }
+  const RESULT = { ok: '成功', error: '失败' };
+  // "还没更新过" has no time to show: say which report is the newest instead.
+  function lastRunText(f, now, latest) {
+    if (f.status.lastRunAt) return SC.formatWhen(f.status.lastRunAt, now);
+    return latest ? latest + ' 那一期' : '还没有跑过';
+  }
+  function staleText(f, now) {
+    return '数据截至 ' + (f.asOf ? SC.formatWhen(f.asOf, now) : '未知时间');
+  }
+  function needPill(n) {
+    const pill = el('span', 'sx-need', `待你审核 ${n} 条`);
+    pill.dataset.count = String(n);
+    return pill;
+  }
+  function feedCard(f, now) {
+    const card = el('div', 'sched-card sx-card');
+    card.dataset.feedId = f.id;
+    const mark = el('span', 'sx-mark');
+    mark.setAttribute('aria-hidden', 'true');
+    const main = el('button', 'sched-main sched-open');
+    main.type = 'button'; main.title = '查看详情和每次的结果'; main.dataset.fk = 'feed:' + f.id;
+    main.addEventListener('click', () => openDetail({ kind: 'feed', id: f.id }));
+    main.appendChild(el('div', 'sched-name', f.name));
+    if (f.about) main.appendChild(el('div', 'sx-about', f.about));
+    const meta = el('div', 'sched-meta');
+    if (f.when) meta.appendChild(chip('clock', f.when));
+    if (f.runner) meta.appendChild(chip(null, f.runner));
+    if (f.status.nextRunAt) meta.appendChild(chip(null, '下次 ' + SC.formatWhen(f.status.nextRunAt, now)));
+    else if (!f.status.enabled) meta.appendChild(chip(null, '已暂停'));
+    const last = chip(null, '上次 ' + lastRunText(f, now, f.latest) + (RESULT[f.status.lastStatus] ? ' · ' + RESULT[f.status.lastStatus] : ''));
+    last.classList.add('st-' + (f.status.lastStatus || 'none'));
+    if (f.status.lastError) last.title = f.status.lastError;
+    meta.appendChild(last);
+    if (f.offline) {
+      const off = chip(null, '连不上 · ' + staleText(f, now));
+      off.classList.add('sx-off');
+      meta.appendChild(off);
+    }
+    if (f.unsynced) {
+      const wait = chip(null, `${f.unsynced} 个决定待同步`);
+      wait.classList.add('sx-off');
+      meta.appendChild(wait);
+    }
+    main.appendChild(meta);
+    const side = el('div', 'sched-actions sx-side');
+    if (f.openCount) side.appendChild(needPill(f.openCount));
+    side.appendChild(icon('chevRight', 'sx-go'));
+    card.append(mark, main, side);
+    return card;
+  }
+
+  function openDetail(d) {
+    detail = { ...d, date: d.date || '', data: null, error: '', checking: false, saving: '' };
+    view.scrollTop = 0;
+    render();
+    if (d.kind === 'feed') reloadFeed(false).then(() => reloadFeed(true));
+  }
+  function closeDetail() {
+    const from = detail;
+    detail = null;
+    render();
+    const back = from && view.querySelector(`[data-fk="${from.kind}:${from.id}"]`);
+    if (back) back.focus();
+    refreshFeeds();
+  }
+  async function reloadFeed(fresh, force) {
+    const at = detail;
+    if (!at || at.kind !== 'feed') return;
+    const run = ++feedRun;
+    if (fresh && !at.checking) { at.checking = true; redraw(); }
+    let r;
+    try { r = await window.deck.scheduleFeedDetail(at.id, { date: at.date, fresh, force: !!force }); } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+    if (detail !== at || run !== feedRun) return;
+    at.checking = !fresh && !!(r && r.checking);
+    if (r && r.ok) { at.data = r; at.error = ''; } else at.error = (r && r.error) || '读不到这个任务';
+    tellCaptain();
+    redraw();
+    // Decisions still waiting to be written: this visit retried them. Show how
+    // that went, once (a refresh or a new visit tries again).
+    if (fresh && r && r.ok && r.unsynced && !at.retried) {
+      at.retried = true;
+      window.deck.scheduleFeedSettle(at.id).catch(() => null).then(() => { if (detail === at) reloadFeed(true); });
+    }
+  }
+  // Decisions 队长 has not heard about go out through the same queue a message
+  // typed on the phone uses: it waits for 队长 to be idle and never touches a
+  // half-written message. No 队长 running: they wait in the journal.
+  function tellCaptain() {
+    const lists = [...(detail && detail.data ? [detail.data] : []), ...(feeds || [])];
+    for (const f of lists) {
+      for (const n of f.notes || []) {
+        const key = f.id + ':' + n.seq;
+        if (told.has(key) || holding.has(key)) continue;
+        try { window.MainSession.sendMessage(F.captainMessage(f, n)); } catch (_) { return; }
+        told.add(key);
+        window.deck.scheduleFeedNotified(f.id, [n.seq]);
+      }
+    }
+  }
+  async function decideItem(item, decision) {
+    const at = detail;
+    const key = at.id + ':' + item.id;
+    at.saving = item.id;
+    redraw();
+    let r;
+    try {
+      r = await window.deck.scheduleFeedDecide(at.id, { itemId: item.id, decision, reason: (drafts.get(key) || '').trim(), date: at.data.report.date });
+    } catch (e) { r = { ok: false, error: String(e && e.message || e) }; }
+    at.saving = '';
+    if (!r || !r.ok) {
+      host.showToast((r && r.error) || '没能记下这个决定');
+      if (detail === at) redraw();
+      return;
+    }
+    drafts.delete(key); changing.delete(key);
+    const note = at.id + ':' + r.entry.seq;
+    holding.add(note);
+    if (detail === at) await reloadFeed(false);   // 已决定 shows at once, from this machine's journal
+    // A moment for the write to land, so 队长 is told where the decision stands.
+    await Promise.race([window.deck.scheduleFeedSettle(at.id).catch(() => null), new Promise((done) => setTimeout(done, 12_000))]);
+    holding.delete(note);
+    if (detail === at) await reloadFeed(true); else await loadFeeds(false);
+    if (!told.has(note)) host.showToast('决定已记下。队长现在没在运行，等它开着时会自动把这条决定告诉它。');
+  }
+
+  function backButton() {
+    const b = el('button', 'page-close sx-back');
+    b.type = 'button'; b.title = '回到定时任务列表 (Esc)'; b.innerHTML = host.ICONS.left;
+    b.setAttribute('aria-label', '回到定时任务列表'); b.dataset.fk = 'back';
+    b.addEventListener('click', closeDetail);
+    return b;
+  }
+  function iconButton(name, title, onClick, fk) {
+    const b = el('button', 'btn tool-action');
+    b.type = 'button'; b.title = title; b.innerHTML = host.ICONS[name] || '';
+    b.setAttribute('aria-label', title);
+    if (fk) b.dataset.fk = fk;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+  function mdBlock(md, cls) {
+    const box = el('div', 'pv-md sx-md' + (cls ? ' ' + cls : ''));
+    box.innerHTML = C.renderMarkdown(md);
+    box.addEventListener('click', (e) => {
+      const a = e.target.closest('a');
+      if (!a) return;
+      e.preventDefault();
+      if (a.hasAttribute('data-ext')) window.SidePane.openLink({ kind: 'url', text: a.getAttribute('href') }, e);
+    });
+    return box;
+  }
+  function linkTo(text, url) {
+    const a = el('a', 'sx-link', text);
+    a.href = url; a.title = url;
+    a.addEventListener('click', (e) => { e.preventDefault(); window.SidePane.openLink({ kind: 'url', text: url }, e); });
+    return a;
+  }
+  function fact(label, value, cls, title) {
+    const f = el('div', 'sx-fact' + (cls ? ' ' + cls : ''));
+    f.append(el('span', 'sx-fact-label', label), el('span', 'sx-fact-value', value));
+    if (title) f.title = title;
+    return f;
+  }
+  function hero(kicker, facts) {
+    const box = el('section', 'sx-hero');
+    const sky = el('div', 'star-sky');
+    sky.setAttribute('aria-hidden', 'true');
+    for (let i = 0; i < 6; i++) sky.appendChild(el('i'));
+    const grid = el('div', 'sx-facts');
+    facts.filter(Boolean).forEach((f) => grid.appendChild(f));
+    box.appendChild(sky);
+    if (kicker) box.appendChild(el('div', 'sx-kicker', kicker));
+    box.appendChild(grid);
+    return box;
+  }
+
+  function renderFeedDetail() {
+    const at = detail;
+    const d = at.data;
+    const summary = (feeds || []).find((f) => f.id === at.id);
+    const refresh = iconButton('refresh', '刷新：重新读取最新结果', () => { at.retried = false; reloadFeed(true, true); }, 'refresh');
+    if (at.checking) refresh.classList.add('spinning');
+    const body = frame(d ? d.name : summary ? summary.name : '定时任务', d ? d.about : summary ? summary.about : '', [refresh]);
+    view.querySelector('.page-head').prepend(backButton());
+    body.classList.add('sx-detail');
+    body.dataset.feedId = at.id;
+    if (!d) {
+      body.appendChild(el('div', 'sx-note', at.error || '正在读取…'));
+      return;
+    }
+    const now = Date.now();
+    const r = d.report;
+    const s = d.status;
+    const result = fact('上次结果', RESULT[s.lastStatus] || '还不知道', 'st-' + (s.lastStatus || 'none'));
+    if (s.lastStatus === 'error' && s.lastError) result.appendChild(el('span', 'sx-fact-more', s.lastError));
+    body.appendChild(hero([d.runner, d.when].filter(Boolean).join(' · '), [
+      fact('下次运行', s.nextRunAt ? SC.formatWhen(s.nextRunAt, now) : s.enabled ? '时间未知' : '已暂停', '', s.nextRunAt ? new Date(s.nextRunAt).toLocaleString() : ''),
+      fact('上次运行', lastRunText(d, now, d.dates[d.dates.length - 1]), '', s.lastRunAt ? new Date(s.lastRunAt).toLocaleString() : ''),
+      result,
+      d.canDecide ? fact('待你审核', d.openCount ? d.openCount + ' 条' : '没有', d.openCount ? 'need' : '') : null,
+    ]));
+
+    // where the numbers came from, and what happens to a decision meanwhile
+    const where = d.runner || '任务所在的电脑';
+    if (d.offline) {
+      const off = el('div', 'sx-banner');
+      off.setAttribute('role', 'status');
+      off.dataset.state = 'offline';
+      off.append(el('strong', null, `现在连不上「${where}」`),
+        el('span', null, d.source === 'none'
+          ? '这台电脑上也没有存过它的结果，连上后点右上角的刷新。'
+          : `下面是这台电脑上存的最近结果，${staleText(d, now)}。` + (d.canDecide ? '你的决定会先记在这台电脑上，连上后自动写进去，不会丢。' : '')));
+      body.appendChild(off);
+    } else if (d.unsynced) {
+      const wait = el('div', 'sx-banner');
+      wait.setAttribute('role', 'status');
+      wait.dataset.state = 'unsynced';
+      wait.append(el('strong', null, `${d.unsynced} 个决定还没写进去`),
+        el('span', null, '已经记在这台电脑上，AgentDeck 会自己重试，也可以点右上角的刷新马上再试。' + (d.syncError ? '上次没成：' + d.syncError : '')));
+      body.appendChild(wait);
+    }
+    const fresh = el('div', 'sx-fresh');
+    fresh.setAttribute('role', 'status');
+    fresh.textContent = at.checking ? '正在读取最新结果…' : d.offline ? '' : `已是最新 · 读取于 ${SC.formatWhen(d.asOf, now)}`;
+    fresh.hidden = !fresh.textContent;
+
+    const head = el('div', 'sx-section-head');
+    const titles = el('div', 'sx-section-titles');
+    titles.append(el('h2', null, '最近结果'), fresh);
+    head.appendChild(titles);
+    if (d.dates.length) head.appendChild(issuePager(d, r ? r.date : ''));
+    body.appendChild(head);
+
+    if (!r) {
+      body.appendChild(el('div', 'sx-note', d.missing ? `这台电脑上没有 ${d.missing} 这一期，连上后才能看。` : '还没有结果。它跑完第一次，结果会出现在这里。'));
+      return;
+    }
+    const report = el('article', 'sx-report');
+    report.dataset.date = r.date;
+    if (r.title) report.appendChild(el('h3', 'sx-report-title', r.title));
+    if (r.lead) report.appendChild(mdBlock(r.lead, 'sx-lead'));
+    if (r.items.length) {
+      const open = r.items.filter((it) => !it.decided).length;
+      const ih = el('div', 'sx-items-head');
+      ih.appendChild(el('h3', null, r.itemsHeading || '建议'));
+      if (d.canDecide) ih.appendChild(el('span', 'sx-items-count', open ? `还有 ${open} 条等你决定` : '这一期都决定了'));
+      report.appendChild(ih);
+      const list = el('div', 'sx-items');
+      r.items.forEach((it) => list.appendChild(itemCard(at, d, it, now)));
+      report.appendChild(list);
+    }
+    if (r.rest) report.appendChild(mdBlock(r.rest));
+    if (r.detail) {
+      const more = el('details', 'sx-more');
+      const sum = el('summary', null, '这一期的全部明细');
+      sum.dataset.fk = 'more';
+      more.append(sum, mdBlock(r.detail));
+      more.open = !!at.moreOpen;
+      more.addEventListener('toggle', () => { at.moreOpen = more.open; });
+      report.appendChild(more);
+    }
+    body.appendChild(report);
+  }
+  // Newest issue on the right, like a calendar: ‹ older, newer ›.
+  function issuePager(d, date) {
+    const at = d.dates.indexOf(date);
+    const go = (to) => { detail.date = to; detail.moreOpen = false; reloadFeed(false).then(() => reloadFeed(true)); };
+    const pager = el('div', 'sx-pager');
+    const older = iconButton('left', '上一期', () => go(d.dates[at - 1]), 'older');
+    const newer = iconButton('right', '下一期', () => go(d.dates[at + 1]), 'newer');
+    older.disabled = at <= 0; newer.disabled = at < 0 || at >= d.dates.length - 1;
+    const pick = el('select', 'sx-issue');
+    pick.title = '选一期'; pick.setAttribute('aria-label', '选一期'); pick.dataset.fk = 'issue';
+    [...d.dates].reverse().forEach((day, i) => {
+      const o = el('option', null, day + (i === 0 ? '（最新）' : '') + (d.canDecide && d.open[day] ? ` · 待审核 ${d.open[day]} 条` : ''));
+      o.value = day;
+      pick.appendChild(o);
+    });
+    pick.value = date;
+    pick.addEventListener('change', () => go(pick.value));
+    pager.append(older, pick, newer);
+    return pager;
+  }
+  const VERB = { accepted: '做', rejected: '不做' };
+  function itemCard(at, d, it, now) {
+    const key = at.id + ':' + it.id;
+    const done = it.decided;
+    const card = el('section', 'sx-item');
+    card.dataset.itemId = it.id;
+    card.dataset.state = done ? done.decision : 'open';
+    const head = el('header', 'sx-item-head');
+    head.append(el('span', 'sx-item-id', it.id), el('h4', 'sx-item-title', it.title || it.id));
+    card.appendChild(head);
+    const rows = el('dl', 'sx-rows');
+    const row = (label, node) => {
+      const dd = el('dd');
+      dd.append(...[].concat(node));
+      rows.append(el('dt', null, label), dd);
+    };
+    // a report without a structured twin has only the suggestion's own words
+    const fields = it.change || it.benefit || it.effort || it.stance || it.reason;
+    if (fields && it.source) row('借鉴', linkTo(it.source.name, it.source.url));
+    if (it.change) row('改什么', it.change);
+    if (it.benefit) row('用户好处', it.benefit);
+    if (it.effort) row('工作量', it.effort);
+    if (it.stance || it.reason) row('队长建议', [it.stance ? el('strong', null, it.stance + (it.reason ? '。' : '')) : '', it.reason].filter(Boolean));
+    if (fields) card.appendChild(rows);
+    else if (it.body) card.appendChild(mdBlock(it.body));
+    if (!d.canDecide) return card;
+
+    const foot = el('footer', 'sx-item-foot');
+    const editing = !done || changing.has(key);
+    if (done) {
+      const said = el('div', 'sx-decided');
+      said.dataset.decision = done.decision;
+      const verdict = el('span', 'sx-verdict');
+      verdict.append(icon(done.decision === 'accepted' ? 'check' : 'close'), el('span', null, '已决定：' + VERB[done.decision]));
+      const when = el('time', 'sx-decided-when', done.at ? SC.formatWhen(done.at, now) : '');
+      if (done.at) { when.dateTime = new Date(done.at).toISOString(); when.title = '决定于 ' + new Date(done.at).toLocaleString(); }
+      said.append(verdict, when);
+      if (done.reason) said.appendChild(el('span', 'sx-decided-reason', '理由：' + done.reason));
+      if (!done.synced) {
+        const wait = el('span', 'sx-tag', '待同步');
+        wait.title = '已经记在这台电脑上，连上后自动写进任务的决定文件';
+        said.appendChild(wait);
+      }
+      if ((d.notes || []).some((n) => n.itemId === it.id && !told.has(at.id + ':' + n.seq))) {
+        const wait = el('span', 'sx-tag', '还没告诉队长');
+        wait.title = '队长开着并且空下来时，会自动把这条决定发给它';
+        said.appendChild(wait);
+      }
+      if (!editing) {
+        said.appendChild(iconButton('edit', '改主意：重新决定 ' + it.id, () => {
+          changing.add(key);
+          if (!drafts.has(key)) drafts.set(key, done.reason || '');
+          redraw();
+          const input = view.querySelector(`.sx-item[data-item-id="${it.id}"] .sx-reason`);
+          if (input) input.focus();
+        }, 'change:' + it.id));
+      }
+      foot.appendChild(said);
+    }
+    if (editing) {
+      const form = el('div', 'sx-decide');
+      const input = el('input', 'sx-reason');
+      input.type = 'text'; input.maxLength = F.MAX_REASON; input.spellcheck = false;
+      input.placeholder = '可以写一句理由（不写也行）';
+      input.setAttribute('aria-label', it.id + ' 的理由（可不填）');
+      input.value = drafts.get(key) || '';
+      input.dataset.fk = 'reason:' + it.id;
+      input.addEventListener('input', () => drafts.set(key, input.value));
+      input.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
+      // long enough for the click on 做 / 不做 that took the focus to land on the button it aimed at
+      input.addEventListener('blur', () => setTimeout(() => { if (redrawWaiting && current === 'schedule') redraw(); }, 600));
+      const yes = btn('做', () => decideItem(it, 'accepted'), 'sx-yes');
+      const no = btn('不做', () => decideItem(it, 'rejected'), 'sx-no');
+      yes.dataset.fk = 'yes:' + it.id; no.dataset.fk = 'no:' + it.id;
+      yes.setAttribute('aria-label', '做 ' + it.id); no.setAttribute('aria-label', '不做 ' + it.id);
+      yes.disabled = no.disabled = input.disabled = !!at.saving;
+      form.append(input, yes, no);
+      if (done) {
+        form.appendChild(iconButton('close', '不改了', () => { changing.delete(key); drafts.delete(key); redraw(); }, 'keep:' + it.id));
+      }
+      foot.appendChild(form);
+    }
+    card.appendChild(foot);
+    return card;
+  }
+
+  // An AgentDeck schedule opened from the list: what it sends, when, and what
+  // came back last time (the reply in the conversation it went to, if any).
+  function lastReply(s) {
+    const colId = s.lastColId || (s.target !== 'new' ? s.target : '');
+    if (!colId || !s.lastRunAt || s.lastStatus !== 'ok') return null;
+    const turn = window.ChatUI.turnsOf(colId).find((t) => t.kind !== 'task' && t.ts >= s.lastRunAt - 2000);
+    return turn && turn.reply ? { colId, turn } : null;
+  }
+  function renderOwnDetail() {
+    const s = schedules().find((x) => x.id === detail.id);
+    if (!s) { detail = null; renderSchedule(); return; }
+    const now = Date.now();
+    const edit = iconButton('edit', '编辑定时任务', () => openEditor(s), 'edit');
+    const body = frame(scheduleTitle(s), '到点由 AgentDeck 把下面的提示词发出去。只在 AgentDeck 开着时运行。', [btn('立即运行', () => runManually(s.id)), edit]);
+    view.querySelector('.page-head').prepend(backButton());
+    body.classList.add('sx-detail');
+    body.dataset.scheduleId = s.id;
+    const result = fact('上次结果', s.lastRunAt ? STATUS[s.lastStatus] || '还不知道' : '还没有跑过', 'st-' + (s.lastStatus || 'none'));
+    if (s.lastNote) result.appendChild(el('span', 'sx-fact-more', s.lastNote));
+    body.appendChild(hero([SC.describe(s, now), targetLabel(s)].join(' · '), [
+      fact('下次运行', s.enabled && s.nextAt ? SC.formatWhen(s.nextAt, now) : '已暂停', '', s.enabled && s.nextAt ? new Date(s.nextAt).toLocaleString() : ''),
+      fact('上次运行', s.lastRunAt ? SC.formatWhen(s.lastRunAt, now) : '还没有跑过', '', s.lastRunAt ? new Date(s.lastRunAt).toLocaleString() : ''),
+      result,
+    ]));
+    const ph = el('div', 'sx-section-head');
+    ph.appendChild(el('h2', null, '发送的提示词'));
+    body.append(ph, el('pre', 'sx-prompt', s.prompt));
+    const last = lastReply(s);
+    if (!last) return;
+    const rh = el('div', 'sx-section-head');
+    const titles = el('div', 'sx-section-titles');
+    titles.append(el('h2', null, '最近结果'), el('div', 'sx-fresh', last.turn.done ? '上次运行后对话里的回复' : '还在回复，这是到目前为止的内容'));
+    rh.append(titles, btn('跳到对话', () => { hide(); window.ChatUI.reveal(last.colId, last.turn.id, 'reply'); }));
+    const report = el('article', 'sx-report');
+    report.appendChild(mdBlock(last.turn.reply));
+    body.append(rh, report);
+  }
+
   function chip(iconName, text) {
     const c = el('span', 'chip');
     if (iconName) c.appendChild(icon(iconName));
@@ -139,7 +600,7 @@
   function update(id, fn) {
     host.config.schedules = schedules().map((s) => (s.id === id ? fn(s) : s));
     host.saveConfig();
-    if (current === 'schedule') render();
+    if (current === 'schedule') redraw();
   }
   function setEnabled(id, on) {
     update(id, (s) => {
@@ -159,22 +620,22 @@
         cwd: s.cwd,
       }, !manual);
       host.sendWhenReady(col, prompt, { allowShell: true });
-      return { status: 'ok', note: '开了新对话「' + host.columnLabel(col) + '」' };
+      return { status: 'ok', note: '开了新对话「' + host.columnLabel(col) + '」', colId: col.id };
     }
     let col = host.columns().find((c) => c.id === s.target);
     if (!col && host.archived().some((a) => a.id === s.target)) {
       col = host.restoreArchived(s.target, manual);
       if (!col) return { status: 'error', note: '恢复归档对话失败' };
       host.sendWhenReady(col, prompt, { allowShell: true });
-      return { status: 'ok', note: '恢复了归档的对话再发送' };
+      return { status: 'ok', note: '恢复了归档的对话再发送', colId: col.id };
     }
     if (!col) return { status: 'error', note: '目标对话已经删掉了' };
     const entry = host.terms.get(col.id);
-    if (!entry) { host.sendWhenReady(col, prompt, { allowShell: true }); return { status: 'ok', note: '' }; }
+    if (!entry) { host.sendWhenReady(col, prompt, { allowShell: true }); return { status: 'ok', note: '', colId: col.id }; }
     if (!entry.alive) return { status: 'error', note: '这个对话的终端已经退出了' };
     if (entry.state === 'working' || entry.state === 'input') return { status: 'busy', note: '' };
     host.sendWhenReady(col, prompt, { allowShell: true });
-    return { status: 'ok', note: '' };
+    return { status: 'ok', note: '', colId: col.id };
   }
   function runManually(id) {
     const s = schedules().find((x) => x.id === id);
@@ -182,7 +643,7 @@
     const r = runSchedule(s, true);
     if (r.status === 'busy') { host.showToast('这个对话正在忙，等它停下来再试'); return; }
     if (r.status === 'error') host.showToast(r.note);
-    update(id, (x) => ({ ...x, lastRunAt: Date.now(), lastStatus: r.status, lastNote: r.note }));
+    update(id, (x) => ({ ...x, lastRunAt: Date.now(), lastStatus: r.status, lastNote: r.note, lastColId: r.colId || x.lastColId }));
     if (r.status === 'ok') { hide(); }
   }
 
@@ -203,12 +664,13 @@
       }
       waiting.delete(s.id);
       changed = true;
-      return SC.settle(s, now, r.status, r.note);
+      return { ...SC.settle(s, now, r.status, r.note), lastColId: r.colId || s.lastColId };
     });
     if (changed) {
       host.saveConfig();
-      if (current === 'schedule') render();
+      if (current === 'schedule') redraw();
     }
+    tellCaptain();
   }
 
   // ---- schedule editor dialog ----
@@ -298,7 +760,7 @@
     if (at >= 0) list[at] = armed; else list.push(armed);
     host.saveConfig();
     $('scheduleDialog').close();
-    if (current !== 'schedule') show('schedule'); else render();
+    if (current !== 'schedule') show('schedule'); else redraw();
   }
   function initEditor() {
     document.querySelectorAll('#scheduleDialog .sd-kind').forEach((b) => b.addEventListener('click', () => setKind(b.dataset.kind)));
@@ -630,10 +1092,14 @@
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && current && !document.querySelector('dialog[open]') && !document.querySelector('.ctx-menu')) {
         e.preventDefault();
-        hide();
+        if (current === 'schedule' && detail) closeDetail(); else hide();
       }
     });
-    window.addEventListener('focus', () => { if (current === 'artifacts' && recheckDisk) recheckDisk(); });
+    window.addEventListener('focus', () => {
+      if (current === 'artifacts' && recheckDisk) recheckDisk();
+      else if (current === 'schedule') { if (detail && detail.kind === 'feed') { detail.retried = false; reloadFeed(true); } else loadFeeds(true); }
+    });
+    loadFeeds(false);   // decisions made while 队长 was off still have to reach it
     // Give the terminals a moment to come up before sending anything.
     setTimeout(() => {
       tick(true);
@@ -642,7 +1108,7 @@
   }
 
   window.Pages = {
-    init, show, hide, toggle, render, openEditor, tick,
+    init, show, hide, toggle, render, openEditor, tick, openDetail, refreshFeeds,
     current: () => current,
     refresh: () => { if (current === 'artifacts') renderArtifacts(true); },
   };

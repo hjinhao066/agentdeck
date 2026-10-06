@@ -83,6 +83,12 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   session sits on a startup dialog is reported to the 队长 once, never typed into it.
 - Schedule runs only while the app is open, never fires overdue runs late at
   launch (reported as missed), and sends through the same path as the composer.
+- Schedule's watched tasks (`schedule-feed.js`, `docs/schedule-watched-tasks.md`) are
+  run by another scheduler; AgentDeck only reads their reports. A 做 / 不做 goes into
+  this machine's journal first and is then written by the task's own `decide` command:
+  never write into a task's folder or its mirror, never drop a waiting decision, and
+  never let a decision open a session, create a card or start work. No bulk accept.
+  A test profile reads task descriptions only from inside the profile.
 - Automatic sends go through `sendWhenReady`/`agentInForeground`: never type
   prose into a column whose foreground process is a shell (unless it is a plain
   shell column a Schedule targets on purpose). Prompts are never truncated; long

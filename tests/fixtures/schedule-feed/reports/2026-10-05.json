@@ -1,0 +1,77 @@
+{
+ "date": "2026-10-05",
+ "summary": "这一期核对了 5 个仓库，建议补三处。",
+ "projects": [
+  {
+   "name": "deckhand",
+   "url": "https://example.invalid/acme/deckhand",
+   "normalized_url": "https://example.invalid/acme/deckhand",
+   "stars": 12751,
+   "verified": true
+  },
+  {
+   "name": "worktreekit",
+   "url": "https://example.invalid/acme/worktreekit",
+   "normalized_url": "https://example.invalid/acme/worktreekit",
+   "stars": 2780,
+   "verified": true
+  },
+  {
+   "name": "quotalens",
+   "url": "https://example.invalid/acme/quotalens",
+   "normalized_url": "https://example.invalid/acme/quotalens",
+   "stars": 22191,
+   "verified": true
+  },
+  {
+   "name": "tasktrail",
+   "url": "https://example.invalid/acme/tasktrail",
+   "normalized_url": "https://example.invalid/acme/tasktrail",
+   "stars": 8570,
+   "verified": true
+  },
+  {
+   "name": "pocketpilot",
+   "url": "https://example.invalid/acme/pocketpilot",
+   "normalized_url": "https://example.invalid/acme/pocketpilot",
+   "stars": 24018,
+   "verified": true
+  }
+ ],
+ "recommendations": [
+  {
+   "id": "ADR-0002",
+   "project_url": "https://example.invalid/acme/deckhand",
+   "title": "任务卡给出完成证据，并把审过、已合入、已交付分开",
+   "area": "board",
+   "change": "在任务卡片详情里汇总改动摘要、截图和文件、测试结果、验收结论与提交，并标注客观的合入状态；首期只做只读展示。",
+   "benefit": "不用翻队员的长对话，也不会把一句「完成」当成真正交付。",
+   "effort": "中（约 3–5 个开发日）。",
+   "stance": "建议做",
+   "reason": "已有文件预览与自动验收，这里补的是和任务绑在一起的证据。"
+  },
+  {
+   "id": "ADR-0003",
+   "project_url": "https://example.invalid/acme/worktreekit",
+   "title": "编码队员自动准备独立工作区，收工后安全回收",
+   "area": "arch",
+   "change": "同一个仓库并行编码时自动建独立工作区与分支，卡片记住目录与分支；没提交的文件、没合入的分支不自动删除。",
+   "benefit": "队员不会互相覆盖文件，队长也少做重复的环境准备。",
+   "effort": "中到大（约 5–8 个开发日）。",
+   "stance": "建议做",
+   "reason": "实施前先核对已有分支，调研与生活类任务照旧用普通目录。"
+  },
+  {
+   "id": "ADR-0004",
+   "project_url": "https://example.invalid/acme/quotalens",
+   "title": "额度区另外显示「厂商正在故障」，和余额、采样失败分开",
+   "area": "quota",
+   "change": "在现有余额状态旁加独立的服务健康徽章与最后检查时间，链接到官方故障页；抓不到就显示未知，只提示，不自动换席。",
+   "benefit": "能分清「没额度」「读取失败」和「服务中断」，少白白重登和等待。",
+   "effort": "小（约 1–2 个开发日）。",
+   "stance": "建议做",
+   "reason": "先接常用的两三家。"
+  }
+ ],
+ "requires_user_decision": true
+}

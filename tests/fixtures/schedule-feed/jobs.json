@@ -1,0 +1,28 @@
+{
+ "jobs": [
+  {
+   "id": "other-job",
+   "name": "别的任务",
+   "enabled": true,
+   "state": "scheduled",
+   "next_run_at": "2026-10-06T07:00:00-07:00",
+   "last_run_at": "2026-10-05T07:00:03-07:00",
+   "last_status": "ok"
+  },
+  {
+   "id": "radar01",
+   "name": "竞品与灵感雷达",
+   "enabled": true,
+   "state": "scheduled",
+   "schedule": {
+    "kind": "cron",
+    "expr": "30 20 * * *"
+   },
+   "next_run_at": "2026-10-05T20:30:00-07:00",
+   "last_run_at": "2026-10-05T00:44:37.987099-07:00",
+   "last_status": "ok",
+   "last_error": null
+  }
+ ],
+ "updated_at": "2026-10-05T00:45:00-07:00"
+}
