@@ -30,21 +30,20 @@ async function geometry() {
     const texts = [...document.querySelectorAll('.cm-node')].flatMap((card) => [...card.querySelectorAll('.cm-top, .cm-title, .cm-line, .cm-live, .cm-foot')].filter((n) => !n.hidden).map((n) => ({ id: card.dataset.nodeId, cls: n.className, captain: card.classList.contains('kind-captain'), ...rect(n), parent: rect(card), lineHeight: parseFloat(getComputedStyle(n).lineHeight), localHeight: n.offsetHeight, clamp: getComputedStyle(n).webkitLineClamp })));
     const heads = [...document.querySelectorAll('.cm-project-head')].map((h) => { const sum = h.querySelector('.cm-project-summary'), name = h.querySelector('.cm-project-name'); return { id: h.parentElement.dataset.project, ...rect(h), sumClient: sum.clientWidth, sumScroll: sum.scrollWidth, sumRight: sum.getBoundingClientRect().right, counts: [...sum.querySelectorAll('.cm-count')].map((c) => ({ cls: c.className, ...rect(c.querySelector('b')) })), nameCut: name.scrollWidth > name.clientWidth + 1, nameOverflow: getComputedStyle(name).textOverflow }; });
     const below = [...document.querySelectorAll('.cm-tray, .cm-legend')].filter((n) => !n.hidden).map((n) => n.getBoundingClientRect().y);
-    return { viewport, nodes, groups, heads, below, texts, scale: CrewMap.view().scale, bodyPx: parseFloat(getComputedStyle(document.querySelector('.cm-node:not(.kind-captain) .cm-line')).fontSize) };
+    return { viewport, nodes, groups, heads, below, texts, scale: CrewMap.view().scale, fits: CrewMap.pageFits() };
   });
 }
 async function assertLayout() {
   const g = await geometry();
   const overlaps = (a, b) => a.x < b.right - 1 && a.right > b.x + 1 && a.y < b.bottom - 1 && a.bottom > b.y + 1;
-  // Auto-fit never goes below 85% (card body text is 13px: 11px or more on screen). The
-  // controls sit on the legend row below the viewport, so the only thing the map keeps
-  // clear of is the viewport's own edge: the fit's 8px inset plus the 16px the map carries
-  // around itself, on every side (21.8px at 86%). A map too tall at the floor starts at the
-  // top and is cut at the bottom edge: there a card is either whole with 16px (map px) to
-  // spare, or plainly cut by 24px or more, never flush against the tray or the legend row.
-  expect(g.scale).toBeGreaterThanOrEqual(0.85 - 1e-6);
-  expect(g.bodyPx * g.scale).toBeGreaterThanOrEqual(11 - 1e-6);
-  const fits = g.scale > 0.85 + 1e-3, edge = 8 + 16 * g.scale;
+  // The map arrives at its own 100% (0.7 of the drawn size). The controls sit on the legend
+  // row below the viewport, so the only thing the map keeps clear of is the viewport's own
+  // edge: the fit's 8px inset plus the 16px the map carries around itself, on every side
+  // (19.2px at 100%). A map too tall for the page starts at the top and is cut at the bottom
+  // edge: there a card is either whole with 16px (map px) to spare, or plainly cut by 24px
+  // or more, never flush against the tray or the legend row.
+  expect(g.scale).toBeCloseTo(0.7, 5);
+  const fits = g.fits, edge = 8 + 16 * g.scale;
   for (const y of g.below) expect(y, 'tray and legend row sit under the viewport').toBeGreaterThanOrEqual(g.viewport.bottom - 0.5);
   for (const list of [g.nodes, g.groups]) for (let i = 0; i < list.length; i++) {
     const a = list[i];
@@ -144,8 +143,8 @@ for (const scenario of ['A', 'B']) test(`${scenario}: default layout at both win
     await expect(page.locator('#navTop #taskBoardBtn')).toBeVisible();
     evidence.push({ scenario, width, height, theme, ...g });
     await screenshot(`${scenario}-${width}x${height}-${theme}`);
-    if (g.scale <= 0.85 + 1e-3) {
-      // held at the floor: the rest is a wheel scroll away, and the last project comes to
+    if (!g.fits) {
+      // taller than the page: the rest is a wheel scroll away, and the last project comes to
       // rest with the same margin above the bottom edge as a map that fits, nothing over it
       const edge = 8 + 16 * g.scale, lowest = () => page.evaluate(() => Math.max(...[...document.querySelectorAll('.cm-pane')].map((n) => n.getBoundingClientRect().bottom)));
       await page.mouse.move(g.viewport.x + g.viewport.width / 2, g.viewport.y + g.viewport.height / 2);

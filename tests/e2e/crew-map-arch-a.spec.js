@@ -146,24 +146,25 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
     return { vp: rect(document.querySelector('.cm-viewport')), tray: rect(document.querySelector('.cm-tray')), cap: rect(document.querySelector('.cm-node.kind-captain')), scale: CrewMap.view().scale,
       pane: rect(document.querySelector('.cm-pane')), card: Object.fromEntries([...document.querySelectorAll('.cm-node:not(.kind-captain)')].map((n) => [n.dataset.nodeId, rect(n)])) };
   });
-  // 1280x800 cannot show seven cards whole: three wide, three rows at the floor (no sideways scrolling), the last cut by the tray's edge.
-  await open(1280, 800, 'dark'); await settled();
+  // 1280x560 cannot show seven cards whole at 100%: four wide, two rows (no sideways scrolling), the second cut by the tray's edge.
+  await open(1280, 560, 'dark'); await settled();
   const base = await read();
-  expect(base.scale).toBeCloseTo(0.85, 5);
+  expect(base.scale).toBeCloseTo(0.7, 5);
+  expect(base.card.w6.y, 'two rows').toBeGreaterThan(base.card.w0.bottom);
   expect(base.card.w6.bottom).toBeGreaterThan(base.vp.bottom);
-  // Size the window so the edge would land 5px under the second row (1.1.8 left a row 4.4px
+  // Size the window so the edge would land 5px under the first row (1.1.8 left a row 4.4px
   // above the tray), then 5px inside it: neither may stay flush against the tray.
-  for (const [nudge, check] of [[5, (gap) => gap >= 16 * 0.85 - 0.5], [-5, (gap) => gap <= -24 * 0.85 + 0.5]]) {
-    await open(1280, 800 - Math.round(base.vp.bottom - (base.card.w3.bottom + nudge)), 'dark'); await settled();
-    const g = await read(), gap = g.vp.bottom - g.card.w3.bottom;
-    expect(g.scale).toBeCloseTo(0.85, 5);
-    expect(check(gap), `second row ends ${gap.toFixed(1)}px above the tray`).toBe(true);
+  for (const [nudge, check] of [[5, (gap) => gap >= 16 * 0.7 - 0.5], [-5, (gap) => gap <= -24 * 0.7 + 0.5]]) {
+    await open(1280, 560 - Math.round(base.vp.bottom - (base.card.w0.bottom + nudge)), 'dark'); await settled();
+    const g = await read(), gap = g.vp.bottom - g.card.w0.bottom;
+    expect(g.scale).toBeCloseTo(0.7, 5);
+    expect(check(gap), `first row ends ${gap.toFixed(1)}px above the tray`).toBe(true);
     expect(g.cap.y, '队长 stays whole').toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
     expect(g.tray.y).toBeGreaterThanOrEqual(g.vp.bottom - 0.5);
   }
   // scrolled to the end, the last card and its project's frame rest above the tray with the fit's margin
-  await open(1280, 800, 'dark'); await settled();
-  const edge = 8 + 16 * 0.85;
+  await open(1280, 560, 'dark'); await settled();
+  const edge = 8 + 16 * 0.7;
   await page.mouse.move(base.vp.x + base.vp.width / 2, base.vp.y + 200);
   await expect.poll(async () => {
     const over = (await read()).pane.bottom - (base.vp.bottom - edge);
@@ -176,7 +177,7 @@ test('too tall with the tray showing: a row is whole and clear of the tray or pl
   expect(end.card.w6.y).toBeGreaterThanOrEqual(end.vp.y);
   expect(end.card.w6.bottom).toBeLessThanOrEqual(end.tray.y - edge);
   expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y).closest('.cm-node[data-node-id="w6"]'), [end.card.w6.x + end.card.w6.width / 2, end.card.w6.bottom - 4])).toBe(true);
-  await shot('arch-a-1280x800-scrolled-end-dark');
+  await shot('arch-a-1280x560-scrolled-end-dark');
   await page.locator('[data-cm="fit"]').click();
 });
 
@@ -267,9 +268,11 @@ test('live updates keep a hand-placed view; 智能一页 brings the fit back', a
   expect(await page.evaluate(() => CrewMap.userMoved())).toBe(false);
   await settled();
   expect(await page.evaluate(() => CrewMap.view())).not.toEqual(mine);
-  // 100% button
+  // 100% button: the map's own 100% is 0.7 of the drawn size
+  await page.locator('[data-cm="in"]').click();
+  await expect(page.locator('[data-cm="reset"]')).toHaveText('110%');
   await page.locator('[data-cm="reset"]').click();
-  expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(1, 5);
+  expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(0.7, 5);
   await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
   await page.locator('[data-cm="fit"]').click();
 });

@@ -7,15 +7,17 @@
 //
 // Arrangement and view are one system with two layers:
 // - Where things stand. Untouched, the map arranges itself for the window:
-//   project frames side by side in lanes, the plan that shows everything
-//   largest (CrewMapCore.planLanes). Once the user drags a card or a frame,
-//   that plan is kept under their moves until they tidy, so a window resize
-//   never pulls the ground from under a hand-placed map.
-// - How it is seen. Untouched, the view fits the map to the window, never
-//   below FIT_MIN; once the user pans or zooms, it is theirs.
+//   project frames across it, up to four abreast as its width holds, the
+//   rest stacked under them row after row (CrewMapCore.planAcross).
+//   Once the user drags a card or a frame, that plan is kept under their
+//   moves until they tidy, so a window resize never pulls the ground from
+//   under a hand-placed map.
+// - How it is seen. Untouched, the map stands at its own 100% (C.BASE_SCALE
+//   of the drawn size), centred, from the top when it is taller than the
+//   window; once the user pans or zooms, the view is theirs.
 // 一键整理 puts every frame and card back on the grid in the order the frames
 // were left in, and leaves a hand-set zoom alone. 智能一页 hands both layers
-// back: arrangement, order and zoom are worked out again for this window.
+// back: arrangement and order are worked out again for this window, at 100%.
 // Either can be undone until the next move by hand.
 (function () {
   'use strict';
@@ -23,13 +25,11 @@
   const SVG = 'http://www.w3.org/2000/svg';
   const NODE = { nodeW: 280, nodeH: 172, captainW: 420, captainH: 104, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16, lane: 12 };
   const GRID = { padX: 24, padBottom: 20, rowGap: 20, reviewGap: 40 };   // card grid inside a project
-  // Auto-fit never shrinks below this: card body text (13px) stays at 11px or more on screen.
-  // What does not fit at this scale is reached by panning (drag, wheel, trackpad).
-  const FIT_MIN = 0.85;
-  // A small map grows a little to fill its page, never more than this.
-  const FIT_MAX = 1.15;
+  // The scale the map arrives at and is arranged for: its own 100%. What does not fit at this
+  // scale is reached by panning (drag, wheel, trackpad).
+  const FIT = C.BASE_SCALE;
   const MOVE_MS = 280;    // frames and cards gliding to a new place (shorter than the view's own glide)
-  // Spacing given up when the roomy map just misses the window at FIT_MIN and this brings all of it in.
+  // Spacing given up when the roomy map just misses the window at 100% and this brings all of it in.
   const TIGHT = { captainH: 92, fanY: 40, rowGap: 12, padBottom: 12 };
   const DRAG_PX = 4;
   let host = null;
@@ -52,7 +52,8 @@
   let popId = null;         // the session whose detail popover is open
   let smoothT = 0;
   let plan = null;          // the arrangement in use: { lanes, caps, tight }
-  let pageFits = true;      // the whole map shows at FIT_MIN or better in this window
+  let planW = 0;            // the viewport width it was worked out for
+  let pageFits = true;      // the whole map shows at 100% in this window
   let undo = null;          // what 一键整理 / 智能一页 replaced, until the next move by hand
   let hintT = 0;
 
@@ -388,7 +389,7 @@
   // ---- canvas view ----
   function applyView() {
     canvasEl.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
-    const pct = Math.round(view.scale * 100) + '%';
+    const pct = C.zoomPercent(view.scale) + '%';
     zoomLabel.textContent = pct;
     zoomLabel.setAttribute('aria-label', `回到 100%（当前 ${pct}）`);
     placePop();
@@ -427,8 +428,8 @@
   function fit(smooth) {
     if (!lay) return;
     const bounds = fitBounds(lay), inset = FIT_INSET;
-    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, { min: FIT_MIN, max: FIT_MAX });
-    // held at the floor and still too tall: start at the top (队长 and the first rows), not mid-map
+    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, { min: FIT, max: FIT });
+    // too tall for the window: start at the top (队长 and the first rows), not mid-map
     if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) {
       view.y = inset.top - bounds.top * view.scale;
       view.y += cutShift(view);
@@ -459,15 +460,15 @@
   }
 
   const hasManual = () => Object.keys(saved().positions).length > 0 || Object.keys(saved().projectPositions).length > 0;
-  // The layout for this render. Nothing hand-placed: the plan that shows the whole map
-  // largest in this window (the plan in use is kept while it is nearly as good). Something
-  // hand-placed: the plan those moves were made on, whatever the window is now.
+  // The layout for this render. Nothing hand-placed: the frames across this window's width
+  // at 100%, the rest stacked under them. Something hand-placed: the plan those moves were
+  // made on, whatever the window is now.
   function arrange(map) {
     const vw = vpEl.clientWidth, vh = vpEl.clientHeight;
     const base = { ...dims, ...GRID, fold: map.hiddenArchived > 0, collapsedProjects: saved().collapsedProjects, order: saved().projectOrder, grid: true, center: true, tray: true, headW: headNeeds(map) };
     const tightly = { ...TIGHT, captainH: TIGHT.captainH + (capWrap ? CAP_ROW : 0) };
     const build = (p) => C.layout(map, { ...base, ...(p.tight ? tightly : {}), lanes: p.lanes, caps: p.caps });
-    const whole = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= FIT_MIN;
+    const whole = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= FIT - 1e-9;
     const pinned = hasManual() ? saved().plan : null;
     if (pinned) {
       const l = build(pinned), keys = new Set(pinned.lanes.flat());
@@ -475,18 +476,19 @@
       if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l); return l; }
     }
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
-    const size = { w: vw - FIT_INSET.left - FIT_INSET.right, h: vh - FIT_INSET.top - FIT_INSET.bottom };
+    const size = { w: (vw - FIT_INSET.left - FIT_INSET.right) / FIT };
     const pick = (tight) => {
-      const p = C.planLanes(map, size, { ...base, ...(tight ? tightly : {}), floor: FIT_MIN, max: FIT_MAX }, plan && !!plan.tight === tight ? plan : null);
+      const p = C.planAcross(map, size, { ...base, ...(tight ? tightly : {}), keep: plan && planW === vw ? plan.lanes.length : 0 });
       const next = { lanes: p.lanes, caps: p.caps, tight };
       return { plan: next, lay: build(next) };
     };
-    // Roomy while the whole map shows at FIT_MIN or better; tight when only that brings
-    // it all in; a map too tall either way stays roomy and is panned.
+    // Roomy while the whole map shows at 100%; tight when only that brings it all in;
+    // a map too tall either way stays roomy and is panned.
     let chosen = pick(false);
     pageFits = whole(chosen.lay);
     if (!pageFits) { const tight = pick(true); if (whole(tight.lay)) { chosen = tight; pageFits = true; } }
     plan = chosen.plan;
+    planW = vw;
     if (hasManual()) { saved().plan = plan; host.save(); }
     return chosen.lay;
   }
@@ -707,10 +709,10 @@
     nodesEl.innerHTML = '';
     emptyEl.hidden = !!map.captain;
     if (!map.captain) { edgesEl.innerHTML = ''; zonesEl.innerHTML = ''; projectsEl.innerHTML = ''; lay = null; closePop(); return; }
-    // A window narrower than 队长's one-row tally at the smallest readable size: the card takes the
+    // A window narrower than 队长's one-row tally at 100%: the card takes the
     // width there is and its tally wraps to a second row, so no count is cut and nothing scrolls sideways.
     const natural = Math.round(captainWidth(map));
-    const room = Math.floor((vpEl.clientWidth - FIT_INSET.left - FIT_INSET.right) / FIT_MIN - 2 * NODE.pad);
+    const room = Math.floor((vpEl.clientWidth - FIT_INSET.left - FIT_INSET.right) / FIT - 2 * NODE.pad);
     capWrap = natural > room && room >= NODE.captainW;
     rootEl.classList.toggle('cm-cap-wrap', capWrap);
     dims = { ...NODE, captainW: capWrap ? room : natural, captainH: NODE.captainH + (capWrap ? CAP_ROW : 0) };
@@ -787,8 +789,8 @@
     setUndo(snap);
     say('');
   }
-  // 智能一页: arrangement, order and zoom worked out again for this window, so the whole map
-  // fills one page. When it cannot at readable size, it stays readable and says so.
+  // 智能一页: arrangement and order worked out again for this window and the zoom back at 100%,
+  // so the map uses the page's whole width. When it is taller than the page at 100%, it says so.
   function page() {
     if (!lay) return;
     const snap = hasManual() || saved().projectOrder.length || userView ? snapshot() : null;
@@ -798,7 +800,7 @@
     host.save();
     render({ smooth: true });
     setUndo(snap);
-    say(pageFits ? '' : `一页放不下：文字保持在最小可读大小（${Math.round(FIT_MIN * 100)}%），其余部分滚动查看`);
+    say(pageFits ? '' : '一页放不下：保持 100% 大小，其余部分向下滚动查看');
   }
   function undoArrange() {
     const u = undo;
@@ -867,9 +869,9 @@
     returnBtn.setAttribute('aria-pressed', String(showReturn));
     const on = (name, fn) => rootEl.querySelector(`[data-cm="${name}"]`).addEventListener('click', fn);
     on('archived', () => setShowArchived(!showArchived));
-    on('out', () => view && zoomCenter(1 / 1.2));
-    on('in', () => view && zoomCenter(1.2));
-    on('reset', () => view && zoomCenter(1 / view.scale));
+    on('out', () => view && zoomCenter(C.zoomStep(view.scale, -1) / view.scale));
+    on('in', () => view && zoomCenter(C.zoomStep(view.scale, 1) / view.scale));
+    on('reset', () => view && zoomCenter(FIT / view.scale));
     on('fit', page);
     on('relayout', tidy);
     on('undo', undoArrange);

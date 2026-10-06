@@ -4,9 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 终端架构图: project frames side by side in lanes (项目框横排), 智能一页 (the
-// arrangement and zoom that show the whole map in this window, never below the
-// readable floor), 一键整理 (hand-dragged frames and cards back on the grid,
+// 终端架构图: project frames across the window, up to four abreast and row after
+// row under them (项目框横排), 智能一页 (the arrangement for this window's width,
+// at the map's own 100%), 一键整理 (hand-dragged frames and cards back on the grid,
 // animated, with undo), and the look (the sky, glass cards, lit wiring, nothing
 // moving under 减少动态效果). Real renderer, isolated userData, PTYs running
 // only the stand-in TUI. Set AGENTDECK_CREW_MAP_SHOTS to keep PNGs.
@@ -127,7 +127,7 @@ const read = () => page.evaluate(() => {
 });
 const apart = (a, b) => a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y;
 // The map is in order: no frame or card on another, every card inside its own frame on the frame's column
-// grid, frames of a lane on one left edge with one gap between them, and readable.
+// grid, frames of a lane on one left edge with one gap between them, and at its own 100%.
 function assertNeat(g, ownZoom) {
   g.groups.forEach((a, i) => g.groups.slice(i + 1).forEach((b) => expect(apart(a, b), `${a.key}/${b.key} overlap`).toBe(true)));
   g.nodes.forEach((a, i) => g.nodes.slice(i + 1).forEach((b) => expect(apart(a, b), `${a.id}/${b.id} overlap`).toBe(true)));
@@ -159,10 +159,11 @@ function assertNeat(g, ownZoom) {
     list.slice(1).forEach((f, i) => expect(f.y - (list[i].y + list[i].h), 'one gap between frames in a lane').toBe(32));
   });
   expect(new Set(g.groups.filter((f) => !lanes.get(f.lane).indexOf(f)).map((f) => f.y)).size, 'every lane starts on one line').toBe(1);
-  if (ownZoom) return; // a zoom the user set is theirs: the readable floor belongs to the automatic fit
-  expect(g.view.scale).toBeGreaterThanOrEqual(0.85 - 1e-6);
-  expect(g.bodyPx * g.view.scale, 'card text stays 11px or more on screen').toBeGreaterThanOrEqual(11 - 1e-6);
+  if (ownZoom) return; // a zoom the user set is theirs
+  expect(g.view.scale, 'untouched, the map stands at its own 100%: 0.7 of the drawn size').toBeCloseTo(0.7, 5);
 }
+// the projects of a plan read row by row, the way they are filled in
+const byRow = (plan) => Array.from({ length: Math.max(0, ...plan.lanes.map((l) => l.length)) }, (_, r) => plan.lanes.filter((l) => l[r]).map((l) => l[r])).flat();
 // The whole map is inside the viewport with the fit's margin.
 function assertWhole(g) {
   const edge = 8 + 16 * g.view.scale - 0.5;
@@ -188,9 +189,9 @@ async function dragBy(locator, dx, dy) {
   await page.mouse.up();
 }
 
-test('项目框横排: frames stand side by side in lanes, small ones stacked beside the big one, at three widths in both themes', async () => {
+test('项目框横排: frames stand across the window, four abreast where it is wide enough, at 100%, at five widths in both themes', async () => {
   await launch(BIG);
-  // a window that holds the whole map: the big project has a lane to itself, the small ones share the next
+  // a wide window: the four projects stand in one row, the big one several cards wide
   await open(1920, 1080, 'dark');
   await expect(page.locator('.cm-project')).toHaveCount(4);
   await expect(page.locator('.cm-node:not(.kind-captain)')).toHaveCount(BIG.length);
@@ -199,14 +200,10 @@ test('项目框横排: frames stand side by side in lanes, small ones stacked be
   assertNeat(g);
   expect(g.pageFits).toBe(true);
   assertWhole(g);
-  expect(g.plan.lanes.flat()).toEqual(['agentdeck', 'hermes-savings', 'type4me-windows', 'vps-ops']);
-  expect(g.plan.lanes.length, 'more than one lane across').toBeGreaterThanOrEqual(2);
-  expect(g.plan.lanes.some((l) => l.length > 1), 'small projects share a lane').toBe(true);
-  expect(new Set(g.groups.map((f) => f.x)).size, 'frames side by side, not one under another').toBeGreaterThanOrEqual(2);
-  // the page is filled, not run down: the map takes most of the window's width and height
-  const filled = (m) => [(Math.max(...m.frames.map((f) => f.right)) - Math.min(...m.frames.map((f) => f.x))) / m.vp.width, (Math.max(...m.frames.map((f) => f.bottom)) - m.cards.find((c) => c.id === 'cap').y) / m.vp.height];
-  expect(Math.max(...filled(g))).toBeGreaterThan(0.9);
-  expect(Math.min(...filled(g))).toBeGreaterThan(0.7);
+  expect(g.plan.lanes, 'four abreast').toEqual([['agentdeck'], ['hermes-savings'], ['type4me-windows'], ['vps-ops']]);
+  expect(new Set(g.groups.map((f) => f.y)).size, 'one row: every frame starts on the same line').toBe(1);
+  expect(g.plan.caps.agentdeck, 'the big project is several cards wide, so its lane is no taller than the others').toBeGreaterThanOrEqual(3);
+  await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
   expect(await linesClear()).toEqual([]);
   // the same seventeen cards one under another, the way it was, would need about twice the height
   const stackedHeight = await page.evaluate(() => { const C = CrewMapCore, map = CrewMap.lastMap();
@@ -230,23 +227,24 @@ test('项目框横排: frames stand side by side in lanes, small ones stacked be
   });
   expect(look).toEqual({ sky: true, blur: 0, cardAnimations: ['cm-breathe', 'cm-edge-flow'], cardProps: ['opacity', 'transform'], movingCards: 'working', stillCard: 0 });
 
-  // narrower windows: what cannot show whole at readable size is never squeezed and never scrolls sideways
+  // narrower windows give lanes up one at a time: the map stays at 100%, is never squeezed and never scrolls sideways
+  let lanes = 4;
   for (const [w, h] of [[1440, 900], [1280, 800], [980, 700], [700, 800]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     g = await read();
     assertNeat(g);
     expect(await linesClear()).toEqual([]);
-    // a narrow window stacks the frames in one lane, two cards wide while that fits, instead of squeezing lanes side by side
-    if (w <= 980) expect(g.plan.lanes.length, `${w}: one lane`).toBe(1);
-    if (w === 980) expect(Math.max(...Object.values(g.plan.caps)), '980: two cards wide').toBe(2);
+    expect(g.plan.lanes.length, `${w}: no more lanes than a wider window had`).toBeLessThanOrEqual(lanes);
+    lanes = g.plan.lanes.length;
+    expect(byRow(g.plan), `${w}: the rows keep the projects in order`).toEqual(['agentdeck', 'hermes-savings', 'type4me-windows', 'vps-ops']);
+    if (w === 700) expect(lanes, '700: one lane').toBe(1);
     if (g.pageFits) assertWhole(g);
     else {
-      expect(g.view.scale).toBeCloseTo(0.85, 5);
       const width = Math.max(...g.frames.map((f) => f.right), ...g.cards.map((c) => c.right)) - Math.min(...g.frames.map((f) => f.x), ...g.cards.map((c) => c.x));
       expect(width, 'no sideways scrolling').toBeLessThanOrEqual(g.vp.width - 16 + 1);
       expect(g.cards.find((c) => c.id === 'cap').y, '队长 at the top').toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
     }
-    if (w >= 1280) expect(g.plan.lanes.length, `${w}: still more than one lane`).toBeGreaterThanOrEqual(2);
+    if (w >= 1280) expect(lanes, `${w}: still more than one lane`).toBeGreaterThanOrEqual(2);
     await shot(`map-4projects-${w}-${theme}`);
   }
 
@@ -260,7 +258,7 @@ test('项目框横排: frames stand side by side in lanes, small ones stacked be
   expect(g.pageFits).toBe(true);
   assertWhole(g);
   expect(g.plan.lanes).toEqual([['agentdeck']]);
-  expect(g.plan.caps.agentdeck, 'ten cards four wide in three rows: three wide would be four rows and no longer show whole').toBe(4);
+  expect(g.plan.caps.agentdeck, 'ten cards five wide in two rows: as wide as the window holds at 100%').toBe(5);
   for (const [w, h] of [[1440, 900], [1280, 800], [980, 700]]) for (const theme of ['dark', 'light']) {
     await open(w, h, theme); await settled();
     assertNeat(await read());
@@ -277,7 +275,9 @@ test('项目名完整显示: four projects with long names at 1920, 1440, 980 an
     await settled();
     const g = await read();
     assertNeat(g);
-    expect(g.heads.map((x) => x.name)).toEqual(['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期']);
+    // (frames are drawn lane by lane; with fewer than four lanes the fourth project stands under the first)
+    expect(g.heads.map((x) => x.name).sort()).toEqual(['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期'].sort());
+    expect(byRow(g.plan)).toEqual(['agentdeck', 'hermes-savings-center', 'type4me-windows-installer', '客户门户与数据工作台二期']);
     // the names are whole because the frames made room for them, not because the text was shrunk
     expect(await page.evaluate(() => [...document.querySelectorAll('.cm-project-name')].map((n) => getComputedStyle(n).fontSize))).toEqual(['17px', '17px', '17px', '17px']);
     expect(await linesClear()).toEqual([]);
@@ -339,7 +339,7 @@ test('状态标签完整显示: every card status is whole at 1920, 1440, 980 an
   expect(errors).toEqual([]);
 });
 
-test('智能一页: one click hands arrangement and zoom back to the window; what cannot fit stays readable and says so; it can be undone', async () => {
+test('智能一页: one click hands arrangement and zoom back to the window, at 100%; what is taller than the page says so; it can be undone', async () => {
   await launch(BIG);
   await open(1920, 1080, 'dark'); await settled();
   const auto = await read();
@@ -361,7 +361,8 @@ test('智能一页: one click hands arrangement and zoom back to the window; wha
   expect(mine.moved).toBe(true);
   expect(mine.saved.projectPositions['hermes-savings']).toBeTruthy();
   expect(mine.saved.plan, 'the arrangement the move was made on is kept under it').toEqual(auto.plan);
-  expect(mine.view.scale).toBeGreaterThan(auto.view.scale * 1.3);
+  expect(mine.view.scale, 'two steps in: 120%').toBeCloseTo(0.7 * 1.2, 5);
+  await expect(page.locator('[data-cm="reset"]')).toHaveText('120%');
   await shot('map-smartpage-before-1920-dark');
   // a smaller window: the hand-placed map keeps its ground (same frames, same places) and its view
   await size(1440, 900); await settled();
@@ -370,7 +371,7 @@ test('智能一页: one click hands arrangement and zoom back to the window; wha
   expect(kept.view).toEqual(mine.view);
   await shot('map-smartpage-before-1440-dark');
 
-  // 智能一页 at 1440x900: seventeen cards cannot show whole at readable size, so it holds the floor and says so
+  // 智能一页 at 1440x900: seventeen cards are taller than the page at 100%, so it stays at 100% and says so
   await page.locator('[data-cm="fit"]').click();
   await settled();
   let g = await read();
@@ -378,8 +379,9 @@ test('智能一页: one click hands arrangement and zoom back to the window; wha
   expect(g.moved).toBe(false);
   assertNeat(g);
   expect(g.pageFits).toBe(false);
-  expect(g.view.scale).toBeCloseTo(0.85, 5);
-  expect(g.hint).toBe('一页放不下：文字保持在最小可读大小（85%），其余部分滚动查看');
+  expect(g.view.scale).toBeCloseTo(0.7, 5);
+  await expect(page.locator('[data-cm="reset"]')).toHaveText('100%');
+  expect(g.hint).toBe('一页放不下：保持 100% 大小，其余部分向下滚动查看');
   await expect(page.locator('.cm-hint')).toHaveAttribute('role', 'status');
   expect(g.cards.find((c) => c.id === 'cap').y).toBeGreaterThanOrEqual(g.vp.y + 8 - 0.5);
   expect(g.canUndo).toBe(true);
@@ -411,23 +413,45 @@ test('智能一页: one click hands arrangement and zoom back to the window; wha
   // from then on the map follows the window again
   await size(1440, 900); await settled();
   g = await read();
-  expect(g.view.scale).toBeCloseTo(0.85, 5);
+  expect(g.view.scale).toBeCloseTo(0.7, 5);
   expect(g.plan).not.toEqual(auto.plan);
   assertNeat(g);
   await size(1920, 1080, 'light'); await settled();
   g = await read();
   assertWhole(g);
+  expect(g.plan, 'back at the first width, the first arrangement').toEqual(auto.plan);
   await shot('map-smartpage-after-1920-light');
   // nothing hand-placed and the view untouched: nothing to undo
   await page.locator('[data-cm="fit"]').click();
   await expect(page.locator('[data-cm="undo"]')).toBeHidden();
-  // a small map grows a little to fill its page, never past 115%
+  // a small map is not blown up to fill its page: it stands at 100% like any other
   await setTask(BIG.map((c, i) => [c, 'w' + i]).filter(([c]) => c[0] !== 'vps-ops').map(([, id]) => id), 'done');
   await expect(page.locator('.cm-project')).toHaveCount(1);
   await settled();
   g = await read();
-  expect(g.view.scale).toBeCloseTo(1.15, 5);
+  expect(g.view.scale).toBeCloseTo(0.7, 5);
   assertWhole(g);
+
+  // the zoom control reads and steps from the new 100%: tenths of it, and a click on the number comes back to it
+  const label = page.locator('[data-cm="reset"]');
+  await expect(label).toHaveText('100%');
+  await page.locator('[data-cm="out"]').click();
+  await expect(label).toHaveText('90%');
+  expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(0.63, 5);
+  await page.locator('[data-cm="out"]').click(); await page.locator('[data-cm="out"]').click();
+  await expect(label).toHaveText('70%');
+  await expect(label).toHaveAttribute('aria-label', '回到 100%（当前 70%）');
+  // a pinch leaves it between two steps: the next press lands on a whole tenth
+  await page.evaluate(() => { const vp = document.querySelector('.cm-viewport'), r = vp.getBoundingClientRect(); vp.dispatchEvent(new WheelEvent('wheel', { deltaY: -30, ctrlKey: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, bubbles: true, cancelable: true })); });
+  const pinched = await label.textContent();
+  expect(Number(pinched.replace('%', ''))).toBeGreaterThan(70);
+  expect(Number(pinched.replace('%', ''))).toBeLessThan(80);
+  await page.locator('[data-cm="in"]').click();
+  await expect(label).toHaveText('80%');
+  await label.click();
+  await expect(label).toHaveText('100%');
+  expect((await page.evaluate(() => CrewMap.view())).scale).toBeCloseTo(0.7, 5);
+  expect(await page.evaluate(() => config.crewMap.view.scale), 'the view is saved in drawn units, as older versions saved it').toBeCloseTo(0.7, 5);
   expect(errors).toEqual([]);
 });
 
@@ -472,7 +496,7 @@ test('一键整理: dragged frames and cards go back on the grid in the order th
   // the order the frames were left in: the one dragged to the far left now comes first, and it is remembered
   expect(g.saved.projectOrder[0]).toBe('vps-ops');
   expect(g.groups[0].key).toBe('vps-ops');
-  expect(g.plan.lanes.flat()).toEqual(g.saved.projectOrder);
+  expect(byRow(g.plan)).toEqual(g.saved.projectOrder);
   expect(g.view.scale, 'the zoom the user set stays').toBeCloseTo(zoomed.view.scale, 5);
   expect(g.moved).toBe(true);
   expect(g.canUndo).toBe(true);

@@ -166,7 +166,8 @@ async function assertBoardLayout(minCard, stacked = false) {
     const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom, width: r.width, height: r.height }; };
     const shown = (n) => !n.hidden && getComputedStyle(n).display !== 'none' && n.getBoundingClientRect().width > 0;
     const barGroups = [...document.querySelector('#taskBoardView .tbv-filters').children].filter(shown);
-    // Project chips wrap as whole controls; their strip is no longer a single-line control.
+    // Project chips wrap as whole controls over the full width of the bar, beside the tally and tools
+    // on the first row and under them after it: what must not touch is each chip and that block.
     const bar = barGroups.flatMap((n) => n.classList.contains('tbv-projects') ? [...n.querySelectorAll('.tbv-chip')].filter(shown) : [n]).map((n) => ({ cls: n.className, ...rect(n) }));
     const chips = [...document.querySelectorAll('#taskBoardView .tbv-chip')].filter(shown);
     const chipNames = chips.map((n) => { const name = n.querySelector('.tbv-chip-name'); return { text: name.textContent, scrollWidth: name.scrollWidth, clientWidth: name.clientWidth }; });
@@ -184,10 +185,7 @@ async function assertBoardLayout(minCard, stacked = false) {
   expect(g.projects.x, 'project strip inside window').toBeGreaterThanOrEqual(g.view.x);
   expect(g.projects.right, 'project strip inside window').toBeLessThanOrEqual(g.view.right);
   for (const name of g.chipNames) expect(name.scrollWidth, name.text + ' shown whole').toBeLessThanOrEqual(name.clientWidth);
-  for (let i = 0; i < g.barGroups.length; i++) {
-    expect(g.barGroups[i].right, g.barGroups[i].cls + ' inside window').toBeLessThanOrEqual(g.view.right);
-    for (const b of g.barGroups.slice(i + 1)) expect(overlaps(g.barGroups[i], b), `${g.barGroups[i].cls}/${b.cls} overlap`).toBe(false);
-  }
+  for (const group of g.barGroups) expect(group.right, group.cls + ' inside window').toBeLessThanOrEqual(g.view.right);
   for (let i = 0; i < g.bar.length; i++) {
     expect(g.bar[i].height, g.bar[i].cls + ' single line').toBeLessThanOrEqual(34);
     expect(g.bar[i].right, g.bar[i].cls + ' inside window').toBeLessThanOrEqual(g.view.right);
