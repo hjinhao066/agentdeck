@@ -197,6 +197,64 @@ textarea::placeholder { color: var(--muted); }
 .output-names h1 { font-size: 17px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
 .output { margin: 0; padding: 16px 14px; min-height: 320px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); font: 12px/1.8 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* 待我处理: 要你处理 in the board's 等用户 amber with a rim on the left, 结果汇报 quiet; unread is a blue dot.
+   Text buttons for replying and ticking (the main actions), icons for copy and put-back. */
+.navigation button { position: relative; }
+.nav-attention { position: absolute; top: 3px; left: calc(50% + 7px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 99px; background: var(--soft); color: var(--secondary); font: 600 10.5px/17px var(--sans); text-align: center; font-variant-numeric: tabular-nums; }
+.nav-attention.need { background: var(--warn); color: var(--surface); }
+.at-lists { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+.at-hint { margin: 0 4px; }
+.at-hint.blocked { color: var(--bad); }
+.at-section { display: flex; align-items: flex-end; gap: 10px; margin: 14px 4px 0; }
+.at-lists > .at-section:first-of-type { margin-top: 2px; }
+.at-section-titles { flex: 1; min-width: 0; }
+.at-section h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; }
+.at-section p { margin-top: 2px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.at-count { min-width: 22px; padding: 0 7px; border-radius: 99px; background: var(--soft); color: var(--secondary); font: 600 11px/20px var(--mono); text-align: center; }
+.at-sec-need .at-count { background: var(--warn-soft); color: var(--warn); }
+.at-all { min-height: 40px; padding: 0 12px; font-size: 13px; }
+.at-item { position: relative; padding: 13px 14px 6px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.at-item.at-need:not(.done) { border-left: 3px solid var(--warn); padding-left: 14px; }
+.at-item.done { background: transparent; box-shadow: none; }
+.at-top { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11.5px; }
+.at-unread { width: 8px; height: 8px; border-radius: 50%; background: var(--focus); flex-shrink: 0; }
+.at-ok { color: var(--ok); }
+.at-ok svg { width: 16px; height: 16px; }
+.at-kind { padding: 2px 9px; border-radius: 99px; background: var(--soft); color: var(--secondary); font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.at-need:not(.done) .at-kind { background: var(--warn-soft); color: var(--warn); }
+.at-report:not(.done) .at-kind { background: var(--accent-soft); color: var(--accent); }
+.at-meta { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-title { margin-top: 8px; font-size: 15.5px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.at-item.done .at-title { margin-top: 6px; font-size: 14px; font-weight: 500; color: var(--secondary); }
+.at-ask { margin-top: 9px; padding: 9px 12px; border-radius: 12px; background: var(--warn-soft); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.at-ask b { margin-right: 8px; color: var(--warn); font-size: 12px; }
+.at-done-text { margin-top: 4px; color: var(--muted); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.at-more { display: inline-flex; align-items: center; gap: 4px; min-height: 40px; margin: 4px 0 0 -6px; padding: 0 8px 0 4px; border: 0; border-radius: 10px; background: transparent; color: var(--secondary); font-size: 13px; }
+.at-chev svg { width: 15px; height: 15px; transition: transform .15s; }
+.at-chev.open svg { transform: rotate(90deg); }
+.at-detail { margin: 2px 0 8px; padding: 11px 12px; border-radius: 12px; background: var(--raised); display: grid; gap: 9px; }
+.at-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.7; color: var(--secondary); }
+.at-files { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.at-files li { font: 12px/1.55 var(--mono); color: var(--secondary); overflow-wrap: anywhere; }
+.at-links { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.at-said { padding-top: 9px; border-top: 1px solid var(--line); }
+.at-said-head { display: block; font-size: 11.5px; color: var(--muted); }
+.at-said-text { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.6; }
+.at-actions { display: flex; align-items: center; gap: 8px; margin: 8px -8px 0 0; padding-bottom: 6px; }
+.at-actions .text-button { min-height: 40px; }
+.text-button.quiet { color: var(--secondary); }
+.at-spacer { flex: 1; }
+.at-compose { margin: 10px 0 10px; }
+.at-compose-row { display: flex; align-items: flex-start; gap: 4px; padding-left: 6px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--raised); }
+.at-compose-row:focus-within { border-color: var(--accent); }
+textarea.at-reply { height: auto; min-height: 88px; max-height: min(220px, 40dvh); }
+.at-compose .primary { margin-top: 8px; }
+button.at-done-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-top: 10px; padding: 0 4px; border: 0; border-radius: 12px; background: transparent; color: var(--secondary); font-size: 14px; font-weight: 650; text-align: left; }
+.at-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 20px 34px; border: 1px dashed var(--line-strong); border-radius: 18px; text-align: center; color: var(--secondary); font-size: 13px; line-height: 1.7; }
+.at-empty-art { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 6px; border-radius: 18px; background: var(--accent-soft); color: var(--accent); }
+.at-empty-art svg { width: 28px; height: 28px; }
+.at-empty strong { color: var(--text); font-size: 15px; font-weight: 650; }
+@media (prefers-reduced-motion: reduce) { .at-chev svg { transition: none; } }
 .navigation { display: flex; gap: 4px; padding: 2px 8px calc(2px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
 .navigation button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 48px; padding: 5px 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1.3; }
 .navigation button[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }

@@ -361,3 +361,57 @@
   return { cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
+
+// 待我处理 on the phone: each computer's list, cleaned field by field again
+// (a computer's answer is data, not trusted markup), then merged into one page:
+// 要你处理 first, then 结果汇报, newest first; 已完成 by when it was finished.
+// Each item keeps the computer it came from: a reply goes to that computer only.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const ID = /^at-[a-z0-9-]{4,40}$/;
+  const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
+  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const line = (value, max) => text(value, max).replace(/\s+/g, ' ').trim();
+  function cleanAttention(body) {
+    const items = (body && Array.isArray(body.items) ? body.items : []).slice(0, 300)
+      .filter((item) => item && typeof item.id === 'string' && ID.test(item.id) && (item.kind === 'need' || item.kind === 'report') && line(item.title, 300))
+      .map((item) => ({
+        id: item.id, kind: item.kind, label: line(item.label, 20) || (item.kind === 'need' ? '要你处理' : '结果汇报'),
+        title: line(item.title, 300), ask: line(item.ask, 1000), detail: text(item.detail, 4000),
+        files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
+        project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
+        source: item.source === 'card' ? 'card' : 'captain', created: time(item.created), readAt: time(item.readAt),
+        done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0, doneText: item.done === true ? line(item.doneText, 200) : '',
+        replies: (Array.isArray(item.replies) ? item.replies : []).slice(-3).filter((r) => r && typeof r.text === 'string')
+          .map((r) => ({ text: text(r.text, 1000), at: time(r.at), from: r.from === 'phone' ? 'phone' : 'desktop', seen: r.seen === true })),
+      }));
+    return items;
+  }
+  // sources: [{ id, label, items }] for the computers that answered.
+  function mergeAttention(sources) {
+    const all = [];
+    for (const m of sources || []) for (const item of m.items || []) all.push({ ...item, machineId: m.id, machineLabel: m.label, key: m.id + ':' + item.id });
+    const open = all.filter((i) => !i.done);
+    const byNew = (a, b) => b.created - a.created || (a.key < b.key ? -1 : 1);
+    const needs = open.filter((i) => i.kind === 'need').sort(byNew);
+    const reports = open.filter((i) => i.kind === 'report').sort(byNew);
+    const done = all.filter((i) => i.done).sort((a, b) => b.doneAt - a.doneAt || (a.key < b.key ? -1 : 1));
+    const unreadReports = reports.filter((i) => !i.readAt).length;
+    return { needs, reports, done, counts: { need: needs.length, reports: reports.length, unreadReports, badge: needs.length + unreadReports } };
+  }
+  // Why a reply or tick did not go through, in words.
+  function attentionFailure(result, name) {
+    if (!result || result.failed) return `手机连不上 ${name}，这条没有发出去。草稿还在。`;
+    if (result.timedOut) return `${name} 没有回应（可能在睡眠），这条没有发出去。草稿还在。`;
+    if (result.status === 409 && result.body && typeof result.body.error === 'string' && result.body.error) return result.body.error.slice(0, 200);
+    if (result.status === 401) return `${name} 的登录已失效，先在总览里重新登录。`;
+    if (result.status === 403) return `${name} 的安全校验已过期，刷新页面后再试。`;
+    if (result.status === 404) return `${name} 的 AgentDeck 版本太旧，还没有「待我处理」。`;
+    if (result.status === 502) return `${name} 离线，这条没有发出去。`;
+    return `${name} 没有接受（HTTP ${result.status}）。`;
+  }
+  return { cleanAttention, mergeAttention, attentionFailure };
+});
