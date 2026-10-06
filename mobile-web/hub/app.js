@@ -31,6 +31,8 @@
     alert: '<path d="M12 4 2.8 19.5h18.4L12 4Z"/><path d="M12 10v4.5m0 2.6v.2"/>',
     done: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.8L16.2 9.5"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
+    todo: '<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8M13 12h8M13 18h8"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
   const providerIcons = {
@@ -46,6 +48,9 @@
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
+  // 随手记待办: a write in flight, the line under the box, and ticks shown before their computer confirms them.
+  let todoSaving = false, todoHint = '', todoHintError = false, todoDoneOpen = false;
+  const todoPending = new Map();
   // Quota rows whose details are open, as 'machine:key'. Memory only.
   const openQuota = new Set();
   // Messages that failed to send wait here (memory only) until the user re-edits them.
@@ -106,7 +111,7 @@
     savedTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
-  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash']]) $(id).innerHTML = svg(icon);
+  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['todo-add', 'plus']]) $(id).innerHTML = svg(icon);
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.querySelector('.nav-icon').innerHTML = svg(button.dataset.view);
     button.addEventListener('click', () => showView(button.dataset.view));
@@ -135,7 +140,7 @@
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
     if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; }
     // A machine that no longer accepts this phone must not keep showing its board.
-    if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; }
+    if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; m.todos = null; m.todosReady = null; m.todosAt = 0; }
     return verdict;
   }
   async function poll(m) {
@@ -159,6 +164,8 @@
         const tasks = await request(m, 'api/tasks');
         if (tasks.status === 200 && tasks.body && Array.isArray(tasks.body.cards)) { m.cards = tasks.body.cards; m.boardVersion = m.snap.boardVersion; }
       }
+      // To-dos: every poll while the 待办 tab is open, otherwise every 30 seconds for the tab's count.
+      if (view === 'todo' || m.forceQuota || !m.todosAt || Date.now() - m.todosAt > 30000) await loadTodos(m);
       // Quota moves slowly: read it at most every 30 seconds, and on a manual refresh.
       // The Captain's accounts move as slowly as quota, except while the switch sheet is open on this computer.
       // A running switch has its own faster watch.
@@ -202,7 +209,8 @@
   // In the Captain view it picks who the message goes to, elsewhere what is shown.
   function renderBar() {
     const bar = $('machine-bar');
-    bar.hidden = view === 'output';
+    // One list for both computers on the 待办 tab, so there is nothing to pick there.
+    bar.hidden = view === 'output' || view === 'todo';
     $('app-header').dataset.view = view;
     const online = machines.filter((m) => m.state === 'online').length;
     const picking = view === 'captain';
@@ -870,24 +878,161 @@
     }
   }
 
+  // ---- 随手记待办 ------------------------------------------------------------
+  // One list for both computers: each answers with what it sees, the hub keeps
+  // the newest copy of every item. Recording and ticking go to one computer
+  // (Core.todoWriter); git carries it to the other within half an hour.
+  async function loadTodos(m) {
+    const result = await request(m, 'api/todos');
+    m.todosAt = Date.now();
+    // 404: a build without to-dos. Nothing to show from it, and nothing failed.
+    if (result.status === 200 && result.body) { m.todos = Core.cleanTodos(result.body); m.todosReady = true; }
+    else if (result.status === 404) { m.todos = null; m.todosReady = false; }
+  }
+  const todoSources = () => machines.filter((m) => Array.isArray(m.todos));
+  const todoWriter = () => Core.todoWriter(machines, target);
+  // The computer's answer goes into its own copy at once; the next poll confirms it.
+  function keepTodo(m, item) {
+    const [clean] = Core.cleanTodos({ items: [item] });
+    if (!clean || !Array.isArray(m.todos)) return;
+    const at = m.todos.findIndex((t) => t.id === clean.id);
+    if (at >= 0) m.todos[at] = clean; else m.todos.push(clean);
+  }
+  let todoHintTimer = 0;
+  function setTodoHint(text, error) {
+    todoHint = text; todoHintError = !!error;
+    clearTimeout(todoHintTimer);
+    if (text && !error) todoHintTimer = setTimeout(() => { todoHint = ''; updateTodoForm(); }, 3000);
+    updateTodoForm();
+  }
+  function updateTodoForm() {
+    const writer = todoWriter(), box = $('todo-text'), block = Core.todoBlock(machines);
+    $('todo-add').disabled = todoSaving || !writer || !box.value.trim();
+    const label = writer ? `记下这条待办（存到 ${writer.label}）` : '记下这条待办';
+    $('todo-add').title = block || label; $('todo-add').setAttribute('aria-label', label);
+    const hint = $('todo-hint');
+    hint.textContent = todoSaving ? `正在记到 ${writer ? writer.label : ''}…` : todoHint || block;
+    hint.hidden = !hint.textContent;
+    hint.classList.toggle('blocked', !todoSaving && (todoHintError || (!todoHint && !!block)));
+  }
+  function todoRow(t, writer) {
+    const row = node('li', 'todo-row' + (t.done ? ' is-done' : ''));
+    const check = node('button', 'todo-check');
+    check.type = 'button'; check.dataset.todo = t.id;
+    check.setAttribute('role', 'checkbox'); check.setAttribute('aria-checked', String(t.done));
+    const name = t.done ? '标为未完成' : '勾掉';
+    check.title = name; check.setAttribute('aria-label', `${name}：${t.text}`);
+    check.innerHTML = svg('check');
+    check.disabled = !writer;
+    check.addEventListener('click', () => toggleTodo(t, row, check));
+    const body = node('div', 'todo-main');
+    const when = t.done ? '完成于 ' + Core.ago(Date.parse(t.doneAt || t.updated), Date.now()) : Core.ago(Date.parse(t.created), Date.now());
+    body.append(node('p', 'todo-text', t.text), node('p', 'todo-when', when));
+    row.append(check, body);
+    return row;
+  }
+  async function toggleTodo(t, row, check) {
+    const m = todoWriter();
+    if (!m || row.classList.contains('is-saving')) return;
+    const done = !t.done;
+    row.classList.add('is-saving'); row.classList.toggle('is-done', done); check.setAttribute('aria-checked', String(done));
+    // The base lets a computer tick an item the other one recorded less than a git sync ago.
+    const base = { text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated };
+    const result = await post(m, 'api/todos', { op: 'update', id: t.id, done, base });
+    if (result.status === 200 && result.body && result.body.item) {
+      keepTodo(m, result.body.item);
+      setTodoHint(done ? `已勾掉（记在 ${m.label}）` : `已放回未完成（记在 ${m.label}）`);
+      // Let the tick show before the row moves.
+      setTimeout(renderTodos, 350);
+    } else {
+      row.classList.remove('is-saving'); row.classList.toggle('is-done', t.done); check.setAttribute('aria-checked', String(t.done));
+      setTodoHint(Core.todoFailure(result, m.label), true);
+    }
+  }
+  function renderTodos() {
+    const lists = $('todo-lists'), sources = todoSources(), writer = todoWriter();
+    const { open, done } = Core.mergeTodos(sources);
+    const badge = document.querySelector('[data-view="todo"] .nav-badge');
+    badge.textContent = open.length > 99 ? '99+' : String(open.length); badge.hidden = !open.length;
+    updateTodoForm();
+    const missing = machines.filter((m) => !Array.isArray(m.todos));
+    $('todo-foot').textContent = !sources.length ? '' : (missing.length ? `现在只读到 ${sources.map((m) => m.label).join('、')} 的待办。` : `已合并 ${sources.map((m) => m.label).join(' 和 ')} 的待办。`)
+      + '两台电脑通过 git 每 30 分钟同步一次。';
+    if (!changed(lists, [open, done, todoDoneOpen, !!writer, sources.length, Core.todoBlock(machines)])) return;
+    const focusedId = document.activeElement && lists.contains(document.activeElement) ? document.activeElement.dataset.todo || document.activeElement.id : '';
+    lists.replaceChildren();
+    if (!sources.length) {
+      lists.append(node('p', 'empty', Core.todoBlock(machines) || '正在读取待办…'));
+      return;
+    }
+    if (!open.length) {
+      const box = node('div', 'todo-empty'), art = node('div', 'todo-empty-art');
+      art.innerHTML = svg(done.length ? 'check' : 'todo');
+      box.append(art, node('strong', '', done.length ? '都做完了' : '清单还是空的'), node('p', '', done.length ? '新冒出来的事，直接在上面记一条。' : '买东西、回邮件、别忘了的小事——打一句话，点完成就存好。'));
+      lists.append(box);
+    } else {
+      const head = node('h2', 'todo-section');
+      head.append(node('span', '', '未完成'), node('span', 'todo-count', String(open.length)));
+      const list = node('ul', 'todo-list'); list.setAttribute('aria-label', '未完成的待办');
+      open.forEach((t) => list.append(todoRow(t, writer)));
+      lists.append(head, list);
+    }
+    if (done.length) {
+      const toggle = node('button', 'todo-section todo-done-toggle');
+      toggle.type = 'button'; toggle.id = 'todo-done-toggle';
+      toggle.setAttribute('aria-expanded', String(todoDoneOpen));
+      const chev = node('span', 'todo-chev' + (todoDoneOpen ? ' open' : '')); chev.innerHTML = svg('chevron');
+      toggle.append(chev, node('span', '', '已完成'), node('span', 'todo-count', String(done.length)));
+      toggle.addEventListener('click', () => { todoDoneOpen = !todoDoneOpen; renderTodos(); });
+      lists.append(toggle);
+      if (todoDoneOpen) {
+        const list = node('ul', 'todo-list todo-list-done'); list.setAttribute('aria-label', '已完成的待办');
+        done.forEach((t) => list.append(todoRow(t, writer)));
+        lists.append(list);
+      }
+    }
+    if (focusedId) (lists.querySelector(`[data-todo="${CSS.escape(focusedId)}"]`) || $(focusedId))?.focus();
+  }
+  $('todo-text').addEventListener('input', () => { if (todoHintError) setTodoHint(''); else updateTodoForm(); });
+  // Enter while an input method is still composing picks a candidate; it never records.
+  $('todo-text').addEventListener('keydown', (event) => { if (event.key === 'Enter' && (event.isComposing || event.keyCode === 229)) event.preventDefault(); });
+  $('todo-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const box = $('todo-text'), text = box.value, m = todoWriter();
+    if (todoSaving || !text.trim() || !m) return;
+    // The box stays enabled and focused, so the phone keyboard stays up for the next one.
+    todoSaving = true; todoHint = ''; updateTodoForm();
+    const result = await post(m, 'api/todos', { op: 'add', text });
+    todoSaving = false;
+    if (result.status === 200 && result.body && result.body.item) {
+      if (box.value === text) box.value = '';
+      keepTodo(m, result.body.item);
+      setTodoHint(`已记下（存在 ${m.label}）`);
+    } else setTodoHint(Core.todoFailure(result, m.label), true);
+    renderTodos();
+  });
+
   // ---- shell ---------------------------------------------------------------
   function showView(next) {
     if (view === 'output' && next !== 'output') { outputRequest++; output = null; $('output-text').textContent = ''; }
     view = next;
-    ['overview', 'captain', 'sessions', 'board', 'output'].forEach((name) => { $(name + '-view').hidden = name !== view; });
+    ['overview', 'captain', 'todo', 'sessions', 'board', 'output'].forEach((name) => { $(name + '-view').hidden = name !== view; });
     document.querySelectorAll('[data-view]').forEach((button) => {
       if (button.dataset.view === (view === 'output' ? 'sessions' : view)) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     });
     $('back').hidden = view !== 'output';
     $('main').classList.toggle('fill', view === 'captain');
-    if (view !== 'output') { $('brand-title').textContent = 'AgentDeck'; $('brand-caption').textContent = '总台'; }
+    if (view === 'todo') { $('brand-title').textContent = '待办'; $('brand-caption').textContent = '两台电脑同一份'; }
+    else if (view !== 'output') { $('brand-title').textContent = 'AgentDeck'; $('brand-caption').textContent = '总台'; }
     $('main').scrollTop = 0;
     render();
     if (view === 'captain') $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
+    // The 待办 tab reads fresh lists at once rather than on the next 30-second turn.
+    if (view === 'todo') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
   }
   function render() {
-    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderSessions(); renderBoard(); renderSheet();
+    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
   }
   $('refresh').addEventListener('click', refreshAll);
@@ -912,7 +1057,7 @@
     if (!list.length) { notice('没有读到电脑列表（machines.json）。请刷新重试。', true); return; }
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
-    machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '',
+    machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '', todos: null, todosReady: null, todosAt: 0,
       meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
     machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);

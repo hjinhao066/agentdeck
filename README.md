@@ -67,7 +67,10 @@ raw diagnostics are not copied into AgentDeck logs or conversations.
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
-- **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
+- **待办** (sidebar, under 任务看板): your own one-line to-dos, kept apart from the
+  agents' task cards. Type and press Enter; ⌘T (Ctrl+Shift+T on Windows) records one
+  from anywhere in the window. The phone hub has the same list. See [docs/todo.md](docs/todo.md).
+- **Left sidebar** (collapsible, resizable): 新对话, 队长, 任务看板, 待办, 搜索, Schedule, Artifacts, Skills,
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.

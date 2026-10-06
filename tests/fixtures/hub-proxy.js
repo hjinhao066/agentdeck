@@ -30,11 +30,13 @@ function readJson(req) {
 // answers, like a half-open tunnel) | 'legacy' (an old build: no api/info, and
 // every prefixed path answers 401 because it does not know the prefix) | 'redirect'
 // (a hostile machine: every answer is a 307 to machine.redirectTo, e.g. a path on the other machine).
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null }) {
+// todos: this machine's answer to api/todos, as the phone view mobile-web.js sends
+// (live items plus bare deletion marks); null is an older build without the route.
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [] }) {
   const base = `/${id}/`, cookieName = `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, quota, boardVersion: 'b1',
+    requests: [], messages: [], sessions, cards, outputs, quota, boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '',
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
     setCards(next) { machine.cards = next; machine.boardVersion = crypto.randomBytes(4).toString('hex'); },
@@ -77,7 +79,7 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (machine.mode === 'legacy') return json(res, 401, { error: 'Unauthorized.' });
     if (req.method === 'POST' && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Same origin required.' });
     // Unauthenticated capability probe; fixed, non-sensitive fields only.
-    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath'], machine: { id, label, platform }, appVersion });
+    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', ...(machine.todos ? ['todos'] : [])], machine: { id, label, platform }, appVersion });
     if (req.method === 'POST' && url.pathname === '/login') {
       const body = await readJson(req);
       const ban = Math.ceil((machine.bannedUntil - Date.now()) / 1000);
@@ -117,6 +119,27 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       machine.relay.job = { id: crypto.randomBytes(6).toString('hex'), status: 'switching', fromId: state.currentId, fromName: name(state.seats.find((s) => s.current) || { name: '' }),
         targetId: seat.id, targetName: name(seat), startedAt: Date.now(), finishedAt: null, error: '' };
       return json(res, 200, { started: true, id: machine.relay.job.id });
+    }
+    // 随手记待办, like mobile-web.js: record one or tick one; the base stands in for an item not synced here yet.
+    if (req.method === 'GET' && url.pathname === '/api/todos' && machine.todos) return json(res, 200, { items: machine.todos });
+    if (req.method === 'POST' && url.pathname === '/api/todos' && machine.todos) {
+      const body = await readJson(req);
+      machine.todoWrites.push(body);
+      if (machine.todoRefuse) return json(res, 400, { error: machine.todoRefuse });
+      const now = new Date(Math.max(Date.now(), ...machine.todos.map((t) => Date.parse(t.updated) + 1))).toISOString();
+      if (body && body.op === 'add' && typeof body.text === 'string' && body.text.trim() && Object.keys(body).length === 2) {
+        const item = { id: 'td-' + crypto.randomUUID(), text: body.text.replace(/\s+/g, ' ').trim(), done: false, doneAt: null, created: now, updated: now };
+        machine.todos.push(item);
+        return json(res, 200, { item });
+      }
+      if (body && body.op === 'update' && typeof body.id === 'string' && typeof body.done === 'boolean') {
+        let item = machine.todos.find((t) => t.id === body.id && !t.deleted);
+        if (!item && body.base) { item = { id: body.id, text: body.base.text, done: !!body.base.done, doneAt: body.base.doneAt || null, created: body.base.created, updated: body.base.updated }; machine.todos.push(item); }
+        if (!item) return json(res, 400, { error: '这条待办已经不在了，刷新一下。' });
+        Object.assign(item, { done: body.done, doneAt: body.done ? now : null, updated: now });
+        return json(res, 200, { item });
+      }
+      return json(res, 400, { error: 'Invalid to-do request.' });
     }
     if (req.method === 'GET' && url.pathname === '/api/output') {
       const session = machine.sessions.find((s) => s.id === url.searchParams.get('id') && !s.isMain);

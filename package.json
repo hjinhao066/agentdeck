@@ -71,6 +71,8 @@
       "schedule-feed-core.js",
       "schedule-feed.js",
       "pages.js",
+      "todo-ui.js",
+      "todo-store.js",
       "main-core.js",
       "auto-verify-core.js",
       "relay-handoff-core.js",

@@ -39,6 +39,19 @@
           <p id="send-hint" class="send-hint" role="status" aria-live="polite"></p>
         </form>
       </section>
+      <section id="todo-view" class="view" aria-label="待办" hidden>
+        <form id="todo-form" class="todo-form">
+          <label class="sr-only" for="todo-text">新待办</label>
+          <div class="todo-box">
+            <span class="todo-ring" aria-hidden="true"></span>
+            <input id="todo-text" type="text" maxlength="500" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="记一件事…" aria-describedby="todo-hint">
+            <button id="todo-add" class="icon-button todo-add" type="submit" title="记下这条待办" aria-label="记下这条待办" disabled></button>
+          </div>
+          <p id="todo-hint" class="send-hint" role="status" aria-live="polite" hidden></p>
+        </form>
+        <div id="todo-lists" class="todo-lists"></div>
+        <p id="todo-foot" class="board-foot"></p>
+      </section>
       <section id="sessions-view" class="view" aria-label="会话列表" hidden>
         <div id="session-groups" class="stack"></div>
       </section>
@@ -56,6 +69,7 @@
     <nav class="navigation" aria-label="主导航">
       <button type="button" data-view="overview" aria-current="page"><span class="nav-icon" aria-hidden="true"></span><span>总览</span></button>
       <button type="button" data-view="captain"><span class="nav-icon" aria-hidden="true"></span><span>队长</span></button>
+      <button type="button" data-view="todo"><span class="nav-icon" aria-hidden="true"></span><span class="nav-badge" aria-hidden="true" hidden></span><span>待办</span></button>
       <button type="button" data-view="sessions"><span class="nav-icon" aria-hidden="true"></span><span>会话</span></button>
       <button type="button" data-view="board"><span class="nav-icon" aria-hidden="true"></span><span>看板</span></button>
     </nav>
