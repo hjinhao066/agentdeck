@@ -941,7 +941,11 @@ bash scripts/rollback-agentdeck.sh --go --backup /absolute/path/backup
 
 入口使用稳定的安装标识和 `install-entry.lock`／`install.lock`／`install-claims` 阻止并发、崩溃后重入及同一安装包重新计数；不会自动删除遗留锁。发现上次 pending、未确认结果或已有 claim 时会拒绝开始，请先检查日志、结果与所属进程，处理失败原因后再由维护者清理相应标记。托管会话必须使用支持待核对协议的应用版本；旧版不能确认登记时安全退出，不以普通 progress 冒充成功登记。`--with-data` 仅允许独立终端使用，避免覆盖正在运行的任务控制状态。 若回滚到尚未包含结果读取机制的旧二进制，它不能自动提交新协议回执；离线 Bark 仍报告失败，结果文件保留，卡片不得据此冒报成功。
 
-Mac distribution uses the local `AgentDeck Dev` signing identity. On a CI host
+Mac distribution uses the local `AgentDeck Dev` signing identity, pinned in `build/signing-identity.json`.
+macOS privacy grants follow the app's designated requirement, so every release must keep it
+(`identifier "com.jinhao.agentdeck" and certificate leaf = H"<pinned sha1>"`); `scripts/release.js` runs
+`scripts/signing-check.js` before the build and on the packaged app and fails on an ad-hoc fallback.
+Never recreate the certificate; see `docs/macos-signing-and-permissions.md`. On a CI host
 without that certificate, use `CSC_IDENTITY_AUTO_DISCOVERY=false` and
 `npx electron-builder --mac --config.mac.identity=null --publish never`.
 CI builds are unsigned and not notarized; they are not equivalent to a signed
