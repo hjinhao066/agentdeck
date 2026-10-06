@@ -878,6 +878,9 @@ app.whenReady().then(async () => {
     },
     getQuota: () => requestMobile('quota'),
     sendCaptain: (message, images) => requestMobile('captain', { message, images }),
+    // Which account the Captain is on, and moving it to another: the desktop's own manual switch.
+    getRelay: () => requestMobile('relay'),
+    switchRelay: (input) => requestMobile('relay-switch', input),
     // Like pasted screenshots, phone images reach the Captain as file paths.
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
     getBoardVersion: () => boardVersionOf(taskStore.dir),

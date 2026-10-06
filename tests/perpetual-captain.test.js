@@ -565,3 +565,34 @@ test('native five-hour resumption does not clear a persisted weekly quota lock',
   assert.equal(state.seats.us.weeklyLowRemaining, 0);
   assert.equal(P.status(unknown('us'), state.seats.us, 3, NOW + 1000).exhausted, true);
 });
+
+test('manual choices for the phone: the seat in use, used-up, low and unlogged seats cannot be picked, and each says why', () => {
+  const seats = [quota('cn', 40), quota('us', 80), quota('us2', 2), { ...quota('eu', 0), remaining: 0 }, { id: 'jp', loggedIn: false },
+    { ...quota('kr', 70), onboardingComplete: false }, unknown('br'), quota('wk', 50, { weeklyRemaining: 1 })];
+  const list = P.manualChoices({ currentId: 'cn', seats, codex: { out: false }, now: NOW });
+  const by = Object.fromEntries(list.map((c) => [c.id, c]));
+  assert.deepEqual(list.map((c) => [c.id, c.selectable, c.reason]), [['cn', false, 'current'], ['us', true, ''], ['us2', false, 'low'], ['eu', false, 'exhausted'],
+    ['jp', false, 'login'], ['kr', false, 'onboarding'], ['br', true, 'unknown'], ['wk', false, 'low'], ['chatgpt', true, '']]);
+  assert.equal(by.cn.current, true);
+  assert.equal(list.filter((c) => c.current).length, 1);
+  // The time it comes back is the window that ran out: 5 hours, or the week.
+  assert.equal(by.eu.recoveryAt, NOW + 3600_000);
+  assert.equal(by.wk.weekly, true);
+  assert.equal(by.wk.recoveryAt, NOW + 7 * 86400_000);
+  assert.equal(by.us.recoveryAt, null);
+  // A native rate-limit error blocks a seat even while its last number looked fine.
+  const blocked = P.manualChoices({ currentId: 'cn', seats: [quota('cn', 40), quota('us', 80)], state: exhausted({}, 'us', NOW, NOW + 1800_000), now: NOW });
+  assert.deepEqual(blocked.map((c) => [c.id, c.selectable, c.reason, c.recoveryAt]), [['cn', false, 'current', null], ['us', false, 'exhausted', NOW + 1800_000]]);
+});
+
+test('manual choices include ChatGPT only when asked, refuse it when used up, and mark it when the Captain is on it', () => {
+  const seats = [quota('cn', 40), quota('us', 80)];
+  assert.equal(P.manualChoices({ currentId: 'cn', seats, now: NOW }).some((c) => c.id === P.CODEX_ID), false);
+  const out = P.manualChoices({ currentId: 'cn', seats, codex: { out: true, recoveryAt: NOW + 60_000 }, now: NOW }).find((c) => c.id === P.CODEX_ID);
+  assert.deepEqual([out.selectable, out.reason, out.recoveryAt], [false, 'exhausted', NOW + 60_000]);
+  const on = P.manualChoices({ currentId: P.CODEX_ID, seats, codex: { out: true }, now: NOW });
+  assert.deepEqual(on.map((c) => [c.id, c.current, c.selectable]), [['cn', false, true], ['us', false, true], ['chatgpt', true, false]]);
+  // Unlike the automatic rotation, a person's choice ignores the 10-minute cooldown and the on/off switch.
+  const cooled = P.recordSwitch({}, { fromId: 'us', targetId: 'cn', at: NOW - 60_000 });
+  assert.equal(P.manualChoices({ currentId: 'cn', seats, state: cooled, settings: { enabled: false }, now: NOW }).find((c) => c.id === 'us').selectable, true);
+});

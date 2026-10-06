@@ -1,14 +1,14 @@
 const { test, expect } = require('@playwright/test');
 const fs = require('fs');
 const path = require('path');
-const { startHub } = require('../fixtures/hub-proxy');
+const { startHub, withRelay } = require('../fixtures/hub-proxy');
 
 // The phone hub against two fake machines behind a Caddy-like local proxy.
 // Nothing here touches a real AgentDeck, the VPS or the shared boards.
 let hub, context, page, problems;
 
-async function open(browser, { theme = 'dark', login = ['mac', 'win'] } = {}) {
-  hub = await startHub();
+async function open(browser, { theme = 'dark', login = ['mac', 'win'], machines } = {}) {
+  hub = await startHub(machines ? { machines } : undefined);
   context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: theme, permissions: ['clipboard-read', 'clipboard-write'] });
   page = await context.newPage();
   problems = [];
@@ -651,3 +651,227 @@ for (const theme of ['dark', 'light']) {
     await expect(machineCard('Mac').locator('.quota')).toHaveCount(0);
   });
 }
+
+// ---- moving a computer's Captain to another account ----
+const sheet = () => page.locator('#switch-sheet');
+const option = (id) => sheet().locator(`.seat-option[data-seat-id="${id}"]`);
+const switchButton = (label, scope = page) => scope.getByRole('button', { name: `切换 ${label} 队长`, exact: true });
+// Nothing on screen uses the internal words for this feature.
+async function plainWords() { expect(await sheet().evaluate((el) => el.innerText)).not.toMatch(/relay|seat|席位/i); }
+async function sheetShot(name) {
+  await auditButtons(); await plainWords();
+  // The sheet is fully on screen and nothing in it overflows sideways.
+  // (Polled: the sheet slides up for a fifth of a second.)
+  await expect.poll(() => sheet().evaluate((el) => { const r = el.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight + 1 && r.top >= 0 && el.querySelector('.sheet-body').scrollWidth <= el.querySelector('.sheet-body').clientWidth; })).toBe(true);
+  await shot(name);
+}
+
+for (const theme of ['dark', 'light']) {
+  test(`the Captain moves to another account from the phone: pick, confirm, switching, done, and a failure that changes nothing (${theme})`, async ({ browser }) => {
+    test.setTimeout(120000);
+    await open(browser, { theme, machines: withRelay() });
+    const { mac, win } = hub.machines;
+    // Before: each computer's card says which account its Captain is on.
+    const macSeat = machineCard('Mac').locator('.captain-seat'), winSeat = machineCard('Windows').locator('.captain-seat');
+    await expect(macSeat).toContainText('队长在用');
+    await expect(macSeat.locator('.captain-seat-value')).toHaveText('Claude US');
+    await expect(macSeat.locator('.captain-seat-quota')).toHaveText('5 小时剩 4% · 每周剩 41%');
+    await expect(macSeat).toHaveAttribute('data-level', 'danger');
+    await expect(winSeat.locator('.captain-seat-value')).toHaveText('ChatGPT');
+    await expect(switchButton('Mac')).toHaveText('切换队长');
+    await expect(switchButton('Mac')).toHaveAttribute('aria-haspopup', 'dialog');
+    await macSeat.scrollIntoViewIfNeeded();
+    await auditButtons();
+    await shot(`switch-390-${theme}-1-before`);
+
+    // The sheet: this computer only, every account with its remainder, the unusable ones greyed with the reason.
+    await switchButton('Mac').click();
+    await expect(sheet()).toBeVisible();
+    expect(await sheet().evaluate((el) => el.matches(':modal'))).toBe(true);
+    await expect(sheet().getByRole('heading')).toHaveText('切换 Mac 队长');
+    await expect(sheet()).toContainText('只换 Mac 这台电脑的队长。它现在用的是 Claude US');
+    await expect(sheet().locator('.seat-option')).toHaveCount(6);
+    await expect(sheet().locator('.seat-name')).toHaveText(['Claude US', 'Claude CN', 'Claude US2', 'Claude EU', 'Claude JP', 'ChatGPT']);
+    await expect(option('us')).toContainText('队长在用');
+    await expect(option('us')).toHaveAttribute('aria-disabled', 'true');
+    await expect(option('cn')).not.toHaveAttribute('aria-disabled', 'true');
+    await expect(option('cn').locator('.seat-cell-value')).toHaveText(['72%', '63%']);
+    await expect(option('us2')).toContainText('额度还不清楚，可以换过去试试');
+    await expect(option('us2')).not.toHaveAttribute('aria-disabled', 'true');
+    await expect(option('eu')).toHaveAttribute('aria-disabled', 'true');
+    await expect(option('eu').locator('.seat-reason')).toHaveText(/^额度用完了，\d\d:\d\d（1 小时 \d+ 分后）恢复$/);
+    await expect(option('eu').locator('.seat-reason')).toHaveAttribute('data-blocked', 'true');
+    await expect(option('eu')).toHaveAttribute('aria-label', /Claude EU；.*额度用完了.*现在不能选/);
+    await expect(option('jp')).toHaveAttribute('aria-disabled', 'true');
+    await expect(option('jp').locator('.seat-reason')).toHaveText('还没登录。要回到电脑上登录后才能用');
+    // Greyed, but the reason keeps full strength and stays readable.
+    expect(await option('eu').evaluate((el) => ({ name: getComputedStyle(el.querySelector('.seat-name')).opacity, reason: getComputedStyle(el.querySelector('.seat-reason')).opacity, border: getComputedStyle(el).borderTopStyle }))).toEqual({ name: '0.45', reason: '1', border: 'dashed' });
+    const close = sheet().getByRole('button', { name: '关闭', exact: true });
+    await expect(close).toHaveAttribute('title', '关闭');
+    await expect(close).toHaveText('');
+    await sheetShot(`switch-390-${theme}-2-pick`);
+    await option('eu').scrollIntoViewIfNeeded();
+    if (process.env.AGENTDECK_HUB_SCREENSHOT_DIR) await sheet().locator('.seat-list').screenshot({ path: path.join(path.resolve(process.env.AGENTDECK_HUB_SCREENSHOT_DIR), `switch-390-${theme}-7-used-up-greyed.png`) });
+    // A greyed account does nothing, by tap or by keyboard.
+    // (force: Playwright itself refuses to click what is marked disabled; a finger does not.)
+    await option('eu').click({ force: true });
+    await option('jp').focus(); await page.keyboard.press('Enter');
+    await option('us').click({ force: true });
+    await expect(sheet().getByRole('heading')).toHaveText('切换 Mac 队长');
+    expect(mac.switches).toEqual([]);
+
+    // Picking only asks; nothing is sent until the second, worded confirmation.
+    await option('cn').click();
+    await expect(sheet().getByRole('heading')).toHaveText('确认切换 Mac 队长？');
+    await expect(sheet().getByRole('heading')).toBeFocused();
+    await expect(sheet().locator('.sheet-route')).toHaveAttribute('aria-label', '从 Claude US 换到 Claude CN');
+    await expect(sheet()).toContainText('现在这位队长正在说的话会中断，它没存下来的内容会丢。派出去的队员和任务不受影响。');
+    await expect(sheet().getByRole('button', { name: '确认切换', exact: true })).toBeVisible();
+    await sheetShot(`switch-390-${theme}-3-confirm`);
+    expect(mac.switches).toEqual([]);
+    await sheet().getByRole('button', { name: '先不换', exact: true }).click();
+    await expect(sheet().getByRole('heading')).toHaveText('切换 Mac 队长');
+    expect(mac.switches).toEqual([]);
+    await option('cn').click();
+    await sheet().getByRole('button', { name: '确认切换', exact: true }).click();
+
+    // Switching: said in words, with a running clock; only Mac was asked.
+    await expect(sheet().getByRole('heading')).toHaveText('正在切换 Mac 队长');
+    await expect(sheet().getByRole('status')).toContainText('先让现在的队长存好进度，再启动新队长');
+    await expect(sheet().locator('.sheet-route')).toHaveAttribute('aria-label', '从 Claude US 换到 Claude CN');
+    await expect(sheet().locator('#switch-elapsed')).toHaveText(/^已经等了 0:0[1-9]$/, { timeout: 8000 });
+    expect(mac.switches).toEqual([{ seatId: 'cn', expectCurrent: 'us' }]);
+    expect(mac.posts('api/relay')).toHaveLength(1);
+    expect(win.switches).toEqual([]);
+    expect(win.requests.some((r) => r.method === 'POST' && /relay/.test(r.url))).toBe(false);
+    await expect(macSeat.locator('.captain-seat-value')).toHaveText('正在换到 Claude CN…');
+    await sheetShot(`switch-390-${theme}-4-switching`);
+
+    // Done: the page follows the new Captain by itself.
+    mac.finishRelay(true);
+    await expect(sheet().getByRole('heading')).toHaveText('已换到 Claude CN', { timeout: 8000 });
+    await expect(sheet().getByRole('status')).toContainText('Mac 的新队长已经用 Claude CN 接手');
+    await sheetShot(`switch-390-${theme}-5-done`);
+    await sheet().getByRole('button', { name: '去看新队长', exact: true }).click();
+    await expect(sheet()).toBeHidden();
+    await expect(sendTo('Mac')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#captain-turns')).toContainText('Mac 新队长测试回复', { timeout: 8000 });
+    await expect(page.locator('#captain-turns')).not.toContainText('出门前看一下三端方案的进度。');
+    const bar = page.locator('#captain-seat');
+    await expect(bar.locator('.captain-seat-value')).toHaveText('Claude CN');
+    await expect(bar).toContainText('Mac 队长在用');
+    expect(await bar.evaluate((el) => { const v = el.querySelector('.captain-seat-value'); return v.getBoundingClientRect().width > 40 && el.scrollWidth <= el.clientWidth; })).toBe(true);
+    // The conversation still gets most of the screen.
+    expect(await page.evaluate(() => document.getElementById('captain-turns').clientHeight / innerHeight)).toBeGreaterThanOrEqual(0.7);
+    await auditButtons();
+    await shot(`switch-390-${theme}-6-new-captain`);
+    expect(win.relay.currentId).toBe('chatgpt');
+
+    // A failure, started from the conversation: the reason is shown and the Captain stays where it is.
+    await switchButton('Mac', bar).click();
+    await expect(option('cn')).toContainText('队长在用');
+    await option('chatgpt').click();
+    await sheet().getByRole('button', { name: '确认切换', exact: true }).click();
+    await expect(sheet().getByRole('heading')).toHaveText('正在切换 Mac 队长');
+    mac.finishRelay(false, '存进度或启动新队长没成功');
+    await expect(sheet().getByRole('heading')).toHaveText('Mac 队长没有换成', { timeout: 8000 });
+    await expect(sheet().getByRole('alert')).toHaveText('存进度或启动新队长没成功');
+    await expect(sheet()).toContainText('Mac 队长现在用的还是 Claude CN，没有变化。');
+    await sheetShot(`switch-390-${theme}-8-failed`);
+    expect(mac.relay.currentId).toBe('cn');
+    await sheet().getByRole('button', { name: '重新选账号', exact: true }).click();
+    await expect(sheet().getByRole('heading')).toHaveText('切换 Mac 队长');
+    await expect(option('cn')).toContainText('队长在用');
+    // Escape closes the sheet and focus returns to the button that opened it.
+    await page.keyboard.press('Escape');
+    await expect(sheet()).toBeHidden();
+    await expect(switchButton('Mac', bar)).toBeFocused();
+    await expect(page.locator('#captain-turns')).toContainText('Mac 新队长测试回复');
+  });
+}
+
+test('the two computers switch separately; a refusal, a restart and a lost connection on the way are told apart', async ({ browser }) => {
+  test.setTimeout(120000);
+  await open(browser, { machines: withRelay() });
+  const { mac, win } = hub.machines;
+  const macSeat = machineCard('Mac').locator('.captain-seat'), winSeat = machineCard('Windows').locator('.captain-seat');
+  const confirm = () => sheet().getByRole('button', { name: '确认切换', exact: true }).click();
+  // Windows: its own sheet, its own prefix; Mac is never asked.
+  await switchButton('Windows').click();
+  await expect(sheet().getByRole('heading')).toHaveText('切换 Windows 队长');
+  await expect(option('chatgpt')).toContainText('队长在用');
+  await option('cn').click();
+  await expect(sheet().getByRole('heading')).toHaveText('确认切换 Windows 队长？');
+  await confirm();
+  await expect(sheet().getByRole('heading')).toHaveText('正在切换 Windows 队长');
+  expect(win.switches).toEqual([{ seatId: 'cn', expectCurrent: 'chatgpt' }]);
+  expect(mac.switches).toEqual([]);
+  // The sheet can be closed: the switch goes on, the card says so, and the outcome arrives at the top of the page.
+  await sheet().getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(sheet()).toBeHidden();
+  await expect(winSeat.locator('.captain-seat-value')).toHaveText('正在换到 Claude CN…');
+  await expect(winSeat.getByRole('button', { name: '查看 Windows 队长的切换进度', exact: true })).toHaveText('查看进度');
+  await expect(macSeat.locator('.captain-seat-value')).toHaveText('Claude US');
+  await expect(switchButton('Mac')).toHaveText('切换队长');
+  win.finishRelay(true);
+  await expect(page.locator('#notice')).toHaveText('Windows 队长已换到 Claude CN。', { timeout: 8000 });
+  await expect(winSeat.locator('.captain-seat-value')).toHaveText('Claude CN', { timeout: 8000 });
+  expect(mac.relay.currentId).toBe('us');
+  expect(mac.posts('api/relay')).toEqual([]);
+
+  // The computer refuses (a draft is waiting on the desktop): its own words, and nothing changed.
+  mac.relay.refuse = '电脑上队长的输入框里还有没发出去的内容，要先在电脑上发出或清空';
+  await switchButton('Mac').click();
+  await option('cn').click(); await confirm();
+  await expect(sheet().getByRole('heading')).toHaveText('Mac 队长没有换成');
+  await expect(sheet().getByRole('alert')).toHaveText(mac.relay.refuse);
+  await expect(sheet()).toContainText('Mac 队长现在用的还是 Claude US，没有变化。');
+  expect(mac.relay.currentId).toBe('us');
+  mac.relay.refuse = '';
+
+  // The Captain moved on the desktop meanwhile: the phone's stale picture is refused by the computer.
+  await sheet().getByRole('button', { name: '重新选账号', exact: true }).click();
+  await expect(option('cn')).toBeVisible();
+  const posts = mac.switches.length;
+  mac.relay.currentId = 'us2';
+  await option('cn').click();
+  // The list is re-read while the sheet is open, so the question is asked about what is true now.
+  await expect(sheet().locator('.sheet-route')).toHaveAttribute('aria-label', '从 Claude US2 换到 Claude CN', { timeout: 10000 });
+  await confirm();
+  await expect(sheet().getByRole('heading')).toHaveText('正在切换 Mac 队长');
+  expect(mac.switches.slice(posts)).toEqual([{ seatId: 'cn', expectCurrent: 'us2' }]);
+
+  // The connection drops on the way: still "switching", said so, and the result shows up when it returns.
+  mac.setMode('down');
+  await expect(sheet()).toContainText('暂时连不上 Mac。恢复以后这里会自动显示结果，不用重新点。', { timeout: 10000 });
+  await expect(sheet().getByRole('heading')).toHaveText('正在切换 Mac 队长');
+  mac.setMode('online');
+  mac.finishRelay(true);
+  await expect(sheet().getByRole('heading')).toHaveText('已换到 Claude CN', { timeout: 10000 });
+  await sheet().getByRole('button', { name: '关闭', exact: true }).click();
+
+  // AgentDeck restarts on the way and forgets the switch: the account the Captain is on decides.
+  await expect(macSeat.locator('.captain-seat-value')).toHaveText('Claude CN', { timeout: 8000 });
+  await switchButton('Mac').click();
+  await option('chatgpt').click(); await confirm();
+  await expect(sheet().getByRole('heading')).toHaveText('正在切换 Mac 队长');
+  mac.forgetRelay();
+  await expect(sheet().getByRole('heading')).toHaveText('Mac 队长没有换成', { timeout: 8000 });
+  await expect(sheet().getByRole('alert')).toHaveText('电脑上的 AgentDeck 中途重启了，切换没有完成。');
+  await expect(sheet()).toContainText('Mac 队长现在用的还是 Claude CN，没有变化。');
+  await plainWords();
+});
+
+test('a computer without the switch (older AgentDeck), offline or with no Captain offers no switch', async ({ browser }) => {
+  const [mac, win] = withRelay();
+  await open(browser, { machines: [{ ...mac, relay: null }, { ...win, captain: false }] });
+  await expect(machineCard('Mac')).toContainText('最近回执');
+  await expect(machineCard('Windows')).toContainText('最近回执');
+  // Mac answers 404 for api/relay; Windows has accounts but no Captain to move.
+  await expect.poll(() => hub.machines.mac.requests.some((r) => r.url === '/mac/api/relay')).toBe(true);
+  await expect.poll(() => hub.machines.win.requests.some((r) => r.url === '/win/api/relay')).toBe(true);
+  await expect(page.locator('.captain-seat')).toHaveCount(0);
+  await expect(page.locator('[data-switch]')).toHaveCount(0);
+  await nav('队长');
+  await expect(page.locator('#captain-seat')).toBeHidden();
+});

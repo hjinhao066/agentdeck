@@ -223,3 +223,103 @@ test('the hub asks each computer for its own quota under its prefix and keeps no
   const stored = [...source.matchAll(/store\(KEYS\.\w+/g)].map((match) => match[0]);
   assert.deepEqual(stored.sort(), ['store(KEYS.machine', 'store(KEYS.machine', 'store(KEYS.meta', 'store(KEYS.theme']);
 });
+
+// ---- moving the Captain to another account ----
+const relayAnswer = (extra = {}) => ({ captainId: 'cap', currentId: 'us', switching: false, job: null, seats: [
+  { id: 'us', name: 'US', provider: 'Claude', account: 'u***@example.com', current: true, selectable: false, reason: 'current', cells: [{ key: '5h', remaining: 4, resetAt: 5 }, { key: '7d', remaining: 41 }] },
+  { id: 'cn', name: 'CN', provider: 'Claude', account: 'c***@example.com', selectable: true, reason: '', cells: [{ key: '5h', remaining: 72 }] },
+  { id: 'us2', name: 'US2', provider: 'Claude', selectable: true, reason: 'unknown', cells: [] },
+  { id: 'eu', name: 'EU', provider: 'Claude', selectable: false, reason: 'exhausted', recoveryAt: Date.UTC(2026, 9, 3, 13), cells: [{ key: '5h', remaining: 0, out: true }] },
+  { id: 'jp', name: 'JP', provider: 'Claude', selectable: false, reason: 'login', cells: [] },
+  { id: 'chatgpt', name: 'ChatGPT', provider: 'Codex', selectable: true, reason: '', cells: [] }], ...extra });
+
+test('accounts are offered only when the computer says so in words the page knows', () => {
+  const relay = Core.cleanRelay(relayAnswer());
+  assert.deepEqual(relay.seats.map((s) => [s.id, s.selectable, s.reason]), [['us', false, 'current'], ['cn', true, ''], ['us2', true, 'unknown'], ['eu', false, 'exhausted'], ['jp', false, 'login'], ['chatgpt', true, '']]);
+  assert.equal(Core.currentSeat(relay).id, 'us');
+  assert.deepEqual(relay.seats.map(Core.seatLabel), ['Claude US', 'Claude CN', 'Claude US2', 'Claude EU', 'Claude JP', 'ChatGPT']);
+  // Hostile or newer answers: a selectable flag next to a blocking or unknown reason, the seat in use, bad ids, extra fields.
+  const odd = Core.cleanRelay({ currentId: '../x', captainId: 7, job: { id: 'BAD ID', status: 'done' }, seats: [
+    { id: 'a', name: 'A', selectable: true, reason: 'exhausted' }, { id: 'b', name: 'B', selectable: true, reason: 'brand-new' }, { id: 'c', name: 'C', selectable: true, current: true, reason: '' },
+    { id: 'bad id', name: 'x', selectable: true, reason: '' }, null, { id: 'd', name: 'D\n<b>', selectable: 'yes', reason: '', configDir: '/Users/x/.claude', cells: [{ key: '1d', remaining: 5 }, { key: '5h', remaining: 900 }] }] });
+  assert.deepEqual(odd.seats.map((s) => [s.id, s.selectable, s.reason]), [['a', false, 'exhausted'], ['b', false, 'unknown'], ['c', false, ''], ['d', false, '']]);
+  assert.deepEqual([odd.currentId, odd.captainId, odd.job], ['', '', null]);
+  assert.equal(odd.seats[3].name, 'D <b>');
+  assert.equal('configDir' in odd.seats[3], false);
+  assert.deepEqual(odd.seats[3].cells, [{ key: '5h', remaining: 100, out: false, resetAt: null }]);
+  assert.deepEqual(Core.cleanRelay(null), { captainId: '', currentId: '', switching: false, seats: [], job: null });
+});
+
+test('every account that cannot be picked says why in plain words, with no internal terms', () => {
+  const now = Date.UTC(2026, 9, 3, 12), relay = Core.cleanRelay(relayAnswer());
+  const by = Object.fromEntries(relay.seats.map((s) => [s.id, s]));
+  assert.equal(Core.seatQuotaText(by.us), '5 小时剩 4% · 每周剩 41%');
+  assert.equal(Core.seatQuotaText(by.eu), '5 小时已用完');
+  assert.equal(Core.seatQuotaText(by.jp), '');
+  assert.equal(Core.seatReason(by.cn, now), '');
+  assert.equal(Core.seatReason(by.us, now), '队长现在就在用这个账号');
+  assert.equal(Core.seatReason(by.jp, now), '还没登录。要回到电脑上登录后才能用');
+  assert.match(Core.seatReason(by.eu, now), /^额度用完了，\d\d:00（1 小时后）恢复$/);
+  assert.equal(Core.seatReason({ ...by.eu, recoveryAt: null, weekly: true }, now), '每周额度用完了，恢复时间还不知道');
+  assert.equal(Core.seatReason({ ...by.eu, reason: 'low', recoveryAt: null }, now), '额度快用完了，恢复时间还不知道');
+  assert.equal(Core.seatReason({ ...by.eu, reason: 'onboarding' }, now), '还停在第一次启动的引导页。要回到电脑上处理');
+  assert.equal(Core.seatReason(by.us2, now), '额度还不清楚，可以换过去试试');
+  assert.match(Core.seatSpoken(by.eu, now), /^Claude EU；5 小时已用完；额度用完了，.*恢复；现在不能选$/);
+  assert.equal(Core.seatSpoken(by.cn, now), 'Claude CN；c***@example.com；5 小时剩 72%；点一下选它');
+  for (const seat of relay.seats) assert.doesNotMatch(Core.seatSpoken(seat, now) + Core.seatReason(seat, now), /relay|seat|席位|Relay|onboarding|quota/i);
+});
+
+test('the outcome of a switch comes from that computer: its job record, or after a restart the account the Captain is on', () => {
+  const job = { id: 'j1', targetId: 'cn' };
+  const state = (extra) => Core.cleanRelay(relayAnswer(extra));
+  assert.deepEqual(Core.relayOutcome(job, null), { phase: 'switching', error: '' });
+  assert.deepEqual(Core.relayOutcome(job, state({ job: { id: 'j1', status: 'switching', targetId: 'cn' } })), { phase: 'switching', error: '' });
+  assert.deepEqual(Core.relayOutcome(job, state({ job: { id: 'j1', status: 'done', targetId: 'cn' }, currentId: 'cn' })), { phase: 'done', error: '' });
+  assert.deepEqual(Core.relayOutcome(job, state({ job: { id: 'j1', status: 'failed', targetId: 'cn', error: '存进度或启动新队长没成功' } })), { phase: 'failed', error: '存进度或启动新队长没成功' });
+  assert.deepEqual(Core.relayOutcome(job, state({ job: { id: 'j1', status: 'failed', targetId: 'cn' } })), { phase: 'failed', error: '电脑没有完成切换。' });
+  // Someone else's later switch, or none at all: this one's record is gone.
+  assert.deepEqual(Core.relayOutcome(job, state({ job: null, currentId: 'cn' })), { phase: 'done', error: '' });
+  assert.deepEqual(Core.relayOutcome(job, state({ job: { id: 'other', status: 'done', targetId: 'us2' }, currentId: 'us2' })), { phase: 'failed', error: '电脑上的 AgentDeck 中途重启了，切换没有完成。' });
+  assert.deepEqual(Core.relayOutcome(job, state({ job: null })), { phase: 'failed', error: '电脑上的 AgentDeck 中途重启了，切换没有完成。' });
+  // Before the computer confirmed the request there is no id to compare: keep waiting.
+  assert.deepEqual(Core.relayOutcome({ id: '', targetId: 'cn' }, state({ job: null })), { phase: 'switching', error: '' });
+});
+
+test('a refused switch names the computer and says nothing changed; the computer\'s own reason is passed on', () => {
+  assert.equal(Core.relayRefusal({ status: 409, body: { started: false, error: '这个账号的额度已经用完' } }, 'Mac'), '这个账号的额度已经用完');
+  assert.equal(Core.relayRefusal({ status: 409, body: {} }, 'Mac'), 'Mac 没有接受这次切换（HTTP 409）。');
+  assert.equal(Core.relayRefusal({ status: 502, body: { offline: true } }, 'Windows'), 'Windows 离线，没有切换。');
+  assert.equal(Core.relayRefusal({ status: 404 }, 'Windows'), 'Windows 的 AgentDeck 版本太旧，还不能在手机上切换队长。');
+  assert.equal(Core.relayRefusal({ status: 401 }, 'Mac'), 'Mac 的登录已失效，没有切换。');
+  assert.equal(Core.relayRefusal({ status: 403 }, 'Mac'), 'Mac 的安全校验已过期，没有切换。刷新后再试。');
+  assert.equal(Core.relayRefusal({ failed: true }, 'Mac'), '手机连不上入口，切换的请求没有发出去。');
+  assert.match(Core.relayRefusal({ timedOut: true }, 'Mac'), /^没有收到 Mac 的确认/);
+  assert.equal(Core.elapsedText(65_400), '1:05');
+});
+
+test('both phone pages switch through each computer\'s own api/relay, and only the confirm step starts a switch', () => {
+  const read = (file) => fs.readFileSync(path.join(__dirname, '..', 'mobile-web', file), 'utf8');
+  const hub = read('hub/app.js'), single = read('app.js');
+  // The hub names the computer in every call; nothing switches without a machine.
+  assert.match(hub, /request\(m, 'api\/relay'\)/);
+  assert.match(hub, /post\(m, 'api\/relay', \{ seatId: seat\.id/);
+  assert.equal([...hub.matchAll(/api\/relay/g)].length, 2);
+  assert.match(single, /api\('\/api\/relay', \{ method: 'POST'/);
+  for (const source of [hub, single]) {
+    // One place starts a switch, and only the confirm step calls it.
+    assert.equal([...source.matchAll(/startSwitch\(/g)].length, 2);
+    assert.match(source, /action\('primary', '确认切换', 'confirm', \(\) => startSwitch\(/);
+  }
+  // New wording never calls an account a "席位"; the older quota chip label is the only place it stays.
+  assert.equal([...single.matchAll(/席位/g)].length, 1);
+  assert.equal([...hub.matchAll(/席位/g)].length, 0);
+});
+
+test('neither phone page declares the same function twice (a later one would silently replace the earlier)', () => {
+  for (const file of ['hub/app.js', 'app.js']) {
+    const source = fs.readFileSync(path.join(__dirname, '..', 'mobile-web', file), 'utf8');
+    const names = [...source.matchAll(/^ {2}(?:async )?function (\w+)\(/gm)].map((match) => match[1]);
+    assert.ok(names.length > 20, file);
+    assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [], file);
+  }
+});

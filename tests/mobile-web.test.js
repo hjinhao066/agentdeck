@@ -699,3 +699,70 @@ test('the upload directory is capped: day-old images make room, otherwise the up
   assert.equal((await f.upload(PNG)).status, 200);
   assert.equal((await f.stored()).length, 1);
 });
+
+// ---- moving the Captain to another account (api/relay) ----
+function relaySources(state = {}) {
+  const calls = [];
+  const data = { captainId: 'captain', currentId: 'us', switching: false, job: null, seats: [
+    { id: 'us', name: 'US', provider: 'Claude', account: 'user-us@example.com', current: true, selectable: false, reason: 'current', configDir: '/Users/someone/.claude-us', accountKey: 'us-key', credentialKey: 'us-cred',
+      cells: [{ key: '5h', remaining: 4, out: false, resetAt: 1_800_000_000_000 }, { key: '7d', remaining: 41, resetAt: 'soon' }, { key: '1d', remaining: 5 }] },
+    { id: 'cn', name: 'CN', provider: 'Claude', account: 'user-cn@example.com', current: false, selectable: true, reason: '', cells: [{ key: '5h', remaining: 72 }] },
+    { id: 'eu', name: 'EU', provider: 'Claude', account: '', selectable: true, reason: 'exhausted', recoveryAt: 1_800_000_000_000, cells: [] },
+    { id: 'new', name: 'N', provider: 'Other', selectable: true, reason: 'future-reason', cells: 'x' },
+    { id: 'bad id', name: 'x', selectable: true, reason: '' },
+    { id: 'chatgpt', name: 'ChatGPT', provider: 'Codex', account: 'gpt@example.com', selectable: true, reason: '', cells: [] }], ...state };
+  return { calls, data, options: { getRelay: () => data, switchRelay: (input) => { calls.push(input); if (data.refuse) throw new Error(data.refuse); return data.answer || { started: true, id: 'job1' }; } } };
+}
+
+test('api/relay lists the Captain\'s accounts with display values only, masked, and never offers a blocked or unknown one', async (t) => {
+  const relay = relaySources({ job: { id: 'job0', status: 'failed', fromId: 'us', fromName: 'US', targetId: 'cn', targetName: 'CN', startedAt: 5, finishedAt: 9, error: '存进度\n没成功', command: 'claude --secret' } });
+  const { status, auth } = await start(t, {}, relay.options);
+  for (const headers of [{}, { Authorization: 'Bearer wrong' }]) assert.equal((await request(status, '/api/relay', { headers })).status, 401);
+  const response = await request(status, '/api/relay', { headers: auth });
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(response.text, /user-us|user-cn|gpt@|\.claude|us-key|us-cred|configDir|accountKey|credentialKey|--secret|command/);
+  const body = JSON.parse(response.text);
+  assert.deepEqual([body.captainId, body.currentId, body.switching], ['captain', 'us', false]);
+  assert.deepEqual(body.seats.map((s) => [s.id, s.provider, s.account, s.current, s.selectable, s.reason]), [
+    ['us', 'Claude', 'u***@example.com', true, false, 'current'], ['cn', 'Claude', 'u***@example.com', false, true, ''],
+    // A selectable flag next to a blocking reason, or a reason this build does not know, is never offered.
+    ['eu', 'Claude', '', false, false, 'exhausted'], ['new', 'Claude', '', false, false, 'unknown'], ['chatgpt', 'Codex', 'g***@example.com', false, true, '']]);
+  assert.deepEqual(body.seats[0].cells, [{ key: '5h', remaining: 4, out: false, resetAt: 1_800_000_000_000 }, { key: '7d', remaining: 41, out: false, resetAt: null }]);
+  assert.equal(body.seats[2].recoveryAt, 1_800_000_000_000);
+  assert.deepEqual(body.job, { id: 'job0', status: 'failed', fromId: 'us', fromName: 'US', targetId: 'cn', targetName: 'CN', startedAt: 5, finishedAt: 9, error: '存进度 没成功' });
+  // A running job reads as switching even if the flag is missing.
+  relay.data.job = { id: 'job1', status: 'switching', targetId: 'cn', targetName: 'CN' };
+  assert.equal(JSON.parse((await request(status, '/api/relay', { headers: auth })).text).switching, true);
+  relay.data.job = { id: 'JOB', status: 'weird' };
+  assert.equal(JSON.parse((await request(status, '/api/relay', { headers: auth })).text).job, null);
+});
+
+test('POST api/relay needs the device, CSRF token and same origin, takes one seat id, and passes on a refusal without switching', async (t) => {
+  const relay = relaySources();
+  const { status, auth } = await start(t, {}, relay.options);
+  assert.equal((await post(status, '/api/relay', { seatId: 'cn' })).status, 401);
+  assert.equal((await post(status, '/api/relay', { seatId: 'cn' }, { Authorization: auth.Authorization })).status, 403);
+  assert.equal((await post(status, '/api/relay', { seatId: 'cn' }, { ...auth, Origin: 'https://evil.example' })).status, 403);
+  for (const body of [{}, { seatId: '' }, { seatId: 'bad id' }, { seatId: '../cn' }, { seatId: ['cn'] }, { seatId: 'cn', command: 'x' }, { seatId: 'cn', expectCurrent: 5 }, { seatId: 'cn', expectCurrent: 'a b' }, { seatId: 'x'.repeat(41) }])
+    assert.equal((await post(status, '/api/relay', body, auth)).status, 400, JSON.stringify(body));
+  assert.deepEqual(relay.calls, []);
+  const ok = await post(status, '/api/relay', { seatId: 'cn', expectCurrent: 'us' }, auth);
+  assert.deepEqual([ok.status, JSON.parse(ok.text)], [200, { started: true, id: 'job1' }]);
+  assert.deepEqual(relay.calls, [{ seatId: 'cn', expectCurrent: 'us' }]);
+  assert.deepEqual((await post(status, '/api/relay', { seatId: 'chatgpt' }, auth)).status, 200);
+  assert.deepEqual(relay.calls[1], { seatId: 'chatgpt' });
+  // The desktop said no: an answer in plain words, the Captain unchanged.
+  relay.data.refuse = '这个账号的额度已经用完\n';
+  const refused = await post(status, '/api/relay', { seatId: 'cn' }, auth);
+  assert.deepEqual([refused.status, JSON.parse(refused.text)], [409, { started: false, error: '这个账号的额度已经用完 ' }]);
+  relay.data.refuse = ''; relay.data.answer = { started: true, id: 'NOT VALID' };
+  assert.deepEqual(JSON.parse((await post(status, '/api/relay', { seatId: 'cn' }, auth)).text), { started: false, error: '没有切换。' });
+  relay.data.answer = { started: false };
+  assert.equal((await post(status, '/api/relay', { seatId: 'cn' }, auth)).status, 409);
+});
+
+test('without the relay sources there is no api/relay route', async (t) => {
+  const bare = await start(t);
+  assert.equal((await request(bare.status, '/api/relay', { headers: bare.auth })).status, 404);
+  assert.equal((await post(bare.status, '/api/relay', { seatId: 'cn' }, bare.auth)).status, 404);
+});

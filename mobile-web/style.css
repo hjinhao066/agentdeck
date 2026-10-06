@@ -350,10 +350,71 @@ textarea:disabled { opacity: .6; }
 .task-flag.failed { color: var(--red); }
 .lane-empty { font-size: 12px; color: var(--muted); padding: 14px 4px; }
 
+/* Switching the Captain's account: the worded action, a line over the conversation when the account runs low, and the sheet. */
+.text-button { flex: none; min-height: 44px; padding: 0 12px; border: 0; border-radius: 12px; background: transparent; color: var(--orange); font-size: 14px; font-weight: 650; white-space: nowrap; }
+.text-button:hover { background: var(--orange-soft); }
+.seat-alert { flex: none; display: flex; align-items: center; gap: 8px; padding: 0 4px 0 14px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--quota-out-fill) 10%, var(--bg)); }
+.seat-alert-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.45; color: var(--quota-out); font-weight: 550; overflow-wrap: anywhere; }
+.sheet { position: fixed; inset: auto 0 0 0; width: 100%; max-width: 760px; max-height: 88dvh; margin: 0 auto; padding: 0; border: 0; border-radius: 22px 22px 0 0; background: var(--surface); color: var(--text); box-shadow: var(--shadow); overflow: hidden; }
+.sheet::backdrop { background: var(--backdrop); }
+.sheet[open] { display: flex; animation: sheet-up .22s ease-out; }
+.sheet-body { flex: 1; min-width: 0; max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain; padding: 6px 16px calc(18px + env(safe-area-inset-bottom)); }
+.sheet-head { display: flex; align-items: center; gap: 10px; min-height: 60px; margin-right: -10px; }
+.sheet-head h2 { flex: 1; min-width: 0; font-size: 18px; font-weight: 650; letter-spacing: -.3px; line-height: 1.35; overflow-wrap: anywhere; }
+.sheet-head h2:focus-visible { outline: 0; }
+.sheet-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; background: var(--orange-soft); color: var(--crown); flex: none; }
+.sheet-mark svg { width: 19px; height: 19px; }
+.sheet-lead { margin-top: 4px; font-size: 14.5px; line-height: 1.7; color: var(--secondary); overflow-wrap: anywhere; }
+.sheet-note { margin-top: 10px; font-size: 12.5px; line-height: 1.65; color: var(--muted); overflow-wrap: anywhere; }
+.sheet-note.warn { padding: 10px 12px; border-radius: 12px; background: var(--orange-soft); color: var(--tab-active); font-size: 13px; }
+.sheet-elapsed { margin-top: 10px; font: 13px/1.5 var(--mono); color: var(--secondary); font-variant-numeric: tabular-nums; }
+.seat-list { display: grid; gap: 8px; margin-top: 14px; }
+.seat-option { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 64px; padding: 10px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); text-align: left; }
+.seat-option:not([aria-disabled="true"]):hover, .seat-option:not([aria-disabled="true"]):active { border-color: var(--orange); background: var(--orange-soft); }
+.seat-option .quota-icon svg { width: 20px; height: 20px; }
+.seat-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.seat-top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.seat-name { font-size: 16px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat-tag { flex: none; display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 99px; background: var(--orange-soft); color: var(--tab-active); font-size: 11px; font-weight: 600; }
+.seat-tag svg { width: 11px; height: 11px; color: var(--crown); }
+.seat-account { font: 11px/1.5 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seat-reason { font-size: 12.5px; line-height: 1.5; color: var(--secondary); overflow-wrap: anywhere; }
+.seat-reason[data-blocked="true"] { color: var(--red); font-weight: 550; }
+.seat-values { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 2px; font-variant-numeric: tabular-nums; }
+.seat-cell { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; line-height: 1.4; }
+.seat-cell-key { font-size: 11px; color: var(--muted); }
+.seat-cell-value { min-width: 34px; text-align: right; font-weight: 650; }
+.seat-cell[data-level="low"] .seat-cell-value { color: var(--quota-low); }
+.seat-cell[data-level="danger"] .seat-cell-value, .seat-cell[data-level="out"] .seat-cell-value { color: var(--quota-out); }
+/* The account in use, and accounts that cannot be picked: greyed, but the reason stays readable. */
+.seat-option[data-current="true"] { border-color: var(--orange); background: var(--raised); cursor: default; }
+.seat-option[aria-disabled="true"] { cursor: default; }
+.seat-option[aria-disabled="true"]:not([data-current="true"]) { border-style: dashed; background: var(--raised); }
+.seat-option[aria-disabled="true"]:not([data-current="true"]) :is(.quota-icon, .seat-name, .seat-account, .seat-values) { opacity: .45; }
+.sheet-route { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 6px 0 12px; }
+.sheet-route-seat { min-width: 0; padding: 9px 14px; border-radius: 12px; background: var(--raised); border: 1px solid var(--line); font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-route-seat.target { background: var(--orange-soft); border-color: var(--orange); color: var(--tab-active); }
+.sheet-route-arrow { flex: none; color: var(--muted); }
+.sheet-route-arrow svg { width: 18px; height: 18px; }
+.sheet-figure { display: grid; place-items: center; width: 56px; height: 56px; margin: 4px auto 12px; border-radius: 50%; }
+.sheet-figure svg { width: 30px; height: 30px; }
+.sheet-figure.tone-ok { color: var(--green); background: color-mix(in srgb, var(--green) 14%, transparent); }
+.sheet-figure.tone-bad { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+.sheet-figure.tone-accent { color: var(--orange); background: var(--orange-soft); }
+.spinner { width: 26px; height: 26px; border-radius: 50%; border: 3px solid color-mix(in srgb, currentColor 25%, transparent); border-top-color: currentColor; animation: rotate .9s linear infinite; }
+.sheet[data-phase="switching"] :is(.sheet-lead, .sheet-elapsed), .sheet[data-phase="done"] .sheet-lead, .sheet[data-phase="failed"] .sheet-lead { text-align: center; }
+.sheet[data-phase="failed"] .sheet-lead { color: var(--red); font-weight: 550; }
+.sheet[data-phase="failed"] .sheet-note, .sheet[data-phase="switching"] .sheet-note:not(.warn) { text-align: center; }
+.sheet-actions { display: grid; gap: 8px; margin-top: 18px; }
+.sheet .primary, .sheet .secondary { width: 100%; min-height: 48px; border-radius: 12px; font-size: 15px; font-weight: 650; }
+.sheet .primary { border: 0; background: var(--orange); color: var(--on-orange); }
+.sheet .secondary { border: 1px solid var(--line); background: transparent; color: var(--text); font-weight: 600; }
+.sheet .secondary:hover { background: var(--soft); }
+@keyframes sheet-up { from { transform: translateY(24px); opacity: .6; } }
 @keyframes rotate { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: .35; } }
 @keyframes blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .refreshing svg, .dot[data-status="working"], .typing i { animation: none; } .switch, .switch::after, .upload-bar, .drawer, .scrim { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .refreshing svg, .dot[data-status="working"], .typing i, .sheet[open] { animation: none; } .spinner { animation-duration: 2.4s; } .switch, .switch::after, .upload-bar, .drawer, .scrim { transition: none; } }
 
 /* Folded long message. */
 .user-message { display: flex; flex-direction: column; align-items: flex-start; }
