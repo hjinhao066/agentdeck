@@ -564,7 +564,9 @@
       const table = b.lines.every((l) => BOX_ROW.test(l)) ? boxRows(b.lines) : recordRows(b.lines);
       if (table) return table.join('\n');
       const aboveList = b.lines.length > 1 && LIST_ITEM.test(b.lines[1]);
-      const title = (b.lines.length === 1 ? at < blocks.length - 1 : aboveList) && titleLike(b.lines[0], aboveList, at === 0);
+      // right above a sentence too: the terminal only breaks a line that is full, so a short first line was meant as one
+      const aboveText = b.lines.length > 1 && !aboveList && (NOT_TITLE_END.test(b.lines[1].trim()) || [...b.lines[1].trim()].length > 32);
+      const title = (b.lines.length === 1 ? at < blocks.length - 1 : aboveList || aboveText) && titleLike(b.lines[0], aboveList, at === 0);
       return (title ? ['### ' + b.lines[0].trim(), ...b.lines.slice(1)] : b.lines).join('\n');
     }).join('\n\n');
   }

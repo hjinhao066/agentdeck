@@ -1185,6 +1185,10 @@ body.linking-board .board-port.out::before {
 .reply.md th, .reply.md td { min-width: 4.4em; padding: 8px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--hairline); overflow-wrap: break-word; }
 .reply.md th + th, .reply.md td + td { border-left: 1px solid var(--hairline); }
 .reply.md th { background: var(--pill-bg); color: var(--text-2); font-weight: 600; white-space: nowrap; }
+/* a short cell stays on one line and a long one keeps a readable width: in a
+   narrow column the table then scrolls in its frame instead of squeezing the text into a sliver */
+.reply.md td.short { white-space: nowrap; }
+.reply.md td:not(.short) { min-width: 11em; }
 .reply.md tbody tr:last-child td { border-bottom: none; }
 .reply.md hr { border: none; border-top: 1px solid var(--hairline); margin: 1.2em 0; }
 .reply.quiet { color: var(--muted); font-size: 12.5px; }

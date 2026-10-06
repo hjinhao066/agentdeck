@@ -103,6 +103,10 @@ test('new cards and receipts preserve the reading position in every chat includi
       for (let i = 0; i < 30; i++) ChatUI.addCard(id, { id: id + '-card-' + i, title: 'Task ' + i, colId: id, status: 'working' });
     }, id);
     const scroll = col(id).locator('.chat-scroll');
+    // the cards arrive folded behind one line; opened, they are the tall content this test scrolls
+    await expect(col(id).locator('.task-run')).toHaveText(/30 条/);
+    await col(id).locator('.task-run').click();
+    await scroll.evaluate((s) => { s.scrollTop = s.scrollHeight; });
     await expect.poll(() => scroll.evaluate((s) => s.scrollHeight - s.scrollTop - s.clientHeight)).toBeLessThan(3);
     await scroll.evaluate((s) => { s.scrollTop = 100; });
     await expect.poll(() => scroll.evaluate((s) => s.scrollTop)).toBe(100);

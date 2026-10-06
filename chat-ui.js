@@ -366,6 +366,8 @@
       box.innerHTML = C.renderMarkdown(isAgentColumn(columnById(v.id)) ? C.tidyReply(text) : text, { breaks: true });
       linkifyTree(box, v.id);
       decorateCode(box);
+      // a short cell (a version, a time, a state) stays on one line; the long ones take the wrapping
+      box.querySelectorAll('.md-table td').forEach((td) => td.classList.toggle('short', C.visibleWidth(td.textContent) <= 16));
     } else if (!turn.interrupted) {
       box.classList.add('quiet');
       box.textContent = '这一轮没有文字回复，过程在终端里。';

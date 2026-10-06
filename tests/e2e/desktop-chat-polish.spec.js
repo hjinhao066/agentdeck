@@ -36,8 +36,9 @@ test.beforeAll(async () => {
   fs.writeFileSync(path.join(profile, 'chats', SHELL + '.json'), JSON.stringify({ v: 1, id: SHELL, turns: [{ ...residue, id: 's1', user: 'ls', reply: '❯ ls\nRan 2 shell commands' }] }));
   const column = (id, title, more) => ({ id, title, displayTitle: title, manualTitle: true, cwd: profile, width: 760, role: 'manual', view: 'chat', ...more });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
-    theme: 'dark', fitWindow: true, fitCols: 1, globalViewMode: 'chat', perpetualCaptain: { enabled: false }, resumeOnRestart: false,
-    columns: [column(ID, '队长', { cmd: FAKE + ' --captain-statusline', isMain: true }), column(WORKER, '队员', { cmd: FAKE }), column(SHELL, '终端', { cmd: '' })],
+    theme: 'dark', fitWindow: true, fitCols: 2, globalViewMode: 'chat', perpetualCaptain: { enabled: false }, resumeOnRestart: false,
+    // the other two are 队长's background sessions: off the deck, so 队长's column has the whole width as it does in use
+    columns: [column(ID, '队长', { cmd: FAKE + ' --captain-statusline', isMain: true }), column(WORKER, '队员', { cmd: FAKE, captainCrew: true }), column(SHELL, '终端', { cmd: '', captainCrew: true })],
     mainSession: { colId: ID, cmd: FAKE + ' --captain-statusline', gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: [] },
   }));
   const env = { ...process.env, ZDOTDIR: profile };

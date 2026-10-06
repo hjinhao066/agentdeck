@@ -539,6 +539,9 @@ test('what is not a title, a table or a record is left as the agent wrote it', (
     '版本: 1.2.0\n\n只有这一条。', 'npm test\n\n- a\n- b', '```\n没做成的\n\n  缩进的代码\n```\n\n后面的话。', '名称: a: b\n名称: c']) assert.equal(C.tidyReply(text), text);
   assert.equal(C.tidyReply('Summary\n- one\n- two'), '### Summary\n- one\n- two');
   assert.equal(C.tidyReply('第一段。\n\n小结\n\n第二段。'), '第一段。\n\n### 小结\n\n第二段。');
+  // a title right above its paragraph; a few short lines in a row are not titles
+  assert.equal(C.tidyReply('先说结论。\n\n监听优化（Codex Sol）\n你理解得对：队员干完自动通知我，这条本来就有。\n- 改成由程序盯队员'), '先说结论。\n\n### 监听优化（Codex Sol）\n你理解得对：队员干完自动通知我，这条本来就有。\n- 改成由程序盯队员');
+  assert.equal(C.tidyReply('前言。\n\n张三\n李四\n王五'), '前言。\n\n张三\n李四\n王五');
   assert.equal(C.tidyReply(null), '');
   // records with different keys, or only one of them, are not a table
   assert.equal(C.tidyReply('版本: 1\nMac: 好\n版本: 2\n手机: 好'), '版本: 1\nMac: 好\n版本: 2\n手机: 好');

@@ -610,6 +610,15 @@ text; terminal mouse reports are excluded. Each prompt and final reply has a
 visible copy button that copies its plain text. Older chats containing repeated
 mouse-report fragments are cleaned when loaded, preserving adjacent text.
 
+The chat reads in a centred column, each reply under the name of who is speaking
+(队长 with its crest). An agent's reply shows its words only: the echo of a
+prompt, a file-diff tail, tool summaries and the TUI's own hints are taken out
+when it is shown, by the same rules as the phone page, and its titles, nested
+lists and tables are set as such; copy and share give the same clean text. The
+saved reply is unchanged, and a plain shell's output is shown as it is. The
+cards 队长 leaves between two messages (work handed out, receipts back) sit
+folded behind one line with their count and state; click it to open them.
+
 - A new blank session (no launch command, nothing said yet) offers Claude,
   Antigravity, Grok, Cursor CLI and Codex (ChatGPT) buttons. A click types that agent's launch
   command into the session's own shell; the terminal and its history stay. Only once
