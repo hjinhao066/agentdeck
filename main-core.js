@@ -821,8 +821,20 @@
     const lines = String(screen || '').split('\n').slice(-20);
     const prompt = lines.findLastIndex((line) => /^\s*[│┃]?\s*❯(?:\s|$)/.test(line));
     if (prompt < 0 || /^\s*[│┃]?\s*❯\s*\d+\./.test(lines[prompt])) return false;
-    return lines.slice(prompt + 1).some((line) =>
-      /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line));
+    const footer = lines.slice(prompt + 1);
+    if (footer.some((line) => /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i.test(line))) return true;
+    // A narrow column drops the tail of the footer ("· 1 monitor ·", "still running"
+    // cut off), so a bare "N monitors" segment of the footer counts as well.
+    return footer.some((line) => line.split(/[·,]/).some((part) =>
+      /^[\s│┃]*[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)(?:\s+still\s+running)?[\s.…│┃]*$/i.test(part)));
+  }
+  // A quota failure receipt is provisional: Claude and Codex continue by themselves
+  // once the limit resets. True while the terminal is alive, no longer shows the
+  // quota wait, and is visibly working (a background command counts).
+  function quotaResumed(entry, cmd) {
+    if (!entry || !entry.alive || entry.state === 'quota' || entry.state === 'input') return false;
+    const activity = terminalActivity(entry.lastScreen, cmd);
+    return activity !== 'quota' && (entry.state === 'working' || activity === 'working' || claudeBackgroundTasks(entry.lastScreen, cmd));
   }
   // agy, Cursor and Codex keep the input box while a background command is
   // still going. The live signal sits under the prompt: a truncated status
@@ -984,5 +996,6 @@
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
+    quotaResumed,
   };
 });

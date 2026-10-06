@@ -414,6 +414,28 @@ test('quota generates a failure receipt; queued work still waits for the quota s
   await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
 });
 
+test('a session that carries on by itself after its quota stop voids the 额度用尽 receipt; a real quota stop stays failed', async () => {
+  await run(mainId, `clear; node "${CLI}" new --title "额度后续跑" --task "wait for quota probe" --command "${FAKE.replace(/"/g, '')} --interruptible"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '额度后续跑')?.id)).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '额度后续跑').id);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('quota');
+  const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`, { hasText: '额度后续跑' }).last();
+  await expect(card.locator('.task-status')).toHaveText('没做成');
+  // still on the quota wait a while later: the failure stands
+  await page.waitForTimeout(20000);
+  expect(await page.evaluate((i) => config.mainSession.tasks.findLast((t) => t.colId === i).status, child)).toBe('failed');
+  // the agent resumes on its own and shows live work
+  await page.evaluate((i) => window.deck.ptyInput(i, 'keep working now\r'), child);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.state, child)).toBe('working');
+  await expect.poll(() => page.evaluate((i) => config.mainSession.tasks.findLast((t) => t.colId === i).status, child), { timeout: 30000 }).toBe('working');
+  expect(await page.evaluate((i) => columns.find((c) => c.id === i).lastReceipt, child)).toBeFalsy();
+  await run(mainId, `clear; node "${CLI}" ledger`);
+  await expect.poll(() => screen(mainId)).toContain('额度后续跑');
+  expect(await screen(mainId)).not.toContain('额度用尽：');
+  await run(mainId, `clear; node "${CLI}" archive --id ${child}`);
+  await expect.poll(() => page.evaluate((i) => columns.some((c) => c.id === i), child)).toBe(false);
+});
+
 test('a dispatched paste waits for the TUI before Enter and reaches the worker exactly once', async () => {
   await run(mainId, `clear; node "${CLI}" new --title "慢粘贴" --task "delayed paste task" --command "${FAKE.replace(/"/g, '')} --slow-paste"`);
   await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '慢粘贴')?.id), { timeout: 15000 }).toBeTruthy();
