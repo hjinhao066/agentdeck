@@ -22,5 +22,30 @@
     if (!text || CREDENTIAL.test(text)) throw new Error('报告摘要为空或疑似含凭据，未写入回执；请本地检查报告。');
     return '结论摘要（报告摘录）：' + text.slice(0, 900);
   }
-  return { validatePublicTask, summary };
+  // ---- what the dispatch picker in 队长's composer shows ----
+  const MODES = Object.freeze([
+    Object.freeze({ id: 'chat', label: '普通', detail: '6 Pro，最多等 30 分钟' }),
+    Object.freeze({ id: 'deep-research', label: 'Deep Research', detail: '深度研究，最多等 60 分钟' }),
+  ]);
+  const LABEL = '网页版 ChatGPT';
+  const PUBLIC_NOTICE = '仅用于公开调研：任务内容会发到 ChatGPT 网页，不要包含密钥、隐私或内部信息。';
+  const NO_SEAT_NOTE = '走本机已登录的 ChatGPT 网页，不占 Claude 席位，也不能改启动命令。';
+  const modeLabel = (mode) => (MODES.find((m) => m.id === mode) || MODES[0]).label;
+  // The card title is the question's first line, cut to fit a card.
+  function titleFor(text) {
+    const line = String(text || '').split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).find(Boolean) || '';
+    return line.length > 40 ? line.slice(0, 39) + '…' : line;
+  }
+  // Web requests run one at a time on this machine: how many are already out.
+  function busyCount(tasks, columns) {
+    const web = new Set((columns || []).filter((c) => c && c.executor === 'chatgpt-web').map((c) => c.id));
+    return (tasks || []).filter((t) => t && web.has(t.colId) && t.status === 'working').length;
+  }
+  // A web task is 'working' from the moment it is handed to the executor; the
+  // executor's phase says whether the page has actually been opened for it.
+  const isQueued = (task) => !!task && task.status === 'working' && task.webPhase === 'queued';
+  function dispatchResult(busy) {
+    return busy > 0 ? `排队中：前面还有 ${busy} 件网页调研，轮到它才会发到 ChatGPT 网页。` : `已派给${LABEL}。`;
+  }
+  return { validatePublicTask, summary, MODES, LABEL, PUBLIC_NOTICE, NO_SEAT_NOTE, modeLabel, titleFor, busyCount, isQueued, dispatchResult };
 });

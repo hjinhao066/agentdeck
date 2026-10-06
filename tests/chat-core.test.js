@@ -583,3 +583,11 @@ test('a table the TUI drew with box lines is saved as a Markdown table, wrapped 
   assert.equal(C.extractReply(['表：', '┌─────┬─────┐', '│ a   │ b   │'], 'x', 80), '表：\n│ a   │ b   │');
   assert.equal(C.extractReply(['框：', '┌───────────┐', '│ 不是表格  │', '└───────────┘'], 'x', 80), '框：\n│ 不是表格  │');
 });
+
+test('a web task card keeps its queued/running phase and drops anything else', () => {
+  const card = (webPhase) => C.normalizeChat({ turns: [{ user: 'q', kind: 'task', task: { title: 'q', status: 'working', webPhase } }] }, 'x').turns[0].task;
+  assert.equal(card('queued').webPhase, 'queued');
+  assert.equal(card('running').webPhase, 'running');
+  assert.equal('webPhase' in card('later'), false);
+  assert.equal('webPhase' in card(undefined), false);
+});

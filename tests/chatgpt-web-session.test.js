@@ -189,3 +189,53 @@ test('tell --replace cancels native queued supplements without interrupting the 
   assert.equal(w.runs[1].task, 'What makes sunsets red?');
   assert.ok(w.runs.every((run) => run.task !== old.instruction));
 });
+
+test('picker helpers: title from the first line, busy count, queued label and result wording', () => {
+  assert.deepEqual(Web.MODES.map((m) => m.id), ['chat', 'deep-research']);
+  assert.equal(Web.modeLabel('deep-research'), 'Deep Research'); assert.equal(Web.modeLabel('chat'), '普通');
+  assert.equal(Web.titleFor('\n  Why   is the sky blue?  \nsecond line'), 'Why is the sky blue?');
+  assert.equal(Web.titleFor('x'.repeat(60)).length, 40); assert.equal(Web.titleFor('  \n '), '');
+  const columns = [{ id: 'w1', executor: 'chatgpt-web' }, { id: 'w2', executor: 'chatgpt-web' }, { id: 'c', cmd: 'claude' }];
+  const tasks = [{ colId: 'w1', status: 'working' }, { colId: 'w2', status: 'done' }, { colId: 'c', status: 'working' }];
+  assert.equal(Web.busyCount(tasks, columns), 1); assert.equal(Web.busyCount(undefined, undefined), 0);
+  assert.equal(Web.isQueued({ status: 'working', webPhase: 'queued' }), true);
+  assert.equal(Web.isQueued({ status: 'working', webPhase: 'running' }), false);
+  assert.equal(Web.isQueued({ status: 'done', webPhase: 'queued' }), false);
+  assert.match(Web.dispatchResult(0), /已派给网页版 ChatGPT/); assert.match(Web.dispatchResult(2), /排队中：前面还有 2 件/);
+  assert.match(Web.PUBLIC_NOTICE, /公开调研/); assert.match(Web.PUBLIC_NOTICE, /密钥、隐私或内部信息/);
+  assert.match(Web.NO_SEAT_NOTE, /席位/); assert.match(Web.NO_SEAT_NOTE, /启动命令/);
+});
+
+test('dispatchWeb opens a web session like new --agent chatgpt-web and says so only when nothing is ahead', async () => {
+  const w = world();
+  const first = await w.api.dispatchWeb('Why is the sky blue?\nUse public sources.', 'deep-research'); await tick();
+  const col = w.columns[1], task = w.task();
+  assert.equal(first.queued, false); assert.equal(first.colId, col.id); assert.match(first.result, /已派给网页版 ChatGPT/);
+  assert.equal(col.executor, 'chatgpt-web'); assert.equal(col.cmd, 'chatgpt-web'); assert.equal(col.webMode, 'deep-research');
+  assert.equal(col.claudeSeatId, undefined); assert.equal(task.title, 'Why is the sky blue?');
+  assert.deepEqual(JSON.parse(JSON.stringify(w.runs)), [{ id: col.id, taskId: task.id, task: 'Why is the sky blue?\nUse public sources.', mode: 'deep-research' }]);
+  const second = await w.api.dispatchWeb('Why is the sea salty?', 'chat'); await tick();
+  assert.equal(second.queued, true); assert.match(second.result, /排队中：前面还有 1 件/);
+  assert.equal(w.shellInputs.length, 0);
+});
+
+test('dispatchWeb refuses credentials, an empty question and an unknown mode before anything is saved', async () => {
+  const w = world();
+  await assert.rejects(w.api.dispatchWeb('password = hunter2hunter2', 'chat'), /疑似含凭据/);
+  await assert.rejects(w.api.dispatchWeb('   \n', 'chat'), /先写下要调研的问题/);
+  await assert.rejects(w.api.dispatchWeb('Why is the sky blue?', 'agent'), /网页模式/);
+  assert.equal(w.columns.length, 1); assert.equal(w.tasks().length, 0); assert.equal(w.runs.length, 0);
+});
+
+test('a web task is queued until the executor reports the page is open, and the terminal entry follows', async () => {
+  const w = world(); await w.create(); await tick();
+  const col = w.columns[1], task = w.task(), entry = w.terms.get(col.id);
+  assert.equal(task.status, 'working'); assert.equal(task.webPhase, 'queued'); assert.equal(entry.webQueued, true);
+  assert.equal(Web.isQueued(task), true); assert.match(task.progress, /排队中/);
+  await w.api.submit({ action: 'progress', taskId: task.id, message: '排队等待 ChatGPT 网页：本机一次只做一个请求。', phase: 'queued' }, col);
+  assert.equal(task.webPhase, 'queued'); assert.equal(entry.webQueued, true);
+  await w.api.submit({ action: 'progress', taskId: task.id, message: '等待 ChatGPT 网页：6 Pro', phase: 'running' }, col);
+  assert.equal(task.webPhase, 'running'); assert.equal(entry.webQueued, false); assert.equal(Web.isQueued(task), false);
+  await w.api.submit({ action: 'complete', taskId: task.id, result: 'Air scatters blue light.' }, col);
+  assert.equal(task.status, 'done'); assert.equal(Web.isQueued(task), false);
+});

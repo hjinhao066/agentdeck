@@ -538,6 +538,7 @@ function terminalIdle(col, entry) {
   const screen = MainCore.codexStatusScreen(entry.lastScreen, col.cmd);
   return !WORKING_RE.test(screen) && AGENT_IDLE_RE.test(screen);
 }
+const WEB_QUEUED_TIP = '排队中：前面还有网页调研在跑';
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
 function classify(text, entry, cmd, isCaptain = false) {
   if (cmd === 'chatgpt-web') return entry?.webExecutorState || 'plain';
@@ -565,8 +566,9 @@ function classify(text, entry, cmd, isCaptain = false) {
 }
 function setDot(entry, state) {
   if (!entry || !entry.dot) return;
-  entry.dot.className = 'dot ' + state;
-  entry.dot.title = DOT_TIP[state] || '';
+  const queued = state === 'working' && entry.webQueued;   // a web request waiting its turn
+  entry.dot.className = 'dot ' + state + (queued ? ' web-queued' : '');
+  entry.dot.title = queued ? WEB_QUEUED_TIP : DOT_TIP[state] || '';
 }
 
 // ---- Theme ----
@@ -2866,8 +2868,9 @@ function syncNav() {
       if (id === focusedId) nav.folderHead.classList.add('has-focus');
       return;
     }
-    nav.dot.className = 'cn-dot ' + state;
-    nav.dot.title = DOT_TIP[state] || '';
+    const queued = state === 'working' && entry.webQueued;
+    nav.dot.className = 'cn-dot ' + state + (queued ? ' web-queued' : '');
+    nav.dot.title = queued ? WEB_QUEUED_TIP : DOT_TIP[state] || '';
     nav.el.classList.toggle('active', id === focusedId);
     nav.el.classList.toggle('live', state === 'working' || state === 'input');
   });
@@ -2953,6 +2956,7 @@ const titleInput = document.getElementById('titleInput');
 const cwdInput = document.getElementById('cwdInput');
 const cmdInput = document.getElementById('cmdInput');
 const dlgTitle = document.getElementById('dlgTitle');
+const cmdLockedHint = document.getElementById('cmdLockedHint');
 let editIndex = null;
 
 function openDialog(idx) {
@@ -2961,6 +2965,12 @@ function openDialog(idx) {
   titleInput.value = editIndex === null ? '' : columnLabel(columns[editIndex]);
   cwdInput.value = editIndex === null ? '' : (columns[editIndex].cwd || '');
   cmdInput.value = editIndex === null ? '' : (columns[editIndex].cmd || '');
+  // A 网页版 ChatGPT session has no launch command to change.
+  const web = editIndex !== null && columns[editIndex].executor === 'chatgpt-web';
+  cmdInput.disabled = web;
+  dlg.querySelectorAll('.preset').forEach((b) => { b.disabled = web; });
+  cmdLockedHint.hidden = !web;
+  cmdLockedHint.textContent = web ? ChatGPTWebCore.LABEL + '：' + ChatGPTWebCore.NO_SEAT_NOTE : '';
   dlg.showModal();
   setTimeout(() => titleInput.focus(), 50);
 }
