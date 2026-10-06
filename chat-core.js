@@ -486,12 +486,12 @@
   // file diff left at its top; that row gets its indent back so the shared
   // rules see the diff whole.
   const DIFF_ROW = /^ {2,}\d{1,6}(?: [+-]| {2}\S|\s*$)/;
-  function shownReply(reply, said, clean) {
+  function shownReply(reply, said, clean, prompt) {
     let text = String(reply == null ? '' : reply).replace(/\r\n?/g, '\n');
     if (typeof clean !== 'function') return text;
     const head = text.split(/\n[ \t]*\n/)[0].split('\n');
     if (head.length > 1 && /^\S/.test(head[0]) && head.slice(1).some((l) => DIFF_ROW.test(l))) text = '    ' + text;
-    return clean(text, said || '');
+    return clean(text, said || '', prompt || '');
   }
 
   // The shown reply as Markdown for the page. The TUI already drew the agent's

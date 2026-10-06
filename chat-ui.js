@@ -80,7 +80,7 @@
     const said = saidIn(turns || chatFor(v.id).turns);
     const hit = shownOf.get(turn);
     if (hit && hit.reply === reply && hit.said === said) return hit.text;
-    const text = C.shownReply(reply, said, window.HubCore && window.HubCore.cleanReply);
+    const text = C.shownReply(reply, said, window.HubCore && window.HubCore.cleanReply, turn.user);
     shownOf.set(turn, { reply, said, text });
     return text;
   }

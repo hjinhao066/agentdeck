@@ -471,7 +471,7 @@ const Hub = require('../mobile-web/hub/core.js');
 const captain = require('./fixtures/captain-chat.js');
 const captainTurns = captain.turns(1_800_000_000_000);
 const captainSaid = captainTurns.map((t) => t.user || '').join('\n');
-const shown = (reply) => C.shownReply(reply, captainSaid, Hub.cleanReply);
+const shown = (reply, prompt) => C.shownReply(reply, captainSaid, Hub.cleanReply, prompt);
 const RESIDUE = /^[❯›] |\(click\) ↓|^Ran \d+ shell command|^Background command|How is Claude doing|^1: Bad|^ {2,}\d{1,6}(?: [+-]| {2}\S|\s*$)|^\s*\+|用户未反对|卡在哪|交付状态/m;
 
 test('the desktop page loads the phone hub rules and cleans replies with them, not with a second set', () => {
@@ -480,11 +480,11 @@ test('the desktop page loads the phone hub rules and cleans replies with them, n
   const hub = html.indexOf('<script src="mobile-web/hub/core.js">');
   assert.ok(hub > html.indexOf('<script src="chat-core.js">') && hub < html.indexOf('<script src="chat-ui.js">'));
   const ui = fs.readFileSync(path.join(__dirname, '..', 'chat-ui.js'), 'utf8');
-  assert.match(ui, /C\.shownReply\(reply, said, window\.HubCore && window\.HubCore\.cleanReply\)/);
+  assert.match(ui, /C\.shownReply\(reply, said, window\.HubCore && window\.HubCore\.cleanReply, turn\.user\)/);
   // the rules themselves are called, with what the user wrote
   const calls = [];
-  assert.equal(C.shownReply('a\r\nb', 'said', (text, said) => { calls.push([text, said]); return 'cleaned'; }), 'cleaned');
-  assert.deepEqual(calls, [['a\nb', 'said']]);
+  assert.equal(C.shownReply('a\r\nb', 'said', (text, said, prompt) => { calls.push([text, said, prompt]); return 'cleaned'; }, 'asked'), 'cleaned');
+  assert.deepEqual(calls, [['a\nb', 'said', 'asked']]);
   // without them (a column that is not cleaned) the reply is shown as saved
   assert.equal(C.shownReply('❯ ls\nfile', 'ls'), '❯ ls\nfile');
   assert.equal(C.shownReply(undefined, '', Hub.cleanReply), '');
@@ -501,6 +501,18 @@ test('real 队长 replies lose their terminal residue and keep every sentence', 
   assert.equal(shown('上），用户未反对\n    25\n    26 +- 一行改动\n\n收到。'), '收到。');
   // an ordinary first paragraph is never mistaken for one
   for (const text of ['第一行\n  3 件事都做完了\n\n第二段', '1. 第一步\n2. 第二步\n    - 缩进的子项', '结论：\n    npm test']) assert.equal(shown(text), text);
+});
+
+test('a reply read from the middle of your own echoed message opens with 队长\'s words, not yours', () => {
+  const late = captainTurns.find((t) => t.id === 'f-late');
+  // as saved: the end of the message you sent while 队长 was busy, then the reply
+  assert.ok(late.reply.startsWith(captain.LATE_TAIL) && late.user.endsWith(captain.LATE_TAIL));
+  const text = shown(late.reply, late.user);
+  assert.match(text, /^先更正一处\n\n之前我说那张卡/);
+  assert.ok(!text.includes('印象里是有的'));
+  assert.match(text, /等预习材料的格式定下来就派。$/);
+  // without the turn's own message nothing is taken for an echo
+  assert.ok(shown(late.reply).startsWith(captain.LATE_TAIL));
 });
 
 test('a reply drawn as plain rows gets its titles, lists and tables back', () => {
