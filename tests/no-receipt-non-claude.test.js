@@ -222,3 +222,113 @@ test('Claude background work still blocks the no-receipt clock', async () => {
   await flush();
   assert.equal(boardEvents.some((e) => e.input.type === 'fallback'), false);
 });
+
+// 1.2.4 reported 已结束，未提交回执 for a Codex worker that was polling a one-hour
+// job with `sleep 300`: its status row read "Waiting for background terminal"
+// instead of "Working", which nothing recognised. Header text comes from the
+// Codex 0.160 binary and the session's own footer ("1 background terminal
+// running · /ps to view · /stop to close"); the row layout is Codex's standard
+// status indicator, not a captured frame.
+const CODEX = B.commandForAgent('codex');
+const CODEX_PROMPT = '› Ask Codex to do anything\n? for shortcuts';
+const CODEX_WAITING = [
+  '◦ Waiting for background terminal (5m 12s • esc to interrupt) · sleep 300',
+  '◦ Waiting for background terminal · sleep 300',
+  '• Waiting for background terminal',
+  '◦ Waiting for agents (2m 3s • esc to interrupt)',
+  '◦ Compacting context (41s • esc to interrupt)',
+];
+
+test('Codex status rows other than "Working" count as still working', () => {
+  for (const row of CODEX_WAITING) {
+    const screen = `• Ran sleep 300\n  └ (no output)\n\n${row}\n\n${CODEX_PROMPT}`;
+    assert.equal(M.codexLiveStatus(screen, CODEX), true, row);
+    assert.equal(M.terminalActivity(screen, CODEX), 'working', row);
+    // An older turn's divider keeps the row below it, a finished turn hides one above it.
+    assert.equal(M.terminalActivity(`─ Worked for 3m 1s • 12:52 ─\n${row}\n${CODEX_PROMPT}`, CODEX), 'working', row);
+    assert.equal(M.terminalActivity(`${row}\n─ Worked for 3m 1s • 12:52 ─\n${CODEX_PROMPT}`, CODEX), '', row);
+  }
+  // Wrapped far above a tall composer: the whole screen is read, not its last 20 rows.
+  const tall = `${CODEX_WAITING[0]}\n${Array(30).fill('x').join('\n')}\n${CODEX_PROMPT}`;
+  assert.equal(M.terminalActivity(tall, CODEX), 'working');
+});
+
+test('Codex prose, history rows and other agents never look like a waiting status row', () => {
+  for (const text of [
+    '• Waiting for background terminal to finish, then I will report.',
+    'Waiting for background terminal sessions is slow',
+    '• Waited for background terminal · sleep 300',
+    '• Worked for 5m 3s',
+    '• Ran sleep 300\n  └ (no output)',
+    'The row "◦ Waiting for agents (2m 3s • esc to interrupt)" is quoted here.',
+  ]) assert.equal(M.terminalActivity(`${text}\n\n${CODEX_PROMPT}`, CODEX), '', text);
+  const row = CODEX_WAITING[0];
+  assert.equal(M.codexLiveStatus(`${row}\n${CODEX_PROMPT}`, B.commandForAgent('claude')), false);
+  assert.equal(M.terminalActivity(`${row}\n>\nAntigravity`, B.commandForAgent('agy')), '');
+});
+
+test('Codex background-terminal footer with its "/ps to view" hint is a running command', () => {
+  for (const footer of [
+    '1 background terminal running · /ps to view · /stop to close',
+    '3 background terminals running · /ps to view · /',
+    '1 background terminal running',
+  ]) assert.equal(M.backgroundCommandStatus(`${CODEX_PROMPT}\n${footer}`, CODEX), true, footer);
+  assert.equal(M.backgroundCommandStatus(`${CODEX_PROMPT}\nNo background terminals running.`, CODEX), false);
+  assert.equal(M.backgroundCommandStatus(`1 background terminal running · /ps to view\n${CODEX_PROMPT}`, CODEX), false);
+});
+
+test('Antigravity "Running command" holds the work open on every dot frame of its spinner', () => {
+  const cmd = B.commandForAgent('agy');
+  for (const frame of ['⣾  Running command', '⣟  Running command.', '⣻  Running command..', '⣽  Running command...']) {
+    assert.equal(M.terminalActivity(`${frame}\n>\nAntigravity`, cmd), 'working', frame);
+  }
+  assert.equal(M.terminalActivity('Running command\n>\nAntigravity', cmd), '');
+  assert.equal(M.terminalActivity('Running command.\n>\nAntigravity', cmd), '');
+});
+
+test('Codex blocked on a background terminal is not a missing receipt, however long it waits', async () => {
+  for (const row of CODEX_WAITING) {
+    const screen = `• Ran sleep 300\n\n${row}\n\n${CODEX_PROMPT}`;
+    // The turn was closed early (state done) and the grace period already ran out.
+    const task = openTask();
+    task.endedAt = Date.now() - QUIET;
+    const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - QUIET, lastScreen: screen };
+    const live = runtime({ cmd: CODEX, task, entry, turns: finishedTurn });
+    live.api.onTurnDone(live.worker.id, finishedTurn[0]);
+    live.api.onTick(live.worker.id, entry);
+    assert.equal(task.status, 'working', row);
+    assert.equal(task.receipt, undefined);
+    assert.equal(task.endedAt, 0);
+    await flush();
+    assert.equal(live.boardEvents.some((e) => e.input.type === 'fallback'), false);
+
+    // A fallback that already went out is withdrawn once the screen shows the wait again.
+    const judged = openTask();
+    judged.status = 'stopped';
+    judged.receipt = { summary: '已结束，未提交回执', source: 'fallback', files: [] };
+    judged.doneAt = Date.now();
+    const again = runtime({ cmd: CODEX, task: judged, entry, turns: finishedTurn });
+    again.api.onTick(again.worker.id, entry);
+    assert.equal(judged.status, 'working');
+    assert.equal(judged.receipt, undefined);
+  }
+});
+
+test('Codex that finished and sits idle still reports a missing receipt after the wait row is gone', async () => {
+  const idle = '─ Worked for 34m 29s • 12:52 ─\n› Ask Codex to do anything\n? for shortcuts';
+  // The wait ended: the same row is above the new divider and no longer counts.
+  const screen = `◦ Waiting for background terminal (5m 12s • esc to interrupt) · sleep 300\n${idle}`;
+  assert.equal(M.terminalActivity(screen, CODEX), '');
+  const task = openTask();
+  const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - QUIET, lastScreen: screen };
+  const held = runtime({ cmd: CODEX, task, entry, turns: finishedTurn });
+  held.api.onTurnDone(held.worker.id, finishedTurn[0]);
+  assert.ok(task.endedAt > Date.now() - 5000);
+  task.endedAt = Date.now() - QUIET;
+  held.api.onTick(held.worker.id, entry);
+  assert.equal(task.status, 'stopped');
+  assert.equal(task.receipt.summary, '已结束，未提交回执');
+  assert.equal(task.receipt.source, 'fallback');
+  await flush();
+  assert.equal(held.boardEvents.at(-1).input.type, 'fallback');
+});

@@ -804,9 +804,23 @@
       const text = line.replace(/[│┃]/g, '').trim();
       if (!text || text.length > 140) return false;
       if (/(?:\.{3}|…)\s*running\s*$/i.test(text)) return true;
-      if (/^\d+\s+background\s+(?:terminals?|shells?|tasks?|commands?|jobs?)\b.*\brunning\s*$/i.test(text)) return true;
+      // Codex's footer goes on with "· /ps to view · /stop to close" (cut at the width).
+      if (/^\d+\s+background\s+(?:terminals?|shells?|tasks?|commands?|jobs?)\b.*\brunning\b(?:\s*·.*)?$/i.test(text)) return true;
       return /^(?:waiting for (?:the )?(?:lock|test lock)|正在等(?:全机)?(?:测试)?锁)\s*$/i.test(text);
     });
+  }
+  // Codex shows what it is doing in one status row above the input box and
+  // swaps its header with the phase: "Working", "Waiting for background
+  // terminal · sleep 300", "Waiting for agents", "Compacting context"... Only
+  // "Working" was read before, so a blocking wait (the agent polling a long
+  // job with `sleep 300`) looked idle. The row always carries a bullet and
+  // either the "(5m 3s • esc to interrupt)" timer or, for the wait, the header
+  // followed by "(", "·" or the end of the row. Prose in a reply does not.
+  function codexLiveStatus(screen, cmd) {
+    if (cmd && !/\bcodex\b/i.test(cmd)) return false;
+    return codexStatusScreen(screen, cmd).split('\n').some((line) =>
+      /^\s*[│┃]?\s*[◦●•]\s+[^()\n]{1,60}\(\s*(?:\d+h\s+)?(?:\d+m\s+)?\d+s\s*•\s*esc to interrupt\)/.test(line) ||
+      /^\s*[│┃]?\s*[◦●•]?\s*Waiting for background terminals?\s*(?:\(|·|$)/i.test(line));
   }
   function terminalActivity(screen, cmd) {
     screen = codexStatusScreen(screen, cmd);
@@ -819,13 +833,13 @@
       if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;
       // Antigravity keeps its ">" prompt on screen while a tool is running.
       // "Running …" alone does not match; the status line is "Running command…".
-      if (/\bagy\b/i.test(cmd || '') && /^\s*(?:[\u2800-\u28FF]\s*)?Running command(?:…|\.{3})\s*$/i.test(line)) working = i;
+      if (/\bagy\b/i.test(cmd || '') && /^\s*(?:[\u2800-\u28FF]\s*Running command(?:…|\.{0,3})|Running command(?:…|\.{3}))\s*$/i.test(line)) working = i;
       if (/press up to edit queued messages/i.test(line)) queued = true;
     });
     if (quota > resumed && quota > working) return 'quota';
     // A background command under the ready prompt wins over Cursor's idle
     // prompt. Otherwise that early return would hide the status bar.
-    if (backgroundCommandStatus(screen, cmd)) return 'working';
+    if (backgroundCommandStatus(screen, cmd) || codexLiveStatus(screen, cmd)) return 'working';
     const cursor = /\bcursor-agent\b/i.test(cmd || '') || /^\s*[│┃]?\s*→/m.test(screen) ? cursorActivity(screen) : '';
     if (cursor === 'working') return 'working';
     if (cursor === 'idle' && /\bcursor-agent\b/i.test(cmd || '')) return '';
@@ -931,6 +945,6 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
-    receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
   };
 });
