@@ -216,3 +216,27 @@ Do you trust the contents of this project?
   assert.equal(M.autoConfirmPrompt('Antigravity CLI 1.3.0\n>', currentWorktree), null);
   assert.equal(M.isTrustPrompt('Do you want to proceed? (y/n)', currentWorktree), false);
 });
+
+test('打包完整性：main.js 引用的本地模块（含 agy-trust-main.js）必须全部列入 package.json 的 build.files 白名单', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const buildFiles = new Set(pkg.build?.files || []);
+  assert.ok(buildFiles.has('agy-trust-main.js'), 'agy-trust-main.js 必须在 build.files 白名单中');
+
+  const mainSrc = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  const localRequires = [...mainSrc.matchAll(/require\(["'](\.[^"']+)["']\)/g)].map((m) => m[1]);
+  for (const req of localRequires) {
+    let file = req.replace(/^\.\//, '');
+    if (file === 'package.json') continue;
+    if (!file.endsWith('.js') && !file.endsWith('.json')) file += '.js';
+    assert.ok(buildFiles.has(file), `main.js 所需模块 ${file} 必须在 package.json 的 build.files 中`);
+  }
+});
+
+test('隔离保护：home 参数必须是绝对路径，缺少或无效时直接拒绝，绝不写真实 HOME', async (t) => {
+  const { root, dir } = copyFixture(t);
+  for (const badHome of [undefined, null, '', 'relative/home', 123]) {
+    const res = await M.trustWorktree(badHome, dir, { root });
+    assert.equal(res.ok, false);
+    assert.equal(res.reason, '用户目录无效');
+  }
+});

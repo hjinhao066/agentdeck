@@ -91,7 +91,8 @@ handleMain('worktree:prepare', async (_event, payload) => {
   const root = Worktree.defaultRoot(HOME);
   let agyTrust;
   if (payload.agent === 'Antigravity') {
-    agyTrust = await trustAgyWorktree(HOME, prepared.path, { root, platform: process.platform });
+    const agyHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+    agyTrust = await trustAgyWorktree(agyHome, prepared.path, { root, platform: process.platform });
     if (!agyTrust.ok) nlog(`worktree agy trust not recorded: ${agyTrust.reason}`);
   }
   // A Claude session in the new copy would stop on "trust this folder" (default row: No, exit).
@@ -295,7 +296,7 @@ function isAgyCommand(command) {
   if (typeof command !== 'string') return false;
   const first = command.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
   const bin = first ? (first[1] || first[2] || first[3]).replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase() : '';
-  return bin === 'agy' || bin === 'antigravity' || bin === 'gemini' || BoardCore.inferAgentType(command) === 'Antigravity';
+  return bin === 'agy' || bin === 'antigravity';
 }
 const ptyLaunchDirs = new Map();
 handleMain('pty:prepare-launch', async (_event, { id, command }) => {
@@ -303,7 +304,13 @@ handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   const launchDir = ptyLaunchDirs.get(id);
   if (launchDir && isAgyCommand(command)) {
     const root = Worktree.defaultRoot(HOME);
-    await trustAgyWorktree(HOME, launchDir, { root, platform: process.platform }).catch(() => {});
+    const agyHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+    try {
+      const res = await trustAgyWorktree(agyHome, launchDir, { root, platform: process.platform });
+      if (!res.ok) nlog(`review agy trust not recorded: ${res.reason}`);
+    } catch (err) {
+      nlog(`review agy trust error: ${err.message}`);
+    }
   }
   return codexLauncher.prepare(command, launchDir);
 });

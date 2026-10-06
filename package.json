@@ -95,6 +95,7 @@
       "quota-warmup-main.js",
       "quota-warmup-occupancy.js",
       "claude-seats-main.js",
+      "agy-trust-main.js",
       "claude-seats-ui.js",
       "crew-map-core.js",
       "crew-map.js",

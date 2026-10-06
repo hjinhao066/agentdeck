@@ -11,7 +11,10 @@ const crypto = require('crypto');
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function settingsPath(home = os.homedir()) {
+function settingsPath(home) {
+  if (!home || typeof home !== 'string' || !path.isAbsolute(home)) {
+    throw new Error('settingsPath requires an absolute home path');
+  }
   return path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
 }
 
@@ -51,6 +54,9 @@ async function withFileLock(file, work) {
 
 async function trustWorktree(home, dir, { root, platform = process.platform, configPath } = {}) {
   try {
+    if (typeof home !== 'string' || !path.isAbsolute(home)) {
+      return { ok: false, reason: '用户目录无效' };
+    }
     if (typeof dir !== 'string' || !path.isAbsolute(dir) || typeof root !== 'string' || !path.isAbsolute(root)) {
       return { ok: false, reason: '副本路径无效' };
     }
