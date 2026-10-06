@@ -136,6 +136,8 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | GET | `/api/quota` | `{rows,version,now}` 只读额度行：服务端按白名单重建字段，账号统一打码为 `h***@example.com`，带 `source` 来源说明（至多 60 字，如 `Claude OAuth usage`），不含配置目录、token 或原始明细 |
 | POST | `/api/captain` | `{message, images?}` + CSRF，`images` 为至多 6 个上传 id，接受后 `{queued:true}` |
 | POST | `/api/upload` | 原始图片字节 + CSRF，返回 `{id}` |
+| GET | `/api/relay` | `{captainId,currentId,switching,seats,job,now}` 队长所在账号和可换的账号。`seats[]` 只有 `id,name,provider,account(已打码),current,selectable,reason,weekly,recoveryAt,cells`；`reason` 为 `current/login/onboarding/exhausted/low/unknown/''`，只有 `''` 和 `unknown` 可选。`job` 是手机发起的最近一次切换 `{id,status:switching|done|failed,fromId,fromName,targetId,targetName,startedAt,finishedAt,error}`，只在内存里，应用重启后为 `null` |
+| POST | `/api/relay` | `{seatId, expectCurrent?}` + CSRF，发起手动切换（桌面端 Relay 的同一条路径）。立即返回 `{started:true,id}`，结果轮询 GET。桌面端拒绝时 409 `{started:false,error}`，`error` 是可直接给用户看的原因，队长不变 |
 | GET | `/api/image?id=…` | 已登录设备读取自己上传的图片 |
 
 设置了前缀时，以上路径都相对于前缀（`/win/login`、`/win/api/auth` 等），内置页面和资源除外。
@@ -211,3 +213,26 @@ VPS 改前必须备份 Caddyfile；回滚只移除新站点（若期间有其他
 `caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile` 成功后再 `systemctl reload caddy`。
 可删除专用 SSH 账号/配置并 `sshd -t` 后 reload ssh。Mac 自动启动可在系统「登录项」中关闭。
 所有部署和验证均不得停止、打包、安装、替换或重启现役 AgentDeck。
+
+## 手机上切换队长的账号
+
+出门在外、队长所在账号额度快用完时，可以在手机上把队长换到另一个账号，不用回电脑。这就是桌面端的手动 Relay：
+`POST /api/relay` → 渲染进程 `ClaudeSeats.mobileSwitch` → `switchSeat`，先存档交接再换队长，所有检查不变。
+
+- **接口此前不存在**：1.2.2 及更早只有 `captain:relay-notify` 这条桌面内部通道，没有 HTTP 接口；`/api/relay` 是这次新增的。
+  VPS 入口按前缀原样转发 JSON 响应，不按路径放行，所以 `/mac/api/relay`、`/win/api/relay` 不需要改 Caddy。
+- **哪些账号能选**（`PerpetualCaptainCore.manualChoices`）：队长在用的、没登录的、停在首次启动引导的、额度用尽的、剩余不高于永动机阈值的都不能选，
+  各带原因和恢复时间；额度未知的可以选（与桌面菜单一致），确认时提醒。ChatGPT 额度用尽时不能选。
+  手动切换不受永动机开关和 10 分钟回切冷却限制。服务端按白名单重建字段，带阻断原因或不认识原因的账号一律不可选；页面再校验一次。
+- **二次确认**：选账号只进入确认页，点「确认切换」才发请求。请求带 `expectCurrent`（手机看到的当前账号），
+  队长已被永动机或桌面换走时桌面端拒绝，不会按过期画面切错。
+- **过程和结果**：桌面端立即应答，手机每 1.5 秒读一次 `GET /api/relay`，按 `job.id` 认自己的那次切换，显示「正在切换」（带已等时长）、
+  「已换到…」或「没有换成」加原因。连不上时保持「正在切换」并说明；应用中途重启（`job` 丢失）时看队长现在所在账号：到了目标就算成功，否则失败。
+  成功后立即重读会话和对话，页面自动接到新队长，不用刷新。关掉面板切换照常进行，结果显示在页面顶部提示行。
+- **失败时原队长不变**：桌面输入框有未发送内容、存档失败、新队长启动失败、目标账号未登录等，`switchSeat` 在关掉旧终端之前就返回，
+  原因经 `options.reason` 以大白话送到手机。
+- **两台电脑分开切**：每台电脑只回答自己前缀下的 `api/relay`，用自己的设备 cookie 和 CSRF token；手机总台的面板从打开起绑定一台电脑，
+  标题和确认语都带电脑名。
+- **入口**：手机总台在每台电脑的总览卡和队长对话页顶部；单机页在侧边栏额度旁、「更多」里，以及队长账号 5 小时额度不高于 10% 时对话页顶部的提示条。
+  旧版应用（接口 404）、离线或没有队长的电脑不显示入口。
+- **界面用词**：页面上只说「账号」「切换队长」，不出现 Relay、seat、席位。
