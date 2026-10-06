@@ -323,7 +323,6 @@ async function main() {
     if (action === 'receipts' && args.wait === true) {
       const seconds = args.timeout === undefined ? undefined : (typeof args.timeout === 'string' && args.timeout.trim() ? Number(args.timeout) : NaN);
       if (seconds !== undefined && (!Number.isFinite(seconds) || seconds < 0 || seconds > Number.MAX_SAFE_INTEGER / 1000)) fail('receipts --timeout must be a non-negative number of seconds.');
-      const expiresAt = seconds === undefined ? undefined : Date.now() + seconds * 1000;
       const auth = resolveBoardAuth({ env: process.env, tty: controllingTerminal(), filename: __filename, action: 'main-receipts' });
       if (!auth.controlDir || !auth.token) fail('This terminal is independent. Only conductor-managed terminals can use the board control channel.');
       try {
@@ -331,6 +330,9 @@ async function main() {
         receiptListener = ReceiptListener.claim(auth.controlDir, auth.token, ownerPid);
       }
       catch (error) { fail(error.message); }
+      // Count --timeout from here: on Windows the owner lookup above starts PowerShell
+      // and can take seconds, which must not be taken out of the wait.
+      const expiresAt = seconds === undefined ? undefined : Date.now() + seconds * 1000;
       const release = () => receiptListener?.release();
       process.once('exit', release);
       for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { release(); process.exit(0); });

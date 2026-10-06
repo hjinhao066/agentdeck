@@ -129,10 +129,10 @@ test('new --worktree records the copy on the card and archive keeps a dirty tree
   const col = app.w.columns.find((c) => !c.isMain);
   const recorded = app.card(card.id).worktree;
   assert.equal(col.cwd, recorded.path);
-  assert.equal(recorded.repo, fs.realpathSync(app.w.repo));
+  assert.equal(recorded.repo, fs.realpathSync.native(app.w.repo));
   assert.equal(recorded.branch, 'feat/dirty');
   assert.equal(recorded.base, git(app.w.repo, ['rev-parse', 'main']));
-  assert.equal(recorded.path.startsWith(fs.realpathSync(app.w.wt) + path.sep), true);
+  assert.equal(recorded.path.startsWith(fs.realpathSync.native(app.w.wt) + path.sep), true);
   fs.writeFileSync(path.join(recorded.path, 'dirty.txt'), 'not committed\n');
   const archived = await app.handle({ action: 'main-archive', to: col.id });
   assert.match(archived.result, /未提交|未跟踪/);
@@ -165,7 +165,7 @@ test('archive removes a clean copy only after its branch is pushed', async (t) =
   assert.equal(fs.existsSync(copy), false);
   const after = app.card(card.id).worktree;
   assert.equal(after.removed, true);
-  assert.equal(after.repo, fs.realpathSync(app.w.repo));
+  assert.equal(after.repo, fs.realpathSync.native(app.w.repo));
   assert.equal(after.branch, 'feat/pushed');
   assert.match(after.base, /^[0-9a-f]{40}$/);
   assert.equal(git(app.w.repo, ['rev-parse', 'refs/heads/feat/pushed']), git(app.w.repo, ['rev-parse', 'origin/feat/pushed']));
