@@ -501,7 +501,7 @@
     applyView();
     saveView();
   }
-  function zoomCenter(factor) { zoomAt(vpEl.clientWidth / 2, vpEl.clientHeight / 2, factor); }
+  function zoomCenter(factor) { hush(); zoomAt(vpEl.clientWidth / 2, vpEl.clientHeight / 2, factor); }
 
   function startCardDrag(e, n, node, box) {
     if (e.button !== 0) return;
@@ -527,6 +527,7 @@
     if (!drag.moved && Math.hypot(dx, dy) < DRAG_PX) return;
     drag.moved = true;
     if (drag.kind === 'pan') {
+      hush();
       view = { ...view, x: drag.x0 + dx, y: drag.y0 + dy };
       glide(false);
       applyView();
@@ -574,6 +575,7 @@
   function onWheel(e) {
     if (mode !== 'crew' || !view || e.target.closest('.cm-pop')) return;
     e.preventDefault();
+    hush();
     const r = vpEl.getBoundingClientRect();
     // a pinch on a trackpad arrives as ctrl+wheel
     if (e.ctrlKey || e.metaKey) zoomAt(e.clientX - r.left, e.clientY - r.top, Math.exp(-e.deltaY * 0.0022));
@@ -776,6 +778,8 @@
     hintEl.hidden = !text;
     if (text) hintT = setTimeout(() => { hintEl.hidden = true; }, 6000);
   }
+  // The hint has done its job once the user scrolls, drags or zooms the map: it goes then, not after the six seconds.
+  function hush() { if (!hintEl.hidden) say(''); }
   // 一键整理: every frame and card back on the grid, in the order the frames stand in now.
   // The zoom is left alone when the user has set one.
   function tidy() {

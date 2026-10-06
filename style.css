@@ -2939,7 +2939,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .tbv-refresh.busy svg { animation: tbv-spin .8s linear infinite; }
 @keyframes tbv-spin { to { transform: rotate(360deg); } }
 
-.tbv-filters { flex: 0 0 auto; display: flow-root; min-width: 0; padding: 6px 12px 6px 18px; border-bottom: 1px solid var(--tbv-line); }
+.tbv-filters { position: relative; flex: 0 0 auto; display: flow-root; min-width: 0; padding: 6px 12px 6px 18px; border-bottom: 1px solid var(--tbv-line); }
 .tbv-lane, .tbv-chip, .tbv-detail, .tbv-ghost, .tbv-finished { --project-color: hsl(var(--project-hue, 228) 82% 68%); }
 :root[data-theme="light"] :is(.tbv-lane, .tbv-chip, .tbv-detail, .tbv-ghost, .tbv-finished) { --project-color: hsl(var(--project-hue, 228) 70% 46%); }
 /* A project's mark: a small star in its own colour. */
@@ -2951,9 +2951,11 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 /* Overview strip: every project with its 进行中 / 需要你 counts; a click shows only that project. */
 /* Every chip shows whole, across the full width of the bar: the tally and the tools hold the right
    end of the first row, the chips run beside them and then under them, row after row. A bar too
-   narrow for a chip beside the tools starts the chips on the next row. */
-.tbv-tools { float: right; display: flex; align-items: center; gap: 4px; height: 32px; margin-left: 10px; white-space: nowrap; }
+   narrow for a chip beside the tools starts the chips on the next row. The tools come after the chips
+   in the page (Tab reaches the chips first); an empty float as wide as the tools keeps their place. */
+.tbv-tools { position: absolute; top: 6px; right: 12px; display: flex; align-items: center; gap: 4px; height: 32px; white-space: nowrap; }
 .tbv-projects { min-width: 0; font-size: 0; line-height: 0; }
+.tbv-projects::before { content: ''; float: right; width: var(--tbv-tools-w, 0px); height: 32px; margin-left: 10px; }
 .tbv-chip {
   min-width: 0; max-width: 100%; box-sizing: border-box; display: inline-flex; align-items: center; gap: 6px; height: 26px; margin: 3px 6px 3px 0; padding: 0 9px;
   border: 1px solid var(--tbv-rim); border-radius: 13px; background: var(--tbv-chip); vertical-align: top;
