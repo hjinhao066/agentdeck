@@ -3463,7 +3463,7 @@ window.deck.onBoardCommand(async (message) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
         // must not rewrite config or evict cached task responses every second.
         if (message.action === 'main-receipt-listener-status' || message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-handoff' || message.action === 'main-receipts-snapshot' || (message.action === 'main-receipts' && message.wait && !response.result)) window.deck.boardRespond({ requestId: message.id, ...response });
-        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task' || message.action === 'main-queue' || message.action === 'main-read');
+        else respondBoard(message.id, response, message.action === 'main-receipts' || message.action === 'main-receipts-ack' || message.action === 'main-task' || message.action === 'main-queue' || message.action === 'main-read' || message.action === 'main-inbox');
       },
       (error) => {
         const response = { done: true, error: error.message };
