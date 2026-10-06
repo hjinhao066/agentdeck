@@ -1163,11 +1163,18 @@
       if (typeof window.deck.prepareWorktree !== 'function') throw new Error('这台 AgentDeck 还不能创建代码副本。');
       // A Claude session asks to trust the new folder (default row: No, exit): the app records that answer
       // for this copy in the seat that will run it, so the question never appears.
-      const seat = window.AgentInfo.inferProvider(cmd) === 'Claude' && window.ClaudeSeatsCore.bindColumn({ claudeSeatId: metadata.claudeSeatId, claudeConfigDir: metadata.claudeConfigDir }, host.config);
-      const { trust, ...prepared } = await window.deck.prepareWorktree({ ...metadata.worktreeRequest, ...(seat?.configDir ? { seatId: seat.id, configDir: seat.configDir } : {}) });
+      // An Antigravity session similarly asks to trust the workspace; the app records it in settings.json.
+      const provider = window.AgentInfo.inferProvider(cmd);
+      const seat = provider === 'Claude' && window.ClaudeSeatsCore.bindColumn({ claudeSeatId: metadata.claudeSeatId, claudeConfigDir: metadata.claudeConfigDir }, host.config);
+      const { trust, agyTrust, ...prepared } = await window.deck.prepareWorktree({
+        ...metadata.worktreeRequest,
+        ...(provider === 'Antigravity' ? { agent: 'Antigravity' } : {}),
+        ...(seat?.configDir ? { seatId: seat.id, configDir: seat.configDir } : {}),
+      });
       metadata.worktree = prepared;
       cwd = prepared.path;
       if (trust && !trust.ok) boardNotice(`代码副本 ${prepared.path} 没能预先登记 Claude 的文件夹信任（${trust.reason}）。会话若停在「是否信任此文件夹」，用 answer --key down,enter 选第二项。`);
+      if (agyTrust && !agyTrust.ok) boardNotice(`代码副本 ${prepared.path} 没能预先登记 Antigravity 的文件夹信任（${agyTrust.reason}）。会话若停在「是否信任此文件夹」，用 answer --key enter 选第一项。`);
     }
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     let col = null;

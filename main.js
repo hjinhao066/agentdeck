@@ -20,6 +20,7 @@ const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
 const PerpetualCaptainCore = require('./perpetual-captain-core');
 const { seatEnvironment, credentialLocation, initializeOnboarding, trustWorktree: trustClaudeWorktree, registerSeatsIpc, seatInfo, readUsage } = require('./claude-seats-main');
+const { trustWorktree: trustAgyWorktree } = require('./agy-trust-main');
 const { createWarmupService } = require('./quota-warmup-service');
 const { createQuotaWarmupRunner } = require('./quota-warmup-main');
 const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
@@ -87,15 +88,21 @@ handleMain('worktree:prepare', async (_event, payload) => {
     branch: typeof payload.branch === 'string' ? payload.branch : '',
     taskId: typeof payload.taskId === 'string' ? payload.taskId : '',
   });
+  const root = Worktree.defaultRoot(HOME);
+  let agyTrust;
+  if (payload.agent === 'Antigravity') {
+    agyTrust = await trustAgyWorktree(HOME, prepared.path, { root, platform: process.platform });
+    if (!agyTrust.ok) nlog(`worktree agy trust not recorded: ${agyTrust.reason}`);
+  }
   // A Claude session in the new copy would stop on "trust this folder" (default row: No, exit).
   // Record the answer for this one directory in the seat that will run it, before the session opens.
   if (typeof payload.seatId === 'string' && typeof payload.configDir === 'string' && payload.configDir) {
     const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
     const trust = await trustClaudeWorktree({ id: payload.seatId, configDir: payload.configDir }, seatHome, prepared.path, { root: Worktree.defaultRoot(HOME), platform: process.platform });
     if (!trust.ok) nlog(`worktree trust not recorded: ${trust.reason}`);
-    return { ...prepared, trust: { ok: trust.ok, reason: trust.reason || '' } };
+    return { ...prepared, trust: { ok: trust.ok, reason: trust.reason || '' }, ...(agyTrust ? { agyTrust: { ok: agyTrust.ok, reason: agyTrust.reason || '' } } : {}) };
   }
-  return prepared;
+  return { ...prepared, ...(agyTrust ? { agyTrust: { ok: agyTrust.ok, reason: agyTrust.reason || '' } } : {}) };
 });
 handleMain('worktree:reclaim', (_event, payload) => {
   const record = payload && payload.record;
@@ -284,10 +291,21 @@ function shellArgs() {
 }
 
 const codexLauncher = createCodexLauncher({ shell: shellFile(), env: ENV });
+function isAgyCommand(command) {
+  if (typeof command !== 'string') return false;
+  const first = command.trim().match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
+  const bin = first ? (first[1] || first[2] || first[3]).replace(/^.*[\\/]/, '').replace(/\.(exe|cmd|bat)$/i, '').toLowerCase() : '';
+  return bin === 'agy' || bin === 'antigravity' || bin === 'gemini' || BoardCore.inferAgentType(command) === 'Antigravity';
+}
 const ptyLaunchDirs = new Map();
 handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   if (!ptys.has(id) || typeof command !== 'string' || command.length > 1000 || /[\x00-\x1f\x7f]/.test(command)) throw new Error('Invalid launch command');
-  return codexLauncher.prepare(command, ptyLaunchDirs.get(id));
+  const launchDir = ptyLaunchDirs.get(id);
+  if (launchDir && isAgyCommand(command)) {
+    const root = Worktree.defaultRoot(HOME);
+    await trustAgyWorktree(HOME, launchDir, { root, platform: process.platform }).catch(() => {});
+  }
+  return codexLauncher.prepare(command, launchDir);
 });
 
 const ptySeats = new Map();

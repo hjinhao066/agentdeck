@@ -61,9 +61,13 @@ function world(t) {
       restartManifestLoad: () => null, restartManifestSave() {},
       prepareWorktree: (input) => {
         w.prepares += 1; w.prepareInputs.push(input);
-        // main.js adds `trust` only when the page named a seat
+        // main.js adds `trust` only when the page named a seat, and `agyTrust` when agent is Antigravity
         const prepared = Worktree.prepare({ repo: input.repo, base: input.base, branch: input.branch, taskId: input.taskId, root: w.wt });
-        return input.seatId && w.trustResult ? { ...prepared, trust: w.trustResult } : prepared;
+        return {
+          ...prepared,
+          ...(input.seatId && w.trustResult ? { trust: w.trustResult } : {}),
+          ...(input.agent === 'Antigravity' && w.agyTrustResult ? { agyTrust: w.agyTrustResult } : {}),
+        };
       },
       claudeSeats: async () => ClaudeSeatsCore.normalize().map((seat) => ({ id: seat.id, loggedIn: true })),
       reclaimWorktree: (record) => Worktree.reclaim(record, { root: w.wt }),
@@ -243,6 +247,9 @@ test('a Claude session in a new copy names the seat that will run it, so the fol
   // not a Claude session: nothing about a seat leaves the page
   const fourth = (await open('codex', { command: CODEX })).input;
   assert.equal('seatId' in fourth, false); assert.equal('configDir' in fourth, false);
+  // an Antigravity session passes agent: 'Antigravity' without seat
+  const fifth = (await open('agy', { command: 'agy --dangerously-skip-permissions --model gemini-3.8-flash-high' })).input;
+  assert.equal(fifth.agent, 'Antigravity'); assert.equal('seatId' in fifth, false);
   // what the main process records stays out of the card and the column
   const col = app.w.columns.find((c) => c.title === 'default' || c.displayTitle === 'default');
   assert.equal(col.worktree && 'trust' in col.worktree, false);
@@ -265,6 +272,28 @@ test('when the trust record cannot be written the task still starts and the Capt
   app.w.config.mainSession.pending = []; app.w.trustResult = { ok: true, reason: '' };
   const second = (await app.store.add({ project: 'demo', title: '登记好', detail: '' })).card;
   await app.handle({ action: 'main-new', id: 'req-ok', title: '登记好', task: '改代码', boardId: second.id, project: 'demo', command: 'claude --model claude-opus-5-5', worktree: app.w.repo, branch: 'feat/ok' });
+  await tick();
+  assert.equal(app.w.config.mainSession.pending.filter((p) => /信任/.test(p.summary || '')).length, 0);
+});
+
+test('when agy trust record cannot be written the task still starts and the Captain is told to answer enter', async (t) => {
+  const app = world(t);
+  app.w.agyTrustResult = { ok: false, reason: 'Antigravity 配置文件读不了，没有改动' };
+  const card = (await app.store.add({ project: 'demo', title: 'agy无法登记', detail: '' })).card;
+  const reply = await app.handle({ action: 'main-new', id: 'req-agy-fail', title: 'agy无法登记', task: '改代码', boardId: card.id, project: 'demo', command: 'agy --model gemini-3.8-flash-high', worktree: app.w.repo, branch: 'feat/agy-fail' });
+  await tick();
+  assert.match(reply.result, /已开新会话/);
+  const col = app.w.columns.find((c) => !c.isMain);
+  assert.equal(fs.existsSync(col.cwd), true);
+  assert.equal('agyTrust' in app.card(card.id).worktree, false);
+  const notice = app.w.config.mainSession.pending.map((p) => p.summary).join('\n');
+  assert.match(notice, /没能预先登记 Antigravity 的文件夹信任（Antigravity 配置文件读不了，没有改动）/);
+  assert.match(notice, /answer --key enter/);
+  assert.ok(notice.includes(col.cwd));
+  // success is silent
+  app.w.config.mainSession.pending = []; app.w.agyTrustResult = { ok: true, reason: '' };
+  const second = (await app.store.add({ project: 'demo', title: 'agy登记好', detail: '' })).card;
+  await app.handle({ action: 'main-new', id: 'req-agy-ok', title: 'agy登记好', task: '改代码', boardId: second.id, project: 'demo', command: 'agy --model gemini-3.8-flash-high', worktree: app.w.repo, branch: 'feat/agy-ok' });
   await tick();
   assert.equal(app.w.config.mainSession.pending.filter((p) => /信任/.test(p.summary || '')).length, 0);
 });
