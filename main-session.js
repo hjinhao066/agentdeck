@@ -1901,8 +1901,13 @@
       // Never parse a screen for a completion receipt. A finished turn (or a real
       // zero process exit) gets a three-minute grace period for its command.
       // Cursor blink refreshes lastOutputAt after the turn is done; that must
-      // not keep postponing the grace.
+      // not keep postponing the grace. agy, Cursor and Codex stay running at
+      // the input box after a normal turn, so a live process is not itself a
+      // reason to wait. Hold the grace only while the screen is still working
+      // (a background command or a test-lock wait counts) or the Captain
+      // interrupted this turn. A dead terminal is already settled above.
       const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
+      if (!task.processEnded && entry.alive && turn?.interrupted) { task.endedAt = 0; continue; }
       const ended = task.endedAt || (turn?.done && !turn.interrupted && entry.state === 'done' ? (task.endedAt = Date.now()) : 0);
       if (!ended || turn && !turn.done && !task.processEnded) continue;
       const anchor = entry.state === 'done' ? ended : Math.max(ended, entry.lastOutputAt || 0);
