@@ -29,6 +29,7 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
 const { TodoStore } = require('./todo-store');
 const Worktree = require('./worktree-core');
+const { prepareWorkspaceTrust } = require('./workspace-trust-main');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
@@ -313,7 +314,12 @@ const codexLauncher = createCodexLauncher({ shell: shellFile(), env: ENV });
 const ptyLaunchDirs = new Map();
 handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   if (!ptys.has(id) || typeof command !== 'string' || command.length > 1000 || /[\x00-\x1f\x7f]/.test(command)) throw new Error('Invalid launch command');
-  return codexLauncher.prepare(command, ptyLaunchDirs.get(id));
+  const cwd = ptyLaunchDirs.get(id);
+  const column = readLocalConfig().columns?.find((c) => c.id === id);
+  const trustHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  const prepared = prepareWorkspaceTrust(command, column, cwd, trustHome);
+  if (prepared.warning) send('toast', { text: prepared.warning });
+  return codexLauncher.prepare(prepared.command, cwd);
 });
 
 const ptySeats = new Map();

@@ -401,6 +401,7 @@
     const executor = sessionById(card.exec_receipt?.session_id);
     const title = window.BoardCore.cleanText('审查：' + card.title, 80).replace(/\s+/g, ' ');
     const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round };
+    if (executor?.trustedCwd && executor.trustedCwd === executor.cwd) metadata.trustedCwd = executor.trustedCwd;
     const placed = await withQueue(async () => {
       const current = await findCard(id);
       if (state() !== s || !current || current.review_claim?.key !== input.key || current.review_claim.delivered ||
@@ -1178,6 +1179,7 @@
       const { trust, ...prepared } = await window.deck.prepareWorktree({ ...metadata.worktreeRequest, ...(seat?.configDir ? { seatId: seat.id, configDir: seat.configDir } : {}) });
       metadata.worktree = prepared;
       cwd = prepared.path;
+      metadata.trustedCwd = cwd;
       if (trust && !trust.ok) boardNotice(`代码副本 ${prepared.path} 没能预先登记 Claude 的文件夹信任（${trust.reason}）。会话若停在「是否信任此文件夹」，用 answer --key down,enter 选第二项。`);
     }
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -2599,6 +2601,9 @@
           metadata.claudeConfigDir = seat.configDir;
         }
         const cwd = window.BoardCore.cleanText(message.cwd, 1000);
+        // An inherited/default cwd is not authorization. Only the Captain's
+        // explicit --cwd or a copy we just created can receive startup trust.
+        if (cwd && isMain(caller)) metadata.trustedCwd = cwd;
         if (typeof message.worktree === 'string' && message.worktree.trim()) {
           if (metadata.executor === 'chatgpt-web') throw new Error('--worktree 不能用于网页调研。');
           if (cwd) throw new Error('--worktree 会指定工作目录，不要同时传 --cwd。');

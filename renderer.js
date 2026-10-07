@@ -218,6 +218,7 @@ if (saved) {
       requestId: c.requestId,
       waitRequestIds: c.waitRequestIds,
       createdByRequestId: c.createdByRequestId,
+      trustedCwd: typeof c.trustedCwd === 'string' ? c.trustedCwd : '',
       taskCompleted: c.taskCompleted,
       initialPromptSent: c.initialPromptSent,
       agentType: c.agentType,

@@ -100,6 +100,21 @@ function boot(w, persisted) {
 }
 const newCard = async (app, extra = {}) => (await app.window.TaskBoard.add({ project: 'p', title: '修登录', detail: '把登录修好', verify: true, ...extra })).card;
 
+test('automatic reviewers inherit only an unchanged explicitly authorized directory', async (t) => {
+  for (const authorized of [true, false]) {
+    const w = world(t), app = w.boot(), card = await newCard(app);
+    const exec = await app.execute(card);
+    exec.cwd = path.join(w.root, 'copy');
+    exec.trustedCwd = authorized ? exec.cwd : path.join(w.root, 'previous-copy');
+    await app.finish(exec, '执行完成');
+    await app.scan();
+    const review = app.reviewers(card)[0];
+    assert.ok(review);
+    assert.equal(review.cwd, exec.cwd);
+    assert.equal(review.trustedCwd, authorized ? exec.cwd : undefined);
+  }
+});
+
 async function manualReview(app, card, exec, id = 'manual-review') {
   await app.api.handle({ action: 'main-new', id, title: '重开审查', task: '独立审查', boardId: card.id, project: card.project, reviews: [exec.id], command: CODEX }, app.captain);
   await tick();
