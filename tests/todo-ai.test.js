@@ -20,14 +20,33 @@ function fixture(t) {
 
 test('@ai accepts adjacent Chinese, end/whitespace/punctuation and excludes handles and email addresses', () => {
   for (const text of ['@ai 查资料', '@AI', '@Ai', '@aI', '＠ai', '＠AI 查资料', '查资料@ai', '查@AI，一下', '查＠ ai。', '@\nai 找书', '查 @ai 资料', '@ai,找书', '@ai.查资料', '@ai：找书', '@ai（找书）', '引用「@ai」', '@ai查火车', '帮我@ai找本书', '＠AI查资料', '帮我＠ aI查资料', '@Ai𠀀字资料']) assert.equal(isAi(text), true, text);
-  for (const text of ['', '查资料', '找电子书', '病历 CT', 'AI', '了解一下 AI', '学习 AI', '查 AI 资料', 'OpenAI', '学AI', 'ai@', '@a i', '@Aidan', '@aiden', '联系 @air_france 客服', '找 @aimee 要资料', '问问@AIRPORT', 'bob@aiden.com', 'me@ai.com', 'first.last+tag@AI.com', '用户@ai.com', '用户@ai中文.com', '"用户"@AI资料.cn', 'a!@ai.com', '"bob"@ai.com', 'a%tag@ai.中国', '@ai1', '@ai2', '@AI2查火车', '@aiA查火车', '@ai_tool', '@aid', '@air', '@aix', '@ai🤖', null, 4]) assert.equal(isAi(text), false, String(text));
+  for (const text of ['', '查资料', '找电子书', '病历 CT', 'AI', '了解一下 AI', '学习 AI', '查 AI 资料', 'OpenAI', '学AI', 'ai@', '@a i', '@Aidan', '@aiden', '联系 @air_france 客服', '找 @aimee 要资料', '问问@AIRPORT', 'bob@aiden.com', 'me@ai.com', 'first.last+tag@AI.com', 'a!@ai.com', '"bob"@ai.com', 'a%tag@ai.中国', '@ai1', '@ai2', '@AI2查火车', '@aiA查火车', '@ai_tool', '@aid', '@air', '@aix', '@ai🤖', null, 4]) assert.equal(isAi(text), false, String(text));
+});
+
+test('@ai at sentence start or after Chinese accepts versions, URLs and dots consistently', () => {
+  for (const [prefix, text] of [
+    ['帮我', '@ai查一下Python3.12的文档'],
+    ['帮我', '@ai查iPhone15.5'],
+    ['帮我', '@AI查www.baidu.com'],
+    ['帮我', '@ai查火车.下午去'],
+    ['帮我', '@ai查iPhone15.5价格'],
+    ['帮我', '@ai查一下v2.0版本'],
+    ['今天', '@ai查Python3.12'],
+    ['帮我', '@AI查www.baidu.com首页'],
+  ]) {
+    assert.equal(isAi(text), true, text);
+    assert.equal(isAi(prefix + text), true, prefix + text);
+  }
+  // Only an ASCII mailbox local-part excludes a mention; Chinese is literal opt-in.
+  for (const text of ['用户@ai.com', '用户@ai中文.com', '"用户"@AI资料.cn']) assert.equal(isAi(text), true, text);
+  for (const text of ['someone@ai.com', 'user123@AI.com', '123@ai.cn', 'name+tag@ai.example.com', '联系someone@ai.com查文档', 'someone@ai中文.com', 'bob@aiden.com', 'a!@ai.com', '"bob"@ai.com', 'a!@ai中文.com', '"bob"@ai中文.com']) assert.equal(isAi(text), false, text);
 });
 
 test('Chinese-adjacent @ai submits original text once and accepts Captain status write-back', async (t) => {
   const { todos, tasks, deliveries, ai } = fixture(t);
   const texts = ['@ai查火车', '帮我@ai找本书', '＠AI整理资料'];
   const items = texts.map((text) => todos.add({ text }));
-  for (const text of ['@aiden找本书', '@ai2查火车', '联系用户@ai中文.com']) todos.add({ text });
+  for (const text of ['@aiden找本书', '@ai2查火车', '联系someone@ai中文.com']) todos.add({ text });
   ai.scan();
   for (const item of items) ai.acknowledge(item.id, taskId(item));
   ai.scan();

@@ -16,10 +16,10 @@ function isAi(text) {
   for (const match of text.matchAll(/[@＠]\s*ai(?!_)(?=$|\s|\p{P}|\p{Script=Han})/giu)) {
     const before = text.slice(0, match.index), after = text.slice(match.index + match[0].length);
     // An ASCII mailbox/local-part or handle is not a mention. Chinese can
-    // surround the marker without spaces; email domains still exclude it.
+    // surround the marker without spaces, even before versions or URLs.
     if (/[A-Za-z0-9._%+@＠-]$/.test(before)) continue;
-    // Exclude domains even with RFC mailbox punctuation/quoted local-parts.
-    if (/^[\p{L}\p{N}-]*\.[\p{L}\p{N}-]/u.test(after) && /\S$/u.test(before)) continue;
+    // Also exclude ASCII mailboxes ending in quoted/local-part punctuation.
+    if (/^[\p{L}\p{N}-]*\.[\p{L}\p{N}-]/u.test(after) && /[A-Za-z0-9][!#$&'*\/=?^`{|}~"]*$/.test(before)) continue;
     return true;
   }
   return false;
