@@ -83,13 +83,20 @@
   const MAX_FILES = 10;
   const MAX_PATH = 500;
   const TOKEN_SAVER_DEFAULT = 150_000;
+  // A prompt up to this many characters is pasted whole. A longer one is saved as
+  // a file and the agent gets its opening plus "read this file first"
+  // (ChatUI.sendPrompt). The Captain briefing has to fit: a pointer hides its rules
+  // and its closing paragraph. When it no longer fits, raise this, never drop a rule.
+  const LONG_PROMPT = 10000;
+  // What the token saver adds after the briefing once the context is cleared.
+  const SAVER_RESUME = '\n\n读看板继续。';
   // The last moment the outgoing context still holds the user's words: decisions go to the file the handoff quotes.
   const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板；用户的有效决定、暂停或取消、交付状态有变化的，一并更新到 ~/.agents/boards/agentdeck-captain-decisions.md。写完只回复 已存档';
   // The closing paragraph. What to do on arrival depends on the live state, so its
   // opening only points at `handoff`; the concurrency and release habits are unchanged.
   const AUTONOMOUS_CONTINUATION = '开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项；Relay、清空或重启后有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派。按 quota：额度紧时保持 3–5 个活并行，额度多时开十几个。发版时测试全过并进入打包后停止派新活，等现有任务收尾；包就绪后让长任务停在安全点记进度，短任务等收尾；存档后直接安装并重启。安装只用正式 restart-agentdeck.sh／rollback-agentdeck.sh 或发版入口，禁临时脚本；待核对不能 complete，版本启动核验后才结卡。';
   // Alias of the briefing's last paragraph. Do not paste it again after the
-  // briefing: the combined text exceeds the 8000-character inline limit.
+  // briefing: it is already there, and the repeat uses up the room under LONG_PROMPT.
   const REBRIEF_NOTE = AUTONOMOUS_CONTINUATION;
   function contextResetCommand(provider, text) {
     if (typeof text !== 'string' || /[\r\n]/.test(text)) return false;
@@ -187,6 +194,7 @@
     'Claude Code、Cursor、Codex 命令仍禁止 Claude 4.x 和 Haiku。只有 agy 可用上面列出的两个 Claude 4.6 模型；其他旧模型仍禁止。',
     'Codex：使用 --agent codex，默认模型 GPT-6.1 Sol；简单活改用 --command "codex -m gpt-6-luna"。免确认沙箱参数（--dangerously-bypass-approvals-and-sandbox）和 --no-daemon 由 AgentDeck 按本机支持情况自动补齐，不要手动拼接。',
     '独立的 Grok CLI（grok）：用户的订阅已经取消，用户没点名就不要用它派活（Cursor 里的 grok 模型不受影响）。',
+    'DeepSeek 兜底（仅 Mac，按量扣费，用户已同意启用）：new --command "/Users/jinhao/.local/claude-deepseek/bin/claude-ds --dangerously-skip-permissions"，必须写绝对路径；复杂一点的活在命令里加 --model opus。参数以共享记忆 ~/.agents/memory/deepseek-fallback-enabled.md 为准。它不是 Claude 席位，不套用上面 Claude 小弟的 --model claude-…／--effort 写法。',
   ];
   const ROUTING = [
     'Opus 5.5：UI 设计、最关键核心代码、最终审核（Claude Code 显式 --model claude-opus-5-5，或 Cursor claude-opus-5-5-high）。',
@@ -197,6 +205,7 @@
     'Cursor Grok 4.7：脏活、抓数据、外部信息采集（cursor-agent --force --model grok-4.7-high-fast）。',
     '数据抓取兜底：网上的数据抓不到时，不要盲目手写无头爬虫死磕，先找 GitHub 现成工具、OpenCLI、agent-reach 技能；若仍抓不到再考虑调度 Muse.ai 或 ChatGPT 浏览器（computer use）。',
     '额度轮换：quota 只读被动观测，未知不代表可用，不要因此换模型。额度用尽或低于阈值时按同级换能用的模型，标题和回执写明原本派了谁；--command 点名的不换，只排队。会话自己报用完、限流或没登录时，用 new 换下一个重派并告诉用户。',
+    'DeepSeek 兜底：Claude 各席位、Codex、Cursor、Gemini 都用尽或低于阈值而活不能停时才用，还有订阅额度就不用。只派简单到中等的代码、测试、整理；UI 设计、最关键代码、最终审核不派，等订阅额度恢复。标题和回执写明「DeepSeek 兜底」，派出的活必须带独立审查。',
   ];
   // Effort tiers, lowest first. Cursor takes the tier as the model id's suffix
   // and lists exactly these ids for Opus and Sonnet.
@@ -237,7 +246,7 @@
       '规则：',
       '1. 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及第 14 条的只读 sysctl。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
-      `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用；测试用 notify-user --test（【测试】，critical，音量 3）。`,
+      `   ${cli} inbox need|report|resolve   用户的「待我处理」页（inbox help）：要用户介入的 need，本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用。向用户汇报的结论都 report，解决了 resolve`,
       `   ${cli} handoff   生成当前交接快照并刷新交接文件；开工、Relay、清空、重启后先跑。briefing 只读本提示词全文；用户说「你是队长」先跑 ledger 验证身份，再读这两个`,
       `   ${cli} ledger   列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} discuss start --topic "题目"   「讨论一下」/group discussion/do a group discussion/group chat 就发起；规约：docs/discuss.md。`,
@@ -1024,7 +1033,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };

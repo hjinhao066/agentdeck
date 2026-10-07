@@ -3,6 +3,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const os = require('node:os');
+const path = require('node:path');
+const { createExecutor } = require('../chatgpt-web-executor');
 const B = require('../board-core');
 const M = require('../main-core');
 const Web = require('../chatgpt-web-core');
@@ -134,6 +137,41 @@ test('native failed receipts remain failed in the ledger and dot state, includin
   w.api.notePtySurvived(col); await tick();
   assert.equal(w.terms.get(col.id).webExecutorState, 'failed');
   assert.equal(w.runs.length, 1);
+});
+
+test('foreground violation delivers the answer and report while the Captain sees an abnormal run', async (t) => {
+  const w = world(); await w.create(); await tick();
+  const col = w.columns[1], task = w.task();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deck-web-receipt-'));
+  let finish;
+  const done = new Promise((resolve) => { finish = resolve; });
+  const executor = createExecutor({ reportsDir: dir, stateDir: path.join(dir, 'state'), cooldownMs: 0,
+    runCli: async ({ report, mode }) => {
+      fs.writeFileSync(report, 'Air scatters blue light.');
+      fs.writeFileSync(report + '.meta.json', JSON.stringify({ selectedModel: '6 Pro', selectedMode: mode,
+        submitted: true, finishedAt: new Date().toISOString(), exportMethod: 'copy-markdown' }));
+      return 'FRONT_STOLEN';
+    }, emit: (event) => { if (event.action === 'complete') finish(event); } });
+  t.after(() => { executor.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  executor.submit({ id: col.id, taskId: task.id, task: 'Why is the sky blue?' });
+  const receipt = await done;
+  await w.api.submit(receipt, col);
+  assert.equal(task.status, 'failed');
+  assert.equal(w.terms.get(col.id).webExecutorState, 'failed');
+  assert.equal(w.window.__test.ledgerRows()[0].state, 'failed');
+  assert.match(task.receipt.summary, /^⚠【异常】工具抢了前台/);
+  assert.match(task.receipt.summary, /Air scatters blue light/);
+  assert.deepEqual(Array.from(task.receipt.files), receipt.files);
+  const pending = w.config.mainSession.pending.at(-1);
+  assert.match(pending.failed, /^⚠【异常】工具抢了前台/);
+  assert.match(pending.summary, /Air scatters blue light/);
+  const modelText = M.receiptsForModel([pending]);
+  assert.match(modelText, /工具抢了前台.*答案已完整交付/);
+  assert.match(modelText, /Air scatters blue light/);
+  assert.ok(modelText.includes(receipt.files[0]));
+  const ledger = (await w.api.handle({ action: 'main-ledger' }, w.captain)).result;
+  assert.match(ledger, /⚠【异常】工具抢了前台/);
+  assert.ok(ledger.includes(receipt.files[0]));
 });
 
 for (const replace of [false, true]) test('native tell --now prioritizes C after interrupting A' + (replace ? ' and --replace cancels B' : ' while preserving B'), async () => {

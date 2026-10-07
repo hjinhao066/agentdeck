@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "1.5.0",
+  "version": "1.6.0",
   "description": "TweetDeck-style multi-column deck for terminal AI agents",
   "main": "main.js",
   "scripts": {
@@ -77,6 +77,8 @@
       "schedule-feed-core.js",
       "schedule-feed.js",
       "pages.js",
+      "todo-ui.js",
+      "todo-store.js",
       "main-core.js",
       "auto-verify-core.js",
       "relay-handoff-core.js",
@@ -86,6 +88,7 @@
       "agent-sessions.js",
       "task-board.js",
       "worktree-core.js",
+      "workspace-trust-main.js",
       "shared-store.js",
       "sync-server.js",
       "sync-client.js",
@@ -112,6 +115,8 @@
       "side-main.js",
       "skills-core.js",
       "skills-ui.js",
+      "attention-core.js",
+      "attention-ui.js",
       "style.css",
       "vendor/**",
       "security.js",

@@ -228,7 +228,7 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.ok(text.indexOf('3. 目标清楚就派活') < text.indexOf('4. 派活单步原则'), 'the ask-or-dispatch rule comes before the dispatch rules');
   assert.match(text, /10\. 判断会话卡没卡先用 peek，至少等 5 分钟/);
   assert.match(text, /「待补充」[^\n]*自动执行/);
-  assert.ok(text.length < 8000, 'goes out as a prompt, not a file');
+  assert.ok(text.length <= M.LONG_PROMPT, 'goes out as a prompt, not a file');
 });
 
 test('队长 picks the effort: simple medium, ordinary code high, complex or failed xhigh, critical max', () => {

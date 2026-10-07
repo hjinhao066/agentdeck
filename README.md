@@ -50,6 +50,15 @@ questions; `--replace` drops those queued questions (`--replace --now` does both
 Failed receipts show “没做成” in the ledger and status dot; cancelled work shows
 “已中断”. A report excerpt and the absolute full Markdown path return through the existing completion
 channel. Reports stay local under `~/reports/agentdeck-chatgpt-web/<run-id>/`.
+If only the tool's final foreground self-check returns exit 98
+(indeterminate/user window changes), a verified, fully exported answer is still
+delivered with the self-check result in the receipt. Missing or incomplete output
+still fails for both exit 97 and 98. With exit 97 (a reported foreground violation),
+a verified, fully exported answer is delivered too, but the receipt starts with
+`⚠【异常】工具抢了前台` and retains the existing `failed` marker: the ledger/status
+dot and the Captain's unread receipt show the abnormal run, alongside the answer
+excerpt and full report path. This marker reports the foreground violation, not
+a missing answer. Other tool errors and cancellation retain their failure behavior.
 
 Requests in one app execute FIFO, one at a time, with at least 60 seconds after
 the previous request ends. The existing skill also protects the local browser
@@ -67,10 +76,16 @@ raw diagnostics are not copied into AgentDeck logs or conversations.
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
-- **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
+- **待办** (sidebar, under 搜索): your own one-line to-dos, kept apart from the
+  agents' task cards. Type and press Enter; ⌘T (Ctrl+Shift+T on Windows) records one
+  from anywhere in the window. The phone hub has the same list. See [docs/todo.md](docs/todo.md).
+- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 搜索, 待办, Schedule, Artifacts, Skills,
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
+  待我处理 collects decisions, login/payment requests and reports; reply to each
+  item with its original context for the Captain, or tick it into the folded
+  已完成 section. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
   sessions in exactly the sidebar order (队长 first, then folders, then loose
@@ -139,7 +154,11 @@ the middle:
   sidebar collapsed, a gauge icon in the top bar (tinted by the provider closest to running out) opens the same
   rows in a popover. Hover, click or focus a row for
   each window with its exact reset time/date, account, seat, source, sample time,
-  confidence and Captain rotation plan in one tooltip; config dir/model
+  confidence and Captain rotation plan in one tooltip. Details stay beside the rows,
+  wrap to the available width and remain inside the window when it resizes; a reset
+  time breaks only between the clock and the countdown, never mid-phrase. Only one
+  detail opens at a time: keyboard focus keeps its own, while the mouse can look at
+  other rows past a clicked one. Config dir/model
   diagnostics stay in the row's data-detail.
   Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
   Claude shows a separate item per `claudeSeats` configuration, with both
@@ -630,8 +649,9 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   paragraph tells the Captain to run `handoff` first and follow its takeover
   steps: report ready when nothing is open, carry on unprompted when authorised
   work is out, and leave paused or cancelled work alone. That paragraph is
-  not appended again: the combined text would exceed the inline prompt limit
-  and be replaced by a file pointer. The delivery waits for an idle
+  not appended again: the briefing has to stay inside the 10,000-character
+  inline prompt limit (`MainCore.LONG_PROMPT`), past which it is replaced by a
+  file pointer that hides the closing. The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
   including attachments, and rechecks these guards when sending.
 - Raw terminal history recall, Tab completion and cursor edits make the tracked
@@ -728,7 +748,7 @@ folded behind one line with their count and state; click it to open them.
   without `--no-daemon`; model and resume arguments are preserved.
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
-- Prompts have no length limit. One longer than 8000 characters is saved as a
+- Prompts have no length limit. One longer than 10,000 characters is saved as a
   private `.txt` in userData/`long-prompts` (pruned after 60 days) and the agent
   gets its opening plus "read this file first"; the bubble shows the file.
 - Automatic sends (Schedule, 队长) never type into a bare shell, which would run
@@ -792,7 +812,7 @@ new terminal, so an agent launching the app cannot disable independent CLI histo
   its session's id.
 - Limits: history only exists from when AgentDeck recorded it. Older or deleted
   conversations and agent CLIs' own transcripts are not imported. A reply is the
-  screen-extracted final answer, cut at 20,000 characters. A prompt over 8,000
+  screen-extracted final answer, cut at 20,000 characters. A prompt over 10,000
   characters goes out as a file, and its bubble keeps the opening plus that file.
   All chats are loaded into memory at launch. A single chat file larger than
   64 MB is no longer written: you get a warning, and what was saved before stays.
@@ -1061,11 +1081,18 @@ the Windows Electron UI or install, rebuild, or restart either installed app.
 
 Coding tasks can pass `new --worktree <repo> [--base ref] [--branch name]`. AgentDeck adds a git worktree under `~/agentdeck-worktrees/<repo>/<branch>` and starts the session there. After the session is archived, the copy is removed only when the tree has no uncommitted, untracked, stashed, or ignored files and the branch is merged into main/master (or origin's default branch) or is still present on a remote. Any ignored file or directory blocks that automatic removal, including `node_modules`. A copy whose ignored content is entirely inside `node_modules`, and whose branch is already merged or pushed, is marked manually cleanable and listed by `worktree clean` with its path, branch, a summary of the ignored content, and the size. Other ignored paths, such as `dist`, `build`, `out`, and `.env`, are kept and named, and are not offered in that list. `worktree clean` only lists. Deleting one copy requires `--apply` and `--path` for that copy, and the same checks run again. Removal never uses `git worktree remove --force`.
 
-Claude Code asks "do you trust this folder" once per directory and judges a linked worktree on its own path (trust for the repository or a parent folder does not carry over), with "No, exit" as the default row. So that an unattended session does not die there, AgentDeck records the answer itself right after it creates a copy and before the session starts: `projects[<copy path>].hasTrustDialogAccepted = true` in the global file of the Claude seat that will run the session (`~/.claude.json` for the default seat, `<seat dir>/.claude.json` for the others), written the way Claude Code writes it (same lock directory, atomic rename, other content untouched). Only that one directory is recorded (its real path, and the path as given when they differ); the repository, `~/agentdeck-worktrees` and the home folder are never trusted, a damaged seat file is left alone, and only a linked worktree under `~/agentdeck-worktrees` is accepted. Non-Claude agents are not touched. If the record cannot be written the task still starts and the 队长 is told once; it can then answer the menu with `answer --key down,enter`.
+Claude Code asks "do you trust this folder" once per directory and judges a linked worktree on its own path (trust for the repository or a parent folder does not carry over), with "No, exit" as the default row. So that an unattended session does not die there, AgentDeck records the answer itself right after it creates a copy and before the session starts: `projects[<copy path>].hasTrustDialogAccepted = true` in the global file of the Claude seat that will run the session (`~/.claude.json` for the default seat, `<seat dir>/.claude.json` for the others), written the way Claude Code writes it (same lock directory, atomic rename, other content untouched). Only that one directory is recorded (its real path, and the path as given when they differ); the repository, `~/agentdeck-worktrees` and the home folder are never trusted, a damaged seat file is left alone, and only a linked worktree under `~/agentdeck-worktrees` is accepted. Other agents do not change Claude's seat file. If the record cannot be written the task still starts and the 队长 is told once; it can then answer the menu with `answer --key down,enter`.
+
+Antigravity (`agy`) and Cursor CLI (`cursor-agent`) also receive startup directory trust for copies AgentDeck creates with `new --worktree`, and for directories the Captain explicitly names with `new --cwd`. AgentDeck saves that exact authorization on the column (`trustedCwd`); automatic reviewers inherit it only while the executor's cwd still matches. Default/inherited directories, manual columns, edited directories, home and filesystem roots receive no automatic trust. Startup is bound to the authorized directory even if a shell profile changes cwd. Compound shell commands, argument expressions/escapes and CLI workspace overrides (`--workspace`, `--add-dir`, `--worktree`/`-w`, `--project`, etc.) keep the normal manual confirmation path.
+
+- **agy:** before launching, append only the directory and its real-path alias to `trustedWorkspaces` in `~/.gemini/antigravity-cli/settings.json`, using the official CLI's exact-string format and native path separators. The installed official CLI's `CliSetting.IsTrustedWorkspace`/`Store.TrustWorkspace` confirm exact membership, without parent-directory inheritance. Existing settings and trust entries are retained; writes use a temporary file and atomic rename. Invalid JSON, malformed trust arrays and nonregular files are kept intact and a toast reports registration failure. No screen prompt is automatically answered.
+- **Cursor:** launch with its official `--trust` flag, which records the CLI's own workspace decision before displaying a trust dialog. Interactive support requires **Cursor CLI 2026.07.20 or newer**, as described in the [official release notes](https://cursor.com/docs/release-notes); older interactive versions are not covered. AgentDeck does not write Cursor's internal `.workspace-trusted` markers or enable additional permission flags.
+
+Both paths use the same code on macOS and Windows (agy's Windows config is `%USERPROFILE%\.gemini\antigravity-cli\settings.json`; Cursor handles its own state). Regression tests cover native Windows path spelling and PowerShell launch construction. Windows hardware/CLI execution has not been verified for this change. Tests use temporary homes and stand-in programs; no live trust configuration or model session is changed.
 
 A prompt that carries an image path (for example a screenshot) is turned into an attachment by Claude Code, which says "Pasting…" in its footer while it reads the file and drops an Enter pressed meanwhile. AgentDeck therefore waits (at most 30 s) until that footer is gone before it presses Enter, so the task is submitted instead of sitting in the input box.
 
-The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
+The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in
 [Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and

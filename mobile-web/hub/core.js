@@ -358,6 +358,117 @@
   }
   const elapsedText = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + pad(s % 60); };
 
-  return { cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  // ---- 随手记待办 ----------------------------------------------------------
+  // Each computer answers api/todos with the list as it sees it (its own file
+  // merged with what git brought from the other one). The same id can come from
+  // both: the copy updated last wins, and a deletion mark hides the item.
+  const TODO_ID = /^td-[A-Za-z0-9-]{8,64}$/;
+  const time = (value) => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
+  function cleanTodos(body) {
+    const items = body && Array.isArray(body.items) ? body.items : [];
+    const out = [];
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !TODO_ID.test(item.id) || !time(item.updated)) continue;
+      if (item.deleted === true) { out.push({ id: item.id, deleted: true, updated: item.updated }); continue; }
+      if (typeof item.text !== 'string' || !item.text.trim()) continue;
+      out.push({ id: item.id, text: item.text.slice(0, 500), done: item.done === true, doneAt: item.done === true && time(item.doneAt) ? item.doneAt : null,
+        created: time(item.created) ? item.created : item.updated, updated: item.updated });
+    }
+    return out;
+  }
+  function mergeTodos(sources) {
+    const merged = new Map();
+    for (const source of sources) for (const item of source.todos || []) {
+      const kept = merged.get(item.id);
+      if (!kept || Date.parse(item.updated) > Date.parse(kept.item.updated)) merged.set(item.id, { item, from: source.id });
+    }
+    const live = [...merged.values()].filter(({ item }) => !item.deleted).map(({ item, from }) => ({ ...item, seenOn: from }));
+    const open = live.filter((t) => !t.done).sort((a, b) => Date.parse(b.created) - Date.parse(a.created) || a.id.localeCompare(b.id));
+    const done = live.filter((t) => t.done).sort((a, b) => Date.parse(b.doneAt || b.updated) - Date.parse(a.doneAt || a.updated) || a.id.localeCompare(b.id));
+    return { open, done };
+  }
+  // Where a new to-do or a tick goes: the computer the user picked, else the
+  // default one (Mac), else any other that is online and has to-dos. Both
+  // computers keep the same list, so the choice only decides who writes first.
+  function todoWriter(machines, preferId) {
+    const ready = machines.filter((m) => m.state === 'online' && m.todosReady && m.csrf);
+    return ready.find((m) => m.id === preferId) || ready.find((m) => m.default) || ready[0] || null;
+  }
+  // Why nothing can be recorded right now ('' when something can).
+  function todoBlock(machines) {
+    if (todoWriter(machines, '')) return '';
+    const online = machines.filter((m) => m.state === 'online');
+    if (online.length && online.every((m) => m.todosReady === false)) return '这台电脑上的 AgentDeck 版本还没有待办，升级后就能在手机上记。';
+    if (machines.some((m) => m.state === 'login')) return '先在「总览」登录一台电脑，才能记待办。';
+    return '两台电脑现在都连不上，等它们上线后再记。';
+  }
+  function todoFailure(result, name) {
+    if (!result || result.failed) return `没连上 ${name}，这条没有记下。`;
+    if (result.timedOut) return `${name} 没有响应，这条可能没记下，刷新看看。`;
+    if (result.status === 401) return `${name} 需要重新登录，这条没有记下。`;
+    if (result.status === 403) return `${name} 的安全校验已过期，刷新后再记。`;
+    if (result.status === 400 && result.body && typeof result.body.error === 'string' && /[\u4e00-\u9fff]/.test(result.body.error)) return result.body.error.slice(0, 120);
+    return `${name} 没有记下这条（HTTP ${result.status}）。`;
+  }
+
+  return { cleanTodos, mergeTodos, todoWriter, todoBlock, todoFailure, cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
+});
+
+// 待我处理 on the phone: each computer's list, cleaned field by field again
+// (a computer's answer is data, not trusted markup), then merged into one page:
+// 要你处理 first, then 结果汇报, newest first; 已完成 by when it was finished.
+// Each item keeps the computer it came from: a reply goes to that computer only.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const ID = /^at-[a-z0-9-]{4,40}$/;
+  const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
+  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const line = (value, max) => text(value, max).replace(/\s+/g, ' ').trim();
+  function cleanAttention(body) {
+    const items = (body && Array.isArray(body.items) ? body.items : []).slice(0, 300)
+      .filter((item) => item && typeof item.id === 'string' && ID.test(item.id) && (item.kind === 'need' || item.kind === 'report') && line(item.title, 300))
+      .map((item) => ({
+        id: item.id, kind: item.kind, label: line(item.label, 20) || (item.kind === 'need' ? '要你处理' : '结果汇报'),
+        title: line(item.title, 300), ask: line(item.ask, 1000), detail: text(item.detail, 4000),
+        files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
+        project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
+        source: item.source === 'card' ? 'card' : 'captain', created: time(item.created), readAt: time(item.readAt),
+        done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0, doneText: item.done === true ? line(item.doneText, 200) : '',
+        replies: (Array.isArray(item.replies) ? item.replies : []).slice(-3).filter((r) => r && typeof r.text === 'string')
+          .map((r) => ({ text: text(r.text, 1000), at: time(r.at), from: r.from === 'phone' ? 'phone' : 'desktop', seen: r.seen === true })),
+      }));
+    return items;
+  }
+  // sources: [{ id, label, items }] for the computers that answered.
+  function mergeAttention(sources) {
+    const all = [];
+    for (const m of sources || []) for (const item of m.items || []) all.push({ ...item, machineId: m.id, machineLabel: m.label, key: m.id + ':' + item.id });
+    const open = all.filter((i) => !i.done);
+    const byNew = (a, b) => b.created - a.created || (a.key < b.key ? -1 : 1);
+    const needs = open.filter((i) => i.kind === 'need').sort(byNew);
+    const reports = open.filter((i) => i.kind === 'report').sort(byNew);
+    const done = all.filter((i) => i.done).sort((a, b) => b.doneAt - a.doneAt || (a.key < b.key ? -1 : 1));
+    const unreadReports = reports.filter((i) => !i.readAt).length;
+    return { needs, reports, done, counts: { need: needs.length, reports: reports.length, unreadReports, badge: needs.length + unreadReports } };
+  }
+  // Why a reply or tick did not go through, in words.
+  function attentionFailure(result, name) {
+    if (!result || result.failed) return `手机连不上 ${name}，这条没有发出去。草稿还在。`;
+    if (result.timedOut) return `${name} 没有回应（可能在睡眠），这条没有发出去。草稿还在。`;
+    if (result.status === 409 && result.body && typeof result.body.error === 'string' && result.body.error) {
+      // The computer's own words point at its sidebar, which the phone does not have.
+      if (result.body.error.startsWith('还没有队长')) return `${name} 上还没有队长。先到那台电脑的 AgentDeck 里创建队长，再回来回复。草稿还在。`;
+      return result.body.error.slice(0, 200);
+    }
+    if (result.status === 401) return `${name} 的登录已失效，先在总览里重新登录。`;
+    if (result.status === 403) return `${name} 的安全校验已过期，刷新页面后再试。`;
+    if (result.status === 404) return `${name} 的 AgentDeck 版本太旧，还没有「待我处理」。`;
+    if (result.status === 502) return `${name} 离线，这条没有发出去。`;
+    return `${name} 没有接受（HTTP ${result.status}）。`;
+  }
+  return { cleanAttention, mergeAttention, attentionFailure };
 });

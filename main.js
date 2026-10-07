@@ -27,7 +27,9 @@ const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
+const { TodoStore } = require('./todo-store');
 const Worktree = require('./worktree-core');
+const { prepareWorkspaceTrust } = require('./workspace-trust-main');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
 const { createRefresh: createClaudeQuotaRefresh } = require('./quota-claude');
@@ -71,6 +73,31 @@ function readLocalConfig() {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 }
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
+// 随手记待办: ~/.agents/boards/todos (each computer writes only its own file);
+// a test profile keeps its own copy inside the profile.
+const todoStore = new TodoStore(tudArg ? path.join(app.getPath('userData'), 'todos') : undefined);
+let todoWatch = null, todoWatchTimer = null;
+function todosChanged() { send('todos:changed', {}); }
+// The other computer's file arrives through git; tell the page so an open list refreshes.
+function watchTodos() {
+  if (todoWatch) return;
+  try {
+    fs.mkdirSync(todoStore.dir, { recursive: true });
+    todoWatch = fs.watch(todoStore.dir, () => { clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); });
+    todoWatch.on('error', () => { try { todoWatch.close(); } catch (_) {} todoWatch = null; });
+  } catch (_) { todoWatch = null; }
+}
+handleMain('todos:request', (_event, payload) => {
+  if (!payload || !['list', 'add', 'update', 'remove'].includes(payload.op)) throw new Error('Invalid to-do operation.');
+  const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
+  if (payload.op === 'list') return { items: todoStore.list() };
+  // The desktop page never writes on the phone's behalf, and never touches the AI flag.
+  const item = payload.op === 'add' ? todoStore.add({ text: input.text })
+    : payload.op === 'remove' ? todoStore.remove({ id: input.id })
+      : todoStore.update({ id: input.id, ...(input.text !== undefined ? { text: input.text } : {}), ...(input.done !== undefined ? { done: input.done } : {}), ...(input.deleted !== undefined ? { deleted: input.deleted } : {}) });
+  todosChanged();
+  return { item };
+});
 let fleetClient = null;
 let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
@@ -287,7 +314,12 @@ const codexLauncher = createCodexLauncher({ shell: shellFile(), env: ENV });
 const ptyLaunchDirs = new Map();
 handleMain('pty:prepare-launch', async (_event, { id, command }) => {
   if (!ptys.has(id) || typeof command !== 'string' || command.length > 1000 || /[\x00-\x1f\x7f]/.test(command)) throw new Error('Invalid launch command');
-  return codexLauncher.prepare(command, ptyLaunchDirs.get(id));
+  const cwd = ptyLaunchDirs.get(id);
+  const column = readLocalConfig().columns?.find((c) => c.id === id);
+  const trustHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
+  const prepared = prepareWorkspaceTrust(command, column, cwd, trustHome);
+  if (prepared.warning) send('toast', { text: prepared.warning });
+  return codexLauncher.prepare(prepared.command, cwd);
 });
 
 const ptySeats = new Map();
@@ -509,7 +541,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user', 'main-discuss-receipt'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user', 'main-discuss-receipt', 'main-inbox'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -799,6 +831,8 @@ function createWindow() {
 function hideTestWindow(win) {
   win.setOpacity(0);
   win.setIgnoreMouseEvents(true);
+  // Set before the first show, so the invisible window never sits above the user's windows.
+  if (isMac) win.setAlwaysOnTop(true, 'normal', -1);
 }
 
 function focusColumn(id) {
@@ -900,6 +934,14 @@ app.whenReady().then(async () => {
   mobileWeb = new MobileWebServer({
     getSessions: () => requestMobile('sessions'),
     getTasks: () => taskStore.list(),
+    // The phone records, reads and ticks to-dos; it never edits text or deletes.
+    getTodos: () => todoStore.phone(),
+    writeTodos: (input) => {
+      const item = input.op === 'add' ? todoStore.add({ text: input.text, source: 'phone' })
+        : todoStore.update({ id: input.id, done: input.done, ...(input.base ? { base: input.base } : {}), source: 'phone' });
+      todosChanged();
+      return { id: item.id, text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated };
+    },
     getOutput: (id) => requestMobile('output', { id }),
     getCaptain: async () => {
       const data = await requestMobile('captain-history');
@@ -916,6 +958,9 @@ app.whenReady().then(async () => {
     // Which account the Captain is on, and moving it to another: the desktop's own manual switch.
     getRelay: () => requestMobile('relay'),
     switchRelay: (input) => requestMobile('relay-switch', input),
+    // 待我处理: the same list and actions as the desktop page.
+    getAttention: () => requestMobile('attention'),
+    writeAttention: (input) => requestMobile('attention-write', input),
     // Like pasted screenshots, phone images reach the Captain as file paths.
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
     getBoardVersion: () => boardVersionOf(taskStore.dir),
@@ -1215,7 +1260,15 @@ app.whenReady().then(async () => {
       try { result = await pending.notifyPromise; }
       catch (err) { error = err.message; }
     }
-    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read';
+    // 待我处理: a newly filed need item alerts the user the same way notify-user does.
+    if (action === 'main-inbox' && pending.command.op === 'need' && turnId && !error) {
+      const input = pending.command.input || {};
+      const message = [input.title, input.ask].filter((v) => typeof v === 'string' && v.trim()).join('\n').slice(0, 4000);
+      pending.notifyPromise ||= notifyUser({ callerId: pending.command.callerId, id: pending.command.id, message, urgent: input.urgent === true }, visible === true, turnId);
+      try { result = (typeof result === 'string' ? result + '\n' : '') + await pending.notifyPromise; }
+      catch (err) { result = (typeof result === 'string' ? result + '\n' : '') + '本机提醒没发出：' + err.message; }
+    }
+    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read' || action === 'main-inbox';
     pendingBoardCommands.delete(requestId);
     if (pending?.installResolve) {
       if (error) pending.installReject(new Error(error)); else pending.installResolve();
@@ -1600,6 +1653,8 @@ function startFleet(configPath) {
   const userData = app.getPath('userData');
   const device = loadDevice(path.join(userData, 'device.json'));
   taskStore.deviceId = device.id;
+  todoStore.deviceId = device.id;
+  watchTodos();
   const settings = readFleetSettings({ env: process.env, fleetFile: path.join(userData, 'fleet.json') });
   if (!settings) return;
   if (settings.error) {

@@ -112,7 +112,7 @@ test('the briefing tells the Captain what 高优先级 means and how to mark it,
     assert.match(text, /task priority --id 卡片或会话id --level high\|normal/);
     assert.match(text, /new --title [^\n]*\[--priority high\]/);
     assert.match(text, /用户说「高优先级」＝立刻派到后台开工：建卡或 new 加 --priority high，排队排最前/);
-    assert.ok((text + '\n\n读看板继续。').length <= 8000, platform);
+    assert.ok((text + M.SAVER_RESUME).length <= M.LONG_PROMPT, platform);
   }
 });
 

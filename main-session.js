@@ -70,6 +70,17 @@
     s.pending.push({ taskId: 'board-' + Date.now(), colId: s.colId, title: '任务看板', ts: Date.now(), summary: message, source: 'command' });
     save();
   }
+  // 待我处理: the user's reply to an item, or a tick on something 队长 asked of
+  // them, reaches 队长 as one receipt. Returns its id, so the page can tell
+  // when 队长 has taken it off the channel.
+  function userNotice(message) {
+    const s = state();
+    if (!s || !mainCol()) throw new Error('还没有队长：回复要交给队长，先在侧边栏创建队长。');
+    const taskId = 'attention-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    s.pending.push({ taskId, colId: s.colId, title: '待我处理', ts: Date.now(), summary: message, source: 'command' });
+    save();
+    return taskId;
+  }
   async function boardRequest(op, input) {
     const result = await window.deck.taskBoard(op, input);
     if (op === 'move' && ['done', 'todo'].includes(result.card?.status)) cancelWaiting((w) => w.metadata?.boardId === result.card.id, '卡片已移到' + result.card.status + '，取消排队。');
@@ -237,7 +248,7 @@
   }
   function quotaQueueText(plan, title, dispatch = false) {
     if (plan.reason === 'explicit') {
-      const why = plan.held === 'low' ? '额度低于阈值' : '额度用尽';
+      const why = plan.held === 'low' ? '5 小时额度低于阈值' : '额度用尽';
       return `已排队：${plan.note}。${why}，稍后自动开${dispatch ? '调度会话' : `新会话「${title}」`}。`;
     }
     return dispatch ? '已排队：额度用尽，稍后自动开调度会话。' : `已排队：额度用尽，稍后自动开新会话「${title}」。`;
@@ -390,6 +401,7 @@
     const executor = sessionById(card.exec_receipt?.session_id);
     const title = window.BoardCore.cleanText('审查：' + card.title, 80).replace(/\s+/g, ' ');
     const metadata = { project: card.project, reviews: executor ? [executor.id] : [], boardId: id, autoReviewRound: claim.round };
+    if (executor?.trustedCwd && executor.trustedCwd === executor.cwd) metadata.trustedCwd = executor.trustedCwd;
     const placed = await withQueue(async () => {
       const current = await findCard(id);
       if (state() !== s || !current || current.review_claim?.key !== input.key || current.review_claim.delivered ||
@@ -773,10 +785,10 @@
     } else if (op.phase === 'cleared' && used !== null && used < op.used / 2) {
       archiveSnapshot(col, op.snapshot);
       saverBanner('上下文已清空，正在重发队长提示词');
-      // The briefing already ends with AUTONOMOUS_CONTINUATION. Appending it
-      // again exceeds the 8000-character inline limit, so the captain would
-      // only see a file pointer and miss the "don't wait" closing.
-      saverSend(op, briefingText() + '\n\n读看板继续。', 'briefing', true, () => {
+      // The briefing already ends with AUTONOMOUS_CONTINUATION, so only the short
+      // resume line follows it. Past M.LONG_PROMPT the captain would only see a
+      // file pointer and miss the "don't wait" closing.
+      saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true, () => {
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
       });
@@ -1167,6 +1179,7 @@
       const { trust, ...prepared } = await window.deck.prepareWorktree({ ...metadata.worktreeRequest, ...(seat?.configDir ? { seatId: seat.id, configDir: seat.configDir } : {}) });
       metadata.worktree = prepared;
       cwd = prepared.path;
+      metadata.trustedCwd = cwd;
       if (trust && !trust.ok) boardNotice(`代码副本 ${prepared.path} 没能预先登记 Claude 的文件夹信任（${trust.reason}）。会话若停在「是否信任此文件夹」，用 answer --key down,enter 选第二项。`);
     }
     const id = 'c-board-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -1215,7 +1228,7 @@
   async function enqueue(title, cmd, cwd, requestId, text, metadata = {}, reason = '') {
     const s = state();
     let body = text;
-    if (body.length > 8000 && metadata.executor !== 'chatgpt-web') {
+    if (body.length > M.LONG_PROMPT && metadata.executor !== 'chatgpt-web') {
       const file = await window.deck.saveLongPrompt(body).catch(() => '');
       if (!file) throw new Error('任务太长，存文件失败，没有排上队。');
       body = `${body.slice(0, 300).replace(/\s+/g, ' ').trim()}…\n（这件活共 ${text.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
@@ -2357,8 +2370,13 @@
         listenerStatus = { colId: caller.id, alive: message.alive, at: Date.now() };
         if (message.alive) listenerReminder = false;
         return { done: true };
+      case 'main-inbox':
+        if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
+        return window.AttentionUI.captain(message, caller);
       case 'main-notify-user':
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
+        // The user also finds it on 待我处理 when they come back.
+        if (!message.test && window.AttentionUI) window.AttentionUI.fromNotify(message.message);
         return { done: true, visible: host.captainColumnVisible(caller.id),
           turnId: message.test ? message.id : host.terms.get(caller.id)?.captainTurnId || message.id };
       case 'main-discuss-receipt': {
@@ -2595,6 +2613,9 @@
           metadata.claudeConfigDir = seat.configDir;
         }
         const cwd = window.BoardCore.cleanText(message.cwd, 1000);
+        // An inherited/default cwd is not authorization. Only the Captain's
+        // explicit --cwd or a copy we just created can receive startup trust.
+        if (cwd && isMain(caller)) metadata.trustedCwd = cwd;
         if (typeof message.worktree === 'string' && message.worktree.trim()) {
           if (metadata.executor === 'chatgpt-web') throw new Error('--worktree 不能用于网页调研。');
           if (cwd) throw new Error('--worktree 会指定工作目录，不要同时传 --cwd。');
@@ -2718,7 +2739,7 @@
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
-    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb,
+    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),
 

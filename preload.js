@@ -122,6 +122,9 @@ contextBridge.exposeInMainWorld('deck', {
   boardReady: () => ipcRenderer.send('board:ready'),
   // Fixed shared task store; no caller-selected paths or arbitrary IPC.
   taskBoard: (op, input) => ipcRenderer.invoke('task-board:request', { op, input }),
+  // 随手记待办: list / add / update / remove on the fixed to-do folder only.
+  todos: (op, input) => ipcRenderer.invoke('todos:request', { op, input }),
+  onTodosChanged: (cb) => ipcRenderer.on('todos:changed', () => cb()),
   prepareWorktree: (input) => ipcRenderer.invoke('worktree:prepare', input || {}),
   reclaimWorktree: (record) => ipcRenderer.invoke('worktree:reclaim', { record }),
   fleetState: () => ipcRenderer.invoke('fleet:state'),

@@ -49,6 +49,7 @@ h1, h2, h3, p, dl, dd { margin: 0; }
 /* The computer switch sits in the header, so the wordmark steps aside: the mark stays, the name returns on wide screens and on the output view, which has no switch. */
 .brand strong, .brand-caption { display: none; }
 .app-header[data-view="output"] .brand strong, .app-header[data-view="output"] .brand-caption { display: inline; }
+.app-header[data-view="todo"] .brand strong, .app-header[data-view="todo"] .brand-caption { display: inline; }
 @media (min-width: 520px) { .brand strong, .brand-caption { display: inline; } }
 .icon-button { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 12px; color: var(--secondary); background: transparent; flex-shrink: 0; transition: background .15s, color .15s; }
 .icon-button:hover:not(:disabled) { color: var(--text); background: var(--soft); }
@@ -190,13 +191,71 @@ textarea::placeholder { color: var(--muted); }
 .task-card h3 { font-size: 14px; font-weight: 600; line-height: 1.55; overflow-wrap: anywhere; }
 .task-assignee { font: 11px/1.6 var(--mono); color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
 .task-receipt { color: var(--secondary); font-size: 12px; line-height: 1.6; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
-.board-foot { margin-top: 16px; padding: 0 4px; font-size: 12px; line-height: 1.65; color: var(--muted); }
+.board-foot, .todo-foot { margin-top: 16px; padding: 0 4px; font-size: 12px; line-height: 1.65; color: var(--muted); }
 
 .output-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 0 10px 4px; }
 .output-names { min-width: 0; }
 .output-names h1 { font-size: 17px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
 .output { margin: 0; padding: 16px 14px; min-height: 320px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); font: 12px/1.8 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 
+/* 待我处理: 要你处理 in the board's 等用户 amber with a rim on the left, 结果汇报 quiet; unread is a blue dot.
+   Text buttons for replying and ticking (the main actions), icons for copy and put-back. */
+.navigation button { position: relative; }
+.nav-attention { position: absolute; top: 3px; left: calc(50% + 7px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 99px; background: var(--soft); color: var(--secondary); font: 600 10.5px/17px var(--sans); text-align: center; font-variant-numeric: tabular-nums; }
+.nav-attention.need { background: var(--warn); color: var(--surface); }
+.at-lists { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 10px; }
+.at-hint { margin: 0 4px; }
+.at-hint.blocked { color: var(--bad); }
+.at-section { display: flex; align-items: flex-end; gap: 10px; margin: 14px 4px 0; }
+.at-lists > .at-section:first-of-type { margin-top: 2px; }
+.at-section-titles { flex: 1; min-width: 0; }
+.at-section h2 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; }
+.at-section p { margin-top: 2px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.at-count { min-width: 22px; padding: 0 7px; border-radius: 99px; background: var(--soft); color: var(--secondary); font: 600 11px/20px var(--mono); text-align: center; }
+.at-sec-need .at-count { background: var(--warn-soft); color: var(--warn); }
+.at-all { min-height: 44px; padding: 0 12px; font-size: 13px; }
+.at-item { position: relative; padding: 13px 14px 6px 16px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.at-item.at-need:not(.done) { border-left: 3px solid var(--warn); padding-left: 14px; }
+.at-item.done { background: transparent; box-shadow: none; }
+.at-top { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11.5px; }
+.at-unread { width: 8px; height: 8px; border-radius: 50%; background: var(--focus); flex-shrink: 0; }
+.at-ok { color: var(--ok); }
+.at-ok svg { width: 16px; height: 16px; }
+.at-kind { padding: 2px 9px; border-radius: 99px; background: var(--soft); color: var(--secondary); font-weight: 600; white-space: nowrap; flex-shrink: 0; }
+.at-need:not(.done) .at-kind { background: var(--warn-soft); color: var(--warn); }
+.at-report:not(.done) .at-kind { background: var(--accent-soft); color: var(--accent); }
+.at-meta { min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.at-title { margin-top: 8px; font-size: 15.5px; font-weight: 650; line-height: 1.5; overflow-wrap: anywhere; }
+.at-item.done .at-title { margin-top: 6px; font-size: 14px; font-weight: 500; color: var(--secondary); }
+.at-ask { margin-top: 9px; padding: 9px 12px; border-radius: 12px; background: var(--warn-soft); font-size: 14px; line-height: 1.65; overflow-wrap: anywhere; }
+.at-ask b { margin-right: 8px; color: var(--warn); font-size: 12px; }
+.at-done-text { margin-top: 4px; color: var(--muted); font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere; }
+.at-more { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; margin: 2px 0 0 -6px; padding: 0 8px 0 4px; border: 0; border-radius: 10px; background: transparent; color: var(--secondary); font-size: 13px; }
+.at-chev svg { width: 15px; height: 15px; transition: transform .15s; }
+.at-chev.open svg { transform: rotate(90deg); }
+.at-detail { margin: 2px 0 8px; padding: 11px 12px; border-radius: 12px; background: var(--raised); display: grid; gap: 9px; }
+.at-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.7; color: var(--secondary); }
+.at-files { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.at-files li { font: 12px/1.55 var(--mono); color: var(--secondary); overflow-wrap: anywhere; }
+.at-links { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.at-said { padding-top: 9px; border-top: 1px solid var(--line); }
+.at-said-head { display: block; font-size: 11.5px; color: var(--muted); }
+.at-said-text { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.6; }
+.at-actions { display: flex; align-items: center; gap: 8px; margin: 8px -8px 0 0; padding-bottom: 6px; }
+.text-button.quiet { color: var(--secondary); }
+.at-spacer { flex: 1; }
+.at-error { margin-top: 10px; padding: 8px 12px; border-radius: 12px; background: var(--bad-soft); color: var(--bad); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.at-compose { margin: 10px 0 10px; }
+.at-compose-row { display: flex; align-items: flex-start; gap: 4px; padding-left: 6px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--raised); }
+.at-compose-row:focus-within { border-color: var(--accent); }
+textarea.at-reply { height: auto; min-height: 88px; max-height: min(220px, 40dvh); }
+.at-compose .primary { margin-top: 8px; }
+button.at-done-toggle { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; margin-top: 10px; padding: 0 4px; border: 0; border-radius: 12px; background: transparent; color: var(--secondary); font-size: 14px; font-weight: 650; text-align: left; }
+.at-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 20px 34px; border: 1px dashed var(--line-strong); border-radius: 18px; text-align: center; color: var(--secondary); font-size: 13px; line-height: 1.7; }
+.at-empty-art { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 6px; border-radius: 18px; background: var(--accent-soft); color: var(--accent); }
+.at-empty-art svg { width: 28px; height: 28px; }
+.at-empty strong { color: var(--text); font-size: 15px; font-weight: 650; }
+@media (prefers-reduced-motion: reduce) { .at-chev svg { transition: none; } }
 .navigation { display: flex; gap: 4px; padding: 2px 8px calc(2px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
 .navigation button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 48px; padding: 5px 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1.3; }
 .navigation button[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
@@ -351,3 +410,46 @@ textarea::placeholder { color: var(--muted); }
 @media (prefers-reduced-motion: reduce) { .refreshing svg, .typing i, .sheet[open] { animation: none; } .spinner { animation-duration: 2.4s; } .icon-button, .text-button, .seat-option { transition: none; } }
 /* Tiny phones: the switch gets its own line instead of clipping the names. */
 @media (max-width: 359px) { .app-header { flex-wrap: wrap; } .brand { display: none; } .machine-bar { order: 3; flex: 1 0 100%; margin: 0; } .stats { grid-template-columns: 1fr 1fr; } }
+
+/* 随手记待办: one box at the top, open items newest first, finished ones folded below. */
+.navigation button { position: relative; }
+.nav-badge { position: absolute; top: 3px; left: calc(50% + 7px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 99px; background: var(--accent); color: var(--accent-ink); font: 600 10.5px/17px var(--sans); text-align: center; font-variant-numeric: tabular-nums; }
+.todo-form { position: sticky; top: -14px; z-index: 2; margin: -14px -12px 0; padding: 14px 12px 6px; background: var(--bg); }
+/* The list slides under the box: a short fade instead of a hard cut through a half-hidden line. */
+.todo-form::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 12px; background: linear-gradient(var(--bg), transparent); pointer-events: none; }
+.todo-box { display: flex; align-items: center; gap: 10px; padding-left: 16px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
+.todo-box:focus-within { border-color: var(--accent); }
+.todo-ring { width: 20px; height: 20px; border-radius: 50%; border: 1.7px dashed var(--muted); flex-shrink: 0; opacity: .8; }
+.todo-box input { flex: 1; min-width: 0; height: 52px; padding: 0; border: 0; background: transparent; font-size: 16px; }
+.todo-box input:focus-visible { outline: 0; }
+.todo-box input::placeholder { color: var(--muted); }
+.todo-add { position: relative; margin: 4px; color: var(--accent-ink); }
+.todo-add::before { content: ""; position: absolute; inset: 4px; border-radius: 12px; background: var(--accent); }
+.todo-add svg { position: relative; width: 20px; height: 20px; stroke-width: 2.2; }
+.todo-add:hover:not(:disabled) { background: transparent; color: var(--accent-ink); }
+.todo-add:disabled { opacity: 1; color: var(--muted); }
+.todo-add:disabled::before { background: var(--soft); }
+.todo-form .send-hint { margin: 7px 6px 0; }
+.todo-lists { margin-top: 12px; }
+.todo-section { display: flex; align-items: center; gap: 8px; margin: 6px 4px 8px; font-size: 12px; font-weight: 600; color: var(--muted); letter-spacing: .03em; }
+.todo-count { min-width: 20px; padding: 0 7px; border-radius: 99px; background: var(--soft); text-align: center; font: 500 11px/19px var(--mono); letter-spacing: 0; }
+button.todo-done-toggle { width: 100%; min-height: 44px; margin: 14px 0 6px; padding: 0 4px; border: 0; border-radius: 12px; background: transparent; text-align: left; }
+.todo-chev svg { width: 15px; height: 15px; transition: transform .15s; }
+.todo-chev.open svg { transform: rotate(90deg); }
+.todo-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); overflow: hidden; }
+.todo-row { display: flex; align-items: flex-start; gap: 4px; padding: 2px 14px 2px 2px; }
+.todo-row + .todo-row { border-top: 1px solid var(--line); }
+.todo-check { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; padding: 0; border: 0; border-radius: 50%; background: transparent; color: transparent; flex-shrink: 0; }
+.todo-check svg { width: 24px; height: 24px; padding: 3px; border-radius: 50%; border: 1.8px solid var(--line-strong); stroke-width: 3; transition: background .18s, border-color .18s, color .18s, transform .18s; }
+.todo-check:disabled { opacity: .5; }
+.todo-row.is-done .todo-check svg { background: var(--ok); border-color: var(--ok); color: var(--surface); }
+.todo-row.is-saving .todo-check svg { transform: scale(1.1); }
+.todo-main { flex: 1; min-width: 0; padding: 12px 0 11px; }
+.todo-text { font-size: 15px; line-height: 1.5; overflow-wrap: anywhere; transition: color .2s; }
+.todo-row.is-done .todo-text { color: var(--muted); text-decoration: line-through; }
+.todo-when { margin-top: 1px; font-size: 11.5px; color: var(--muted); }
+.todo-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 20px 34px; border: 1px dashed var(--line-strong); border-radius: 18px; text-align: center; color: var(--secondary); font-size: 13px; line-height: 1.7; }
+.todo-empty-art { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 6px; border-radius: 18px; background: var(--accent-soft); color: var(--accent); }
+.todo-empty-art svg { width: 28px; height: 28px; }
+.todo-empty strong { color: var(--text); font-size: 15px; font-weight: 650; }
+@media (prefers-reduced-motion: reduce) { .todo-check svg, .todo-chev svg, .todo-text { transition: none; } }
