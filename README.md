@@ -79,7 +79,7 @@ the middle:
 - **待办** (sidebar, under 搜索): your own one-line to-dos, kept apart from the
   agents' task cards. Type and press Enter; ⌘T (Ctrl+Shift+T on Windows) records one
   from anywhere in the window. The phone hub has the same list. See [docs/todo.md](docs/todo.md).
-- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 搜索, 待办, Schedule, Artifacts, Skills,
+- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 搜索, 待办, Schedule, Artifacts, Skills,
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.

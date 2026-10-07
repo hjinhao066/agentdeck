@@ -68,7 +68,7 @@ test('the sidebar 待办 entry opens a page that is ready to type into, with a f
   await expect(count()).toBeHidden();
   // It sits right under 搜索, after 任务看板, among the primary entries.
   const order = await page.locator('#navTop > *').evaluateAll((rows) => rows.map((r) => r.dataset.nav || r.id));
-  expect(order.slice(0, 5)).toEqual(['new', 'captain', 'tasks', 'navSearchSlot', 'todo']);
+  expect(order.slice(0, 6)).toEqual(['new', 'captain', 'attention', 'tasks', 'navSearchSlot', 'todo']);
   await entry.click();
   await expect(page.locator('#pageView .page-titles h1')).toHaveText('待办');
   await expect(entry).toHaveClass(/active/);
