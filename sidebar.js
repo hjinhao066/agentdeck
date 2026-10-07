@@ -47,13 +47,14 @@
     b.type = 'button'; b.title = title; b.setAttribute('aria-label', title); b.innerHTML = host.ICONS[name] || '';
     b.addEventListener('mousedown', (e) => e.stopPropagation());
     b.addEventListener('click', (e) => { e.stopPropagation(); onClick(e); });
-    b.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') {
+    if (cls === 'captain-fold' || cls === 'crew-model-fold') {
+      b.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
         e.preventDefault();
         e.stopPropagation();
-        onClick(e);
-      }
-    });
+        if (!e.repeat) b.click();
+      });
+    }
     return b;
   }
 
@@ -130,22 +131,18 @@
   function renderBody() {
     closeMenu();
     const active = document.activeElement;
-    let restoreFocus = null;
-    if (active && listEl && listEl.contains(active)) {
-      if (active.classList.contains('captain-fold')) {
-        restoreFocus = () => listEl.querySelector('.captain-fold');
-      } else if (active.classList.contains('crew-model-fold')) {
-        const modelKey = active.closest('.crew-model')?.dataset.modelKey;
-        restoreFocus = () => listEl.querySelector(`.crew-model[data-model-key="${modelKey}"] .crew-model-fold`);
-      } else if (active.dataset?.colId) {
-        const colId = active.dataset.colId;
-        restoreFocus = () => listEl.querySelector(`[data-col-id="${colId}"]`);
+    let foldSelector = null;
+    if (listEl.contains(active)) {
+      if (active.classList.contains('captain-fold')) foldSelector = '.captain-fold';
+      else if (active.classList.contains('crew-model-fold')) {
+        const key = active.closest('.crew-model').dataset.modelKey;
+        foldSelector = `.crew-model[data-model-key="${CSS.escape(key)}"] .crew-model-fold`;
       }
-      try { active.blur(); } catch (_) {}
     }
+    const previous = [...listEl.childNodes];
+    const body = document.createDocumentFragment();
     const navItems = host.navItems;
     navItems.clear();
-    listEl.textContent = '';
     captainMirror.disconnect();
     const main = window.MainSession && window.MainSession.mainCol();
     captainRow.dot.hidden = !main;
@@ -157,26 +154,26 @@
     if (main) {
       const waiting = (window.MainSession.state()?.waitlist || []).length;
       const captain = captainListRow(main, !!(crew.length || waiting));
-      listEl.appendChild(captain);
-      if (crew.length || waiting) listEl.appendChild(crewBlock(crew, captain.querySelector('.crew-counts')));
+      body.appendChild(captain);
+      if (crew.length || waiting) body.appendChild(crewBlock(crew, captain.querySelector('.crew-counts')));
     }
 
-    listEl.appendChild(sectionHead('folders', '文件夹', null, [iconButton('folderPlus', '新建文件夹', () => createFolder(true))]));
-    groups.forEach((g) => listEl.appendChild(folderBlock(g)));
+    body.appendChild(sectionHead('folders', '文件夹', null, [iconButton('folderPlus', '新建文件夹', () => createFolder(true))]));
+    groups.forEach((g) => body.appendChild(folderBlock(g)));
 
-    listEl.appendChild(sectionHead('loose', '对话', loose.length || null, [iconButton('plus', '新对话 (⌘N)', () => host.addAndFocusColumn())]));
+    body.appendChild(sectionHead('loose', '对话', loose.length || null, [iconButton('plus', '新对话 (⌘N)', () => host.addAndFocusColumn())]));
     const looseBox = el('div', 'nav-group');
     looseBox.dataset.group = '';
     loose.forEach((col) => looseBox.appendChild(sessionRow(col)));
     if (!loose.length) {
       looseBox.appendChild(el('div', 'nav-empty', cols.length ? '拖到这里可以移出文件夹' : '还没有对话，点「新对话」开始'));
     }
-    listEl.appendChild(looseBox);
+    body.appendChild(looseBox);
 
     const archived = host.archived();
     const open = !!host.config.navArchivedOpen;
     if (archived.length) {
-      listEl.appendChild(sectionHead('archived', '已归档', archived.length, null, () => {
+      body.appendChild(sectionHead('archived', '已归档', archived.length, null, () => {
         host.config.navArchivedOpen = !open;
         host.saveConfig();
         render();
@@ -184,18 +181,30 @@
       if (open) {
         const box = el('div', 'nav-archived');
         archived.forEach((a) => box.appendChild(archivedRow(a)));
-        listEl.appendChild(box);
+        body.appendChild(box);
       }
     } else {
       // still a drop target, so a session can be archived by dragging it here
       const head = sectionHead('archived', '已归档', null);
       head.classList.add('empty');
-      listEl.appendChild(head);
+      body.appendChild(head);
     }
+    const nextFold = foldSelector && body.querySelector(foldSelector);
+    listEl.appendChild(body);
+    if (nextFold) {
+      // Keep the actual focused button connected: no blur/refocus or repeated
+      // accessibility focus announcement, even on a background list refresh.
+      for (const name of ['title', 'aria-label', 'aria-expanded', 'aria-controls']) {
+        const value = nextFold.getAttribute(name);
+        if (value === null) active.removeAttribute(name); else active.setAttribute(name, value);
+      }
+      active.disabled = nextFold.disabled;
+      active.innerHTML = nextFold.innerHTML;
+      nextFold.parentElement.moveBefore(active, nextFold);
+      nextFold.remove();
+    }
+    previous.forEach((node) => node.remove());
     host.syncNav();
-    if (restoreFocus) {
-      try { restoreFocus()?.focus(); } catch (_) {}
-    }
   }
 
   // 队长's own row, pinned first like its column in the deck. It cannot be
@@ -220,7 +229,7 @@
     const meta = el('span', 'cn-meta', ago(host.lastTurnTs(col.id)));
     const open = !!host.config.crewOpen;
     const fold = iconButton(open ? 'chevDown' : 'chevRight', hasCrew ? (open ? '收起队员列表' : '展开队员列表') : '暂无队员会话', () => {
-      host.config.crewOpen = !open;
+      host.config.crewOpen = !host.config.crewOpen;
       host.saveConfig();
       render();
     }, 'captain-fold');

@@ -88,6 +88,9 @@ the middle:
   as work starts and finishes.
   Captain and worker titles occupy their own full-width line and wrap in narrow
   sidebars; model badges and timestamps/actions sit below the title.
+  Folding arrows keep keyboard focus on the same button across list updates.
+  Enter or Space toggles once on the first keydown; holding either key does not
+  toggle again.
   Worker titles are slightly smaller than navigation labels and use at most two
   lines. The Captain row keeps its full height when the list scrolls. Activity
   subtitles show progress/status text, filtering out terminal shortcut hints

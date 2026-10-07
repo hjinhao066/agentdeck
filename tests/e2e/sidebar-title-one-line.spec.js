@@ -26,6 +26,8 @@ test.beforeAll(async () => {
   });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2, navWidth: 252,
+    // Identity/quota samples below must not rotate or replace the stand-in Captain.
+    perpetualCaptain: { enabled: false },
     columns: [
       { id: 'captain', title: '队长', cmd: FAKE + ' --captain-statusline', cwd: profile, width: 460, role: 'manual', isMain: true },
       ...titles.map((title, i) => ({ id: `worker-${i}`, title, displayTitle: title, manualTitle: true,
@@ -48,6 +50,14 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(4);
   // Finish the startup briefing before assigning actual-tool metadata.
   await expect.poll(() => page.evaluate(() => terms.get('captain').lastScreen)).toContain('Delegate report:');
+  // The crew's restart resends must also finish before typing /model commands.
+  await expect.poll(() => page.evaluate(() => {
+    const tasks = MainSession.state().tasks;
+    return tasks.length === 3 && tasks.every((task) => {
+      const entry = terms.get(task.colId);
+      return task.instructionSent && !task.restartHold && !entry.sendingPrompt && !entry.injecting && entry.lastScreen.includes('⏺ GOT ');
+    });
+  }), { timeout: 20000 }).toBe(true);
   await page.evaluate(() => {
     const commands = ['cursor-agent --model grok-4.7-high-fast', 'codex --model gpt-6.1-sol', 'agy --model gemini-3.8-flash-high'];
     const models = ['grok-4.7-high-fast', 'gpt-6.1-sol', 'gemini-3.8-flash-high'];

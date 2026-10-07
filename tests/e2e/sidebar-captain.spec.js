@@ -22,6 +22,8 @@ test.beforeAll(async () => {
   }
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2, navWidth: 252,
+    // Identity/quota samples below must not rotate or replace the stand-in Captain.
+    perpetualCaptain: { enabled: false },
     columns: [
       { id: 'captain', title: '队长', cmd: FAKE + ' --captain-statusline', cwd: profile, width: 460, role: 'manual', isMain: true },
       ...titles.map((title, i) => ({ id: `worker-${i}`, title, displayTitle: title, manualTitle: true,
@@ -43,6 +45,14 @@ test.beforeAll(async () => {
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(4);
   // Finish the startup briefing before assigning actual-tool metadata.
   await expect.poll(() => page.evaluate(() => terms.get('captain').lastScreen)).toContain('Delegate report:');
+  // The crew's restart resends must also finish before typing /model commands.
+  await expect.poll(() => page.evaluate(() => {
+    const tasks = MainSession.state().tasks;
+    return tasks.length === 3 && tasks.every((task) => {
+      const entry = terms.get(task.colId);
+      return task.instructionSent && !task.restartHold && !entry.sendingPrompt && !entry.injecting && entry.lastScreen.includes('⏺ GOT ');
+    });
+  }), { timeout: 20000 }).toBe(true);
   await page.evaluate(() => {
     const cap = columns.find((c) => c.id === 'captain');
     cap.cmd = 'claude --dangerously-skip-permissions --effort high';
@@ -120,8 +130,11 @@ test('Captain arrow folds without selecting it; live counts stay on its one-line
   await page.locator('#colNav').screenshot({ path: path.join(dir, 'sidebar-folded.png') });
   await page.evaluate(() => { MainSession.state().tasks.find((t) => t.colId === 'worker-1').status = 'done'; Sidebar.refreshCrew(); });
   await expect(counts).toHaveAttribute('title', '2 干活中 · 1 完成');
+  const ids = await page.evaluate(() => columns.map((col) => col.id));
   await fold.focus();
   await page.keyboard.press('Enter');
+  await expect(fold).toBeFocused();
+  expect(await page.evaluate(() => columns.map((col) => col.id))).toEqual(ids);
   await expect(page.locator('.nav-crew .colnav-item')).toHaveCount(3);
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('worker-0');
   await page.evaluate(() => ChatUI.setMode('captain', 'term'));
@@ -236,9 +249,57 @@ test('each model is one collapsible header and a member click still opens that s
   expect(await page.evaluate(() => focusedId)).toBe(focused);
   await flash.locator('.crew-model-fold').focus();
   await page.keyboard.press('Enter');
+  await expect(flash.locator('.crew-model-fold')).toBeFocused();
   await expect(page.locator('.nav-crew [data-col-id="worker-1"]')).toHaveCount(1);
   await page.locator('.nav-crew [data-col-id="worker-1"] .cn-label').click();
   await expect.poll(() => page.evaluate(() => focusedId)).toBe('worker-1');
+});
+
+test('keyboard folding keeps its button and column focus through redraws and ignores held keys', async () => {
+  await page.evaluate(() => { config.crewOpen = true; config.crewModelsCollapsed = []; Sidebar.render(); });
+  await page.locator('.nav-crew [data-col-id="worker-0"]').click();
+  const ids = await page.evaluate(() => columns.map((col) => col.id));
+  for (const selector of ['.captain-fold', '.crew-model-fold']) {
+    const fold = page.locator(selector).first();
+    await fold.focus();
+    const button = await fold.elementHandle();
+    await page.evaluate(() => {
+      window.foldFocusEvents = [];
+      window.recordFoldFocus = (e) => window.foldFocusEvents.push(e.type);
+      document.addEventListener('focusout', window.recordFoldFocus);
+      document.addEventListener('focusin', window.recordFoldFocus);
+    });
+    try {
+      await page.keyboard.down('Enter');
+      await expect(fold).toHaveAttribute('aria-expanded', 'false');
+      await page.keyboard.down('Enter');
+      await page.keyboard.up('Enter');
+      await expect(fold).toHaveAttribute('aria-expanded', 'false');
+      await page.keyboard.down('Space');
+      await expect(fold).toHaveAttribute('aria-expanded', 'true');
+      await page.keyboard.down('Space');
+      await expect(fold).toHaveAttribute('aria-expanded', 'true');
+      await page.keyboard.up('Space');
+      await expect(fold).toHaveAttribute('aria-expanded', 'true');
+      await page.evaluate(() => { Sidebar.render(); Sidebar.render(); });
+      expect(await button.evaluate((el) => el === document.activeElement)).toBe(true);
+      await expect(fold).toBeFocused();
+      expect(await page.evaluate(() => window.foldFocusEvents)).toEqual([]);
+      expect(await page.evaluate(() => focusedId)).toBe('worker-0');
+      expect(await page.evaluate(() => columns.map((col) => col.id))).toEqual(ids);
+    } finally {
+      await page.evaluate(() => {
+        document.removeEventListener('focusout', window.recordFoldFocus);
+        document.removeEventListener('focusin', window.recordFoldFocus);
+        delete window.recordFoldFocus; delete window.foldFocusEvents;
+      });
+      await button.dispose();
+    }
+    await page.keyboard.press('Tab');
+    await expect(fold).not.toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(fold).toBeFocused();
+  }
 });
 
 test('Captain metadata and counts stay inside its row when the sidebar list overflows or folds', async () => {
@@ -350,6 +411,8 @@ test('sidebar text shortcuts scale metadata with titles, clamp safely and share 
   await expect.poll(() => page.evaluate(() => config.sidebarFontSize)).toBe(13);
   // Chat/terminal content retains its own size control, separate from the sidebar.
   await page.locator('.captain-item .cn-label').click();
+  // Sidebar selection intentionally opens the terminal; explicitly enter chat.
+  await page.evaluate(() => ChatUI.setMode('captain', 'chat'));
   await page.locator('.column[data-col-id="captain"] .composer textarea').focus();
   await page.keyboard.press(`${mod}+Minus`);
   await expect.poll(() => page.evaluate(() => config.fontSize)).toBe(12);
