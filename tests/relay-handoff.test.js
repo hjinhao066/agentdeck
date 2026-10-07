@@ -34,10 +34,14 @@ let seq = 0;
 const record = (colId, status, extra = {}) => ({ id: 'k' + (++seq), colId, title: '执行', status, gen: 1, sentAt: NOW - 3600_000 + seq * 1000, receipt: null, project: 'p', reviews: [], boardId: '', boardAttempt: '', ...extra });
 const receipt = (summary, extra = {}) => ({ summary, files: [], failed: '', explicit: true, source: 'command', ...extra });
 const session = (id, state = 'working', extra = {}) => ({ id, title: id, state, alive: true, crew: true, ...extra });
-const build = (snapshot) => H.build({ now: NOW, timeZone: 'America/Los_Angeles', ...snapshot });
-const section = (text, n) => text.slice(text.indexOf(`\n## ${n}.`), text.indexOf(`\n## ${n + 1}.`) < 0 ? undefined : text.indexOf(`\n## ${n + 1}.`));
+// `text` is everything the handoff holds, overview and detail files together, so a fact can be checked
+// wherever it lives; `brief` is the overview page alone, and `file(name)` one detail file.
+const build = (snapshot) => {
+  const built = H.build({ now: NOW, timeZone: 'America/Los_Angeles', ...snapshot });
+  return { ...built, brief: built.text, text: [built.text, ...built.files.map((f) => f.text)].join('\n'), file: (name) => built.files.find((f) => f.name === name).text };
+};
 // One row per unfinished task: a record of its own, or a line under the not-started header.
-const cardLines = (text) => section(text, 4).split('\n').filter((l) => (/^- 【/.test(l) && !/^- 【待执行】还没启动的 \d+ 张/.test(l)) || /^ {2}- (?:t-|[\w-]+｜)/.test(l));
+const cardLines = (built) => built.file('tasks.md').split('\n').filter((l) => (/^- 【/.test(l) && !/^- 【待执行】还没启动的 \d+ 张/.test(l)) || /^ {2}- (?:t-|[\w-]+｜)/.test(l));
 
 test('a card executed three times is one record: who has it now, what is left, where the old rounds are', (t) => {
   const f = fixture(t);
@@ -190,23 +194,23 @@ test('the summary and the task list are the same snapshot: the counts match the 
   const { stats } = built.state; const text = built.text;
   const total = stats.rework + stats.review + stats.doing + stats.paused + stats.todo;
   assert.equal(total, stats.cards + stats.loose);
-  assert.equal(cardLines(text).length, total, 'one row per unfinished task, as many as the summary says');
+  assert.equal(cardLines(built).length, total, 'one row per unfinished task, as many as the summary says');
   assert.match(text, new RegExp(`摘要：未完成任务 ${total} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）；在跑的队员会话 ${stats.running.length} 个`));
   assert.deepEqual([stats.review, stats.paused, stats.todo], [1, 1, 2]);
   // a session waiting for the Captain's answer still holds its task
   assert.deepEqual([...stats.running].sort(), ['s-ask', 's-doing', 's-ghost', 's-loose']);
   assert.match(text, /执行 s-ask（运行中·在等队长回答）/);
-  for (const id of stats.running) assert.ok(section(text, 4).includes(id), id);
+  for (const id of stats.running) assert.ok(built.file('tasks.md').includes(id), id);
   assert.match(text, /在跑、但没有对应未完成任务记录的会话：s-ghost/);
-  assert.ok(!section(text, 4).includes(done.id), 'finished work stays in the store, not in the handoff');
+  assert.ok(!built.file('tasks.md').includes(done.id), 'finished work stays in the store, not in the handoff');
   assert.ok(!text.includes('manual'), 'the user\'s own terminals are not crew');
-  assert.match(text, /下面各节都取自这一份快照，另标了时间的除外/);
+  assert.match(text, /各份文件都取自这一份快照，另标了时间的除外/);
   // the one part with a clock of its own says so, and says what came after it
-  assert.match(text, /来源：队长维护的 \/b\/decisions\.md（最后修改 10-04 21:19；此后还有 1 条用户消息没整理进来，以原文为准）/);
+  assert.match(built.brief, /来源 \/b\/decisions\.md（最后修改 10-04 21:19；此后还有 1 条用户消息没整理进来，以原文为准）/);
   // a crew question sits on its card and in the Captain's inbox: one line, the Captain's to answer
   // first, and not handed to the user by the program
   assert.match(text, new RegExp(`队员在等队长回答 1 条（卡着后续动作，先处理：已有授权能定或有把握的直接 tell / answer 回答，涉及不可逆的事或拿不准的才请用户决定）：\\n {2}- 提问｜s-ask｜${ask.id}｜「等用户的」｜用哪个域名？｜不阻塞其他卡`));
-  assert.match(text, /必须由用户决定：无（队长没有记录）/);
+  assert.match(built.file('needs-user.md'), /- 无（队长没有记录）/);
   assert.match(text, new RegExp(`【暂停（队员提问，等回答）】${ask.id}[^\\n]*\\n[^\\n]*\\n[^\\n]*\\n {2}阻塞：队员提问：用哪个域名？\\n {2}下一步：先看清问题：已有授权能定或有把握就 tell s-ask 回答`));
   assert.equal(stats.asks, 1); assert.equal(stats.forUser, 0);
   assert.ok(!text.split('\n').find((l) => l.startsWith('7. ')).includes(ask.id), 'an open question is dealt with first, not parked');
@@ -255,7 +259,7 @@ test('a pause the user asked for is not overridden by the standing continue-the-
   assert.equal(rec.code, 'stopped'); assert.equal(rec.group, 'paused');
   assert.match(built.text, /【暂停（已被队长叫停）】/);
   assert.match(built.text, /已被队长叫停：没有用户或队长的新指令不要重派/);
-  const step = (n) => built.text.split('\n').find((l) => l.startsWith(n + '. '));
+  const step = (n) => built.file('playbook.md').split('\n').find((l) => l.startsWith(n + '. '));
   assert.ok(!step(5).includes(stopped.id), 'a stopped task is not offered for take-over');
   assert.ok(step(7).includes(stopped.id)); assert.ok(step(4).includes(running.id));
   // a restart does not bring it back either
@@ -264,9 +268,9 @@ test('a pause the user asked for is not overridden by the standing continue-the-
   const decisions = { path: '/b/decisions.md', mtime: NOW - 1000, text: '## 暂停/取消/暂不启动\n- [10-04 22:50] Windows 升级先停，等我回来再说｜只这一项｜read --id cap-old --find "先停"\n## 授权范围\n- [10-04 21:00] 1.2 发版全流程，不用请示\n' };
   built = build({ cards: f.cards(), dispatches, sessions, decisions });
   assert.equal(built.state.plan, 'paused');
-  assert.match(built.text, /- 暂停、取消、暂不启动：\[10-04 22:50\] Windows 升级先停，等我回来再说｜只这一项｜read --id cap-old --find "先停"/);
-  assert.match(built.text, /启动方式：第 2 节有生效中的暂停或取消项：这些事项不续派、不重启，运行中的会话和旧的续活计划都不能推翻它。其余已授权任务照下面的顺序核对后续接/);
-  assert.match(built.text, /旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍/);
+  assert.match(built.brief, /- 暂停\/取消\/暂不启动 1 条（生效中[^\n]*：\n {2}- L2｜\[10-04 22:50\] Windows 升级先停，等我回来再说｜只这一项｜read --id cap-old --find "先停"/);
+  assert.match(built.brief, /启动方式：「现行有效的决定」里有生效中的暂停或取消项：这些事项不续派、不重启，运行中的会话和旧的续活计划都不能推翻它。其余已授权任务照核对顺序核对后续接/);
+  assert.match(built.file('playbook.md'), /旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍/);
   // the static prompt no longer tells every new Captain to restart everything unconditionally
   const brief = M.instructions('darwin');
   assert.doesNotMatch(brief, /重新派起来|持续自主拆解并派活/);
@@ -279,17 +283,17 @@ test('how a new Captain starts: ready when there is nothing, straight on when au
   let built = build({ cards: f.cards() });
   assert.equal(built.state.plan, 'ready');
   assert.match(built.text, /启动方式：没有待办：简短回复「队长已就绪」，等用户指令；不要自行立项或派新活。/);
-  assert.match(section(built.text, 4), /\n无\n/); assert.match(section(built.text, 5), /未读回执和提问：无/);
+  assert.match(built.file('tasks.md'), /\n无\n/); assert.match(built.file('waiting.md'), /未读回执和提问：无/);
   // only cards nobody started
   f.add({ title: '以后再说的想法' });
   built = build({ cards: f.cards() });
   assert.equal(built.state.plan, 'backlog');
-  assert.match(built.text, /启动方式：没有在跑、待验收或待处理的任务，有 1 张待执行卡：属于第 2 节授权范围且没被暂停的可以启动，范围不明先问；不要为了凑数新立项目。/);
+  assert.match(built.text, /启动方式：没有在跑、待验收或待处理的任务，有 1 张待执行卡：属于授权范围且没被暂停的可以启动，范围不明先问；不要为了凑数新立项目。/);
   // work that is out, or a receipt waiting, means: check, then carry on without being told
   const card = f.add({ title: '在做的' }); f.bind(card.id, 'a1', 's1'); f.event(card.id, 'started', '', 'a1', 's1');
   built = build({ cards: f.cards(), sessions: [session('s1')], dispatches: [record('s1', 'working', { boardId: card.id, boardAttempt: 'a1' })] });
   assert.equal(built.state.plan, 'resume');
-  assert.match(built.text, /启动方式：有已授权待办：照下面的顺序核对后主动续接，不用等用户说继续。/);
+  assert.match(built.text, /启动方式：有已授权待办：照 playbook.md 的顺序核对后主动续接，不用等用户说继续。/);
   assert.equal(build({ cards: [], pending: [{ taskId: 'k1', colId: 's9', title: '交回的活', summary: '做完了' }] }).state.plan, 'resume');
   // and the standing prompt agrees with both
   const brief = M.instructions('darwin');
@@ -304,7 +308,7 @@ test('a session still running with no record behind it is something to check fir
   assert.equal(built.state.plan, 'verify');
   assert.match(built.text, /启动方式：有 1 个会话还在跑、却没有对应的任务记录（worker-live）：先 peek 核实它在做什么，再决定继续跟踪还是叫停；核实前不要报告就绪，也不要另派同样的活。/);
   assert.doesNotMatch(built.text, /没有待办/);
-  assert.match(section(built.text, 4), /在跑、但没有对应未完成任务记录的会话：worker-live「尚在执行的任务」（运行中）。用 peek 看它在做什么/);
+  assert.match(built.file('tasks.md'), /在跑、但没有对应未完成任务记录的会话：worker-live「尚在执行的任务」（运行中）。用 peek 看它在做什么/);
   assert.match(built.text.split('\n').find((l) => l.startsWith('3. ')), /没有任务记录却在跑的会话 1 个（worker-live，先 peek）/);
   assert.match(built.text, /在跑的队员会话 1 个/);
   // next to real work it does not change the plan, but it is still the first thing to check
@@ -350,13 +354,14 @@ test('every window on the page says it is a window: old messages, long reference
   // more user messages than the excerpt holds
   const userTurns = Array.from({ length: 12 }, (_, i) => ({ ts: NOW - (12 - i) * 60_000, text: `第 ${i} 条`, sourceId: 'cap-old' }));
   let built = build({ cards: [], userTurns, userTurnsOlder: true, decisions: { path: '/b/d.md', mtime: NOW - 3600_000, text: '## 当前目标\n- 发 1.2\n' } });
-  assert.match(built.text, /最近用户消息 12 条（[^\n]*其中 12 条还没进有效决定文件；更早的没有统计在内，read --id captain-history --find 关键词）/);
+  assert.match(built.brief, /本快照有用户消息 12 条，其中 12 条还没进决定文件，更早的没有统计在内/);
+  assert.match(built.brief, /更早的：read --id captain-history --find 关键词|另有 \d+ 条没摘录/);
   assert.match(built.text, /此后还有 至少 12 条用户消息没整理进来/);
   built = build({ cards: [], userTurns: userTurns.slice(0, 3), decisions: { path: '/b/d.md', mtime: NOW - 3600_000, text: '## 当前目标\n- 发 1.2\n' } });
   assert.doesNotMatch(built.text, /更早的没有统计在内|至少/);
   // a notes file that could not be read is not "nothing recorded"
   built = build({ cards: [], decisions: { path: '/b/d.md', text: '', mtime: 0, error: '文件超过 512KB，没有读' } });
-  assert.match(built.text, /来源：队长维护的 \/b\/d\.md（文件超过 512KB，没有读，下面各项待核实）/);
+  assert.match(built.brief, /来源 \/b\/d\.md（文件超过 512KB，没有读，下面各项待核实）/);
   assert.doesNotMatch(built.text, /还没有这份文件/);
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-big-notes-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -369,13 +374,13 @@ test('every window on the page says it is a window: old messages, long reference
   const card = f.add({ title: '改了很多分支的' }); f.bind(card.id, 'a1', 's1'); f.event(card.id, 'started', '', 'a1', 's1');
   built = build({ cards: f.cards(), sessions: [session('s1')], dispatches: [record('s1', 'working', { boardId: card.id, boardAttempt: 'a1',
     progress: Array.from({ length: 8 }, (_, i) => `feat/branch-${i}`).join(' ') })] });
-  assert.match(section(built.text, 3), /分支 feat\/branch-0、[^\n]*feat\/branch-5｜还有没列出的，见回执原文/);
+  assert.match(built.file('delivery.md'), /分支 feat\/branch-0、[^\n]*feat\/branch-5｜还有没列出的，见回执原文/);
   assert.equal(H.refsIn('feat/a', []).more, false);
   // the note a new Captain gets lists twenty tasks and says how many it left out
   const active = Array.from({ length: 27 }, (_, i) => ({ title: '活 ' + i, colId: 'c' + i, status: 'working' }));
   const note = M.resetNote('cap-old', active, 'relay');
   assert.equal(note.split('\n').filter((l) => /^ {3}- 「活 \d+」/.test(l)).length, 20);
-  assert.match(note, /另有 7 件没列在这里，完整清单看 handoff 第 4 节。/);
+  assert.match(note, /另有 7 件没列在这里，完整清单看交接目录里的 tasks.md。/);
   assert.doesNotMatch(M.resetNote('cap-old', active.slice(0, 20), 'relay'), /另有/);
   // the records themselves: when the list is at its cap, the page says finished ones were dropped
   const records = Array.from({ length: 120 }, (_, i) => record('s-old-' + i, 'done', { receipt: receipt('完成') }));
@@ -383,7 +388,9 @@ test('every window on the page says it is a window: old messages, long reference
   assert.doesNotMatch(build({ cards: [], dispatches: records.slice(0, 50), dispatchCap: 120 }).text, /派活记录：本快照/);
 });
 
-test('the length budget squeezes explanations, never an unfinished task, a blocker, a limit or an open decision', (t) => {
+// Forty cards in every state, receipts, a notes file and twelve long user messages: the overview must fit
+// whatever the limit, and nothing unfinished may become impossible to find.
+function crowded(t) {
   const f = fixture(t);
   const ids = [], questions = [];
   const long = '这是一段很长的回执，'.repeat(60);
@@ -403,32 +410,138 @@ test('the length budget squeezes explanations, never an unfinished task, a block
   const userTurns = Array.from({ length: 12 }, (_, i) => ({ ts: NOW - (12 - i) * 60_000, text: `第 ${i} 条用户消息 ` + '说了很多话'.repeat(80), sourceId: 'cap-old' }));
   const snapshot = { reason: 'relay', cards: f.cards(), dispatches, sessions, decisions, userTurns, captain: { previousId: 'cap-old', gen: 7 },
     pending: [{ taskId: 'k', colId: 's1', title: '回执', summary: long }], unconfirmed: [{ receiptId: 'r-1', colId: 's5', title: '上任取走的', summary: long }] };
-  const roomy = build({ ...snapshot, budget: 60000 });
-  const tight = build({ ...snapshot, budget: 4000 });
-  assert.equal(roomy.level, 0); assert.equal(roomy.over, false);
-  assert.equal(tight.level, H.LEVELS.length - 1);
-  assert.ok(tight.length < roomy.length * 0.6, `${tight.length} vs ${roomy.length}`);
-  for (const built of [roomy, tight]) {
-    for (const id of ids) assert.ok(section(built.text, 4).includes(id), 'every unfinished card is still named: ' + id);
-    for (const limit of limits) assert.ok(built.text.includes(limit), limit);
-    for (const q of questions) assert.ok(built.text.includes(q), q);
-    assert.match(built.text, /必须由用户决定 1 条（队长记录）：\n {2}- 是否买第二张重置卡｜不阻塞/);
-    assert.equal(built.state.stats.asks, questions.length, 'each question once, however many places hold it');
-    assert.match(built.text, /前置卡未完成：/); assert.match(built.text, /连续失败 2 次，等队长拍板/);
-    assert.match(built.text, /未读回执和提问 1 条/); assert.match(built.text, /上任已取走、可能没处理完的回执 1 条/);
-    assert.equal(cardLines(built.text).length, built.state.stats.cards + built.state.stats.loose);
+  return { snapshot, ids, questions, limits };
+}
+
+test('the overview has a hard limit; whatever is squeezed out of it is still on file, with its count and where to read it', (t) => {
+  const { snapshot, ids, questions, limits } = crowded(t);
+  for (const budget of [20000, 6000, 3000]) {
+    const built = build({ ...snapshot, budget });
+    assert.ok(built.length <= budget, `${built.length} fits ${budget}`); assert.equal(built.over, false);
+    assert.equal(built.length, Array.from(built.brief).length, 'the length it reports is the page\'s own');
+    const { stats } = built.state;
+    // every unfinished card, question, receipt and pause is findable: in a detail file, or on the page
+    for (const id of ids) assert.ok(built.file('tasks.md').includes(id), `${id} in tasks.md at ${budget}`);
+    for (const q of questions) assert.ok(built.file('waiting.md').includes(q), q);
+    for (const limit of limits) assert.ok(built.brief.includes(limit) || built.file('decisions-history.md').includes(limit), limit);
+    assert.match(built.file('needs-user.md'), /是否买第二张重置卡｜不阻塞/);
+    assert.equal(cardLines(built).length, stats.cards + stats.loose);
+    // the page itself says how many, and where
+    assert.match(built.brief, new RegExp(`未完成任务 ${stats.cards + stats.loose} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）→ tasks\\.md`));
+    assert.match(built.brief, new RegExp(`队员提问 ${stats.asks} 条｜未读回执 ${stats.pending} 条｜已取走未确认 ${stats.unconfirmed} 条｜矛盾 ${stats.conflicts} 条｜等队长拍板 ${built.state.forCaptain.length} 条 → waiting\\.md｜等用户决定 1 条 → needs-user\\.md`));
+    assert.match(built.brief, /暂停\/取消\/暂不启动 2 条/);
+    assert.equal(stats.asks, questions.length, 'each question once, however many places hold it');
+    // the contents page names each file, how long it is and when to read it
+    for (const f of built.files) assert.match(built.brief, new RegExp(`- ${f.name.replace('.', '\\.')}｜${String(f.length).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} 字｜[^\\n]*｜[^\\n]*读\\n`), f.name);
   }
-  // what was squeezed is said, with where to find it; going over is said too, never hidden
-  assert.match(roomy.text, /长度：预算 60000 字，实际约 \d+ 字，压缩级别 0（完整）/);
-  assert.match(tight.text, /长度：预算 4000 字，实际约 \d+ 字，压缩级别 3（只留必留项）；压掉了：[^\n]*用户消息摘录 12 条[^\n]*都留了查询入口；已超出预算：未完成任务、阻塞、限制和待决定事项一条没删/);
-  assert.equal(tight.over, true);
-  assert.match(tight.text, /另有 12 条没摘录，其中未整理的在 [^\n]*read --id cap-old --turns 10/);
-  assert.ok(!tight.text.includes(long.slice(0, 80)), 'long receipts are what gets cut');
-  // a middle budget lands on a middle level and fits
-  const middle = build({ ...snapshot, budget: Math.round((roomy.length + tight.length) / 2) });
-  assert.ok(middle.level > 0 && middle.level < H.LEVELS.length); assert.ok(middle.length <= middle.budget || middle.level === H.LEVELS.length - 1);
+  // roomy: nothing squeezed. tight: squeezed, and says so.
+  assert.deepEqual(build({ ...snapshot, budget: 20000 }).cuts, []);
+  const tight = build({ ...snapshot, budget: 3000 });
+  assert.ok(tight.cuts.length > 0); assert.match(tight.brief, /为了放进 3,000 字，缩短了：/);
+  // the detail files are never squeezed by the limit
+  assert.equal(build({ ...snapshot, budget: 20000 }).file('tasks.md'), tight.file('tasks.md'));
   // the setting is clamped, not trusted
-  assert.equal(M.handoffBudget(), 12000); assert.equal(M.handoffBudget(1), 4000); assert.equal(M.handoffBudget(1e9), 60000); assert.equal(M.handoffBudget('abc'), 12000);
+  assert.equal(M.handoffBudget(), 6000); assert.equal(M.handoffBudget(1), 3000); assert.equal(M.handoffBudget(1e9), 20000); assert.equal(M.handoffBudget('abc'), 6000);
+  assert.equal(build({ ...snapshot, budget: 1 }).limit, 3000);
+});
+
+test('what is given up when the overview does not fit: the user\'s latest words go last', (t) => {
+  const { snapshot } = crowded(t);
+  const order = H.SQUEEZE.map(([key]) => key);
+  // every step is taken in the fixed order, and the user's words are touched only after all the others
+  const tight = build({ ...snapshot, budget: 3000 });
+  assert.deepEqual(tight.cuts, order.slice(0, tight.cuts.length));
+  assert.equal(order.indexOf('w'), order.findIndex((k, i) => k === 'w' && order.slice(0, i).every((x) => x !== 'w')));
+  assert.ok(order.slice(0, order.indexOf('w')).every((k) => k !== 'w') && order.slice(order.indexOf('w')).every((k) => k === 'w'));
+  // a limit that only the first steps can meet still shows the whole run of the user's messages
+  const some = build({ ...snapshot, budget: 4200 });
+  assert.ok(!some.cuts.includes('w'), some.cuts.join());
+  assert.equal(some.brief.split('\n').filter((l) => /^- 10-04 \d\d:\d\d(?: 未整理)?｜「第 \d+ 条用户消息/.test(l)).length, 8);
+  // at the smallest page, the latest message is still there, the oldest excerpts are what went
+  assert.match(tight.brief, /第 11 条用户消息/); assert.ok(!tight.brief.includes('第 0 条用户消息'));
+  assert.match(tight.brief, /read --id cap-old --find "第"/);
+  // and the older ones are one file away
+  assert.match(tight.file('user-messages.md'), /第 0 条用户消息/);
+  // five hundred cards, three hundred receipts: still one page, still the user's words, still every count
+  const f = fixture(t);
+  for (let i = 0; i < 300; i++) f.add({ title: `卡 ${i}` });
+  const pending = Array.from({ length: 300 }, (_, i) => ({ taskId: 'k' + i, colId: 's' + i, title: '回执' + i, summary: '做完了' }));
+  const big = build({ ...snapshot, cards: f.cards(), pending, budget: 3000 });
+  assert.ok(big.length <= 3000, String(big.length)); assert.equal(big.over, false);
+  assert.match(big.brief, /第 11 条用户消息/); assert.ok(big.state.stats.cards + big.state.stats.loose >= 300); assert.match(big.brief, new RegExp(`未完成任务 ${big.state.stats.cards + big.state.stats.loose} 条`)); assert.match(big.brief, /未读回执 300 条/);
+  assert.ok(big.file('tasks.md').includes('卡 299'), 'the last of the three hundred is on file');
+});
+
+test('the Captain\'s decisions file: only the newest and the entries marked as lasting are quoted; older ones are a line and a pointer', () => {
+  const lines = ['## 有效决定'];
+  for (let i = 1; i <= 50; i++) lines.push(`- [09-${String(10 + (i % 20)).padStart(2, '0')} 10:${String(i % 60).padStart(2, '0')}] 旧决定编号${i}｜${'细节很多'.repeat(40)}`);
+  lines.push('- **[10-03 09:00 用户决定，长期有效]** 派活只看 5 小时额度，周额度不用管', '- [10-04 20:00] 最新决定甲', '- [10-04 21:00] 最新决定乙', '- [10-04 22:00] 最新决定丙', '- [10-02 08:00] 较新的决定丁');
+  lines.push('## 暂停/取消/暂不启动', '- [10-04 22:50] 先别动 Windows', '## 当前目标', '- [10-04 12:00] 发 1.2');
+  const text = lines.join('\n') + '\n';
+  const built = build({ cards: [], decisions: { path: '/b/decisions.md', mtime: NOW - 1000, text }, budget: 6000 });
+  // quoted: the lasting one, the three newest, the pause, nothing old
+  assert.match(built.brief, /长期有效 1 条：\n {2}- L52｜\*\*\[10-03 09:00 用户决定，长期有效\]\*\* 派活只看 5 小时额度/);
+  for (const n of ['最新决定甲', '最新决定乙', '最新决定丙']) assert.ok(built.brief.includes(n), n);
+  assert.ok(!built.brief.includes('最新决定丁') || built.brief.includes('较新的决定丁') === false);
+  assert.ok(!built.brief.includes('旧决定编号'), 'the old ones are not pasted in');
+  assert.match(built.brief, /先别动 Windows/);
+  assert.ok(built.length < 6000 && built.length < Array.from(text).length / 2);
+  // each older entry is on file, as one line with the line it has in the decisions file
+  const history = built.file('decisions-history.md');
+  for (let i = 1; i <= 50; i++) {
+    const m = new RegExp(`- L(\\d+)｜\\[09-\\d\\d 10:\\d\\d\\] 旧决定编号${i}｜`).exec(history);
+    assert.ok(m, '旧决定编号' + i);
+    assert.match(text.split('\n')[Number(m[1]) - 1], new RegExp(`旧决定编号${i}｜`), 'the pointer is the real line');
+  }
+  assert.match(history, /较新的决定丁/);
+  assert.ok(!history.includes('细节很多'.repeat(40)), 'a title line, not the whole entry');
+  // the file itself is not changed or parsed away: entries keep their line numbers across comments
+  const entries = H.parseDecisionEntries('# t\n<!-- a\nb -->\n## 有效决定\n- x\n\n- y\n');
+  assert.deepEqual(entries.decisions, [{ text: 'x', line: 5 }, { text: 'y', line: 7 }]);
+  // a snapshot section is not the list of what is paused
+  assert.equal(H.parseDecisions('## 暂停时的现场（10-05 17:05）\n- 流水一\n## 暂停/取消\n- 别动 A\n').paused.length, 1);
+});
+
+test('the profile of the person served is quoted as it is, with its age, and left out when there is none', () => {
+  const body = '# 关于用户\n- 学生，在找暑期实习\n- 不懂技术，别用术语\n';
+  const at = (days, text = body) => build({ cards: [], aboutUser: { path: '/m/about-user.md', text, mtime: NOW - days * 86400_000 } });
+  const fresh = at(3);
+  assert.ok(fresh.brief.indexOf('## 你服务的人') < fresh.brief.indexOf('## 1. 用户最近的原话'), 'the first section after the header');
+  assert.match(fresh.brief, /来源 \/m\/about-user\.md｜最后修改 10-01 23:19\n> # 关于用户\n> - 学生，在找暑期实习\n> - 不懂技术，别用术语\n/);
+  assert.doesNotMatch(fresh.brief, /可能过期/);
+  assert.match(at(20).brief, /最后修改 09-14 23:19｜可能过期：已 20 天没更新/);
+  assert.doesNotMatch(at(14).brief, /可能过期/); assert.match(at(15).brief, /可能过期/);
+  // at most 2000 characters, and it says there is more
+  const huge = at(1, '字'.repeat(5000)).brief;
+  assert.equal(huge.split('\n').find((l) => /^> 字+$/.test(l)).length - 2, H.ABOUT_MAX);
+  assert.match(huge, /只引了前 2000 字，共 5000 字，全文见上面的来源文件/);
+  // no file, an empty file: no section, no complaint
+  for (const none of [build({ cards: [] }), at(1, '  \n'), build({ cards: [], aboutUser: null })]) {
+    assert.doesNotMatch(none.brief, /你服务的人/); assert.doesNotMatch(none.brief, /about-user/);
+  }
+  // under pressure it is the first of the big blocks to shorten, and it still says where the file is
+  const f = { cards: [], aboutUser: { path: '/m/about-user.md', text: '字'.repeat(2000), mtime: NOW }, budget: 3000,
+    userTurns: Array.from({ length: 8 }, (_, i) => ({ ts: NOW - i * 60_000, text: `第 ${i} 句 ` + '话'.repeat(300), sourceId: 'c' })) };
+  const squeezed = build(f);
+  assert.ok(squeezed.length <= 3000); assert.match(squeezed.brief, /\/m\/about-user\.md/);
+  assert.match(squeezed.brief, /第 0 句/);
+});
+
+test('the writer reads the profile where the shared memory keeps it, and puts the detail files beside the overview', (t) => {
+  const f = fixture(t);
+  const home = path.join(f.root, 'home'), userData = path.join(f.root, 'deck');
+  const payload = { colId: 'captain-now', reason: 'refresh', now: NOW, timeZone: 'Asia/Shanghai', tasks: [], sessions: [], captain: { previousId: 'cap-old', gen: 3 } };
+  const options = { cards: () => f.cards(), tasksDir: f.store.dir };
+  const bare = Seats.handoff(home, userData, payload, options);
+  assert.doesNotMatch(bare.text, /你服务的人/);
+  fs.mkdirSync(path.join(home, '.agents', 'memory'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.agents', 'memory', 'about-user.md'), '- 他在找暑期实习\n');
+  const built = Seats.handoff(home, userData, payload, options);
+  assert.match(built.text, /## 你服务的人\n来源 [^\n]*about-user\.md｜最后修改 [^\n]*\n> - 他在找暑期实习/);
+  for (const file of H.DETAIL_FILES) assert.ok(fs.statSync(path.join(built.dir, file.name)).size > 0, file.name);
+  assert.equal(fs.readdirSync(built.dir).length, H.DETAIL_FILES.length, 'nothing else, no temp files left behind');
+  assert.equal(built.dir, path.join(path.dirname(built.path), 'agentdeck-captain-handoff'));
+  assert.ok(built.text.includes(built.dir), 'the page says where the files are');
 });
 
 test('states are told apart: the session, the task, the verdict and the delivery each speak for themselves', (t) => {
@@ -471,7 +584,7 @@ test('states are told apart: the session, the task, the verdict and the delivery
   assert.match(text, /执行 s-res（被中断·重启后程序自动续接中）/);
   // delivery: what this machine runs is a fact; what a receipt claims is a claim; other machines are unknown
   assert.match(text, /本机：Mac mac\.local，正在运行 AgentDeck 1\.1\.11（程序自报，取自本快照）。其他机器：待核实，本机看不到/);
-  assert.match(text, /队长记录的交付状态[^\n]*：agentdeck 1\.1\.11｜release\/1\.1\.11｜e6794ae｜已提交 是｜已合并 否｜已打包 是｜已安装 Mac：是；Windows：待核实/);
+  assert.match(built.file('delivery.md'), /队长记录的交付状态[^\n]*：\n {2}- L2｜agentdeck 1\.1\.11｜release\/1\.1\.11｜e6794ae｜已提交 是｜已合并 否｜已打包 是｜已安装 Mac：是；Windows：待核实/);
   assert.match(text, /队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理/);
   assert.match(text, new RegExp(`${waiting.id}｜分支 feat/login｜提交 abc1234｜产物 /reports/login/report\\.md`));
   assert.match(text, /等队长拍板 \d+ 条（已有授权能解决，不要转给用户）/);
@@ -488,8 +601,8 @@ test('a task still running names the branch and commit from its progress, as a c
     record('s-old', 'done', { boardId: old.id, boardAttempt: 'o1', progress: '在 feat/old-work 上', receipt: receipt('已推送 feat/old-work 1234abc') }),
     record('s-run', 'working', { boardId: card.id, boardAttempt: 'a1', progress: '已合入 release/1.2.0，提交 32918b1 推到 feat/relay-handoff-v2，报告还没写' }),
   ] });
-  assert.match(section(built.text, 3), new RegExp(`未完成任务的回执和进度里提到的分支、提交、产物（队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理）：\\n {2}- ${card.id}｜分支 release/1\\.2\\.0、feat/relay-handoff-v2｜提交 32918b1`));
-  assert.ok(!section(built.text, 3).includes('feat/old-work'), 'a finished card is not delivery state to chase');
+  assert.match(built.file('delivery.md'), new RegExp(`未完成任务的回执和进度里提到的分支、提交、产物（队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理）：\\n {2}- ${card.id}｜分支 release/1\\.2\\.0、feat/relay-handoff-v2｜提交 32918b1`));
+  assert.ok(!built.file('delivery.md').includes('feat/old-work'), 'a finished card is not delivery state to chase');
 });
 
 test('quota, relay roles and old messages come with their sampling time and are never restated as current', () => {
@@ -502,10 +615,10 @@ test('quota, relay roles and old messages come with their sampling time and are 
   assert.match(text, /快照版本：队长代次 gen 18 → 19/);
   assert.match(text, /队长轮换：永动机自动轮换开，席位顺序 us2 → us → cn[^\n]*谁接任队长只看这项设置，和队员用什么模型无关；交接不改它/);
   // a long user message is a pointer, not a 600-character dump
-  const line = text.split('\n').find((l) => l.includes('一步。'));
-  assert.ok(line.length < 320, String(line.length));
+  const line = built.brief.split('\n').find((l) => l.includes('一步。'));
+  assert.ok(line.length < 520, String(line.length));
   assert.match(line, /10-04 23:17 未整理｜「一步。 - 提供相关报告[^」]*…」（共 \d+ 字，全文 \/u\/long-prompts\/prompt-abc\.txt）｜read --id cap-old --find "一步。"/);
-  assert.match(text, /当前目标：无记录，待核实/); assert.match(text, /暂停、取消、暂不启动：无/);
+  assert.match(built.brief, /暂停\/取消\/暂不启动 0 条/);
   // commands are spelled once, the way the CLI takes them
   assert.match(text, /命令：下文的 handoff、ledger、read 等都接在 node "\$AGENTDECK_BOARD_CLI" 后面运行/);
   assert.ok(!text.includes('board-cli read'));
@@ -529,20 +642,23 @@ test('the handoff file is the app\'s, the decisions file is the Captain\'s: one 
   assert.equal(first.path, path.join(dir, 'agentdeck-captain-handoff.md'));
   assert.equal(fs.readFileSync(first.path, 'utf8'), first.text);
   assert.equal(first.plan, 'resume');
-  assert.match(first.text, /生成：2026-10-05 14:19（Asia\/Shanghai，UTC\+08:00）/);
-  assert.match(first.text, /看板版本 abc123/); assert.match(first.text, /本机：Windows pc，正在运行 AgentDeck 1\.2\.0/);
-  assert.match(first.text, new RegExp(`任务卡原始数据：${f.store.dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/<项目>\\.json`));
+  const detail = (r, name) => fs.readFileSync(path.join(r.dir, name), 'utf8');
+  assert.equal(first.dir, path.join(dir, 'agentdeck-captain-handoff'), 'the detail files sit beside the overview');
+  assert.match(first.text, /生成 2026-10-05 14:19（Asia\/Shanghai）/);
+  assert.match(detail(first, 'playbook.md'), /生成：2026-10-05 14:19（Asia\/Shanghai，UTC\+08:00）/);
+  assert.match(detail(first, 'playbook.md'), /看板版本 abc123/); assert.match(detail(first, 'delivery.md'), /本机：Windows pc，正在运行 AgentDeck 1\.2\.0/);
+  assert.match(detail(first, 'playbook.md'), new RegExp(`任务卡原始数据：${f.store.dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/<项目>\\.json`));
   // the template is created once for the Captain to fill in
   const notes = path.join(dir, 'agentdeck-captain-decisions.md');
   assert.equal(fs.readFileSync(notes, 'utf8'), H.DECISIONS_TEMPLATE);
   fs.writeFileSync(notes, '## 暂停/取消/暂不启动\n- 先别派新活，等 1.2 装完\n');
   const second = Seats.handoff(home, userData, payload, options);
   assert.equal(fs.readFileSync(notes, 'utf8'), '## 暂停/取消/暂不启动\n- 先别派新活，等 1.2 装完\n', 'never rewritten by the app');
-  assert.match(second.text, /暂停、取消、暂不启动：先别派新活，等 1\.2 装完/); assert.equal(second.plan, 'paused');
+  assert.match(second.text, /暂停\/取消\/暂不启动 1 条[^\n]*：\n {2}- L2｜先别派新活，等 1\.2 装完/); assert.equal(second.plan, 'paused');
   // a board that cannot be read is said out loud; the Captain's own records still go out
   const broken = Seats.handoff(home, userData, payload, { ...options, cards: () => { throw new Error('Task board has invalid JSON or a sync conflict: p.json'); } });
-  assert.match(broken.text, /任务看板读不出来（Task board has invalid JSON or a sync conflict: p\.json）：下面只有队长自己的派活记录，卡片状态待核实/);
-  assert.match(broken.text, /没挂卡｜p｜执行｜执行 s1（运行中）/);
+  assert.match(detail(broken, 'tasks.md'), /任务看板读不出来（Task board has invalid JSON or a sync conflict: p\.json）：下面只有队长自己的派活记录，卡片状态待核实/);
+  assert.match(detail(broken, 'tasks.md'), /没挂卡｜p｜执行｜执行 s1（运行中）/);
   assert.throws(() => Seats.handoff(home, userData, { ...payload, colId: '../x' }, options), /无效/);
   // open records are never trimmed, so more than the renderer's cap of 120 is a real payload; only an absurd one is refused
   assert.match(Seats.handoff(home, userData, { ...payload, tasks: Array(121).fill({}) }, options).text, /# AgentDeck 队长交接/);

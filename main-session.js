@@ -549,7 +549,7 @@
       if ($('batteryConcurrency') && !$('batteryConcurrency').disabled && $('batteryConcurrency').reportValidity && !$('batteryConcurrency').reportValidity()) return;
       const budgetBox = $('handoffBudget');
       if (budgetBox?.reportValidity && !budgetBox.reportValidity()) return;
-      if (budgetBox && budgetBox.value !== undefined) host.config.captainHandoffBudget = M.handoffBudget(budgetBox.value);
+      if (budgetBox && budgetBox.value !== undefined) host.config.captainHandoffOverview = M.handoffBudget(budgetBox.value);
       host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
       host.config.resumeOnRestart = $('resumeOnRestart').checked;
       if (Bat() && $('batteryMode')) {
@@ -591,7 +591,7 @@
       $('batteryConcurrency').value = Bat().normalizeCap(host.config.batteryConcurrency);
       syncBatteryField();
     }
-    if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffBudget);
+    if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffOverview);
     const resumeBox = $('resumeOnRestart');
     if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
   }
@@ -699,7 +699,7 @@
     const rotation = window.PerpetualCaptainCore ? window.PerpetualCaptainCore.normalizeSettings(host.config.perpetualCaptain) : null;
     return {
       colId: col.id, reason, now: Date.now(), timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, cli: M.boardCli(host.platform),
-      budget: host.config.captainHandoffBudget, dispatchCap: MAX_TASKS, userTurnsOlder,
+      budget: host.config.captainHandoffOverview, dispatchCap: MAX_TASKS, userTurnsOlder,
       captain: { previousId, gen: s.gen, ...(leaving ? { nextGen: s.gen + 1 } : {}), message: relayMessage || '', lastRelay: leaving ? null : s.relayRecord || null,
         rotation: rotation ? `永动机自动轮换${rotation.enabled ? '开' : '关'}，席位顺序 ${rotation.order.join(' → ')}，Claude 席位都用尽时交给 ${host.config.captainRelayCodex?.name || 'ChatGPT'}` : '' },
       // Instruction bodies stay where they are; the handoff never quotes them.

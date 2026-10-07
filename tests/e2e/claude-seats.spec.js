@@ -118,7 +118,7 @@ test('rotation checkpoints first, retains workers/receipts, briefs continuation 
   const id = await page.evaluate(() => config.mainSession.colId);
   expect(id).not.toBe(cn);
   const board = path.join(home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
-  expect(fs.readFileSync(board, 'utf8')).toContain('Keep running');
+  expect(fs.readFileSync(path.join(path.dirname(board), 'agentdeck-captain-handoff', 'tasks.md'), 'utf8')).toContain('Keep running');
   expect(fs.existsSync(path.join(profile, 'chats', cn + '.json'))).toBe(true);
   expect(await page.evaluate(() => columns.find((c) => c.id === 'seat-worker').claudeSeatId)).toBe('cn');
   expect(await page.evaluate(() => window.deck.ptyIsAlive('seat-worker'))).toBe(true);

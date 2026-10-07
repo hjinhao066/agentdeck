@@ -170,7 +170,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   await expect(usBanner).toContainText('3%');
   await screenshot('perpetual-02-us-automatic');
   const board = path.join(home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
-  expect(fs.readFileSync(board, 'utf8')).toContain('继续跑的任务');
+  expect(fs.readFileSync(path.join(path.dirname(board), 'agentdeck-captain-handoff', 'tasks.md'), 'utf8')).toContain('继续跑的任务');
   expect(fs.readFileSync(board, 'utf8')).toContain('# AgentDeck 队长交接');
   expect(fs.readFileSync(board, 'utf8')).toContain('触发：席位 Relay');
   expect(fs.readFileSync(board, 'utf8')).toContain('CN → US');
@@ -191,7 +191,7 @@ test('automatic CN → US → Codex preserves worker and handoff, then returns t
   await screenshot('perpetual-03-codex-automatic');
   const secondArchive = JSON.parse(fs.readFileSync(path.join(profile, 'chats', usId + '.json')));
   expect(secondArchive.turns.some((t) => t.user === 'wait for quota' && t.interrupted)).toBe(true);
-  expect(fs.readFileSync(board, 'utf8')).toContain(`上任会话：${usId}`);
+  expect(fs.readFileSync(board, 'utf8')).toContain(`上任会话 ${usId}`);
   expect(fs.readFileSync(board, 'utf8')).toContain('US → ChatGPT');
   const notices = await page.evaluate((id) => ChatUI.turnsOf(id).filter((t) => t.kind === 'notice'), codexId);
   expect(notices).toHaveLength(1);

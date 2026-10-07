@@ -154,13 +154,16 @@ test('handoff: 高优先级 tasks are marked, counted and listed first inside th
   s.bind({ id: running.id, session_id: 'c-run', attempt_id: 'a1', assignee: { agent: 'Claude', model: 'm' } });
   s.bind({ id: urgent.id, session_id: 'c-urgent', attempt_id: 'a2', assignee: { agent: 'Claude', model: 'm' } });
   const record = (colId, extra = {}) => ({ id: 'k-' + colId, colId, title: colId, status: 'working', gen: 1, sentAt: 1, receipt: null, project: 'p', reviews: [], boardId: '', boardAttempt: '', ...extra });
-  const text = H.build({
+  const built = H.build({
     now: Date.parse('2026-10-05T06:19:52Z'), timeZone: 'UTC', reason: 'refresh', cards: s.list({ archived: true }),
     dispatches: [record('c-run', { boardId: running.id, boardAttempt: 'a1' }), record('c-urgent', { boardId: urgent.id, boardAttempt: 'a2' }), record('c-loose', { title: '没挂卡的急事', important: true })],
     sessions: ['c-run', 'c-urgent', 'c-loose'].map((id) => ({ id, title: id, state: 'working', alive: true, crew: true })),
     waitlist: [{ taskId: 'k-wait', title: '排队的急事', project: 'p', important: true, metadata: { boardId: '' } }],
-  }).text;
-  assert.match(text, /用户点名高优先级 4 条（下面标了【高优先级】，先办）/);
+  });
+  const text = built.files.find((f) => f.name === 'tasks.md').text;
+  // the overview names them (it is what a squeezed page keeps), the full table marks and orders them
+  assert.match(built.text, /## 3\. 用户点名的高优先级（4 条，先办）/);
+  assert.match(built.files.find((f) => f.name === 'playbook.md').text, /用户点名高优先级 4 条（tasks\.md 里标了【高优先级】，先办）/);
   const at = (needle) => { const i = text.indexOf(needle); assert.ok(i >= 0, needle); return i; };
   assert.ok(at(`【高优先级】${urgent.id}｜p｜紧急在做`) < at(`${running.id}｜p｜普通在做`), 'urgent first among running cards');
   assert.ok(at(`【高优先级】${high.id}｜p｜紧急待办`) < at(`${plain.id}｜p｜普通待办`), 'urgent first among cards not started');
@@ -168,7 +171,8 @@ test('handoff: 高优先级 tasks are marked, counted and listed first inside th
   assert.match(text, /】【高优先级】没挂卡｜p｜没挂卡的急事/);
   assert.match(text, /】【高优先级】没挂卡｜p｜排队的急事｜还没开会话/);
   // Nothing marked: the summary line says nothing about it.
-  assert.doesNotMatch(H.build({ now: 1, timeZone: 'UTC', reason: 'refresh', cards: [], dispatches: [], sessions: [] }).text, /高优先级/);
+  const plainBuilt = H.build({ now: 1, timeZone: 'UTC', reason: 'refresh', cards: [], dispatches: [], sessions: [] });
+  assert.doesNotMatch([plainBuilt.text, ...plainBuilt.files.map((f) => f.text)].join('\n'), /高优先级/);
 });
 
 // ---- the Captain's commands, against the real session code ----

@@ -155,16 +155,20 @@ test('durable checkpoint saves full interrupted history and compact board before
   const home = fixture(t), userData = path.join(home, 'deck');
   const chat = { turns: [{ id: 'turn', user: 'continue work', reply: 'partly done', interrupted: true, ts: Date.now() }] };
   const file = M.checkpoint(home, userData, { colId: 'captain-old', chat, tasks: [{ colId: 'worker', title: 'Work', status: 'asking', receipt: { question: 'Which branch?' } }] });
-  assert.match(fs.readFileSync(file, 'utf8'), /Which branch\?/);
-  assert.match(fs.readFileSync(file, 'utf8'), /read --id captain-old/);
-  assert.match(fs.readFileSync(file, 'utf8'), /receipts --wait 监听（不设超时）/);
-  assert.match(fs.readFileSync(file, 'utf8'), /没有才安静重挂，不用向用户汇报/);
-  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /--timeout 300/);
+  // the overview page, and the detail files beside it
+  const dir = path.join(path.dirname(file), 'agentdeck-captain-handoff'), detail = (n) => fs.readFileSync(path.join(dir, n), 'utf8');
+  const all = [fs.readFileSync(file, 'utf8'), ...fs.readdirSync(dir).map(detail)].join('\n');
+  assert.match(all, /Which branch\?/);
+  assert.match(all, /read --id captain-old/);
+  assert.match(detail('playbook.md'), /receipts --wait 监听（不设超时）/);
+  assert.match(detail('playbook.md'), /没有才安静重挂，不用向用户汇报/);
+  assert.doesNotMatch(all, /--timeout 300/);
   // the handoff states how to start from the live state; the standing habits stay in the briefing
-  assert.match(fs.readFileSync(file, 'utf8'), /队员在等队长回答 1 条[^\n]*\n {2}- 提问｜worker｜「Work」｜Which branch\?/);
-  assert.match(fs.readFileSync(file, 'utf8'), /启动方式：有已授权待办：照下面的顺序核对后主动续接，不用等用户说继续。/);
-  assert.match(fs.readFileSync(file, 'utf8'), /触发：席位 Relay/);
-  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /存档后直接安装并重启|重新派起来/);
+  assert.match(detail('waiting.md'), /队员在等队长回答 1 条[^\n]*\n {2}- 提问｜worker｜「Work」｜Which branch\?/);
+  assert.match(fs.readFileSync(file, 'utf8'), /队员提问 1 条/);
+  assert.match(fs.readFileSync(file, 'utf8'), /启动方式：有已授权待办：照 playbook\.md 的顺序核对后主动续接，不用等用户说继续。/);
+  assert.match(all, /触发：席位 Relay/);
+  assert.doesNotMatch(all, /存档后直接安装并重启|重新派起来/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'chats', 'captain-old.json'))).turns[0].interrupted, true);
   assert.throws(() => M.checkpoint(home, userData, { colId: '../unsafe', chat, tasks: [] }), /无效/);
 });

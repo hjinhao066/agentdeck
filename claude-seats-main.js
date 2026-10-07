@@ -243,6 +243,13 @@ function handoff(home, userData, payload, options = {}) {
     // Too big to be the one-line-per-decision file: said in the text, not read as "nothing recorded".
     else decisions.error = stat.isFile() ? '文件超过 512KB，没有读' : '不是普通文件，没有读';
   } catch (error) { if (error.code !== 'ENOENT') decisions.error = '读不出来：' + error.message; }
+  // The user's profile belongs to someone else (it is written elsewhere); only quoted here, and left out if there is none.
+  let aboutUser = null;
+  const about = path.join(home, '.agents', 'memory', 'about-user.md');
+  try {
+    const stat = fs.statSync(about);
+    if (stat.isFile() && stat.size <= 256 * 1024) aboutUser = { path: about, text: fs.readFileSync(about, 'utf8'), mtime: stat.mtimeMs };
+  } catch (_) { /* no profile: the section is left out */ }
   // An unreadable board is said out loud; the dispatch records alone still go out.
   let cards = [], boardError = '';
   try { cards = options.cards ? options.cards() : []; } catch (error) { boardError = error.message; }
@@ -257,12 +264,19 @@ function handoff(home, userData, payload, options = {}) {
     captain: { ...(payload.captain && typeof payload.captain === 'object' ? payload.captain : { previousId: payload.colId, message: payload.relayMessage || '' }) },
     cards, boardError, dispatches: payload.tasks, sessions: all(payload.sessions), archivedIds: all(payload.archivedIds),
     pending: all(payload.pending), inflight: all(payload.inflight), unconfirmed: all(payload.unconfirmed), waitlist: all(payload.waitlist),
-    carry: payload.carry, userTurns: all(payload.userTurns).slice(-12), decisions,
+    carry: payload.carry, userTurns: all(payload.userTurns).slice(-12), decisions, aboutUser,
     paths: { handoff: board, decisions: notes, chats: path.join(userData, 'chats'), tasks: options.tasksDir || path.join(dir, 'tasks') },
   });
+  // The detail files go beside the overview, in a directory of their own; the overview is written last.
+  fs.mkdirSync(built.dir, { recursive: true, mode: 0o700 });
+  for (const f of built.files) {
+    const target = path.join(built.dir, f.name);
+    fs.writeFileSync(target + '.tmp', f.text, { mode: 0o600 });
+    fs.renameSync(target + '.tmp', target);
+  }
   fs.writeFileSync(board + '.tmp', built.text, { mode: 0o600 });
   fs.renameSync(board + '.tmp', board);
-  return { path: board, text: built.text, plan: built.state.plan, level: built.level, over: built.over };
+  return { path: board, dir: built.dir, text: built.text, plan: built.state.plan, cuts: built.cuts, over: built.over };
 }
 function checkpoint(home, userData, payload, options) {
   if (!validId(payload?.colId) || !payload.chat || !Array.isArray(payload.tasks) || payload.tasks.length > MAX_HANDOFF_RECORDS) throw new Error('无效队长存档');

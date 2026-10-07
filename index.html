@@ -29,9 +29,9 @@
     <input id="csThreshold" type="number" min="1" step="1" required />
     <p class="hint">仅 Claude Code 队长空闲且输入框为空时执行：存看板 → 收到「已存档」→ /clear → 重发提示词并读看板继续。顶部可取消后续步骤。</p>
     <h3>队长交接</h3>
-    <label for="handoffBudget">交接长度预算（字，4000–60000，默认 12000）</label>
-    <input id="handoffBudget" type="number" min="4000" max="60000" step="500" inputmode="numeric" required autocomplete="off" aria-describedby="handoffBudgetNote" />
-    <p id="handoffBudgetNote" class="hint">Relay、清空或重启后队长读的交接不超过这么长。超出时先压缩历史说明和重复证据；未完成任务、阻塞、限制和待决定事项不会被删</p>
+    <label for="handoffBudget">交接总览长度上限（字，3000–20000，默认 6000）</label>
+    <input id="handoffBudget" type="number" min="3000" max="20000" step="500" inputmode="numeric" required autocomplete="off" aria-describedby="handoffBudgetNote" />
+    <p id="handoffBudgetNote" class="hint">Relay、清空或重启后队长先读的交接总览不超过这么长。放不下的细节移到旁边的分文件，总览里留条数和去哪读；用户最近的原话最后才会被压缩</p>
     <h3>并发上限</h3>
     <label for="concurrencyCap">同时干活的会话数（5–50，默认 30）</label>
     <input id="concurrencyCap" type="number" min="5" max="50" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="concurrencyCapNote" />

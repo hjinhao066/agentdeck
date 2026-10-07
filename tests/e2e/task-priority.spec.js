@@ -412,8 +412,11 @@ test('the Captain marks from the command line: task add, task priority, new, and
   expect((await waitlist()).map((w) => w[0])).toEqual(['排队的急事', '马上查一下告警', '做登录文案', '排队的普通活']);
 
   // the handoff the next Captain reads
-  const handoff = await ok(['handoff']);
-  expect(handoff).toMatch(/用户点名高优先级 \d+ 条（下面标了【高优先级】，先办）/);
+  const overview = await ok(['handoff']);
+  expect(overview).toMatch(/## 3\. 用户点名的高优先级（\d+ 条，先办）/);
+  expect(overview.length).toBeLessThan(6000);
+  // the full table is a detail file beside the overview
+  const handoff = fs.readFileSync(path.join(profile, 'seats-home', '.agents', 'boards', 'agentdeck-captain-handoff', 'tasks.md'), 'utf8');
   expect(handoff).toMatch(/】【高优先级】h-doing｜客户门户｜线上登录失败紧急排查/);
   expect(handoff).toMatch(/【高优先级】h-todo｜客户门户｜修复支付回调丢单/);
   expect(handoff).toMatch(/】【高优先级】没挂卡｜客户门户｜排队的急事｜还没开会话/);

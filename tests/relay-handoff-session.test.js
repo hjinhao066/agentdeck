@@ -19,6 +19,11 @@ const CODEX = 'codex --no-daemon --dangerously-bypass-approvals-and-sandbox';
 const tick = async (n = 30) => { for (let i = 0; i < n; i++) await new Promise((resolve) => setImmediate(resolve)); };
 const savedCap = M.MAX_ACTIVE;
 
+// The handoff is an overview page plus detail files beside it; `everything` is both, for checking a fact wherever it lives.
+const everything = (w, overview) => {
+  const dir = path.join(w.home, '.agents', 'boards', 'agentdeck-captain-handoff');
+  return [overview, ...(fs.existsSync(dir) ? fs.readdirSync(dir).sort().map((n) => fs.readFileSync(path.join(dir, n), 'utf8')) : [])].join('\n');
+};
 function world(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-relay-session-'));
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); M.MAX_ACTIVE = savedCap; });
@@ -99,7 +104,7 @@ test('after a Relay the card that is out is named with its owner, cannot be hand
   assert.equal(columns(), 1);
 
   const first = await app.relay('us', 'Relay：CN → US；手动切换');
-  const handoff = fs.readFileSync(first.file, 'utf8');
+  const handoff = everything(w, fs.readFileSync(first.file, 'utf8'));
   assert.match(handoff, /触发：席位 Relay；Relay：CN → US；手动切换/);
   assert.match(handoff, new RegExp(`上任会话：${first.from}（read --id ${first.from} 按需读）`));
   assert.match(handoff, /快照版本：队长代次 gen 1 → 2/);
@@ -132,7 +137,7 @@ test('after a Relay the card that is out is named with its owner, cannot be hand
   await assert.rejects(app.handle({ action: 'main-tell', to: worker.id, message: '改方向' }, { id: first.id, isMain: true, cmd: 'claude' }), /只有队长可以用这个命令/);
   await assert.rejects(app.handle({ action: 'main-new', id: 'third', title: '第三次', task: '做这件事', boardId: card.id, project: 'p', command: CODEX }), /already has an active execution/);
   assert.equal(columns(), 1);
-  assert.match(fs.readFileSync(second.file, 'utf8'), new RegExp(`上任会话：${first.id}`));
+  assert.match(everything(w, fs.readFileSync(second.file, 'utf8')), new RegExp(`上任会话：${first.id}`));
   // the worker's receipt after two Relays still lands on the same card, once
   await app.api.submit({ action: 'complete', result: '修好了。' }, worker);
   assert.equal(app.card(card.id).status, 'done');
@@ -258,7 +263,7 @@ test('receipts the CLI took but the Captain never got to are named at the Relay,
   assert.deepEqual([...pending.pending].map((p) => p.summary), ['still-unread']);
 
   const { file, fresh, from } = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
-  const text = fs.readFileSync(file, 'utf8');
+  const text = everything(w, fs.readFileSync(file, 'utf8'));
   assert.match(text, /未读回执和提问 1 条（会经 receipts 通道送达，到时再处理，不要照这里重复派活）：\n {2}- 回执｜worker｜「still-unread」｜still-unread/);
   assert.match(text, /上任已取走、可能没处理完的回执 1 条（不会再经通道送达，逐条核对是否已处理）：\n {2}- 回执｜worker｜「taken-but-never-read」｜taken-but-never-read/);
   assert.ok(!text.includes('handled-by-the-old-captain'));
@@ -270,8 +275,8 @@ test('receipts the CLI took but the Captain never got to are named at the Relay,
   assert.match(next.result, /still-unread/); assert.doesNotMatch(next.result, /taken-but-never-read|handled-by/);
   // the new Captain asks again later: the taken one is still on the page, with when and from whom
   const later = await app.handle({ action: 'main-handoff' });
-  assert.match(later.result, new RegExp(`上次 Relay（[^）]*，上任 ${from}）时已取走、可能没处理完的回执 1 条[^\\n]*\\n {2}- 回执｜worker｜「taken-but-never-read」`));
-  assert.match(later.result, /触发：队长运行 handoff/);
+  assert.match(everything(w, later.result), new RegExp(`上次 Relay（[^）]*，上任 ${from}）时已取走、可能没处理完的回执 1 条[^\\n]*\\n {2}- 回执｜worker｜「taken-but-never-read」`));
+  assert.match(everything(w, later.result), /触发：队长运行 handoff/);
 
   // a restart keeps the same promise: taken, unsettled receipts are carried instead of dropped silently
   w.skew += 5000; app.receipt('taken-right-before-quit');
@@ -281,7 +286,7 @@ test('receipts the CLI took but the Captain never got to are named at the Relay,
   assert.equal(again.s().handoffCarry.kind, 'restart');
   // the one the new Captain took after the Relay and never finished a turn on is carried as well
   assert.deepEqual([...again.s().handoffCarry.items].map((p) => p.summary), ['taken-but-never-read', 'still-unread', 'taken-right-before-quit']);
-  assert.match((await again.handle({ action: 'main-handoff' })).result, /重启前（[^）]*）已取走、可能没处理完的回执 3 条/);
+  assert.match(everything(w, (await again.handle({ action: 'main-handoff' })).result), /重启前（[^）]*）已取走、可能没处理完的回执 3 条/);
   assert.equal((await again.listen('z', 1)).result, '', 'and still not sent a second time');
 });
 
@@ -292,13 +297,13 @@ test('Relays in a row: a Captain that never got to work passes on what its prede
   app.receipt('left-by-a');
   assert.match((await app.listen('a', 1)).result, /left-by-a/);
   const toB = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
-  assert.match(fs.readFileSync(toB.file, 'utf8'), /上任已取走、可能没处理完的回执 1 条[^\n]*\n {2}- 回执｜worker｜「left-by-a」/);
+  assert.match(everything(w, fs.readFileSync(toB.file, 'utf8')), /上任已取走、可能没处理完的回执 1 条[^\n]*\n {2}- 回执｜worker｜「left-by-a」/);
   // B is out of quota as well: it takes one more and never finishes a turn. The app moves on to C.
   w.skew += 1000; app.receipt('left-by-b');
   assert.match((await app.listen('b', 1, toB.fresh)).result, /left-by-b/);
   w.skew += 1000;
   const toC = await app.relay('us2', '永动机自动轮换：US → US2；新队长没有开工');
-  const text = fs.readFileSync(toC.file, 'utf8');
+  const text = everything(w, fs.readFileSync(toC.file, 'utf8'));
   assert.match(text, /上任已取走、可能没处理完的回执 1 条[^\n]*\n {2}- 回执｜worker｜「left-by-b」/);
   assert.match(text, new RegExp(`更早一次 Relay（[^）]*，当时的上任 ${toB.from}）已取走、之后也没人处理完的回执 1 条（不会再经通道送达，逐条核对是否已处理）：\\n {2}- 回执｜worker｜「left-by-a」`));
   assert.match(text, /已取走未确认 2 条/); assert.match(text, /启动方式：有已授权待办/);
@@ -306,12 +311,12 @@ test('Relays in a row: a Captain that never got to work passes on what its prede
   assert.equal(app.s().handoffCarry.fromId, toC.from);
   // neither is sent through the channel a second time, and C still has both on the page when it asks
   assert.equal((await app.listen('c', 1, toC.fresh)).result, '');
-  const asked = (await app.handle({ action: 'main-handoff' })).result;
+  const asked = everything(w, (await app.handle({ action: 'main-handoff' })).result);
   assert.match(asked, /left-by-a/); assert.match(asked, /left-by-b/);
   // C works a full stretch with them in front of it: the next Relay no longer repeats them
   w.skew += 1000; settle(toC.id); w.skew += 1000;
   const toD = await app.relay('cn', 'Relay：US2 → CN；手动切换');
-  const last = fs.readFileSync(toD.file, 'utf8');
+  const last = everything(w, fs.readFileSync(toD.file, 'utf8'));
   assert.doesNotMatch(last, /left-by-a|left-by-b/); assert.match(last, /已取走、可能没处理完的回执：无/);
   assert.equal(app.s().handoffCarry, null);
   assert.equal(w.columns.filter((c) => c.isMain).length, 1); assert.equal(app.s().gen, 4);
@@ -325,26 +330,26 @@ test('sixty receipts taken and never handled all reach the next Captain, the one
   assert.equal(named((await app.listen('a', 1)).result).length, 60);
   assert.equal(app.api.handoffSnapshot('relay').unconfirmed.length, 60);
   const toB = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
-  let text = fs.readFileSync(toB.file, 'utf8');
+  let text = everything(w, fs.readFileSync(toB.file, 'utf8'));
   assert.match(text, /上任已取走、可能没处理完的回执 60 条/); assert.match(text, /已取走未确认 60 条/);
   assert.deepEqual(named(text), names, 'every one is named in the handoff, the oldest included');
   assert.equal(app.s().handoffCarry.items.length, 60); assert.equal(app.s().inflight.length, 0); assert.equal(app.s().pending.length, 0);
   // B never works; C still gets all sixty, and none comes through the channel again
   w.skew += 1000;
   const toC = await app.relay('us2', '永动机自动轮换：US → US2；新队长没有开工');
-  text = fs.readFileSync(toC.file, 'utf8');
+  text = everything(w, fs.readFileSync(toC.file, 'utf8'));
   assert.match(text, /已取走、之后也没人处理完的回执 60 条/);
   assert.deepEqual(named(text), names);
   assert.deepEqual([...app.s().handoffCarry.items].map((p) => p.summary), names);
   assert.equal((await app.listen('c', 1, toC.fresh)).result, '');
-  assert.deepEqual(named((await app.handle({ action: 'main-handoff' })).result), names);
+  assert.deepEqual(named(everything(w, (await app.handle({ action: 'main-handoff' })).result)), names);
   // a restart with more taken in between keeps the sixty and adds the new ones
   w.skew += 1000;
   for (let i = 0; i < 55; i++) app.receipt('before-quit-' + String(i).padStart(2, '0'));
   assert.match((await app.listen('c', 1, toC.fresh)).result, /before-quit-54/);
   const again = boot(w, app.persisted());
   assert.equal(again.s().handoffCarry.kind, 'restart'); assert.equal(again.s().handoffCarry.items.length, 115);
-  const after = (await again.handle({ action: 'main-handoff' })).result;
+  const after = everything(w, (await again.handle({ action: 'main-handoff' })).result);
   assert.match(after, /重启前（[^）]*）已取走、可能没处理完的回执 115 条/);
   assert.deepEqual(named(after), names); assert.ok(after.includes('「before-quit-00」') && after.includes('「before-quit-54」'));
   // past the first few, a receipt is listed by session and title only; the text says so and says where the rest is
@@ -368,7 +373,7 @@ test('501 receipts taken in one go, then a Relay: none reads as unread, none is 
   const before = app.api.handoffSnapshot('relay');
   assert.equal(before.unconfirmed.length, 501); assert.equal(before.inflight.length, 0); assert.equal(before.pending.length, 0);
   const relay = await app.relay('us', '永动机自动轮换：CN → US；当前席位额度用尽或限流');
-  const text = fs.readFileSync(relay.file, 'utf8');
+  const text = everything(w, fs.readFileSync(relay.file, 'utf8'));
   assert.match(text, /上任已取走、可能没处理完的回执 501 条/); assert.match(text, /未读回执和提问：无/);
   assert.deepEqual(titled(text, names), names);
   assert.equal(app.s().pending.length, 0); assert.equal(app.s().inflight.length, 0); assert.equal(app.s().handoffCarry.items.length, 501);
@@ -376,7 +381,7 @@ test('501 receipts taken in one go, then a Relay: none reads as unread, none is 
   // restart: still all of them, still not delivered again
   const again = boot(w, app.persisted());
   assert.equal(again.s().handoffCarry.items.length, 501); assert.equal(again.s().pending.length, 0);
-  assert.deepEqual(titled((await again.handle({ action: 'main-handoff' })).result, names), names);
+  assert.deepEqual(titled(everything(w, (await again.handle({ action: 'main-handoff' })).result), names), names);
   assert.equal((await again.listen('z', 1)).result, '');
 });
 
@@ -402,7 +407,7 @@ test('receipts taken over many reads, well past 500 in total: only the unhandled
   assert.equal((await restarted.listen('r', 1)).result, '');
   // then a Relay by a Captain that never worked after the restart: the same 501, once
   const relay = await restarted.relay('us', '永动机自动轮换：CN → US；新队长没有开工');
-  const text = fs.readFileSync(relay.file, 'utf8');
+  const text = everything(w, fs.readFileSync(relay.file, 'utf8'));
   assert.deepEqual(titled(text, names), names); assert.equal(titled(text, handled).length, 0);
   assert.match(text, /已取走未确认 501 条/);
   assert.equal(restarted.s().handoffCarry.items.length, 501); assert.equal(restarted.s().pending.length, 0);
@@ -424,7 +429,7 @@ test('a manual clear puts 501 unhandled receipts back in the queue; a Relay befo
   // the new context never reads them; the seat changes
   const relay = await app.relay('us', 'Relay：CN → US；手动切换');
   assert.equal(app.s().pending.length, 501, 'still waiting, whatever the id history says');
-  assert.match(fs.readFileSync(relay.file, 'utf8'), /未读回执和提问 501 条/);
+  assert.match(everything(w, fs.readFileSync(relay.file, 'utf8')), /未读回执和提问 501 条/);
   const got = (await app.listen('n', 1, relay.fresh)).result;
   assert.deepEqual(titled(got, names), names);
   assert.equal((await app.listen('n', 1, relay.fresh)).result, '');
@@ -448,7 +453,7 @@ test('a dispatch record that is still out is never trimmed away, and the handoff
   app.s().tasks.push(...Array.from({ length: 140 }, (_, i) => rec(1000 + i, 'working')));
   app = boot(w, app.persisted());
   assert.ok(app.s().tasks.filter((x) => x.status === 'working' || x.status === 'paused').length >= 155);
-  const text = (await app.handle({ action: 'main-handoff' })).result;
+  const text = everything(w, (await app.handle({ action: 'main-handoff' })).result);
   assert.match(text, /# AgentDeck 队长交接/);
   assert.match(text, /派活记录：本快照有 \d+ 条。未结束的全部保留；已结束的只留最近的/);
   for (const i of [0, 14, 1000, 1139]) assert.ok(text.includes(`「活 ${i}」`) || text.includes(`活 ${i}｜`), 'record ' + i);
@@ -464,11 +469,13 @@ test('the handoff command: live state on demand, the same text as the file, Capt
   const out = await app.handle({ action: 'main-handoff' });
   const file = path.join(w.home, '.agents', 'boards', 'agentdeck-captain-handoff.md');
   assert.equal(out.result, fs.readFileSync(file, 'utf8'));
-  assert.match(out.result, /触发：队长运行 handoff/);
-  assert.match(out.result, new RegExp(`【执行中】${card.id}`)); assert.match(out.result, new RegExp(`【待执行】还没启动的 1 张[^\\n]*\\n {2}- ${idle.id}｜p｜没开始的`));
+  assert.ok(out.result.length < 6000, 'the command prints the short page');
+  const all = everything(w, out.result);
+  assert.match(all, /触发：队长运行 handoff/);
+  assert.match(all, new RegExp(`【执行中】${card.id}`)); assert.match(all, new RegExp(`【待执行】还没启动的 1 张[^\\n]*\\n {2}- ${idle.id}｜p｜没开始的`));
   assert.match(out.result, /「把登录修了，修完发 1\.2」｜read --id captain --find "把登录修了，修完发"/);
-  assert.match(out.result, /本机：Mac mac\.test，正在运行 AgentDeck 1\.1\.11/);
-  assert.match(out.result, /队长轮换：永动机自动轮换开，席位顺序 us2 → us → cn/);
+  assert.match(all, /本机：Mac mac\.test，正在运行 AgentDeck 1\.1\.11/);
+  assert.match(all, /队长轮换：永动机自动轮换开，席位顺序 us2 → us → cn/);
   // it changes no session and no card; it only remembers where the file is for the next start
   const after = JSON.parse(app.persisted()); const was = JSON.parse(before);
   assert.equal(after.mainSession.seatCheckpoint, file); delete after.mainSession.seatCheckpoint;
@@ -476,7 +483,7 @@ test('the handoff command: live state on demand, the same text as the file, Capt
   await assert.rejects(app.handle({ action: 'main-handoff' }, worker), /只有队长可以用这个命令/);
   // the worker finishes; asking again shows the new state, from the board, not from memory
   await app.api.submit({ action: 'complete', result: '修好了。' }, worker);
-  const next = await app.handle({ action: 'main-handoff' });
+  const next = { result: everything(w, (await app.handle({ action: 'main-handoff' })).result) };
   assert.ok(!next.result.includes(`【执行中】${card.id}`)); assert.match(next.result, /未读回执和提问 1 条/);
   // a restart points the Captain back at it and warns that the crew is being continued by the app
   const again = boot(w, app.persisted());
@@ -487,7 +494,7 @@ test('the handoff command: live state on demand, the same text as the file, Capt
   const resumed = await newCard(again, { title: '重启时在跑的' });
   const { col } = await again.execute(resumed, 'resume-req');
   Object.assign(again.s().tasks.findLast((x) => x.colId === col.id), { status: 'paused', restartHold: true });
-  const text = (await again.handle({ action: 'main-handoff' })).result;
+  const text = everything(w, (await again.handle({ action: 'main-handoff' })).result);
   assert.match(text, new RegExp(`【执行中（重启后程序自动续接中）】${resumed.id}[^\\n]*\\n {2}会话：执行 ${col.id}（被中断·重启后程序自动续接中）`));
   assert.match(text, /程序正在自动续接（真续接或重发），约 1 分钟后用 ledger 确认；不要重派/);
 });
