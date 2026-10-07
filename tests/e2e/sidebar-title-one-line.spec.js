@@ -46,6 +46,8 @@ test.beforeAll(async () => {
   page = await application.firstWindow();
   await expect(page.locator('.column')).toHaveCount(4);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 20000 }).toBe(4);
+  // Finish the startup briefing before assigning actual-tool metadata.
+  await expect.poll(() => page.evaluate(() => terms.get('captain').lastScreen)).toContain('Delegate report:');
   await page.evaluate(() => {
     const commands = ['cursor-agent --model grok-4.7-high-fast', 'codex --model gpt-6.1-sol', 'agy --model gemini-3.8-flash-high'];
     const models = ['grok-4.7-high-fast', 'gpt-6.1-sol', 'gemini-3.8-flash-high'];

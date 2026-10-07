@@ -47,6 +47,13 @@
     b.type = 'button'; b.title = title; b.setAttribute('aria-label', title); b.innerHTML = host.ICONS[name] || '';
     b.addEventListener('mousedown', (e) => e.stopPropagation());
     b.addEventListener('click', (e) => { e.stopPropagation(); onClick(e); });
+    b.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick(e);
+      }
+    });
     return b;
   }
 
@@ -122,6 +129,20 @@
   }
   function renderBody() {
     closeMenu();
+    const active = document.activeElement;
+    let restoreFocus = null;
+    if (active && listEl && listEl.contains(active)) {
+      if (active.classList.contains('captain-fold')) {
+        restoreFocus = () => listEl.querySelector('.captain-fold');
+      } else if (active.classList.contains('crew-model-fold')) {
+        const modelKey = active.closest('.crew-model')?.dataset.modelKey;
+        restoreFocus = () => listEl.querySelector(`.crew-model[data-model-key="${modelKey}"] .crew-model-fold`);
+      } else if (active.dataset?.colId) {
+        const colId = active.dataset.colId;
+        restoreFocus = () => listEl.querySelector(`[data-col-id="${colId}"]`);
+      }
+      try { active.blur(); } catch (_) {}
+    }
     const navItems = host.navItems;
     navItems.clear();
     listEl.textContent = '';
@@ -172,6 +193,9 @@
       listEl.appendChild(head);
     }
     host.syncNav();
+    if (restoreFocus) {
+      try { restoreFocus()?.focus(); } catch (_) {}
+    }
   }
 
   // 队长's own row, pinned first like its column in the deck. It cannot be
