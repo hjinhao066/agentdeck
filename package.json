@@ -80,6 +80,7 @@
       "agent-sessions.js",
       "task-board.js",
       "worktree-core.js",
+      "workspace-trust-main.js",
       "shared-store.js",
       "sync-server.js",
       "sync-client.js",

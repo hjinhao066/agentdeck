@@ -119,6 +119,7 @@ test('new without --worktree does not create a copy or change the working direct
   assert.equal(app.w.prepares, 0);
   const col = app.w.columns.find((c) => !c.isMain);
   assert.equal(col.cwd, plain);
+  assert.equal(col.trustedCwd, plain);
   assert.equal(col.worktree, undefined);
   assert.equal(app.card(card.id).worktree, undefined);
   assert.equal(fs.existsSync(app.w.wt), false);
@@ -137,6 +138,7 @@ test('new --worktree records the copy on the card and archive keeps a dirty tree
   const col = app.w.columns.find((c) => !c.isMain);
   const recorded = app.card(card.id).worktree;
   assert.equal(col.cwd, recorded.path);
+  assert.equal(col.trustedCwd, recorded.path);
   assert.equal(recorded.repo, fs.realpathSync.native(app.w.repo));
   assert.equal(recorded.branch, 'feat/dirty');
   assert.equal(recorded.base, git(app.w.repo, ['rev-parse', 'main']));
