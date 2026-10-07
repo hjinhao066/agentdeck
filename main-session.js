@@ -1364,6 +1364,7 @@
   const CLOSED = ['done', 'failed', 'stopped', 'asking'];
   function settle(task, receipt, boardRecorded = false) {
     if (CLOSED.includes(task.status) || task.pendingInstall) return;
+    if (receipt.failed) Promise.resolve(window.deck.seatAuthFailure?.({ colId: task.colId, message: receipt.failed })).catch(() => {});
     if (receipt.failed && task.instructionSent === false && task.instruction) {
       receipt = { ...receipt, undeliveredInstruction: task.instruction, undeliveredTaskId: task.id };
     }
@@ -2339,6 +2340,23 @@
   async function handleOnce(message, caller) {
     refuseLate(message);
     const s = state();
+    if (message.action === 'seat-auth-alert') {
+      if (message.nativeSeatAuth !== true) throw new Error('席位异常只能由程序确认。');
+      if (!s || !mainCol()) throw new Error('队长尚未就绪，席位异常等待送达。');
+      if (typeof message.alertId !== 'string' || !/^[a-zA-Z0-9-]{1,100}$/.test(message.alertId) ||
+          !['Claude', 'Codex', 'Cursor', 'Antigravity'].includes(message.provider) ||
+          typeof message.seatId !== 'string' || !/^[a-zA-Z0-9_-]{1,40}$/.test(message.seatId) ||
+          typeof message.message !== 'string' || !message.message.trim() || message.message.length > 4000) throw new Error('Invalid seat authentication alert.');
+      s.seatAuthAlerts = Array.isArray(s.seatAuthAlerts) ? s.seatAuthAlerts : [];
+      if (!s.seatAuthAlerts.includes(message.alertId)) {
+        s.pending.push({ taskId: 'seat-auth-' + message.alertId, colId: s.colId, title: '席位掉登录', ts: Date.now(),
+          alertId: message.alertId, provider: message.provider, seatId: message.seatId, question: message.message, source: 'seat-auth' });
+        s.seatAuthAlerts.push(message.alertId);
+        save();
+        host.flushConfig?.();
+      }
+      return { done: true, result: 'Seat authentication alert recorded.', visible: host.captainColumnVisible(s.colId) };
+    }
     if (!s || !caller || (!isMain(caller) && !(message.action === 'main-new' && message.dispatcherCardId && message.dispatcherCardId === caller.dispatcherCardId && message.boardId === caller.dispatcherCardId))) throw new Error('只有队长可以用这个命令。');
     if (isMain(caller) && s.relayStartup?.attempt?.colId === caller.id &&
         !['main-receipt-listener-status', 'main-install-result'].includes(message.action)) {

@@ -17,9 +17,9 @@ function boot() {
       fresh: false, crewMarked: true, waitlist: [],
     },
   };
-  const terms = new Map([[captain.id, { alive: true, state: 'done', lastOutputAt: 0, lastScreen: '' }]]), prompts = [];
+  const terms = new Map([[captain.id, { alive: true, state: 'done', lastOutputAt: 0, lastScreen: '' }]]), prompts = [], authFailures = [];
   const window = {
-    deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: M, BoardCore: B, Sidebar: { render() {} },
+    deck: { onTaskStart() {}, onTaskReview() {}, onTaskRework() {}, seatAuthFailure: (input) => { authFailures.push(input); } }, MainCore: M, BoardCore: B, Sidebar: { render() {} },
     ChatUI: { hasDraft: () => false, turnsOf: () => [], updateCard() {}, addCard() {}, retireChat: () => null, captainArchives: () => [] },
   };
   const elements = new Map();
@@ -36,6 +36,7 @@ function boot() {
   vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
   const host = {
     config, platform: 'darwin', saveConfig() {}, columns: () => columns, terms, userComposing: () => false,
+    captainColumnVisible: () => false, isBackstage: () => false,
     columnLabel: (col) => col.id, showToast() {}, sendWhenReady: (_col, text, options) => { prompts.push(text); options?.onSent?.(); }, jumpToColumn() {},
     respawnColumn(col) {
       col.isMain = false;
@@ -46,12 +47,64 @@ function boot() {
     },
   };
   window.MainSession.init(host);
-  return { api: window.MainSession, config, captain, columns, host, prompts };
+  return { api: window.MainSession, config, captain, columns, host, prompts, authFailures };
 }
 
 function receipt(summary) {
   return { taskId: 'task-' + summary, colId: 'worker', title: summary, ts: Date.now(), summary, files: [] };
 }
+
+test('confirmed seat logout queues one durable question without settling any worker task', async () => {
+  const { api, config, captain, host } = boot();
+  const task = { id: 'work', colId: 'worker', title: 'pending work', status: 'working' };
+  config.mainSession.tasks.push(task);
+  let flushed = 0; host.flushConfig = () => { flushed++; };
+  const alert = { action: 'seat-auth-alert', nativeSeatAuth: true, alertId: 'alert-us-1', provider: 'Claude', seatId: 'us',
+    message: 'US 席位掉登录，任务无法继续。请重新登录；队长请改派其他席位。' };
+  await assert.rejects(api.handle({ ...alert, nativeSeatAuth: false }, captain), /只能由程序确认/);
+  await api.handle(alert, null);
+  await api.handle(alert, null);
+  assert.equal(config.mainSession.pending.length, 1);
+  assert.equal(config.mainSession.pending[0].question, alert.message);
+  assert.equal(config.mainSession.pending[0].source, 'seat-auth');
+  assert.equal(task.status, 'working');
+  assert.equal(task.receipt, undefined);
+  assert.equal(flushed, 1);
+
+  api.init(host);
+  const read = await api.handle({ action: 'main-receipts', wait: true }, captain);
+  assert.match(read.result, /US 席位掉登录/);
+  await api.handle(alert, null);
+  assert.equal(config.mainSession.pending.length, 0);
+  await api.handle({ ...alert, alertId: 'alert-us-2' }, null);
+  assert.equal(config.mainSession.pending.length, 1);
+});
+
+test('seat authentication signals use authenticated failed receipts, never successful result prose', async () => {
+  const { api, config, columns, authFailures } = boot();
+  const worker = { id: 'worker', cmd: 'claude', captainCrew: true }; columns.push(worker);
+  const assign = (id) => config.mainSession.tasks.push({ id, colId: worker.id, gen: 1, title: id, status: 'working', startedAt: Date.now() });
+  assign('failed-login');
+  await api.submit({ action: 'complete', result: '任务无法执行', failed: 'Not logged in' }, worker);
+  assert.equal(authFailures.length, 1);
+  assert.equal(authFailures[0].colId, worker.id);
+  assert.equal(authFailures[0].message, 'Not logged in');
+  assign('successful-work');
+  await api.submit({ action: 'complete', result: '已补 Not logged in 的回归测试' }, worker);
+  assert.equal(authFailures.length, 1);
+});
+
+test('automatic process failure receipts also signal authentication failures once', () => {
+  const { api, config, columns, host, authFailures } = boot();
+  const worker = { id: 'worker', cmd: 'claude', captainCrew: true }; columns.push(worker);
+  config.mainSession.tasks.push({ id: 'crashed', colId: worker.id, gen: 1, title: 'crashed', status: 'working', startedAt: Date.now() });
+  const entry = { alive: false, state: 'exited', lastScreen: '', exitReason: 'Not logged in', lastOutputAt: Date.now() };
+  host.terms.set(worker.id, entry);
+  api.onTick(worker.id, entry);
+  api.onTick(worker.id, entry);
+  assert.equal(authFailures.length, 1);
+  assert.equal(authFailures[0].message, 'Not logged in');
+});
 
 test('a restart does not resend receipts the background channel already returned', async () => {
   const { api, config, captain, host } = boot();

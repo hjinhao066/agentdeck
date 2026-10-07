@@ -92,8 +92,77 @@ usage reader refreshes that token itself so an idle seat does not depend on a
 running Claude process. Missing credentials, malformed credentials, or an
 expired access token without a live refresh token give a seat-specific login
 reason. A locked or unreadable Keychain gives a verification/access-permission
-reason, not a login instruction. An API network/401/403 failure only affects
-usage sampling.
+reason, not a login instruction. Network, permission and ordinary usage-query
+failures keep login state unknown. An official HTTP 401 or OAuth `invalid_grant`
+is an explicit authentication failure and participates in logout confirmation.
+
+## Seat logout alerts
+
+The main process watches actual quota/account polls for a transition from a
+previously working login to **confirmed 未登录**. Claude uses its configured
+seat directory and credential service: missing credentials, expired access
+without a usable refresh token, rejected refresh, or an official 401 are logout
+proofs. Two proofs at least 30 seconds apart confirm the outage. After the first
+proof, an extra check runs after 30 seconds; network/permission/ordinary query
+failure breaks the consecutive confirmation. An authenticated failed worker
+receipt (including a process failure receipt) mentioning `Not logged in` or
+`未登录` only triggers a fresh provider check; the text itself never counts as
+either confirmation, including GitHub/login-related failure prose. Successful
+result prose is ignored.
+
+Claude's normal first check is within about 5 minutes, or 15 minutes in idle
+battery mode, followed by the 30-second confirmation (plus request timeouts).
+The existing Codex account/quota RPC is checked about once a minute (up to two
+minutes with the battery tick); explicit `account: null` confirms credential
+absence. Only a successful authenticated quota response proves Codex recovery:
+cached account identity alone cannot clear an outage. Remotely revoked Codex
+tokens that do not appear as `account: null` cannot reliably be classified by
+this sampler. Cursor and Antigravity have no reliable authentication probe in
+their existing local quota snapshots and are not included in these alerts.
+
+Confirmation immediately submits critical Bark through the same private-key
+sender as `notify-user --urgent` and queues a question in the normal Captain
+`receipts` channel. The message names the seat, explains that its work fails or
+queues, gives that directory's login command, and asks the Captain to reassign
+affected work. For example, a seat configured as `~/.claude-us` gets
+`CLAUDE_CONFIG_DIR=~/.claude-us claude auth login`; the default directory gets
+`env -u CLAUDE_CONFIG_DIR claude auth login`. Custom paths are quoted safely;
+Windows gets the equivalent PowerShell environment command. The sampler never
+runs the login command itself.
+
+Bark uses the shared configurable critical volume (default 4) and quiet-hours
+queue: 23:00–10:00 Seattle time by default, plus fresh cached class periods when
+the local authenticated calendar CLI is available, otherwise configurable weekly
+periods (Tuesday/Thursday 10:30–12:20; Tuesday 15:30–17:20 by default). During quiet hours the local
+reminder and Captain receipt stay immediate; the phone alert is persisted and
+merged after quiet hours, checked every 30 seconds while the app is open.
+Unavailable/stale calendars visibly fall back to weekly periods. Empty weekly
+settings leave only sleep protection and show an explicit warning. Calendar
+failures retry in 15 minutes; Settings edits/manual refresh can retry immediately.
+
+The quota panel shows a pale-red row and red **未登录**, with the generated login
+command and a copy icon in the details (last line in the sidebar, level with the row;
+the detail stays 300 ms after the pointer leaves the row so the icon can be reached); it hides cached percentages and excludes the
+seat from existing quota fallback choices. Recovery is silent and requires a
+fresh successful provider query. Confirmed logged-out seats recheck every 30
+seconds (plus request time) for the first 10 minutes and every 2 minutes after that,
+even if an intervening query is unknown; recovery
+removes that seat’s queued phone alert without ringing. Each seat/outage sends only once, including
+across app restarts; a confirmed recovery rearms the next outage. The private
+`userData/seat-auth-state.json` keeps the episode latch and undelivered Captain
+receipts. A missing Captain does not delay Bark; its receipt waits until one
+exists. Never-logged-in seats show 未登录 after confirmation without a dropout
+alert. On upgrade, a fresh bound quota sample can establish the prior login.
+Blank Bark settings use the same private Captain key file `~/.secrets/bark-key.txt`.
+Where the setting is blank and that file does not exist (Windows by default), a phone
+reminder is dropped with a setup hint instead of queued; an explicit path that cannot
+be read still queues and retries. Queued reminders older than 24 hours are discarded.
+Daytime sends are durable too: failure retains the outbox for a 60-second retry,
+with an explicit Settings error and a once-per-outage Captain exception receipt.
+If the outbox cannot be saved, this is reported instead of claiming queued delivery.
+An interrupted send with unknown outcome (owner process gone, or the send record
+older than 60 seconds) pauses automatic resends until manual refresh; successful-send cleanup errors retry saving without repeated ringing.
+Native reminders preserve front-window silence and never activate a window.
 
 This branch does not restart installed AgentDeck or migrate running terminals.
 These process-binding fixes take effect when the new runtime is installed and

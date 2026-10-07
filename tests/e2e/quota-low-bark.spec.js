@@ -27,6 +27,7 @@ test.beforeEach(() => {
   }
   const file = path.join(profile, 'fake-key'); fs.writeFileSync(file, 'fake_e2e_quota_device_key');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ barkKeyFile: file,
+    barkNotifications: { sleepEnabled: false, classesEnabled: false },
     claudeSeats: ['cn', 'us'].map((id) => ({ id, name: id.toUpperCase(), configDir: `~/.claude-${id}` })),
     columns: ['cn', 'us'].map((id) => ({ id, title: id.toUpperCase(), claudeSeatId: id,
       cmd: `node "${FAKE}" Claude ${id}`, cwd: profile, role: 'manual' })),
@@ -47,8 +48,8 @@ test('startup low quotas send once per account; relaunch and renderer replay do 
   fs.writeFileSync(file, JSON.stringify(config)); await launch();
   await expect.poll(async () => (await alerts()).length).toBe(2);
   expect(await alerts()).toEqual(expect.arrayContaining([
-    expect.objectContaining({ level: 'critical', volume: 3, body: expect.stringMatching(/CN.*剩余 2%.*重置时间/) }),
-    expect.objectContaining({ level: 'critical', volume: 3, body: expect.stringMatching(/US.*剩余 2%.*重置时间/) }),
+    expect.objectContaining({ level: 'critical', volume: 4, body: expect.stringMatching(/CN.*剩余 2%.*重置时间/) }),
+    expect.objectContaining({ level: 'critical', volume: 4, body: expect.stringMatching(/US.*剩余 2%.*重置时间/) }),
   ]));
   await page.evaluate(() => { flushConfig(); window.deck.saveConfig(config); window.deck.saveConfig(config); });
   await page.waitForTimeout(500); expect(await alerts()).toHaveLength(2);
@@ -56,7 +57,7 @@ test('startup low quotas send once per account; relaunch and renderer replay do 
   await application.close(); application = null; await launch();
   await page.waitForTimeout(2000); expect(await alerts()).toHaveLength(0);
   await page.reload(); await page.waitForTimeout(2000); expect(await alerts()).toHaveLength(0);
-  expect(await page.evaluate(() => config.claudeQuotaAlert)).toEqual({ thresholdPercent: 2, volume: 3 });
+  expect(await page.evaluate(() => config.claudeQuotaAlert)).toEqual({ thresholdPercent: 2 });
   expect(await page.evaluate(() => config.barkKeyFile)).toBe(path.join(profile, 'fake-key'));
 });
 test('live Claude seat footer triggers inclusively, deduplicates and rearms after recovery', async () => {
@@ -67,7 +68,7 @@ test('live Claude seat footer triggers inclusively, deduplicates and rearms afte
   await expect.poll(() => page.evaluate(() => terms.get('us')?.lastScreen || ''), { timeout: 20000 }).toContain('Claude Code');
   await page.evaluate(() => window.deck.ptyInput('us', 'remaining:2\r'));
   await expect.poll(async () => (await alerts()).length).toBe(1);
-  expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 3, body: expect.stringMatching(/US.*剩余 2%/) });
+  expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 4, body: expect.stringMatching(/US.*剩余 2%/) });
   await page.evaluate(() => window.deck.ptyInput('us', 'remaining:1\r'));
   await expect(badge).toHaveText('1%');
   await page.waitForTimeout(500); expect(await alerts()).toHaveLength(1);

@@ -21,6 +21,7 @@ test.beforeEach(() => {
   fs.writeFileSync(keyFile, KEY + '\n');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', barkKeyFile: keyFile,
+    barkNotifications: { sleepEnabled: false, classesEnabled: false },
     columns: ['a', 'b'].map((id) => ({ id, title: id.toUpperCase(), cmd: '', cwd: profile })),
   }));
 });

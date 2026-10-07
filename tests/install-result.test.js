@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { readResult, createResultMonitor, MAX_PENDING_MS } = require('../install-result');
+const { readResult, createResultMonitor, notificationOutcome, MAX_PENDING_MS } = require('../install-result');
 
 function fixture(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-install-result-'));
@@ -102,4 +102,122 @@ test('phone fallback waits for the installer notification attempt but records th
   f.write({ status: 'failed', notificationPending: true, finishedAt: Date.now() - 16000 });
   await poll();
   assert.equal(delivered, 1); assert.equal(notified, 1);
+});
+
+test('a live notification owner keeps its attempt past 15 seconds while the captain receipt is delivered', async (t) => {
+  const f = fixture(t); f.write({ status: 'failed', notificationPending: true, notificationOwnerPid: process.pid, finishedAt: Date.now() - 120000 });
+  let delivered = 0, notified = 0;
+  const poll = createResultMonitor({ file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => delivered++, notify: async () => { notified++; return true; } });
+  await poll(); await poll();
+  assert.equal(delivered, 1);
+  assert.equal(notified, 0);
+  f.write({ status: 'failed', notificationPending: false, notificationOwnerPid: process.pid, finishedAt: Date.now() - 120000 });
+  await poll();
+  assert.equal(notified, 1);
+});
+
+test('a definitely exited notification owner permits immediate fallback without waiting out the legacy window', async (t) => {
+  const f = fixture(t), ownerPid = 123456;
+  f.write({ status: 'failed', notificationPending: true, notificationOwnerPid: ownerPid, finishedAt: Date.now() });
+  t.mock.method(process, 'kill', (pid, signal) => {
+    assert.equal(pid, ownerPid); assert.equal(signal, 0);
+    throw Object.assign(new Error('process exited'), { code: 'ESRCH' });
+  });
+  let notified = 0;
+  await createResultMonitor({ file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => {}, notify: async () => { notified++; return true; } })();
+  assert.equal(notified, 1);
+});
+
+test('permission denial cannot prove that the installer notification owner has exited', async (t) => {
+  const f = fixture(t); f.write({ status: 'failed', notificationPending: true, notificationOwnerPid: 123456, finishedAt: Date.now() - 120000 });
+  t.mock.method(process, 'kill', () => { throw Object.assign(new Error('permission denied'), { code: 'EPERM' }); });
+  let notified = 0;
+  await createResultMonitor({ file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => {}, notify: async () => { notified++; return true; } })();
+  assert.equal(notified, 0);
+});
+
+test('after observing owner exit the monitor rereads notification state written while receipt delivery awaited', async (t) => {
+  const f = fixture(t), ownerPid = 123456;
+  f.write({ status: 'failed', notificationPending: true, notificationOwnerPid: ownerPid, finishedAt: Date.now() - 120000 });
+  t.mock.method(process, 'kill', (pid, signal) => {
+    assert.equal(pid, ownerPid); assert.equal(signal, 0);
+    throw Object.assign(new Error('process exited'), { code: 'ESRCH' });
+  });
+  let notified = 0;
+  await createResultMonitor({ file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => f.write({ status: 'failed', notificationPending: false, notificationOwnerPid: ownerPid,
+      notificationSent: true, notificationAccepted: true, finishedAt: Date.now() }),
+    notify: async () => { notified++; return true; } })();
+  assert.equal(notified, 0);
+  assert.equal(JSON.parse(fs.readFileSync(f.file + '.ack.json', 'utf8')).receipt, true);
+});
+
+for (const change of ['replaced', 'removed']) test(`owner-exit recheck never sends for an installation result ${change} during receipt delivery`, async (t) => {
+  const f = fixture(t);
+  f.write({ status: 'failed', notificationPending: true, notificationOwnerPid: 123456, finishedAt: Date.now() - 120000 });
+  t.mock.method(process, 'kill', () => { throw Object.assign(new Error('process exited'), { code: 'ESRCH' }); });
+  let notified = 0;
+  await createResultMonitor({ file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => change === 'removed' ? fs.unlinkSync(f.file) : f.write({ id: 'another-install', status: 'failed' }),
+    notify: async () => { notified++; return true; } })();
+  assert.equal(notified, 0);
+});
+
+test('notification outcomes distinguish accepted queues from delivered reminders and retain boolean compatibility', () => {
+  assert.deepEqual(notificationOutcome(true), { accepted: true, queued: false, sent: true });
+  assert.deepEqual(notificationOutcome(false), { accepted: false, queued: false, sent: false });
+  assert.deepEqual(notificationOutcome({ ok: true, queued: true }), { accepted: true, queued: true, sent: false });
+  assert.deepEqual(notificationOutcome({ ok: false, accepted: true, queued: true, sent: false }), { accepted: true, queued: true, sent: false });
+  assert.deepEqual(notificationOutcome({ ok: true }), { accepted: true, queued: false, sent: true });
+  assert.deepEqual(notificationOutcome({ ok: false }), { accepted: false, queued: false, sent: false });
+});
+
+for (const flags of [{ notificationAccepted: true }, { notificationQueued: true }, { notificationSent: true }]) {
+  test(`installer notification acceptance prevents app retry: ${Object.keys(flags)[0]}`, async (t) => {
+    const f = fixture(t); f.write({ status: 'failed', ...flags });
+    let delivered = 0, notified = 0;
+    const options = { file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+      deliver: async () => delivered++, notify: async () => { notified++; return true; } };
+    await createResultMonitor(options)(); await createResultMonitor(options)();
+    assert.equal(delivered, 1);
+    assert.equal(notified, 0);
+  });
+}
+
+test('queued app fallback is acknowledged across restarts and uses a stable installation-result key', async (t) => {
+  const f = fixture(t); f.write({ status: 'failed' });
+  const notified = [];
+  const options = { file: f.file, runtime: () => f.runtime, getConfig: () => f.config,
+    deliver: async () => {}, notify: async (command) => { notified.push(command); return { ok: true, queued: true }; } };
+  await createResultMonitor(options)();
+  await createResultMonitor(options)();
+  const ack = JSON.parse(fs.readFileSync(f.file + '.ack.json', 'utf8'));
+  assert.equal(ack.notification, true);
+  assert.equal(ack.notificationAccepted, true);
+  assert.equal(ack.notificationQueued, true);
+  assert.equal(ack.notificationSent, false);
+  assert.equal(notified.length, 1);
+  assert.equal(notified[0].dedupeKey, 'install:' + f.r.id);
+  f.config.mainSession.tasks[0].pendingInstall.id = 'install-2';
+  f.write({ id: 'install-2', status: 'failed' });
+  await createResultMonitor(options)();
+  assert.equal(notified.length, 2);
+  assert.equal(notified[1].dedupeKey, 'install:install-2');
+});
+
+test('a structured notification rejection remains retryable rather than being truthily acknowledged', async (t) => {
+  const f = fixture(t); f.write({ status: 'failed' });
+  let notified = 0;
+  const options = { file: f.file, runtime: () => f.runtime, getConfig: () => f.config, deliver: async () => {},
+    notify: async () => { notified++; return { ok: false }; } };
+  await createResultMonitor(options)();
+  const ack = JSON.parse(fs.readFileSync(f.file + '.ack.json', 'utf8'));
+  assert.equal(ack.notificationAccepted, false);
+  assert.equal(ack.notificationSent, false);
+  ack.nextNotificationAt = 0; fs.writeFileSync(f.file + '.ack.json', JSON.stringify(ack));
+  await createResultMonitor(options)();
+  assert.equal(notified, 2);
 });

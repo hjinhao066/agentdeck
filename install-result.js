@@ -28,6 +28,26 @@ function readResult(file, runtime, now = Date.now()) {
 function summary(r) {
   return `AgentDeck ${r.operation === 'rollback' ? '回滚' : '安装'} ${r.targetVersion} ${r.status === 'success' ? '成功' : '失败'}；${r.reason || '版本与启动状态已核对'}；现在运行 ${r.activeVersion || '未知版本'}。`;
 }
+function notificationOutcome(value) {
+  if (value === true) return { accepted: true, queued: false, sent: true };
+  const queued = value?.queued === true;
+  const sent = value?.sent === true || value?.ok === true && !queued && value?.sent !== false;
+  return { accepted: value?.accepted === true || queued || sent, queued, sent };
+}
+function notificationOwnerAlive(pid) {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return error.code !== 'ESRCH'; }
+}
+function notificationLease(result) {
+  if (result.notificationPending !== true) return { busy: false, ownerExited: false };
+  const pid = result.notificationOwnerPid;
+  if (Number.isInteger(pid) && pid > 0 && pid <= 2147483647) {
+    const busy = notificationOwnerAlive(pid);
+    return { busy, ownerExited: !busy };
+  }
+  const finished = typeof result.finishedAt === 'number' ? result.finishedAt : Date.parse(result.finishedAt);
+  return { busy: Number.isFinite(finished) && Date.now() - finished < 15000, ownerExited: false };
+}
 
 // Separate acknowledgement: never overwrite a result while the installer is
 // atomically replacing it. The renderer flushes the task receipt before ack.
@@ -60,17 +80,34 @@ function createResultMonitor({ file, runtime, getConfig, deliver, notify }) {
         await deliver({ id: 'install-' + r.id + '-' + Date.now(), action: 'main-install-result', callerId: captain.id, installResult: r, result: message });
         ack.receipt = true; saveAck();
       }
-      const finished = typeof r.finishedAt === 'number' ? r.finishedAt : Date.parse(r.finishedAt);
-      const installerNotifying = r.notificationPending === true && Number.isFinite(finished) && Date.now() - finished < 15000;
-      if (!installerNotifying && (r.status === 'failed' || r.operation === 'rollback') && !r.notificationSent && !ack.notification &&
+      // Calendar reads, outbox locks and transport may outlast the legacy 15 s
+      // window. Only a definitely exited owner relinquishes a pending attempt.
+      let notificationResult = r, lease = notificationLease(r);
+      if (lease.ownerExited) {
+        // The owner may have written its accepted/sent state while deliver()
+        // awaited the receipt. Read only after observing its exit, when that
+        // final atomic write is complete; a changed/missing result is not ours.
+        const current = readResult(file, runtime());
+        if (!current || current.id !== r.id) return;
+        notificationResult = current;
+        lease = notificationLease(current);
+      }
+      if (!lease.busy && (notificationResult.status === 'failed' || notificationResult.operation === 'rollback') &&
+          !notificationResult.notificationAccepted && !notificationResult.notificationQueued && !notificationResult.notificationSent &&
+          !ack.notification && !ack.notificationAccepted && !ack.notificationQueued &&
           (ack.notificationAttempts || 0) < 3 && Date.now() >= (ack.nextNotificationAt || 0)) {
         ack.notificationAttempts = (ack.notificationAttempts || 0) + 1;
         ack.nextNotificationAt = Date.now() + 60000;
         saveAck();
-        ack.notification = await notify({ id: 'install-alert-' + r.id, callerId: captain.id, message, urgent: true });
+        const outcome = notificationOutcome(await notify({ id: 'install-alert-' + r.id, callerId: captain.id,
+          message: summary(notificationResult), urgent: true, dedupeKey: 'install:' + r.id }));
+        ack.notification = outcome.accepted;
+        ack.notificationAccepted = outcome.accepted;
+        ack.notificationQueued = outcome.queued;
+        ack.notificationSent = outcome.sent;
       }
       saveAck();
     } finally { busy = false; }
   };
 }
-module.exports = { MAX_PENDING_MS, readResult, summary, createResultMonitor };
+module.exports = { MAX_PENDING_MS, readResult, summary, notificationOutcome, createResultMonitor };

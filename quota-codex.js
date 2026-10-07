@@ -10,8 +10,8 @@ function accountIdentity(email) {
 }
 function readCodex(env = process.env, spawnImpl = spawn, timeoutMs = 8000) {
   return new Promise((resolve) => {
-    let child, buffer = '', bytes = 0, identity = {}, done = false;
-    const finish = (q = null) => {
+    let child, buffer = '', bytes = 0, identity = {}, authSample = null, done = false;
+    const finish = (q = authSample) => {
       if (done) return;
       done = true; clearTimeout(timer);
       if (child && !child.killed) child.kill();
@@ -40,13 +40,21 @@ function readCodex(env = process.env, spawnImpl = spawn, timeoutMs = 8000) {
             send(null, 'initialized');
             send(2, 'account/read', { refreshToken: false });
           } else if (message.id === 2) {
+            if (message.error) return finish();
+            if (message.result?.account === null) return finish({ provider: 'Codex', scope: 'codex', at: Date.now(),
+              authStatus: 'logged-out', failureOnly: true, failure: '账号查询没有登录账户' });
+            if (!['chatgpt', 'apiKey'].includes(message.result?.account?.type)) return finish();
             // API-key accounts have no ChatGPT subscription quota.
             if (message.result?.account?.type !== 'chatgpt') return finish();
             identity = accountIdentity(message.result.account.email);
+            // account/read does not refresh authentication: it can still name a
+            // cached account whose token was revoked. Only authenticated quota
+            // success below proves that an account has recovered its login.
+            authSample = Object.keys(identity).length ? { provider: 'Codex', scope: 'codex', at: Date.now(), ...identity, identityOnly: true } : null;
             send(3, 'account/rateLimits/read');
           } else if (message.id === 3) {
             const at = Date.now(), q = Q.codexServer(message.result, at);
-            finish(q ? { ...q, ...identity } : Object.keys(identity).length ? { provider: 'Codex', scope: 'codex', at, ...identity, identityOnly: true } : null);
+            finish(q ? { ...q, ...identity, authStatus: 'logged-in' } : authSample);
           }
         }
       });

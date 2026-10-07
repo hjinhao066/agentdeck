@@ -69,6 +69,7 @@
       "quota-local.js",
       "quota-codex.js",
       "quota-low-bark.js",
+      "seat-auth-alert.js",
       "needs-user-bark.js",
       "quota-claude.js",
       "chat-ui.js",
@@ -123,6 +124,9 @@
       "security.js",
       "notifications.js",
       "notify-user.js",
+      "bark-policy.js",
+      "bark-delivery.js",
+      "bark-calendar.js",
       "notification-policy.js"
     ],
     "mac": {

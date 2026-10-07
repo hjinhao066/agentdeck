@@ -6,7 +6,9 @@ const KNOWN = {
 };
 
 function barkEnabled(config) { return !config || config.needsUserBark !== false; }
-function barkReady(config) { return typeof config?.barkKeyFile === 'string' && !!config.barkKeyFile.trim(); }
+// A blank setting uses the shared private key file; delivery reports unreadable
+// credentials and keeps the reminder for retry rather than silently dropping it.
+function barkReady() { return true; }
 
 function oneLine(value, max) { return String(value || '').replace(/\s+/g, ' ').trim().slice(0, max); }
 

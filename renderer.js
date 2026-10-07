@@ -116,7 +116,8 @@ let config = {
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
-  claudeQuotaAlert: { thresholdPercent: 2, volume: 3 }, barkKeyFile: '', needsUserBark: true,
+  claudeQuotaAlert: { thresholdPercent: 2 }, barkKeyFile: '', needsUserBark: true,
+  barkNotifications: BarkPolicy.settings(),
   perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
@@ -133,8 +134,9 @@ config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas
 if (saved) {
   if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
   if (typeof saved.needsUserBark === 'boolean') config.needsUserBark = saved.needsUserBark;
+  config.barkNotifications = BarkPolicy.settings(saved.barkNotifications);
   if (saved.claudeQuotaAlert && typeof saved.claudeQuotaAlert === 'object') {
-    config.claudeQuotaAlert = { ...config.claudeQuotaAlert, ...saved.claudeQuotaAlert };
+    config.claudeQuotaAlert = { thresholdPercent: QuotaCore.percent(saved.claudeQuotaAlert.thresholdPercent) ?? 2 };
   }
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
   config.perpetualCaptain = PerpetualCaptainCore.normalizeSettings(saved.perpetualCaptain);
@@ -684,6 +686,16 @@ function openNotificationSettings() {
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
   document.getElementById('barkKeyFile').value = config.barkKeyFile;
   document.getElementById('needsUserBark').checked = config.needsUserBark !== false;
+  const bark = BarkPolicy.settings(config.barkNotifications);
+  document.getElementById('barkCriticalVolume').value = bark.criticalVolume;
+  document.getElementById('barkSleepEnabled').checked = bark.sleepEnabled;
+  document.getElementById('barkSleepStart').value = bark.sleepStart;
+  document.getElementById('barkSleepEnd').value = bark.sleepEnd;
+  document.getElementById('barkClassesEnabled').checked = bark.classesEnabled;
+  document.getElementById('barkClassCalendarIds').value = bark.classCalendarIds.join('\n');
+  document.getElementById('barkClassFilters').value = bark.classFilters.join('\n');
+  document.getElementById('barkWeeklyClasses').value = (bark.weeklyClasses || []).map((entry) => `周${'日一二三四五六'[entry.day]} ${entry.start}-${entry.end}`).join('\n');
+  updateBarkPolicyStatus();
   MainSession.openSettings();
   updateMobileWebSettings();
   dialog.showModal();
@@ -726,7 +738,27 @@ document.getElementById('mobileWebCopyGateway').addEventListener('click', (event
   button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
   setTimeout(() => { button.innerHTML = original; button.title = '复制入口口令'; button.setAttribute('aria-label', '复制入口口令'); }, 1400);
 });
+async function updateBarkPolicyStatus() {
+  const node = document.getElementById('barkPolicyStatus');
+  try {
+    const status = await window.deck.barkStatus();
+    const calendar = status.calendar || {};
+    const calendarText = calendar.state === 'disabled' ? '已关闭' : calendar.available ?
+      `已缓存（更新于 ${new Date(calendar.fetchedAt).toLocaleString()}）` : calendar.fallback ? '不可用，使用每周固定上课时段' : '不可用，未设置固定上课时段，上课时手机可能响';
+    node.textContent = `暂存手机提醒：${status.queuedCount || 0} 条。课程日历：${calendarText}。${status.lastError ? `${status.queuedCount ? '发送失败待重试：' : ''}${status.lastError.replace(/。$/, '')}${status.retryAt ? `（${new Date(status.retryAt).toLocaleTimeString()}后重试）` : ''}。` : ''}`;
+  } catch (_) { node.textContent = '课程日历状态暂不可用。'; }
+}
 function saveNotificationSettings() {
+  const weeklyInput = document.getElementById('barkWeeklyClasses');
+  let weeklyClasses = [], weeklyValid = true;
+  for (const line of weeklyInput.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+    const match = /^周([日一二三四五六])\s+((?:[01]\d|2[0-3]):[0-5]\d)\s*[-–]\s*((?:[01]\d|2[0-3]):[0-5]\d)$/.exec(line);
+    if (!match || match[2] >= match[3]) { weeklyValid = false; break; }
+    weeklyClasses.push({ day: '日一二三四五六'.indexOf(match[1]), start: match[2], end: match[3] });
+  }
+  // A mistyped line keeps the last saved periods; every other setting is still saved and the window can close.
+  weeklyInput.setCustomValidity(weeklyValid ? '' : '每行请填写「周二 10:30-12:20」，结束时间要晚于开始时间。');
+  if (!weeklyValid) { weeklyClasses = BarkPolicy.settings(config.barkNotifications).weeklyClasses; weeklyInput.reportValidity(); }
   config.captainNotifications = NotificationPolicy.normalizeSettings({
     enabled: document.getElementById('captainNotifyEnabled').checked,
     sound: document.getElementById('captainSoundEnabled').checked,
@@ -734,7 +766,19 @@ function saveNotificationSettings() {
   });
   config.barkKeyFile = document.getElementById('barkKeyFile').value.trim();
   config.needsUserBark = document.getElementById('needsUserBark').checked;
+  config.barkNotifications = BarkPolicy.settings({ ...config.barkNotifications,
+    criticalVolume: document.getElementById('barkCriticalVolume').valueAsNumber,
+    sleepEnabled: document.getElementById('barkSleepEnabled').checked,
+    sleepStart: document.getElementById('barkSleepStart').value,
+    sleepEnd: document.getElementById('barkSleepEnd').value,
+    classesEnabled: document.getElementById('barkClassesEnabled').checked,
+    classCalendarIds: document.getElementById('barkClassCalendarIds').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+    classFilters: document.getElementById('barkClassFilters').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+    weeklyClasses,
+  });
   saveConfig();
+  updateBarkPolicyStatus();
+  return weeklyValid;
 }
 function buildChrome() {
   const head = document.getElementById('navHead');
@@ -858,9 +902,10 @@ function positionQuotaDetails() {
   if (!pop.hidden) positionQuotaPop();
   const items = [...document.querySelectorAll('#quotaBar .quota-item, #quotaPop .quota-item')];
   const visible = items.filter((item) => item.offsetParent);
-  const focused = visible.find((item) => item === document.activeElement), hovered = visible.find((item) => item.matches(':hover'));
+  const focused = visible.find((item) => item.contains(document.activeElement)), hovered = visible.find((item) => item.matches(':hover'));
+  const held = visible.find((item) => item.classList.contains('tip-hold'));
   // Keyboard focus keeps its detail; the mouse can still look at other rows past a clicked (pinned) one.
-  const active = (focused?.matches(':focus-visible') && focused) || hovered || focused;
+  const active = (focused?.matches(':focus-visible, :has(:focus-visible)') && focused) || held || hovered || focused;
   items.forEach((item) => item.classList.toggle('quota-detail-open', item === active));
   if (!active) return;
   const tip = active.querySelector('.quota-tooltip');
@@ -3490,7 +3535,7 @@ window.deck.onBoardCommand(async (message) => {
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
   // 队长's commands: only its own column may use them.
-  if (String(message.action || '').startsWith('main-')) {
+  if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert') {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
@@ -3500,7 +3545,7 @@ window.deck.onBoardCommand(async (message) => {
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-receipt-listener-status' || message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-handoff') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'seat-auth-alert' || message.action === 'main-receipt-listener-status' || message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-handoff') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;
@@ -3623,8 +3668,26 @@ document.getElementById('searchClose').innerHTML = ICONS.close;
 document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
-document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
-['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark'].forEach((id) => {
+const closeNotificationSettings = () => {
+  if (!saveNotificationSettings()) showToast('上课时段有一行格式不对，这一项没改；其他设置已保存。');
+  flushConfig();
+};
+document.getElementById('notificationSettingsClose').onclick = () => {
+  closeNotificationSettings();
+  document.getElementById('notificationSettings').close();
+};
+document.getElementById('notificationSettings').addEventListener('cancel', closeNotificationSettings);
+document.getElementById('barkCalendarRefresh').innerHTML = ICONS.refresh;
+document.getElementById('barkCalendarRefresh').addEventListener('click', async (event) => {
+  saveNotificationSettings();
+  flushConfig();
+  const button = event.currentTarget;
+  button.disabled = true;
+  try { await window.deck.refreshBarkCalendar(); await updateBarkPolicyStatus(); }
+  catch (_) { document.getElementById('barkPolicyStatus').textContent = '刷新失败，请稍后重试。'; }
+  finally { button.disabled = false; }
+});
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark', 'barkCriticalVolume', 'barkSleepEnabled', 'barkSleepStart', 'barkSleepEnd', 'barkClassesEnabled', 'barkClassCalendarIds', 'barkClassFilters', 'barkWeeklyClasses'].forEach((id) => {
   document.getElementById(id).addEventListener('change', saveNotificationSettings);
 });
 buildChrome();
@@ -3955,6 +4018,31 @@ function renderQuotaBar() {
         const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `${prefix}-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
         item.setAttribute('aria-describedby', tip.id);
         item.append(label, values, tip); bar.append(item);
+        item.addEventListener('click', (event) => {
+          const button = event.target.closest('.quota-login-copy');
+          if (!button || !item.dataset.loginCommand) return;
+          event.stopPropagation();
+          try {
+            window.deck.clipboardWrite(item.dataset.loginCommand);
+            item.dataset.loginCopiedUntil = String(Date.now() + 1400);
+            renderQuotaBar();
+            // A mouse click focused the button, which would pin the detail open: let go once the tick is over.
+            const byMouse = event.detail > 0;
+            setTimeout(() => {
+              renderQuotaBar();
+              const active = document.activeElement;
+              if (byMouse && active?.classList.contains('quota-login-copy') && item.contains(active)) active.blur();
+            }, 1450);
+          } catch (_) { showToast('登录命令复制失败，请重试。'); }
+        });
+        // Leaving the row on the way to the copy button keeps the detail for a moment (see .tip-hold).
+        item.addEventListener('mouseleave', () => {
+          if (!item.dataset.loginCommand) return;
+          item.classList.add('tip-hold'); clearTimeout(item.tipHoldTimer);
+          positionQuotaDetails();
+          item.tipHoldTimer = setTimeout(() => { item.classList.remove('tip-hold'); positionQuotaDetails(); }, 300);
+        });
+        item.addEventListener('mouseenter', () => { clearTimeout(item.tipHoldTimer); item.classList.remove('tip-hold'); });
       }
       const q = summaries[index];
       // Include the seat name: multiple subscriptions can share the same flag.
@@ -3963,11 +4051,11 @@ function renderQuotaBar() {
       const name = item.querySelector('.quota-name');
       const crown = el('span', 'quota-captain'); crown.innerHTML = ICONS.crown;
       fill(name, [seat ? seatLabel : NAMES[provider], ...(captain ? [crown] : [])]);
-      const state = q.out ? 'exhausted' : q.state;
+      const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
       const recovery = q.recoveryAt > now ? q.recoveryAt : null;
       // Always a 5h and a 7d cell: % + reset time over a thin bar. Used up = ⊘ + reset time;
       // No numeric windows: show the row status in 5h. Account-wide blocks with a reset keep their recovery time.
-      const blockedOnly = q.out && !q.cells.some((c) => c.out);
+      const blockedOnly = q.authStatus !== 'logged-out' && q.out && !q.cells.some((c) => c.out);
       const row = ['5h', '7d'].map((key) => {
         const c = q.cells.find((v) => v.key === key) || (key === '5h' && blockedOnly ? { key, out: true, resetAt: recovery } : null);
         const cell = el('span', 'quota-cell'); cell.dataset.window = key; cell.dataset.level = c ? level(c) : 'none';
@@ -3994,7 +4082,18 @@ function renderQuotaBar() {
           c.resetAt > now ? resetText('qt-reset', '', c.resetAt, '重置') : el('span', 'qt-reset', '重置时间未知'));
         return line;
       });
-      if (blockedOnly) lines.unshift(recovery ? resetText('qt-note out', '已用尽，预计 ', recovery, '恢复') : el('span', 'qt-note out', '已用尽，恢复时间未知'));
+      if (q.authStatus === 'logged-out') {
+        lines.unshift(el('span', 'qt-note out', '此席位无法继续任务，请重新登录'));
+        if (q.loginCommand) {
+          const login = el('span', 'qt-login'), command = el('code', 'qt-login-command', q.loginCommand);
+          const copy = el('button', 'rail-btn quota-login-copy'); copy.type = 'button';
+          const copied = Number(item.dataset.loginCopiedUntil) > now;
+          copy.innerHTML = copied ? ICONS.check : ICONS.copy;
+          copy.title = copied ? '已复制' : '复制登录命令'; copy.setAttribute('aria-label', copy.title);
+          login.append(command, copy); lines.push(login);
+        }
+      }
+      else if (blockedOnly) lines.unshift(recovery ? resetText('qt-note out', '已用尽，预计 ', recovery, '恢复') : el('span', 'qt-note out', '已用尽，恢复时间未知'));
       else if (!q.cells.length) lines.push(el('span', 'qt-note', state === 'normal' ? '未见用尽，此来源不提供百分比' : '暂无额度数据，等待下次采样'));
       const warm = seat ? ClaudeSeats.warmupDetail(seat.id) : '';
       if (seat) {
@@ -4007,10 +4106,20 @@ function renderQuotaBar() {
       const meta = el('span', `qt-meta${q.stale ? ' stale' : ''}`);
       for (const [k, v] of [['账号', q.account || '未识别'], seat && ['席位', `${seat.name}${captain ? '（队长在用）' : ''}`],
         ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
+      const copyFocused = document.activeElement?.classList.contains('quota-login-copy') && tip.contains(document.activeElement);
       fill(tip, [head, ...lines, meta]);
-      const brief = [q.out && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
+      if (copyFocused) {
+        // Replacing the button removes :focus-within and hides the tooltip.
+        // Focus its row first so the replacement can receive keyboard focus.
+        item.focus({ preventScroll: true });
+        tip.querySelector('.quota-login-copy')?.focus({ preventScroll: true });
+      }
+      const brief = [q.out && q.authStatus !== 'logged-out' && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
         ...q.cells.map((c) => `${c.key === '5h' ? '5 小时' : '每周'}剩余 ${c.remaining}%${c.resetAt > now ? `（${shortReset(c.resetAt)} 重置）` : ''}`)].filter(Boolean).join('，');
       item.dataset.state = state;
+      item.dataset.authStatus = q.authStatus || '';
+      item.dataset.loginCommand = q.loginCommand || '';
+      tip.dataset.loginCommand = q.loginCommand ? 'true' : '';
       item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
       // Config dir, model and the full evidence line: kept for diagnosis, never shown on hover.
       item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;

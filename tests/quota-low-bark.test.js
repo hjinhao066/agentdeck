@@ -14,13 +14,13 @@ function harness(state = {}, sendBark) {
   };
   return { config, state, calls, writes, sample, check: (now = NOW) => check(config, now) };
 }
-test('inclusive threshold alerts each CN/US seat, names account/reset and uses volume 3', async () => {
+test('inclusive threshold alerts each CN/US seat, names account/reset and leaves volume to shared policy', async () => {
   const h = harness(); h.sample(2.1); await h.check(); assert.equal(h.calls.length, 0);
   h.sample(2, { at: NOW + 1 }); h.sample(0, { id: 'us' }); await h.check();
   assert.equal(h.calls.length, 2);
   assert.match(h.calls[0].message, /CN.*5 小时.*剩余 2%.*重置时间/);
   assert.match(h.calls[1].message, /US.*剩余 0%/);
-  assert.equal(h.calls[0].volume, 3);
+  assert.equal(h.calls[0].volume, undefined);
 });
 test('dedup survives repeated samples, restart, unknown data and learning identity', async () => {
   const h = harness(); h.sample(2); await h.check(); await h.check();
@@ -67,9 +67,9 @@ test('unknown, malformed, weekly-only, stale, future and expired samples never s
   const h = harness(); await h.check(); assert.equal(h.calls.length, 0);
   h.sample(1); h.config.quotas['Claude:cn'].configDir = '/other'; await h.check(); assert.equal(h.calls.length, 0);
 });
-test('missing reset still alerts once; missing key does not consume the alert', async () => {
+test('missing reset still alerts once and a blank key setting uses the shared default', async () => {
   const h = harness(); h.sample(0, { resetAt: null }); h.config.barkKeyFile = '';
-  await h.check(); assert.equal(h.writes.length, 0);
+  await h.check(); assert.equal(h.calls.length, 1);
   h.config.barkKeyFile = '/private/key'; await h.check(); await h.check();
   assert.equal(h.calls.length, 1); assert.doesNotMatch(h.calls[0].message, /重置时间/);
 });
@@ -94,10 +94,10 @@ test('failed persistence prevents network sends', () => {
   assert.throws(() => check(h.config, NOW), /disk full/);
 });
 test('settings defaults and explicit overrides', async () => {
-  assert.deepEqual(settings(), { thresholdPercent: 2, volume: 3 });
+  assert.deepEqual(settings(), { thresholdPercent: 2 });
   assert.deepEqual(settings({ thresholdPercent: -2, volume: 11 }), settings());
   const h = harness(); h.config.claudeQuotaAlert = { thresholdPercent: 5, volume: 1 };
-  h.sample(5); await h.check(); assert.equal(h.calls[0].volume, 1);
+  h.sample(5); await h.check(); assert.equal(h.calls.length, 1); assert.equal(h.calls[0].volume, undefined);
 });
 
 test('configured seats never alert or rearm from unbound, missing or mismatched identity and directory', async () => {

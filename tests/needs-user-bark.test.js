@@ -28,14 +28,15 @@ function card(id, extra = {}) {
     user_question: '选 8 位还是 12 位？ 第二句说明原因。第三句不要。', latest_receipt: '选 8 位还是 12 位？', ...extra };
 }
 
-test('the phone switch defaults on and only a configured key path counts as ready', () => {
+test('the phone switch defaults on and delivery can resolve configured or shared default keys', () => {
   assert.equal(barkEnabled(undefined), true);
   assert.equal(barkEnabled({}), true);
   assert.equal(barkEnabled({ needsUserBark: true }), true);
   assert.equal(barkEnabled({ needsUserBark: false }), false);
   assert.equal(barkReady({ barkKeyFile: ' ~/.secrets/bark-key.txt ' }), true);
-  assert.equal(barkReady({ barkKeyFile: '' }), false);
-  assert.equal(barkReady({}), false);
+  assert.equal(barkReady({ barkKeyFile: '' }), true);
+  assert.equal(barkReady({}), true);
+  assert.equal(barkReady(undefined), true);
 });
 
 test('one visit sends the project, title and the first two sentences, then stays quiet', async () => {

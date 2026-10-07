@@ -308,7 +308,7 @@ test('notify-user routes local, urgent and fixed test requests without key data'
   for (const [args, expected] of [
     [['--message', 'hello'], { message: 'hello', urgent: false, test: false }],
     [['--message', 'hello', '--urgent'], { message: 'hello', urgent: true, test: false }],
-    [['--test'], { message: '【测试】AgentDeck Bark 通知（critical，音量 3）。', urgent: true, test: true }],
+    [['--test'], { message: 'AgentDeck 加急通知测试', urgent: true, test: true }],
   ]) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-notify-cli-'));
     fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));

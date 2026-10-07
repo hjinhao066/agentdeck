@@ -99,6 +99,7 @@ test.beforeEach(async () => {
   fs.writeFileSync(barkKeyFile, 'offline-test-device');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2, barkKeyFile,
+    barkNotifications: { sleepEnabled: false, classesEnabled: false },
     columns: [
       { id: CN, title: '队长', cmd: FAKE, cwd: profile, isMain: true, claudeSeatId: 'cn' },
       { id: WORKER, title: '不中断的队员', cmd: FAKE, cwd: profile, claudeSeatId: 'cn', captainCrew: true },

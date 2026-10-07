@@ -389,7 +389,8 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 [data-level="low"] > .quota-meter::after { background: var(--quota-low-fill); }
 [data-level="danger"] > .quota-meter::after { background: var(--quota-out-fill); }
 [data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-out-fill) 40%, transparent); }
-.quota-item[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
+.quota-item[data-state="exhausted"], .quota-item[data-auth-status="logged-out"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
+.quota-item[data-auth-status="logged-out"] [data-window="5h"] .quota-none { color: var(--quota-out); font-weight: 600; }
 /* Too narrow for the reset times: keep the two remaining percentages only. */
 @container (max-width: 215px) {
   .quota-cell .quota-reset { display: none; }
@@ -400,6 +401,16 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 
 .quota-tooltip { display: none; flex-direction: column; gap: 6px; position: absolute; left: calc(100% + 10px); top: 0; width: max-content; max-width: 420px; max-height: calc(100vh - 16px); overflow: auto; overflow-wrap: anywhere; padding: 10px 12px; z-index: 100; white-space: normal; background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-pop); font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .quota-detail-open .quota-tooltip { display: flex; }
+.quota-tooltip[data-login-command="true"] { pointer-events: auto; }
+.quota-tooltip[data-login-command="true"]::before { content: ''; position: absolute; top: 0; right: 100%; width: 11px; height: 100%; }
+/* The pointer may cut a corner on its way to the copy button: the detail stays for a
+   moment after the row is left, and no other row's detail replaces it meanwhile. */
+.qt-login { display: flex; align-items: center; gap: 8px; }
+/* Sidebar: the detail grows upwards from its row, so the command sits last, level with the row. */
+#quotaBar .qt-login { order: 1; }
+.qt-login-command { min-width: 0; overflow-wrap: anywhere; font-size: 11px; }
+.quota-login-copy { min-width: 36px; min-height: 36px; }
+.quota-login-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .qt-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; }
 .qt-captain { display: inline-flex; align-items: center; gap: 3px; color: var(--text-2); font-size: 11px; font-weight: 500; }
 .qt-captain svg { width: 11px; height: 11px; color: #e0a91c; }
@@ -2912,16 +2923,20 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 #notificationSettings p { font-size: 13px; line-height: 1.6; opacity: .7; }
 .notify-setting { display: flex; align-items: center; justify-content: space-between; min-height: 48px; gap: 16px; font-size: 14px; }
 .notify-setting span { flex-shrink: 0; }
-.notify-setting input { appearance: none; position: relative; flex: 0 0 36px; width: 36px; height: 22px; border-radius: 12px; background: var(--muted); cursor: pointer; }
-.notify-setting input::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; transition: transform .15s; }
-.notify-setting input:checked { background: var(--accent); }
-.notify-setting input:checked::before { transform: translateX(14px); }
+.notify-setting input[type="checkbox"] { appearance: none; position: relative; flex: 0 0 36px; width: 36px; height: 22px; border-radius: 12px; background: var(--muted); cursor: pointer; }
+.notify-setting input[type="checkbox"]::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; transition: transform .15s; }
+.notify-setting input[type="checkbox"]:checked { background: var(--accent); }
+.notify-setting input[type="checkbox"]:checked::before { transform: translateX(14px); }
 .notify-setting select { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+.notify-setting input[type="number"], .notify-setting input[type="time"] { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-sizing: border-box; }
 #notificationSettings .rail-btn { min-width: 36px; min-height: 36px; }
+/* Short lists (calendars, course names, class periods): as tall as their rows, not the 120px prompt box. */
+#notificationSettings textarea { min-height: 0; }
 #notificationSettings :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .bark-key-setting { display: block; margin: 16px 0 8px; font-size: 14px; }
 #barkKeyFile { width: 100%; box-sizing: border-box; padding: 10px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
+#barkClassCalendarIds, #barkClassFilters, #barkWeeklyClasses { width: 100%; box-sizing: border-box; padding: 10px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; resize: vertical; font: inherit; }
 /* ---- 任务看板 (星图): every task, one group per project across five status columns.
    Covers the deck and the board view like #pageView. The toolbar mirrors the
    crew map's so 架构图 / 自由画布 / 任务看板 sit in the same place in both.
