@@ -988,7 +988,11 @@ app.whenReady().then(async () => {
     getSettings: () => BarkPolicy.settings(notificationConfig.barkNotifications), getClasses: (at) => barkCalendar.ranges(at),
     sendNow: sendBarkDigest, onFailure: ({ message, keys }) => {
       send('toast', { text: message });
-      for (const key of keys) if (seatAuth?.recordDeliveryFailure(key, message)) queueAuthReceipts();
+      // A damaged/locked outbox may fail before its keys can be read. Still
+      // tell the Captain that its confirmed offline seats cannot reach Bark.
+      const affected = keys.length ? keys : (seatAuth?.samples() || []).filter((s) => s.authStatus === 'logged-out')
+        .map((s) => `seat-auth:${s.provider}:${s.seatId}`);
+      for (const key of affected) if (seatAuth?.recordDeliveryFailure(key, message)) queueAuthReceipts();
     } });
   const pumpBark = async () => {
     await barkCalendar.refresh();

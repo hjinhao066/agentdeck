@@ -204,3 +204,17 @@ test('daytime phone failure stays queued, records a Captain exception and retrie
   await application.evaluate(async ({ app }) => app.testBarkFlush());
   expect(await application.evaluate(({ app }) => app.testBarkDigests)).toHaveLength(1);
 });
+
+test('an unreadable outbox records a Captain delivery exception even when pending keys cannot be loaded', async () => {
+  await launch(); const base = Date.now() - 90000;
+  await observe([['logged-in', base], ['logged-out', base + 30000], ['logged-out', base + 60000]]);
+  await expect.poll(async () => (await alerts()).length).toBe(1);
+  fs.writeFileSync(path.join(profile, 'bark-pending.json'), '{damaged');
+  expect(await application.evaluate(async ({ app }) => {
+    try { await app.testBarkFlush(); return false; } catch (_) { return true; }
+  })).toBe(true);
+  await expect.poll(() => page.evaluate(() => config.mainSession.pending.some((r) => /提醒异常.*队列无法读写/.test(r.question)))).toBe(true);
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('#barkPolicyStatus')).toContainText('队列无法读写');
+  expect(fs.readFileSync(path.join(profile, 'bark-pending.json'), 'utf8')).toBe('{damaged');
+});
