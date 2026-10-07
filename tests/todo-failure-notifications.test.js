@@ -35,25 +35,27 @@ test('failures coalesce into one generic ordinary-expedited notification and dup
   assert.equal(await h.queue.flush(), false);
 });
 
-test('quiet-hour boundaries use local calendar times and permit exactly 09:30 through 22:59', () => {
-  for (const [hour, minute, expected] of [[22, 59, local(22, 59)], [23, 0, local(9, 30, 8)],
-    [23, 59, local(9, 30, 8)], [0, 0, local(9, 30)], [9, 29, local(9, 30)], [9, 30, local(9, 30)]]) {
+test('quiet-hour boundaries use local calendar times and permit exactly 10:00 through 22:59', () => {
+  for (const [hour, minute, expected] of [[22, 59, local(22, 59)], [23, 0, local(10, 0, 8)],
+    [23, 59, local(10, 0, 8)], [0, 0, local(10)], [9, 30, local(10)], [9, 59, local(10)], [10, 0, local(10)]]) {
     assert.equal(nextAllowedTime(local(hour, minute)), expected);
   }
 });
 
-test('late-evening failure persists through restart, joins overnight failures and sends together at 09:30', async (t) => {
+test('late-evening failure persists through restart, joins overnight failures and sends together at 10:00', async (t) => {
   const h = harness(t, local(22, 59));
   h.queue.enqueue({ id: id('a') });
-  assert.equal(h.scheduled[0].ms, local(9, 30, 8) - local(22, 59));
+  assert.equal(h.scheduled[0].ms, local(10, 0, 8) - local(22, 59));
   h.setNow(local(23)); assert.equal(await h.queue.flush(), false);
   h.queue.stop();
   h.setNow(local(1, 0, 8));
   const restored = new TodoFailureNotifications(h.options);
   t.after(() => restored.stop()); restored.start(); restored.enqueue({ id: id('b') });
   assert.equal(await restored.flush(), false); assert.equal(h.calls.length, 0);
-  h.setNow(local(9, 29, 8)); assert.equal(await restored.flush(), false);
-  h.setNow(local(9, 30, 8)); assert.equal(await restored.flush(), true);
+  h.setNow(local(9, 30, 8)); assert.equal(await restored.flush(), false);
+  h.setNow(local(9, 59, 8)); assert.equal(await restored.flush(), false);
+  assert.equal(h.calls.length, 0);
+  h.setNow(local(10, 0, 8)); assert.equal(await restored.flush(), true);
   assert.equal(h.calls.length, 1); assert.match(h.calls[0].message, /有 2 条/);
 });
 

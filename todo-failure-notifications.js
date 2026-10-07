@@ -4,8 +4,8 @@ const path = require('path');
 const crypto = require('crypto');
 
 // No unified quiet-hours setting exists yet. The settings task will connect it
-// here; keep the current local-time policy in one place (23:00–09:30).
-const DEFAULT_QUIET_HOURS = Object.freeze({ start: 23 * 60, end: 9 * 60 + 30 });
+// here; keep the current local-time policy in one place (23:00–10:00).
+const DEFAULT_QUIET_HOURS = Object.freeze({ start: 23 * 60, end: 10 * 60 });
 const COALESCE_MS = 60 * 1000;
 
 function nextAllowedTime(at) {
