@@ -33,8 +33,13 @@ const longFiles = () => { const dir = path.join(profile, 'long-prompts'); return
 // The CLI's own request must carry the text as one piece, unchanged.
 async function arrives(what, cli, sent) {
   const head = sent.slice(0, 40);
-  await expect.poll(() => api.userTexts().some((t) => t === sent), { timeout: 90000,
-    message: `${cli} never asked its model with the ${what} whole; closest it sent: ${JSON.stringify(api.userTexts().filter((t) => t.includes(head)).map((t) => t.length))} characters` }).toBe(true);
+  try {
+    await expect.poll(() => api.userTexts().some((t) => t === sent), { timeout: 90000 }).toBe(true);
+  } catch (_) {
+    // Say what the CLI did instead: what it sent, and the screen it is sitting on (a throwaway profile, nothing of the owner's).
+    const screen = await page.evaluate((id) => dumpScreen(terms.get(id).term, 30), CAPTAIN).catch(() => '');
+    throw new Error(`${cli} never asked its model with the ${what} whole. Requests: ${api.requests.length}; texts starting like it: ${JSON.stringify(api.userTexts().filter((t) => t.includes(head)).map((t) => t.length))} characters.\nCaptain screen:\n${screen}`);
+  }
   console.log(`[real-cli] ${process.platform} ${os.release()} ${version(cli)} ${what}: AgentDeck sent ${sent.length} chars, the CLI's model request carries ${sent.length} chars, identical=true`);
 }
 function version(cli) {
