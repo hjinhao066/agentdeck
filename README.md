@@ -978,6 +978,14 @@ alternate buffer separately. A ConPTY terminal name is not a foreground-process
 name, so shell readiness is verified by the command's output.
 The first automatic prompt in a Windows terminal waits for 500 ms of quiet TUI
 output, avoiding startup input loss. Later prompts keep the existing delivery checks.
+`captain-briefing-paste.spec.js` sends the Captain briefing, and one grown to
+exactly 10,000 characters, through a real PTY to stand-in agents and compares
+what reached their stdin with what was sent. `real-cli-briefing.spec.js` is
+skipped unless `AGENTDECK_REAL_CLI=claude,codex` names an installed CLI. It then
+runs that real CLI as the Captain with an empty config directory and a local
+stand-in for its model API (no login, no quota), and compares the CLI's own model
+request with the briefing. Run it on each platform before raising
+`MainCore.BRIEFING_LIMIT`, and when a Captain CLI changes how it takes a paste.
 ConPTY reset evidence, replay filtering and deck navigation fixes apply only on
 Windows; macOS keeps its existing reset, status and navigation behavior.
 

@@ -7,16 +7,27 @@ const M = require('../../main-core');
 // The Captain briefing is the one prompt allowed past the ordinary 8000-character
 // cut. These tests send it through the real window, a real PTY (ConPTY on
 // Windows) and a stand-in agent that writes down exactly what reached its stdin.
-// Two stand-ins: one reads lines, one waits for a bracketed paste like Claude
-// Code. AgentDeck pastes when the terminal was asked to and types otherwise;
-// each test prints which it did on this machine.
+// Two stand-ins: one reads lines, one asks for bracketed paste like Claude Code
+// and records its raw input. AgentDeck pastes when the terminal was asked to and
+// types otherwise; each test prints which it did on this machine.
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
+const RECORDER = `node "${path.join(__dirname, 'fixtures', 'paste-recorder.js')}"`;
 const CAPTAIN = 'paste-captain', LINES = 'paste-lines', PASTED = 'paste-bracketed', WORKER = 'paste-worker';
-let application, page, profile, promptsFile;
+let application, page, profile, promptsFile, rawFile;
 
 const received = (colId) => (fs.existsSync(promptsFile) ? fs.readFileSync(promptsFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [])
   .filter((p) => p.colId === colId).map((p) => p.text);
+// What the recorder's stdin got, as a TUI reads it: the paste between its two
+// markers, the pty's line ends as newlines, the closing Enter left off.
+function pasted(colId) {
+  return (fs.existsSync(rawFile) ? fs.readFileSync(rawFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [])
+    .filter((p) => p.colId === colId).map(({ raw }) => {
+      const start = raw.indexOf('\x1b[200~'), end = raw.indexOf('\x1b[201~');
+      return { markers: start >= 0 && end > start, cr: raw.split('\r').length - 1, lf: raw.split('\n').length - 1,
+        text: (start >= 0 && end > start ? raw.slice(start + 6, end) : raw.replace(/\r\n?$/, '')).replace(/\r\n?/g, '\n') };
+    });
+}
 const longFiles = () => { const dir = path.join(profile, 'long-prompts'); return fs.existsSync(dir) ? fs.readdirSync(dir) : []; };
 // A briefing grown to `length` characters by more rule-sized lines, its closing
 // paragraph still last. (The line-reading stand-in answers after 250 ms without
@@ -32,23 +43,25 @@ function grown(brief, length) {
   return rules + more + closing;
 }
 // The line the CI log keeps as evidence: which machine, which way in, how much arrived.
-function evidence(what, way, sent, got) {
-  console.log(`[briefing-paste] ${process.platform} ${os.release()} ${what} via ${way}: sent ${sent.length} chars, received ${got.length} chars, identical=${got === sent}`);
+function evidence(what, way, sent, got, note = '') {
+  console.log(`[briefing-paste] ${process.platform} ${os.release()} ${what} via ${way}: sent ${sent.length} chars, received ${got.length} chars, identical=${got === sent}${note}`);
 }
-async function launch(captainFlags = '') {
+const rawNote = (p) => ` (paste markers ${p.markers ? 'arrived' : 'missing'}; line ends on arrival: ${p.cr} CR, ${p.lf} LF)`;
+async function launch(captain = FAKE) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-briefing-paste-'));
   promptsFile = path.join(profile, 'prompts.jsonl');
+  rawFile = path.join(profile, 'raw-input.jsonl');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 4,
-    mainSession: { colId: CAPTAIN, cmd: FAKE + captainFlags, gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] },
+    mainSession: { colId: CAPTAIN, cmd: captain, gen: 1, tasks: [], pending: [], inflight: [], waitlist: [] },
     columns: [
-      { id: CAPTAIN, title: '队长', isMain: true, cmd: FAKE + captainFlags, cwd: profile },
+      { id: CAPTAIN, title: '队长', isMain: true, cmd: captain, cwd: profile },
       { id: LINES, title: 'Lines', cmd: FAKE, cwd: profile, role: 'manual' },
-      { id: PASTED, title: 'Bracketed', cmd: FAKE + ' --slow-paste', cwd: profile, role: 'manual' },
+      { id: PASTED, title: 'Bracketed', cmd: RECORDER, cwd: profile, role: 'manual' },
       { id: WORKER, title: 'Worker', cmd: FAKE, cwd: profile, role: 'manual' },
     ],
   }));
-  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPT_COLUMNS_FILE: promptsFile };
+  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPT_COLUMNS_FILE: promptsFile, AGENTDECK_TEST_RAW_INPUT_FILE: rawFile };
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
@@ -84,14 +97,15 @@ test('the Captain\'s first briefing, longer than an ordinary prompt may be, reac
   expect(longFiles()).toEqual([]);
 });
 
-test('the Captain\'s first briefing reaches a paste-detecting agent whole', async () => {
-  await launch(' --slow-paste');
+test('the Captain\'s first briefing reaches a paste-taking agent whole, as one bracketed paste', async () => {
+  await launch(RECORDER);
   await pasteModeOrSkip(CAPTAIN);
   const brief = await briefing();
-  await expect.poll(() => received(CAPTAIN).length, { timeout: 30000 }).toBeGreaterThan(0);
-  const got = received(CAPTAIN)[0];
-  evidence('first briefing', 'bracketed paste', brief, got);
-  expect(got).toBe(brief);
+  await expect.poll(() => pasted(CAPTAIN).length, { timeout: 30000 }).toBeGreaterThan(0);
+  const got = pasted(CAPTAIN)[0];
+  evidence('first briefing', 'bracketed paste', brief, got.text, rawNote(got));
+  expect(got.markers).toBe(true);
+  expect(got.text).toBe(brief);
   expect(longFiles()).toEqual([]);
 });
 
@@ -118,14 +132,17 @@ test('a briefing of exactly 10000 characters reaches a line-reading agent whole;
   expect(fs.readFileSync(path.join(profile, 'long-prompts', longFiles()[0]), 'utf8')).toBe(over);
 });
 
-test('a briefing of exactly 10000 characters reaches a paste-detecting agent whole, as one bracketed paste', async () => {
+test('a briefing of exactly 10000 characters reaches a paste-taking agent whole, as one bracketed paste', async () => {
   await launch();
   await pasteModeOrSkip(PASTED);
   const full = grown(await briefing(), M.BRIEFING_LIMIT);
   await sendAsBriefing(PASTED, full);
-  await expect.poll(() => received(PASTED).length, { timeout: 40000 }).toBe(1);
-  evidence('10000-character briefing', 'bracketed paste', full, received(PASTED)[0]);
-  expect(received(PASTED)[0]).toBe(full);
+  await expect.poll(() => pasted(PASTED).length, { timeout: 40000 }).toBe(1);
+  const got = pasted(PASTED)[0];
+  evidence('10000-character briefing', 'bracketed paste', full, got.text, rawNote(got));
+  expect(got.markers).toBe(true);
+  expect(got.text).toBe(full);
+  expect(got.text.endsWith('读看板继续。')).toBe(true);
   expect(longFiles()).toEqual([]);
 });
 
