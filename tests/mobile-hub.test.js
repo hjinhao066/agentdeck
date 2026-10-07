@@ -238,7 +238,7 @@ test('the hub asks each computer for its own quota under its prefix and keeps no
   const source = fs.readFileSync(path.join(__dirname, '..', 'mobile-web', 'hub', 'app.js'), 'utf8');
   assert.match(source, /request\(m, 'api\/quota'\)/);
   const stored = [...source.matchAll(/store\(KEYS\.\w+/g)].map((match) => match[0]);
-  assert.deepEqual(stored.sort(), ['store(KEYS.machine', 'store(KEYS.machine', 'store(KEYS.meta', 'store(KEYS.theme']);
+  assert.deepEqual(stored.sort(), ['store(KEYS.machine', 'store(KEYS.machine', 'store(KEYS.meta', 'store(KEYS.theme', 'store(KEYS.view']);
 });
 
 // ---- moving the Captain to another account ----

@@ -358,7 +358,60 @@
   }
   const elapsedText = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + pad(s % 60); };
 
-  return { cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  // ---- 随手记待办 ----------------------------------------------------------
+  // Each computer answers api/todos with the list as it sees it (its own file
+  // merged with what git brought from the other one). The same id can come from
+  // both: the copy updated last wins, and a deletion mark hides the item.
+  const TODO_ID = /^td-[A-Za-z0-9-]{8,64}$/;
+  const time = (value) => typeof value === 'string' && value.length <= 40 && Number.isFinite(Date.parse(value));
+  function cleanTodos(body) {
+    const items = body && Array.isArray(body.items) ? body.items : [];
+    const out = [];
+    for (const item of items) {
+      if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !TODO_ID.test(item.id) || !time(item.updated)) continue;
+      if (item.deleted === true) { out.push({ id: item.id, deleted: true, updated: item.updated }); continue; }
+      if (typeof item.text !== 'string' || !item.text.trim()) continue;
+      out.push({ id: item.id, text: item.text.slice(0, 500), done: item.done === true, doneAt: item.done === true && time(item.doneAt) ? item.doneAt : null,
+        created: time(item.created) ? item.created : item.updated, updated: item.updated });
+    }
+    return out;
+  }
+  function mergeTodos(sources) {
+    const merged = new Map();
+    for (const source of sources) for (const item of source.todos || []) {
+      const kept = merged.get(item.id);
+      if (!kept || Date.parse(item.updated) > Date.parse(kept.item.updated)) merged.set(item.id, { item, from: source.id });
+    }
+    const live = [...merged.values()].filter(({ item }) => !item.deleted).map(({ item, from }) => ({ ...item, seenOn: from }));
+    const open = live.filter((t) => !t.done).sort((a, b) => Date.parse(b.created) - Date.parse(a.created) || a.id.localeCompare(b.id));
+    const done = live.filter((t) => t.done).sort((a, b) => Date.parse(b.doneAt || b.updated) - Date.parse(a.doneAt || a.updated) || a.id.localeCompare(b.id));
+    return { open, done };
+  }
+  // Where a new to-do or a tick goes: the computer the user picked, else the
+  // default one (Mac), else any other that is online and has to-dos. Both
+  // computers keep the same list, so the choice only decides who writes first.
+  function todoWriter(machines, preferId) {
+    const ready = machines.filter((m) => m.state === 'online' && m.todosReady && m.csrf);
+    return ready.find((m) => m.id === preferId) || ready.find((m) => m.default) || ready[0] || null;
+  }
+  // Why nothing can be recorded right now ('' when something can).
+  function todoBlock(machines) {
+    if (todoWriter(machines, '')) return '';
+    const online = machines.filter((m) => m.state === 'online');
+    if (online.length && online.every((m) => m.todosReady === false)) return '这台电脑上的 AgentDeck 版本还没有待办，升级后就能在手机上记。';
+    if (machines.some((m) => m.state === 'login')) return '先在「总览」登录一台电脑，才能记待办。';
+    return '两台电脑现在都连不上，等它们上线后再记。';
+  }
+  function todoFailure(result, name) {
+    if (!result || result.failed) return `没连上 ${name}，这条没有记下。`;
+    if (result.timedOut) return `${name} 没有响应，这条可能没记下，刷新看看。`;
+    if (result.status === 401) return `${name} 需要重新登录，这条没有记下。`;
+    if (result.status === 403) return `${name} 的安全校验已过期，刷新后再记。`;
+    if (result.status === 400 && result.body && typeof result.body.error === 'string' && /[\u4e00-\u9fff]/.test(result.body.error)) return result.body.error.slice(0, 120);
+    return `${name} 没有记下这条（HTTP ${result.status}）。`;
+  }
+
+  return { cleanTodos, mergeTodos, todoWriter, todoBlock, todoFailure, cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 

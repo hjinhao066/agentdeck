@@ -73,6 +73,25 @@ function quotaView(data, now) {
 // ids, display names, a masked account, why a seat cannot be picked, and the
 // last switch the phone asked for. No paths, commands or credentials.
 const SEAT_ID = /^[a-zA-Z0-9_-]{1,40}$/;
+// 随手记待办 from the phone: record one, or tick/untick one. Nothing else.
+const TODO_ID = /^td-[A-Za-z0-9-]{8,64}$/;
+const TODO_BASE_KEYS = ['text', 'done', 'doneAt', 'created', 'updated'];
+function todoRequest(body) {
+  const keys = Object.keys(body);
+  if (body.op === 'add') {
+    if (keys.some((key) => key !== 'op' && key !== 'text') || typeof body.text !== 'string' || !body.text.trim() || body.text.length > 2000) return null;
+    return { op: 'add', text: body.text };
+  }
+  if (body.op !== 'update' || keys.some((key) => !['op', 'id', 'done', 'base'].includes(key)) || typeof body.id !== 'string' || !TODO_ID.test(body.id) || typeof body.done !== 'boolean') return null;
+  const base = body.base;
+  if (base !== undefined) {
+    if (!base || typeof base !== 'object' || Array.isArray(base) || Object.keys(base).some((key) => !TODO_BASE_KEYS.includes(key))) return null;
+    if (typeof base.text !== 'string' || base.text.length > 2000 || typeof base.updated !== 'string' || base.updated.length > 40) return null;
+    if (base.done !== undefined && typeof base.done !== 'boolean') return null;
+    if (['doneAt', 'created'].some((key) => base[key] !== undefined && base[key] !== null && (typeof base[key] !== 'string' || base[key].length > 40))) return null;
+  }
+  return { op: 'update', id: body.id, done: body.done, ...(base ? { base } : {}) };
+}
 const RELAY_REASONS = ['', 'current', 'login', 'onboarding', 'exhausted', 'low', 'unknown'];
 function relayView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -193,8 +212,8 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, machine = {}, uploadDir = '', now = Date.now }) {
-    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion };
+  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, machine = {}, uploadDir = '', now = Date.now }) {
+    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos };
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
@@ -464,7 +483,7 @@ class MobileWebServer {
     // Fixed, non-sensitive fields only; no hostname, exact app version, token,
     // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
-      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath'],
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : [])],
         machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
@@ -588,6 +607,23 @@ class MobileWebServer {
       catch (err) { return this.json(res, 409, { started: false, error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) || '没有切换。' }); }
       if (!started || started.started !== true || !/^[a-z0-9]{1,40}$/.test(started.id || '')) return this.json(res, 409, { started: false, error: '没有切换。' });
       return this.json(res, 200, { started: true, id: started.id });
+    }
+    // 随手记待办: the same login, Origin, Fetch Metadata and CSRF checks as a
+    // message to the Captain, re-checked after the body is read.
+    if (req.method === 'GET' && route === '/api/todos' && this.sources.getTodos) {
+      const data = await this.sources.getTodos();
+      return this.json(res, 200, { items: Array.isArray(data?.items) ? data.items : [] });
+    }
+    if (req.method === 'POST' && route === '/api/todos' && this.sources.writeTodos) {
+      let body;
+      try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
+      const input = todoRequest(body);
+      if (!input) return this.json(res, 400, { error: 'Invalid to-do request.' });
+      if (!this.writeCredential(req, res, prefixed)) return;
+      let item;
+      try { item = await this.sources.writeTodos(input); }
+      catch (err) { return this.json(res, 400, { error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) || '没有记下。' }); }
+      return this.json(res, 200, { item });
     }
     if (req.method === 'POST' && route === '/api/upload' && this.uploadDir) {
       let data;

@@ -66,6 +66,7 @@
     else if (current === 'schedule') renderSchedule();
     else if (current === 'artifacts') renderArtifacts();
     else if (current === 'skills') window.SkillsPage.render(frame, host);
+    else if (current === 'todo') window.TodoUI.render(frame, host);
   }
   function frame(title, subtitle, actions) {
     view.textContent = '';

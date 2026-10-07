@@ -27,6 +27,7 @@ const { occupied: occupiedClaudeSeats } = require('./quota-warmup-occupancy');
 const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
+const { TodoStore } = require('./todo-store');
 const Worktree = require('./worktree-core');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
@@ -71,6 +72,31 @@ function readLocalConfig() {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
 }
 const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tasks') : undefined, { sessions: () => localSessions(readLocalConfig()) });
+// 随手记待办: ~/.agents/boards/todos (each computer writes only its own file);
+// a test profile keeps its own copy inside the profile.
+const todoStore = new TodoStore(tudArg ? path.join(app.getPath('userData'), 'todos') : undefined);
+let todoWatch = null, todoWatchTimer = null;
+function todosChanged() { send('todos:changed', {}); }
+// The other computer's file arrives through git; tell the page so an open list refreshes.
+function watchTodos() {
+  if (todoWatch) return;
+  try {
+    fs.mkdirSync(todoStore.dir, { recursive: true });
+    todoWatch = fs.watch(todoStore.dir, () => { clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); });
+    todoWatch.on('error', () => { try { todoWatch.close(); } catch (_) {} todoWatch = null; });
+  } catch (_) { todoWatch = null; }
+}
+handleMain('todos:request', (_event, payload) => {
+  if (!payload || !['list', 'add', 'update', 'remove'].includes(payload.op)) throw new Error('Invalid to-do operation.');
+  const input = payload.input && typeof payload.input === 'object' ? payload.input : {};
+  if (payload.op === 'list') return { items: todoStore.list() };
+  // The desktop page never writes on the phone's behalf, and never touches the AI flag.
+  const item = payload.op === 'add' ? todoStore.add({ text: input.text })
+    : payload.op === 'remove' ? todoStore.remove({ id: input.id })
+      : todoStore.update({ id: input.id, ...(input.text !== undefined ? { text: input.text } : {}), ...(input.done !== undefined ? { done: input.done } : {}), ...(input.deleted !== undefined ? { deleted: input.deleted } : {}) });
+  todosChanged();
+  return { item };
+});
 let fleetClient = null;
 let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
@@ -897,6 +923,14 @@ app.whenReady().then(async () => {
   mobileWeb = new MobileWebServer({
     getSessions: () => requestMobile('sessions'),
     getTasks: () => taskStore.list(),
+    // The phone records, reads and ticks to-dos; it never edits text or deletes.
+    getTodos: () => todoStore.phone(),
+    writeTodos: (input) => {
+      const item = input.op === 'add' ? todoStore.add({ text: input.text, source: 'phone' })
+        : todoStore.update({ id: input.id, done: input.done, ...(input.base ? { base: input.base } : {}), source: 'phone' });
+      todosChanged();
+      return { id: item.id, text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated };
+    },
     getOutput: (id) => requestMobile('output', { id }),
     getCaptain: async () => {
       const data = await requestMobile('captain-history');
@@ -1608,6 +1642,8 @@ function startFleet(configPath) {
   const userData = app.getPath('userData');
   const device = loadDevice(path.join(userData, 'device.json'));
   taskStore.deviceId = device.id;
+  todoStore.deviceId = device.id;
+  watchTodos();
   const settings = readFleetSettings({ env: process.env, fleetFile: path.join(userData, 'fleet.json') });
   if (!settings) return;
   if (settings.error) {

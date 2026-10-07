@@ -409,7 +409,7 @@ test('machine choice is remembered, content is not, and keyboard focus stays vis
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 
   const storage = await page.evaluate(() => ({ keys: Object.keys(localStorage).sort(), dump: JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }), cookie: document.cookie }));
-  expect(storage.keys).toEqual(['agentdeck-hub-machine', 'agentdeck-hub-meta', 'agentdeck-hub-theme']);
+  expect(storage.keys).toEqual(['agentdeck-hub-machine', 'agentdeck-hub-meta', 'agentdeck-hub-theme', 'agentdeck-hub-view']);
   expect(storage.cookie).toBe('');
   for (const content of [mac.token, win.token, message, '还没发出的草稿正文', '队长测试回复', '检查隧道守护脚本', '出门前看一下', '测试回执', '总览和派活界面', '队员测试输出', '隧道守护脚本', '手机总台前端', '清理旧的定时任务日志', '三端方案']) {
     expect(storage.dump).not.toContain(content);

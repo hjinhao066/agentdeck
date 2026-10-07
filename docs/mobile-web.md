@@ -139,6 +139,8 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | GET | `/api/relay` | `{captainId,currentId,switching,seats,job,now}` 队长所在账号和可换的账号。`seats[]` 只有 `id,name,provider,account(已打码),current,selectable,reason,weekly,recoveryAt,cells`；`reason` 为 `current/login/onboarding/exhausted/low/unknown/''`，只有 `''` 和 `unknown` 可选。`job` 是手机发起的最近一次切换 `{id,status:switching|done|failed,fromId,fromName,targetId,targetName,startedAt,finishedAt,error}`，只在内存里，应用重启后为 `null` |
 | POST | `/api/relay` | `{seatId, expectCurrent?}` + CSRF，发起手动切换（桌面端 Relay 的同一条路径）。立即返回 `{started:true,id}`，结果轮询 GET。桌面端拒绝时 409 `{started:false,error}`，`error` 是可直接给用户看的原因，队长不变 |
 | GET | `/api/image?id=…` | 已登录设备读取自己上传的图片 |
+| GET | `/api/todos` | `{items}` 随手记待办：未删除的只有 `id,text,done,doneAt,created,updated`，删除的只有 `{id,deleted,updated}`，见 [todo.md](todo.md) |
+| POST | `/api/todos` | `{op:'add',text}` 或 `{op:'update',id,done,base?}` + CSRF，返回 `{item}`；只能记和勾，不能删、不能改字 |
 
 设置了前缀时，以上路径都相对于前缀（`/win/login`、`/win/api/auth` 等），内置页面和资源除外。
 

@@ -14,6 +14,8 @@
   let captainRow = null;       // the 队长 entry at the top
   let crewHead = null;         // 队长's sessions: { counts, ids, open, shown }
   let captainHead = null;      // 队长's pinned row: { col, item, counts, sub }
+  let todoCount = null;        // open to-dos, on the 待办 entry
+  let todoOpen = 0;
 
   function el(tag, cls, text) {
     const n = document.createElement(tag);
@@ -90,16 +92,31 @@
     tasks.id = 'taskBoardBtn';
     tasks.setAttribute('aria-label', '任务看板');
     tasks.title = '任务看板：全部任务，按项目和状态排开';
+    // 随手记待办: the user's own list, kept apart from the agents' task cards.
+    const todo = navRow('todo', 'todo', '待办', '', () => host.togglePage('todo'));
+    todo.id = 'todoBtn';
+    todoCount = el('span', 'nav-row-count');
+    todo.appendChild(todoCount);
+    setTodoCount(todoOpen);
+    todo.title = `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI ? window.TodoUI.shortcutLabel() : '⌘T'} 速记）`;
     topEl.append(
       navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
       captain,
       attention,
       tasks,
       slot,
+      todo,
       navRow('schedule', 'clock', 'Schedule', '', () => host.togglePage('schedule')),
       navRow('artifacts', 'artifacts', 'Artifacts', '', () => host.togglePage('artifacts')),
       navRow('skills', 'skills', 'Skills', '', () => host.togglePage('skills')),
     );
+  }
+  function setTodoCount(n) {
+    todoOpen = n || 0;
+    if (!todoCount) return;
+    todoCount.hidden = !n;
+    todoCount.textContent = n > 99 ? '99+' : String(n || '');
+    todoCount.parentElement.setAttribute('aria-label', n ? `待办，${n} 条未完成` : '待办');
   }
   function markPage(name) {
     topEl.querySelectorAll('.nav-row[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === name));
@@ -751,5 +768,5 @@
     listEl.addEventListener('scroll', closeMenu, { passive: true });
   }
 
-  window.Sidebar = { init, render, markPage, refreshTimes, touchTime, createFolder, closeMenu, openMenu, ago, refreshCrew };
+  window.Sidebar = { init, render, markPage, setTodoCount, refreshTimes, touchTime, createFolder, closeMenu, openMenu, ago, refreshCrew };
 })();
