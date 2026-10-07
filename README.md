@@ -823,7 +823,8 @@ or moved to the foreground. Worker questions and receipts go to the Captain.
 
 Settings → **Bark 本机密钥文件路径（barkKeyFile）** saves only a local path,
 for example `~/.secrets/bark-key.txt`; the file contains only the device key.
-An empty path disables phone alerts. The authenticated Captain can send
+An empty path uses the Captain’s existing private file `~/.secrets/bark-key.txt`;
+an explicit path takes precedence (an unreadable explicit file never falls back to another device). The authenticated Captain can send
 `node "$AGENTDECK_BOARD_CLI" notify-user --message "需要你亲自操作"` for a local
 alert, adding `--urgent` for Bark (`critical`, volume 4, `minuet`).
 `node "$AGENTDECK_BOARD_CLI" notify-user --test` sends a **【测试】** Bark alert
@@ -835,23 +836,34 @@ invalid key files return a setup hint; network errors are redacted. Tests use
 isolated profiles and a fake transport, never the real key or phone.
 
 Settings → 通知 also configures the shared critical volume (0–10), sleep quiet
-hours (default **23:00–10:00**, this computer's local time), and class quiet hours.
+hours (default **23:00–10:00**, Seattle time, including daylight saving), and class quiet hours.
 Every Bark path, including offline installation-result alerts, follows these
 hours. Local reminders and Captain receipts are still recorded immediately.
 Phone reminders are kept in private `userData/bark-pending.json`, deduplicated
 by category/seat or identical content, and merged into one push when quiet hours
-end (checked every 30 seconds while AgentDeck is open). Failed digests stay queued
-and retry after one minute. Restarting restores the queue; while the app is closed
+end (checked every 30 seconds while AgentDeck is open). Immediate daytime alerts
+also enter the durable queue before sending; failed sends stay queued and retry
+after one minute. Settings shows the last delivery error, and seat-alert failures
+also leave a persistent Captain question receipt. Restarting restores the queue; while the app is closed
 there is no timer to deliver it.
 
 Class quiet hours use the locally authenticated `gws calendar events list` CLI,
-reading expanded events for the next 14 days at most once every 24 hours and
+reading expanded events for the next 14 days once every 24 hours after success and
 caching only start/end times in private `userData/bark-calendar.json`. The defaults
-match IMT 540 and IMT 598 B on the primary calendar; `barkNotifications.classCalendarIds`
-and `classFilters` in local config can select other calendars/course names.
+match IMT 540 and IMT 598 B on the primary calendar; Settings can edit calendars,
+course names and weekly fallback periods (`barkNotifications.weeklyClasses`).
 Cancelled/declined and all-day events are excluded. Missing CLI/auth, incomplete
-reads, or stale caches fall back to sleep hours only; Settings explicitly shows
-calendar availability. Calendar changes can take up to 24 hours to reach the cache.
+reads, or stale caches use the configured weekly course periods in Seattle time.
+The current defaults are Tuesday/Thursday 10:30–12:20 and Tuesday 15:30–17:20;
+update these each term. A fresh calendar, including an empty holiday schedule,
+takes precedence. Clearing weekly periods leaves only sleep protection; Settings
+explicitly warns that classes may then ring. A failed fetch retries after 15
+minutes (also after restart); changing calendars/course names or the refresh icon
+can retry immediately. The CLI receives the app’s augmented PATH. Refresh also
+retries phone delivery, still respecting all quiet hours. If a process died during
+sending and delivery is uncertain, automatic retries pause, Settings and a Captain
+seat-alert receipt explain it; check the phone before explicitly refreshing.
+A successful send whose cleanup write fails only retries disk cleanup, not sending.
 The app does not install the CLI or request calendar credentials automatically.
 
 The legacy watch-ai bridge is disabled, including with `AGENTDECK_LEGACY_WATCH=1`,
@@ -1085,6 +1097,7 @@ Claude's macOS quota reader and seat-isolated Relay are described in
 `board-cli quota` are remaining; `↻` identifies each window's next reset.
 Confirmed Claude-seat/Codex credential logout raises critical Bark with the
 seat's login command and a Captain question receipt; the quota panel shows red
-`未登录`. Two explicit signals at least 30 seconds apart are required; network
+`未登录` with a pale-red row and a login-command copy icon in its details.
+Two explicit provider samples at least 30 seconds apart are required; network
 failures do not alert. Details, polling delay and provider coverage are in the
 same usage document.

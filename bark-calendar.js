@@ -4,7 +4,9 @@ const fs = require('fs');
 const path = require('path');
 const { execFile } = require('child_process');
 const { randomBytes } = require('crypto');
+const Policy = require('./bark-policy');
 const DAY_MS = 24 * 60 * 60_000;
+const RETRY_MS = 15 * 60_000;
 const MAX_BYTES = 1024 * 1024;
 const MAX_PAGES = 10;
 const DEFAULT_FILTERS = ['IMT 540', 'IMT 598 B'];
@@ -35,7 +37,7 @@ function eventRange(event, filters) {
   const start = Date.parse(startText), end = Date.parse(endText);
   return Number.isFinite(start) && Number.isFinite(end) && end > start ? { start, end } : null;
 }
-function createCalendarCache({ file, getSettings = () => ({}), now = Date.now, execFileImpl = execFile }) {
+function createCalendarCache({ file, getSettings = () => ({}), now = Date.now, execFileImpl = execFile, env = process.env }) {
   let cache = null, pending = null;
   try {
     if (fs.statSync(file).size <= MAX_BYTES) {
@@ -64,7 +66,7 @@ function createCalendarCache({ file, getSettings = () => ({}), now = Date.now, e
     return new Promise((resolve, reject) => {
       try {
         execFileImpl(process.platform === 'win32' ? 'gws.exe' : 'gws', ['calendar', 'events', 'list', '--params', JSON.stringify(params), '--format', 'json'],
-          { windowsHide: true, shell: false, timeout: 10_000, maxBuffer: MAX_BYTES, encoding: 'utf8' }, (error, stdout) => {
+          { windowsHide: true, shell: false, env, timeout: 10_000, maxBuffer: MAX_BYTES, encoding: 'utf8' }, (error, stdout) => {
             if (error) return reject(new Error('calendar-unavailable'));
             try {
               if (typeof stdout !== 'string' || Buffer.byteLength(stdout) > MAX_BYTES) throw new Error('invalid-calendar');
@@ -77,13 +79,14 @@ function createCalendarCache({ file, getSettings = () => ({}), now = Date.now, e
       } catch (_) { reject(new Error('calendar-unavailable')); }
     });
   }
-  function refresh() {
+  function refresh(force = false) {
     // Settings may change during an in-flight query. Wait for it, then check
     // the current calendar selection before callers decide whether to send.
-    if (pending) return pending.then(() => refresh());
+    if (pending) return pending.then(() => refresh(force));
     const value = config(), at = now(), settingsKey = key(value);
     if (!value.enabled || !value.calendarIds.length || !value.filters.length) return Promise.resolve(status());
-    if (cache?.settingsKey === settingsKey && at >= cache.lastAttemptAt && at - cache.lastAttemptAt < DAY_MS) return Promise.resolve(status());
+    const interval = cache?.state === 'ok' ? DAY_MS : RETRY_MS;
+    if (!force && cache?.settingsKey === settingsKey && at >= cache.lastAttemptAt && at - cache.lastAttemptAt < interval) return Promise.resolve(status());
     pending = (async () => {
       const ranges = [], rangeEnd = at + 14 * DAY_MS;
       try {
@@ -119,8 +122,9 @@ function createCalendarCache({ file, getSettings = () => ({}), now = Date.now, e
     const at = now(), value = config();
     return { available: usable(at, value), state: !value.enabled ? 'disabled' : usable(at, value) ? 'ready' :
       cache?.settingsKey === key(value) && cache.state === 'ok' ? 'stale' : 'unavailable',
+      fallback: value.enabled && !usable(at, value) && Policy.settings(getSettings()).weeklyClasses.length > 0,
       fetchedAt: cache?.fetchedAt || null, lastAttemptAt: cache?.lastAttemptAt || null };
   }
-  return { refresh, ranges: (at = now()) => usable(at) ? cache.ranges.map((range) => ({ ...range })) : [], status };
+  return { refresh, ranges: (at = now()) => usable(at) ? cache.ranges.map((range) => ({ ...range })) : Policy.weeklyRanges(at, getSettings()), status };
 }
-module.exports = { DAY_MS, DEFAULT_FILTERS, matchesClass, eventRange, createCalendarCache };
+module.exports = { DAY_MS, RETRY_MS, DEFAULT_FILTERS, matchesClass, eventRange, createCalendarCache };

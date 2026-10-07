@@ -50,21 +50,22 @@ test('a token-bearing managed worker cannot use notify-user, including urgent', 
   await expect.poll(() => screen('worker')).toMatch(/只有队长可以用这个命令|Receipt capability allows only/);
   expect((await alerts()).filter((e) => e.type !== 'cancel').length).toBe(before);
 });
-test('urgent without a configured key still notifies locally and prints the setup hint', async () => {
+test('missing isolated default key keeps local notification and queues Bark for retry', async () => {
   await run('captain', `node "${CLI}" notify-user --message "请授权。" --urgent`);
-  await expect.poll(() => screen()).toContain('Bark 已跳过');
+  await expect.poll(() => screen()).toMatch(/Bark.*(?:密钥文件不可读|发送失败)/);
   expect((await alerts()).filter((e) => e.type === 'notification')).toHaveLength(2);
   expect((await alerts()).filter((e) => e.type === 'bark')).toHaveLength(0);
+  await expect.poll(() => page.evaluate(async () => (await window.deck.barkStatus()).queuedCount)).toBe(1);
 });
 test('configured urgent delivers critical/4/minuet with local toggles off; replay is harmless and key stays private', async () => {
   const file = path.join(profile, 'bark-test-key'); fs.writeFileSync(file, 'fake_e2e_device_key\n');
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const pathInput = page.getByLabel('Bark 本机密钥文件路径（barkKeyFile）', { exact: true });
   await expect(page.getByLabel('手机加急通知音量', { exact: true })).toHaveValue('4');
   await expect(page.getByLabel('睡觉开始', { exact: true })).toHaveValue('23:00');
   await expect(page.getByLabel('睡觉结束', { exact: true })).toHaveValue('10:00');
-  await expect(page.locator('#barkPolicyStatus')).toContainText('暂存手机提醒：0 条');
+  await expect(page.locator('#barkPolicyStatus')).toContainText('暂存手机提醒：1 条');
+  await expect(page.locator('#barkPolicyStatus')).toContainText('发送失败待重试');
   await pathInput.fill(' ~/.secrets/bark-key.txt ');
   await pathInput.press('Tab');
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).barkKeyFile).toBe('~/.secrets/bark-key.txt');
@@ -85,6 +86,9 @@ test('configured urgent delivers critical/4/minuet with local toggles off; repla
   expect((await close.boundingBox()).width).toBeGreaterThanOrEqual(process.platform === 'win32' ? 36 - 0.0001 : 36);
   await pathInput.fill(file);
   await page.getByLabel('Bark 本机密钥文件路径（barkKeyFile）', { exact: true }).press('Tab');
+  await page.getByRole('button', { name: '刷新课表并重试手机提醒', exact: true }).click();
+  await expect.poll(() => application.evaluate(({ app }) => app.testBarkDigests.length)).toBe(1);
+  await expect(page.locator('#barkPolicyStatus')).toContainText('暂存手机提醒：0 条');
   await page.getByRole('switch', { name: '系统通知', exact: true }).uncheck();
   await page.getByRole('switch', { name: '提示音', exact: true }).uncheck();
   await page.getByRole('button', { name: '关闭设置' }).click();
@@ -127,4 +131,45 @@ test('test command uses shared volume setting once; repeated acknowledgements ca
   expect((await alerts()).filter((e) => e.type === 'bark')).toHaveLength(2);
   expect(JSON.stringify(await alerts())).not.toContain('fake_e2e_device_key');
   expect(await screen()).not.toContain('fake_e2e_device_key');
+});
+
+test('calendar and fixed weekly class settings are editable, refreshable and durable', async () => {
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const calendars = page.getByLabel('课程日历 ID（每行一个）', { exact: true });
+  const filters = page.getByLabel('课程名称（每行一个）', { exact: true });
+  const weekly = page.getByLabel('每周固定上课时段（西雅图时间，课表不可用时兜底）', { exact: true });
+  await expect(weekly).toHaveValue('周二 10:30-12:20\n周四 10:30-12:20\n周二 15:30-17:20');
+  await calendars.fill('primary\nschool@example.test'); await calendars.press('Tab');
+  await filters.fill('COURSE 101\nCOURSE 102'); await filters.press('Tab');
+  await weekly.fill('周三 10:00-11:00'); await weekly.press('Tab');
+  await page.getByRole('switch', { name: '上课时暂停手机提醒', exact: true }).check();
+  const refresh = page.getByRole('button', { name: '刷新课表并重试手机提醒', exact: true });
+  await expect(refresh).toHaveAttribute('title', '刷新课表并重试手机提醒'); await expect(refresh.locator('svg')).toHaveCount(1);
+  await refresh.click(); await expect(refresh).toBeEnabled();
+  await expect(page.locator('#barkPolicyStatus')).toContainText('使用每周固定上课时段');
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).barkNotifications).toMatchObject({
+    classCalendarIds: ['primary', 'school@example.test'], classFilters: ['COURSE 101', 'COURSE 102'],
+    weeklyClasses: [{ day: 3, start: '10:00', end: '11:00' }],
+  });
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await page.reload(); await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(calendars).toHaveValue('primary\nschool@example.test');
+  await expect(filters).toHaveValue('COURSE 101\nCOURSE 102'); await expect(weekly).toHaveValue('周三 10:00-11:00');
+  await weekly.fill(''); await weekly.press('Tab'); await refresh.click();
+  await expect(page.locator('#barkPolicyStatus')).toContainText('未设置固定上课时段，上课时手机可能响');
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+});
+
+test('empty key setting uses the Captain default file within the isolated profile', async () => {
+  fs.mkdirSync(path.join(profile, '.secrets'), { recursive: true });
+  fs.writeFileSync(path.join(profile, '.secrets/bark-key.txt'), 'fake_default_captain_key');
+  await page.evaluate(() => {
+    config.barkKeyFile = ''; config.barkNotifications = BarkPolicy.settings({ sleepEnabled: false, classesEnabled: false });
+    saveConfig(); flushConfig();
+  });
+  const before = (await alerts()).filter((event) => event.type === 'bark').length;
+  await run('captain', `node "${CLI}" notify-user --message "隔离默认密钥链路验证。" --urgent`);
+  await expect.poll(async () => (await alerts()).filter((event) => event.type === 'bark').length).toBe(before + 1);
+  expect((await alerts()).filter((event) => event.type === 'bark').at(-1)).toMatchObject({ level: 'critical', volume: 4, body: '隔离默认密钥链路验证。' });
+  expect(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).not.toContain('fake_default_captain_key');
 });

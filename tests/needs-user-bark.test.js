@@ -34,7 +34,7 @@ test('the phone switch defaults on and only a configured key path counts as read
   assert.equal(barkEnabled({ needsUserBark: true }), true);
   assert.equal(barkEnabled({ needsUserBark: false }), false);
   assert.equal(barkReady({ barkKeyFile: ' ~/.secrets/bark-key.txt ' }), true);
-  assert.equal(barkReady({ barkKeyFile: '' }), false);
+  assert.equal(barkReady({ barkKeyFile: '' }), true);
   assert.equal(barkReady({}), false);
 });
 

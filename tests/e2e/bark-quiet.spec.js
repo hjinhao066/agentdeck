@@ -103,3 +103,22 @@ test('fresh cached class ranges postpone reminders until the exact 12:20 end', a
   expect((await digests())[0]).toMatchObject({ level: 'critical', volume: 4, body: expect.stringContaining('课后请登录席位。') });
   expect(pending()).toHaveLength(0);
 });
+
+test('missing calendar CLI visibly uses weekly fallback and postpones a Thursday class alert until 12:20', async () => {
+  const configFile = path.join(profile, 'config.json'), config = JSON.parse(fs.readFileSync(configFile));
+  config.barkNotifications = { sleepEnabled: false, classesEnabled: true };
+  fs.writeFileSync(configFile, JSON.stringify(config));
+  const now = Date.parse('2026-10-08T11:00:00-07:00');
+  await launch(now);
+  await expect.poll(async () => (await status()).calendar.fallback).toBe(true);
+  await urgent('US 需要在下课后重新登录。');
+  await expect.poll(async () => (await status()).queuedCount).toBe(1);
+  expect(await digests()).toHaveLength(0);
+  expect((await status()).blockedUntil).toBe(Date.parse('2026-10-08T12:20:00-07:00'));
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('#barkPolicyStatus')).toContainText('使用每周固定上课时段');
+  await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await clock(Date.parse('2026-10-08T12:20:00-07:00'), true);
+  expect(await digests()).toHaveLength(1);
+  expect((await digests())[0]).toMatchObject({ level: 'critical', volume: 4 });
+});

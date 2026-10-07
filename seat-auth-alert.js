@@ -25,12 +25,15 @@ function authFailure(message) {
 
 // Only fresh, explicit sampler proofs enter here. Neither stale quota numbers
 // nor a generic query/network failure is evidence that a login was lost.
-function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, home, platform = process.platform,
+function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRecovery, home, platform = process.platform,
   id = () => crypto.randomUUID() } = {}) {
   state = Object.fromEntries(Object.entries(state).filter(([key, e]) => e && ['Claude', 'Codex'].includes(e.provider) &&
     key === (e.provider === 'Claude' ? Q.seatKey(e.seatId) : 'Codex') && typeof e.configDir === 'string' &&
-    Number.isFinite(e.lastAt)).map(([key, e]) => [key, { ...e, receipts: (Array.isArray(e.receipts) ? e.receipts : [])
-    .filter((r) => r && typeof r.id === 'string' && typeof r.message === 'string' && r.message.length <= 4000) }]));
+    Number.isFinite(e.lastAt)).map(([key, e]) => {
+    const receipts = (Array.isArray(e.receipts) ? e.receipts : [])
+      .filter((r) => r && typeof r.id === 'string' && typeof r.message === 'string' && r.message.length <= 4000);
+    return [key, { ...e, receipts, alertId: e.alertId || (e.notified ? receipts[0]?.id || id() : undefined) }];
+  }));
   function observe(seat, sample) {
     if (!seat || !['Claude', 'Codex'].includes(sample?.provider) || !Number.isFinite(sample.at)) return false;
     const key = sample.provider === 'Claude' ? Q.seatKey(seat.id) : sample.provider;
@@ -39,8 +42,9 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, home,
     if (previous && sample.at <= previous.lastAt) return false;
     const next = { ...(previous || { receipts: state[key]?.receipts || [] }), provider: sample.provider, seatId: seat.id, name: seat.name,
       configDir: seat.configDir, lastAt: sample.at };
-    let changedStatus = false, alert;
+    let changedStatus = false, alert, recovered;
     if (sample.authStatus === 'logged-in') {
+      if (next.status === 'logged-out') recovered = { provider: sample.provider, seatId: seat.id, configDir: seat.configDir, alertId: next.alertId };
       changedStatus = next.status !== 'logged-in';
       next.status = 'logged-in'; next.statusAt = sample.at; next.wasLoggedIn = true;
       next.misses = 0; next.notified = false; delete next.firstMissAt;
@@ -56,6 +60,7 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, home,
           alert = { id: id(), provider: sample.provider, seatId: seat.id,
             message: `${name}掉登录了，派到这里的任务会失败或排队。请现在打开终端运行：\n${command}\n完成网页登录后，AgentDeck 会自动检查恢复；队长请把受影响的任务改派到其他已登录席位。` };
           next.notified = true; next.receipts = [...(next.receipts || []), alert];
+          next.alertId = alert.id; next.deliveryFailureReported = false; next.cancellationFailureReported = false;
         }
       }
     } else {
@@ -64,20 +69,36 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, home,
     // Persist the episode latch before sending, including across app relaunch.
     const saved = { ...state, [key]: next };
     saveState(saved); state = saved;
+    if (recovered) onRecovery?.(recovered);
     if (changedStatus) onStatus?.(statusSample(next));
     if (alert) onAlert?.(alert);
     return true;
   }
   function statusSample(entry) {
     return { provider: entry.provider, scope: Q.SCOPES[entry.provider], seatId: entry.seatId,
-      configDir: entry.configDir, at: entry.statusAt, authOnly: true, authStatus: entry.status, source: '席位登录确认' };
+      configDir: entry.configDir, at: entry.statusAt, authOnly: true, authStatus: entry.status, source: '席位登录确认',
+      loginCommand: loginCommand(entry.provider, entry, home, platform) };
   }
   return {
     observe,
     samples: () => Object.values(state).filter((e) => ['logged-in', 'logged-out'].includes(e.status)).map(statusSample),
     needsConfirmation: (seat, provider) => {
       const e = state[provider === 'Claude' ? Q.seatKey(seat.id) : provider];
-      return e?.configDir === seat.configDir && e.misses > 0 && e.status !== 'logged-out';
+      return e?.configDir === seat.configDir && (e.misses > 0 || e.status === 'logged-out');
+    },
+    recordDeliveryFailure: (alertIdOrKey, message, kind = 'delivery') => {
+      if (typeof alertIdOrKey !== 'string' || typeof message !== 'string' || !message.trim()) return false;
+      const key = Object.keys(state).find((key) => state[key].alertId === alertIdOrKey ||
+        `seat-auth:${state[key].provider}:${state[key].seatId}` === alertIdOrKey);
+      const entry = key && state[key];
+      const reported = kind === 'cancel' ? 'cancellationFailureReported' : 'deliveryFailureReported';
+      if (!entry?.alertId || entry[reported]) return false;
+      const name = entry.provider === 'Claude' ? `Claude ${entry.name}（${entry.seatId}）席位` : 'Codex 席位';
+      const receipt = { id: id(), provider: entry.provider, seatId: entry.seatId,
+        message: `${name}掉登录提醒异常：${message.trim().slice(0, 500)}` };
+      const saved = { ...state, [key]: { ...entry, [reported]: true, receipts: [...(entry.receipts || []), receipt] } };
+      saveState(saved); state = saved;
+      return true;
     },
     pendingReceipts: () => Object.values(state).flatMap((e) => e.receipts || []),
     acknowledge: (alertId) => {

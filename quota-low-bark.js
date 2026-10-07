@@ -11,7 +11,6 @@ function settings(value = {}) {
 // must never overwrite a delivery latch. Persist before awaiting the network.
 function createQuotaLowBark({ state = {}, saveState, sendBark }) {
   return function check(config, now = Date.now()) {
-    if (typeof config.barkKeyFile !== 'string' || !config.barkKeyFile.trim()) return Promise.resolve([]);
     const options = settings(config.claudeQuotaAlert), alerts = [];
     let changed = false;
     for (const seat of Q.claudeSeats(config.claudeSeats)) {

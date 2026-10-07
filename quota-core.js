@@ -314,7 +314,8 @@
     for (const key of ['account', 'accountKey', 'credentialKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
     if (next.authOnly) {
       if (!['logged-in', 'logged-out'].includes(next.authStatus) || next.at < (out.auth?.at || 0)) return false;
-      out.auth = { status: next.authStatus, at: next.at };
+      out.auth = { status: next.authStatus, at: next.at,
+        ...(typeof next.loginCommand === 'string' && next.loginCommand.length <= 1000 ? { loginCommand: next.loginCommand } : {}) };
       store[key] = out;
       return before !== JSON.stringify(out);
     }
@@ -390,7 +391,7 @@
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
     if (entry.auth?.status === 'logged-out') {
       const name = seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '';
-      return { provider, authStatus: 'logged-out', state: 'danger', label: '未登录', displayLabel: '未登录', sampleLabel: '', statusText: '未登录',
+      return { provider, authStatus: 'logged-out', loginCommand: entry.auth.loginCommand || '', state: 'danger', label: '未登录', displayLabel: '未登录', sampleLabel: '', statusText: '未登录',
         fiveHour: null, weekly: null, shortText: '未登录', shortRemaining: null, out: true, recoveryAt: null, sampledAt: entry.auth.at,
         stale: false, failures: 0, cells: [], account: entry.account || '', source: '登录状态确认', confidence: '已确认未登录', name,
         detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：未登录\n此席位无法继续任务，请重新登录${seat ? `\n配置目录：${seat.configDir}` : ''}` };

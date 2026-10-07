@@ -164,7 +164,7 @@ test('offline installer queues by result identity, coalescing changed text witho
   const f = fixture(t);
   t.mock.method(Date, 'now', () => Date.parse('2026-10-08T10:00:00Z'));
   fs.mkdirSync(f.options.data);
-  fs.writeFileSync(path.join(f.options.data, 'config.json'), JSON.stringify({ barkNotifications: {
+  fs.writeFileSync(path.join(f.options.data, 'config.json'), JSON.stringify({ barkKeyFile: path.join(f.options.data, 'fake-key'), barkNotifications: {
     sleepEnabled: true, sleepStart: '00:00', sleepEnd: '23:59', classesEnabled: false,
   } }));
   const result = { id: 'first-install', targetVersion: '1.2.0', operation: 'install', reason: 'copy failed', running: true, activeVersion: '1.1.11' };

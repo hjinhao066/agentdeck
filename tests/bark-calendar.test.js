@@ -1,10 +1,11 @@
 'use strict';
+process.env.TZ = 'America/Los_Angeles';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { DAY_MS, matchesClass, eventRange, createCalendarCache } = require('../bark-calendar');
+const { DAY_MS, RETRY_MS, matchesClass, eventRange, createCalendarCache } = require('../bark-calendar');
 const at = Date.parse('2026-10-08T10:00:00-07:00');
 const event = (overrides = {}) => ({ summary: 'IMT 540 A — Design Methods', status: 'confirmed',
   start: { dateTime: '2026-10-08T10:30:00-07:00' }, end: { dateTime: '2026-10-08T12:20:00-07:00' }, ...overrides });
@@ -37,11 +38,11 @@ test('class matching tolerates course-code spacing and keeps 598 B separate from
 });
 test('a changed calendar selection during a pending query is refreshed before delivery can proceed', async (t) => {
   const file = fixture(t), calls = [], callbacks = [];
-  let options = { classCalendarIds: ['old'] };
+  let options = { classCalendarIds: ['old'], weeklyClasses: [] };
   const cache = createCalendarCache({ file, now: () => at, getSettings: () => options,
     execFileImpl: (_binary, args, _options, callback) => { calls.push(JSON.parse(args[4]).calendarId); callbacks.push(callback); } });
   const old = cache.refresh();
-  options = { classCalendarIds: ['new'] };
+  options = { classCalendarIds: ['new'], weeklyClasses: [] };
   const latest = cache.refresh();
   callbacks.shift()(null, JSON.stringify({ items: [] }));
   await new Promise((resolve) => setImmediate(resolve));
@@ -51,7 +52,7 @@ test('a changed calendar selection during a pending query is refreshed before de
   assert.equal(cache.status().available, true); assert.equal(cache.ranges().length, 1);
 });
 test('an empty partial API response can omit items without being mistaken for a fetch failure', async (t) => {
-  const cache = createCalendarCache({ file: fixture(t), now: () => at, execFileImpl: cli(() => ({}), []) });
+  const cache = createCalendarCache({ file: fixture(t), now: () => at, getSettings: () => ({ weeklyClasses: [] }), execFileImpl: cli(() => ({}), []) });
   assert.equal((await cache.refresh()).available, true); assert.deepEqual(cache.ranges(), []);
 });
 test('cancelled, declined, all-day and timezone-less events do not create class periods', () => {
@@ -65,7 +66,7 @@ test('cancelled, declined, all-day and timezone-less events do not create class 
 });
 test('daily refresh expands recurring events, paginates, sanitizes its cache and coalesces callers', async (t) => {
   const file = fixture(t), calls = [];
-  const cache = createCalendarCache({ file, now: () => at, execFileImpl: cli((params) => params.pageToken
+  const cache = createCalendarCache({ file, now: () => at, getSettings: () => ({ weeklyClasses: [] }), execFileImpl: cli((params) => params.pageToken
     ? { items: [event({ summary: 'IMT 598 A — excluded' }), event()] }
     : { items: [event({ description: 'PRIVATE-BODY', location: 'PRIVATE-LOCATION' })], nextPageToken: 'second' }, calls) });
   assert.deepEqual(cache.ranges(), []);
@@ -77,7 +78,7 @@ test('daily refresh expands recurring events, paginates, sanitizes its cache and
   assert.equal(calls[0].timeMin, new Date(at).toISOString());
   assert.equal(Date.parse(calls[0].timeMax) - at, 14 * DAY_MS);
   assert.equal(calls[1].pageToken, 'second');
-  assert.deepEqual(cache.status(), { available: true, state: 'ready', fetchedAt: at, lastAttemptAt: at });
+  assert.deepEqual(cache.status(), { available: true, state: 'ready', fallback: false, fetchedAt: at, lastAttemptAt: at });
   assert.equal(cache.ranges().length, 1);
   cache.ranges()[0].start = 0;
   assert.notEqual(cache.ranges()[0].start, 0);
@@ -88,9 +89,9 @@ test('daily refresh expands recurring events, paginates, sanitizes its cache and
   assert.equal(reloaded.ranges().length, 1);
   assert.equal((await reloaded.refresh()).available, true);
 });
-test('a fresh empty calendar succeeds; a stale cache or failed refresh falls back without class suppression', async (t) => {
+test('a fresh empty calendar succeeds; a stale or failed cache with explicitly empty weekly periods reports unavailable', async (t) => {
   const file = fixture(t), calls = []; let time = at, fail = false;
-  const cache = createCalendarCache({ file, now: () => time, execFileImpl: cli(() => {
+  const cache = createCalendarCache({ file, now: () => time, getSettings: () => ({ weeklyClasses: [] }), execFileImpl: cli(() => {
     if (fail) throw new Error('PRIVATE-CREDENTIAL-ERROR');
     return { items: [event()] };
   }, calls) });
@@ -104,11 +105,11 @@ test('a fresh empty calendar succeeds; a stale cache or failed refresh falls bac
   assert.deepEqual(cache.ranges(), []);
   assert.doesNotMatch(JSON.stringify(failure) + fs.readFileSync(file, 'utf8'), /PRIVATE-CREDENTIAL-ERROR/);
   await cache.refresh(); assert.equal(calls.length, 2);
-  const reloaded = createCalendarCache({ file, now: () => time + 1000, execFileImpl: () => { throw new Error('daily retry must stay gated after restart'); } });
+  const reloaded = createCalendarCache({ file, now: () => time + 1000, execFileImpl: () => { throw new Error('failure retry must stay gated briefly after restart'); } });
   assert.equal((await reloaded.refresh()).state, 'unavailable');
-  fail = false; time += DAY_MS;
+  fail = false; time += RETRY_MS;
   await cache.refresh(); assert.equal(cache.status().state, 'ready');
-  const empty = createCalendarCache({ file: fixture(t), now: () => time, execFileImpl: cli(() => ({ items: [] }), []) });
+  const empty = createCalendarCache({ file: fixture(t), now: () => time, getSettings: () => ({ weeklyClasses: [] }), execFileImpl: cli(() => ({ items: [] }), []) });
   assert.equal((await empty.refresh()).available, true);
   assert.deepEqual(empty.ranges(), []);
 });
@@ -118,13 +119,13 @@ test('partial pagination, a failed selected calendar, missing CLI and malformed 
     (_binary, _args, _options, callback) => callback({ code: 'ENOENT' }),
     (_binary, _args, _options, callback) => callback(null, '{'),
     (_binary, _args, _options, callback) => callback(null, '{"error":{"message":"PRIVATE"}}')]) {
-    const cache = createCalendarCache({ file: fixture(t), now: () => at, getSettings: () => ({ classCalendarIds: ['primary', 'second'] }), execFileImpl: read });
+    const cache = createCalendarCache({ file: fixture(t), now: () => at, getSettings: () => ({ classCalendarIds: ['primary', 'second'], weeklyClasses: [] }), execFileImpl: read });
     assert.equal((await cache.refresh()).state, 'unavailable');
     assert.deepEqual(cache.ranges(), []);
   }
 });
 test('settings changes invalidate old coverage and disabled class suppression never calls the CLI', async (t) => {
-  const calls = []; let current = { classesEnabled: true, classCalendarIds: ['primary'], classFilters: ['IMT 540'] };
+  const calls = []; let current = { weeklyClasses: [], classesEnabled: true, classCalendarIds: ['primary'], classFilters: ['IMT 540'] };
   const cache = createCalendarCache({ file: fixture(t), now: () => at, getSettings: () => current,
     execFileImpl: cli(() => ({ items: [event()] }), calls) });
   await cache.refresh(); assert.equal(cache.ranges().length, 1);
@@ -135,4 +136,36 @@ test('settings changes invalidate old coverage and disabled class suppression ne
   assert.deepEqual(cache.ranges(), []);
   assert.equal((await cache.refresh()).state, 'disabled');
   assert.equal(calls.length, 2);
+});
+
+test('CLI uses the augmented app environment and failed queries retry in 15 minutes or on manual refresh', async (t) => {
+  const file = fixture(t), calls = []; let time = at, fail = true;
+  const env = { PATH: '/opt/homebrew/bin:/usr/local/bin:/usr/bin' };
+  const cache = createCalendarCache({ file, now: () => time, env, getSettings: () => ({ weeklyClasses: [] }),
+    execFileImpl: (_binary, _args, options, done) => {
+      calls.push(options.env); done(fail ? { code: 'ENOENT' } : null, JSON.stringify({ items: [] }));
+    } });
+  assert.equal((await cache.refresh()).state, 'unavailable');
+  assert.equal(calls[0], env);
+  await cache.refresh(); assert.equal(calls.length, 1);
+  fail = false;
+  await cache.refresh(true); assert.equal(calls.length, 2); assert.equal(cache.status().state, 'ready');
+  time += DAY_MS; fail = true; await cache.refresh(); assert.equal(calls.length, 3);
+  time += RETRY_MS - 1; await cache.refresh(); assert.equal(calls.length, 3);
+  time++; fail = false; await cache.refresh(); assert.equal(calls.length, 4);
+});
+test('missing gws uses visible configurable weekly course fallback; fresh empty calendar respects cancelled holidays', async (t) => {
+  const time = new Date(2026, 9, 6, 11).getTime(); // Tuesday
+  let fail = true, periods = [{ day: 2, start: '10:30', end: '12:20' }];
+  const cache = createCalendarCache({ file: fixture(t), now: () => time,
+    getSettings: () => ({ weeklyClasses: periods }),
+    execFileImpl: (_binary, _args, _options, done) => done(fail ? { code: 'ENOENT' } : null, '{"items":[]}') });
+  const missing = await cache.refresh();
+  assert.equal(missing.state, 'unavailable'); assert.equal(missing.fallback, true);
+  const range = cache.ranges().find((p) => p.start <= time && time < p.end);
+  assert.equal(new Date(range.end).getHours(), 12); assert.equal(new Date(range.end).getMinutes(), 20);
+  periods = [];
+  assert.equal(cache.status().fallback, false); assert.deepEqual(cache.ranges(), []);
+  fail = false; periods = [{ day: 2, start: '10:30', end: '12:20' }];
+  await cache.refresh(true); assert.equal(cache.status().fallback, false); assert.deepEqual(cache.ranges(), []);
 });

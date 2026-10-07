@@ -106,7 +106,9 @@ proofs. Two proofs at least 30 seconds apart confirm the outage. After the first
 proof, an extra check runs after 30 seconds; network/permission/ordinary query
 failure breaks the consecutive confirmation. An authenticated failed worker
 receipt (including a process failure receipt) mentioning `Not logged in` or
-`未登录` also triggers that check. Successful result prose is ignored.
+`未登录` only triggers a fresh provider check; the text itself never counts as
+either confirmation, including GitHub/login-related failure prose. Successful
+result prose is ignored.
 
 Claude's normal first check is within about 5 minutes, or 15 minutes in idle
 battery mode, followed by the 30-second confirmation (plus request timeouts).
@@ -129,22 +131,32 @@ Windows gets the equivalent PowerShell environment command. The sampler never
 runs the login command itself.
 
 Bark uses the shared configurable critical volume (default 4) and quiet-hours
-queue: 23:00–10:00 local time by default, plus fresh cached class periods when
-the local authenticated calendar CLI is available. During quiet hours the local
+queue: 23:00–10:00 Seattle time by default, plus fresh cached class periods when
+the local authenticated calendar CLI is available, otherwise configurable weekly
+periods (Tuesday/Thursday 10:30–12:20; Tuesday 15:30–17:20 by default). During quiet hours the local
 reminder and Captain receipt stay immediate; the phone alert is persisted and
 merged after quiet hours, checked every 30 seconds while the app is open.
-Unavailable/stale calendars fall back to sleep hours only (shown in Settings).
+Unavailable/stale calendars visibly fall back to weekly periods. Empty weekly
+settings leave only sleep protection and show an explicit warning. Calendar
+failures retry in 15 minutes; Settings edits/manual refresh can retry immediately.
 
-The quota panel shows red **未登录**, hides cached percentages and excludes the
+The quota panel shows a pale-red row and red **未登录**, with the generated login
+command and a copy icon in the details; it hides cached percentages and excludes the
 seat from existing quota fallback choices. Recovery is silent and requires a
-fresh successful provider query. Each seat/outage sends only once, including
+fresh successful provider query. Confirmed logged-out seats recheck every 30
+seconds (plus request time), even if an intervening query is unknown; recovery
+removes that seat’s queued phone alert without ringing. Each seat/outage sends only once, including
 across app restarts; a confirmed recovery rearms the next outage. The private
 `userData/seat-auth-state.json` keeps the episode latch and undelivered Captain
 receipts. A missing Captain does not delay Bark; its receipt waits until one
 exists. Never-logged-in seats show 未登录 after confirmation without a dropout
 alert. On upgrade, a fresh bound quota sample can establish the prior login.
-If Bark is unconfigured or delivery fails, a local notice explains it and the
-Captain receipt remains; the episode does not repeatedly ring on later polls.
+Blank Bark settings use the same private Captain key file `~/.secrets/bark-key.txt`.
+Daytime sends are durable too: failure retains the outbox for a 60-second retry,
+with an explicit Settings error and a once-per-outage Captain exception receipt.
+If the outbox cannot be saved, this is reported instead of claiming queued delivery.
+An interrupted send with unknown outcome pauses automatic resends until manual
+refresh; successful-send cleanup errors retry saving without repeated ringing.
 Native reminders preserve front-window silence and never activate a window.
 
 This branch does not restart installed AgentDeck or migrate running terminals.

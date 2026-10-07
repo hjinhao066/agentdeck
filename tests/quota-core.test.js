@@ -11,11 +11,13 @@ test('confirmed logout overrides cached percentages until explicit recovery, wit
     accountBound: true, accountKey: 'us-account' };
   Q.observe(store, sample, now);
   assert.equal(Q.summary(store, 'Claude', now, seat).fiveHour, 90);
-  const auth = { provider: 'Claude', scope: 'claude', seatId: 'us', configDir: seat.configDir, authOnly: true, authStatus: 'logged-out', at: now + 1 };
+  const auth = { provider: 'Claude', scope: 'claude', seatId: 'us', configDir: seat.configDir, authOnly: true, authStatus: 'logged-out', at: now + 1,
+    loginCommand: 'CLAUDE_CONFIG_DIR=~/.claude-us claude auth login' };
   assert.equal(Q.observe(store, auth, now + 1), true);
   const q = Q.summary(store, 'Claude', now + 1, seat);
   assert.equal(q.label, '未登录'); assert.equal(q.statusText, '未登录'); assert.equal(q.shortText, '未登录');
   assert.equal(q.state, 'danger'); assert.equal(q.out, true); assert.equal(q.fiveHour, null); assert.deepEqual(q.cells, []);
+  assert.equal(q.loginCommand, auth.loginCommand);
   assert.equal(Q.summary(store, 'Claude', now + 1, { ...seat, configDir: '~/.different' }).label, '未知');
   Q.observe(store, { ...sample, at: now + 2 }, now + 2);
   Q.observe(store, { ...sample, accountKey: 'another-account', at: now + 2 }, now + 2);

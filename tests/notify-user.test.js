@@ -63,9 +63,12 @@ test('workers and malformed requests fail before any alert or file/network acces
   }
   assert.deepEqual(h.alerts, []); assert.deepEqual(h.calls, []);
 });
-test('missing configuration skips Bark with an actionable hint after local delivery', async () => {
+test('missing default key reports an actionable hint after local delivery', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bark-no-key-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  t.mock.method(os, 'homedir', () => dir);
   const h = harness();
-  assert.match(await h.notify({ urgent: true }), /Bark 已跳过.*设置.*密钥文件路径/);
+  assert.match(await h.notify({ urgent: true }), /Bark 密钥文件不可读.*设置.*密钥文件路径/);
   assert.equal(h.alerts.length, 1); assert.equal(h.calls.length, 0);
 });
 test('urgent sends fixed HTTPS POST critical/4/minuet, key only in body, regardless of local preferences', async () => {
@@ -148,4 +151,23 @@ test('tilde key paths expand in the main-process sender without exposing the key
     assert.ok(!result.includes('fake_tilde_key'));
     assert.equal(JSON.parse(h.calls[0][1].body).device_key, 'fake_tilde_key');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('blank and absent key settings use the same private Captain key without reading real user credentials', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bark-default-key-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, '.secrets'));
+  fs.writeFileSync(path.join(dir, '.secrets/bark-key.txt'), 'fake_captain_key');
+  const calls = [];
+  for (const config of [{}, { barkKeyFile: '' }, { barkKeyFile: '  ' }]) {
+    const send = createBarkSender({ getConfig: () => config, keyHome: dir, fetchImpl: async (_url, options) => {
+      calls.push(JSON.parse(options.body)); return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } });
+    assert.equal((await send({ message: 'seat offline', level: 'critical' })).ok, true);
+  }
+  assert.equal(calls.length, 3);
+  assert.ok(calls.every((p) => p.device_key === 'fake_captain_key' && p.volume === 4));
+  const explicit = createBarkSender({ getConfig: () => ({ barkKeyFile: path.join(dir, 'missing') }), keyHome: dir,
+    fetchImpl: () => assert.fail('must not fall back from an explicit invalid key') });
+  assert.equal((await explicit({ message: 'seat offline' })).ok, false);
 });

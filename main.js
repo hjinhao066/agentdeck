@@ -974,10 +974,11 @@ app.whenReady().then(async () => {
   const barkNow = () => tudArg && Number.isFinite(app.testBarkNow) ? app.testBarkNow : Date.now();
   const barkQueuePath = path.join(app.getPath('userData'), 'bark-pending.json');
   barkCalendar = createCalendarCache({ file: path.join(app.getPath('userData'), 'bark-calendar.json'),
-    getSettings: () => BarkPolicy.settings(notificationConfig.barkNotifications), now: barkNow,
+    getSettings: () => BarkPolicy.settings(notificationConfig.barkNotifications), now: barkNow, env: ENV,
     ...(tudArg ? { execFileImpl: (_command, _args, _options, done) => done({ code: 'ENOENT' }) } : {}) });
   if (tudArg) app.testBarkDigests = [];
   const sendBarkDigest = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { keyHome: app.getPath('userData') } : {}),
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       const { device_key, ...payload } = JSON.parse(options.body);
       app.testBarkDigests.push(payload);
@@ -985,11 +986,28 @@ app.whenReady().then(async () => {
     } } : {}) });
   barkDelivery = createFileBarkDelivery({ file: barkQueuePath, now: barkNow, prepare: () => barkCalendar.refresh(),
     getSettings: () => BarkPolicy.settings(notificationConfig.barkNotifications), getClasses: (at) => barkCalendar.ranges(at),
-    sendNow: sendBarkDigest });
-  const pumpBark = async () => { await barkCalendar.refresh(); return barkDelivery.flush(); };
+    sendNow: sendBarkDigest, onFailure: ({ message, keys }) => {
+      send('toast', { text: message });
+      for (const key of keys) if (seatAuth?.recordDeliveryFailure(key, message)) queueAuthReceipts();
+    } });
+  const pumpBark = async () => {
+    await barkCalendar.refresh();
+    // Also retry a recovery cancellation that previously failed to write.
+    for (const sample of seatAuth?.samples() || []) if (sample.authStatus === 'logged-in') {
+      await barkDelivery.cancel(`seat-auth:${sample.provider}:${sample.seatId}`, () => seatAuth.samples().some((s) =>
+        s.provider === sample.provider && s.seatId === sample.seatId && s.authStatus === 'logged-in'));
+    }
+    return barkDelivery.flush();
+  };
   pumpBark().catch(() => {});
   barkPumpTimer = setInterval(() => pumpBark().catch(() => {}), 30_000); barkPumpTimer.unref();
   handleMain('bark:status', () => ({ ...barkDelivery.status(), calendar: barkCalendar.status() }));
+  handleMain('bark:refresh', async () => {
+    await barkCalendar.refresh(true);
+    await pumpBark();
+    await barkDelivery.retry();
+    return { ...barkDelivery.status(), calendar: barkCalendar.status() };
+  });
   if (tudArg) app.testBarkFlush = pumpBark;
   const quotaAlertPath = path.join(app.getPath('userData'), 'quota-bark-state.json');
   let quotaAlertState = {};
@@ -1001,6 +1019,7 @@ app.whenReady().then(async () => {
   } catch (_) {}
   if (tudArg) app.testQuotaAlerts = [];
   const sendQuotaBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
+    ...(tudArg ? { keyHome: app.getPath('userData') } : {}),
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       // Test profiles never contact Bark or retain even a stand-in device key.
       const { device_key, ...payload } = JSON.parse(options.body);
@@ -1048,6 +1067,19 @@ app.whenReady().then(async () => {
       fs.renameSync(authStatePath + '.tmp', authStatePath);
     },
     onStatus: (sample) => send('quota:updated', [sample]),
+    onRecovery: (recovery) => {
+      const key = `seat-auth:${recovery.provider}:${recovery.seatId}`;
+      Promise.resolve().then(() => barkDelivery.cancel(key, () => seatAuth.samples().some((s) =>
+        s.provider === recovery.provider && s.seatId === recovery.seatId && s.authStatus === 'logged-in'))).then((result) => {
+        if (!result?.ok || result.cancelled !== true) throw new Error('Reminder cancellation not saved');
+      }).catch(() => {
+        const message = '席位已恢复，但旧手机提醒撤销失败，请介入检查通知队列。';
+        send('toast', { text: message });
+        try { seatAuth.recordDeliveryFailure(key, message, 'cancel'); queueAuthReceipts(); } catch (_) {
+          send('toast', { text: '提醒撤销异常未能保存，请介入检查磁盘和通知队列。' });
+        }
+      });
+    },
     onAlert: (alert) => {
       queueAuthReceipts();
       // Critical Bark uses the notify-user --urgent sender immediately. The
@@ -1056,8 +1088,20 @@ app.whenReady().then(async () => {
       const delivery = sendQuotaBark({ message: alert.message, title: 'AgentDeck · 席位掉登录', level: 'critical', dedupeKey: `seat-auth:${alert.provider}:${alert.seatId}` });
       send('toast', { text: alert.message });
       Promise.resolve(delivery).then((result) => {
-        if (!result.ok) send('toast', { text: result.message });
-      }).catch(() => send('toast', { text: '席位掉登录：加急提醒发送失败，请检查本机 Bark 配置。' }));
+        if (!result.ok) {
+          const message = result.message || '手机通知发送失败，请介入检查本机 Bark 配置和通知队列。';
+          send('toast', { text: message });
+          try { seatAuth.recordDeliveryFailure(alert.id, message); queueAuthReceipts(); } catch (_) {
+            send('toast', { text: '手机通知异常未能保存，请介入检查磁盘和通知设置。' });
+          }
+        }
+      }).catch(() => {
+        const message = '席位掉登录：手机通知发送失败，未保留，请介入检查本机 Bark 配置和通知队列。';
+        send('toast', { text: message });
+        try { seatAuth.recordDeliveryFailure(alert.id, message); queueAuthReceipts(); } catch (_) {
+          send('toast', { text: '手机通知异常未能保存，请介入检查磁盘和通知设置。' });
+        }
+      });
     },
   });
   // On upgrade, a fresh, seat-bound successful quota is a prior login baseline.
@@ -1070,20 +1114,32 @@ app.whenReady().then(async () => {
     if (provider === 'Codex' && !entry.accountKey) continue;
     seatAuth.observe(seat || codexSeat, { provider, at: sample.at, authStatus: 'logged-in' });
   }
+  async function checkAuthSeat(seat, provider) {
+    if (tudArg) {
+      app.testSeatAuthChecks.push({ provider, seatId: seat.id });
+      const sample = app.testSeatAuthProofs.shift();
+      if (sample) observeAuth({ ...sample, provider, seatId: seat.id, configDir: seat.configDir });
+      return;
+    }
+    if (provider === 'Claude') {
+      await claudeQuotaRefresh?.tick({ force: true, seatId: seat.id });
+      send('quota:updated', [...(claudeQuotaRefresh?.samples() || []), ...authSamples()]);
+    } else await sampleCodex(true);
+  }
   const observeAuth = (sample) => {
     const seat = configuredAuthSeat(sample);
     if (!seat) return;
     try {
       seatAuth.observe(seat, sample);
       const key = sample.provider === 'Claude' ? QuotaCore.seatKey(seat.id) : sample.provider;
-      if (!tudArg && seatAuth.needsConfirmation(seat, sample.provider) && !seatAuthChecks.has(key)) {
-        const timer = setTimeout(async () => {
+      if (!seatAuth.needsConfirmation(seat, sample.provider)) {
+        clearTimeout(seatAuthChecks.get(key)); seatAuthChecks.delete(key);
+      } else if (!tudArg && !seatAuthChecks.has(key)) {
+        const timer = setTimeout(() => {
           seatAuthChecks.delete(key);
           if (!configuredAuthSeat(sample)) return;
-          if (sample.provider === 'Claude') {
-            await claudeQuotaRefresh?.tick({ force: true, seatId: seat.id });
-            send('quota:updated', [...(claudeQuotaRefresh?.samples() || []), ...authSamples()]);
-          } else await sampleCodex(true);
+          checkAuthSeat(seat, sample.provider).catch(() => observeAuth({ provider: sample.provider,
+            seatId: seat.id, configDir: seat.configDir, at: Date.now() }));
         }, CONFIRM_MS);
         timer.unref(); seatAuthChecks.set(key, timer);
       }
@@ -1107,10 +1163,19 @@ app.whenReady().then(async () => {
     const provider = column && BoardCore.inferAgentType(column.cmd);
     const seat = provider === 'Claude' ? QuotaCore.seatForColumn(column, ClaudeSeatsCore.normalize(seatConfig().claudeSeats)) : provider === 'Codex' ? codexSeat : null;
     if (!seat) return false;
-    observeAuth({ provider, scope: QuotaCore.SCOPES[provider], seatId: seat.id, configDir: seat.configDir, at: Date.now(), authStatus: 'logged-out' });
+    // Receipt text can describe GitHub, a browser or even a failing test. It is
+    // only a reason to query the provider; it never counts as a logout proof.
+    checkAuthSeat(seat, provider).catch(() => {});
     return true;
   });
-  if (tudArg) app.testSeatAuthObserve = observeAuth;
+  if (tudArg) {
+    app.testSeatAuthObserve = observeAuth;
+    app.testSeatAuthChecks = []; app.testSeatAuthProofs = [];
+    app.testSeatAuthNeedsCheck = (sample) => {
+      const seat = configuredAuthSeat(sample);
+      return !!seat && seatAuth.needsConfirmation(seat, sample.provider);
+    };
+  }
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
   let warmupCaptain = { id: '', idle: false, at: 0 };
   const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
@@ -1149,6 +1214,7 @@ app.whenReady().then(async () => {
   quotaWarmupTimer.unref();
   if (tudArg) app.testRelayAlerts = [];
   const sendRelayBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
+    ...(tudArg ? { keyHome: app.getPath('userData') } : {}),
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       const { device_key, ...payload } = JSON.parse(options.body);
       app.testRelayAlerts.push(payload);
@@ -1183,6 +1249,7 @@ app.whenReady().then(async () => {
   } catch (_) {}
   if (tudArg) app.testNeedsUserAlerts = [];
   const sendNeedsUserBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
+    ...(tudArg ? { keyHome: app.getPath('userData') } : {}),
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       const { device_key, ...payload } = JSON.parse(options.body);
       app.testNeedsUserAlerts.push(payload);
@@ -1596,6 +1663,7 @@ app.whenReady().then(async () => {
         { timeout: 2000 }, () => {});
     } });
   notifyUser = createNotifyUser({ getConfig: () => notificationConfig, notifications, delivery: barkDelivery,
+    ...(tudArg ? { keyHome: app.getPath('userData') } : {}),
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       // Test profiles never contact Bark or retain the stand-in key.
       const { device_key, ...payload } = JSON.parse(options.body);

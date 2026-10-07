@@ -89,7 +89,8 @@ function macOperations(options) {
       let config = {};
       try { config = JSON.parse(fs.readFileSync(path.join(options.data, 'config.json'), 'utf8')); } catch (_) {}
       const getSettings = () => BarkPolicy.settings(config.barkNotifications);
-      const calendar = createCalendarCache({ file: path.join(options.data, 'bark-calendar.json'), getSettings });
+      const calendar = createCalendarCache({ file: path.join(options.data, 'bark-calendar.json'), getSettings,
+        env: { ...process.env, PATH: ['/opt/homebrew/bin', '/usr/local/bin', process.env.PATH || ''].join(path.delimiter) } });
       const sendNow = createBarkSender({ getConfig: () => config });
       const delivery = createFileBarkDelivery({ file: path.join(options.data, 'bark-pending.json'), getSettings,
         getClasses: (at) => calendar.ranges(at), prepare: () => calendar.refresh(), sendNow });

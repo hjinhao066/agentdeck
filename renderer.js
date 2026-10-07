@@ -689,6 +689,9 @@ function openNotificationSettings() {
   document.getElementById('barkSleepStart').value = bark.sleepStart;
   document.getElementById('barkSleepEnd').value = bark.sleepEnd;
   document.getElementById('barkClassesEnabled').checked = bark.classesEnabled;
+  document.getElementById('barkClassCalendarIds').value = bark.classCalendarIds.join('\n');
+  document.getElementById('barkClassFilters').value = bark.classFilters.join('\n');
+  document.getElementById('barkWeeklyClasses').value = (bark.weeklyClasses || []).map((entry) => `周${'日一二三四五六'[entry.day]} ${entry.start}-${entry.end}`).join('\n');
   updateBarkPolicyStatus();
   MainSession.openSettings();
   updateMobileWebSettings();
@@ -738,11 +741,22 @@ async function updateBarkPolicyStatus() {
     const status = await window.deck.barkStatus();
     const calendar = status.calendar || {};
     const calendarText = calendar.state === 'disabled' ? '已关闭' : calendar.available ?
-      `已缓存（更新于 ${new Date(calendar.fetchedAt).toLocaleString()}）` : '不可用，当前只按睡眠时段免打扰';
-    node.textContent = `暂存手机提醒：${status.queuedCount || 0} 条。课程日历：${calendarText}。`;
+      `已缓存（更新于 ${new Date(calendar.fetchedAt).toLocaleString()}）` : calendar.fallback ? '不可用，使用每周固定上课时段' : '不可用，未设置固定上课时段，上课时手机可能响';
+    node.textContent = `暂存手机提醒：${status.queuedCount || 0} 条。课程日历：${calendarText}。${status.lastError ? `发送失败待重试：${status.lastError}${status.retryAt ? `（${new Date(status.retryAt).toLocaleTimeString()}后重试）` : ''}。` : ''}`;
   } catch (_) { node.textContent = '课程日历状态暂不可用。'; }
 }
 function saveNotificationSettings() {
+  const weeklyInput = document.getElementById('barkWeeklyClasses'), weeklyClasses = [];
+  for (const line of weeklyInput.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
+    const match = /^周([日一二三四五六])\s+((?:[01]\d|2[0-3]):[0-5]\d)\s*[-–]\s*((?:[01]\d|2[0-3]):[0-5]\d)$/.exec(line);
+    if (!match || match[2] >= match[3]) {
+      weeklyInput.setCustomValidity('每行请填写「周二 10:30-12:20」，结束时间要晚于开始时间。');
+      weeklyInput.reportValidity();
+      return false;
+    }
+    weeklyClasses.push({ day: '日一二三四五六'.indexOf(match[1]), start: match[2], end: match[3] });
+  }
+  weeklyInput.setCustomValidity('');
   config.captainNotifications = NotificationPolicy.normalizeSettings({
     enabled: document.getElementById('captainNotifyEnabled').checked,
     sound: document.getElementById('captainSoundEnabled').checked,
@@ -756,9 +770,13 @@ function saveNotificationSettings() {
     sleepStart: document.getElementById('barkSleepStart').value,
     sleepEnd: document.getElementById('barkSleepEnd').value,
     classesEnabled: document.getElementById('barkClassesEnabled').checked,
+    classCalendarIds: document.getElementById('barkClassCalendarIds').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+    classFilters: document.getElementById('barkClassFilters').value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean),
+    weeklyClasses,
   });
   saveConfig();
   updateBarkPolicyStatus();
+  return true;
 }
 function buildChrome() {
   const head = document.getElementById('navHead');
@@ -3618,7 +3636,17 @@ document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
-['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark', 'barkCriticalVolume', 'barkSleepEnabled', 'barkSleepStart', 'barkSleepEnd', 'barkClassesEnabled'].forEach((id) => {
+document.getElementById('barkCalendarRefresh').innerHTML = ICONS.refresh;
+document.getElementById('barkCalendarRefresh').addEventListener('click', async (event) => {
+  if (!saveNotificationSettings()) return;
+  flushConfig();
+  const button = event.currentTarget;
+  button.disabled = true;
+  try { await window.deck.refreshBarkCalendar(); await updateBarkPolicyStatus(); }
+  catch (_) { document.getElementById('barkPolicyStatus').textContent = '课程日历刷新失败，请稍后重试。'; }
+  finally { button.disabled = false; }
+});
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark', 'barkCriticalVolume', 'barkSleepEnabled', 'barkSleepStart', 'barkSleepEnd', 'barkClassesEnabled', 'barkClassCalendarIds', 'barkClassFilters', 'barkWeeklyClasses'].forEach((id) => {
   document.getElementById(id).addEventListener('change', saveNotificationSettings);
 });
 buildChrome();
@@ -3943,6 +3971,17 @@ function renderQuotaBar() {
         const tip = document.createElement('span'); tip.className = 'quota-tooltip'; tip.id = `${prefix}-${provider}-${seat?.id || ''}`; tip.setAttribute('role', 'tooltip');
         item.setAttribute('aria-describedby', tip.id);
         item.append(label, values, tip); bar.append(item);
+        item.addEventListener('click', (event) => {
+          const button = event.target.closest('.quota-login-copy');
+          if (!button || !item.dataset.loginCommand) return;
+          event.stopPropagation();
+          try {
+            window.deck.clipboardWrite(item.dataset.loginCommand);
+            item.dataset.loginCopiedUntil = String(Date.now() + 1400);
+            renderQuotaBar();
+            setTimeout(renderQuotaBar, 1450);
+          } catch (_) { showToast('登录命令复制失败，请重试。'); }
+        });
       }
       const q = summaries[index];
       // Include the seat name: multiple subscriptions can share the same flag.
@@ -3982,7 +4021,17 @@ function renderQuotaBar() {
           el('span', 'qt-reset', c.resetAt > now ? `${longReset(c.resetAt)}重置` : '重置时间未知'));
         return line;
       });
-      if (q.authStatus === 'logged-out') lines.unshift(el('span', 'qt-note out', '此席位无法继续任务，请重新登录'));
+      if (q.authStatus === 'logged-out') {
+        lines.unshift(el('span', 'qt-note out', '此席位无法继续任务，请重新登录'));
+        if (q.loginCommand) {
+          const login = el('span', 'qt-login'), command = el('code', 'qt-login-command', q.loginCommand);
+          const copy = el('button', 'rail-btn quota-login-copy'); copy.type = 'button';
+          const copied = Number(item.dataset.loginCopiedUntil) > now;
+          copy.innerHTML = copied ? ICONS.check : ICONS.copy;
+          copy.title = copied ? '已复制' : '复制登录命令'; copy.setAttribute('aria-label', copy.title);
+          login.append(command, copy); lines.push(login);
+        }
+      }
       else if (blockedOnly) lines.unshift(el('span', 'qt-note out', recovery ? `已用尽，预计 ${longReset(recovery)}恢复` : '已用尽，恢复时间未知'));
       else if (!q.cells.length) lines.push(el('span', 'qt-note', state === 'normal' ? '未见用尽，此来源不提供百分比' : '暂无额度数据，等待下次采样'));
       const warm = seat ? ClaudeSeats.warmupDetail(seat.id) : '';
@@ -3996,10 +4045,15 @@ function renderQuotaBar() {
       const meta = el('span', `qt-meta${q.stale ? ' stale' : ''}`);
       for (const [k, v] of [['账号', q.account || '未识别'], seat && ['席位', `${seat.name}${captain ? '（队长在用）' : ''}`],
         ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
+      const copyFocused = document.activeElement?.classList.contains('quota-login-copy') && tip.contains(document.activeElement);
       fill(tip, [head, ...lines, meta]);
+      if (copyFocused) tip.querySelector('.quota-login-copy')?.focus({ preventScroll: true });
       const brief = [q.out && q.authStatus !== 'logged-out' && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
         ...q.cells.map((c) => `${c.key === '5h' ? '5 小时' : '每周'}剩余 ${c.remaining}%${c.resetAt > now ? `（${shortReset(c.resetAt)} 重置）` : ''}`)].filter(Boolean).join('，');
       item.dataset.state = state;
+      item.dataset.authStatus = q.authStatus || '';
+      item.dataset.loginCommand = q.loginCommand || '';
+      tip.dataset.loginCommand = q.loginCommand ? 'true' : '';
       item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
       // Config dir, model and the full evidence line: kept for diagnosis, never shown on hover.
       item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;

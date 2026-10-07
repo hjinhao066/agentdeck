@@ -1,4 +1,5 @@
 'use strict';
+process.env.TZ = 'America/Los_Angeles';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { settings, blockedUntil } = require('../bark-policy');
@@ -43,4 +44,28 @@ test('sleep end uses wall-clock time across daylight-saving changes', () => {
 test('a sequence of long classes and sleep periods keeps reminders deferred until all overlaps end', () => {
   const classes = [8, 9, 10].map((day) => ({ start: local(day, 9, 30), end: local(day, 23, 30) }));
   assert.equal(blockedUntil(local(7, 23), {}, classes), local(11, 10));
+});
+
+test('weekly fallback defaults cover Tuesday/Thursday morning and Tuesday afternoon with editable periods', () => {
+  const { weeklyRanges } = require('../bark-policy');
+  const tuesday = local(6, 11), thursday = local(8, 11);
+  assert.equal(blockedUntil(tuesday, {}, weeklyRanges(tuesday)), local(6, 12, 20));
+  assert.equal(blockedUntil(thursday, {}, weeklyRanges(thursday)), local(8, 12, 20));
+  assert.equal(blockedUntil(local(6, 16), {}, weeklyRanges(local(6, 16))), local(6, 17, 20));
+  assert.deepEqual(weeklyRanges(tuesday, { weeklyClasses: [] }), []);
+  assert.deepEqual(weeklyRanges(tuesday, { classesEnabled: false }), []);
+  assert.deepEqual(settings({ weeklyClasses: [{ day: 9, start: '10:00', end: '12:00' },
+    { day: 2, start: '25:00', end: '26:00' }, { day: 2, start: '12:00', end: '10:00' }] }).weeklyClasses, []);
+});
+
+test('Seattle sleep and fixed course periods do not shift when the machine timezone changes', (t) => {
+  const previous = process.env.TZ;
+  t.after(() => { process.env.TZ = previous; });
+  process.env.TZ = 'Asia/Shanghai';
+  const { weeklyRanges } = require('../bark-policy');
+  const sleep = Date.parse('2026-10-07T23:00:00-07:00');
+  assert.equal(blockedUntil(sleep), Date.parse('2026-10-08T10:00:00-07:00'));
+  const classAt = Date.parse('2026-10-08T11:00:00-07:00');
+  assert.equal(blockedUntil(classAt, {}, weeklyRanges(classAt)), Date.parse('2026-10-08T12:20:00-07:00'));
+  assert.equal(blockedUntil(Date.parse('2026-10-31T23:00:00-07:00')), Date.parse('2026-11-01T10:00:00-08:00'));
 });

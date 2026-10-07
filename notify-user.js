@@ -5,8 +5,8 @@ const path = require('path');
 const Policy = require('./bark-policy');
 
 // Only authenticated board requests reach here; never accept a key from the CLI.
-function createNotifyUser({ getConfig, notifications, fetchImpl = fetch, delivery }) {
-  const sendBark = createBarkSender({ getConfig, fetchImpl, delivery });
+function createNotifyUser({ getConfig, notifications, fetchImpl = fetch, delivery, keyHome }) {
+  const sendBark = createBarkSender({ getConfig, fetchImpl, delivery, keyHome });
   return async (command, visible, turnId = command.id, structured = false) => {
     const config = getConfig();
     if (!(config.columns || []).some((c) => c.isMain && c.id === command.callerId)) {
@@ -28,16 +28,17 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch, deliver
 }
 // Shared sender extracted from origin/feat/captain-notify (0a850e0).
 // Fixed endpoint, private key-file lookup and redacted errors stay in one place.
-function createBarkSender({ getConfig, fetchImpl = fetch, delivery }) {
+function createBarkSender({ getConfig, fetchImpl = fetch, delivery, keyHome }) {
   const transport = async ({ message, title = '队长', level = 'active' }) => {
     if (typeof message !== 'string' || !message.trim() || message.length > 4000 ||
         !['active', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
     const config = getConfig();
     const volume = Policy.settings(config.barkNotifications).criticalVolume;
     let file = typeof config.barkKeyFile === 'string' ? config.barkKeyFile.trim() : '';
-
-    if (!file) return { ok: false, message: 'Bark 已跳过：请在设置中配置本机密钥文件路径。' };
-    if (file.startsWith('~/')) file = path.join(os.homedir(), file.slice(2));
+    // Same private device-key file used by the Captain on this machine. An
+    // explicit path wins; never silently change devices when that path fails.
+    if (!file) file = '~/.secrets/bark-key.txt';
+    if (file.startsWith('~/')) file = path.join(keyHome || os.homedir(), file.slice(2));
     let key;
     try {
       if (!path.isAbsolute(file)) throw new Error();
@@ -46,7 +47,7 @@ function createBarkSender({ getConfig, fetchImpl = fetch, delivery }) {
       key = (await fs.readFile(file, 'utf8')).trim();
       if (!/^[A-Za-z0-9_-]{1,512}$/.test(key)) throw new Error();
     } catch (_) {
-      return { ok: false, message: 'Bark 已跳过：密钥文件不可读或格式无效，请检查设置（文件仅含设备 key）。' };
+      return { ok: false, message: 'Bark 密钥文件不可读或格式无效，请检查设置中的本机密钥文件路径（留空默认 ~/.secrets/bark-key.txt，文件仅含设备 key）。' };
     }
     try {
       const response = await fetchImpl('https://api.day.app/push', {
@@ -69,10 +70,6 @@ function createBarkSender({ getConfig, fetchImpl = fetch, delivery }) {
   return async ({ message, title = '队长', level = 'active', dedupeKey }) => {
     if (typeof message !== 'string' || !message.trim() || message.length > 4000 ||
         typeof title !== 'string' || title.length > 200 || !['active', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
-    // An empty path disables phone alerts; quiet hours must not promise a
-    // later delivery that is not configured, or silently acknowledge it.
-    const keyFile = getConfig()?.barkKeyFile;
-    if (typeof keyFile !== 'string' || !keyFile.trim()) return { ok: false, message: 'Bark 已跳过：请在设置中配置本机密钥文件路径。' };
     const payload = { message: message.trim(), title, level, ...(typeof dedupeKey === 'string' && dedupeKey.length <= 200 ? { dedupeKey } : {}) };
     return delivery ? delivery.send(payload, transport) : transport(payload);
   };

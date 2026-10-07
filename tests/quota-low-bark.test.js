@@ -67,9 +67,9 @@ test('unknown, malformed, weekly-only, stale, future and expired samples never s
   const h = harness(); await h.check(); assert.equal(h.calls.length, 0);
   h.sample(1); h.config.quotas['Claude:cn'].configDir = '/other'; await h.check(); assert.equal(h.calls.length, 0);
 });
-test('missing reset still alerts once; missing key does not consume the alert', async () => {
+test('missing reset still alerts once and a blank key setting uses the shared default', async () => {
   const h = harness(); h.sample(0, { resetAt: null }); h.config.barkKeyFile = '';
-  await h.check(); assert.equal(h.writes.length, 0);
+  await h.check(); assert.equal(h.calls.length, 1);
   h.config.barkKeyFile = '/private/key'; await h.check(); await h.check();
   assert.equal(h.calls.length, 1); assert.doesNotMatch(h.calls[0].message, /重置时间/);
 });

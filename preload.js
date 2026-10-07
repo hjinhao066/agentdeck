@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('deck', {
   onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
   seatAuthFailure: (payload) => ipcRenderer.invoke('seat-auth:failure', payload),
   barkStatus: () => ipcRenderer.invoke('bark:status'),
+  refreshBarkCalendar: () => ipcRenderer.invoke('bark:refresh'),
   // Electron gives a preload no `clipboard` module, so main reads and writes
   // it. A failed write throws: a copy button must not report success for it.
   clipboardWrite: (t) => { if (ipcRenderer.sendSync('clipboard:write-sync', t) !== true) throw new Error('Clipboard write failed.'); },
