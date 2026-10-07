@@ -2332,6 +2332,23 @@
       s.relayStartup.attempt.output = true; save();
     }
     switch (message.action) {
+      case 'main-todo-delivery': {
+        if (!message.nativeWeb || typeof message.taskId !== 'string' || !/^todo-[a-f0-9]{64}$/.test(message.taskId) || typeof message.result !== 'string') throw new Error('Invalid Todo delivery.');
+        const accepted = host.config.todoDeliveries || {};
+        if (!accepted[message.taskId]) {
+          const notice = { receiptId: 'r-' + message.taskId, taskId: message.taskId, colId: s.colId,
+            title: 'Todo 新任务', ts: Date.now(), summary: message.result, source: 'command' };
+          s.pending.push(notice);
+          host.config.todoDeliveries = { ...accepted, [message.taskId]: true };
+          save(); host.flushConfig?.();
+          if (!window.deck.saveConfigSync(host.config)) {
+            s.pending = s.pending.filter((p) => p !== notice);
+            host.config.todoDeliveries = accepted;
+            throw new Error('Todo 投递未能持久保存，请稍后重试。');
+          }
+        }
+        return { done: true };
+      }
       case 'main-install-result': {
         const r = message.installResult;
         const task = s.tasks.find((t) => t.id === r.taskId && t.colId === r.columnId);

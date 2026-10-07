@@ -534,3 +534,28 @@ test('new forwards --worktree only when asked, and worktree clean lists without 
   assert.match(outside.stderr, /temp directory/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('todo list/status reuse authenticated Captain requests and preserve artifact paths', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-todo-cli-'));
+  fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
+  const requests = [];
+  const server = setInterval(() => {
+    for (const file of fs.readdirSync(path.join(dir, 'requests')).filter((name) => name.endsWith('.json'))) {
+      const request = JSON.parse(fs.readFileSync(path.join(dir, 'requests', file), 'utf8'));
+      fs.unlinkSync(path.join(dir, 'requests', file)); requests.push(request);
+      fs.writeFileSync(path.join(dir, 'responses', file), JSON.stringify({ done: true, result: '{"ok":true}' }));
+    }
+  }, 20);
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'test-token' };
+  try {
+    assert.equal((await runCli(['todo', 'list'], env)).code, 0);
+    assert.equal((await runCli(['todo', 'status', '--id', 'td-test-cli-01', '--task-id', 'todo-test', '--status', 'done', '--files', '/tmp/a b.pdf,/tmp/book.epub'], env)).code, 0);
+    assert.equal(requests[0].action, 'main-todo'); assert.equal(requests[0].op, 'list');
+    assert.deepEqual(requests[1].input, { id: 'td-test-cli-01', taskId: 'todo-test', status: 'done', message: '', files: ['/tmp/a b.pdf', '/tmp/book.epub'] });
+    assert.equal(requests[1].token, 'test-token');
+    const bad = await runCli(['todo', 'status', '--id', 'td-test-cli-01', '--status', 'guessed'], env);
+    assert.notEqual(bad.code, 0); assert.match(bad.stderr, /requires/);
+    const denied = await runCli(['todo', 'list'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.notEqual(denied.code, 0); assert.match(denied.stderr, /Only conductor-managed terminals/);
+  } finally { clearInterval(server); fs.rmSync(dir, { recursive: true, force: true }); }
+});

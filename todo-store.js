@@ -1,6 +1,6 @@
 'use strict';
 // 随手记待办: the user's own short to-dos, shared by the desktop page, the
-// phone hub and (read-only for now) the Captain and other agents.
+// phone hub and the Captain's AI-task backend.
 //
 // Storage is ~/.agents/boards/todos/, synced between Mac and Windows by the
 // ~/.agents git job every 30 minutes. A git conflict there stops the whole
@@ -49,7 +49,8 @@ function normalizeItem(raw) {
     created: isTime(raw.created) ? raw.created : raw.updated, updated: raw.updated, deleted,
     source: typeof raw.source === 'string' && SOURCE.test(raw.source) ? raw.source : 'desktop',
     device: typeof raw.device === 'string' && DEVICE.test(raw.device) ? raw.device : '',
-    // Reserved for 交给 AI. This version only carries it along unchanged.
+    textUpdated: isTime(raw.textUpdated) ? raw.textUpdated : (isTime(raw.created) ? raw.created : raw.updated),
+    textDevice: typeof raw.textDevice === 'string' && DEVICE.test(raw.textDevice) ? raw.textDevice : (typeof raw.device === 'string' && DEVICE.test(raw.device) ? raw.device : ''),
     ai: raw.ai === undefined ? null : raw.ai };
   return item;
 }
@@ -66,7 +67,13 @@ function merge(lists) {
     const item = normalizeItem(raw);
     if (!item) continue;
     const seen = byId.get(item.id);
-    if (!seen || newer(item, seen)) byId.set(item.id, item);
+    const winner = !seen || newer(item, seen) ? item : seen;
+    const other = winner === item ? seen : item;
+    // A phone checkbox can carry a not-yet-synced item via `base`. Wait for
+    // its original copy before assigning an AI owner; preserve its AI state.
+    if (winner.awaitingOrigin === true && other && other.awaitingOrigin !== true && other.text === winner.text && other.textDevice && Date.parse(other.updated) >= Date.parse(winner.originUpdated)) {
+      byId.set(item.id, { ...winner, textDevice: other.textDevice, textUpdated: other.textUpdated, ai: other.ai, awaitingOrigin: false });
+    } else byId.set(item.id, winner);
   }
   return byId;
 }
@@ -82,7 +89,7 @@ const PHONE_DONE_LIMIT = 200;
 function phoneView(items) {
   const live = sorted(items.filter((t) => !t.deleted));
   const open = live.filter((t) => !t.done), done = live.filter((t) => t.done).slice(0, PHONE_DONE_LIMIT);
-  const pick = (t) => ({ id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated });
+  const pick = (t) => ({ id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated, ...(t.ai ? { ai: t.ai } : {}) });
   return [...open.map(pick), ...done.map(pick), ...items.filter((t) => t.deleted).map((t) => ({ id: t.id, deleted: true, updated: t.updated }))];
 }
 
@@ -146,7 +153,7 @@ class TodoStore {
     return this.mutate((byId) => {
       const at = this.stamp();
       const item = { id: 'td-' + crypto.randomUUID(), text: clean, done: false, doneAt: null, created: at, updated: at,
-        deleted: false, source, device: this.deviceId, ai: null };
+        deleted: false, source, device: this.deviceId, textUpdated: at, textDevice: this.deviceId, ai: null };
       byId.set(item.id, item);
       return item;
     });
@@ -165,10 +172,14 @@ class TodoStore {
         const b = typeof base === 'object' && !Array.isArray(base) ? base : {};
         current = normalizeItem({ id, text: b.text, done: b.done === true, doneAt: b.doneAt, created: b.created, updated: b.updated, deleted: false, source, ai: null });
         if (!current) throw new Error('Invalid to-do.');
+        current.awaitingOrigin = true;
+        current.originUpdated = current.updated;
       }
       if (!current) throw new Error('这条待办已经不在了，刷新一下。');
       const next = { ...current, updated: this.stamp(current.updated), device: this.deviceId };
-      if (text !== undefined) next.text = text;
+      if (text !== undefined && text !== current.text) {
+        next.text = text; next.textUpdated = next.updated; next.textDevice = this.deviceId; next.ai = null; next.awaitingOrigin = false;
+      }
       if (done !== undefined && done !== current.done) { next.done = done; next.doneAt = done ? next.updated : null; }
       if (deleted !== undefined) next.deleted = deleted;
       byId.set(id, next);
@@ -176,6 +187,18 @@ class TodoStore {
     });
   }
   remove({ id } = {}) { return this.update({ id, deleted: true }); }
+  // AI writes never change text ownership or the user's completion checkbox.
+  writeAi(id, change) {
+    todoId(id);
+    return this.mutate((byId) => {
+      const current = byId.get(id);
+      if (!current || current.deleted) throw new Error('这条待办已经不在了。');
+      const ai = change(current);
+      const next = { ...current, ai, updated: this.stamp(current.updated) };
+      byId.set(id, next);
+      return next;
+    });
+  }
 }
 
 module.exports = { TodoStore, merge, normalizeItem, cleanText, sorted, phoneView, TEXT_MAX, VERSION };

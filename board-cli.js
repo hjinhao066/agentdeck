@@ -130,7 +130,7 @@ async function request(command, waitForCompletion) {
   fail(`Timed out waiting for board request ${id}.`, 2);
 }
 
-const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'];
+const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer', 'main-todo'];
 
 function usage() {
   process.stdout.write(
@@ -144,6 +144,8 @@ function usage() {
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
+    '  todo list                                personal Todo items and AI state\n' +
+    '  todo status --id td-… --task-id todo-… --status working|needs_user|done|failed [--message "Reason"] [--files path1,path2]\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, critical / volume 3\n' +
     '  task add --project "Project" --title "Task" [--detail "Description"] [--depends id,id] [--verify] [--priority high]\n' +
@@ -274,6 +276,18 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'todo') {
+    const op = args._[1];
+    if (!['list', 'status'].includes(op)) fail('todo requires list or status.');
+    if (op === 'status' && (typeof args.id !== 'string' || typeof args['task-id'] !== 'string' || !['working', 'needs_user', 'done', 'failed'].includes(args.status) ||
+        (args.message !== undefined && typeof args.message !== 'string') || (args.files !== undefined && typeof args.files !== 'string'))) fail('todo status requires --id, --task-id and a valid --status.');
+    const response = await request({ action: 'main-todo', op, ...(op === 'status' ? { input: {
+      id: args.id, taskId: args['task-id'], status: args.status, message: args.message || '',
+      files: args.files ? args.files.split(',').map((file) => file.trim()).filter(Boolean) : [],
+    } } : {}) }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
   if (action === 'queue') {
     const op = args._[1];
     if (!['list', 'cancel'].includes(op)) fail('queue requires list or cancel.');

@@ -111,7 +111,7 @@ function isManualTitle(t) { return !!t && !/^\d+$/.test(String(t).trim()) && !AU
 let config = {
   theme: 'dark', fitWindow: false, fitCols: DEFAULT_FIT_COLS, navWidth: NAV_DEFAULT_W,
   navCollapsed: false, fontSize: 13, activeView: 'terminals', columns: defaultColumns(), links: [],
-  boardResponses: {}, boardPositions: {}, globalViewMode: 'term',
+  boardResponses: {}, boardPositions: {}, todoDeliveries: {}, globalViewMode: 'term',
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
@@ -167,6 +167,9 @@ if (saved) {
   config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
+  if (saved.todoDeliveries && typeof saved.todoDeliveries === 'object' && !Array.isArray(saved.todoDeliveries)) {
+    config.todoDeliveries = Object.fromEntries(Object.entries(saved.todoDeliveries).filter(([id, accepted]) => /^todo-[a-f0-9]{64}$/.test(id) && accepted === true));
+  }
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);
@@ -3458,6 +3461,12 @@ window.deck.onBoardCommand(async (message) => {
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
   // 队长's commands: only its own column may use them.
+  if (message.action === 'main-todo-delivery') {
+    Promise.resolve().then(() => MainSession.handle(message, caller)).then(
+      (response) => window.deck.boardRespond({ requestId: message.id, ...response }),
+      (error) => window.deck.boardRespond({ requestId: message.id, done: true, error: error.message }));
+    return;
+  }
   if (String(message.action || '').startsWith('main-')) {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {

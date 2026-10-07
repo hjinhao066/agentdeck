@@ -59,6 +59,23 @@ test('a restarted watcher does not send the same visit again', async () => {
   assert.equal(restarted.calls.length, 0);
 });
 
+test('Todo AI cards waiting for materials never send a phone alert', async () => {
+  const h = harness();
+  const todos = [
+    card('plain-id', { project: 'todo', title: '病历材料', user_question: '等你提供 CT 报告。' }),
+    card('other-id', { project: 'ToDo', title: '财务材料' }),
+    card('todo-stable-id', { project: '重命名项目', title: '证件材料' }),
+  ];
+  await h.observe(todos);
+  assert.equal(h.calls.length, 0);
+  await h.observe([...todos, card('ordinary')]);
+  assert.equal(h.calls.length, 1);
+  assert.doesNotMatch(h.calls[0].message, /病历|CT|财务|证件/);
+  assert.deepEqual(h.saved().entries, { ordinary: '2026-10-05T04:00:00.000Z' });
+  await h.observe(todos.map((item) => ({ ...item, needs_user_entry: '2026-10-05T05:00:00.000Z' })));
+  assert.equal(h.calls.length, 1, 'a new visit still stays quiet');
+});
+
 test('a missing or unreadable state file baselines existing cards instead of replaying them', async () => {
   const calls = [];
   const state = { entries: {} };

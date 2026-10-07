@@ -242,6 +242,22 @@ class TaskStore {
       cards.push(card); return { card, notices: [] };
     });
   }
+  // Internal Todo backend only; not an additional renderer operation.
+  todoStatus({ id, status, message }) {
+    return this.mutate((docs) => {
+      const card = this.find(docs, id);
+      if (card.project !== 'todo' || !card.id.startsWith('todo-')) throw new Error('Not a Todo task.');
+      const previous = card.status;
+      card.status = { working: 'doing', needs_user: 'needs_user', done: 'done', failed: 'needs_user' }[status];
+      if (!card.status) throw new Error('Invalid Todo status.');
+      card.flag = status === 'failed' ? 'failed' : null;
+      card.latest_receipt = text(message, 'message');
+      finishStatus(card, previous);
+      if (status === 'needs_user' || status === 'failed') card.user_question = message;
+      if (status === 'working') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: card.updated };
+      return { card, notices: [] };
+    });
+  }
   sessionOpen(id, attemptClosed = false, sessions = this.sessions(), host, reservedAt = 0) {
     if (!id) return false;
     const session = sessions.find((s) => s.id === id);

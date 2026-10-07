@@ -28,6 +28,7 @@ const { readLocal: readLocalQuota } = require('./quota-local');
 const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
 const { TodoStore } = require('./todo-store');
+const { TodoAI } = require('./todo-ai');
 const Worktree = require('./worktree-core');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
@@ -75,8 +76,20 @@ const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tas
 // 随手记待办: ~/.agents/boards/todos (each computer writes only its own file);
 // a test profile keeps its own copy inside the profile.
 const todoStore = new TodoStore(tudArg ? path.join(app.getPath('userData'), 'todos') : undefined);
-let todoWatch = null, todoWatchTimer = null;
-function todosChanged() { send('todos:changed', {}); }
+let todoWatch = null, todoWatchTimer = null, todoAiTimer = null, todoAi = null;
+function scanTodoAi() { try { todoAi?.scan(); } catch (_) { /* Durable outbox is retried on the next local scan. */ } }
+function todosChanged() { scanTodoAi(); send('todos:changed', {}); }
+function deliverTodo({ item, card }) {
+  if (!boardRendererReady) return;
+  const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+  if (!captain) return; // The pending item stays on disk until a Captain exists.
+  const id = 'todo-delivery-' + item.ai.revision;
+  if (!pendingBoardCommands.has(id)) pendingBoardCommands.set(id, { command: {
+    id, action: 'main-todo-delivery', callerId: captain.id, nativeWeb: true,
+    todoId: item.id, taskId: card.id, result: card.detail,
+  }, delivered: false });
+  dispatchPendingBoardCommands();
+}
 // The other computer's file arrives through git; tell the page so an open list refreshes.
 function watchTodos() {
   if (todoWatch) return;
@@ -479,6 +492,9 @@ function writeBoardResponse(requestId, payload) {
 let processingBoardRequests = false;
 function dispatchPendingBoardCommands() {
   for (const [id, pending] of pendingBoardCommands) {
+    if (pending.command.action === 'main-todo-delivery' && !todoStore.list().some((t) => !t.done && t.ai?.taskId === pending.command.taskId)) {
+      pendingBoardCommands.delete(id); continue;
+    }
     if (pending.listenerLease && !receiptListeners?.isCurrent(pending.command.callerId, pending.listenerLease)) {
       pendingBoardCommands.delete(id);
       writeBoardResponse(id, { done: true, result: '', listenerStopped: true });
@@ -525,6 +541,20 @@ function processBoardRequests() {
       catch (error) { writeBoardResponse(request.id, { done: true, error: error.message }); continue; }
       if (submitOnly && !dispatchCard && !['complete', 'ask', 'progress', 'session-exit'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: 'Receipt capability allows only complete, ask and progress; it cannot control other sessions.' });
+        continue;
+      }
+      if (action === 'main-todo') {
+        try {
+          if (request.op === 'status' && (!Number.isFinite(request.deadline) || Date.now() > request.deadline)) throw new Error('这条命令已超时，没有执行，请重新读取 todo list 后再回填。');
+          const cfg = readLocalConfig();
+          if (caller[0] !== cfg.mainSession?.colId || !cfg.columns?.some((c) => c.id === caller[0] && c.isMain)) throw new Error('只有队长可以用这个命令。');
+          let result;
+          if (request.op === 'list') result = Promise.resolve({ items: todoStore.list() });
+          else if (request.op === 'status') result = todoAi.status(request.input || {});
+          else throw new Error('Invalid Todo operation.');
+          result.then((value) => writeBoardResponse(request.id, { done: true, result: JSON.stringify(value) }),
+            (error) => writeBoardResponse(request.id, { done: true, error: error.message }));
+        } catch (error) { writeBoardResponse(request.id, { done: true, error: error.message }); }
         continue;
       }
       if (action === 'session-exit' && Number.isInteger(request.code)) receiptListeners?.remove(caller[0], managedSessions.get(caller[0]));
@@ -1126,6 +1156,7 @@ app.whenReady().then(async () => {
     catch (_) { e.returnValue = null; }
   });
   const writeConfig = (cfg) => {
+    const previousCaptain = notificationConfig.mainSession?.colId;
     cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
@@ -1137,6 +1168,7 @@ app.whenReady().then(async () => {
     fs.writeFileSync(configPath + '.tmp', JSON.stringify(cfg, null, 2), { encoding: 'utf-8', mode: 0o600 });
     fs.chmodSync(configPath + '.tmp', 0o600);
     fs.renameSync(configPath + '.tmp', configPath);
+    if (cfg.mainSession?.colId !== previousCaptain) scanTodoAi();
     checkQuotaBark();
     notifyNeedsUserCards();
   };
@@ -1240,6 +1272,10 @@ app.whenReady().then(async () => {
   onMain('board:response', async (_e, { requestId, done, result, error, childId, snapshot, visible, turnId }) => {
     const pending = pendingBoardCommands.get(requestId);
     const action = pending?.command.action;
+    if (action === 'main-todo-delivery' && done === true && !error) {
+      try { todoAi.acknowledge(pending.command.todoId, pending.command.taskId); }
+      catch (_) { /* The durable Captain receipt deduplicates the next retry. */ }
+    }
     if (action === 'main-notify-user' && !error) {
       // Duplicate renderer acknowledgements share a single local/Bark delivery.
       pending.notifyPromise ||= notifyUser(pending.command, visible === true, turnId);
@@ -1266,6 +1302,7 @@ app.whenReady().then(async () => {
     boardRendererReady = true;
     for (const pending of pendingBoardCommands.values()) pending.delivered = false;
     dispatchPendingBoardCommands();
+    scanTodoAi();
     if (pendingFocusColumn) {
       send('focus-column', { id: pendingFocusColumn });
       pendingFocusColumn = null;
@@ -1632,7 +1669,12 @@ function startFleet(configPath) {
   const device = loadDevice(path.join(userData, 'device.json'));
   taskStore.deviceId = device.id;
   todoStore.deviceId = device.id;
+  todoAi = new TodoAI({ todos: todoStore, tasks: taskStore, deliver: deliverTodo,
+    changed: () => { send('todos:changed', {}); send('task-board:changed', {}); },
+    notify: (command) => notifyUser({ ...command, callerId: readLocalConfig().mainSession?.colId }, false, command.id) });
   watchTodos();
+  scanTodoAi();
+  todoAiTimer = setInterval(() => { watchTodos(); scanTodoAi(); }, 60 * 60 * 1000);
   const settings = readFleetSettings({ env: process.env, fleetFile: path.join(userData, 'fleet.json') });
   if (!settings) return;
   if (settings.error) {
@@ -1741,6 +1783,7 @@ app.on('before-quit', (event) => {
   quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
   chatgptWebExecutor?.dispose();
   receiptListeners?.dispose(); receiptListeners = null;
+  clearInterval(todoAiTimer);
 
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }

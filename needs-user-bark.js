@@ -65,6 +65,9 @@ function createNeedsUserBark({ state = {}, saveState, sendBark, onError = () => 
     let changed = false;
     for (const card of Array.isArray(cards) ? cards : []) {
       if (!card || card.status !== 'needs_user' || card.archived || typeof card.id !== 'string') continue;
+      // Todo AI requests are quiet while waiting for user materials. Their
+      // failures use notify-user separately, without leaking the task text.
+      if (String(card.project || '').normalize('NFC').toLowerCase() === 'todo' || card.id.startsWith('todo-')) continue;
       seen.add(card.id);
       const stamped = entryOf(card);
       const entry = stamped || `legacy:${card.id}`;
