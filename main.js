@@ -1671,7 +1671,11 @@ function startFleet(configPath) {
   todoStore.deviceId = device.id;
   todoAi = new TodoAI({ todos: todoStore, tasks: taskStore, deliver: deliverTodo,
     changed: () => { send('todos:changed', {}); send('task-board:changed', {}); },
-    notify: (command) => notifyUser({ ...command, callerId: readLocalConfig().mainSession?.colId }, false, command.id) });
+    notify: (command) => {
+      pendingBoardCommands.set(command.id, { command: { ...command, action: 'main-notify-user',
+        callerId: readLocalConfig().mainSession?.colId, nativeWeb: true }, delivered: false });
+      dispatchPendingBoardCommands();
+    } });
   watchTodos();
   scanTodoAi();
   todoAiTimer = setInterval(() => { watchTodos(); scanTodoAi(); }, 60 * 60 * 1000);
