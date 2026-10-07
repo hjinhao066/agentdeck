@@ -78,6 +78,8 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   expect(hub.machines.mac.attentionWrites.filter((w) => w.op === 'reply')).toEqual([{ op: 'reply', id: 'at-m1-decide', text: '改成登录一次长期有效，别设成 1' }]);
   expect(hub.machines.win.attentionWrites.filter((w) => w.op !== 'read')).toEqual([]);
   await expect(lists.locator('.at-section h2').first()).toHaveText('要你处理2');
+  await expect(page.getByRole('button', { name: /已完成/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(item('网页端登录改成「1」')).toHaveCount(0);
 
   // Tick the Windows card item: only Windows hears about it.
   await item('Muse 冒烟测试').getByRole('button', { name: '已处理' }).click();
@@ -90,6 +92,8 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   await toggle.click();
   await expect(item('Windows 隧道守护脚本').locator('.at-done-text')).toHaveText('你已回复：好，开机自启也一起配上');
   await expect(item('网页端登录改成「1」').locator('.at-done-text')).toHaveText('你已回复：改成登录一次长期有效，别设成 1');
+  await expect(item('网页端登录改成「1」')).toHaveClass(/\bdone\b/);
+  await expect(item('网页端登录改成「1」').locator('.at-ok svg')).toHaveCount(1);
   await shot('phone-3-done-dark');
   await item('Muse 冒烟测试').getByRole('button', { name: '放回待处理' }).click();
   await expect.poll(() => hub.machines.win.attentionWrites.filter((w) => w.op === 'reopen')).toEqual([{ op: 'reopen', id: 'at-w1-held' }]);

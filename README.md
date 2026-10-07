@@ -67,10 +67,13 @@ raw diagnostics are not copied into AgentDeck logs or conversations.
 The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
-- **Left sidebar** (collapsible, resizable): 新对话, 队长, 搜索, Schedule, Artifacts, Skills,
+- **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 搜索, Schedule, Artifacts, Skills,
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
+  待我处理 collects decisions, login/payment requests and reports; reply to each
+  item with its original context for the Captain, or tick it into the folded
+  已完成 section. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
   sessions in exactly the sidebar order (队长 first, then folders, then loose

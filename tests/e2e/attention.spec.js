@@ -2,12 +2,14 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const closeElectron = require('./fixtures/close-electron');
 
 // 待我处理 on the desktop: 队长 files items with the real board CLI from its own
 // terminal, the board's 需要你 card shows up by itself, the user reads, replies
 // and ticks, and things settle on their own. Isolated profile, stand-in shell
 // Captain, the profile's own task store.
 let application, page, profile;
+const problems = [];
 const CLI = process.platform === 'win32' ? '$env:AGENTDECK_BOARD_CLI' : '$AGENTDECK_BOARD_CLI';
 const screen = () => page.evaluate(() => dumpScreen(terms.get('captain').term).replace(/\n/g, ''));
 const run = (command) => page.evaluate((c) => window.deck.ptyInput('captain', c + '\r'), command);
@@ -40,14 +42,15 @@ test.beforeAll(async () => {
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`], env,
   });
   page = await application.firstWindow();
-  page.on('pageerror', (error) => console.error('pageerror', String(error)));
+  page.on('pageerror', (error) => problems.push(String(error)));
   await expect(page.locator('.xterm')).toHaveCount(1);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 900));
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => t.alive).length)).toBe(1);
 });
 test.afterAll(async () => {
-  if (application) await application.close();
+  if (application) await closeElectron(application);
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
+  expect(problems).toEqual([]);
 });
 
 test('队长 files needs and reports from its terminal; the board\'s 需要你 card shows up by itself; the sidebar counts them', async () => {
@@ -99,10 +102,27 @@ test('the page: needs first, then reports, details in place; icons with names; r
   await copy.click();
   await expect(card('小红书要你').getByRole('button', { name: '已复制' })).toBeVisible();
 
-  // Everything on screen for a moment counts as read; the badge drops the read reports.
-  await page.locator('#pageView').evaluate((el) => { el.scrollTop = el.scrollHeight; });
-  await expect.poll(async () => (await items()).filter((i) => !i.readAt).length, { timeout: 15000 }).toBe(0);
+  // Each item must actually stay on screen: jumping to the bottom can skip one.
+  for (const unread of (await items()).filter((i) => !i.readAt)) {
+    await page.locator(`.at-card[data-id="${unread.id}"]`).scrollIntoViewIfNeeded();
+    await expect.poll(async () => (await items()).find((i) => i.id === unread.id).readAt, { timeout: 15000 }).toBeGreaterThan(0);
+  }
   await expect(page.locator('#attentionBtn .nav-row-badge')).toHaveText('3');
+});
+
+test('redrawing captures keyboard focus and reading position before the page is cleared', async () => {
+  const position = await page.evaluate(() => {
+    const scroller = document.getElementById('pageView');
+    const button = scroller.querySelector('[data-fk^="copy:"]');
+    button.focus({ preventScroll: true });
+    scroller.scrollTop = 100;
+    const before = { top: scroller.scrollTop, focus: document.activeElement.dataset.fk };
+    Pages.render();
+    return { before, after: { top: scroller.scrollTop, focus: document.activeElement.dataset.fk } };
+  });
+  expect(position.before.top).toBeGreaterThan(0);
+  expect(position.before.focus).toMatch(/^copy:/);
+  expect(position.after).toEqual(position.before);
 });
 
 test('a reply goes to 队长 with the item and ticks it; 已处理 tells 队长; the card answer takes the board\'s path', async () => {
@@ -110,6 +130,14 @@ test('a reply goes to 队长 with the item and ticks it; 已处理 tells 队长;
   const box = card('网页端登录改成「1」').getByRole('textbox');
   await expect(box).toBeFocused();
   await box.fill('改成登录一次长期有效，别设成 1');
+  // An unrelated refresh must leave an unsent draft and its focus intact.
+  await page.evaluate(() => {
+    const report = config.attention.items.find((i) => i.kind === 'report' && !i.done);
+    AttentionUI.tick(report.id);
+    AttentionUI.reopen(report.id);
+  });
+  await expect(box).toBeFocused();
+  await expect(box).toHaveValue('改成登录一次长期有效，别设成 1');
   await shot('desktop-3-reply-dark');
   await box.press('Enter');
   await expect.poll(async () => (await items()).find((i) => i.title.startsWith('网页端登录改成「1」')).doneBy).toBe('reply');
@@ -119,6 +147,13 @@ test('a reply goes to 队长 with the item and ticks it; 已处理 tells 队长;
   expect(told.summary).toContain('当时请用户做的：回复「仍要 1」，或者「改成登录一次长期有效」');
   expect(told.summary).toContain('用户的回复：改成登录一次长期有效，别设成 1');
   await expect(page.locator('.at-section h2').first()).toHaveText('要你处理2');
+  await expect(page.locator('.at-done-toggle')).toHaveAttribute('aria-expanded', 'false');
+  await expect(card('网页端登录改成「1」')).toHaveCount(0);
+  await page.locator('.at-done-toggle').click();
+  await expect(card('网页端登录改成「1」')).toHaveClass(/\bdone\b/);
+  await expect(card('网页端登录改成「1」').locator('.at-check svg')).toHaveCount(1);
+  await expect(card('网页端登录改成「1」').locator('.at-done-text')).toHaveText('你已回复：改成登录一次长期有效，别设成 1');
+  await page.locator('.at-done-toggle').click();
 
   await card('小红书要你').getByRole('button', { name: '已处理' }).click();
   await expect.poll(async () => (await pending()).some((p) => p.summary.includes('标为已处理') && p.summary.includes('小红书要你'))).toBe(true);
@@ -129,6 +164,25 @@ test('a reply goes to 队长 with the item and ticks it; 已处理 tells 队长;
   await card('停下来等你回答').getByRole('button', { name: '发送给队长' }).click();
   await expect.poll(async () => (await pending()).some((p) => p.summary.includes('用户在任务看板回答了卡片 t-ask') && p.summary.includes('一起踢下线'))).toBe(true);
   await expect(page.locator('.at-sec-need')).toHaveCount(0);
+});
+
+test('a report reply carries its context too and ticks only that item into folded 已完成', async () => {
+  const report = card('小福助手排查报告');
+  await report.getByRole('button', { name: '回复', exact: true }).click();
+  await report.getByRole('textbox').fill('补查两件后再汇报');
+  await report.getByRole('textbox').press('Enter');
+  await expect(page.locator('.at-sec-report h2')).toHaveText('结果汇报1');
+  await expect(report).toHaveCount(0);
+  await expect(page.locator('.at-done-toggle')).toHaveAttribute('aria-expanded', 'false');
+  const told = (await pending()).find((p) => p.summary.includes('用户的回复：补查两件后再汇报'));
+  expect(told.summary).toContain('回复了一条结果汇报');
+  expect(told.summary).toContain('原条目：小福助手排查报告回来了：结论是完全正常，但这个结论我还不认，已让它补查两件');
+  await page.locator('.at-done-toggle').click();
+  await expect(report).toHaveClass(/\bdone\b/);
+  await expect(report.locator('.at-check svg')).toHaveCount(1);
+  await expect(report.locator('.at-done-text')).toHaveText('你已回复：补查两件后再汇报');
+  await report.getByRole('button', { name: '放回待处理' }).click();
+  await page.locator('.at-done-toggle').click();
 });
 
 test('队长 resolves, a finished card ticks its item, 已完成 is folded and an item can be put back', async () => {

@@ -225,7 +225,10 @@
 
   // ---- the page -------------------------------------------------------------------------
   const visible = () => !!(window.Pages && window.Pages.current() === 'attention');
-  const typing = () => !!view && !!document.activeElement && view.contains(document.activeElement) && document.activeElement.classList.contains('at-reply');
+  // A sent draft must no longer defer the redraw, even while its old textarea
+  // still holds focus after Enter. Unsent drafts keep their input method intact.
+  const typing = () => !!view && !!document.activeElement && view.contains(document.activeElement) && document.activeElement.classList.contains('at-reply')
+    && drafts.has(document.activeElement.closest('.at-card').dataset.id);
   function redraw() {
     if (!visible()) return;
     if (typing()) { redrawWaiting = true; return; }
