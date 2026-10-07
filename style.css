@@ -400,7 +400,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .qt-badge[data-state="danger"], .qt-badge[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 16%, transparent); color: var(--quota-out); }
 .qt-window { display: grid; grid-template-columns: 3.2em 5.4em 48px minmax(0, 1fr); align-items: center; column-gap: 8px; white-space: normal; }
 .quota-tooltip-compact .qt-window { grid-template-columns: 3.2em 5.4em minmax(24px, 1fr); white-space: normal; }
-.quota-tooltip-compact .qt-reset { grid-column: 1 / -1; }
+.quota-tooltip-compact .qt-reset { grid-column: 1 / -1; text-wrap: balance; }
 .qt-key { color: var(--muted); }
 .qt-pct { font-weight: 600; }
 .qt-window > .quota-meter { position: relative; height: 4px; border-radius: 2px; }
