@@ -40,7 +40,8 @@ function createBarkDelivery({ state = {}, saveState, getSettings, getClasses = (
   }
   function persist(next) { saveState(next); state = next; volatileError = ''; }
   function settledState() {
-    return { ...state, inflight: null, uncertain: false, retryAt: settled.retryAt, lastError: settled.message,
+    const owned = state.inflight?.batchId === settled.batchId;
+    return { ...state, ...(owned ? { inflight: null, uncertain: false, retryAt: settled.retryAt, lastError: settled.message } : {}),
       pending: settled.ok ? state.pending.filter((p) => !settled.items.has(JSON.stringify(p))) : state.pending };
   }
   function serialized(work) {
@@ -89,12 +90,13 @@ function createBarkDelivery({ state = {}, saveState, getSettings, getClasses = (
     if (state.retryAt > now()) return { ok: true, accepted: true, queued: true, sent: false, message: 'Bark 发送失败，待重试，已保留。' };
     // Save before sending so a crash/failed cleanup cannot cause another app or
     // installer to blindly repeat an already delivered batch.
-    persist({ ...state, inflight: { ownerPid: process.pid, keys: state.pending.map((p) => p.key) }, lastError: '' });
+    const batchId = crypto.randomUUID();
+    persist({ ...state, inflight: { ownerPid: process.pid, batchId, keys: state.pending.map((p) => p.key) }, lastError: '' });
     let result;
     try { result = await transport(immediate || digest(state.pending)); }
     catch (_) { result = { ok: false, message: 'Bark 发送失败，已保留待重试。' }; }
     const message = result.ok ? result.message : 'Bark 发送失败，已保留；60 秒后重试，请检查网络和本机密钥文件。';
-    settled = { ok: !!result.ok, items: new Set(state.pending.map((p) => JSON.stringify(p))),
+    settled = { ok: !!result.ok, batchId, items: new Set(state.pending.map((p) => JSON.stringify(p))),
       retryAt: result.ok ? 0 : now() + 60_000, message: result.ok ? '' : message };
     try { persist(settledState()); settled = null; }
     catch (_) {

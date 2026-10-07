@@ -193,3 +193,23 @@ test('one explicit retry recovers a dead inflight owner without requiring a seco
   } });
   await h.delivery.retry(); assert.equal(h.calls.length, 1);
 });
+
+test('a settled old batch never clears a different instances new inflight marker', async () => {
+  const h = harness({ at: local(7, 12) }); let failCleanup = true, calls = 0;
+  const options = { ...h.options, readState: () => h.saved,
+    saveState: (next) => {
+      if (failCleanup && h.saved.inflight && !next.inflight) throw new Error('disk full');
+      h.saved = structuredClone(next);
+    }, sendNow: async () => { calls++; return { ok: true }; } };
+  const first = createBarkDelivery(options);
+  await first.send(payload('A', { dedupeKey: 'a' }));
+  const canceller = createBarkDelivery({ ...h.options, readState: () => h.saved });
+  await canceller.cancel('a');
+  const second = createBarkDelivery(options);
+  await second.send(payload('B', { dedupeKey: 'b' }));
+  const nextBatchId = h.saved.inflight.batchId;
+  await first.flush();
+  assert.equal(h.saved.inflight.batchId, nextBatchId); assert.equal(calls, 2);
+  failCleanup = false; await second.flush();
+  assert.equal(calls, 2); assert.deepEqual(h.saved.pending, []);
+});
