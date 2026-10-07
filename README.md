@@ -139,7 +139,9 @@ the middle:
   sidebar collapsed, a gauge icon in the top bar (tinted by the provider closest to running out) opens the same
   rows in a popover. Hover, click or focus a row for
   each window with its exact reset time/date, account, seat, source, sample time,
-  confidence and Captain rotation plan in one tooltip; config dir/model
+  confidence and Captain rotation plan in one tooltip. Details stay beside the rows,
+  wrap to the available width and remain inside the window when it resizes; only
+  one detail opens at a time. Config dir/model
   diagnostics stay in the row's data-detail.
   Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
   Claude shows a separate item per `claudeSeats` configuration, with both

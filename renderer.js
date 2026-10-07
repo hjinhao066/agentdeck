@@ -842,19 +842,42 @@ function fitTopBar() {
   bar.classList.remove('tb-compact');
   if (bar.scrollWidth > bar.clientWidth) bar.classList.add('tb-compact');
 }
-new ResizeObserver(() => fitTopBar()).observe(document.getElementById('topBar'));
+new ResizeObserver(() => { fitTopBar(); positionQuotaDetails(); }).observe(document.getElementById('topBar'));
+function positionQuotaPop() {
+  const pop = document.getElementById('quotaPop');
+  const r = document.getElementById('quotaRailBtn').getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+  pop.style.top = Math.max(8, Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 8)) + 'px';
+}
+// Keep one full detail beside the quota panel, including while the window resizes.
+function positionQuotaDetails() {
+  const pop = document.getElementById('quotaPop');
+  if (!pop.hidden) positionQuotaPop();
+  const items = [...document.querySelectorAll('#quotaBar .quota-item, #quotaPop .quota-item')];
+  const visible = items.filter((item) => item.offsetParent);
+  const active = visible.find((item) => item === document.activeElement) || visible.find((item) => item.matches(':hover'));
+  items.forEach((item) => item.classList.toggle('quota-detail-open', item === active));
+  if (!active) return;
+  const tip = active.querySelector('.quota-tooltip');
+  const panel = active.closest('#quotaPop') || document.getElementById('colNav');
+  const r = active.getBoundingClientRect();
+  const left = panel.getBoundingClientRect().right + 10;
+  const width = Math.min(380, window.innerWidth - left - 8);
+  tip.classList.toggle('quota-tooltip-compact', width < 340);
+  tip.style.maxWidth = width + 'px';
+  tip.style.left = (left - r.left) + 'px';
+  const top = panel === pop ? r.top : r.bottom - tip.offsetHeight;
+  tip.style.top = (Math.max(8, Math.min(top, window.innerHeight - tip.offsetHeight - 8)) - r.top) + 'px';
+}
+window.addEventListener('resize', positionQuotaDetails);
 function toggleQuotaPop(open) {
   const pop = document.getElementById('quotaPop');
   const btn = document.getElementById('quotaRailBtn');
   const show = open ?? pop.hidden;
-  if (show) {
-    const r = btn.getBoundingClientRect();
-    pop.style.left = Math.max(8, r.left) + 'px';
-    pop.style.top = (r.bottom + 6) + 'px';
-  }
   pop.hidden = !show;
   btn.classList.toggle('on', show);
   btn.setAttribute('aria-expanded', String(show));
+  positionQuotaDetails();
 }
 document.addEventListener('mousedown', (e) => {
   const pop = document.getElementById('quotaPop');
@@ -3907,6 +3930,7 @@ function renderQuotaBar() {
         if (seat) item.dataset.seatId = seat.id;
         item.setAttribute('role', 'group');
         item.tabIndex = 0; // keyboard users can inspect the same tooltip; a click focuses and so pins it
+        for (const event of ['mouseenter', 'mouseleave', 'focus', 'blur']) item.addEventListener(event, positionQuotaDetails);
         const label = document.createElement('span'); label.className = 'quota-label'; label.setAttribute('aria-hidden', 'true');
         const icon = document.createElement('span'); icon.className = 'quota-icon';
         icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
@@ -3984,6 +4008,7 @@ function renderQuotaBar() {
   const worst = summaries.map((q) => q.out ? 'exhausted' : q.state).reduce((w, st) => (rank[st] || 0) > (rank[w] || 0) ? st : w, 'normal');
   const rail = document.getElementById('quotaRailBtn');
   if (rail) rail.dataset.state = worst;
+  positionQuotaDetails();
 }
 battery.every('statusTick', () => {
   let attn = 0;

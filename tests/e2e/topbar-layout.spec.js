@@ -14,7 +14,7 @@ test.beforeAll(async () => {
   for (const seat of seats) {
     const loc = M.credentialLocation(seat, home);
     fs.mkdirSync(loc.dir, { recursive: true });
-    fs.writeFileSync(loc.metadataPath, JSON.stringify({ oauthAccount: { accountUuid: `fake-topbar-${seat.id}`, emailAddress: `${seat.id}@example.test` } }));
+    fs.writeFileSync(loc.metadataPath, JSON.stringify({ hasCompletedOnboarding: true, oauthAccount: { accountUuid: `fake-topbar-${seat.id}`, emailAddress: `${seat.id}@example.test` } }));
   }
   M.writeUsage(seats[0], home, { at: Date.now(), source: 'Claude /usage', windows: [
     { key: 'fiveHour', remaining: 19, resetText: '2hr 10m' },
@@ -23,6 +23,9 @@ test.beforeAll(async () => {
   const col = (id, title, cmd, extra = {}) => ({ id, title, cmd, cwd: profile, width: 600, role: 'manual', ...extra });
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     theme: 'dark', fitWindow: true, fitCols: 2,
+    // This suite measures layout; automatic Relay must not replace its Captain.
+    perpetualCaptain: { enabled: false },
+    captainRelayCodex: { name: 'ChatGPT', command: `node "${FAKE}" Codex` },
     claudeSeats: seats,
     activeClaudeSeatId: 'cn', mainSession: { colId: 'tb-cn', tasks: [], pending: [] },
     columns: [
@@ -33,8 +36,15 @@ test.beforeAll(async () => {
       ...['Codex', 'Cursor', 'Antigravity'].map((p) => col(`tb-${p}`, `${p} 模拟会话`, `node "${FAKE}" ${p}`)),
     ],
   }));
-  const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
+  const env = { ...process.env, ZDOTDIR: profile };
+  for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_') || key === 'ELECTRON_RUN_AS_NODE') delete env[key];
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
+  // The transparent, non-focusable test window must stay below normal windows.
+  await app.evaluate(({ app, BrowserWindow }) => {
+    const keepBehind = (win) => { if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'normal', -1); };
+    BrowserWindow.getAllWindows().forEach(keepBehind);
+    app.on('browser-window-created', (_event, win) => keepBehind(win));
+  });
   page = await app.firstWindow();
   await expect(page.locator('#quotaBar [data-seat-id="cn"] [data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('未知—');
@@ -175,6 +185,9 @@ test('collapsed sidebar keeps a gauge icon whose popover lists every quota', asy
   await expect(pop.locator('[data-seat-id="us2"]')).toHaveCount(1);
   await expect(pop.locator('[data-seat-id="us"] .quota-values')).toHaveText('未知—');
   await expect(pop.locator('[data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
+  expect(await page.evaluate(() => ({ id: config.mainSession?.colId, provider: MainSession.mainCol()?.agentProvider }))).toEqual({ id: 'tb-cn', provider: 'Claude' });
+  await expect(pop.locator('[data-seat-id="cn"] .quota-captain svg')).toBeVisible();
+  await expect(pop.locator('[data-provider="Codex"] .quota-captain')).toHaveCount(0);
   await expect(pop.locator('[data-provider="Codex"]')).toHaveAttribute('aria-label', /^ChatGPT：/);
   for (const theme of ['dark', 'light']) {
     await page.evaluate((t) => applyTheme(t), theme);
@@ -196,4 +209,115 @@ test('collapsed sidebar keeps a gauge icon whose popover lists every quota', asy
   await page.locator('#navExpandBtn').click();
   await expect(rail).toBeHidden();
   await page.evaluate(() => applyTheme('dark'));
+});
+
+async function expectQuotaDetailsInside(panel, row) {
+  const tip = row.getByRole('tooltip');
+  await expect(tip).toBeVisible();
+  await expect.poll(() => row.evaluate((item) => {
+    const tooltip = item.querySelector('.quota-tooltip'), r = tooltip.getBoundingClientRect();
+    const panel = item.closest('#quotaPop') || document.getElementById('colNav');
+    const points = [[r.left + 12, r.top + 12], [r.right - 12, r.bottom - 12]];
+    return {
+      inside: r.left >= 8 && r.right <= innerWidth - 8 && r.top >= 8 && r.bottom <= innerHeight - 8,
+      beside: r.left >= panel.getBoundingClientRect().right + 10,
+      overflow: tooltip.scrollWidth - tooltip.clientWidth,
+      clipped: tooltip.scrollHeight - tooltip.clientHeight,
+      unobscured: points.every(([x, y]) => tooltip.contains(document.elementFromPoint(x, y))),
+      open: document.querySelectorAll('.quota-detail-open').length,
+    };
+  }), { message: `${panel} ${await row.getAttribute('data-quota-key')} at ${JSON.stringify(page.viewportSize())}` }).toEqual({ inside: true, beside: true, overflow: 0, clipped: 0, unobscured: true, open: 1 });
+  if (panel === '#quotaPop') {
+    const box = await page.locator(panel).boundingBox();
+    const viewport = page.viewportSize();
+    expect(box.x).toBeGreaterThanOrEqual(8);
+    expect(box.y).toBeGreaterThanOrEqual(8);
+    expect(box.x + box.width).toBeLessThanOrEqual(viewport.width - 8);
+    expect(box.y + box.height).toBeLessThanOrEqual(viewport.height - 8);
+    const bar = await page.locator('#topBar').boundingBox();
+    expect(box.y).toBeGreaterThanOrEqual(bar.y + bar.height);
+  }
+}
+
+for (const collapsed of [true, false]) {
+  test(`${collapsed ? 'collapsed quota popover' : 'sidebar quota'} details stay complete beside every row at all supported widths`, async () => {
+    await page.mouse.move(1, 1);
+    await page.evaluate((c) => setNavCollapsed(c), collapsed);
+    const panel = collapsed ? '#quotaPop' : '#quotaBar';
+    if (collapsed) await page.locator('#quotaRailBtn').click();
+    for (const [width, height] of [[1920, 1080], [1440, 900], [1280, 800], [1024, 600], [800, 600], [640, 600], [640, 480]]) {
+      await page.setViewportSize({ width, height });
+      for (const theme of ['dark', 'light']) {
+        await page.evaluate((t) => applyTheme(t), theme);
+        for (const key of ['Claude:cn', 'Claude:us', 'Claude:us2', 'Codex', 'Cursor', 'Antigravity']) {
+          const row = page.locator(`${panel} [data-quota-key="${key}"]`);
+          // Check an already open detail after resize/theme changes too.
+          if (key === 'Claude:cn' && await row.evaluate((e) => e === document.activeElement)) await expectQuotaDetailsInside(panel, row);
+          await row.focus();
+          await expectQuotaDetailsInside(panel, row);
+          if (width === 640 && key === 'Codex') await shot(`after-${collapsed ? 'collapsed' : 'expanded'}-${width}x${height}-${theme}`);
+        }
+        await page.locator(`${panel} [data-quota-key="Claude:cn"]`).focus();
+      }
+    }
+    if (!collapsed) {
+      // A wider sidebar leaves less room for details in the minimum window.
+      await page.evaluate(() => { config.navWidth = NAV_MAX_W; applyNavWidth(); });
+      await expectQuotaDetailsInside(panel, page.locator(`${panel} [data-quota-key="Claude:cn"]`));
+      await page.evaluate(() => { config.navWidth = NAV_DEFAULT_W; applyNavWidth(); });
+    }
+    await page.evaluate(() => { document.activeElement.blur(); toggleQuotaPop(false); });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.evaluate(() => { setNavCollapsed(false); applyTheme('dark'); });
+  });
+}
+
+test('quota details keep one focused row and long explanations remain readable by scrolling', async () => {
+  await page.setViewportSize({ width: 640, height: 480 });
+  await page.mouse.move(1, 1);
+  await page.evaluate(() => setNavCollapsed(true));
+  await page.locator('#quotaRailBtn').click();
+  const codex = page.locator('#quotaPop [data-provider="Codex"]');
+  const gemini = page.locator('#quotaPop [data-provider="Antigravity"]');
+  await codex.click();
+  await gemini.hover();
+  await expect(codex.getByRole('tooltip')).toBeVisible();
+  await expect(gemini.getByRole('tooltip')).toBeHidden();
+  await page.mouse.move(1, 1);
+  await expect(codex.getByRole('tooltip')).toBeVisible();
+  await gemini.hover();
+  await page.evaluate(() => document.activeElement.blur());
+  await expect(gemini.getByRole('tooltip')).toBeVisible();
+  await expect(codex.getByRole('tooltip')).toBeHidden();
+  await page.mouse.move(1, 1);
+  await expect(page.locator('.quota-detail-open')).toHaveCount(0);
+
+  await page.evaluate(() => {
+    window.topbarQuotaBackup = JSON.stringify(config.quotas.Codex);
+    config.quotas.Codex.sample.source = '布局测试长来源：' + '完整保留这段说明。'.repeat(100) + '来源结束';
+    renderQuotaBar();
+  });
+  await codex.click();
+  const tip = codex.getByRole('tooltip');
+  await expect(tip).toContainText('来源结束');
+  const box = await tip.boundingBox();
+  expect(box.x).toBeGreaterThanOrEqual(8);
+  expect(box.y).toBeGreaterThanOrEqual(8);
+  expect(box.x + box.width).toBeLessThanOrEqual(632);
+  expect(box.y + box.height).toBeLessThanOrEqual(472);
+  expect(await tip.evaluate((e) => e.scrollWidth - e.clientWidth)).toBe(0);
+  expect(await tip.evaluate((e) => e.scrollHeight - e.clientHeight)).toBeGreaterThan(0);
+  await tip.hover();
+  await page.mouse.wheel(0, 10000);
+  await expect.poll(() => tip.evaluate((e) => e.scrollTop + e.clientHeight >= e.scrollHeight)).toBe(true);
+  // The final metadata row must actually be on-screen after scrolling.
+  expect(await tip.evaluate((e) => {
+    const r = e.getBoundingClientRect(), last = e.querySelector('.qt-meta').lastElementChild.getBoundingClientRect();
+    return last.top >= r.top && last.bottom <= r.bottom;
+  })).toBe(true);
+  await page.evaluate(() => {
+    config.quotas.Codex = JSON.parse(window.topbarQuotaBackup); delete window.topbarQuotaBackup;
+    document.activeElement.blur(); toggleQuotaPop(false); setNavCollapsed(false); renderQuotaBar();
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
 });
