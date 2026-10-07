@@ -50,6 +50,12 @@ questions; `--replace` drops those queued questions (`--replace --now` does both
 Failed receipts show “没做成” in the ledger and status dot; cancelled work shows
 “已中断”. A report excerpt and the absolute full Markdown path return through the existing completion
 channel. Reports stay local under `~/reports/agentdeck-chatgpt-web/<run-id>/`.
+If only the tool's final foreground self-check returns a nonzero exit (98 for
+indeterminate/user window changes, 97 for a reported foreground violation), a
+verified, fully exported answer is still delivered with the distinct self-check
+result in the receipt. Missing or incomplete output still fails, and a reported
+foreground violation remains explicit even if report validation fails. Other
+tool errors and cancellation retain their failure behavior.
 
 Requests in one app execute FIFO, one at a time, with at least 60 seconds after
 the previous request ends. The existing skill also protects the local browser
