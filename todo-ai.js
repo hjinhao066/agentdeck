@@ -13,13 +13,13 @@ const TRANSITIONS = {
 // Literal opt-in, including Chinese full-width input. No intent classifier.
 function isAi(text) {
   if (typeof text !== 'string') return false;
-  for (const match of text.matchAll(/[@＠]\s*ai(?!_)(?=$|\s|\p{P})/giu)) {
+  for (const match of text.matchAll(/[@＠]\s*ai(?!_)(?=$|\s|\p{P}|\p{Script=Han})/giu)) {
     const before = text.slice(0, match.index), after = text.slice(match.index + match[0].length);
     // An ASCII mailbox/local-part or handle is not a mention. Chinese can
-    // precede the marker without a space; email domains still exclude it.
+    // surround the marker without spaces; email domains still exclude it.
     if (/[A-Za-z0-9._%+@＠-]$/.test(before)) continue;
     // Exclude domains even with RFC mailbox punctuation/quoted local-parts.
-    if (/^\.[\p{L}\p{N}-]/u.test(after) && /\S$/u.test(before)) continue;
+    if (/^[\p{L}\p{N}-]*\.[\p{L}\p{N}-]/u.test(after) && /\S$/u.test(before)) continue;
     return true;
   }
   return false;

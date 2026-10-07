@@ -80,7 +80,7 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await page.locator('#todoBtn').click();
     await page.locator('.todo-add-input').fill('自己去取快递');
     await page.locator('.todo-add-input').press('Enter');
-    const original = '@ai 查一下西雅图到温哥华的火车';
+    const original = '帮我@ai查一下西雅图到温哥华的火车';
     const taskBody = original;
     await page.locator('.todo-add-input').fill(original);
     await page.locator('.todo-add-input').press('Enter');
