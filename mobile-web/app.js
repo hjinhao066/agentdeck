@@ -15,6 +15,7 @@
     more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
     image: '<rect x="3" y="5" width="18" height="14" rx="2.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="m4 17 5-4.5 3.5 3 3-2.5L21 17"/>',
     close: '<path d="M6 6l12 12M18 6 6 18"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m13 7 4 4"/>',
     board: '<path d="M4 4v16M12 4v16M20 4v16M4 8h4m4 5h4m4-5h2"/>',
     sidebar: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/>',
     crown: '<path d="m2 4 3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/>',
@@ -88,12 +89,13 @@
   let fullHeight = 0, fullWidth = 0;
   function fitViewport() {
     if (!viewport) return;
-    const root = document.documentElement.style;
+    const root = document.documentElement.style, typing = document.activeElement === $('message');
     root.setProperty('--app-height', viewport.height + 'px');
     root.setProperty('--app-top', viewport.offsetTop + 'px');
-    if (viewport.width !== fullWidth) { fullWidth = viewport.width; fullHeight = 0; }
+    // A window resized with no field in use (iPad split view) starts the measure again.
+    if (viewport.width !== fullWidth || !typing) { fullWidth = viewport.width; fullHeight = 0; }
     fullHeight = Math.max(fullHeight, viewport.height, window.innerHeight);
-    $('app').classList.toggle('keyboard-open', document.activeElement === $('message') && fullHeight - viewport.height > 120);
+    $('app').classList.toggle('keyboard-open', typing && fullHeight - viewport.height > 120);
   }
   function onResize() { const follow = atBottom($('captain-turns')); fitViewport(); if (follow) toBottom($('captain-turns')); }
   if (viewport) {
@@ -104,6 +106,26 @@
     $('message').addEventListener('blur', onResize);
     fitViewport();
   }
+  // A finger that drags where nothing scrolls, or past the end of a list, would
+  // pull the whole page and the composer with it (the rubber band). Decided once
+  // per touch, on its first move; sideways drags and pinches are left alone.
+  let drag = null;
+  document.addEventListener('touchstart', (event) => { drag = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY, held: null } : null; }, { passive: true });
+  document.addEventListener('touchmove', (event) => {
+    if (!drag || event.touches.length !== 1) return;
+    if (drag.held === null) {
+      const dx = event.touches[0].clientX - drag.x, dy = event.touches[0].clientY - drag.y;
+      if (Math.abs(dx) > Math.abs(dy)) drag.held = false;
+      else {
+        let scroller = null;
+        for (let el = event.target; el && el !== document.body && !scroller; el = el.parentElement) {
+          if (/auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1) scroller = el;
+        }
+        drag.held = window.HubCore.dragMovesPage(scroller, dy);
+      }
+    }
+    if (drag.held && event.cancelable) event.preventDefault();
+  }, { passive: false });
 
   function node(tag, className, text) {
     const el = document.createElement(tag);
@@ -875,10 +897,51 @@
     }
     return row;
   }
+  // What this page sent and the conversation does not show yet: on its way,
+  // accepted and waiting for the Captain, or failed. The computer types a
+  // message into the Captain only once the Captain is idle, so its own record
+  // of the message can be minutes away; until then the message stays here.
+  function renderOutgoing(item, captain) {
+    const failed = item.state === 'failed';
+    const row = renderGroup({ id: '', user: item.text, images: [], reply: '', pending: false, interrupted: false });
+    row.classList.add('outgoing'); row.dataset.state = item.state;
+    if (item.thumbs.length) {
+      const strip = node('div', 'sent-images');
+      item.thumbs.forEach((thumb, i) => { const frame = node('span', 'sent-image'), img = node('img'); img.src = thumb; img.alt = '你发的图片 ' + (i + 1); frame.append(img); strip.append(frame); });
+      row.prepend(strip);
+    }
+    if (failed) {
+      let bubble = row.querySelector('.user-message');
+      if (!bubble) { bubble = node('div', 'chat-message user-message'); row.append(bubble); }
+      bubble.classList.add('failed');
+      bubble.prepend(node('span', 'failed-label', '没有发出'));
+      const foot = node('div', 'failed-foot');
+      const resend = iconButton('refresh', '重新发送这条消息', () => deliver(item));
+      resend.disabled = sending || offline || !csrfToken || !captain;
+      foot.append(node('p', 'failed-reason', item.reason), resend, iconButton('edit', '重新编辑这条消息', () => {
+        outbox.splice(outbox.indexOf(item), 1);
+        const box = $('message');
+        box.value = box.value ? box.value + '\n' + item.draft : item.draft;
+        attachments = [...attachments, ...item.images.map((id, i) => ({ state: 'done', id, thumb: item.thumbs[i] }))].slice(0, MAX_IMAGES);
+        sendStatus(''); renderAttachments(); renderCaptain(); fitComposer(); box.focus();
+      }));
+      bubble.append(foot);
+    } else {
+      // Under the bubble, like a delivery receipt: on its way, then waiting for the Captain to take it.
+      const state = node('p', 'sent-meta'), mark = node('span', 'meta-mark'); mark.setAttribute('aria-hidden', 'true');
+      if (item.state === 'sending') mark.append(node('span', 'spinner')); else mark.innerHTML = svg('check');
+      state.append(mark, node('span', '', item.state === 'sending' ? '发送中…' : captain?.status === 'working' ? '已发出，队长忙完手上的就会看到' : '已发出，等队长接收'));
+      row.append(state);
+    }
+    return row;
+  }
   function renderCaptain() {
     const captain = sessions.find((s) => s.isMain);
     const conversation = $('captain-turns');
-    const signature = JSON.stringify([captainData.turns, !!captain, !loaded && offline]);
+    // A sent message and the computer's record of it are one bubble: the record takes over in place.
+    const pending = window.HubCore.settleOutbox(outbox, captainData.turns);
+    for (const item of [...outbox]) if (!pending.includes(item)) { outbox.splice(outbox.indexOf(item), 1); if (item.state !== 'failed') arrived.push({ ...item, arrived: true }); }
+    const signature = JSON.stringify([captainData.turns, !!captain, !loaded && offline, pending.map((item) => [item.id, item.state, item.reason]), captain?.status === 'working', sending || offline || !csrfToken]);
     if (signature !== turnsSignature) {
       const follow = turnsSignature === undefined || atBottom(conversation);
       const scrollTop = conversation.scrollTop;
@@ -886,13 +949,14 @@
       conversation.replaceChildren();
       if (!loaded && offline) conversation.append(empty('暂时连不上桌面端，正在自动重连…'));
       else if (!captain && loaded) conversation.append(empty('尚未创建队长。先在桌面端创建队长。'));
-      else if (!captainData.turns.length) conversation.append(empty(loaded ? '还没有对话。发一条指令，让队长开始安排。' : ''));
+      else if (!captainData.turns.length && !pending.length) conversation.append(empty(loaded ? '还没有对话。发一条指令，让队长开始安排。' : ''));
       for (const group of captain ? groupTurns(captainData.turns) : []) conversation.append(renderGroup(group));
+      for (const item of pending) conversation.append(renderOutgoing(item, captain));
       conversation.scrollTop = follow ? conversation.scrollHeight : scrollTop;
     }
     // Offline keeps the draft editable (flaky mobile networks) but blocks sending.
-    $('message').disabled = !captain || sending;
-    $('attach').disabled = !captain || sending;
+    $('message').disabled = !captain;
+    $('attach').disabled = !captain;
     updateComposer(); updateSend();
   }
   function updateHeading() {
@@ -1099,22 +1163,53 @@
     fitComposer(); updateSend();
     if (follow) toBottom(conversation);
   });
-  $('message-form').addEventListener('submit', async (event) => {
+  const outbox = [], arrived = [];
+  let outboxId = 0, repeatAsked = null;
+  // One message, one request. The box is not locked meanwhile (locking it would
+  // fold the phone's keyboard on every send); only the send button waits.
+  async function deliver(item) {
+    if (sending) return;
+    item.state = 'sending'; item.reason = ''; item.unsure = false; item.at = Date.now();
+    item.known = window.HubCore.userTurnIds(captainData.turns);
+    sending = true; sendStatus('正在发送…', true);
+    renderCaptain(); toBottom($('captain-turns'));
+    try {
+      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item.images.length ? { message: item.text, images: item.images } : { message: item.text }) });
+      if (!result.queued) throw new Error('消息未加入队列。');
+      item.state = 'sent';
+      sendStatus(item.forWorker ? '已转给队长，等待处理。' : '已排队，等待队长处理。');
+      refresh();
+    } catch (err) {
+      // No answer at all: it may have arrived. If it shows up in the conversation, this bubble gives way to it.
+      item.state = 'failed'; item.unsure = err instanceof TypeError;
+      item.reason = item.unsure ? '手机没连上电脑，不确定这条有没有送到。先看一眼对话，再决定要不要重发。' : err.message;
+      sendStatus('这条没有发出，原文留在对话里，可重试。', true);
+    }
+    finally { sending = false; renderCaptain(); }
+  }
+  $('message-form').addEventListener('submit', (event) => {
     event.preventDefault();
-    const text = $('message').value, images = attachments.map((item) => item.id);
-    if (sending || !(text.trim() || images.length) || images.includes(undefined) || !sessions.some((s) => s.isMain)) return;
+    const draft = $('message').value, images = attachments.map((item) => item.id), now = Date.now();
+    if (sending || !(draft.trim() || images.length) || images.includes(undefined) || !sessions.some((s) => s.isMain)) return;
     // Workers have no direct channel; a reply from a worker's page goes to the
     // Captain with the worker named, through the same validated endpoint.
-    const message = view === 'output' && selected ? '关于队员「' + selected.title + '」：\n' + text : text;
-    sending = true; $('message').disabled = true; $('attach').disabled = true; updateSend(); sendStatus('正在发送…', true);
-    try {
-      const result = await api('/api/captain', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(images.length ? { message, images } : { message }) });
-      if (!result.queued) throw new Error('消息未加入队列，请重试。');
-      $('message').value = ''; fitComposer(); attachments = []; renderAttachments();
-      sendStatus(view === 'output' ? '已转给队长，等待处理。' : '已排队，等待队长处理。');
-      refresh();
-    } catch (err) { sendStatus(err.message + ' 消息已保留，可重试。', true); }
-    finally { sending = false; renderCaptain(); }
+    const forWorker = view === 'output' && !!selected;
+    const text = forWorker ? '关于队员「' + selected.title + '」：\n' + draft : draft;
+    while (arrived.length && now - arrived[0].at > 60000) arrived.shift();
+    // The same words as a message that just went out: say so instead of sending them twice.
+    // A second tap within a few seconds means it, and sends.
+    const again = repeatAsked && repeatAsked.text === text && now - repeatAsked.at < 15000;
+    if (!images.length && !again && window.HubCore.repeatedSend([...outbox, ...arrived], text, now)) {
+      repeatAsked = { text, at: now };
+      sendStatus('刚才那条已发出，就在对话里，不用再发。确实要再发一遍，就再点一次发送。', true);
+      if (view === 'captain') toBottom($('captain-turns'));
+      return;
+    }
+    repeatAsked = null;
+    const item = { id: ++outboxId, text, draft, images, thumbs: attachments.map((a) => a.thumb), forWorker, state: 'sending', reason: '', known: [], at: now };
+    outbox.push(item);
+    $('message').value = ''; fitComposer(); attachments = []; renderAttachments();
+    deliver(item);
   });
   $('copy').addEventListener('click', () => copyText($('copy'), $('outputText').textContent, '复制输出'));
   $('refresh').addEventListener('click', refresh);

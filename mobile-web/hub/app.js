@@ -48,8 +48,11 @@
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
   // Quota rows whose details are open, as 'machine:key'. Memory only.
   const openQuota = new Set();
-  // Messages that failed to send wait here (memory only) until the user re-edits them.
-  const outbox = [];
+  // What this phone sent and the conversation does not show yet (memory only):
+  // on its way, accepted and waiting for the Captain, or failed. `arrived` keeps
+  // the last minute of delivered ones, to notice the same words sent twice.
+  const outbox = [], arrived = [];
+  let repeatAsked = null;
   const signatures = new WeakMap();
 
   const stored = (key) => { try { return localStorage.getItem(key); } catch (_) { return null; } };
@@ -111,6 +114,56 @@
     button.querySelector('.nav-icon').innerHTML = svg(button.dataset.view);
     button.addEventListener('click', () => showView(button.dataset.view));
   });
+
+  // ---- shell ---------------------------------------------------------------
+  // The shell is pinned to what is visible. iOS Safari keeps the page its full
+  // height under the soft keyboard and pans it instead, so the shell takes the
+  // visual viewport's height and follows its offset: the input sits on the
+  // keyboard and the conversation scrolls above it. The keyboard counts as
+  // open while a text field has focus and the visible height is well below
+  // the tallest seen at this width; the bottom navigation hides then.
+  const viewport = window.visualViewport, shell = document.querySelector('.app');
+  let fullHeight = 0, fullWidth = 0;
+  function fitViewport() {
+    if (!viewport) return;
+    const turns = $('captain-turns'), follow = turns.scrollHeight - turns.scrollTop - turns.clientHeight < 48;
+    const root = document.documentElement.style, typing = !!document.activeElement && document.activeElement.matches('textarea, input');
+    root.setProperty('--app-height', viewport.height + 'px');
+    root.setProperty('--app-top', viewport.offsetTop + 'px');
+    // A window resized with no field in use (iPad split view) starts the measure again.
+    if (viewport.width !== fullWidth || !typing) { fullWidth = viewport.width; fullHeight = 0; }
+    fullHeight = Math.max(fullHeight, viewport.height, window.innerHeight);
+    shell.classList.toggle('keyboard-open', typing && fullHeight - viewport.height > 120);
+    if (follow) turns.scrollTop = turns.scrollHeight;
+  }
+  if (viewport) {
+    viewport.addEventListener('resize', fitViewport);
+    viewport.addEventListener('scroll', fitViewport);
+    window.addEventListener('resize', fitViewport);
+    document.addEventListener('focusin', fitViewport);
+    document.addEventListener('focusout', fitViewport);
+    fitViewport();
+  }
+  // A finger that drags where nothing scrolls, or past the end of a list, would
+  // pull the whole page and the input with it (the rubber band). Decided once
+  // per touch, on its first move; sideways drags and pinches are left alone.
+  let drag = null;
+  document.addEventListener('touchstart', (event) => { drag = event.touches.length === 1 ? { x: event.touches[0].clientX, y: event.touches[0].clientY, held: null } : null; }, { passive: true });
+  document.addEventListener('touchmove', (event) => {
+    if (!drag || event.touches.length !== 1) return;
+    if (drag.held === null) {
+      const dx = event.touches[0].clientX - drag.x, dy = event.touches[0].clientY - drag.y;
+      if (Math.abs(dx) > Math.abs(dy)) drag.held = false;
+      else {
+        let scroller = null;
+        for (let el = event.target; el && el !== document.body && !scroller; el = el.parentElement) {
+          if (/auto|scroll/.test(getComputedStyle(el).overflowY) && el.scrollHeight > el.clientHeight + 1) scroller = el;
+        }
+        drag.held = Core.dragMovesPage(scroller, dy);
+      }
+    }
+    if (drag.held && event.cancelable) event.preventDefault();
+  }, { passive: false });
 
   // ---- network -------------------------------------------------------------
   // Every request names its machine; the prefix is the only routing there is.
@@ -625,27 +678,31 @@
       setTimeout(() => { button.innerHTML = svg('copy'); button.title = label; button.setAttribute('aria-label', label); button.classList.remove('copied'); }, 1600);
     }).catch(() => notice('无法复制。可以长按文字手动选择。', true));
   }
+  // What the user said: the same bubble whether it is still on its way or already in the computer's record.
+  function mineBubble(words, extra) {
+    const prompt = node('div', 'bubble mine' + extra);
+    prompt.append(node('span', 'sr-only', '你'));
+    if (!words) return prompt;
+    const text = node('p', 'bubble-text', words);
+    prompt.append(text);
+    // Long messages fold to a few lines; the whole text stays in the page.
+    if (words.length > 500 || words.split('\n').length > 10) {
+      text.classList.add('clamped');
+      const toggle = node('button', 'expand-toggle', '展开全文');
+      toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false');
+      toggle.addEventListener('click', () => {
+        const open = text.classList.toggle('clamped') === false;
+        toggle.textContent = open ? '收起' : '展开全文'; toggle.setAttribute('aria-expanded', String(open));
+      });
+      prompt.append(toggle);
+    }
+    return prompt;
+  }
   function renderGroup(m, group) {
     const row = node('article', 'turn');
     if (group.id) row.dataset.turnId = group.id;
     if (group.user || group.images.length) {
-      const prompt = node('div', 'bubble mine');
-      prompt.append(node('span', 'sr-only', '你'));
-      if (group.user) {
-        const text = node('p', 'bubble-text', group.user);
-        prompt.append(text);
-        // Long messages fold to a few lines; the whole text stays in the page.
-        if (group.user.length > 500 || group.user.split('\n').length > 10) {
-          text.classList.add('clamped');
-          const toggle = node('button', 'expand-toggle', '展开全文');
-          toggle.type = 'button'; toggle.setAttribute('aria-expanded', 'false');
-          toggle.addEventListener('click', () => {
-            const open = text.classList.toggle('clamped') === false;
-            toggle.textContent = open ? '收起' : '展开全文'; toggle.setAttribute('aria-expanded', String(open));
-          });
-          prompt.append(toggle);
-        }
-      }
+      const prompt = mineBubble(group.user, '');
       if (group.images.length) prompt.append(node('span', 'bubble-state', `附 ${group.images.length} 张图片（在这台电脑上查看）`));
       row.append(prompt);
     }
@@ -688,9 +745,11 @@
       captainSeat.hidden = !row; captainSeat.replaceChildren(...(row ? [row] : []));
     }
     const conversation = $('captain-turns');
-    const pending = outbox.filter((item) => item.machineId === m.id);
     const turns = captain ? captain.turns || [] : [];
-    if (changed(conversation, [m.id, m.state, !!captain, turns, pending, m.state === 'online' ? '' : lastSeen(m)])) {
+    // A sent message and the computer's record of it are one bubble: the record takes over in place.
+    const mine = outbox.filter((item) => item.machineId === m.id), pending = Core.settleOutbox(mine, turns);
+    for (const item of mine) if (!pending.includes(item)) { outbox.splice(outbox.indexOf(item), 1); if (item.state !== 'failed') arrived.push({ ...item, arrived: true }); }
+    if (changed(conversation, [m.id, m.state, !!captain, captain && captain.status === 'working', turns, pending.map((item) => [item.id, item.state, item.reason]), sending, Core.sendBlock(m), m.state === 'online' ? '' : lastSeen(m)])) {
       const follow = conversation.scrollHeight - conversation.scrollTop - conversation.clientHeight < 48 || conversation.dataset.machine !== m.id;
       const scrollTop = conversation.scrollTop;
       conversation.dataset.machine = m.id;
@@ -700,10 +759,16 @@
       else if (!turns.length && !pending.length) conversation.append(node('p', 'empty', `还没有对话。发一条指令，让 ${m.label} 队长开始安排。`));
       for (const group of Core.groupTurns(turns)) conversation.append(renderGroup(m, group));
       for (const item of pending) {
-        const row = node('article', 'turn'), bubble = node('div', 'bubble mine ' + (item.state === 'failed' ? 'failed' : 'sending'));
-        bubble.append(node('span', 'bubble-label', item.state === 'failed' ? `没有发给 ${m.label}` : `正在发给 ${m.label}…`), node('p', 'bubble-text', item.text));
-        if (item.state === 'failed') {
+        const failed = item.state === 'failed';
+        const row = node('article', 'turn outgoing'), bubble = mineBubble(item.text, failed ? ' failed' : '');
+        row.dataset.state = item.state;
+        row.append(bubble);
+        if (failed) {
+          bubble.prepend(node('span', 'bubble-label', `没有发给 ${m.label}`));
           const foot = node('div', 'bubble-foot');
+          const resend = iconButton('refresh', '重新发送这条消息');
+          resend.disabled = sending || !!Core.sendBlock(m);
+          resend.addEventListener('click', () => deliver(m, item));
           const edit = iconButton('pencil', '重新编辑这条消息');
           edit.addEventListener('click', () => {
             outbox.splice(outbox.indexOf(item), 1);
@@ -711,9 +776,15 @@
             box.value = box.value ? box.value + '\n' + item.text : item.text;
             sendStatus = ''; render(); fitComposer(); box.focus();
           });
-          foot.append(node('p', 'bubble-reason', item.reason), edit); bubble.append(foot);
+          foot.append(node('p', 'bubble-reason', item.reason), resend, edit); bubble.append(foot);
+        } else {
+          // Under the bubble, like a delivery receipt: on its way, then waiting for the Captain to take it.
+          const state = node('p', 'bubble-meta'), mark = node('span', 'meta-mark'); mark.setAttribute('aria-hidden', 'true');
+          if (item.state === 'sending') mark.append(node('span', 'spinner')); else mark.innerHTML = svg('check');
+          state.append(mark, node('span', '', item.state === 'sending' ? '发送中…' : captain && captain.status === 'working' ? `已发出，${m.label} 队长忙完手上的就会看到` : `已发出，等 ${m.label} 队长接收`));
+          row.append(state);
         }
-        row.append(bubble); conversation.append(row);
+        conversation.append(row);
       }
       conversation.scrollTop = follow ? conversation.scrollHeight : scrollTop;
     }
@@ -723,10 +794,10 @@
     const m = byId(target);
     if (!m) return;
     const block = Core.sendBlock(m), box = $('message'), label = `发送给 ${m.label} 队长`;
-    box.placeholder = `写给 ${m.label} 队长…`; box.disabled = sending;
+    box.placeholder = `写给 ${m.label} 队长…`;
     $('send').title = block || label; $('send').setAttribute('aria-label', label);
     $('send').disabled = sending || !!block || !box.value.trim();
-    $('clear').disabled = sending; $('clear').hidden = !box.value;
+    $('clear').hidden = !box.value;
     const hint = $('send-hint');
     // Nothing to say, nothing shown: the bottom is just the input.
     hint.textContent = sending ? `正在发给 ${m.label} 队长…` : block || sendStatus;
@@ -742,21 +813,45 @@
   }
   $('message').addEventListener('input', () => { sendStatus = ''; updateComposer(); fitComposer(); });
   $('clear').addEventListener('click', () => { $('message').value = ''; sendStatus = ''; updateComposer(); fitComposer(); $('message').focus(); });
-  $('message-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    // The destination is fixed here, at the moment of the tap, and never changes afterwards.
-    const m = byId(target), text = $('message').value;
-    if (sending || !m || !text.trim() || Core.sendBlock(m)) return;
-    const item = { id: ++outboxId, machineId: m.id, text, state: 'sending', reason: '' };
-    outbox.push(item); sending = true; sendStatus = ''; $('message').value = '';
+  // One message, one request. The box is not locked meanwhile (locking it would
+  // fold the phone's keyboard on every send); only the send button waits.
+  async function deliver(m, item) {
+    if (sending || Core.sendBlock(m)) return;
+    item.state = 'sending'; item.reason = ''; item.unsure = false; item.at = Date.now();
+    item.known = Core.userTurnIds(m.snap && m.snap.captain && m.snap.captain.turns);
+    sending = true; sendStatus = '';
     render(); fitComposer();
-    const result = await post(m, 'api/captain', { message: text });
+    $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
+    const result = await post(m, 'api/captain', { message: item.text });
     sending = false;
     if (result.status === 200 && result.body && result.body.queued) {
-      outbox.splice(outbox.indexOf(item), 1);
+      item.state = 'sent';
       sendStatus = `已排队到 ${m.label} 队长。`;
-    } else { item.state = 'failed'; item.reason = Core.sendFailure(result, m.label); }
+    } else {
+      // No answer at all: it may have arrived. If it shows up in the conversation, this bubble gives way to it.
+      item.state = 'failed'; item.unsure = !!(result.timedOut || result.failed); item.reason = Core.sendFailure(result, m.label);
+    }
     render(); poll(m);
+  }
+  $('message-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    // The destination is fixed here, at the moment of the tap, and never changes afterwards.
+    const m = byId(target), text = $('message').value, now = Date.now();
+    if (sending || !m || !text.trim() || Core.sendBlock(m)) return;
+    while (arrived.length && now - arrived[0].at > 60000) arrived.shift();
+    // The same words as a message that just went out: say so instead of sending them twice.
+    // A second tap within a few seconds means it, and sends.
+    const again = repeatAsked && repeatAsked.text === text && repeatAsked.machineId === m.id && now - repeatAsked.at < 15000;
+    if (!again && Core.repeatedSend([...outbox, ...arrived].filter((item) => item.machineId === m.id), text, now)) {
+      repeatAsked = { text, machineId: m.id, at: now };
+      sendStatus = '刚才那条已发出，就在上面的对话里，不用再发。确实要再发一遍，就再点一次发送。';
+      updateComposer(); $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
+      return;
+    }
+    repeatAsked = null;
+    const item = { id: ++outboxId, machineId: m.id, text, state: 'sending', reason: '', known: [], at: now };
+    outbox.push(item); $('message').value = '';
+    deliver(m, item);
   });
 
   // ---- sessions and output -------------------------------------------------

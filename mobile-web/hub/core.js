@@ -91,6 +91,51 @@
     return `${name} 没有接收这条消息（HTTP ${result.status}）。`;
   }
 
+  // ---- outbox --------------------------------------------------------------
+  // A message the phone sent stays in the conversation from the tap until the
+  // computer's own record of it arrives. The computer types a message into the
+  // Captain only once the Captain is idle, so that record can be minutes away.
+  // A very long message is recorded clipped, ending in this note.
+  const CLIPPED = /…?（全文 \d+ 字，见附件）$/;
+  const isUserTurn = (turn) => !!turn && typeof turn === 'object' && !turn.kind && !!(typeof turn.user === 'string' && turn.user || Array.isArray(turn.images) && turn.images.length);
+  function sameMessage(turn, item) {
+    const said = typeof turn.user === 'string' ? turn.user : '', sent = squash(item.text || '');
+    const images = (list) => (Array.isArray(list) ? list : []).join('|');
+    if (images(item.images) && images(item.images) !== images(turn.images)) return false;
+    if (squash(said) === sent) return true;
+    const head = squash(said.replace(CLIPPED, ''));
+    return CLIPPED.test(said) && head.length >= 20 && sent.startsWith(head);
+  }
+  const userTurnIds = (turns) => (Array.isArray(turns) ? turns : []).filter(isUserTurn).map((turn) => turn.id);
+  // The sent messages the conversation does not show yet. `known` holds the
+  // turns that were there when a message went out, so an older message with the
+  // same words is never taken for it; a turn stands for one sent message only.
+  // A failed message stays unless nobody knows whether it arrived (`unsure`).
+  function settleOutbox(items, turns) {
+    const users = (Array.isArray(turns) ? turns : []).filter(isUserTurn);
+    return items.filter((item) => {
+      if (item.state === 'failed' && !item.unsure) return true;
+      const turn = users.find((t) => !item.known.includes(t.id) && sameMessage(t, item));
+      if (!turn) return true;
+      for (const other of items) other.known.push(turn.id);
+      return false;
+    });
+  }
+  // The same words again right after they went out is nearly always a second
+  // tap on a message that looked lost. True while the first one is still on its
+  // way to the Captain, or went out less than a minute ago.
+  const REPEAT_MS = 60000;
+  function repeatedSend(items, text, now) {
+    const words = squash(text || '');
+    return !!words && items.some((item) => item.state !== 'failed' && squash(item.text || '') === words && !(item.images && item.images.length) && (!item.arrived || now - item.at < REPEAT_MS));
+  }
+  // Whether a vertical drag would move the page instead of a list: nothing
+  // under the finger scrolls, or the list is already at the end the finger pulls from.
+  function dragMovesPage(scroller, dy) {
+    if (!scroller) return true;
+    return dy > 0 ? scroller.scrollTop <= 0 : scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
+  }
+
   function ago(then, now) {
     if (!Number.isFinite(then) || then <= 0) return '';
     const minutes = Math.floor(Math.max(0, now - then) / 60000);
@@ -358,6 +403,6 @@
   }
   const elapsedText = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return Math.floor(s / 60) + ':' + pad(s % 60); };
 
-  return { cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  return { cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });

@@ -30,11 +30,13 @@ function readJson(req) {
 // answers, like a half-open tunnel) | 'legacy' (an old build: no api/info, and
 // every prefixed path answers 401 because it does not know the prefix) | 'redirect'
 // (a hostile machine: every answer is a 307 to machine.redirectTo, e.g. a path on the other machine).
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null }) {
-  const base = `/${id}/`, cookieName = `__Secure-agentdeck_${id}`;
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, plainCookie = false }) {
+  // plainCookie: WebKit refuses Secure cookies over http, even on localhost.
+  const base = `/${id}/`, cookieName = plainCookie ? `agentdeck_${id}` : `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, quota, boardVersion: 'b1',
+    requests: [], messages: [], sessions, cards, outputs, quota, boardVersion: 'b1', busy: false, queued: [],
+    releaseQueued() { machine.busy = false; machine.captain.turns.push(...machine.queued.splice(0)); },
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
     setCards(next) { machine.cards = next; machine.boardVersion = crypto.randomBytes(4).toString('hex'); },
@@ -66,7 +68,7 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     return values.length === 1 && machine.devices.has(values[0].slice(cookieName.length + 1)) ? values[0].slice(cookieName.length + 1) : null;
   };
   const csrf = (value) => crypto.createHmac('sha256', csrfSecret).update(value).digest('hex');
-  const cookie = (value, maxAge) => `${cookieName}=${value}; HttpOnly; Secure; SameSite=Strict; Path=${base}; Max-Age=${maxAge}`;
+  const cookie = (value, maxAge) => `${cookieName}=${value}; HttpOnly; ${plainCookie ? '' : 'Secure; '}SameSite=Strict; Path=${base}; Max-Age=${maxAge}`;
   const server = http.createServer(async (req, res) => {
     machine.requests.push({ method: req.method, url: req.url });
     if (machine.mode === 'hang') return;
@@ -127,7 +129,9 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       if (!body || Object.keys(body).some((key) => key !== 'message') || typeof body.message !== 'string' || !body.message.trim()) return json(res, 400, { error: 'Message required (maximum 8000 characters).' });
       if (!machine.captain) return json(res, 500, { error: 'Local service unavailable.' });
       machine.messages.push(body.message);
-      machine.captain.turns.push({ id: 'turn-' + machine.messages.length, ts: Date.now(), user: body.message, reply: '', done: false, interrupted: false });
+      // A busy Captain (machine.busy): the desktop accepts the message and types it in only once the Captain is idle (releaseQueued).
+      const turn = { id: 'turn-' + machine.messages.length, ts: Date.now(), user: body.message, reply: '', done: false, interrupted: false };
+      if (machine.busy) machine.queued.push(turn); else machine.captain.turns.push(turn);
       return json(res, 200, { queued: true });
     }
     if (req.method === 'POST' && url.pathname === '/logout') {
@@ -209,9 +213,9 @@ function withRelay() {
   return [{ ...mac, relay: relayFixture('us') }, { ...win, relay: relayFixture('chatgpt') }];
 }
 
-async function startHub({ port = 0, machines = defaults(), directory = HUB } = {}) {
+async function startHub({ port = 0, machines = defaults(), directory = HUB, plainCookie = false } = {}) {
   const fakes = {};
-  for (const options of machines) fakes[options.id] = await fakeMachine(options);
+  for (const options of machines) fakes[options.id] = await fakeMachine({ ...options, plainCookie });
   const proxy = http.createServer((req, res) => {
     const fake = Object.values(fakes).find((m) => req.url.startsWith(`/${m.id}/`));
     if (!fake) {
