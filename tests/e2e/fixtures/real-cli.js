@@ -4,7 +4,7 @@
 // stand-in API, so no login, account or quota is touched.
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 
 const [cli, port, dir] = process.argv.slice(2);
 if (!['claude', 'codex'].includes(cli) || !/^\d+$/.test(port || '') || !dir) {
@@ -14,6 +14,7 @@ if (!['claude', 'codex'].includes(cli) || !/^\d+$/.test(port || '') || !dir) {
 fs.mkdirSync(dir, { recursive: true });
 // nothing of the owner's logins or endpoints rides along
 const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(?:ANTHROPIC_|CLAUDE_|CLAUDECODE$|OPENAI_|CODEX_)/i.test(key)));
+const args = [];
 const here = [...new Set([process.cwd(), fs.realpathSync(process.cwd())].flatMap((p) => [p, p.replace(/\\/g, '/')]))];
 if (cli === 'claude') {
   fs.writeFileSync(path.join(dir, '.claude.json'), JSON.stringify({
@@ -31,8 +32,10 @@ if (cli === 'claude') {
     ...here.flatMap((p) => [`[projects.'${p}']`, 'trust_level = "trusted"', '']),
   ].join('\n'));
   Object.assign(env, { CODEX_HOME: dir, PROBE_KEY: 'probe-not-a-real-key' });
+  // As AgentDeck launches Codex: without its shared background server where the CLI offers that.
+  try { if (/--no-daemon\b/.test(execSync('codex --help', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }))) args.push('--no-daemon'); } catch (_) {}
 }
 // The CLI takes over this terminal; npm's .cmd shims on Windows need the shell.
-const child = spawn(cli, [], { stdio: 'inherit', env, shell: process.platform === 'win32' });
+const child = spawn(cli, args, { stdio: 'inherit', env, shell: process.platform === 'win32' });
 child.on('error', (error) => { console.error(`${cli} did not start: ${error.message}`); process.exit(127); });
 child.on('exit', (code) => process.exit(code == null ? 1 : code));
