@@ -24,6 +24,107 @@ async function success({ question, report, mode }) {
   return '';
 }
 
+// A stand-in for the CLI's post-export foreground guard; no browser/window APIs.
+async function foregroundCli(t, { exitCode = 98, mode = 'chat', body = 'Paris is the capital of France.', meta = {}, diagnostic, malformedDiagnostic = false, missingReport = false, missingMeta = false } = {}) {
+  const s = await setup(t, { runCli: (input) => runCli({ ...input, cliPath: path.join(s.dir, 'fake-guard-cli.js') }) });
+  const metadata = { selectedModel: '6 Pro', selectedMode: mode, submitted: true, finishedAt: new Date().toISOString(),
+    exportMethod: 'copy-markdown', ...(mode === 'deep-research' ? { researchEvidence: { complete: true } } : {}), ...meta };
+  await fs.writeFile(path.join(s.dir, 'fake-guard-cli.js'), `
+    const fs = require('fs');
+    const report = process.argv[process.argv.indexOf('--out') + 1];
+    if (!${missingReport}) fs.writeFileSync(report, ${JSON.stringify(body)});
+    if (!${missingMeta}) fs.writeFileSync(report + '.meta.json', ${JSON.stringify(JSON.stringify(metadata))});
+    ${diagnostic ? `fs.writeFileSync(report + '.error.json', ${JSON.stringify(JSON.stringify({ code: diagnostic, reason: 'private diagnostic' }))});` : ''}
+    if (${malformedDiagnostic}) fs.writeFileSync(report + '.error.json', 'invalid');
+    console.error('private foreground application/window details');
+    process.exit(${exitCode});
+  `);
+  s.executor.submit(task('one', mode));
+  return s;
+}
+
+for (const mode of ['chat', 'deep-research']) {
+  test(`indeterminate foreground guard exit 98 delivers finalized ${mode} answer with a self-check note`, async (t) => {
+    const s = await foregroundCli(t, { exitCode: 98, mode });
+    const receipt = await s.done;
+    assert.equal(receipt.failed, undefined);
+    assert.match(receipt.result, /Paris is the capital/);
+    assert.match(receipt.result, /无法判定，用户可能自行切换.*未确认工具抢占/);
+    assert.doesNotMatch(receipt.result, /private foreground/);
+    assert.equal(receipt.files.length, 1);
+    assert.equal(await fs.readFile(receipt.files[0], 'utf8'), 'Paris is the capital of France.');
+  });
+
+  test(`foreground violation exit 97 delivers finalized ${mode} answer with an abnormal receipt`, async (t) => {
+    const s = await foregroundCli(t, { exitCode: 97, mode });
+    const receipt = await s.done;
+    assert.match(receipt.failed, /^⚠【异常】工具抢了前台/);
+    assert.match(receipt.failed, /答案已完整交付/);
+    assert.match(receipt.result, /^⚠【异常】工具抢了前台/);
+    assert.match(receipt.result, /Paris is the capital/);
+    assert.doesNotMatch(receipt.result, /private foreground|未取得可核验的完整报告/);
+    assert.equal(receipt.files.length, 1);
+    assert.equal(s.executor.status('one').receipt.failed, receipt.failed);
+    const [runDir] = (await fs.readdir(s.dir, { withFileTypes: true })).filter((entry) => entry.isDirectory());
+    assert.equal(await fs.readFile(path.join(s.dir, runDir.name, 'report.md'), 'utf8'), 'Paris is the capital of France.');
+  });
+}
+
+for (const exitCode of [98, 97]) for (const [name, incomplete] of [
+  ['missing report', { missingReport: true }], ['missing metadata', { missingMeta: true }],
+  ['empty report', { body: '' }], ['unsubmitted report', { meta: { submitted: false } }],
+  ['sensitive report', { body: 'answer sk-' + 'x'.repeat(24) }],
+  ['unfinished report', { meta: { finishedAt: null } }], ['invalid completion time', { meta: { finishedAt: 'invalid' } }],
+  ['unexported report', { meta: { exportMethod: null } }], ['error metadata', { meta: { status: 'error' } }],
+  ['unverified research', { mode: 'deep-research', meta: { researchEvidence: { complete: false } } }],
+  ['wrong model', { meta: { selectedModel: 'Medium' } }], ['wrong mode', { meta: { selectedMode: 'deep-research' } }],
+]) {
+  test(`foreground guard exit ${exitCode} does not deliver ${name}`, async (t) => {
+    const s = await foregroundCli(t, { exitCode, ...incomplete });
+    const receipt = await s.done;
+    assert.ok(receipt.failed);
+    assert.deepEqual(receipt.files, []);
+    assert.doesNotMatch(receipt.result, /Paris is the capital|private foreground/);
+    assert.match(receipt.failed, exitCode === 98 ? /无法判定/ : /工具抢了前台/);
+    assert.doesNotMatch(receipt.failed, /答案已完整交付/);
+  });
+}
+
+for (const diagnostic of ['TIMEOUT', 'FOREGROUND_VIOLATION', 'UNEXPECTED_ERROR']) {
+  test(`real ${diagnostic} diagnostic takes precedence over foreground exit and saved artifacts`, async (t) => {
+    const s = await foregroundCli(t, { exitCode: 97, diagnostic });
+    const receipt = await s.done;
+    assert.ok(receipt.failed);
+    assert.deepEqual(receipt.files, []);
+    assert.doesNotMatch(receipt.result, /Paris is the capital|private diagnostic/);
+    if (diagnostic === 'FOREGROUND_VIOLATION') assert.match(receipt.failed, /Chrome 抢占了前台/);
+  });
+}
+
+test('unrelated nonzero exit cannot recover a finalized answer', async (t) => {
+  const s = await foregroundCli(t, { exitCode: 1 });
+  assert.ok((await s.done).failed);
+});
+
+test('malformed error diagnostic cannot be treated as a guard-only failure', async (t) => {
+  const s = await foregroundCli(t, { malformedDiagnostic: true });
+  const receipt = await s.done;
+  assert.ok(receipt.failed);
+  assert.deepEqual(receipt.files, []);
+});
+
+test('cancellation takes precedence over a saved answer and indeterminate foreground check', async (t) => {
+  const s = await setup(t, { runCli: async (input) => {
+    await success(input);
+    s.executor.cancel('one');
+    return 'FRONT_UNSURE';
+  } });
+  s.executor.submit(task());
+  const receipt = await s.done;
+  assert.match(receipt.failed, /已取消/);
+  assert.deepEqual(receipt.files, []);
+});
+
 test('successful fake webpage returns report excerpt and absolute report path; removes private input', async (t) => {
   const s = await setup(t, { runCli: success });
   assert.deepEqual(s.executor.submit(task()), { accepted: true });

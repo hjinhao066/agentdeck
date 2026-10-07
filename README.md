@@ -50,6 +50,15 @@ questions; `--replace` drops those queued questions (`--replace --now` does both
 Failed receipts show “没做成” in the ledger and status dot; cancelled work shows
 “已中断”. A report excerpt and the absolute full Markdown path return through the existing completion
 channel. Reports stay local under `~/reports/agentdeck-chatgpt-web/<run-id>/`.
+If only the tool's final foreground self-check returns exit 98
+(indeterminate/user window changes), a verified, fully exported answer is still
+delivered with the self-check result in the receipt. Missing or incomplete output
+still fails for both exit 97 and 98. With exit 97 (a reported foreground violation),
+a verified, fully exported answer is delivered too, but the receipt starts with
+`⚠【异常】工具抢了前台` and retains the existing `failed` marker: the ledger/status
+dot and the Captain's unread receipt show the abnormal run, alongside the answer
+excerpt and full report path. This marker reports the foreground violation, not
+a missing answer. Other tool errors and cancellation retain their failure behavior.
 
 Requests in one app execute FIFO, one at a time, with at least 60 seconds after
 the previous request ends. The existing skill also protects the local browser
