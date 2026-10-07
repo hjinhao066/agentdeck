@@ -5,7 +5,7 @@ const Policy = require('./bark-policy');
 
 function digest(pending) {
   const stamp = (at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-  const lines = [`有 ${pending.length} 项待补发提醒，请查看：`];
+  const lines = [`有 ${pending.length} 项提醒待补发，请查看：`];
   let included = 0;
   for (const item of pending) {
     const line = `${stamp(item.createdAt)} ${item.title}：${item.message}`;
