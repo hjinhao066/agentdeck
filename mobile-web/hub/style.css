@@ -357,6 +357,8 @@ textarea::placeholder { color: var(--muted); }
 .navigation button { position: relative; }
 .nav-badge { position: absolute; top: 3px; left: calc(50% + 7px); min-width: 17px; height: 17px; padding: 0 5px; border-radius: 99px; background: var(--accent); color: var(--accent-ink); font: 600 10.5px/17px var(--sans); text-align: center; font-variant-numeric: tabular-nums; }
 .todo-form { position: sticky; top: -14px; z-index: 2; margin: -14px -12px 0; padding: 14px 12px 6px; background: var(--bg); }
+/* The list slides under the box: a short fade instead of a hard cut through a half-hidden line. */
+.todo-form::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 12px; background: linear-gradient(var(--bg), transparent); pointer-events: none; }
 .todo-box { display: flex; align-items: center; gap: 10px; padding-left: 16px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); }
 .todo-box:focus-within { border-color: var(--accent); }
 .todo-ring { width: 20px; height: 20px; border-radius: 50%; border: 1.7px dashed var(--muted); flex-shrink: 0; opacity: .8; }

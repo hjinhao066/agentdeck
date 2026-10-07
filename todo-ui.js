@@ -87,7 +87,7 @@
   // ---- page ----
   function render(frame, h) {
     host = h || host;
-    const body = frame('待办', `脑子里冒出来的事，先记在这里。任何时候按 ${shortcutLabel()} 都能速记一条；手机总台也能记、能勾。`);
+    const body = frame('待办', `脑子里冒出来的事，先记在这里。在 AgentDeck 里任何地方按 ${shortcutLabel()} 都能速记一条；手机总台也能记、能勾。`);
     body.parentElement.classList.add('page-todo');
     const form = el('form', 'todo-add');
     form.setAttribute('aria-label', '记一条待办');
@@ -317,7 +317,7 @@
     document.body.appendChild(wrap);
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && composing(e)) { e.preventDefault(); return; }
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeQuick(); }
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); input.value = ''; closeQuick(); }
     });
     input.addEventListener('input', () => { status.textContent = ''; wrap.classList.remove('is-error'); });
     form.addEventListener('submit', async (e) => {
@@ -334,7 +334,7 @@
       } catch (err) { wrap.classList.add('is-error'); status.textContent = friendly(err); }
       finally { wrap.classList.remove('is-saving'); }
     });
-    // Clicking anywhere else puts the bar away; nothing is lost but the draft.
+    // Clicking anywhere else only puts the bar away: the draft waits for the next shortcut. Esc throws it away.
     document.addEventListener('pointerdown', (e) => { if (!wrap.hidden && !wrap.contains(e.target)) closeQuick(true); }, true);
     quick = { wrap, input, status };
   }

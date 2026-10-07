@@ -70,7 +70,9 @@ test('record one from the phone: empty state, one line, Enter, saved on the defa
   await expect(page.locator('#todo-view')).toBeVisible();
   await expect(page.locator('#machine-bar')).toBeHidden(); // one list for both computers: nothing to pick
   await expect(page.locator('.todo-empty strong')).toHaveText('清单还是空的');
+  await expect(page.locator('.todo-empty p')).toHaveText('买东西、回邮件、别忘了的小事——打一句话，点右边的 ＋ 就存好。');
   await expect(page.locator('#todo-add')).toBeDisabled();
+  await expect(box()).toBeFocused(); // tapping the tab is for writing one down
   await shot('phone-dark-empty');
   await box().click();
   await box().fill('明早把快递放门口');
@@ -101,7 +103,7 @@ test('the list merges both computers: newest copy wins, deletions stay deleted, 
   await expect(openRows().nth(1)).toContainText('把 Hermes 早报里的求职邮件回掉'); // only Windows has it yet
   await expect(rowFor('整理桌面截图文件夹')).toHaveCount(0); // deleted on Windows after the Mac copy
   await expect(page.locator('.todo-done-toggle .todo-count')).toHaveText('2'); // 给妈妈打电话 (ticked on Windows) and 续订域名
-  await expect(page.locator('#todo-foot')).toContainText('已合并 Mac 和 Windows 的待办');
+  await expect(page.locator('#todo-foot')).toHaveText('已合并 Mac 和 Windows 的待办。两台电脑每 30 分钟自动同步一次。');
   await expect(page.locator('[data-view="todo"] .nav-badge')).toHaveText('11');
   // Every row's circle is a named checkbox with a 44px+ target.
   const checks = await page.locator('.todo-check').evaluateAll((list) => list.map((b) => ({ role: b.getAttribute('role'), label: b.getAttribute('aria-label'), w: b.getBoundingClientRect().width, h: b.getBoundingClientRect().height })));
@@ -195,4 +197,20 @@ test('a refused write keeps the text, an older build says it needs an upgrade, a
   await expect(page.locator('#todo-lists .empty')).toHaveText('先在「总览」登录一台电脑，才能记待办。');
   await expect(rowFor('退货包裹放门口')).toHaveCount(0);
   expect(hub.machines.mac.requests.filter((r) => r.url === '/mac/api/todos')).toEqual([]);
+});
+
+test('the hub opens where it was left, and a #todo link opens 待办 directly', async ({ browser }) => {
+  await open(browser, { list: machines(dozen()) });
+  await nav('待办');
+  await page.reload();
+  await expect(page.locator('#todo-view')).toBeVisible();
+  await expect(page.locator('nav [data-view="todo"]')).toHaveAttribute('aria-current', 'page');
+  await expect(openRows()).toHaveCount(11);
+  await nav('总览');
+  await page.reload();
+  await expect(page.locator('#overview-view')).toBeVisible();
+  await page.goto(hub.url + '#todo');
+  await page.reload(); // a hash change alone does not reload: open it the way a home-screen link does
+  await expect(page.locator('#todo-view')).toBeVisible();
+  await expect(page.locator('#brand-title')).toHaveText('待办');
 });

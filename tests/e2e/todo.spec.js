@@ -75,6 +75,10 @@ test('the sidebar 待办 entry opens a page that is ready to type into, with a f
   await expect(input()).toBeFocused();
   await expect(page.locator('.todo-empty strong')).toHaveText('清单还是空的');
   await expect(page.locator('.todo-empty kbd')).toHaveText(process.platform === 'darwin' ? '⌘T' : 'Ctrl+Shift+T');
+  // The shortcut works inside AgentDeck only, and the words say so.
+  await expect(page.locator('#pageView .page-titles')).toContainText('在 AgentDeck 里任何地方按');
+  expect(await entry.getAttribute('title')).toContain('在 AgentDeck 里按');
+  await expect(page.locator('#helpDialog')).toContainText('速记一条待办（Windows 是 Ctrl+Shift+T）');
   await expect(page.locator('.todo-add-btn')).toBeDisabled();
   await shot('desktop-wide-dark-empty');
   await theme('light');
@@ -217,7 +221,7 @@ test('the quick-capture shortcut records from inside a terminal and gives the te
   await bar.locator('.todo-quick-input').fill('下班路上取快递');
   await shot('desktop-quick-capture-dark');
   if (shots) {
-    // The theme button is outside the bar, and a click outside puts the bar away (keeping nothing).
+    // The theme button is outside the bar, and a click outside puts the bar away (the draft waits).
     await theme('light');
     await expect(bar).toBeHidden();
     await page.locator('.column[data-col-id="todo-host"] .xterm').click();
@@ -236,12 +240,23 @@ test('the quick-capture shortcut records from inside a terminal and gives the te
   await expect(count()).toHaveText('14');
   await expect(page.locator('.column[data-col-id="todo-host"] .xterm-helper-textarea')).toBeFocused();
   expect(stored().some((t) => t.text === '下班路上取快递')).toBe(true);
-  // Esc puts it away without saving; the terminal never saw the keys.
+  // Esc puts it away without saving and throws the words away; the terminal never saw the keys.
   await page.keyboard.press(quickKey);
   await bar.locator('.todo-quick-input').fill('不存');
   await bar.locator('.todo-quick-input').press('Escape');
   await expect(bar).toBeHidden();
   expect(stored().some((t) => t.text === '不存')).toBe(false);
+  await page.keyboard.press(quickKey);
+  await expect(bar.locator('.todo-quick-input')).toHaveValue('');
+  // A slip of the mouse only puts it away: the words are still there at the next shortcut.
+  await bar.locator('.todo-quick-input').fill('手滑点到别处');
+  await page.locator('.column[data-col-id="todo-host"] .xterm').click();
+  await expect(bar).toBeHidden();
+  await page.keyboard.press(quickKey);
+  await expect(bar.locator('.todo-quick-input')).toHaveValue('手滑点到别处');
+  await bar.locator('.todo-quick-input').press('Escape');
+  await expect(bar).toBeHidden();
+  expect(stored().some((t) => t.text === '手滑点到别处')).toBe(false);
   // With the page open, the shortcut just puts the cursor in the page's own box.
   await page.locator('#todoBtn').click();
   await page.locator('.todo-row .todo-check').first().focus();

@@ -44,7 +44,8 @@
   const statusNames = { working: '干活中', idle: '空闲', failed: '失败', input: '停在确认', quota: '额度用尽/等待', queued: '待补充', waiting: '排队', asking: '在问你', done: '完成', unavailable: '未启动' };
   const taskStatuses = [['todo', '待办'], ['doing', '进行中'], ['review', '待验收'], ['needs_user', '等用户'], ['done', '完成']];
   const flagNames = { failed: '失败', blocked: '前置未完成', held: '挂起' };
-  const KEYS = { theme: 'agentdeck-hub-theme', machine: 'agentdeck-hub-machine', meta: 'agentdeck-hub-meta' };
+  const KEYS = { theme: 'agentdeck-hub-theme', machine: 'agentdeck-hub-machine', meta: 'agentdeck-hub-meta', view: 'agentdeck-hub-view' };
+  const TABS = ['overview', 'captain', 'todo', 'sessions', 'board'];
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
@@ -114,7 +115,11 @@
   for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['todo-add', 'plus']]) $(id).innerHTML = svg(icon);
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.querySelector('.nav-icon').innerHTML = svg(button.dataset.view);
-    button.addEventListener('click', () => showView(button.dataset.view));
+    button.addEventListener('click', () => {
+      showView(button.dataset.view);
+      // Tapping 待办 is for writing one down: the cursor (and the phone's keyboard) goes straight to the box.
+      if (view === 'todo') $('todo-text').focus();
+    });
   });
 
   // ---- network -------------------------------------------------------------
@@ -957,7 +962,7 @@
     updateTodoForm();
     const missing = machines.filter((m) => !Array.isArray(m.todos));
     $('todo-foot').textContent = !sources.length ? '' : (missing.length ? `现在只读到 ${sources.map((m) => m.label).join('、')} 的待办。` : `已合并 ${sources.map((m) => m.label).join(' 和 ')} 的待办。`)
-      + '两台电脑通过 git 每 30 分钟同步一次。';
+      + '两台电脑每 30 分钟自动同步一次。';
     if (!changed(lists, [open, done, todoDoneOpen, !!writer, sources.length, Core.todoBlock(machines)])) return;
     const focusedId = document.activeElement && lists.contains(document.activeElement) ? document.activeElement.dataset.todo || document.activeElement.id : '';
     lists.replaceChildren();
@@ -968,7 +973,7 @@
     if (!open.length) {
       const box = node('div', 'todo-empty'), art = node('div', 'todo-empty-art');
       art.innerHTML = svg(done.length ? 'check' : 'todo');
-      box.append(art, node('strong', '', done.length ? '都做完了' : '清单还是空的'), node('p', '', done.length ? '新冒出来的事，直接在上面记一条。' : '买东西、回邮件、别忘了的小事——打一句话，点完成就存好。'));
+      box.append(art, node('strong', '', done.length ? '都做完了' : '清单还是空的'), node('p', '', done.length ? '新冒出来的事，直接在上面记一条。' : '买东西、回邮件、别忘了的小事——打一句话，点右边的 ＋ 就存好。'));
       lists.append(box);
     } else {
       const head = node('h2', 'todo-section');
@@ -1016,6 +1021,7 @@
   function showView(next) {
     if (view === 'output' && next !== 'output') { outputRequest++; output = null; $('output-text').textContent = ''; }
     view = next;
+    if (TABS.includes(view)) store(KEYS.view, view);
     ['overview', 'captain', 'todo', 'sessions', 'board', 'output'].forEach((name) => { $(name + '-view').hidden = name !== view; });
     document.querySelectorAll('[data-view]').forEach((button) => {
       if (button.dataset.view === (view === 'output' ? 'sessions' : view)) button.setAttribute('aria-current', 'page');
@@ -1064,7 +1070,9 @@
     filter = byId(saved) ? saved : 'all';
     // With nothing chosen, work goes to the default machine (Mac) until the user picks another.
     target = filter !== 'all' ? filter : (machines.find((m) => m.default) || machines[0]).id;
-    showView('overview');
+    // Open where the user left off; a bookmark ending in #todo (or another tab's name) opens that tab.
+    const asked = location.hash.slice(1), last = stored(KEYS.view);
+    showView(TABS.includes(asked) ? asked : TABS.includes(last) ? last : 'overview');
     refreshAll();
   }
   start();

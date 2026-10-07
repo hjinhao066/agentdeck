@@ -91,7 +91,7 @@
     todoCount = el('span', 'nav-row-count');
     todo.appendChild(todoCount);
     setTodoCount(todoOpen);
-    todo.title = `待办：你自己要做的事，打一句话回车就存（${window.TodoUI ? window.TodoUI.shortcutLabel() : '⌘T'} 随时速记）`;
+    todo.title = `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI ? window.TodoUI.shortcutLabel() : '⌘T'} 速记）`;
     topEl.append(
       navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
       captain,
