@@ -94,6 +94,48 @@ function relayView(data, now) {
   return { captainId: text(data?.captainId, 256), currentId: id(data?.currentId), switching: data?.switching === true || job?.status === 'switching', seats, job, now };
 }
 
+// 待我处理 items, rebuilt field by field: display text the desktop prepared,
+// times and flags. No receipt ids, commands or credentials. Line breaks stay
+// in the longer texts; other control characters go.
+const ATTENTION_ID = /^at-[a-z0-9-]{4,40}$/;
+function attentionView(data, now) {
+  const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
+  const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').slice(0, max) : '';
+  const line = (value, max) => text(value, max).replace(/\s+/g, ' ').trim();
+  const items = (Array.isArray(data?.items) ? data.items : []).slice(0, 300)
+    .filter((item) => item && typeof item.id === 'string' && ATTENTION_ID.test(item.id) && ['need', 'report'].includes(item.kind) && line(item.title, 300))
+    .map((item) => ({
+      id: item.id, kind: item.kind, label: line(item.label, 20) || (item.kind === 'need' ? '要你处理' : '结果汇报'),
+      title: line(item.title, 300), ask: line(item.ask, 1000), detail: text(item.detail, 4000),
+      files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
+      project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
+      source: ['captain', 'notify', 'card'].includes(item.source) ? item.source : 'captain',
+      created: time(item.created), readAt: time(item.readAt), done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0,
+      doneText: item.done === true ? line(item.doneText, 200) : '',
+      replies: (Array.isArray(item.replies) ? item.replies : []).slice(-3).filter((r) => r && typeof r.text === 'string')
+        .map((r) => ({ text: text(r.text, 1000), at: time(r.at), from: r.from === 'phone' ? 'phone' : 'desktop', seen: r.seen === true })),
+    }));
+  const open = items.filter((item) => !item.done);
+  const need = open.filter((item) => item.kind === 'need').length;
+  const unreadReports = open.filter((item) => item.kind === 'report' && !item.readAt).length;
+  return { items, counts: { need, reports: open.length - need, unreadReports, badge: need + unreadReports }, now };
+}
+// What the phone may do to an item: mark some read, reply, tick, put back.
+function attentionRequest(body) {
+  const keys = Object.keys(body);
+  if (body.op === 'read') {
+    if (keys.some((key) => key !== 'op' && key !== 'ids') || !Array.isArray(body.ids) || body.ids.length > 100 || body.ids.some((id) => typeof id !== 'string' || !ATTENTION_ID.test(id))) return null;
+    return { op: 'read', ids: [...new Set(body.ids)] };
+  }
+  if (typeof body.id !== 'string' || !ATTENTION_ID.test(body.id)) return null;
+  if (body.op === 'reply') {
+    if (keys.some((key) => !['op', 'id', 'text'].includes(key)) || typeof body.text !== 'string' || !body.text.trim() || body.text.length > 4000 || /\x00/.test(body.text)) return null;
+    return { op: 'reply', id: body.id, text: body.text };
+  }
+  if (!['done', 'reopen'].includes(body.op) || keys.some((key) => key !== 'op' && key !== 'id')) return null;
+  return { op: body.op, id: body.id };
+}
+
 // Login-item registration is shared by the platforms whose Electron
 // `openAtLogin` can restore the private web service after a user login.
 function supportsLoginItem(platform) { return LOGIN_ITEM_PLATFORMS.includes(platform); }
@@ -156,6 +198,9 @@ class MobileWebServer {
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
+    // 待我处理: the list, and the user's read / reply / tick from the phone.
+    const { getAttention, writeAttention } = arguments[0] || {};
+    Object.assign(this.sources, { getAttention, writeAttention });
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
@@ -511,6 +556,22 @@ class MobileWebServer {
       await this.sources.sendCaptain(body.message, files);
       return this.json(res, 200, { queued: true });
     }
+    // 待我处理: the same login, Origin, Fetch Metadata and CSRF checks as a
+    // message to the Captain, re-checked after the body is read. A reply goes
+    // to this computer's Captain only.
+    if (req.method === 'GET' && route === '/api/attention' && this.sources.getAttention) return this.json(res, 200, attentionView(await this.sources.getAttention(), this.now()));
+    if (req.method === 'POST' && route === '/api/attention' && this.sources.writeAttention) {
+      let body;
+      try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
+      const input = attentionRequest(body);
+      if (!input) return this.json(res, 400, { error: 'Invalid request.' });
+      if (!this.writeCredential(req, res, prefixed)) return;
+      let result;
+      try { result = await this.sources.writeAttention(input); }
+      catch (err) { return this.json(res, 409, { error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200) || '没有成功。' }); }
+      const view = result?.item ? attentionView({ items: [result.item] }, this.now()).items[0] || null : null;
+      return this.json(res, 200, { ok: true, item: view });
+    }
     // Moving the Captain to another account. Each machine answers only for its
     // own Captain, under its own prefix, cookie and CSRF token. The switch runs
     // on the desktop; this call only starts it and the phone polls GET for the outcome.
@@ -554,4 +615,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, relayView, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
+module.exports = { MobileWebServer, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };

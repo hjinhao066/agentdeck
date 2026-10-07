@@ -132,6 +132,22 @@ async function request(command, waitForCompletion) {
 
 const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'];
 
+// 待我处理: what the user should come back to. Plain words for 队长, who files the items.
+const INBOX_HELP = [
+  'inbox：用户的「待我处理」页（桌面侧边栏和手机总台都有），用户不在电脑前时，回来一条条看、就地回复。',
+  '  inbox need --title "一句话说明" --ask "要用户做什么" [--type decide|login|pay|question|review|other] [--urgent]',
+  '      要用户介入的事：等用户拍板、登录或授权、付款、回答问题、验收卡住。同时发本机提醒；--urgent 再加 Bark 紧急提醒，仅需用户登录/授权或付款时用。',
+  '  inbox report --title "一句话结论"',
+  '      结果汇报：你在对话里告诉用户的那种短结论（含你没认的结论、你替队员做的决定）。用户回来能回头看、逐条回复。',
+  '  共用可选：--detail "展开后看的细节和证据" --files 路径1,路径2 --project 项目 --card 卡片id --session 会话id',
+  '      --card：need 在这张卡完成时自动打勾；--session：登记时这个会话正停在提问或确认上，答完后自动打勾。',
+  '  inbox list [--all]                          未解决的条目和 id；--all 再列最近解决的',
+  '  inbox resolve --id 条目id [--note "怎么解决的"]   你替用户办了、用户口头答了、事情过时了，都要 resolve',
+  '用户在页面上回复某条，会作为回执交给你，带着原条目；那条随即打勾。用户把要处理的事勾成「已处理」也会告诉你。',
+  '标题和要求写用户看得懂的大白话中文，一句话说清；内部 id 放 --card/--session，不要当主要信息。',
+  '',
+].join('\n');
+
 function usage() {
   process.stdout.write(
     'AgentDeck managed-terminal bridge\n\n' +
@@ -146,6 +162,7 @@ function usage() {
     'Captain only (队长, the main session):\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, critical / volume 3\n' +
+    '  inbox need|report|list|resolve            the user\'s 待我处理 page; inbox help for details\n' +
     '  task add --project "Project" --title "Task" [--detail "Description"] [--depends id,id] [--verify] [--priority high]\n' +
     '  task list [--project "Project"] [--status todo|doing|review|needs_user|done] [--priority high|normal]\n' +
     '  task move --id <card-id> --status todo|doing|review|needs_user|done\n' +
@@ -194,6 +211,31 @@ async function main() {
     const response = await request({ action: 'main-notify-user',
       message: testing ? '【测试】AgentDeck Bark 通知（critical，音量 3）。' : args.message,
       urgent: testing || args.urgent === true, test: testing }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
+
+  if (action === 'inbox') {
+    const op = args._[1];
+    if (!op || op === 'help') { process.stdout.write(INBOX_HELP); return; }
+    if (!['need', 'report', 'list', 'resolve'].includes(op)) fail('inbox takes need, report, list or resolve. Run inbox help.');
+    const allowed = { need: ['title', 'ask', 'type', 'detail', 'files', 'project', 'card', 'session', 'urgent'],
+      report: ['title', 'detail', 'files', 'project', 'card', 'session'], list: ['all'], resolve: ['id', 'note'] }[op];
+    const extra = Object.keys(args).find((key) => key !== '_' && !allowed.includes(key));
+    if (extra) fail(`inbox ${op} does not take --${extra}. Run inbox help.`);
+    if (args._.length > 2) fail('inbox: put text in --title "..." (quote it).');
+    const input = {};
+    for (const key of allowed) {
+      if (args[key] === undefined) continue;
+      if (key === 'urgent' || key === 'all') {
+        if (args[key] !== true) fail(`--${key} takes no value.`);
+        input[key] = true;
+      } else if (typeof args[key] !== 'string' || !args[key].trim()) fail(`inbox ${op} --${key} requires a value.`);
+      else input[key] = key === 'files' ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : args[key];
+    }
+    if ((op === 'need' || op === 'report') && !input.title) fail(`inbox ${op} requires --title "一句话结论".`);
+    if (op === 'resolve' && !input.id) fail('inbox resolve requires --id <条目id> (see inbox list).');
+    const response = await request({ action: 'main-inbox', op, input }, false);
     process.stdout.write(`${response.result || ''}\n`);
     return;
   }

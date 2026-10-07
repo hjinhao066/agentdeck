@@ -26,6 +26,10 @@
       <section id="overview-view" class="view" aria-label="总览">
         <div id="machine-cards" class="stack"></div>
       </section>
+      <section id="attention-view" class="view" aria-label="待我处理" hidden>
+        <p id="attention-sources" class="board-sources"></p>
+        <div id="attention-lists" class="at-lists"></div>
+      </section>
       <section id="captain-view" class="view captain-view" aria-label="队长对话" hidden>
         <div class="sr-only"><h1 id="captain-title"></h1><span id="captain-status"></span></div>
         <div id="captain-turns" class="turns" role="region" aria-label="队长对话记录" tabindex="0"></div>
@@ -55,6 +59,7 @@
     </main>
     <nav class="navigation" aria-label="主导航">
       <button type="button" data-view="overview" aria-current="page"><span class="nav-icon" aria-hidden="true"></span><span>总览</span></button>
+      <button type="button" data-view="attention" id="attention-tab"><span class="nav-icon" aria-hidden="true"></span><span class="nav-attention" aria-hidden="true" hidden></span><span>待我处理</span></button>
       <button type="button" data-view="captain"><span class="nav-icon" aria-hidden="true"></span><span>队长</span></button>
       <button type="button" data-view="sessions"><span class="nav-icon" aria-hidden="true"></span><span>会话</span></button>
       <button type="button" data-view="board"><span class="nav-icon" aria-hidden="true"></span><span>看板</span></button>

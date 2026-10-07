@@ -509,7 +509,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user', 'main-inbox'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -913,6 +913,9 @@ app.whenReady().then(async () => {
     // Which account the Captain is on, and moving it to another: the desktop's own manual switch.
     getRelay: () => requestMobile('relay'),
     switchRelay: (input) => requestMobile('relay-switch', input),
+    // 待我处理: the same list and actions as the desktop page.
+    getAttention: () => requestMobile('attention'),
+    writeAttention: (input) => requestMobile('attention-write', input),
     // Like pasted screenshots, phone images reach the Captain as file paths.
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
     getBoardVersion: () => boardVersionOf(taskStore.dir),
@@ -1212,7 +1215,15 @@ app.whenReady().then(async () => {
       try { result = await pending.notifyPromise; }
       catch (err) { error = err.message; }
     }
-    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read';
+    // 待我处理: a newly filed need item alerts the user the same way notify-user does.
+    if (action === 'main-inbox' && pending.command.op === 'need' && turnId && !error) {
+      const input = pending.command.input || {};
+      const message = [input.title, input.ask].filter((v) => typeof v === 'string' && v.trim()).join('\n').slice(0, 4000);
+      pending.notifyPromise ||= notifyUser({ callerId: pending.command.callerId, id: pending.command.id, message, urgent: input.urgent === true }, visible === true, turnId);
+      try { result = (typeof result === 'string' ? result + '\n' : '') + await pending.notifyPromise; }
+      catch (err) { result = (typeof result === 'string' ? result + '\n' : '') + '本机提醒没发出：' + err.message; }
+    }
+    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read' || action === 'main-inbox';
     pendingBoardCommands.delete(requestId);
     if (pending?.installResolve) {
       if (error) pending.installReject(new Error(error)); else pending.installResolve();

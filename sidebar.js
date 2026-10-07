@@ -79,6 +79,13 @@
     const dot = el('span', 'cn-dot');
     captain.insertBefore(dot, captain.querySelector('.nav-row-label').nextSibling);
     captainRow = { el: captain, dot };
+    // 待我处理: what the AI handed back to the user; the badge counts what still needs them.
+    const attention = navRow('attention', 'inbox', '待我处理', '', () => host.togglePage('attention'));
+    attention.id = 'attentionBtn';
+    const attentionBadge = el('span', 'nav-row-badge');
+    attentionBadge.hidden = true;
+    attentionBadge.setAttribute('aria-hidden', 'true');
+    attention.appendChild(attentionBadge);
     const tasks = navRow('tasks', 'tasks', '任务看板', '', () => host.toggleTaskBoard());
     tasks.id = 'taskBoardBtn';
     tasks.setAttribute('aria-label', '任务看板');
@@ -86,6 +93,7 @@
     topEl.append(
       navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
       captain,
+      attention,
       tasks,
       slot,
       navRow('schedule', 'clock', 'Schedule', '', () => host.togglePage('schedule')),
