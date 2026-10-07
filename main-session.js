@@ -2319,7 +2319,7 @@
   // command after that would start work 队长 believes never started, and a retry
   // would then start it twice.
   function refuseLate(message) {
-    if (['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'].includes(message.action) && Number.isFinite(message.deadline) && Date.now() > message.deadline) {
+    if (['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer', 'main-discuss-receipt'].includes(message.action) && Number.isFinite(message.deadline) && Date.now() > message.deadline) {
       throw new Error('这条命令等到超时才轮到，没有执行。先用 ledger 确认现状，需要的话再发一次。');
     }
   }
@@ -2361,6 +2361,18 @@
         if (!isMain(caller)) throw new Error('只有队长可以用这个命令。');
         return { done: true, visible: host.captainColumnVisible(caller.id),
           turnId: message.test ? message.id : host.terms.get(caller.id)?.captainTurnId || message.id };
+      case 'main-discuss-receipt': {
+        if (typeof message.receiptId !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(message.receiptId) ||
+            typeof message.result !== 'string' || !message.result.trim() || message.result.length > 4000) throw new Error('无效讨论回执');
+        s.discussionReceipts ||= [];
+        if (!s.discussionReceipts.includes(message.receiptId)) {
+          s.pending.push({ taskId: message.receiptId, colId: s.colId, title: '讨论一下',
+            ts: Date.now(), summary: message.result, source: 'command' });
+          s.discussionReceipts.push(message.receiptId);
+          save();
+        }
+        return { done: true, result: '讨论回执已收录。' };
+      }
       case 'main-briefing':
         return { done: true, result: briefingText() };
       case 'main-quota':

@@ -239,3 +239,40 @@ test('a web task is queued until the executor reports the page is open, and the 
   await w.api.submit({ action: 'complete', taskId: task.id, result: 'Air scatters blue light.' }, col);
   assert.equal(task.status, 'done'); assert.equal(Web.isQueued(task), false);
 });
+
+test('discussion receipts require the Captain, validate the payload and deduplicate the same receipt without replacing its text', async () => {
+  const w = world();
+  const receipt = { action: 'main-discuss-receipt', receiptId: 'd-example-complete-1',
+    result: '讨论已完成。建议先核对约束；主要分歧保留。完整答案：/tmp/discussion/final.md', deadline: Date.now() + 5000 };
+  const worker = w.host.createSession({ id: 'discussion-worker', cmd: 'claude', captainCrew: true });
+  await assert.rejects(w.api.handle(receipt, worker), /只有队长/);
+  assert.equal(w.config.mainSession.pending.length, 0);
+  for (const malformed of [{ receiptId: '../invalid' }, { receiptId: '' }, { result: '' }, { result: 'x'.repeat(4001) }]) {
+    await assert.rejects(w.api.handle({ ...receipt, ...malformed }, w.captain), /无效讨论回执/);
+  }
+  assert.equal(w.config.mainSession.pending.length, 0);
+  const first = await w.api.handle(receipt, w.captain);
+  assert.equal(first.done, true);
+  assert.equal(w.config.mainSession.pending.length, 1);
+  assert.equal(w.config.mainSession.pending[0].summary, receipt.result);
+  assert.equal(w.config.mainSession.pending[0].taskId, receipt.receiptId);
+  assert.deepEqual(Array.from(w.config.mainSession.discussionReceipts), [receipt.receiptId]);
+  await w.api.handle({ ...receipt, result: '重复通知不得覆盖原始结果。' }, w.captain);
+  assert.equal(w.config.mainSession.pending.length, 1);
+  assert.equal(w.config.mainSession.pending[0].summary, receipt.result);
+  assert.equal(w.config.mainSession.discussionReceipts.length, 1);
+  assert.equal(w.runs.length, 0);
+  assert.equal(w.shellInputs.length, 0);
+});
+
+test('an expired discussion receipt never enters the Captain queue or consumes its deduplication id', async () => {
+  const w = world();
+  const receipt = { action: 'main-discuss-receipt', receiptId: 'd-example-paused-1', result: '讨论已暂停，网页原请求待处理。' };
+  await assert.rejects(w.api.handle({ ...receipt, deadline: Date.now() - 1000 }, w.captain), /超时|没有执行/);
+  assert.equal(w.config.mainSession.pending.length, 0);
+  assert.equal(w.config.mainSession.discussionReceipts, undefined);
+  await w.api.handle({ ...receipt, deadline: Date.now() + 5000 }, w.captain);
+  assert.equal(w.config.mainSession.pending.length, 1);
+  assert.equal(w.config.mainSession.pending[0].summary, receipt.result);
+  assert.deepEqual(Array.from(w.config.mainSession.discussionReceipts), [receipt.receiptId]);
+});
