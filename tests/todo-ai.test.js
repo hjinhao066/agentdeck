@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 const { TodoStore } = require('../todo-store');
 const { TaskStore } = require('../task-board');
-const { TodoAI, isAi, taskText, taskId, taskDetail } = require('../todo-ai');
+const { TodoAI, isAi, taskId, taskDetail } = require('../todo-ai');
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-ai-unit-'));
@@ -18,36 +18,9 @@ function fixture(t) {
   return { root, todos, tasks, deliveries, alerts, options, ai: new TodoAI(options) };
 }
 
-test('@ai is literal opt-in, accepts case/full-width @/spacing and adjacent Chinese', () => {
-  for (const text of ['@ai 查资料', '@AI', '@Ai', '@aI', '＠ai', '＠AI查资料', '查资料@ai', '查@AI一下', '查＠ ai资料', '@\nai 找书', '查 @ai 资料', '@ai,找书', 'prefix@AIsuffix', '@ai1', '@ai_tool', '@aid', '@air', '@aix']) assert.equal(isAi(text), true, text);
-  for (const text of ['', '查资料', '找电子书', '病历 CT', 'AI', 'ai@', '@a i', null, 4]) assert.equal(isAi(text), false, String(text));
-});
-
-test('standalone trailing AI opts in; middle AI, joined words and following punctuation do not', () => {
-  for (const text of ['查一下西雅图到温哥华的火车 AI', '查资料 ai', '查资料 Ai', '查资料 aI', '查资料  AI', '查资料 AI   ', '了解一下 AI']) assert.equal(isAi(text), true, text);
-  for (const text of ['查 AI 资料', 'AI 查资料', '了解 OpenAI', '学AI', '查一下AI', 'AI', '查 AI。', '查 AI!', '查 AI别的字', '查 AIs', '查 A I']) assert.equal(isAi(text), false, text);
-  assert.equal(taskText('查一下西雅图到温哥华的火车 AI'), '查一下西雅图到温哥华的火车');
-  assert.equal(taskText('查资料  ai   '), '查资料');
-  assert.equal(taskText('@AI 查资料 AI'), '@AI 查资料');
-  assert.equal(taskText('查 AI 资料'), '查 AI 资料');
-  assert.equal(taskText('了解 OpenAI'), '了解 OpenAI');
-});
-
-test('trailing AI stays in Todo original but is stripped from Captain card/body; ambiguous topic is literal opt-in', (t) => {
-  const { todos, tasks, deliveries, ai } = fixture(t);
-  const text = '查一下西雅图到温哥华的火车 AI';
-  const item = todos.add({ text });
-  todos.add({ text: '查 AI 资料' }); todos.add({ text: '了解 OpenAI' }); todos.add({ text: '学AI' });
-  const topic = todos.add({ text: '了解一下 AI' });
-  ai.scan();
-  assert.equal(tasks.list().length, 2);
-  assert.equal(deliveries.length, 2);
-  const card = tasks.list().find((c) => c.id === taskId(item));
-  assert.equal(card.title, '查一下西雅图到温哥华的火车');
-  assert.match(card.detail, /待办内容：查一下西雅图到温哥华的火车\n/);
-  assert.ok(!card.detail.includes(text));
-  assert.equal(todos.list().find((i) => i.id === item.id).text, text);
-  assert.equal(tasks.list().find((c) => c.id === taskId(topic)).title, '了解一下');
+test('@ai requires end/whitespace/punctuation and excludes handles and email addresses', () => {
+  for (const text of ['@ai 查资料', '@AI', '@Ai', '@aI', '＠ai', '＠AI 查资料', '查资料@ai', '查@AI，一下', '查＠ ai。', '@\nai 找书', '查 @ai 资料', '@ai,找书', '@ai.查资料', '@ai：找书', '@ai（找书）', '引用「@ai」']) assert.equal(isAi(text), true, text);
+  for (const text of ['', '查资料', '找电子书', '病历 CT', 'AI', '了解一下 AI', '学习 AI', '查 AI 资料', 'OpenAI', '学AI', 'ai@', '@a i', '@Aidan', '联系 @air_france 客服', '找 @aimee 要资料', '问问@AIRPORT', 'bob@aiden.com', 'me@ai.com', 'first.last+tag@AI.com', '用户@ai.com', 'a!@ai.com', '"bob"@ai.com', 'a%tag@ai.中国', '@ai1', '@ai_tool', '@aid', '@air', '@aix', '@ai查资料', '＠AI查资料', '@ai🤖', null, 4]) assert.equal(isAi(text), false, String(text));
 });
 
 test('scan ignores personal, done/deleted todos; one card and acknowledged delivery survive restart', (t) => {
@@ -89,7 +62,7 @@ test('only actual text edits resubmit, A to B to A creates new revision; late st
 
 test('startup/hourly fallback recovers a missed save and interrupted card creation without duplicate', (t) => {
   const { todos, tasks, deliveries, ai, options } = fixture(t);
-  const item = todos.add({ text: '＠AI漏掉的保存' });
+  const item = todos.add({ text: '＠AI 漏掉的保存' });
   const add = tasks.add.bind(tasks); let fail = true;
   tasks.add = (input) => { const result = add(input); if (fail) { fail = false; throw new Error('crash after card write'); } return result; };
   assert.throws(() => ai.scan(), /crash/);
@@ -135,16 +108,17 @@ test('state flow waits for user, requires real artifacts, never changes user che
 });
 function fixtureOptions(todos, tasks, alerts) { return { todos, tasks, deliver() {}, notify: async (value) => alerts.push(value) }; }
 
-test('failed notification attempt is durable; retries and restart do not ring again', async (t) => {
+test('failed reminder enqueue remains retryable; successful enqueue is durable across restart', async (t) => {
   const { todos, tasks, ai } = fixture(t);
   const item = todos.add({ text: '@ai test' }); ai.scan();
   let calls = 0;
-  const failing = new TodoAI({ todos, tasks, deliver() {}, notify: async () => { calls++; throw new Error('offline'); } });
+  const failing = new TodoAI({ todos, tasks, deliver() {}, notify: async () => { calls++; if (calls === 1) throw new Error('offline'); } });
   const input = { id: item.id, taskId: taskId(item), status: 'failed', message: '失败' };
   await assert.rejects(failing.status(input), /offline/);
+  assert.equal(todos.list()[0].ai.exceptionNotifiedAt, null);
   await failing.status(input);
   await new TodoAI({ todos, tasks, deliver() {}, notify: async () => calls++ }).status(input);
-  assert.equal(calls, 1);
+  assert.equal(calls, 2);
 });
 
 test('each text revision is delivered by its saving device, synced AI state is read-only on the peer', async (t) => {
@@ -182,7 +156,7 @@ test('an edit arriving between status validation and disk mutation cannot corrup
 test('an unsynced phone checkbox base waits for original ownership, avoiding a second Captain delivery', (t) => {
   const { root, todos, tasks, ai, deliveries } = fixture(t);
   const remote = new TodoStore(path.join(root, 'remote-todos'), { deviceId: 'dev-win' });
-  const original = remote.add({ text: '查火车 AI' });
+  const original = remote.add({ text: '@ai 查火车' });
   const staleCopy = fs.readFileSync(path.join(remote.dir, 'dev-win.json'), 'utf8');
   const remoteAI = new TodoAI({ todos: remote, tasks, deliver() {}, notify: async () => {} });
   remoteAI.scan(); remoteAI.acknowledge(original.id, taskId(original));
@@ -201,4 +175,11 @@ test('an unsynced phone checkbox base waits for original ownership, avoiding a s
   assert.ok(seen.ai.deliveredAt);
   assert.equal(deliveries.length, 0);
   assert.equal(tasks.list().length, 1);
+});
+test('backend card write errors receive a stable diagnostic code for Captain exception reporting', async (t) => {
+  const { todos, tasks, ai } = fixture(t);
+  const item = todos.add({ text: '@ai 测试' }); ai.scan();
+  tasks.todoStatus = () => { throw new Error('invalid JSON with private content'); };
+  await assert.rejects(ai.status({ id: item.id, taskId: taskId(item), status: 'working' }), (error) => error.code === 'TODO_BOARD_WRITE');
+  assert.equal(todos.list()[0].ai.status, 'queued');
 });

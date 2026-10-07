@@ -43,10 +43,26 @@ test('ordinary sender rejects malformed messages and levels before key lookup or
   let lookups = 0, calls = 0;
   const send = createBarkSender({ getConfig: () => { lookups++; return {}; }, fetchImpl: async () => { calls++; } });
   for (const value of [{ message: '' }, { message: true }, { message: ' ' }, { message: 'x'.repeat(4001) },
-    { message: 'relay', level: 'timeSensitive' }, { message: 'relay', level: false }]) {
+    { message: 'relay', level: 'passive' }, { message: 'relay', level: false }]) {
     await assert.rejects(send(value), /Invalid Bark message or notification level/);
   }
   assert.equal(lookups, 0); assert.equal(calls, 0);
+});
+
+test('internal Todo failure batches use timeSensitive without critical volume, other requests cannot select it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-bark-todo-'));
+  try {
+    const h = harness(); h.config.barkKeyFile = path.join(dir, 'key');
+    fs.writeFileSync(h.config.barkKeyFile, 'fake_todo_key');
+    const command = { id: 'todo-failures-' + 'a'.repeat(64), nativeWeb: true, urgent: true, level: 'timeSensitive' };
+    assert.match(await h.notify(command), /Bark 提醒已发送/);
+    const body = JSON.parse(h.calls[0][1].body);
+    assert.equal(body.level, 'timeSensitive'); assert.equal(body.volume, undefined);
+    for (const extra of [{ nativeWeb: false }, { id: 'request-1' }, { urgent: false }, { test: true }, { level: 'critical' }]) {
+      await assert.rejects(h.notify({ ...command, ...extra }));
+    }
+    assert.equal(h.calls.length, 1); assert.equal(h.alerts.length, 1);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('default uses local alerts and current turn, never reads a key or sends Bark', async () => {

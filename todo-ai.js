@@ -11,14 +11,25 @@ const TRANSITIONS = {
   done: [], failed: ['working', 'needs_user', 'done'],
 };
 // Literal opt-in, including Chinese full-width input. No intent classifier.
-function isAi(text) { return typeof text === 'string' && (/[@＠]\s*ai/iu.test(text) || / ai$/iu.test(text.trimEnd())); }
-function taskText(text) { return text.trimEnd().replace(/ ai$/iu, '').trimEnd(); }
+function isAi(text) {
+  if (typeof text !== 'string') return false;
+  for (const match of text.matchAll(/[@＠]\s*ai(?!_)(?=$|\s|\p{P})/giu)) {
+    const before = text.slice(0, match.index), after = text.slice(match.index + match[0].length);
+    // An ASCII mailbox/local-part or handle is not a mention. Chinese can
+    // precede the marker without a space; email domains still exclude it.
+    if (/[A-Za-z0-9._%+@＠-]$/.test(before)) continue;
+    // Exclude domains even with RFC mailbox punctuation/quoted local-parts.
+    if (/^\.[\p{L}\p{N}-]/u.test(after) && /\S$/u.test(before)) continue;
+    return true;
+  }
+  return false;
+}
 function revision(item) {
   return crypto.createHash('sha256').update(JSON.stringify([item.id, item.text, item.textUpdated || item.created])).digest('hex');
 }
 function taskId(item) { return 'todo-' + revision(item); }
 function taskDetail(item, id) {
-  return `来自 Todo 随手记的新任务。项目：todo；待办 id：${item.id}；任务卡 id：${id}。\n待办内容：${taskText(item.text)}\n\n` +
+  return `来自 Todo 随手记的新任务。项目：todo；待办 id：${item.id}；任务卡 id：${id}。\n待办内容：${item.text}\n\n` +
     '由 AgentDeck 队长照常派活。办完的标准是拿到实物，不是写一份说明：搜资料要把资料本身搜全并保存，再附总结；找电子书要把 PDF/EPUB 文件本身找到并落盘。\n' +
     '缺用户才有的信息或材料（如病历、CT 报告）时：等用户提供，不要自己猜、不要瞎编。回填 needs_user（等你提供），说明具体缺什么；不得把缺材料当作已完成。\n' +
     '隐私：病历、CT、证件、财务等材料只在本机处理和存放，不得上传到任何在线服务（包括在线模型、网页工具或云盘）。待办原文的同步存储方式保持原样。\n' +
@@ -32,6 +43,7 @@ class TodoAI {
     this.todos = todos; this.tasks = tasks; this.deliver = deliver; this.notify = notify; this.changed = changed;
   }
   scan() {
+    if (this.todos.readFiles().some((file) => file.own && !file.doc)) throw Object.assign(new Error('Todo store is damaged.'), { code: 'TODO_STORE_CORRUPT' });
     // One content revision has one writing device. Other computers display its
     // synced AI state but never wake a second Captain, even while Git is offline.
     for (const item of this.todos.list()) {
@@ -49,7 +61,7 @@ class TodoAI {
       if (ai.ownerDevice !== this.todos.deviceId) continue;
       let card = this.tasks.list({ archived: true }).find((c) => c.id === id);
       if (!card) {
-        card = this.tasks.add({ id, project: 'todo', title: taskText(item.text), detail: taskDetail(item, id) }).card;
+        card = this.tasks.add({ id, project: 'todo', title: item.text, detail: taskDetail(item, id) }).card;
         this.changed();
       }
       if (!ai.deliveredAt) this.deliver({ item: current, card });
@@ -60,7 +72,8 @@ class TodoAI {
     if (!item || item.ai?.taskId !== cardId || item.ai.revision !== revision(item) || item.ai.deliveredAt) return;
     this.todos.writeAi(id, (t) => {
       if (t.ai?.taskId !== cardId || t.ai.revision !== revision(t)) throw new Error('Todo delivery version changed.');
-      return { ...t.ai, deliveredAt: this.todos.stamp(), updated: this.todos.stamp() };
+      const at = this.todos.stamp(t.ai.updated);
+      return { ...t.ai, deliveredAt: at, updated: at };
     });
     this.changed();
   }
@@ -74,19 +87,28 @@ class TodoAI {
     if (!item || !isAi(item.text) || item.ai?.taskId !== cardId || item.ai.revision !== revision(item)) throw new Error('待办已编辑或任务版本过期，请重新读取 todo list。');
     if (item.ai.ownerDevice !== this.todos.deviceId) throw new Error('请在这条待办的投递设备上回填。');
     if (item.ai.status !== status && !TRANSITIONS[item.ai.status]?.includes(status)) throw new Error('Invalid AI status transition.');
-    // The same status/report is safe to retry. Exception marker is persisted
-    // before notify-user: delivery failure must not make a phone ring twice.
+    // notify durably enqueues, it does not ring the phone here. Only mark a
+    // failure once that enqueue succeeds, so a repaired queue can retry it.
     const shouldNotify = status === 'failed' && !item.ai.exceptionNotifiedAt;
     const at = this.todos.stamp(item.updated);
-    this.tasks.todoStatus({ id: cardId, status, message: message.trim() });
+    try { this.tasks.todoStatus({ id: cardId, status, message: message.trim() }); }
+    catch (error) { error.code ||= 'TODO_BOARD_WRITE'; throw error; }
     const next = this.todos.writeAi(id, (t) => {
       if (t.ai?.taskId !== cardId || t.ai.revision !== revision(t)) throw new Error('待办已编辑或任务版本过期，请重新读取 todo list。');
       return { ...t.ai, status, message: message.trim(), files: status === 'done' ? [...new Set(files)] : [], updated: at,
-        exceptionNotifiedAt: shouldNotify ? at : t.ai.exceptionNotifiedAt };
+        exceptionNotifiedAt: t.ai.exceptionNotifiedAt };
     });
     this.changed();
-    if (shouldNotify) await this.notify({ id: 'todo-error-' + item.ai.revision, message: 'Todo AI 任务没办成或出错，请在 AgentDeck 查看详情。', urgent: true });
+    if (shouldNotify) {
+      await this.notify({ id: 'todo-error-' + item.ai.revision, message: 'Todo AI 任务没办成或出错，请在 AgentDeck 查看详情。', urgent: true });
+      const marked = this.todos.writeAi(id, (t) => {
+        if (t.ai?.taskId !== cardId || t.ai.revision !== revision(t)) throw new Error('待办已编辑或任务版本过期，请重新读取 todo list。');
+        const notifiedAt = this.todos.stamp(t.ai.updated);
+        return { ...t.ai, updated: notifiedAt, exceptionNotifiedAt: notifiedAt };
+      });
+      this.changed(); return marked;
+    }
     return next;
   }
 }
-module.exports = { TodoAI, isAi, taskText, revision, taskId, taskDetail, STATUSES, TRANSITIONS };
+module.exports = { TodoAI, isAi, revision, taskId, taskDetail, STATUSES, TRANSITIONS };

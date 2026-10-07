@@ -80,8 +80,8 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await page.locator('#todoBtn').click();
     await page.locator('.todo-add-input').fill('自己去取快递');
     await page.locator('.todo-add-input').press('Enter');
-    const original = '查一下西雅图到温哥华的火车 AI';
-    const taskBody = '查一下西雅图到温哥华的火车';
+    const original = '@ai 查一下西雅图到温哥华的火车';
+    const taskBody = original;
     await page.locator('.todo-add-input').fill(original);
     await page.locator('.todo-add-input').press('Enter');
     await expect.poll(async () => (await cards()).length).toBe(1);
@@ -96,8 +96,28 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     await page.locator('#mdCwd').fill(profile);
     await page.locator('#mdCreate').click();
     await expect.poll(() => fs.existsSync(controlFile), { timeout: 20000 }).toBe(true);
-    const captainId = await page.evaluate(() => MainSession.mainCol().id);
+    let captainId = await page.evaluate(() => MainSession.mainCol().id);
     await expect.poll(async () => (await items()).find((i) => i.id === submitted.id).ai.deliveredAt).not.toBeNull();
+    await expect.poll(() => page.evaluate(() => Object.keys(config.todoInbox).length)).toBe(1);
+    // Acceptance into pending is still unread. Close the actual test Captain
+    // column and create another: the durable queue must wake the new listener.
+    await expect.poll(() => page.evaluate((id) => terms.get(id).sendingPrompt, captainId)).toBe(false);
+    fs.unlinkSync(controlFile); // confirm the new stand-in has started by waiting for its credentials file
+    await page.evaluate(() => {
+      const col = MainSession.mainCol(), confirmBefore = window.confirm;
+      window.confirm = () => true;
+      try { removeCol(col); } finally { window.confirm = confirmBefore; }
+      window.deck.saveConfigSync(config);
+    });
+    expect(await page.evaluate(() => config.mainSession)).toBeNull();
+    expect(await page.evaluate(() => Object.keys(config.todoInbox).length)).toBe(1);
+    await page.locator('.nav-row[data-nav="captain"]').click();
+    await page.locator('#mdCmd').fill(fake);
+    await page.locator('#mdCwd').fill(profile);
+    await page.locator('#mdCreate').click();
+    captainId = await page.evaluate(() => MainSession.mainCol().id);
+    await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
+    await expect.poll(() => page.evaluate(() => MainSession.state().pending.length)).toBe(1);
     await expect.poll(() => captured().join('\n'), { timeout: 20000 }).toContain('run_in_background: true');
     await expect.poll(() => page.evaluate((id) => terms.get(id).sendingPrompt, captainId)).toBe(false);
     await page.evaluate((id) => ChatUI.setMode(id, 'chat'), captainId);
@@ -109,7 +129,6 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect(receipt.stderr).toBe('');
     for (const text of ['【AgentDeck 新回执】', submitted.id, submitted.ai.taskId, taskBody,
       '拿到实物', 'PDF/EPUB', '等用户提供，不要自己猜、不要瞎编', '不得上传到任何在线服务']) expect(receipt.stdout).toContain(text);
-    expect(receipt.stdout).not.toContain(original);
     await expect(composer).toHaveValue('我还没写完的草稿');
     expect(captured().slice(beforePrompts).some((p) => p.includes('我还没写完的草稿') || p.includes(original))).toBe(false);
     expect((await cli(['todo', 'list'])).stdout).toContain(submitted.id);
@@ -165,7 +184,8 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect(stale.stderr).toContain('版本过期');
     expect((await status(next, 'failed', ['--message', '测试异常：没有找到资料'])).code).toBe(0);
     await expect.poll(async () => (await bark()).length).toBe(1);
-    expect((await bark())[0].body).toBe('Todo AI 任务没办成或出错，请在 AgentDeck 查看详情。');
+    expect((await bark())[0]).toMatchObject({ body: 'Todo AI 有 1 条任务没办成或出错，请在 AgentDeck 查看详情。', level: 'timeSensitive' });
+    expect((await bark())[0].volume).toBeUndefined();
     expect((await status(next, 'failed', ['--message', '测试异常：没有找到资料'])).code).toBe(0);
     expect(await bark()).toHaveLength(1);
     expect((await items()).find((i) => i.id === submitted.id).ai.status).toBe('failed');
@@ -189,6 +209,18 @@ test('Todo AI goes through the Captain receipt channel and persists artifact/sta
     expect((await cli(['receipts'])).stdout).not.toContain(edited);
     expect(await bark()).toHaveLength(1);
     expect(await page.evaluate(() => Object.keys(config.todoDeliveries).length)).toBe(2);
+    expect(await page.evaluate(() => Object.keys(config.todoInbox).length)).toBe(0);
+    // Backend filesystem failures must reach the Captain, without leaking the
+    // damaged data into the receipt or making success/waiting tasks ring.
+    const healthy = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, '{broken-private-CT-material');
+    await expect.poll(() => page.evaluate(() => MainSession.state().pending.some((p) => p.title === 'Todo 后台异常'))).toBe(true);
+    const exception = await cli(['receipts']);
+    expect(exception.stdout).toContain('TODO_STORE_CORRUPT');
+    expect(exception.stdout).not.toContain('private-CT-material');
+    fs.writeFileSync(file, healthy);
+    await expect.poll(async () => (await items()).length).toBe(2);
+    expect(await bark()).toHaveLength(1);
     if (process.platform === 'darwin') {
       expect(foregroundPids.length).toBeGreaterThan(0);
       expect(foregroundPids).not.toContain(application.process().pid);

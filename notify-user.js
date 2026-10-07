@@ -13,13 +13,17 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch }) {
     }
     if (typeof command.message !== 'string' || !command.message.trim() || command.message.length > 4000 ||
         typeof command.urgent !== 'boolean' || (command.test !== undefined && typeof command.test !== 'boolean') ||
-        (command.test && !command.urgent)) throw new Error('notify-user requires --message (1–4000 characters) and optional --urgent.');
+        (command.test && !command.urgent) ||
+        (command.level !== undefined && !(command.level === 'timeSensitive' && command.nativeWeb === true &&
+          /^todo-failures-[a-f0-9]{64}$/.test(command.id) && command.urgent && !command.test))) {
+      throw new Error('notify-user requires --message (1–4000 characters) and optional --urgent.');
+    }
     notifications.show({ id: command.callerId, turnId, state: 'input', reply: command.message, visible });
     const local = '已处理本机提醒（遵循通知/声音设置、前台静音及30秒间隔）。';
     if (!command.urgent) return local;
     const result = await sendBark(command.test
       ? { message: '【测试】AgentDeck Bark 通知（critical，音量 3）。', title: '【测试】队长', level: 'critical', volume: 3 }
-      : { message: command.message, level: 'critical' });
+      : { message: command.message, level: command.level || 'critical' });
 
     return local + '\n' + result.message;
   };
@@ -29,7 +33,7 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch }) {
 function createBarkSender({ getConfig, fetchImpl = fetch }) {
   return async ({ message, title = '队长', level = 'active', volume = 4 }) => {
     if (typeof message !== 'string' || !message.trim() || message.length > 4000 ||
-        !['active', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
+        !['active', 'timeSensitive', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
     const config = getConfig();
     let file = typeof config.barkKeyFile === 'string' ? config.barkKeyFile.trim() : '';
 

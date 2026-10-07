@@ -6,7 +6,8 @@
 // ~/.agents git job every 30 minutes. A git conflict there stops the whole
 // sync, so each computer writes only its own file, <deviceId>.json, holding
 // the complete list as that computer sees it. Reading merges every file: for
-// each id the copy with the latest `updated` wins. A deletion is kept as
+// each id the copy with the latest `updated` wins, while AI state for the
+// same text version is merged by its own `ai.updated`. A deletion is kept as
 // `deleted: true` so an older copy on the other computer cannot bring it back.
 // Personal to-dos never live with the agents' task cards in boards/tasks/.
 const fs = require('fs');
@@ -62,10 +63,12 @@ function newer(a, b) {
   return JSON.stringify(a) > JSON.stringify(b);
 }
 function merge(lists) {
-  const byId = new Map();
+  const byId = new Map(), copies = new Map();
   for (const list of lists) for (const raw of Array.isArray(list) ? list : []) {
     const item = normalizeItem(raw);
     if (!item) continue;
+    if (!copies.has(item.id)) copies.set(item.id, []);
+    copies.get(item.id).push(item);
     const seen = byId.get(item.id);
     const winner = !seen || newer(item, seen) ? item : seen;
     const other = winner === item ? seen : item;
@@ -74,6 +77,17 @@ function merge(lists) {
     if (winner.awaitingOrigin === true && other && other.awaitingOrigin !== true && other.text === winner.text && other.textDevice && Date.parse(other.updated) >= Date.parse(winner.originUpdated)) {
       byId.set(item.id, { ...winner, textDevice: other.textDevice, textUpdated: other.textUpdated, ai: other.ai, awaitingOrigin: false });
     } else byId.set(item.id, winner);
+  }
+  // Select AI only after the winning text version is known. A pairwise merge
+  // can lose a completed state when a third, differently edited copy is read
+  // between the owner and a stale checkbox; file order must not matter.
+  for (const [id, winner] of byId) {
+    let ai = winner.ai;
+    for (const copy of copies.get(id)) {
+      if (copy.text !== winner.text || copy.textUpdated !== winner.textUpdated || !isTime(copy.ai?.updated)) continue;
+      if (!ai || !isTime(ai.updated) || newer(copy.ai, ai)) ai = copy.ai;
+    }
+    if (ai !== winner.ai) byId.set(id, { ...winner, ai });
   }
   return byId;
 }

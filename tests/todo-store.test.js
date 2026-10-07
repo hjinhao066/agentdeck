@@ -138,3 +138,44 @@ test('merge and the phone view: deletions travel as bare marks, ties do not depe
   assert.deepEqual(view.find((x) => x.id === 'td-gone-item-1'), { id: 'td-gone-item-1', deleted: true, updated: '2026-10-06T08:00:00.000Z' });
   assert.deepEqual(Object.keys(view.find((x) => x.id === 'td-open-item-1')).sort(), ['created', 'done', 'doneAt', 'id', 'text', 'updated']);
 });
+
+test('newer stale peer checkboxes cannot roll back AI status, artifacts or delivery/notification markers', () => {
+  const base = { id: 'td-ai-merge-0001', text: '@ai 找书', created: '2026-10-06T08:00:00Z',
+    textUpdated: '2026-10-06T08:00:00Z', textDevice: 'dev-mac', updated: '2026-10-06T08:01:00Z',
+    ai: { revision: 'same', status: 'queued', updated: '2026-10-06T08:01:00Z', files: [] } };
+  for (const status of ['working', 'needs_user', 'done', 'failed']) {
+    const fresh = { ...base, updated: '2026-10-06T08:02:00Z', ai: { ...base.ai, status,
+      updated: '2026-10-06T08:02:00Z', files: ['/local/book.pdf'], deliveredAt: 'accepted', exceptionNotifiedAt: 'queued' } };
+    const tick = { ...base, done: true, updated: '2026-10-06T08:03:00Z' };
+    const untick = { ...base, done: false, updated: '2026-10-06T08:04:00Z' };
+    for (const lists of [[[fresh], [tick], [untick]], [[untick], [tick], [fresh]], [[tick], [fresh], [untick]]]) {
+      const merged = merge(lists).get(base.id);
+      assert.equal(merged.done, false); assert.deepEqual(merged.ai, fresh.ai);
+      assert.deepEqual(phoneView([merged])[0].ai, fresh.ai);
+    }
+  }
+});
+
+test('AI merge uses its own time even when retry moves failed back to working; edits never inherit old AI', () => {
+  const base = { id: 'td-ai-merge-0002', text: '@ai A', created: '2026-10-06T08:00:00Z',
+    textUpdated: '2026-10-06T08:00:00Z', updated: '2026-10-06T08:05:00Z',
+    ai: { status: 'failed', updated: '2026-10-06T08:02:00Z' } };
+  const working = { ...base, updated: '2026-10-06T08:04:00Z', ai: { status: 'working', updated: '2026-10-06T08:04:00Z' } };
+  assert.equal(merge([[working], [base]]).get(base.id).ai.status, 'working');
+  for (const edited of [{ ...base, text: '@ai B', ai: null, textUpdated: '2026-10-06T08:06:00Z', updated: '2026-10-06T08:06:00Z' },
+    { ...base, ai: null, textUpdated: '2026-10-06T08:06:00Z', updated: '2026-10-06T08:06:00Z' }]) {
+    assert.equal(merge([[base], [edited]]).get(base.id).ai, null);
+    assert.equal(merge([[edited], [base]]).get(base.id).ai, null);
+  }
+});
+test('three device copies with an intervening edit choose AI independently of every file order', () => {
+  const owner = { id: 'td-ai-merge-0003', text: '@ai v1', created: '2026-10-06T08:00:00Z',
+    textUpdated: '2026-10-06T08:00:00Z', updated: '2026-10-06T08:10:00Z',
+    ai: { status: 'done', updated: '2026-10-06T08:10:00Z', files: ['/local/result.pdf'] } };
+  const edited = { ...owner, text: '@ai v2', textUpdated: '2026-10-06T08:15:00Z', updated: '2026-10-06T08:20:00Z', ai: null };
+  const tick = { ...owner, done: true, updated: '2026-10-06T08:30:00Z', ai: { status: 'queued', updated: '2026-10-06T08:05:00Z', files: [] } };
+  for (const order of [[owner, edited, tick], [owner, tick, edited], [edited, owner, tick], [edited, tick, owner], [tick, owner, edited], [tick, edited, owner]]) {
+    const seen = merge(order.map((item) => [item])).get(owner.id);
+    assert.equal(seen.done, true); assert.deepEqual(seen.ai, owner.ai);
+  }
+});

@@ -74,6 +74,8 @@
       "todo-ui.js",
       "todo-store.js",
       "todo-ai.js",
+      "todo-backend-errors.js",
+      "todo-failure-notifications.js",
       "main-core.js",
       "auto-verify-core.js",
       "relay-handoff-core.js",

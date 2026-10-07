@@ -29,6 +29,8 @@ const { readCodex: readCodexQuota } = require('./quota-codex');
 const { TaskStore, localSessions } = require('./task-board');
 const { TodoStore } = require('./todo-store');
 const { TodoAI } = require('./todo-ai');
+const { TodoBackendErrors } = require('./todo-backend-errors');
+const { TodoFailureNotifications, nextAllowedTime } = require('./todo-failure-notifications');
 const Worktree = require('./worktree-core');
 const { FleetClient, readFleetSettings, loadDevice } = require('./sync-client');
 const { TaskHeartbeat } = require('./task-heartbeat');
@@ -76,18 +78,30 @@ const taskStore = new TaskStore(tudArg ? path.join(app.getPath('userData'), 'tas
 // 随手记待办: ~/.agents/boards/todos (each computer writes only its own file);
 // a test profile keeps its own copy inside the profile.
 const todoStore = new TodoStore(tudArg ? path.join(app.getPath('userData'), 'todos') : undefined);
-let todoWatch = null, todoWatchTimer = null, todoAiTimer = null, todoAi = null;
-function scanTodoAi() { try { todoAi?.scan(); } catch (_) { /* Durable outbox is retried on the next local scan. */ } }
+let todoWatch = null, todoWatchTimer = null, todoAiTimer = null, todoAi = null, todoErrors = null, todoFailures = null;
+let todoNotificationNow = Date.now;
+function scanTodoAi() {
+  todoErrors?.run('scan', () => todoAi?.scan());
+  todoErrors?.flush();
+}
 function todosChanged() { scanTodoAi(); send('todos:changed', {}); }
 function deliverTodo({ item, card }) {
   if (!boardRendererReady) return;
   const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
   if (!captain) return; // The pending item stays on disk until a Captain exists.
   const id = 'todo-delivery-' + item.ai.revision;
-  if (!pendingBoardCommands.has(id)) pendingBoardCommands.set(id, { command: {
+  queueTodoReceipt({
     id, action: 'main-todo-delivery', callerId: captain.id, nativeWeb: true,
     todoId: item.id, taskId: card.id, result: card.detail,
-  }, delivered: false });
+  });
+}
+function queueTodoReceipt(command) {
+  if (!boardRendererReady) return;
+  const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+  if (!captain) return;
+  const pending = pendingBoardCommands.get(command.id);
+  if (!pending) pendingBoardCommands.set(command.id, { command: { ...command, callerId: captain.id }, delivered: false });
+  else if (pending.command.callerId !== captain.id) { pending.command.callerId = captain.id; pending.delivered = false; }
   dispatchPendingBoardCommands();
 }
 // The other computer's file arrives through git; tell the page so an open list refreshes.
@@ -96,8 +110,8 @@ function watchTodos() {
   try {
     fs.mkdirSync(todoStore.dir, { recursive: true });
     todoWatch = fs.watch(todoStore.dir, () => { clearTimeout(todoWatchTimer); todoWatchTimer = setTimeout(todosChanged, 300); });
-    todoWatch.on('error', () => { try { todoWatch.close(); } catch (_) {} todoWatch = null; });
-  } catch (_) { todoWatch = null; }
+    todoWatch.on('error', (error) => { try { todoWatch.close(); } catch (_) {} todoWatch = null; todoErrors?.report('watch', error); });
+  } catch (error) { todoWatch = null; todoErrors?.report('watch', error); }
 }
 handleMain('todos:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'update', 'remove'].includes(payload.op)) throw new Error('Invalid to-do operation.');
@@ -495,6 +509,11 @@ function dispatchPendingBoardCommands() {
     if (pending.command.action === 'main-todo-delivery' && !todoStore.list().some((t) => !t.done && t.ai?.taskId === pending.command.taskId)) {
       pendingBoardCommands.delete(id); continue;
     }
+    if (pending.command.nativeWeb && ['main-todo-delivery', 'main-todo-error', 'main-notify-user'].includes(pending.command.action)) {
+      const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+      if (!captain) continue;
+      if (pending.command.callerId !== captain.id) { pending.command.callerId = captain.id; pending.delivered = false; }
+    }
     if (pending.listenerLease && !receiptListeners?.isCurrent(pending.command.callerId, pending.listenerLease)) {
       pendingBoardCommands.delete(id);
       writeBoardResponse(id, { done: true, result: '', listenerStopped: true });
@@ -553,7 +572,10 @@ function processBoardRequests() {
           else if (request.op === 'status') result = todoAi.status(request.input || {});
           else throw new Error('Invalid Todo operation.');
           result.then((value) => writeBoardResponse(request.id, { done: true, result: JSON.stringify(value) }),
-            (error) => writeBoardResponse(request.id, { done: true, error: error.message }));
+            (error) => {
+              if (error.code || error.file) todoErrors?.report('status', error);
+              writeBoardResponse(request.id, { done: true, error: error.message });
+            });
         } catch (error) { writeBoardResponse(request.id, { done: true, error: error.message }); }
         continue;
       }
@@ -1273,17 +1295,32 @@ app.whenReady().then(async () => {
     const pending = pendingBoardCommands.get(requestId);
     const action = pending?.command.action;
     if (action === 'main-todo-delivery' && done === true && !error) {
-      try { todoAi.acknowledge(pending.command.todoId, pending.command.taskId); }
-      catch (_) { /* The durable Captain receipt deduplicates the next retry. */ }
+      todoErrors?.run('acknowledge', () => todoAi.acknowledge(pending.command.todoId, pending.command.taskId));
     }
+    if (action === 'main-todo-error' && done === true && !error) todoErrors?.acknowledge(requestId);
+    if (action === 'main-todo-delivery' && error) todoErrors?.report('delivery', new Error('Todo receipt rejected.'));
     if (action === 'main-notify-user' && !error) {
+      const notificationAt = todoNotificationNow();
+      if (pending.todoNotifyResolve && nextAllowedTime(notificationAt) !== notificationAt) {
+        pendingBoardCommands.delete(requestId); pending.todoNotifyResolve(false); return;
+      }
       // Duplicate renderer acknowledgements share a single local/Bark delivery.
       pending.notifyPromise ||= notifyUser(pending.command, visible === true, turnId);
-      try { result = await pending.notifyPromise; }
+      try {
+        result = await pending.notifyPromise;
+        if (pending.todoNotifyResolve) todoErrors?.run('phone-reminder', () => {
+          if (/Bark 已跳过|Bark 发送失败/.test(result)) throw new Error('Bark reminder not delivered.');
+        });
+      }
       catch (err) { error = err.message; }
     }
     const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read';
     pendingBoardCommands.delete(requestId);
+    if (pending?.todoNotifyResolve) {
+      if (error) pending.todoNotifyReject(new Error('Todo notification delivery failed.'));
+      else pending.todoNotifyResolve(true);
+      return;
+    }
     if (pending?.installResolve) {
       if (error) pending.installReject(new Error(error)); else pending.installResolve();
       return;
@@ -1669,12 +1706,30 @@ function startFleet(configPath) {
   const device = loadDevice(path.join(userData, 'device.json'));
   taskStore.deviceId = device.id;
   todoStore.deviceId = device.id;
+  todoErrors = new TodoBackendErrors({ file: path.join(userData, 'todo-backend-errors.json'), log: nlog, deliver: queueTodoReceipt });
+  const todoTestStarted = Date.now();
+  if (tudArg) todoNotificationNow = () => new Date(2026, 9, 7, 12).getTime() + Date.now() - todoTestStarted;
+  todoFailures = todoErrors.run('notification-queue-read', () => new TodoFailureNotifications({ file: path.join(userData, 'todo-failure-notifications.json'),
+    // Isolated E2E uses a virtual midday clock and short coalescing window.
+    ...(tudArg ? { coalesceMs: 100, now: todoNotificationNow } : {}),
+    onError: (stage, error) => todoErrors.report('notification-' + stage, error),
+    notify: (command) => {
+      const cfg = readLocalConfig(), captain = cfg.columns?.find((c) => c.isMain && c.id === cfg.mainSession?.colId);
+      if (!captain || !boardRendererReady) return false;
+      return new Promise((resolve, reject) => {
+        pendingBoardCommands.set(command.id, { command: { ...command, action: 'main-notify-user', callerId: captain.id, nativeWeb: true },
+          delivered: false, todoNotifyResolve: resolve, todoNotifyReject: reject });
+        dispatchPendingBoardCommands();
+      });
+    } }));
+  todoFailures?.start();
   todoAi = new TodoAI({ todos: todoStore, tasks: taskStore, deliver: deliverTodo,
     changed: () => { send('todos:changed', {}); send('task-board:changed', {}); },
     notify: (command) => {
-      pendingBoardCommands.set(command.id, { command: { ...command, action: 'main-notify-user',
-        callerId: readLocalConfig().mainSession?.colId, nativeWeb: true }, delivered: false });
-      dispatchPendingBoardCommands();
+      try {
+        if (!todoFailures) throw new Error('Todo failure notification queue unavailable.');
+        todoFailures.enqueue(command);
+      } catch (error) { todoErrors.report('notification-queue-write', error); throw error; }
     } });
   watchTodos();
   scanTodoAi();
@@ -1788,6 +1843,7 @@ app.on('before-quit', (event) => {
   chatgptWebExecutor?.dispose();
   receiptListeners?.dispose(); receiptListeners = null;
   clearInterval(todoAiTimer);
+  todoFailures?.stop();
 
   if (notifications) notifications.dispose();
   if (isMac && app.dock) { try { app.dock.setBadge(''); } catch (_) {} }
