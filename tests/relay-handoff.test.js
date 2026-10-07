@@ -464,12 +464,92 @@ test('what is given up when the overview does not fit: the user\'s latest words 
   assert.match(tight.file('user-messages.md'), /第 0 条用户消息/);
   // five hundred cards, three hundred receipts: still one page, still the user's words, still every count
   const f = fixture(t);
-  for (let i = 0; i < 300; i++) f.add({ title: `卡 ${i}` });
+  for (let i = 0; i < 500; i++) f.add({ title: `卡 ${i}` });
+  assert.equal(f.cards().length, 500, 'the stress case really builds five hundred cards');
   const pending = Array.from({ length: 300 }, (_, i) => ({ taskId: 'k' + i, colId: 's' + i, title: '回执' + i, summary: '做完了' }));
   const big = build({ ...snapshot, cards: f.cards(), pending, budget: 3000 });
   assert.ok(big.length <= 3000, String(big.length)); assert.equal(big.over, false);
-  assert.match(big.brief, /第 11 条用户消息/); assert.ok(big.state.stats.cards + big.state.stats.loose >= 300); assert.match(big.brief, new RegExp(`未完成任务 ${big.state.stats.cards + big.state.stats.loose} 条`)); assert.match(big.brief, /未读回执 300 条/);
-  assert.ok(big.file('tasks.md').includes('卡 299'), 'the last of the three hundred is on file');
+  assert.match(big.brief, /第 11 条用户消息/); assert.equal(big.state.cards.length, 500); assert.match(big.brief, new RegExp(`未完成任务 ${big.state.stats.cards + big.state.stats.loose} 条`)); assert.match(big.brief, /未读回执 300 条/);
+  assert.ok(big.file('tasks.md').includes('卡 499'), 'the last of the five hundred is on file');
+});
+
+// What the user stopped must never be lost on the way to the next Captain, or it gets dispatched again.
+// A pause entry is "[time] what｜how far it reaches｜pointer": the page keeps the first two parts to the end.
+const pauseText = (i, words = 30) => `[10-0${(i % 9) + 1} 12:00] 禁止重启-${i}｜适用范围：范围-${i}${'，很长的说明'.repeat(words)}｜read --id cap-old --find "禁止${i}"`;
+const onPage = (built, i, line) => built.brief.split('\n').filter((l) => l.includes(`L${line}｜`) && l.includes(`禁止重启-${i}`) && l.includes(`范围-${i}`)).length;
+
+test('every pause, cancellation and stopped task stays on the overview whatever the limit: only the words about each get shorter', (t) => {
+  const { snapshot } = crowded(t);
+  // the Captain stopped these two; the board still has them as ordinary unfinished cards
+  const g = fixture(t);
+  const halted = [];
+  const dispatches = [...snapshot.dispatches], sessions = [...snapshot.sessions];
+  for (const name of ['Windows 升级', '叫停的另一张']) {
+    const card = g.add({ title: name + '：' + '很长的标题'.repeat(10) });
+    g.bind(card.id, 'u-' + card.id, 's-' + card.id); g.event(card.id, 'started', '', 'u-' + card.id, 's-' + card.id);
+    dispatches.push(record('s-' + card.id, 'stopped', { boardId: card.id, boardAttempt: 'u-' + card.id, receipt: receipt('队长已请求中断当前操作。', { source: 'captain-stop' }) }));
+    sessions.push(session('s-' + card.id, 'done'));
+    halted.push(card.id);
+  }
+  // one the Captain stopped that never had a card
+  dispatches.push(record('s-loose', 'stopped', { title: '没挂卡的活', receipt: receipt('队长已请求中断当前操作。', { source: 'captain-stop' }) }));
+  sessions.push(session('s-loose', 'done'));
+  // nine pauses (the page used to list the first eight); line 1 is the heading
+  const pauses = Array.from({ length: 9 }, (_, i) => pauseText(i + 1));
+  const decisions = { path: '/b/decisions.md', mtime: NOW - 1000, text: '## 暂停/取消/暂不启动\n' + pauses.map((x) => '- ' + x).join('\n') + '\n## 有效决定\n- [10-04 21:00] 1.1.11 之后版本号进一位\n' };
+  for (const budget of [60000, 20000, 6000, 3000]) {
+    const built = build({ ...snapshot, cards: [...snapshot.cards, ...g.cards()], dispatches, sessions, decisions, budget });
+    assert.equal(built.over, false, `fits ${budget}`); assert.ok(built.length <= budget);
+    for (let i = 1; i <= 9; i++) assert.equal(onPage(built, i, i + 1), 1, `pause ${i} on the page at ${budget}: what it stops, how far, and its line`);
+    assert.match(built.brief, /暂停\/取消\/暂不启动 9 条/);
+    for (const id of halted) assert.ok(built.brief.split('\n').some((l) => l.includes(id) && /叫停/.test(l)), `stopped ${id} on the page at ${budget}`);
+    assert.ok(built.brief.split('\n').some((l) => l.includes('没挂卡 s-loose') && /叫停/.test(l)), `a stopped task with no card at ${budget}`);
+    assert.match(built.brief, /被队长叫停的任务 3 条/);
+    // every task the program derives as stopped by the Captain is named on the page
+    const stopped = [...built.state.cards.filter((c) => c.code === 'stopped').map((c) => c.id), ...built.state.loose.filter((l) => l.halted).map((l) => l.id)];
+    assert.equal(stopped.length, 3);
+    for (const id of stopped) assert.ok(built.brief.includes(id), `${id} at ${budget}`);
+    assert.ok(built.file('decisions-history.md').includes(pauses[8].replace(/\s+/g, ' ')), 'the full text is in the history file');
+  }
+  // the reviewer's smallest case
+  const rows = Array.from({ length: 9 }, (_, i) => `- 禁止重启-${i + 1}`);
+  const bare = build({ budget: 6000, decisions: { text: '## 暂停/取消\n' + rows.join('\n') } });
+  for (let i = 1; i <= 9; i++) assert.ok(bare.brief.includes('禁止重启-' + i), `禁止重启-${i}`);
+  // so many that the page cannot hold them in its limit: still every one of them, and it says it is over
+  const many = Array.from({ length: 120 }, (_, i) => pauseText(i + 1, 3));
+  const crammed = build({ ...snapshot, decisions: { path: '/b/decisions.md', mtime: NOW - 1000, text: '## 暂停/取消/暂不启动\n' + many.map((x) => '- ' + x).join('\n') + '\n' }, budget: 3000 });
+  for (let i = 1; i <= 120; i++) assert.equal(onPage(crammed, i, i + 1), 1, `pause ${i} of 120`);
+  assert.equal(crammed.over, true); assert.match(crammed.brief, /已超出预算：未完成任务、阻塞、限制和待决定事项一条没删/);
+  assert.match(crammed.brief, /暂停\/取消\/暂不启动 120 条/);
+  // squeezing never removes the block: no step sets it to nothing
+  assert.ok(H.SQUEEZE.filter(([key]) => key === 'paused').every(([, level]) => level > 0));
+});
+
+test('decisions-history.md and delivery.md list every entry of the decisions file, one line with its line number each; the contents page counts what is really listed', () => {
+  const lines = [], found = [];
+  const add = (title, count, tag) => { lines.push('## ' + title); for (let i = 0; i < count; i++) { found.push({ tag, i, line: lines.length + 1 }); lines.push(`- [09-1${i % 10} 10:0${i % 6}] ${tag}-${i}｜${'细节很多'.repeat(40)}`); } };
+  // every section well past the caps it used to have (40, 40, 99, 60 and 30 lines)
+  add('当前目标', 90, '目标'); add('授权范围', 70, '授权'); add('暂停/取消/暂不启动', 120, '暂停'); add('有效决定', 130, '决定'); add('其他记录', 80, '其他'); add('交付状态', 100, '交付'); add('等用户决定', 5, '问用户');
+  const text = lines.join('\n') + '\n';
+  const built = build({ cards: [], decisions: { path: '/b/decisions.md', mtime: NOW - 1000, text }, budget: 20000 });
+  const history = built.file('decisions-history.md'), delivery = built.file('delivery.md');
+  const listed = (file, re) => (file.match(re) || []).length;
+  const inHistory = found.filter((e) => e.tag !== '交付' && e.tag !== '问用户');
+  assert.equal(listed(history, /^- L\d+｜/gm), inHistory.length, 'one line for every entry, no cap');
+  assert.equal(listed(delivery, /^ +- L\d+｜/gm), 100, 'every delivery record is a line');
+  for (const e of inHistory) assert.ok(history.includes(`- L${e.line}｜`) && new RegExp(`- L${e.line}｜[^\\n]*${e.tag}-${e.i}｜`).test(history), `${e.tag}-${e.i} at L${e.line}`);
+  for (const e of found.filter((e) => e.tag === '交付')) assert.match(delivery, new RegExp(`- L${e.line}｜[^\\n]*交付-${e.i}｜`));
+  assert.doesNotMatch(history, /还有 \d+ 条更早的没列/); assert.doesNotMatch(delivery, /还有 \d+ 条更早的没列/);
+  // the contents page says how many the file lists, and that is the number it lists
+  const row = (name) => built.brief.split('\n').find((l) => l.startsWith(`- ${name}｜`));
+  assert.match(row('delivery.md'), /，100 条记录｜/);
+  assert.match(history, new RegExp(`本文件逐条列出 ${inHistory.length} 条`));
+  // the file's own count and the source total are told apart: the rest are in the files named
+  assert.match(row('decisions-history.md'), new RegExp(`，逐条列出 ${inHistory.length} 条（决定文件共 ${found.length} 条，其余在 delivery\\.md、needs-user\\.md）｜`));
+  // the reviewer's smallest case: 75 decisions
+  const seventy = build({ cards: [], decisions: { text: '## 有效决定\n' + Array.from({ length: 75 }, (_, i) => '- 决定-' + i).join('\n') } });
+  assert.equal(listed(seventy.file('decisions-history.md'), /^- L\d+｜/gm), 75);
+  assert.match(seventy.brief.split('\n').find((l) => l.startsWith('- decisions-history.md｜')), /，逐条列出 75 条（决定文件共 75 条，其余在 delivery\.md、needs-user\.md）｜/);
 });
 
 test('the Captain\'s decisions file: only the newest and the entries marked as lasting are quoted; older ones are a line and a pointer', () => {

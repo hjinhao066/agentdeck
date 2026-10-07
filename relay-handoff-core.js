@@ -402,7 +402,7 @@ function deriveLoose(ctx, cardIds) {
     const unhandled = ['failed', 'stopped'].includes(last.status) && ctx.sessions.has(id) && !bookkeeping(last);
     if (!open && !unhandled) continue;
     const stopped = captainStopped(last);
-    out.push({ id, title: String(last.title || ''), project: String(last.project || ''), state, status: last.status, reviewer: isReviewer(last), important: last.important === true || ctx.sessions.get(id)?.important === true,
+    out.push({ id, title: String(last.title || ''), project: String(last.project || ''), state, status: last.status, halted: stopped, reviewer: isReviewer(last), important: last.important === true || ctx.sessions.get(id)?.important === true,
       label: stopped ? '暂停（已被队长叫停）' : last.status === 'asking' ? '执行中（在等队长回答）' : last.status === 'failed' ? '返工（执行失败，没人处理）' : last.status === 'stopped' ? '暂停（会话结束，没交回执）' : state.code === 'resuming' ? '执行中（重启后程序自动续接中）' : '执行中',
       group: stopped || last.status === 'stopped' ? 'paused' : last.status === 'failed' ? 'rework' : 'doing',
       result: receiptText(last.receipt) || (last.progress ? '进度：' + last.progress : ''),
@@ -502,12 +502,17 @@ const DETAIL_FILES = [
 const WORDS = [{ n: 8, old: 120, last: 400 }, { n: 5, old: 90, last: 300 }, { n: 3, old: 60, last: 200 }, { n: 2, old: 50, last: 120 }, { n: 1, old: 0, last: 80 }];
 // What the overview shows when nothing is squeezed, and the order things are given up when it does not fit.
 // The user's latest words go last: they are the one thing the next Captain cannot get anywhere else.
-const FIRST = { recent: 3, longTerm: 4, delivery: 1, sessions: 12, items: 8, high: 10, paused: 8, w: 0 };
+// What the user paused or stopped is never given up: `paused` is how short each of its lines is (0 = fullest), not how many there are.
+const FIRST = { recent: 3, longTerm: 4, delivery: 1, sessions: 12, items: 8, high: 10, paused: 0, w: 0 };
 const SQUEEZE = [['recent', 1], ['recent', 0], ['longTerm', 0], ['delivery', 0], ['sessions', 5], ['sessions', 0],
-  ['items', 5], ['items', 2], ['items', 0], ['high', 5], ['high', 2], ['high', 0], ['paused', 0],
+  ['items', 5], ['items', 2], ['items', 0], ['high', 5], ['high', 2], ['high', 0], ['paused', 1], ['paused', 2],
   ['w', 1], ['w', 2], ['w', 3], ['w', 4]];
+// A pause entry reads "what｜how far it reaches｜pointer". Per level: how much of its first two parts the page keeps
+// (the line number in the decisions file always stays, so the rest is one read away). A task's title: how much is shown.
+const PAUSE_PARTS = [[160], [60, 40], [40, 24]];
+const PAUSE_TITLE = [30, 16, 10];
 const SQUEEZED = { recent: '最近的决定', longTerm: '长期有效的决定', delivery: '最新交付状态', sessions: '在跑会话的名单',
-  items: '提问、回执、返工、矛盾的明细行', high: '高优先级任务的明细行', paused: '暂停项的明细行', w: '用户原话的条数和长度' };
+  items: '提问、回执、返工、矛盾的明细行', high: '高优先级任务的明细行', paused: '暂停/叫停项每条的说明文字（每条都还在）', w: '用户原话的条数和长度' };
 
 const detailDir = (ctx) => (ctx.paths.handoff || HANDOFF_FILE).replace(/\.md$/i, '');
 const sepOf = (p) => (/\\/.test(p) && !/\//.test(p) ? '\\' : '/');
@@ -537,8 +542,7 @@ function renderDetails(state) {
     const rest = sorted.slice(full);
     if (rest.length) {
       out.push(`  - 更早的 ${rest.length} 条，只列标题；原文在 ${file} 的对应行：`);
-      rest.slice(0, 60).forEach((e) => out.push(`    - ${at(e)}${one(e.text, 80)}`));
-      if (rest.length > 60) out.push(`    - 还有 ${rest.length - 60} 条更早的没列，直接读 ${file}`);
+      rest.forEach((e) => out.push(`    - ${at(e)}${one(e.text, 80)}`));
     }
   };
 
@@ -668,21 +672,23 @@ function renderDetails(state) {
   if (files.length) out.push(`- 未完成任务提到的报告和产物：${files.slice(0, 12).join('、')}${files.length > 12 ? ` 等 ${files.length} 个` : ''}`);
 
   // ---- history: every decision the overview does not quote ----
-  begin('history', '# 历史决定', `来源：队长维护的 ${file}（${noteWhen}），整份 ${num(size(ctx.decisions.text || ''))} 字。程序不改它。总览引用过的条目这里也有；每条前面的 L 数字是它在原文件里的行号。`);
-  const section = (title, list, full, max) => {
-    const rest = newest(list);
+  begin('history', '# 历史决定', '');
+  // Every entry the file has under these headings is one line here, with its line number: only how much of it is quoted
+  // gets shorter. The count the contents page gives is the number of lines counted as they are written.
+  let listed = 0;
+  const section = (title, list, whole) => {
     if (!list.length) return;
     out.push('', `## ${title}（共 ${list.length} 条）`);
-    rest.slice(0, full).forEach((e) => out.push(`- ${at(e)}${cut(e.text, 300)}`));
-    rest.slice(full, max).forEach((e) => out.push(`- ${at(e)}${one(e.text, 80)}`));
-    if (rest.length > max) out.push(`- 还有 ${rest.length - max} 条更早的没列标题，直接读 ${file}`);
+    newest(list).forEach((e) => out.push(`- ${at(e)}${whole ? one(e.text) : one(e.text, 80)}`));
+    listed += list.length;
   };
-  section('暂停/取消/暂不启动（生效中，全文）', entries.paused, 99, 99);
-  section('当前目标', entries.goal, 0, 40);
-  section('授权范围', entries.scope, 0, 40);
-  section('有效决定', entries.decisions, 0, 60);
-  section('其他记录', entries.other, 0, 30);
-  return { parts, notes: { file, noteWhen } };
+  section('暂停/取消/暂不启动（生效中，全文）', entries.paused, true);
+  section('当前目标', entries.goal);
+  section('授权范围', entries.scope);
+  section('有效决定', entries.decisions);
+  section('其他记录', entries.other);
+  parts.history[1] = `来源：队长维护的 ${file}（${noteWhen}），整份 ${num(size(ctx.decisions.text || ''))} 字。程序不改它。本文件逐条列出 ${listed} 条，一条不缺、不设条数上限（交付状态在 delivery.md，等用户决定在 needs-user.md）；总览引用过的条目这里也有；每条前面的 L 数字是它在原文件里的行号。`;
+  return { parts, notes: { file, noteWhen, listed } };
 }
 
 // One line of the user's words: when, an excerpt, and the command that reads the whole.
@@ -770,9 +776,23 @@ function renderOverview(state, details, p, cuts) {
   const stale = state.unsorted.length && state.recorded ? `；此后还有 ${ctx.userTurnsOlder && state.unsorted.length === ctx.userTurns.length ? '至少 ' : ''}${state.unsorted.length} 条用户消息没整理进来，以原文为准` : '';
   out.push(`来源 ${file}（${ctx.decisions.error ? ctx.decisions.error + '，下面各项待核实' : state.mtime ? '最后修改 ' + when(state.mtime) : '还没有这份文件'}${stale}）。给条目开头标「长期」，它就一直留在这页。`);
   const quote = (e, max = 160) => { quoted.add(e); return `L${e.line}｜${one(e.text, max)}${Array.from(one(e.text)).length > max ? '…' : ''}`; };
-  out.push(`- 暂停/取消/暂不启动 ${entries.paused.length} 条${entries.paused.length ? `（生效中：不续派、不重启，没有新指令不推翻）${p.paused ? '：' : '，全文见 decisions-history.md'}` : ''}`);
-  if (p.paused) newest(entries.paused).slice(0, p.paused).forEach((e) => out.push('  - ' + quote(e)));
-  if (p.paused && entries.paused.length > p.paused) out.push(`  - 另 ${entries.paused.length - p.paused} 条见 decisions-history.md`);
+  // A pause is quoted whole while there is room, then as what it stops and how far it reaches, always with its line.
+  const pauseLine = (e) => {
+    if (!p.paused) return quote(e);
+    quoted.add(e);
+    const parts = one(e.text).split('｜'), [first, second] = PAUSE_PARTS[p.paused];
+    const head = parts.length > 1 ? [one(parts[0], first), one(parts[1], second)] : [one(parts[0], first + second)];
+    return `L${e.line}｜${head.join('｜')}${parts.length > 2 ? '｜…' : ''}`;
+  };
+  out.push(`- 暂停/取消/暂不启动 ${entries.paused.length} 条${entries.paused.length ? '（生效中：不续派、不重启，没有新指令不推翻；一条不省，全文见 decisions-history.md）：' : ''}`);
+  newest(entries.paused).forEach((e) => out.push('  - ' + pauseLine(e)));
+  // The tasks the Captain stopped (stop or archive): the user's call, so every one is named here, whatever else is squeezed.
+  const halted = [...state.cards.filter((c) => c.code === 'stopped').map((c) => ({ id: c.id, label: c.label, tag: c.important ? HIGH : '', where: c.project, title: c.title })),
+    ...state.loose.filter((l) => l.halted).map((l) => ({ id: `没挂卡 ${l.id}`, label: l.label, tag: l.important ? HIGH : '', where: l.project || '无项目', title: l.title }))];
+  if (halted.length) {
+    out.push(`- 被队长叫停的任务 ${halted.length} 条（不重派，没有新指令不重启；一条不省，各自的下一步在 tasks.md）：`);
+    for (const h of halted) out.push('  - ' + [h.tag + h.id, h.label, ...(p.paused < 2 ? [h.where] : []), ...(PAUSE_TITLE[p.paused] ? [one(h.title, PAUSE_TITLE[p.paused])] : [])].join('｜'));
+  }
   const live = [...entries.goal, ...entries.scope, ...entries.decisions];
   const long = newest(live.filter(lasting)), recent = newest(live.filter((e) => !lasting(e) && e.ts));
   if (p.longTerm && long.length) { out.push(`- 长期有效 ${long.length} 条：`); long.slice(0, p.longTerm).forEach((e) => out.push('  - ' + quote(e))); }
@@ -786,7 +806,8 @@ function renderOverview(state, details, p, cuts) {
   for (const f of DETAIL_FILES) out.push(`- ${f.name}｜${num(size(details.texts[f.key]))} 字｜${f.title.replace(/（.*）/, '')}，${details.counts[f.key]}｜${f.read}读`);
   out.push(`目录位置：${dir}${sep}`);
   const gone = [...new Set(cuts)].map((k) => SQUEEZED[k]);
-  return out.join('\n') + '\n' + (gone.length ? `\n（为了放进 ${num(state.ctx.limit)} 字，缩短了：${gone.join('、')}。计数都还在上面，明细在对应分文件里。）\n` : '');
+  return out.join('\n') + '\n' + (gone.length ? `\n（为了放进 ${num(state.ctx.limit)} 字，缩短了：${gone.join('、')}。计数都还在上面，明细在对应分文件里。）\n` : '')
+    + (p.over ? `\n（已超出预算：未完成任务、阻塞、限制和待决定事项一条没删，暂停/取消/叫停的事项也必须全部留在这页，所以这页超过了 ${num(state.ctx.limit)} 字。）\n` : '');
 }
 
 // The overview at its fullest, then squeezed step by step until it fits. The
@@ -797,7 +818,7 @@ function build(snapshot) {
   const { parts, notes } = renderDetails(state);
   const texts = Object.fromEntries(Object.entries(parts).map(([key, lines]) => [key, lines.join('\n') + '\n']));
   const counts = { tasks: `${state.stats.cards + state.stats.loose} 条`, waiting: `提问 ${state.stats.asks}、回执 ${state.stats.pending + state.stats.unconfirmed}`, needsUser: `${state.stats.forUser} 条`,
-    delivery: `${state.notes.delivery.length} 条记录`, history: `${Object.values(state.notes).flat().length - state.notes.user.length - state.notes.delivery.length} 条`, messages: `${state.ctx.userTurns.length} 条`, playbook: '9 步' };
+    delivery: `${state.notes.delivery.length} 条记录`, history: `逐条列出 ${notes.listed} 条（决定文件共 ${Object.values(state.notes).flat().length} 条，其余在 delivery.md、needs-user.md）`, messages: `${state.ctx.userTurns.length} 条`, playbook: '9 步' };
   const details = { notes, texts, counts };
   const p = { ...FIRST }, cuts = [];
   const draw = () => {
@@ -811,7 +832,9 @@ function build(snapshot) {
     if (size(text) <= limit) break;
     p[key] = value; cuts.push(key); text = draw();
   }
+  // What the user paused or stopped stays on the page even when that alone is longer than the limit; the page says so.
   const over = size(text) > limit;
+  if (over) { p.over = true; text = draw(); }
   const files = DETAIL_FILES.map((f) => ({ name: f.name, key: f.key, title: f.title, read: f.read, text: details.texts[f.key], length: size(details.texts[f.key]) }));
   return { text, length: size(text), limit, over, cuts: [...cuts], files, dir: detailDir(state.ctx), state };
 }
