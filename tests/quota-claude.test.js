@@ -70,8 +70,8 @@ test('one pinned HTTPS GET returns only real subscription windows and absolute r
   assert.equal(calls[0].options.agent, false);
   assert.ok(!JSON.stringify(usage).includes('fake-'));
 });
-test('redirect/auth/rate limit/malformed/oversized/timeout/network responses fail closed without retry', async () => {
-  for (const [status, body, options] of [[302, '{}'], [401, '{}'], [429, '{}'], [200, '{'], [200, '{}'], [200, 'x'.repeat(65537)], [200, '', { hang: true }], [200, '', { error: true }]]) {
+test('redirect/rate limit/malformed/oversized/timeout/network responses fail closed without retry', async () => {
+  for (const [status, body, options] of [[302, '{}'], [403, '{}'], [429, '{}'], [500, '{}'], [200, '{'], [200, '{}'], [200, 'x'.repeat(65537)], [200, '', { hang: true }], [200, '', { error: true }]]) {
     const calls = [];
     assert.equal(await C.requestUsage('fake-access', transport(status, body, calls, options), 10), null);
     assert.equal(calls.length, 1);
@@ -404,7 +404,7 @@ test('token refresh posts only to the pinned Claude Code token URL and drops aut
         const res = new EventEmitter();
         res.statusCode = status; res.setEncoding = () => {}; res.destroy = () => { res.destroyed = true; };
         callback(res);
-        if (status === 200 && !res.destroyed) { res.emit('data', body); res.emit('end'); }
+        if ([200, 400].includes(status) && !res.destroyed) { res.emit('data', body); res.emit('end'); }
       });
     };
     return req;
@@ -415,8 +415,77 @@ test('token refresh posts only to the pinned Claude Code token URL and drops aut
   assert.equal(calls[0].options.method, 'POST');
   assert.equal(calls[0].options.agent, false);
   assert.equal(JSON.parse(calls[0].payload).refresh_token, 'fake-refresh-token');
-  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(401, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), null);
+  assert.deepEqual(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(401, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), { authStatus: 'logged-out' });
+  assert.deepEqual(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(400, '{"error":"invalid_grant","refresh_token":"fake-never-return"}')), { authStatus: 'logged-out' });
+  assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(400, '{"error":"invalid_request"}')), null);
   assert.equal(await C.postRefresh({ refresh_token: 'fake-refresh-token' }, transport(429, '{"error":"rate_limited"}')), null);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 5);
   assert.ok(!JSON.stringify(ok).includes('fake-refresh-token'));
+});
+
+test('only an explicit usage authentication rejection reports logout; success proves login', async () => {
+  const rejected = await C.requestUsage('fake-access', transport(401, '{"secret":"fake-never-return"}', []));
+  assert.equal(rejected.authStatus, 'logged-out');
+  assert.ok(!JSON.stringify(rejected).includes('fake-'));
+  const reset = new Date(Date.now() + 3600000).toISOString();
+  const success = await C.requestUsage('fake-access', transport(200, JSON.stringify({ five_hour: { utilization: 10, resets_at: reset }, seven_day: { utilization: 20, resets_at: reset } }), []));
+  assert.equal(success.authStatus, 'logged-in');
+});
+
+test('credential absence and unusable expired credentials report logout; read failures and refresh network errors do not', async (t) => {
+  const home = fixture(t), seat = S.normalize()[1], loc = M.credentialLocation(seat, home);
+  const signals = [], deps = { onAuth: (status) => signals.push(status) };
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, deps), null);
+  assert.deepEqual(signals.splice(0), ['logged-out']);
+  assert.equal(await C.readCredentials(seat, home, 'darwin', (_bin, _args, _options, cb) => cb({ code: 36 }), deps), null);
+  assert.deepEqual(signals, []);
+  assert.equal(await C.readCredentials(seat, home, 'darwin', (_bin, _args, _options, cb) => cb({ code: 44 }), deps), null);
+  assert.deepEqual(signals.splice(0), ['logged-out']);
+  fs.writeFileSync(loc.credentialsPath, '{');
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, deps), null);
+  assert.deepEqual(signals, []);
+  fs.writeFileSync(loc.credentialsPath, expiredCredential({ refreshToken: undefined }));
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, deps), null);
+  assert.deepEqual(signals.splice(0), ['logged-out']);
+  const rejectedCredential = expiredCredential();
+  fs.writeFileSync(loc.credentialsPath, rejectedCredential);
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { ...deps, post: async () => null }), null);
+  assert.deepEqual(signals, []);
+  assert.equal(await C.readCredentials(seat, home, 'win32', undefined, { ...deps, post: async () => ({ authStatus: 'logged-out' }) }), null);
+  assert.deepEqual(signals.splice(0), ['logged-out']);
+  assert.equal(fs.readFileSync(loc.credentialsPath, 'utf8'), rejectedCredential);
+});
+
+test('readSeat exposes credential logout even after account metadata is removed, without mistaking a custom null result', async (t) => {
+  const home = fixture(t), seat = S.normalize()[1], loc = M.credentialLocation(seat, home);
+  fs.unlinkSync(loc.metadataPath);
+  const read = (item, root, _platform, _exec, deps) => C.readCredentials(item, root, 'win32', undefined, deps);
+  const value = await C.readSeat(seat, home, read, async () => { throw new Error('must not query without credentials'); });
+  assert.equal(value.authStatus, 'logged-out');
+  assert.equal(value.configDir, loc.dir);
+  assert.equal(await C.readSeat(seat, home, async () => null), null);
+});
+
+test('refresh reports one auth observation per real poll; caches and concurrent readers produce no extra proof', async (t) => {
+  const home = fixture(t), seat = S.normalize()[1], loc = M.credentialLocation(seat, home);
+  let now = Date.now(), mode = 'success';
+  const signals = [];
+  const poller = C.createRefresh({ home, getSeats: () => [seat], now: () => now, onSample: (sample) => signals.push(sample), read: async () => {
+    if (mode === 'unknown') return null;
+    if (mode === 'logout') return { authStatus: 'logged-out', configDir: loc.dir };
+    return bound(seat, home, { windows: [{ key: 'weekly', remaining: 80 }] });
+  } });
+  t.after(() => poller.dispose());
+  await Promise.all([poller.tick(), poller.tick()]);
+  assert.deepEqual(signals.map(s => s.authStatus), ['logged-in']);
+  poller.samples(); poller.samples(); await poller.tick();
+  assert.equal(signals.length, 1);
+  assert.equal(poller.samples()[0].authStatus, undefined);
+  for (const state of ['logout', 'unknown', 'logout', 'success']) {
+    mode = state; now += C.INTERVAL_MS; await poller.tick();
+  }
+  assert.deepEqual(signals.map(s => s.authStatus), ['logged-in', 'logged-out', undefined, 'logged-out', 'logged-in']);
+  assert.equal(signals[1].failureOnly, true);
+  assert.equal(signals[1].checkedAt, signals[1].at);
+  assert.notEqual(signals[1].failure, '未登录');
 });

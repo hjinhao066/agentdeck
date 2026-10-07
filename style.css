@@ -382,6 +382,7 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 [data-level="danger"] > .quota-meter::after { background: var(--quota-out-fill); }
 [data-level="out"] > .quota-meter { background: color-mix(in srgb, var(--quota-out-fill) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--quota-out-fill) 40%, transparent); }
 .quota-item[data-state="exhausted"] { background: color-mix(in srgb, var(--quota-out-fill) 10%, transparent); }
+.quota-item[data-state="danger"] .quota-none { color: var(--quota-out); font-weight: 600; }
 /* Too narrow for the reset times: keep the two remaining percentages only. */
 @container (max-width: 215px) {
   .quota-cell .quota-reset { display: none; }

@@ -1,0 +1,91 @@
+'use strict';
+const crypto = require('crypto');
+const Q = require('./quota-core');
+const S = require('./claude-seats-core');
+
+const CONFIRM_MS = 30_000;
+const quote = (value, platform) => "'" + value.replace(/'/g, platform === 'win32' ? "''" : "'\\''") + "'";
+function loginCommand(provider, seat, home, platform = process.platform) {
+  const variable = provider === 'Claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+  const command = provider === 'Claude' ? 'claude auth login' : 'codex login';
+  const standard = provider === 'Claude' ? '~/.claude' : '~/.codex';
+  const dir = S.configDir(seat, home, platform), base = S.configDir({ configDir: standard }, home, platform);
+  const same = platform === 'win32' ? dir.toLowerCase() === base.toLowerCase() : dir === base;
+  if (platform === 'win32') return `Remove-Item Env:${variable} -ErrorAction SilentlyContinue; ` +
+    (same ? '' : `$env:${variable}=${quote(dir, platform)}; `) + command;
+  if (same) return `env -u ${variable} ${command}`;
+  // Keep simple ~/ paths readable and expandable; shell-quote every other path.
+  const value = /^~\/[a-zA-Z0-9_./-]+$/.test(seat.configDir) ? seat.configDir : quote(dir, platform);
+  return `${variable}=${value} ${command}`;
+}
+function authFailure(message) {
+  return typeof message === 'string' && (/\bnot (?:logged|signed) in\b|未登录|尚未登录|请先登录/i.test(message) ||
+    message.split('\n').some((line) => Q.resourceError(line) === 'auth'));
+}
+
+// Only fresh, explicit sampler proofs enter here. Neither stale quota numbers
+// nor a generic query/network failure is evidence that a login was lost.
+function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, home, platform = process.platform,
+  id = () => crypto.randomUUID() } = {}) {
+  state = Object.fromEntries(Object.entries(state).filter(([key, e]) => e && ['Claude', 'Codex'].includes(e.provider) &&
+    key === (e.provider === 'Claude' ? Q.seatKey(e.seatId) : 'Codex') && typeof e.configDir === 'string' &&
+    Number.isFinite(e.lastAt)).map(([key, e]) => [key, { ...e, receipts: (Array.isArray(e.receipts) ? e.receipts : [])
+    .filter((r) => r && typeof r.id === 'string' && typeof r.message === 'string' && r.message.length <= 4000) }]));
+  function observe(seat, sample) {
+    if (!seat || !['Claude', 'Codex'].includes(sample?.provider) || !Number.isFinite(sample.at)) return false;
+    const key = sample.provider === 'Claude' ? Q.seatKey(seat.id) : sample.provider;
+    let previous = state[key];
+    if (previous?.configDir !== seat.configDir) previous = null;
+    if (previous && sample.at <= previous.lastAt) return false;
+    const next = { ...(previous || { receipts: state[key]?.receipts || [] }), provider: sample.provider, seatId: seat.id, name: seat.name,
+      configDir: seat.configDir, lastAt: sample.at };
+    let changedStatus = false, alert;
+    if (sample.authStatus === 'logged-in') {
+      changedStatus = next.status !== 'logged-in';
+      next.status = 'logged-in'; next.statusAt = sample.at; next.wasLoggedIn = true;
+      next.misses = 0; next.notified = false; delete next.firstMissAt;
+    } else if (sample.authStatus === 'logged-out') {
+      next.firstMissAt ??= sample.at;
+      next.misses = (next.misses || 0) + 1;
+      if (next.misses >= 2 && sample.at - next.firstMissAt >= CONFIRM_MS) {
+        changedStatus = next.status !== 'logged-out';
+        next.status = 'logged-out'; next.statusAt = sample.at;
+        if (next.wasLoggedIn && !next.notified) {
+          const command = loginCommand(sample.provider, seat, home, platform);
+          const name = sample.provider === 'Claude' ? `Claude ${seat.name}（${seat.id}）席位` : 'Codex 席位';
+          alert = { id: id(), provider: sample.provider, seatId: seat.id,
+            message: `${name}掉登录了，派到这里的任务会失败或排队。请现在打开终端运行：\n${command}\n完成网页登录后，AgentDeck 会自动检查恢复；队长请把受影响的任务改派到其他已登录席位。` };
+          next.notified = true; next.receipts = [...(next.receipts || []), alert];
+        }
+      }
+    } else {
+      next.misses = 0; delete next.firstMissAt;
+    }
+    // Persist the episode latch before sending, including across app relaunch.
+    const saved = { ...state, [key]: next };
+    saveState(saved); state = saved;
+    if (changedStatus) onStatus?.(statusSample(next));
+    if (alert) onAlert?.(alert);
+    return true;
+  }
+  function statusSample(entry) {
+    return { provider: entry.provider, scope: Q.SCOPES[entry.provider], seatId: entry.seatId,
+      configDir: entry.configDir, at: entry.statusAt, authOnly: true, authStatus: entry.status, source: '席位登录确认' };
+  }
+  return {
+    observe,
+    samples: () => Object.values(state).filter((e) => ['logged-in', 'logged-out'].includes(e.status)).map(statusSample),
+    needsConfirmation: (seat, provider) => {
+      const e = state[provider === 'Claude' ? Q.seatKey(seat.id) : provider];
+      return e?.configDir === seat.configDir && e.misses > 0 && e.status !== 'logged-out';
+    },
+    pendingReceipts: () => Object.values(state).flatMap((e) => e.receipts || []),
+    acknowledge: (alertId) => {
+      const key = Object.keys(state).find((k) => state[k].receipts?.some((r) => r.id === alertId));
+      if (!key) return;
+      const saved = { ...state, [key]: { ...state[key], receipts: state[key].receipts.filter((r) => r.id !== alertId) } };
+      saveState(saved); state = saved;
+    },
+  };
+}
+module.exports = { CONFIRM_MS, loginCommand, authFailure, createSeatAuthMonitor };

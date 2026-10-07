@@ -1063,3 +1063,8 @@ The Captain briefing is static across turns and context resets. Claude workers m
 Claude's macOS quota reader and seat-isolated Relay are described in
 [Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and
 `board-cli quota` are remaining; `↻` identifies each window's next reset.
+Confirmed Claude-seat/Codex credential logout raises critical Bark with the
+seat's login command and a Captain question receipt; the quota panel shows red
+`未登录`. Two explicit signals at least 30 seconds apart are required; network
+failures do not alert. Details, polling delay and provider coverage are in the
+same usage document.

@@ -4,6 +4,38 @@ const assert = require('node:assert/strict');
 const Q = require('../quota-core');
 const now = Date.parse('2026-10-03T23:00:00Z');
 
+test('confirmed logout overrides cached percentages until explicit recovery, with isolated seat identity', () => {
+  const seat = { id: 'us', name: 'US', configDir: '~/.claude-us' };
+  const store = {};
+  const sample = { ...Q.cacheClaude({ sessionUsage: 10 }, now), seatId: 'us', configDir: seat.configDir,
+    accountBound: true, accountKey: 'us-account' };
+  Q.observe(store, sample, now);
+  assert.equal(Q.summary(store, 'Claude', now, seat).fiveHour, 90);
+  const auth = { provider: 'Claude', scope: 'claude', seatId: 'us', configDir: seat.configDir, authOnly: true, authStatus: 'logged-out', at: now + 1 };
+  assert.equal(Q.observe(store, auth, now + 1), true);
+  const q = Q.summary(store, 'Claude', now + 1, seat);
+  assert.equal(q.label, '未登录'); assert.equal(q.statusText, '未登录'); assert.equal(q.shortText, '未登录');
+  assert.equal(q.state, 'danger'); assert.equal(q.out, true); assert.equal(q.fiveHour, null); assert.deepEqual(q.cells, []);
+  assert.equal(Q.summary(store, 'Claude', now + 1, { ...seat, configDir: '~/.different' }).label, '未知');
+  Q.observe(store, { ...sample, at: now + 2 }, now + 2);
+  Q.observe(store, { ...sample, accountKey: 'another-account', at: now + 2 }, now + 2);
+  Q.observe(store, { ...auth, authOnly: false, failureOnly: true, authStatus: 'logged-in', at: now + 3, checkedAt: now + 3, failures: 1, failure: 'query failed' }, now + 3);
+  assert.equal(Q.summary(store, 'Claude', now + 3, seat).label, '未登录');
+  assert.equal(Q.observe(store, { ...auth, authStatus: 'logged-in', at: now }, now + 3), false);
+  assert.equal(Q.summary(JSON.parse(JSON.stringify(store)), 'Claude', now + 86400000, seat).label, '未登录');
+  Q.observe(store, { ...auth, authStatus: 'logged-in', at: now + 4 }, now + 4);
+  assert.notEqual(Q.summary(store, 'Claude', now + 4, seat).label, '未登录');
+});
+
+test('confirmed provider logout is visible without inventing quota windows', () => {
+  for (const provider of ['Codex', 'Cursor', 'Antigravity']) {
+    const store = {};
+    Q.observe(store, { provider, scope: Q.SCOPES[provider], at: now, authOnly: true, authStatus: 'logged-out' }, now);
+    assert.equal(Q.summary(store, provider, now).label, '未登录', provider);
+    assert.equal(Q.summary(store, provider, now).out, true, provider);
+  }
+});
+
 test('Cursor monthly billing errors recognize the native unpunctuated suffix without matching narration', () => {
   // Native wording from saved Cursor errors; account-specific amount replaced.
   const sample = require('fs').readFileSync(require('path').join(__dirname, 'fixtures/cursor-monthly-limit.txt'), 'utf8').trim();

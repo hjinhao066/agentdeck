@@ -58,14 +58,20 @@ function postRefresh(body, request = https.request, timeoutMs = 8000) {
         res = incoming;
         incoming.on('error', () => finish());
         if (done) { incoming.destroy(); return; }
-        if (incoming.statusCode !== 200) return finish();
+        if (incoming.statusCode === 401) return finish({ authStatus: 'logged-out' });
+        if (![200, 400].includes(incoming.statusCode)) return finish();
         incoming.setEncoding('utf8');
         incoming.on('data', (chunk) => {
           bytes += Buffer.byteLength(chunk);
           if (bytes > MAX_BYTES) return finish();
           raw += chunk;
         });
-        incoming.on('end', () => { try { finish(JSON.parse(raw)); } catch (_) { finish(); } });
+        incoming.on('end', () => {
+          try {
+            const value = JSON.parse(raw);
+            finish(incoming.statusCode === 200 ? value : value?.error === 'invalid_grant' ? { authStatus: 'logged-out' } : null);
+          } catch (_) { finish(); }
+        });
       });
       req.on('error', () => finish());
       req.end(payload);
@@ -83,6 +89,7 @@ async function refreshOauth(auth, now, post = postRefresh, expectedUuid = null) 
     response = await post({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: OAUTH_CLIENT_ID, scope: scopes.join(' ') });
   } catch (_) { return null; }
   if (!response || typeof response !== 'object') return null;
+  if (response.authStatus === 'logged-out') return { authStatus: 'logged-out' };
   if (expectedUuid && response.account && typeof response.account.uuid === 'string' && response.account.uuid !== expectedUuid) return null;
   if (typeof response.access_token !== 'string' || !TOKEN_RE.test(response.access_token)) return null;
   const expiresIn = Number(response.expires_in);
@@ -137,12 +144,15 @@ async function loadCredential(seat, home, platform, exec) {
     catch (e) { if (e.code !== 'ENOENT') return { loc, blocked: true }; }
   }
   const account = credentialAccount();
-  let raw = null, source = null;
+  let raw = null, source = null, keychainUnknown = false;
   if (platform === 'darwin') {
     raw = await new Promise((resolve) => {
       // Capture stdout in memory; never use a shell, log stderr or return errors.
       exec('/usr/bin/security', ['find-generic-password', '-a', account, '-s', loc.keychainService, '-w'],
-        { timeout: 2000, maxBuffer: MAX_BYTES, encoding: 'utf8' }, (error, stdout) => resolve(error ? null : stdout));
+        { timeout: 2000, maxBuffer: MAX_BYTES, encoding: 'utf8' }, (error, stdout) => {
+          keychainUnknown = !!error && error.code !== 44;
+          resolve(error ? null : stdout);
+        });
     });
     if (raw) source = 'keychain';
   }
@@ -156,16 +166,17 @@ async function loadCredential(seat, home, platform, exec) {
       } finally { await handle.close(); }
     } catch (e) { if (e.code !== 'ENOENT') return { loc, account, blocked: true }; }
   }
-  return { loc, account, raw, source };
+  return { loc, account, raw, source, blocked: !raw && keychainUnknown };
 }
 async function readCredentials(seat, home, platform = process.platform, exec = execFile, deps = {}) {
   const now = typeof deps.now === 'function' ? deps.now() : Date.now();
   const loaded = await loadCredential(seat, home, platform, exec);
-  if (loaded.blocked || !loaded.raw) return null;
+  if (loaded.blocked) return null;
+  if (!loaded.raw) { deps.onAuth?.('logged-out'); return null; }
   let stored;
   try { stored = JSON.parse(loaded.raw); } catch (_) { return null; }
   const auth = stored?.claudeAiOauth;
-  if (!auth || typeof auth !== 'object') return null;
+  if (!auth || typeof auth !== 'object') { deps.onAuth?.('logged-out'); return null; }
   if (accessUsable(auth, now)) {
     refreshedCredentials.delete(loaded.loc.keychainService);
     return auth.accessToken;
@@ -182,12 +193,17 @@ async function readCredentials(seat, home, platform = process.platform, exec = e
     return cached.auth.accessToken;
   }
   const base = newerAuth(cached?.auth, auth);
+  if (!base?.refreshToken || Number.isFinite(base.refreshTokenExpiresAt) && base.refreshTokenExpiresAt <= now) {
+    if (Number.isFinite(base?.expiresAt) && base.expiresAt <= now) deps.onAuth?.('logged-out');
+    return null;
+  }
   let expectedUuid = null;
   try {
     const account = JSON.parse(await fs.readFile(loaded.loc.metadataPath, 'utf8')).oauthAccount;
     if (typeof account?.accountUuid === 'string' && account.accountUuid) expectedUuid = account.accountUuid;
   } catch (_) {}
   const next = deps.refresh ? await deps.refresh(base, now) : await refreshOauth(base, now, deps.post || postRefresh, expectedUuid);
+  if (next?.authStatus === 'logged-out') deps.onAuth?.('logged-out');
   if (!accessUsable(next, now)) return null;
   const payload = JSON.stringify({ ...stored, claudeAiOauth: next });
   if (payload.includes('\n') || Buffer.byteLength(payload) > MAX_BYTES) return null;
@@ -227,6 +243,7 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
         response = res;
         res.on('error', () => finish());
         if (done) { res.destroy(); return; }
+        if (res.statusCode === 401) return finish({ at: Date.now(), source: Q.CLAUDE_OAUTH_SOURCE, authStatus: 'logged-out' });
         if (res.statusCode !== 200) return finish();
         res.setEncoding('utf8');
         res.on('data', (chunk) => {
@@ -238,7 +255,7 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
           try {
             const data = JSON.parse(body), at = Date.now();
             const windows = officialUsage(data, { id: 'default' }, '', at).windows.map((w) => ({ key: w.key, remaining: 100 - w.used, resetText: w.resetText }));
-            finish({ at, source: Q.CLAUDE_OAUTH_SOURCE, windows });
+            finish({ at, source: Q.CLAUDE_OAUTH_SOURCE, windows, authStatus: 'logged-in' });
           } catch (_) { finish(); }
         });
       });
@@ -248,12 +265,18 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
 }
 async function readSeat(seat, home, credentials = readCredentials, usage = requestUsage) {
   try {
-    const loc = M.credentialLocation(seat, home), accountKey = M.usageAccountKey(loc);
-    if (!accountKey) return null;
-    const token = await credentials(seat, home);
+    const loc = M.credentialLocation(seat, home);
+    let accountKey = null, authStatus;
+    try { accountKey = M.usageAccountKey(loc); } catch (_) {}
+    const token = await credentials(seat, home, undefined, undefined, { onAuth: (value) => { authStatus = value; } });
+    if (!accountKey && authStatus !== 'logged-out') return null;
     const value = token ? await usage(token) : null;
     const current = M.credentialLocation(seat, home);
-    if (!value || current.dir !== loc.dir || accountKey !== M.usageAccountKey(current)) return null;
+    if (current.dir !== loc.dir) return null;
+    if (authStatus === 'logged-out' || value?.authStatus === 'logged-out') return {
+      at: Date.now(), source: Q.CLAUDE_OAUTH_SOURCE, configDir: loc.dir, authStatus: 'logged-out',
+    };
+    if (!value || !accountKey || accountKey !== M.usageAccountKey(current)) return null;
     return { ...value, accountKey, configDir: loc.dir };
   } catch (_) { return null; }
 }
@@ -265,7 +288,7 @@ function boundUsage(seat, home, value) {
     return { ...M.sanitizeUsage(value), accountKey: value.accountKey, configDir: loc.dir };
   } catch (_) { return null; }
 }
-function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, now = Date.now, intervalMs = () => INTERVAL_MS }) {
+function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, now = Date.now, intervalMs = () => INTERVAL_MS, onSample = () => {} }) {
   const entries = new Map();
   let stopped = false;
   function sync() {
@@ -297,9 +320,16 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
             try { write(entry.seat, home, usage); } catch (_) {}
           } else {
             entry.failures++;
+            const loggedOut = value?.authStatus === 'logged-out' && value.configDir === M.credentialLocation(entry.seat, home).dir;
             entry.failure = { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
-              at: now(), failureOnly: true, failures: entry.failures, checkedAt: now(), failure: '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
+              at: now(), failureOnly: true, failures: entry.failures, checkedAt: now(),
+              ...(loggedOut ? { authStatus: 'logged-out' } : {}),
+              failure: '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
           }
+          // Only actual polls are evidence; cached samples exposed by samples()
+          // must never advance a logout confirmation or manufacture a recovery.
+          try { onSample(usage ? { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
+            at: now(), checkedAt: now(), authStatus: 'logged-in' } : entry.failure); } catch (_) {}
         }
       })().finally(() => { entry.pending = null; });
       return entry.pending;

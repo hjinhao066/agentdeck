@@ -11,6 +11,7 @@ const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createResultMonitor } = require('./install-result');
 const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
+const { createSeatAuthMonitor, authFailure, CONFIRM_MS } = require('./seat-auth-alert');
 const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const { registerScheduleFeedIpc } = require('./schedule-feed');
@@ -46,6 +47,8 @@ let notifyUser = null;
 let sidePane = null;
 let claudeQuotaRefresh = null, claudeQuotaTimer = null;
 let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
+let seatAuth = null;
+const seatAuthChecks = new Map();
 
 let pendingFocusColumn = null;
 let mobileWeb = null;
@@ -516,6 +519,7 @@ function processBoardRequests() {
       const listenerLease = action === 'main-receipts' && request.wait ? request.listener : null;
       delete request.token;
       delete request.listener; // Listener process identity stays in the main process.
+      delete request.nativeSeatAuth; // This marker is set only by the main process.
       if (pendingBoardCommands.size >= 256) {
         writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
         continue;
@@ -872,13 +876,6 @@ app.whenReady().then(async () => {
     // The Relay handoff reads the same board the heartbeat does, done and archived cards included.
     handoffOptions: { cards: () => taskStore.list({ archived: true }), tasksDir: taskStore.dir, boardVersion: () => boardVersionOf(taskStore.dir),
       machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() } } });
-  if (!tudArg) {
-    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats,
-      intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()) });
-    const refresh = () => claudeQuotaRefresh.tick().then(() => send('quota:updated', claudeQuotaRefresh.samples())).catch(() => {});
-    refresh();
-    claudeQuotaTimer = power.every('claudeQuotaTick', refresh);
-  }
   let quotaSeatConfig;
   let notificationConfig = {};
   try { notificationConfig = JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) {}
@@ -996,6 +993,98 @@ app.whenReady().then(async () => {
       }).catch(() => send('toast', { text: '额度 Bark 提醒失败，请检查本机配置。' }));
     } catch (_) { send('toast', { text: '额度 Bark 去重记录无法保存，未发送提醒。' }); }
   };
+  const authStatePath = path.join(app.getPath('userData'), 'seat-auth-state.json');
+  let authState = {};
+  try {
+    if (fs.statSync(authStatePath).size <= 1024 * 1024) {
+      const value = JSON.parse(fs.readFileSync(authStatePath, 'utf8'));
+      if (value && typeof value === 'object' && !Array.isArray(value)) authState = value;
+    }
+  } catch (_) {}
+  const codexSeat = { id: 'codex', name: 'Codex', configDir: ENV.CODEX_HOME || '~/.codex' };
+  const configuredAuthSeat = (sample) => sample.provider === 'Claude'
+    ? ClaudeSeatsCore.normalize(seatConfig().claudeSeats).find((s) => s.id === sample.seatId && s.configDir === sample.configDir)
+    : sample.provider === 'Codex' && sample.configDir === codexSeat.configDir ? codexSeat : null;
+  const authSamples = () => seatAuth.samples().filter((s) => configuredAuthSeat(s));
+  const queueAuthReceipts = () => {
+    const captain = seatConfig().columns?.find((c) => c.isMain);
+    if (!captain || !boardRendererReady) return;
+    for (const alert of seatAuth.pendingReceipts()) {
+      if (pendingBoardCommands.has(alert.id)) continue;
+      pendingBoardCommands.set(alert.id, { command: { id: alert.id, callerId: captain.id, action: 'seat-auth-alert',
+        nativeSeatAuth: true, alertId: alert.id, provider: alert.provider, seatId: alert.seatId, message: alert.message }, delivered: false });
+    }
+    dispatchPendingBoardCommands();
+  };
+  seatAuth = createSeatAuthMonitor({ home: HOME, state: authState,
+    saveState: (value) => {
+      fs.writeFileSync(authStatePath + '.tmp', JSON.stringify(value), { mode: 0o600 });
+      fs.renameSync(authStatePath + '.tmp', authStatePath);
+    },
+    onStatus: (sample) => send('quota:updated', [sample]),
+    onAlert: (alert) => {
+      queueAuthReceipts();
+      // Critical Bark uses the notify-user --urgent sender immediately. The
+      // native reminder follows the renderer acknowledgement's visibility so
+      // a focused Captain remains locally silent and never loses focus.
+      const delivery = sendQuotaBark({ message: alert.message, title: 'AgentDeck · 席位掉登录', level: 'critical' });
+      send('toast', { text: alert.message });
+      Promise.resolve(delivery).then((result) => {
+        if (!result.ok) send('toast', { text: result.message });
+      }).catch(() => send('toast', { text: '席位掉登录：加急提醒发送失败，请检查本机 Bark 配置。' }));
+    },
+  });
+  // On upgrade, a fresh, seat-bound successful quota is a prior login baseline.
+  // Afterwards actual sampler proofs (and the persisted state) own recovery.
+  for (const { provider, seat, key } of QuotaCore.items(seatConfig().claudeSeats)) {
+    if (!['Claude', 'Codex'].includes(provider) || authState[key]) continue;
+    const entry = seatConfig().quotas?.[key], sample = entry?.sample;
+    if (!sample || Date.now() - sample.at > QuotaCore.freshMs(sample) || sample.at > Date.now()) continue;
+    if (provider === 'Claude' && (!sample.accountBound || !sample.accountKey || sample.accountKey !== entry.accountKey || sample.configDir !== seat.configDir)) continue;
+    if (provider === 'Codex' && !entry.accountKey) continue;
+    seatAuth.observe(seat || codexSeat, { provider, at: sample.at, authStatus: 'logged-in' });
+  }
+  const observeAuth = (sample) => {
+    const seat = configuredAuthSeat(sample);
+    if (!seat) return;
+    try {
+      seatAuth.observe(seat, sample);
+      const key = sample.provider === 'Claude' ? QuotaCore.seatKey(seat.id) : sample.provider;
+      if (!tudArg && seatAuth.needsConfirmation(seat, sample.provider) && !seatAuthChecks.has(key)) {
+        const timer = setTimeout(async () => {
+          seatAuthChecks.delete(key);
+          if (!configuredAuthSeat(sample)) return;
+          if (sample.provider === 'Claude') {
+            await claudeQuotaRefresh?.tick({ force: true, seatId: seat.id });
+            send('quota:updated', [...(claudeQuotaRefresh?.samples() || []), ...authSamples()]);
+          } else await sampleCodex(true);
+        }, CONFIRM_MS);
+        timer.unref(); seatAuthChecks.set(key, timer);
+      }
+    } catch (_) { send('toast', { text: '席位登录状态记录无法保存，请检查磁盘。' }); }
+  };
+  async function sampleCodex(force = false) {
+    if (!force && codexQuotaRead && Date.now() - codexQuotaAt < 60000) return codexQuotaRead;
+    if (sampleCodex.pending) return sampleCodex.pending;
+    codexQuotaAt = Date.now();
+    codexQuotaRead = sampleCodex.pending = readCodexQuota(ENV).then((sample) => {
+      observeAuth({ ...(sample || { provider: 'Codex', at: Date.now() }), configDir: codexSeat.configDir });
+      send('quota:updated', [...(sample ? [sample] : []), ...authSamples()]);
+      return sample;
+    }).finally(() => { sampleCodex.pending = null; });
+    return codexQuotaRead;
+  }
+  handleMain('seat-auth:failure', (_event, payload) => {
+    if (!payload || !validId(payload.colId) || typeof payload.message !== 'string' || payload.message.length > 2 * 1024 * 1024) throw new Error('Invalid authentication failure signal.');
+    if (!authFailure(payload.message)) return false;
+    const column = seatConfig().columns?.find((c) => c.id === payload.colId);
+    const provider = column && BoardCore.inferAgentType(column.cmd);
+    const seat = provider === 'Claude' ? QuotaCore.seatForColumn(column, ClaudeSeatsCore.normalize(seatConfig().claudeSeats)) : provider === 'Codex' ? codexSeat : null;
+    if (!seat) return false;
+    observeAuth({ provider, scope: QuotaCore.SCOPES[provider], seatId: seat.id, configDir: seat.configDir, at: Date.now(), authStatus: 'logged-out' });
+    return true;
+  });
+  if (tudArg) app.testSeatAuthObserve = observeAuth;
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
   let warmupCaptain = { id: '', idle: false, at: 0 };
   const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
@@ -1104,6 +1193,7 @@ app.whenReady().then(async () => {
     fs.chmodSync(configPath + '.tmp', 0o600);
     fs.renameSync(configPath + '.tmp', configPath);
     checkQuotaBark();
+    queueAuthReceipts();
     notifyNeedsUserCards();
   };
   onMain('save-config', (_e, cfg) => { try { writeConfig(cfg); } catch (_) {} });
@@ -1138,28 +1228,25 @@ app.whenReady().then(async () => {
 
   // Test profiles never read the user's quota caches or conversation logs.
   handleMain('quota:local', async () => {
-    if (tudArg) return readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig);
+    if (tudArg) return [...await readLocalQuota(seatHome, path.join(seatHome, '.codex'), Date.now(), quotaSeatConfig), ...authSamples()];
     await claudeQuotaRefresh?.tick();
 
     const seatsKey = JSON.stringify(quotaSeatConfig || null);
     if (!quotaRead || Date.now() - quotaReadAt >= 30000 || seatsKey !== quotaSeatsKey) {
       quotaSeatsKey = seatsKey;
       quotaReadAt = Date.now();
-      if (!codexQuotaRead || Date.now() - codexQuotaAt >= 60000) {
-        codexQuotaAt = Date.now();
-        codexQuotaRead = readCodexQuota(ENV);
-      }
+      await sampleCodex();
       quotaRead = Promise.all([readLocalQuota(os.homedir(), process.env.CODEX_HOME, Date.now(), quotaSeatConfig), codexQuotaRead])
         .then(([local, codex]) => codex ? [...local, codex] : local).catch(() => []);
     }
-    return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || [])]);
+    return quotaRead.then((samples) => [...samples, ...(claudeQuotaRefresh?.samples() || []), ...authSamples()]);
   });
   handleMain('quota:refresh', async (_e, { seatId } = {}) => {
     if (tudArg) return [];
     if (seatId && !ClaudeSeatsCore.normalize(seatConfig().claudeSeats).some((s) => s.id === seatId)) throw new Error('席位不存在');
     await claudeQuotaRefresh.tick({ force: true, seatId });
     quotaRead = null;
-    return claudeQuotaRefresh.samples().filter((s) => !seatId || s.seatId === seatId);
+    return [...claudeQuotaRefresh.samples(), ...authSamples()].filter((s) => !seatId || s.seatId === seatId);
   });
   onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
   // Only the trusted deck main frame can submit a native worker. No browser
@@ -1214,6 +1301,14 @@ app.whenReady().then(async () => {
     }
     const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read';
     pendingBoardCommands.delete(requestId);
+    if (action === 'seat-auth-alert' && pending?.command.nativeSeatAuth === true) {
+      if (!error) {
+        try { seatAuth.acknowledge(pending.command.alertId); }
+        catch (_) { send('toast', { text: '席位异常回执确认无法保存，稍后会重试。' }); }
+        if (notifyUser) notifyUser({ ...pending.command, urgent: false }, visible === true).catch(() => {});
+      }
+      return;
+    }
     if (pending?.installResolve) {
       if (error) pending.installReject(new Error(error)); else pending.installResolve();
       return;
@@ -1232,6 +1327,7 @@ app.whenReady().then(async () => {
     boardRendererReady = true;
     for (const pending of pendingBoardCommands.values()) pending.delivered = false;
     dispatchPendingBoardCommands();
+    queueAuthReceipts();
     if (pendingFocusColumn) {
       send('focus-column', { id: pendingFocusColumn });
       pendingFocusColumn = null;
@@ -1478,6 +1574,17 @@ app.whenReady().then(async () => {
       app.testCaptainAlerts.push({ type: 'bark', ...payload });
       return { ok: true, status: 200, json: async () => ({ code: 200 }) };
     } } : {}) });
+  if (!tudArg) {
+    claudeQuotaRefresh = createClaudeQuotaRefresh({ home: seatHome, getSeats: () => seatConfig().claudeSeats,
+      intervalMs: () => Battery.pollMs('claudeQuotaSample', power.active()), onSample: observeAuth });
+    const refresh = async () => {
+      await Promise.all([claudeQuotaRefresh.tick(), sampleCodex()]);
+      send('quota:updated', [...claudeQuotaRefresh.samples(), ...authSamples()]);
+      queueAuthReceipts();
+    };
+    refresh().catch(() => {});
+    claudeQuotaTimer = power.every('claudeQuotaTick', () => refresh().catch(() => {}));
+  }
   const pollInstallResult = createResultMonitor({
     file: path.join(app.getPath('userData'), 'install-result.json'),
     runtime: () => ({ execPath: process.execPath, version: app.getVersion() }),
@@ -1703,6 +1810,8 @@ app.on('before-quit', (event) => {
   mobileRequests.clear();
   clearInterval(quotaWarmupTimer);
   quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
+  for (const timer of seatAuthChecks.values()) clearTimeout(timer);
+  seatAuthChecks.clear();
   chatgptWebExecutor?.dispose();
   receiptListeners?.dispose(); receiptListeners = null;
 

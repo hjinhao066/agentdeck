@@ -282,7 +282,7 @@
     return windows.length ? { provider: 'Antigravity', scope: 'gemini', model: modelScope('Antigravity', model) ? modelName(model) : 'Gemini（共享分组）', at, source: 'agy 本地状态行快照', confidence: '中（可选 CLI 调试快照）', windows } : null;
   }
   function observe(store, next, now = Date.now()) {
-    if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || (!next.official && !next.failureOnly && now - next.at > freshMs(next))) return false;
+    if (!next || !PROVIDERS.includes(next.provider) || !Number.isFinite(next.at) || next.at > now + 60000 || (!next.official && !next.failureOnly && !next.authOnly && now - next.at > freshMs(next))) return false;
     if (next.scope !== SCOPES[next.provider]) return false;
     if (next.provider === 'Claude' && next.source === CLAUDE_OAUTH_SOURCE &&
       (!next.accountBound || !next.accountKey || !next.configDir || !next.windows?.length)) return false;
@@ -290,6 +290,7 @@
     const key = next.provider === 'Claude' ? seatKey(next.seatId) : next.provider;
     const before = JSON.stringify(store[key] || {});
     let previous = store[key] || {};
+    const auth = previous.scope === next.scope && (!next.configDir || !previous.configDir || next.configDir === previous.configDir) ? previous.auth : null;
     const identityChanged = (next.accountKey && previous.accountKey && next.accountKey !== previous.accountKey && next.legacyAccountKey !== previous.accountKey) ||
       (next.configDir && previous.configDir && next.configDir !== previous.configDir);
     const officialNotBefore = Math.max(previous.officialNotBefore || 0, identityChanged ? next.at : 0);
@@ -305,11 +306,18 @@
       if (previous.blocked?.numeric) delete previous.blocked;
     }
     const out = { ...previous };
+    if (auth) out.auth = auth; // account/cache identity changes cannot undo a confirmed login state
     if (out.blocked?.resetAt && out.blocked.resetAt <= Math.max(now, next.at)) delete out.blocked; // past its reset time
     if (officialNotBefore) out.officialNotBefore = officialNotBefore;
 
     out.scope = next.scope;
     for (const key of ['account', 'accountKey', 'credentialKey', 'model', 'configDir']) if (next[key]) out[key] = next[key];
+    if (next.authOnly) {
+      if (!['logged-in', 'logged-out'].includes(next.authStatus) || next.at < (out.auth?.at || 0)) return false;
+      out.auth = { status: next.authStatus, at: next.at };
+      store[key] = out;
+      return before !== JSON.stringify(out);
+    }
     if (next.accountKey && next.legacyAccountKey === previous.accountKey && out.blocked && !out.blocked.numeric && out.blocked.accountKey === previous.accountKey) {
       out.blocked = { ...out.blocked, accountKey: next.accountKey };
     }
@@ -380,6 +388,13 @@
   function summary(store, provider, now = Date.now(), seat = null, captainSeatId = null) {
     const saved = store[seat ? seatKey(seat.id) : provider] || {};
     const entry = saved.scope === SCOPES[provider] && (!seat || !saved.configDir || saved.configDir === seat.configDir) ? saved : {}, sample = entry.sample;
+    if (entry.auth?.status === 'logged-out') {
+      const name = seat ? seat.name + (seat.id === captainSeatId ? ' · 队长' : '') : provider === 'Antigravity' ? 'Gemini' : provider === 'Cursor' ? 'Grok 4.7' : '';
+      return { provider, authStatus: 'logged-out', state: 'danger', label: '未登录', displayLabel: '未登录', sampleLabel: '', statusText: '未登录',
+        fiveHour: null, weekly: null, shortText: '未登录', shortRemaining: null, out: true, recoveryAt: null, sampledAt: entry.auth.at,
+        stale: false, failures: 0, cells: [], account: entry.account || '', source: '登录状态确认', confidence: '已确认未登录', name,
+        detail: `${seat ? 'Claude / ' + seat.name : NAMES[provider]}：未登录\n此席位无法继续任务，请重新登录${seat ? `\n配置目录：${seat.configDir}` : ''}` };
+    }
     const trusted = !seat || seat.id === 'default' || (sample?.accountBound && sample.accountKey && sample.accountKey === entry.accountKey && sample.configDir === seat.configDir && sample.at >= (entry.officialNotBefore || 0)) ||
       (sample?.official && sample.seatId === seat.id && sample.credentialKey && sample.credentialKey === entry.credentialKey &&
         sample.configDir === seat.configDir && sample.at >= (entry.officialNotBefore || 0));

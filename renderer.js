@@ -3457,7 +3457,7 @@ window.deck.onBoardCommand(async (message) => {
     } catch (error) { respondBoard(message.id, { done: true, error: error.message }); return; }
   }
   // 队长's commands: only its own column may use them.
-  if (String(message.action || '').startsWith('main-')) {
+  if (String(message.action || '').startsWith('main-') || message.action === 'seat-auth-alert') {
     Promise.resolve().then(() => MainSession.handle(message, caller)).then(
       (response) => {
         // A peek is ephemeral; empty watcher polls have no side effects and
@@ -3467,7 +3467,7 @@ window.deck.onBoardCommand(async (message) => {
       },
       (error) => {
         const response = { done: true, error: error.message };
-        if (message.action === 'main-receipt-listener-status' || message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-handoff') window.deck.boardRespond({ requestId: message.id, ...response });
+        if (message.action === 'seat-auth-alert' || message.action === 'main-receipt-listener-status' || message.action === 'main-peek' || message.action === 'main-quota' || message.action === 'main-briefing' || message.action === 'main-handoff') window.deck.boardRespond({ requestId: message.id, ...response });
         else respondBoard(message.id, response);
       });
     return;
@@ -3924,11 +3924,11 @@ function renderQuotaBar() {
       const name = item.querySelector('.quota-name');
       const crown = el('span', 'quota-captain'); crown.innerHTML = ICONS.crown;
       fill(name, [seat ? seatLabel : NAMES[provider], ...(captain ? [crown] : [])]);
-      const state = q.out ? 'exhausted' : q.state;
+      const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
       const recovery = q.recoveryAt > now ? q.recoveryAt : null;
       // Always a 5h and a 7d cell: % + reset time over a thin bar. Used up = ⊘ + reset time;
       // No numeric windows: show the row status in 5h. Account-wide blocks with a reset keep their recovery time.
-      const blockedOnly = q.out && !q.cells.some((c) => c.out);
+      const blockedOnly = q.authStatus !== 'logged-out' && q.out && !q.cells.some((c) => c.out);
       const row = ['5h', '7d'].map((key) => {
         const c = q.cells.find((v) => v.key === key) || (key === '5h' && blockedOnly ? { key, out: true, resetAt: recovery } : null);
         const cell = el('span', 'quota-cell'); cell.dataset.window = key; cell.dataset.level = c ? level(c) : 'none';
@@ -3955,7 +3955,8 @@ function renderQuotaBar() {
           el('span', 'qt-reset', c.resetAt > now ? `${longReset(c.resetAt)}重置` : '重置时间未知'));
         return line;
       });
-      if (blockedOnly) lines.unshift(el('span', 'qt-note out', recovery ? `已用尽，预计 ${longReset(recovery)}恢复` : '已用尽，恢复时间未知'));
+      if (q.authStatus === 'logged-out') lines.unshift(el('span', 'qt-note out', '此席位无法继续任务，请重新登录'));
+      else if (blockedOnly) lines.unshift(el('span', 'qt-note out', recovery ? `已用尽，预计 ${longReset(recovery)}恢复` : '已用尽，恢复时间未知'));
       else if (!q.cells.length) lines.push(el('span', 'qt-note', state === 'normal' ? '未见用尽，此来源不提供百分比' : '暂无额度数据，等待下次采样'));
       const warm = seat ? ClaudeSeats.warmupDetail(seat.id) : '';
       if (seat) {
@@ -3969,7 +3970,7 @@ function renderQuotaBar() {
       for (const [k, v] of [['账号', q.account || '未识别'], seat && ['席位', `${seat.name}${captain ? '（队长在用）' : ''}`],
         ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
       fill(tip, [head, ...lines, meta]);
-      const brief = [q.out && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
+      const brief = [q.out && q.authStatus !== 'logged-out' && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
         ...q.cells.map((c) => `${c.key === '5h' ? '5 小时' : '每周'}剩余 ${c.remaining}%${c.resetAt > now ? `（${shortReset(c.resetAt)} 重置）` : ''}`)].filter(Boolean).join('，');
       item.dataset.state = state;
       item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
