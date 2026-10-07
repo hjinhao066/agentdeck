@@ -281,6 +281,85 @@ test('the copy icon can be clicked by moving the mouse straight at it, and the d
   expect(await plain.locator('.quota-tooltip').isVisible()).toBe(false);
 });
 
+test('the mouse can rest in the gap between a logged-out row and its detail, in the sidebar and in the popup', async () => {
+  await launch(); const base = Date.now() - 90000;
+  await observe([['logged-in', base], ['logged-out', base + 30000], ['logged-out', base + 60000]]);
+  await page.evaluate(() => {
+    QuotaCore.observe(config.quotas, { provider: 'Codex', scope: 'codex', at: Date.now(),
+      windows: [{ label: '每周', key: 'weekly', remaining: 80 }] }); renderQuotaBar();
+  });
+  const command = require('../../seat-auth-alert').loginCommand('Claude', { configDir: '~/.custom-us-seat' }, os.homedir(), process.platform);
+  const away = [1200, 600];
+  // The strip between a row's right edge and its detail's left edge, and what the pointer hits along it.
+  const strip = (selector) => page.evaluate((selector) => {
+    const row = document.querySelector(selector), r = row.getBoundingClientRect(), t = row.querySelector('.quota-tooltip').getBoundingClientRect();
+    const y = r.top + r.height / 2, outside = [];
+    for (let x = Math.ceil(r.right); x < t.left; x++) if (!row.contains(document.elementFromPoint(x, y))) outside.push(x);
+    return { right: r.right, left: t.left, y, top: t.top, outside };
+  }, selector);
+  for (const panel of ['#quotaBar', '#quotaPop']) {
+    if (panel === '#quotaPop') {
+      await page.locator('#navCollapseBtn').click(); await page.locator('#quotaRailBtn').click();
+      await expect(page.locator('#quotaPop')).toBeVisible();
+    }
+    const selector = `${panel} [data-seat-id="us"]`, row = page.locator(selector), tip = row.locator('.quota-tooltip'), copy = row.locator('.quota-login-copy');
+    await expect(row).toHaveAttribute('data-auth-status', 'logged-out');
+    const name = await row.locator('.quota-name').boundingBox(), x0 = name.x + name.width / 2, y0 = name.y + name.height / 2;
+    await page.mouse.move(...away); await expect(tip).toBeHidden();
+    await page.mouse.move(x0, y0); await expect(copy).toBeVisible();
+    const gap = await strip(selector);
+    expect(gap.left - gap.right).toBeGreaterThan(12); // wider than a quick pass: the 300ms hold alone does not cover a pause
+    // Longer than the hold at both ends and in the middle of the strip, then level with the detail's top edge.
+    for (const [x, y] of [[gap.right + 2, gap.y], [(gap.right + gap.left) / 2, gap.y], [gap.left - 2, gap.y], [gap.left - 2, gap.top + 4]]) {
+      await page.mouse.move(x0, y0);
+      await page.mouse.move(x, y, { steps: 4 }); await page.waitForTimeout(700);
+      await expect(tip).toBeVisible();
+      expect(await page.locator(`${panel} .quota-tooltip:visible`).count()).toBe(1);
+    }
+    expect(gap.outside).toEqual([]); // and nothing else is under the pointer anywhere along it
+    // From the strip on to the copy button: it still works.
+    const button = await copy.boundingBox(), x1 = button.x + button.width / 2, y1 = button.y + button.height / 2;
+    await page.evaluate(() => window.deck.clipboardWrite(''));
+    await page.mouse.move(x1, y1, { steps: 6 }); await page.mouse.click(x1, y1);
+    await expect(row.getByRole('button', { name: '已复制', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.deck.clipboardRead())).toBe(command);
+    await expect(copy).toHaveAttribute('aria-label', '复制登录命令');
+    await page.mouse.move(...away); await expect(tip).toBeHidden();
+    // A row without a command has no such strip: its detail goes as soon as the pointer leaves the row.
+    const plain = page.locator(`${panel} [data-quota-key="Codex"]`), other = await strip(`${panel} [data-quota-key="Codex"]`);
+    await plain.hover(); await expect(plain.locator('.quota-tooltip')).toBeVisible();
+    await page.mouse.move(other.right + 2, other.y);
+    expect(await plain.locator('.quota-tooltip').isVisible()).toBe(false);
+    await page.mouse.move(...away);
+  }
+});
+
+test('keyboard focus moves between a logged-out row and its copy button without closing the detail', async () => {
+  await launch(); const base = Date.now() - 90000;
+  await observe([['logged-in', base], ['logged-out', base + 30000], ['logged-out', base + 60000]]);
+  const row = page.locator('#quotaBar [data-seat-id="us"]'), tip = row.locator('.quota-tooltip'), copy = row.locator('.quota-login-copy');
+  await expect(row).toHaveAttribute('data-auth-status', 'logged-out');
+  const command = require('../../seat-auth-alert').loginCommand('Claude', { configDir: '~/.custom-us-seat' }, os.homedir(), process.platform);
+  await page.mouse.move(1200, 600);
+  await row.focus(); await expect(tip).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(copy).toBeFocused(); await expect(tip).toBeVisible();
+  await page.evaluate(() => window.deck.clipboardWrite(''));
+  await page.keyboard.press('Enter');
+  await expect(row.getByRole('button', { name: '已复制', exact: true })).toBeFocused();
+  expect(await page.evaluate(() => window.deck.clipboardRead())).toBe(command);
+  await expect(row.getByRole('button', { name: '复制登录命令', exact: true })).toBeFocused(); await expect(tip).toBeVisible();
+  await page.keyboard.press('Shift+Tab');
+  await expect(row).toBeFocused(); await expect(tip).toBeVisible();
+  // A detail the keyboard keeps open does not cover the sidebar's drag handle beside it.
+  expect(await page.evaluate(() => {
+    const row = document.querySelector('#quotaBar [data-seat-id="us"]').getBoundingClientRect();
+    const edge = document.getElementById('colNav').getBoundingClientRect().right;
+    return [row.top + row.height / 2, row.top - 40].map((y) => document.elementFromPoint(edge, y)?.id);
+  })).toEqual(['navResizer', 'navResizer']);
+  await page.mouse.click(1200, 600); await expect(tip).toBeHidden();
+});
+
 test('with no key path and no default key file a phone alert is dropped with a setup hint instead of queued', async () => {
   const file = path.join(profile, 'config.json'), cfg = JSON.parse(fs.readFileSync(file));
   cfg.barkKeyFile = ''; fs.writeFileSync(file, JSON.stringify(cfg)); // the isolated profile has no .secrets/bark-key.txt

@@ -919,6 +919,10 @@ function positionQuotaDetails() {
   const height = tip.getBoundingClientRect().height;
   const top = panel === pop ? r.top : r.bottom - height;
   tip.style.top = (Math.max(8, Math.min(top, window.innerHeight - height - 8)) - r.top) + 'px';
+  // The row's hover bridge (.quota-detail-open::after) fills the strip up to the detail, at the detail's height.
+  active.style.setProperty('--tip-gap', (left - r.right) + 'px');
+  active.style.setProperty('--tip-top', tip.style.top);
+  active.style.setProperty('--tip-height', height + 'px');
 }
 window.addEventListener('resize', positionQuotaDetails);
 function toggleQuotaPop(open) {
