@@ -43,16 +43,28 @@ async function foregroundCli(t, { exitCode = 98, mode = 'chat', body = 'Paris is
   return s;
 }
 
-for (const exitCode of [98, 97]) for (const mode of ['chat', 'deep-research']) {
-  test(`foreground guard exit ${exitCode} delivers finalized ${mode} answer with a distinct self-check note`, async (t) => {
-    const s = await foregroundCli(t, { exitCode, mode });
+for (const mode of ['chat', 'deep-research']) {
+  test(`indeterminate foreground guard exit 98 delivers finalized ${mode} answer with a self-check note`, async (t) => {
+    const s = await foregroundCli(t, { exitCode: 98, mode });
     const receipt = await s.done;
     assert.equal(receipt.failed, undefined);
     assert.match(receipt.result, /Paris is the capital/);
-    assert.match(receipt.result, exitCode === 98 ? /无法判定，用户可能自行切换.*未确认工具抢占/ : /工具报告抢占了前台，违反后台运行约束/);
+    assert.match(receipt.result, /无法判定，用户可能自行切换.*未确认工具抢占/);
     assert.doesNotMatch(receipt.result, /private foreground/);
     assert.equal(receipt.files.length, 1);
     assert.equal(await fs.readFile(receipt.files[0], 'utf8'), 'Paris is the capital of France.');
+  });
+
+  test(`foreground violation exit 97 fails even with a finalized ${mode} answer`, async (t) => {
+    const s = await foregroundCli(t, { exitCode: 97, mode });
+    const receipt = await s.done;
+    assert.match(receipt.failed, /工具报告抢占了前台，违反后台运行约束/);
+    assert.equal(receipt.result, receipt.failed);
+    assert.doesNotMatch(receipt.result, /Paris is the capital|private foreground|未取得可核验的完整报告/);
+    assert.deepEqual(receipt.files, []);
+    assert.equal(s.executor.status('one').receipt.failed, receipt.failed);
+    const [runDir] = (await fs.readdir(s.dir, { withFileTypes: true })).filter((entry) => entry.isDirectory());
+    assert.equal(await fs.readFile(path.join(s.dir, runDir.name, 'report.md'), 'utf8'), 'Paris is the capital of France.');
   });
 }
 

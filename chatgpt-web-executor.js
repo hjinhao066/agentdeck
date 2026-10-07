@@ -24,7 +24,7 @@ const REASONS = Object.freeze({
   SENSITIVE_INPUT: '问题疑似含凭据；技能已阻止发送，请队长只派公开调研。',
   BAD_STATE: '网页技能的本机冷却状态损坏；请人工检查，不自动清理状态。',
   FRONT_UNSURE: FOREGROUND_NOTES.FRONT_UNSURE + '未取得可核验的完整报告，未自动重发。',
-  FRONT_STOLEN: FOREGROUND_NOTES.FRONT_STOLEN + '未取得可核验的完整报告，未自动重发。',
+  FRONT_STOLEN: FOREGROUND_NOTES.FRONT_STOLEN + '本次按失败处理，未自动重发。',
   FOREGROUND_VIOLATION: '网页工具报告 Chrome 抢占了前台，违反后台运行约束；未交付完整报告，未自动重发。',
 });
 function failure(code) {
@@ -114,7 +114,7 @@ function createExecutor(options = {}) {
           env: options.env || process.env, onChild: (child) => { job.child = child; if (job.cancelled) child.kill('SIGTERM'); } });
       } finally { await fs.unlink(question).catch(() => {}); }
       if (job.cancelled) code = 'INTERRUPTED';
-      if (code && !Object.hasOwn(FOREGROUND_NOTES, code)) throw new Error(code);
+      if (code && code !== 'FRONT_UNSURE') throw new Error(code);
       foregroundNote = FOREGROUND_NOTES[code] || '';
       let meta, markdown;
       try {
@@ -122,8 +122,8 @@ function createExecutor(options = {}) {
         markdown = await fs.readFile(report, 'utf8');
       } catch (error) { throw new Error(code || error.message); }
       if (!/^6\s+Pro$/.test(String(meta.selectedModel).replace(/^GPT[-\s]*/i, '')) || meta.selectedMode !== job.mode) throw new Error('MODEL_UNVERIFIABLE');
-      // The outer foreground guard runs after export and can change only the
-      // exit status. Recover only finalized output, never a partial/error file.
+      // An indeterminate outer foreground check can change the exit status
+      // after export. Recover only finalized output; focus violations fail.
       if (code && (meta.status === 'error' || meta.submitted !== true || !Number.isFinite(Date.parse(meta.finishedAt))
         || !['copy-markdown', 'rendered-html-to-markdown'].includes(meta.exportMethod)
         || (job.mode === 'deep-research' && meta.researchEvidence?.complete !== true))) throw new Error(code);
