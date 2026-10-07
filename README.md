@@ -666,11 +666,17 @@ consume receipts or save the response to config. Only the Captain capability can
 use it. When the user says `你是队长`, first run `ledger` to verify that this
 terminal is the Captain, then read `briefing` and `handoff`.
 
-`node "$AGENTDECK_BOARD_CLI" handoff` prints the Captain handoff built from the
-live state and rewrites `~/.agents/boards/agentdeck-captain-handoff.md`: one
-record per unfinished task card (task state, review verdict, current session,
-next step), unread and unconfirmed receipts, open questions and the takeover
-steps. It is read-only for sessions and cards. The same text is written when a
+`node "$AGENTDECK_BOARD_CLI" handoff` prints a one-page overview of the Captain
+handoff (hard limit 6000 characters, `config.captainHandoffOverview`) and rewrites
+`~/.agents/boards/agentdeck-captain-handoff.md` plus seven detail files in
+`~/.agents/boards/agentdeck-captain-handoff/` (all unfinished tasks, waiting
+receipts and questions, what waits for the user, delivery state, older decisions,
+older user messages, the takeover playbook). The overview starts with one
+pointer line to the user profile (`~/.agents/memory/about-user.md`, read on demand,
+not quoted), then the user's
+latest words, what is running and waiting, high-priority tasks, the decisions in
+force, and a table of contents; nothing that is squeezed out of the page leaves
+the files. It is read-only for sessions and cards. The same page is written when a
 seat Relay replaces the Captain. The briefing holds the stable rules, the
 handoff the changing state; see [docs/relay-handoff.md](docs/relay-handoff.md). An
 installed version that returns

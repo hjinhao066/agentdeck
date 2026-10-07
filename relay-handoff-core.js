@@ -5,7 +5,7 @@
 // same snapshot, so the summary cannot disagree with the task list.
 // Pure: no fs, no Electron, no clock of its own.
 const AutoVerify = require('./auto-verify-core');
-// How long the handoff may be, in characters (config.captainHandoffBudget).
+// How long the overview page may be, in characters (config.captainHandoffOverview).
 const { handoffBudget: budget } = require('./main-core');
 
 // Written once for the Captain to fill in; AgentDeck only ever reads it.
@@ -72,6 +72,8 @@ function offset(ms, zone) {
 
 // ---- the Captain's own notes ----
 function sectionKey(title) {
+  // "暂停时的现场" is a snapshot written at the moment of a pause, not the list of what is paused.
+  if (/现场/.test(title)) return 'other';
   if (/暂停|取消|暂不|叫停/.test(title)) return 'paused';
   if (/目标/.test(title)) return 'goal';
   if (/授权|范围/.test(title)) return 'scope';
@@ -80,18 +82,37 @@ function sectionKey(title) {
   if (/决定/.test(title)) return 'decisions';
   return 'other';
 }
-function parseDecisions(text) {
+// Every bullet with the line it stands on in the file, so an older entry can be pointed at.
+function parseDecisionEntries(text) {
   const out = { goal: [], scope: [], paused: [], decisions: [], delivery: [], user: [], other: [] };
   let key = 'other';
-  for (const raw of String(text || '').replace(/<!--[\s\S]*?-->/g, '').split(/\r?\n/)) {
+  // Comments are blanked, not removed, so the line numbers stay those of the file.
+  const lines = String(text || '').replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, '')).split(/\r?\n/);
+  lines.forEach((raw, i) => {
     const heading = /^#{1,6}\s*(.+?)\s*$/.exec(raw);
-    if (heading) { key = sectionKey(heading[1]); continue; }
+    if (heading) { key = sectionKey(heading[1]); return; }
     const bullet = /^\s*[-*•]\s+(.*\S)\s*$/.exec(raw);
-    if (!bullet || /^(?:无|暂无|（无）|\(无\)|none|n\/a)[。.]?$/i.test(bullet[1])) continue;
-    out[key].push(bullet[1]);
-  }
+    if (!bullet || /^(?:无|暂无|（无）|\(无\)|none|n\/a)[。.]?$/i.test(bullet[1])) return;
+    out[key].push({ text: bullet[1], line: i + 1 });
+  });
   return out;
 }
+function parseDecisions(text) {
+  return Object.fromEntries(Object.entries(parseDecisionEntries(text)).map(([key, list]) => [key, list.map((e) => e.text)]));
+}
+// "[10-06 12:15 …" at the start of an entry. Only used to order entries, so the
+// year is the current one (the previous one if that would be in the future).
+function stampOf(text, now) {
+  const m = /^[*_\s]*[\[【(（](?:(\d{4})-)?(\d{1,2})-(\d{1,2})(?:[^\d\]】）)]{0,4}(\d{1,2}):(\d{2}))?/.exec(text);
+  if (!m) return 0;
+  const year = m[1] ? Number(m[1]) : new Date(now).getUTCFullYear();
+  const at = (y) => Date.UTC(y, Number(m[2]) - 1, Number(m[3]), Number(m[4] || 0), Number(m[5] || 0));
+  return !m[1] && at(year) > now + 36 * 3600_000 ? at(year - 1) : at(year);
+}
+// Newest first; entries with no time at the start go last, in file order.
+const newest = (entries) => [...entries].sort((a, b) => b.ts - a.ts || a.line - b.line);
+// The Captain marks an entry as lasting by saying so at its start: 【长期】, "长期有效".
+const lasting = (entry) => /长期/.test(Array.from(entry.text).slice(0, 80).join(''));
 
 // Branches, commits and files a receipt mentions. Claims, not facts.
 function refsIn(text, files) {
@@ -125,9 +146,10 @@ function index(snapshot) {
     waitlist: list(s.waitlist), carry: s.carry && typeof s.carry === 'object' ? s.carry : null, boardError: one(s.boardError, 200),
     userTurns: list(s.userTurns).filter((t) => typeof t.text === 'string' && t.text.trim()),
     decisions: s.decisions && typeof s.decisions === 'object' ? s.decisions : {},
+    aboutUser: s.aboutUser && typeof s.aboutUser === 'object' ? { mtime: Number(s.aboutUser.mtime) } : null,
     paths: s.paths && typeof s.paths === 'object' ? s.paths : {},
     cli: typeof s.cli === 'string' && s.cli ? s.cli : 'node "$AGENTDECK_BOARD_CLI"',
-    budget: budget(s.budget), dispatchCap: Number.isFinite(s.dispatchCap) ? s.dispatchCap : 0, userTurnsOlder: s.userTurnsOlder === true,
+    limit: budget(s.budget), dispatchCap: Number.isFinite(s.dispatchCap) ? s.dispatchCap : 0, userTurnsOlder: s.userTurnsOlder === true,
   };
 }
 const lastReal = (records) => (records || []).filter((t) => !bookkeeping(t)).at(-1) || (records || []).at(-1) || null;
@@ -380,7 +402,7 @@ function deriveLoose(ctx, cardIds) {
     const unhandled = ['failed', 'stopped'].includes(last.status) && ctx.sessions.has(id) && !bookkeeping(last);
     if (!open && !unhandled) continue;
     const stopped = captainStopped(last);
-    out.push({ id, title: String(last.title || ''), project: String(last.project || ''), state, status: last.status, reviewer: isReviewer(last), important: last.important === true || ctx.sessions.get(id)?.important === true,
+    out.push({ id, title: String(last.title || ''), project: String(last.project || ''), state, status: last.status, halted: stopped, reviewer: isReviewer(last), important: last.important === true || ctx.sessions.get(id)?.important === true,
       label: stopped ? '暂停（已被队长叫停）' : last.status === 'asking' ? '执行中（在等队长回答）' : last.status === 'failed' ? '返工（执行失败，没人处理）' : last.status === 'stopped' ? '暂停（会话结束，没交回执）' : state.code === 'resuming' ? '执行中（重启后程序自动续接中）' : '执行中',
       group: stopped || last.status === 'stopped' ? 'paused' : last.status === 'failed' ? 'rework' : 'doing',
       result: receiptText(last.receipt) || (last.progress ? '进度：' + last.progress : ''),
@@ -422,7 +444,9 @@ function derive(snapshot) {
     const last = lastReal(records);
     if (last && (last.status === 'asking' || last.status === 'input')) asks.push({ id, cardId: last.boardId && cardIds.has(last.boardId) ? last.boardId : '', title: String(last.title || ''), kind: last.status === 'asking' ? '提问' : '确认提示', text: last.receipt?.question || '' });
   }
-  const notes = parseDecisions(ctx.decisions.text);
+  const found = parseDecisionEntries(ctx.decisions.text);
+  const entries = Object.fromEntries(Object.entries(found).map(([key, list]) => [key, list.map((e) => ({ ...e, ts: stampOf(e.text, ctx.now) }))]));
+  const notes = Object.fromEntries(Object.entries(entries).map(([key, list]) => [key, list.map((e) => e.text)]));
   const dependents = (id) => ctx.cards.filter((c) => c.status !== 'done' && (c.depends_on || []).includes(id)).map((c) => c.id);
   // A question on a card (the 需要你 column) went to the Captain as well: the same
   // question, listed once, with what waits on it. Whether the user has to decide
@@ -450,43 +474,89 @@ function derive(snapshot) {
   // A session at work with no record behind it is not "nothing to do": it is the first thing
   // to look at. Neither is a task that was stopped and is all that is left.
   const plan = notes.paused.length ? 'paused' : active ? 'resume' : strays.length ? 'verify' : stats.todo + stats.paused ? 'backlog' : 'ready';
-  return { ctx, cards, loose, strays, pending: [...redeliver, ...ctx.pending], unconfirmed, carried, asks, notes, recorded, mtime, latestUser, unsorted, forCaptain, conflicts, stats, plan };
+  return { ctx, cards, loose, strays, pending: [...redeliver, ...ctx.pending], unconfirmed, carried, asks, notes, entries, recorded, mtime, latestUser, unsorted, forCaptain, conflicts, stats, plan };
 }
 
 // ---- text ----
-// What each level keeps. Unfinished tasks, blockers, limits and open decisions
-// are never dropped at any level; only explanations, excerpts and evidence shrink.
-const LEVELS = [
-  { name: '完整', result: 200, title: 60, history: 'full', excerpts: 8, excerpt: 100, files: 12, refs: true, long: true, line: 100, note: 300, items: 40 },
-  { name: '压缩历史说明和证据', result: 110, title: 48, history: 'count', excerpts: 5, excerpt: 60, files: 6, refs: true, long: true, line: 70, note: 300, items: 20 },
-  { name: '再压缩结果摘要和原文摘录', result: 60, title: 36, history: 'none', excerpts: 3, excerpt: 40, files: 3, refs: false, long: false, line: 50, note: 200, items: 10 },
-  { name: '只留必留项', result: 0, title: 24, history: 'none', excerpts: 0, excerpt: 0, files: 0, refs: false, long: false, line: 30, note: 160, items: 5 },
-];
+// The handoff is one overview page and a few detail files beside it. The page
+// has a hard length limit and lists, newest and most useful first, what the
+// Captain has to know now. Everything else moves to a detail file and leaves a
+// count and where to read it on the page, so squeezing never makes an
+// unfinished task, a question or a pause impossible to find.
 const PLATFORM = { darwin: 'Mac', win32: 'Windows', linux: 'Linux' };
 const HIGH = '【高优先级】';
 const REASON = { relay: '席位 Relay', clear: '清空队长上下文', 'token-saver': '自动存档并清空上下文', restart: 'AgentDeck 重启', refresh: '队长运行 handoff' };
+const DAY = 86400000;
+// The user's profile is only pointed at, with its age; "maybe stale" after this many days.
+const ABOUT_USER_FILE = '~/.agents/memory/about-user.md', ABOUT_STALE_DAYS = 14;
+// The detail files, in the order the overview lists them.
+const DETAIL_FILES = [
+  { key: 'tasks', name: 'tasks.md', title: '未完成任务全表', read: '要派活，或查某张卡的状态、下一步、旧轮次时' },
+  { key: 'waiting', name: 'waiting.md', title: '待处理明细（未读回执、已取走未确认的回执、队员提问、等队长拍板）', read: '处理提问和回执之前' },
+  { key: 'needsUser', name: 'needs-user.md', title: '等用户决定清单', read: '要向用户汇报，或有事想问用户之前' },
+  { key: 'delivery', name: 'delivery.md', title: '交付状态', read: '谈到版本、合并、打包、安装之前' },
+  { key: 'history', name: 'decisions-history.md', title: '历史决定（决定文件里总览没引用的条目，一条一行）', read: '拿不准某件事是否被授权、叫停或取代时' },
+  { key: 'messages', name: 'user-messages.md', title: '更早的用户消息摘录', read: '总览里的原话不够，要追上下文时' },
+  { key: 'playbook', name: 'playbook.md', title: '接手动作、核对顺序和证据索引', read: '刚接班照着核对一遍；找原始数据在哪时' },
+];
+const WORDS = [{ n: 8, old: 120, last: 400 }, { n: 5, old: 90, last: 300 }, { n: 3, old: 60, last: 200 }, { n: 2, old: 50, last: 120 }, { n: 1, old: 0, last: 80 }];
+// What the overview shows when nothing is squeezed, and the order things are given up when it does not fit.
+// The user's latest words go last: they are the one thing the next Captain cannot get anywhere else.
+// What the user paused or stopped is never given up: `paused` is how short each of its lines is (0 = fullest), not how many there are.
+const FIRST = { recent: 3, longTerm: 4, delivery: 1, sessions: 12, items: 8, high: 10, paused: 0, w: 0 };
+const SQUEEZE = [['recent', 1], ['recent', 0], ['longTerm', 0], ['delivery', 0], ['sessions', 5], ['sessions', 0],
+  ['items', 5], ['items', 2], ['items', 0], ['high', 5], ['high', 2], ['high', 0], ['paused', 1], ['paused', 2],
+  ['w', 1], ['w', 2], ['w', 3], ['w', 4]];
+// A pause entry reads "what｜how far it reaches｜pointer". Per level: how much of its first two parts the page keeps
+// (the line number in the decisions file always stays, so the rest is one read away). A task's title: how much is shown.
+const PAUSE_PARTS = [[160], [60, 40], [40, 24]];
+const PAUSE_TITLE = [30, 16, 10];
+// Paused task states that are never squeezed off the page (see renderOverview).
+const PINNED = ['stopped', 'needs_check', 'held'];
+const SQUEEZED = { recent: '最近的决定', longTerm: '长期有效的决定', delivery: '最新交付状态', sessions: '在跑会话的名单',
+  items: '提问、回执、返工、矛盾的明细行', high: '高优先级任务的明细行', paused: '暂停/叫停项每条的说明文字（每条都还在）', w: '用户原话的条数和长度' };
 
-function render(state, level) {
-  const L = LEVELS[level];
-  const { ctx, stats, notes } = state;
+const detailDir = (ctx) => (ctx.paths.handoff || HANDOFF_FILE).replace(/\.md$/i, '');
+const sepOf = (p) => (/\\/.test(p) && !/\//.test(p) ? '\\' : '/');
+const num = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const size = (text) => Array.from(text).length;
+
+// The detail files: the full text, with no length limit. Nothing here is squeezed.
+function renderDetails(state) {
+  const { ctx, stats, notes, entries } = state;
   const cli = ctx.cli;
   const when = (ms) => (ms ? clock(ms, ctx.timeZone).short : '时间未知');
   const now = clock(ctx.now, ctx.timeZone);
-  const omitted = [];
-  const out = [];
   const prev = ctx.captain.previousId || '';
   const who = (r) => `${r.role} ${r.id}（${r.state.label}${r.note ? '，' + r.note : ''}）`;
+  const file = ctx.decisions.path || ctx.paths.decisions || DECISIONS_FILE;
+  const noteWhen = ctx.decisions.error ? ctx.decisions.error + '，下面各项待核实' : state.mtime ? '最后修改 ' + when(state.mtime) : '还没有这份文件';
+  const at = (e) => `L${e.line}｜`;
+  const parts = {};
+  let out;
+  const begin = (key, ...head) => { out = parts[key] = [...head]; };
+  const cut = (line, max = 300) => one(line, max) + (Array.from(one(line)).length > max ? '（全文见决定文件）' : '');
+  // Entries newest first, the first `full` in full and the rest as one titled line each (with its line in the file).
+  const entryList = (list, full, empty) => {
+    if (!list.length) { out.push('  - ' + empty); return; }
+    const sorted = newest(list);
+    sorted.slice(0, full).forEach((e) => out.push(`  - ${at(e)}${cut(e.text, 500)}`));
+    const rest = sorted.slice(full);
+    if (rest.length) {
+      out.push(`  - 更早的 ${rest.length} 条，只列标题；原文在 ${file} 的对应行：`);
+      rest.forEach((e) => out.push(`    - ${at(e)}${one(e.text, 80)}`));
+    }
+  };
 
-  // 1
-  out.push('# AgentDeck 队长交接', '', '## 1. 交接元信息');
+  // ---- playbook: meta, then what to do first ----
+  begin('playbook', '# 接手动作、核对顺序和证据索引', '', '## 交接元信息');
   const relay = ctx.captain.message ? one(ctx.captain.message, 200) : ctx.captain.lastRelay?.message ? `最近一次轮换（${when(ctx.captain.lastRelay.at)}）：${one(ctx.captain.lastRelay.message, 200)}` : '';
   out.push(`- 生成：${now.date} ${now.time}（${now.zone}${offset(ctx.now, now.zone) ? '，' + offset(ctx.now, now.zone) : ''}）；触发：${REASON[ctx.reason]}${relay ? '；' + relay : ''}`);
   if (/\d\s*%/.test(relay)) out.push('- 上面的额度百分比是轮换那一刻的采样（来源：永动机轮换判定），只说明为什么轮换；现在的额度用 quota 查，不要拿它推算');
   out.push(`- 上任会话：${prev || '无'}${prev ? `（read --id ${prev} 按需读）` : ''}`);
-  out.push(`- 快照版本：队长代次 gen ${ctx.captain.gen ?? '待核实'}${ctx.captain.nextGen ? ' → ' + ctx.captain.nextGen : ''}${ctx.boardVersion ? '；看板版本 ' + ctx.boardVersion : ''}。下面各节都取自这一份快照，另标了时间的除外`);
-  out.push(`- 摘要：未完成任务 ${stats.cards + stats.loose} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）；在跑的队员会话 ${stats.running.length} 个；未读回执 ${stats.pending} 条；已取走未确认 ${stats.unconfirmed} 条；队员在等回答 ${stats.asks} 条；等用户决定 ${stats.forUser} 条；矛盾 ${stats.conflicts} 条${stats.important ? `；用户点名高优先级 ${stats.important} 条（下面标了【高优先级】，先办）` : ''}`);
+  out.push(`- 快照版本：队长代次 gen ${ctx.captain.gen ?? '待核实'}${ctx.captain.nextGen ? ' → ' + ctx.captain.nextGen : ''}${ctx.boardVersion ? '；看板版本 ' + ctx.boardVersion : ''}。各份文件都取自这一份快照，另标了时间的除外`);
+  out.push(`- 摘要：未完成任务 ${stats.cards + stats.loose} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）；在跑的队员会话 ${stats.running.length} 个；未读回执 ${stats.pending} 条；已取走未确认 ${stats.unconfirmed} 条；队员在等回答 ${stats.asks} 条；等用户决定 ${stats.forUser} 条；矛盾 ${stats.conflicts} 条${stats.important ? `；用户点名高优先级 ${stats.important} 条（tasks.md 里标了【高优先级】，先办）` : ''}`);
   if (ctx.dispatchCap && ctx.dispatches.length >= ctx.dispatchCap) out.push(`- 派活记录：本快照有 ${ctx.dispatches.length} 条。未结束的全部保留；已结束的只留最近的，更早的旧轮次和只记在派活记录里的外部审查结论不在这里，以看板卡片为准，细节 read --id 会话id`);
-  out.push('- 长度：{{LENGTH}}');
   out.push(`- 命令：下文的 handoff、ledger、read 等都接在 ${cli} 后面运行`);
   if (ctx.captain.rotation) out.push(`- 队长轮换：${one(ctx.captain.rotation, 160)}。谁接任队长只看这项设置，和队员用什么模型无关；交接不改它`);
 
@@ -495,106 +565,55 @@ function render(state, level) {
     for (const d of ctx.discussions) out.push(`- ${d.id}：${one(d.status, 30)}，第 ${Number(d.round) || 1} 轮；discuss status --id ${d.id} 核对，wait 等结果；暂停先查原因，unknown 不自动重发，resume/cancel 只针对原 ID。`);
   }
 
-  // 2
-  const file = ctx.decisions.path || ctx.paths.decisions || DECISIONS_FILE;
-  const atLeast = ctx.userTurnsOlder && state.unsorted.length === ctx.userTurns.length ? '至少 ' : '';
-  const stale = state.unsorted.length && state.recorded ? `；此后还有 ${atLeast}${state.unsorted.length} 条用户消息没整理进来，以原文为准` : '';
-  out.push('', '## 2. 当前目标和有效决定');
-  out.push(`来源：队长维护的 ${file}（${ctx.decisions.error ? ctx.decisions.error + '，下面各项待核实' : state.mtime ? '最后修改 ' + when(state.mtime) : '还没有这份文件'}${stale}）。程序原样引用，不判断语义。`);
-  const cut = (line) => one(line, L.note) + (Array.from(one(line)).length > L.note ? '（全文见文件）' : '');
-  const block = (title, lines, empty) => {
-    if (!lines.length) { out.push(`- ${title}：${empty}`); return; }
-    if (lines.length === 1) { out.push(`- ${title}：${cut(lines[0])}`); return; }
-    out.push(`- ${title}：`); lines.forEach((line) => out.push('  - ' + cut(line)));
-  };
-  block('当前目标', notes.goal, '无记录，待核实');
-  block('已授权范围', notes.scope, '无记录，待核实');
-  block('暂停、取消、暂不启动', notes.paused, '无');
-  block('仍有效的用户决定', notes.decisions, '无记录，待核实');
-  if (notes.other.length) block('其他记录', notes.other, '无');
-  const olderTurns = ctx.userTurnsOlder ? '；更早的没有统计在内，read --id captain-history --find 关键词' : '';
-  if (!ctx.userTurns.length) out.push('- 最近用户消息：无');
-  else {
-    const turns = L.excerpts ? ctx.userTurns.slice(-L.excerpts) : [];
-    const hidden = ctx.userTurns.length - turns.length;
-    out.push(`- 最近用户消息 ${ctx.userTurns.length} 条（原文指针，程序没有整理；其中 ${state.unsorted.length} 条还没进有效决定文件${olderTurns}）：`);
-    for (const t of turns) {
-      const words = one(t.text).replace(/["\\`$]/g, '');
-      const find = Array.from(words.split(' ')[0] || '').slice(0, 12).join('');
-      const size = Array.from(t.text).length;
-      out.push(`  - ${when(t.ts)}${state.unsorted.includes(t) ? ' 未整理' : ''}｜「${one(t.text, L.excerpt)}」${size > L.excerpt ? `（共 ${size} 字${t.longFile ? '，全文 ' + t.longFile : ''}）` : ''}｜read --id ${t.sourceId || prev || '上任会话'}${find ? ` --find "${find}"` : ''}`);
-    }
-    if (hidden > 0) {
-      const rest = ctx.userTurns.slice(0, hidden);
-      const late = rest.filter((t) => state.unsorted.includes(t));
-      const where = [...new Set(rest.map((t) => t.sourceId || prev).filter(Boolean))];
-      out.push(`  - 另有 ${hidden} 条没摘录${late.length ? `，其中未整理的在 ${late.map((t) => when(t.ts)).join('、')}` : ''}：read --id ${where[0] || '上任会话'} --turns 10${where.length > 1 ? `（另见 ${where.slice(1).join('、')}）` : ''}`);
-      omitted.push(`用户消息摘录 ${hidden} 条`);
-    }
-  }
-
-  // 3
-  out.push('', '## 3. 当前项目与交付状态');
+  // ---- delivery ----
+  begin('delivery', '# 交付状态');
   out.push(`- 本机：${PLATFORM[ctx.platform] || ctx.platform || '待核实'}${ctx.host ? ' ' + ctx.host : ''}，正在运行 AgentDeck ${ctx.appVersion || '待核实'}（程序自报，取自本快照）。其他机器：待核实，本机看不到`);
-  block(`队长记录的交付状态（${state.mtime ? when(state.mtime) + ' 的记录' : '无文件'}）`, notes.delivery, '无记录，待核实');
+  out.push(`- 队长记录的交付状态（来源 ${file}，${noteWhen}；最新的在前，最近 10 条全文）：`);
+  entryList(entries.delivery, 10, '无记录，待核实');
   const withRefs = state.cards.filter((c) => c.refs.commits.length || c.refs.branches.length || c.refs.files.length);
   if (!withRefs.length) out.push('- 未完成任务的回执和进度里提到的分支、提交、产物：无');
-  else if (!L.refs) { out.push(`- 未完成任务的回执和进度里提到分支、提交或产物的有 ${withRefs.length} 张卡，这里不展开：task list --status doing`); omitted.push(`回执和进度里的分支、提交、产物 ${withRefs.length} 张卡`); }
   else {
     out.push('- 未完成任务的回执和进度里提到的分支、提交、产物（队员自述，程序没有核实；提交、合并、打包、安装各到哪一步都按待核实处理）：');
     for (const c of withRefs) {
-      const files = c.refs.files.slice(0, Math.max(1, Math.floor(L.files / 3)));
+      const files = c.refs.files.slice(0, 4);
       out.push(`  - ${c.id}｜${[c.refs.branches.length ? '分支 ' + c.refs.branches.join('、') : '', c.refs.commits.length ? '提交 ' + c.refs.commits.join('、') : '', files.length ? '产物 ' + files.join('、') : ''].filter(Boolean).join('｜')}${c.refs.more || files.length < c.refs.files.length ? '｜还有没列出的，见回执原文' : ''}`);
     }
   }
 
-  // 4
-  out.push('', `## 4. 未完成任务（${stats.cards + stats.loose} 条，每张卡一条当前记录）`);
+  // ---- tasks ----
+  begin('tasks', `# 未完成任务全表（${stats.cards + stats.loose} 条，每张卡一条当前记录）`);
   const started = state.cards.filter((c) => c.started || c.group !== 'todo');
   const fresh = state.cards.filter((c) => !started.includes(c));
   if (ctx.boardError) out.push(`- 任务看板读不出来（${ctx.boardError}）：下面只有队长自己的派活记录，卡片状态待核实；修好看板文件后再跑 handoff`);
   if (!state.cards.length && !state.loose.length) out.push('无');
   for (const c of started) {
     const roles = c.roles.length ? c.roles.map(who).join('；') : '无';
-    const head = `- 【${c.label}】${c.important ? HIGH : ''}${c.id}｜${c.project}｜${one(c.title, L.title)}`;
     const blocked = [...c.blockers, ...c.conflicts.map((x) => '矛盾：' + x)];
-    if (L.long) {
-      out.push(head, `  会话：${roles}｜验收：${c.verdict.label}`);
-      out.push(`  结果：${one(c.result, L.result) || '无'}`);
-      out.push(`  阻塞：${blocked.length ? blocked.join('；') : '无'}`);
-      out.push(`  下一步：${c.next}`);
-      if (c.history.length && L.history === 'full') out.push(`  旧轮次：${c.history.map((h) => `${h.id}（${h.outcome}）`).join('、')}；细节 read --id 会话id`);
-      else if (c.history.length) out.push(`  旧轮次：${c.history.length} 个会话，细节 read --id 会话id`);
-    } else {
-      out.push(`${head}｜${c.roles.length ? roles : '无会话'}｜验收：${c.verdict.label}${L.result && c.result ? '｜结果：' + one(c.result, L.result) : ''}｜阻塞：${blocked.length ? blocked.join('；') : '无'}｜下一步：${c.nextShort}`);
-    }
+    out.push(`- 【${c.label}】${c.important ? HIGH : ''}${c.id}｜${c.project}｜${one(c.title, 60)}`, `  会话：${roles}｜验收：${c.verdict.label}`);
+    out.push(`  结果：${one(c.result, 200) || '无'}`, `  阻塞：${blocked.length ? blocked.join('；') : '无'}`, `  下一步：${c.next}`);
+    if (c.history.length) out.push(`  旧轮次：${c.history.map((h) => `${h.id}（${h.outcome}）`).join('、')}；细节 read --id 会话id`);
   }
-  if (!L.long) omitted.push('任务的完整下一步说明和旧轮次');
-  else if (L.history === 'count' && started.some((c) => c.history.length)) omitted.push('旧轮次明细');
-  if (!L.result && started.some((c) => c.result)) omitted.push(`结果摘要（ledger 或 task list 查）`);
   if (fresh.length) {
-    out.push(`- 【待执行】还没启动的 ${fresh.length} 张（在第 2 节授权范围内且没被暂停时再派：new --task-id 卡片id）：`);
-    for (const c of fresh) out.push(`  - ${c.important ? HIGH : ''}${c.id}｜${c.project}｜${one(c.title, L.title)}${c.blockers.length ? '｜' + c.blockers.join('；') : ''}`);
+    out.push(`- 【待执行】还没启动的 ${fresh.length} 张（在总览「现行有效的决定」的授权范围内且没被暂停时再派：new --task-id 卡片id）：`);
+    for (const c of fresh) out.push(`  - ${c.important ? HIGH : ''}${c.id}｜${c.project}｜${one(c.title, 60)}${c.blockers.length ? '｜' + c.blockers.join('；') : ''}`);
   }
   for (const l of state.loose) {
-    out.push(`- 【${l.label}】${l.important ? HIGH : ''}没挂卡｜${l.project || '无项目'}｜${one(l.title, L.title)}｜${l.id ? `${l.reviewer ? '审查' : '执行'} ${l.id}（${l.state.label}）` : '还没开会话'}${L.result && l.result ? '｜结果：' + one(l.result, L.result) : ''}｜下一步：${l.next}`);
+    out.push(`- 【${l.label}】${l.important ? HIGH : ''}没挂卡｜${l.project || '无项目'}｜${one(l.title, 60)}｜${l.id ? `${l.reviewer ? '审查' : '执行'} ${l.id}（${l.state.label}）` : '还没开会话'}${l.result ? '｜结果：' + one(l.result, 200) : ''}｜下一步：${l.next}`);
   }
   if (state.strays.length) out.push(`- 在跑、但没有对应未完成任务记录的会话：${state.strays.map((s) => `${s.id}「${one(s.title, 24)}」（${s.state.label}）`).join('、')}。用 peek 看它在做什么`);
 
-  // 5
-  out.push('', '## 5. 待处理事项');
-  const item = (p) => `  - ${pendingKind(p)}｜${p.colId || ''}｜「${one(p.title, 30)}」｜${one(pendingLine(p), L.line)}`;
-  // Every waiting receipt is named. Past the first L.items of a list the rest go by
+  // ---- waiting ----
+  begin('waiting', '# 待处理明细');
+  const item = (p) => `  - ${pendingKind(p)}｜${p.colId || ''}｜「${one(p.title, 30)}」｜${one(pendingLine(p), 100)}`;
+  // Every waiting receipt is named. Past the first 40 of a list the rest go by
   // session and title only, so a long list costs little and nobody's result is cut off.
-  let titlesOnly = 0;
   const receipts = (items) => {
-    items.slice(0, L.items).forEach((p) => out.push(item(p)));
-    const rest = items.slice(L.items);
+    items.slice(0, 40).forEach((p) => out.push(item(p)));
+    const rest = items.slice(40);
     if (!rest.length) return;
     const bySession = new Map();
     for (const p of rest) bySession.set(p.colId || '会话未知', [...(bySession.get(p.colId || '会话未知') || []), p]);
     out.push(`  - 其余 ${rest.length} 条只列会话和标题，内容用 read --id 会话id 查：${[...bySession].map(([id, ps]) => id + ps.map((p) => `${pendingKind(p) === '回执' ? '' : pendingKind(p)}「${one(p.title, 40)}」`).join('')).join('；')}`);
-    titlesOnly += rest.length;
   };
   if (!state.pending.length) out.push('- 未读回执和提问：无');
   else { out.push(`- 未读回执和提问 ${state.pending.length} 条（会经 receipts 通道送达，到时再处理，不要照这里重复派活）：`); receipts(state.pending); }
@@ -611,35 +630,39 @@ function render(state, level) {
     receipts(state.carried);
   }
   if (!state.unconfirmed.length && !state.carried.length) out.push('- 已取走、可能没处理完的回执：无');
-  if (titlesOnly) omitted.push(`回执内容 ${titlesOnly} 条（只列了会话和标题）`);
   if (!state.asks.length) out.push('- 队员在等队长回答：无');
   else {
     out.push(`- 队员在等队长回答 ${state.asks.length} 条（卡着后续动作，先处理：已有授权能定或有把握的直接 tell / answer 回答，涉及不可逆的事或拿不准的才请用户决定）：`);
-    state.asks.forEach((a) => out.push(`  - ${a.kind}｜${a.id || '会话未知'}｜${a.cardId ? a.cardId + '｜' : ''}「${one(a.title, 30)}」${a.text ? '｜' + one(a.text, Math.max(L.line, 60)) : a.id ? `｜peek --id ${a.id}` : ''}${a.cardId ? '｜' + (a.blocks?.length ? '阻塞 ' + a.blocks.join('、') : '不阻塞其他卡') : ''}`));
+    state.asks.forEach((a) => out.push(`  - ${a.kind}｜${a.id || '会话未知'}｜${a.cardId ? a.cardId + '｜' : ''}「${one(a.title, 30)}」${a.text ? '｜' + one(a.text, 100) : a.id ? `｜peek --id ${a.id}` : ''}${a.cardId ? '｜' + (a.blocks?.length ? '阻塞 ' + a.blocks.join('、') : '不阻塞其他卡') : ''}`));
   }
-  // Only what the Captain wrote down as waiting for the user. A crew question is not one until the Captain says so.
-  if (!notes.user.length) out.push('- 必须由用户决定：无（队长没有记录）');
-  else { out.push(`- 必须由用户决定 ${notes.user.length} 条（队长记录）：`); notes.user.forEach((line) => out.push('  - ' + cut(line))); }
   if (!state.forCaptain.length) out.push('- 等队长拍板（已有授权能解决，不要转给用户）：无');
   else out.push(`- 等队长拍板 ${state.forCaptain.length} 条（已有授权能解决，不要转给用户）：${state.forCaptain.map((c) => `${c.id}（${c.label}）`).join('、')}`);
 
-  // 6
-  // Section 4 already carries every card's own next step; long id lists are not repeated here.
+  // ---- needs the user: only what the Captain wrote down. A crew question is not one until the Captain says so ----
+  begin('needsUser', '# 等用户决定清单', `来源：队长维护的 ${file}（${noteWhen}）。只列队长记下的；队员的提问先归队长判断，见 waiting.md。`);
+  if (!notes.user.length) out.push('- 无（队长没有记录）');
+  else entries.user.forEach((e) => out.push(`- ${at(e)}${cut(e.text, 500)}`));
+
+  // ---- the user's words beyond the overview ----
+  begin('messages', '# 更早的用户消息摘录', '原文指针，程序没有整理；全文用 read --id 会话id --find 关键词 查。');
+  const olderTurns = ctx.userTurnsOlder ? '；更早的没有统计在内，read --id captain-history --find 关键词' : '';
+  if (!ctx.userTurns.length) out.push('- 无');
+  else {
+    out.push(`- 本快照有用户消息 ${ctx.userTurns.length} 条（其中 ${state.unsorted.length} 条还没进有效决定文件${olderTurns}）：`);
+    for (const t of [...ctx.userTurns].reverse()) out.push('  ' + turnLine(state, t, 300, prev, when));
+  }
+
+  // ---- playbook, second half ----
+  // The overview carries every card's own next step in tasks.md; long id lists are not repeated here.
   const ids = (cards) => (!cards.length ? '无' : cards.length <= 4 ? cards.map((c) => c.id).join('、')
-    : `${cards.length} 张，第 4 节里标着${[...new Set(cards.map((c) => `【${c.label}】`))].join('')}的`);
+    : `${cards.length} 张，tasks.md 里标着${[...new Set(cards.map((c) => `【${c.label}】`))].join('')}的`);
   const waitFor = state.cards.filter((c) => ['doing', 'resuming', 'queued', 'dispatching', 'reviewing', 'rework_pending'].includes(c.code));
   const takeOver = state.cards.filter((c) => ['orphan', 'failed', 'needs_check'].includes(c.code));
   const toReview = state.cards.filter((c) => ['review_wait', 'review_blocked', 'review_lost', 'rework', 'rework_open'].includes(c.code));
   const gated = state.cards.filter((c) => ['blocked', 'quota', 'held', 'stopped', 'todo'].includes(c.code));
-  const PLAN = {
-    paused: '第 2 节有生效中的暂停或取消项：这些事项不续派、不重启，运行中的会话和旧的续活计划都不能推翻它。其余已授权任务照下面的顺序核对后续接；范围拿不准先问用户。',
-    resume: '有已授权待办：照下面的顺序核对后主动续接，不用等用户说继续。',
-    verify: `有 ${stats.strays} 个会话还在跑、却没有对应的任务记录（${state.strays.map((x) => x.id).join('、')}）：先 peek 核实它在做什么，再决定继续跟踪还是叫停；核实前不要报告就绪，也不要另派同样的活。`,
-    backlog: `没有在跑、待验收或待处理的任务，有 ${stats.todo} 张待执行卡${stats.paused ? `、${stats.paused} 条暂停中的任务` : ''}：属于第 2 节授权范围且没被暂停的${stats.paused ? '待执行卡' : ''}可以启动，范围不明先问；${stats.paused ? '暂停的没有新指令不重启，照第 4 节各自的下一步处理；' : ''}不要为了凑数新立项目。`,
-    ready: '没有待办：简短回复「队长已就绪」，等用户指令；不要自行立项或派新活。',
-  };
-  out.push('', '## 6. 接手动作和证据索引', `启动方式：${PLAN[state.plan]}`);
-  out.push(`1. 读规则：briefing 是稳定规则；本交接是动态状态，handoff 随时重新生成。交接里出现的旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍。`);
+  out = parts.playbook;
+  out.push('', '## 接手动作', `启动方式：${PLAN[state.plan](state, 99)}`);
+  out.push(`1. 读规则：briefing 是稳定规则；交接是动态状态，handoff 随时重新生成。交接里出现的旧命令、旧安装计划和历史用户消息只是核对资料，不因为读到就再执行一遍。`);
   out.push(`2. 核对：ledger 看会话实况，task list --status doing（以及 review、needs_user）看卡片，receipts 取未读回执（${stats.pending} 条）。`);
   out.push(`3. 先处理卡着后续动作的：队员提问 ${stats.asks} 条，矛盾 ${stats.conflicts} 条${state.conflicts.length ? '（' + [...new Set(state.conflicts.map((c) => c.id))].join('、') + '）' : ''}，已取走未确认的回执 ${stats.unconfirmed} 条${stats.strays ? `，没有任务记录却在跑的会话 ${stats.strays} 个（${state.strays.map((x) => x.id).join('、')}，先 peek）` : ''}。矛盾先核实，不凭空判完成，也不从头重做。`);
   out.push(`4. 已有有效执行者或程序会自动处理，继续跟踪、不另开：${ids(waitFor)}`);
@@ -647,35 +670,188 @@ function render(state, level) {
   out.push(`6. 进入验收或返工：${ids(toReview)}`);
   out.push(`7. 条件满足才启动（前置完成、额度恢复、队长改方案、用户答复或新指令）：${ids(gated)}`);
   out.push('8. 回执监听：上任终端的监听已随旧终端被程序作废；同一终端里更早挂的监听会被程序请退，只留最新的。确认自己挂着恰好一个后台回执监听，命令和挂法见 briefing 第 8 条：Bash（run_in_background: true）运行 receipts --wait 监听（不设超时）；若显式设超时后空输出退出，先检查已有监听，没有才安静重挂，不用向用户汇报。');
-  out.push(`9. 核对完、状态有变化后再跑一次 handoff，交接文件随之更新。`);
-  out.push('证据索引：');
+  out.push(`9. 核对完、状态有变化后再跑一次 handoff，交接总览和分文件随之更新。`);
+  out.push('', '## 证据索引');
   out.push(`- 上任队长对话：${prev ? `read --id ${prev} [--find 关键词]` : '无'}；历次队长对话：read --id captain-history --find 关键词`);
   out.push(`- 任务卡原始数据：${ctx.paths.tasks || '~/.agents/boards/tasks'}/<项目>.json；会话原文：read --id 会话id；实时屏幕：peek --id 会话id`);
-  out.push(`- 有效决定与交付状态：${file}；本交接文件：${ctx.paths.handoff || HANDOFF_FILE}${ctx.paths.chats ? '；对话存档目录：' + ctx.paths.chats : ''}`);
+  out.push(`- 有效决定与交付状态：${file}；交接总览：${ctx.paths.handoff || HANDOFF_FILE}；分文件目录：${detailDir(ctx)}${ctx.paths.chats ? '；对话存档目录：' + ctx.paths.chats : ''}`);
   const files = [...new Set(state.cards.flatMap((c) => c.refs.files))];
-  if (files.length && L.files) out.push(`- 未完成任务提到的报告和产物：${files.slice(0, L.files).join('、')}${files.length > L.files ? ` 等 ${files.length} 个` : ''}`);
-  if (files.length > L.files) omitted.push(`报告和产物路径 ${files.length - L.files} 个`);
-  return { text: out.join('\n') + '\n', omitted };
+  if (files.length) out.push(`- 未完成任务提到的报告和产物：${files.slice(0, 12).join('、')}${files.length > 12 ? ` 等 ${files.length} 个` : ''}`);
+
+  // ---- history: every decision the overview does not quote ----
+  begin('history', '# 历史决定', '');
+  // Every entry the file has under these headings is one line here, with its line number: only how much of it is quoted
+  // gets shorter. The count the contents page gives is the number of lines counted as they are written.
+  let listed = 0;
+  const section = (title, list, whole) => {
+    if (!list.length) return;
+    out.push('', `## ${title}（共 ${list.length} 条）`);
+    newest(list).forEach((e) => out.push(`- ${at(e)}${whole ? one(e.text) : one(e.text, 80)}`));
+    listed += list.length;
+  };
+  section('暂停/取消/暂不启动（生效中，全文）', entries.paused, true);
+  section('当前目标', entries.goal);
+  section('授权范围', entries.scope);
+  section('有效决定', entries.decisions);
+  section('其他记录', entries.other);
+  parts.history[1] = `来源：队长维护的 ${file}（${noteWhen}），整份 ${num(size(ctx.decisions.text || ''))} 字。程序不改它。本文件逐条列出 ${listed} 条，一条不缺、不设条数上限（交付状态在 delivery.md，等用户决定在 needs-user.md）；总览引用过的条目这里也有；每条前面的 L 数字是它在原文件里的行号。`;
+  return { parts, notes: { file, noteWhen, listed } };
 }
 
-// The shortest level that fits. Past the last level nothing more may go, so
-// the text says it is over budget instead of losing a task.
+// One line of the user's words: when, an excerpt, and the command that reads the whole.
+function turnLine(state, t, max, prev, when) {
+  const words = one(t.text).replace(/["\\`$]/g, '');
+  const find = Array.from(words.split(' ')[0] || '').slice(0, 12).join('');
+  const length = Array.from(t.text).length;
+  return `- ${when(t.ts)}${state.unsorted.includes(t) ? ' 未整理' : ''}｜「${one(t.text, max)}」${length > max ? `（共 ${length} 字${t.longFile ? '，全文 ' + t.longFile : ''}）` : ''}｜read --id ${t.sourceId || prev || '上任会话'}${find ? ` --find "${find}"` : ''}`;
+}
+
+// What to do first, one line per case. `cap` is how many ids a line may name.
+const PLAN = {
+  paused: () => '「现行有效的决定」里有生效中的暂停或取消项：这些事项不续派、不重启，运行中的会话和旧的续活计划都不能推翻它。其余已授权任务照核对顺序核对后续接；范围拿不准先问用户。',
+  resume: () => '有已授权待办：照 playbook.md 的顺序核对后主动续接，不用等用户说继续。',
+  verify: (state, cap) => `有 ${state.stats.strays} 个会话还在跑、却没有对应的任务记录（${state.strays.slice(0, cap).map((x) => x.id).join('、')}${state.strays.length > cap ? ' 等' : ''}）：先 peek 核实它在做什么，再决定继续跟踪还是叫停；核实前不要报告就绪，也不要另派同样的活。`,
+  backlog: (state) => `没有在跑、待验收或待处理的任务，有 ${state.stats.todo} 张待执行卡${state.stats.paused ? `、${state.stats.paused} 条暂停中的任务` : ''}：属于授权范围且没被暂停的${state.stats.paused ? '待执行卡' : ''}可以启动，范围不明先问；${state.stats.paused ? '暂停的没有新指令不重启，照 tasks.md 里各自的下一步处理；' : ''}不要为了凑数新立项目。`,
+  ready: () => '没有待办：简短回复「队长已就绪」，等用户指令；不要自行立项或派新活。',
+};
+
+// The overview page. `p` says how much of each block is shown; `cuts` is what has been given up so far.
+function renderOverview(state, details, p, cuts) {
+  const { ctx, stats, notes, entries } = state;
+  const when = (ms) => (ms ? clock(ms, ctx.timeZone).short : '时间未知');
+  const now = clock(ctx.now, ctx.timeZone);
+  const prev = ctx.captain.previousId || '';
+  const dir = detailDir(ctx), sep = sepOf(dir);
+  const file = details.notes.file;
+  const out = [];
+  const quoted = new Set();
+
+  out.push('# AgentDeck 队长交接·总览', '');
+  const relay = ctx.captain.message ? one(ctx.captain.message, 160) : ctx.captain.lastRelay?.message ? `最近一次轮换（${when(ctx.captain.lastRelay.at)}）：${one(ctx.captain.lastRelay.message, 160)}` : '';
+  out.push(`生成 ${now.date} ${now.time}（${now.zone}）｜触发：${REASON[ctx.reason]}${relay ? '｜' + relay : ''}｜上任会话 ${prev || '无'}${prev ? `（read --id ${prev}）` : ''}｜队长代次 gen ${ctx.captain.gen ?? '待核实'}${ctx.captain.nextGen ? ' → ' + ctx.captain.nextGen : ''}`);
+  out.push(`这页只是总览，最长 ${num(state.ctx.limit)} 字。细节拆在 ${dir}${sep} 下的分文件里，见最后一节「目录」，按需读，不用全读。命令都接在 ${ctx.cli} 后面运行。{{LENGTH}}`);
+
+  if (ctx.discussions.length) {
+    out.push('', '## 进行中的讨论（私有原稿不进入交接）');
+    for (const d of ctx.discussions) out.push(`- ${d.id}：${one(d.status, 30)}，第 ${Number(d.round) || 1} 轮；discuss status --id ${d.id} 核对，wait 等结果；暂停先查原因，unknown 不自动重发，resume/cancel 只针对原 ID。`);
+  }
+
+  // 0 who you serve: a pointer only. The profile is read when it is needed, never on every handover.
+  if (ctx.aboutUser) {
+    const age = Number.isFinite(ctx.aboutUser.mtime) && ctx.aboutUser.mtime > 0 ? Math.floor((ctx.now - ctx.aboutUser.mtime) / DAY) : null;
+    out.push('', `关于用户：${ABOUT_USER_FILE}（短档案）及 about-user/ 下按主题的详档，需要了解他的偏好、近况时再读｜${age == null ? '修改时间未知' : '最后修改 ' + when(ctx.aboutUser.mtime)}${age != null && age > ABOUT_STALE_DAYS ? `（可能过期：已 ${age} 天没更新）` : ''}`);
+  }
+
+  // 1 the user's latest words, newest first
+  const W = WORDS[p.w];
+  out.push('', '## 1. 用户最近的原话（最新的在最前，程序没有整理）');
+  if (!ctx.userTurns.length) out.push('- 无（本快照里没有用户消息）');
+  else {
+    const turns = [...ctx.userTurns].reverse(), shown = turns.slice(0, W.n);
+    out.push(`本快照有用户消息 ${ctx.userTurns.length} 条，其中 ${state.unsorted.length} 条还没进决定文件${ctx.userTurnsOlder ? '，更早的没有统计在内' : ''}：`);
+    shown.forEach((t, i) => out.push(turnLine(state, t, i === 0 ? W.last : W.old, prev, when)));
+    if (turns.length > shown.length) out.push(`- 另有 ${turns.length - shown.length} 条没摘录：user-messages.md（每条 300 字）；原文 read --id ${turns[shown.length].sourceId || prev || '上任会话'} --turns 10`);
+    else if (ctx.userTurnsOlder) out.push('- 更早的：read --id captain-history --find 关键词');
+  }
+
+  // 2 running sessions and what waits for the Captain
+  out.push('', '## 2. 在跑的会话，和等你处理的事');
+  out.push(`- 数一数：未完成任务 ${stats.cards + stats.loose} 条（返工 ${stats.rework}｜待验收 ${stats.review}｜执行中 ${stats.doing}｜暂停 ${stats.paused}｜待执行 ${stats.todo}）→ tasks.md｜队员提问 ${stats.asks} 条｜未读回执 ${stats.pending} 条｜已取走未确认 ${stats.unconfirmed} 条｜矛盾 ${stats.conflicts} 条｜等队长拍板 ${state.forCaptain.length} 条 → waiting.md｜等用户决定 ${stats.forUser} 条 → needs-user.md`);
+  const running = stats.running.map((id) => ({ id, title: String(ctx.sessions.get(id)?.title || '') }));
+  if (!running.length) out.push('- 在跑的队员会话：0 个');
+  else if (!p.sessions) out.push(`- 在跑的队员会话 ${running.length} 个：ledger 看实况，对应的任务在 tasks.md`);
+  else out.push(`- 在跑的队员会话 ${running.length} 个：${running.slice(0, p.sessions).map((r) => r.id + (r.title && r.title !== r.id ? `「${one(r.title, 16)}」` : '')).join('、')}${running.length > p.sessions ? `，另 ${running.length - p.sessions} 个见 ledger` : ''}`);
+  const lines = (title, list, line) => {
+    if (!list.length || !p.items) return;
+    out.push(`- ${title}：`);
+    list.slice(0, p.items).forEach((x) => out.push('  - ' + line(x)));
+    if (list.length > p.items) out.push(`  - 另 ${list.length - p.items} 条见 ${title.includes('回执') ? 'waiting.md' : 'tasks.md / waiting.md'}`);
+  };
+  lines(`队员提问 ${stats.asks} 条（先处理，已有授权能定的直接回答）`, state.asks, (a) => `${a.kind}｜${a.id || '会话未知'}｜${a.cardId ? a.cardId + '｜' : ''}「${one(a.title, 20)}」${a.text ? '｜' + one(a.text, 60) : ''}`);
+  lines(`未读和未确认的回执 ${stats.pending + stats.unconfirmed} 条`, [...state.pending, ...state.unconfirmed], (r) => `${pendingKind(r)}｜${r.colId || ''}｜「${one(r.title, 20)}」｜${one(pendingLine(r), 50)}`);
+  lines(`返工 ${stats.rework} 条`, state.cards.filter((c) => c.group === 'rework'), (c) => `${c.id}｜${c.label}｜${one(c.title, 24)}`);
+  lines(`矛盾 ${stats.conflicts} 条（先核实）`, state.conflicts, (c) => `${c.id}｜${one(c.text, 70)}`);
+  lines(`等队长拍板 ${state.forCaptain.length} 条（别转给用户）`, state.forCaptain, (c) => `${c.id}｜${c.label}｜${one(c.title, 24)}`);
+  lines(`没有任务记录却在跑的会话 ${stats.strays} 个（先 peek）`, state.strays, (s) => `${s.id}｜${one(s.title, 24)}｜${s.state.label}`);
+  out.push(`- 启动方式：${PLAN[state.plan](state, 5)}`);
+
+  // 3 what the user named as urgent
+  const high = [...state.cards.filter((c) => c.important).map((c) => `${c.label.split('（')[0]}｜${c.id}｜${c.project}｜${one(c.title, 30)}`), ...state.loose.filter((l) => l.important).map((l) => `${l.label.split('（')[0]}｜没挂卡｜${l.project || '无项目'}｜${one(l.title, 30)}`)];
+  if (high.length) {
+    out.push('', `## 3. 用户点名的高优先级（${high.length} 条，先办）`);
+    high.slice(0, p.high).forEach((l) => out.push(`- ${HIGH}${l}`));
+    if (high.length > p.high) out.push(`- ${p.high ? '另 ' + (high.length - p.high) + ' 条' : '全部'}见 tasks.md（标了${HIGH}）`);
+  }
+
+  // 4 decisions in force: pauses, then lasting ones, then the newest few; the rest by pointer
+  out.push('', '## 4. 现行有效的决定（队长维护的决定文件，程序只读）');
+  const stale = state.unsorted.length && state.recorded ? `；此后还有 ${ctx.userTurnsOlder && state.unsorted.length === ctx.userTurns.length ? '至少 ' : ''}${state.unsorted.length} 条用户消息没整理进来，以原文为准` : '';
+  out.push(`来源 ${file}（${ctx.decisions.error ? ctx.decisions.error + '，下面各项待核实' : state.mtime ? '最后修改 ' + when(state.mtime) : '还没有这份文件'}${stale}）。给条目开头标「长期」，它就一直留在这页。`);
+  const quote = (e, max = 160) => { quoted.add(e); return `L${e.line}｜${one(e.text, max)}${Array.from(one(e.text)).length > max ? '…' : ''}`; };
+  // A pause is quoted whole while there is room, then as what it stops and how far it reaches, always with its line.
+  const pauseLine = (e) => {
+    if (!p.paused) return quote(e);
+    quoted.add(e);
+    const parts = one(e.text).split('｜'), [first, second] = PAUSE_PARTS[p.paused];
+    const head = parts.length > 1 ? [one(parts[0], first), one(parts[1], second)] : [one(parts[0], first + second)];
+    return `L${e.line}｜${head.join('｜')}${parts.length > 2 ? '｜…' : ''}`;
+  };
+  out.push(`- 暂停/取消/暂不启动 ${entries.paused.length} 条${entries.paused.length ? '（生效中：不续派、不重启，没有新指令不推翻；一条不省，全文见 decisions-history.md）：' : ''}`);
+  newest(entries.paused).forEach((e) => out.push('  - ' + pauseLine(e)));
+  // The paused tasks that wait on the Captain's call, every one named here whatever else is squeezed: stopped by the Captain
+  // (stop or archive; the user's call), waiting for the Captain to check them, or hung after two failures. Each keeps its id,
+  // project, the start of its title and where it is stuck (the label).
+  const halted = [...state.cards.filter((c) => PINNED.includes(c.code)).map((c) => ({ id: c.id, label: c.label, tag: c.important ? HIGH : '', where: c.project, title: c.title })),
+    ...state.loose.filter((l) => l.halted).map((l) => ({ id: `没挂卡 ${l.id}`, label: l.label, tag: l.important ? HIGH : '', where: l.project || '无项目', title: l.title }))];
+  if (halted.length) {
+    out.push(`- 暂停中的任务 ${halted.length} 条（被叫停的不重派、没有新指令不重启；待核实、连续失败挂起的等队长处理，别漏也别重复派；一条不省，各自的下一步在 tasks.md）：`);
+    for (const h of halted) out.push('  - ' + [h.tag + h.id, h.label, h.where, one(h.title, PAUSE_TITLE[p.paused])].join('｜'));
+  }
+  const live = [...entries.goal, ...entries.scope, ...entries.decisions];
+  const long = newest(live.filter(lasting)), recent = newest(live.filter((e) => !lasting(e) && e.ts));
+  if (p.longTerm && long.length) { out.push(`- 长期有效 ${long.length} 条：`); long.slice(0, p.longTerm).forEach((e) => out.push('  - ' + quote(e))); }
+  if (p.recent && recent.length) { out.push(`- 最近的目标、授权和决定（按时间，最新 ${Math.min(p.recent, recent.length)} 条）：`); recent.slice(0, p.recent).forEach((e) => out.push('  - ' + quote(e))); }
+  if (p.delivery && entries.delivery.length) out.push(`- 最新交付状态：${quote(newest(entries.delivery)[0])}（更多见 delivery.md）`);
+  const rest = Object.values(entries).flat().length - quoted.size - entries.user.length;
+  out.push(`- 其余 ${Math.max(0, rest)} 条（目标、授权、决定、交付、其他记录里更早的）和 ${entries.user.length} 条等用户决定的事：只留标题和行号，在 decisions-history.md、delivery.md、needs-user.md；整份原文 ${num(size(ctx.decisions.text || ''))} 字`);
+
+  // 5 the table of contents
+  out.push('', '## 5. 目录（其余内容都在这些分文件里，按需读）');
+  for (const f of DETAIL_FILES) out.push(`- ${f.name}｜${num(size(details.texts[f.key]))} 字｜${f.title.replace(/（.*）/, '')}，${details.counts[f.key]}｜${f.read}读`);
+  out.push(`目录位置：${dir}${sep}`);
+  const gone = [...new Set(cuts)].map((k) => SQUEEZED[k]);
+  return out.join('\n') + '\n' + (gone.length ? `\n（为了放进 ${num(state.ctx.limit)} 字，缩短了：${gone.join('、')}。计数都还在上面，明细在对应分文件里。）\n` : '')
+    + (p.over ? `\n（已超出预算：未完成任务、阻塞、限制和待决定事项一条没删，暂停/取消/叫停的事项也必须全部留在这页，所以这页超过了 ${num(state.ctx.limit)} 字。）\n` : '');
+}
+
+// The overview at its fullest, then squeezed step by step until it fits. The
+// detail files are never squeezed.
 function build(snapshot) {
   const state = derive(snapshot);
-  const limit = state.ctx.budget;
-  const size = (text) => Array.from(text).length;
-  const fill = (drawn, level, over) => {
-    const note = (length) => `预算 ${limit} 字，实际约 ${length} 字，压缩级别 ${level}（${LEVELS[level].name}）`
-      + (drawn.omitted.length ? `；压掉了：${[...new Set(drawn.omitted)].join('、')}，都留了查询入口` : '；没有压掉内容')
-      + (over ? '；已超出预算：未完成任务、阻塞、限制和待决定事项一条没删，要更短就归档已完成的卡或调大预算' : '');
-    return drawn.text.replace('{{LENGTH}}', note(size(drawn.text.replace('{{LENGTH}}', note(limit)))));
+  const limit = state.ctx.limit;
+  const { parts, notes } = renderDetails(state);
+  const texts = Object.fromEntries(Object.entries(parts).map(([key, lines]) => [key, lines.join('\n') + '\n']));
+  const counts = { tasks: `${state.stats.cards + state.stats.loose} 条`, waiting: `提问 ${state.stats.asks}、回执 ${state.stats.pending + state.stats.unconfirmed}`, needsUser: `${state.stats.forUser} 条`,
+    delivery: `${state.notes.delivery.length} 条记录`, history: `逐条列出 ${notes.listed} 条（决定文件共 ${Object.values(state.notes).flat().length} 条，其余在 delivery.md、needs-user.md）`, messages: `${state.ctx.userTurns.length} 条`, playbook: '9 步' };
+  const details = { notes, texts, counts };
+  const p = { ...FIRST }, cuts = [];
+  const draw = () => {
+    const note = (n) => `本页 ${num(n)} 字（上限 ${num(limit)}）。`;
+    const text = renderOverview(state, details, p, cuts);
+    const fit = text.replace('{{LENGTH}}', note(limit)); // wide enough for the real number
+    return text.replace('{{LENGTH}}', note(size(fit)));
   };
-  let level = 0, drawn = render(state, 0), text = fill(drawn, 0, false);
-  while (size(text) > limit && level < LEVELS.length - 1) { level += 1; drawn = render(state, level); text = fill(drawn, level, false); }
+  let text = draw();
+  for (const [key, value] of SQUEEZE) {
+    if (size(text) <= limit) break;
+    p[key] = value; cuts.push(key); text = draw();
+  }
+  // What the user paused or stopped stays on the page even when that alone is longer than the limit; the page says so.
   const over = size(text) > limit;
-  if (over) text = fill(drawn, level, true);
-  return { text, level, budget: limit, length: size(text), over, omitted: [...new Set(drawn.omitted)], state };
+  if (over) { p.over = true; text = draw(); }
+  const files = DETAIL_FILES.map((f) => ({ name: f.name, key: f.key, title: f.title, read: f.read, text: details.texts[f.key], length: size(details.texts[f.key]) }));
+  return { text, length: size(text), limit, over, cuts: [...cuts], files, dir: detailDir(state.ctx), state };
 }
 
-module.exports = { budget, DECISIONS_FILE, HANDOFF_FILE, DECISIONS_TEMPLATE, LEVELS, GROUP_NAME,
-  parseDecisions, refsIn, sessionState, deriveCard, derive, render, build, bookkeeping, captainStopped, isReviewer };
+module.exports = { budget, DECISIONS_FILE, HANDOFF_FILE, DECISIONS_TEMPLATE, DETAIL_FILES, SQUEEZE, ABOUT_USER_FILE, ABOUT_STALE_DAYS, GROUP_NAME,
+  parseDecisions, parseDecisionEntries, refsIn, sessionState, deriveCard, derive, build, bookkeeping, captainStopped, isReviewer };

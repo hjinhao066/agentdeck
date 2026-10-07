@@ -165,8 +165,8 @@ test('after a Relay the new Captain reads the handoff through the CLI; a second 
   const file = path.join(boards, 'agentdeck-captain-handoff.md');
   // written before the old terminal was replaced, from the state at that moment
   const written = fs.readFileSync(file, 'utf8');
-  expect(written).toContain('触发：席位 Relay'); expect(written).toContain(`上任会话：${CAPTAIN}`);
-  expect(written).toContain('交接时还在跑的活'); expect(written).toContain('队长代次 gen 1 → 2');
+  expect(written).toContain('触发：席位 Relay'); expect(written).toContain(`上任会话 ${CAPTAIN}`);
+  expect(fs.readFileSync(path.join(boards, 'agentdeck-captain-handoff', 'tasks.md'), 'utf8')).toContain('交接时还在跑的活'); expect(written).toContain('队长代次 gen 1 → 2');
   // the Captain's own notes file exists as an empty template and is not the app's to fill
   expect(fs.readFileSync(path.join(boards, 'agentdeck-captain-decisions.md'), 'utf8')).toContain('## 暂停/取消/暂不启动');
 
@@ -175,7 +175,7 @@ test('after a Relay the new Captain reads the handoff through the CLI; a second 
   const live = await cli(['handoff'], env).done;
   expect(live.stderr).toBe(''); expect(live.code).toBe(0);
   expect(live.stdout).toContain('# AgentDeck 队长交接'); expect(live.stdout).toContain('触发：队长运行 handoff');
-  expect(live.stdout).toContain(`上任会话：${CAPTAIN}`); expect(live.stdout).toContain('交接时还在跑的活');
+  expect(live.stdout).toContain(`上任会话 ${CAPTAIN}`); expect(live.stdout).toContain('在跑的队员会话');
   expect(live.stdout).toBe(fs.readFileSync(file, 'utf8') + '\n');
   const refused = await cli(['handoff'], oldEnv).done;
   expect(refused.code).toBe(1); expect(refused.stderr).toContain('Control request rejected');

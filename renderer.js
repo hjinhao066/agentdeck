@@ -124,7 +124,7 @@ let config = {
   // sidebar folders, archived sessions (terminal stopped, conversation kept), Schedule
   folders: [], archived: [], schedules: [], navArchivedOpen: false, crewModelsCollapsed: [], artifactsCollapsed: [],
   captainTokenSaver: MainCore.tokenSaverSettings(),
-  concurrencyCap: MainCore.concurrencyCap(), captainHandoffBudget: MainCore.handoffBudget(),
+  concurrencyCap: MainCore.concurrencyCap(), captainHandoffOverview: MainCore.handoffBudget(),
   batteryMode: BatteryCore.MODE_DEFAULT, batteryConcurrency: BatteryCore.CAP_DEFAULT,
 };
 const saved = window.deck.loadConfig();
@@ -174,7 +174,7 @@ if (saved) {
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);
   config.batteryConcurrency = BatteryCore.normalizeCap(saved.batteryConcurrency);
-  config.captainHandoffBudget = MainCore.handoffBudget(saved.captainHandoffBudget);
+  config.captainHandoffOverview = MainCore.handoffBudget(saved.captainHandoffOverview);
   if (saved.navCollapsed !== undefined) config.navCollapsed = saved.navCollapsed;
   if (typeof saved.fontSize === 'number' && saved.fontSize >= 8 && saved.fontSize <= 32) config.fontSize = saved.fontSize;
   if (['captain', 'gemini'].includes(saved.taskBoard?.dispatcher) || saved.taskBoard?.autoVerify === false) {

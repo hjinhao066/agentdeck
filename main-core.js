@@ -23,10 +23,10 @@
     if (n > CONCURRENCY_MAX) return CONCURRENCY_MAX;
     return n;
   }
-  // How long the Relay handoff may be, in characters. Settings store 4000–60000.
-  const HANDOFF_BUDGET_DEFAULT = 12000;
-  const HANDOFF_BUDGET_MIN = 4000;
-  const HANDOFF_BUDGET_MAX = 60000;
+  // How long the Relay handoff overview page may be, in characters. Settings store 3000–20000.
+  const HANDOFF_BUDGET_DEFAULT = 6000;
+  const HANDOFF_BUDGET_MIN = 3000;
+  const HANDOFF_BUDGET_MAX = 20000;
   function handoffBudget(value) {
     if (value == null || value === '') return HANDOFF_BUDGET_DEFAULT;
     const n = typeof value === 'number' ? value : Number(value);
@@ -281,7 +281,7 @@
       `14. 并发上限 ${limit}（设置可改）。把控看内存压力等级：压缩和 swap 增长都属正常，不要因为 swap 用了几个 G 就少开。macOS 可只读 sysctl -n kern.memorystatus_vm_pressure_level（1 正常、2 警告照常开、4 危急先别开）。危急时自动开新会话会暂停，排队卡片写「内存吃紧，稍后自动开」，压力下来后自动补位，不用重派。Windows 没有这个指标，只按上限和干活会话数把控。真正要避免的是多组全量 E2E 同时跑。`,
       '15. 节省上下文：不读大文件正文，只看报告的结论段；查进度优先 peek。ledger 和旧回执超出摘要 300 字或 5 个文件路径的部分用 read 按需查；命令回执保持原样，提交摘要要简短，不要整段重读旧对话。',
       '16. 重要的活完成后，派 Gemini 3.8 Flash 验收：文件确实存在、测试真的通过、截图真的落盘。验收不通过，把具体问题打回原队员，最多返工 2 轮；仍不通过，换更强模型的队员接手，最后才找用户。验收通过再汇报。',
-      '17. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff。用户有新决定、改范围、叫停或恢复某事，或交付有进展时，更新有效决定文件（格式见 handoff 第 2 节）；暂停只在它说的范围和阶段内有效，“继续当前工作”不等于可以新立项目。谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关。',
+      '17. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff。用户有新决定、改范围、叫停或恢复某事，或交付有进展时，更新有效决定文件（格式见文件开头的说明）；暂停只在它说的范围和阶段内有效，“继续当前工作”不等于可以新立项目。谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关。',
       '',
       '可用 agent：new --command 写完整命令，--model 选模型。',
       ...PROVIDERS.map((p) => `   ${p}`),
@@ -310,7 +310,7 @@
     if (list.length) {
       lines.push(`${relay ? '交接' : '清空'}前派出去、还没结束的活（已有会话在做，不要重派；回执和提问会照常发给你）：`);
       list.forEach((t) => lines.push(`   - 「${oneLine(t.title, 60)}」(${t.colId})：${TASK_STATUS[t.status] || t.status}`));
-      if (active.length > list.length) lines.push(`   另有 ${active.length - list.length} 件没列在这里，完整清单看 handoff 第 4 节。`);
+      if (active.length > list.length) lines.push(`   另有 ${active.length - list.length} 件没列在这里，完整清单看交接目录里的 tasks.md。`);
     }
     return lines.join('\n');
   }
