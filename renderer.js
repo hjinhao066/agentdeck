@@ -3635,7 +3635,15 @@ document.getElementById('searchClose').innerHTML = ICONS.close;
 document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
-document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
+document.getElementById('notificationSettingsClose').onclick = () => {
+  if (!saveNotificationSettings()) return;
+  flushConfig();
+  document.getElementById('notificationSettings').close();
+};
+document.getElementById('notificationSettings').addEventListener('cancel', (event) => {
+  if (!saveNotificationSettings()) { event.preventDefault(); return; }
+  flushConfig();
+});
 document.getElementById('barkCalendarRefresh').innerHTML = ICONS.refresh;
 document.getElementById('barkCalendarRefresh').addEventListener('click', async (event) => {
   if (!saveNotificationSettings()) return;
@@ -4047,7 +4055,12 @@ function renderQuotaBar() {
         ['来源', [q.source || '暂无', sampled].join(' · ')], ['可信度', q.confidence || '未知']].filter(Boolean)) meta.append(el('span', 'qt-k', k), el('span', 'qt-v', v));
       const copyFocused = document.activeElement?.classList.contains('quota-login-copy') && tip.contains(document.activeElement);
       fill(tip, [head, ...lines, meta]);
-      if (copyFocused) tip.querySelector('.quota-login-copy')?.focus({ preventScroll: true });
+      if (copyFocused) {
+        // Replacing the button removes :focus-within and hides the tooltip.
+        // Focus its row first so the replacement can receive keyboard focus.
+        item.focus({ preventScroll: true });
+        tip.querySelector('.quota-login-copy')?.focus({ preventScroll: true });
+      }
       const brief = [q.out && q.authStatus !== 'logged-out' && (recovery ? `${longReset(recovery)}恢复` : '恢复时间未知'),
         ...q.cells.map((c) => `${c.key === '5h' ? '5 小时' : '每周'}剩余 ${c.remaining}%${c.resetAt > now ? `（${shortReset(c.resetAt)} 重置）` : ''}`)].filter(Boolean).join('，');
       item.dataset.state = state;

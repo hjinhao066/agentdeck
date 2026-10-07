@@ -49,7 +49,7 @@ test('confirmed logout sends one critical Bark, red 未登录 and a Captain ques
   await observe([['logged-out', base + 120000], ['logged-out', base + 130000]]);
   await expect.poll(async () => (await alerts()).length).toBe(1);
   expect((await alerts())[0]).toMatchObject({ level: 'critical', volume: 4, body: expect.stringMatching(/US（us）席位掉登录.*任务会失败或排队/s) });
-  const command = process.platform === 'win32' ? 'claude auth login' : 'CLAUDE_CONFIG_DIR=~/.custom-us-seat claude auth login';
+  const command = require('../../seat-auth-alert').loginCommand('Claude', { configDir: '~/.custom-us-seat' }, os.homedir(), process.platform);
   expect((await alerts())[0].body).toContain(command);
   await expect(row).toHaveAttribute('data-state', 'danger');
   await expect(row.locator('[data-window="5h"] .quota-none')).toHaveText('未登录');
