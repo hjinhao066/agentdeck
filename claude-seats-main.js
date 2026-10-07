@@ -243,12 +243,13 @@ function handoff(home, userData, payload, options = {}) {
     // Too big to be the one-line-per-decision file: said in the text, not read as "nothing recorded".
     else decisions.error = stat.isFile() ? '文件超过 512KB，没有读' : '不是普通文件，没有读';
   } catch (error) { if (error.code !== 'ENOENT') decisions.error = '读不出来：' + error.message; }
-  // The user's profile belongs to someone else (it is written elsewhere); only quoted here, and left out if there is none.
+  // The user's profile belongs to someone else and is read on demand, not at every handover:
+  // the overview only points at it, with its modification time. No file, no line.
   let aboutUser = null;
   const about = path.join(home, '.agents', 'memory', 'about-user.md');
   try {
     const stat = fs.statSync(about);
-    if (stat.isFile() && stat.size <= 256 * 1024) aboutUser = { path: about, text: fs.readFileSync(about, 'utf8'), mtime: stat.mtimeMs };
+    if (stat.isFile()) aboutUser = { mtime: stat.mtimeMs };
   } catch (_) { /* no profile: the section is left out */ }
   // An unreadable board is said out loud; the dispatch records alone still go out.
   let cards = [], boardError = '';

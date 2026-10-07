@@ -644,8 +644,9 @@ handoff (hard limit 6000 characters, `config.captainHandoffOverview`) and rewrit
 `~/.agents/boards/agentdeck-captain-handoff.md` plus seven detail files in
 `~/.agents/boards/agentdeck-captain-handoff/` (all unfinished tasks, waiting
 receipts and questions, what waits for the user, delivery state, older decisions,
-older user messages, the takeover playbook). The overview starts with who the
-Captain serves (`~/.agents/memory/about-user.md`, if present), then the user's
+older user messages, the takeover playbook). The overview starts with one
+pointer line to the user profile (`~/.agents/memory/about-user.md`, read on demand,
+not quoted), then the user's
 latest words, what is running and waiting, high-priority tasks, the decisions in
 force, and a table of contents; nothing that is squeezed out of the page leaves
 the files. It is read-only for sessions and cards. The same page is written when a

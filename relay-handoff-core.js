@@ -146,7 +146,7 @@ function index(snapshot) {
     waitlist: list(s.waitlist), carry: s.carry && typeof s.carry === 'object' ? s.carry : null, boardError: one(s.boardError, 200),
     userTurns: list(s.userTurns).filter((t) => typeof t.text === 'string' && t.text.trim()),
     decisions: s.decisions && typeof s.decisions === 'object' ? s.decisions : {},
-    aboutUser: s.aboutUser && typeof s.aboutUser === 'object' && typeof s.aboutUser.text === 'string' && s.aboutUser.text.trim() ? s.aboutUser : null,
+    aboutUser: s.aboutUser && typeof s.aboutUser === 'object' ? { mtime: Number(s.aboutUser.mtime) } : null,
     paths: s.paths && typeof s.paths === 'object' ? s.paths : {},
     cli: typeof s.cli === 'string' && s.cli ? s.cli : 'node "$AGENTDECK_BOARD_CLI"',
     limit: budget(s.budget), dispatchCap: Number.isFinite(s.dispatchCap) ? s.dispatchCap : 0, userTurnsOlder: s.userTurnsOlder === true,
@@ -487,8 +487,8 @@ const PLATFORM = { darwin: 'Mac', win32: 'Windows', linux: 'Linux' };
 const HIGH = '【高优先级】';
 const REASON = { relay: '席位 Relay', clear: '清空队长上下文', 'token-saver': '自动存档并清空上下文', restart: 'AgentDeck 重启', refresh: '队长运行 handoff' };
 const DAY = 86400000;
-// The user's profile, quoted as it is: at most this many characters, and "maybe stale" after this many days.
-const ABOUT_MAX = 2000, ABOUT_STALE_DAYS = 14;
+// The user's profile is only pointed at, with its age; "maybe stale" after this many days.
+const ABOUT_USER_FILE = '~/.agents/memory/about-user.md', ABOUT_STALE_DAYS = 14;
 // The detail files, in the order the overview lists them.
 const DETAIL_FILES = [
   { key: 'tasks', name: 'tasks.md', title: '未完成任务全表', read: '要派活，或查某张卡的状态、下一步、旧轮次时' },
@@ -502,11 +502,11 @@ const DETAIL_FILES = [
 const WORDS = [{ n: 8, old: 120, last: 400 }, { n: 5, old: 90, last: 300 }, { n: 3, old: 60, last: 200 }, { n: 2, old: 50, last: 120 }, { n: 1, old: 0, last: 80 }];
 // What the overview shows when nothing is squeezed, and the order things are given up when it does not fit.
 // The user's latest words go last: they are the one thing the next Captain cannot get anywhere else.
-const FIRST = { recent: 3, longTerm: 4, delivery: 1, about: ABOUT_MAX, sessions: 12, items: 8, high: 10, paused: 8, w: 0 };
-const SQUEEZE = [['recent', 1], ['recent', 0], ['longTerm', 0], ['delivery', 0], ['about', 1000], ['sessions', 5], ['sessions', 0],
-  ['items', 5], ['items', 2], ['items', 0], ['high', 5], ['high', 2], ['high', 0], ['paused', 0], ['about', 300], ['about', 0],
+const FIRST = { recent: 3, longTerm: 4, delivery: 1, sessions: 12, items: 8, high: 10, paused: 8, w: 0 };
+const SQUEEZE = [['recent', 1], ['recent', 0], ['longTerm', 0], ['delivery', 0], ['sessions', 5], ['sessions', 0],
+  ['items', 5], ['items', 2], ['items', 0], ['high', 5], ['high', 2], ['high', 0], ['paused', 0],
   ['w', 1], ['w', 2], ['w', 3], ['w', 4]];
-const SQUEEZED = { recent: '最近的决定', longTerm: '长期有效的决定', delivery: '最新交付状态', about: '你服务的人（只引开头，全文见来源文件）', sessions: '在跑会话的名单',
+const SQUEEZED = { recent: '最近的决定', longTerm: '长期有效的决定', delivery: '最新交付状态', sessions: '在跑会话的名单',
   items: '提问、回执、返工、矛盾的明细行', high: '高优先级任务的明细行', paused: '暂停项的明细行', w: '用户原话的条数和长度' };
 
 const detailDir = (ctx) => (ctx.paths.handoff || HANDOFF_FILE).replace(/\.md$/i, '');
@@ -718,15 +718,10 @@ function renderOverview(state, details, p, cuts) {
   out.push(`生成 ${now.date} ${now.time}（${now.zone}）｜触发：${REASON[ctx.reason]}${relay ? '｜' + relay : ''}｜上任会话 ${prev || '无'}${prev ? `（read --id ${prev}）` : ''}｜队长代次 gen ${ctx.captain.gen ?? '待核实'}${ctx.captain.nextGen ? ' → ' + ctx.captain.nextGen : ''}`);
   out.push(`这页只是总览，最长 ${num(state.ctx.limit)} 字。细节拆在 ${dir}${sep} 下的分文件里，见最后一节「目录」，按需读，不用全读。命令都接在 ${ctx.cli} 后面运行。{{LENGTH}}`);
 
-  // 0 who you serve
+  // 0 who you serve: a pointer only. The profile is read when it is needed, never on every handover.
   if (ctx.aboutUser) {
-    const a = ctx.aboutUser, body = a.text.replace(/\s+$/, '').replace(/^\s*\n/, '');
-    const shown = Math.min(p.about, ABOUT_MAX), long = Array.from(body).length > shown;
-    const age = Number.isFinite(a.mtime) && a.mtime > 0 ? Math.floor((ctx.now - a.mtime) / DAY) : null;
-    out.push('', '## 你服务的人');
-    out.push(`来源 ${a.path}｜${age == null ? '修改时间未知' : '最后修改 ' + when(a.mtime)}${age != null && age > ABOUT_STALE_DAYS ? `｜可能过期：已 ${age} 天没更新，拿不准的以用户最近的话为准` : ''}`);
-    if (shown > 0) out.push(...Array.from(body).slice(0, shown).join('').split(/\r?\n/).map((l) => '> ' + l), ...(long ? [`（只引了前 ${shown} 字，共 ${Array.from(body).length} 字，全文见上面的来源文件）`] : []));
-    else out.push(`（为了让总览放得下，这一节没有引用；共 ${Array.from(body).length} 字，开工前先读上面的来源文件）`);
+    const age = Number.isFinite(ctx.aboutUser.mtime) && ctx.aboutUser.mtime > 0 ? Math.floor((ctx.now - ctx.aboutUser.mtime) / DAY) : null;
+    out.push('', `关于用户：${ABOUT_USER_FILE}（短档案）及 about-user/ 下按主题的详档，需要了解他的偏好、近况时再读｜${age == null ? '修改时间未知' : '最后修改 ' + when(ctx.aboutUser.mtime)}${age != null && age > ABOUT_STALE_DAYS ? `（可能过期：已 ${age} 天没更新）` : ''}`);
   }
 
   // 1 the user's latest words, newest first
@@ -821,5 +816,5 @@ function build(snapshot) {
   return { text, length: size(text), limit, over, cuts: [...cuts], files, dir: detailDir(state.ctx), state };
 }
 
-module.exports = { budget, DECISIONS_FILE, HANDOFF_FILE, DECISIONS_TEMPLATE, DETAIL_FILES, SQUEEZE, ABOUT_MAX, ABOUT_STALE_DAYS, GROUP_NAME,
+module.exports = { budget, DECISIONS_FILE, HANDOFF_FILE, DECISIONS_TEMPLATE, DETAIL_FILES, SQUEEZE, ABOUT_USER_FILE, ABOUT_STALE_DAYS, GROUP_NAME,
   parseDecisions, parseDecisionEntries, refsIn, sessionState, deriveCard, derive, build, bookkeeping, captainStopped, isReviewer };

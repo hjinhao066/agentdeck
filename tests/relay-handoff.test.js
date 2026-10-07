@@ -502,42 +502,35 @@ test('the Captain\'s decisions file: only the newest and the entries marked as l
   assert.equal(H.parseDecisions('## 暂停时的现场（10-05 17:05）\n- 流水一\n## 暂停/取消\n- 别动 A\n').paused.length, 1);
 });
 
-test('the profile of the person served is quoted as it is, with its age, and left out when there is none', () => {
-  const body = '# 关于用户\n- 学生，在找暑期实习\n- 不懂技术，别用术语\n';
-  const at = (days, text = body) => build({ cards: [], aboutUser: { path: '/m/about-user.md', text, mtime: NOW - days * 86400_000 } });
+test('the profile of the person served is only pointed at, with its age; the file is never quoted, and no file means no line', () => {
+  const at = (days) => build({ cards: [], aboutUser: { mtime: NOW - days * 86400_000, text: '# 关于用户\n- 秘密偏好不该出现在总览' } });
   const fresh = at(3);
-  assert.ok(fresh.brief.indexOf('## 你服务的人') < fresh.brief.indexOf('## 1. 用户最近的原话'), 'the first section after the header');
-  assert.match(fresh.brief, /来源 \/m\/about-user\.md｜最后修改 10-01 23:19\n> # 关于用户\n> - 学生，在找暑期实习\n> - 不懂技术，别用术语\n/);
+  assert.match(fresh.brief, /\n关于用户：~\/\.agents\/memory\/about-user\.md（短档案）及 about-user\/ 下按主题的详档，需要了解他的偏好、近况时再读｜最后修改 10-01 23:19\n/);
+  assert.ok(fresh.brief.indexOf('关于用户：') < fresh.brief.indexOf('## 1. 用户最近的原话'), 'right after the header');
+  assert.ok(!fresh.text.includes('秘密偏好'), 'its contents are not in the page or any detail file');
   assert.doesNotMatch(fresh.brief, /可能过期/);
-  assert.match(at(20).brief, /最后修改 09-14 23:19｜可能过期：已 20 天没更新/);
+  assert.match(at(20).brief, /最后修改 09-14 23:19（可能过期：已 20 天没更新）/);
   assert.doesNotMatch(at(14).brief, /可能过期/); assert.match(at(15).brief, /可能过期/);
-  // at most 2000 characters, and it says there is more
-  const huge = at(1, '字'.repeat(5000)).brief;
-  assert.equal(huge.split('\n').find((l) => /^> 字+$/.test(l)).length - 2, H.ABOUT_MAX);
-  assert.match(huge, /只引了前 2000 字，共 5000 字，全文见上面的来源文件/);
-  // no file, an empty file: no section, no complaint
-  for (const none of [build({ cards: [] }), at(1, '  \n'), build({ cards: [], aboutUser: null })]) {
-    assert.doesNotMatch(none.brief, /你服务的人/); assert.doesNotMatch(none.brief, /about-user/);
-  }
-  // under pressure it is the first of the big blocks to shorten, and it still says where the file is
-  const f = { cards: [], aboutUser: { path: '/m/about-user.md', text: '字'.repeat(2000), mtime: NOW }, budget: 3000,
-    userTurns: Array.from({ length: 8 }, (_, i) => ({ ts: NOW - i * 60_000, text: `第 ${i} 句 ` + '话'.repeat(300), sourceId: 'c' })) };
-  const squeezed = build(f);
-  assert.ok(squeezed.length <= 3000); assert.match(squeezed.brief, /\/m\/about-user\.md/);
-  assert.match(squeezed.brief, /第 0 句/);
+  for (const none of [build({ cards: [] }), build({ cards: [], aboutUser: null })]) assert.doesNotMatch(none.brief, /关于用户|about-user/);
+  // one line, whatever the pressure: it is not something the limit squeezes
+  const tight = build({ cards: [], aboutUser: { mtime: NOW }, budget: 3000, userTurns: Array.from({ length: 8 }, (_, i) => ({ ts: NOW - i * 60_000, text: `第 ${i} 句 ` + '话'.repeat(300), sourceId: 'c' })) });
+  assert.ok(tight.length <= 3000); assert.match(tight.brief, /关于用户：/); assert.match(tight.brief, /第 0 句/);
+  assert.ok(!H.SQUEEZE.some(([key]) => key === 'about'));
 });
 
-test('the writer reads the profile where the shared memory keeps it, and puts the detail files beside the overview', (t) => {
+test('the writer points at the profile where the shared memory keeps it (modification time only), and puts the detail files beside the overview', (t) => {
   const f = fixture(t);
   const home = path.join(f.root, 'home'), userData = path.join(f.root, 'deck');
   const payload = { colId: 'captain-now', reason: 'refresh', now: NOW, timeZone: 'Asia/Shanghai', tasks: [], sessions: [], captain: { previousId: 'cap-old', gen: 3 } };
   const options = { cards: () => f.cards(), tasksDir: f.store.dir };
   const bare = Seats.handoff(home, userData, payload, options);
-  assert.doesNotMatch(bare.text, /你服务的人/);
+  assert.doesNotMatch(bare.text, /关于用户/);
   fs.mkdirSync(path.join(home, '.agents', 'memory'), { recursive: true });
   fs.writeFileSync(path.join(home, '.agents', 'memory', 'about-user.md'), '- 他在找暑期实习\n');
+  const mtime = new Date('2026-10-04T10:00:00Z'); fs.utimesSync(path.join(home, '.agents', 'memory', 'about-user.md'), mtime, mtime);
   const built = Seats.handoff(home, userData, payload, options);
-  assert.match(built.text, /## 你服务的人\n来源 [^\n]*about-user\.md｜最后修改 [^\n]*\n> - 他在找暑期实习/);
+  assert.match(built.text, /\n关于用户：~\/\.agents\/memory\/about-user\.md（短档案）[^\n]*｜最后修改 10-04 18:00\n/);
+  assert.ok(!built.text.includes('暑期实习'), 'pointed at, not read into the handoff');
   for (const file of H.DETAIL_FILES) assert.ok(fs.statSync(path.join(built.dir, file.name)).size > 0, file.name);
   assert.equal(fs.readdirSync(built.dir).length, H.DETAIL_FILES.length, 'nothing else, no temp files left behind');
   assert.equal(built.dir, path.join(path.dirname(built.path), 'agentdeck-captain-handoff'));
