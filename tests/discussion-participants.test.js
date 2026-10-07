@@ -3,11 +3,13 @@ const assert = require('node:assert/strict');
 const fs = require('fs/promises');
 const os = require('os');
 const path = require('path');
-const { createParticipants, parseCli, seatEligibility, childEnvironment, DEADLINE_MS } = require('../discussion-participants');
+const { createParticipants, parseCli, seatEligibility, agyEligibility, resolveCommand, childEnvironment, DEADLINE_MS } = require('../discussion-participants');
 
 const opus = { id: 'opus', provider: 'claude', model: 'claude-opus-5-5', effort: 'high' };
 const web = { id: 'web', provider: 'chatgpt-web', model: '6 Pro', effort: 'Pro' };
 const auth = { loggedIn: true, authMethod: 'claude.ai', subscriptionType: 'max' };
+const webMeta = (extra = {}) => ({ selectedModel: '6 Pro', selectedMode: 'chat', submitted: true,
+  finishedAt: new Date().toISOString(), exportMethod: 'rendered-html-to-markdown', ...extra });
 const job = (participant = opus, id = 'round1-opus') => ({ id, participant, prompt: '公开讨论题及本轮材料全文。' });
 const output = (model = opus.model, extra = {}) => JSON.stringify({ type: 'system', subtype: 'init', model, effort: 'high', apiKeySource: 'oauth' }) + '\n'
   + JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '独立回答：建议与依据。', modelUsage: { [model]: { inputTokens: 20, outputTokens: 10, provider: 'firstParty' } }, ...extra }) + '\n';
@@ -24,7 +26,7 @@ async function webpage({ question, report, mode, timeout }) {
   assert.equal(mode, 'chat'); assert.equal(timeout, 30);
   assert.equal(await fs.readFile(question, 'utf8'), job(web).prompt);
   await fs.writeFile(report, '网页完整原稿：独立结论及充分依据。');
-  await fs.writeFile(report + '.meta.json', JSON.stringify({ selectedModel: '6 Pro', selectedMode: 'chat' }));
+  await fs.writeFile(report + '.meta.json', JSON.stringify(webMeta()));
   return '';
 }
 
@@ -39,6 +41,14 @@ test('fake subscription CLI verifies native model and effort, archives full prom
   assert.equal(DEADLINE_MS, 30 * 60_000);
 });
 
+test('CLI preserves a Chinese character split between native stdout chunks and the durable response', async (t) => {
+  const script = `process.stdin.resume();process.stdin.on('end',()=>{const b=Buffer.from(${JSON.stringify(output())});const split=b.indexOf(Buffer.from('独'))+1;process.stdout.write(b.subarray(0,split));setTimeout(()=>process.stdout.end(b.subarray(split)),10);});`;
+  const s = await fixture(t, {}, script);
+  const result = await s.adapter.execute(job(), s);
+  assert.equal(result.text, '独立回答：建议与依据。');
+  assert.equal((await s.adapter.recover(job(), s)).text, result.text);
+});
+
 test('actual model downgrade, effort mismatch, API source and provider are refused', () => {
   assert.throws(() => parseCli(output('claude-sonnet-5-5'), opus), { code: 'MODEL_MISMATCH' });
   assert.throws(() => parseCli(output(opus.model, { effort: 'low' }), opus), { code: 'MODEL_MISMATCH' });
@@ -48,6 +58,16 @@ test('actual model downgrade, effort mismatch, API source and provider are refus
   assert.equal(parseCli(output('claude-opus-5-5-20261001'), opus).actualModel, opus.model);
   assert.equal(parseCli(output('claude-opus-5-5-20261001'), opus).observedModel, 'claude-opus-5-5-20261001');
   assert.throws(() => parseCli(output(opus.model, { api_error_status: 429, is_error: true }), opus), { code: 'QUOTA' });
+});
+
+test('native Claude primary evidence accepts 1m suffix and auxiliaries without mistaking an auxiliary for the main model', () => {
+  assert.equal(parseCli(output(opus.model + '[1m]'), opus).observedModel, opus.model + '[1m]');
+  const usage = { [opus.model]: { inputTokens: 20, outputTokens: 10 }, 'claude-haiku-4-5': { inputTokens: 4, outputTokens: 2 } };
+  assert.equal(parseCli(output(opus.model, { modelUsage: usage }), opus).actualModel, opus.model);
+  assert.throws(() => parseCli(output('claude-sonnet-5-5', { modelUsage: usage }), opus), { code: 'MODEL_MISMATCH' });
+  const assistant = JSON.stringify({ type: 'assistant', message: { model: 'claude-sonnet-5-5' } });
+  assert.throws(() => parseCli(assistant + '\n' + output(opus.model, { modelUsage: usage }), opus), { code: 'MODEL_MISMATCH' });
+  assert.throws(() => parseCli(output(opus.model, { modelUsage: usage }).split('\n').slice(1).join('\n'), opus), { code: 'MODEL_MISMATCH' });
 });
 
 test('authentication is checked before inference; paid API login never runs participant', async (t) => {
@@ -111,6 +131,97 @@ test('fake webpage gets full standalone input, saves actual model and recovers p
   assert.equal(await fs.readFile(path.join(s.runDir, 'jobs', job(web).id, 'input.md'), 'utf8'), job(web).prompt);
 });
 
+test('FRONT_UNSURE finalized webpage remains successful without sending again', async (t) => {
+  let calls = 0;
+  const s = await fixture(t, { webRunCli: async (input) => { calls++; await webpage(input); return 'FRONT_UNSURE'; } });
+  const result = await s.adapter.execute(job(web), s);
+  assert.equal(result.foregroundStatus, 'FRONT_UNSURE');
+  assert.equal((await createParticipants(s.options).recover(job(web), s)).text, result.text);
+  assert.equal(calls, 1);
+});
+
+test('FRONT_STOLEN saves finalized answer but requires explicit acceptance before recovery or continuation', async (t) => {
+  let calls = 0;
+  const s = await fixture(t, { webRunCli: async (input) => { calls++; await webpage(input); return 'FRONT_STOLEN'; } });
+  await assert.rejects(s.adapter.execute(job(web), s), { code: 'FRONT_STOLEN', mayHaveSent: true, answerSaved: true });
+  const saved = JSON.parse(await fs.readFile(path.join(s.runDir, 'jobs', job(web).id, 'result.json'), 'utf8'));
+  assert.match(saved.text, /充分依据/); assert.equal(saved.requiresForegroundReview, true);
+  const fresh = createParticipants(s.options);
+  await assert.rejects(fresh.recover(job(web), s), { code: 'FRONT_STOLEN', answerSaved: true });
+  await assert.rejects(fresh.execute(job(web), s), { code: 'FRONT_STOLEN' });
+  const accepted = await fresh.recover(job(web), { ...s, allowForegroundRecovery: true });
+  assert.equal(accepted.foregroundStatus, 'FRONT_STOLEN'); assert.equal(accepted.foregroundReviewed, true);
+  assert.equal((await fresh.execute(job(web), s)).requiresForegroundReview, false);
+  assert.equal(calls, 1);
+});
+
+for (const [label, change] of [['error status', { status: 'error' }], ['not submitted', { submitted: false }],
+  ['missing completion time', { finishedAt: undefined }], ['invalid completion time', { finishedAt: 'invalid' }],
+  ['unrecognized export', { exportMethod: 'partial-html' }]]) {
+  test(`webpage recovery rejects ${label}, including when result.json was already cached`, async (t) => {
+    let report;
+    const s = await fixture(t, { webRunCli: async (input) => { report = input.report; return webpage(input); } });
+    await s.adapter.execute(job(web), s);
+    await fs.writeFile(report + '.meta.json', JSON.stringify(webMeta(change)));
+    await assert.rejects(createParticipants(s.options).recover(job(web), s), { code: 'PENDING_REQUEST', mayHaveSent: true });
+    await fs.unlink(path.join(s.runDir, 'jobs', job(web).id, 'result.json'));
+    await assert.rejects(createParticipants(s.options).recover(job(web), s), { code: 'PENDING_REQUEST', mayHaveSent: true });
+  });
+}
+
+test('webpage input validation and confirmed pre-send login failure are safely retryable without an ended-request claim', async (t) => {
+  let calls = 0;
+  const s = await fixture(t, { webRunCli: async () => { calls++; return 'LOGIN_REQUIRED'; } });
+  await assert.rejects(s.adapter.execute({ ...job(web), prompt: 'api_key=' + 'x'.repeat(30) }, s), { code: 'VALIDATION', mayHaveSent: false });
+  assert.equal(calls, 0);
+  await assert.rejects(fs.access(path.join(s.runDir, 'jobs', job(web).id, 'request.json')));
+  await assert.rejects(s.adapter.execute(job(web), s), { code: 'LOGIN_REQUIRED', mayHaveSent: false });
+  await assert.rejects(createParticipants(s.options).recover(job(web), s), { code: 'LOGIN_REQUIRED', mayHaveSent: false });
+  assert.equal(calls, 1);
+});
+
+test('webpage waits in the background through confirmed unsent LOCKED and COOLDOWN conditions, then submits once', async (t) => {
+  let calls = 0, sent = 0;
+  const progress = [];
+  const s = await fixture(t, { webRetryDelayMs: 5, webRunCli: async (input) => {
+    calls++;
+    if (calls < 3) {
+      const code = calls === 1 ? 'LOCKED' : 'COOLDOWN';
+      await fs.writeFile(input.report + '.error.json', JSON.stringify({ code, submitted: false }));
+      return code;
+    }
+    sent++; return webpage(input);
+  } });
+  const result = await s.adapter.execute(job(web), { ...s, onProgress: (event) => progress.push(event) });
+  assert.match(result.text, /充分依据/);
+  assert.equal(calls, 3); assert.equal(sent, 1);
+  assert.ok(progress.some((event) => event.phase === 'queued' && /本题尚未发送/.test(event.message)));
+});
+
+test('a lock error with submission evidence cannot enter the automatic unsent wait/retry path', async (t) => {
+  let calls = 0;
+  const s = await fixture(t, { webRetryDelayMs: 1, webRunCli: async (input) => {
+    calls++;
+    await fs.writeFile(input.report + '.error.json', JSON.stringify({ code: 'LOCKED', submitted: false, submittedAt: new Date().toISOString() }));
+    return 'LOCKED';
+  } });
+  await assert.rejects(s.adapter.execute(job(web), s), { code: 'PENDING_REQUEST', mayHaveSent: true });
+  assert.equal(calls, 1);
+});
+
+test('outer webpage watchdog stops a hung skill process and preserves an unknown non-retryable attempt', async (t) => {
+  let calls = 0;
+  const kills = [];
+  const s = await fixture(t, { webTimeoutMs: 30, webRunCli: async ({ onChild }) => {
+    calls++; onChild({ exitCode: null, signalCode: null, kill: (signal) => { kills.push(signal); } });
+    return new Promise(() => {});
+  } });
+  await assert.rejects(s.adapter.execute(job(web), s), { code: 'PENDING_REQUEST', mayHaveSent: true });
+  assert.ok(kills.includes('SIGTERM'));
+  await assert.rejects(createParticipants(s.options).execute(job(web), s), { code: 'PENDING_REQUEST', mayHaveSent: true });
+  assert.equal(calls, 1);
+});
+
 test('web timeout and unknown submitted request stay paused across restart, never submitted twice', async (t) => {
   let calls = 0;
   const s = await fixture(t, { webRunCli: async () => { calls++; return 'TIMEOUT'; } });
@@ -122,7 +233,7 @@ test('web timeout and unknown submitted request stay paused across restart, neve
 test('fake webpage wrong actual model never counts as participant completion', async (t) => {
   const s = await fixture(t, { webRunCli: async (input) => {
     await webpage(input);
-    await fs.writeFile(input.report + '.meta.json', JSON.stringify({ selectedModel: '6 Thinking', selectedMode: 'chat' }));
+    await fs.writeFile(input.report + '.meta.json', JSON.stringify(webMeta({ selectedModel: '6 Thinking' })));
     return '';
   } });
   await assert.rejects(s.adapter.execute(job(web), s));
@@ -157,4 +268,30 @@ test('optional Antigravity is subscription-only, passes full high model id witho
   assert.equal((await adapter.execute(job(gemini, 'round1-gemini'), s)).actualModel, gemini.model);
   const noSubscription = createParticipants({ ...s.options, agyStatus: async () => ({ product: 'antigravity', plan_tier: 'API' }) });
   await assert.rejects(noSubscription.execute(job(gemini, 'round2-gemini'), s), { code: 'AUTH' });
+});
+
+test('Antigravity snapshot and native model object shapes fail closed without model self-report as evidence', () => {
+  const snapshot = { product: 'antigravity', plan_tier: 'Google AI Ultra', model: { id: 'Gemini 3.8 Flash (Medium)', effort: 'medium' },
+    quota: { 'gemini-5h': { remaining_fraction: 0.8 }, 'gemini-weekly': { remaining_fraction: 0.9 } } };
+  assert.equal(agyEligibility(snapshot).source, 'native-antigravity-subscription-snapshot');
+  assert.throws(() => agyEligibility({ ...snapshot, product: 'api' }), { code: 'AUTH' });
+  for (const remaining of ['0.8', NaN, -1, 2, null]) assert.throws(() => agyEligibility({ ...snapshot, quota: { ...snapshot.quota, 'gemini-5h': { remaining_fraction: remaining } } }), { code: 'QUOTA' });
+  const gemini = { provider: 'antigravity', model: 'gemini-3.8-flash-high', effort: 'high' };
+  const native = (model) => JSON.stringify({ type: 'system', subtype: 'init', model }) + '\n' + JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '完整答案与依据，不以自称型号作为核验证据。' });
+  assert.equal(parseCli(native({ id: 'Gemini 3.8 Flash (High)', effort: 'high' }), gemini).effortEvidence, 'runtime');
+  assert.throws(() => parseCli(native({ id: 'Gemini 3.8 Flash (Medium)', effort: 'medium' }), gemini), { code: 'MODEL_MISMATCH' });
+  assert.throws(() => parseCli(native(null), gemini), { code: 'MODEL_MISMATCH' });
+});
+
+test('Windows npm cmd shim resolves to its real Node entry without running a shell or foreground window', async (t) => {
+  const s = await fixture(t);
+  const entry = path.join(s.runDir, 'node_modules', '@anthropic-ai', 'claude-code', 'cli.js');
+  await fs.mkdir(path.dirname(entry), { recursive: true }); await fs.writeFile(entry, '// fake installed CLI');
+  const shim = path.join(s.runDir, 'claude.cmd');
+  await fs.writeFile(shim, '@ECHO off\r\n"%~dp0\\node.exe" "%~dp0\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*\r\n');
+  const launch = await resolveCommand(['claude', '--auth-only'], { Path: s.runDir }, 'win32');
+  assert.deepEqual(launch.cmd, [process.execPath, entry, '--auth-only']);
+  assert.equal(launch.env.ELECTRON_RUN_AS_NODE, '1');
+  await fs.writeFile(shim, 'powershell -Command arbitrary-shell-code');
+  await assert.rejects(resolveCommand([shim], {}, 'win32'), { code: 'TOOL_UNAVAILABLE', mayHaveSent: false });
 });

@@ -57,6 +57,7 @@
       "discussion-participants.js",
       "discussion-runner.js",
       "discussion-command.js",
+      "docs/discuss.md",
       "board-cli.js",
       "receipt-listener-core.js",
       "board-credentials.js",

@@ -5,6 +5,9 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const os = require('node:os');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
+const DiscussionRunner = require('../discussion-runner');
+const ReceiptListener = require('../receipt-listener-core');
 const { createExecutor } = require('../chatgpt-web-executor');
 const B = require('../board-core');
 const M = require('../main-core');
@@ -289,8 +292,15 @@ test('discussion receipts require the Captain, validate the payload and deduplic
     await assert.rejects(w.api.handle({ ...receipt, ...malformed }, w.captain), /无效讨论回执/);
   }
   assert.equal(w.config.mainSession.pending.length, 0);
+  let flushed = 0;
+  w.host.flushConfig = () => {
+    flushed++;
+    assert.equal(w.config.mainSession.pending[0].summary, receipt.result);
+    assert.equal(w.config.mainSession.discussionReceipts[0], receipt.receiptId);
+  };
   const first = await w.api.handle(receipt, w.captain);
   assert.equal(first.done, true);
+  assert.equal(flushed, 1, 'the acknowledgement follows a durable config flush');
   assert.equal(w.config.mainSession.pending.length, 1);
   assert.equal(w.config.mainSession.pending[0].summary, receipt.result);
   assert.equal(w.config.mainSession.pending[0].taskId, receipt.receiptId);
@@ -299,6 +309,7 @@ test('discussion receipts require the Captain, validate the payload and deduplic
   assert.equal(w.config.mainSession.pending.length, 1);
   assert.equal(w.config.mainSession.pending[0].summary, receipt.result);
   assert.equal(w.config.mainSession.discussionReceipts.length, 1);
+  assert.equal(flushed, 2);
   assert.equal(w.runs.length, 0);
   assert.equal(w.shellInputs.length, 0);
 });
@@ -313,4 +324,62 @@ test('an expired discussion receipt never enters the Captain queue or consumes i
   assert.equal(w.config.mainSession.pending.length, 1);
   assert.equal(w.config.mainSession.pending[0].summary, receipt.result);
   assert.deepEqual(Array.from(w.config.mainSession.discussionReceipts), [receipt.receiptId]);
+});
+
+test('a durable discussion receipt reaches the real board CLI receipts --wait channel exactly once', async (t) => {
+  const w = world(); w.captain.cmd = 'claude';
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'deck-discussion-receipts-'));
+  const controlDir = path.join(dir, 'board-control');
+  for (const folder of ['requests', 'responses']) fs.mkdirSync(path.join(controlDir, folder), { recursive: true });
+  const instance = ReceiptListener.initialize(controlDir);
+  const registry = ReceiptListener.createRegistry(controlDir, instance, () => {});
+  const token = 'isolated-discussion-captain-token';
+  const handled = new Set(), actions = [], errors = [];
+  const timer = setInterval(async () => {
+    for (const file of fs.readdirSync(path.join(controlDir, 'requests')).filter((f) => f.endsWith('.json'))) {
+      if (handled.has(file)) continue;
+      handled.add(file);
+      const payload = JSON.parse(fs.readFileSync(path.join(controlDir, 'requests', file), 'utf8'));
+      let response;
+      try {
+        assert.equal(payload.token, token);
+        if (payload.action === 'main-receipts' && payload.wait) assert.equal(registry.register(w.captain.id, token, payload.listener), true);
+        actions.push(payload.action);
+        response = await w.api.handle(payload, w.captain);
+      } catch (error) { errors.push(error); response = { done: true, error: error.message }; }
+      const target = path.join(controlDir, 'responses', file);
+      fs.writeFileSync(target + '.tmp', JSON.stringify(response)); fs.renameSync(target + '.tmp', target);
+    }
+  }, 10);
+  t.after(() => { clearInterval(timer); registry.dispose(); fs.rmSync(dir, { recursive: true, force: true }); });
+  const run = { id: 'd-receipt-roundtrip', status: 'complete', updatedAt: '2026-10-07T00:00:00Z',
+    jobs: [], summary: '先选可逆方案，再核对决定性证据。', disagreements: ['时机仍有分歧。'], minority: [] };
+  const delivered = await DiscussionRunner.deliver(run, dir, { controlDir, token });
+  assert.equal(delivered.delivered, true);
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
+  Object.assign(env, { AGENTDECK_CONTROL_DIR: controlDir, AGENTDECK_CONTROL_TOKEN: token });
+  const cli = await new Promise((resolve, reject) => execFile(process.execPath,
+    [require.resolve('../board-cli'), 'receipts', '--wait', '--timeout', '2'],
+    { env, windowsHide: true, timeout: 10_000 }, (error, stdout, stderr) => error ? reject(error) : resolve({ stdout, stderr })));
+  assert.ok(cli.stdout.includes(run.summary));
+  assert.ok(cli.stdout.includes(path.join(dir, 'final.md')));
+  assert.equal(w.config.mainSession.pending.length, 0);
+  await w.api.handle({ action: 'main-discuss-receipt', receiptId: delivered.id, result: delivered.text }, w.captain);
+  assert.equal(w.config.mainSession.pending.length, 0, 'a replay after consumption cannot create another receipt');
+  assert.ok(actions.includes('main-discuss-receipt')); assert.ok(actions.includes('main-receipts'));
+  assert.deepEqual(errors, []);
+  assert.equal(w.runs.length, 0); assert.equal(w.shellInputs.length, 0);
+});
+
+test('a discussion receipt is not acknowledged until synchronous persistence succeeds, and retry does not duplicate it', async () => {
+  const w = world();
+  const payload = { action: 'main-discuss-receipt', receiptId: 'dr-persistence-retry', result: '已完成，完整答案保存在私有目录。' };
+  w.window.deck.saveConfigSync = () => false;
+  await assert.rejects(w.api.handle(payload, w.captain), /未能落盘/);
+  assert.equal(w.config.mainSession.pending.length, 1);
+  w.window.deck.saveConfigSync = () => true;
+  const accepted = await w.api.handle(payload, w.captain);
+  assert.equal(accepted.done, true); assert.equal(w.config.mainSession.pending.length, 1);
+  assert.equal(w.config.mainSession.discussionReceipts.length, 1);
 });

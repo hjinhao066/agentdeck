@@ -2389,6 +2389,8 @@
           s.discussionReceipts.push(message.receiptId);
           save();
         }
+        host.flushConfig?.();
+        if (window.deck.saveConfigSync?.(host.config) === false) throw new Error('讨论回执未能落盘，执行器保留回执等待重新投递。');
         return { done: true, result: '讨论回执已收录。' };
       }
       case 'main-briefing':

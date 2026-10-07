@@ -46,6 +46,7 @@ function createStore(options = {}) {
       const name = `${job.id}-${job.attemptId}`;
       immutableWrite(path.join(base, 'input', `${name}.md`), job.input);
       immutableWrite(path.join(base, 'input', `${name}.meta.json`), json({ jobId: job.id, attemptId: job.attemptId, inputHash: job.inputHash, participantId: job.participantId }));
+      if (job.awaitingMetadata?.rawText) immutableWrite(path.join(base, 'metadata-needed', `${name}.md`), job.awaitingMetadata.rawText);
       if (job.rejectedOutput) {
         const rejectedHash = crypto.createHash('sha256').update(job.rejectedOutput).digest('hex');
         immutableWrite(path.join(base, 'rejected', `${name}-${rejectedHash}.md`), job.rejectedOutput);
@@ -63,7 +64,7 @@ function createStore(options = {}) {
     if (run.status === 'complete') {
       immutableWrite(path.join(destination, 'final.md'), run.finalAnswer);
       immutableWrite(path.join(destination, 'final-meta.json'), json({ id: run.id, status: run.status, model: run.finalModel,
-        summary: run.summary, faithful: run.faithful, finalHash: run.finalHash, rounds: run.rounds.length,
+        summary: run.summary, faithful: run.faithful, faithfulness: run.faithfulness || { modelReported: true, externallyVerified: false }, finalHash: run.finalHash, rounds: run.rounds.length,
         disagreements: run.disagreements, minority: run.minority, participants: run.participants,
         actualModels: run.jobs.map((j) => ({ jobId: j.id, actualModel: j.actualModel, actualTier: j.actualTier,
           actualEffort: j.actualEffort, observedModel: j.observedModel, verificationSource: j.verificationSource })) }));

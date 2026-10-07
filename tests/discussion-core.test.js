@@ -11,7 +11,7 @@ const { createStore } = require('../discussion-store');
 function create(overrides = {}) { return Core.createDiscussion({ question: '应该如何设计可靠的自动讨论流程？给出可验证的建议。', ...overrides }); }
 function result(job, overrides = {}) {
   return { attemptId: job.attemptId, receiptId: `receipt-${job.attemptId}`, text: '推荐使用持久化轮次屏障。需要保留每位参与者的完整稿，失败时暂停。',
-    actualModel: job.participant.model, actualTier: job.participant.tier,
+    actualModel: job.participant.model, actualTier: job.participant.tier, actualEffort: job.participant.effort,
     materialDisagreement: false, disagreements: [], minority: [], faithful: true,
     summary: '采用持久化屏障。保留完整稿。失败暂停。', ...overrides };
 }
@@ -40,7 +40,9 @@ test('two independent participants use identical packets, freeze all before revi
   Core.markStarted(run, second.id); Core.acceptResult(run, second.id, result(second));
   assert.equal(run.rounds.length, 1);
   const review = Core.nextJobs(run);
-  assert.equal(review[0].input, review[1].input);
+  assert.notEqual(review[0].input, review[1].input);
+  assert.notDeepEqual(review[0].snapshotOrders, review[1].snapshotOrders);
+  for (const job of review) for (const entry of run.rounds[0].entries) assert.ok(job.input.includes(entry.text));
   assert.match(review[0].input, /方案 A/); assert.match(review[0].input, /方案 B/);
   assert.doesNotMatch(review[0].input, /claude-opus|ChatGPT|6 Pro/);
   finishPhase(run); assert.equal(run.phase, 'summary');
@@ -76,7 +78,9 @@ test('a slow webpage is never discarded and timeout/unknown cannot silently rese
   assert.deepEqual(Core.nextJobs(run), []);
   Core.resume(run);
   assert.equal(run.status, 'paused');
-  assert.throws(() => Core.resume(run, { retryIds: [jobs[1].id] }), /explicit confirmation/);
+  Core.resume(run, { retryIds: [jobs[1].id] });
+  assert.equal(run.resumeBlocked[0].jobId, jobs[1].id);
+  assert.match(run.resumeBlocked[0].reason, /explicitly confirm/);
   const originalAttempt = jobs[1].attemptId;
   Core.resume(run, { retryIds: [jobs[1].id], confirmedNotSent: [jobs[1].id] });
   assert.equal(run.status, 'running'); assert.notEqual(jobs[1].attemptId, originalAttempt);
@@ -114,25 +118,22 @@ test('every round redacts newly generated private data and all participants read
   store.create(run);
   const input = Core.nextJobs(run)[0].input;
   assert.doesNotMatch(input, /alice|example\.com|10\.2\.3\.4|private-77/); assert.match(input, /100元/);
-  finishPhase(run, { text: '推荐进行可靠的队列处理。新增路径 C:\\Users\\alice\\secret 与 bob@corp.org\nAuthorization: Bearer secret\n模型签名：我是 Claude。' });
+  finishPhase(run, { text: '推荐进行可靠的队列处理。新增路径 C:\\Users\\alice\\secret 与 bob@corp.org\n模型签名：我是 Claude。' });
   const packet = Core.nextJobs(run)[0].input;
-  assert.doesNotMatch(packet, /alice|bob@|Bearer secret|我是 Claude/);
-  assert.equal(packet, Core.nextJobs(run)[1].input);
+  assert.doesNotMatch(packet, /alice|bob@|我是 Claude/);
+  for (const job of Core.nextJobs(run)) for (const entry of run.rounds[0].entries) assert.ok(job.input.includes(entry.text));
   store.save(run);
   const first = run.jobs[0];
   const raw = fs.readFileSync(path.join(store.dir(run.id), 'round-01', 'output', `${first.id}-${first.attemptId}.md`), 'utf8');
   assert.match(raw, /bob@corp.org/);
 });
 
-test('redaction removes credential forms, keys, IPs, domains, sessions and stable aliases', () => {
-  const labelled = Privacy.redact('用户名: captain_alice，预算200元。 "username":"other_bob"; 工期两天。').text;
-  assert.doesNotMatch(labelled, /captain_alice|other_bob/);
-  assert.match(labelled, /预算200元/);
-  assert.match(labelled, /工期两天/);
+test('credential redaction preserves stable private aliases and reports an outbound hard block', () => {
   const mapping = {};
   const secret = '-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----';
-  const first = Privacy.redact(`mail a@b.org again a@b.org\n${secret}\nsk-abcdefghijklmnop\nhttps://foo.dev/x?token=hidden\neyJabc.def.ghi\nTOKEN=supersecret\n{\"password\":\"supersecret\"}\n192.168.1.1\n2001:db8::1\n::1\nsession_id=abc`, { mapping });
-  assert.doesNotMatch(first.text, /secret|abcdefghijkl|hidden|eyJabc|192\.168|2001:db8|::1|session_id=abc|a@b\.org/);
+  const first = Privacy.redact(`mail a@b.org again a@b.org\n${secret}\nsk-abcdefghijklmnop\n192.168.1.1\n2001:db8::1\n::1\nsession_id=abc`, { mapping });
+  assert.equal(first.blocked, true);
+  assert.doesNotMatch(first.text, /secret|abcdefghijkl|192\.168|2001:db8|::1|session_id=abc|a@b\.org/);
   assert.equal(Privacy.redact('a@b.org', { mapping }).text, '[邮箱-1]');
 });
 
@@ -144,7 +145,9 @@ test('wrong model or tier pauses without generating a final; no paid or weaker f
   assert.throws(() => create({ participants: [{ id: 'one', provider: 'api', model: 'opus' }, { id: 'two', provider: 'chatgpt-web', model: '6 Pro' }] }), /Only subscription/);
   const webRun = create(); const web = Core.nextJobs(webRun)[1]; Core.markStarted(webRun, web.id);
   assert.equal(Core.acceptResult(webRun, web.id, result(web, { actualTier: 'High' })).invalid, true);
-  assert.throws(() => Core.resume(webRun), /Webpage retry needs confirmation/);
+  Core.resume(webRun);
+  assert.equal(webRun.jobs[1].status, 'failed');
+  assert.equal(webRun.resumeBlocked[0].jobId, web.id);
 });
 
 test('quota pauses and missing final fidelity check is never complete', () => {
@@ -153,7 +156,7 @@ test('quota pauses and missing final fidelity check is never complete', () => {
   assert.equal(run.pauseReason, 'quota'); assert.deepEqual(Core.nextJobs(run), []);
   Core.resume(run); finishPhase(run); finishPhase(run);
   const final = Core.nextJobs(run)[0]; Core.markStarted(run, final.id);
-  assert.equal(Core.acceptResult(run, final.id, result(final, { faithful: false })).invalid, true);
+  assert.equal(Core.acceptResult(run, final.id, result(final, { faithful: false })).metadataNeeded, true);
   assert.equal(run.status, 'paused'); assert.equal(run.finalAnswer, undefined);
 });
 
@@ -168,13 +171,17 @@ test('cancel prevents queued sends and ignores late answers', () => {
   assert.equal(run.updatedAt, updatedAt); assert.equal(run.events.length, events);
 });
 
-test('machine metadata is parsed while retaining exact original draft and invalid metadata pauses', () => {
+test('machine metadata is parsed while retaining the exact draft; a bad review is held for metadata', () => {
   const run = create(); const job = Core.nextJobs(run)[0]; Core.markStarted(run, job.id);
   const raw = '这是完整的独立答案。应通过轮次屏障保证每个人获得同样的事实材料。\n<discussion-meta>{"disagreements":[],"minority":[]}</discussion-meta>';
   assert.equal(Core.acceptResult(run, job.id, result(job, { text: raw })).accepted, true);
   assert.equal(job.rawOutput, raw); assert.doesNotMatch(job.output, /discussion-meta/);
-  const second = Core.nextJobs(run)[0]; Core.markStarted(run, second.id);
-  assert.equal(Core.acceptResult(run, second.id, result(second, { text: '这是完整答案，包含无法读取的元数据。\n<discussion-meta>{invalid}</discussion-meta>' })).invalid, true);
+  finishPhase(run);
+  const review = Core.nextJobs(run)[0]; Core.markStarted(run, review.id);
+  const delivered = { text: '这是一份完整的互评修订答案。应保留完整证据、核查前提，并确保每位成员读到同样的材料。\n<discussion-meta>{invalid}</discussion-meta>', actualModel: review.participant.model, actualTier: review.participant.tier, actualEffort: review.participant.effort };
+  assert.equal(Core.acceptResult(run, review.id, delivered).metadataNeeded, true);
+  assert.equal(review.status, 'metadata-needed'); assert.equal(review.awaitingMetadata.rawText, delivered.text);
+  assert.equal(review.attempt, 1); assert.equal(review.rejectedOutput, undefined);
 });
 test('metadata wrapped in markdown fences is still accepted without changing the archived original', () => {
   const body = '这是完整的互评与修订稿。应保留匿名材料、有效的反驳和实施条件。';
@@ -216,10 +223,13 @@ test('a claimed faithful final cannot silently discard recorded minority opinion
   finishPhase(run, { minority: ['若数据无需共享，简单串行流程可能更可靠。'] });
   const final = Core.nextJobs(run)[0]; Core.markStarted(run, final.id);
   const accepted = Core.acceptResult(run, final.id, result(final, { faithful: true, minority: [] }));
-  assert.equal(accepted.invalid, true); assert.match(accepted.reason, /minority/);
+  assert.equal(accepted.metadataNeeded, true); assert.match(accepted.reason, /minority/);
   assert.equal(run.status, 'paused');
   assert.deepEqual(run.minority, ['若数据无需共享，简单串行流程可能更可靠。']);
-  Core.resume(run); finishPhase(run, { minority: run.minority });
+  const attempt = final.attemptId;
+  Core.resume(run);
+  assert.equal(final.attemptId, attempt); assert.equal(final.status, 'metadata-needed');
+  assert.equal(Core.supplyMetadata(run, final.id, { faithful: true, summary: '保留少数派。分阶段实施。按条件取舍。', minority: run.minority }).accepted, true);
   assert.equal(run.status, 'complete');
 });
 test('minority metadata is supplied to later participants and the final summarizer even when absent from prose', () => {
@@ -228,4 +238,120 @@ test('minority metadata is supplied to later participants and the final summariz
   assert.match(Core.nextJobs(run)[0].input, /高影响的变更应分阶段实施/);
   finishPhase(run);
   assert.match(Core.nextJobs(run)[0].input, /高影响的变更应分阶段实施/);
+});
+
+
+test('web-export escaping, inline code, JSON key escapes, and trailing prose retain valid metadata', () => {
+  const body = '这是完整的互评与修订答案。保留正确的建议，回应具体反驳并说明实施条件。';
+  const meta = '{"materialDisagreement":false,"disagreements":[],"minority":[]}';
+  const variants = [
+    `<discussion-meta>${meta}</discussion-meta>`,
+    `\\<discussion-meta\\>${meta}\\</discussion-meta\\>`,
+    `\\<discussion-meta\\>${meta}\\<\\/discussion-meta\\>`,
+    `\`<discussion-meta>${meta}</discussion-meta>\``,
+    `&lt;discussion-meta&gt;${meta}&lt;/discussion-meta&gt;`,
+    '<discussion-meta>{"material\\_Disagreement":false,"disagreements":[],"minority":[]}</discussion-meta>',
+    '<discussion-meta>{"material_disagreement":false,"disagreements":[],"minority":[]}</discussion-meta>',
+    '```xml\n<discussion-meta>' + meta + '</discussion-meta>\n```',
+  ];
+  for (const packet of variants) {
+    const parsed = Core.readResult({ text: body + '\n' + packet + '\n补充说明：需要核查证据。' });
+    assert.equal(parsed.materialDisagreement, false, packet);
+    assert.match(parsed.text, /完整的互评/); assert.match(parsed.text, /补充说明/);
+    assert.doesNotMatch(parsed.text, /discussion-meta|materialDisagreement|```/);
+  }
+});
+
+test('missing metadata survives restart and is completed manually without a new attempt or model request', (t) => {
+  const store = tempStore(t); let run = create(); finishPhase(run);
+  const jobs = Core.nextJobs(run); jobs.forEach((job) => Core.markStarted(run, job.id));
+  const first = jobs[0], body = '这是一份完整互评修订稿。先保留可靠的轮次屏障，再补充失败恢复的条件。';
+  assert.equal(Core.acceptResult(run, first.id, { text: body, actualModel: first.participant.model, actualEffort: first.participant.effort }).metadataNeeded, true);
+  Core.acceptResult(run, jobs[1].id, result(jobs[1])); store.create(run);
+  run = Core.recover(store.load(run.id));
+  const saved = run.jobs.find((job) => job.id === first.id), attempt = saved.attemptId;
+  Core.resume(run);
+  assert.equal(run.status, 'paused'); assert.equal(run.resumeBlocked[0].status, 'metadata-needed');
+  assert.equal(Core.nextJobs(run).length, 0); assert.equal(saved.attemptId, attempt);
+  assert.equal(Core.supplyMetadata(run, saved.id, { material_disagreement: false, disagreements: [], minority: [] }).accepted, true);
+  assert.equal(saved.attemptId, attempt); assert.equal(saved.rawOutput, body); assert.equal(run.phase, 'summary');
+  store.save(run);
+  assert.equal(store.load(run.id).jobs.find((job) => job.id === first.id).rawOutput, body);
+});
+
+test('safe failed jobs resume while a possibly sent webpage stays visibly blocked', () => {
+  const run = create(); const [cli, web] = Core.nextJobs(run);
+  Core.markStarted(run, cli.id); Core.markStarted(run, web.id);
+  Core.failJob(run, cli.id, { reason: 'QUOTA', quota: true, uncertain: false, mayHaveSent: false });
+  Core.failJob(run, web.id, { reason: 'TIMEOUT', uncertain: true, mayHaveSent: true });
+  const webAttempt = web.attemptId; Core.resume(run);
+  assert.equal(run.status, 'running'); assert.deepEqual(run.resumedJobs, [cli.id]);
+  assert.equal(web.attemptId, webAttempt); assert.equal(web.status, 'unknown');
+  assert.deepEqual(Core.nextJobs(run).map((job) => job.id), [cli.id]);
+  assert.equal(run.resumeBlocked[0].mayHaveSent, true); assert.match(run.resumeBlocked[0].reason, /previous request/);
+  Core.markStarted(run, cli.id); Core.acceptResult(run, cli.id, result(cli));
+  assert.equal(run.status, 'paused'); assert.equal(run.rounds.length, 0);
+});
+
+test('webpage failure proven unsent retries without confirmation, with submission evidence kept', () => {
+  const run = create(); const [cli, web] = Core.nextJobs(run);
+  Core.markStarted(run, cli.id); Core.acceptResult(run, cli.id, result(cli)); Core.markStarted(run, web.id);
+  Core.failJob(run, web.id, { reason: 'LOGIN_REQUIRED', uncertain: false, mayHaveSent: false });
+  assert.equal(web.mayHaveSent, false);
+  const attempt = web.attemptId; Core.resume(run);
+  assert.equal(run.status, 'running'); assert.notEqual(web.attemptId, attempt);
+  assert.equal(web.attempts[0].mayHaveSent, false); assert.deepEqual(run.resumeBlocked, []);
+  Core.markStarted(run, web.id); Core.acceptResult(run, web.id, result(web));
+  assert.equal(run.phase, 'review');
+});
+
+test('each reviewer gets a durable distinct order of the same frozen full drafts and anonymous metadata', (t) => {
+  const store = tempStore(t);
+  const run = create({ participants: [...Core.DEFAULT_PARTICIPANTS, Core.GEMINI_PARTICIPANT] });
+  finishPhase(run, { text: 'ChatGPT 认为采用可靠的屏障方案。By Claude：需要保留完整证据。Anthropic/OpenAI 不能替代事实核验。',
+    disagreements: ['ChatGPT 认为队列边界还需要核实。'], minority: ['By Claude：极小任务可以只用一位参与者。'] });
+  const jobs = Core.nextJobs(run);
+  assert.equal(new Set(jobs.map((job) => job.snapshotOrders[1].join(','))).size, 3);
+  const authors = run.rounds[0].entries.map((entry) => entry.author).sort();
+  for (const job of jobs) {
+    assert.deepEqual([...job.snapshotOrders[1]].sort(), authors);
+    for (const entry of run.rounds[0].entries) assert.ok(job.input.includes(entry.text));
+    assert.doesNotMatch(job.input, /Claude|ChatGPT/);
+    assert.match(job.input, /Anthropic\/OpenAI 不能替代事实核验/, 'objective company mentions retain their meaning');
+  }
+  store.create(run); const loaded = store.load(run.id);
+  assert.deepEqual(Core.nextJobs(loaded).map((job) => job.inputHash), jobs.map((job) => job.inputHash));
+});
+
+test('summary fidelity is recorded as model self-report rather than external verification', () => {
+  const run = create(); finishPhase(run); finishPhase(run); finishPhase(run);
+  assert.deepEqual(run.faithfulness, { modelReported: true, externallyVerified: false, source: 'summarizer-self-report' });
+});
+
+test('credentials in the original question or a new draft hard-pause before any following outbound job', (t) => {
+  const blocked = create({ question: '应该采用什么架构？真实凭据 sk-proj-abcdefghijklmnopqrstuvwxyz0123456789 不应发出。' });
+  assert.equal(blocked.status, 'paused'); assert.equal(blocked.pauseReason, 'privacy-blocked');
+  assert.equal(blocked.jobs.length, 0); assert.match(blocked.question, /sk-proj/);
+  Core.resume(blocked); assert.equal(blocked.resumeBlocked[0].status, 'privacy-blocked');
+  const store = tempStore(t), run = create();
+  finishPhase(run, { text: '这是完整回答，建议使用持久化轮次屏障。凭据 sk-proj-abcdefghijklmnopqrstuvwxyz0123456789 必须留在本地。' });
+  assert.equal(run.status, 'paused'); assert.equal(run.pauseReason, 'privacy-blocked');
+  assert.equal(run.rounds.length, 0); assert.equal(Core.nextJobs(run).length, 0); assert.equal(run.jobs.length, 2);
+  store.create(run); assert.match(store.load(run.id).jobs[0].rawOutput, /sk-proj/);
+});
+
+test('credential-bearing protocol metadata cannot bypass the hard gate after being stripped from prose', () => {
+  const run = create();
+  finishPhase(run, { text: '这是完整的建议与依据。应采用可靠的屏障方案以确保完整性。',
+    disagreements: ['需要保护 sk-proj-abcdefghijklmnopqrstuvwxyz0123456789'], minority: [] });
+  assert.equal(run.pauseReason, 'privacy-blocked'); assert.equal(run.jobs.length, 2); assert.equal(run.rounds.length, 0);
+});
+
+test('manual or automatic draft evidence cannot omit or weaken the requested effort', () => {
+  for (const effort of [undefined, 'medium']) {
+    const run = create(), job = run.jobs[0]; Core.markStarted(run, job.id);
+    const accepted = Core.acceptResult(run, job.id, result(job, { actualEffort: effort, verificationSource: 'manual-import' }));
+    assert.equal(accepted.invalid, true); assert.match(accepted.reason, /effort/);
+    assert.equal(job.status, 'failed'); assert.equal(run.rounds.length, 0);
+  }
 });

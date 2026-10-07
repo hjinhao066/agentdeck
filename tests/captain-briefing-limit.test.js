@@ -133,3 +133,34 @@ test('the DeepSeek command opens while every subscription is exhausted, and pass
     assert.deepEqual(M.checkCommand(cmd), { cmd });
   }
 });
+
+// Exact baseline wording from main-core.js at 64043df. New discussion commands
+// must fit alongside these rules rather than silently rewriting their meaning.
+test('discussion instructions preserve rules 3, 4, 5 and 9 verbatim from the main baseline', () => {
+  const baseline = {
+    3: '3. 目标清楚就派活：目标、范围和验收要求明确且已获授权，直接拆开派下去；缺的信息能靠检查项目、产物或历史弄清的先派人检查，影响目标、范围、授权或关键结果又查不出来的才问用户。已有授权不因 Relay、重启或清空而重新确认，也不因此扩大。技术细节（模型、实现、拆法）自己决定，不拿去问用户。',
+    4: '4. 派活单步原则：一个会话一次只派一件活，忙碌时不要连着追加。互不依赖的事拆开并行。补充用 tell 发回原会话，只转发新指令，不要再贴文件正文；改方向用 tell --replace --now，明确要停才用 stop。',
+    5: '5. 界面类的活要写明图标规则：任务正文里必须写明——复制、删除、编辑等常见工具动作用图标按钮（复制=两个重叠方框、删除=垃圾桶、编辑=铅笔），配 tooltip 和无障碍名称，不用「复制」这类文字按钮。不写，别的模型会做成文字按钮。',
+    9: '9. 队员向你提问、或停在确认/权限提示时，你来拿主意：先看清它问的是什么，不盲按 y 或 enter；有把握就用 tell 或 answer 回复它；没把握，或者涉及删除数据、花钱、对外发布这类不可逆的事，再请用户决定，并说清要用户决定什么。',
+  };
+  for (const platform of PLATFORMS) for (const legacy of [false, true]) {
+    const lines = M.instructions(platform, '', legacy).split('\n');
+    for (const [number, expected] of Object.entries(baseline)) {
+      assert.equal(lines.find((line) => line.startsWith(number + '. ')), expected, `${platform} rule ${number}`);
+    }
+  }
+});
+
+test('the briefing keeps Chinese and English discussion triggers plus discovery, help and safe recovery under the paste limit', () => {
+  for (const platform of PLATFORMS) for (const legacy of [false, true]) for (const cap of [5, 30, 50]) {
+    const text = M.instructions(platform, '', legacy, cap);
+    const line = text.split('\n').find((value) => value.includes('discuss start --topic'));
+    assert.ok(line, platform + ': a Captain can start a discussion');
+    for (const trigger of ['讨论一下', 'group discussion', 'do a group discussion', 'group chat']) assert.ok(line.includes(trigger), `${platform}: ${trigger}`);
+    assert.match(line, /status 查全部/, platform + ': a new Captain can discover existing discussion IDs');
+    assert.match(line, /status\/wait\/resume\/cancel --id ID/, platform);
+    assert.match(line, /discuss help/, platform + ': installed Captains have a readable usage entry');
+    assert.match(line, /unknown.*核对旧请求.*确认结束.*resume --retry JOB --confirmed-ended JOB/, platform);
+    assert.ok((text + M.SAVER_RESUME).length <= 10000, `${platform}: discussion commands and existing rules still fit in one complete paste`);
+  }
+});

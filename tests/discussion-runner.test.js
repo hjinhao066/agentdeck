@@ -97,3 +97,51 @@ test('cancellation aborts in-flight adapters, preserves completed drafts and pre
   assert.equal(cancelled.jobs[0].status, 'complete'); assert.equal(cancelled.rounds.length, 0);
   assert.equal(fs.existsSync(path.join(dir, 'final.md')), false);
 });
+
+test('PID reuse and obsolete recovery guards do not block a restarted runner', (t) => {
+  const { dir } = fixture(t);
+  fs.mkdirSync(path.join(dir, '.runner-lock'));
+  fs.writeFileSync(path.join(dir, '.runner-lock', 'owner.json'), JSON.stringify({ pid: process.pid, token: 'old-generation', started: 'a different process start', boot: 1 }));
+  fs.mkdirSync(path.join(dir, '.runner-recovery'));
+  assert.equal(Runner.active(Runner.owner(dir), { dir }), false);
+  const release = Runner.lock(dir);
+  const lease = Runner.owner(dir);
+  assert.equal(Runner.active(lease, { dir }), true);
+  assert.equal(typeof lease.started, 'string');
+  assert.equal(typeof lease.heartbeatAt, 'number');
+  assert.throws(() => Runner.lock(dir), /仍在运行/);
+  release();
+});
+test('a live lease without process evidence cannot be stolen', (t) => {
+  const { dir } = fixture(t);
+  const release = Runner.lock(dir);
+  assert.equal(Runner.active(Runner.owner(dir), { dir, identity: () => null }), true);
+  release();
+});
+test('whole-discussion deadline pauses a hung participant and retains completed drafts', async (t) => {
+  const { run, store, dir } = fixture(t);
+  const completed = await Runner.runDiscussion({ id: run.id, store, timeoutMs: 30,
+    adapter: { execute: async (job) => job.participantId === 'opus' ? result(job) : new Promise(() => {}) } });
+  assert.equal(completed.status, 'paused'); assert.equal(completed.pauseReason, 'DISCUSSION_TIMEOUT');
+  assert.equal(completed.jobs[0].status, 'complete'); assert.equal(completed.jobs[1].status, 'unknown');
+  assert.equal(fs.existsSync(path.join(dir, 'final.md')), false); assert.equal(Runner.owner(dir), null);
+});
+test('receipt ids stay valid even for the longest permitted custom discussion id', (t) => {
+  const { run, dir } = fixture(t); run.id = 'x'.repeat(160);
+  assert.match(Runner.receipt(run, dir).id, /^[A-Za-z0-9_-]{1,160}$/);
+});
+
+test('restart preserves affirmative unsent evidence and saved-foreground-answer diagnostics', async (t) => {
+  const { run, dir } = fixture(t);
+  for (const job of run.jobs) Core.markStarted(run, job.id);
+  await Runner.recoverResults(run, { recover: async (job) => {
+    throw Object.assign(new Error('stand-in recovery'), job.participantId === 'chatgpt'
+      ? { code: 'LOCKED', mayHaveSent: false } : { code: 'FRONT_STOLEN', mayHaveSent: true, answerSaved: true });
+  } }, dir);
+  const web = run.jobs.find((j) => j.participantId === 'chatgpt');
+  assert.equal(web.status, 'failed'); assert.equal(web.mayHaveSent, false);
+  assert.equal(run.jobs[0].answerSaved, true); assert.equal(run.jobs[0].failure, 'FRONT_STOLEN');
+  Core.resume(run);
+  assert.equal(web.status, 'pending');
+  assert.equal(run.jobs[0].status, 'unknown'); assert.equal(run.resumeBlocked.length, 1);
+});

@@ -42,11 +42,11 @@ function summary(run, store) {
   let note;
   try { note = JSON.parse(fs.readFileSync(path.join(dir, 'receipt.json'), 'utf8')); } catch {}
   return { id: run.id, question: run.publicQuestion, status: run.status, pauseReason: run.pauseReason, phase: run.phase, round: run.round,
-    completedRounds: run.rounds.length, plannedRounds: run.plannedRounds, directory: dir,
-    runnerActive: !!current && Runner.alive(current.pid), participants: run.participants,
+    resumeBlocked: run.resumeBlocked || [], resumedJobs: run.resumedJobs || [], completedRounds: run.rounds.length, plannedRounds: run.plannedRounds, directory: dir,
+    runnerActive: Runner.active(current, { dir }), participants: run.participants,
     jobs: run.jobs.map((j) => ({ id: j.id, participantId: j.participantId, round: j.round, phase: j.phase,
       status: j.status, attemptId: j.attemptId, actualModel: j.actualModel, actualTier: j.actualTier,
-      actualEffort: j.actualEffort, progress: j.progress, failure: j.failure })),
+      actualEffort: j.actualEffort, progress: j.progress, failure: j.failure, mayHaveSent: j.mayHaveSent, metadataNeeded: j.status === 'metadata-needed', answerSaved: j.answerSaved })),
     summary: run.summary, disagreements: run.disagreements, minority: run.minority,
     ...(run.status === 'complete' ? { final: path.join(dir, 'final.md') } : {}),
     ...(note ? { receipt: note.text, receiptDelivered: note.delivered } : {}) };
@@ -54,7 +54,8 @@ function summary(run, store) {
 async function command(args, auth) {
   const config = settings(auth), store = createStore({ root: config.root });
   const op = args._[1];
-  if (!['start', 'status', 'wait', 'resume', 'cancel'].includes(op)) throw new Error('discuss requires start, status, wait, resume or cancel.');
+  if (!['start', 'status', 'wait', 'resume', 'cancel', 'help'].includes(op)) throw new Error('discuss requires start, status, wait, resume or cancel.');
+  if (op === 'help') { const file = fs.existsSync(path.join(__dirname, 'discuss.md')) ? path.join(__dirname, 'discuss.md') : path.join(__dirname, 'docs', 'discuss.md'); return fs.readFileSync(file, 'utf8'); }
   if (op === 'start') {
     if (args.topic !== undefined && args['topic-file'] !== undefined) throw new Error('只用 --topic 或 --topic-file 其中一个。');
     const question = args['topic-file'] ? readFile(args['topic-file']) : args.topic;
@@ -86,7 +87,7 @@ async function command(args, auth) {
     }
   }
   const current = Runner.owner(dir);
-  if (current && Runner.alive(current.pid)) {
+  if (Runner.active(current, { dir })) {
     if (op === 'resume') throw new Error('讨论执行器仍在运行；用 status 或 wait 等候，不能重复续跑。');
     fs.writeFileSync(path.join(dir, 'cancel.request'), 'cancel', { mode: 0o600 });
     return { id: args.id, status: 'cancelling', directory: dir };
@@ -101,8 +102,11 @@ async function command(args, auth) {
       let application = {};
       try { application = JSON.parse(fs.readFileSync(config.configFile, 'utf8')); } catch {}
       const adapter = Runner.adapters({ getConfig: () => application });
-      try { await Runner.recoverResults(run, adapter, dir); } finally { adapter.dispose?.(); }
+      try { await Runner.recoverResults(run, adapter, dir, { allowForegroundRecovery: args['accept-saved'] === true }); } finally { adapter.dispose?.(); }
       store.save(run);
+      if (args['metadata-file']) {
+        Core.supplyMetadata(run, args.job, JSON.parse(readFile(args['metadata-file']))); store.save(run);
+      }
       if (args['result-file']) {
         const job = run.jobs.find((j) => j.id === args.job);
         if (!job) throw new Error('--result-file requires --job from discuss status.');

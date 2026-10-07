@@ -17,9 +17,9 @@ function isolatedEnv(extra = {}) {
   delete result.ELECTRON_RUN_AS_NODE;
   return { ...result, ...extra };
 }
-function cli(args, overrides = {}) {
+function cli(args, overrides = {}, entry = path.join(ROOT, 'board-cli.js')) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [path.join(ROOT, 'board-cli.js'), 'discuss', ...args], {
+    const child = spawn(process.execPath, [entry, 'discuss', ...args], {
       env: isolatedEnv({ ...env, ...overrides }), stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
@@ -100,7 +100,8 @@ test('authenticated Captain completes independent answers, frozen anonymous revi
   expect(review[0].input).toContain('### 方案 A');
   expect(review[0].input).toContain('### 方案 B');
   expect(review[0].input).not.toMatch(/claude-opus|ChatGPT|Claude Code/);
-  expect(review[0].input).toBe(review[1].input);
+  expect(review[0].input).not.toBe(review[1].input);
+  for (const source of complete.rounds[0].entries) for (const reviewer of review) expect(reviewer.input).toContain(source.text);
   const final = fs.readFileSync(path.join(run.directory, 'final.md'), 'utf8');
   expect(final).toContain('少数派');
   expect(final).toContain('忠实性核对');
@@ -205,7 +206,7 @@ test('restart recovers a completed webpage artifact without a second send, and a
 });
 
 test('every outbound packet redacts private identifiers and saves exactly what the webpage received', async () => {
-  const run = await start('User alice@example.test uses /Users/privateuser/project, Windows C:\\Users\\privateuser\\repo; session id 12345678-1234-4234-8234-123456789abc; server 192.0.2.1 at private.example.test. Token sk-proj-abcdefghijklmnopqrstuvwxyz123456.');
+  const run = await start('User alice@example.test uses /Users/privateuser/project, Windows C:\\Users\\privateuser\\repo; session id 12345678-1234-4234-8234-123456789abc; server 192.0.2.1 at private.example.test.');
   const complete = await waitState(run, 'complete');
   const webpage = events().filter((event) => event.participantId === 'chatgpt');
   expect(webpage).toHaveLength(2);
@@ -247,4 +248,61 @@ test('ordinary worker capability cannot start or read a discussion', async () =>
     expect(result.stderr).toMatch(/Captain|队长|Only conductor-managed/);
   }
   expect(requests).toHaveLength(0);
+});
+
+
+test('credentials pause before any participant is sent a question', async () => {
+  const run = await start('比较方案，api_key=sk-proj-abcdefghijklmnopqrstuvwxyz123456；预算100元。');
+  const paused = await waitState(run, 'paused');
+  expect(paused.pauseReason).toBe('privacy-blocked');
+  expect(events()).toHaveLength(0);
+  expect(fs.existsSync(path.join(run.directory, 'final.md'))).toBe(false);
+});
+test('missing metadata keeps the web draft and manual metadata resumes the same attempt without a second question', async () => {
+  controls({ chatgpt: 'metadata-missing' });
+  const run = await start(); await waitState(run, 'paused');
+  await expect.poll(() => fs.existsSync(path.join(run.directory, '.runner-lock'))).toBe(false);
+  const saved = state(run), job = saved.jobs.find((j) => j.status === 'metadata-needed');
+  expect(job.phase).toBe('review'); expect(job.awaitingMetadata.rawText).toContain('完整回答');
+  const resumed = JSON.parse(await command(['resume', '--id', run.id]));
+  expect(resumed.resumeBlocked.some((b) => b.status === 'metadata-needed')).toBe(true);
+  const metadata = path.join(profile, 'metadata.json');
+  fs.writeFileSync(metadata, JSON.stringify({ materialDisagreement: false, disagreements: [], minority: [] }));
+  controls({}); await command(['resume', '--id', run.id, '--job', job.id, '--metadata-file', metadata]);
+  const complete = await waitState(run, 'complete');
+  expect(complete.jobs.find((j) => j.id === job.id).attemptId).toBe(job.attemptId);
+  expect(events().filter((event) => event.jobId === job.id)).toHaveLength(1);
+  expect(events()).toHaveLength(5);
+});
+test('rendered Markdown metadata survives export escapes and trailing explanatory text', async () => {
+  controls({ chatgpt: 'metadata-export' });
+  const run = await start(); const complete = await waitState(run, 'complete');
+  expect(complete.rounds).toHaveLength(2); expect(events()).toHaveLength(5);
+  expect(complete.faithfulness.externallyVerified).toBe(false);
+});
+test('confirmed unsent webpage failure can resume without confirmed-ended', async () => {
+  controls({ chatgpt: 'unsent' });
+  const run = await start(); await waitState(run, 'paused');
+  await expect.poll(() => fs.existsSync(path.join(run.directory, '.runner-lock'))).toBe(false);
+  const before = state(run).jobs.find((j) => j.participantId === 'chatgpt');
+  expect(before.mayHaveSent).toBe(false); controls({});
+  await command(['resume', '--id', run.id]); await waitState(run, 'complete');
+});
+
+test('the installed tools copy is self-contained, exposes help and starts its own background runner', async () => {
+  const tools = path.join(profile, 'tools'); fs.mkdirSync(tools);
+  const setup = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
+  const copy = setup.match(/for \(const file of \[('board-credentials\.js'[\s\S]*?)\]\) fs\.copyFileSync/);
+  expect(copy).toBeTruthy();
+  for (const match of copy[1].matchAll(/'([^']+)'/g)) fs.copyFileSync(path.join(ROOT, match[1]), path.join(tools, match[1]));
+  fs.copyFileSync(path.join(ROOT, 'docs/discuss.md'), path.join(tools, 'discuss.md'));
+  const entry = path.join(tools, 'agentdeck-board.js'); fs.copyFileSync(path.join(ROOT, 'board-cli.js'), entry);
+  const help = await cli(['help'], {}, entry);
+  expect(help.code, help.stderr).toBe(0); expect(help.stdout).toContain('group discussion');
+  const launched = await cli(['start', '--topic', '比较两种可靠性方案。'], {}, entry);
+  expect(launched.code, launched.stderr).toBe(0);
+  const run = JSON.parse(launched.stdout); runs.push(run);
+  const complete = await waitState(run, 'complete'); expect(complete.jobs).toHaveLength(5);
+  expect(events()).toHaveLength(5);
+  expect(fs.existsSync(path.join(run.directory, 'final.md'))).toBe(true);
 });
