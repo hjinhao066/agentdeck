@@ -406,7 +406,11 @@
   function attentionFailure(result, name) {
     if (!result || result.failed) return `手机连不上 ${name}，这条没有发出去。草稿还在。`;
     if (result.timedOut) return `${name} 没有回应（可能在睡眠），这条没有发出去。草稿还在。`;
-    if (result.status === 409 && result.body && typeof result.body.error === 'string' && result.body.error) return result.body.error.slice(0, 200);
+    if (result.status === 409 && result.body && typeof result.body.error === 'string' && result.body.error) {
+      // The computer's own words point at its sidebar, which the phone does not have.
+      if (result.body.error.startsWith('还没有队长')) return `${name} 上还没有队长。先到那台电脑的 AgentDeck 里创建队长，再回来回复。草稿还在。`;
+      return result.body.error.slice(0, 200);
+    }
     if (result.status === 401) return `${name} 的登录已失效，先在总览里重新登录。`;
     if (result.status === 403) return `${name} 的安全校验已过期，刷新页面后再试。`;
     if (result.status === 404) return `${name} 的 AgentDeck 版本太旧，还没有「待我处理」。`;

@@ -377,7 +377,9 @@
       mark.setAttribute('aria-hidden', 'true');
       top.appendChild(mark);
     }
-    top.appendChild(el('span', 'at-kind', A.label(item)));
+    // A finished 要你处理 already has its tick; the plain label would read as still pending.
+    const kind = A.label(item);
+    if (!(item.done && kind === A.TYPES.other)) top.appendChild(el('span', 'at-kind', kind));
     const meta = el('span', 'at-meta');
     if (item.project) meta.appendChild(el('span', 'at-project', item.project));
     const time = el('time', 'at-when', A.when(item.done ? item.doneAt : item.created, now));
@@ -454,7 +456,7 @@
     const v = A.view(load());
     let body = null;
     keepingFocus(() => {
-      body = frame('待我处理', '队长和队员在你不在时交回来的事：上面是要你处理的，下面是结果汇报。每条都能就地回复，回复会带着这一条交给队长；处理完的自动打勾，归到已完成。');
+      body = frame('待我处理', '你不在时交回来的事，处理完自动归到已完成。');
       body.classList.add('at-page');
       view = body;
       const open = v.needs.length + v.reports.length;

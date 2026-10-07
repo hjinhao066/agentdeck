@@ -239,6 +239,7 @@ function attentionFixture() {
     win: [
       item('at-w1-held', 'need', '验收卡住了', '「Muse 冒烟测试」验收没过 2 次，已经停下', 95, { ask: '决定还做不做、要不要换个做法（回复会交给队长）。', project: 'muse', source: 'card', cardTitle: 'Muse 冒烟测试' }),
       item('at-w2-done', 'report', '结果汇报', 'Windows 隧道守护脚本 dry-run 通过了', 300, { readAt: ago(290), done: true, doneAt: ago(280), doneText: '你已回复', replies: [{ text: '好，开机自启也一起配上', at: ago(280), from: 'phone', seen: true }] }),
+      item('at-w3-other', 'need', '要你处理', 'Windows 的 Bark 推送要你在手机上点一次允许', 420, { readAt: ago(410), done: true, doneAt: ago(400), doneText: '你标记已处理' }),
     ],
   };
 }

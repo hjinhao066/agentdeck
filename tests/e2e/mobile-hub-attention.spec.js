@@ -94,6 +94,9 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   await expect(item('网页端登录改成「1」').locator('.at-done-text')).toHaveText('你已回复：改成登录一次长期有效，别设成 1');
   await expect(item('网页端登录改成「1」')).toHaveClass(/\bdone\b/);
   await expect(item('网页端登录改成「1」').locator('.at-ok svg')).toHaveCount(1);
+  // A finished plain 要你处理 drops its label; a typed one keeps it.
+  await expect(item('Bark 推送').locator('.at-kind')).toHaveCount(0);
+  await expect(item('网页端登录改成「1」').locator('.at-kind')).toHaveText('等你拍板');
   await shot('phone-3-done-dark');
   await item('Muse 冒烟测试').getByRole('button', { name: '放回待处理' }).click();
   await expect.poll(() => hub.machines.win.attentionWrites.filter((w) => w.op === 'reopen')).toEqual([{ op: 'reopen', id: 'at-w1-held' }]);
@@ -125,7 +128,7 @@ test('light theme, a refused reply keeps the draft, and an older computer withou
   await item('小福助手排查报告').getByRole('button', { name: '回复', exact: true }).click();
   await item('小福助手排查报告').getByRole('textbox').fill('补查完了告诉我');
   await item('小福助手排查报告').getByRole('button', { name: '发送给 Mac 队长' }).click();
-  await expect(item('小福助手排查报告').getByRole('alert')).toHaveText('还没有队长：回复要交给队长，先在侧边栏创建队长。');
+  await expect(item('小福助手排查报告').getByRole('alert')).toHaveText('Mac 上还没有队长。先到那台电脑的 AgentDeck 里创建队长，再回来回复。草稿还在。');
   await expect(item('小福助手排查报告').getByRole('textbox')).toHaveValue('补查完了告诉我');
   await shot('phone-4-light');
 });

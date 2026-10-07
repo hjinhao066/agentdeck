@@ -32,7 +32,7 @@ test('both computers on one page: needs first, then reports, newest first; finis
   ]);
   assert.deepEqual(merged.needs.map((i) => i.key), ['mac:at-m1-decide', 'mac:at-m2-login', 'win:at-w1-held']);
   assert.deepEqual(merged.reports.map((i) => i.key), ['mac:at-m3-report', 'mac:at-m4-report']);
-  assert.deepEqual(merged.done.map((i) => i.key), ['win:at-w2-done']);
+  assert.deepEqual(merged.done.map((i) => i.key), ['win:at-w2-done', 'win:at-w3-other']);
   assert.equal(merged.needs[2].machineLabel, 'Windows');
   assert.deepEqual(merged.counts, { need: 3, reports: 2, unreadReports: 1, badge: 4 });
 });
@@ -40,7 +40,9 @@ test('both computers on one page: needs first, then reports, newest first; finis
 test('a reply or tick that did not go through says why, in words', () => {
   assert.match(Core.attentionFailure({ failed: true }, 'Mac'), /连不上 Mac.*草稿还在/);
   assert.match(Core.attentionFailure({ timedOut: true }, 'Mac'), /没有回应/);
-  assert.equal(Core.attentionFailure({ status: 409, body: { error: '还没有队长：回复要交给队长。' } }, 'Mac'), '还没有队长：回复要交给队长。');
+  assert.equal(Core.attentionFailure({ status: 409, body: { error: '回复最多 4000 字。' } }, 'Mac'), '回复最多 4000 字。');
+  // The computer says "sidebar"; the phone has none, so it says where to go instead.
+  assert.equal(Core.attentionFailure({ status: 409, body: { error: '还没有队长：回复要交给队长，先在侧边栏创建队长。' } }, 'Mac'), 'Mac 上还没有队长。先到那台电脑的 AgentDeck 里创建队长，再回来回复。草稿还在。');
   assert.match(Core.attentionFailure({ status: 404 }, 'Windows'), /版本太旧/);
   assert.match(Core.attentionFailure({ status: 403 }, 'Mac'), /刷新/);
 });

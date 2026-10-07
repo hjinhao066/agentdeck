@@ -1682,6 +1682,8 @@ body.linking-board .board-port.out::before {
 .at-said-text { margin-top: 3px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; }
 .at-actions { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
 .at-actions .btn { height: 30px; }
+.at-actions .btn.at-answer { color: var(--accent); font-weight: 600; }
+.at-actions .btn.at-answer:hover { background: var(--accent-soft); }
 .at-compose { margin-top: 12px; }
 .at-reply {
   display: block; width: 100%; min-height: 64px; resize: none; padding: 10px 12px;

@@ -81,6 +81,12 @@ test('队长 files needs and reports from its terminal; the board\'s 需要你 c
 test('the page: needs first, then reports, details in place; icons with names; reading clears the dot', async () => {
   await page.locator('#attentionBtn').click();
   await expect(page.locator('.page-titles h1')).toHaveText('待我处理');
+  await expect(page.locator('.page-titles p')).toHaveText('你不在时交回来的事，处理完自动归到已完成。');
+  // 回复 is the main action: accent text, unlike 已处理 beside it.
+  const colors = await card('小红书要你').locator('.at-actions .btn').evaluateAll((all) => all.map((b) => getComputedStyle(b).color));
+  const accent = await page.evaluate(() => { const s = document.createElement('span'); s.style.color = 'var(--accent)'; document.body.append(s); const c = getComputedStyle(s).color; s.remove(); return c; });
+  expect(colors[0]).toBe(accent);
+  expect(colors[1]).not.toBe(accent);
   await expect(page.locator('.at-section h2')).toHaveText(['要你处理3', '结果汇报2']);
   await expect(page.locator('.at-card .at-title')).toHaveText([/小红书要你/, /网页端登录改成「1」/, /停下来等你回答/, /「登录改成 1」的会话/, /小福助手排查报告/]);
   await expect(card('停下来等你回答').locator('.at-ask')).toContainText('旧设备要不要一起踢下线？');
@@ -201,6 +207,9 @@ test('队长 resolves, a finished card ticks its item, 已完成 is folded and a
   await toggle.click();
   await expect(card('「登录改成 1」').locator('.at-done-text')).toHaveText('队长标记已解决：已经确认生效');
   await expect(card('网页端登录改成「1」').locator('.at-done-text')).toHaveText('你已回复：改成登录一次长期有效，别设成 1');
+  // A finished plain 要你处理 drops its label; a typed one keeps it.
+  await expect(card('确认旧设备踢下线后再发版').locator('.at-kind')).toHaveCount(0);
+  await expect(card('网页端登录改成「1」').locator('.at-kind')).toHaveText('等你拍板');
   await shot('desktop-4-done-dark');
   await card('小福助手排查报告').getByRole('button', { name: '知道了' }).click();
   await card('小福助手排查报告').getByRole('button', { name: '放回待处理' }).click();
@@ -208,5 +217,7 @@ test('队长 resolves, a finished card ticks its item, 已完成 is folded and a
 
   await page.evaluate(() => applyTheme('light'));
   await page.evaluate(() => Pages.render());
+  // Let the theme's colour transitions settle so the shot is not taken halfway.
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
   await shot('desktop-5-light');
 });
