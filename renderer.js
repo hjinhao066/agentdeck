@@ -4008,7 +4008,10 @@ function renderQuotaBar() {
         if (seat) item.dataset.seatId = seat.id;
         item.setAttribute('role', 'group');
         item.tabIndex = 0; // keyboard users can inspect the same tooltip; a click focuses and so pins it
-        for (const event of ['mouseenter', 'mouseleave', 'focus', 'blur']) item.addEventListener(event, positionQuotaDetails);
+        for (const event of ['mouseenter', 'mouseleave', 'focusin', 'focusout']) item.addEventListener(event, (e) => {
+          if (e.type === 'focusout' && item.contains(e.relatedTarget)) return;
+          positionQuotaDetails();
+        });
         const label = document.createElement('span'); label.className = 'quota-label'; label.setAttribute('aria-hidden', 'true');
         const icon = document.createElement('span'); icon.className = 'quota-icon';
         icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
