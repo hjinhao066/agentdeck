@@ -140,8 +140,10 @@ the middle:
   rows in a popover. Hover, click or focus a row for
   each window with its exact reset time/date, account, seat, source, sample time,
   confidence and Captain rotation plan in one tooltip. Details stay beside the rows,
-  wrap to the available width and remain inside the window when it resizes; only
-  one detail opens at a time. Config dir/model
+  wrap to the available width and remain inside the window when it resizes; a reset
+  time breaks only between the clock and the countdown, never mid-phrase. Only one
+  detail opens at a time: keyboard focus keeps its own, while the mouse can look at
+  other rows past a clicked one. Config dir/model
   diagnostics stay in the row's data-detail.
   Gemini uses only agy’s Gemini pool; Cursor follows Grok 4.7 only.
   Claude shows a separate item per `claudeSeats` configuration, with both

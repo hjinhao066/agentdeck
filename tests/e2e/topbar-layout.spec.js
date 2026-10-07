@@ -39,12 +39,6 @@ test.beforeAll(async () => {
   const env = { ...process.env, ZDOTDIR: profile };
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_') || key === 'ELECTRON_RUN_AS_NODE') delete env[key];
   app = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined, args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
-  // The transparent, non-focusable test window must stay below normal windows.
-  await app.evaluate(({ app, BrowserWindow }) => {
-    const keepBehind = (win) => { if (process.platform === 'darwin') win.setAlwaysOnTop(true, 'normal', -1); };
-    BrowserWindow.getAllWindows().forEach(keepBehind);
-    app.on('browser-window-created', (_event, win) => keepBehind(win));
-  });
   page = await app.firstWindow();
   await expect(page.locator('#quotaBar [data-seat-id="cn"] [data-window="5h"] .quota-pct')).toHaveText('19%', { timeout: 20000 });
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('未知—');
@@ -185,6 +179,11 @@ test('collapsed sidebar keeps a gauge icon whose popover lists every quota', asy
   await expect(pop.locator('[data-seat-id="us2"]')).toHaveCount(1);
   await expect(pop.locator('[data-seat-id="us"] .quota-values')).toHaveText('未知—');
   await expect(pop.locator('[data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
+  // The Gemini icon paints with a shared gradient; it must not live inside the hidden sidebar.
+  expect(await page.evaluate(() => {
+    for (let e = document.getElementById('quotaGeminiGradient'); e; e = e.parentElement) if (getComputedStyle(e).display === 'none') return false;
+    return getComputedStyle(document.querySelector('#quotaPop [data-provider="Antigravity"] .quota-icon path')).fill.includes('quotaGeminiGradient');
+  })).toBe(true);
   expect(await page.evaluate(() => ({ id: config.mainSession?.colId, provider: MainSession.mainCol()?.agentProvider }))).toEqual({ id: 'tb-cn', provider: 'Claude' });
   await expect(pop.locator('[data-seat-id="cn"] .quota-captain svg')).toBeVisible();
   await expect(pop.locator('[data-provider="Codex"] .quota-captain')).toHaveCount(0);
@@ -214,8 +213,11 @@ test('collapsed sidebar keeps a gauge icon whose popover lists every quota', asy
 async function expectQuotaDetailsInside(panel, row) {
   const tip = row.getByRole('tooltip');
   await expect(tip).toBeVisible();
-  await expect.poll(() => row.evaluate((item) => {
+  // Reset times stay on one line from 1024px up; narrower, they may break only between time and countdown.
+  const resetLines = page.viewportSize().width >= 1024 ? 1 : 2;
+  await expect.poll(() => row.evaluate((item, resetLines) => {
     const tooltip = item.querySelector('.quota-tooltip'), r = tooltip.getBoundingClientRect();
+    const lines = (e) => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight));
     const panel = item.closest('#quotaPop') || document.getElementById('colNav');
     const points = [[r.left + 12, r.top + 12], [r.right - 12, r.bottom - 12]];
     return {
@@ -225,8 +227,10 @@ async function expectQuotaDetailsInside(panel, row) {
       clipped: tooltip.scrollHeight - tooltip.clientHeight,
       unobscured: points.every(([x, y]) => tooltip.contains(document.elementFromPoint(x, y))),
       open: document.querySelectorAll('.quota-detail-open').length,
+      resetWhole: [...tooltip.querySelectorAll('.qt-at')].every((e) => lines(e) === 1),
+      resetLines: [...tooltip.querySelectorAll('.qt-reset')].every((e) => lines(e) <= resetLines),
     };
-  }), { message: `${panel} ${await row.getAttribute('data-quota-key')} at ${JSON.stringify(page.viewportSize())}` }).toEqual({ inside: true, beside: true, overflow: 0, clipped: 0, unobscured: true, open: 1 });
+  }, resetLines), { message: `${panel} ${await row.getAttribute('data-quota-key')} at ${JSON.stringify(page.viewportSize())}` }).toEqual({ inside: true, beside: true, overflow: 0, clipped: 0, unobscured: true, open: 1, resetWhole: true, resetLines: true });
   if (panel === '#quotaPop') {
     const box = await page.locator(panel).boundingBox();
     const viewport = page.viewportSize();
@@ -280,11 +284,25 @@ test('quota details keep one focused row and long explanations remain readable b
   const codex = page.locator('#quotaPop [data-provider="Codex"]');
   const gemini = page.locator('#quotaPop [data-provider="Antigravity"]');
   await codex.click();
-  await gemini.hover();
   await expect(codex.getByRole('tooltip')).toBeVisible();
-  await expect(gemini.getByRole('tooltip')).toBeHidden();
+  // The mouse can still look at another row past a clicked (pinned) one...
+  await gemini.hover();
+  await expect(gemini.getByRole('tooltip')).toBeVisible();
+  await expect(codex.getByRole('tooltip')).toBeHidden();
+  await expect(page.locator('.quota-detail-open')).toHaveCount(1);
+  // ...and the pinned detail comes back once it leaves.
   await page.mouse.move(1, 1);
   await expect(codex.getByRole('tooltip')).toBeVisible();
+  await expect(page.locator('.quota-detail-open')).toHaveCount(1);
+  // Keyboard focus keeps its detail even with the mouse over another row.
+  const grok = page.locator('#quotaPop [data-provider="Cursor"]');
+  await page.keyboard.press('Tab');
+  await expect(grok).toBeFocused();
+  await gemini.hover();
+  await expect(grok.getByRole('tooltip')).toBeVisible();
+  await expect(gemini.getByRole('tooltip')).toBeHidden();
+  await page.mouse.move(1, 1);
+  await codex.click();
   await gemini.hover();
   await page.evaluate(() => document.activeElement.blur());
   await expect(gemini.getByRole('tooltip')).toBeVisible();
