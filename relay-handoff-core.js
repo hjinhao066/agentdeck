@@ -511,6 +511,8 @@ const SQUEEZE = [['recent', 1], ['recent', 0], ['longTerm', 0], ['delivery', 0],
 // (the line number in the decisions file always stays, so the rest is one read away). A task's title: how much is shown.
 const PAUSE_PARTS = [[160], [60, 40], [40, 24]];
 const PAUSE_TITLE = [30, 16, 10];
+// Paused task states that are never squeezed off the page (see renderOverview).
+const PINNED = ['stopped', 'needs_check', 'held'];
 const SQUEEZED = { recent: '最近的决定', longTerm: '长期有效的决定', delivery: '最新交付状态', sessions: '在跑会话的名单',
   items: '提问、回执、返工、矛盾的明细行', high: '高优先级任务的明细行', paused: '暂停/叫停项每条的说明文字（每条都还在）', w: '用户原话的条数和长度' };
 
@@ -786,12 +788,14 @@ function renderOverview(state, details, p, cuts) {
   };
   out.push(`- 暂停/取消/暂不启动 ${entries.paused.length} 条${entries.paused.length ? '（生效中：不续派、不重启，没有新指令不推翻；一条不省，全文见 decisions-history.md）：' : ''}`);
   newest(entries.paused).forEach((e) => out.push('  - ' + pauseLine(e)));
-  // The tasks the Captain stopped (stop or archive): the user's call, so every one is named here, whatever else is squeezed.
-  const halted = [...state.cards.filter((c) => c.code === 'stopped').map((c) => ({ id: c.id, label: c.label, tag: c.important ? HIGH : '', where: c.project, title: c.title })),
+  // The paused tasks that wait on the Captain's call, every one named here whatever else is squeezed: stopped by the Captain
+  // (stop or archive; the user's call), waiting for the Captain to check them, or hung after two failures. Each keeps its id,
+  // project, the start of its title and where it is stuck (the label).
+  const halted = [...state.cards.filter((c) => PINNED.includes(c.code)).map((c) => ({ id: c.id, label: c.label, tag: c.important ? HIGH : '', where: c.project, title: c.title })),
     ...state.loose.filter((l) => l.halted).map((l) => ({ id: `没挂卡 ${l.id}`, label: l.label, tag: l.important ? HIGH : '', where: l.project || '无项目', title: l.title }))];
   if (halted.length) {
-    out.push(`- 被队长叫停的任务 ${halted.length} 条（不重派，没有新指令不重启；一条不省，各自的下一步在 tasks.md）：`);
-    for (const h of halted) out.push('  - ' + [h.tag + h.id, h.label, ...(p.paused < 2 ? [h.where] : []), ...(PAUSE_TITLE[p.paused] ? [one(h.title, PAUSE_TITLE[p.paused])] : [])].join('｜'));
+    out.push(`- 暂停中的任务 ${halted.length} 条（被叫停的不重派、没有新指令不重启；待核实、连续失败挂起的等队长处理，别漏也别重复派；一条不省，各自的下一步在 tasks.md）：`);
+    for (const h of halted) out.push('  - ' + [h.tag + h.id, h.label, h.where, one(h.title, PAUSE_TITLE[p.paused])].join('｜'));
   }
   const live = [...entries.goal, ...entries.scope, ...entries.decisions];
   const long = newest(live.filter(lasting)), recent = newest(live.filter((e) => !lasting(e) && e.ts));

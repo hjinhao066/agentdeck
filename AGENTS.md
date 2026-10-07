@@ -147,7 +147,8 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   round, never from the last row of a session's records. A session ending is not a task
   finishing and not a review passing. Under the length budget only explanations shrink:
   unfinished tasks, blockers, limits and open decisions are never dropped. Pauses,
-  cancellations and Captain-stopped tasks stay on the overview itself, one line each, even
+  cancellations and paused tasks waiting on the Captain (stopped, to check, hung after two
+  failures) stay on the overview itself, one line each, even
   past the limit (the page then says so), and every decision-file entry keeps a line in
   `decisions-history.md`; the contents page counts what a file really lists. The briefing
   stays static; anything that changes belongs in the handoff. A `receipts --wait` that a

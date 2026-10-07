@@ -499,12 +499,16 @@ test('every pause, cancellation and stopped task stays on the overview whatever 
   const decisions = { path: '/b/decisions.md', mtime: NOW - 1000, text: '## 暂停/取消/暂不启动\n' + pauses.map((x) => '- ' + x).join('\n') + '\n## 有效决定\n- [10-04 21:00] 1.1.11 之后版本号进一位\n' };
   for (const budget of [60000, 20000, 6000, 3000]) {
     const built = build({ ...snapshot, cards: [...snapshot.cards, ...g.cards()], dispatches, sessions, decisions, budget });
-    assert.equal(built.over, false, `fits ${budget}`); assert.ok(built.length <= budget);
+    // thirteen paused tasks and nine pauses may be more than the smallest limit can hold: then the page says it is over, and still holds every one
+    if (budget >= 6000) { assert.equal(built.over, false, `fits ${budget}`); assert.ok(built.length <= budget); }
+    else if (built.over) assert.match(built.brief, /已超出预算：未完成任务、阻塞、限制和待决定事项一条没删/);
+    else assert.ok(built.length <= budget);
     for (let i = 1; i <= 9; i++) assert.equal(onPage(built, i, i + 1), 1, `pause ${i} on the page at ${budget}: what it stops, how far, and its line`);
     assert.match(built.brief, /暂停\/取消\/暂不启动 9 条/);
     for (const id of halted) assert.ok(built.brief.split('\n').some((l) => l.includes(id) && /叫停/.test(l)), `stopped ${id} on the page at ${budget}`);
     assert.ok(built.brief.split('\n').some((l) => l.includes('没挂卡 s-loose') && /叫停/.test(l)), `a stopped task with no card at ${budget}`);
-    assert.match(built.brief, /被队长叫停的任务 3 条/);
+    // the three the Captain stopped, and the crowded snapshot's own that wait on the Captain's check (the next test says more about those)
+    assert.match(built.brief, new RegExp(`暂停中的任务 ${3 + built.state.cards.filter((c) => ['needs_check', 'held'].includes(c.code)).length} 条`));
     // every task the program derives as stopped by the Captain is named on the page
     const stopped = [...built.state.cards.filter((c) => c.code === 'stopped').map((c) => c.id), ...built.state.loose.filter((l) => l.halted).map((l) => l.id)];
     assert.equal(stopped.length, 3);
@@ -523,6 +527,33 @@ test('every pause, cancellation and stopped task stays on the overview whatever 
   assert.match(crammed.brief, /暂停\/取消\/暂不启动 120 条/);
   // squeezing never removes the block: no step sets it to nothing
   assert.ok(H.SQUEEZE.filter(([key]) => key === 'paused').every(([, level]) => level > 0));
+});
+
+// Paused tasks that wait on the Captain are as easy to forget, or to dispatch twice, as the stopped ones.
+test('paused tasks waiting on the Captain (to check, hung after two failures) stay on the overview whatever the limit, with project, title and where they are stuck', (t) => {
+  const { snapshot } = crowded(t);   // forty cards, receipts and twelve long messages: the page is under real pressure
+  const g = fixture(t);
+  const check = g.add({ project: 'fuqing', title: '小福助手模型替换：' + '很长的标题'.repeat(10) });
+  g.bind(check.id, 'c1', 's-c1'); g.event(check.id, 'fallback', '', 'c1', 's-c1');           // the session ended without a receipt
+  const hung = g.add({ project: 'web-research', title: '让 Muse 操控网页：' + '很长的标题'.repeat(10) });
+  g.bind(hung.id, 'h1', 's-h1'); g.event(hung.id, 'failed', '失败一', 'h1', 's-h1'); g.live.push({ id: 's-h1', archived: true });
+  g.bind(hung.id, 'h2', 's-h2'); g.event(hung.id, 'failed', '失败二', 'h2', 's-h2');
+  const cards = [...snapshot.cards, ...g.cards()];
+  for (const budget of [60000, 20000, 6000, 4200, 3000]) {
+    const built = build({ ...snapshot, cards, archivedIds: ['s-h1', 's-h2'], budget });
+    assert.equal(built.over, false, `fits ${budget}`); assert.ok(built.length <= budget);
+    const line = (id) => built.brief.split('\n').filter((l) => l.includes(id));
+    assert.equal(built.state.cards.find((c) => c.id === check.id).code, 'needs_check');
+    assert.equal(built.state.cards.find((c) => c.id === hung.id).code, 'held');
+    for (const [card, project, head, stuck] of [[check, 'fuqing', '小福助手模型', '待队长核实'], [hung, 'web-research', '让 Muse', '连续失败 2 次，已挂起']]) {
+      assert.ok(line(card.id).some((l) => l.includes(project) && l.includes(head) && l.includes(stuck)), `${card.id} (${head}) with project, title and where it is stuck at ${budget}`);
+    }
+    // every paused task that waits on the Captain, the crowded snapshot's own included, is named on the page
+    const pinned = built.state.cards.filter((c) => ['needs_check', 'held'].includes(c.code));
+    assert.ok(pinned.length >= 12);
+    for (const c of pinned) assert.ok(line(c.id).some((l) => l.includes(c.project)), `${c.id} (${c.code}) at ${budget}`);
+    assert.match(built.brief, new RegExp(`暂停中的任务 ${pinned.length} 条`));
+  }
 });
 
 test('decisions-history.md and delivery.md list every entry of the decisions file, one line with its line number each; the contents page counts what is really listed', () => {
