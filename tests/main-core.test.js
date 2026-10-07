@@ -517,12 +517,12 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /AGENTDECK_BOARD_CLI" handoff {3}生成当前交接快照[^\n]*briefing 只读本提示词全文/);
   assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc\|up\|down[^\n]*down,enter/);
   assert.ok(!/ {4,}\S/.test(text.split('\n').filter((line) => line.includes('AGENTDECK_BOARD_CLI')).join('\n')), 'no alignment padding in the command list');
-  // chat-ui replaces prompts longer than M.LONG_PROMPT with a file pointer. The
-  // closing paragraph must stay inside the pasted briefing on both platforms.
+  // chat-ui replaces a briefing longer than M.BRIEFING_LIMIT with a file pointer.
+  // The closing paragraph must stay inside the pasted briefing on both platforms.
   for (const platform of ['darwin', 'win32']) {
     const brief = M.instructions(platform);
-    assert.ok(brief.length <= M.LONG_PROMPT, platform);
-    assert.ok((brief + M.SAVER_RESUME).length <= M.LONG_PROMPT, platform + ' saver');
+    assert.ok(brief.length <= M.BRIEFING_LIMIT, platform);
+    assert.ok((brief + M.SAVER_RESUME).length <= M.BRIEFING_LIMIT, platform + ' saver');
     assert.match(brief, /写代码的活加 --worktree 仓库路径，程序会建独立副本和分支/);
     assert.ok(!brief.endsWith('然后等用户的指令。'));
   }

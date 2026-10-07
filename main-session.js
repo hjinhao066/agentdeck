@@ -516,7 +516,7 @@
       if (note) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
     };
     host.sendWhenReady(col, briefingText(note), {
-      silent: true, onSent: sent, guardUserInput: true,
+      silent: true, onSent: sent, guardUserInput: true, inlineLimit: M.BRIEFING_LIMIT,
       onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
     });
   }
@@ -722,7 +722,7 @@
     const col = mainCol();
     if (text === '/clear') op.snapshot = window.ChatUI.captainSnapshot(col.id);
     host.sendWhenReady(col, text, {
-      silent, guardUserInput: true, requireIdle: true, timeout: 5 * 60_000,
+      silent, guardUserInput: true, requireIdle: true, timeout: 5 * 60_000, inlineLimit: M.BRIEFING_LIMIT,
       // A paste/Enter already in progress stays atomic; cancelling stops the
       // next step and never leaves AgentDeck's own paste stranded in the box.
       cancelled: () => tokenSaving !== op && !host.terms.get(op.colId)?.injecting,
@@ -774,8 +774,8 @@
       archiveSnapshot(col, op.snapshot);
       saverBanner('上下文已清空，正在重发队长提示词');
       // The briefing already ends with AUTONOMOUS_CONTINUATION, so only the short
-      // resume line follows it. Past M.LONG_PROMPT the captain would only see a
-      // file pointer and miss the "don't wait" closing.
+      // resume line follows it. Past M.BRIEFING_LIMIT the captain would only see
+      // a file pointer and miss the "don't wait" closing.
       saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true, () => {
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
@@ -840,7 +840,7 @@
       Date.now() - (entry.lastOutputAt || 0) < 3000 || host.userComposing(op.col.id)) return;
     op.sending = true;
     host.sendWhenReady(op.col, briefingText(), {
-      silent: true, guardUserInput: true, requireIdle: true,
+      silent: true, guardUserInput: true, requireIdle: true, inlineLimit: M.BRIEFING_LIMIT,
       cancelled: () => contextReset !== op && !entry.injecting,
       onSent: () => { if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
       onGiveUp: () => { if (contextReset === op) { contextReset = null; host.showToast('队长提示词没发出去；可在队长终端运行 briefing 读取'); } },

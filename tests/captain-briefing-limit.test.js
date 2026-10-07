@@ -5,35 +5,37 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const ChatCore = require('../chat-core');
+const BoardCore = require('../board-core');
 const M = require('../main-core');
 const Q = require('../quota-core');
 
 const read = (name) => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
 const PLATFORMS = ['darwin', 'win32'];
 const DEEPSEEK = '/Users/jinhao/.local/claude-deepseek/bin/claude-ds --dangerously-skip-permissions';
+// what main-session passes with each briefing send
+const BRIEFING = { silent: true, guardUserInput: true, inlineLimit: M.BRIEFING_LIMIT };
 
 // ChatUI.sendPrompt and sendLong, cut out of chat-ui.js and run against a stand-in terminal.
 const chatUi = read('chat-ui.js');
 const sendSource = chatUi.slice(chatUi.indexOf('  const PASTE_READ_MAX = 30_000;'), chatUi.indexOf('  // A line submitted straight in the terminal'));
 
-function terminal() {
+function terminal(cmd = 'claude') {
   const typed = [], saved = [];
   const entry = { alive: true, state: 'done', term: { modes: { bracketedPasteMode: true } }, lastOutputAt: 0 };
   const host = {
-    terms: new Map([['captain', entry]]), dumpScreen: () => '❯ \n────────\n  ⏵⏵ auto mode on',
+    terms: new Map([['col', entry]]), dumpScreen: () => '❯ \n────────\n  ⏵⏵ auto mode on',
     shellQuote: (p) => p, manualPromptSent() {}, userComposing: () => false, maybeAutoName() {}, showToast() {},
   };
   const context = vm.createContext({
     C: ChatCore, host, Date, setTimeout, Promise,
     window: {
       deck: { ptyInput: (id, data) => typed.push(data), notifyCancel() {}, saveLongPrompt: async (text) => { saved.push(text); return '/tmp/long-prompts/prompt.txt'; } },
-      MainSession: null, MainCore: M, BoardCore: { inferAgentType: () => 'Claude' },
+      MainSession: null, MainCore: M, BoardCore,
     },
     beginTurn: () => ({ id: 't' }),
   });
   vm.runInContext(sendSource, context);
-  // the options the briefing goes out with
-  return { typed, saved, send: (text) => context.sendPrompt({ id: 'captain', cmd: 'claude' }, text, null, { silent: true, guardUserInput: true }) };
+  return { typed, saved, send: (text, opts) => context.sendPrompt({ id: 'col', cmd }, text, null, opts || { silent: true }) };
 }
 // A briefing that has grown to `length` characters; the closing paragraph and
 // the token saver's resume line are still the last thing in it.
@@ -43,39 +45,39 @@ function grown(platform, length) {
   return rules + '规'.repeat(length - rules.length - closing.length) + closing;
 }
 
-test('one prompt may be 10000 characters, and every Captain briefing fits with the saver line', () => {
-  assert.equal(M.LONG_PROMPT, 10000);
+test('the Captain briefing may be 10000 characters; every other prompt keeps the 8000 cut', () => {
+  assert.equal(M.LONG_PROMPT, 8000);
+  assert.equal(M.BRIEFING_LIMIT, 10000);
   for (const platform of PLATFORMS) for (const legacy of [false, true]) for (const cap of [5, 30, 50]) {
     const brief = M.instructions(platform, '', legacy, cap);
     assert.ok(brief.endsWith(M.AUTONOMOUS_CONTINUATION), platform);
-    assert.ok((brief + M.SAVER_RESUME).length <= M.LONG_PROMPT,
-      `${platform}${legacy ? ' legacy' : ''}：队长提示词超出一次粘贴上限 ${M.LONG_PROMPT}。调高 MainCore.LONG_PROMPT，不要删规则凑字数（docs/captain-briefing-checklist.md）`);
+    assert.ok((brief + M.SAVER_RESUME).length <= M.BRIEFING_LIMIT,
+      `${platform}${legacy ? ' legacy' : ''}：队长提示词超出一次粘贴上限 ${M.BRIEFING_LIMIT}。调高 MainCore.BRIEFING_LIMIT 并按 docs/captain-briefing-checklist.md 重新取证，不要删规则凑字数`);
   }
 });
 
 test('the token saver resend reaches the Captain whole on Mac and Windows, closing and 读看板继续 included', async () => {
   await Promise.all(PLATFORMS.flatMap((platform) => [false, true].map(async (legacy) => {
     const text = M.instructions(platform, '', legacy) + M.SAVER_RESUME, t = terminal();
-    assert.ok(await t.send(text), platform);
+    assert.ok(text.length > M.LONG_PROMPT, 'longer than an ordinary prompt may be');
+    assert.ok(await t.send(text, BRIEFING), platform);
     assert.deepEqual(t.saved, [], platform + ': nothing goes to a file');
     assert.deepEqual(t.typed, ['\x1b[200~' + text + '\x1b[201~', '\r'], platform + ': one paste, one Enter');
     assert.ok(t.typed[0].endsWith(M.AUTONOMOUS_CONTINUATION + '\n\n读看板继续。\x1b[201~'), platform);
   })));
-  // main-session sends exactly that text
-  assert.ok(read('main-session.js').includes("saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true"));
 });
 
 test('a briefing of exactly 10000 characters is still pasted whole; one more character becomes a file pointer', async () => {
   await Promise.all(PLATFORMS.map(async (platform) => {
-    const full = grown(platform, M.LONG_PROMPT), t = terminal();
+    const full = grown(platform, M.BRIEFING_LIMIT), t = terminal();
     assert.equal(full.length, 10000);
-    assert.ok(await t.send(full), platform);
+    assert.ok(await t.send(full, BRIEFING), platform);
     assert.deepEqual(t.saved, [], platform);
     assert.deepEqual(t.typed, ['\x1b[200~' + full + '\x1b[201~', '\r'], platform);
     assert.ok(t.typed[0].endsWith('读看板继续。\x1b[201~'), platform);
 
-    const over = grown(platform, M.LONG_PROMPT + 1), o = terminal();
-    assert.ok(await o.send(over), platform);
+    const over = grown(platform, M.BRIEFING_LIMIT + 1), o = terminal();
+    assert.ok(await o.send(over, BRIEFING), platform);
     assert.deepEqual(o.saved, [over], platform + ': the whole text is in the file');
     assert.equal(o.typed.length, 2, platform);
     assert.match(o.typed[0], /（这条消息共 10001 字，完整内容已存成文件，请先完整读取再照做：\/tmp\/long-prompts\/prompt\.txt）/, platform);
@@ -83,10 +85,36 @@ test('a briefing of exactly 10000 characters is still pasted whole; one more cha
   }));
 });
 
-test('ChatUI and the queue read the one limit; no second copy of the number', () => {
-  assert.match(chatUi, /prompt\.length > window\.MainCore\.LONG_PROMPT\) return sendLong\(/);
+// Raising the briefing's limit must not change what any agent gets as ordinary work.
+test('an ordinary prompt is cut at 8000 for every agent, exactly as before', async () => {
+  const commands = ['claude --model claude-opus-5-5', 'codex', 'cursor-agent --force --model grok-4.7-high-fast', 'agy --model gemini-3.8-flash-high', 'grok', DEEPSEEK];
+  await Promise.all(commands.map(async (cmd) => {
+    const inside = '活'.repeat(M.LONG_PROMPT), t = terminal(cmd);
+    assert.ok(await t.send(inside), cmd);
+    assert.deepEqual(t.saved, [], cmd + ': 8000 characters are pasted');
+    assert.equal(t.typed[0], '\x1b[200~' + inside + '\x1b[201~', cmd);
+
+    for (const length of [M.LONG_PROMPT + 1, 9618, M.BRIEFING_LIMIT]) {
+      const long = '活'.repeat(length), o = terminal(cmd);
+      assert.ok(await o.send(long), cmd);
+      assert.deepEqual(o.saved, [long], `${cmd}: ${length} characters go to a file`);
+      assert.match(o.typed[0], new RegExp(`（这条消息共 ${length} 字，完整内容已存成文件`), cmd);
+    }
+  }));
+});
+
+test('only the three briefing sends carry the larger limit; the queue keeps the ordinary one', () => {
+  assert.match(chatUi, /prompt\.length > \(o\.inlineLimit \|\| window\.MainCore\.LONG_PROMPT\)\) return sendLong\(/);
   assert.doesNotMatch(chatUi, /LONG_PROMPT = /);
   const session = read('main-session.js');
+  // the first briefing, the rebrief after a context reset, and the token saver's steps
+  assert.equal(session.split('inlineLimit: M.BRIEFING_LIMIT').length - 1, 3);
+  assert.match(session, /host\.sendWhenReady\(col, briefingText\(note\), \{\n\s+silent: true, onSent: sent, guardUserInput: true, inlineLimit: M\.BRIEFING_LIMIT,/);
+  assert.match(session, /host\.sendWhenReady\(op\.col, briefingText\(\), \{\n\s+silent: true, guardUserInput: true, requireIdle: true, inlineLimit: M\.BRIEFING_LIMIT,/);
+  assert.ok(session.includes("saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true"));
+  for (const file of ['main-session.js', 'renderer.js', 'chat-ui.js', 'task-board-ui.js', 'schedule-core.js']) {
+    assert.doesNotMatch(read(file).replace(/inlineLimit: M\.BRIEFING_LIMIT/g, ''), /inlineLimit\s*:/, file + ' gives no other prompt a larger limit');
+  }
   assert.match(session, /body\.length > M\.LONG_PROMPT && metadata\.executor !== 'chatgpt-web'/);
   assert.doesNotMatch(session, /body\.length > \d/);
 });
