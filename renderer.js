@@ -114,7 +114,8 @@ let config = {
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
-  claudeQuotaAlert: { thresholdPercent: 2, volume: 3 }, barkKeyFile: '', needsUserBark: true,
+  claudeQuotaAlert: { thresholdPercent: 2 }, barkKeyFile: '', needsUserBark: true,
+  barkNotifications: BarkPolicy.settings(),
   perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
 
@@ -131,8 +132,9 @@ config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas
 if (saved) {
   if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
   if (typeof saved.needsUserBark === 'boolean') config.needsUserBark = saved.needsUserBark;
+  config.barkNotifications = BarkPolicy.settings(saved.barkNotifications);
   if (saved.claudeQuotaAlert && typeof saved.claudeQuotaAlert === 'object') {
-    config.claudeQuotaAlert = { ...config.claudeQuotaAlert, ...saved.claudeQuotaAlert };
+    config.claudeQuotaAlert = { thresholdPercent: QuotaCore.percent(saved.claudeQuotaAlert.thresholdPercent) ?? 2 };
   }
   config.claudeSeats = ClaudeSeatsCore.normalize(saved.claudeSeats);
   config.perpetualCaptain = PerpetualCaptainCore.normalizeSettings(saved.perpetualCaptain);
@@ -681,6 +683,13 @@ function openNotificationSettings() {
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
   document.getElementById('barkKeyFile').value = config.barkKeyFile;
   document.getElementById('needsUserBark').checked = config.needsUserBark !== false;
+  const bark = BarkPolicy.settings(config.barkNotifications);
+  document.getElementById('barkCriticalVolume').value = bark.criticalVolume;
+  document.getElementById('barkSleepEnabled').checked = bark.sleepEnabled;
+  document.getElementById('barkSleepStart').value = bark.sleepStart;
+  document.getElementById('barkSleepEnd').value = bark.sleepEnd;
+  document.getElementById('barkClassesEnabled').checked = bark.classesEnabled;
+  updateBarkPolicyStatus();
   MainSession.openSettings();
   updateMobileWebSettings();
   dialog.showModal();
@@ -723,6 +732,16 @@ document.getElementById('mobileWebCopyGateway').addEventListener('click', (event
   button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
   setTimeout(() => { button.innerHTML = original; button.title = '复制入口口令'; button.setAttribute('aria-label', '复制入口口令'); }, 1400);
 });
+async function updateBarkPolicyStatus() {
+  const node = document.getElementById('barkPolicyStatus');
+  try {
+    const status = await window.deck.barkStatus();
+    const calendar = status.calendar || {};
+    const calendarText = calendar.state === 'disabled' ? '已关闭' : calendar.available ?
+      `已缓存（更新于 ${new Date(calendar.fetchedAt).toLocaleString()}）` : '不可用，当前只按睡眠时段免打扰';
+    node.textContent = `暂存手机提醒：${status.queuedCount || 0} 条。课程日历：${calendarText}。`;
+  } catch (_) { node.textContent = '课程日历状态暂不可用。'; }
+}
 function saveNotificationSettings() {
   config.captainNotifications = NotificationPolicy.normalizeSettings({
     enabled: document.getElementById('captainNotifyEnabled').checked,
@@ -731,7 +750,15 @@ function saveNotificationSettings() {
   });
   config.barkKeyFile = document.getElementById('barkKeyFile').value.trim();
   config.needsUserBark = document.getElementById('needsUserBark').checked;
+  config.barkNotifications = BarkPolicy.settings({ ...config.barkNotifications,
+    criticalVolume: document.getElementById('barkCriticalVolume').valueAsNumber,
+    sleepEnabled: document.getElementById('barkSleepEnabled').checked,
+    sleepStart: document.getElementById('barkSleepStart').value,
+    sleepEnd: document.getElementById('barkSleepEnd').value,
+    classesEnabled: document.getElementById('barkClassesEnabled').checked,
+  });
   saveConfig();
+  updateBarkPolicyStatus();
 }
 function buildChrome() {
   const head = document.getElementById('navHead');
@@ -3591,7 +3618,7 @@ document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').onclick = () => document.getElementById('notificationSettings').close();
-['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark'].forEach((id) => {
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark', 'barkCriticalVolume', 'barkSleepEnabled', 'barkSleepStart', 'barkSleepEnd', 'barkClassesEnabled'].forEach((id) => {
   document.getElementById(id).addEventListener('change', saveNotificationSettings);
 });
 buildChrome();

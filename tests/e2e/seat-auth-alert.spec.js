@@ -27,6 +27,7 @@ test.beforeEach(() => {
   M.writeUsage(seat, home, { at: Date.now(), windows: [{ key: 'fiveHour', remaining: 55 }, { key: 'weekly', remaining: 66 }] });
   const key = path.join(profile, 'fake-key'); fs.writeFileSync(key, 'fake_e2e_auth_key');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ barkKeyFile: key, perpetualCaptain: { enabled: false },
+    barkNotifications: { sleepEnabled: false, classesEnabled: false },
     claudeSeats: [seat], activeClaudeSeatId: 'us',
     mainSession: { colId: 'captain', gen: 1, tasks: [], pending: [], inflight: [], waitlist: [], fresh: false, crewMarked: true },
     columns: [{ id: 'captain', title: '队长', isMain: true, cmd: `node "${FAKE}" Claude us`, cwd: profile, role: 'manual' },

@@ -113,19 +113,25 @@ test('HTTP/API/network/timeout/JSON errors are redacted and do not cancel the lo
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test('explicit test sends fixed marked critical/3/minuet without trusting the supplied body', async () => {
+test('explicit test shares configurable critical volume with urgent alerts and ignores the supplied body', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-bark-test-'));
   try {
     const h = harness(); h.config.barkKeyFile = path.join(dir, 'key');
     fs.writeFileSync(h.config.barkKeyFile, 'fake_test_key');
     assert.match(await h.notify({ urgent: true, test: true, message: 'untrusted body' }), /Bark 紧急提醒已发送/);
     assert.deepEqual(JSON.parse(h.calls[0][1].body), { device_key: 'fake_test_key',
-      title: '【测试】队长', body: '【测试】AgentDeck Bark 通知（critical，音量 3）。',
-      level: 'critical', volume: 3, sound: 'minuet' });
+      title: '【测试】', body: 'AgentDeck 加急通知测试，音量 4',
+      level: 'critical', volume: 4, sound: 'minuet' });
     for (const extra of [{ test: 'true', urgent: true }, { test: true }, { test: true, urgent: true, callerId: 'crew' }]) {
       await assert.rejects(h.notify(extra));
     }
     assert.equal(h.calls.length, 1);
+    h.config.barkNotifications = { criticalVolume: 6 };
+    await h.notify({ urgent: true, test: true });
+    await h.notify({ urgent: true });
+    assert.equal(JSON.parse(h.calls[1][1].body).body, 'AgentDeck 加急通知测试，音量 6');
+    assert.equal(JSON.parse(h.calls[1][1].body).volume, 6);
+    assert.equal(JSON.parse(h.calls[2][1].body).volume, 6);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

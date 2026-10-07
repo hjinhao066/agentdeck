@@ -145,7 +145,7 @@ function usage() {
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
-    '  notify-user --test                        Bark 【测试】 notification, critical / volume 3\n' +
+    '  notify-user --test                        Bark 【测试】 notification, shared volume setting (default 4)\n' +
     '  task add --project "Project" --title "Task" [--detail "Description"] [--depends id,id] [--verify] [--priority high]\n' +
     '  task list [--project "Project"] [--status todo|doing|review|needs_user|done] [--priority high|normal]\n' +
     '  task move --id <card-id> --status todo|doing|review|needs_user|done\n' +
@@ -192,7 +192,7 @@ async function main() {
       fail('notify-user requires --message (1–4000 characters) and optional --urgent, or --test alone.');
     }
     const response = await request({ action: 'main-notify-user',
-      message: testing ? '【测试】AgentDeck Bark 通知（critical，音量 3）。' : args.message,
+      message: testing ? 'AgentDeck 加急通知测试' : args.message,
       urgent: testing || args.urgent === true, test: testing }, false);
     process.stdout.write(`${response.result || ''}\n`);
     return;

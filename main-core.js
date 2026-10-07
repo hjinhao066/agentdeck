@@ -237,7 +237,7 @@
       '规则：',
       '1. 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及第 14 条的只读 sysctl。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
-      `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用；测试用 notify-user --test（【测试】，critical，音量 3）。`,
+      `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用；测试用 notify-user --test（【测试】，加急音量按统一设置，默认 4）。`,
       `   ${cli} handoff   生成当前交接快照并刷新交接文件；开工、Relay、清空、重启后先跑。briefing 只读本提示词全文；用户说「你是队长」先跑 ledger 验证身份，再读这两个`,
       `   ${cli} ledger   列出全部会话：id、标题、状态、最近回执`,
       `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify] [--priority high]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task priority --id 卡片或会话id --level high|normal；task archive --done [--project "项目"]`,

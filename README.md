@@ -159,7 +159,7 @@ the middle:
   after 15 minutes and Claude server samples after 30 minutes. A failed Claude
   refresh invalidates its old numbers immediately, never inventing a percentage.
   See [quota sources and limits](QUOTA_SOURCES.md).
-  Claude 5-hour remaining ≤2% also sends a Bark phone alert (`critical`, volume 3),
+  Claude 5-hour remaining ≤2% also sends a Bark phone alert (`critical`, shared volume 4 by default),
   naming the CN/US seat and reset time when available. It uses the existing
   `barkKeyFile` setting and sends once until a newer sample recovers above the
   threshold or belongs to a reset window, including across app restarts.
@@ -827,12 +827,32 @@ An empty path disables phone alerts. The authenticated Captain can send
 `node "$AGENTDECK_BOARD_CLI" notify-user --message "需要你亲自操作"` for a local
 alert, adding `--urgent` for Bark (`critical`, volume 4, `minuet`).
 `node "$AGENTDECK_BOARD_CLI" notify-user --test` sends a **【测试】** Bark alert
-with `critical`, volume **3**, and `minuet`; use `--test` alone.
+with `critical`, the same configurable volume **4** by default, and `minuet`; use `--test` alone.
 On Windows PowerShell use `$env:AGENTDECK_BOARD_CLI`.
 Workers cannot use this command. Phone alerts require Bark's critical-alert
 permission and are independent of local notification/sound toggles. Missing or
 invalid key files return a setup hint; network errors are redacted. Tests use
 isolated profiles and a fake transport, never the real key or phone.
+
+Settings → 通知 also configures the shared critical volume (0–10), sleep quiet
+hours (default **23:00–10:00**, this computer's local time), and class quiet hours.
+Every Bark path, including offline installation-result alerts, follows these
+hours. Local reminders and Captain receipts are still recorded immediately.
+Phone reminders are kept in private `userData/bark-pending.json`, deduplicated
+by category/seat or identical content, and merged into one push when quiet hours
+end (checked every 30 seconds while AgentDeck is open). Failed digests stay queued
+and retry after one minute. Restarting restores the queue; while the app is closed
+there is no timer to deliver it.
+
+Class quiet hours use the locally authenticated `gws calendar events list` CLI,
+reading expanded events for the next 14 days at most once every 24 hours and
+caching only start/end times in private `userData/bark-calendar.json`. The defaults
+match IMT 540 and IMT 598 B on the primary calendar; `barkNotifications.classCalendarIds`
+and `classFilters` in local config can select other calendars/course names.
+Cancelled/declined and all-day events are excluded. Missing CLI/auth, incomplete
+reads, or stale caches fall back to sleep hours only; Settings explicitly shows
+calendar availability. Calendar changes can take up to 24 hours to reach the cache.
+The app does not install the CLI or request calendar credentials automatically.
 
 The legacy watch-ai bridge is disabled, including with `AGENTDECK_LEGACY_WATCH=1`,
 to avoid bypassing this policy. Child terminals export

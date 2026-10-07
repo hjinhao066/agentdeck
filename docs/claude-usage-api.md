@@ -118,7 +118,7 @@ tokens that do not appear as `account: null` cannot reliably be classified by
 this sampler. Cursor and Antigravity have no reliable authentication probe in
 their existing local quota snapshots and are not included in these alerts.
 
-Confirmation immediately sends critical Bark through the same private-key
+Confirmation immediately submits critical Bark through the same private-key
 sender as `notify-user --urgent` and queues a question in the normal Captain
 `receipts` channel. The message names the seat, explains that its work fails or
 queues, gives that directory's login command, and asks the Captain to reassign
@@ -127,6 +127,13 @@ affected work. For example, a seat configured as `~/.claude-us` gets
 `env -u CLAUDE_CONFIG_DIR claude auth login`. Custom paths are quoted safely;
 Windows gets the equivalent PowerShell environment command. The sampler never
 runs the login command itself.
+
+Bark uses the shared configurable critical volume (default 4) and quiet-hours
+queue: 23:00–10:00 local time by default, plus fresh cached class periods when
+the local authenticated calendar CLI is available. During quiet hours the local
+reminder and Captain receipt stay immediate; the phone alert is persisted and
+merged after quiet hours, checked every 30 seconds while the app is open.
+Unavailable/stale calendars fall back to sleep hours only (shown in Settings).
 
 The quota panel shows red **未登录**, hides cached percentages and excludes the
 seat from existing quota fallback choices. Recovery is silent and requires a

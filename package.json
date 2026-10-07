@@ -112,6 +112,9 @@
       "security.js",
       "notifications.js",
       "notify-user.js",
+      "bark-policy.js",
+      "bark-delivery.js",
+      "bark-calendar.js",
       "notification-policy.js"
     ],
     "mac": {

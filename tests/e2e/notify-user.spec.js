@@ -11,6 +11,7 @@ test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-notify-cli-'));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    barkNotifications: { sleepEnabled: false, classesEnabled: false },
     mainSession: { colId: 'captain', cmd: '', crewMarked: true }, theme: 'dark',
     columns: [{ id: 'captain', title: '队长', isMain: true, cmd: '', cwd: profile },
       { id: 'worker', title: 'Managed worker', role: 'worker', taskId: 'task-worker', cmd: '', cwd: profile }],
@@ -60,6 +61,10 @@ test('configured urgent delivers critical/4/minuet with local toggles off; repla
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].restore());
   await page.getByRole('button', { name: '设置', exact: true }).click();
   const pathInput = page.getByLabel('Bark 本机密钥文件路径（barkKeyFile）', { exact: true });
+  await expect(page.getByLabel('手机加急通知音量', { exact: true })).toHaveValue('4');
+  await expect(page.getByLabel('睡觉开始', { exact: true })).toHaveValue('23:00');
+  await expect(page.getByLabel('睡觉结束', { exact: true })).toHaveValue('10:00');
+  await expect(page.locator('#barkPolicyStatus')).toContainText('暂存手机提醒：0 条');
   await pathInput.fill(' ~/.secrets/bark-key.txt ');
   await pathInput.press('Tab');
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).barkKeyFile).toBe('~/.secrets/bark-key.txt');
@@ -100,16 +105,19 @@ test('configured urgent delivers critical/4/minuet with local toggles off; repla
   await page.reload();
   await page.getByRole('button', { name: '设置', exact: true }).click();
   await expect(page.getByLabel('Bark 本机密钥文件路径（barkKeyFile）', { exact: true })).toHaveValue(file);
+  await page.getByLabel('手机加急通知音量', { exact: true }).fill('7');
+  await page.getByLabel('手机加急通知音量', { exact: true }).press('Tab');
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).barkNotifications.criticalVolume).toBe(7);
   await page.getByRole('button', { name: '关闭设置' }).click();
 });
 
-test('test command sends marked critical/3/minuet once; repeated acknowledgements cannot resend', async () => {
+test('test command uses shared volume setting once; repeated acknowledgements cannot resend', async () => {
   await run('captain', `node "${CLI}" notify-user --test`);
   await expect.poll(async () => (await alerts()).filter((e) => e.type === 'bark').length).toBe(2);
   const events = await alerts();
   expect(events.filter((e) => e.type === 'bark').at(-1)).toEqual({ type: 'bark',
-    title: '【测试】队长', body: '【测试】AgentDeck Bark 通知（critical，音量 3）。',
-    level: 'critical', volume: 3, sound: 'minuet' });
+    title: '【测试】', body: 'AgentDeck 加急通知测试，音量 7',
+    level: 'critical', volume: 7, sound: 'minuet' });
   await page.evaluate(() => {
     const [requestId, response] = Object.entries(config.boardResponses).at(-1);
     window.deck.boardRespond({ requestId, ...response });

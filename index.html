@@ -22,7 +22,14 @@
     <label class="notify-setting"><span>需要你推到手机</span><input type="checkbox" role="switch" id="needsUserBark" aria-label="需要你推到手机" checked /></label>
     <label class="bark-key-setting" for="barkKeyFile">Bark 本机密钥文件路径（barkKeyFile）</label>
     <input type="text" id="barkKeyFile" placeholder="~/.secrets/bark-key.txt" autocomplete="off" spellcheck="false" aria-describedby="barkKeyNote" />
-    <p id="barkKeyNote">这里只保存路径，文件仅含设备 key。留空则不发手机提醒；支持绝对路径和 ~/。手机需开启 Bark 重要警告权限。看板卡片进入「需要你」时自动推送，可用上面的开关关闭。队长可用 notify-user --test 发送【测试】通知（critical，音量 3）。</p>
+    <p id="barkKeyNote">这里只保存路径，文件仅含设备 key。留空则不发手机提醒；支持绝对路径和 ~/。手机需开启 Bark 重要警告权限。加急通知音量统一由下面设置。队长可用 notify-user --test 发送【测试】通知。</p>
+    <label class="notify-setting"><span>手机加急通知音量（0–10）</span><input type="number" id="barkCriticalVolume" min="0" max="10" step="1" aria-label="手机加急通知音量" /></label>
+    <label class="notify-setting"><span>睡觉时暂停手机提醒</span><input type="checkbox" role="switch" id="barkSleepEnabled" aria-label="睡觉时暂停手机提醒" /></label>
+    <label class="notify-setting"><span>睡觉开始</span><input type="time" id="barkSleepStart" aria-label="睡觉开始" /></label>
+    <label class="notify-setting"><span>睡觉结束</span><input type="time" id="barkSleepEnd" aria-label="睡觉结束" /></label>
+    <label class="notify-setting"><span>上课时暂停手机提醒</span><input type="checkbox" role="switch" id="barkClassesEnabled" aria-label="上课时暂停手机提醒" /></label>
+    <p class="notify-settings-note">睡觉和上课期间所有手机提醒暂存，结束后合并提醒。默认睡觉时间为 23:00–10:00；上课时间读取已缓存的课程日历。</p>
+    <p id="barkPolicyStatus" class="notify-settings-note" role="status"></p>
     <h3>队长省上下文</h3>
     <label class="sd-check"><input id="csEnabled" type="checkbox" />自动存看板并清空上下文</label>
     <label for="csThreshold">上下文阈值（k tokens，默认 150）</label>
@@ -539,6 +546,7 @@
   <script src="vendor/addon-search.js"></script>
   <script src="vendor/addon-canvas.js"></script>
   <script src="board-core.js"></script>
+  <script src="bark-policy.js"></script>
   <script src="chatgpt-web-core.js"></script>
   <script src="chat-core.js"></script>
   <!-- the phone hub's pure rules: the chat view takes terminal residue out of a reply with the same cleanReply -->

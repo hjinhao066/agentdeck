@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { install, parseArgs, newestBackup } = require('../scripts/install-agentdeck');
+const { install, parseArgs, newestBackup, macOperations } = require('../scripts/install-agentdeck');
 function fixture(t, fail = false) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-install-test-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -124,4 +124,59 @@ test('rollback chooses newest backup by directory mtime across legacy and epoch 
   assert.equal(newestBackup(f.options.backups), latest);
   fs.utimesSync(old, 400, 400);
   assert.equal(newestBackup(f.options.backups), old);
+});
+
+test('installer retains accepted queued state without claiming the reminder was sent', async (t) => {
+  const f = fixture(t, true);
+  f.ops.notify = async () => ({ ok: true, queued: true, sent: false });
+  const result = await install(f.options, f.ops);
+  assert.equal(result.notificationAccepted, true);
+  assert.equal(result.notificationQueued, true);
+  assert.equal(result.notificationSent, false);
+  assert.equal(result.notificationPending, false);
+  assert.equal(result.notificationOwnerPid, process.pid);
+  assert.deepEqual(f.result(), JSON.parse(JSON.stringify(result)));
+});
+
+test('installer persists the owning process before a notification begins', async (t) => {
+  const f = fixture(t, true);
+  f.ops.notify = async () => {
+    const pending = f.result();
+    assert.equal(pending.notificationPending, true);
+    assert.equal(pending.notificationOwnerPid, process.pid);
+    return { ok: true, queued: true };
+  };
+  await install(f.options, f.ops);
+  assert.equal(f.result().notificationPending, false);
+  assert.equal(f.result().notificationAccepted, true);
+});
+
+test('installer preserves a rejected structured response for app fallback', async (t) => {
+  const f = fixture(t, true);
+  f.ops.notify = async () => ({ ok: false });
+  const result = await install(f.options, f.ops);
+  assert.equal(result.notificationAccepted, false);
+  assert.equal(result.notificationQueued, false);
+  assert.equal(result.notificationSent, false);
+});
+
+test('offline installer queues by result identity, coalescing changed text without collapsing another installation', async (t) => {
+  const f = fixture(t);
+  t.mock.method(Date, 'now', () => Date.parse('2026-10-08T10:00:00Z'));
+  fs.mkdirSync(f.options.data);
+  fs.writeFileSync(path.join(f.options.data, 'config.json'), JSON.stringify({ barkNotifications: {
+    sleepEnabled: true, sleepStart: '00:00', sleepEnd: '23:59', classesEnabled: false,
+  } }));
+  const result = { id: 'first-install', targetVersion: '1.2.0', operation: 'install', reason: 'copy failed', running: true, activeVersion: '1.1.11' };
+  const ops = macOperations(f.options);
+  const queued = await ops.notify(result);
+  assert.equal(queued.ok, true);
+  assert.equal(queued.queued, true);
+  await ops.notify({ ...result, reason: 'different failure summary' });
+  let state = JSON.parse(fs.readFileSync(path.join(f.options.data, 'bark-pending.json'), 'utf8'));
+  assert.equal(state.pending.length, 1);
+  assert.equal(state.pending[0].key, 'install:first-install');
+  await ops.notify({ ...result, id: 'second-install' });
+  state = JSON.parse(fs.readFileSync(path.join(f.options.data, 'bark-pending.json'), 'utf8'));
+  assert.deepEqual(state.pending.map((item) => item.key).sort(), ['install:first-install', 'install:second-install']);
 });

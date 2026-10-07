@@ -8,6 +8,10 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { execFileSync, spawn } = require('node:child_process');
 const { createBarkSender } = require('../notify-user');
+const { createFileBarkDelivery } = require('../bark-delivery');
+const { createCalendarCache } = require('../bark-calendar');
+const BarkPolicy = require('../bark-policy');
+const { notificationOutcome } = require('../install-result');
 const MAX_ATTEMPTS = 3;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const run = (command, args) => execFileSync(command, args, { encoding: 'utf8', timeout: 120000, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -17,6 +21,15 @@ function atomicJson(file, value) {
   const tmp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
   fs.renameSync(tmp, file);
+}
+async function notifyResult(result, ops) {
+  let response;
+  try { response = await ops.notify(result); } catch (_) {}
+  const outcome = notificationOutcome(response);
+  result.notificationAccepted = outcome.accepted;
+  result.notificationQueued = outcome.queued;
+  result.notificationSent = outcome.sent;
+  result.notificationPending = false;
 }
 function defaults(env = process.env) {
   return { appPath: env.AGENTDECK_APP || '/Applications/AgentDeck.app',
@@ -75,8 +88,12 @@ function macOperations(options) {
       const message = `AgentDeck ${result.targetVersion} ${result.operation === 'rollback' ? '回滚' : '安装失败'}：${result.reason.slice(0, 500)}；现役 ${result.activeVersion || '未知'}${result.running ? '，已启动' : '，未运行'}`;
       let config = {};
       try { config = JSON.parse(fs.readFileSync(path.join(options.data, 'config.json'), 'utf8')); } catch (_) {}
-      const response = await createBarkSender({ getConfig: () => config })({ message, level: 'critical' });
-      return response.ok;
+      const getSettings = () => BarkPolicy.settings(config.barkNotifications);
+      const calendar = createCalendarCache({ file: path.join(options.data, 'bark-calendar.json'), getSettings });
+      const sendNow = createBarkSender({ getConfig: () => config });
+      const delivery = createFileBarkDelivery({ file: path.join(options.data, 'bark-pending.json'), getSettings,
+        getClasses: (at) => calendar.ranges(at), prepare: () => calendar.refresh(), sendNow });
+      return createBarkSender({ getConfig: () => config, delivery })({ message, level: 'critical', dedupeKey: `install:${result.id}` });
     },
   };
 }
@@ -84,7 +101,8 @@ async function install(options, ops = macOperations(options)) {
   const resultFile = path.join(options.data, 'install-result.json');
   const result = { id: options.id || crypto.randomUUID(), status: 'pending', targetVersion: options.targetVersion || 'unknown',
     activeVersion: null, reason: '', appPath: options.appPath, attempts: 0, createdAt: new Date().toISOString(),
-    operation: options.rollback ? 'rollback' : 'install', taskId: options.taskId, columnId: options.columnId, running: false, notificationSent: false };
+    operation: options.rollback ? 'rollback' : 'install', taskId: options.taskId, columnId: options.columnId, running: false,
+    notificationAccepted: false, notificationQueued: false, notificationSent: false };
   const lock = path.join(options.data, 'install.lock');
   fs.mkdirSync(options.data, { recursive: true });
   // Never break another installer's lock, even after a crash: manual investigation
@@ -172,10 +190,10 @@ async function install(options, ops = macOperations(options)) {
     fs.rmSync(stage, { recursive: true, force: true });
     result.finishedAt = Date.now();
     result.notificationPending = result.status === 'failed' || !!options.rollback;
+    if (result.notificationPending) result.notificationOwnerPid = process.pid;
     active(); atomicJson(resultFile, result);
     if (result.status === 'failed' || options.rollback) {
-      try { result.notificationSent = await ops.notify(result); } catch (_) { result.notificationSent = false; }
-      result.notificationPending = false;
+      await notifyResult(result, ops);
       atomicJson(resultFile, result);
     }
     fs.rmdirSync(lock);
@@ -202,11 +220,10 @@ async function main(argv) {
       process.exitCode = result.status === 'success' ? 0 : 1;
     } catch (error) {
       const ops = macOperations(request);
-      const failure = { id: request.id, operation: request.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: request.targetVersion, appPath: request.appPath, taskId: request.taskId, columnId: request.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, notificationPending: true, finishedAt: Date.now(), reason: error.message };
+      const failure = { id: request.id, operation: request.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: request.targetVersion, appPath: request.appPath, taskId: request.taskId, columnId: request.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, notificationOwnerPid: process.pid, notificationPending: true, finishedAt: Date.now(), reason: error.message };
       try { failure.activeVersion = ops.version(request.appPath); failure.running = ops.running(); } catch (_) {}
       atomicJson(path.join(request.data, 'install-result.json'), failure);
-      try { failure.notificationSent = await ops.notify(failure); } catch (_) {}
-      failure.notificationPending = false;
+      await notifyResult(failure, ops);
       try { atomicJson(path.join(request.data, 'install-result.json'), failure); } catch (_) {}
       try { fs.rmdirSync(request.entryLock); } catch (_) {}
       throw error;
@@ -255,12 +272,11 @@ async function main(argv) {
   const fd = fs.openSync(options.log, 'a');
   const child = spawn(process.execPath, [__filename, '--child', '--request', request], { detached: true, stdio: ['ignore', fd, fd] });
   child.on('error', async (error) => {
-    const failure = { id: options.id, operation: options.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, notificationSent: false, notificationPending: true, finishedAt: Date.now(), reason: `Installer could not start: ${error.message}` };
+    const failure = { id: options.id, operation: options.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, notificationSent: false, notificationOwnerPid: process.pid, notificationPending: true, finishedAt: Date.now(), reason: `Installer could not start: ${error.message}` };
     const ops = macOperations(options);
     try { failure.activeVersion = ops.version(options.appPath); failure.running = ops.running(); } catch (_) {}
     atomicJson(path.join(options.data, 'install-result.json'), failure);
-    try { failure.notificationSent = await ops.notify(failure); } catch (_) {}
-    failure.notificationPending = false;
+    await notifyResult(failure, ops);
     try { atomicJson(path.join(options.data, 'install-result.json'), failure); } catch (_) {}
     try { fs.rmdirSync(options.entryLock); } catch (_) {}
     process.exitCode = 1;
@@ -271,11 +287,10 @@ async function main(argv) {
   } catch (error) {
     if (registered && !handedOff) {
       const ops = macOperations(options);
-      const failure = { id: options.id, operation: options.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, notificationPending: true, finishedAt: Date.now(), reason: `Installer launch preparation failed: ${error.message}` };
+      const failure = { id: options.id, operation: options.rollback ? 'rollback' : 'install', status: 'failed', targetVersion: options.targetVersion, appPath: options.appPath, taskId: options.taskId, columnId: options.columnId, createdAt: new Date().toISOString(), attempts: 0, running: false, activeVersion: null, notificationSent: false, notificationOwnerPid: process.pid, notificationPending: true, finishedAt: Date.now(), reason: `Installer launch preparation failed: ${error.message}` };
       try { failure.activeVersion = ops.version(options.appPath); failure.running = ops.running(); } catch (_) {}
       try { atomicJson(path.join(options.data, 'install-result.json'), failure); } catch (_) {}
-      try { failure.notificationSent = await ops.notify(failure); } catch (_) {}
-    failure.notificationPending = false;
+      await notifyResult(failure, ops);
     try { atomicJson(path.join(options.data, 'install-result.json'), failure); } catch (_) {}
     }
     throw error;

@@ -4,7 +4,6 @@ const Q = require('./quota-core');
 function settings(value = {}) {
   return {
     thresholdPercent: Q.percent(value?.thresholdPercent) ?? 2,
-    volume: Number.isInteger(value?.volume) && value.volume >= 0 && value.volume <= 10 ? value.volume : 3,
   };
 }
 
@@ -38,7 +37,7 @@ function createQuotaLowBark({ state = {}, saveState, sendBark }) {
       if (w.remaining <= options.thresholdPercent && !next.notified) {
         next.notified = true;
         const resetText = w.resetAt ? new Date(w.resetAt).toLocaleString() : w.resetText;
-        alerts.push({ title: 'Claude 额度即将用尽', level: 'critical', volume: options.volume,
+        alerts.push({ title: 'Claude 额度即将用尽', level: 'critical', dedupeKey: `quota-low:${seat.id}`,
           message: `Claude ${seat.name}（${seat.id.toUpperCase()} 席位）5 小时额度快用完：剩余 ${w.remaining}%。` +
             (resetText ? `重置时间：${resetText}。` : '') });
       }

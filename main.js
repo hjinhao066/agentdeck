@@ -12,6 +12,9 @@ const { createResultMonitor } = require('./install-result');
 const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
 const { createSeatAuthMonitor, authFailure, CONFIRM_MS } = require('./seat-auth-alert');
+const BarkPolicy = require('./bark-policy');
+const { createFileBarkDelivery } = require('./bark-delivery');
+const { createCalendarCache } = require('./bark-calendar');
 const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const { registerScheduleFeedIpc } = require('./schedule-feed');
@@ -49,6 +52,7 @@ let claudeQuotaRefresh = null, claudeQuotaTimer = null;
 let quotaWarmup = null, quotaWarmupRunner = null, quotaWarmupTimer = null;
 let seatAuth = null;
 const seatAuthChecks = new Map();
+let barkCalendar = null, barkDelivery = null, barkPumpTimer = null;
 
 let pendingFocusColumn = null;
 let mobileWeb = null;
@@ -965,6 +969,28 @@ app.whenReady().then(async () => {
     if (typeof payload.error === 'string' && payload.error) pending.reject(new Error(payload.error));
     else pending.resolve(payload.result);
   });
+  const barkTestClock = tudArg && process.argv.find((arg) => arg.startsWith('--test-bark-now='));
+  if (barkTestClock && Number.isFinite(Number(barkTestClock.split('=')[1]))) app.testBarkNow = Number(barkTestClock.split('=')[1]);
+  const barkNow = () => tudArg && Number.isFinite(app.testBarkNow) ? app.testBarkNow : Date.now();
+  const barkQueuePath = path.join(app.getPath('userData'), 'bark-pending.json');
+  barkCalendar = createCalendarCache({ file: path.join(app.getPath('userData'), 'bark-calendar.json'),
+    getSettings: () => BarkPolicy.settings(notificationConfig.barkNotifications), now: barkNow,
+    ...(tudArg ? { execFileImpl: (_command, _args, _options, done) => done({ code: 'ENOENT' }) } : {}) });
+  if (tudArg) app.testBarkDigests = [];
+  const sendBarkDigest = createBarkSender({ getConfig: () => notificationConfig,
+    ...(tudArg ? { fetchImpl: async (_url, options) => {
+      const { device_key, ...payload } = JSON.parse(options.body);
+      app.testBarkDigests.push(payload);
+      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
+    } } : {}) });
+  barkDelivery = createFileBarkDelivery({ file: barkQueuePath, now: barkNow, prepare: () => barkCalendar.refresh(),
+    getSettings: () => BarkPolicy.settings(notificationConfig.barkNotifications), getClasses: (at) => barkCalendar.ranges(at),
+    sendNow: sendBarkDigest });
+  const pumpBark = async () => { await barkCalendar.refresh(); return barkDelivery.flush(); };
+  pumpBark().catch(() => {});
+  barkPumpTimer = setInterval(() => pumpBark().catch(() => {}), 30_000); barkPumpTimer.unref();
+  handleMain('bark:status', () => ({ ...barkDelivery.status(), calendar: barkCalendar.status() }));
+  if (tudArg) app.testBarkFlush = pumpBark;
   const quotaAlertPath = path.join(app.getPath('userData'), 'quota-bark-state.json');
   let quotaAlertState = {};
   try {
@@ -974,7 +1000,7 @@ app.whenReady().then(async () => {
     }
   } catch (_) {}
   if (tudArg) app.testQuotaAlerts = [];
-  const sendQuotaBark = createBarkSender({ getConfig: () => notificationConfig,
+  const sendQuotaBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       // Test profiles never contact Bark or retain even a stand-in device key.
       const { device_key, ...payload } = JSON.parse(options.body);
@@ -1027,7 +1053,7 @@ app.whenReady().then(async () => {
       // Critical Bark uses the notify-user --urgent sender immediately. The
       // native reminder follows the renderer acknowledgement's visibility so
       // a focused Captain remains locally silent and never loses focus.
-      const delivery = sendQuotaBark({ message: alert.message, title: 'AgentDeck · 席位掉登录', level: 'critical' });
+      const delivery = sendQuotaBark({ message: alert.message, title: 'AgentDeck · 席位掉登录', level: 'critical', dedupeKey: `seat-auth:${alert.provider}:${alert.seatId}` });
       send('toast', { text: alert.message });
       Promise.resolve(delivery).then((result) => {
         if (!result.ok) send('toast', { text: result.message });
@@ -1122,7 +1148,7 @@ app.whenReady().then(async () => {
   quotaWarmupTimer = setInterval(() => quotaWarmup.tick().catch(() => {}), 30_000);
   quotaWarmupTimer.unref();
   if (tudArg) app.testRelayAlerts = [];
-  const sendRelayBark = createBarkSender({ getConfig: () => notificationConfig,
+  const sendRelayBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       const { device_key, ...payload } = JSON.parse(options.body);
       app.testRelayAlerts.push(payload);
@@ -1156,7 +1182,7 @@ app.whenReady().then(async () => {
     }
   } catch (_) {}
   if (tudArg) app.testNeedsUserAlerts = [];
-  const sendNeedsUserBark = createBarkSender({ getConfig: () => notificationConfig,
+  const sendNeedsUserBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       const { device_key, ...payload } = JSON.parse(options.body);
       app.testNeedsUserAlerts.push(payload);
@@ -1184,6 +1210,7 @@ app.whenReady().then(async () => {
     cfg.mobileWeb = persistable(mobileSettings);
     quotaSeatConfig = cfg?.claudeSeats;
     notificationConfig = cfg;
+    notificationConfig.barkNotifications = BarkPolicy.settings(cfg.barkNotifications);
     power.set({ mode: cfg?.batteryMode });
     if (cfg.quotaWarmup?.enabled === false) for (const seat of ClaudeSeatsCore.normalize(cfg.claudeSeats)) quotaWarmup.cancel(seat.id);
     if (notifications && cfg.captainNotifications?.enabled === false) notifications.dispose();
@@ -1194,6 +1221,7 @@ app.whenReady().then(async () => {
     fs.renameSync(configPath + '.tmp', configPath);
     checkQuotaBark();
     queueAuthReceipts();
+    pumpBark().catch(() => {});
     notifyNeedsUserCards();
   };
   onMain('save-config', (_e, cfg) => { try { writeConfig(cfg); } catch (_) {} });
@@ -1567,7 +1595,7 @@ app.whenReady().then(async () => {
       execFile('/usr/bin/afplay', ['-v', '0.35', '-t', '1', `/System/Library/Sounds/${tone}.aiff`],
         { timeout: 2000 }, () => {});
     } });
-  notifyUser = createNotifyUser({ getConfig: () => notificationConfig, notifications,
+  notifyUser = createNotifyUser({ getConfig: () => notificationConfig, notifications, delivery: barkDelivery,
     ...(tudArg ? { fetchImpl: async (_url, options) => {
       // Test profiles never contact Bark or retain the stand-in key.
       const { device_key, ...payload } = JSON.parse(options.body);
@@ -1599,8 +1627,7 @@ app.whenReady().then(async () => {
     }),
     notify: async (command) => {
       if (!notifyUser) return false;
-      const result = await notifyUser(command, false, command.id);
-      return result.includes('Bark 紧急提醒已发送');
+      return notifyUser(command, false, command.id, true);
     },
   });
   const installResultTimer = setInterval(() => pollInstallResult().catch(() => {}), 1000);
@@ -1812,6 +1839,7 @@ app.on('before-quit', (event) => {
   quotaWarmup?.dispose(); quotaWarmupRunner?.dispose();
   for (const timer of seatAuthChecks.values()) clearTimeout(timer);
   seatAuthChecks.clear();
+  clearInterval(barkPumpTimer);
   chatgptWebExecutor?.dispose();
   receiptListeners?.dispose(); receiptListeners = null;
 
