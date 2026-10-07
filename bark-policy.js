@@ -30,7 +30,7 @@
     let end = at;
     // Overlapping sleep/classes can extend each other; touching end boundaries
     // are open, so a class ending at 12:20 releases reminders at 12:20.
-    for (let i = 0; i <= classes.length + 2; i++) {
+    for (let i = 0; i <= 2 * classes.length + 2; i++) {
       let next = sleepEnd(end, options);
       if (options.classesEnabled) for (const range of classes) {
         if (Number.isFinite(range.start) && Number.isFinite(range.end) && range.start <= end && end < range.end) next = Math.max(next, range.end);

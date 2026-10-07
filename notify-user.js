@@ -69,6 +69,10 @@ function createBarkSender({ getConfig, fetchImpl = fetch, delivery }) {
   return async ({ message, title = '队长', level = 'active', dedupeKey }) => {
     if (typeof message !== 'string' || !message.trim() || message.length > 4000 ||
         typeof title !== 'string' || title.length > 200 || !['active', 'critical'].includes(level)) throw new Error('Invalid Bark message or notification level.');
+    // An empty path disables phone alerts; quiet hours must not promise a
+    // later delivery that is not configured, or silently acknowledge it.
+    const keyFile = getConfig()?.barkKeyFile;
+    if (typeof keyFile !== 'string' || !keyFile.trim()) return { ok: false, message: 'Bark 已跳过：请在设置中配置本机密钥文件路径。' };
     const payload = { message: message.trim(), title, level, ...(typeof dedupeKey === 'string' && dedupeKey.length <= 200 ? { dedupeKey } : {}) };
     return delivery ? delivery.send(payload, transport) : transport(payload);
   };

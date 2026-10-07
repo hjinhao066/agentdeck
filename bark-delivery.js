@@ -74,7 +74,12 @@ function createFileBarkDelivery({ file, ...options }) {
   const readState = () => {
     try {
       if (fs.statSync(file).size > 8 * 1024 * 1024) throw new Error('Bark reminder queue too large');
-      return JSON.parse(fs.readFileSync(file, 'utf8'));
+      const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!value || typeof value !== 'object' || !Array.isArray(value.pending) ||
+          normalizeState(value).pending.length !== value.pending.length || !Number.isFinite(value.retryAt)) {
+        throw new Error('Invalid Bark reminder queue');
+      }
+      return value;
     } catch (error) { if (error.code === 'ENOENT') return {}; throw new Error('Bark reminder queue cannot be read'); }
   };
   const lock = file + '.lock';

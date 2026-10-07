@@ -52,12 +52,21 @@ test('failed digest retains every reminder with bounded retries and accepts new 
 });
 test('local notification is recorded immediately while urgent Bark is deferred', async () => {
   const h = harness(), alerts = [];
-  const notify = createNotifyUser({ getConfig: () => ({ columns: [{ id: 'captain', isMain: true }] }),
+  const notify = createNotifyUser({ getConfig: () => ({ columns: [{ id: 'captain', isMain: true }], barkKeyFile: '/private/fake-key' }),
     notifications: { show: (p) => alerts.push(p) }, delivery: h.delivery,
     fetchImpl: () => { throw new Error('should not send'); } });
   const result = await notify({ callerId: 'captain', id: 'request', message: 'US 掉登录', urgent: true }, false);
   assert.equal(alerts.length, 1); assert.equal(alerts[0].reply, 'US 掉登录'); assert.match(result, /Bark 已延后/);
   assert.equal(h.saved.pending.length, 1);
+});
+test('an unconfigured phone alert reports the setup hint immediately even during sleep hours', async () => {
+  const h = harness(), alerts = [];
+  const notify = createNotifyUser({ getConfig: () => ({ columns: [{ id: 'captain', isMain: true }] }),
+    notifications: { show: (p) => alerts.push(p) }, delivery: h.delivery,
+    fetchImpl: () => { throw new Error('should not send'); } });
+  const result = await notify({ callerId: 'captain', id: 'request', message: 'US 掉登录', urgent: true }, false);
+  assert.equal(alerts.length, 1); assert.match(result, /Bark 已跳过.*配置/);
+  assert.equal(h.delivery.status().queuedCount, 0);
 });
 test('file outbox reloads under lock across independent app and installer instances', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bark-outbox-')); t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -80,6 +89,10 @@ test('proven dead lock owner is reclaimed; damaged queue is preserved without cr
   const next = createFileBarkDelivery({ ...h.options, file });
   await assert.rejects(next.send(payload('B')), /queue cannot be read/);
   assert.equal(fs.readFileSync(file, 'utf8'), '{damaged'); assert.equal(fs.existsSync(file + '.lock'), false);
+  const damaged = JSON.stringify({ pending: ['damaged-item'], retryAt: 0 });
+  fs.writeFileSync(file, damaged);
+  await assert.rejects(next.flush(), /queue cannot be read/);
+  assert.equal(fs.readFileSync(file, 'utf8'), damaged);
 });
 test('large digest is one bounded push and reports extra items without losing queue detail', () => {
   const pending = Array.from({ length: 20 }, (_, i) => ({ ...payload('x'.repeat(4000)), createdAt: local(7, 23), key: String(i) }));

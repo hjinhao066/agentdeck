@@ -40,3 +40,7 @@ test('sleep end uses wall-clock time across daylight-saving changes', () => {
   const start = new Date(2026, 9, 31, 23).getTime();
   assert.equal(blockedUntil(start), new Date(2026, 10, 1, 10).getTime());
 });
+test('a sequence of long classes and sleep periods keeps reminders deferred until all overlaps end', () => {
+  const classes = [8, 9, 10].map((day) => ({ start: local(day, 9, 30), end: local(day, 23, 30) }));
+  assert.equal(blockedUntil(local(7, 23), {}, classes), local(11, 10));
+});

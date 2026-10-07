@@ -23,6 +23,7 @@ async function launch(now) {
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ args: [ROOT, `--test-user-data=${profile}`, `--test-bark-now=${now}`], env });
   page = await application.firstWindow();
+  await expect(page.locator('.xterm')).toHaveCount(1);
   await expect.poll(() => page.evaluate(() => terms.get('captain')?.alive)).toBe(true);
   await expect.poll(() => application.evaluate(({ app }) => typeof app.testBarkFlush)).toBe('function');
 }
