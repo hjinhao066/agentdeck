@@ -175,3 +175,14 @@ for (const p of ["darwin", "win32"]) for (const legacy of [false, true]) {
 - E2E 只跑了覆盖这次改动的三个文件：`tests/e2e/workspace.spec.js`（含改过长度的超长消息用例）、`captain-token-saver.spec.js`、`captain-rebrief.spec.js`，27 条全部通过。全量 E2E 没有跑。
 - 自动验收（`--verify`）遇到 DeepSeek 执行会话：命令不带 `--model` 时程序认不出它是哪家模型，卡片会停在 review 并写明原因，需要队长手动派审查（规则 13 已有这个分支）；带 `--model opus` 时按 Anthropic 家族处理，审查者从 Google／OpenAI 里选。这是现有行为，本次没有改。
 - `claude-ds` 本身是否可用、`--model opus` 是否映射正确，以共享记忆为准，本次没有启动它。
+
+## 9. 1.6 集成补充
+
+上面的逐行基线对照、字符数及定向 E2E 结果记录的是 `3959659` 独立审查时的状态。
+1.6 同时合入「待我处理」：队长提示词的一条命令从 `notify-user` 改为 `inbox`，
+保留原有处理规则并指向新的汇总入口。因此与 `64043df` 相比不再只有新增行。
+集成后，默认并发上限 30 时，Mac 的后台／旧回执方式提示词分别为 8369／8070 字，
+Windows 分别为 8429／8130 字；加上省上下文的「读看板继续。」分别为
+8377／8078／8437／8138 字，仍在 10000 字上限内。
+`tests/captain-briefing-limit.test.js` 在组合后的提示词上继续验证两种平台、两种回执方式、
+并发上限 5／30／50 以及 10000／10001 字边界；1.6 的全量测试结果见发布报告。
