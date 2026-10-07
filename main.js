@@ -828,6 +828,8 @@ function createWindow() {
 function hideTestWindow(win) {
   win.setOpacity(0);
   win.setIgnoreMouseEvents(true);
+  // Set before the first show, so the invisible window never sits above the user's windows.
+  if (isMac) win.setAlwaysOnTop(true, 'normal', -1);
 }
 
 function focusColumn(id) {

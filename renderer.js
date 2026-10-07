@@ -845,19 +845,44 @@ function fitTopBar() {
   bar.classList.remove('tb-compact');
   if (bar.scrollWidth > bar.clientWidth) bar.classList.add('tb-compact');
 }
-new ResizeObserver(() => fitTopBar()).observe(document.getElementById('topBar'));
+new ResizeObserver(() => { fitTopBar(); positionQuotaDetails(); }).observe(document.getElementById('topBar'));
+function positionQuotaPop() {
+  const pop = document.getElementById('quotaPop');
+  const r = document.getElementById('quotaRailBtn').getBoundingClientRect();
+  pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 8)) + 'px';
+  pop.style.top = Math.max(8, Math.min(r.bottom + 6, window.innerHeight - pop.offsetHeight - 8)) + 'px';
+}
+// Keep one full detail beside the quota panel, including while the window resizes.
+function positionQuotaDetails() {
+  const pop = document.getElementById('quotaPop');
+  if (!pop.hidden) positionQuotaPop();
+  const items = [...document.querySelectorAll('#quotaBar .quota-item, #quotaPop .quota-item')];
+  const visible = items.filter((item) => item.offsetParent);
+  const focused = visible.find((item) => item === document.activeElement), hovered = visible.find((item) => item.matches(':hover'));
+  // Keyboard focus keeps its detail; the mouse can still look at other rows past a clicked (pinned) one.
+  const active = (focused?.matches(':focus-visible') && focused) || hovered || focused;
+  items.forEach((item) => item.classList.toggle('quota-detail-open', item === active));
+  if (!active) return;
+  const tip = active.querySelector('.quota-tooltip');
+  const panel = active.closest('#quotaPop') || document.getElementById('colNav');
+  const r = active.getBoundingClientRect();
+  const left = panel.getBoundingClientRect().right + 10;
+  const width = Math.min(420, window.innerWidth - left - 8);
+  tip.classList.toggle('quota-tooltip-compact', width < 340);
+  tip.style.maxWidth = width + 'px';
+  tip.style.left = (left - r.left) + 'px';
+  const top = panel === pop ? r.top : r.bottom - tip.offsetHeight;
+  tip.style.top = (Math.max(8, Math.min(top, window.innerHeight - tip.offsetHeight - 8)) - r.top) + 'px';
+}
+window.addEventListener('resize', positionQuotaDetails);
 function toggleQuotaPop(open) {
   const pop = document.getElementById('quotaPop');
   const btn = document.getElementById('quotaRailBtn');
   const show = open ?? pop.hidden;
-  if (show) {
-    const r = btn.getBoundingClientRect();
-    pop.style.left = Math.max(8, r.left) + 'px';
-    pop.style.top = (r.bottom + 6) + 'px';
-  }
   pop.hidden = !show;
   btn.classList.toggle('on', show);
   btn.setAttribute('aria-expanded', String(show));
+  positionQuotaDetails();
 }
 document.addEventListener('mousedown', (e) => {
   const pop = document.getElementById('quotaPop');
@@ -3886,17 +3911,20 @@ function renderQuotaBar() {
     return gap <= 86400000 ? hm(d) : gap < 6 * 86400000 ? day(d) : `${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   };
   // Tooltip: the exact time plus how long that is from now; past a day it also names the date.
-  const longReset = (t) => {
+  const longResetParts = (t) => {
     const d = new Date(t), mins = Math.max(1, Math.round((t - now) / 60000));
     const left = mins < 60 ? `${mins} 分钟` : mins < 1440 ? `${Math.floor(mins / 60)} 小时${mins % 60 ? ` ${mins % 60} 分` : ''}` : `${Math.floor(mins / 1440)} 天`;
-    return `${t - now <= 86400000 ? '' : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${day(d)} `}${hm(d)}（${left}后）`;
+    return [`${t - now <= 86400000 ? '' : `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${day(d)} `}${hm(d)}`, `（${left}后）`];
   };
+  const longReset = (t) => longResetParts(t).join('');
   const level = (c) => c.out ? 'out' : c.remaining <= 10 ? 'danger' : c.remaining <= 20 ? 'low' : 'ok';
   // Whole percents keep the columns aligned.
   const pct = (c) => c.out ? '用尽' : c.remaining < 1 ? '<1%' : `${Math.round(c.remaining)}%`;
   const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; if (text !== undefined) n.textContent = text; return n; };
   // Unchanged content keeps its nodes: the periodic re-render must not disturb a hovered row.
   const fill = (box, nodes) => { const next = el('span', ''); next.append(...nodes); if (next.innerHTML !== box.innerHTML) box.replaceChildren(...next.childNodes); };
+  // The exact time and "（N 后）重置" each stay whole, so a narrow detail breaks only between them.
+  const resetText = (cls, lead, t, verb) => { const [at, left] = longResetParts(t), n = el('span', cls, lead); n.append(el('span', 'qt-at', at), el('span', 'qt-at', left + verb)); return n; };
   const meter = (c) => { const m = el('span', 'quota-meter'); m.setAttribute('aria-hidden', 'true'); m.style.setProperty('--pct', `${!c || c.out ? 0 : Math.max(2, Math.min(100, c.remaining))}%`); return m; };
   const NAMES = { Claude: 'Claude', Codex: 'ChatGPT', Cursor: 'Grok 4.7', Antigravity: 'Gemini' };
   for (const [bar, prefix] of [[document.getElementById('quotaBar'), 'quota-tip'], [document.getElementById('quotaPopList'), 'quota-pop-tip']]) {
@@ -3916,6 +3944,7 @@ function renderQuotaBar() {
         if (seat) item.dataset.seatId = seat.id;
         item.setAttribute('role', 'group');
         item.tabIndex = 0; // keyboard users can inspect the same tooltip; a click focuses and so pins it
+        for (const event of ['mouseenter', 'mouseleave', 'focus', 'blur']) item.addEventListener(event, positionQuotaDetails);
         const label = document.createElement('span'); label.className = 'quota-label'; label.setAttribute('aria-hidden', 'true');
         const icon = document.createElement('span'); icon.className = 'quota-icon';
         icon.innerHTML = AgentInfo.PROVIDER_ICONS[provider === 'Cursor' ? 'Grok' : provider];
@@ -3961,10 +3990,10 @@ function renderQuotaBar() {
       const lines = q.cells.map((c) => {
         const line = el('span', 'qt-window'); line.dataset.level = level(c);
         line.append(el('span', 'qt-key', c.key === '5h' ? '5 小时' : '每周'), el('span', 'qt-pct', c.out ? '已用尽' : `剩余 ${pct(c)}`), meter(c),
-          el('span', 'qt-reset', c.resetAt > now ? `${longReset(c.resetAt)}重置` : '重置时间未知'));
+          c.resetAt > now ? resetText('qt-reset', '', c.resetAt, '重置') : el('span', 'qt-reset', '重置时间未知'));
         return line;
       });
-      if (blockedOnly) lines.unshift(el('span', 'qt-note out', recovery ? `已用尽，预计 ${longReset(recovery)}恢复` : '已用尽，恢复时间未知'));
+      if (blockedOnly) lines.unshift(recovery ? resetText('qt-note out', '已用尽，预计 ', recovery, '恢复') : el('span', 'qt-note out', '已用尽，恢复时间未知'));
       else if (!q.cells.length) lines.push(el('span', 'qt-note', state === 'normal' ? '未见用尽，此来源不提供百分比' : '暂无额度数据，等待下次采样'));
       const warm = seat ? ClaudeSeats.warmupDetail(seat.id) : '';
       if (seat) {
@@ -3993,6 +4022,7 @@ function renderQuotaBar() {
   const worst = summaries.map((q) => q.out ? 'exhausted' : q.state).reduce((w, st) => (rank[st] || 0) > (rank[w] || 0) ? st : w, 'normal');
   const rail = document.getElementById('quotaRailBtn');
   if (rail) rail.dataset.state = worst;
+  positionQuotaDetails();
 }
 battery.every('statusTick', () => {
   let attn = 0;
