@@ -340,3 +340,54 @@ test('neither phone page declares the same function twice (a later one would sil
     assert.deepEqual(names.filter((name, index) => names.indexOf(name) !== index), [], file);
   }
 });
+
+test('a sent message stays until the computer records it: one bubble, never matched to an older message with the same words', () => {
+  const item = (text, state = 'sent', extra = {}) => ({ text, state, known: [], ...extra });
+  const before = [{ id: 't1', user: '继续', reply: '好的', done: true }, { id: 'n1', kind: 'notice', user: '继续' }];
+  const again = item('继续', 'sent', { known: Core.userTurnIds(before) });
+  assert.deepEqual(Core.userTurnIds(before), ['t1']);
+  // The Captain is busy: nothing new on the computer yet, the message stays shown.
+  assert.deepEqual(Core.settleOutbox([again], before), [again]);
+  // Its own record arrives (spacing differs after the terminal): the record takes over.
+  assert.deepEqual(Core.settleOutbox([again], [...before, { id: 't2', user: ' 继续\n', reply: '' }]), []);
+  // Two identical messages on their way: one record stands for one of them only.
+  const a = item('重试'), b = item('重试');
+  assert.deepEqual(Core.settleOutbox([a, b], [{ id: 't3', user: '重试' }]), [b]);
+  assert.deepEqual(Core.settleOutbox([b], [{ id: 't3', user: '重试' }]), [b]);
+  assert.deepEqual(Core.settleOutbox([b], [{ id: 't3', user: '重试' }, { id: 't4', user: '重试' }]), []);
+  // Still on the way when the record shows up, and a very long message recorded clipped.
+  assert.deepEqual(Core.settleOutbox([item('早', 'sending')], [{ id: 't5', user: '早' }]), []);
+  const long = '长'.repeat(2500);
+  assert.deepEqual(Core.settleOutbox([item(long)], [{ id: 't6', user: long.slice(0, 2000) + '\n…（全文 2500 字，见附件）' }]), []);
+  assert.equal(Core.settleOutbox([item(long)], [{ id: 't6', user: '别的话'.repeat(10) + '\n…（全文 2500 字，见附件）' }]).length, 1);
+  // Images are part of the message.
+  assert.equal(Core.settleOutbox([item('', 'sent', { images: ['a.png'] })], [{ id: 't7', user: '', images: ['b.png'] }]).length, 1);
+  assert.equal(Core.settleOutbox([item('', 'sent', { images: ['a.png'] })], [{ id: 't7', user: '', images: ['a.png'] }]).length, 0);
+  // A failed message keeps its words, unless nobody knows whether it arrived and it then shows up.
+  const failed = item('没发出', 'failed'), unsure = item('不确定', 'failed', { unsure: true });
+  assert.deepEqual(Core.settleOutbox([failed, unsure], [{ id: 't8', user: '没发出' }, { id: 't9', user: '不确定' }]), [failed]);
+});
+
+test('the same words right after they went out are recognised as a repeat; different words, failures and old ones are not', () => {
+  const now = 1_000_000, sent = (text, extra = {}) => ({ text, state: 'sent', at: now - 5000, ...extra });
+  assert.equal(Core.repeatedSend([sent('修一下输入栏')], '修一下输入栏', now), true);
+  assert.equal(Core.repeatedSend([sent('修一下输入栏')], ' 修一下输入栏\n', now), true);
+  assert.equal(Core.repeatedSend([sent('修一下输入栏')], '修一下发送', now), false);
+  assert.equal(Core.repeatedSend([sent('修一下输入栏', { state: 'failed' })], '修一下输入栏', now), false);
+  // Still waiting for the Captain counts however long ago; once delivered, only for a minute.
+  assert.equal(Core.repeatedSend([sent('继续', { at: now - 600000 })], '继续', now), true);
+  assert.equal(Core.repeatedSend([sent('继续', { arrived: true, at: now - 30000 })], '继续', now), true);
+  assert.equal(Core.repeatedSend([sent('继续', { arrived: true, at: now - 61000 })], '继续', now), false);
+  assert.equal(Core.repeatedSend([sent('', { images: ['a.png'] })], '', now), false);
+});
+
+test('a drag moves the page only where nothing scrolls or the list is at that end', () => {
+  const list = (scrollTop) => ({ scrollTop, clientHeight: 400, scrollHeight: 1000 });
+  assert.equal(Core.dragMovesPage(null, -30), true);
+  assert.equal(Core.dragMovesPage(list(300), -30), false);
+  assert.equal(Core.dragMovesPage(list(300), 30), false);
+  assert.equal(Core.dragMovesPage(list(0), 30), true);
+  assert.equal(Core.dragMovesPage(list(0), -30), false);
+  assert.equal(Core.dragMovesPage(list(600), -30), true);
+  assert.equal(Core.dragMovesPage(list(600), 30), false);
+});
