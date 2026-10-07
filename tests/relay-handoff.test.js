@@ -554,3 +554,57 @@ test('the handoff file is the app\'s, the decisions file is the Captain\'s: one 
   assert.equal(JSON.parse(fs.readFileSync(path.join(userData, 'chats', 'captain-old.json'), 'utf8')).turns[0].interrupted, true);
   assert.match(fs.readFileSync(file, 'utf8'), /触发：席位 Relay/);
 });
+
+test('handoff discovers running and paused discussion IDs from private state without importing topics or drafts', (t) => {
+  const f = fixture(t), home = path.join(f.root, 'isolated-home'), userData = path.join(f.root, 'deck');
+  const privateRoot = path.join(home, '.agents-state', 'agentdeck', 'discussions');
+  const secret = 'PRIVATE-QUESTION-AND-DRAFT-SENTINEL';
+  const states = [['d-running', 'running', 2], ['d-paused', 'paused', 3], ['d-complete', 'complete', 2], ['d-cancelled', 'cancelled', 1]];
+  for (const [id, status, round] of states) {
+    const dir = path.join(privateRoot, id);
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, 'run.json'), JSON.stringify({ version: 1, id, status, round, phase: 'review',
+      createdAt: new Date(NOW).toISOString(), question: secret, publicQuestion: secret,
+      jobs: [{ output: secret, input: secret, rawOutput: secret }], rounds: [], finalAnswer: secret }), { mode: 0o600 });
+  }
+  // A similarly named shared directory is not a source for private discussions.
+  const shared = path.join(home, '.agents', 'boards', 'discussions', 'd-shared-should-not-load');
+  fs.mkdirSync(shared, { recursive: true });
+  fs.writeFileSync(path.join(shared, 'run.json'), JSON.stringify({ version: 1, id: 'd-shared-should-not-load', status: 'running', jobs: [], rounds: [] }));
+  for (const reason of ['refresh', 'relay', 'restart']) {
+    const result = Seats.handoff(home, userData, { colId: 'captain-new', tasks: [], sessions: [], reason, now: NOW,
+      captain: { previousId: 'captain-old', gen: 2 }, budget: 20000 }, { cards: () => [] });
+    assert.equal(result.plan, 'resume', reason + ': a discussion is authorized unfinished work even without task cards');
+    assert.match(result.text, /进行中的讨论（私有原稿不进入交接）/);
+    assert.match(result.text, /d-running：running，第 2 轮/);
+    assert.match(result.text, /d-paused：paused，第 3 轮/);
+    assert.match(result.text, /discuss status --id d-running/);
+    assert.match(result.text, /unknown 不自动重发/);
+    assert.doesNotMatch(result.text, /d-complete|d-cancelled|d-shared-should-not-load/);
+    assert.ok(!result.text.includes(secret), reason + ': neither question nor model prose enters the Captain handoff');
+    assert.equal(fs.readFileSync(result.path, 'utf8'), result.text);
+  }
+  for (const [id] of states.slice(0, 2)) {
+    const file = path.join(privateRoot, id, 'run.json'), run = JSON.parse(fs.readFileSync(file, 'utf8'));
+    run.status = 'complete'; fs.writeFileSync(file, JSON.stringify(run));
+  }
+  const finished = Seats.handoff(home, userData, { colId: 'captain-new', tasks: [], reason: 'refresh', now: NOW }, { cards: () => [] });
+  assert.equal(finished.plan, 'ready'); assert.doesNotMatch(finished.text, /d-running|d-paused|进行中的讨论/);
+});
+
+test('a crowded compressed handoff retains every unfinished discussion ID and excludes finished discussions', () => {
+  const secret = 'NEVER-IMPORT-PRIVATE-DISCUSSION-PROSE';
+  const discussions = Array.from({ length: 60 }, (_, i) => ({ id: `d-unfinished-${String(i).padStart(3, '0')}`,
+    status: i % 2 ? 'paused' : 'running', round: i % 3 + 1, question: secret, finalAnswer: secret, jobs: [{ rawOutput: secret }] }));
+  const result = build({ cards: [], dispatches: [], sessions: [], budget: 4000,
+    discussions: [...discussions, { id: 'd-finished', status: 'complete' }, { id: 'd-cancelled', status: 'cancelled' }] });
+  assert.equal(result.state.plan, 'resume');
+  assert.equal(result.state.ctx.discussions.length, discussions.length);
+  for (const discussion of discussions) {
+    assert.ok(result.text.includes(`- ${discussion.id}：`), discussion.id + ': unfinished IDs survive compression');
+    assert.ok(result.text.includes(`discuss status --id ${discussion.id}`), discussion.id + ': the new Captain can recover this exact discussion');
+  }
+  assert.doesNotMatch(result.text, /d-finished|d-cancelled/);
+  assert.ok(!result.text.includes(secret));
+  assert.equal(result.over, true, 'over-budget state is explicit rather than dropping discussion IDs');
+});

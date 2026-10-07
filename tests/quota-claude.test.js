@@ -70,6 +70,18 @@ test('one pinned HTTPS GET returns only real subscription windows and absolute r
   assert.equal(calls[0].options.agent, false);
   assert.ok(!JSON.stringify(usage).includes('fake-'));
 });
+test('official usage preserves only boolean Extra Usage state; missing or nonboolean remains unknown', async () => {
+  const reset = new Date(Date.now() + 3600000).toISOString();
+  for (const [extra, expected] of [[{ is_enabled: false }, false], [{ is_enabled: true }, true], [undefined, null], [{ is_enabled: 'false' }, null]]) {
+    const body = JSON.stringify({ five_hour: { utilization: 20, resets_at: reset }, seven_day: { utilization: 30, resets_at: reset },
+      extra_usage: extra && { ...extra, monthly_limit: 12345, used_credits: 54321, secret: 'fake-never-return' } });
+    const usage = await C.requestUsage('fake-access', transport(200, body, []));
+    assert.equal(usage.extraUsageEnabled, expected);
+    assert.ok(!JSON.stringify(usage).includes('12345'));
+    assert.ok(!JSON.stringify(usage).includes('54321'));
+    assert.ok(!JSON.stringify(usage).includes('fake-'));
+  }
+});
 test('redirect/auth/rate limit/malformed/oversized/timeout/network responses fail closed without retry', async () => {
   for (const [status, body, options] of [[302, '{}'], [401, '{}'], [429, '{}'], [200, '{'], [200, '{}'], [200, 'x'.repeat(65537)], [200, '', { hang: true }], [200, '', { error: true }]]) {
     const calls = [];

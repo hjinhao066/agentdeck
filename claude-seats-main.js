@@ -250,12 +250,14 @@ function handoff(home, userData, payload, options = {}) {
   // and a trimmed list would lose a result or call a live session gone.
   const all = (value) => (Array.isArray(value) ? value : []);
   const machine = options.machine || {};
+  const discussionsRoot = options.discussionsRoot || path.join(home, '.agents-state', 'agentdeck', 'discussions');
+  const discussions = require('./discussion-store').createStore({ root: discussionsRoot }).list().filter((d) => !['complete', 'cancelled'].includes(d.status));
   const built = Handoff.build({
     now: Number.isFinite(payload.now) ? payload.now : Date.now(), timeZone: payload.timeZone, reason: payload.reason, cli: payload.cli, budget: payload.budget,
     dispatchCap: payload.dispatchCap, userTurnsOlder: payload.userTurnsOlder === true || all(payload.userTurns).length > 12,
     platform: machine.platform || process.platform, host: machine.hostname || os.hostname(), appVersion: machine.appVersion || '', boardVersion: options.boardVersion ? options.boardVersion() : '',
     captain: { ...(payload.captain && typeof payload.captain === 'object' ? payload.captain : { previousId: payload.colId, message: payload.relayMessage || '' }) },
-    cards, boardError, dispatches: payload.tasks, sessions: all(payload.sessions), archivedIds: all(payload.archivedIds),
+    discussions, cards, boardError, dispatches: payload.tasks, sessions: all(payload.sessions), archivedIds: all(payload.archivedIds),
     pending: all(payload.pending), inflight: all(payload.inflight), unconfirmed: all(payload.unconfirmed), waitlist: all(payload.waitlist),
     carry: payload.carry, userTurns: all(payload.userTurns).slice(-12), decisions,
     paths: { handoff: board, decisions: notes, chats: path.join(userData, 'chats'), tasks: options.tasksDir || path.join(dir, 'tasks') },

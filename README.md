@@ -252,6 +252,13 @@ skipped.
 
 ## 队长 (Captain)
 
+队长可用「讨论一下」命令行组织 Opus 5.5 与网页 ChatGPT 6 Pro，先各自独答，
+再匿名互评修订，最后保留分歧与少数派合成答案：
+`node /绝对路径/新源码/board-cli.js discuss start --topic "题目、约束和需要决定的事"`。
+使用现役队长终端的控制凭据即可启动后台流程，现役安装的工具要集成新版本后才有此命令。
+进度、断点恢复、取消、参与者配置及额度说明见 [docs/discuss.md](docs/discuss.md)。
+本次没有桌面或手机讨论入口，长文与逐轮原稿只存本机私有讨论目录。
+
 任务看板数据、CLI、自动流转及界面的读写入口见
 [任务看板接口说明](docs/task-board-api.md)。正本是 `~/.agents/boards/tasks/<项目名>.json`；
 `new --task-id ... --project ...` 绑定卡片，命令回执自动流转，文件监听和每 60 秒巡检

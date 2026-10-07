@@ -249,6 +249,7 @@
       `   ${cli} inbox need|report|resolve   用户的「待我处理」页（inbox help）：要用户介入的 need，本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用。向用户汇报的结论都 report，解决了 resolve`,
       `   ${cli} handoff   生成当前交接快照并刷新交接文件；开工、Relay、清空、重启后先跑。briefing 只读本提示词全文；用户说「你是队长」先跑 ledger 验证身份，再读这两个`,
       `   ${cli} ledger   列出全部会话：id、标题、状态、最近回执`,
+      `   ${cli} discuss start --topic "题目"   「讨论一下」/group discussion/do a group discussion/group chat 就发起；status 查全部，status/wait/resume/cancel --id ID 查/等/续/取消。unknown 先核对旧请求，确认结束才 resume --retry JOB --confirmed-ended JOB；discuss help 读规约。`,
       `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify] [--priority high]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task priority --id 卡片或会话id --level high|normal；task archive --done [--project "项目"]`,
       `   ${cli} queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令/模型会替换，移到 done/todo 撤队`,
       `   ${cli} quota   只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的；未知不代表可用`,

@@ -477,6 +477,8 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.equal(M.instructions('darwin', 'time and board A'), M.instructions('darwin', 'time and board B'));
   const text = M.instructions('darwin');
   assert.match(text, /--model claude-opus-5-5 --effort high/);
+  for (const trigger of ['讨论一下', 'group discussion', 'do a group discussion', 'group chat']) assert.ok(text.includes(trigger));
+  assert.match(text, /discuss start --topic/);
   assert.ok(!text.includes('默认模型是 Opus'));
   assert.match(text, /开工后用 peek 看状态行确认模型/);
   assert.match(text, /claude-sonnet-4-6/);

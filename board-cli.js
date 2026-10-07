@@ -160,6 +160,8 @@ function usage() {
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
     'Captain only (队长, the main session):\n' +
+    '  discuss start --topic "题目" [--gemini] [--participants-file path] [--summarizer id]\n' +
+    '  discuss status [--id id] | wait --id id | resume --id id [--retry job-id] | cancel --id id\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, critical / volume 3\n' +
     '  inbox need|report|list|resolve            the user\'s 待我处理 page; inbox help for details\n' +
@@ -199,6 +201,16 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const action = args._[0];
   if (!action || action === 'help' || args.help) { usage(); return; }
+
+  if (action === 'discuss') {
+    // The existing read-only action authenticates the Captain even when this
+    // source CLI is used alongside an older installed application.
+    await request({ action: 'main-ledger' }, false);
+    const auth = resolveBoardAuth({ env: process.env, tty: controllingTerminal(), filename: __filename, action: 'main-ledger' });
+    const result = await require('./discussion-command').command(args, auth);
+    process.stdout.write(typeof result === 'string' ? result + '\n' : JSON.stringify(result, null, 2) + '\n');
+    return;
+  }
 
   if (action === 'notify-user') {
     const testing = args.test === true;

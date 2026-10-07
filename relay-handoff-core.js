@@ -116,7 +116,7 @@ function index(snapshot) {
     now: Number.isFinite(s.now) ? s.now : 0, timeZone: typeof s.timeZone === 'string' && s.timeZone ? s.timeZone : 'UTC',
     reason: ['relay', 'clear', 'token-saver', 'restart', 'refresh'].includes(s.reason) ? s.reason : 'refresh',
     platform: String(s.platform || ''), host: one(s.host, 80), appVersion: one(s.appVersion, 40), boardVersion: one(s.boardVersion, 40),
-    captain, cards: list(s.cards), dispatches, byCard, bySession,
+    captain, discussions: list(s.discussions).filter((d) => /^[A-Za-z0-9_-]{1,160}$/.test(d.id) && !['complete', 'cancelled'].includes(d.status)), cards: list(s.cards), dispatches, byCard, bySession,
     sessions: new Map(list(s.sessions).filter((x) => typeof x.id === 'string').map((x) => [x.id, x])),
     archived: new Set((Array.isArray(s.archivedIds) ? s.archivedIds : []).filter((x) => typeof x === 'string')),
     // inflight: typed in but never acknowledged, so it is delivered again.
@@ -446,7 +446,7 @@ function derive(snapshot) {
     important: cards.filter((c) => c.important).length + loose.filter((l) => l.important).length,
     pending: ctx.pending.length + redeliver.length, unconfirmed: unconfirmed.length + carried.length, asks: asks.length, forUser: notes.user.length, conflicts: conflicts.length, strays: strays.length };
   // Authorized work that is under way or waiting on the Captain, as opposed to cards nobody has started.
-  const active = stats.rework + stats.review + stats.doing + cards.filter((c) => ['held', 'needs_check', 'quota'].includes(c.code)).length + stats.pending + stats.unconfirmed + stats.asks;
+  const active = ctx.discussions.length + stats.rework + stats.review + stats.doing + cards.filter((c) => ['held', 'needs_check', 'quota'].includes(c.code)).length + stats.pending + stats.unconfirmed + stats.asks;
   // A session at work with no record behind it is not "nothing to do": it is the first thing
   // to look at. Neither is a task that was stopped and is all that is left.
   const plan = notes.paused.length ? 'paused' : active ? 'resume' : strays.length ? 'verify' : stats.todo + stats.paused ? 'backlog' : 'ready';
@@ -489,6 +489,11 @@ function render(state, level) {
   out.push('- 长度：{{LENGTH}}');
   out.push(`- 命令：下文的 handoff、ledger、read 等都接在 ${cli} 后面运行`);
   if (ctx.captain.rotation) out.push(`- 队长轮换：${one(ctx.captain.rotation, 160)}。谁接任队长只看这项设置，和队员用什么模型无关；交接不改它`);
+
+  if (ctx.discussions.length) {
+    out.push('', '### 进行中的讨论（私有原稿不进入交接）');
+    for (const d of ctx.discussions) out.push(`- ${d.id}：${one(d.status, 30)}，第 ${Number(d.round) || 1} 轮；discuss status --id ${d.id} 核对，wait 等结果；暂停先查原因，unknown 不自动重发，resume/cancel 只针对原 ID。`);
+  }
 
   // 2
   const file = ctx.decisions.path || ctx.paths.decisions || DECISIONS_FILE;

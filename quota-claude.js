@@ -238,7 +238,8 @@ function requestUsage(token, get = https.get, timeoutMs = 8000) {
           try {
             const data = JSON.parse(body), at = Date.now();
             const windows = officialUsage(data, { id: 'default' }, '', at).windows.map((w) => ({ key: w.key, remaining: 100 - w.used, resetText: w.resetText }));
-            finish({ at, source: Q.CLAUDE_OAUTH_SOURCE, windows });
+            finish({ at, source: Q.CLAUDE_OAUTH_SOURCE, windows,
+              extraUsageEnabled: typeof data?.extra_usage?.is_enabled === 'boolean' ? data.extra_usage.is_enabled : null });
           } catch (_) { finish(); }
         });
       });
