@@ -27,8 +27,10 @@
   --brand-claude: #e08562; --brand-chatgpt: #19c37d; --brand-gemini: #5b9bff;
 }
 * { box-sizing: border-box; }
+/* Nothing but the lists inside the shell ever scrolls: the page itself stays put,
+   so no rubber band can carry the composer away. */
 html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; }
+body { position: fixed; inset: 0; margin: 0; background: var(--bg); color: var(--text); font: 15px/1.6 var(--sans); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; }
 button, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button:disabled { cursor: default; }
@@ -99,6 +101,17 @@ h1, h2, h3, h4, p { margin: 0; }
 .captain-message { max-width: 100%; min-width: 0; padding: 9px 13px 10px; border: 1px solid var(--line); border-radius: 18px 18px 18px 6px; background: var(--raised); }
 .captain-label { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; font-size: 12px; font-weight: 650; color: var(--orange); }
 .captain-label svg { width: 13px; height: 13px; color: var(--crown); }
+/* Your own message while it is on its way: a small line under it, like a
+   delivery receipt. One that did not go out turns red and keeps its words. */
+.outgoing[data-state="sending"] :is(.user-message, .sent-images) { opacity: .7; }
+.sent-meta { align-self: flex-end; display: flex; align-items: center; gap: 5px; max-width: 86%; margin-top: 3px; padding-right: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.meta-mark { display: flex; flex: none; }
+.meta-mark svg { width: 13px; height: 13px; stroke-width: 2.2; color: var(--green); }
+.meta-mark .spinner { width: 11px; height: 11px; border-width: 1.5px; }
+.user-message.failed { border: 1px solid var(--red); background: color-mix(in srgb, var(--red) 10%, var(--bg)); color: var(--text); }
+.failed-label { margin-bottom: 3px; font-size: 12px; font-weight: 600; color: var(--red); }
+.failed-foot { align-self: stretch; display: flex; align-items: center; gap: 4px; margin: 8px -8px -6px 0; padding-top: 6px; border-top: 1px solid color-mix(in srgb, var(--red) 45%, transparent); }
+.failed-reason { flex: 1; min-width: 0; font-size: 12px; line-height: 1.6; color: var(--secondary); overflow-wrap: anywhere; }
 /* Images the user sent sit above their bubble, right-aligned like it. */
 .sent-images { align-self: flex-end; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; max-width: 86%; }
 .sent-images + .user-message { margin-top: 6px; }

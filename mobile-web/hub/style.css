@@ -27,8 +27,10 @@
   --brand-claude: #e08562; --brand-chatgpt: #19c37d; --brand-gemini: #5b9bff;
 }
 * { box-sizing: border-box; }
-html, body { height: 100%; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; }
+/* Nothing but the lists inside the shell ever scrolls: the page itself stays put,
+   so no rubber band can carry the input away. */
+html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+body { position: fixed; inset: 0; margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); -webkit-font-smoothing: antialiased; -webkit-text-size-adjust: 100%; }
 button, textarea, input { font: inherit; color: inherit; }
 button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 button:disabled { opacity: .42; cursor: default; }
@@ -38,7 +40,9 @@ svg { display: block; width: 22px; height: 22px; flex-shrink: 0; }
 h1, h2, h3, p, dl, dd { margin: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-.app { display: flex; flex-direction: column; max-width: 680px; height: 100dvh; margin: 0 auto; }
+/* The shell fills the visual viewport (app.js keeps the two variables), so the input sits on the keyboard. */
+.app { position: fixed; top: 0; left: 0; right: 0; display: flex; flex-direction: column; max-width: 680px; height: var(--app-height, 100dvh); margin: 0 auto;
+  transform: translateY(var(--app-top, 0px)); overflow: hidden; overflow: clip; }
 .app-header { display: flex; align-items: center; gap: 4px; padding: max(4px, env(safe-area-inset-top)) 4px 4px 12px; }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .brand strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 17px; font-weight: 650; letter-spacing: -.4px; }
@@ -119,7 +123,13 @@ main.fill { display: flex; overflow: hidden; padding: 6px 6px 6px; }
 /* Both sides are bubbles as wide as their text: the user's on the right in a strong colour, the Captain's on the left with its name. */
 .bubble { max-width: 100%; min-width: 0; padding: 9px 13px 10px; border-radius: 18px 18px 18px 6px; background: var(--surface); border: 1px solid var(--line); }
 .bubble.mine { align-self: flex-end; max-width: 86%; display: flex; flex-direction: column; align-items: flex-start; padding: 9px 14px 10px; border: 0; border-radius: 18px 18px 6px 18px; background: var(--mine); color: var(--mine-ink); }
-.bubble.sending { opacity: .7; }
+.turn.outgoing { gap: 3px; }
+.outgoing[data-state="sending"] .bubble { opacity: .7; }
+/* Under your own bubble while it is on its way: a small line on the right, like a delivery receipt. */
+.bubble-meta { align-self: flex-end; display: flex; align-items: center; gap: 5px; max-width: 86%; padding-right: 4px; font-size: 12px; line-height: 1.5; color: var(--muted); overflow-wrap: anywhere; }
+.meta-mark { display: flex; flex: none; }
+.meta-mark svg { width: 13px; height: 13px; stroke-width: 2.2; color: var(--ok); }
+.meta-mark .spinner { width: 11px; height: 11px; border-width: 1.5px; }
 .bubble.failed { background: var(--bad-soft); color: var(--text); border: 1px solid var(--bad); }
 .bubble-label { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; font-size: 12px; font-weight: 650; color: var(--accent); }
 .bubble-label svg { width: 13px; height: 13px; color: var(--crown); }
@@ -134,7 +144,7 @@ main.fill { display: flex; overflow: hidden; padding: 6px 6px 6px; }
 .composer { flex: none; }
 .composer-box { display: flex; align-items: flex-end; padding-left: 8px; border: 1px solid var(--line-strong); border-radius: 23px; background: var(--surface); }
 .composer-box:focus-within { border-color: var(--accent); }
-textarea { flex: 1; min-width: 0; height: 44px; min-height: 44px; max-height: min(140px, 30dvh); resize: none; margin: 0; padding: 10px 6px; border: 0; background: transparent; font-size: 16px; line-height: 24px; overflow-y: auto; }
+textarea { flex: 1; min-width: 0; height: 44px; min-height: 44px; max-height: min(140px, calc(var(--app-height, 100dvh) * .3)); resize: none; margin: 0; padding: 10px 6px; border: 0; background: transparent; font-size: 16px; line-height: 24px; overflow-y: auto; }
 textarea:focus-visible { outline: 0; }
 textarea::placeholder { color: var(--muted); }
 .composer .icon-button { border-radius: 50%; }
@@ -256,6 +266,8 @@ button.at-done-toggle { display: flex; align-items: center; gap: 8px; width: 100
 .at-empty-art svg { width: 28px; height: 28px; }
 .at-empty strong { color: var(--text); font-size: 15px; font-weight: 650; }
 @media (prefers-reduced-motion: reduce) { .at-chev svg { transition: none; } }
+/* Keyboard up: the navigation gives its room to the conversation. */
+.keyboard-open .navigation { display: none; }
 .navigation { display: flex; gap: 4px; padding: 2px 8px calc(2px + env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--surface); }
 .navigation button { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 48px; padding: 5px 4px; border: 0; border-radius: 12px; background: transparent; color: var(--muted); font-size: 11px; line-height: 1.3; }
 .navigation button[aria-current="page"] { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
