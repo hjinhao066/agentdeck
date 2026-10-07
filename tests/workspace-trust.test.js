@@ -19,12 +19,21 @@ function fixture(t) {
   return { home, cwd, file, column, prepare };
 }
 
+// The launch command is shaped for the host shell: `command agy ...` after cd on
+// POSIX, a PowerShell Get-Command wrapper on Windows. Check the program and its
+// exact arguments in whichever form this platform produces.
+function launches(command, program, args) {
+  return process.platform === 'win32'
+    ? command.includes(`Get-Command -Name '${program}' `) && command.includes(`.Source) ${args}`)
+    : command.includes(`${program} ${args}`);
+}
+
 test('agy saves only the authorized directory before launch, preserving settings and other trust', (t) => {
   const { home, cwd, file, prepare } = fixture(t);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const before = { theme: 'dark', nested: { keep: true }, trustedWorkspaces: ['/existing'] };
   fs.writeFileSync(file, JSON.stringify(before), { mode: 0o600 });
-  assert.ok(prepare('agy --model gemini-3.8-flash-high').command.includes('agy --model gemini-3.8-flash-high'));
+  assert.ok(launches(prepare('agy --model gemini-3.8-flash-high').command, 'agy', '--model gemini-3.8-flash-high'));
   assert.deepEqual(JSON.parse(fs.readFileSync(file)), { ...before, trustedWorkspaces: ['/existing', cwd] });
   const saved = fs.readFileSync(file, 'utf8');
   prepare('agy');
@@ -82,13 +91,13 @@ test('launch stays in the authorized directory despite a different shell cwd, an
 
 test('Cursor uses its official trust flag once; agy keeps native exact paths on both platforms', (t) => {
   const { prepare, column, cwd, home } = fixture(t);
-  assert.ok(prepare('cursor-agent --force --model grok-4.7-high-fast').command.includes('cursor-agent --trust --force --model grok-4.7-high-fast'));
-  assert.ok(prepare('cursor-agent --trust --force').command.includes('cursor-agent --trust --force'));
+  assert.ok(launches(prepare('cursor-agent --force --model grok-4.7-high-fast').command, 'cursor-agent', '--trust --force --model grok-4.7-high-fast'));
+  assert.ok(launches(prepare('cursor-agent --trust --force').command, 'cursor-agent', '--trust --force'));
   const windows = T.prepareWorkspaceTrust('"C:\\Program Files\\Cursor\\cursor-agent.cmd" --force', column, cwd, home, 'win32').command;
   assert.ok(windows.startsWith('& { Set-Location -LiteralPath '));
   assert.ok(windows.includes("Get-Command -Name 'C:\\Program Files\\Cursor\\cursor-agent.cmd' -CommandType Application,ExternalScript"));
   assert.ok(windows.includes(').Source) --trust --force'));
-  assert.ok(prepare('cursor-agent -- "explain --trust please"').command.includes('cursor-agent --trust -- "explain --trust please"'));
+  assert.ok(launches(prepare('cursor-agent -- "explain --trust please"').command, 'cursor-agent', '--trust -- "explain --trust please"'));
   assert.deepEqual(T.trustKeys('C:\\Users\\Test\\copy\\', 'C:\\Users\\Test\\copy', 'win32'), ['C:\\Users\\Test\\copy']);
   assert.deepEqual(T.trustKeys('C:\\Alias\\项目', 'C:\\Real\\项目', 'win32'), ['C:\\Alias\\项目', 'C:\\Real\\项目']);
   assert.deepEqual(T.trustKeys('/alias/copy/', '/real/copy', 'darwin'), ['/alias/copy', '/real/copy']);
@@ -120,9 +129,9 @@ test('the existing privileged launch channel completes registration before retur
   });
   vm.runInContext(source.slice(begin, end), context);
   const command = await handler(null, { id: 'worker', command: 'agy --model x' });
-  assert.ok(command.includes('agy --model x'));
+  assert.ok(launches(command, 'agy', '--model x'));
   assert.deepEqual(launch, { cmd: command, dir: cwd, registered: true });
-  assert.ok((await handler(null, { id: 'worker', command: 'cursor-agent --force' })).includes('cursor-agent --trust --force'));
+  assert.ok(launches(await handler(null, { id: 'worker', command: 'cursor-agent --force' }), 'cursor-agent', '--trust --force'));
   await assert.rejects(handler(null, { id: 'unknown', command: 'agy' }), /Invalid launch/);
   const pkg = require('../package.json');
   assert.ok(pkg.build.files.includes('workspace-trust-main.js'));
