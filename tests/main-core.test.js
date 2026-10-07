@@ -31,9 +31,9 @@ test('context tokens come from an explicit used/total status, not percentages or
     ['Context: 23% │ Session: 290k/1000k', null], ['Context: 23% Session: 290k/1000k', null],
     ['Context: 23%', null], ['Session: 290k/1000k', null], ['Context: 2M/1M', null],
   ]) assert.equal(M.contextTokens(footer), used, footer);
-  assert.deepEqual(M.tokenSaverSettings(), { enabled: true, threshold: 150000 });
-  assert.deepEqual(M.tokenSaverSettings({ enabled: false, threshold: 250000 }), { enabled: false, threshold: 250000 });
-  for (const threshold of [0, -1, NaN, Infinity, '200000']) assert.equal(M.tokenSaverSettings({ threshold }).threshold, 150000);
+  assert.deepEqual(M.tokenSaverSettings(), { enabled: true, threshold: 600000, compactThreshold: 450000 });
+  assert.deepEqual(M.tokenSaverSettings({ enabled: false, threshold: 250000 }), { enabled: false, threshold: 250000, compactThreshold: 249999 });
+  for (const threshold of [0, -1, NaN, Infinity, '200000']) assert.equal(M.tokenSaverSettings({ threshold }).threshold, 600000);
 });
 
 test('model receipts and ledger cap each summary at 300 Unicode characters and five paths, preserving source receipts', () => {

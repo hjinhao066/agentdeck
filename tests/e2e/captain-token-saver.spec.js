@@ -2,13 +2,16 @@ const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawn } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '../..');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --token-saver`;
 const SHOTS = process.env.AGENTDECK_TOKEN_SAVER_SHOTS;
-let application, page, profile, promptsFile, boardFile;
+let application, page, profile, promptsFile, boardFile, controlFile, receiptListener;
 const prompts = () => fs.existsSync(promptsFile) ? fs.readFileSync(promptsFile, 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse) : [];
 const archivePrompts = () => prompts().filter((p) => p.startsWith('把当前进度写进'));
+const compactPrompts = () => prompts().filter((p) => /^\/compact(?:\s|$)/.test(p));
+const compactChecks = () => prompts().filter((p) => p.startsWith('【AgentDeck 压缩后核对】'));
 const banner = () => page.locator('.captain-token-saving');
 async function tick() { await page.evaluate(() => MainSession.onTick('saver-captain', terms.get('saver-captain'))); }
 async function context(used) {
@@ -21,10 +24,11 @@ async function shot(name) {
   fs.mkdirSync(SHOTS, { recursive: true });
   await page.screenshot({ path: path.join(SHOTS, name + '.png') });
 }
-async function launch(flags = '', settings) {
+async function launch(flags = '', settings = { threshold: 150000, compactThreshold: 149999 }) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-token-saver-'));
   promptsFile = path.join(profile, 'prompts.jsonl');
   boardFile = path.join(profile, 'board.md');
+  controlFile = path.join(profile, 'control-env.json');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     captainTokenSaver: settings,
@@ -34,7 +38,9 @@ async function launch(flags = '', settings) {
       { id: 'saver-worker', title: 'Worker', cmd: FAKE, cwd: profile },
     ],
   }));
-  const env = { ...process.env, ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: promptsFile, AGENTDECK_TEST_BOARD_FILE: boardFile };
+  const env = { ...process.env };
+  for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_')) delete env[key];
+  Object.assign(env, { ZDOTDIR: profile, AGENTDECK_TEST_PROMPTS_FILE: promptsFile, AGENTDECK_TEST_BOARD_FILE: boardFile, AGENTDECK_TEST_CONTROL_ENV_FILE: controlFile });
   delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({ executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
     args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [ROOT]), `--test-user-data=${profile}`], env });
@@ -47,6 +53,7 @@ async function launch(flags = '', settings) {
   await expect.poll(() => prompts().some((p) => p.startsWith('你是 AgentDeck'))).toBe(true);
 }
 test.afterEach(async () => {
+  if (receiptListener) { receiptListener.kill(); receiptListener = null; }
   if (application) await application.close();
   application = null;
   if (profile) fs.rmSync(profile, { recursive: true, force: true });
@@ -84,9 +91,9 @@ test('archives progress, waits for acknowledgement, sends /clear, rebriefs witho
 test('chat draft, attachments, raw terminal draft and busy/quota/input states block automatic sends', async () => {
   await launch();
   const ta = page.locator('.column.is-main .composer textarea');
-  await context(150000);
+  await context(149000);
   await tick();
-  await expect(banner()).toHaveCount(0); // strictly greater than threshold
+  await expect(banner()).toHaveCount(0); // below both compact and clearing thresholds
   await ta.fill('用户未发出的半句话');
   await context(290000);
   await tick();
@@ -112,7 +119,7 @@ test('cancel icon stops the cycle and suppresses repeated attempts at the same h
   await launch();
   await context(290000);
   await expect(banner()).toBeVisible({ timeout: 15000 });
-  const cancel = banner().getByRole('button', { name: '取消自动存档与清空' });
+  const cancel = banner().getByRole('button', { name: '取消自动压缩、存档与清空' });
   await expect(cancel).toHaveAttribute('title', /取消后续/);
   await expect(cancel.locator('svg')).toHaveCount(1);
   await cancel.click();
@@ -179,6 +186,7 @@ test('settings change threshold and disable the saver persistently', async () =>
   await expect(page.locator('#csThreshold')).toHaveValue('150');
   await shot('settings');
   await page.locator('#csThreshold').fill('350');
+  await page.locator('#csCompactThreshold').fill('349.999');
   await page.getByRole('button', { name: '保存设置' }).click();
   await context(290000); await tick();
   await expect(banner()).toHaveCount(0);
@@ -187,7 +195,7 @@ test('settings change threshold and disable the saver persistently', async () =>
   await page.getByRole('button', { name: '保存设置' }).click();
   await context(500000); await tick();
   await expect(banner()).toHaveCount(0);
-  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).captainTokenSaver).toEqual({ enabled: false, threshold: 350000 });
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).captainTokenSaver).toEqual({ enabled: false, threshold: 350000, compactThreshold: 349999 });
   expect(archivePrompts()).toHaveLength(0);
 });
 
@@ -214,3 +222,135 @@ test('background receipts and ledger deliver only 300 characters and five paths;
   }
   expect(result.read).toContain('/tmp/report-7.md');
 });
+
+test('compacts an idle Captain in place, checks its listener and cools down before another attempt', async () => {
+  test.setTimeout(90000);
+  await launch('', { threshold: 600000, compactThreshold: 450000 });
+  const original = await page.evaluate(() => {
+    MainSession.mainCol().modelSessionId = '00000000-0000-4000-8000-000000000001';
+    return { ids: columns.map((c) => c.id), history: config.captainHistory || [] };
+  });
+  await page.locator('.column.is-main .composer textarea').fill('最近原话：只提交任务分支，不能重启应用');
+  await page.locator('.column.is-main .composer textarea').press('Enter');
+  await expect.poll(() => page.evaluate(() => ChatUI.turnsOf('saver-captain').every((t) => t.done)), { timeout: 15000 }).toBe(true);
+  // A real authenticated CLI listener remains alive across the stand-in's compact.
+  // Claude itself preserves Bash jobs (official behavior); this checks AgentDeck's
+  // lease/status path without replacing it with a synthetic liveness message.
+  await expect.poll(() => fs.existsSync(controlFile)).toBe(true);
+  const controlEnv = JSON.parse(fs.readFileSync(controlFile, 'utf8'));
+  receiptListener = spawn(process.execPath, [path.join(ROOT, 'board-cli.js'), 'receipts', '--wait'], {
+    env: { ...process.env, ...controlEnv }, stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const listenerDir = path.join(controlEnv.AGENTDECK_CONTROL_DIR, 'receipt-listeners');
+  await expect.poll(() => fs.readdirSync(listenerDir).filter((name) => name.endsWith('.json')).length).toBe(1);
+  await context(500000);
+  await expect.poll(() => compactPrompts().length, { timeout: 25000 }).toBe(1);
+  expect(compactPrompts()[0]).toContain('用户最近的原话指示');
+  expect(compactPrompts()[0]).toContain('当前存活');
+  await expect.poll(() => compactChecks().length, { timeout: 20000 }).toBe(1);
+  await expect(banner()).toHaveCount(0, { timeout: 20000 });
+  expect(receiptListener.exitCode).toBeNull();
+  expect(fs.readdirSync(listenerDir).filter((name) => name.endsWith('.json'))).toHaveLength(1);
+  expect(prompts()).not.toContain('/clear');
+  expect(archivePrompts()).toHaveLength(0);
+  expect(await page.evaluate(() => columns.map((c) => c.id))).toEqual(original.ids);
+  expect(await page.evaluate(() => config.captainHistory || [])).toEqual(original.history);
+  expect(await page.evaluate(() => MainSession.mainCol().modelSessionId)).toBe('00000000-0000-4000-8000-000000000001');
+  await context(500000);
+  await page.waitForTimeout(5000);
+  await tick();
+  expect(compactPrompts()).toHaveLength(1);
+});
+
+test('outstanding receipts, unanswered questions and user turns block compact', async () => {
+  test.setTimeout(120000);
+  await launch('', { threshold: 600000, compactThreshold: 450000 });
+  await context(440000);
+  for (const block of ['pending', 'inflight', 'question', 'user']) {
+    await page.locator('.column.is-main .composer textarea').fill('测试正在设置触发条件');
+    await context(500000);
+    await page.evaluate((kind) => {
+      const s = MainSession.state(), e = terms.get('saver-captain');
+      e.state = 'done'; e.lastOutputAt = Date.now() - 10000;
+      if (kind === 'pending') s.pending.push({ colId: 'saver-worker', summary: '尚未处理', ts: Date.now() });
+      if (kind === 'inflight') s.inflight.push({ colId: 'saver-worker', summary: '已送到 CLI 未处理', viaChannel: true, takenAt: Date.now() });
+      if (kind === 'question') s.tasks.push({ id: 'compact-ask', colId: 'saver-worker', title: '等拍板', status: 'asking', receipt: { question: '选哪个？' } });
+      if (kind === 'user') { ChatUI.noteSent(MainSession.mainCol(), '用户刚发来的消息'); e.state = 'done'; }
+    }, block);
+    await page.locator('.column.is-main .composer textarea').fill('');
+    await tick();
+    expect(compactPrompts()).toHaveLength(0);
+    await page.evaluate(() => {
+      const s = MainSession.state(); s.pending = []; s.inflight = []; s.tasks = [];
+      ChatUI.turnsOf('saver-captain').forEach((t) => { t.done = true; });
+    });
+    await context(440000);
+  }
+});
+
+test('compact failure falls back to one archive and clear instead of another compact', async () => {
+  test.setTimeout(90000);
+  await launch(' --compact-fail', { threshold: 600000, compactThreshold: 450000 });
+  await context(500000);
+  await expect.poll(() => compactPrompts().length, { timeout: 25000 }).toBe(1);
+  await expect.poll(() => prompts().includes('/clear'), { timeout: 30000 }).toBe(true);
+  await expect.poll(() => prompts().filter((p) => p.startsWith('你是 AgentDeck')).length, { timeout: 20000 }).toBe(2);
+  expect(compactPrompts()).toHaveLength(1);
+  expect(archivePrompts()).toHaveLength(1);
+});
+
+test('a missing listener after compact causes one guarded recovery check and eventual clear fallback', async () => {
+  test.setTimeout(90000);
+  await launch('', { threshold: 600000, compactThreshold: 450000 });
+  await context(500000);
+  await expect.poll(() => compactChecks().length, { timeout: 30000 }).toBe(1);
+  await expect.poll(() => page.evaluate(() => terms.get('saver-captain').state)).toBe('done');
+  await page.evaluate(() => {
+    const realNow = Date.now;
+    Date.now = () => realNow() + 6 * 60_000;
+    try { const e = terms.get('saver-captain'); e.lastOutputAt = realNow() - 10000; MainSession.onTick('saver-captain', e); }
+    finally { Date.now = realNow; }
+  });
+  await expect.poll(() => prompts().includes('/clear'), { timeout: 30000 }).toBe(true);
+  expect(compactChecks()).toHaveLength(1);
+  expect(compactPrompts()).toHaveLength(1);
+});
+
+test('compact threshold is saved below clear threshold and non-Claude Captains skip compact quietly', async () => {
+  await launch('', { threshold: 600000, compactThreshold: 450000 });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('#csThreshold')).toHaveValue('600');
+  await expect(page.locator('#csCompactThreshold')).toHaveValue('450');
+  await page.locator('#csCompactThreshold').fill('600');
+  await page.getByRole('button', { name: '保存设置' }).click();
+  await expect(page.locator('#notificationSettings')).toBeVisible();
+  await page.locator('#csCompactThreshold').fill('420');
+  await page.getByRole('button', { name: '保存设置' }).click();
+  await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).captainTokenSaver.compactThreshold).toBe(420000);
+  await page.evaluate(() => { MainSession.mainCol().cmd = 'codex'; });
+  await context(500000); await tick();
+  expect(compactPrompts()).toHaveLength(0);
+  await expect(banner()).toHaveCount(0);
+});
+
+for (const [flag, description] of [['--compact-no-reset', 'unchanged footer'], ['--compact-still-high', 'context still above clearing threshold']]) {
+  test(`compact with ${description} falls back once without a retry loop`, async () => {
+    test.setTimeout(90000);
+    await launch(' ' + flag, { threshold: 600000, compactThreshold: 450000 });
+    await context(500000);
+    await expect.poll(() => compactPrompts().length, { timeout: 25000 }).toBe(1);
+    await expect.poll(() => page.evaluate(() => terms.get('saver-captain').state), { timeout: 15000 }).toBe('done');
+    await page.evaluate(() => {
+      if (MainSession.state().compact?.failed) return; // high usage can already have taken the fallback
+      const realNow = Date.now;
+      Date.now = () => realNow() + 6 * 60_000;
+      try { const e = terms.get('saver-captain'); e.lastOutputAt = realNow() - 10000; MainSession.onTick('saver-captain', e); }
+      finally { Date.now = realNow; }
+    });
+    await expect.poll(() => prompts().includes('/clear'), { timeout: 30000 }).toBe(true);
+    await expect.poll(() => prompts().filter((p) => p.startsWith('你是 AgentDeck')).length, { timeout: 20000 }).toBe(2);
+    expect(compactPrompts()).toHaveLength(1);
+    expect(archivePrompts()).toHaveLength(1);
+    expect(compactChecks()).toHaveLength(0);
+  });
+}

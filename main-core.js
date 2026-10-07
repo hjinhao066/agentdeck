@@ -82,7 +82,10 @@
   const MAX_FAILURE = 240;
   const MAX_FILES = 10;
   const MAX_PATH = 500;
-  const TOKEN_SAVER_DEFAULT = 150_000;
+  const TOKEN_SAVER_DEFAULT = 600_000;
+  const COMPACT_DEFAULT = 450_000;
+  const COMPACT_COOLDOWN = 30 * 60_000;
+  const COMPACT_TIMEOUT = 5 * 60_000;
   // The last moment the outgoing context still holds the user's words: decisions go to the file the handoff quotes.
   const ARCHIVE_PROMPT = '把当前进度写进 ~/.agents/boards/ 对应看板；用户的有效决定、暂停或取消、交付状态有变化的，一并更新到 ~/.agents/boards/agentdeck-captain-decisions.md。写完只回复 已存档';
   // The closing paragraph. What to do on arrival depends on the live state, so its
@@ -127,7 +130,25 @@
     return false;
   }
   function tokenSaverSettings(value) {
-    return { enabled: value?.enabled !== false, threshold: Number.isInteger(value?.threshold) && value.threshold > 0 ? value.threshold : TOKEN_SAVER_DEFAULT };
+    const threshold = Number.isInteger(value?.threshold) && value.threshold > 1 ? value.threshold : TOKEN_SAVER_DEFAULT;
+    const compact = Number.isInteger(value?.compactThreshold) && value.compactThreshold > 0 ? value.compactThreshold : COMPACT_DEFAULT;
+    return { enabled: value?.enabled !== false, threshold, compactThreshold: Math.min(compact, threshold - 1) };
+  }
+  function compactReady({ provider, used, settings, idle, pending, inflight, questions, mobile, cooldownUntil = 0, failed, now = Date.now() }) {
+    return settings.enabled && provider === 'Claude' && used !== null && used >= settings.compactThreshold &&
+      used <= settings.threshold && idle && !pending && !inflight && !questions && !mobile && !failed && now >= cooldownUntil;
+  }
+  // Only post-submission PTY output counts. A footer repaint or a small rounding
+  // change is not proof that the CLI summarized the conversation.
+  function compactOutcome({ before, after, output = '', elapsed, idle }) {
+    const text = String(output).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    if (/(?:compact(?:ion|ing)?[^\n]{0,60}(?:failed|failure|error|cancelled|canceled)|(?:failed|error|cannot|could not)[^\n]{0,60}compact|(?:unknown|unrecognized|unsupported) (?:slash )?command)/i.test(text)) return 'failed';
+    if (idle && after !== null && before - after >= Math.max(1000, before * 0.05)) return 'complete';
+    return elapsed >= COMPACT_TIMEOUT ? 'failed' : 'waiting';
+  }
+  function compactPrompt(listenerAlive) {
+    return '/compact 重点保留：当前所有未完成任务、任务卡及会话 id、授权范围和下一步；用户最近的原话指示（不要改写成新授权）；已经做出的决定、暂停或取消；未处理的回执与提问。后台 receipts --wait 监听' +
+      (listenerAlive ? '当前存活' : '当前状态待核对') + '，压缩不会停止后台命令，不要重复启动监听。保留这些任务的后台状态及恢复方法。AgentDeck 已刷新交接快照，必要时运行 handoff 核对；不要重新执行历史指令。';
   }
   // Only pass the TUI footer here: conversation text can quote a status line.
   function contextTokens(footer) {
@@ -1022,7 +1043,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, COMPACT_DEFAULT, COMPACT_COOLDOWN, COMPACT_TIMEOUT, compactReady, compactOutcome, compactPrompt, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };

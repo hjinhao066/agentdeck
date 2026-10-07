@@ -573,15 +573,39 @@ Tests simulate the power source: unit tests inject a `BatteryCore` state; the E2
 
 ### Automatic context saving (Claude Code Captain)
 
-Enabled by default at **150k tokens**. Open the sidebar's **settings icon** to
-change the threshold in k tokens or turn it off. The setting is saved locally.
+Enabled by default: **450k tokens** for idle `/compact`, **600k tokens** for
+checkpoint + `/clear`. Open the sidebar's **settings icon** to set both thresholds
+in k tokens or turn it off. The compact threshold must be smaller than the clear
+threshold. Saved clear thresholds are preserved; older lower thresholds clamp the
+compact threshold just below them. Both settings are saved locally.
 AgentDeck reads the live TUI status rows below the input box, such as
 `Context: … 290k/1000k`, including wrapped rows. A percentage alone, a missing
 status or a quoted line in a reply does not trigger it. Other agent providers
 are not sent Claude's `/clear` command.
 
-When usage is strictly above the threshold, the Captain is idle with quiet output,
-and both its chat composer (including attachments) and terminal input are empty:
+At or above the compact threshold, AgentDeck waits for three seconds of quiet
+output, a completed user reply and empty chat/terminal input (including attachments).
+Pending/unconfirmed receipts, unanswered worker questions and mobile messages hold
+compaction until handled. It refreshes the handoff snapshot, then sends `/compact`
+with instructions to preserve task/session IDs, recent verbatim user instructions,
+decisions, open receipts/questions and the background listener state. Claude keeps
+background commands running across compact; AgentDeck sends one guarded follow-up
+to check the handoff and keep exactly one background `receipts --wait` listener,
+rehanging only if absent. A fresh authenticated liveness report confirms recovery.
+Recovery still waits for a safe gap if a user message or receipt arrives, including
+after a restart. Other providers and explicit legacy receipt-injection mode skip
+this compact layer silently. AgentDeck does not change Claude's own auto-compact
+settings because they cannot enforce these application-level idle gates.
+
+A drop of at least 5% (and at least 1k tokens) in the live footer confirms compact;
+a repaint alone does not. Chat notices record the time and before/after usage.
+Attempts have a durable 30-minute cooldown. A CLI error, missing reduction after
+five minutes, missing listener recovery, or usage still at the clear threshold
+falls back to the existing checkpoint/clear flow once idle, without retrying compact.
+The clear threshold remains the fallback during cooldown too.
+
+When usage is strictly above the clear threshold (or compact has failed), the
+Captain is idle with empty input and a completed user reply:
 
 1. The Captain column's top line announces the process, with a cancellation icon.
 2. AgentDeck sends `把当前进度写进 ~/.agents/boards/ 对应看板，写完只回复 已存档`.

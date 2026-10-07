@@ -24,10 +24,12 @@
     <input type="text" id="barkKeyFile" placeholder="~/.secrets/bark-key.txt" autocomplete="off" spellcheck="false" aria-describedby="barkKeyNote" />
     <p id="barkKeyNote">这里只保存路径，文件仅含设备 key。留空则不发手机提醒；支持绝对路径和 ~/。手机需开启 Bark 重要警告权限。看板卡片进入「需要你」时自动推送，可用上面的开关关闭。队长可用 notify-user --test 发送【测试】通知（critical，音量 3）。</p>
     <h3>队长省上下文</h3>
-    <label class="sd-check"><input id="csEnabled" type="checkbox" />自动存看板并清空上下文</label>
-    <label for="csThreshold">上下文阈值（k tokens，默认 150）</label>
+    <label class="sd-check"><input id="csEnabled" type="checkbox" />空闲时自动压缩，必要时存档清空</label>
+    <label for="csCompactThreshold">压缩阈值（k tokens，默认 450）</label>
+    <input id="csCompactThreshold" type="number" min="0.001" step="0.001" required />
+    <label for="csThreshold">清空阈值（k tokens，默认 600）</label>
     <input id="csThreshold" type="number" min="1" step="1" required />
-    <p class="hint">仅 Claude Code 队长空闲且输入框为空时执行：存看板 → 收到「已存档」→ /clear → 重发提示词并读看板继续。顶部可取消后续步骤。</p>
+    <p class="hint">压缩阈值须小于清空阈值。仅 Claude Code 队长空闲、输入为空且没有待处理消息时自动压缩，保留当前对话并核对回执监听；30 分钟内不重复压缩。压缩失败或超过清空阈值时：存看板 → 收到「已存档」→ /clear → 重发提示词并读看板继续。顶部可取消后续步骤。</p>
     <h3>队长交接</h3>
     <label for="handoffBudget">交接长度预算（字，4000–60000，默认 12000）</label>
     <input id="handoffBudget" type="number" min="4000" max="60000" step="500" inputmode="numeric" required autocomplete="off" aria-describedby="handoffBudgetNote" />

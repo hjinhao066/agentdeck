@@ -14,7 +14,8 @@
   const STOP_QUIET = 3 * 60_000; // ended turns with no command receipt
   const dispatches = new Map();  // one delivery loop per session; additions merge until submission
   let tokenSaving = null;
-  let tokenSaverPaused = false;  // cancel/failure: no retry until usage falls below the threshold
+  let tokenSaverPaused = 0;  // cancel/failure: usage must fall to this threshold before retry
+  let tokenSaverPauseCompact = false;
   let contextReset = null;
   let mobileDelivery = null;
   let listenerStatus = null;
@@ -541,16 +542,21 @@
   }
   function initDialog() {
     const settings = $('notificationSettings');
-    $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
+    $('csEnabled').onchange = () => { $('csThreshold').disabled = $('csCompactThreshold').disabled = !$('csEnabled').checked; };
+    const validateCompact = () => $('csCompactThreshold').setCustomValidity(
+      Number($('csCompactThreshold').value) >= Number($('csThreshold').value) ? '压缩阈值必须小于清空阈值' : '');
+    $('csCompactThreshold').oninput = $('csThreshold').oninput = validateCompact;
     if ($('batteryMode')) $('batteryMode').onchange = syncBatteryField;
     $('csSave').onclick = () => {
-      if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
+      validateCompact();
+      if ($('csEnabled').checked && (!$('csThreshold').reportValidity() || !$('csCompactThreshold').reportValidity())) return;
       if (!$('concurrencyCap').reportValidity()) return;
       if ($('batteryConcurrency') && !$('batteryConcurrency').disabled && $('batteryConcurrency').reportValidity && !$('batteryConcurrency').reportValidity()) return;
       const budgetBox = $('handoffBudget');
       if (budgetBox?.reportValidity && !budgetBox.reportValidity()) return;
       if (budgetBox && budgetBox.value !== undefined) host.config.captainHandoffBudget = M.handoffBudget(budgetBox.value);
-      host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000 });
+      host.config.captainTokenSaver = M.tokenSaverSettings({ enabled: $('csEnabled').checked, threshold: Number($('csThreshold').value) * 1000,
+        compactThreshold: Number($('csCompactThreshold').value) * 1000 });
       host.config.resumeOnRestart = $('resumeOnRestart').checked;
       if (Bat() && $('batteryMode')) {
         host.config.batteryMode = Bat().normalizeMode($('batteryMode').value);
@@ -560,7 +566,7 @@
       }
       applyConcurrencyCap($('concurrencyCap').value);
       cancelTokenSaving();
-      tokenSaverPaused = false;
+      tokenSaverPaused = 0;
       save();
       settings.close();
     };
@@ -585,6 +591,9 @@
     $('csEnabled').checked = settings.enabled;
     $('csThreshold').value = settings.threshold / 1000;
     $('csThreshold').disabled = !settings.enabled;
+    $('csCompactThreshold').value = settings.compactThreshold / 1000;
+    $('csCompactThreshold').disabled = !settings.enabled;
+    $('csCompactThreshold').setCustomValidity('');
     $('concurrencyCap').value = M.concurrencyCap(host.config.concurrencyCap);
     if (Bat() && $('batteryMode')) {
       $('batteryMode').value = Bat().normalizeMode(host.config.batteryMode);
@@ -620,7 +629,7 @@
       const cancel = el('button', 'icon-btn');
       cancel.type = 'button'; cancel.innerHTML = host.ICONS.close;
       cancel.title = '取消后续自动步骤（已发送的命令无法撤回）';
-      cancel.setAttribute('aria-label', '取消自动存档与清空');
+      cancel.setAttribute('aria-label', '取消自动压缩、存档与清空');
       cancel.onclick = cancelTokenSaving;
       banner.append(label, cancel);
       wrap.querySelector('.col-head').after(banner);
@@ -632,8 +641,10 @@
       clearTimeout(tokenSaving.timer);
       tokenSaving.reject(new Error('Relay存档已取消'));
     }
+    const settings = M.tokenSaverSettings(host.config.captainTokenSaver);
+    tokenSaverPauseCompact = tokenSaving?.kind === 'compact';
+    tokenSaverPaused = tokenSaverPauseCompact ? settings.compactThreshold : settings.threshold;
     tokenSaving = null;
-    tokenSaverPaused = true;
     saverBanner('');
   }
 
@@ -716,6 +727,87 @@
     cancelTokenSaving();
     host.showToast(message + '；自动清理已暂停');
   }
+  function saverIdle(col, entry) {
+    return entry.alive && !briefing && !delivering && !mobileDelivery && !listenerReminderSending && !entry.sendingPrompt && !entry.injecting &&
+      entry.state === 'done' && !M.terminalActivity(entry.lastScreen, col.cmd) &&
+      Date.now() - (entry.lastOutputAt || 0) >= 3000 && !host.userComposing(col.id) &&
+      !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
+  }
+  function compactWorkWaiting() {
+    const s = state();
+    return { pending: s.pending.length > 0,
+      inflight: unreadReceipts(s.inflight, new Set(normalizeSeenIds(s.receiptsSeen))).length > 0 || unconfirmedReceipts(s).length > 0 || !!carriedReceipts(s),
+      questions: s.tasks.some((t) => ['asking', 'input'].includes(t.status)), mobile: !!s.mobileMessages?.length };
+  }
+  function listenerAlive(colId, since = 0) {
+    return listenerStatus?.colId === colId && listenerStatus.alive && listenerStatus.at >= since && Date.now() - listenerStatus.at < 30_000;
+  }
+  function compactRecord(op, used, result) {
+    const size = used === null ? '未知' : `${Math.round(used / 1000)}k`;
+    window.ChatUI.addNotice(op.colId, `上下文压缩${result} · ${new Date().toLocaleString()} · ${Math.round(op.used / 1000)}k → ${size}`);
+  }
+  function compactFailed(op, used, reason) {
+    if (tokenSaving !== op) return;
+    state().compact = { cooldownUntil: Date.now() + M.COMPACT_COOLDOWN, failed: true, fallback: true, needsCheck: false, before: op.used };
+    compactRecord(op, used, '失败（' + reason + '），待空闲后存档清空');
+    tokenSaving = null;
+    tokenSaverPaused = 0;
+    saverBanner(''); save();
+  }
+  function compactSend(op, text, phase, onSent) {
+    op.phase = phase; op.since = Date.now();
+    const col = mainCol();
+    host.sendWhenReady(col, text, {
+      silent: true, guardUserInput: true, requireIdle: true, timeout: M.COMPACT_TIMEOUT,
+      cancelled: () => {
+        if (op.entry.injecting) return false;
+        if (tokenSaving !== op) return true;
+        if (!saverIdle(col, op.entry) || Object.values(compactWorkWaiting()).some(Boolean)) {
+          // Nothing has been pasted yet. Let ordinary delivery/user work win.
+          // The post-compact obligation stays in config for the next safe gap.
+          tokenSaving = null; saverBanner(''); return true;
+        }
+        return false;
+      },
+      onSent: () => { if (tokenSaving === op) { op.since = Date.now(); onSent(); } },
+      onGiveUp: () => compactFailed(op, null, '命令未送达'),
+    });
+  }
+  function compactTick(op, used, idle, settings) {
+    if (op.phase === 'compact-queued') {
+      if (!idle || Object.values(compactWorkWaiting()).some(Boolean)) { tokenSaving = null; saverBanner(''); return; }
+      if (Date.now() - op.since < 3000) return;
+      op.phase = 'compact-snapshot';
+      window.deck.captainHandoff(handoffSnapshot('refresh')).then(() => {
+        if (tokenSaving !== op) return;
+        compactSend(op, M.compactPrompt(listenerAlive(op.colId)), 'compact-sending', () => {
+          op.phase = 'compacting'; op.output = ''; op.submitted = true;
+          state().compact = { cooldownUntil: Date.now() + M.COMPACT_COOLDOWN, failed: false, fallback: false,
+            needsCheck: true, needsOutcome: true, sentAt: Date.now(), before: op.used };
+          compactRecord(op, null, '开始'); save();
+        });
+      }, () => compactFailed(op, used, '交接快照无法保存'));
+    } else if (op.phase === 'compacting') {
+      if (idle && used !== null && used >= settings.threshold) { compactFailed(op, used, '仍达到清空阈值'); return; }
+      const outcome = M.compactOutcome({ before: op.used, after: used, output: op.output, elapsed: Date.now() - op.since, idle });
+      if (outcome === 'failed') { compactFailed(op, used, '未确认上下文下降或 CLI 报错'); return; }
+      if (outcome !== 'complete') return;
+      state().compact.needsOutcome = false; save();
+      compactRecord(op, used, '完成');
+      op.phase = 'compact-check-queued'; op.since = Date.now();
+    } else if (op.phase === 'compact-check-queued') {
+      if (!idle || Object.values(compactWorkWaiting()).some(Boolean)) { tokenSaving = null; saverBanner(''); return; }
+      // Claude keeps background Bash jobs, but reestablish its awareness even
+      // when the authenticated lease is alive. Never blindly create a duplicate.
+      compactSend(op, '【AgentDeck 压缩后核对】刚完成 /compact，仍是同一个对话。先运行 handoff 核对当前任务与会话 id、用户原话、决定及未处理回执/提问，历史指令不要重做。回执监听' +
+        (listenerAlive(op.colId) ? '仍存活，保留它' : '未确认存活') + '；检查已有 Bash 后台任务，确保恰好一个 node "$AGENTDECK_BOARD_CLI" receipts --wait（run_in_background: true、不设超时）；没有才立即重挂，已有不要重复启动。',
+      'compact-check-sending', () => { op.phase = 'compact-listener'; });
+    } else if (op.phase === 'compact-listener' && idle && listenerAlive(op.colId, op.since)) {
+      state().compact.cooldownUntil = Date.now() + M.COMPACT_COOLDOWN;
+      state().compact.needsCheck = false;
+      tokenSaving = null; saverBanner(''); save();
+    } else if (Date.now() - op.since >= M.COMPACT_TIMEOUT) compactFailed(op, used, '压缩后监听未恢复或步骤超时');
+  }
   function saverSend(op, text, phase, silent, onSent) {
     op.phase = phase;
     op.since = Date.now();
@@ -751,17 +843,38 @@
     // Read the actual footer, including soft-wrapped rows, in either view.
     const footer = window.ChatUI.readFooter(entry.term);
     const used = M.contextTokens((footer || []).map((row) => row.map((s) => s.text).join('')).join('\n'));
-    const idle = !briefing && !delivering && !entry.sendingPrompt && entry.state === 'done' && !M.terminalActivity(entry.lastScreen, col?.cmd) &&
-      Date.now() - (entry.lastOutputAt || 0) >= 3000 && !host.userComposing(col.id) &&
-      !window.ChatUI.turnsOf(col.id).some((t) => t.kind !== 'task' && !t.done);
+    const idle = saverIdle(col, entry);
+    const work = compactWorkWaiting();
     if (!tokenSaving) {
-      if (used !== null && used <= settings.threshold) tokenSaverPaused = false;
-      if (tokenSaverPaused || used === null || used <= settings.threshold || !idle || window.AgentInfo.inferProvider(col.cmd, entry.lastScreen) !== 'Claude') return;
-      tokenSaving = { colId: col.id, entry, used, phase: 'queued', since: Date.now() };
-      saverBanner(`上下文 ${(used / 1000).toFixed(0)}k：准备存看板 → 清空 → 读看板继续`);
+      if (used !== null && tokenSaverPaused && (used < tokenSaverPaused || (used === tokenSaverPaused && !tokenSaverPauseCompact))) tokenSaverPaused = 0;
+      const compact = state().compact || {};
+      if (used !== null && used < settings.compactThreshold && compact.failed && !compact.fallback) { delete state().compact; save(); }
+      if (used === null && !compact.needsCheck && !compact.fallback) return;
+      const provider = window.AgentInfo.inferProvider(col.cmd, entry.lastScreen);
+      if (compact.needsCheck && state().legacyReceiptInjection) { compact.needsCheck = false; save(); }
+      if (compact.needsCheck && provider === 'Claude') {
+        // Reading the outcome injects nothing; pending work must not prevent
+        // validation after an interrupted compact. Only its follow-up send waits.
+        if (idle && (compact.needsOutcome || !Object.values(work).some(Boolean))) {
+          tokenSaving = { kind: 'compact', colId: col.id, entry, used: compact.before || used,
+            phase: compact.needsOutcome ? 'compacting' : 'compact-check-queued', since: compact.needsOutcome ? compact.sentAt : Date.now(),
+            output: '', submitted: !!compact.needsOutcome };
+          saverBanner('上下文压缩后，等待核对回执监听');
+        }
+        return;
+      }
+      if (!state().legacyReceiptInjection && !tokenSaverPaused && M.compactReady({ provider, used, settings, idle, ...work, ...compact, now: Date.now() })) {
+        tokenSaving = { kind: 'compact', colId: col.id, entry, used, phase: 'compact-queued', since: Date.now() };
+        saverBanner(`上下文 ${Math.round(used / 1000)}k：准备压缩，保留当前对话`); return;
+      }
+      if (tokenSaverPaused || (used === null && !compact.fallback) || (used <= settings.threshold && !compact.fallback) || !idle || provider !== 'Claude') return;
+      if (compact.fallback) { compact.fallback = false; save(); }
+      tokenSaving = { colId: col.id, entry, used: used ?? compact.before, phase: 'queued', since: Date.now() };
+      saverBanner(`上下文 ${(tokenSaving.used / 1000).toFixed(0)}k：准备存看板 → 清空 → 读看板继续`);
       return;
     }
     const op = tokenSaving;
+    if (op.kind === 'compact') { compactTick(op, used, idle, settings); return; }
     if (Date.now() - op.since > 5 * 60_000) { saverFailed(op.phase === 'cleared' ? '/clear 后未确认上下文下降，请手动检查队长' : '未收到存档确认或队长一直忙碌'); return; }
     if (!idle) return;
     if (op.phase === 'queued' && Date.now() - op.since >= 3000) {
@@ -791,6 +904,7 @@
     const retired = window.ChatUI.archiveCaptainSnapshot(col.id, snapshot);
     if (retired) host.config.captainHistory = M.normalizeHistory([...(host.config.captainHistory || []), { ...retired, clearedAt: Date.now() }]);
     const s = state();
+    delete s.compact; // the cooldown/recovery belongs to the outgoing context
     s.pending = [...requeued(s.inflight), ...s.pending];
     s.inflight = [];
     delete col.modelSessionId;
@@ -823,6 +937,8 @@
   }
   function onOutput(id, data) {
     if (contextReset?.col.id === id && contextReset.submitted && !contextReset.confirmed) contextReset.output = (contextReset.output + data).slice(-16000);
+    if (tokenSaving?.kind === 'compact' && tokenSaving.colId === id && tokenSaving.submitted && tokenSaving.phase === 'compacting')
+      tokenSaving.output = (tokenSaving.output + data).slice(-16000);
   }
   function contextResetTick(entry) {
     const op = contextReset;
@@ -910,6 +1026,7 @@
     s.cmd = col.cmd;
     if (rotation) { delete col.agentProvider; delete col.agentModel; delete col.agentEffort; }
     const fresh = host.respawnColumn(col, { freshChat: true });   // new id, new shell, new token
+    delete s.compact;
     s.colId = fresh.id;
     if (rotation && window.RelayStartupCore) {
       s.relayStartup = window.RelayStartupCore.begin(options.automatic ? s.relayStartup : {},
@@ -1946,7 +2063,7 @@
     if (listenerStatus.alive || !s.pending.length) { listenerReminder = false; return; }
     if (listenerReminder || listenerReminderSending || Date.now() - Math.min(...s.pending.map((p) => p.ts || Date.now())) < 3 * 60_000 ||
         !entry.alive || entry.sendingPrompt || ['working', 'quota', 'input'].includes(entry.state) ||
-        M.terminalActivity(entry.lastScreen, col.cmd) || briefing === col.id || host.userComposing(col.id)) return;
+        M.terminalActivity(entry.lastScreen, col.cmd) || briefing === col.id || tokenSaving || contextReset || host.userComposing(col.id)) return;
     listenerReminderSending = true;
     Promise.resolve(host.agentInForeground(col, false)).then((ok) => {
       if (!ok || mainCol() !== col || listenerStatus?.alive || !s.pending.length || !entry.alive ||
@@ -1989,8 +2106,10 @@
     if (id === s.colId) {
       const busy = entry.alive && (entry.state === 'working' || M.terminalActivity(entry.lastScreen, mainCol()?.cmd) === 'working');
       // Only a receipt taken before a stretch began was in front of the model for all of it.
-      if (busy) captainBusySince ||= Date.now();
-      else if (captainBusySince && entry.state === 'done') { s.captainSettledAt = Math.max(s.captainSettledAt || 0, captainBusySince); captainBusySince = 0; save(); }
+      if (tokenSaving?.kind !== 'compact' && !s.compact?.needsOutcome) {
+        if (busy) captainBusySince ||= Date.now();
+        else if (captainBusySince && entry.state === 'done') { s.captainSettledAt = Math.max(s.captainSettledAt || 0, captainBusySince); captainBusySince = 0; save(); }
+      }
       for (const [cardId, input] of quotaStarts) {
         if (quotaPlan(window.BoardCore.commandForAgent('agy')).action !== 'queue') {
           quotaStarts.delete(cardId);

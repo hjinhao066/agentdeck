@@ -136,6 +136,15 @@ function answer() {
   if (first.startsWith('/model ')) model = first.slice(7).trim();
   if (first.startsWith('/context ')) contextUsed = Number(first.slice(9));
   if (first === '/clear' && !process.argv.includes('--clear-no-reset')) contextUsed = 23000;
+  if (process.argv.includes('--token-saver') && /^\/compact(?:\s|$)/.test(first)) {
+    process.stdout.write('\x1b[2J\x1b[H');
+    if (process.argv.includes('--compact-fail')) process.stdout.write('Error: Compaction failed\n');
+    else {
+      if (!process.argv.includes('--compact-no-reset')) contextUsed = process.argv.includes('--compact-still-high') ? 650000 : 80000;
+      process.stdout.write('⏺ Conversation compacted\n');
+    }
+    box(); return;
+  }
   if (/ask me/.test(text)) {
     // Redraw the confirmation like the other TUI replies. Raw input has no
     // console echo to separate this turn from the previous input box/footer.
