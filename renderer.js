@@ -871,8 +871,9 @@ function positionQuotaDetails() {
   tip.classList.toggle('quota-tooltip-compact', width < 340);
   tip.style.maxWidth = width + 'px';
   tip.style.left = (left - r.left) + 'px';
-  const top = panel === pop ? r.top : r.bottom - tip.offsetHeight;
-  tip.style.top = (Math.max(8, Math.min(top, window.innerHeight - tip.offsetHeight - 8)) - r.top) + 'px';
+  const height = tip.getBoundingClientRect().height;
+  const top = panel === pop ? r.top : r.bottom - height;
+  tip.style.top = (Math.max(8, Math.min(top, window.innerHeight - height - 8)) - r.top) + 'px';
 }
 window.addEventListener('resize', positionQuotaDetails);
 function toggleQuotaPop(open) {
