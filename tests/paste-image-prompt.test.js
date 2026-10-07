@@ -5,10 +5,11 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const ChatCore = require('../chat-core');
+const MainCore = require('../main-core');
 
 // ChatUI.sendPrompt, cut out of chat-ui.js and run against a stand-in terminal.
 const source = fs.readFileSync(path.join(__dirname, '../chat-ui.js'), 'utf8');
-const body = source.slice(source.indexOf('  const LONG_PROMPT = 8000;'), source.indexOf('  // Resolves to the turn (or true) once the file is written'));
+const body = source.slice(source.indexOf('  const PASTE_READ_MAX = 30_000;'), source.indexOf('  // Resolves to the turn (or true) once the file is written'));
 
 function harness({ footerAt }) {
   const sent = [];
@@ -22,7 +23,7 @@ function harness({ footerAt }) {
   };
   const context = vm.createContext({
     C: ChatCore, host, Date, setTimeout, Promise,
-    window: { deck: { ptyInput: (id, data) => sent.push({ data, at: Date.now() - t0 }), notifyCancel() {} }, MainSession: null, BoardCore: { inferAgentType: () => 'Claude' } },
+    window: { deck: { ptyInput: (id, data) => sent.push({ data, at: Date.now() - t0 }), notifyCancel() {} }, MainSession: null, MainCore, BoardCore: { inferAgentType: () => 'Claude' } },
     beginTurn: () => ({ id: 't' }),
   });
   vm.runInContext(body, context);

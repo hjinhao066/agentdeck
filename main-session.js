@@ -785,10 +785,10 @@
     } else if (op.phase === 'cleared' && used !== null && used < op.used / 2) {
       archiveSnapshot(col, op.snapshot);
       saverBanner('上下文已清空，正在重发队长提示词');
-      // The briefing already ends with AUTONOMOUS_CONTINUATION. Appending it
-      // again exceeds the 8000-character inline limit, so the captain would
-      // only see a file pointer and miss the "don't wait" closing.
-      saverSend(op, briefingText() + '\n\n读看板继续。', 'briefing', true, () => {
+      // The briefing already ends with AUTONOMOUS_CONTINUATION, so only the short
+      // resume line follows it. Past M.LONG_PROMPT the captain would only see a
+      // file pointer and miss the "don't wait" closing.
+      saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true, () => {
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
       });
@@ -1228,7 +1228,7 @@
   async function enqueue(title, cmd, cwd, requestId, text, metadata = {}, reason = '') {
     const s = state();
     let body = text;
-    if (body.length > 8000 && metadata.executor !== 'chatgpt-web') {
+    if (body.length > M.LONG_PROMPT && metadata.executor !== 'chatgpt-web') {
       const file = await window.deck.saveLongPrompt(body).catch(() => '');
       if (!file) throw new Error('任务太长，存文件失败，没有排上队。');
       body = `${body.slice(0, 300).replace(/\s+/g, ' ').trim()}…\n（这件活共 ${text.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;

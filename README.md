@@ -642,8 +642,9 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   paragraph tells the Captain to run `handoff` first and follow its takeover
   steps: report ready when nothing is open, carry on unprompted when authorised
   work is out, and leave paused or cancelled work alone. That paragraph is
-  not appended again: the combined text would exceed the inline prompt limit
-  and be replaced by a file pointer. The delivery waits for an idle
+  not appended again: the briefing has to stay inside the 10,000-character
+  inline prompt limit (`MainCore.LONG_PROMPT`), past which it is replaced by a
+  file pointer that hides the closing. The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
   including attachments, and rechecks these guards when sending.
 - Raw terminal history recall, Tab completion and cursor edits make the tracked
@@ -740,7 +741,7 @@ folded behind one line with their count and state; click it to open them.
   without `--no-daemon`; model and resume arguments are preserved.
 - The composer takes pasted screenshots, dropped files and files picked with +
   as attachments; they are sent as paths ahead of the text.
-- Prompts have no length limit. One longer than 8000 characters is saved as a
+- Prompts have no length limit. One longer than 10,000 characters is saved as a
   private `.txt` in userData/`long-prompts` (pruned after 60 days) and the agent
   gets its opening plus "read this file first"; the bubble shows the file.
 - Automatic sends (Schedule, 队长) never type into a bare shell, which would run
@@ -804,7 +805,7 @@ new terminal, so an agent launching the app cannot disable independent CLI histo
   its session's id.
 - Limits: history only exists from when AgentDeck recorded it. Older or deleted
   conversations and agent CLIs' own transcripts are not imported. A reply is the
-  screen-extracted final answer, cut at 20,000 characters. A prompt over 8,000
+  screen-extracted final answer, cut at 20,000 characters. A prompt over 10,000
   characters goes out as a file, and its bubble keeps the opening plus that file.
   All chats are loaded into memory at launch. A single chat file larger than
   64 MB is no longer written: you get a warning, and what was saved before stays.
@@ -1084,7 +1085,7 @@ Both paths use the same code on macOS and Windows (agy's Windows config is `%USE
 
 A prompt that carries an image path (for example a screenshot) is turned into an attachment by Claude Code, which says "Pasting…" in its footer while it reads the file and drops an Enter pressed meanwhile. AgentDeck therefore waits (at most 30 s) until that footer is gone before it presses Enter, so the task is submitted instead of sitting in the input box.
 
-The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. Notification and token-saver controls share the Settings dialog.
+The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in
 [Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and

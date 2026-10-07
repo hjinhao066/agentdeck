@@ -1335,9 +1335,8 @@
   // not into the bubble; silent sends no bubble at all. Every other send is
   // recorded as a turn in either view (force is accepted for older callers).
   // Returns the recorded turn, true when sent without one, or false.
-  // No length limit: a prompt longer than this is saved as a .txt file and the
-  // agent gets its opening plus "read this file first".
-  const LONG_PROMPT = 8000;
+  // No length limit: a prompt longer than MainCore.LONG_PROMPT is saved as a .txt
+  // file and the agent gets its opening plus "read this file first".
   // A pasted image path is read by the agent before it accepts Enter; a big image takes a few seconds.
   const PASTE_READ_MAX = 30_000;
   async function sendPrompt(col, prompt, atts, opts) {
@@ -1346,7 +1345,7 @@
     const entry = host.terms.get(col.id);
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
     if (o.requireIdle && (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen, col.cmd))) return false;
-    if (prompt && prompt.length > LONG_PROMPT) return sendLong(col, prompt, atts, o);
+    if (prompt && prompt.length > window.MainCore.LONG_PROMPT) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
     // guardUserInput (receipts, 队长's work for others): never into an input box
     // the user is typing in, because the Enter below would send their words

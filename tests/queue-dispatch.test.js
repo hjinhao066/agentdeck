@@ -56,7 +56,7 @@ test('failed long-body save or board bind preserves the original queued request 
     const old = h.state.waitlist[0], task = h.state.tasks[0];
     if (mode === 'save') { h.out.add('next-held'); h.failLong = true; }
     else h.failBind = true;
-    await assert.rejects(h.assign(card, mode === 'save' ? 'next-held' : 'available', mode === 'save' ? 'x'.repeat(9000) : 'New body'), /存文件失败|bind failed/);
+    await assert.rejects(h.assign(card, mode === 'save' ? 'next-held' : 'available', mode === 'save' ? 'x'.repeat(M.LONG_PROMPT + 1) : 'New body'), /存文件失败|bind failed/);
     assert.equal(h.state.waitlist.length, 1);
     assert.equal(h.state.waitlist[0], old);
     assert.equal(old.task, 'Original body');

@@ -98,7 +98,7 @@ test('pasted images stay as attachments when the text is deleted, and go out as 
 
 test('a very long prompt is not cut: it goes to the agent as a file', async () => {
   const col = page.locator('.column[data-col-id="ws-c"]');
-  const long = 'LONGSTART ' + '这是一段很长的需求说明。'.repeat(800) + ' LONGEND';
+  const long = 'LONGSTART ' + '这是一段很长的需求说明。'.repeat(1000) + ' LONGEND';
   await page.evaluate((t) => { const ta = document.querySelector('.column[data-col-id="ws-c"] .composer textarea'); ta.value = t; ta.dispatchEvent(new Event('input')); }, long);
   await col.locator('.composer textarea').press('Enter');
   const bubble = col.locator('.msg.user').last();
