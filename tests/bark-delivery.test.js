@@ -213,3 +213,72 @@ test('a settled old batch never clears a different instances new inflight marker
   failCleanup = false; await second.flush();
   assert.equal(calls, 2); assert.deepEqual(h.saved.pending, []);
 });
+
+test('a machine with no phone key drops the reminder with a setup hint instead of piling it up', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bark-no-default-key-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const h = harness({ at: local(7, 12) }), failures = [];
+  h.delivery = createBarkDelivery({ ...h.options, onFailure: (p) => failures.push(p) });
+  const { createBarkSender } = require('../notify-user');
+  const fetchImpl = () => assert.fail('must not send without a key');
+  // Blank setting + no ~/.secrets/bark-key.txt (Windows by default).
+  const send = createBarkSender({ getConfig: () => ({}), keyHome: dir, delivery: h.delivery, fetchImpl });
+  for (const message of ['US 未登录', '额度偏低']) {
+    const result = await send({ message, level: 'critical' });
+    assert.equal(result.ok, false); assert.equal(result.queued, false); assert.equal(result.sent, false);
+    assert.match(result.message, /还没有配置手机提醒密钥.*不会补发.*设置/);
+  }
+  assert.deepEqual(h.saved.pending, []); assert.equal(h.saved.inflight, null); assert.equal(h.saved.retryAt, 0);
+  assert.equal(failures.length, 1); assert.equal(failures[0].retained, false);
+  assert.match(h.delivery.status().lastError, /还没有配置手机提醒密钥/);
+  // Quiet hours still hold it; the morning flush then drops it rather than retrying every minute.
+  h.at = local(7, 23); await send({ message: '夜里掉登录', level: 'critical' });
+  assert.equal(h.saved.pending.length, 1);
+  h.at = local(8, 10); await h.delivery.flush(); assert.deepEqual(h.saved.pending, []);
+  // An explicit path that cannot be read is a fault, not an unconfigured machine: keep and retry.
+  const explicit = createBarkSender({ getConfig: () => ({ barkKeyFile: path.join(dir, 'missing') }), keyHome: dir, delivery: h.delivery, fetchImpl });
+  const kept = await explicit({ message: '路径填错', level: 'critical' });
+  assert.equal(kept.queued, true); assert.equal(h.saved.pending.length, 1); assert.equal(h.saved.retryAt, h.at + 60_000);
+  // A key file that exists but is malformed is kept too.
+  fs.mkdirSync(path.join(dir, '.secrets')); fs.writeFileSync(path.join(dir, '.secrets/bark-key.txt'), 'not a key!');
+  h.at += 60_000; assert.equal((await send({ message: '文件坏了', level: 'critical' })).queued, true);
+  assert.equal(h.saved.pending.length, 2);
+});
+test('reminders that could not go out for 24 hours are discarded, newer ones still go', async () => {
+  const h = harness({ at: local(7, 12) }); let ok = false;
+  h.delivery = createBarkDelivery({ ...h.options, sendNow: async (p) => { h.calls.push(p); return { ok }; } });
+  await h.delivery.send(payload('旧提醒', { dedupeKey: 'old' }));
+  h.at += 23 * 3600_000; await h.delivery.send(payload('新提醒', { dedupeKey: 'new' }));
+  assert.equal(h.saved.pending.length, 2);
+  h.at = local(8, 12) + 1; ok = true; h.calls.length = 0; await h.delivery.flush();
+  assert.equal(h.calls.length, 1); assert.match(h.calls[0].message, /新提醒/); assert.doesNotMatch(h.calls[0].message, /旧提醒/);
+  assert.deepEqual(h.saved.pending, []);
+  // Everything stale: the queue empties without sending and without a leftover retry or error.
+  ok = false; await h.delivery.send(payload('只剩旧的', { dedupeKey: 'only' }));
+  h.at += 24 * 3600_000 + 1; h.calls.length = 0; await h.delivery.flush();
+  assert.equal(h.calls.length, 0); assert.deepEqual(h.saved.pending, []);
+  assert.equal(h.saved.retryAt, 0); assert.equal(h.delivery.status().lastError, '');
+});
+test('a "sending" record older than 60 seconds is treated as interrupted even when its process id is alive', async () => {
+  const h = harness({ at: local(7, 12) }), failures = [];
+  const state = (startedAt) => ({ pending: [{ ...payload('A'), key: 'a', createdAt: h.at }], retryAt: 0,
+    inflight: { ownerPid: process.pid, batchId: 'other', keys: ['a'], ...(startedAt === undefined ? {} : { startedAt }) } });
+  // Recent and alive: someone is still sending, leave it alone.
+  h.delivery = createBarkDelivery({ ...h.options, state: state(h.at - 59_000) });
+  assert.match((await h.delivery.flush()).message, /正在发送/); assert.equal(h.delivery.status().uncertain, false);
+  // Stale (reused pid after a forced restart) or written before records carried a time: visible, and refresh recovers.
+  for (const startedAt of [h.at - 60_001, undefined]) {
+    h.calls.length = 0;
+    h.delivery = createBarkDelivery({ ...h.options, state: state(startedAt), onFailure: (p) => failures.push(p) });
+    assert.equal((await h.delivery.flush()).ok, false); assert.equal(h.delivery.status().uncertain, true);
+    assert.match(h.delivery.status().lastError, /送达结果不明/); assert.equal(h.calls.length, 0);
+    await h.delivery.retry(); assert.equal(h.calls.length, 1); assert.deepEqual(h.saved.pending, []);
+  }
+  assert.equal(failures.length, 2);
+  // One click on refresh is enough from the stuck state as well.
+  h.calls.length = 0; h.delivery = createBarkDelivery({ ...h.options, state: state(h.at - 60_001) });
+  await h.delivery.retry(); assert.equal(h.calls.length, 1);
+  // A new send stamps its record.
+  let seen; h.delivery = createBarkDelivery({ ...h.options, sendNow: async () => { seen = h.saved.inflight; return { ok: true }; } });
+  await h.delivery.send(payload('B')); assert.equal(seen.startedAt, h.at); assert.equal(seen.ownerPid, process.pid);
+});

@@ -742,21 +742,20 @@ async function updateBarkPolicyStatus() {
     const calendar = status.calendar || {};
     const calendarText = calendar.state === 'disabled' ? '已关闭' : calendar.available ?
       `已缓存（更新于 ${new Date(calendar.fetchedAt).toLocaleString()}）` : calendar.fallback ? '不可用，使用每周固定上课时段' : '不可用，未设置固定上课时段，上课时手机可能响';
-    node.textContent = `暂存手机提醒：${status.queuedCount || 0} 条。课程日历：${calendarText}。${status.lastError ? `发送失败待重试：${status.lastError}${status.retryAt ? `（${new Date(status.retryAt).toLocaleTimeString()}后重试）` : ''}。` : ''}`;
+    node.textContent = `暂存手机提醒：${status.queuedCount || 0} 条。课程日历：${calendarText}。${status.lastError ? `${status.queuedCount ? '发送失败待重试：' : ''}${status.lastError.replace(/。$/, '')}${status.retryAt ? `（${new Date(status.retryAt).toLocaleTimeString()}后重试）` : ''}。` : ''}`;
   } catch (_) { node.textContent = '课程日历状态暂不可用。'; }
 }
 function saveNotificationSettings() {
-  const weeklyInput = document.getElementById('barkWeeklyClasses'), weeklyClasses = [];
+  const weeklyInput = document.getElementById('barkWeeklyClasses');
+  let weeklyClasses = [], weeklyValid = true;
   for (const line of weeklyInput.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean)) {
     const match = /^周([日一二三四五六])\s+((?:[01]\d|2[0-3]):[0-5]\d)\s*[-–]\s*((?:[01]\d|2[0-3]):[0-5]\d)$/.exec(line);
-    if (!match || match[2] >= match[3]) {
-      weeklyInput.setCustomValidity('每行请填写「周二 10:30-12:20」，结束时间要晚于开始时间。');
-      weeklyInput.reportValidity();
-      return false;
-    }
+    if (!match || match[2] >= match[3]) { weeklyValid = false; break; }
     weeklyClasses.push({ day: '日一二三四五六'.indexOf(match[1]), start: match[2], end: match[3] });
   }
-  weeklyInput.setCustomValidity('');
+  // A mistyped line keeps the last saved periods; every other setting is still saved and the window can close.
+  weeklyInput.setCustomValidity(weeklyValid ? '' : '每行请填写「周二 10:30-12:20」，结束时间要晚于开始时间。');
+  if (!weeklyValid) { weeklyClasses = BarkPolicy.settings(config.barkNotifications).weeklyClasses; weeklyInput.reportValidity(); }
   config.captainNotifications = NotificationPolicy.normalizeSettings({
     enabled: document.getElementById('captainNotifyEnabled').checked,
     sound: document.getElementById('captainSoundEnabled').checked,
@@ -776,7 +775,7 @@ function saveNotificationSettings() {
   });
   saveConfig();
   updateBarkPolicyStatus();
-  return true;
+  return weeklyValid;
 }
 function buildChrome() {
   const head = document.getElementById('navHead');
@@ -3635,23 +3634,23 @@ document.getElementById('searchClose').innerHTML = ICONS.close;
 document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
-document.getElementById('notificationSettingsClose').onclick = () => {
-  if (!saveNotificationSettings()) return;
+const closeNotificationSettings = () => {
+  if (!saveNotificationSettings()) showToast('上课时段有一行格式不对，这一项没改；其他设置已保存。');
   flushConfig();
+};
+document.getElementById('notificationSettingsClose').onclick = () => {
+  closeNotificationSettings();
   document.getElementById('notificationSettings').close();
 };
-document.getElementById('notificationSettings').addEventListener('cancel', (event) => {
-  if (!saveNotificationSettings()) { event.preventDefault(); return; }
-  flushConfig();
-});
+document.getElementById('notificationSettings').addEventListener('cancel', closeNotificationSettings);
 document.getElementById('barkCalendarRefresh').innerHTML = ICONS.refresh;
 document.getElementById('barkCalendarRefresh').addEventListener('click', async (event) => {
-  if (!saveNotificationSettings()) return;
+  saveNotificationSettings();
   flushConfig();
   const button = event.currentTarget;
   button.disabled = true;
   try { await window.deck.refreshBarkCalendar(); await updateBarkPolicyStatus(); }
-  catch (_) { document.getElementById('barkPolicyStatus').textContent = '课程日历刷新失败，请稍后重试。'; }
+  catch (_) { document.getElementById('barkPolicyStatus').textContent = '刷新失败，请稍后重试。'; }
   finally { button.disabled = false; }
 });
 ['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark', 'barkCriticalVolume', 'barkSleepEnabled', 'barkSleepStart', 'barkSleepEnd', 'barkClassesEnabled', 'barkClassCalendarIds', 'barkClassFilters', 'barkWeeklyClasses'].forEach((id) => {
@@ -3987,9 +3986,22 @@ function renderQuotaBar() {
             window.deck.clipboardWrite(item.dataset.loginCommand);
             item.dataset.loginCopiedUntil = String(Date.now() + 1400);
             renderQuotaBar();
-            setTimeout(renderQuotaBar, 1450);
+            // A mouse click focused the button, which would pin the detail open: let go once the tick is over.
+            const byMouse = event.detail > 0;
+            setTimeout(() => {
+              renderQuotaBar();
+              const active = document.activeElement;
+              if (byMouse && active?.classList.contains('quota-login-copy') && item.contains(active)) active.blur();
+            }, 1450);
           } catch (_) { showToast('登录命令复制失败，请重试。'); }
         });
+        // Leaving the row on the way to the copy button keeps the detail for a moment (see .tip-hold).
+        item.addEventListener('mouseleave', () => {
+          if (!item.dataset.loginCommand) return;
+          item.classList.add('tip-hold'); clearTimeout(item.tipHoldTimer);
+          item.tipHoldTimer = setTimeout(() => item.classList.remove('tip-hold'), 300);
+        });
+        item.addEventListener('mouseenter', () => { clearTimeout(item.tipHoldTimer); item.classList.remove('tip-hold'); });
       }
       const q = summaries[index];
       // Include the seat name: multiple subscriptions can share the same flag.

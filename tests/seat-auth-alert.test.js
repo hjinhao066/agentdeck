@@ -177,3 +177,22 @@ test('an already notified legacy outage can report a durable transport issue aft
   const restarted = harness(h.writes.at(-1));
   assert.equal(restarted.monitor.recordDeliveryFailure('seat-auth:Claude:us', '旧掉线提醒发送失败，已保留'), false);
 });
+
+test('a confirmed logout is rechecked every 30 seconds for 10 minutes, then every 2 minutes until it recovers', () => {
+  const { FAST_RECHECK_MS, SLOW_RECHECK_MS } = require('../seat-auth-alert');
+  const h = harness(); h.observe('logged-in', NOW); h.observe('logged-out', NOW + 1);
+  assert.equal(h.monitor.recheckDelay(US, 'Claude', NOW + 2), CONFIRM_MS); // one miss: confirm quickly
+  const out = NOW + CONFIRM_MS + 1; h.observe('logged-out', out);
+  assert.equal(h.monitor.recheckDelay(US, 'Claude', out + FAST_RECHECK_MS), CONFIRM_MS);
+  // Later proofs and unknown polls do not restart the fast window.
+  h.observe('logged-out', out + 5 * 60_000); h.observe(undefined, out + 6 * 60_000);
+  assert.equal(h.monitor.recheckDelay(US, 'Claude', out + FAST_RECHECK_MS + 1), SLOW_RECHECK_MS);
+  const restarted = harness(h.writes.at(-1));
+  assert.equal(restarted.monitor.recheckDelay(US, 'Claude', out + 3600_000), SLOW_RECHECK_MS);
+  assert.equal(restarted.monitor.recheckDelay({ ...US, configDir: '~/different' }, 'Claude', out + 3600_000), CONFIRM_MS);
+  // Recovery ends the episode; the next outage starts fast again.
+  restarted.observe('logged-in', out + 3600_000);
+  const again = out + 3600_000 + 1; restarted.observe('logged-out', again); restarted.observe('logged-out', again + CONFIRM_MS);
+  assert.equal(restarted.monitor.recheckDelay(US, 'Claude', again + CONFIRM_MS + FAST_RECHECK_MS), CONFIRM_MS);
+  assert.equal(restarted.monitor.recheckDelay(US, 'Claude', again + CONFIRM_MS + FAST_RECHECK_MS + 1), SLOW_RECHECK_MS);
+});

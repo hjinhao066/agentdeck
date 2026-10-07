@@ -141,10 +141,12 @@ settings leave only sleep protection and show an explicit warning. Calendar
 failures retry in 15 minutes; Settings edits/manual refresh can retry immediately.
 
 The quota panel shows a pale-red row and red **未登录**, with the generated login
-command and a copy icon in the details; it hides cached percentages and excludes the
+command and a copy icon in the details (last line in the sidebar, level with the row;
+the detail stays 300 ms after the pointer leaves the row so the icon can be reached); it hides cached percentages and excludes the
 seat from existing quota fallback choices. Recovery is silent and requires a
 fresh successful provider query. Confirmed logged-out seats recheck every 30
-seconds (plus request time), even if an intervening query is unknown; recovery
+seconds (plus request time) for the first 10 minutes and every 2 minutes after that,
+even if an intervening query is unknown; recovery
 removes that seat’s queued phone alert without ringing. Each seat/outage sends only once, including
 across app restarts; a confirmed recovery rearms the next outage. The private
 `userData/seat-auth-state.json` keeps the episode latch and undelivered Captain
@@ -152,11 +154,14 @@ receipts. A missing Captain does not delay Bark; its receipt waits until one
 exists. Never-logged-in seats show 未登录 after confirmation without a dropout
 alert. On upgrade, a fresh bound quota sample can establish the prior login.
 Blank Bark settings use the same private Captain key file `~/.secrets/bark-key.txt`.
+Where the setting is blank and that file does not exist (Windows by default), a phone
+reminder is dropped with a setup hint instead of queued; an explicit path that cannot
+be read still queues and retries. Queued reminders older than 24 hours are discarded.
 Daytime sends are durable too: failure retains the outbox for a 60-second retry,
 with an explicit Settings error and a once-per-outage Captain exception receipt.
 If the outbox cannot be saved, this is reported instead of claiming queued delivery.
-An interrupted send with unknown outcome pauses automatic resends until manual
-refresh; successful-send cleanup errors retry saving without repeated ringing.
+An interrupted send with unknown outcome (owner process gone, or the send record
+older than 60 seconds) pauses automatic resends until manual refresh; successful-send cleanup errors retry saving without repeated ringing.
 Native reminders preserve front-window silence and never activate a window.
 
 This branch does not restart installed AgentDeck or migrate running terminals.

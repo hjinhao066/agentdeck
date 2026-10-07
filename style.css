@@ -395,7 +395,13 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-item:hover .quota-tooltip, .quota-item:focus .quota-tooltip, .quota-item:focus-within .quota-tooltip { display: flex; }
 .quota-tooltip[data-login-command="true"] { pointer-events: auto; }
 .quota-tooltip[data-login-command="true"]::before { content: ''; position: absolute; top: 0; right: 100%; width: 11px; height: 100%; }
+/* The pointer may cut a corner on its way to the copy button: the detail stays for a
+   moment after the row is left, and no other row's detail replaces it meanwhile. */
+.quota-item.tip-hold .quota-tooltip { display: flex; }
+:is(#quotaBar, #quotaPopList):has(.tip-hold) .quota-item:not(.tip-hold):hover .quota-tooltip { display: none; }
 .qt-login { display: flex; align-items: center; gap: 8px; }
+/* Sidebar: the detail grows upwards from its row, so the command sits last, level with the row. */
+#quotaBar .qt-login { order: 1; }
 .qt-login-command { min-width: 0; overflow-wrap: anywhere; font-size: 11px; }
 .quota-login-copy { min-width: 36px; min-height: 36px; }
 .quota-login-copy:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -2819,6 +2825,8 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .notify-setting select { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 .notify-setting input[type="number"], .notify-setting input[type="time"] { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-sizing: border-box; }
 #notificationSettings .rail-btn { min-width: 36px; min-height: 36px; }
+/* Short lists (calendars, course names, class periods): as tall as their rows, not the 120px prompt box. */
+#notificationSettings textarea { min-height: 0; }
 #notificationSettings :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 
 .bark-key-setting { display: block; margin: 16px 0 8px; font-size: 14px; }

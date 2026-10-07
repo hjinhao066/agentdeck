@@ -50,7 +50,10 @@ test('a token-bearing managed worker cannot use notify-user, including urgent', 
   await expect.poll(() => screen('worker')).toMatch(/只有队长可以用这个命令|Receipt capability allows only/);
   expect((await alerts()).filter((e) => e.type !== 'cancel').length).toBe(before);
 });
-test('missing isolated default key keeps local notification and queues Bark for retry', async () => {
+// A blank path with no default key file is dropped with a setup hint (seat-auth-alert.spec.js);
+// a path that was filled in but cannot be read is a fault and stays queued.
+test('an unreadable configured key keeps local notification and queues Bark for retry', async () => {
+  await page.evaluate((file) => { config.barkKeyFile = file; saveConfig(); flushConfig(); }, path.join(profile, 'no-such-key'));
   await run('captain', `node "${CLI}" notify-user --message "请授权。" --urgent`);
   await expect.poll(() => screen()).toMatch(/Bark.*(?:密钥文件不可读|发送失败)/);
   expect((await alerts()).filter((e) => e.type === 'notification')).toHaveLength(2);
@@ -135,7 +138,7 @@ test('test command uses shared volume setting once; repeated acknowledgements ca
 
 test('calendar and fixed weekly class settings are editable, refreshable and durable', async () => {
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  const calendars = page.getByLabel('课程日历 ID（每行一个）', { exact: true });
+  const calendars = page.getByLabel('课程在哪个日历里（每行一个，主日历写 primary）', { exact: true });
   const filters = page.getByLabel('课程名称（每行一个）', { exact: true });
   const weekly = page.getByLabel('每周固定上课时段（西雅图时间，课表不可用时兜底）', { exact: true });
   await expect(weekly).toHaveValue('周二 10:30-12:20\n周四 10:30-12:20\n周二 15:30-17:20');
@@ -158,6 +161,26 @@ test('calendar and fixed weekly class settings are editable, refreshable and dur
   await weekly.fill(''); await weekly.press('Tab'); await refresh.click();
   await expect(page.locator('#barkPolicyStatus')).toContainText('未设置固定上课时段，上课时手机可能响');
   await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+});
+
+test('a mistyped class period does not trap the settings window: the rest is saved and it closes', async () => {
+  const saved = () => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'))).barkNotifications;
+  const before = saved().weeklyClasses;
+  const weekly = page.locator('#barkWeeklyClasses'), volume = page.locator('#barkCriticalVolume'), dialog = page.locator('#notificationSettings');
+  for (const [close, value] of [[() => page.getByRole('button', { name: '关闭设置', exact: true }).click(), 7], [() => page.keyboard.press('Escape'), 6]]) {
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    await weekly.fill('周二 12:20-10:30\n随便写的'); await volume.fill(String(value));
+    await close();
+    await expect(dialog).toBeHidden();
+    await expect(page.locator('#toast')).toHaveText('上课时段有一行格式不对，这一项没改；其他设置已保存。');
+    await expect.poll(() => saved().criticalVolume).toBe(value);
+    expect(saved().weeklyClasses).toEqual(before);
+  }
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(volume).toHaveValue('6');
+  await expect(weekly).toHaveValue(before.map((p) => `周${'日一二三四五六'[p.day]} ${p.start}-${p.end}`).join('\n'));
+  await volume.fill('4'); await page.getByRole('button', { name: '关闭设置', exact: true }).click();
+  await expect(dialog).toBeHidden();
 });
 
 test('empty key setting uses the Captain default file within the isolated profile', async () => {

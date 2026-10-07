@@ -3,6 +3,16 @@ const crypto = require('crypto');
 const fs = require('fs');
 const Policy = require('./bark-policy');
 
+// A send holds the outbox lock and gives up after 8 s, so an older "sending"
+// record was interrupted even when its process id is alive again (reused).
+const INFLIGHT_MS = 60_000;
+// Reminders that could not go out for a day are stale news: never deliver them late.
+const EXPIRE_MS = 24 * 60 * 60_000;
+function interrupted(inflight, at) {
+  if (!(Math.abs(at - inflight.startedAt) <= INFLIGHT_MS)) return true;
+  try { process.kill(inflight.ownerPid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
+}
+
 function digest(pending) {
   const stamp = (at) => new Date(at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
   const lines = [`有 ${pending.length} 项提醒待补发，请查看：`];
@@ -55,8 +65,8 @@ function createBarkDelivery({ state = {}, saveState, getSettings, getClasses = (
         if (settled) {
           try { persist(settledState()); settled = null; }
           catch (_) {
-            const message = settled.ok ? 'Bark 已送达，但队列记录未能保存；正在重试保存，不会重复发送。' : 'Bark 发送失败，队列记录未能保存；已保留，正在重试保存。';
-            failure(message); return { ok: false, accepted: true, queued: !settled.ok, sent: settled.ok, message };
+            const message = settled.sent ? 'Bark 已送达，但队列记录未能保存；正在重试保存，不会重复发送。' : 'Bark 发送失败，队列记录未能保存；已保留，正在重试保存。';
+            failure(message); return { ok: false, accepted: true, queued: !settled.sent, sent: settled.sent, message };
           }
         }
         return work();
@@ -76,12 +86,17 @@ function createBarkDelivery({ state = {}, saveState, getSettings, getClasses = (
     persist({ ...state, pending: [...state.pending.filter((p) => p.key !== key), item] });
   }
   async function flush(transport = sendNow, immediate) {
+    const fresh = state.pending.filter((p) => now() - p.createdAt <= EXPIRE_MS);
+    if (fresh.length !== state.pending.length) {
+      const keys = new Set(fresh.map((p) => p.key)), inflightKeys = state.inflight?.keys?.filter((k) => keys.has(k));
+      const cleared = !fresh.length || inflightKeys?.length === 0;
+      persist({ ...state, pending: fresh, ...(cleared ? { inflight: null, uncertain: false, retryAt: 0, lastError: '' } :
+        inflightKeys ? { inflight: { ...state.inflight, keys: inflightKeys } } : {}) });
+    }
     if (!state.pending.length) return { ok: true, sent: false };
     if (state.uncertain) return { ok: false, accepted: true, queued: true, sent: false, message: state.lastError };
     if (state.inflight) {
-      let dead = false;
-      try { process.kill(state.inflight.ownerPid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
-      if (!dead) return { ok: true, accepted: true, queued: true, sent: false, message: 'Bark 提醒正在发送或等待保存送达记录。' };
+      if (!interrupted(state.inflight, now())) return { ok: true, accepted: true, queued: true, sent: false, message: 'Bark 提醒正在发送或等待保存送达记录。' };
       const message = 'Bark 上次发送中断，送达结果不明，已暂停自动补发。请检查手机后用设置中的刷新按钮重试。';
       persist({ ...state, uncertain: true, lastError: message }); failure(message);
     }
@@ -91,21 +106,24 @@ function createBarkDelivery({ state = {}, saveState, getSettings, getClasses = (
     // Save before sending so a crash/failed cleanup cannot cause another app or
     // installer to blindly repeat an already delivered batch.
     const batchId = crypto.randomUUID();
-    persist({ ...state, inflight: { ownerPid: process.pid, batchId, keys: state.pending.map((p) => p.key) }, lastError: '' });
+    persist({ ...state, inflight: { ownerPid: process.pid, batchId, startedAt: now(), keys: state.pending.map((p) => p.key) }, lastError: '' });
     let result;
     try { result = await transport(immediate || digest(state.pending)); }
     catch (_) { result = { ok: false, message: 'Bark 发送失败，已保留待重试。' }; }
-    const message = result.ok ? result.message : 'Bark 发送失败，已保留；60 秒后重试，请检查网络和本机密钥文件。';
-    settled = { ok: !!result.ok, batchId, items: new Set(state.pending.map((p) => JSON.stringify(p))),
-      retryAt: result.ok ? 0 : now() + 60_000, message: result.ok ? '' : message };
+    // Nothing to wait for on a machine with no phone key: drop instead of piling up.
+    const dropped = !result.ok && result.unconfigured === true;
+    const message = result.ok ? result.message : dropped ? '这台电脑还没有配置手机提醒密钥，这条手机提醒没有发出，也不会补发；本机提醒不受影响。要发到手机，请在设置里填写密钥文件路径。' :
+      'Bark 发送失败，已保留；60 秒后重试，请检查网络和本机密钥文件。';
+    settled = { ok: !!result.ok || dropped, sent: !!result.ok, batchId, items: new Set(state.pending.map((p) => JSON.stringify(p))),
+      retryAt: result.ok || dropped ? 0 : now() + 60_000, message: result.ok ? '' : message };
     try { persist(settledState()); settled = null; }
     catch (_) {
       const warning = result.ok ? 'Bark 已送达，但队列记录未能保存；正在重试保存，不会重复发送。' : 'Bark 发送失败，队列记录未能保存；已保留，正在重试保存。';
       failure(warning); return { ok: false, accepted: true, queued: !result.ok, sent: !!result.ok, message: warning };
     }
-    if (!result.ok) failure(message);
+    if (!result.ok) failure(message, !dropped);
     else reportedError = '';
-    return { ...result, message, accepted: true, queued: !result.ok, sent: !!result.ok };
+    return { ...result, message, accepted: true, queued: !result.ok && !dropped, sent: !!result.ok };
   }
   return {
     send: (payload, transport = sendNow) => serialized(async () => {
@@ -124,9 +142,7 @@ function createBarkDelivery({ state = {}, saveState, getSettings, getClasses = (
       return { ok: true, cancelled: state.pending.every((p) => p.key !== key) };
     }),
     retry: () => serialized(() => {
-      let dead = false;
-      if (state.inflight) try { process.kill(state.inflight.ownerPid, 0); } catch (error) { dead = error.code === 'ESRCH'; }
-      if (!state.inflight || dead) persist({ ...state, inflight: null, uncertain: false, retryAt: 0, lastError: '' });
+      if (!state.inflight || interrupted(state.inflight, now())) persist({ ...state, inflight: null, uncertain: false, retryAt: 0, lastError: '' });
       return flush();
     }),
     status: () => ({ queuedCount: state.pending.length, blockedUntil: quietUntil(), retryAt: state.retryAt,

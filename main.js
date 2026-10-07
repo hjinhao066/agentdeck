@@ -11,7 +11,7 @@ const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createResultMonitor } = require('./install-result');
 const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
 const { createQuotaLowBark } = require('./quota-low-bark');
-const { createSeatAuthMonitor, authFailure, CONFIRM_MS } = require('./seat-auth-alert');
+const { createSeatAuthMonitor, authFailure } = require('./seat-auth-alert');
 const BarkPolicy = require('./bark-policy');
 const { createFileBarkDelivery } = require('./bark-delivery');
 const { createCalendarCache } = require('./bark-calendar');
@@ -1144,7 +1144,7 @@ app.whenReady().then(async () => {
           if (!configuredAuthSeat(sample)) return;
           checkAuthSeat(seat, sample.provider).catch(() => observeAuth({ provider: sample.provider,
             seatId: seat.id, configDir: seat.configDir, at: Date.now() }));
-        }, CONFIRM_MS);
+        }, seatAuth.recheckDelay(seat, sample.provider, Date.now()));
         timer.unref(); seatAuthChecks.set(key, timer);
       }
     } catch (_) { send('toast', { text: '席位登录状态记录无法保存，请检查磁盘。' }); }

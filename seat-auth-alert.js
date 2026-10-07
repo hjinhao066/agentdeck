@@ -4,6 +4,9 @@ const Q = require('./quota-core');
 const S = require('./claude-seats-core');
 
 const CONFIRM_MS = 30_000;
+// A seat nobody signs back into is rechecked quickly at first, then slowly:
+// every check refreshes a dead token or starts the provider's CLI.
+const FAST_RECHECK_MS = 10 * 60_000, SLOW_RECHECK_MS = 2 * 60_000;
 const quote = (value, platform) => "'" + value.replace(/'/g, platform === 'win32' ? "''" : "'\\''") + "'";
 function loginCommand(provider, seat, home, platform = process.platform) {
   const variable = provider === 'Claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
@@ -47,13 +50,13 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
       if (next.status === 'logged-out') recovered = { provider: sample.provider, seatId: seat.id, configDir: seat.configDir, alertId: next.alertId };
       changedStatus = next.status !== 'logged-in';
       next.status = 'logged-in'; next.statusAt = sample.at; next.wasLoggedIn = true;
-      next.misses = 0; next.notified = false; delete next.firstMissAt;
+      next.misses = 0; next.notified = false; delete next.firstMissAt; delete next.outSince;
     } else if (sample.authStatus === 'logged-out') {
       next.firstMissAt ??= sample.at;
       next.misses = (next.misses || 0) + 1;
       if (next.misses >= 2 && sample.at - next.firstMissAt >= CONFIRM_MS) {
         changedStatus = next.status !== 'logged-out';
-        next.status = 'logged-out'; next.statusAt = sample.at;
+        next.status = 'logged-out'; next.statusAt = sample.at; next.outSince ??= sample.at;
         if (next.wasLoggedIn && !next.notified) {
           const command = loginCommand(sample.provider, seat, home, platform);
           const name = sample.provider === 'Claude' ? `Claude ${seat.name}（${seat.id}）席位` : 'Codex 席位';
@@ -86,6 +89,10 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
       const e = state[provider === 'Claude' ? Q.seatKey(seat.id) : provider];
       return e?.configDir === seat.configDir && (e.misses > 0 || e.status === 'logged-out');
     },
+    recheckDelay: (seat, provider, at) => {
+      const e = state[provider === 'Claude' ? Q.seatKey(seat.id) : provider];
+      return e?.configDir === seat.configDir && e.status === 'logged-out' && at - e.outSince > FAST_RECHECK_MS ? SLOW_RECHECK_MS : CONFIRM_MS;
+    },
     recordDeliveryFailure: (alertIdOrKey, message, kind = 'delivery') => {
       if (typeof alertIdOrKey !== 'string' || typeof message !== 'string' || !message.trim()) return false;
       const key = Object.keys(state).find((key) => state[key].alertId === alertIdOrKey ||
@@ -109,4 +116,4 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
     },
   };
 }
-module.exports = { CONFIRM_MS, loginCommand, authFailure, createSeatAuthMonitor };
+module.exports = { CONFIRM_MS, FAST_RECHECK_MS, SLOW_RECHECK_MS, loginCommand, authFailure, createSeatAuthMonitor };

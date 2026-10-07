@@ -843,7 +843,8 @@ Phone reminders are kept in private `userData/bark-pending.json`, deduplicated
 by category/seat or identical content, and merged into one push when quiet hours
 end (checked every 30 seconds while AgentDeck is open). Immediate daytime alerts
 also enter the durable queue before sending; failed sends stay queued and retry
-after one minute. Settings shows the last delivery error, and seat-alert failures
+after one minute, for at most 24 hours. With a blank key path and no default key
+file on this machine, the phone push is skipped with a setup hint instead of queued. Settings shows the last delivery error, and seat-alert failures
 also leave a persistent Captain question receipt. Restarting restores the queue; while the app is closed
 there is no timer to deliver it.
 

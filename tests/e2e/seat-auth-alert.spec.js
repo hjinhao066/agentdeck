@@ -218,3 +218,80 @@ test('an unreadable outbox records a Captain delivery exception even when pendin
   await expect(page.locator('#barkPolicyStatus')).toContainText('队列无法读写');
   expect(fs.readFileSync(path.join(profile, 'bark-pending.json'), 'utf8')).toBe('{damaged');
 });
+
+test('the copy icon can be clicked by moving the mouse straight at it, and the detail is not left pinned', async () => {
+  await launch(); const base = Date.now() - 90000;
+  await observe([['logged-in', base], ['logged-out', base + 30000], ['logged-out', base + 60000]]);
+  const row = page.locator('#quotaBar [data-seat-id="us"]'), tip = row.locator('.quota-tooltip'), copy = row.locator('.quota-login-copy');
+  await expect(row).toHaveAttribute('data-auth-status', 'logged-out');
+  const command = require('../../seat-auth-alert').loginCommand('Claude', { configDir: '~/.custom-us-seat' }, os.homedir(), process.platform);
+  const centre = async (locator) => { const box = await locator.boundingBox(); return [box.x + box.width / 2, box.y + box.height / 2]; };
+  // The command is the last line of the detail, level with its row.
+  expect(await page.evaluate(() => {
+    const tip = document.querySelector('#quotaBar [data-seat-id="us"] .quota-tooltip');
+    tip.style.display = 'flex';
+    const last = [...tip.children].sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top)[0];
+    tip.style.display = '';
+    return last.className;
+  })).toBe('qt-login');
+  for (const start of ['[data-window="5h"] .quota-none', '.quota-name']) {
+    await page.mouse.move(600, 300); await expect(tip).toBeHidden();
+    const [x0, y0] = await centre(row.locator(start));
+    await page.mouse.move(x0, y0); await expect(copy).toBeVisible();
+    const [x1, y1] = await centre(copy);
+    // An unhurried straight line: about a quarter of a second, leaving the row on the way.
+    for (let step = 1; step <= 12; step++) {
+      await page.mouse.move(x0 + (x1 - x0) * step / 12, y0 + (y1 - y0) * step / 12); await page.waitForTimeout(20);
+      expect(await page.locator('#quotaBar .quota-tooltip:visible').count()).toBe(1);
+    }
+    await expect(tip).toBeVisible();
+    await page.evaluate(() => window.deck.clipboardWrite(''));
+    await page.mouse.click(x1, y1);
+    await expect(row.getByRole('button', { name: '已复制', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.deck.clipboardRead())).toBe(command);
+    // The tick ends and the click's focus is released, so only the pointer keeps the detail open.
+    await expect(copy).toHaveAttribute('aria-label', '复制登录命令');
+    await expect.poll(() => page.evaluate(() => document.activeElement === document.body)).toBe(true);
+    await page.mouse.move(600, 300); await expect(tip).toBeHidden();
+  }
+  // Cutting across the row above on the way does not swap in that row's detail.
+  await page.evaluate(() => {
+    QuotaCore.observe(config.quotas, { provider: 'Codex', scope: 'codex', at: Date.now(),
+      windows: [{ label: '每周', key: 'weekly', remaining: 80 }] }); renderQuotaBar();
+  });
+  const box = await row.boundingBox(), other = await page.evaluate((y) => {
+    const above = [...document.querySelectorAll('#quotaBar .quota-item')].map((item) => item.getBoundingClientRect())
+      .filter((r) => r.bottom <= y + 1).sort((a, b) => b.bottom - a.bottom)[0];
+    return above ? above.top + above.height / 2 : null;
+  }, box.y);
+  await page.mouse.move(box.x + 20, box.y + box.height / 2); await expect(copy).toBeVisible();
+  const [x1, y1] = await centre(copy);
+  if (other !== null) {
+    await page.mouse.move(box.x + box.width - 20, other); await page.waitForTimeout(100);
+    await expect(tip).toBeVisible(); expect(await page.locator('#quotaBar .quota-tooltip:visible').count()).toBe(1);
+  }
+  await page.mouse.move(x1, y1); await expect(tip).toBeVisible();
+  await page.mouse.click(x1, y1);
+  await expect(row.getByRole('button', { name: '已复制', exact: true })).toBeVisible();
+  // A row that has no command keeps its plain hover: nothing lingers after the pointer leaves.
+  await page.mouse.move(600, 300); await expect(tip).toBeHidden();
+  const plain = page.locator('#quotaBar [data-quota-key="Codex"]');
+  await plain.hover(); await expect(plain.locator('.quota-tooltip')).toBeVisible();
+  await page.mouse.move(600, 300);
+  expect(await plain.locator('.quota-tooltip').isVisible()).toBe(false);
+});
+
+test('with no key path and no default key file a phone alert is dropped with a setup hint instead of queued', async () => {
+  const file = path.join(profile, 'config.json'), cfg = JSON.parse(fs.readFileSync(file));
+  cfg.barkKeyFile = ''; fs.writeFileSync(file, JSON.stringify(cfg)); // the isolated profile has no .secrets/bark-key.txt
+  await launch(new Date('2026-10-07T12:00:00-07:00').getTime()); const base = Date.now() - 90000;
+  await observe([['logged-in', base], ['logged-out', base + 30000], ['logged-out', base + 60000]]);
+  await expect.poll(() => page.evaluate(() => config.mainSession.pending.some((r) => /提醒异常.*还没有配置手机提醒密钥/.test(r.question)))).toBe(true);
+  expect(await page.evaluate(async () => (await window.deck.barkStatus()).queuedCount)).toBe(0);
+  expect(await alerts()).toHaveLength(0);
+  expect(JSON.parse(fs.readFileSync(path.join(profile, 'bark-pending.json'), 'utf8'))).toMatchObject({ pending: [], inflight: null, retryAt: 0 });
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  await expect(page.locator('#barkPolicyStatus')).toContainText('暂存手机提醒：0 条');
+  await expect(page.locator('#barkPolicyStatus')).toContainText('还没有配置手机提醒密钥');
+  await expect(page.locator('#barkPolicyStatus')).not.toContainText('待重试');
+});

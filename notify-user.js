@@ -39,15 +39,20 @@ function createBarkSender({ getConfig, fetchImpl = fetch, delivery, keyHome }) {
     // explicit path wins; never silently change devices when that path fails.
     if (!file) file = '~/.secrets/bark-key.txt';
     if (file.startsWith('~/')) file = path.join(keyHome || os.homedir(), file.slice(2));
+    const blank = !(typeof config.barkKeyFile === 'string' && config.barkKeyFile.trim());
     let key;
     try {
       if (!path.isAbsolute(file)) throw new Error();
-      const stat = await fs.stat(file);
+      const stat = await fs.stat(file).catch((error) => {
+        // No setting and no default file: this machine was never set up for the
+        // phone (the default file exists on the Mac only). Nothing to retry.
+        throw Object.assign(new Error(), { unconfigured: blank && error.code === 'ENOENT' });
+      });
       if (!stat.isFile() || stat.size > 4096) throw new Error();
       key = (await fs.readFile(file, 'utf8')).trim();
       if (!/^[A-Za-z0-9_-]{1,512}$/.test(key)) throw new Error();
-    } catch (_) {
-      return { ok: false, message: 'Bark 密钥文件不可读或格式无效，请检查设置中的本机密钥文件路径（留空默认 ~/.secrets/bark-key.txt，文件仅含设备 key）。' };
+    } catch (error) {
+      return { ok: false, ...(error.unconfigured ? { unconfigured: true } : {}), message: 'Bark 密钥文件不可读或格式无效，请检查设置中的本机密钥文件路径（留空默认 ~/.secrets/bark-key.txt，文件仅含设备 key）。' };
     }
     try {
       const response = await fetchImpl('https://api.day.app/push', {
