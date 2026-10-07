@@ -7,7 +7,7 @@ const { validatePublicTask, summary } = require('./chatgpt-web-core');
 
 const FOREGROUND_NOTES = Object.freeze({
   FRONT_UNSURE: '前台自检：无法判定，用户可能自行切换了窗口；未确认工具抢占前台。',
-  FRONT_STOLEN: '前台自检：工具报告抢占了前台，违反后台运行约束。',
+  FRONT_STOLEN: '⚠【异常】工具抢了前台，违反后台运行约束。',
 });
 const REASONS = Object.freeze({
   LOGIN_REQUIRED: 'ChatGPT 网页未登录；需要用户在专用 Chrome 窗口手动登录。本次未尝试登录。',
@@ -24,7 +24,7 @@ const REASONS = Object.freeze({
   SENSITIVE_INPUT: '问题疑似含凭据；技能已阻止发送，请队长只派公开调研。',
   BAD_STATE: '网页技能的本机冷却状态损坏；请人工检查，不自动清理状态。',
   FRONT_UNSURE: FOREGROUND_NOTES.FRONT_UNSURE + '未取得可核验的完整报告，未自动重发。',
-  FRONT_STOLEN: FOREGROUND_NOTES.FRONT_STOLEN + '本次按失败处理，未自动重发。',
+  FRONT_STOLEN: FOREGROUND_NOTES.FRONT_STOLEN + '未取得可核验的完整报告，本次失败，未自动重发。',
   FOREGROUND_VIOLATION: '网页工具报告 Chrome 抢占了前台，违反后台运行约束；未交付完整报告，未自动重发。',
 });
 function failure(code) {
@@ -114,7 +114,7 @@ function createExecutor(options = {}) {
           env: options.env || process.env, onChild: (child) => { job.child = child; if (job.cancelled) child.kill('SIGTERM'); } });
       } finally { await fs.unlink(question).catch(() => {}); }
       if (job.cancelled) code = 'INTERRUPTED';
-      if (code && code !== 'FRONT_UNSURE') throw new Error(code);
+      if (code && !Object.hasOwn(FOREGROUND_NOTES, code)) throw new Error(code);
       foregroundNote = FOREGROUND_NOTES[code] || '';
       let meta, markdown;
       try {
@@ -122,13 +122,14 @@ function createExecutor(options = {}) {
         markdown = await fs.readFile(report, 'utf8');
       } catch (error) { throw new Error(code || error.message); }
       if (!/^6\s+Pro$/.test(String(meta.selectedModel).replace(/^GPT[-\s]*/i, '')) || meta.selectedMode !== job.mode) throw new Error('MODEL_UNVERIFIABLE');
-      // An indeterminate outer foreground check can change the exit status
-      // after export. Recover only finalized output; focus violations fail.
+      // The outer foreground guard can change the exit status after export.
+      // Recover finalized output, retaining an abnormal receipt for violations.
       if (code && (meta.status === 'error' || meta.submitted !== true || !Number.isFinite(Date.parse(meta.finishedAt))
         || !['copy-markdown', 'rendered-html-to-markdown'].includes(meta.exportMethod)
         || (job.mode === 'deep-research' && meta.researchEvidence?.complete !== true))) throw new Error(code);
       const result = summary(markdown);
-      complete(job, result + (foregroundNote ? '\n' + foregroundNote : ''), '', [report]);
+      const abnormal = code === 'FRONT_STOLEN' ? foregroundNote + '答案已完整交付；请队长修复工具的后台运行行为。' : '';
+      complete(job, abnormal ? abnormal + '\n' + result : result + (foregroundNote ? '\n' + foregroundNote : ''), abnormal, [report]);
     } catch (error) {
       let reason = failure(error.message);
       if (foregroundNote && !reason.includes(foregroundNote)) reason += '\n' + foregroundNote;

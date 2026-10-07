@@ -55,13 +55,15 @@ for (const mode of ['chat', 'deep-research']) {
     assert.equal(await fs.readFile(receipt.files[0], 'utf8'), 'Paris is the capital of France.');
   });
 
-  test(`foreground violation exit 97 fails even with a finalized ${mode} answer`, async (t) => {
+  test(`foreground violation exit 97 delivers finalized ${mode} answer with an abnormal receipt`, async (t) => {
     const s = await foregroundCli(t, { exitCode: 97, mode });
     const receipt = await s.done;
-    assert.match(receipt.failed, /工具报告抢占了前台，违反后台运行约束/);
-    assert.equal(receipt.result, receipt.failed);
-    assert.doesNotMatch(receipt.result, /Paris is the capital|private foreground|未取得可核验的完整报告/);
-    assert.deepEqual(receipt.files, []);
+    assert.match(receipt.failed, /^⚠【异常】工具抢了前台/);
+    assert.match(receipt.failed, /答案已完整交付/);
+    assert.match(receipt.result, /^⚠【异常】工具抢了前台/);
+    assert.match(receipt.result, /Paris is the capital/);
+    assert.doesNotMatch(receipt.result, /private foreground|未取得可核验的完整报告/);
+    assert.equal(receipt.files.length, 1);
     assert.equal(s.executor.status('one').receipt.failed, receipt.failed);
     const [runDir] = (await fs.readdir(s.dir, { withFileTypes: true })).filter((entry) => entry.isDirectory());
     assert.equal(await fs.readFile(path.join(s.dir, runDir.name, 'report.md'), 'utf8'), 'Paris is the capital of France.');
@@ -83,7 +85,8 @@ for (const exitCode of [98, 97]) for (const [name, incomplete] of [
     assert.ok(receipt.failed);
     assert.deepEqual(receipt.files, []);
     assert.doesNotMatch(receipt.result, /Paris is the capital|private foreground/);
-    assert.match(receipt.failed, exitCode === 98 ? /无法判定/ : /工具报告抢占了前台/);
+    assert.match(receipt.failed, exitCode === 98 ? /无法判定/ : /工具抢了前台/);
+    assert.doesNotMatch(receipt.failed, /答案已完整交付/);
   });
 }
 
