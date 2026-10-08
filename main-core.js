@@ -599,7 +599,7 @@
   function receiptsForModel(items) {
     if (!items.length) return '';
     const lines = items.map((r) => {
-      const anomaly = r.anomaly ? '异常回执（' + ({ process: '进程退出未交回执', quota: '额度用尽', auth: '未登录', rate_limit: '限流', input: '确认/权限提示', no_output: '长时间无输出' }[r.anomaly] || r.anomaly) + '）：' : '';
+      const anomaly = r.anomaly ? '异常回执（' + ({ process: '进程退出未交回执', quota: '额度用尽', auth: '未登录', rate_limit: '限流', input: '确认/权限提示', no_output: '长时间无输出', startup: '启动失败，任务没送达' }[r.anomaly] || r.anomaly) + '）：' : '';
       if (r.question) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 向你提问：${r.question}`;
       if (r.waiting) return `- 「${oneLine(r.title, 60)}」(${r.colId}) ${anomaly}停在确认提示上：\n${r.waiting.split('\n').map((l) => '    ' + l).join('\n')}`;
       const compact = modelReceipt(r);
@@ -725,6 +725,34 @@
     // A lone y/n/digit is a typed answer that still needs its Enter; a list says exactly what to press.
     return { keys, submit: parts.length === 1 && /^[yn1-9]$/.test(keys[0]) };
   }
+  // ---- a launched command line that never came up ----
+  // The launcher types "<agent …>; node "$AGENTDECK_BOARD_CLI" session-exit --code "$?"" into the
+  // column's shell. While the agent has drawn nothing, that echoed line is the last thing on the
+  // screen, however the rows wrap. (An agent that draws, or a shell that comes back, puts more
+  // below it; a fullscreen TUI hides it. Both read as "not silent": when in doubt, the old rules.)
+  const LAUNCH_ECHO_END = /session-exit--code"\$(?:\?|LASTEXITCODE)"$/;
+  function launchEchoOnly(screen) {
+    return LAUNCH_ECHO_END.test(String(screen || '').replace(/\s+/g, ''));
+  }
+  // How long a silent start is waited for. Claude, Codex and agy paint within seconds (a big
+  // --resume, a cold disk or a first-run scan: well under a minute), so 3 minutes is several
+  // times the slowest normal start. Cursor's session head is quiet for 1–2 minutes on purpose,
+  // so it gets three times that.
+  const STARTUP_LIMIT = 3 * 60_000;
+  const CURSOR_STARTUP_LIMIT = 6 * 60_000;
+  function startupLimit(cmd) { return /\bcursor-agent\b/i.test(cmd || '') ? CURSOR_STARTUP_LIMIT : STARTUP_LIMIT; }
+  // The failure text for the 队长: what happened, that nothing went in, how long, why it may be,
+  // and the last screen rows (the launch line only; the task text was never typed).
+  function startupFailure({ screen, cmd, waitedMs } = {}) {
+    const program = oneLine(String(cmd || '').trim().split(/\s+/)[0].replace(/^["']|["']$/g, '').replace(/^.*[\\/]/, ''), 40) || '命令行';
+    const minutes = Math.max(1, Math.round((waitedMs || 0) / 60_000));
+    const rows = String(screen || '').split('\n').map((row) => row.trimEnd()).filter((row) => row.trim()).slice(-5).map((row) => '    ' + row.slice(0, 160)).join('\n');
+    return `启动失败：「${program}」在新会话里等了 ${minutes} 分钟仍没有出现任何界面，任务正文没有送进终端（任务没有送达）。` +
+      '可能原因：命令行卡在启动阶段——刚升级后 macOS 在等「来自互联网，确定打开吗」之类的确认框、权限弹窗，或者进程卡死、机器很忙。' +
+      '处理：先让用户在这台电脑上点掉弹窗或手动运行一次该命令；确认能启动后，用 read 取回原文，再重新派一遍。' +
+      (rows ? '\n终端最后几行：\n' + rows : '\n终端上什么都没有。');
+  }
+
   // Why a queued tell still cannot be typed in. Empty when nothing here blocks it.
   function tellWaitReason({ entry, composing, foreground, screen, cmd } = {}) {
     const text = screen != null ? screen : entry?.lastScreen;
@@ -953,6 +981,7 @@
   function exceptionReason(receipt) {
     if (receipt.waiting) return 'input';
     if (receipt.source === 'watchdog') return 'no_output';
+    if (receipt.source === 'startup') return 'startup';
     if (receipt.source === 'quota') return resourceFailure(receipt.failed, 'quota');
     if (receipt.source === 'process') return resourceFailure(receipt.failed, 'process') || 'process';
     return '';
@@ -1034,7 +1063,7 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
-    receiptsForModel, silenceTimeout, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
 });

@@ -46,8 +46,8 @@ const bookkeeping = (t) => ['merged', 'superseded', 'captain-cancel'].includes(t
 const captainStopped = (t) => !!t && t.status === 'stopped' && (['captain-stop', 'captain-archive'].includes(t.receipt?.source) || STOPPED.includes(t.receipt?.summary));
 const isReviewer = (t) => AutoVerify.isReviewAttempt(t.boardAttempt) || (Array.isArray(t.reviews) && t.reviews.length > 0);
 // A crash or a quota stop of a reviewer is not a finding.
-const INFRA = ['quota', 'process', 'resume', 'automatic', 'fallback'];
-const INFRA_TEXT = /^(?:额度用尽|请求被限流|未登录|agent 进程异常退出|这个会话|续接失败|30 分钟内一直发不出去)/;
+const INFRA = ['quota', 'process', 'startup', 'resume', 'automatic', 'fallback'];
+const INFRA_TEXT = /^(?:额度用尽|请求被限流|未登录|agent 进程异常退出|这个会话|启动失败|续接失败|30 分钟内一直发不出去)/;
 
 const one = (value, max) => {
   const text = String(value == null ? '' : value).replace(/\s+/g, ' ').trim();
