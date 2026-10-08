@@ -258,6 +258,7 @@ try { onBatteryPower = window.deck.powerState()?.onBattery === true; } catch (_)
 battery.set({ onBattery: onBatteryPower, mode: config.batteryMode, cap: config.batteryConcurrency });
 MainCore.MAX_ACTIVE = BatteryCore.effectiveCap(config.concurrencyCap, battery.snapshot()).cap;
 window.deck.onPowerChanged((on) => battery.set({ onBattery: on }));
+window.deck.onPowerSleep((asleep, at) => window.MainSession.onPower(asleep, at));
 function seatLaunchCommand(col, command) {
   const seat = ClaudeSeatsCore.bindColumn(col, config);
   if (!seat.configDir) return ''; // A removed, unbound seat must not launch under another login.

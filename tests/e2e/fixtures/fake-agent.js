@@ -142,6 +142,15 @@ function answer() {
     process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n\nProceed with the change? (y/n) ');
     return;
   }
+  if (process.argv.includes('--sleep-error')) {
+    // The task turn is cut short by a sleep; only a later "接着做" gets through and submits.
+    process.stdout.write('\x1b[2J\x1b[H> ' + first + '\n');
+    if (first.startsWith('接着做')) {
+      process.stdout.write('\n⏺ GOT carry on\n');
+      require('child_process').execFile(process.execPath, [process.env.AGENTDECK_BOARD_CLI, 'complete', '--result', 'resumed after sleep'], () => {});
+    } else process.stdout.write('\n  ⎿  API Error: Your computer went to sleep mid-response. Try again.\n');
+    box(); return;
+  }
   if (first === 'gemini confirmation regression') {
     process.stdout.write('\x1b[2J\x1b[HThinking: waiting for confirmation\n⠋ Working\nAntigravity\n');
     setTimeout(() => {

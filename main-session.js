@@ -1997,6 +1997,74 @@
     autoBoardEvent(task, 'started', '', 'resume-quota-' + Date.now());
     update(task);
   }
+  // ---- cut short by sleep or a dropped network ----
+  // Such a turn stops at the prompt with an API error. It is not "finished
+  // without a receipt": once the machine is awake and online again the session
+  // gets a short "carry on" (spaced out and capped; sleep-resume-core.js has the
+  // rules), and only repeated failure reaches 队长, as one anomaly receipt.
+  // A stopped, finished or interrupted task is never touched.
+  const sleepSending = new Map(); // task id -> when a nudge began waiting for the prompt (never saved)
+  function onPower(asleep, at) {
+    const sr = window.SleepResume;
+    if (!sr) return;
+    const when = Number.isFinite(at) ? at : Date.now();
+    if (asleep) {
+      sr.clock.suspend();
+      for (const task of state()?.tasks || []) if (task.status === 'working') task.sleptAt = when;
+      save();
+    } else sr.clock.resume(when);
+  }
+  function sleepResumeRecovered(task, entry) {
+    const sr = window.SleepResume, rec = task.sleepResume;
+    if (!sr || !rec || !rec.lastAt || sleepSending.has(task.id)) return;
+    if (Date.now() - rec.lastAt >= sr.RECOVER_MS && !sr.interruption(entry.lastScreen)) { delete task.sleepResume; save(); }
+  }
+  function sendSleepNudge(col, task, rec) {
+    const sr = window.SleepResume;
+    sleepSending.set(task.id, Date.now());
+    const done = () => sleepSending.delete(task.id);
+    host.sendWhenReady(col, sr.message(), {
+      silent: true, guardUserInput: true, requireIdle: true, timeout: 90_000,
+      cancelled: () => { const gone = task.status !== 'working'; if (gone) done(); return gone; },
+      onSent: () => {
+        done();
+        rec.attempts++; rec.lastAt = Date.now();
+        task.sleepNudges = (task.sleepNudges || 0) + 1;
+        if (rec.evidence !== 'screen') delete task.sleptAt;
+        task.endedAt = 0;
+        save();
+      },
+      onGiveUp: done,
+    });
+  }
+  // true: this tick belongs to the sleep rules (waiting, nudging or giving up).
+  function sleepResumeStep(col, entry, task) {
+    const sr = window.SleepResume;
+    if (!sr || !col || task.status !== 'working' || task.processEnded || task.pendingInstall || entry.state !== 'done') return false;
+    const turn = task.turnId && window.ChatUI.turnsOf(task.colId).find((t) => t.id === task.turnId);
+    if (turn?.interrupted) return false;
+    const now = Date.now();
+    const clock = sr.clock.snapshot();
+    // Nothing finishes while the machine sleeps; a tick that slips in before the wake event is not a verdict.
+    if (clock.asleep) return true;
+    const why = sr.evidence({ screen: entry.lastScreen, sleptAt: task.sleptAt, now, clock });
+    if (!why) return false;
+    const rec = task.sleepResume ||= { firstSeenAt: now, attempts: 0, lastAt: 0, evidence: why };
+    if (why === 'screen') rec.evidence = 'screen';
+    const began = sleepSending.get(task.id);
+    if (began && now - began < 3 * 60_000) return true;
+    const online = sr.online(typeof navigator === 'undefined' ? null : navigator);
+    const step = sr.decide(rec, { now, clock, online, lifetime: task.sleepNudges || 0 });
+    if (step.action === 'wait') return true;
+    if (step.action === 'send') { sendSleepNudge(col, task, rec); return true; }
+    if (rec.evidence === 'screen') {
+      settle(task, { summary: '', files: [], images: [], failed: sr.failure(rec), explicit: true, source: 'sleep' });
+      return true;
+    }
+    // Only the sleep event suggested it and the nudge changed nothing: the ordinary rule decides.
+    delete task.sleptAt; delete task.sleepResume;
+    return false;
+  }
   function onTick(id, entry) {
     const s = state();
     if (!s) return;
@@ -2015,6 +2083,7 @@
       retryBoardWrites(s); if (!seatChanging) { contextResetTick(entry); if (!contextReset) tokenSaverTick(entry); if (!tokenSaving && !contextReset) { deliver(entry); deliverMobile(); } pump(); } return;
     }
     const col = host.columns().find((c) => c.id === id);
+    window.SleepResume?.clock.beat();
     if (col) reopenAfterQuota(col, entry);
     if (col?.executor === 'chatgpt-web') {
       startWebTask(col);
@@ -2101,7 +2170,9 @@
       }
       // the prompt is gone (answered here or in the column): back to work
       if (task.status === 'input') { task.status = 'working'; update(task); }
+      if (task.sleepResume && (entry.state === 'working' || activity === 'working')) sleepResumeRecovered(task, entry);
       if (!task.processEnded && (entry.state === 'working' || activity === 'working' || M.claudeBackgroundTasks(entry.lastScreen, col?.cmd))) { task.endedAt = 0; continue; }
+      if (sleepResumeStep(col, entry, task)) continue;
       // A finished turn that asked in prose, without `ask`, is a question receipt.
       // Formal 【回执】/【提问】 blocks on screen stay ignored. One question text
       // per session. feat/crew-exception-receipts does not do this; it reports
@@ -2757,7 +2828,7 @@
   }
 
   window.MainSession = {
-    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
+    init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onPower, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
     isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click

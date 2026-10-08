@@ -185,6 +185,11 @@ function initPower() {
   const recheck = () => { if (tudArg) return; let on = false; try { on = powerMonitor.isOnBatteryPower() === true; } catch (_) {} changed(on); };
   powerMonitor.on('resume', recheck);
   powerMonitor.on('unlock-screen', recheck);
+  // Sleep and wake, stamped here because the page is frozen while the machine sleeps
+  // and only hears of them afterwards. A waiting `receipts --wait` must not look
+  // abandoned just because the clock jumped.
+  powerMonitor.on('suspend', () => send('power:sleep', { asleep: true, at: Date.now() }));
+  powerMonitor.on('resume', () => { receiptListeners?.wake(); send('power:sleep', { asleep: false, at: Date.now() }); });
 }
 onMain('power-state', (e) => { e.returnValue = { onBattery: power.snapshot().onBattery }; });
 
@@ -507,9 +512,15 @@ function dispatchPendingBoardCommands() {
   }
 }
 
+// A long silence between two passes means the machine slept. Every listener was frozen
+// with it, so none may look abandoned when this pass runs the registry's expiry check.
+let lastBoardPassAt = 0;
 function processBoardRequests() {
   if (processingBoardRequests || !boardControlDir) return;
   processingBoardRequests = true;
+  const passAt = Date.now();
+  if (lastBoardPassAt && passAt - lastBoardPassAt > 20_000) receiptListeners?.wake();
+  lastBoardPassAt = passAt;
   try {
     const dir = path.join(boardControlDir, 'requests');
     fs.mkdirSync(dir, { recursive: true });

@@ -86,6 +86,7 @@
       "relay-handoff-core.js",
       "main-session.js",
       "restart-resume.js",
+      "sleep-resume-core.js",
       "install-result.js",
       "agent-sessions.js",
       "task-board.js",

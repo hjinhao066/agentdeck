@@ -68,11 +68,13 @@ function removeLease(file, lease) {
   if (sameLease(read(file), lease)) { try { fs.unlinkSync(file); } catch (_) {} }
   try { fs.unlinkSync(releasePath(file, lease)); } catch (_) {}
   try { fs.unlinkSync(file + '.superseded'); } catch (_) {}
+  try { fs.unlinkSync(file + '.expired'); } catch (_) {}
 }
 
 // The lock belongs to a capability generation, never to a reusable column id.
 // No process is signalled: an old CLI detects its revoked lease and exits itself.
 const SUPERSEDED_NOTICE = '【AgentDeck 监听】已有更新的回执监听在运行，这个旧监听已自动退出。不要为它重挂。';
+const EXPIRED_NOTICE = '【AgentDeck 监听】这个回执监听超过 30 秒没被 AgentDeck 收到轮询（常见原因：电脑睡眠或 AgentDeck 卡住），登记已过期，监听已退出。请重新挂一个 receipts --wait。';
 function claim(dir, token, ownerPid = 0) {
   const instance = read(instancePath(dir));
   if (!instance || !alive(instance.pid)) throw new Error('AgentDeck receipt listener host is not running.');
@@ -93,7 +95,9 @@ function claim(dir, token, ownerPid = 0) {
   return {
     lease,
     superseded: () => generationAlive() && sameLease(read(file + '.superseded'), lease),
-    valid: () => generationAlive() && !sameLease(read(file + '.superseded'), lease),
+    // The host stopped hearing from this listener (see createRegistry): it leaves and says so.
+    expired: () => generationAlive() && sameLease(read(file + '.expired'), lease),
+    valid: () => generationAlive() && !sameLease(read(file + '.superseded'), lease) && !sameLease(read(file + '.expired'), lease),
     release: () => {
       if (locallyReleased) return;
       locallyReleased = true;
@@ -112,6 +116,14 @@ function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = aliv
       && !released(entry.file, entry.lease)
       && !sameLease(read(entry.file + '.superseded'), entry.lease)
       && sameLease(read(entry.file), entry.lease) && now() - entry.seenAt < 30_000;
+  }
+  // Only the age is wrong: process, host, release and supersession are all fine.
+  function stale(entry) {
+    return entry && entry.lease.instanceId === instance.id && pidAlive(entry.lease.pid)
+      && (!entry.lease.ownerPid || pidAlive(entry.lease.ownerPid))
+      && !released(entry.file, entry.lease)
+      && !sameLease(read(entry.file + '.superseded'), entry.lease)
+      && sameLease(read(entry.file), entry.lease) && now() - entry.seenAt >= 30_000;
   }
   function candidates(token) {
     return fs.readdirSync(path.join(dir, 'receipt-listeners'))
@@ -136,9 +148,9 @@ function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = aliv
         else if (lease.instanceId !== instance.id || !pidAlive(lease.pid) || lease.ownerPid && !pidAlive(lease.ownerPid) || released(file, lease)) removeLease(file, lease);
       }
       for (const name of fs.readdirSync(path.join(dir, 'receipt-listeners'))) {
-        if (!name.endsWith('.released') && !name.endsWith('.superseded')) continue;
+        if (!name.endsWith('.released') && !name.endsWith('.superseded') && !name.endsWith('.expired')) continue;
         const marker = path.join(dir, 'receipt-listeners', name);
-        const file = marker.replace(/(?:\.[a-f0-9]{32}\.released|\.superseded)$/, '');
+        const file = marker.replace(/(?:\.[a-f0-9]{32}\.released|\.superseded|\.expired)$/, '');
         if (!sameLease(read(marker), read(file) || {})) { try { fs.unlinkSync(marker); } catch (_) {} }
       }
     },
@@ -167,7 +179,12 @@ function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = aliv
       for (const id of statuses.keys()) if (!ids.has(id)) statuses.delete(id);
       for (const id of ids) {
         const entry = listeners.get(id), live = !!owns(entry);
-        if (entry && !live) { removeLease(entry.file, entry.lease); listeners.delete(id); }
+        if (entry && !live) {
+          // A listener that merely went quiet is told why: its lease stays, marked, until it releases.
+          if (stale(entry)) fs.writeFileSync(entry.file + '.expired', JSON.stringify(entry.lease), { mode: 0o600 });
+          else removeLease(entry.file, entry.lease);
+          listeners.delete(id);
+        }
         const previous = statuses.get(id);
         if (!previous || previous.alive !== live || now() - previous.at >= 10_000) {
           statuses.set(id, { alive: live, at: now() });
@@ -176,6 +193,8 @@ function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = aliv
       }
     },
     remove,
+    // The machine slept: no listener could have polled meanwhile, so none counts as abandoned.
+    wake() { const t = now(); for (const entry of listeners.values()) entry.seenAt = t; },
     dispose() {
       for (const id of listeners.keys()) remove(id);
       try { fs.unlinkSync(instancePath(dir)); } catch (_) {}
@@ -184,4 +203,4 @@ function createRegistry(dir, instance, onStatus, now = Date.now, pidAlive = aliv
   };
 }
 
-module.exports = { initialize, claim, createRegistry, alive, agentOwnerPid, SUPERSEDED_NOTICE };
+module.exports = { initialize, claim, createRegistry, alive, agentOwnerPid, SUPERSEDED_NOTICE, EXPIRED_NOTICE };

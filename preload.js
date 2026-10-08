@@ -16,6 +16,8 @@ contextBridge.exposeInMainWorld('deck', {
   // Battery mode: whether the Mac runs on battery now, and a push when it changes.
   powerState: () => ipcRenderer.sendSync('power-state'),
   onPowerChanged: (cb) => ipcRenderer.on('power:changed', (_e, m) => cb(!!(m && m.onBattery))),
+  // The machine going to sleep / waking, with main's own timestamp.
+  onPowerSleep: (cb) => ipcRenderer.on('power:sleep', (_e, m) => cb(!!(m && m.asleep), Number.isFinite(m && m.at) ? m.at : Date.now())),
   quotaLocal: () => ipcRenderer.invoke('quota:local'),
   quotaRefresh: (seatId) => ipcRenderer.invoke('quota:refresh', { seatId }),
   onQuotaUpdated: (cb) => ipcRenderer.on('quota:updated', (_e, samples) => cb(samples)),
