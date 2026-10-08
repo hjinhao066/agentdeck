@@ -178,8 +178,8 @@ test('队长 knows the providers, only verified models, and the routing preferen
   for (const key of ['agy']) assert.ok(text.includes(B.commandForAgent(key)), key);
   assert.ok(text.includes('claude --dangerously-skip-permissions --model claude-opus-5-5 --effort high'));
   assert.ok(text.includes('cursor-agent --force --model grok-4.7-high-fast'));
-  // Codex: --agent codex (default GPT-6.1 Sol) or the Luna command; the bypass flag is named only to forbid writing it
-  assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*--command "codex -m gpt-6-luna"[^\n]*--dangerously-bypass-approvals-and-sandbox[^\n]*--no-daemon[^\n]*不要手动拼接/);
+  // Codex: --agent codex (default GPT-6.1 Sol), not used for execution work for now; the bypass flag is named only to forbid writing it
+  assert.match(text, /Codex：使用 --agent codex，默认模型 GPT-6\.1 Sol[^\n]*暂不消耗 ChatGPT 额度[^\n]*--dangerously-bypass-approvals-and-sandbox[^\n]*--no-daemon[^\n]*不要手动拼接/);
   assert.ok(!text.includes(B.commandForAgent('codex')), 'no ready-made codex command with the flag to copy');
   assert.match(text, /--agent claude\|agy\|cursor\|grok\|codex\|chatgpt-web \| --command/);
   // only models the CLIs listed on the owner's accounts
@@ -202,9 +202,9 @@ test('队长 knows the providers, only verified models, and the routing preferen
   const route = (needle) => text.split('\n').find((l) => l.startsWith('   - ') && l.includes(needle)) || '';
   assert.match(route('UI 设计'), /Opus 5\.5[^\n]*最关键核心代码[^\n]*最终审核/);
   assert.match(route('重要代码'), /Sonnet 5\.5[^\n]*核心改动/);
-  assert.match(route('批量写代码'), /GPT-6\.1 Sol[^\n]*写测试[^\n]*CI/);
-  assert.match(route('简单的轻量代码'), /^   - Haiku 5\.5[^\n]*--model claude-haiku-5-5[^\n]*--effort[^\n]*额度不够[^\n]*GPT-6 Luna/);
-  assert.ok(!route('简单的轻量代码').startsWith('   - Codex GPT-6 Luna'), 'Luna is the fallback, not the first choice');
+  assert.match(route('批量写代码'), /^   - Haiku 5\.5[^\n]*写测试[^\n]*CI[^\n]*--model claude-haiku-5-5[^\n]*--effort[^\n]*Sonnet 5\.5/);
+  assert.ok(!/GPT-6 Luna|gpt-6-luna/.test(text), 'Luna is no longer an execution fallback');
+  assert.ok(!text.split('\n').some((l) => l.startsWith('   - Codex')), 'no Codex routing line');
   assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*不用 Gemini 3\.1 Pro/);
   assert.match(route('检索、整理'), /Gemini 周额度用尽时[^\n]*GPT-OSS[^\n]*Sonnet 4\.6[^\n]*Opus 4\.6/);
   assert.match(route('脏活'), /Cursor Grok 4\.7[^\n]*抓数据/);

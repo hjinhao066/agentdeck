@@ -192,7 +192,7 @@ test('dispatcher uses Captain model routing, portable CLI and important/unclear 
   for (const platform of ['darwin', 'win32']) {
     const prompt = M.dispatcherInstructions(platform, c);
     assert.ok(prompt.includes(M.boardCli(platform))); assert.ok(prompt.includes('--task-id ' + c.id));
-    for (const model of ['gpt-6-luna', 'Gemini 3.8 Flash', 'GPT-6.1 Sol', 'Sonnet 5.5', 'Opus 5.5', 'grok-4.7-high-fast']) assert.ok(prompt.includes(model));
+    for (const model of ['claude-haiku-5-5', 'Gemini 3.8 Flash', 'GPT-6.1 Sol', 'Sonnet 5.5', 'Opus 5.5', 'grok-4.7-high-fast']) assert.ok(prompt.includes(model));
   }
 });
 test('dispatcher question/crash update the card; a delegated worker is never changed by its dispatcher receipt', (t) => {

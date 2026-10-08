@@ -437,8 +437,9 @@ again with the current provider, model and effort instructions.
   refused with a message telling the 队长 what to use instead. Haiku 5.5 is allowed
   (Claude Code `--model claude-haiku-5-5 --effort medium|high`, measured on claude
   2.1.294; Cursor's `claude-haiku-5-5-<tier>` and `claude-haiku-5-5-thinking-<tier>`
-  pass the check too) and is the 队长's first choice for simple, lightweight work;
-  Codex GPT-6 Luna is the fallback when Claude quota runs short.
+  pass the check too) and is the 队长's first choice for simple, lightweight work,
+  bulk code, tests and CI/CD fixes; the 队长 does not hand execution work to Codex
+  (Sol/Luna) for now, so ChatGPT quota is left alone unless the user names it.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   The 队长 can read observed subscription quotas with `quota` and switches
