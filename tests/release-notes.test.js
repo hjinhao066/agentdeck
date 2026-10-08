@@ -45,8 +45,9 @@ test('versions compare by number; 1.9 is 1.9.0 and a patch keeps its third numbe
 
 test('problems name what a release editor got wrong', () => {
   const late = valid();
-  late.released.unshift({ ...late.released[0], version: '2.0', date: '2026-10-09' });
-  assert.ok(H.releaseProblems(late).some((p) => /2\.0 已经发布了，从 upcoming 里删掉/.test(p)));
+  const next = late.upcoming.find((e) => e.version).version;
+  late.released.unshift({ ...late.released[0], version: next, date: '2099-01-01' });
+  assert.ok(H.releaseProblems(late).some((p) => p.includes(`${next} 已经发布了，从 upcoming 里删掉`)));
   const order = valid();
   [order.released[0], order.released[1]] = [order.released[1], order.released[0]];
   assert.ok(H.releaseProblems(order).some((p) => /从新到旧/.test(p)));
@@ -59,7 +60,7 @@ test('problems name what a release editor got wrong', () => {
   const long = valid();
   long.released[0].items[0] = '字'.repeat(61);
   assert.ok(H.releaseProblems(long).some((p) => /最多 60 字/.test(p)));
-  assert.match(H.releaseGap(valid(), '2.0.0'), /最新一版是 1\.9，还没写 2\.0 的更新内容/);
+  assert.ok(H.releaseGap(valid(), '99.1.0').includes(`最新一版是 ${notes.released[0].version}，还没写 99.1 的更新内容`));
   assert.match(H.releaseGap(thin, pkg.version), /release-notes\.json 有问题/);
 });
 
