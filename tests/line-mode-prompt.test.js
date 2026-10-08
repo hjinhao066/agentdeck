@@ -63,6 +63,15 @@ test('attachments and a suffix are counted in the line budget', async () => {
   assert.ok(sent.includes(att) && sent.endsWith('请直接动手。'));
 });
 
+test('a multi-line suffix such as the receipt contract does not eat the pointer\'s opening', async () => {
+  const { context, typed } = harness({ bracketed: false });
+  await context.sendPrompt(col, '把这件事做完，'.repeat(120), null, { suffix: MainCore.RECEIPT_CONTRACT });
+  const rows = typed.filter((d) => d !== '\r').join('').split('\r');
+  assert.match(rows[0], /^把这件事做完，.*完整内容已存成文件/, 'the opening is kept');
+  assert.ok(rows.every((row) => Buffer.byteLength(row) <= ChatCore.LINE_MODE_BYTES));
+  assert.ok(rows.join('\r').includes('（AgentDeck 约定）'), 'the contract still follows');
+});
+
 test('a long line among short ones is caught; short multi-line text is untouched', async () => {
   const a = harness({ bracketed: false });
   await a.context.sendPrompt(col, `第一行\n${'x'.repeat(1100)}\n第三行`, null, {});

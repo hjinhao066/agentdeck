@@ -1422,7 +1422,8 @@
       const entry = host.terms.get(col.id);
       let pointer = `${opening}…\n${note}`;
       if (entry && !(entry.term.modes && entry.term.modes.bracketedPasteMode)) {
-        const fixed = (o.prefix || '') + (atts || []).map(host.shellQuote).join(' ') + (o.suffix || '') + note + '… ';
+        // only what shares the pointer's line counts: the end of the prefix and the start of the suffix
+        const fixed = String(o.prefix || '').split(/\r?\n|\r/).at(-1) + (atts || []).map(host.shellQuote).join(' ') + String(o.suffix || '').split(/\r?\n|\r/)[0] + note + '… ';
         const fitting = C.clipBytes(opening, C.LINE_MODE_BYTES - C.utf8Length(fixed));
         pointer = (fitting ? fitting + '…' : '') + note;
       }
