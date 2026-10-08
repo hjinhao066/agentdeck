@@ -555,6 +555,10 @@
     const settings = $('notificationSettings');
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
     if ($('batteryMode')) $('batteryMode').onchange = syncBatteryField;
+    // These few wait for 保存设置 (the switches above save on change), so the save bar says when they are edited.
+    for (const id of ['csEnabled', 'csThreshold', 'handoffBudget', 'concurrencyCap', 'batteryMode', 'batteryConcurrency', 'resumeOnRestart']) {
+      $(id)?.addEventListener?.('input', () => { if ($('csDirty')) $('csDirty').textContent = '有改动还没保存'; });
+    }
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
       if (!$('concurrencyCap').reportValidity()) return;
@@ -574,6 +578,7 @@
       cancelTokenSaving();
       tokenSaverPaused = false;
       save();
+      if ($('csDirty')) $('csDirty').textContent = '';
       settings.close();
     };
     settings.addEventListener('keydown', (e) => e.stopPropagation());
@@ -606,6 +611,7 @@
     if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffOverview);
     const resumeBox = $('resumeOnRestart');
     if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
+    if ($('csDirty')) $('csDirty').textContent = '';
   }
   // 不限制: the battery count does not apply, so it is greyed out and not required (like the token-saver threshold).
   function syncBatteryField() {

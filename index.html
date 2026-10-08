@@ -16,6 +16,9 @@
       <h2 id="notificationSettingsTitle">设置 · 队长</h2>
       <button type="button" class="rail-btn" id="notificationSettingsClose" title="关闭设置" aria-label="关闭设置"></button>
     </div>
+    <!-- Only this part scrolls: the title with its close button and the save bar stay on screen. -->
+    <div class="notify-settings-body">
+    <h3>提醒</h3>
     <p>队长回复结束或需要你确认时提醒；手动终端中你亲自提交的那一轮结束时也提醒。</p>
     <label class="notify-setting"><span>系统通知</span><input type="checkbox" role="switch" id="captainNotifyEnabled" aria-label="系统通知" /></label>
     <label class="notify-setting"><span>提示音</span><input type="checkbox" role="switch" id="captainSoundEnabled" aria-label="提示音" /></label>
@@ -64,7 +67,6 @@
     <h3>重启后续上</h3>
     <label class="sd-check"><input id="resumeOnRestart" type="checkbox" />重启后自动续上在跑的队员</label>
     <p class="hint">退出前记下在干活的队员，并在时限内退出。能续上原对话的用各家自己的 resume；续不上的新开会话，并重发卡片任务和最后回执。</p>
-    <button id="csSave" class="btn primary" type="button">保存设置</button>
     <h3>手机网页端</h3>
     <label class="notify-setting"><span>本地网页服务</span><input type="checkbox" role="switch" id="mobileWebEnabled" aria-label="本地网页服务" /></label>
     <p class="hint">服务只监听本机。远程访问需已配置的私人 HTTPS 隧道；开启后登录 Mac 会自动启动 AgentDeck。首次登录使用 token，随后记住设备。</p>
@@ -88,7 +90,12 @@
       <p id="mobileWebDevices" class="hint"></p>
     </div>
     <h3>Claude 席位与 Relay</h3>
-    <button id="claudeSeatsSettings" class="seat-icon" type="button" title="席位设置" aria-label="席位设置"></button>
+    <div class="notify-setting"><span>席位、登录和 Relay</span><button id="claudeSeatsSettings" class="seat-icon" type="button" title="席位设置" aria-label="席位设置"></button></div>
+    </div>
+    <div class="notify-settings-foot">
+      <p id="csDirty" class="notify-settings-dirty" role="status"></p>
+      <button id="csSave" class="btn primary" type="button" title="保存队长省上下文、交接、并发、电池和重启续上这几项">保存设置</button>
+    </div>
   </dialog>
   <nav id="colNav" aria-label="对话列表">
     <div id="navHead"></div>
@@ -465,8 +472,8 @@
   </dialog>
 
   <!-- Shortcuts & tips (help button in the sidebar, or Cmd+/) -->
-  <dialog id="helpDialog">
-    <h3>快捷键与使用提示</h3>
+  <dialog id="helpDialog" aria-labelledby="helpDialogTitle">
+    <div class="dialog-head"><h3 id="helpDialogTitle">快捷键与使用提示</h3><button type="button" class="btn tool-action" id="helpX" title="关闭 (Esc)" aria-label="关闭快捷键与使用提示"></button></div>
     <div class="help-section">界面</div>
     <div class="help-grid">
       <span>左右滑动</span><span>中间区域两指左右滑动，在各个对话之间切换（每个对话就是一个真实终端）</span>

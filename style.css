@@ -689,7 +689,7 @@ dialog {
   margin: auto;
   background: var(--elev); color: var(--text);
   border: 1px solid var(--border); border-radius: 14px;
-  padding: 22px; width: 440px;
+  padding: 22px; width: min(440px, calc(100vw - 32px));
   box-shadow: var(--shadow-pop);
 }
 dialog[open] { animation: dlg-in .2s cubic-bezier(0.16, 1, 0.3, 1); }
@@ -697,6 +697,18 @@ dialog[open] { animation: dlg-in .2s cubic-bezier(0.16, 1, 0.3, 1); }
   from { opacity: 0; transform: scale(0.97) translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
+/* A dialog taller than the window scrolls inside itself; its title (with the close button) and its
+   action row stay pinned, so closing or saving never needs a scroll back. Offsets cancel the 22px padding. */
+dialog:modal { max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+dialog > h3:first-child, dialog > .dialog-head:first-child, .seat-dialog > .seat-dialog-head:first-child {
+  position: sticky; top: -22px; z-index: 2; margin: -22px -22px 0; padding: 22px 22px 10px; background: inherit;
+}
+dialog > .row:last-child, .seat-dialog > .seat-dialog-actions:last-child {
+  position: sticky; bottom: -22px; z-index: 2; margin: 22px -22px -22px; padding: 14px 22px 22px; background: inherit;
+}
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dialog-head h3 { margin: 0; min-width: 0; }
+.dialog-head .tool-action { width: 36px; height: 36px; border: 0; }
 dialog::backdrop { background: var(--backdrop); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
 dialog h3 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 4px; }
 dialog .hint { font-size: 12px; color: var(--muted); line-height: 1.55; margin: 10px 0 2px; }
@@ -710,7 +722,7 @@ dialog input, dialog textarea, dialog select {
 }
 dialog textarea { min-height: 120px; resize: vertical; line-height: 1.5; }
 dialog input:focus, dialog textarea:focus, dialog select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.task-dialog { width: 520px; }
+.task-dialog { width: min(520px, calc(100vw - 32px)); }
 dialog .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 dialog .preset {
   border: 1px solid var(--border); background: var(--pill-bg); color: var(--text);
@@ -736,7 +748,7 @@ dialog .row { display: flex; gap: 8px; justify-content: flex-end; align-items: c
 .btn.primary:hover { filter: brightness(0.92); background: var(--primary-bg); }
 
 /* Schedule editor */
-.schedule-dialog { width: 540px; max-height: 88vh; overflow-y: auto; }
+.schedule-dialog { width: min(540px, calc(100vw - 32px)); }
 .schedule-dialog textarea { min-height: 96px; }
 .sd-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .sd-kinds { display: inline-flex; gap: 2px; padding: 2px; background: var(--pill-bg); border-radius: 8px; }
@@ -820,7 +832,7 @@ dialog label.sd-check input { width: 15px; height: 15px; }
 }
 
 /* Help dialog (shortcuts & tips) */
-#helpDialog { width: 500px; max-height: 80vh; overflow-y: auto; }
+#helpDialog { width: min(500px, calc(100vw - 32px)); }
 #helpDialog::-webkit-scrollbar { width: 8px; }
 #helpDialog::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 999px; }
 .help-section {
@@ -1100,7 +1112,7 @@ body.linking-board .board-port.out::before {
   color: var(--muted); font-size: 12px;
 }
 
-.link-dialog { width: 560px; }
+.link-dialog { width: min(560px, calc(100vw - 32px)); }
 .link-endpoints {
   display: flex; align-items: center; gap: 10px; margin: 12px 0 2px;
   color: var(--muted); font-size: 12px;
@@ -2905,7 +2917,7 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .seat-icon:hover { color: var(--text); background: var(--icon-hover-bg); }
 .seat-icon:focus-visible, .seat-choice:focus-visible { outline: 2px solid #d98645; outline-offset: 2px; }
 .seat-icon:disabled { opacity: .4; cursor: default; }
-.seat-dialog { width: min(460px, 80vw); max-height: 80vh; overflow-y: auto; }
+.seat-dialog { width: min(460px, calc(100vw - 32px)); }
 .seat-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .seat-dialog-head h3 { margin: 0; }
 .seat-current { color: var(--muted); margin: 12px 0; }
@@ -2922,19 +2934,28 @@ body.nav-collapsed .cn-badge .agent-model-label { display: none; }
 .seat-quota-banner { display: flex; align-items: center; justify-content: space-between; padding: 4px 10px; flex-shrink: 0; color: #d98645; background: rgba(217,134,69,.1); font-size: 12px; }
 
 /* Captain notification preferences: native switches/selects, icon-only actions. */
-#notificationSettings { width: min(420px, calc(100vw - 48px)); padding: 24px; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
-.notify-settings-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.notify-settings-head h2 { margin: 0; font-size: 18px; }
+/* Title + close and the save bar stay put; only the body between them scrolls. */
+#notificationSettings { width: min(460px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; }
+#notificationSettings[open] { display: flex; flex-direction: column; }
+.notify-settings-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 14px 12px 24px; border-bottom: 1px solid var(--hairline); }
+.notify-settings-head h2 { margin: 0; min-width: 0; font-size: 18px; }
+.notify-settings-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 6px 24px 20px; }
+#notificationSettings h3 { margin: 26px 0 2px; padding-top: 18px; border-top: 1px solid var(--hairline); font-size: 15px; }
+#notificationSettings .notify-settings-body > h3:first-child { margin-top: 10px; padding-top: 0; border-top: 0; }
+.notify-settings-foot { flex: none; display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 12px 24px; border-top: 1px solid var(--hairline); }
+#notificationSettings .notify-settings-dirty { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 1.4; color: var(--muted); opacity: 1; }
+#notificationSettings .notify-settings-foot .btn { height: 36px; padding: 0 18px; }
 #notificationSettings p { font-size: 13px; line-height: 1.6; opacity: .7; }
 .notify-setting { display: flex; align-items: center; justify-content: space-between; min-height: 48px; gap: 16px; font-size: 14px; }
-.notify-setting span { flex-shrink: 0; }
+.notify-setting span { flex: 0 1 auto; min-width: 0; }
 .notify-setting input[type="checkbox"] { appearance: none; position: relative; flex: 0 0 36px; width: 36px; height: 22px; border-radius: 12px; background: var(--muted); cursor: pointer; }
 .notify-setting input[type="checkbox"]::before { content: ''; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: white; transition: transform .15s; }
 .notify-setting input[type="checkbox"]:checked { background: var(--accent); }
 .notify-setting input[type="checkbox"]:checked::before { transform: translateX(14px); }
 .notify-setting select { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; }
 .notify-setting input[type="number"], .notify-setting input[type="time"] { flex: 0 0 110px; width: 110px; min-width: 110px; padding: 8px; color: inherit; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-sizing: border-box; }
-#notificationSettings .rail-btn { min-width: 36px; min-height: 36px; }
+#notificationSettings .rail-btn, #notificationSettings .seat-icon { min-width: 36px; min-height: 36px; flex: 0 0 36px; }
+#mobileWebSaveOrigin { margin-top: 8px; }
 /* Short lists (calendars, course names, class periods): as tall as their rows, not the 120px prompt box. */
 #notificationSettings textarea { min-height: 0; }
 #notificationSettings :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
