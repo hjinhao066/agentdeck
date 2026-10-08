@@ -1367,7 +1367,7 @@
     if (!(shut && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
     if (stay) top.append(node('span', 'at-seen', '已读'));
     const when = shut ? item.doneAt : item.created;
-    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
+    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
     if (when) meta.title = (shut ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
     // An open need with a question: the question is the biggest thing on the card,

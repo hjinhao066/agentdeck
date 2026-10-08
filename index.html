@@ -92,6 +92,11 @@
       <button id="mobileWebRevoke" class="rail-btn" type="button" title="吊销所有设备并更换登录 token" aria-label="吊销所有设备并更换登录 token"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
       <p id="mobileWebDevices" class="hint"></p>
     </div>
+    <h3>自动回执</h3>
+    <label class="notify-setting"><span>允许本机定时脚本发自动回执</span><input type="checkbox" role="switch" id="automationEnabled" aria-label="允许本机定时脚本发自动回执" /></label>
+    <p class="hint">只在本机，用单独的令牌（不显示）。定时脚本（如夜间挖虫）只能给队长发一条标明「自动任务：名字」的回执、建待办卡片、在「待我处理」登记结果汇报；不能派活，也不能改设置。重置后旧令牌立即失效，脚本下次运行会自动读到新的。</p>
+    <button id="automationReset" class="rail-btn" type="button" title="重置自动回执令牌" aria-label="重置自动回执令牌"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+    <p id="automationStatus" class="hint" role="status"></p>
     <h3>Claude 席位与 Relay</h3>
     <div class="notify-setting"><span>席位、登录和 Relay</span><button id="claudeSeatsSettings" class="seat-icon" type="button" title="席位设置" aria-label="席位设置"></button></div>
     </div>

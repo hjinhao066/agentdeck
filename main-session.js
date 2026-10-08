@@ -81,6 +81,30 @@
     save();
     return taskId;
   }
+  // 自动回执入口: what a scheduled script on this computer may do, and nothing else.
+  // main.js already checked the token, the allowed fields and the rate; these
+  // commands have no calling session (callerId is empty), cannot hand out work
+  // and are never shown as the user's words.
+  async function automation(message) {
+    const from = message && message.automation;
+    if (!from || message.callerId || typeof from.source !== 'string' || from.label !== '自动任务：' + from.source) throw new Error('自动回执：来源无效。');
+    const s = state();
+    if (message.action === 'automation-receipt') {
+      if (!s || !mainCol()) throw new Error('队长还没创建或启动，这条自动回执没有送达。');
+      const taskId = 'auto-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      s.pending.push({ taskId, colId: s.colId, title: from.label, ts: Date.now(), summary: String(message.message || ''), source: 'command', automation: from.source });
+      save();
+      return { done: true, result: '已交给队长：' + from.label + '。' };
+    }
+    if (message.action === 'automation-task-add') {
+      // Always a plain 待办 card; the board starts nothing from there.
+      const detail = '【' + from.label + '】本机定时脚本经自动回执入口登记，不是用户本人建的。' + (message.detail ? '\n\n' + message.detail : '');
+      const { card } = await boardRequest('add', { project: message.project, title: message.title, detail });
+      return { done: true, result: '已建卡 ' + card.id + '（项目 ' + card.project + '，待办，没有开始做）。' };
+    }
+    if (message.action === 'automation-inbox-report') return window.AttentionUI.automation(message);
+    throw new Error('自动回执入口不支持这个命令。');
+  }
   async function boardRequest(op, input) {
     const result = await window.deck.taskBoard(op, input);
     if (op === 'move' && ['done', 'todo'].includes(result.card?.status)) cancelWaiting((w) => w.metadata?.boardId === result.card.id, '卡片已移到' + result.card.status + '，取消排队。');
@@ -2912,7 +2936,7 @@
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onPower, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
-    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice,
+    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation,
     batteryReadout, setBattery,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),

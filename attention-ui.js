@@ -181,6 +181,17 @@
     const turn = id && window.ChatUI ? window.ChatUI.turnsOf(colId).find((t) => t.id === id) : null;
     return turn && (!turn.done || now - (turn.end || 0) <= 120_000) ? turn.id : '';
   }
+  // 自动回执入口: a scheduled script's 结果汇报. Always a report (never a need), no
+  // alert, and it says where it came from.
+  function automation(message) {
+    const from = message.automation;
+    const { item, created } = A.add(load(), {
+      kind: 'report', title: message.title, detail: message.detail, files: message.files, project: message.project,
+      source: 'automation', automation: from.source,
+    }, Date.now());
+    if (created) save();
+    return { done: true, result: created ? `已登记到「待我处理」：${item.id}，结果汇报（来自 ${from.label}）。` : `「待我处理」里已有同样一条未解决的：${item.id}，没有重复登记。` };
+  }
   // notify-user: the alert goes out as before; the user also finds it here.
   function fromNotify(text) {
     try {
@@ -450,6 +461,7 @@
     time.title = (shut ? '完成于 ' : '登记于 ') + new Date(shut ? item.doneAt : item.created).toLocaleString();
     meta.appendChild(time);
     if (item.source === 'card') meta.appendChild(el('span', 'at-from', '来自任务看板'));
+    if (item.source === 'automation') meta.appendChild(el('span', 'at-from', '来自自动任务：' + item.automation));
     top.append(meta, el('span', 'at-spacer'));
     const tools = el('span', 'at-tools');
     const live = liveSession(item);
@@ -618,7 +630,7 @@
   }
 
   window.AttentionUI = {
-    init, render, refresh, paintBadge, counts, captain, fromNotify, reply, tick, tickReports, reopen, markRead,
+    init, render, refresh, paintBadge, counts, captain, automation, fromNotify, reply, tick, tickReports, reopen, markRead,
     mobileView, mobileWrite, sessionWaiting,
     open: () => { if (!visible()) host.togglePage('attention'); },
   };

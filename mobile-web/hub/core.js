@@ -542,7 +542,7 @@
         options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
         files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
         project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-        source: item.source === 'card' ? 'card' : 'captain', turn: item.kind === 'report' && typeof item.turn === 'string' && TURN.test(item.turn) ? item.turn : '',
+        source: item.source === 'card' ? 'card' : item.source === 'automation' ? 'automation' : 'captain', automation: item.source === 'automation' ? line(item.automation, 40) : '', turn: item.kind === 'report' && typeof item.turn === 'string' && TURN.test(item.turn) ? item.turn : '',
         created: time(item.created), readAt: time(item.readAt),
         done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0, doneText: item.done === true ? line(item.doneText, 200) : '',
         doneBy: item.done === true && DONE_BY.includes(item.doneBy) ? item.doneBy : '',

@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('deck', {
   onParkForRestart: (cb) => ipcRenderer.on('park-for-restart', (_e, m) => cb(m && m.sessions)),
   parkForRestartDone: () => ipcRenderer.send('park-for-restart-done'),
   mobileWebSettings: (input) => ipcRenderer.invoke('mobile-web:settings', input),
+  automationSettings: (input) => ipcRenderer.invoke('automation:settings', input),
   onMobileRequest: (cb) => ipcRenderer.on('mobile-web:request', (_e, m) => cb(m)),
   mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),

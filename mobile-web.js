@@ -143,9 +143,10 @@ function attentionView(data, now) {
       options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
       files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
       project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-      source: ['captain', 'notify', 'card'].includes(item.source) ? item.source : 'captain',
+      source: ['captain', 'notify', 'card', 'automation'].includes(item.source) ? item.source : 'captain',
       // The 队长 chat turn a report was said in (an id the captain history already shows).
       turn: item.kind === 'report' && typeof item.turn === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(item.turn) ? item.turn : '',
+      automation: item.source === 'automation' ? line(item.automation, 40) : '',
       created: time(item.created), readAt: time(item.readAt), done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0,
       doneText: item.done === true ? line(item.doneText, 200) : '',
       doneBy: item.done === true && ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'].includes(item.doneBy) ? item.doneBy : '',

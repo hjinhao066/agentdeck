@@ -310,7 +310,7 @@ function hostQueue(t, dir, registry) {
   const pendingBoardCommands = new Map(), responses = new Map(), delivered = [];
   const source = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
   const context = vm.createContext({
-    fs, path, boardControlDir: dir, receiptListeners: registry, pendingBoardCommands,
+    fs, path, boardControlDir: dir, receiptListeners: registry, pendingBoardCommands, AutomationCore: require('../automation-core'), automation: null,
     boardRendererReady: false, receiptSessions: new Map(), managedSessions: new Map([['captain', 'captain-token']]),
     validId: (id) => /^[a-z0-9-]+$/.test(id),
     writeBoardResponse: (id, response) => responses.set(id, response),

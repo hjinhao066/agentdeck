@@ -594,6 +594,23 @@ again with the current provider, model and effort instructions.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
 
+### 自动回执入口 (scheduled scripts)
+
+A job that runs on this computer without any AgentDeck terminal (launchd, Task
+Scheduler, cron: the nightly bug hunt is one) has no terminal token, so the
+Captain commands refuse it. It uses its own door instead:
+`node <config>/board-control/tools/agentdeck-board.js automation receipt|task-add|inbox-report|status --source <script name> ...`
+(`automation help`). The door has a token of its own that the app makes and keeps
+(`board-control/automation.json`, mode 600, never shown on screen), works only on
+this computer, and can do exactly three things, each marked 「自动任务：<名字>」 and
+never shown as the user's words: tell the Captain (a receipt it reads as a notice,
+not as an order), add a 待办 card (it starts nothing), file a 结果汇报 on
+待我处理. It cannot dispatch work, `tell`, read a conversation or change a setting;
+extra fields are refused, and it is rate limited (6 a minute per name, 12 in all).
+Settings has a switch to stop it and a button to reset the token. An older
+AgentDeck has no such door and the command fails, so a script should fall back to
+a report and a local notification. See [自动回执入口](docs/automation-receipt.md).
+
 ### Battery mode (电池模式)
 
 Settings → 电池模式 → 没插电时: **省电** (default) or **不限制**, plus how many sessions may be open at
