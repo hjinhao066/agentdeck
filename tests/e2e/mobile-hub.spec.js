@@ -481,7 +481,7 @@ for (const theme of ['dark', 'light']) {
     expect(layout.main.top).toBeCloseTo(layout.header.bottom, 0);
     expect(layout.targetRow).toBe(false);
     expect(layout.hintHidden).toBe(true);
-    expect(layout.composerButtons).toEqual(['清空草稿', '发送给 Mac 队长']);
+    expect(layout.composerButtons).toEqual(['添加图片', '清空草稿', '发送给 Mac 队长']);
     expect(layout.dots).toBe(2);          // the captain view has no "all": one dot and a short name per computer
     // 844px phone: header 52, tabs 53, the rest is content.
     expect(layout.main.height).toBeGreaterThanOrEqual(720);
