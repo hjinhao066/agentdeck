@@ -170,6 +170,8 @@ if (saved) {
   config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
+  // 待我处理 (attention-ui.js normalizes and migrates it); without this every restart emptied the page.
+  if (saved.attention && typeof saved.attention === 'object') config.attention = saved.attention;
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);

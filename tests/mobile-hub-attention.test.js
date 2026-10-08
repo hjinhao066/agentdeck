@@ -8,7 +8,7 @@ const { attentionFixture } = require('./fixtures/hub-proxy.js');
 
 test('each computer\'s list is cleaned again: no foreign ids, no markup tricks, line breaks kept', () => {
   const items = Core.cleanAttention({ items: [
-    { id: 'at-ok-1', kind: 'need', label: '等你拍板', title: ' 一句\n话 ', detail: '第一行\n第二行\u0007', created: 5, replies: [{ text: '好', at: 6, from: 'phone', seen: true, notice: 'secret' }] },
+    { id: 'at-ok-1', kind: 'need', label: '等你拍板', options: ['继续', ' 先放着\n', '继续', { x: 1 }], title: ' 一句\n话 ', detail: '第一行\n第二行\u0007', created: 5, replies: [{ text: '好', at: 6, from: 'phone', seen: true, notice: 'secret' }] },
     { id: '../x', kind: 'need', title: 'x', created: 1 },
     { id: 'at-ok-2', kind: 'todo', title: 'x', created: 1 },
     { id: 'at-ok-3', kind: 'report', title: '   ', created: 1 },
@@ -18,6 +18,8 @@ test('each computer\'s list is cleaned again: no foreign ids, no markup tricks, 
   assert.equal(items[0].title, '一句 话');
   assert.equal(items[0].detail, '第一行\n第二行 ');
   assert.deepEqual(items[0].replies, [{ text: '好', at: 6, from: 'phone', seen: true }]);
+  assert.deepEqual(items[0].options, ['继续', '先放着']);
+  assert.deepEqual(items[1].options, []);
   assert.equal(items[1].title, '<img src=x onerror=alert(1)>', 'kept as text; the page only ever sets textContent');
   assert.equal(items[1].source, 'captain');
   assert.equal(items[1].label, '结果汇报');

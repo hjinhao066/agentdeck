@@ -5,8 +5,9 @@ const path = require('path');
 const closeElectron = require('./fixtures/close-electron');
 
 // 待我处理 on the desktop: 队长 files items with the real board CLI from its own
-// terminal, the board's 需要你 card shows up by itself, the user reads, replies
-// and ticks, and things settle on their own. Isolated profile, stand-in shell
+// terminal; a card waiting in 需要你 is never filed by itself (the item 1.9 filed
+// for it is taken away and 队长 told); the user reads, answers with one tap or in
+// words, ticks, and things settle on their own. Isolated profile, stand-in shell
 // Captain, the profile's own task store.
 let application, page, profile;
 const problems = [];
@@ -16,6 +17,7 @@ const run = (command) => page.evaluate((c) => window.deck.ptyInput('captain', c 
 const items = () => page.evaluate(() => (config.attention && config.attention.items || []).map((i) => ({ id: i.id, kind: i.kind, title: i.title, done: i.done, doneBy: i.doneBy, doneNote: i.doneNote, readAt: i.readAt, source: i.source, card: i.card })));
 const pending = () => page.evaluate(() => MainSession.state().pending.map((p) => ({ title: p.title, summary: p.summary })));
 const card = (title) => page.locator('.at-card', { hasText: title });
+const RECEIPT = '验收完成，判定【通过】。会话回执逐项核实均属实：登录一年有效已生效';
 async function shot(name) {
   const dir = process.env.AGENTDECK_ATTENTION_SHOTS;
   if (!dir) return;
@@ -29,12 +31,16 @@ test.beforeAll(async () => {
   fs.mkdirSync(path.join(profile, 'tasks'));
   fs.writeFileSync(path.join(profile, 'tasks', 'agentdeck.json'), JSON.stringify({ version: 1, project: 'agentdeck', cards: [{
     id: 't-ask', project: 'agentdeck', title: '网页端登录改成一次长期有效', detail: '登录一次记住一年，手机和两台电脑都一样。', status: 'needs_user', flag: null, order: 1,
-    depends_on: [], assignee: null, session_id: null, latest_receipt: '旧设备要不要一起踢下线？', user_question: '旧设备要不要一起踢下线？', needs_user_entry: now,
+    depends_on: [], assignee: null, session_id: null, latest_receipt: RECEIPT, needs_user_entry: now,
     verify: false, rework_count: 0, created: now, updated: now, archived: false }] }));
+  // What 1.9 had filed for that card by itself: the card's last receipt as 要你做.
+  const legacy = { id: 'at-legacy-ask1', kind: 'need', type: 'question', title: '「网页端登录改成一次长期有效」停下来等你回答', ask: RECEIPT, project: 'agentdeck',
+    card: 't-ask', cardTitle: '网页端登录改成一次长期有效', source: 'card', key: `needs:t-ask:${now}`, created: Date.now() - 60000, updated: Date.now() - 60000 };
   fs.writeFileSync(path.join(profile, 'facts.md'), '# 取证\n');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
     mainSession: { colId: 'captain', cmd: '', crewMarked: true }, theme: 'dark',
     columns: [{ id: 'captain', title: '队长', isMain: true, cmd: '', cwd: profile }],
+    attention: { version: 1, items: [legacy] },
   }));
   const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
   application = await electron.launch({
@@ -53,10 +59,22 @@ test.afterAll(async () => {
   expect(problems).toEqual([]);
 });
 
-test('队长 files needs and reports from its terminal; the board\'s 需要你 card shows up by itself; the sidebar counts them', async () => {
-  // The card waiting on the user is an item without anyone filing it.
-  await expect.poll(async () => (await items()).filter((i) => i.source === 'card').map((i) => i.title)).toEqual(['「网页端登录改成一次长期有效」停下来等你回答']);
+test('a card in 需要你 goes to 队长, not to the user; 队长 files plain questions and reports from its terminal; the sidebar counts them', async () => {
+  // The item 1.9 filed for the card is read back from config.json (only a restored store can name it),
+  // taken away, nothing new is filed for the card, and 队长 hears which card it was.
+  await expect.poll(async () => (await pending()).some((p) => p.title === '待我处理' && p.summary.includes('不再由程序自动登记停下来的卡片') && p.summary.includes('卡片 t-ask「网页端登录改成一次长期有效」')), { timeout: 20000 }).toBe(true);
+  expect(await items()).toEqual([]);
+  expect(await page.evaluate(() => [config.attention.version, 'toCaptain' in config.attention])).toEqual([2, false]);
   const row = page.locator('#attentionBtn');
+  await expect(row.locator('.nav-row-badge')).toBeHidden();
+  await page.evaluate(() => AttentionUI.refresh());
+  expect(await items()).toEqual([]);
+
+  // 队长 judges the user is needed and asks one plain question with answers to pick from.
+  await run(`node "${CLI}" inbox need --type decide --card t-ask --title "登录改成一次长期有效已经通过验收，旧设备怎么处理要你定" --ask "已经登录的旧设备要不要一起踢下线？" --options "一起踢下线|保留旧设备" --detail "${RECEIPT}"`);
+  await expect.poll(screen, { timeout: 20000 }).toMatch(/已登记到「待我处理」：at-[a-z0-9-]+，要用户处理（等你拍板）/);
+  await run(`node "${CLI}" inbox need --title "只有选项" --options "好|不好"`);
+  await expect.poll(screen).toContain('--options requires --ask');
   await expect(row.locator('.nav-row-badge')).toHaveText('1');
 
   await run(`node "${CLI}" inbox need --type decide --title "网页端登录改成「1」能做，但谁都能控制两台电脑" --ask "回复「仍要 1」，或者「改成登录一次长期有效」" --project agentdeck --detail "取证结论：网页端在公网上，登录后能给队长发指令。设成 1 等于谁猜一次就能操控两台电脑。" --files "${path.join(profile, 'facts.md')}"`);
@@ -88,9 +106,20 @@ test('the page: needs first, then reports, details in place; icons with names; r
   expect(colors[0]).toBe(accent);
   expect(colors[1]).not.toBe(accent);
   await expect(page.locator('.at-section h2')).toHaveText(['要你处理3', '结果汇报2']);
-  await expect(page.locator('.at-card .at-title')).toHaveText([/小红书要你/, /网页端登录改成「1」/, /停下来等你回答/, /「登录改成 1」的会话/, /小福助手排查报告/]);
-  await expect(card('停下来等你回答').locator('.at-ask')).toContainText('旧设备要不要一起踢下线？');
-  await expect(card('停下来等你回答').locator('.at-meta')).toContainText('来自任务看板');
+  await expect(page.locator('.at-card .at-title')).toHaveText([/小红书要你/, /网页端登录改成「1」/, /旧设备怎么处理/, /「登录改成 1」的会话/, /小福助手排查报告/]);
+  // The question is the biggest thing on the card, its answers right under it; the receipt stays folded in the details.
+  const asked = card('旧设备怎么处理');
+  await expect(asked.getByRole('group', { name: '等你拍板：已经登录的旧设备要不要一起踢下线？' })).toBeVisible();
+  await expect(asked.locator('.at-ask-text')).toHaveText('已经登录的旧设备要不要一起踢下线？');
+  await expect(asked.locator('.at-quick .btn')).toHaveText(['一起踢下线', '保留旧设备']);
+  await expect(asked.getByRole('button', { name: '写别的回复' })).toBeVisible();
+  await expect(asked).not.toContainText('验收完成');
+  await expect(asked.locator('.at-meta')).not.toContainText('来自任务看板');
+  const [askSize, titleSize] = await asked.evaluate((el) => ['.at-ask-text', '.at-title'].map((s) => parseFloat(getComputedStyle(el.querySelector(s)).fontSize)));
+  expect(askSize).toBeGreaterThan(titleSize);
+  await asked.getByRole('button', { name: /细节与证据/ }).click();
+  await expect(asked.locator('.at-text')).toHaveText(RECEIPT);
+  await asked.getByRole('button', { name: '收起细节' }).click();
   await shot('desktop-1-list-dark');
 
   await card('网页端登录改成「1」').getByRole('button', { name: /细节与证据/ }).click();
@@ -131,7 +160,7 @@ test('redrawing captures keyboard focus and reading position before the page is 
   expect(position.after).toEqual(position.before);
 });
 
-test('a reply goes to 队长 with the item and ticks it; 已处理 tells 队长; the card answer takes the board\'s path', async () => {
+test('a reply goes to 队长 with the item and ticks it; 已处理 tells 队长; a quick answer goes with its choices', async () => {
   await card('网页端登录改成「1」').getByRole('button', { name: '回复', exact: true }).click();
   const box = card('网页端登录改成「1」').getByRole('textbox');
   await expect(box).toBeFocused();
@@ -164,11 +193,10 @@ test('a reply goes to 队长 with the item and ticks it; 已处理 tells 队长;
   await card('小红书要你').getByRole('button', { name: '已处理' }).click();
   await expect.poll(async () => (await pending()).some((p) => p.summary.includes('标为已处理') && p.summary.includes('小红书要你'))).toBe(true);
 
-  // The board's own question: the answer goes the task board's way and the card moves on.
-  await card('停下来等你回答').getByRole('button', { name: '回复', exact: true }).click();
-  await card('停下来等你回答').getByRole('textbox').fill('一起踢下线');
-  await card('停下来等你回答').getByRole('button', { name: '发送给队长' }).click();
-  await expect.poll(async () => (await pending()).some((p) => p.summary.includes('用户在任务看板回答了卡片 t-ask') && p.summary.includes('一起踢下线'))).toBe(true);
+  // One tap on a quick answer: it reaches 队长 with the question and the choices, and the item is ticked.
+  await card('旧设备怎么处理').getByRole('button', { name: '一起踢下线', exact: true }).click();
+  await expect.poll(async () => (await pending()).some((p) => p.summary.includes('当时请用户做的：已经登录的旧设备要不要一起踢下线？\n当时给的选项：一起踢下线 / 保留旧设备\n用户的回复：一起踢下线'))).toBe(true);
+  expect((await items()).find((i) => i.title.includes('旧设备怎么处理'))).toMatchObject({ done: true, doneBy: 'reply' });
   await expect(page.locator('.at-sec-need')).toHaveCount(0);
 });
 

@@ -278,7 +278,8 @@ function relayFixture(currentId = 'us') {
   ] };
 }
 // 待我处理 items as each computer's api/attention sends them: Mac has a decision,
-// a login and two reports (one about a card), Windows a held card and an older finished one.
+// a login and two reports (one about a card), Windows a held card 队长 asks about with
+// quick answers, and two older finished ones.
 function attentionFixture() {
   const ago = (minutes) => Date.now() - minutes * 60000;
   const item = (id, kind, label, title, minutes, extra = {}) => ({ id, kind, label, title, ask: '', detail: '', files: [], project: '', cardTitle: '', sessionTitle: '', source: 'captain',
@@ -293,7 +294,8 @@ function attentionFixture() {
       item('at-m4-report', 'report', '结果汇报', '「登录改成 1」的会话卡在确认窗口，我已替它点了「是」', 70, { project: 'agentdeck', readAt: ago(60), sessionTitle: '登录取证' }),
     ],
     win: [
-      item('at-w1-held', 'need', '验收卡住了', '「Muse 冒烟测试」验收没过 2 次，已经停下', 95, { ask: '决定还做不做、要不要换个做法（回复会交给队长）。', project: 'muse', source: 'card', cardTitle: 'Muse 冒烟测试' }),
+      item('at-w1-held', 'need', '验收卡住了', 'Muse 冒烟测试验收没过 2 次，已经停下', 95, { ask: '还要继续做吗？', options: ['换个做法再试', '先放着', '不做了'], project: 'muse', cardTitle: 'Muse 冒烟测试',
+        detail: '最近一次结果：不通过，冒烟脚本第 3 步截图缺失。' }),
       item('at-w2-done', 'report', '结果汇报', 'Windows 隧道守护脚本 dry-run 通过了', 300, { readAt: ago(290), done: true, doneAt: ago(280), doneText: '你已回复', replies: [{ text: '好，开机自启也一起配上', at: ago(280), from: 'phone', seen: true }] }),
       item('at-w3-other', 'need', '要你处理', 'Windows 的 Bark 推送要你在手机上点一次允许', 420, { readAt: ago(410), done: true, doneAt: ago(400), doneText: '你标记已处理' }),
     ],

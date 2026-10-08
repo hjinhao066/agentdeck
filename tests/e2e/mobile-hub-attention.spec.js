@@ -51,7 +51,17 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   await expect(lists.locator('.at-section h2')).toHaveText(['要你处理3', '结果汇报2']);
   await expect(lists.locator('.at-item .at-title')).toHaveText([/网页端登录改成「1」/, /小红书要你/, /Muse 冒烟测试/, /小福助手排查报告/, /登录改成 1」的会话/]);
   await expect(item('Muse 冒烟测试').locator('.at-meta')).toContainText('Windows · muse');
-  await expect(item('网页端登录改成「1」').locator('.at-ask')).toContainText('要你做回复「仍要 1」');
+  await expect(item('网页端登录改成「1」').locator('.at-ask')).toContainText('回复「仍要 1」');
+  // 队长's question is the biggest text on the card, its answers right under it; writing one's own is the fallback.
+  const muse = item('Muse 冒烟测试');
+  await expect(muse.locator('.at-ask')).toHaveAttribute('aria-label', '验收卡住了：还要继续做吗？');
+  await expect(muse.locator('.at-ask .at-ask-text')).toHaveText('还要继续做吗？');
+  await expect(muse.locator('.at-quick button')).toHaveText(['换个做法再试', '先放着', '不做了']);
+  await expect(muse.getByRole('button', { name: '写别的回复' })).toBeVisible();
+  await expect(muse.getByRole('button', { name: '回复', exact: true })).toHaveCount(0);
+  const [askSize, titleSize] = await muse.evaluate((el) => ['.at-ask-text', '.at-title'].map((s) => parseFloat(getComputedStyle(el.querySelector(s)).fontSize)));
+  expect(askSize).toBeGreaterThan(titleSize);
+  await expect(muse.locator('.at-detail')).toHaveCount(0);
   await expect(page.locator('#attention-sources')).toContainText('回复只发给那条所在的电脑');
   await shot('phone-1-list-dark');
 
@@ -115,6 +125,13 @@ test('both computers on one page: what needs you first, then reports; reply, tic
     expect(b.text, JSON.stringify(b)).not.toMatch(/^(复制|已复制|删除|编辑|刷新|关闭|放回)$/);
     if (b.icon) { expect(b.text).toBe(''); expect(b.label).toBeTruthy(); expect(b.title).toBeTruthy(); expect(b.w).toBeGreaterThanOrEqual(44); }
   }
+
+  // A quick answer is one tap: it goes to Windows only as an ordinary reply, and the item is ticked.
+  await item('Muse 冒烟测试').getByRole('button', { name: '先放着', exact: true }).click();
+  await expect(page.locator('.at-hint')).toContainText('已回复「先放着」，交给 Windows 的队长');
+  await expect.poll(() => hub.machines.win.attentionWrites.filter((w) => w.op === 'reply')).toEqual([{ op: 'reply', id: 'at-w1-held', text: '先放着' }]);
+  expect(hub.machines.mac.attentionWrites.filter((w) => w.op === 'reply')).toHaveLength(1);
+  await expect(lists.locator('.at-section h2').first()).toHaveText('要你处理1');
 });
 
 test('light theme, a refused reply keeps the draft, and an older computer without the page is named', async ({ browser }) => {

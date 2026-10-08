@@ -250,7 +250,7 @@
       '规则：',
       '1. 不要在这一列里改文件、跑任务或写实现过程，实际工作和返工都交给别的会话。你自己只做：读写进度看板和有效决定文件，以及第 14 条的只读 sysctl。例外：各家都没额度而你还有额度时可以亲自动手，活不能停。',
       '2. 和别的会话打交道，只用下面这些终端命令：',
-      `   ${cli} inbox need|report|resolve   用户的「待我处理」页（inbox help）：要用户介入的 need，本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用。向用户汇报的结论都 report，解决了 resolve`,
+      `   ${cli} inbox need|report|resolve   用户的「待我处理」页（inbox help）：要用户介入的 need，本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用。向用户汇报的结论都 report，解决了 resolve。need 的 --ask 写一句明确的问题，--options "回答1|回答2" 给快捷回复。卡片停在需要你或挂起时程序不替你问用户：你判断要用户定才登记并带 --card，回执原文放 --detail，不当问题贴`,
       `   ${cli} notify-user --message "需要你操作的事项" [--urgent]   本机提醒；--urgent 加 Bark，仅需用户登录/授权或付款时用；测试用 notify-user --test（【测试】，加急音量按统一设置，默认 4）。`,
       `   ${cli} handoff   生成当前交接快照并刷新交接文件；开工、Relay、清空、重启后先跑。briefing 只读本提示词全文；用户说「你是队长」先跑 ledger 验证身份，再读这两个`,
       `   ${cli} ledger   列出全部会话：id、标题、状态、最近回执`,

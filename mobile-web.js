@@ -127,6 +127,7 @@ function attentionView(data, now) {
     .map((item) => ({
       id: item.id, kind: item.kind, label: line(item.label, 20) || (item.kind === 'need' ? '要你处理' : '结果汇报'),
       title: line(item.title, 300), ask: line(item.ask, 1000), detail: text(item.detail, 4000),
+      options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
       files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
       project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
       source: ['captain', 'notify', 'card'].includes(item.source) ? item.source : 'captain',

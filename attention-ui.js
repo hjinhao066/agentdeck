@@ -1,7 +1,7 @@
 // 待我处理: the page where the user comes back to what the AI handed them
 // (things only they can do, and the short conclusions 队长 reported while they
-// were away), plus the service behind it: 队长's `inbox` commands, the board's
-// own items, replies carried to 队长 with their context, and the phone's view.
+// were away), plus the service behind it: 队长's `inbox` commands, replies
+// carried to 队长 with their context, and the phone's view.
 // Rules and texts are in attention-core.js; the items are kept in this
 // computer's config.json (`config.attention`).
 (function () {
@@ -58,10 +58,21 @@
   // ---- store ----------------------------------------------------------------
   function load() {
     if (!store) {
-      store = A.normalize(host.config.attention);
+      const raw = host.config.attention;
+      store = A.normalize(raw);
+      // Once: the board items 1.9 filed by itself go; 队长 hears which (refresh delivers it).
+      const { changed } = A.migrate(store, raw && raw.version);
       host.config.attention = store;
+      if (changed) host.saveConfig();
     }
     return store;
+  }
+  // The migration's note for 队长, delivered once a 队长 exists to read it.
+  function deliverToCaptain(s) {
+    if (!s.toCaptain || !window.MainSession || !window.MainSession.exists()) return 0;
+    try { window.MainSession.userNotice(s.toCaptain); } catch (_) { return 0; }
+    delete s.toCaptain;
+    return 1;
   }
   function save() {
     A.prune(load());
@@ -108,6 +119,7 @@
       let changed = 0;
       try { changed += A.syncCards(s, await window.TaskBoard.list({ archived: true }), now); } catch (_) { /* a damaged board file: try again next time */ }
       changed += A.syncSessions(s, sessionWaiting, now);
+      changed += deliverToCaptain(s);
       const ms = window.MainSession && window.MainSession.state();
       if (ms && Array.isArray(ms.pending)) changed += A.markRepliesSeen(s, ms.pending.map((p) => p.taskId));
       if (changed) save(); else paintBadge();
@@ -142,7 +154,7 @@
     const card = input.card ? await cardOf(input.card) : null;
     const col = input.session ? sessionOf(input.session) : null;
     const { item, created } = A.add(s, {
-      kind: message.op, type: input.type, title: input.title, ask: input.ask, detail: input.detail, files: input.files,
+      kind: message.op, type: input.type, title: input.title, ask: input.ask, options: input.options, detail: input.detail, files: input.files,
       project: input.project || (card && card.project) || (col && col.project) || '',
       card: input.card, cardTitle: card && card.title, session: input.session, sessionTitle: col && host.columnLabel(col),
       sessionWaiting: col ? sessionWaiting(col.id) === true : false, source: 'captain',
@@ -173,11 +185,7 @@
     if (!body) throw new Error('先写下你的回复。');
     if ([...body].length > A.LIMITS.reply) throw new Error(`回复最多 ${A.LIMITS.reply} 字。`);
     if (!window.MainSession || !window.MainSession.exists()) throw new Error('还没有队长：回复要交给队长，先在侧边栏创建队长。');
-    let notice = '';
-    // An answer to a card's question takes the board's own path: 队长 hears it
-    // with the card, and the card goes back to 进行中.
-    if (item.source === 'card' && item.card && item.key.startsWith('needs:') && !item.done) await window.TaskBoard.answer(item.card, body);
-    else notice = window.MainSession.userNotice(A.replyNotice(item, body));
+    const notice = window.MainSession.userNotice(A.replyNotice(item, body));
     A.reply(load(), id, body, from, Date.now(), notice);
     save();
     return item;
@@ -358,7 +366,15 @@
   }
   const hasDetail = (item) => !!(item.detail || item.files.length || item.cardTitle || item.sessionTitle || item.replies.length);
   function copyText(item) {
-    return [item.title, item.ask && '要你做：' + item.ask, item.detail, item.files.length && item.files.join('\n')].filter(Boolean).join('\n\n');
+    return [item.title, item.ask && '要你做：' + item.ask, item.options.length && '可选回答：' + item.options.join(' / '), item.detail, item.files.length && item.files.join('\n')].filter(Boolean).join('\n\n');
+  }
+  // One tap answers: the choice goes to 队长 like a typed reply, and the item is ticked.
+  function quickReply(item, option) {
+    act(item.id, async () => {
+      await reply(item.id, option, 'desktop');
+      drafts.delete(item.id);
+      host.showToast(`已回复「${option}」，交给队长了`);
+    });
   }
   function liveSession(item) { return item.session && host.columns().some((c) => c.id === item.session) ? item.session : ''; }
 
@@ -396,10 +412,27 @@
     top.appendChild(tools);
     card.appendChild(top);
 
-    card.appendChild(el('h3', 'at-title', item.title));
-    if (item.ask && !item.done) {
+    // An open need with a question: the question is the biggest thing on the
+    // card, with its answers right under it; the title above says what it is
+    // about, and the chip already says what kind of answer it wants.
+    const asking = !!(item.ask && !item.done);
+    card.appendChild(el('h3', 'at-title' + (asking ? ' at-about' : ''), item.title));
+    if (asking) {
       const ask = el('div', 'at-ask');
-      ask.append(el('span', 'at-ask-label', '要你做'), el('span', 'at-ask-text', item.ask));
+      ask.setAttribute('role', 'group');
+      ask.setAttribute('aria-label', A.label(item) + '：' + item.ask);
+      ask.appendChild(el('p', 'at-ask-text', item.ask));
+      if (item.options.length) {
+        const quick = el('div', 'at-quick');
+        item.options.forEach((option, i) => {
+          const b = btn(option, () => quickReply(item, option), 'at-option');
+          b.dataset.fk = `opt:${item.id}:${i}`;
+          b.title = `回复「${option}」，交给队长`;
+          b.disabled = busy.has(item.id);
+          quick.appendChild(b);
+        });
+        ask.appendChild(quick);
+      }
       card.appendChild(ask);
     }
     if (item.done) {
@@ -422,7 +455,8 @@
       if (drafts.has(item.id)) card.appendChild(composer(item));
       else {
         const actions = el('footer', 'at-actions');
-        const answer = btn('回复', () => openComposer(item.id), 'at-answer');
+        // With answers to pick from, writing one's own is the fallback, not the main action.
+        const answer = btn(item.options.length ? '写别的回复' : '回复', () => openComposer(item.id), item.options.length ? 'at-answer at-own' : 'at-answer');
         answer.dataset.fk = 'answer:' + item.id;
         const doneLabel = item.kind === 'need' ? '已处理' : '知道了';
         const done = btn(doneLabel, () => act(item.id, async () => { tick(item.id); }), 'at-done');

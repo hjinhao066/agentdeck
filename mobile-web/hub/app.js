@@ -1141,7 +1141,7 @@
   function attentionCopy(item) {
     const label = '复制这一条';
     const button = iconButton('copy', label, 'at-copy');
-    const text = [item.title, item.ask && '要你做：' + item.ask, item.detail, item.files.join('\n')].filter(Boolean).join('\n\n');
+    const text = [item.title, item.ask && '要你做：' + item.ask, item.options.length && '可选回答：' + item.options.join(' / '), item.detail, item.files.join('\n')].filter(Boolean).join('\n\n');
     button.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(text); } catch (_) { setAttentionHint('无法复制。可以长按文字手动选择。', true); return; }
       button.innerHTML = svg('check'); button.classList.add('copied'); button.title = '已复制'; button.setAttribute('aria-label', '已复制');
@@ -1160,8 +1160,31 @@
     const meta = node('span', 'at-meta', [multi && item.machineLabel, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
     if (when) meta.title = (item.done ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
-    card.append(top, node('h3', 'at-title', item.title));
-    if (item.ask && !item.done) { const ask = node('div', 'at-ask'); ask.append(node('b', '', '要你做'), markdownNode(item.ask, { reply: true, className: 'at-ask-text' })); card.append(ask); }
+    // An open need with a question: the question is the biggest thing on the card,
+    // its answers right under it; the title above says what it is about, and the
+    // chip already says what kind of answer it wants.
+    const asking = !!(item.ask && !item.done), busy = attentionBusy.has(item.key);
+    card.append(top, node('h3', 'at-title' + (asking ? ' at-about' : ''), item.title));
+    if (asking) {
+      const ask = node('div', 'at-ask');
+      ask.setAttribute('role', 'group'); ask.setAttribute('aria-label', item.label + '：' + item.ask);
+      ask.append(markdownNode(item.ask, { reply: true, className: 'at-ask-text' }));
+      if (item.options.length) {
+        const quick = node('div', 'at-quick');
+        for (const option of item.options) {
+          const b = node('button', 'at-option', option); b.type = 'button'; b.disabled = busy;
+          b.title = `回复「${option}」，交给 ${item.machineLabel} 的队长`;
+          b.addEventListener('click', async () => {
+            if (attentionBusy.has(item.key)) return;
+            if (await attentionWrite(item, { op: 'reply', text: option }, `已回复「${option}」，交给 ${item.machineLabel} 的队长。`)) attentionDrafts.delete(item.key);
+            renderAttention();
+          });
+          quick.append(b);
+        }
+        ask.append(quick);
+      }
+      card.append(ask);
+    }
     const last = item.replies[item.replies.length - 1];
     if (item.done) card.append(node('p', 'at-done-text', item.doneText + (last ? '：' + last.text.replace(/\s+/g, ' ') : '')));
     const more = item.detail || item.files.length || item.cardTitle || item.sessionTitle || item.replies.length;
@@ -1187,7 +1210,6 @@
         card.append(box);
       }
     }
-    const busy = attentionBusy.has(item.key);
     if (attentionErrors.has(item.key)) { const error = node('p', 'at-error', attentionErrors.get(item.key)); error.setAttribute('role', 'alert'); card.append(error); }
     if (!item.done && attentionDrafts.has(item.key)) {
       const form = node('form', 'at-compose');
@@ -1208,7 +1230,8 @@
     } else {
       const actions = node('div', 'at-actions');
       if (!item.done) {
-        const answer = node('button', 'text-button', '回复'); answer.type = 'button'; answer.dataset.answer = item.key; answer.disabled = busy;
+        // With answers to pick from, writing one's own is the fallback.
+        const answer = node('button', 'text-button' + (item.options.length ? ' quiet' : ''), item.options.length ? '写别的回复' : '回复'); answer.type = 'button'; answer.dataset.answer = item.key; answer.disabled = busy;
         answer.addEventListener('click', () => { attentionDrafts.set(item.key, ''); renderAttention(); $('attention-lists').querySelector(`[data-key="${CSS.escape(item.key)}"] .at-reply`)?.focus(); });
         const done = node('button', 'text-button quiet', item.kind === 'need' ? '已处理' : '知道了'); done.type = 'button'; done.disabled = busy;
         done.title = item.kind === 'need' ? (item.source === 'card' ? '从这里勾掉；任务看板上的卡片不变' : '勾掉并告诉队长你已经处理了') : '看过了，没有问题';

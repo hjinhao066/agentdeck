@@ -9,7 +9,7 @@ const { MobileWebServer, attentionView, attentionRequest } = require('../mobile-
 const ITEMS = [
   { id: 'at-mabc-1', kind: 'need', label: '等你拍板', title: '网页端登录改成 1 有风险', ask: '回复「仍要 1」或「登录一次长期有效」', detail: '第一行\n第二行\u0007', files: ['/Users/x/facts.md'],
     project: 'agentdeck', cardTitle: '登录改 1', sessionTitle: '', source: 'captain', created: 1000, readAt: 0, done: false, doneAt: 0, doneText: '',
-    replies: [], notice: 'attention-secret', key: 'needs:t-1:e' },
+    replies: [], notice: 'attention-secret', key: 'needs:t-1:e', options: ['仍要 1', '登录一次长期有效', '仍要 1', '很'.repeat(30), 7] },
   { id: 'at-mabc-2', kind: 'report', label: '结果汇报', title: '小福助手排查报告回来了', ask: '', detail: '', files: [], project: '', created: 900, readAt: 0, done: false, replies: [] },
   { id: 'at-mabc-3', kind: 'report', label: '结果汇报', title: '旧汇报', created: 800, readAt: 850, done: true, doneAt: 860, doneText: '你看过了',
     replies: [{ text: '好', at: 855, from: 'phone', seen: true, notice: 'attention-x' }] },
@@ -52,6 +52,8 @@ test('api/attention lists items field by field: no receipt ids, keys or foreign 
   assert.equal(need.detail, '第一行\n第二行 ', 'line breaks stay, other control characters go');
   assert.equal('notice' in need, false);
   assert.equal('key' in need, false);
+  assert.deepEqual(need.options, ['仍要 1', '登录一次长期有效', '很'.repeat(24)], 'one line each, once, clipped; nothing but text');
+  assert.deepEqual(res.json.items[1].options, [], 'a report has no answers to pick');
   assert.equal('notice' in done.replies[0], false);
   assert.deepEqual(done.replies[0], { text: '好', at: 855, from: 'phone', seen: true });
   assert.deepEqual(res.json.counts, { need: 1, reports: 1, unreadReports: 1, badge: 2 });

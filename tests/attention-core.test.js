@@ -88,78 +88,82 @@ test('a reply ticks the item and carries its context to 队长; seen once 队长
   assert.match(A.doneNotice(n), /标为已处理.*如果有活在等这件事，现在可以继续/);
 });
 
-test('needs_user and held cards become items and tick themselves once the card moves on', () => {
+test('a card that stops for the user is never filed by itself: 队长 decides and asks', () => {
   const s = fresh();
   const cards = [
-    { id: 't-ask', project: 'agentdeck', title: '修复登录', status: 'needs_user', needs_user_entry: '2026-10-06T04:00:00.000Z', user_question: '要不要把旧数据一起迁移？', detail: '把登录改成 1' },
+    { id: 't-ask', project: 'xhs', title: '小红书面经库审计', status: 'needs_user', needs_user_entry: '2026-10-06T04:00:00.000Z', latest_receipt: '验收完成，判定【通过】。会话回执逐项核实均属实：入库46篇' },
     { id: 't-held', project: 'muse', title: 'Muse 冒烟', status: 'doing', flag: 'held', rework_count: 2, latest_receipt: '不通过：报告缺来源', last_failure_attempt: 'a2' },
-    { id: 't-fine', project: 'agentdeck', title: '正常', status: 'doing' },
-    { id: 't-old', project: 'agentdeck', title: '旧问题', status: 'needs_user', archived: true },
+    { id: 't-q', project: 'agentdeck', title: '修复登录', status: 'needs_user', user_question: '要不要把旧数据一起迁移？' },
   ];
-  assert.equal(A.syncCards(s, cards, T0, rnd), 2);
-  const [ask, held] = A.view(s).needs.sort((a, b) => (a.card < b.card ? -1 : 1));
-  assert.equal(ask.title, '「修复登录」停下来等你回答');
-  assert.equal(ask.ask, '要不要把旧数据一起迁移？');
-  assert.equal(ask.type, 'question');
-  assert.equal(ask.source, 'card');
-  assert.match(ask.detail, /任务说明：把登录改成 1/);
-  assert.equal(held.title, '「Muse 冒烟」验收没过 2 次，已经停下');
-  assert.match(held.detail, /不通过：报告缺来源/);
-  assert.equal(A.syncCards(s, cards, T0 + 1, rnd), 0, 'nothing new on a second look');
+  assert.equal(A.syncCards(s, cards, T0), 0);
+  assert.equal(s.items.length, 0);
+  assert.equal('cardNeeds' in A, false);
+});
 
-  // 队长 answered the worker: the card is back in doing; the hold was lifted.
-  cards[0] = { ...cards[0], status: 'doing' };
-  cards[1] = { ...cards[1], flag: null };
-  assert.equal(A.syncCards(s, cards, T0 + 2, rnd), 2);
-  assert.equal(ask.done, true);
-  assert.equal(ask.doneBy, 'card');
-  assert.equal(A.doneText(ask), '任务那边已解决：已经有人回答，任务继续在做');
-  assert.equal(held.done, true);
+test('quick answers: a need may offer short options after one clear question', () => {
+  const s = fresh();
+  const n = A.add(s, { kind: 'need', type: 'decide', title: 'Muse 冒烟测试连续两次没过，已经停下', ask: '还要继续做吗？', options: ['换个做法再试', ' 先放着 ', '不做了', '先放着', ''], card: 't-held' }, T0, rnd()).item;
+  assert.deepEqual(n.options, ['换个做法再试', '先放着', '不做了'], 'trimmed, empty and repeated ones dropped, order kept');
+  assert.throws(() => A.add(s, { kind: 'need', title: 'x', options: ['好'] }, T0, rnd()), /--ask/);
+  assert.throws(() => A.add(s, { kind: 'report', title: 'x', options: ['好'] }, T0, rnd()), /只用于 need/);
+  assert.throws(() => A.add(s, { kind: 'need', title: 'x', ask: '选哪个？', options: ['1', '2', '3', '4', '5', '6', '7'] }, T0, rnd()), /最多 6 个/);
+  assert.throws(() => A.add(s, { kind: 'need', title: 'x', ask: '选哪个？', options: ['很'.repeat(25)] }, T0, rnd()), /每个最多 24 字/);
+  // The answer carries the choices it was picked from.
+  assert.match(A.replyNotice(n, '先放着'), /当时请用户做的：还要继续做吗？\n当时给的选项：换个做法再试 \/ 先放着 \/ 不做了\n用户的回复：先放着/);
+  assert.match(A.listText(s, false, T0 + 1), /可选回答：换个做法再试 \/ 先放着 \/ 不做了/);
+  const phone = A.phoneItem(n);
+  assert.deepEqual([phone.label, phone.options], ['等你拍板', ['换个做法再试', '先放着', '不做了']]);
+  // Stored and read back; a stored option that is too long is not shown.
+  const back = A.normalize(JSON.parse(JSON.stringify({ items: [{ ...n, options: [...n.options, '很'.repeat(25)] }] })));
+  assert.deepEqual(back.items[0].options, n.options);
+  assert.deepEqual(A.normalize({ items: [{ id: 'at-r-0001', kind: 'report', title: 'r', created: T0, options: ['a'] }] }).items[0].options, []);
+});
 
-  // Asked again later: a new visit is a new item.
-  cards[0] = { ...cards[0], status: 'needs_user', needs_user_entry: '2026-10-06T05:00:00.000Z', user_question: null, latest_receipt: '已结束，未提交回执' };
-  assert.equal(A.syncCards(s, cards, T0 + 3, rnd), 1);
-  const again = A.view(s).needs[0];
-  assert.notEqual(again.id, ask.id);
-  assert.match(again.ask, /队员停下了，但没有交结果/);
-  // The user ticks it here: the card is untouched and the item does not come back.
-  A.resolve(s, again.id, 'user', '', T0 + 4);
-  assert.equal(A.syncCards(s, cards, T0 + 5, rnd), 0);
-  assert.equal(A.counts(s).open, 0);
-  // The card disappears: its item says so.
-  const s2 = fresh();
-  A.syncCards(s2, [cards[0]], T0, rnd);
-  A.syncCards(s2, [], T0 + 1, rnd);
-  assert.equal(A.view(s2).done[0].doneNote, '卡片已不在看板上');
+test('migration: the board items 1.9 filed by itself go once, 队长 hears which cards they were', () => {
+  const RECEIPT = '验收完成，判定【通过】。会话回执逐项核实均属实：入库46篇，真题 172→126';
+  const raw = { version: 1, items: [
+    { id: 'at-old-0001', kind: 'need', type: 'question', title: '「小红书面经库审计」停下来等你回答', ask: RECEIPT, project: 'xhs', card: 't-audit', cardTitle: '小红书面经库审计', source: 'card', key: 'needs:t-audit:e1', created: T0 },
+    { id: 'at-old-0002', kind: 'need', type: 'review', title: '「Muse 冒烟」验收没过 2 次，已经停下', ask: '决定还做不做、要不要换个做法（回复会交给队长）。', card: 't-held', cardTitle: 'Muse 冒烟', source: 'card', key: 'held:t-held:a2', created: T0 },
+    { id: 'at-old-0003', kind: 'need', type: 'question', title: '「旧卡」停下来等你回答', ask: '旧问题', card: 't-done', source: 'card', key: 'needs:t-done:e0', created: T0, done: true, doneAt: T0, doneBy: 'card' },
+    { id: 'at-old-0004', kind: 'need', type: 'question', title: '「答过的卡」停下来等你回答', ask: '要不要一起踢下线？', detail: '任务说明：登录', card: 't-ans', source: 'card', key: 'needs:t-ans:e0', created: T0, done: true, doneAt: T0 + 5, doneBy: 'reply', replies: [{ text: '一起踢', at: T0 + 5 }] },
+    { id: 'at-mine-001', kind: 'need', type: 'decide', title: '队长自己登记的', ask: '选 A 还是 B？', card: 't-audit', source: 'captain', created: T0 },
+  ] };
+  const s = A.normalize(raw);
+  assert.equal(s.version, 2);
+  const { changed, moved } = A.migrate(s, raw.version);
+  assert.equal(changed, true);
+  assert.deepEqual(moved.map((i) => i.id), ['at-old-0001', 'at-old-0002'], 'the open unanswered ones');
+  assert.deepEqual(s.items.map((i) => i.id), ['at-old-0004', 'at-mine-001']);
+  const answered = s.items[0];
+  assert.equal(answered.ask, '', 'no pasted receipt as 要你做, even if put back');
+  assert.equal(answered.detail, '当时贴出的原文：要不要一起踢下线？\n\n任务说明：登录');
+  assert.match(s.toCaptain, /「待我处理」不再由程序自动登记停下来的卡片/);
+  assert.match(s.toCaptain, /下面 2 条已从用户的待处理里撤下/);
+  assert.match(s.toCaptain, /- 卡片 t-audit「小红书面经库审计」（项目 xhs）：原来贴出的是「验收完成，判定【通过】/);
+  assert.match(s.toCaptain, /- 卡片 t-held「Muse 冒烟」：/);
+  assert.match(s.toCaptain, /inbox need --card 卡片id --title "一句大白话说明" --ask "一句明确的问题" --options/);
+  // The note survives a save until it is delivered; the migration never runs twice.
+  const saved = A.normalize(JSON.parse(JSON.stringify(s)));
+  assert.equal(saved.toCaptain, s.toCaptain);
+  assert.deepEqual(A.migrate(saved, saved.version), { changed: false, moved: [] });
+  // A store with nothing from the board: nothing to say.
+  const clean = A.normalize({ version: 1, items: [raw.items[4]] });
+  assert.deepEqual(A.migrate(clean, 1), { changed: false, moved: [] });
+  assert.equal('toCaptain' in clean, false);
+  assert.deepEqual(A.migrate(A.normalize(undefined), undefined), { changed: false, moved: [] });
 });
 
 test('a captain need tied to a card ticks when the card is done; a report about it never does', () => {
   const s = fresh();
   const need = A.add(s, { kind: 'need', title: '验收卡住：要你拍板', card: 't-1' }, T0, rnd()).item;
   const report = A.add(s, { kind: 'report', title: '卡片 1 做完了', card: 't-1' }, T0, rnd()).item;
-  A.syncCards(s, [{ id: 't-1', title: '一号', status: 'review' }], T0 + 1, rnd);
+  A.syncCards(s, [{ id: 't-1', title: '一号', status: 'review' }], T0 + 1);
   assert.equal(need.done, false);
   assert.equal(need.cardTitle, '一号', 'the card title is kept for the page');
-  A.syncCards(s, [{ id: 't-1', title: '一号', status: 'done' }], T0 + 2, rnd);
+  A.syncCards(s, [{ id: 't-1', title: '一号', status: 'done' }], T0 + 2);
   assert.equal(need.done, true);
   assert.equal(A.doneText(need), '任务那边已解决：对应任务已完成');
   assert.equal(report.done, false);
-});
-
-test('队长 filing about a card replaces the board item for that card instead of doubling it', () => {
-  const s = fresh();
-  const card = { id: 't-2', title: '二号', status: 'needs_user', needs_user_entry: 'e1', user_question: '选 A 还是 B？' };
-  A.syncCards(s, [card], T0, rnd);
-  const derived = A.view(s).needs[0];
-  const mine = A.add(s, { kind: 'need', type: 'decide', title: '二号要你在 A、B 里选一个', ask: 'A 快，B 稳；回复 A 或 B', card: 't-2' }, T0 + 1, rnd()).item;
-  assert.equal(derived.done, true);
-  assert.equal(A.view(s).needs.length, 1);
-  assert.equal(A.view(s).needs[0].id, mine.id);
-  const fresh2 = A.normalize({});
-  A.add(fresh2, { kind: 'need', title: '先登记', card: 't-2' }, T0, rnd());
-  A.syncCards(fresh2, [card], T0 + 1, rnd);
-  assert.equal(fresh2.items.length, 1, 'an open captain item about the card suppresses the board one');
-  assert.equal(fresh2.items[0].cardTitle, '二号');
 });
 
 test('a session that was waiting on an answer ticks its item once answered', () => {

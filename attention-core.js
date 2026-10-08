@@ -1,17 +1,20 @@
 // 待我处理: what the AI hands back to the user. Two kinds of item:
 //   need   要你处理: something only the user can do (decide, log in, pay, answer)
 //   report 结果汇报: the short conclusion 队长 would otherwise only say in its chat
-// Items come from 队长 (`inbox need|report`, and every `notify-user`) and from
-// the task board itself (a card waiting in 需要你, a card held after two failed
-// rounds). They live in this computer's config.json (`config.attention`), next
-// to the conversations they summarize; nothing here is ever sent to git.
+// Items come from 队长 only (`inbox need|report`, and every `notify-user`).
+// A card that stops for the user (需要你, held after two failed rounds) is not
+// filed here by the program: 队长 hears about it on the receipt channel, judges
+// whether the user is really needed, and files one plain question with the
+// answers to pick from (`--options`). Version 1 filed those cards by itself,
+// pasting the card's last receipt as 要你做; `migrate` takes those away once.
+// Items live in this computer's config.json (`config.attention`), next to the
+// conversations they summarize; nothing here is ever sent to git.
 //
 // An item leaves 待处理 and is ticked into 已完成 when:
 //   - the user ticks it (已处理 / 知道了) or replies to it (the reply goes to 队长);
 //   - 队长 resolves it (`inbox resolve`);
 //   - the card it names is done or archived (need items only: a report is
 //     usually about a card that just finished);
-//   - a card-derived item's card is no longer waiting on the user;
 //   - the session it names was waiting on an answer when it was filed and no
 //     longer is.
 // Pure functions, no DOM: runs in the page, the main process and tests.
@@ -22,7 +25,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = 1;
+  const VERSION = 2;
   const KINDS = ['need', 'report'];
   // What a need item asks of the user, in the words the page shows.
   const TYPES = {
@@ -34,7 +37,7 @@
     other: '要你处理',
   };
   const REPORT_LABEL = '结果汇报';
-  const LIMITS = { title: 300, ask: 1000, detail: 8000, note: 500, reply: 4000, files: 20, path: 1024, project: 120 };
+  const LIMITS = { title: 300, ask: 1000, detail: 8000, note: 500, reply: 4000, files: 20, path: 1024, project: 120, options: 6, option: 24, toCaptain: 8000 };
   const KEEP_DONE = 200;
   const ID = /^at-[a-z0-9-]{4,40}$/;
   const REF = /^[A-Za-z0-9_-]{1,160}$/;
@@ -47,6 +50,8 @@
   // A block keeps its line breaks; other control characters go.
   const block = (v) => String(v == null ? '' : v).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
   const clip = (s, max) => ([...s].length > max ? [...s].slice(0, max - 1).join('') + '…' : s);
+  // Quick answers: short one-line choices, each once, in the order given.
+  const optionList = (v) => [...new Set((Array.isArray(v) ? v : []).map((o) => line(o)).filter(Boolean))];
 
   // ---- store -------------------------------------------------------------
   function normalizeItem(raw) {
@@ -58,6 +63,7 @@
       type: raw.kind === 'need' ? (Object.prototype.hasOwnProperty.call(TYPES, raw.type) ? raw.type : 'other') : '',
       title,
       ask: raw.kind === 'need' ? clip(line(raw.ask), LIMITS.ask) : '',
+      options: raw.kind === 'need' ? optionList(raw.options).filter((o) => [...o].length <= LIMITS.option).slice(0, LIMITS.options) : [],
       detail: clip(block(raw.detail), LIMITS.detail),
       files: (Array.isArray(raw.files) ? raw.files : []).map((f) => line(f)).filter((f) => f && f.length <= LIMITS.path).slice(0, LIMITS.files),
       project: clip(line(raw.project), LIMITS.project),
@@ -90,7 +96,11 @@
       seen.add(item.id);
       items.push(item);
     }
-    return { version: VERSION, items };
+    const out = { version: VERSION, items };
+    // A note waiting to reach 队长 (see migrate): kept until it is delivered.
+    const toCaptain = typeof raw?.toCaptain === 'string' ? clip(block(raw.toCaptain), LIMITS.toCaptain) : '';
+    if (toCaptain) out.toCaptain = toCaptain;
+    return out;
   }
   function newId(now, random) {
     const rand = String(random || Math.random().toString(36).slice(2, 8)).replace(/[^a-z0-9]/g, '').slice(0, 8) || 'x';
@@ -109,6 +119,11 @@
     if ([...title].length > LIMITS.title) throw new Error(`--title 最多 ${LIMITS.title} 字，只写一句话结论；细节放 --detail。`);
     const ask = kind === 'need' ? line(input.ask) : '';
     if ([...ask].length > LIMITS.ask) throw new Error(`--ask 最多 ${LIMITS.ask} 字。`);
+    const options = optionList(input.options);
+    if (options.length && kind !== 'need') throw new Error('--options 只用于 need。');
+    if (options.length && !ask) throw new Error('有 --options 就要有 --ask：先用一句话问清楚，再给可选的回答。');
+    if (options.length > LIMITS.options) throw new Error(`--options 最多 ${LIMITS.options} 个。`);
+    if (options.some((o) => [...o].length > LIMITS.option)) throw new Error(`--options 每个最多 ${LIMITS.option} 字，写成用户点一下就能回的短答案。`);
     const detail = block(input.detail);
     if ([...detail].length > LIMITS.detail) throw new Error(`--detail 最多 ${LIMITS.detail} 字，长内容写进文件再用 --files 给路径。`);
     const files = (Array.isArray(input.files) ? input.files : []).map((f) => line(f)).filter(Boolean);
@@ -123,18 +138,12 @@
     const same = store.items.find((item) => !item.done && item.kind === kind && item.title === title && item.ask === ask && (item.card || '') === (input.card || ''));
     if (same) return { item: same, created: false };
     const item = normalizeItem({
-      id: newId(now, random), kind, type, title, ask, detail, files, project,
+      id: newId(now, random), kind, type, title, ask, options, detail, files, project,
       card: input.card || '', cardTitle: input.cardTitle, session: input.session || '', sessionTitle: input.sessionTitle,
       sessionWaiting: input.sessionWaiting === true, source: SOURCES.includes(input.source) ? input.source : 'captain', key: input.key || '',
       created: now, updated: now,
     });
     store.items.push(item);
-    // 队长's own words about a card replace what the board would say about it.
-    if (item.kind === 'need' && item.card && item.source !== 'card') {
-      for (const other of store.items) {
-        if (!other.done && other.source === 'card' && other.card === item.card) finish(other, 'captain', '队长改登记成了新的一条', now);
-      }
-    }
     return { item, created: true };
   }
 
@@ -210,67 +219,51 @@
     return { kind: 'need', type, title, detail: line(text) === title ? '' : clip(text, LIMITS.detail), source: 'notify' };
   }
 
-  // ---- the board's own items --------------------------------------------
-  const NOT_A_QUESTION = { '已结束，未提交回执': '队员停下了，但没有交结果。看看要不要重派，或者告诉队长怎么办。', '调度已结束，尚未派出执行会话': '这件事还没派给队员，告诉队长要不要开始。' };
-  function cardQuestion(card) {
-    const raw = line(card.user_question || card.latest_receipt);
-    return NOT_A_QUESTION[raw] || raw || '队员在等一个决定，详情见任务看板。';
-  }
-  // What on a card is waiting on the user right now, as { key, item fields }.
-  // A visit has its own key: leaving 需要你 and coming back is a new item.
-  function cardNeeds(card) {
-    if (!card || card.archived || typeof card.id !== 'string' || !REF.test(card.id)) return [];
-    const out = [];
-    const title = line(card.title) || card.id;
-    const base = { kind: 'need', project: line(card.project), card: card.id, cardTitle: title, source: 'card' };
-    if (card.status === 'needs_user') {
-      out.push({ ...base, key: `needs:${card.id}:${card.needs_user_entry || 'legacy'}`, type: 'question',
-        title: `「${title}」停下来等你回答`, ask: cardQuestion(card),
-        detail: line(card.detail) ? '任务说明：' + clip(block(card.detail), 2000) : '' });
-    }
-    if (card.flag === 'held' && card.status !== 'done') {
-      const tries = card.rework_count > 0 ? `验收没过 ${card.rework_count} 次` : '连续两次没做成';
-      out.push({ ...base, key: `held:${card.id}:${card.last_failure_attempt || card.attempt_id || 'x'}`, type: 'review',
-        title: `「${title}」${tries}，已经停下`, ask: '决定还做不做、要不要换个做法（回复会交给队长）。',
-        detail: line(card.latest_receipt) ? '最近一次结果：' + clip(block(card.latest_receipt), 2000) : '' });
-    }
-    return out;
-  }
-  function cardStatusNote(card) {
-    if (!card) return '卡片已不在看板上';
-    if (card.archived || card.status === 'done') return '对应任务已完成';
-    if (card.status === 'doing') return '已经有人回答，任务继续在做';
-    if (card.status === 'review') return '任务已交回，正在验收';
-    if (card.status === 'todo') return '任务放回了待办';
-    return '这张卡已不再等你';
-  }
-  // Brings the store up to date with the cards: files what newly waits on the
-  // user, ticks what no longer does. `cards` must include archived ones.
-  function syncCards(store, cards, now, random) {
-    const list = Array.isArray(cards) ? cards : [];
-    const byCard = new Map(list.filter((c) => c && typeof c.id === 'string').map((c) => [c.id, c]));
-    const live = new Map();
-    for (const card of list) for (const need of cardNeeds(card)) live.set(need.key, need);
+  // ---- cards ------------------------------------------------------------
+  // Keeps 队长's items in step with the cards they name: a need is ticked once
+  // its card is done or archived, and follows the card's title. Nothing is
+  // filed from a card. `cards` must include archived ones.
+  function syncCards(store, cards, now) {
+    const byCard = new Map((Array.isArray(cards) ? cards : []).filter((c) => c && typeof c.id === 'string').map((c) => [c.id, c]));
     let changed = 0;
-    const known = new Set(store.items.map((i) => i.key).filter(Boolean));
-    const told = new Set(store.items.filter((i) => !i.done && i.kind === 'need' && i.card && i.source !== 'card').map((i) => i.card));
-    for (const [key, need] of live) {
-      if (known.has(key) || told.has(need.card)) continue;
-      const { item } = add(store, need, now, random ? random() : undefined);
-      if (item.key !== key) continue; // an identical open captain item already says it
-      changed++;
-    }
     for (const item of store.items) {
       if (item.done || !item.card) continue;
       const card = byCard.get(item.card);
-      if (item.source === 'card') {
-        if (!live.has(item.key)) { finish(item, 'card', cardStatusNote(card), now); changed++; }
-      } else if (item.kind === 'need' && card && (card.archived || card.status === 'done')) {
-        finish(item, 'card', '对应任务已完成', now); changed++;
-      }
-      if (!item.done && card && card.title && item.cardTitle !== line(card.title)) { item.cardTitle = clip(line(card.title), LIMITS.title); changed++; }
+      if (!card) continue;
+      if (item.kind === 'need' && (card.archived || card.status === 'done')) { finish(item, 'card', '对应任务已完成', now); changed++; }
+      if (!item.done && card.title && item.cardTitle !== line(card.title)) { item.cardTitle = clip(line(card.title), LIMITS.title); changed++; }
     }
     return changed;
+  }
+  // Version 1 filed every card that stopped for the user by itself, with the
+  // card's last receipt as 要你做 (「XX 停下来等你回答」, 「验收卡住了」). Those go,
+  // once: an open one nobody answered leaves the page and 队长 is told which
+  // cards they were (`toCaptain`), so it can ask the user properly where it
+  // must; one the user answered stays in 已完成 as the record of that answer,
+  // its pasted receipt moved into the details.
+  function migrate(store, fromVersion) {
+    if (Number(fromVersion) >= 2) return { changed: false, moved: [] };
+    const moved = [];
+    let changed = false;
+    store.items = store.items.filter((item) => {
+      if (item.source !== 'card') return true;
+      changed = true;
+      if (!item.replies.length) { if (!item.done) moved.push(item); return false; }
+      if (item.ask) {
+        item.detail = clip(block(['当时贴出的原文：' + item.ask, item.detail].filter(Boolean).join('\n\n')), LIMITS.detail);
+        item.ask = '';
+      }
+      return true;
+    });
+    if (moved.length) store.toCaptain = clip(block([store.toCaptain, migratedNotice(moved)].filter(Boolean).join('\n\n')), LIMITS.toCaptain);
+    return { changed, moved };
+  }
+  function migratedNotice(moved) {
+    return [
+      `「待我处理」不再由程序自动登记停下来的卡片（以前直接把卡片最近一条回执当成「要你做」，用户看不懂要回答什么）。下面 ${moved.length} 条已从用户的待处理里撤下：`,
+      ...moved.map((i) => `- 卡片 ${i.card}${i.cardTitle ? '「' + i.cardTitle + '」' : ''}${i.project ? '（项目 ' + i.project + '）' : ''}：原来贴出的是「${clip(i.ask, 160)}」`),
+      '请逐张看：卡片还停着、确实只有用户能定的，用 inbox need --card 卡片id --title "一句大白话说明" --ask "一句明确的问题" --options "回答1|回答2|回答3" 重新问用户；不需要用户的你直接处理。',
+    ].join('\n');
   }
   // waiting(sessionId): true while it waits on an answer, false once it does
   // not, null when this computer does not know the session.
@@ -342,6 +335,7 @@
       `用户在「待我处理」回复了一条${item.kind === 'report' ? '结果汇报' : '要用户处理的事（' + label(item) + '）'}（条目 ${item.id}${where ? '，' + where : ''}，登记于 ${new Date(item.created).toLocaleString('zh-CN', { hour12: false })}）。`,
       '原条目：' + item.title,
       item.ask ? '当时请用户做的：' + item.ask : '',
+      item.options.length ? '当时给的选项：' + item.options.join(' / ') : '',
       '用户的回复：' + block(text),
       '请按用户的回复处理，需要派活就派；这一条已经打勾。要用户再介入或有新结论，用 inbox need / inbox report 另登记一条。',
     ].filter(Boolean).join('\n');
@@ -359,6 +353,7 @@
       const meta = [i.project && '项目 ' + i.project, i.card && '卡片 ' + i.card, i.session && '会话 ' + i.session, when(i.created, now), !i.done && !i.readAt ? '用户未读' : ''].filter(Boolean).join('，');
       const lines = [`- ${i.id}【${i.kind === 'need' ? '要你处理·' : ''}${label(i)}】${i.title}（${meta}）`];
       if (i.ask) lines.push('  要用户做：' + i.ask);
+      if (i.options.length) lines.push('  可选回答：' + i.options.join(' / '));
       if (i.done) lines.push('  ' + doneText(i) + '（' + when(i.doneAt, now) + '）');
       const last = i.replies[i.replies.length - 1];
       if (last) lines.push('  用户回复：' + clip(line(last.text), 200));
@@ -382,7 +377,8 @@
   // Display fields only; no captain notice ids.
   function phoneItem(item) {
     return {
-      id: item.id, kind: item.kind, label: label(item), title: item.title, ask: item.ask, detail: clip(item.detail, 4000),
+      id: item.id, kind: item.kind, label: label(item), title: item.title, ask: item.ask, options: item.options.slice(),
+      detail: clip(item.detail, 4000),
       files: item.files.slice(0, 10), project: item.project, cardTitle: item.cardTitle, sessionTitle: item.sessionTitle,
       source: item.source, created: item.created, readAt: item.readAt, done: item.done, doneAt: item.doneAt,
       doneText: item.done ? doneText(item) : '',
@@ -395,5 +391,5 @@
   }
 
   return { VERSION, KINDS, TYPES, REPORT_LABEL, LIMITS, KEEP_DONE, ID, normalize, normalizeItem, newId, add, resolve, reopen, markRead, reply, markRepliesSeen, prune,
-    notifyItem, cardNeeds, cardQuestion, syncCards, syncSessions, label, sorted, counts, badgeTitle, view, doneText, when, refs, replyNotice, doneNotice, listText, addedText, phoneItem, phoneView };
+    notifyItem, syncCards, migrate, syncSessions, label, sorted, counts, badgeTitle, view, doneText, when, refs, replyNotice, doneNotice, listText, addedText, phoneItem, phoneView };
 });
