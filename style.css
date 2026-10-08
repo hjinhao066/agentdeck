@@ -3716,7 +3716,7 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
 .battery-rail { display: none; }
 body.nav-collapsed .battery-rail:not([hidden]) { display: inline-grid; }
 
-/* ---- 随手记待办: sidebar count, the 待办 page and the ⌘T quick-capture bar ---- */
+/* ---- 随手记待办: sidebar count, the 待办 page and the quick-capture box ---- */
 .nav-row-count {
   flex: 0 0 auto; min-width: 18px; height: 18px; padding: 0 6px; border-radius: 999px;
   background: var(--pill-bg); color: var(--text-2); text-align: center;
@@ -3731,12 +3731,12 @@ body.nav-collapsed .battery-rail:not([hidden]) { display: inline-grid; }
   border: 1px solid var(--border); border-bottom-width: 2px; background: var(--pill-bg); color: var(--text-2);
   font: 500 11px/16px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-.todo-add {
+.todo-add, .todo-quick-form {
   display: flex; align-items: center; gap: 12px; height: 54px; padding: 0 9px 0 18px;
   border: 1px solid var(--border); border-radius: 14px; background: var(--elev);
   transition: border-color .15s ease, box-shadow .15s ease;
 }
-.todo-add:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }
+.todo-add:focus-within, .todo-quick-form:focus-within { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); box-shadow: 0 0 0 3px var(--accent-soft); }
 .todo-add-ring { flex: 0 0 auto; width: 18px; height: 18px; border-radius: 50%; border: 1.6px dashed var(--muted); opacity: .75; }
 .todo-add-input, .todo-quick-input {
   flex: 1; min-width: 0; height: 100%; border: none; outline: none; background: transparent;
@@ -3751,10 +3751,10 @@ body.nav-collapsed .battery-rail:not([hidden]) { display: inline-grid; }
 .todo-ibtn svg { width: 16px; height: 16px; }
 .todo-ibtn:hover { background: var(--icon-hover-bg); color: var(--text); }
 .todo-ibtn:focus-visible, .todo-check:focus-visible, .todo-done-toggle:focus-visible, .todo-undo-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.todo-ibtn.todo-add-btn { width: 36px; height: 36px; border-radius: 10px; background: var(--primary-bg); color: var(--primary-fg); }
-.todo-ibtn.todo-add-btn svg { width: 18px; height: 18px; stroke-width: 2.2; }
-.todo-ibtn.todo-add-btn:hover { filter: brightness(.92); background: var(--primary-bg); color: var(--primary-fg); }
-.todo-ibtn.todo-add-btn:disabled { background: var(--pill-bg); color: var(--muted); filter: none; cursor: default; }
+.todo-ibtn.todo-add-btn, .todo-ibtn.todo-quick-add { width: 36px; height: 36px; border-radius: 10px; background: var(--primary-bg); color: var(--primary-fg); }
+.todo-ibtn.todo-add-btn svg, .todo-ibtn.todo-quick-add svg { width: 18px; height: 18px; stroke-width: 2.2; }
+.todo-ibtn.todo-add-btn:hover, .todo-ibtn.todo-quick-add:hover { filter: brightness(.92); background: var(--primary-bg); color: var(--primary-fg); }
+.todo-ibtn.todo-add-btn:disabled, .todo-ibtn.todo-quick-add:disabled { background: var(--pill-bg); color: var(--muted); filter: none; cursor: default; }
 .todo-ibtn.todo-del:hover { color: var(--st-input); background: color-mix(in srgb, var(--st-input) 12%, transparent); }
 .todo-error { margin: 8px 6px 0; color: var(--st-input); font-size: 12.5px; }
 .todo-lists { margin-top: 24px; }
@@ -3839,27 +3839,38 @@ button.todo-done-toggle:hover { background: var(--icon-hover-bg); color: var(--t
   .todo-actions { position: static; transform: none; padding-left: 0; background: none; opacity: 1; pointer-events: auto; }
 }
 
-.todo-quick {
-  position: fixed; top: 14vh; left: 50%; z-index: 1000; transform: translateX(-50%);
-  width: min(600px, calc(100vw - 32px)); padding: 4px; border-radius: 16px;
-  border: 1px solid var(--border); background: var(--elev);
-  box-shadow: var(--shadow-pop), 0 24px 70px rgba(0, 0, 0, .28);
-  animation: todo-pop .14s ease-out;
-}
-.todo-quick[hidden] { display: none; }
-.todo-quick.is-saved { border-color: color-mix(in srgb, var(--st-done) 60%, var(--border)); }
-.todo-quick-form { display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 14px; }
-.todo-quick-ico { display: inline-flex; color: var(--accent); }
-.todo-quick-ico svg { width: 20px; height: 20px; }
-.todo-quick-input { font-size: 16px; }
-.todo-quick-hint { flex: 0 0 auto; color: var(--muted); font-size: 11.5px; white-space: nowrap; }
-.todo-quick-status { margin: -4px 14px 0 46px; padding-bottom: 10px; font-size: 12.5px; color: var(--st-done); }
+/* 速记待办: a modal in the middle of the window, the input on top and the list under it. */
+dialog.todo-quick { width: min(560px, calc(100vw - 32px)); padding: 0; overflow: hidden; border-radius: 16px; }
+.todo-quick-panel { display: flex; flex-direction: column; max-height: min(640px, calc(100vh - 64px)); padding: 14px 18px 18px; }
+.todo-quick-head { display: flex; align-items: center; gap: 12px; min-height: 34px; margin-bottom: 12px; }
+.todo-quick-title { margin: 0; font-size: 16px; font-weight: 600; }
+.todo-quick-hint { margin-left: auto; display: flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.todo-quick-hint kbd:not(:first-child) { margin-left: 8px; }
+.todo-ibtn.todo-quick-close { margin-right: -6px; }
+/* The generic `dialog input` box would draw a second frame inside the field. */
+dialog .todo-quick-input, dialog .todo-quick-input:focus { height: 100%; padding: 0; border: none; border-radius: 0; background: transparent; box-shadow: none; }
+.todo-quick-status { margin: 8px 6px 0; color: var(--st-input); font-size: 12.5px; }
 .todo-quick-status:empty { display: none; }
-.todo-quick.is-error .todo-quick-status { color: var(--st-input); }
-@keyframes todo-pop { from { opacity: 0; transform: translate(-50%, -6px) scale(.985); } to { opacity: 1; transform: translateX(-50%); } }
+.todo-quick-list { flex: 1; min-height: 0; margin-top: 16px; overflow-y: auto; overscroll-behavior: contain; }
+.todo-quick-list .todo-list + .todo-section { margin-top: 18px; }
+.todo-quick-list .todo-row { min-height: 44px; }
+.todo-quick-empty { padding: 20px 6px 4px; color: var(--muted); font-size: 13px; text-align: center; }
+.todo-row.is-new { animation: todo-fresh 1.6s ease-out both; }
+@keyframes todo-fresh { from { background: color-mix(in srgb, var(--accent) 16%, var(--elev)); } to { background: var(--todo-row-bg); } }
 @media (max-width: 560px) { .todo-quick-hint { display: none; } }
-@media (prefers-reduced-motion: reduce) { .todo-quick { animation: none; } .todo-check svg, .todo-text { transition: none; } }
-:root[data-motion="off"] .todo-quick { animation: none; }
+@media (prefers-reduced-motion: reduce) { dialog.todo-quick[open], .todo-row.is-new { animation: none; } .todo-check svg, .todo-text { transition: none; } }
+:root[data-motion="off"] dialog.todo-quick[open], :root[data-motion="off"] .todo-row.is-new { animation: none; }
+/* 设置 · 快捷键: the key the shortcut uses, recorded by pressing it. */
+.shortcut-ctl { display: inline-flex; align-items: center; gap: 6px; }
+.shortcut-field {
+  min-width: 100px; height: 34px; padding: 0 12px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 8px;
+  background: var(--pill-bg); color: var(--text); font: 500 13px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; cursor: pointer;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.shortcut-field:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.shortcut-field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.shortcut-field.is-recording { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); color: var(--muted); font-family: inherit; font-size: 12.5px; }
+#todoShortcutNote.is-warn { color: var(--st-input); }
 /* Who each seat is signed in to: muted when right, orange when it needs a login, red when it is the wrong account. */
 .seat-choice-text { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; min-width: 0; }
 .seat-account { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }

@@ -129,6 +129,7 @@ let config = {
 };
 const saved = window.deck.loadConfig();
 config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
+config.todoShortcut = TodoShortcutCore.normalize(saved?.todoShortcut);
 // Persist only parsed observations, never terminal text or credentials.
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {

@@ -80,6 +80,7 @@
       "schedule-feed.js",
       "pages.js",
       "todo-ui.js",
+      "todo-shortcut-core.js",
       "todo-store.js",
       "main-core.js",
       "auto-verify-core.js",

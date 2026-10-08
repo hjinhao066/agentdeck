@@ -3,13 +3,15 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 随手记待办 on the desktop: the sidebar entry, the 待办 page and the ⌘T /
-// Ctrl+Shift+T quick-capture bar. A --test-user-data profile keeps its to-dos
+// 随手记待办 on the desktop: the sidebar entry, the 待办 page and the ⌘⇧N /
+// Ctrl+Shift+N quick-capture box (the key can be changed in 设置). A --test-user-data profile keeps its to-dos
 // in <profile>/todos, never in ~/.agents. AGENTDECK_TODO_SHOTS=<dir> saves
 // screenshots of the states the user looks at.
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}"`;
 const shots = process.env.AGENTDECK_TODO_SHOTS;
-const quickKey = process.platform === 'darwin' ? 'Meta+t' : 'Control+Shift+T';
+const mac = process.platform === 'darwin';
+const quickKey = mac ? 'Meta+Shift+KeyN' : 'Control+Shift+KeyN';
+const quickLabel = mac ? '⌘⇧N' : 'Ctrl+Shift+N';
 let application, page, profile;
 
 const todoDir = () => path.join(profile, 'todos');
@@ -28,6 +30,11 @@ async function size(width, height) {
 }
 async function theme(name) {
   if (await page.evaluate(() => document.documentElement.dataset.theme) !== name) await page.click('#themeBtn');
+  await expect(page.locator('html')).toHaveAttribute('data-theme', name);
+}
+// The theme under a modal: a real click outside the box would close it.
+async function themeBehind(name) {
+  if (await page.evaluate(() => document.documentElement.dataset.theme) !== name) await page.evaluate(() => document.getElementById('themeBtn').click());
   await expect(page.locator('html')).toHaveAttribute('data-theme', name);
 }
 async function shot(name) {
@@ -74,11 +81,12 @@ test('the sidebar 待办 entry opens a page that is ready to type into, with a f
   await expect(entry).toHaveClass(/active/);
   await expect(input()).toBeFocused();
   await expect(page.locator('.todo-empty strong')).toHaveText('清单还是空的');
-  await expect(page.locator('.todo-empty kbd')).toHaveText(process.platform === 'darwin' ? '⌘T' : 'Ctrl+Shift+T');
+  await expect(page.locator('.todo-empty kbd')).toHaveText(quickLabel);
   // The shortcut works inside AgentDeck only, and the words say so.
   await expect(page.locator('#pageView .page-titles')).toContainText('在 AgentDeck 里任何地方按');
   expect(await entry.getAttribute('title')).toContain('在 AgentDeck 里按');
-  await expect(page.locator('#helpDialog')).toContainText('速记一条待办（Windows 是 Ctrl+Shift+T）');
+  await expect(page.locator('#helpTodoKey')).toHaveText(quickLabel);
+  await expect(page.locator('#helpDialog')).toContainText('速记一条待办：在 AgentDeck 里任何地方都能按');
   await expect(page.locator('.todo-add-btn')).toBeDisabled();
   await shot('desktop-wide-dark-empty');
   await theme('light');
@@ -211,58 +219,202 @@ test('keyboard: Tab reaches the circle and the tools show while focused; Esc clo
   await expect(page.locator('#todoBtn')).not.toHaveClass(/active/);
 });
 
-test('the quick-capture shortcut records from inside a terminal and gives the terminal its focus back', async () => {
+const quick = () => page.locator('#todoQuick');
+const quickInput = () => quick().locator('.todo-quick-input');
+const quickRows = () => quick().locator('.todo-list:not(.todo-list-done) .todo-row');
+const quickDone = () => quick().locator('.todo-list-done .todo-row');
+const termFocus = () => page.locator('.column[data-col-id="todo-host"] .xterm-helper-textarea');
+async function fromTerminal() {
+  if (await page.locator('#pageView .page-close').isVisible()) await page.locator('#pageView .page-close').click();
   await page.locator('.column[data-col-id="todo-host"] .xterm').click();
-  await expect(page.locator('.column[data-col-id="todo-host"] .xterm-helper-textarea')).toBeFocused();
+  await expect(termFocus()).toBeFocused();
+}
+
+test('the shortcut opens a box in the middle of the window, from inside a terminal, with the list under it', async () => {
+  await fromTerminal();
+  const columns = await page.locator('.column').count();
   await page.keyboard.press(quickKey);
-  const bar = page.locator('#todoQuick');
-  await expect(bar).toBeVisible();
-  await expect(bar.locator('.todo-quick-input')).toBeFocused();
-  await bar.locator('.todo-quick-input').fill('下班路上取快递');
-  await shot('desktop-quick-capture-dark');
+  await expect(quick()).toBeVisible();
+  await expect(quickInput()).toBeFocused();
+  // ⌘⇧N is not also ⌘N (新对话): no column was added.
+  await page.waitForTimeout(300);
+  expect(await page.locator('.column').count()).toBe(columns);
+  // In the middle of the window.
+  const box = await quick().boundingBox();
+  const view = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  expect(Math.abs(box.x + box.width / 2 - view.width / 2)).toBeLessThan(2);
+  expect(Math.abs(box.y + box.height / 2 - view.height / 2)).toBeLessThan(2);
+  // The list: open ones newest first, then the finished ones.
+  await expect(quickRows()).toHaveCount(13);
+  await expect(quickRows().first().locator('.todo-text')).toContainText('这是一条很长很长的待办');
+  await expect(quickRows().last().locator('.todo-text')).toHaveText('退货包裹 放门口');
+  await expect(quickDone()).toHaveCount(1);
+  await expect(quickDone().first()).toContainText('给妈妈打电话');
+  // Close is an icon with a name, big enough to hit.
+  const close = quick().locator('.todo-quick-close');
+  await expect(close).toHaveAttribute('aria-label', '关闭速记');
+  expect(await close.getAttribute('title')).toBe('关闭（Esc）');
+  expect((await close.boundingBox()).width).toBeGreaterThanOrEqual(28);
+  await quickInput().fill('下班路上取快递');
+  await shot('quick-dark');
   if (shots) {
-    // The theme button is outside the bar, and a click outside puts the bar away (the draft waits).
-    await theme('light');
-    await expect(bar).toBeHidden();
-    await page.locator('.column[data-col-id="todo-host"] .xterm').click();
-    await page.keyboard.press(quickKey);
-    await bar.locator('.todo-quick-input').fill('下班路上取快递');
-    await shot('desktop-quick-capture-light');
-    await bar.locator('.todo-quick-input').press('Escape');
-    await theme('dark');
-    await page.locator('.column[data-col-id="todo-host"] .xterm').click();
-    await page.keyboard.press(quickKey);
-    await bar.locator('.todo-quick-input').fill('下班路上取快递');
+    await themeBehind('light');
+    await shot('quick-light');
+    await themeBehind('dark');
+    await size(700, 560);
+    await shot('quick-narrow-dark');
+    const spill = await quick().evaluate((d) => d.scrollWidth - d.clientWidth);
+    expect(spill).toBe(0);
+    await size(1280, 800);
   }
-  await bar.locator('.todo-quick-input').press('Enter');
-  await expect(bar.locator('.todo-quick-status')).toHaveText('已记下');
-  await expect(bar).toBeHidden();
+});
+
+test('Enter saves, keeps the box open for the next line and the new line lands on top of the list', async () => {
+  await quickInput().press('Enter');
+  await expect(quickInput()).toHaveValue('');
+  await expect(quickInput()).toBeFocused();
+  await expect(quick()).toBeVisible();
+  await expect(quickRows().first().locator('.todo-text')).toHaveText('下班路上取快递');
+  await expect(quickRows().first()).toHaveClass(/is-new/);
   await expect(count()).toHaveText('14');
-  await expect(page.locator('.column[data-col-id="todo-host"] .xterm-helper-textarea')).toBeFocused();
   expect(stored().some((t) => t.text === '下班路上取快递')).toBe(true);
-  // Esc puts it away without saving and throws the words away; the terminal never saw the keys.
-  await page.keyboard.press(quickKey);
-  await bar.locator('.todo-quick-input').fill('不存');
-  await bar.locator('.todo-quick-input').press('Escape');
-  await expect(bar).toBeHidden();
+  await quickInput().fill('顺便买牛奶');
+  await quickInput().press('Enter');
+  await expect(quickRows().first().locator('.todo-text')).toHaveText('顺便买牛奶');
+  await expect(quickRows().nth(1).locator('.todo-text')).toHaveText('下班路上取快递');
+  await expect(count()).toHaveText('15');
+  await shot('quick-saved-dark');
+  // Blank does nothing.
+  await quickInput().fill('   ');
+  await quickInput().press('Enter');
+  await expect(quickRows()).toHaveCount(15);
+});
+
+test('a row ticks off right in the box and can be put back', async () => {
+  await quickRows().filter({ hasText: '顺便买牛奶' }).locator('.todo-check').click();
+  await expect(quickDone().filter({ hasText: '顺便买牛奶' })).toHaveCount(1);
+  await expect(quickRows()).toHaveCount(14);
+  await expect(count()).toHaveText('14');
+  expect(stored().find((t) => t.text === '顺便买牛奶').done).toBe(true);
+  await quickDone().filter({ hasText: '顺便买牛奶' }).locator('.todo-check').click();
+  await expect(quickRows().filter({ hasText: '顺便买牛奶' })).toHaveCount(1);
+  await expect(count()).toHaveText('15');
+  await quickRows().filter({ hasText: '顺便买牛奶' }).locator('.todo-check').click();
+  await expect(count()).toHaveText('14');
+});
+
+test('Esc and × close it and throw the draft away; the terminal gets its focus back', async () => {
+  await quickInput().fill('不存');
+  await quickInput().press('Escape');
+  await expect(quick()).toBeHidden();
+  await expect(termFocus()).toBeFocused();
   expect(stored().some((t) => t.text === '不存')).toBe(false);
   await page.keyboard.press(quickKey);
-  await expect(bar.locator('.todo-quick-input')).toHaveValue('');
-  // A slip of the mouse only puts it away: the words are still there at the next shortcut.
-  await bar.locator('.todo-quick-input').fill('手滑点到别处');
-  await page.locator('.column[data-col-id="todo-host"] .xterm').click();
-  await expect(bar).toBeHidden();
+  await expect(quickInput()).toHaveValue('');
+  await quickInput().fill('也不存');
+  await quick().locator('.todo-quick-close').click();
+  await expect(quick()).toBeHidden();
+  await expect(termFocus()).toBeFocused();
+  expect(stored().some((t) => t.text === '也不存')).toBe(false);
   await page.keyboard.press(quickKey);
-  await expect(bar.locator('.todo-quick-input')).toHaveValue('手滑点到别处');
-  await bar.locator('.todo-quick-input').press('Escape');
-  await expect(bar).toBeHidden();
+  await expect(quickInput()).toHaveValue('');
+  await quickInput().press('Escape');
+});
+
+test('a click anywhere outside closes it and keeps the half-typed words for next time', async () => {
+  await fromTerminal();
+  await page.keyboard.press(quickKey);
+  await quickInput().fill('手滑点到别处');
+  const box = await quick().boundingBox();
+  for (const [x, y] of [[box.x - 30, box.y + box.height / 2], [box.x + box.width + 30, box.y + box.height / 2], [box.x + box.width / 2, box.y + box.height + 20]]) {
+    await page.mouse.click(x, y);
+    await expect(quick()).toBeHidden();
+    await expect(termFocus()).toBeFocused();
+    await page.keyboard.press(quickKey);
+    await expect(quickInput()).toHaveValue('手滑点到别处');
+  }
+  // A click inside (the list, the title) leaves it open.
+  await quick().locator('.todo-quick-title').click();
+  await expect(quick()).toBeVisible();
+  await quickInput().press('Escape');
   expect(stored().some((t) => t.text === '手滑点到别处')).toBe(false);
-  // With the page open, the shortcut just puts the cursor in the page's own box.
+});
+
+test('on the 待办 page the shortcut opens the same box, and what it saves shows on the page too', async () => {
   await page.locator('#todoBtn').click();
-  await page.locator('.todo-row .todo-check').first().focus();
-  await page.keyboard.press(quickKey);
   await expect(input()).toBeFocused();
-  await expect(bar).toBeHidden();
+  await page.keyboard.press(quickKey);
+  await expect(quick()).toBeVisible();
+  await expect(quickInput()).toBeFocused();
+  await quickInput().fill('从待办页速记');
+  await quickInput().press('Enter');
+  await quickInput().press('Escape');
+  await expect(quick()).toBeHidden();
+  await expect(page.locator('#pageView .todo-list:not(.todo-list-done) .todo-row').first()).toContainText('从待办页速记');
+  await expect(input()).toBeFocused();
+  await expect(count()).toHaveText('15');
+});
+
+test('设置 · 快捷键: record a new key; AgentDeck\'s own keys are refused; every label follows; 恢复默认 brings ⌘⇧N back', async () => {
+  const configFile = path.join(profile, 'config.json');
+  await page.locator('#pageView .page-close').click();
+  await page.locator('#settingsBtn').click();
+  const field = page.locator('#todoShortcutBtn');
+  const note = page.locator('#todoShortcutNote');
+  const reset = page.locator('#todoShortcutReset');
+  await field.scrollIntoViewIfNeeded();
+  await expect(field).toHaveText(quickLabel);
+  await expect(reset).toBeHidden();
+  const columns = await page.locator('.column').count();
+  await field.click();
+  await expect(field).toHaveClass(/is-recording/);
+  // ⌘N / Ctrl+N is refused with the reason, and never opens a new 对话 while recording.
+  await page.keyboard.press(mac ? 'Meta+KeyN' : 'Control+KeyN');
+  await expect(note).toHaveClass(/is-warn/);
+  await expect(note).toContainText(mac ? '⌘N 已经是「新对话」' : 'Shift 或 Alt');
+  expect(await page.locator('.column').count()).toBe(columns);
+  await expect(field).toHaveClass(/is-recording/);
+  await shot('settings-shortcut-refused-dark');
+  const next = mac ? 'Meta+Alt+KeyT' : 'Control+Alt+KeyT';
+  const nextLabel = mac ? '⌘⌥T' : 'Ctrl+Alt+T';
+  await page.keyboard.press(next);
+  await expect(field).not.toHaveClass(/is-recording/);
+  await expect(field).toHaveText(nextLabel);
+  await expect(note).toContainText(`已改成 ${nextLabel}`);
+  await expect(reset).toBeVisible();
+  await expect(reset).toHaveAttribute('aria-label', `恢复默认（${quickLabel}）`);
+  await expect.poll(() => JSON.parse(fs.readFileSync(configFile, 'utf8')).todoShortcut, { timeout: 5000 }).toBe('Mod+Alt+T');
+  await shot('settings-shortcut-dark');
+  if (shots) { await themeBehind('light'); await shot('settings-shortcut-light'); await themeBehind('dark'); }
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#notificationSettings')).toBeHidden();
+  // The labels follow.
+  await expect(page.locator('#helpTodoKey')).toHaveText(nextLabel);
+  expect(await page.locator('#todoBtn').getAttribute('title')).toContain(nextLabel);
+  await page.locator('#todoBtn').click();
+  await expect(page.locator('#pageView .page-titles')).toContainText(`任何地方按 ${nextLabel}`);
+  await page.locator('#pageView .page-close').click();
+  // The old key no longer opens the box; the new one does.
+  await fromTerminal();
+  await page.keyboard.press(quickKey);
+  await page.waitForTimeout(300);
+  await expect(quick()).toBeHidden();
+  await page.keyboard.press(next);
+  await expect(quick()).toBeVisible();
+  await quickInput().press('Escape');
+  // Back to the default.
+  await page.locator('#settingsBtn').click();
+  await reset.scrollIntoViewIfNeeded();
+  await reset.click();
+  await expect(field).toHaveText(quickLabel);
+  await expect(reset).toBeHidden();
+  await expect.poll(() => JSON.parse(fs.readFileSync(configFile, 'utf8')).todoShortcut, { timeout: 5000 }).toBe('Mod+Shift+N');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#helpTodoKey')).toHaveText(quickLabel);
+  await fromTerminal();
+  await page.keyboard.press(quickKey);
+  await expect(quick()).toBeVisible();
+  await quickInput().press('Escape');
 });
 
 test('a list written by the other computer (arriving through git) shows up without reopening the page', async () => {
@@ -270,11 +422,12 @@ test('a list written by the other computer (arriving through git) shows up witho
   fs.writeFileSync(path.join(todoDir(), 'dev-other-computer.json'), JSON.stringify({ version: 1, device: 'dev-other-computer', items: [
     { id: 'td-from-windows-0001', text: '在 Windows 上记的一条', done: false, doneAt: null, created: at, updated: at, deleted: false, source: 'desktop', device: 'dev-other-computer', ai: null },
   ] }));
+  await page.locator('#todoBtn').click();
   await expect(rowFor('在 Windows 上记的一条')).toHaveCount(1, { timeout: 10000 });
-  await expect(count()).toHaveText('15');
+  await expect(count()).toHaveText('16');
   // This computer still writes only its own file.
   await rowFor('在 Windows 上记的一条').locator('.todo-check').click();
-  await expect(count()).toHaveText('14');
+  await expect(count()).toHaveText('15');
   const other = JSON.parse(fs.readFileSync(path.join(todoDir(), 'dev-other-computer.json'), 'utf8'));
   expect(other.items[0].done).toBe(false);
   expect(stored().find((t) => t.id === 'td-from-windows-0001').done).toBe(true);

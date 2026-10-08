@@ -77,8 +77,9 @@ The window follows the Cursor / Codex desktop layout, with AgentDeck's deck in
 the middle:
 
 - **待办** (sidebar, under 搜索): your own one-line to-dos, kept apart from the
-  agents' task cards. Type and press Enter; ⌘T (Ctrl+Shift+T on Windows) records one
-  from anywhere in the window. The phone hub has the same list. See [docs/todo.md](docs/todo.md).
+  agents' task cards. Type and press Enter; ⌘⇧N (Ctrl+Shift+N on Windows, changeable
+  in 设置 · 快捷键) opens a quick-capture box with the list from anywhere in the window.
+  The phone hub has the same list. See [docs/todo.md](docs/todo.md).
 - **Left sidebar** (collapsible, resizable): 新对话, 队长, 待我处理, 任务看板, 搜索, 待办, Schedule, Artifacts, Skills,
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
