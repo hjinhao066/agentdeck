@@ -1118,10 +1118,8 @@
   // Reports read on this visit stay where the user is reading them until the tab is left.
   const attentionKept = new Set();
   const SEEN_MS = 1500;
-  const onScreen = (el, box) => {
-    const r = el.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
-    return r.height > 0 && shown >= Math.min(r.height * 0.6, box.height * 0.5);
-  };
+  // Mostly in view through its scroll area and the window, on both axes (the same rule as the desktop).
+  const onScreen = (el, box) => Core.mostlyShown(el.getBoundingClientRect(), [box, { left: 0, top: 0, right: innerWidth, bottom: innerHeight, width: innerWidth, height: innerHeight }]);
   function checkAttentionSeen() {
     checkCaptainSeen();
     if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); attentionKept.clear(); return; }

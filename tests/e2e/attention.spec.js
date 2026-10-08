@@ -288,11 +288,34 @@ test('a report 队长 said in a reply the user saw is read; one filed while the 
   const box = page.locator('.column[data-col-id="captain"] .composer textarea');
   await box.fill(`node "${CLI}" inbox report --title "迁移预检通过了，队长在对话里说过"`);
   await box.press('Enter');
+  // The deck scrolled sideways until only 4 px of the 队长 column show at its left edge
+  // (the column still "intersects" the deck): the reply is not in front of the user.
+  const slide = () => page.evaluate(() => {
+    const wrap = terms.get('captain').wrap, deck = document.getElementById('deck').getBoundingClientRect();
+    wrap.style.transform = '';
+    wrap.style.transform = `translateX(${deck.left + 4 - wrap.getBoundingClientRect().right}px)`;
+  });
+  await slide();
   await expect.poll(async () => (await items()).find((i) => i.title === '迁移预检通过了，队长在对话里说过'), { timeout: 20000 }).toBeTruthy();
   const said = (await items()).find((i) => i.title === '迁移预检通过了，队长在对话里说过');
-  // Filed with the 队长 turn under way; that reply on screen for a moment reads it.
+  // Filed with the 队长 turn under way.
   expect(said.turn).toBe(await page.evaluate(() => terms.get('captain').captainTurnId));
-  await expect.poll(async () => (await items()).find((i) => i.id === said.id).doneBy, { timeout: 30000 }).toBe('chat');
+  await expect.poll(() => page.evaluate((t) => !!ChatUI.turnsOf('captain').find((x) => x.id === t)?.done, said.turn), { timeout: 30000 }).toBe(true);
+  await slide();
+  const sliver = await page.evaluate((t) => {
+    const deck = document.getElementById('deck').getBoundingClientRect(), wrap = terms.get('captain').wrap.getBoundingClientRect();
+    const reply = document.querySelector(`.msg.assistant[data-turn="${t}"]`).getBoundingClientRect();
+    return { shown: wrap.right - deck.left, replyRight: reply.right, deckLeft: deck.left, visible: captainColumnVisible('captain') };
+  }, said.turn);
+  expect(sliver.visible, JSON.stringify(sliver)).toBe(true);
+  expect(sliver.shown).toBeLessThanOrEqual(4.5);
+  expect(sliver.replyRight).toBeLessThan(sliver.deckLeft + 4.5);
+  await page.waitForTimeout(3000);
+  expect((await items()).find((i) => i.id === said.id)).toMatchObject({ done: false, doneBy: '' });
+  await expect(page.locator('#attentionBtn .nav-row-dot')).toBeVisible();
+  // Scrolled back, the reply is in front: a moment later the report is read.
+  await page.evaluate(() => { terms.get('captain').wrap.style.transform = ''; });
+  await expect.poll(async () => (await items()).find((i) => i.id === said.id).doneBy, { timeout: 15000 }).toBe('chat');
   await expect(page.locator('#attentionBtn .nav-row-dot')).toBeHidden();
 
   // Away from the conversation (another page in front): the next report waits in 没看, a dot, not a number.

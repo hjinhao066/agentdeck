@@ -524,7 +524,20 @@
     if (result.status === 502) return `${name} 离线，这条没有发出去。`;
     return `${name} 没有接受（HTTP ${result.status}）。`;
   }
-  return { cleanAttention, mergeAttention, attentionFailure };
+  // Whether most of an item or a reply is in front of the user. `rect` is cut by
+  // every box that clips it, on both axes: its scroll area (clips[0], also the
+  // measure of "most"), then the deck, the window. A reply slid sideways out of
+  // the deck, or showing only a sliver, is not seen however tall it is.
+  // Rects are { left, top, right, bottom, width, height } (getBoundingClientRect).
+  function mostlyShown(rect, clips) {
+    const boxes = (clips || []).filter(Boolean);
+    if (!rect || !boxes.length || !(rect.width > 0) || !(rect.height > 0)) return false;
+    let { left, top, right, bottom } = rect;
+    for (const c of boxes) { left = Math.max(left, c.left); top = Math.max(top, c.top); right = Math.min(right, c.right); bottom = Math.min(bottom, c.bottom); }
+    const w = right - left, h = bottom - top, area = boxes[0];
+    return w > 0 && h > 0 && h >= Math.min(rect.height * 0.6, area.height * 0.5) && w >= Math.min(rect.width * 0.6, area.width * 0.5);
+  }
+  return { cleanAttention, mergeAttention, attentionFailure, mostlyShown };
 });
 
 // Reading text, for the desktop and the phone alike: the one Markdown renderer

@@ -277,18 +277,17 @@
   // the window is in the background and painting is throttled.
   const SEEN_MS = 1500;
   const seenSince = new Map();
-  const onScreen = (node, box) => {
-    const r = node.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
-    return r.height > 0 && shown >= Math.min(r.height * 0.6, box.height * 0.5);
-  };
+  // Mostly in view through every box that cuts it, sideways too (HubCore.mostlyShown).
+  const windowBox = () => ({ left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight });
+  const onScreen = (node, ...clips) => window.HubCore.mostlyShown(node.getBoundingClientRect(), [...clips.map((c) => c.getBoundingClientRect()), windowBox()]);
   function checkSeen() {
     checkChatSeen();
     const scroller = document.getElementById('pageView');
     if (!visible() || document.hidden || !scroller || !view) { seenSince.clear(); kept.clear(); return; }
-    const box = scroller.getBoundingClientRect(), now = Date.now(), ready = [];
+    const now = Date.now(), ready = [];
     for (const node of view.querySelectorAll('.at-card.unread:not(.done)')) {
       const id = node.dataset.id;
-      if (!onScreen(node, box)) { seenSince.delete(id); continue; }
+      if (!onScreen(node, scroller)) { seenSince.delete(id); continue; }
       if (!seenSince.has(id)) seenSince.set(id, now);
       else if (now - seenSince.get(id) >= SEEN_MS) ready.push(id);
     }
@@ -298,7 +297,9 @@
   }
   // A report 队长 also said in its chat is read once that reply has stayed on
   // screen for the same moment: the 队长 conversation showing in the deck
-  // (chat view), the turn finished, most of its reply in view.
+  // (chat view), the turn finished, most of its reply in view: cut by the chat's
+  // scroll area, the deck and the window, sideways as well as up and down (a
+  // column scrolled almost out of the deck shows a sliver, not the reply).
   const chatSince = new Map();
   function checkChatSeen() {
     const linked = A.unseenByTurn(load());
@@ -310,7 +311,7 @@
       const turn = turns.find((t) => t.id === turnId);
       const node = turn && turn.done && host.terms.get(captainCol.id).wrap.querySelector(`.msg.assistant[data-turn="${CSS.escape(turnId)}"]`);
       const scroller = node && !node.closest('[hidden]') && node.closest('.chat-scroll');
-      if (!scroller || !onScreen(node, scroller.getBoundingClientRect())) { chatSince.delete(turnId); continue; }
+      if (!scroller || !onScreen(node, scroller, document.getElementById('deck'))) { chatSince.delete(turnId); continue; }
       if (!chatSince.has(turnId)) chatSince.set(turnId, now);
       else if (now - chatSince.get(turnId) >= SEEN_MS) { chatSince.delete(turnId); ready.push(...ids); }
     }
