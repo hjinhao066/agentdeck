@@ -105,6 +105,94 @@ test('the phone can tick an item this computer has not synced yet, but only with
   assert.throws(() => mac.update({ id: 'td-from-windows-2', done: true, base: { text: '', updated: base.updated } }), /Invalid to-do/);
 });
 
+// Mac and Windows each have their own folder here; sync() is the 30-minute git job.
+function twoComputers(t, clock) {
+  const mac = fixture(t, 'dev-mac', clock), win = fixture(t, 'dev-win', clock);
+  const copy = (from, to, name) => {
+    if (!fs.existsSync(path.join(from.dir, name))) return;
+    fs.mkdirSync(to.dir, { recursive: true });
+    fs.copyFileSync(path.join(from.dir, name), path.join(to.dir, name));
+  };
+  const sync = () => { copy(mac, win, 'dev-mac.json'); copy(win, mac, 'dev-win.json'); };
+  return { mac: mac.store, win: win.store, sync };
+}
+const baseOf = (item) => ({ text: item.text, done: item.done, doneAt: item.doneAt, created: item.created, updated: item.updated });
+
+test('the phone ticks an item the other computer just edited: the new text survives the next sync', (t) => {
+  let now = Date.parse('2026-10-06T10:00:00Z');
+  const { mac, win, sync } = twoComputers(t, () => now);
+  const item = mac.add({ text: '买牛奶' });
+  sync();
+  now += 60_000;
+  // Windows edits the text; the Mac has not received it yet, but the phone has seen it.
+  const edited = win.update({ id: item.id, text: '买牛奶和鸡蛋' });
+  now += 60_000;
+  const ticked = mac.update({ id: item.id, done: true, base: baseOf(edited), source: 'phone' });
+  assert.equal(ticked.text, '买牛奶和鸡蛋', 'the phone saw the newer text, so the tick is applied to it');
+  assert.equal(ticked.done, true);
+  assert.ok(Date.parse(ticked.updated) > Date.parse(edited.updated));
+  now += 60_000;
+  sync();
+  for (const side of [mac, win]) assert.deepEqual(side.list().map((x) => [x.text, x.done]), [['买牛奶和鸡蛋', true]]);
+});
+
+test('a base that is older than, or the same as, this computer\'s copy changes nothing but the tick', (t) => {
+  let now = Date.parse('2026-10-06T10:00:00Z');
+  const { mac } = twoComputers(t, () => now);
+  const item = mac.add({ text: '旧字' });
+  now += 60_000;
+  const edited = mac.update({ id: item.id, text: '这台电脑刚改的新字' });
+  now += 60_000;
+  const stale = mac.update({ id: item.id, done: true, base: baseOf(item), source: 'phone' });
+  assert.equal(stale.text, '这台电脑刚改的新字', 'a stale phone view must not bring old text back');
+  now += 60_000;
+  const same = mac.update({ id: item.id, done: false, base: baseOf(stale), source: 'phone' });
+  assert.equal(same.text, '这台电脑刚改的新字');
+  now += 60_000;
+  // A base that cannot be a real item is ignored when this computer has the item.
+  const junk = mac.update({ id: item.id, done: true, base: { text: '', updated: 'later' }, source: 'phone' });
+  assert.equal(junk.text, '这台电脑刚改的新字');
+  assert.equal(junk.done, true);
+  assert.ok(edited.updated < junk.updated);
+});
+
+test('a deletion on this computer is not undone by a newer base from the phone', (t) => {
+  let now = Date.parse('2026-10-06T10:00:00Z');
+  const { mac, win, sync } = twoComputers(t, () => now);
+  const item = mac.add({ text: '已经删掉的' });
+  sync();
+  now += 60_000;
+  mac.remove({ id: item.id });
+  now += 60_000;
+  const edited = win.update({ id: item.id, text: '另一台又改了字' });
+  now += 60_000;
+  const after = mac.update({ id: item.id, done: true, base: baseOf(edited), source: 'phone' });
+  assert.equal(after.deleted, true, 'only an explicit undo brings a deleted item back');
+  assert.equal(after.text, '已经删掉的');
+  assert.deepEqual(mac.list(), []);
+  sync();
+  assert.deepEqual(win.list(), []);
+});
+
+test('a newer base keeps what this computer stored that the phone never sees, and still takes only known fields', (t) => {
+  let now = Date.parse('2026-10-06T10:00:00Z');
+  const { dir, make } = fixture(t, 'dev-mac', () => now);
+  fs.mkdirSync(dir, { recursive: true });
+  const created = '2026-10-06T08:00:00.000Z';
+  fs.writeFileSync(path.join(dir, 'dev-mac.json'), JSON.stringify({ version: 1, device: 'dev-mac', items: [
+    { id: 'td-keep-extras-1', text: '旧', done: false, created, updated: created, remindAt: '2026-10-07T01:00:00.000Z', ai: { state: 'requested' } },
+  ] }));
+  const base = { text: '新', done: true, doneAt: '2026-10-06T09:30:00.000Z', created: '2000-01-01T00:00:00.000Z', updated: '2026-10-06T09:30:00.000Z', ai: { state: 'approved' }, evil: 1 };
+  const item = make('dev-mac', () => now).update({ id: 'td-keep-extras-1', done: false, base, source: 'phone' });
+  assert.equal(item.text, '新');
+  assert.equal(item.done, false);
+  assert.equal(item.doneAt, null);
+  assert.equal(item.created, created, 'the item keeps the creation time this computer recorded');
+  assert.equal(item.remindAt, '2026-10-07T01:00:00.000Z');
+  assert.deepEqual(item.ai, { state: 'requested' });
+  assert.equal(item.evil, undefined);
+});
+
 test('a damaged file from the other computer is skipped; our own damaged file is never overwritten', (t) => {
   const { dir, store } = fixture(t);
   store.add({ text: 'ok' });
