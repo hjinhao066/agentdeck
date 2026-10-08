@@ -35,7 +35,10 @@
         <div id="captain-turns" class="turns" role="region" aria-label="队长对话记录" tabindex="0"></div>
         <form id="message-form" class="composer">
           <label class="sr-only" for="message">给队长的消息</label>
+          <div id="attachments" class="attachments" role="list" aria-label="待发送的图片" hidden></div>
           <div class="composer-box">
+            <button id="attach" class="icon-button" type="button" title="添加图片" aria-label="添加图片"></button>
+            <input id="image-input" type="file" accept="image/*" multiple hidden>
             <textarea id="message" name="message" rows="1" maxlength="8000" aria-describedby="send-hint"></textarea>
             <button id="clear" class="icon-button" type="button" title="清空草稿" aria-label="清空草稿" hidden></button>
             <button id="send" class="icon-button send-button" type="submit" aria-describedby="send-hint" disabled></button>
