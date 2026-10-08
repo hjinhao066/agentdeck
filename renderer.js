@@ -537,6 +537,8 @@ const AGENT_IDLE_RE = /bypass permissions|for shortcuts|← for agents|\bBuild a
 // read by MainCore.cursorActivity, which also copes with a wrapped prompt.
 function terminalIdle(col, entry) {
   if (!entry || !entry.alive || entry.state === 'working' || entry.state === 'input' || entry.state === 'quota') return false;
+  // The launch line echoed by the shell is not the agent (it can even contain its name).
+  if (MainCore.launchEchoOnly(entry.lastScreen)) return false;
   if (MainCore.terminalActivity(entry.lastScreen, col.cmd) || (!col.isMain && MainCore.claudeBackgroundTasks(entry.lastScreen, col.cmd))) return false;
   if (/\bcursor-agent\b/i.test(col.cmd || '')) {
     const live = MainCore.cursorActivity(entry.lastScreen);
@@ -2199,6 +2201,7 @@ function buildColumn(col, isFresh) {
             if (col.id !== spawnId || terms.get(spawnId) !== entry || !entry.alive) return;
             if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
             if (prepared !== null) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, prepared), env.platform) + '\r');
+            entry.launchedAt = Date.now();
             entry.launchPending = false;
           };
           setTimeout(start, 700);
@@ -2749,7 +2752,19 @@ function sendWhenReady(col, text, opts) {
       // ConPTY can show a fresh TUI before its startup input has settled.
       // Typing immediately can lose the prompt's leading bytes before the CLI reads them.
       const settled = env.platform !== 'win32' || entry.hasWorked || quiet >= 500;
-      if (idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
+      // A launched command line that has drawn nothing (stuck on a system dialog, hung) is not
+      // an agent, however quiet it is: the text would land in the tty's line buffer, cut at
+      // 1000 bytes. Never type into it; a caller that can report it is told once the limit
+      // for a silent start has passed (see MainCore.startupLimit).
+      const silent = MainCore.launchEchoOnly(entry.lastScreen);
+      if (silent && o.onStartupFailed) {
+        const waited = Date.now() - (entry.launchedAt || started);
+        if (waited >= MainCore.startupLimit(col.cmd)) {
+          o.onStartupFailed(MainCore.startupFailure({ screen: entry.lastScreen, cmd: col.cmd, waitedMs: waited }));
+          return;
+        }
+      }
+      if (!silent && idle && ready && settled && await agentInForeground(col, o.allowShell) && columns.includes(col) && col.id === id) {
         if (o.cancelled && o.cancelled()) return;
         // A draft blocks this attempt, but must not skip the timeout below.
         if (!(o.guardUserInput && userComposing(col.id))) {

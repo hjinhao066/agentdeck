@@ -1104,6 +1104,11 @@
         if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
         batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed: reason || '这个会话已无法接收指令', explicit: true, source: 'process' }));
       },
+      // The command line never came up: nothing was typed. Not a stopped task, not a finished one.
+      onStartupFailed: (failed) => {
+        if (dispatches.get(col.id) === batch) dispatches.delete(col.id);
+        batch.items.forEach(({ task: t }) => settle(t, { summary: '', files: [], images: [], failed, explicit: true, source: 'startup' }));
+      },
       onWaiting: (reason) => {
         const task = batch.items.find((i) => i.task.status === 'queued')?.task;
         const why = reason || '会话还没准备好接收指令';

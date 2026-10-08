@@ -89,6 +89,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   and block automatic delivery; assigned tasks receive failure receipts with the
   provider reason. Work that cannot go in because the
   session sits on a startup dialog is reported to the 队长 once, never typed into it.
+  A launched command line that has drawn nothing (only its echoed launch line is on
+  screen: `MainCore.launchEchoOnly`) is not an agent however quiet it is: no automatic
+  send goes into it, and a 队长 dispatch to it fails after `MainCore.startupLimit`
+  (3 minutes, Cursor 6) with an anomaly receipt (`source: 'startup'`, 启动失败 / 任务没送达,
+  last screen rows, full text kept for `read`). Never the 已结束，未提交回执 path.
 - Schedule runs only while the app is open, never fires overdue runs late at
   launch (reported as missed), and sends through the same path as the composer.
 - Schedule's watched tasks (`schedule-feed.js`, `docs/schedule-watched-tasks.md`) are

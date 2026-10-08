@@ -481,6 +481,28 @@ test('work for a session stopped on a startup dialog (Cursor: trust this workspa
   await page.evaluate((i) => { config.mainSession.pending = config.mainSession.pending.filter((p) => p.colId !== i); config.mainSession.inflight = config.mainSession.inflight.filter((p) => p.colId !== i); archiveColumn(columns.find((c) => c.id === i)); }, child);
 });
 
+test('a command line that starts but never draws anything gets no task text; the Captain is told it did not start', async () => {
+  const SILENT = `node ${path.join(__dirname, 'fixtures', 'silent-agent.js')}`;
+  // the real limit is minutes; the check reads it at call time
+  await page.evaluate(() => { MainCore.startupLimit = () => 6000; });
+  await run(mainId, `clear; node "${CLI}" new --title "不出声" --task "SILENT-TASK-TEXT must never be typed into a dead terminal" --command "${SILENT}"`);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === '不出声')?.id), { timeout: 15000 }).toBeTruthy();
+  const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '不出声').id);
+  const receipts = () => page.evaluate((i) => [...config.mainSession.pending, ...config.mainSession.inflight].filter((p) => p.colId === i), child);
+  await expect.poll(async () => (await receipts()).map((p) => p.anomaly).join(), { timeout: 40000 }).toBe('startup');
+  const [receipt] = await receipts();
+  expect(receipt.failed).toContain('启动失败'); expect(receipt.failed).toContain('任务没有送达'); expect(receipt.failed).toContain('终端最后几行');
+  expect(receipt.failed).not.toContain('SILENT-TASK-TEXT');
+  const task = await page.evaluate((i) => config.mainSession.tasks.findLast((t) => t.colId === i), child);
+  expect(task.status).toBe('failed'); expect(task.receipt.source).toBe('startup'); expect(task.instructionSent).toBe(false);
+  // the terminal got nothing: not on the screen the tty would echo it to, not in a prompt file
+  await page.waitForTimeout(3000);
+  expect(await replay(child)).not.toContain('SILENT-TASK-TEXT');
+  expect(capturedPrompts().filter((p) => p.includes('SILENT-TASK-TEXT'))).toHaveLength(0);
+  expect(await page.evaluate(() => JSON.stringify(config.mainSession.tasks) + JSON.stringify(config.mainSession.pending))).not.toContain('已结束，未提交回执');
+  await page.evaluate((i) => { config.mainSession.pending = config.mainSession.pending.filter((p) => p.colId !== i); config.mainSession.inflight = config.mainSession.inflight.filter((p) => p.colId !== i); archiveColumn(columns.find((c) => c.id === i)); }, child);
+});
+
 test("Claude's folder-trust menu starts on \"No, exit\": answer can walk the cursor down and press Enter, and the task then goes in", async () => {
   const STAND_IN = FAKE.replace(/"/g, '');
   await run(mainId, `clear; node "${CLI}" new --title "信任菜单" --task "work after the trust menu" --command "${STAND_IN} --claude-trust-menu"`);
