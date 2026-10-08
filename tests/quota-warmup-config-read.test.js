@@ -23,6 +23,8 @@ const endMark = '  if (tudArg) app.testQuotaWarmup = quotaWarmup;';
 const begin = source.indexOf(startMark), end = source.indexOf(endMark);
 assert.ok(begin >= 0 && end > begin, 'main.js still sets up the quota warm-up');
 const region = source.slice(begin + startMark.length, end);
+// The view of config.json, wherever main.js declares it.
+const view = (/\n {2}let seatView = [\s\S]*?\n {2}};\n/.exec(source) || [''])[0];
 
 function warmup(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-warmup-config-'));
@@ -48,7 +50,7 @@ function warmup(t) {
     handleMain: (name, fn) => { handlers[name] = fn; },
     quotaWarmup: null, quotaWarmupRunner: null,
   });
-  vm.runInContext(region, context);
+  vm.runInContext(view + region, context);
   return { tick: () => context.quotaWarmup.tick(), handlers, write, config, parses: () => parses, seatReads: () => seatReads,
     reset: () => { parses = 0; seatReads = 0; } };
 }
