@@ -111,7 +111,7 @@ test('the queue wording for a full battery cap', () => {
 });
 
 // ---- the Captain's queue under a battery cap (same stand-in runtime as queue-dispatch.test.js) ----
-function runtime(t, { onBattery = true, mode = 'auto', cap = 3, base = 30, withBattery = true } = {}) {
+function runtime(t, { onBattery = true, mode = 'auto', cap = 3, base = 30, withBattery = true, extraConfig = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-battery-unit-'));
   const savedCap = M.MAX_ACTIVE;
   t.after(() => { fs.rmSync(root, { recursive: true, force: true }); M.MAX_ACTIVE = savedCap; });
@@ -121,7 +121,7 @@ function runtime(t, { onBattery = true, mode = 'auto', cap = 3, base = 30, withB
   const h = { sent: [] };
   const shared = Battery.create();
   shared.set({ onBattery, mode, cap });
-  const config = { mainSession: state, folders: [], concurrencyCap: base };
+  const config = { mainSession: state, folders: [], concurrencyCap: base, ...extraConfig };
   const window = {
     MainCore: M, BoardCore: B, BatteryCore: withBattery ? { ...Battery, shared } : undefined,
     QuotaCore: { commandQuota: () => ({ out: false }), quotaFallback: (_s, cmd) => ({ action: 'open', cmd }) },
@@ -138,7 +138,7 @@ function runtime(t, { onBattery = true, mode = 'auto', cap = 3, base = 30, withB
   M.MAX_ACTIVE = Battery.effectiveCap(base, shared.snapshot()).cap;   // what renderer.js does at load
   window.MainSession.init({
     config, columns: () => columns, terms: new Map(),
-    saveConfig() {}, flushConfig() {}, columnLabel: (c) => c.id, userComposing: () => false,
+    saveConfig() {}, flushConfig() { h.flushed = (h.flushed || 0) + 1; }, columnLabel: (c) => c.id, userComposing: () => false,
     quotaText: () => 'Claude 额度正常',
     createSession: (col) => { columns.push(col); return col; },
     sendWhenReady: (col, text) => h.sent.push({ col, text }),
@@ -323,4 +323,287 @@ test('the preload exposes the power source and a change callback', () => {
   listeners['power:changed']({}, { onBattery: true });
   listeners['power:changed']({}, undefined);
   assert.deepEqual(seen, [false, true, false]);
+});
+
+// ---- changing the setting from outside the settings box: the phone hub and the Captain's `settings battery` ----
+test('a remote change is strict: only auto/off and a whole 1–10, nothing else, never quietly clamped', () => {
+  assert.deepEqual(Battery.parseChange({ mode: 'off' }), { change: { mode: 'off' } });
+  assert.deepEqual(Battery.parseChange({ cap: 7 }), { change: { cap: 7 } });
+  assert.deepEqual(Battery.parseChange({ cap: '7', mode: 'auto' }), { change: { mode: 'auto', cap: 7 } });
+  assert.deepEqual(Battery.parseChange({ mode: undefined, cap: 10 }), { change: { cap: 10 } });
+  for (const bad of [{ cap: 0 }, { cap: 11 }, { cap: 99 }, { cap: -1 }, { cap: 2.5 }, { cap: 'abc' }, { cap: '' }, { cap: '1e1' }, { cap: null }, { cap: [3] },
+    { mode: 'on' }, { mode: 'OFF' }, { mode: true }, { mode: null }, {}, null, undefined, 'off', [], { cap: 3, extra: 1 }, { concurrencyCap: 5 }]) {
+    assert.ok(Battery.parseChange(bad).error, JSON.stringify(bad));
+    assert.equal(Battery.parseChange(bad).change, undefined, JSON.stringify(bad));
+  }
+});
+
+test('readout and the read-only text say what is set, the power, and what applies now', () => {
+  const on = Battery.readout({ mode: 'auto', cap: 5, onBattery: true }, 30, 2);
+  assert.deepEqual(on, { mode: 'auto', cap: 5, capMin: 1, capMax: 10, onBattery: true, active: true, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 5, limited: true, working: 2 });
+  const text = Battery.settingsText(on);
+  assert.match(text, /电池模式：自动/);
+  assert.match(text, /电池并发上限：5（可设 1–10）/);
+  assert.match(text, /现在供电：电池/);
+  assert.match(text, /现在生效：电池供电，同时最多开 5 个会话（设置上限 30）/);
+  assert.match(text, /现在 2 个在干活/);
+  const off = Battery.readout({ mode: 'off', cap: 5, onBattery: true }, 30);
+  assert.equal(off.active, false);
+  assert.equal(off.effectiveCap, 30);
+  assert.equal('working' in off, false);
+  assert.match(Battery.settingsText(off), /电池模式：关（不限制）[\s\S]*现在不生效[\s\S]*现在生效：不限制，同时最多开 30 个会话/);
+  assert.equal(Battery.readout({ mode: 'auto', cap: 5, onBattery: false }, 30).active, false);
+  // Junk in the saved config reads as the defaults.
+  assert.deepEqual(Battery.readout({ mode: 'x', cap: 'y' }, undefined), { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: false, active: false, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 30, limited: false });
+});
+
+test('settings battery: no flags only reads; nothing is written, nothing re-dispatched', async (t) => {
+  const h = runtime(t);
+  h.busy(2);
+  const captain = (message) => h.window.MainSession.handle({ action: 'main-settings', op: 'battery', input: {}, ...message }, h.captain);
+  const res = await captain({});
+  assert.equal(res.done, true);
+  assert.doesNotMatch(res.result, /已生效/);
+  assert.match(res.result, /电池模式：自动[\s\S]*电池并发上限：3[\s\S]*现在供电：电池[\s\S]*同时最多开 3 个会话[\s\S]*现在 2 个在干活/);
+  assert.equal(h.flushed || 0, 0);
+  assert.equal(h.config.batteryMode, undefined);
+  assert.equal(h.config.batteryConcurrency, undefined);
+});
+
+test('settings battery --cap / --mode takes effect at once: live cap, config written, waiting work opens by the new rule', async (t) => {
+  const h = runtime(t);
+  h.busy(3);
+  for (let i = 0; i < 3; i++) await h.assign(h.add());
+  assert.equal(h.state.waitlist.length, 3);
+  assert.equal(M.MAX_ACTIVE, 3);
+  const set = (input) => h.window.MainSession.handle({ action: 'main-settings', op: 'battery', input }, h.captain);
+
+  // cap 4: one more slot; exactly one waiting task is admitted, the other two keep waiting.
+  const raised = await set({ cap: 4 });
+  assert.match(raised.result, /^已生效并写入设置：\n[\s\S]*电池并发上限：4[\s\S]*同时最多开 4 个会话/);
+  await tick(); await tick();
+  assert.equal(M.MAX_ACTIVE, 4);
+  assert.equal(h.state.waitlist.length, 2);
+  assert.equal(h.config.batteryConcurrency, 4);
+  assert.equal(h.config.batteryMode, undefined);   // only what was asked for is written
+  assert.equal(h.flushed, 1);                       // written at once, not left for the 150 ms timer
+  assert.deepEqual(h.shared.snapshot(), { onBattery: true, mode: 'auto', cap: 4, active: true, boost: false, boostUntil: 0 });
+
+  // lowering never stops what is working; the same cap again changes nothing.
+  await set({ cap: 2 });
+  await tick(); await tick();
+  assert.equal(M.MAX_ACTIVE, 2);
+  assert.equal(h.columns.filter((c) => c.captainCrew).length, 4);   // 3 busy + the one admitted at cap 4
+  assert.equal(h.state.waitlist.length, 2);
+  await set({ cap: 2 });
+  assert.equal(M.MAX_ACTIVE, 2);
+
+  // mode off: unlimited, everything waiting opens, and the saved cap survives for later.
+  const lifted = await set({ mode: 'off' });
+  assert.match(lifted.result, /电池模式：关（不限制）[\s\S]*电池并发上限：2/);
+  await tick(); await tick();
+  assert.equal(M.MAX_ACTIVE, 30);
+  assert.equal(h.state.waitlist.length, 0);
+  assert.equal(h.config.batteryMode, 'off');
+  assert.equal(h.config.batteryConcurrency, 2);
+
+  // back to auto with a new cap in one go.
+  await set({ mode: 'auto', cap: 1 });
+  assert.equal(M.MAX_ACTIVE, 1);
+  assert.deepEqual([h.config.batteryMode, h.config.batteryConcurrency], ['auto', 1]);
+  // Queue rule at the new cap: new work waits while 4+ are working.
+  await h.assign(h.add());
+  assert.equal(h.state.waitlist.length, 1);
+});
+
+test('settings battery refuses bad input and leaves everything as it was', async (t) => {
+  const h = runtime(t);
+  h.busy(3);
+  await h.assign(h.add());
+  const before = JSON.stringify([h.shared.snapshot(), h.config, M.MAX_ACTIVE]);
+  const set = (input, op = 'battery') => h.window.MainSession.handle({ action: 'main-settings', op, input }, h.captain);
+  await assert.rejects(set({ cap: 99 }), /cap 要是 1–10/);
+  await assert.rejects(set({ cap: 'x' }), /cap 要是 1–10/);
+  await assert.rejects(set({ mode: 'maybe' }), /mode 只能是 auto/);
+  await assert.rejects(set({ concurrencyCap: 5 }), /不认识的项/);
+  await assert.rejects(set({}, 'sound'), /目前只有 battery/);
+  assert.equal(JSON.stringify([h.shared.snapshot(), h.config, M.MAX_ACTIVE]), before);
+  assert.equal(h.flushed || 0, 0);
+  assert.equal(h.state.waitlist.length, 1);
+});
+
+test('without BatteryCore (an old page) there is no battery setting to read or change', async (t) => {
+  const h = runtime(t, { withBattery: false });
+  assert.equal(h.window.MainSession.batteryReadout(), null);
+  assert.throws(() => h.window.MainSession.setBattery({ cap: 2 }), /没有电池模式/);
+  await assert.rejects(h.window.MainSession.handle({ action: 'main-settings', op: 'battery', input: {} }, h.captain), /没有电池模式/);
+});
+
+test('the Captain briefing lists settings battery once, the board CLI help documents it, and the page serves the phone ops', () => {
+  for (const platform of ['darwin', 'win32']) {
+    const brief = M.instructions(platform);
+    assert.equal(brief.split('settings battery').length - 1, 1, platform);
+    assert.match(brief, /settings battery \[--boost on\|off \[--for 2h\|--until 23:59\]\] \[--mode off\|auto\] \[--cap 1-10\]/);
+    assert.match(brief, /用户说「强度拉满」就 --boost on/);
+    assert.ok((brief + M.SAVER_RESUME).length <= M.BRIEFING_LIMIT, platform);
+  }
+  const cli = fs.readFileSync(path.join(__dirname, '..', 'board-cli.js'), 'utf8');
+  assert.match(cli, /settings battery \[--boost on\|off \[--for 90m\|2h \| --until 23:59\]\] \[--mode off\|auto\] \[--cap 1-10\]/);
+  const renderer = fs.readFileSync(path.join(__dirname, '..', 'renderer.js'), 'utf8');
+  assert.match(renderer, /op === 'battery'[\s\S]*MainSession\.batteryReadout\(\)/);
+  assert.match(renderer, /op === 'battery-set'[\s\S]*MainSession\.setBattery\(input\)/);
+  const main = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
+  assert.match(main, /'main-quota', 'main-settings'/);
+  assert.match(main, /getBattery: \(\) => requestMobile\('battery'\)/);
+  assert.match(main, /setBattery: \(input\) => requestMobile\('battery-set', input\)/);
+});
+
+// ---- 临时拉满: the Captain lifts the battery limit for a while; the battery mode itself stays on ----
+test('boost lifts only the battery limit; plugging in, 不限制 and the end time end it', () => {
+  const sh = Battery.create();
+  sh.set({ onBattery: true, mode: 'auto', cap: 2 });
+  assert.deepEqual(Battery.effectiveCap(30, sh.snapshot()), { cap: 2, limited: true });
+  sh.set({ boost: true });
+  assert.deepEqual(sh.snapshot(), { onBattery: true, mode: 'auto', cap: 2, active: true, boost: true, boostUntil: 0 });
+  assert.deepEqual(Battery.effectiveCap(30, sh.snapshot()), { cap: 30, limited: false });
+  // The settings cap still rules: boost opens the battery limit, not past what the settings allow.
+  assert.deepEqual(Battery.effectiveCap(5, sh.snapshot()), { cap: 5, limited: false });
+  // Plugging in ends it, and it does not come back by unplugging again.
+  sh.set({ onBattery: false });
+  assert.equal(sh.snapshot().boost, false);
+  sh.set({ onBattery: true });
+  assert.deepEqual(Battery.effectiveCap(30, sh.snapshot()), { cap: 2, limited: true });
+  // 不限制 ends it too; a boost asked for while nothing limits is not kept.
+  sh.set({ boost: true }); sh.set({ mode: 'off' });
+  assert.equal(sh.snapshot().boost, false);
+  sh.set({ boost: true });
+  assert.equal(sh.snapshot().boost, false);
+  // End time: still on before it, off after, and the listeners hear about it once.
+  sh.set({ mode: 'auto' });
+  const heard = [];
+  sh.onChange((snap) => heard.push(snap.boost));
+  sh.set({ boost: true, boostUntil: 5000 });
+  assert.equal(sh.expireBoost(4999), false);
+  assert.equal(sh.snapshot().boost, true);
+  assert.equal(sh.expireBoost(5000), true);
+  assert.equal(sh.expireBoost(9000), false);
+  assert.deepEqual(heard, [true, false]);
+  assert.equal(Battery.boostLive({ boost: true, boostUntil: 5000 }, 4999), true);
+  assert.equal(Battery.boostLive({ boost: true, boostUntil: 5000 }, 5000), false);
+  assert.equal(Battery.boostLive({ boost: true }, 1e15), true);
+  assert.equal(Battery.boostLive({ boost: false }, 0), false);
+});
+
+test('boost in a remote change: on/off only, minutes only with on, 1–2880', () => {
+  assert.deepEqual(Battery.parseChange({ boost: true }), { change: { boost: true } });
+  assert.deepEqual(Battery.parseChange({ boost: true, boostMinutes: 120 }), { change: { boost: true, boostMinutes: 120 } });
+  assert.deepEqual(Battery.parseChange({ boost: false }), { change: { boost: false } });
+  for (const bad of [{ boost: 'on' }, { boost: 1 }, { boost: null }, { boostMinutes: 30 }, { boost: false, boostMinutes: 30 }, { boost: true, boostMinutes: 0 },
+    { boost: true, boostMinutes: 2881 }, { boost: true, boostMinutes: 1.5 }, { boost: true, boostMinutes: '60' }]) {
+    assert.ok(Battery.parseChange(bad).error, JSON.stringify(bad));
+  }
+  const until = Date.now() + 90 * 60000;
+  const view = Battery.readout({ mode: 'auto', cap: 2, onBattery: true, boost: true, boostUntil: until }, 30, 1);
+  assert.deepEqual([view.boost, view.boostUntil, view.effectiveCap, view.limited, view.active], [true, until, 30, false, true]);
+  assert.match(Battery.settingsText(view), /临时拉满：开（到 \d\d:\d\d），不受电池上限限制；settings battery --boost off 取消/);
+  assert.match(Battery.settingsText(view), /同时最多开 30 个会话（设置上限 30），已临时拉满/);
+  assert.match(Battery.settingsText(Battery.readout({ mode: 'auto', cap: 2, onBattery: true }, 30)), /临时拉满：关（用户要拉满强度时 settings battery --boost on/);
+  // A boost left in the saved state while plugged in or 不限制 is not reported.
+  assert.equal(Battery.readout({ mode: 'auto', cap: 2, onBattery: false, boost: true }, 30).boost, false);
+  assert.equal(Battery.readout({ mode: 'off', cap: 2, onBattery: true, boost: true }, 30).boost, false);
+  assert.match(Battery.statusLine({ mode: 'auto', cap: 2, onBattery: true, boost: true, boostUntil: 0 }, 30, 4), /电池模式：已临时拉满（直到取消或接电源），同时最多开 30 个会话（设置上限 30），现在 4 个在干活；接电源、到时间或 settings battery --boost off 后恢复省电上限 2/);
+  assert.match(Battery.describe({ mode: 'auto', cap: 2, onBattery: true, boost: true, boostUntil: until }, 30).join('\n'), /已临时拉满（到 \d\d:\d\d）[\s\S]*同时最多开 30 个会话/);
+  assert.match(Battery.statusLine({ mode: 'auto', cap: 2, onBattery: true }, 30, 4), /^电池模式：开（电池供电），同时最多开 2 个会话/);
+});
+
+test('settings battery --boost on opens waiting work at once, off puts the battery limit back, nothing running is stopped', async (t) => {
+  const h = runtime(t);
+  h.busy(3);
+  for (let i = 0; i < 3; i++) await h.assign(h.add());
+  assert.deepEqual([M.MAX_ACTIVE, h.state.waitlist.length], [3, 3]);
+  const set = (input) => h.window.MainSession.handle({ action: 'main-settings', op: 'battery', input }, h.captain);
+  const before = Date.now();
+  const on = await set({ boost: true, boostMinutes: 120 });
+  assert.match(on.result, /^已生效并写入设置：\n[\s\S]*临时拉满：开（到 \d\d:\d\d）/);
+  await tick(); await tick();
+  assert.equal(M.MAX_ACTIVE, 30);
+  assert.equal(h.state.waitlist.length, 0);                              // every waiting task opened
+  assert.equal(h.columns.filter((c) => c.captainCrew).length, 6);
+  const until = h.shared.snapshot().boostUntil;
+  assert.ok(until >= before + 120 * 60000 && until <= Date.now() + 120 * 60000);
+  // Written at once; the battery mode and its limit are exactly as they were.
+  assert.deepEqual({ ...h.config.batteryBoost }, { until });
+  assert.equal(h.config.batteryMode, undefined);
+  assert.equal(h.config.batteryConcurrency, undefined);
+  assert.equal(h.flushed, 1);
+  assert.equal(h.window.MainSession.batteryReadout().boost, true);
+  // The Captain's own lines say so.
+  assert.match((await h.window.MainSession.handle({ action: 'main-ledger' }, h.captain)).result, /电池模式：已临时拉满（到 \d\d:\d\d），同时最多开 30 个会话/);
+  assert.match((await h.window.MainSession.handle({ action: 'main-quota' }, h.captain)).result, /电池模式：已临时拉满/);
+  // Off: the battery limit is back, running sessions stay, new work waits again.
+  const off = await set({ boost: false });
+  assert.match(off.result, /临时拉满：关/);
+  await tick(); await tick();
+  assert.equal(M.MAX_ACTIVE, 3);
+  assert.equal(h.columns.filter((c) => c.captainCrew).length, 6);
+  assert.equal(h.config.batteryBoost, undefined);
+  await h.assign(h.add());
+  assert.equal(h.state.waitlist.length, 1);
+});
+
+test('boost ends by itself: plugging in, the end time, and a restart that finds it already over', async (t) => {
+  const h = runtime(t);
+  h.busy(3);
+  const set = (input) => h.window.MainSession.handle({ action: 'main-settings', op: 'battery', input }, h.captain);
+  await set({ boost: true });
+  assert.deepEqual({ ...h.config.batteryBoost }, { until: 0 });
+  await h.assign(h.add());
+  assert.equal(h.state.waitlist.length, 0);
+  h.shared.set({ onBattery: false });                                     // plug in
+  await tick(); await tick();
+  assert.equal(h.config.batteryBoost, undefined);
+  h.shared.set({ onBattery: true });                                      // unplug: the boost does not come back
+  await tick(); await tick();
+  assert.equal(M.MAX_ACTIVE, 3);
+  // End time reached: the next read drops it and the limit is back.
+  await set({ boost: true, boostMinutes: 1 });
+  assert.equal(M.MAX_ACTIVE, 30);
+  h.shared.set({ boostUntil: Date.now() - 1000 });                       // the end time passes
+  assert.equal(h.window.MainSession.batteryReadout().boost, false);
+  await tick(); await tick();
+  assert.equal(M.MAX_ACTIVE, 3);
+  assert.equal(h.config.batteryBoost, undefined);
+});
+
+test('a boost kept in the config comes back after a restart while on battery, and is dropped when plugged in or past its time', async (t) => {
+  const live = runtime(t, { extraConfig: { batteryBoost: { until: Date.now() + 3600000 } } });
+  assert.equal(live.shared.snapshot().boost, true);
+  assert.equal(M.MAX_ACTIVE, 30);
+  const forever = runtime(t, { extraConfig: { batteryBoost: { until: 0 } } });
+  assert.equal(forever.shared.snapshot().boost, true);
+  const over = runtime(t, { extraConfig: { batteryBoost: { until: Date.now() - 1000 } } });
+  assert.equal(over.shared.snapshot().boost, false);
+  assert.equal(M.MAX_ACTIVE, 3);
+  assert.equal(over.config.batteryBoost, undefined);
+  const plugged = runtime(t, { onBattery: false, extraConfig: { batteryBoost: { until: 0 } } });
+  assert.equal(plugged.shared.snapshot().boost, false);
+  assert.equal(plugged.config.batteryBoost, undefined);
+  const junk = runtime(t, { extraConfig: { batteryBoost: { until: 'soon' } } });
+  assert.equal(junk.shared.snapshot().boost, false);
+});
+
+test('boost is refused when nothing is limiting, and a bad boost changes nothing', async (t) => {
+  const set = (h, input) => h.window.MainSession.handle({ action: 'main-settings', op: 'battery', input }, h.captain);
+  const plugged = runtime(t, { onBattery: false });
+  await assert.rejects(set(plugged, { boost: true }), /现在不需要拉满：现在接着电源/);
+  const off = runtime(t, { mode: 'off' });
+  await assert.rejects(set(off, { boost: true }), /现在不需要拉满：电池模式已关/);
+  // Turning the mode back on in the same command is fine.
+  await set(off, { mode: 'auto', boost: true });
+  assert.equal(off.shared.snapshot().boost, true);
+  const h = runtime(t);
+  const snapshot = JSON.stringify([h.shared.snapshot(), h.config, M.MAX_ACTIVE]);
+  for (const bad of [{ boost: 'on' }, { boostMinutes: 30 }, { boost: true, boostMinutes: 99999 }]) await assert.rejects(set(h, bad), /boost|时长|到期/);
+  assert.equal(JSON.stringify([h.shared.snapshot(), h.config, M.MAX_ACTIVE]), snapshot);
+  assert.equal(h.flushed || 0, 0);
 });

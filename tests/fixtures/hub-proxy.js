@@ -10,6 +10,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const FilePreview = require('../../file-preview-core');
+const BatteryCore = require('../../battery-core');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
@@ -35,7 +36,7 @@ function readJson(req) {
 // todos: this machine's answer to api/todos, as the phone view mobile-web.js sends
 // (live items plus bare deletion marks); null is an older build without the route.
 // files: { home, … } for file-preview-core, the real rules over a stand-in home folder; null is a build without api/file.
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null }) {
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null }) {
   // plainCookie: WebKit refuses Secure cookies over http, even on localhost.
   const base = `/${id}/`, cookieName = plainCookie ? `agentdeck_${id}` : `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
@@ -49,6 +50,8 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     // The Captain's accounts (null: an older build without api/relay). A switch
     // stays "switching" until the test ends it with finishRelay, like the desktop
     // which answers at once and reports the outcome later.
+    // 电池模式 (null: an older build without api/battery, which answers 404). The real rules come from battery-core.
+    battery: battery ? { mode: 'auto', cap: 3, onBattery: false, baseCap: 30, working: 2, refuse: '', ...battery } : null, batteryWrites: [],
     relay: relay ? { currentId: relay.currentId, seats: relay.seats.map((seat) => ({ ...seat })), job: null, refuse: '' } : null, switches: [],
     finishRelay(ok, error = '') {
       const job = machine.relay.job;
@@ -137,6 +140,19 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
         ...(machine.attention || []).flatMap((item) => [item.title, item.ask, item.detail, ...(item.files || [])])];
       const result = await FilePreview.readPreview(body.path, { ...machine.files, texts, offset: body.offset || 0 });
       return result.ok ? json(res, 200, result) : json(res, result.code === 'invalid' ? 400 : result.code === 'missing' ? 404 : 403, { error: 'refused', code: result.code });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/battery' && machine.battery) return json(res, 200, BatteryCore.readout(machine.battery, machine.battery.baseCap, machine.battery.working));
+    if (req.method === 'POST' && url.pathname === '/api/battery' && machine.battery) {
+      const body = await readJson(req);
+      machine.batteryWrites.push(body);
+      if (machine.battery.refuse) return json(res, 400, { error: machine.battery.refuse });
+      const parsed = BatteryCore.parseChange(body);
+      if (parsed.error) return json(res, 400, { error: parsed.error });
+      const { boost, boostMinutes, ...plain } = parsed.change;
+      Object.assign(machine.battery, plain);
+      if (boost === true && !BatteryCore.isActive(machine.battery.mode, machine.battery.onBattery)) return json(res, 400, { error: '现在不需要拉满：本来就不限制。' });
+      if (boost !== undefined) { machine.battery.boost = boost; machine.battery.boostUntil = boost && boostMinutes ? Date.now() + boostMinutes * 60000 : 0; }
+      return json(res, 200, BatteryCore.readout(machine.battery, machine.battery.baseCap, machine.battery.working));
     }
     if (req.method === 'GET' && url.pathname === '/api/relay' && machine.relay) return json(res, 200, relayState());
     if (req.method === 'POST' && url.pathname === '/api/relay' && machine.relay) {
@@ -305,6 +321,12 @@ function withRelay() {
   return [{ ...mac, relay: relayFixture('us') }, { ...win, relay: relayFixture('chatgpt') }];
 }
 
+// Mac has the battery setting (on battery, limit 3, 2 working); Windows is an older build without api/battery.
+function withBattery(extra = {}) {
+  const [mac, win] = defaults();
+  return [{ ...mac, battery: { onBattery: true, cap: 3, working: 2, ...extra } }, win];
+}
+
 async function startHub({ port = 0, machines = defaults(), directory = HUB, plainCookie = false } = {}) {
   const fakes = {};
   for (const options of machines) fakes[options.id] = await fakeMachine({ ...options, plainCookie });
@@ -334,7 +356,7 @@ async function startHub({ port = 0, machines = defaults(), directory = HUB, plai
     async close() { await close(proxy); for (const fake of Object.values(fakes)) await fake.close(); } };
 }
 
-module.exports = { startHub, fakeMachine, HUB_HEADERS, relayFixture, withRelay, attentionFixture };
+module.exports = { startHub, fakeMachine, HUB_HEADERS, relayFixture, withRelay, withBattery, attentionFixture };
 
 // node tests/fixtures/hub-proxy.js → a local hub to click through by hand.
 if (require.main === module) startHub({ port: Number(process.env.PORT) || 0, machines: withRelay() }).then((hub) => {

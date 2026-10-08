@@ -3538,6 +3538,10 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
       result = AttentionUI.mobileView();
     } else if (op === 'attention-write') {
       result = await AttentionUI.mobileWrite(input);
+    } else if (op === 'battery') {
+      result = MainSession.batteryReadout();
+    } else if (op === 'battery-set') {
+      result = MainSession.setBattery(input);
     } else if (op === 'relay') {
       result = ClaudeSeats.mobileState();
     } else if (op === 'relay-switch') {
@@ -3706,6 +3710,7 @@ document.getElementById('searchClose').innerHTML = ICONS.close;
 document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
+document.getElementById('batteryBoostCancel').innerHTML = ICONS.close;
 const closeNotificationSettings = () => {
   if (!saveNotificationSettings()) showToast('上课时段有一行格式不对，这一项没改；其他设置已保存。');
   flushConfig();
@@ -3740,7 +3745,8 @@ function renderBatteryIndicator() {
   document.querySelectorAll('.battery-indicator').forEach((b) => {
     b.hidden = !snap.active;
     b.title = tip;
-    b.setAttribute('aria-label', '电池模式已启用，点击调整');
+    b.setAttribute('aria-label', snap.boost ? '电池模式已临时拉满，点击调整' : '电池模式已启用，点击调整');
+    b.classList.toggle('boosted', snap.boost === true);
   });
 }
 function openBatterySettings() {

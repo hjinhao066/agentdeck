@@ -559,7 +559,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user', 'main-discuss-receipt', 'main-inbox'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-settings', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user', 'main-discuss-receipt', 'main-inbox'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -974,6 +974,9 @@ app.whenReady().then(async () => {
     // Which account the Captain is on, and moving it to another: the desktop's own manual switch.
     getRelay: () => requestMobile('relay'),
     switchRelay: (input) => requestMobile('relay-switch', input),
+    // 电池模式: the desktop page owns the setting; the phone reads and changes it through the same code as the settings box.
+    getBattery: () => requestMobile('battery'),
+    setBattery: (input) => requestMobile('battery-set', input),
     // 待我处理: the same list and actions as the desktop page.
     getAttention: () => requestMobile('attention'),
     writeAttention: (input) => requestMobile('attention-write', input),
@@ -1472,7 +1475,7 @@ app.whenReady().then(async () => {
       try { result = (typeof result === 'string' ? result + '\n' : '') + await pending.notifyPromise; }
       catch (err) { result = (typeof result === 'string' ? result + '\n' : '') + '本机提醒没发出：' + err.message; }
     }
-    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read' || action === 'main-inbox';
+    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-settings' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read' || action === 'main-inbox';
     pendingBoardCommands.delete(requestId);
     if (action === 'seat-auth-alert' && pending?.command.nativeSeatAuth === true) {
       if (!error) {

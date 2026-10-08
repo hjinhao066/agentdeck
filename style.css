@@ -3726,6 +3726,11 @@ header.tbv-ghost { padding: 0 12px 0 4px; }
 /* 不限制: the battery count does not apply, so it reads as greyed out. */
 #batteryConcurrency:disabled { opacity: .45; cursor: not-allowed; }
 .battery-indicator svg { width: 16px; height: 16px; }
+.battery-indicator.boosted { color: var(--accent, var(--text)); }
+/* 临时拉满: shown in the settings box only while it is on; the × takes it back. */
+.boost-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 8px 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--hairline); background: var(--pill-bg); font-size: 12.5px; line-height: 1.5; }
+.boost-row[hidden] { display: none; }
+.boost-row .rail-btn svg { width: 14px; height: 14px; }
 .battery-indicator:hover, .battery-indicator:focus-visible { background: var(--pill-bg); outline: 1px solid var(--hairline); }
 /* On battery: also hold the status-light halos and cables that the calm-motion switch does not cover. */
 :root[data-power="battery"] :is(.dot.working, .cn-dot.working, .dot.input, .cn-dot.input)::after,

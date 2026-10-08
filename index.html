@@ -64,6 +64,10 @@
     <label for="batteryConcurrency">省电时最多同时开几个会话（1–10，默认 3）</label>
     <input id="batteryConcurrency" type="number" min="1" max="10" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="batteryModeNote" />
     <p id="batteryModeNote" class="hint">没插电时多的新任务先排队，已在跑的不打断；插上电立刻恢复。</p>
+    <div id="batteryBoostRow" class="boost-row" hidden role="status">
+      <span id="batteryBoostText"></span>
+      <button type="button" class="rail-btn" id="batteryBoostCancel" title="取消临时拉满，恢复省电上限" aria-label="取消临时拉满，恢复省电上限"></button>
+    </div>
     <h3>重启后续上</h3>
     <label class="sd-check"><input id="resumeOnRestart" type="checkbox" />重启后自动续上在跑的队员</label>
     <p class="hint">退出前记下在干活的队员，并在时限内退出。能续上原对话的用各家自己的 resume；续不上的新开会话，并重发卡片任务和最后回执。</p>
