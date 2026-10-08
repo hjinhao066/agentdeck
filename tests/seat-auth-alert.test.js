@@ -86,6 +86,19 @@ test('login commands derive default and custom seats safely on macOS and Windows
   assert.equal(loginCommand('Claude', { configDir: 'c:\\users\\test\\.claude' }, 'C:\\Users\\Test', 'win32'), 'Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; claude auth login');
   assert.equal(loginCommand('Codex', { configDir: '~/custom-codex' }, '/home/test', 'darwin'), 'CODEX_HOME=~/custom-codex codex login');
 });
+test('Claude login commands pre-fill the seat email; Codex and invalid addresses are left alone', () => {
+  const seat = { ...US, email: 'us@example.com' };
+  assert.equal(loginCommand('Claude', seat, '/home/test', 'darwin'), 'CLAUDE_CONFIG_DIR=~/.claude-us claude auth login --email us@example.com');
+  assert.equal(loginCommand('Claude', { configDir: '~/.claude', email: 'cn@example.com' }, '/home/test', 'darwin'), 'env -u CLAUDE_CONFIG_DIR claude auth login --email cn@example.com');
+  assert.equal(loginCommand('Claude', { configDir: '~/.claude-us2', email: 'us2@example.com' }, 'C:\\Users\\Test', 'win32'), "Remove-Item Env:CLAUDE_CONFIG_DIR -ErrorAction SilentlyContinue; $env:CLAUDE_CONFIG_DIR='C:\\Users\\Test\\.claude-us2'; claude auth login --email us2@example.com");
+  assert.equal(loginCommand('Claude', { ...US, email: 'x; rm -rf ~@a.com' }, '/home/test', 'darwin'), 'CLAUDE_CONFIG_DIR=~/.claude-us claude auth login');
+  assert.equal(loginCommand('Codex', { configDir: '~/.codex', email: 'a@b.com' }, '/home/test', 'darwin'), 'env -u CODEX_HOME codex login');
+  const h = harness(), signed = (status, at) => h.monitor.observe(seat, { provider: 'Claude', at, authStatus: status });
+  signed('logged-in', NOW); signed('logged-out', NOW + 1); signed('logged-out', NOW + CONFIRM_MS + 1);
+  assert.ok(h.alerts[0].message.includes('claude auth login --email us@example.com'));
+  assert.ok(h.alerts[0].message.includes('授权页右上角的账号要是 us@example.com'));
+  assert.equal(h.monitor.samples()[0].loginCommand, 'CLAUDE_CONFIG_DIR=~/.claude-us claude auth login --email us@example.com');
+});
 test('authenticated failure wording triggers a check while ordinary failures do not', () => {
   for (const text of ['Not logged in', 'US seat: Not logged in. Please run /login', 'Claude US 未登录，请先登录', 'Error: 401 Unauthorized']) assert.equal(authFailure(text), true, text);
   for (const text of ['Network timeout', 'usage query failed', 'rate limit reached', 'Unknown provider', undefined]) assert.equal(authFailure(text), false, text);

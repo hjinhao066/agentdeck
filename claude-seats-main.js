@@ -9,6 +9,7 @@ const { saveChat } = require('./side-main');
 const { accountIdentity } = require('./quota-codex');
 const os = require('os');
 const Handoff = require('./relay-handoff-core');
+const { loginCommand } = require('./seat-auth-alert');
 
 function directory(seat, home) {
   const raw = seat.configDir.replace(/^~(?=$|[\\/])/, home);
@@ -170,16 +171,56 @@ function credentialStatus(service, execFileImpl = execFile) {
       } catch (_) { resolve({ present: false, loginReason: '此席位凭据格式无效' }); }
     }));
 }
-async function seatInfo(seat, home, platform = process.platform, keychain = credentialStatus) {
+// Who a seat directory is actually signed in to, as `claude auth status` reports it. Read only:
+// the CLI exits 1 when signed out but still prints its JSON. Null when it cannot answer.
+function readAuthStatus(seat, home, env, execFileImpl = execFile) {
+  return new Promise((resolve) => {
+    let childEnv;
+    try {
+      childEnv = seatEnvironment(env, seat, home);
+      for (const key of Object.keys(childEnv)) if (key.startsWith('AGENTDECK_')) delete childEnv[key];
+      for (const key of ['ELECTRON_RUN_AS_NODE', 'CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT']) delete childEnv[key];
+    } catch (_) { return resolve(null); }
+    try {
+      execFileImpl(process.platform === 'win32' ? 'claude.exe' : 'claude', ['auth', 'status', '--json'], {
+        env: childEnv, shell: false, windowsHide: true, encoding: 'utf8', timeout: 15000, maxBuffer: 64 * 1024,
+      }, (_error, stdout) => {
+        try {
+          const value = JSON.parse(stdout);
+          resolve(typeof value?.loggedIn === 'boolean' ? { loggedIn: value.loggedIn, email: value.loggedIn ? S.cleanEmail(value.email) : '' } : null);
+        } catch (_) { resolve(null); }
+      });
+    } catch (_) { resolve(null); }
+  });
+}
+// One CLI run per seat per ten minutes (or per sign-in change), shared by concurrent readers.
+const AUTH_STATUS_MS = 10 * 60_000;
+function authStatusCache(read, now = Date.now) {
+  const cache = new Map();
+  return (seat, key, fresh) => {
+    const hit = cache.get(seat.id);
+    if (hit && hit.key === key && !fresh && now() - hit.at < AUTH_STATUS_MS) return hit.value;
+    const value = Promise.resolve(read(seat)).catch(() => null);
+    cache.set(seat.id, { key, at: now(), value });
+    return value;
+  };
+}
+async function seatInfo(seat, home, platform = process.platform, keychain = credentialStatus, authStatus = null, fresh = false) {
   const loc = credentialLocation(seat, home);
-  let email = '', accountKey = '';
+  let email = '', rawEmail = '', accountKey = '';
   try {
-    if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) email = S.maskEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
+    if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) rawEmail = S.cleanEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
+    email = S.maskEmail(rawEmail);
     accountKey = usageAccountKey(loc) || '';
   } catch (_) {}
   const status = platform === 'darwin' ? await keychain(loc.keychainService) : fs.existsSync(loc.credentialsPath);
   const present = typeof status === 'object' ? status.present : !!status;
-  return { ...seat, configDir: loc.dir, maskedEmail: email, accountKey, onboardingComplete: onboardingComplete(seat, home),
+  // The CLI's answer wins; without it, the account recorded in the seat's own metadata.
+  const auth = present && authStatus ? await authStatus(seat, [loc.dir, rawEmail, accountKey].join('|'), fresh) : null;
+  const loginEmail = !present ? '' : auth ? auth.email : rawEmail;
+  return { ...seat, configDir: loc.dir, maskedEmail: email, loginEmail, accountKey, onboardingComplete: onboardingComplete(seat, home),
+    // Without --email: the settings row adds the address typed there.
+    loginBase: loginCommand('Claude', { ...seat, email: '' }, home, platform === 'test' ? process.platform : platform),
     credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present,
     loginReason: typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
     authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
@@ -289,10 +330,11 @@ function checkpoint(home, userData, payload, options) {
   if (!saveChat(path.join(userData, 'chats'), payload.colId, activeChat)) throw new Error('队长对话保存失败，没有Relay');
   return handoff(home, userData, { ...payload, reason: 'relay' }, options).path;
 }
-function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, getColumn, platform = process.platform, onUsageRecorded = () => {}, handoffOptions }) {
-
+function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, getColumn, platform = process.platform, env = null, onUsageRecorded = () => {}, handoffOptions }) {
+  // A test profile never asks the real CLI: its default seat would read the real ~/.claude.
+  const authStatus = env && platform !== 'test' ? authStatusCache((seat) => readAuthStatus(seat, home, env)) : null;
   const find = (id) => { const seat = S.normalize(getSeats()).find((s) => s.id === id); if (!seat) throw new Error('席位不存在'); return seat; };
-  handleMain('seats:list', () => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home, platform))));
+  handleMain('seats:list', (_e, options) => Promise.all(S.normalize(getSeats()).map((s) => seatInfo(s, home, platform, credentialStatus, authStatus, options?.fresh === true))));
   handleMain('seats:validate', (_e, { seats }) => {
     const normalized = S.normalize(seats);
     if (!Array.isArray(seats) || normalized.length !== seats.length) throw new Error('席位列表无效');
@@ -319,4 +361,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialStatus, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialStatus, readAuthStatus, authStatusCache, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };

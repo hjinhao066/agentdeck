@@ -925,7 +925,7 @@ app.whenReady().then(async () => {
   const seatHome = tudArg ? path.join(app.getPath('userData'), 'seats-home') : HOME;
   const seatConfig = () => { try { return JSON.parse(fs.readFileSync(configPath, 'utf8')); } catch (_) { return {}; } };
   let quotaRead = null, quotaReadAt = 0, codexQuotaRead = null, codexQuotaAt = 0, quotaSeatsKey = '';
-  registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, userData: app.getPath('userData'),
+  registerSeatsIpc({ handleMain, home: seatHome, platform: tudArg ? 'test' : process.platform, env: ENV, userData: app.getPath('userData'),
     getSeats: () => seatConfig().claudeSeats, getCaptainId: () => seatConfig().mainSession?.colId,
     getColumn: (id) => seatConfig().columns?.find((c) => c.id === id),
     onUsageRecorded: () => { quotaRead = null; },

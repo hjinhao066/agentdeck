@@ -47,9 +47,12 @@
     b.title = `${label()} · 当前 ${seat.name}${info?.maskedEmail ? ' · ' + info.maskedEmail : ''}`;
     return b;
   }
-  async function refresh() {
+  // fresh: ask each seat's CLI again now instead of using the ten-minute answer.
+  async function refresh(fresh = false) {
     host.flushConfig();
-    seats = await window.deck.claudeSeats();
+    const before = JSON.stringify(seats.map((s) => [s.id, accountCheck(s.id)]));
+    seats = await window.deck.claudeSeats(fresh);
+    if (JSON.stringify(seats.map((s) => [s.id, accountCheck(s.id)])) !== before) window.dispatchEvent(new CustomEvent('claude-seat-accounts'));
     warmups = await window.deck.claudeWarmupStatus();
     await Promise.all(seats.map(async (info) => {
       const configured = host.config.claudeSeats.find((s) => s.id === info.id);
@@ -67,6 +70,26 @@
       b.disabled = switching;
     });
     return seats;
+  }
+  // Signed in, signed in to the wrong account, or not signed in: against the seat's configured email.
+  function accountCheck(seatId) {
+    const info = seats.find((s) => s.id === seatId);
+    return info ? S.accountCheck(host.config.claudeSeats.find((s) => s.id === seatId)?.email, info) : null;
+  }
+  // The seat's login command, pre-filled with the email typed in its row.
+  function loginButton(info, emailInput) {
+    const email = () => S.cleanEmail(emailInput.value);
+    const b = button(host.ICONS.copy, '', async () => {
+      try { await window.deck.clipboardWrite(info.loginBase + (email() ? ' --email ' + email() : '')); }
+      catch (_) { host.showToast('登录命令复制失败，请重试'); return; }
+      b.innerHTML = host.ICONS.check; clearTimeout(b.copiedTimer);
+      b.copiedTimer = setTimeout(() => { b.innerHTML = host.ICONS.copy; }, 1400);
+      host.showToast(`已复制 ${info.name} 的登录命令，在普通终端运行。${email() ? `授权页右上角的账号要是 ${email()}，不是就先在网页里切换账号再授权。` : ''}`);
+    });
+    const label = () => { b.title = `复制登录命令${email() ? `（应登录 ${email()}）` : ''}`; b.setAttribute('aria-label', b.title); };
+    b.classList.add('seat-login-copy'); label();
+    emailInput.addEventListener('input', label);
+    return b;
   }
   function dialog(id, title) {
     let d = document.getElementById(id);
@@ -91,10 +114,15 @@
       const b = node('button', 'seat-choice');
       const icon = node('span', 'seat-account-icon', seat.icon);
       if (seat.id === 'chatgpt') icon.innerHTML = window.AgentInfo.PROVIDER_ICONS.Codex;
-      b.append(icon, node('span', '', `${seat.name}${selected ? ' · 当前' : seat.loggedIn ? '' : seat.loginReason ? ' · 需登录' : ' · 待核实'}`));
+      const check = seat.id === 'chatgpt' ? null : accountCheck(seat.id);
+      const text = node('span', 'seat-choice-text');
+      text.append(node('span', '', `${seat.name}${selected ? ' · 当前' : seat.loggedIn ? '' : seat.loginReason ? ' · 需登录' : ' · 待核实'}`));
+      if (check && check.state !== 'login') text.append(node('span', `seat-account ${check.state}`, check.text));
+      b.append(icon, text);
       b.type = 'button'; b.dataset.seatId = seat.id;
+      if (check) b.dataset.account = check.state;
       b.setAttribute('aria-pressed', String(selected));
-      b.title = seat.id === 'chatgpt' ? `${seat.name} · Codex GPT-6.1 Sol` : `${seat.name} · ${seat.loginReason || seat.authReason || seat.maskedEmail || '已登录'}`;
+      b.title = seat.id === 'chatgpt' ? `${seat.name} · Codex GPT-6.1 Sol` : `${seat.name} · ${seat.loginReason || seat.authReason || check.text}`;
       b.disabled = !seat.loggedIn || selected;
       b.addEventListener('click', async () => { d.close(); await switchSeat(seat.id); });
       d.append(b);
@@ -104,8 +132,8 @@
     d.append(actions);
     d.showModal();
   }
-  async function openSettings() {
-    try { await refresh(); } catch (_) { host.showToast('席位配置读取失败，请检查配置目录'); return; }
+  async function openSettings(fresh = false) {
+    try { await refresh(fresh); } catch (_) { host.showToast('席位配置读取失败，请检查配置目录'); return; }
     const d = dialog('claudeSeatSettings', '设置 · 席位');
     const field = (title, value) => {
       const l = node('label', 'seat-field', title), input = node('input');
@@ -144,20 +172,26 @@
     const fields = host.config.claudeSeats.map((s) => {
       const row = node('section', 'seat-setting-row'), info = seats.find((i) => i.id === s.id);
       row.dataset.seatId = s.id;
-      row.append(node('strong', '', `${s.name} · ${info?.loggedIn ? '已登录' : '未登录'}`));
-      row.title = info?.maskedEmail || '尚未登录';
+      const check = accountCheck(s.id) || { state: 'login', text: '需登录' };
+      row.dataset.account = check.state;
+      const head = node('div', 'seat-setting-head');
+      head.append(node('strong', '', s.name), node('span', `seat-account ${check.state}`, check.text));
       const seatName = field('席位名称', s.name), icon = field('席位图标', s.icon), dir = field('配置目录', s.configDir);
-      row.append(seatName.l, icon.l, dir.l); d.append(row);
-      return { id: s.id, name: seatName.input, icon: icon.input, dir: dir.input };
+      const email = field('应登录邮箱', s.email || '');
+      email.input.type = 'email'; email.input.dataset.seatEmail = s.id; email.input.placeholder = 'name@example.com';
+      if (info?.loginBase) head.append(loginButton(info, email.input));
+      row.append(head, seatName.l, icon.l, dir.l, email.l); d.append(row);
+      return { id: s.id, name: seatName.input, icon: icon.input, dir: dir.input, email: email.input };
     });
     d.append(node('p', 'seat-help', '每个席位只需在普通终端登录一次。共享技能、设置、记忆和对话，登录与额度各自独立。'));
     const actions = node('div', 'seat-dialog-actions');
-    actions.append(button(ROTATE, '刷新登录状态', () => { d.close(); openSettings(); }));
+    actions.append(button(ROTATE, '刷新登录状态', () => { d.close(); openSettings(true); }));
     const save = node('button', 'btn primary', '保存设置'); save.type = 'button';
     save.addEventListener('click', async () => {
       if (enabled && !threshold.input.reportValidity()) return;
+      for (const f of fields) if (f.email.value.trim() && !S.cleanEmail(f.email.value)) { host.showToast('应登录邮箱格式不对'); f.email.focus(); return; }
       try {
-        const updated = await window.deck.validateClaudeSeats(fields.map((f) => ({ id: f.id, name: f.name.value.trim(), icon: f.icon.value.trim(), configDir: f.dir.value.trim() })));
+        const updated = await window.deck.validateClaudeSeats(fields.map((f) => ({ id: f.id, name: f.name.value.trim(), icon: f.icon.value.trim(), configDir: f.dir.value.trim(), email: f.email.value.trim() })));
         host.config.claudeSeats = updated;
         host.config.perpetualCaptain = P.normalizeSettings({ enabled, threshold: Number(threshold.input.value), preferEarlier, order: settings.order });
         host.config.quotaWarmup = window.QuotaWarmupCore.normalizeSettings({ enabled: warmupEnabled });
@@ -505,5 +539,5 @@
     });
     return { started: true, id: job.id };
   }
-  window.ClaudeSeats = { init, mobileState, mobileSwitch, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick };
+  window.ClaudeSeats = { init, mobileState, mobileSwitch, rotationButton, openMenu, openSettings, switchSeat, onTick, refresh, warmupDetail, automaticTick, accountCheck };
 })();

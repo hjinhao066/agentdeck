@@ -5,9 +5,9 @@
 ```json
 {
   "claudeSeats": [
-    { "id": "cn", "name": "CN", "icon": "🇨🇳", "configDir": "~/.claude" },
-    { "id": "us", "name": "US", "icon": "🇺🇸", "configDir": "~/.claude-us" },
-    { "id": "us2", "name": "US2", "icon": "🇺🇸", "configDir": "~/.claude-us2" }
+    { "id": "cn", "name": "CN", "icon": "🇨🇳", "configDir": "~/.claude", "email": "cn@example.com" },
+    { "id": "us", "name": "US", "icon": "🇺🇸", "configDir": "~/.claude-us", "email": "us@example.com" },
+    { "id": "us2", "name": "US2", "icon": "🇺🇸", "configDir": "~/.claude-us2", "email": "us2@example.com" }
   ],
   "activeClaudeSeatId": "cn",
   "captainRelayLabel": "Relay",
@@ -17,15 +17,23 @@
 ```
 
 CN是中国 Google 邮箱的 Claude 订阅，US是美国 Google 邮箱的订阅，US2（美国二号）是第三个独立席位；US 和 US2 同用 🇺🇸，界面同时显示名称区分。
-只在本机读取账号元数据，界面只接收打码邮箱，不接收凭据。本机已用真实 CLI 只读核对，CN 和 US 都已登录 Pro；账号元数据和凭据位置独立。
+只在本机读取账号元数据，界面接收各席位实际登录的邮箱（用来分辨登没登错号），不接收凭据。本机已用真实 CLI 只读核对，CN 和 US 都已登录 Pro；账号元数据和凭据位置独立。
 没有配置时使用上述默认值；旧版只含 cn/us 的配置自动补入 us2，保留自定义名称、目录及活动席位。其他自定义列表保持原样（最多 8 席）；每列的 `claudeSeatId` 与 `claudeConfigDir` 在首次启动时绑定并持久保存。以后改活动席位或席位设置只影响新会话；原队员、恢复会话和重开会话仍用原目录。Relay 只为替换后的队长重新绑定目录，不写登录凭据。
 
+
+## 应登录邮箱与登错号提醒
+
+每个 Claude 席位有一项「应登录邮箱」（`email`，在席位设置里填，只存在本机配置里）。源码不带任何真实邮箱，没填就是空，不做登错号判断；上面示例里的地址只是占位。
+
+实际登录的账号取自该席位环境下的 `claude auth status --json`（清掉继承的认证变量，CN 不设 `CLAUDE_CONFIG_DIR`）。只读：每个席位每 10 分钟最多跑一次，席位账号记录变化（重新登录）时立即重查，席位设置的刷新图标强制重查；CLI 不可用时退回该席位自己的 `.claude.json` 记录。测试配置从不调用真实 CLI。
+
+Relay 面板、席位设置和侧边栏额度行用同一个判断：未登录照旧显示「需登录」；实际邮箱与应登录邮箱不同（不分大小写）时标红，写「登成了 X，应为 Y」，额度行的席位名也变红。席位设置每行有复制登录命令的图标按钮，命令带 `claude auth login --email <应登录邮箱>`（取输入框里当前的地址），复制后提示在授权页确认右上角的账号；掉登录提醒和额度浮层里的登录命令同样带 `--email`。`--email` 只预填登录页，浏览器里已登录的 claude.ai 账号仍可能被沿用，所以要看清授权页右上角。程序从不登出、不替用户换号，也不改任何席位的登录文件。
 
 ## 首次准备（macOS）
 
 ```sh
 node scripts/setup-claude-us.js
-env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_SECURESTORAGE_CONFIG_DIR -u CLAUDE_CODE_HOST_CREDS_FILE -u CLAUDE_CODE_HOST_GATEWAY_LINEAGE CLAUDE_CONFIG_DIR="$HOME/.claude-us" claude auth login
+env -u CLAUDE_CODE_OAUTH_TOKEN -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u CLAUDE_SECURESTORAGE_CONFIG_DIR -u CLAUDE_CODE_HOST_CREDS_FILE -u CLAUDE_CODE_HOST_GATEWAY_LINEAGE CLAUDE_CONFIG_DIR="$HOME/.claude-us" claude auth login --email us@example.com
 ```
 
 US2 首次准备与登录（只操作新目录；本功能不会自动创建或登录真实席位）：
@@ -35,7 +43,7 @@ node scripts/setup-claude-us.js --seat us2
 (
   unset CLAUDE_CONFIG_DIR CLAUDE_CODE_OAUTH_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_SECURESTORAGE_CONFIG_DIR CLAUDE_CODE_HOST_CREDS_FILE CLAUDE_CODE_HOST_GATEWAY_LINEAGE CLAUDECODE CLAUDE_CODE_ENTRYPOINT
   export CLAUDE_CONFIG_DIR="$HOME/.claude-us2"
-  command claude auth login
+  command claude auth login --email us2@example.com
 )
 ```
 
@@ -186,8 +194,8 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第
 
 主进程 `readUsage(seat, home)` 或页面的受限
 `deck.claudeSeatUsage(seatId)` 返回经过白名单过滤的用量。
-`deck.claudeSeats()` 返回配置目录、打码邮箱、不可逆账号指纹、登录凭据存在状态及 usagePath，
-不返回账号原始邮箱或凭据。`claude-seat-changed` 事件的 detail 是 `{seatId}`，
+`deck.claudeSeats(fresh)` 返回配置目录、打码邮箱、实际登录邮箱（`loginEmail`）、不带邮箱的登录命令（`loginBase`）、不可逆账号指纹、登录凭据存在状态及 usagePath，
+不返回凭据。`claude-seat-changed` 事件的 detail 是 `{seatId}`，
 供额度区立即刷新。1.0.0 的 quota-bar 已合入，同一配置的各席位显示独立一行（1.1.x 起额度从顶栏移到侧边栏底部）；无真实数据时显示未知。Relay 不主动发送用量查询。
 
 ### 1.1.1 独立额度刷新

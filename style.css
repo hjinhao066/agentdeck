@@ -3860,3 +3860,14 @@ button.todo-done-toggle:hover { background: var(--icon-hover-bg); color: var(--t
 @media (max-width: 560px) { .todo-quick-hint { display: none; } }
 @media (prefers-reduced-motion: reduce) { .todo-quick { animation: none; } .todo-check svg, .todo-text { transition: none; } }
 :root[data-motion="off"] .todo-quick { animation: none; }
+/* Who each seat is signed in to: muted when right, orange when it needs a login, red when it is the wrong account. */
+.seat-choice-text { display: inline-flex; flex-direction: column; gap: 2px; vertical-align: middle; min-width: 0; }
+.seat-account { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.seat-account.login { color: var(--quota-low); }
+.seat-account.mismatch { color: var(--quota-out); font-weight: 600; }
+.seat-choice[data-account="mismatch"] { border-color: var(--quota-out); }
+.seat-setting-row[data-account="mismatch"] { border-top-color: var(--quota-out); }
+.seat-setting-head { display: flex; align-items: center; gap: 8px; min-height: 32px; }
+.seat-setting-head .seat-account { flex: 1; min-width: 0; }
+.seat-login-copy { margin-left: auto; }
+.quota-item[data-account="mismatch"] .quota-name { color: var(--quota-out); font-weight: 600; }
