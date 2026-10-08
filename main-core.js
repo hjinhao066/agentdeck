@@ -599,7 +599,7 @@
   function receiptsForModel(items) {
     if (!items.length) return '';
     const lines = items.map((r) => {
-      const anomaly = r.anomaly ? '异常回执（' + ({ process: '进程退出未交回执', quota: '额度用尽', auth: '未登录', rate_limit: '限流', input: '确认/权限提示', no_output: '长时间无输出', startup: '启动失败，任务没送达' }[r.anomaly] || r.anomaly) + '）：' : '';
+      const anomaly = r.anomaly ? '异常回执（' + ({ process: '进程退出未交回执', quota: '额度用尽', auth: '未登录', rate_limit: '限流', input: '确认/权限提示', no_output: '长时间无输出', startup: '启动失败，任务没送达', interrupted: '睡眠或断网打断，自动续接无效' }[r.anomaly] || r.anomaly) + '）：' : '';
       if (r.question) return `- 「${oneLine(r.title, 60)}」(${r.colId}) 向你提问：${r.question}`;
       if (r.waiting) return `- 「${oneLine(r.title, 60)}」(${r.colId}) ${anomaly}停在确认提示上：\n${r.waiting.split('\n').map((l) => '    ' + l).join('\n')}`;
       const compact = modelReceipt(r);
@@ -982,6 +982,7 @@
     if (receipt.waiting) return 'input';
     if (receipt.source === 'watchdog') return 'no_output';
     if (receipt.source === 'startup') return 'startup';
+    if (receipt.source === 'sleep') return 'interrupted';
     if (receipt.source === 'quota') return resourceFailure(receipt.failed, 'quota');
     if (receipt.source === 'process') return resourceFailure(receipt.failed, 'process') || 'process';
     return '';

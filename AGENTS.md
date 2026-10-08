@@ -145,6 +145,15 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   worker stay failed. Full output, logs and file bodies never go into the 队长's context.
   Automated tests must use the stand-in agent (`--command`); real CLI smoke tasks
   require an explicit user request and an isolated profile.
+- Sleep and network interruption (`sleep-resume-core.js`, README 睡眠或断网打断): a worker
+  turn that stopped at the prompt with a sleep/connection error, or that ended soon after
+  the machine woke, is not 已结束，未提交回执 and not done. Wait for wake and network, then send
+  one short "carry on" per spacing step, capped per episode and per task; only repeated
+  failure reaches the Captain, as one `sleep` anomaly receipt. Never nudge a stopped, closed,
+  interrupted or receipt-holding task, never type over a draft (`guardUserInput`), never nudge
+  while asleep or offline. Tests drive the clock and the events, never a real sleep. After a wake
+  `receipts --wait` must stay waiting: the registry's `wake()` restarts every listener's timer, and
+  every other exit prints its reason (only app restart / ended Captain terminal / `--timeout` stay silent).
 - Relay handoff (`relay-handoff-core.js`, `docs/relay-handoff.md`): the app rewrites
   `agentdeck-captain-handoff.md` whole from one snapshot (board cards, dispatch records,
   live sessions, unread receipts); the Captain's `agentdeck-captain-decisions.md` is only

@@ -57,7 +57,11 @@ function sleep(ms) {
 }
 
 function listenerStopped() {
-  return { done: true, result: receiptListener?.superseded() ? ReceiptListener.SUPERSEDED_NOTICE : '', listenerStopped: true };
+  // Superseded and expired say why on stdout. The app restarting or the Captain's
+  // terminal ending leave quietly: nobody is left to read a reason.
+  const result = receiptListener?.superseded() ? ReceiptListener.SUPERSEDED_NOTICE
+    : receiptListener?.expired() ? ReceiptListener.EXPIRED_NOTICE : '';
+  return { done: true, result, listenerStopped: true };
 }
 
 async function request(command, waitForCompletion) {
@@ -403,7 +407,11 @@ async function main() {
       const expiresAt = seconds === undefined ? undefined : Date.now() + seconds * 1000;
       const release = () => receiptListener?.release();
       process.once('exit', release);
-      for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => { release(); process.exit(0); });
+      for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.once(signal, () => {
+        release();
+        try { process.stdout.write(`【AgentDeck 监听】收到 ${signal}，监听已退出（不是 AgentDeck 的原因）。需要的话重新挂一个 receipts --wait。\n`); } catch (_) {}
+        process.exit(0);
+      });
       // Tells the app which listener this is: a newer one in the same terminal takes over.
       const watcher = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`, watcherStartedAt = Date.now();
       // One background CLI process, short authenticated reads: a cancelled
