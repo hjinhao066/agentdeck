@@ -433,8 +433,12 @@ again with the current provider, model and effort instructions.
   no xhigh/max), Claude Code takes `--effort`. Before a session starts, `new`
   checks the command: an Antigravity `--effort` is folded into the model id (agy
   otherwise silently switches to another model) and a missing `--model` gets
-  Flash; Claude 4.x and Haiku models are refused with a message telling the 队长
-  what to use instead.
+  Flash; Claude 4.x and Haiku 4.x or older (including the bare `haiku` alias) are
+  refused with a message telling the 队长 what to use instead. Haiku 5.5 is allowed
+  (Claude Code `--model claude-haiku-5-5 --effort medium|high`, measured on claude
+  2.1.294; Cursor's `claude-haiku-5-5-<tier>` and `claude-haiku-5-5-thinking-<tier>`
+  pass the check too) and is the 队长's first choice for simple, lightweight work;
+  Codex GPT-6 Luna is the fallback when Claude quota runs short.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   The 队长 can read observed subscription quotas with `quota` and switches
