@@ -550,7 +550,8 @@ function terminalIdle(col, entry) {
 }
 const WEB_QUEUED_TIP = '排队中：前面还有网页调研在跑';
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
-function classify(text, entry, cmd, isCaptain = false) {
+// withoutBackground: read the screen as if no background shell/monitor were counted.
+function classify(text, entry, cmd, isCaptain = false, withoutBackground = false) {
   if (cmd === 'chatgpt-web') return entry?.webExecutorState || 'plain';
   text = MainCore.codexStatusScreen(text, cmd);
   const activity = MainCore.terminalActivity(text, cmd);
@@ -567,12 +568,19 @@ function classify(text, entry, cmd, isCaptain = false) {
   }
   if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
-  if (!isCaptain && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
+  if (!isCaptain && !withoutBackground && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
   // or work without a ready prompt, never evidence that the turn finished.
   if (/\bcursor-agent\b/i.test(cmd || '') && entry?.hasWorked) return 'working';
   if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
+}
+// The turn is over and only a background shell/monitor keeps the dot yellow: the
+// prompt takes a tell (MainCore.workingForSend), while the dot and the receipt
+// clocks keep waiting for that work.
+function backgroundOnlyState(st, isCaptain, text, entry, cmd) {
+  return st === 'working' && !isCaptain && MainCore.claudeBackgroundTasks(text, cmd) &&
+    classify(text, entry, cmd, false, true) !== 'working';
 }
 function setDot(entry, state) {
   if (!entry || !entry.dot) return;
@@ -2189,7 +2197,7 @@ function buildColumn(col, isFresh) {
         const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
         if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
         if (launch && col.executor !== 'chatgpt-web') {
@@ -2743,7 +2751,7 @@ function sendWhenReady(col, text, opts) {
       return;
     }
     if (entry && entry.alive) {
-      const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working' && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)
@@ -2751,9 +2759,10 @@ function sendWhenReady(col, text, opts) {
       // and do not fall back to quiet inference for known Cursor CLI.
       const cursorReady = isCursor && terminalIdle(col, entry) && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
       // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
-      // A finished turn (state done) with a prompt row is ready even when the
-      // row still shows Claude's suggestion and cursor blink keeps lastOutputAt fresh.
-      const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (entry.state === 'done' && MainCore.promptRowIdle(entry.lastScreen)) || (Date.now() - started > 15000 && quiet > 3000));
+      // A finished turn (state done, or only a background shell still running) with a
+      // prompt row is ready even when the row still shows Claude's suggestion and
+      // cursor blink keeps lastOutputAt fresh.
+      const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || ((entry.state === 'done' || entry.backgroundOnly) && MainCore.promptRowIdle(entry.lastScreen)) || (Date.now() - started > 15000 && quiet > 3000));
       // ConPTY can show a fresh TUI before its startup input has settled.
       // Typing immediately can lose the prompt's leading bytes before the CLI reads them.
       const settled = env.platform !== 'win32' || entry.hasWorked || quiet >= 500;
@@ -4182,7 +4191,8 @@ battery.every('statusTick', () => {
     const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;
     entry.lastScreen = cursorScreen;
     if (entry.alive) {
-      let st = classify(liveText, entry, cmd, !!columns.find((c) => c.id === id)?.isMain);
+      const isMainCol = !!columns.find((c) => c.id === id)?.isMain;
+      let st = classify(liveText, entry, cmd, isMainCol);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
@@ -4221,6 +4231,7 @@ battery.every('statusTick', () => {
         }
       }
       entry.state = st;
+      entry.backgroundOnly = backgroundOnlyState(st, isMainCol, liveText, entry, cmd);
       setDot(entry, st);
       maybeNotifyState(id, entry, st);
       if (st === 'input' && columns.find((c) => c.id === id)?.isMain) attn++;

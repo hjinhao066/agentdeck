@@ -1345,7 +1345,7 @@
     if (o.cancelled && o.cancelled()) return false;
     const entry = host.terms.get(col.id);
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
-    if (o.requireIdle && (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen, col.cmd))) return false;
+    if (o.requireIdle && (window.MainCore.workingForSend(entry) || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen, col.cmd))) return false;
     if (prompt && prompt.length > (o.inlineLimit || window.MainCore.LONG_PROMPT)) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
     // guardUserInput (receipts, 队长's work for others): never into an input box
@@ -1386,6 +1386,7 @@
       window.deck.ptyInput(col.id, '\r');
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
+      entry.backgroundOnly = false;   // the turn just sent is real work, until the next status tick says otherwise
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();
       if (isCursor) {

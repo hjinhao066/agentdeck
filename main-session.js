@@ -2352,7 +2352,7 @@
       dispatch(col, text, host.columnLabel(col));
       return { done: true, result: `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。` };
     }
-    const busy = entry && (entry.state === 'working' || entry.state === 'quota');
+    const busy = entry && (M.workingForSend(entry) || entry.state === 'quota');
     if (message.replace) cancelSupplement(col.id);
     if (message.now) {
       await handle({ action: 'main-stop', to: col.id, keepQueued: true }, caller);
