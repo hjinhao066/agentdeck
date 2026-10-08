@@ -720,9 +720,9 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   paragraph tells the Captain to run `handoff` first and follow its takeover
   steps: report ready when nothing is open, carry on unprompted when authorised
   work is out, and leave paused or cancelled work alone. That paragraph is
-  not appended again: the briefing has to stay inside its own 10,000-character
-  inline limit (`MainCore.BRIEFING_LIMIT`), past which it is replaced by a
-  file pointer that hides the closing. The delivery waits for an idle
+  not appended again. What is sent is the core prompt only (at most 2,500
+  characters, `MainCore.CORE_LIMIT`); the rule files are read on demand, see
+  below. The delivery waits for an idle
   agent, three seconds of quiet output, and empty composer/terminal input,
   including attachments, and rechecks these guards when sending.
 - Raw terminal history recall, Tab completion and cursor edits make the tracked
@@ -731,11 +731,47 @@ When you submit a reset yourself, AgentDeck also rebriefs the Captain:
   and no measurable footer decrease (for example an already empty Codex context),
   automatic rebriefing cannot confirm the reset. Use `briefing` as the fallback.
 
-`node "$AGENTDECK_BOARD_CLI" briefing` prints the complete current Captain
-instructions, with original newlines. It is read-only: it does not send input,
+`node "$AGENTDECK_BOARD_CLI" briefing` prints the current Captain core prompt,
+with original newlines. It is read-only: it does not send input,
 consume receipts or save the response to config. Only the Captain capability can
 use it. When the user says `你是队长`, first run `ledger` to verify that this
 terminal is the Captain, then read `briefing` and `handoff`.
+
+**Core prompt and rule files.** The Captain's standing prompt is a short core
+(`MainCore.instructions`, at most 2,500 characters, tested): who it is, the red
+lines it keeps every turn (never does the work itself, asks the user about
+anything irreversible, exactly one background `receipts --wait` listener, tells
+the user right after dispatching, cards go out with `--task-id`/`--project`, does
+not read large files into its context), one
+line per command, and a list of "before doing X, read Y". Everything else is in
+nine rule files, `docs/captain/<topic>.md`: `models` (model list, routing, effort
+tiers, DeepSeek fallback, quota rotation), `dispatch`, `review`, `inbox`,
+`sessions`, `capacity`, `release`, `handoff`, `commands`. The Captain reads one
+with `node "$AGENTDECK_BOARD_CLI" briefing --topic <name>` (`all` prints every
+file, `list` the names and when to read each). The files ship in the package and
+are copied at start to `board-control/tools/captain/` under userData, beside the
+board CLI, so the command needs neither the running app nor a token and is the
+same on macOS and Windows. A user's own additions go in
+`~/.agents/captain/<topic>.md` (`C:\Users\<name>\.agents\captain\` on Windows):
+they are printed after the built-in text under a heading that says they win where
+the two disagree; a built-in file is never replaced. Rules the program already
+enforces (a banned model is refused by `new`, `--effort` is stripped from an `agy`
+command) are not in the core; `models.md` keeps one sentence. To add a rule, put
+it in a rule file and, when it needs one, add its trigger to
+`MainCore.BRIEFING_TOPICS`; `tests/captain-rules.test.js` fails when a file and
+the trigger list disagree or the core outgrows its limit.
+
+**Who is given the prompt.** A Captain with a new model context gets the core
+prompt: a newly created Captain, a cleared context (the 清空上下文 button, a
+submitted `/clear`, the token saver) and a seat Relay. When AgentDeck itself
+restarts and the Captain's own conversation comes back with it (its terminal
+survived, or the CLI was relaunched with `--resume` into the same session) the
+prompt is not pasted again: the Captain gets one short notice
+(`MainCore.restartNotice`: run `handoff`, check the receipt listener, `briefing`
+to reread the rules). `config.mainSession.briefed` records which column was given
+which wording of the prompt; a restart that finds a new conversation, another
+column or a changed prompt (a new version, a new concurrency limit) sends the core
+prompt again.
 
 `node "$AGENTDECK_BOARD_CLI" handoff` prints a one-page overview of the Captain
 handoff (hard limit 6000 characters, `config.captainHandoffOverview`) and rewrites
@@ -827,9 +863,10 @@ folded behind one line with their count and state; click it to open them.
   as attachments; they are sent as paths ahead of the text.
 - Prompts have no length limit. One longer than 8000 characters is saved as a
   private `.txt` in userData/`long-prompts` (pruned after 60 days) and the agent
-  gets its opening plus "read this file first"; the bubble shows the file. The
-  Captain's own briefing is the one exception: it is pasted whole up to 10,000
-  characters, so its rules and closing paragraph are never behind a pointer.
+  gets its opening plus "read this file first"; the bubble shows the file. A
+  Captain briefing send is the one exception: it is pasted whole up to 10,000
+  characters, so it is never behind a pointer (the core prompt itself is at most
+  2,500).
 - Automatic sends (Schedule, 队长) never type into a bare shell, which would run
   each line as a command: on macOS/Linux they wait until something other than the
   shell is in the column's foreground; on Windows until the agent's screen shows.
@@ -1118,7 +1155,9 @@ The first automatic prompt in a Windows terminal waits for 500 ms of quiet TUI
 output, avoiding startup input loss. Later prompts keep the existing delivery checks.
 `captain-briefing-paste.spec.js` sends the Captain briefing, and one grown to
 exactly 10,000 characters, through a real PTY to stand-in agents and compares
-what reached their stdin with what was sent. `real-cli-briefing.spec.js` is
+what reached their stdin with what was sent. `captain-restart-notice.spec.js`
+restarts the app three times around a stand-in `claude` and checks that a resumed
+conversation gets only the short notice and a new one the core prompt. `real-cli-briefing.spec.js` is
 skipped unless `AGENTDECK_REAL_CLI` names installed CLIs. With `claude,codex` it
 runs that real CLI as the Captain with an empty config directory and a local
 stand-in for its model API (no login, no quota), and compares the CLI's own model
@@ -1218,7 +1257,7 @@ Both paths use the same code on macOS and Windows (agy's Windows config is `%USE
 
 A prompt that carries an image path (for example a screenshot) is turned into an attachment by Claude Code, which says "Pasting…" in its footer while it reads the file and drops an Enter pressed meanwhile. AgentDeck therefore waits (at most 30 s) until that footer is gone before it presses Enter, so the task is submitted instead of sitting in the input box.
 
-The Captain briefing is static across turns and context resets. Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
+The Captain briefing is static across turns and context resets; it is a short core, and the rules below live in the rule files it names (`briefing --topic <name>`). Claude workers must use an explicit `--model claude-opus-5-5` or `--model claude-sonnet-5-5` and `--effort`, then be checked with `peek`. Nontrivial user tasks go into `~/.agents/boards/` before dispatch. Important work is checked by Gemini 3.8 Flash; failures go back to the worker for up to two rounds before the Captain handles escalation. When every Claude seat, Codex, Cursor and Gemini is exhausted or below the threshold and work must not stop, the briefing lets the Captain open a pay-as-you-go DeepSeek-backed Claude Code (`claude-ds` by absolute path, Mac only) for simple to medium work; it is outside every measured quota pool, so it opens while the subscriptions wait. Notification and token-saver controls share the Settings dialog.
 
 Claude's macOS quota reader and seat-isolated Relay are described in
 [Claude usage API](docs/claude-usage-api.md). Claude percentages in quota UI and

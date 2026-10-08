@@ -537,24 +537,43 @@
   function briefingText(note) {
     return M.instructions(host.platform, note, state()?.legacyReceiptInjection === true, host.config.concurrencyCap);
   }
-  function brief(col, note) {
+  // s.briefed: the prompt this column's model context was given. Removed the moment
+  // that context is cleared, so a restart in between briefs again.
+  const briefedMark = (col, text) => ({ colId: col.id, mark: M.briefingMark(text) });
+  const holdsBriefing = (col) => state()?.briefed?.colId === col.id && state().briefed.mark === M.briefingMark(briefingText());
+  // kept: the app came back and this Captain's own conversation came back with it.
+  // It still holds the prompt, so it gets the short restart notice instead.
+  function brief(col, note, kept) {
     if (!col.cmd) return;   // a bare shell would run them as commands
     const id = col.id;
     briefing = id;
     const done = () => { if (briefing === id) briefing = ''; };
+    const notice = !!kept && holdsBriefing(col);
+    const text = notice ? M.restartNotice(host.platform, state()?.seatCheckpoint || '') : briefingText(note);
     const sent = () => {
-      if (state()?.relayStartup?.attempt?.colId === id) {
-        state().relayStartup.attempt.promptSent = true;
-        state().relayStartup.attempt.promptSentAt = Date.now();
-        save();
+      const s = state(), attempt = s?.relayStartup?.attempt?.colId === id;
+      if (attempt) {
+        s.relayStartup.attempt.promptSent = true;
+        s.relayStartup.attempt.promptSentAt = Date.now();
       }
+      const fresh = s && !notice && mainCol()?.id === id;
+      if (fresh) s.briefed = briefedMark(col, text);
+      if (attempt || fresh) save();
       done();
-      if (note) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
+      if (note && !notice) host.sendWhenReady(col, note, { silent: true, guardUserInput: true });
     };
-    host.sendWhenReady(col, briefingText(note), {
+    host.sendWhenReady(col, text, {
       silent: true, onSent: sent, guardUserInput: true, inlineLimit: M.BRIEFING_LIMIT,
       onGiveUp: () => { done(); host.showToast('没发出去：队长的 agent 一直没准备好'); },
     });
+  }
+  // The Captain column that came back with the app. Whether its conversation came
+  // back too is known only once its terminal has been reconnected or relaunched.
+  let startupBrief = '';
+  function captainRelaunched(col, kept) {
+    if (!col?.isMain || startupBrief !== col.id) return;
+    startupBrief = '';
+    brief(col, state()?.seatCheckpoint ? M.restartNote(host.platform, state().seatCheckpoint) : '', kept);
   }
   // ---- battery mode: the live cap is the settings cap, lowered while on battery ----
   const Bat = () => window.BatteryCore;
@@ -834,6 +853,7 @@
           col.cmd = M.freshCommand(col.cmd);
           state().cmd = col.cmd;
           state().fresh = true;
+          delete state().briefed;
           save();
         }
         if (tokenSaving === op) { op.since = Date.now(); onSent(turn); }
@@ -877,6 +897,7 @@
       // resume line follows it. Past M.BRIEFING_LIMIT the captain would only see
       // a file pointer and miss the "don't wait" closing.
       saverSend(op, briefingText() + M.SAVER_RESUME, 'briefing', true, () => {
+        state().briefed = briefedMark(col, briefingText()); save();
         cancelTokenSaving();
         host.showToast('队长已存看板并清空上下文，正在读看板继续');
       });
@@ -897,6 +918,7 @@
     col.cmd = M.freshCommand(col.cmd);
     s.cmd = col.cmd;
     s.fresh = true;
+    delete s.briefed;
     save();
   }
   // Called before the submitted command can erase the TUI. Typing a slash,
@@ -942,7 +964,7 @@
     host.sendWhenReady(op.col, briefingText(), {
       silent: true, guardUserInput: true, requireIdle: true, inlineLimit: M.BRIEFING_LIMIT,
       cancelled: () => contextReset !== op && !entry.injecting,
-      onSent: () => { if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
+      onSent: () => { state().briefed = briefedMark(op.col, briefingText()); save(); if (contextReset === op) { contextReset = null; host.showToast('已重新发送队长提示词，先读账本和看板里的队长交接'); } },
       onGiveUp: () => { if (contextReset === op) { contextReset = null; host.showToast('队长提示词没发出去；可在队长终端运行 briefing 读取'); } },
     });
   }
@@ -1016,6 +1038,7 @@
         { colId: fresh.id, targetId: s.relayTargetId, at: Date.now() });
     } else delete s.relayStartup;
     s.fresh = true;
+    delete s.briefed;
     carried.forEach((t) => window.ChatUI.addCard(s.colId, t));
     save();
     window.Sidebar.render();
@@ -1780,6 +1803,7 @@
   }
   function notePtySurvived(col) {
     if (!col) return;
+    captainRelaunched(col, true);
     coldTasks.delete(col.id);
     resumeWaiting.delete(col.id);
     const task = latestTask(col.id);
@@ -1802,7 +1826,9 @@
       }).catch(() => {});
     }
   }
-  function noteColdColumn(col, isFresh) {
+  // resumed: the CLI was relaunched into the conversation it had before the app closed.
+  function noteColdColumn(col, isFresh, resumed) {
+    captainRelaunched(col, !!resumed);
     if (col?.executor === 'chatgpt-web') {
       if (!isFresh) for (const task of (state()?.tasks || []).filter((t) => t.colId === col.id && t.instructionSent && !CLOSED.includes(t.status))) {
         settle(task, { summary: '', files: [], images: [], failed: 'AgentDeck 已重启，网页任务已中断；请检查保留的请求页后再安排任务，系统不会自动重发。', explicit: true, source: 'process' });
@@ -2930,7 +2956,8 @@
     Bat()?.shared.onChange(syncEffectiveCap);
     window.deck.onTasksChanged?.(() => { refreshPriority(); });
     refreshPriority();
-    if (mainCol()) brief(mainCol(), state()?.seatCheckpoint ? M.restartNote(host.platform, state().seatCheckpoint) : '');
+    // Briefed (or only told the app restarted) once its terminal is back: captainRelaunched.
+    if (mainCol()) { startupBrief = mainCol().id; if (mainCol().cmd) briefing = startupBrief; }
   }
 
   window.MainSession = {

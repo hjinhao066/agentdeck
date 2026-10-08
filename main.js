@@ -651,11 +651,14 @@ function setupBoardControl() {
     for (const file of ['board-credentials.js', 'automation-core.js', 'security.js', 'chatgpt-web-core.js', 'chatgpt-web-executor.js', 'receipt-listener-core.js', 'worktree-core.js',
       'discussion-command.js', 'discussion-runner.js', 'discussion-core.js', 'discussion-store.js', 'discussion-privacy.js', 'discussion-participants.js',
       'claude-seats-core.js', 'claude-seats-main.js', 'quota-claude.js', 'quota-core.js', 'quota-codex.js', 'relay-handoff-core.js',
-      'side-main.js', 'chat-core.js', 'main-core.js', 'auto-verify-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
+      'side-main.js', 'chat-core.js', 'main-core.js', 'auto-verify-core.js', 'captain-rules.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
     // chat-core.js reads its Markdown and file-kind rules from the phone hub's rule file, at this relative path.
     fs.mkdirSync(path.join(toolsDir, 'mobile-web', 'hub'), { recursive: true });
     fs.copyFileSync(path.join(__dirname, 'mobile-web', 'hub', 'core.js'), path.join(toolsDir, 'mobile-web', 'hub', 'core.js'));
     fs.copyFileSync(path.join(__dirname, 'docs', 'discuss.md'), path.join(toolsDir, 'discuss.md'));
+    // The Captain's rule files, read with `briefing --topic <name>` (captain-rules.js).
+    fs.mkdirSync(path.join(toolsDir, 'captain'), { recursive: true });
+    for (const [name] of require('./main-core').BRIEFING_TOPICS) fs.copyFileSync(path.join(__dirname, 'docs', 'captain', name + '.md'), path.join(toolsDir, 'captain', name + '.md'));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
     fs.copyFileSync(path.join(__dirname, 'codex-captain-driver.js'), path.join(toolsDir, 'codex-captain-driver.js'));

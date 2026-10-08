@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const M = require('../main-core');
+const { rulebook } = require('./fixtures/captain-rulebook');
 const { CACHE_MS, parseLevel, createMemoryPressure } = require('../memory-pressure');
 
 test('concurrency cap reads the setting, defaults to 30, and stays inside 5–50', () => {
@@ -21,14 +22,17 @@ test('concurrency cap reads the setting, defaults to 30, and stays inside 5–50
   assert.equal(M.concurrencyCap(80), 50);
   assert.equal(M.concurrencyCap(15.5), 30);
   assert.equal(M.MAX_ACTIVE, 30);
-  const custom = M.instructions('darwin', undefined, false, 42);
-  assert.match(custom, /11\. [^\n]*最多 42 个会话在干活[^\n]*自动排队/);
-  assert.match(custom, /14\. [^\n]*并发上限 42[^\n]*内存压力等级[^\n]*kern\.memorystatus_vm_pressure_level/);
+  // the live number is in the core; the capacity rule file calls it N
+  assert.match(M.instructions('darwin', undefined, false, 42), /同一时间最多 42 个会话在干活，再 new 会自动排队/);
+  const custom = rulebook('darwin', undefined, false, 42);
+  assert.match(custom, /11\. [^\n]*最多 N 个会话在干活[^\n]*自动排队/);
+  assert.match(custom, /14\. [^\n]*并发上限 N[^\n]*内存压力等级[^\n]*kern\.memorystatus_vm_pressure_level/);
+  assert.match(custom, /N 是核心提示词里写的并发上限/);
   assert.match(custom, /不要因为 swap 用了几个 G 就少开/);
   assert.match(custom, /全量 E2E/);
   assert.ok(!custom.includes('vm.swapusage'));
   assert.match(M.instructions(), /最多 30 个会话在干活/);
-  assert.match(M.instructions('win32'), /Windows 没有这个指标/);
+  assert.match(rulebook('win32'), /Windows 没有这个指标/);
   const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
   assert.match(html, /id="concurrencyCap"[^>]*min="5"[^>]*max="50"/);
   assert.match(html, /同时最多几个会话干活，超出的自动排队/);

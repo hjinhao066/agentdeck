@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const M = require('../main-core');
+const { rulebook, topic } = require('./fixtures/captain-rulebook');
 
 test('replayed TUI chrome is excluded until fresh output follows the current replay separator', () => {
   for (const separator of [
@@ -49,7 +50,7 @@ test('model receipts and ledger cap each summary at 300 Unicode characters and f
   }
   assert.deepEqual(receipt, copy);
   assert.ok(!M.receiptsForModel([{ summary: '字'.repeat(300), files: copy.files.slice(0, 5) }]).includes('其余见 read'));
-  assert.match(M.instructions(), /不读大文件正文，只看报告的结论段；查进度优先 peek/);
+  assert.match(rulebook(), /不读大文件正文，只看报告的结论段；查进度优先 peek/);
 });
 
 test('a written receipt is read back: summary, files, images, failure', () => {
@@ -109,14 +110,23 @@ test('the model only gets short receipt lines and a compact ledger', () => {
 });
 
 test('队长 instructions name the commands', () => {
-  const text = M.instructions();
+  const text = rulebook();
   for (const cmd of ['ledger', 'new --title', 'tell --to', 'tell --to 会话id --message "指令" [--replace] [--now]', 'stop --id', 'archive --id', 'peek --id', 'read --id', 'receipts']) assert.ok(text.includes(cmd), cmd);
+  // every command the board CLI takes has its line in the core, pasted every time
+  const core = M.instructions();
+  for (const cmd of ['handoff', 'briefing', 'ledger', 'quota', 'task add', 'task list', 'task move', 'task priority', 'task archive', 'queue list', 'queue cancel', 'new --title', 'tell --to',
+    'stop --id', 'archive --id', 'read --id', 'peek --id', 'receipts', 'answer --to', 'inbox need|report|resolve', 'notify-user', 'settings battery', 'discuss start']) assert.match(core, new RegExp(`(?:^ {3}|｜)${cmd.replace(/[|]/g, '\\|')}`, 'm'), cmd);
   assert.match(M.RECEIPT_CONTRACT, /【回执】/);
 });
 
 test('Captain maintains one Bash background receipt listener, including timeout and reset', () => {
   for (const platform of ['darwin', 'win32']) {
-    const text = M.instructions(platform);
+    // the red line itself is pasted every time; the rest of rule 8 is in the sessions rule file
+    const core = M.instructions(platform);
+    assert.match(core, /- 回执监听：开工后立即用 Bash 工具（run_in_background: true）运行 node "\$AGENTDECK_BOARD_CLI" receipts --wait（不设超时），始终保持恰好一个后台监听，不要在终端输入框里运行或重复挂。/);
+    assert.match(core, /处理完立即再挂一个/);
+    assert.match(core, /sessions：处理回执/);
+    const text = rulebook(platform);
     assert.ok(text.includes('node "$AGENTDECK_BOARD_CLI" receipts --wait（不设超时'));
     assert.ok(!text.includes('--timeout 300'));
     assert.ok(!text.includes('node "$env:AGENTDECK_BOARD_CLI" receipts --wait'));
@@ -370,8 +380,10 @@ test('a finished background session is archived only after 10 quiet minutes with
 });
 
 test('队长 is told about background work, the limit and automatic archiving', () => {
-  const text = M.instructions();
-  assert.match(text, /后台跑[^\n]*最多 30 个会话在干活[^\n]*自动排队/);
+  const text = rulebook();
+  assert.match(M.instructions(), /同一时间最多 30 个会话在干活，再 new 会自动排队/);
+  assert.match(text, /后台跑[^\n]*最多 N 个会话在干活[^\n]*自动排队/);
+  assert.equal(M.ARCHIVE_AFTER, 10 * 60_000, 'the sessions rule file says 10 分钟');
   assert.match(text, /10 分钟后会自动归档[^\n]*tell 发给它会自动恢复/);
 });
 
@@ -501,7 +513,7 @@ test('quota wait and Claude queued-message chrome are not completion', () => {
 
 test('Captain briefing stays static and includes explicit models, boards and two-round acceptance', () => {
   assert.equal(M.instructions('darwin', 'time and board A'), M.instructions('darwin', 'time and board B'));
-  const text = M.instructions('darwin');
+  const text = rulebook('darwin');
   assert.match(text, /--model claude-opus-5-5 --effort high/);
   for (const trigger of ['讨论一下', 'group discussion', 'do a group discussion', 'group chat']) assert.ok(text.includes(trigger));
   assert.match(text, /discuss start --topic/);
@@ -530,34 +542,36 @@ test('Captain briefing stays static and includes explicit models, boards and two
   assert.match(text, /待核对不能 complete，版本启动核验后才结卡/);
   assert.equal(M.REBRIEF_NOTE, M.AUTONOMOUS_CONTINUATION);
   // The Captain's boundary is one rule, with the one exception the user set.
-  assert.match(text, /1\. 不要在这一列里改文件[^\n]*实际工作和返工都交给别的会话[^\n]*例外：各家都没额度而你还有额度时可以亲自动手，活不能停/);
+  assert.match(M.instructions('darwin'), /^- 不要在这一列里改文件[^\n]*实际工作和返工都交给别的会话[^\n]*例外：各家都没额度而你还有额度时可以亲自动手，活不能停/m);
   assert.match(text, /仍不通过，换更强模型的队员接手，最后才找用户/);
   assert.doesNotMatch(text, /自己处理/);
   // Stable rules here, live state in handoff; history may be read whenever recovery needs it.
-  assert.match(text, /17\. 本提示词只放稳定规则；动态状态和恢复顺序看 handoff/);
+  assert.match(text, /17\. 核心提示词和各份规范只放稳定规则；动态状态和恢复顺序看 handoff/);
   assert.match(text, /read --id 会话id \[--turns 3\] \[--find 关键词\]   读某个会话已保存的对话；恢复、诊断、验收、核对矛盾或用户追问时按需读/);
   assert.doesNotMatch(text, /只在用户追问细节时用/);
   assert.match(text, /会话结束、任务完成、验收通过、交付到哪一步（提交、合并、打包、安装）是四件事，分开判断；审查结束但不通过就是要返工/);
   assert.match(text, /谁接任队长只看设置里的 Relay 轮换，与队员模型分工无关/);
   assert.match(text, /汇报核对完的会话立即 archive，还在验收的先留着/);
   // Commands as the CLI takes them: one line each, the keys answer really accepts.
-  assert.equal(text.split('\n').filter((line) => /AGENTDECK_BOARD_CLI" (?:briefing|handoff)/.test(line)).length, 1, 'handoff and briefing share one line');
-  assert.match(text, /AGENTDECK_BOARD_CLI" handoff {3}生成当前交接快照[^\n]*briefing 只读本提示词全文/);
+  const commands = topic('commands').split('\n').filter((line) => line.startsWith('- '));
+  assert.equal(commands.filter((line) => line.startsWith('- handoff ')).length, 1);
+  assert.match(text, /^- handoff {3}生成当前交接快照[^\n]*briefing 只读核心提示词/m);
+  assert.match(text, /^- briefing \[--topic 名\] {3}不带参数只读核心提示词；--topic 名 读一份规范，--topic all 读全部/m);
   assert.match(text, /answer --to 会话id --key y\|n\|1-9\|enter\|esc\|up\|down[^\n]*down,enter/);
-  assert.ok(!/ {4,}\S/.test(text.split('\n').filter((line) => line.includes('AGENTDECK_BOARD_CLI')).join('\n')), 'no alignment padding in the command list');
-  // chat-ui replaces a briefing longer than M.BRIEFING_LIMIT with a file pointer.
-  // The closing paragraph must stay inside the pasted briefing on both platforms.
+  assert.ok(!/ {4,}\S/.test(commands.join('\n')), 'no alignment padding in the command list');
+  // What is pasted every time is the core; the closing paragraph is its last line on both platforms.
   for (const platform of ['darwin', 'win32']) {
     const brief = M.instructions(platform);
-    assert.ok(brief.length <= M.BRIEFING_LIMIT, platform);
-    assert.ok((brief + M.SAVER_RESUME).length <= M.BRIEFING_LIMIT, platform + ' saver');
-    assert.match(brief, /写代码的活加 --worktree 仓库路径，程序会建独立副本和分支/);
+    assert.ok(brief.length <= M.CORE_LIMIT, platform);
+    assert.ok((brief + M.SAVER_RESUME).length <= M.CORE_LIMIT, platform + ' saver');
+    assert.ok(brief.endsWith(M.AUTONOMOUS_CONTINUATION), platform);
+    assert.match(rulebook(platform), /写代码的活加 --worktree 仓库路径，程序会建独立副本和分支/);
     assert.ok(!brief.endsWith('然后等用户的指令。'));
   }
 });
 
 test('Captain explains one-level projects, declared review targets and provider sub-agent defaults', () => {
-  const text = M.instructions();
+  const text = rulebook();
   assert.match(text, /同一个 --project/);
   assert.match(text, /--reviews 会话id\[,会话id\]/);
   assert.match(text, /不层层外包/);

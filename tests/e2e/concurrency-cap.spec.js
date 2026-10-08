@@ -67,11 +67,14 @@ test('settings cap queues overflow, a larger cap fills it, and critical memory p
   await expect.poll(() => page.evaluate(() => [config.concurrencyCap, MainCore.MAX_ACTIVE])).toEqual([5, 5]);
   await expect.poll(() => JSON.parse(fs.readFileSync(path.join(profile, 'config.json'), 'utf8')).concurrencyCap).toBe(5);
   const brief = await page.evaluate(async () => (await MainSession.handle({ action: 'main-briefing' }, MainSession.mainCol())).result);
-  expect(brief).toContain('最多 5 个会话在干活');
-  expect(brief).toContain('并发上限 5');
-  expect(brief).toContain('kern.memorystatus_vm_pressure_level');
-  expect(brief).toContain('全量 E2E');
-  expect(brief).not.toContain('vm.swapusage');
+  // the live number is in the core prompt; how to judge memory is in the capacity rule file, which calls it N
+  expect(brief).toContain('同一时间最多 5 个会话在干活，再 new 会自动排队');
+  expect(brief).toContain('capacity：多开会话、排队、内存或额度吃紧');
+  const capacity = fs.readFileSync(path.join(__dirname, '../../docs/captain/capacity.md'), 'utf8');
+  expect(capacity).toContain('并发上限 N');
+  expect(capacity).toContain('kern.memorystatus_vm_pressure_level');
+  expect(capacity).toContain('全量 E2E');
+  expect(capacity).not.toContain('vm.swapusage');
 
   await page.evaluate(() => { MainCore.activeCrew = () => new Set(['b0', 'b1', 'b2', 'b3', 'b4']); });
   const queued = await page.evaluate((cmd) => MainSession.handle({

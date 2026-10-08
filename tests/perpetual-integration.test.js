@@ -9,9 +9,10 @@ const { execFileSync } = require('child_process');
 const B = require('../board-core');
 const S = require('../claude-seats-core');
 
-function session({ tasks = [], pending = [], cmd = '', relayStartup } = {}) {
+// resumed: the Captain's CLI came back into the conversation it had before the app closed.
+function session({ tasks = [], pending = [], cmd = '', relayStartup, briefed, seatCheckpoint, resumed = false } = {}) {
   const col = { id: 'captain', isMain: true, cmd };
-  const config = { mainSession: { colId: col.id, tasks, pending, ...(relayStartup ? { relayStartup } : {}) } };
+  const config = { mainSession: { colId: col.id, tasks, pending, ...(relayStartup ? { relayStartup } : {}), ...(briefed ? { briefed } : {}), ...(seatCheckpoint ? { seatCheckpoint } : {}) } };
   const sends = [], saves = [];
   const entry = { alive: true, state: 'done', lastOutputAt: Date.now() - 5000, lastScreen: '' };
   const elements = new Map();
@@ -26,7 +27,9 @@ function session({ tasks = [], pending = [], cmd = '', relayStartup } = {}) {
     columns: () => [col], terms: new Map([[col.id, entry]]), userComposing: () => false,
     sendWhenReady: (column, text, options) => sends.push({ colId: column.id, text, options }),
     saveConfig: () => saves.push(JSON.parse(JSON.stringify(config))) });
-  return { api: window.MainSession, entry, sends, saves };
+  // like the renderer once the column's terminal has been relaunched
+  window.MainSession.noteColdColumn(col, false, resumed);
+  return { api: window.MainSession, entry, sends, saves, col };
 }
 const task = (id, title, status, failed) => ({ id, colId: 'worker-' + id, title, status, receipt: failed ? { failed } : undefined });
 
@@ -82,6 +85,97 @@ test('MainSession restart clears old PTY startup evidence and records a newly de
   assert.deepEqual(startup.failures, ['us', 'us2']);
   assert.equal(h.saves.length, 2);
   assert.deepEqual(h.saves[1].mainSession.relayStartup, startup);
+});
+
+// ---- an app restart does not paste the prompt again into a Captain that still holds it ----
+const MC = require('../main-core');
+const CORE = MC.instructions('darwin', '', false, undefined);
+const held = { colId: 'captain', mark: MC.briefingMark(CORE) };
+
+test('app restart, the Captain\'s conversation resumed: one short notice, no prompt, nothing sent after it', () => {
+  const h = session({ cmd: S.CLAUDE_COMMAND, briefed: held, resumed: true });
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.sends[0].text, MC.restartNotice('darwin', ''));
+  assert.ok(h.sends[0].text.length < 400 && !h.sends[0].text.includes('红线'));
+  assert.equal(h.sends[0].options.silent, true);
+  assert.equal(h.sends[0].options.guardUserInput, true, 'never typed over a draft');
+  h.sends[0].options.onSent();
+  assert.equal(h.sends.length, 1, 'no second message');
+  assert.deepEqual(h.api.state().briefed, held, 'it still holds the same prompt');
+  assert.equal(h.api.relayIdle(), true, 'and the Captain is free again');
+  // the terminal reporting in a second time (a reload) sends nothing more
+  h.api.noteColdColumn(h.col, false, true); h.api.notePtySurvived(h.col);
+  assert.equal(h.sends.length, 1);
+});
+
+test('app restart with a handoff on disk: the notice names the file, and a waiting Relay attempt still counts it as delivered', () => {
+  const R = require('../relay-startup-core'), at = Date.now() - 60_000, file = '/b/agentdeck-captain-handoff.md';
+  const h = session({ cmd: S.CLAUDE_COMMAND, briefed: held, resumed: true, seatCheckpoint: file, relayStartup: R.begin({}, { colId: 'captain', targetId: 'cn', at }) });
+  assert.equal(h.sends.length, 1);
+  assert.equal(h.sends[0].text, MC.restartNotice('darwin', file));
+  assert.match(h.sends[0].text, /handoff 取当前交接快照（同时写在 \/b\/agentdeck-captain-handoff\.md）/);
+  assert.equal(h.api.state().relayStartup.attempt.promptSent, false);
+  h.sends[0].options.onSent();
+  assert.equal(h.api.state().relayStartup.attempt.promptSent, true);
+  assert.equal(h.sends.length, 1, 'the restart note is not sent as well: the notice already says it');
+});
+
+test('app restart, the terminal survived (reload): the same short notice', () => {
+  const col = { id: 'captain', isMain: true, cmd: S.CLAUDE_COMMAND };
+  const config = { mainSession: { colId: col.id, tasks: [], pending: [], briefed: held, seatCheckpoint: '/b/handoff.md' } };
+  const sends = [];
+  const window = { deck: { saveConfigSync: () => true, onTaskStart() {}, onTaskReview() {}, onTaskRework() {} }, MainCore: MC, BoardCore: B, ChatUI: { hasDraft: () => false, turnsOf: () => [] } };
+  const context = vm.createContext({ window, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } });
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), context);
+  window.MainSession.init({ config, platform: 'win32', columns: () => [col], terms: new Map([[col.id, { alive: true, state: 'done' }]]), userComposing: () => false,
+    sendWhenReady: (column, text, options) => sends.push({ text, options }), saveConfig() {} });
+  assert.equal(sends.length, 0, 'nothing goes out before the terminal is back');
+  // the mark was taken on a Mac prompt: on Windows the prompt differs, so this Captain is briefed again
+  window.MainSession.notePtySurvived(col);
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].text, MC.instructions('win32'));
+  // with the mark of the prompt this machine sends, it is the notice, with the handoff file in it
+  const second = { ...config, mainSession: { ...config.mainSession, briefed: { colId: col.id, mark: MC.briefingMark(MC.instructions('win32')) } } };
+  const sends2 = [];
+  const window2 = { deck: window.deck, MainCore: MC, BoardCore: B, ChatUI: window.ChatUI };
+  vm.runInContext(fs.readFileSync(path.resolve(__dirname, '../main-session.js'), 'utf8'), vm.createContext({ window: window2, document: { getElementById: () => ({ addEventListener() {} }), querySelectorAll: () => [] } }));
+  window2.MainSession.init({ config: second, platform: 'win32', columns: () => [col], terms: new Map([[col.id, { alive: true, state: 'done' }]]), userComposing: () => false,
+    sendWhenReady: (column, text, options) => sends2.push({ text, options }), saveConfig() {} });
+  window2.MainSession.notePtySurvived(col);
+  assert.equal(sends2.length, 1);
+  assert.equal(sends2[0].text, MC.restartNotice('win32', '/b/handoff.md'));
+  assert.match(sends2[0].text, /node "\$env:AGENTDECK_BOARD_CLI" handoff/);
+});
+
+test('app restart into a new context, or holding another prompt: the core prompt goes in, then the restart note', () => {
+  const cases = {
+    'the CLI started a new conversation': { briefed: held, resumed: false },
+    'never briefed by this version (upgrade from 2.0.0)': { resumed: true },
+    'briefed with an older wording of the prompt': { briefed: { colId: 'captain', mark: MC.briefingMark(CORE + ' ') }, resumed: true },
+    'the mark belongs to an earlier Captain column': { briefed: { colId: 'captain-before-relay', mark: held.mark }, resumed: true },
+  };
+  for (const [name, input] of Object.entries(cases)) {
+    const h = session({ cmd: S.CLAUDE_COMMAND, ...input });
+    assert.equal(h.sends.length, 1, name);
+    assert.equal(h.sends[0].text, CORE, name);
+    h.sends[0].options.onSent();
+    assert.deepEqual({ ...h.api.state().briefed }, held, name + ': now it holds this prompt');
+    assert.equal(h.sends.length, 1, name + ': no handoff file, no note');
+  }
+  // with a handoff on disk the restart note follows the prompt, as it always has
+  const noted = session({ cmd: S.CLAUDE_COMMAND, briefed: held, resumed: false, seatCheckpoint: '/b/handoff.md' });
+  assert.equal(noted.sends[0].text, CORE);
+  noted.sends[0].options.onSent();
+  assert.deepEqual(noted.sends.map((m) => m.text), [CORE, MC.restartNote('darwin', '/b/handoff.md')]);
+  // the core is all a new context is given: no rule file is pasted along
+  assert.ok(CORE.length <= MC.CORE_LIMIT);
+  assert.ok(!CORE.includes('模型分工（用户点名优先）'));
+});
+
+test('a bare shell in the Captain column is never briefed and holds nothing up', () => {
+  const h = session({ cmd: '', briefed: held, resumed: true });
+  assert.equal(h.sends.length, 0);
+  assert.equal(h.api.relayIdle(), true);
 });
 
 test('host listener and installation messages cannot prove Relay work; a Captain CLI command can', async () => {

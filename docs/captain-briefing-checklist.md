@@ -290,3 +290,14 @@ Windows 分别为 8429／8130 字；加上省上下文的「读看板继续。�
 
 只改了一行：同一条 `inbox need|report|resolve` 命令行里，「向用户汇报的结论都 report」后面加了括号说明「挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说」（31 字）。没有删改任何其他行。
 默认并发上限 30 时，Mac 的后台／旧回执方式由 8923／8624 字变为 8954／8655 字，Windows 由 8991／8692 字变为 9022／8723 字；加「读看板继续。」后最长 9030 字，仍在 10000 字上限内。`inbox help` 另加一行同样的口径。
+
+## 13. 拆成「短核心 + 按需读的规范文件」（2.0.1，卡片 t-9f9b6f77）
+
+第 1–12 节记录的是整份提示词一次贴完的做法，数字都是当时的。2.0.1 起：
+
+- 每次注入的只有核心提示词（`MainCore.instructions()`）：身份、七条红线、每条命令一行、「做 X 前先读 Y」清单、结尾段。上限 `MainCore.CORE_LIMIT` = 2500 字，由 `tests/captain-briefing-limit.test.js` 和 `tests/captain-rules.test.js` 卡住。默认并发上限 30 时 Mac 后台回执 2201 字、Windows 2205 字；旧回执注入 2141／2145 字。
+- 其余规则原文搬进 `docs/captain/` 的九个文件（models、dispatch、review、inbox、sessions、capacity、release、handoff、commands），用 `briefing --topic 名` 读。规则 2–17 保留原编号。逐条去向见 `~/reports/agentdeck-captain-prompt-slim/mapping.md`（本机报告，不进仓库）。
+- 一次粘贴上限 `MainCore.BRIEFING_LIMIT` 仍是 10000，三处发送仍带 `inlineLimit`，第 6 节的取证继续有效；核心提示词远低于普通上限 8000，实际已用不到这个例外。
+- AgentDeck 重启后，原会话续上的队长只收一条短通知（`MainCore.restartNotice`，约 230 字），不重贴提示词；新上下文（新建、清空、Relay）才贴核心。
+- 超限时的做法变了：不是调高上限，而是把不是每一轮都要守的规则挪进规范文件、在触发清单里加一行。规则仍然一条不能删。
+
