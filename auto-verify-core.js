@@ -12,6 +12,12 @@
   const reviewAttemptId = (cardId, round) => `${REVIEW_PREFIX}${cardId}-r${round}`;
   const reworkAttemptId = (cardId, round) => `${REWORK_PREFIX}${cardId}-r${round}`;
   const isReviewAttempt = (id) => typeof id === 'string' && id.startsWith(REVIEW_PREFIX);
+  // The round of this card's automatic review attempt; Infinity for any other id,
+  // so only a review of an older round can be told apart as void.
+  const reviewAttemptRound = (cardId, id) => {
+    const head = `${REVIEW_PREFIX}${cardId}-r`;
+    return typeof id === 'string' && id.startsWith(head) && /^\d+$/.test(id.slice(head.length)) ? Number(id.slice(head.length)) : Infinity;
+  };
 
   // Who made a model: the reviewer must come from a different one than the
   // executor. First matching rule wins; the model name beats the agent's default.
@@ -108,5 +114,5 @@
     ].join('\n');
   }
 
-  return { REVIEW_PREFIX, REWORK_PREFIX, reviewAttemptId, reworkAttemptId, isReviewAttempt, FAMILY_RULES, FAMILY_NAMES, familyOf, CANDIDATES, pickReviewer, verdict, reviewPrompt, reworkMessage };
+  return { REVIEW_PREFIX, REWORK_PREFIX, reviewAttemptId, reworkAttemptId, isReviewAttempt, reviewAttemptRound, FAMILY_RULES, FAMILY_NAMES, familyOf, CANDIDATES, pickReviewer, verdict, reviewPrompt, reworkMessage };
 });
