@@ -402,7 +402,12 @@ body.is-mac.nav-collapsed #topBar { padding-left: 80px; }
 .quota-tooltip { display: none; flex-direction: column; gap: 6px; position: absolute; left: calc(100% + 10px); top: 0; width: max-content; max-width: 420px; max-height: calc(100vh - 16px); overflow: auto; overflow-wrap: anywhere; padding: 10px 12px; z-index: 100; white-space: normal; background: var(--elev); color: var(--text); border: 1px solid var(--hairline); border-radius: 10px; box-shadow: var(--shadow-pop); font-size: 12px; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .quota-detail-open .quota-tooltip { display: flex; }
 .quota-tooltip[data-login-command="true"] { pointer-events: auto; }
-.quota-tooltip[data-login-command="true"]::before { content: ''; position: absolute; top: 0; right: 100%; width: 11px; height: 100%; }
+/* Hover bridge over the strip between a row and its detail. It belongs to the row: the detail
+   scrolls, so it clips whatever lies outside it. The sidebar's drag handle sits in that strip,
+   so the sidebar list rises above it, but only while the pointer is on its way (a detail kept
+   open by the keyboard or a click leaves the handle alone). */
+.quota-detail-open:is(:hover, .tip-hold):not([data-login-command=""])::after { content: ''; position: absolute; left: 100%; top: var(--tip-top, 0); width: var(--tip-gap, 0); height: var(--tip-height, 100%); z-index: 100; }
+#quotaBar:has(.quota-detail-open:is(:hover, .tip-hold):not([data-login-command=""])) { position: relative; z-index: 7; }
 /* The pointer may cut a corner on its way to the copy button: the detail stays for a
    moment after the row is left, and no other row's detail replaces it meanwhile. */
 .qt-login { display: flex; align-items: center; gap: 8px; }
