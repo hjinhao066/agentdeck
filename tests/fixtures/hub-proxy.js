@@ -178,13 +178,29 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       const session = machine.sessions.find((s) => s.id === url.searchParams.get('id') && !s.isMain);
       return session ? json(res, 200, { id: session.id, title: session.title, text: machine.outputs[session.id] || '' }) : json(res, 404, { error: 'Session not found.' });
     }
+    if (req.method === 'POST' && url.pathname === '/api/upload') {
+      const parts = [];
+      req.on('data', (chunk) => parts.push(chunk));
+      await new Promise((resolve) => req.on('end', resolve));
+      const data = Buffer.concat(parts);
+      const starts = (bytes, offset = 0) => data.length >= offset + bytes.length && bytes.every((byte, i) => data[offset + i] === byte);
+      const isImage = starts([0xff, 0xd8, 0xff]) || starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) ||
+        (starts([0x47, 0x49, 0x46, 0x38]) && (data[4] === 0x37 || data[4] === 0x39) && data[5] === 0x61) ||
+        (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8));
+      if (!isImage) return json(res, 415, { error: 'Only JPEG, PNG, GIF or WebP images are accepted.' });
+      const id = crypto.randomBytes(16).toString('hex') + '.png';
+      machine.uploads = machine.uploads || [];
+      machine.uploads.push({ id, bytes: data.length });
+      return json(res, 200, { id });
+    }
     if (req.method === 'POST' && url.pathname === '/api/captain') {
       const body = await readJson(req);
-      if (!body || Object.keys(body).some((key) => key !== 'message') || typeof body.message !== 'string' || !body.message.trim()) return json(res, 400, { error: 'Message required (maximum 8000 characters).' });
+      const images = Array.isArray(body?.images) ? body.images : [];
+      if (!body || Object.keys(body).some((key) => key !== 'message' && key !== 'images') || typeof body.message !== 'string' || !(body.message.trim() || images.length) || body.message.length > 8000) return json(res, 400, { error: 'Message required (maximum 8000 characters).' });
       if (!machine.captain) return json(res, 500, { error: 'Local service unavailable.' });
       machine.messages.push(body.message);
       // A busy Captain (machine.busy): the desktop accepts the message and types it in only once the Captain is idle (releaseQueued).
-      const turn = { id: 'turn-' + machine.messages.length, ts: Date.now(), user: body.message, reply: '', done: false, interrupted: false };
+      const turn = { id: 'turn-' + machine.messages.length, ts: Date.now(), user: body.message, images, reply: '', done: false, interrupted: false };
       if (machine.busy) machine.queued.push(turn); else machine.captain.turns.push(turn);
       return json(res, 200, { queued: true });
     }

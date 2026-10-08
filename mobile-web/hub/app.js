@@ -61,6 +61,8 @@
   const TABS = ['overview', 'captain', 'todo', 'sessions', 'board'];
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
+  // Images picked for the next message; each was uploaded to the computer it will be sent to.
+  let attachments = [];
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
   // 随手记待办: a write in flight, the line under the box, and ticks shown before their computer confirms them.
   let todoSaving = false, todoHint = '', todoHintError = false, todoDoneOpen = false;
@@ -128,7 +130,7 @@
     savedTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
-  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
+  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
   // Scrolled up to read: new replies do not pull the page down; this button shows instead, with a dot when something new came in.
   const awayFromEnd = () => { const el = $('captain-turns'); return el.scrollHeight - el.scrollTop - el.clientHeight > 160; };
   function updateJump() { const away = awayFromEnd(); $('jump').hidden = !away; if (!away) { $('jump').classList.remove('fresh'); $('jump').title = '回到最新'; $('jump').setAttribute('aria-label', '回到最新'); } }
@@ -278,6 +280,8 @@
   }
   function setTarget(id, fromFilter) {
     if (sending || !byId(id)) return;
+    // An uploaded image lives on one computer; switching the destination drops it.
+    if (id !== target && attachments.length) { attachments.forEach((item) => item.request && item.request.abort()); attachments = []; renderAttachments(); }
     target = id; sendStatus = '';
     // Keep the top switch and the dispatch target telling the same story.
     if (!fromFilter && filter !== 'all') { filter = id; store(KEYS.machine, id); }
@@ -795,7 +799,7 @@
       for (const group of Core.groupTurns(turns)) conversation.append(renderGroup(m, group));
       for (const item of pending) {
         const failed = item.state === 'failed';
-        const row = node('article', 'turn outgoing'), bubble = mineBubble(item.text, failed ? ' failed' : '');
+        const row = node('article', 'turn outgoing'), bubble = mineBubble(item.text || `（${item.images.length} 张图片）`, failed ? ' failed' : '');
         row.dataset.state = item.state;
         row.append(bubble);
         if (failed) {
@@ -833,7 +837,9 @@
     const block = Core.sendBlock(m), box = $('message'), label = `发送给 ${m.label} 队长`;
     box.placeholder = `写给 ${m.label} 队长…`;
     $('send').title = block || label; $('send').setAttribute('aria-label', label);
-    $('send').disabled = sending || !!block || !box.value.trim();
+    const ready = attachments.every((item) => item.state === 'done');
+    $('send').disabled = sending || !!block || !ready || !(box.value.trim() || attachments.length);
+    $('attach').disabled = !!block;
     $('clear').hidden = !box.value;
     const hint = $('send-hint');
     // Nothing to say, nothing shown: the bottom is just the input.
@@ -850,6 +856,115 @@
   }
   $('message').addEventListener('input', () => { sendStatus = ''; updateComposer(); fitComposer(); });
   $('clear').addEventListener('click', () => { $('message').value = ''; sendStatus = ''; updateComposer(); fitComposer(); $('message').focus(); });
+  // ---- images ----
+  // A picked or pasted image is shrunk on the phone, uploaded straight away to
+  // the chosen computer and sent with the next message as a server-issued id.
+  const imageId = /^[a-f0-9]{32}\.(?:jpg|png|gif|webp)$/;
+  const MAX_IMAGES = 6, KEEP_BYTES = 800 * 1024, MAX_EDGE = 1600, THUMB_EDGE = 160;
+  async function decode(file) {
+    try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); }
+    catch (_) { return createImageBitmap(file); }
+  }
+  function draw(bitmap, edge) {
+    const scale = Math.min(1, edge / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+    const context = canvas.getContext('2d');
+    // JPEG has no transparency; put screenshots with alpha on white.
+    context.fillStyle = '#fff'; context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    return canvas;
+  }
+  // Small JPEG/PNG/GIF/WebP files go up unchanged. Anything larger, and any
+  // other format the browser can decode (HEIC on iPhone), becomes a JPEG.
+  async function prepare(file) {
+    const bitmap = await decode(file);
+    try {
+      const thumb = draw(bitmap, THUMB_EDGE).toDataURL('image/jpeg', 0.75);
+      if (/^image\/(?:jpeg|png|gif|webp)$/.test(file.type) && file.size <= KEEP_BYTES) return { thumb, blob: file };
+      const blob = await new Promise((resolve) => draw(bitmap, MAX_EDGE).toBlob(resolve, 'image/jpeg', 0.82));
+      if (!blob) throw new Error('encode');
+      return { thumb, blob };
+    } finally { bitmap.close(); }
+  }
+  function upload(item) {
+    const m = byId(item.machineId);
+    item.state = 'uploading'; item.progress = 0; renderAttachments();
+    const request = new XMLHttpRequest();
+    item.request = request;
+    request.open('POST', m.basePath + 'api/upload');
+    request.setRequestHeader('Content-Type', 'application/octet-stream');
+    request.setRequestHeader('X-CSRF-Token', m.csrf);
+    request.upload.addEventListener('progress', (event) => {
+      if (!event.lengthComputable) return;
+      item.progress = event.loaded / event.total;
+      if (item.bar) item.bar.style.width = Math.round(item.progress * 100) + '%';
+    });
+    const failed = (message) => { item.state = 'failed'; item.error = message; renderAttachments(); };
+    request.addEventListener('load', () => {
+      let id;
+      try { id = JSON.parse(request.responseText).id; } catch (_) { /* Reported below. */ }
+      if (request.status === 200 && imageId.test(id)) { item.state = 'done'; item.id = id; renderAttachments(); }
+      else failed(request.status === 401 ? `${m.label} 需要重新登录，图片没传上去。` : request.status === 404 ? `${m.label} 上的 AgentDeck 版本太旧，还不能收图片。` : request.status === 413 ? '图片太大，没能上传。' : request.status === 415 ? '这种图片格式不支持。' : request.status === 507 ? '桌面端存手机图片的空间满了（最近一天传得太多），请明天再发图。' : '图片上传失败，可重试。');
+    });
+    request.addEventListener('error', () => failed('网络中断，图片没传上去，可重试。'));
+    request.send(item.blob);
+  }
+  async function addImages(files) {
+    const m = byId(target);
+    const images = [...files].filter((file) => /^image\//.test(file.type) || /\.(?:heic|heif)$/i.test(file.name));
+    if (!m || !images.length) return;
+    for (const file of images) {
+      try {
+        const item = { ...(await prepare(file)), machineId: m.id };
+        // Counted after decoding, so two quick picks cannot both use the same room.
+        if (attachments.length >= MAX_IMAGES) { notice('一次最多发 ' + MAX_IMAGES + ' 张图片，多出的没有添加。', true); break; }
+        if (target !== m.id) break;
+        attachments.push(item);
+        upload(item);
+      } catch (_) { notice('有一张图片读不出来（这台设备不支持该格式），请换成截图、JPEG 或 PNG。', true); }
+    }
+    renderAttachments();
+  }
+  function renderAttachments() {
+    const box = $('attachments');
+    box.replaceChildren(); box.hidden = !attachments.length;
+    attachments.forEach((item, i) => {
+      const chip = node('div', 'attachment'); chip.dataset.state = item.state; chip.setAttribute('role', 'listitem');
+      const img = node('img'); img.src = item.thumb; img.alt = '待发送的图片 ' + (i + 1);
+      chip.append(img);
+      if (item.state === 'uploading') {
+        const track = node('span', 'upload-track'); track.setAttribute('role', 'progressbar'); track.setAttribute('aria-label', '正在上传图片 ' + (i + 1));
+        item.bar = node('span', 'upload-bar'); item.bar.style.width = Math.round(item.progress * 100) + '%';
+        track.append(item.bar); chip.append(track);
+      } else if (item.state === 'failed') {
+        const retry = iconButton('refresh', '重试上传', 'attachment-retry');
+        retry.addEventListener('click', () => upload(item));
+        chip.append(retry);
+      }
+      const remove = iconButton('close', '移除图片', 'attachment-remove');
+      remove.addEventListener('click', () => {
+        if (item.request) item.request.abort();
+        attachments = attachments.filter((other) => other !== item);
+        renderAttachments();
+      });
+      chip.append(remove);
+      box.append(chip);
+    });
+    const failed = attachments.find((item) => item.state === 'failed');
+    sendStatus = failed ? failed.error : attachments.some((item) => item.state === 'uploading') ? '正在上传图片…' : /图片/.test(sendStatus) ? '' : sendStatus;
+    updateComposer(); fitComposer();
+  }
+  // Tapping remove or retry must not take focus from the message box: losing
+  // it closes the keyboard and moves the thumbnails under the finger mid-tap.
+  $('attachments').addEventListener('mousedown', (event) => event.preventDefault());
+  $('attach').addEventListener('click', () => $('image-input').click());
+  $('image-input').addEventListener('change', () => { addImages($('image-input').files); $('image-input').value = ''; });
+  $('message').addEventListener('paste', (event) => {
+    const files = [...(event.clipboardData?.files || [])].filter((file) => /^image\//.test(file.type));
+    if (!files.length) return;
+    event.preventDefault(); addImages(files);
+  });
   // One message, one request. The box is not locked meanwhile (locking it would
   // fold the phone's keyboard on every send); only the send button waits.
   async function deliver(m, item) {
@@ -859,7 +974,7 @@
     sending = true; sendStatus = '';
     render(); fitComposer();
     $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
-    const result = await post(m, 'api/captain', { message: item.text });
+    const result = await post(m, 'api/captain', item.images.length ? { message: item.text, images: item.images } : { message: item.text });
     sending = false;
     if (result.status === 200 && result.body && result.body.queued) {
       item.state = 'sent';
@@ -873,21 +988,21 @@
   $('message-form').addEventListener('submit', (event) => {
     event.preventDefault();
     // The destination is fixed here, at the moment of the tap, and never changes afterwards.
-    const m = byId(target), text = $('message').value, now = Date.now();
-    if (sending || !m || !text.trim() || Core.sendBlock(m)) return;
+    const m = byId(target), text = $('message').value, now = Date.now(), images = attachments.map((item) => item.id);
+    if (sending || !m || !(text.trim() || images.length) || images.includes(undefined) || Core.sendBlock(m)) return;
     while (arrived.length && now - arrived[0].at > 60000) arrived.shift();
     // The same words as a message that just went out: say so instead of sending them twice.
     // A second tap within a few seconds means it, and sends.
     const again = repeatAsked && repeatAsked.text === text && repeatAsked.machineId === m.id && now - repeatAsked.at < 15000;
-    if (!again && Core.repeatedSend([...outbox, ...arrived].filter((item) => item.machineId === m.id), text, now)) {
+    if (!images.length && !again && Core.repeatedSend([...outbox, ...arrived].filter((item) => item.machineId === m.id), text, now)) {
       repeatAsked = { text, machineId: m.id, at: now };
       sendStatus = '刚才那条已发出，就在上面的对话里，不用再发。确实要再发一遍，就再点一次发送。';
       updateComposer(); $('captain-turns').scrollTop = $('captain-turns').scrollHeight;
       return;
     }
     repeatAsked = null;
-    const item = { id: ++outboxId, machineId: m.id, text, state: 'sending', reason: '', known: [], at: now };
-    outbox.push(item); $('message').value = '';
+    const item = { id: ++outboxId, machineId: m.id, text, images, state: 'sending', reason: '', known: [], at: now };
+    outbox.push(item); $('message').value = ''; attachments = []; renderAttachments();
     deliver(m, item);
   });
 
