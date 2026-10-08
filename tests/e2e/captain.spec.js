@@ -117,8 +117,9 @@ test('new: a fresh column gets the task as its first message, and the receipt co
   const head = page.locator('.captain-item .crew-counts');
   await expect(head).not.toContainText('后台');
   await expect(page.locator('.nav-crew .crew-head')).toHaveCount(0);
-  await expect(page.locator('.captain-item .captain-fold')).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator(`.nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(0);
+  // the list is open by default: the new session shows under the Captain without a click
+  await expect(page.locator('.captain-item .captain-fold')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator(`.nav-crew .colnav-item[data-col-id="${child}"]`)).toHaveCount(1);
   await expect(page.locator(`.column[data-col-id="${child}"]`)).toHaveClass(/backstage/);
   expect(await page.evaluate((i) => deckColumns().some((c) => c.id === i), child)).toBe(false);
   const card = page.locator(`.column[data-col-id="${mainId}"] .task-card`).first();
@@ -187,7 +188,10 @@ test('tell, ledger and read from the Captain terminal; a worker stuck on a confi
 test('a session the Captain only told something keeps its place; its own sessions leave and come back by drag', async () => {
   const child = await page.evaluate(() => columns.find((c) => c.displayTitle === '写周报').id);
   const crew = (id) => page.locator(`.nav-crew .colnav-item[data-col-id="${id}"]`);
-  // the Captain arrow unfolds its crew
+  // the Captain arrow folds and unfolds its crew; it starts unfolded
+  await expect(crew(child)).toHaveCount(1);
+  await page.locator('.captain-item .captain-fold').click();
+  await expect(crew(child)).toHaveCount(0);
   await page.locator('.captain-item .captain-fold').click();
   await expect(crew(child)).toHaveCount(1);
   await expect(crew('cap-x')).toHaveCount(0);
