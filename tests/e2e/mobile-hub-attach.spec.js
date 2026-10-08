@@ -28,7 +28,9 @@ for (const [name, width, height] of [['iPad landscape', 1366, 1024], ['iPad port
       await card.getByLabel(`${fake.label} 的登录 token`).fill(fake.token);
       await card.getByRole('button', { name: `登录 ${fake.label}`, exact: true }).click();
     }
-    await page.getByRole('navigation', { name: '主导航' }).getByRole('button', { name: '队长', exact: true }).click();
+    // Phones use the bottom tabs; a tablet (900 wide and up) has the desktop-style sidebar instead.
+    const tabs = page.getByRole('navigation', { name: '主导航' });
+    await (await tabs.isVisible() ? tabs : page.getByRole('navigation', { name: '页面' })).getByRole('button', { name: '队长', exact: true }).click();
     const { mac, win } = hub.machines;
 
     // An icon button with a tooltip and a name, at the left of the input, big enough for a finger.

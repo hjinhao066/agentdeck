@@ -187,3 +187,18 @@ test('tablet held upright: the desktop sidebar, and a file opens as a sheet over
   await expect(page.locator('#preview')).toHaveAttribute('role', 'dialog');
   await expect(page.locator('#preview .pv-md h1')).toHaveText('验收报告');
 });
+
+test('a computer still on an AgentDeck without file previews: the layout works, a path says to upgrade instead of failing', async ({ browser }) => {
+  await open(browser, { width: 1366, height: 1024 });
+  // As 1.8.0 answers: no api/file route, so a plain JSON 404 and no "files" capability.
+  hub.machines.mac.files = null;
+  await captainView();
+  await expect(page.getByRole('complementary', { name: '侧边栏' })).toBeVisible();
+  await expect(page.locator('#captain-turns .bubble-md table').last()).toBeVisible();
+  await expect(page.locator('#message-form').getByRole('button', { name: '添加图片', exact: true })).toBeEnabled();
+  await fileLink('review.md').click();
+  await expect(page.locator('#preview .pv-empty[role="alert"]')).toContainText('还是旧版，升级以后才能在这里看文件');
+  expect(hub.machines.mac.fileReads).toEqual([]);
+  await page.getByRole('button', { name: '关闭预览' }).click();
+  await expect(page.locator('#message')).toBeEditable();
+});
