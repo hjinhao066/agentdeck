@@ -35,6 +35,16 @@
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
     todo: '<rect x="3" y="5" width="6" height="6" rx="1"/><path d="m3 17 2 2 4-4"/><path d="M13 6h8M13 12h8M13 18h8"/>',
     plus: '<path d="M12 5v14M5 12h14"/>',
+    file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h8a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
+    download: '<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19.5h14"/>',
+    expand: '<path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/>',
+    shrink: '<path d="M20 10h-6V4M4 14h6v6M14 10l6-6M10 14l-6 6"/>',
+    code: '<path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5"/>',
+    eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/>',
+    paneRight: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/>',
+    paneLeft: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
+    swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
   const providerIcons = {
@@ -117,7 +127,7 @@
     savedTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
-  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['todo-add', 'plus']]) $(id).innerHTML = svg(icon);
+  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back']]) $(id).innerHTML = svg(icon);
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.querySelector('.nav-icon').innerHTML = svg(button.dataset.view);
     button.addEventListener('click', () => {
@@ -179,9 +189,9 @@
 
   // ---- network -------------------------------------------------------------
   // Every request names its machine; the prefix is the only routing there is.
-  async function request(m, path, options = {}) {
+  async function request(m, path, { timeout = Core.TIMEOUT, ...options } = {}) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Core.TIMEOUT);
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
       // redirect 'error': a machine's answer must never send this request (and its cookie or POST body) anywhere else, e.g. to the other computer.
       const response = await fetch(m.basePath + path, { credentials: 'same-origin', cache: 'no-store', ...options, redirect: 'error', signal: controller.signal });
@@ -325,7 +335,8 @@
     line('采样', row.sampledAt ? Core.sampledText(row, now).slice(3) : '暂无采样');
     return body;
   }
-  function quotaSection(m) {
+  // `where` keeps ids apart when the same table stands in a computer's card and in the sidebar.
+  function quotaSection(m, where = '') {
     const now = Date.now(), quota = m.quota;
     const box = node('section', 'quota');
     box.setAttribute('aria-label', `${m.label} 的额度`);
@@ -368,13 +379,13 @@
       button.append(name, values);
       const note = Core.quotaNote(row, now);
       if (note) button.append(node('span', 'quota-row-note', note));
-      const detail = quotaDetails(m, row, now); detail.hidden = !open; detail.id = 'quota-detail-' + id.replace(/[^\w-]/g, '_');
+      const detail = quotaDetails(m, row, now); detail.hidden = !open; detail.id = 'quota-detail-' + where + id.replace(/[^\w-]/g, '_');
       button.setAttribute('aria-controls', detail.id);
       button.addEventListener('click', () => {
         if (openQuota.has(id)) openQuota.delete(id); else openQuota.add(id);
-        signatures.delete(m.card); render();
-        // The card is rebuilt: put the focus back on the row that was tapped.
-        m.card.querySelector(`[aria-controls="${detail.id}"]`)?.focus({ preventScroll: true });
+        signatures.delete(m.card); signatures.delete($('side-quota')); render();
+        // The table is rebuilt: put the focus back on the row that was tapped.
+        document.querySelector(`[aria-controls="${detail.id}"]`)?.focus({ preventScroll: true });
       });
       item.append(button, detail); list.append(item);
     }
@@ -430,7 +441,7 @@
       if (seat) card.append(seat);
       if (m.quota) card.append(quotaSection(m));
       const block = node('div', 'receipt');
-      block.append(node('span', 'receipt-label', receipt ? '最近回执 · ' + receipt.title : '最近回执'), node('p', '', receipt ? receipt.text : '还没有队员提交回执。'));
+      block.append(node('span', 'receipt-label', receipt ? '最近回执 · ' + receipt.title : '最近回执'), receipt ? markdownNode(receipt.text, { reply: true, className: 'receipt-text' }) : node('p', '', '还没有队员提交回执。'));
       const foot = node('div', 'machine-foot');
       const label = `退出 ${m.label}：只退出这台电脑，另一台不受影响`;
       const exit = iconButton('logout', label); exit.disabled = !!m.logoutBusy;
@@ -717,6 +728,7 @@
   }
   function renderGroup(m, group) {
     const row = node('article', 'turn');
+    row.dataset.machine = m.id;
     if (group.id) row.dataset.turnId = group.id;
     if (group.user || group.images.length) {
       const prompt = mineBubble(group.user, '');
@@ -728,7 +740,7 @@
       const label = node('span', 'bubble-label');
       label.innerHTML = svg('crown'); label.append(`${m.label} 队长`);
       bubble.append(label);
-      if (group.reply) bubble.append(node('p', 'bubble-text', group.reply));
+      if (group.reply) bubble.append(markdownNode(group.reply, { reply: true, className: 'bubble-md' }));
       else if (group.interrupted) bubble.append(node('p', 'bubble-text turn-state', '回复已中断。'));
       if (group.pending) {
         const pending = node('p', 'bubble-text pending');
@@ -1016,7 +1028,7 @@
   }
   function attentionCard(item, multi, now) {
     const card = node('article', `at-item at-${item.kind}` + (item.done ? ' done' : item.readAt ? '' : ' unread'));
-    card.dataset.key = item.key;
+    card.dataset.key = item.key; card.dataset.machine = item.machineId;
     const top = node('div', 'at-top');
     if (!item.done && !item.readAt) { const dot = node('span', 'at-unread'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', '未读'); top.append(dot); }
     if (item.done) { const ok = node('span', 'at-ok'); ok.innerHTML = svg('done'); ok.setAttribute('aria-hidden', 'true'); top.append(ok); }
@@ -1026,7 +1038,7 @@
     if (when) meta.title = (item.done ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
     card.append(top, node('h3', 'at-title', item.title));
-    if (item.ask && !item.done) { const ask = node('p', 'at-ask'); ask.append(node('b', '', '要你做'), node('span', '', item.ask)); card.append(ask); }
+    if (item.ask && !item.done) { const ask = node('div', 'at-ask'); ask.append(node('b', '', '要你做'), markdownNode(item.ask, { reply: true, className: 'at-ask-text' })); card.append(ask); }
     const last = item.replies[item.replies.length - 1];
     if (item.done) card.append(node('p', 'at-done-text', item.doneText + (last ? '：' + last.text.replace(/\s+/g, ' ') : '')));
     const more = item.detail || item.files.length || item.cardTitle || item.sessionTitle || item.replies.length;
@@ -1040,8 +1052,8 @@
       card.append(toggle);
       if (open) {
         const box = node('div', 'at-detail'); box.id = id;
-        if (item.detail) box.append(node('p', 'at-text', item.detail));
-        if (item.files.length) { const list = node('ul', 'at-files'); list.setAttribute('aria-label', '证据和文件'); item.files.forEach((f) => list.append(node('li', '', f))); box.append(list); }
+        if (item.detail) box.append(markdownNode(item.detail, { reply: true, className: 'at-text' }));
+        if (item.files.length) { const list = node('ul', 'at-files'); list.setAttribute('aria-label', '证据和文件'); item.files.forEach((f) => { const li = node('li'); li.append(fileEntry(f)); list.append(li); }); box.append(list); }
         const links = [item.cardTitle && '任务：' + item.cardTitle, item.sessionTitle && '会话：' + item.sessionTitle].filter(Boolean).join(' · ');
         if (links) box.append(node('p', 'at-links', links));
         for (const r of item.replies) {
@@ -1092,9 +1104,10 @@
   function renderAttention() {
     const lists = $('attention-lists'), sources = attentionSources(), now = Date.now();
     const { needs, reports, done, counts } = Core.mergeAttention(sources);
-    const badge = document.querySelector('[data-view="attention"] .nav-attention');
-    badge.textContent = counts.badge > 99 ? '99+' : String(counts.badge); badge.hidden = !counts.badge;
-    badge.classList.toggle('need', counts.need > 0);
+    for (const badge of document.querySelectorAll('.nav-attention')) {
+      badge.textContent = counts.badge > 99 ? '99+' : String(counts.badge); badge.hidden = !counts.badge;
+      badge.classList.toggle('need', counts.need > 0);
+    }
     $('attention-tab').setAttribute('aria-label', counts.badge ? '待我处理，' + [counts.need && `${counts.need} 件要你处理`, counts.unreadReports && `${counts.unreadReports} 条新汇报`].filter(Boolean).join('，') : '待我处理');
     const missing = machines.filter((m) => !(m.state === 'online' && Array.isArray(m.attention)));
     const why = (m) => m.attention === 'missing' && m.state === 'online' ? `${m.label} 的 AgentDeck 还没有这个页面` : `${m.label} ${Core.STATES[m.state].label}`;
@@ -1183,12 +1196,20 @@
     }
     if (!grouped.size) { projects.append(node('p', 'empty', cards.length ? '这个状态下没有任务。' : '暂无任务。任务在桌面端创建后会显示在这里。')); return; }
     const order = taskStatuses.map(([status]) => status);
+    // Column names for the wide layout, where each status has its own column (hidden otherwise).
+    // A status with no card shown gets no column, so the ones in use have the room.
+    const shown = [...grouped.values()].flat(), used = taskStatuses.filter(([status]) => shown.some((card) => card.status === status));
+    const lanes = node('div', 'lanes-head'); lanes.setAttribute('aria-hidden', 'true');
+    for (const [status, label] of used) lanes.append(node('span', '', `${label} ${shown.filter((card) => card.status === status).length}`));
+    projects.style.setProperty('--lanes', String(used.length || 1));
+    projects.append(lanes);
     for (const [project, tasks] of grouped) {
       const section = node('section', 'project'), heading = node('div', 'project-heading');
       heading.append(node('h2', '', project), node('span', '', tasks.length + ' 项'));
       section.append(heading);
       for (const task of tasks.sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status) || urgentTask(b) - urgentTask(a))) {
-        const card = node('article', 'task-card'); card.dataset.status = task.status;
+        const card = node('article', 'task-card'); card.dataset.status = task.status; card.dataset.machine = task.seenOn || '';
+        card.style.setProperty('--lane', String(used.findIndex(([status]) => status === task.status) + 1 || 1));
         const top = node('div', 'task-top');
         if (urgentTask(task)) { card.dataset.priority = 'high'; top.append(priorityMark()); }
         top.append(node('span', 'task-status', (taskStatuses.find(([status]) => status === task.status) || [0, task.status])[1]));
@@ -1197,7 +1218,7 @@
         if (owner) top.append(node('span', 'task-owner', `${owner} 领取`));
         card.append(top, node('h3', '', task.title));
         if (task.assignee) card.append(node('p', 'task-assignee', [task.assignee.agent, task.assignee.model].filter(Boolean).join(' · ')));
-        if (task.latest_receipt) card.append(node('p', 'task-receipt', task.latest_receipt));
+        if (task.latest_receipt) card.append(markdownNode(task.latest_receipt, { reply: true, className: 'task-receipt' }));
         section.append(card);
       }
       projects.append(section);
@@ -1278,8 +1299,7 @@
   function renderTodos() {
     const lists = $('todo-lists'), sources = todoSources(), writer = todoWriter();
     const { open, done } = Core.mergeTodos(sources);
-    const badge = document.querySelector('[data-view="todo"] .nav-badge');
-    badge.textContent = open.length > 99 ? '99+' : String(open.length); badge.hidden = !open.length;
+    for (const badge of document.querySelectorAll('.nav-badge')) { badge.textContent = open.length > 99 ? '99+' : String(open.length); badge.hidden = !open.length; }
     updateTodoForm();
     const missing = machines.filter((m) => !Array.isArray(m.todos));
     $('todo-foot').textContent = !sources.length ? '' : (missing.length ? `现在只读到 ${sources.map((m) => m.label).join('、')} 的待办。` : `已合并 ${sources.map((m) => m.label).join(' 和 ')} 的待办。`)
@@ -1338,6 +1358,512 @@
     renderTodos();
   });
 
+  // ---- Markdown ------------------------------------------------------------
+  // Captain replies, receipts, 待我处理 details and previewed .md files all go
+  // through the one renderer in core.js. Its output is escaped HTML; it is read
+  // into an inert document and copied over piece by piece, keeping only the
+  // tags and attributes listed here, so nothing else can reach the page.
+  const MD_TAGS = new Set(['P', 'BR', 'STRONG', 'EM', 'DEL', 'CODE', 'PRE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'HR', 'TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD', 'A', 'SPAN', 'DIV']);
+  const MD_CLASS = /^(?:md-code|md-table|tok-[cskn]|al-[cr])$/;
+  function copyClean(source, target) {
+    for (const child of source.childNodes) {
+      if (child.nodeType === 3) { target.append(child.textContent); continue; }
+      if (child.nodeType !== 1) continue;
+      if (!MD_TAGS.has(child.tagName)) { target.append(child.textContent); continue; }
+      const name = child.tagName.toLowerCase();
+      let el;
+      if (name === 'a') {
+        const href = child.getAttribute('href') || '', file = child.getAttribute('data-file');
+        if (/^(?:https?:\/\/|mailto:)/i.test(href)) {
+          el = node('a', 'web-link'); el.href = href; el.target = '_blank'; el.rel = 'noopener noreferrer';
+        } else if (file) {
+          // Opens the preview: a control, not a place to go.
+          el = node('a', 'file-link'); el.dataset.file = file; el.setAttribute('role', 'button'); el.tabIndex = 0;
+          if (child.getAttribute('data-line')) el.dataset.line = String(parseInt(child.getAttribute('data-line'), 10) || 0);
+          if (child.hasAttribute('data-rel')) el.dataset.rel = '1';
+        } else el = node('span');
+      } else el = node(name);
+      const classes = (child.getAttribute('class') || '').split(/\s+/).filter((c) => MD_CLASS.test(c));
+      if (classes.length) el.classList.add(...classes);
+      if (name === 'ol' && /^\d{1,9}$/.test(child.getAttribute('start') || '')) el.start = Number(child.getAttribute('start'));
+      if (name === 'code' && /^[\w+-]{1,20}$/.test(child.getAttribute('data-lang') || '')) el.dataset.lang = child.getAttribute('data-lang');
+      copyClean(child, el);
+      target.append(el);
+    }
+  }
+  // reply: text read off a terminal (line breaks are meant, titles and tables are read back from the rows).
+  function markdownNode(text, { reply = false, className = '' } = {}) {
+    const box = node('div', 'md' + (className ? ' ' + className : ''));
+    const html = Core.renderMarkdown(reply ? Core.tidyReply(text) : text, { breaks: reply, links: true });
+    copyClean(new DOMParser().parseFromString(html, 'text/html').body, box);
+    // A wide table scrolls inside its own frame; a code block carries its copy button.
+    for (const table of box.querySelectorAll('.md-table')) {
+      table.tabIndex = 0; table.setAttribute('role', 'region'); table.setAttribute('aria-label', '表格，可以左右滑动');
+      table.style.setProperty('--cols', String(table.querySelectorAll('th').length));
+      // A short cell (a name, a state) stays on one line; long ones wrap.
+      for (const cell of table.querySelectorAll('td')) if ([...cell.textContent].reduce((w, ch) => w + (Core.isWide(ch) ? 2 : 1), 0) <= 12) cell.classList.add('short');
+    }
+    for (const pre of box.querySelectorAll('pre.md-code')) {
+      const wrap = node('div', 'md-pre'), copy = iconButton('copy', '复制这段代码', 'md-copy');
+      copy.addEventListener('click', () => copyText(copy, pre.textContent, '复制这段代码'));
+      pre.replaceWith(wrap); wrap.append(pre, copy);
+    }
+    return box;
+  }
+  // One path on its own line (待我处理 lists its files that way): the whole line opens it.
+  function fileEntry(path) {
+    const link = node('a', 'file-link', path);
+    link.dataset.file = path; link.setAttribute('role', 'button'); link.tabIndex = 0;
+    return link;
+  }
+  // A tap on a file path opens it from the computer the text came from.
+  function followLink(link, event) {
+    const owner = link.closest('[data-machine]'), inPreview = !!link.closest('#preview');
+    const machineId = inPreview ? preview.machineId : owner ? owner.dataset.machine : '';
+    let path = link.dataset.file;
+    // A link written inside a file is read against that file's folder.
+    if (link.dataset.rel) path = inPreview && preview.path ? Core.resolvePath(Core.splitPath(preview.path).dir, path) : '';
+    if (event) event.preventDefault();
+    if (!path || !byId(machineId)) { notice('这个链接指向的文件不知道在哪台电脑上，打不开。', true); return; }
+    openPreview(machineId, path, { line: Number(link.dataset.line) || 0, opener: inPreview ? null : link });
+  }
+  document.addEventListener('click', (event) => {
+    const link = event.target instanceof Element && event.target.closest('a.file-link');
+    if (link) followLink(link, event);
+  });
+  document.addEventListener('keydown', (event) => {
+    const link = event.target instanceof Element && event.target.closest('a.file-link');
+    if (link && (event.key === 'Enter' || event.key === ' ') && !event.repeat) followLink(link, event);
+  });
+
+  // ---- file preview --------------------------------------------------------
+  // One panel, two shapes. Beside the page on a wide screen, like the desktop
+  // app's side pane; on a phone a sheet that rises from the bottom, can be
+  // dragged up to the full screen and down to close. The file is read from the
+  // computer whose text named it, in JSON pieces (the entry lets nothing else
+  // through); what may be read is decided on that computer.
+  const wide = window.matchMedia('(min-width: 900px) and (min-height: 600px)');
+  const docked = window.matchMedia('(min-width: 1180px) and (min-height: 600px)');
+  const preview = { open: false, machineId: '', path: '', line: 0, stack: [], state: 'empty', error: '', data: null, source: false, full: false, call: 0, opener: null, snap: 'half', pdf: null };
+  const panel = $('preview'), scrim = $('preview-scrim'), previewBody = $('preview-body');
+  const assetVersion = (() => { const script = [...document.scripts].find((el) => /(?:^|\/)app\.js(?:\?|$)/.test(el.getAttribute('src') || '')); return script ? script.getAttribute('src').replace(/^[^?]*/, '') : ''; })();
+
+  function openPreview(machineId, path, { line = 0, opener, replace = false } = {}) {
+    if (preview.open && preview.path && !replace && !(preview.machineId === machineId && preview.path === path)) preview.stack.push({ machineId: preview.machineId, path: preview.path, line: preview.line });
+    if (opener) { preview.opener = opener; preview.stack = []; }
+    Object.assign(preview, { machineId, path, line, source: false });
+    showPanel();
+    loadPreview();
+  }
+  function showPanel() {
+    const fresh = !preview.open;
+    preview.open = true;
+    if (fresh) preview.snap = 'half';
+    placePanel();
+    // The sheet takes the focus like a dialog; the side pane leaves it where the user is typing.
+    if (fresh && !docked.matches) $('preview-name').focus({ preventScroll: true });
+  }
+  function closePreview() {
+    if (!preview.open) return;
+    preview.open = false; preview.call++; preview.full = false;
+    dropPdf();
+    placePanel();
+    const opener = preview.opener;
+    preview.opener = null;
+    if (opener && opener.isConnected && !docked.matches) opener.focus({ preventScroll: true });
+  }
+  // Where the panel stands and how tall it is, for the screen as it is now.
+  function placePanel() {
+    const sheet = !docked.matches;
+    shell.classList.toggle('pane-open', preview.open && !sheet);
+    shell.classList.toggle('pane-full', preview.open && !sheet && preview.full);
+    panel.hidden = !preview.open;
+    panel.classList.toggle('sheet', sheet);
+    panel.dataset.snap = preview.snap;
+    scrim.hidden = !(preview.open && sheet);
+    if (sheet && preview.open) { panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-modal', 'true'); }
+    else { panel.setAttribute('role', 'complementary'); panel.removeAttribute('aria-modal'); }
+    // Behind the sheet nothing is reachable; beside the pane everything is.
+    document.querySelector('.center').inert = preview.open && sheet;
+    $('sidebar').inert = preview.open && sheet;
+    panel.style.removeProperty('height');
+    const toggle = $('pane-toggle'), label = preview.open ? '收起右侧预览栏' : '打开右侧预览栏';
+    toggle.title = label; toggle.setAttribute('aria-label', label); toggle.setAttribute('aria-expanded', String(preview.open));
+    renderPreview();
+  }
+  $('pane-toggle').addEventListener('click', () => { if (preview.open) closePreview(); else showPanel(); });
+  scrim.addEventListener('click', closePreview);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && preview.open && !docked.matches && !dialog.open) { event.preventDefault(); closePreview(); } });
+  $('preview-back').addEventListener('click', () => {
+    const last = preview.stack.pop();
+    if (last) { Object.assign(preview, last, { source: false }); loadPreview(); }
+  });
+
+  const fileFailure = (result, m) => {
+    const code = result && result.body && result.body.code;
+    if (!result || result.failed) return '手机连不上入口，文件没有读到。';
+    if (result.timedOut) return `${m.label} 没有回应（可能在睡眠），文件没有读到。`;
+    if (code === 'denied') return '这个文件不在可以查看的范围里。这里只能看队长、回执和「待我处理」里提到的文件，以及报告文件夹里的；密钥、口令一类的文件一律不给看。';
+    if (code === 'missing' || (result.status === 404 && code)) return `这个文件已经不在 ${m.label} 上了，可能被移走或删掉了。`;
+    if (result.status === 404) return `${m.label} 上的 AgentDeck 还是旧版，升级以后才能在这里看文件。`;
+    if (result.status === 401) return `${m.label} 的登录已失效，先在总览里重新登录。`;
+    if (result.status === 403) return `${m.label} 的安全校验已过期，刷新页面后再试。`;
+    if (result.status === 502) return `${m.label} 离线，现在读不到它上面的文件。`;
+    return `${m.label} 没有给出这个文件（HTTP ${result.status}）。`;
+  };
+  async function loadPreview() {
+    const call = ++preview.call, m = byId(preview.machineId), path = preview.path;
+    dropPdf();
+    Object.assign(preview, { state: 'loading', error: '', data: null, got: 0, total: 0 });
+    renderPreview();
+    const stop = (text) => { if (call !== preview.call) return; preview.state = 'error'; preview.error = text; renderPreview(); };
+    if (!m) return stop('这个文件不知道在哪台电脑上。');
+    if (m.state !== 'online' || !m.csrf) return stop(`${m.label} ${Core.STATES[m.state].label}，现在读不到它上面的文件。`);
+    const read = (offset) => request(m, 'api/file', { method: 'POST', timeout: 30000, headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': m.csrf }, body: JSON.stringify(offset ? { path, offset } : { path }) });
+    const first = await read(0);
+    if (call !== preview.call) return;
+    if (first.status !== 200 || !first.body || first.body.ok !== true) return stop(fileFailure(first, m));
+    const data = first.body, parts = [];
+    if (typeof data.data === 'string') {
+      parts.push(data.data);
+      preview.total = data.size; preview.got = Math.min(data.size, data.next || data.size);
+      let next = data.next;
+      // A PDF or a large picture arrives in pieces; a file that changed on the way is read again from the top.
+      while (Number.isSafeInteger(next)) {
+        renderPreview();
+        const more = await read(next);
+        if (call !== preview.call) return;
+        if (more.status !== 200 || !more.body || typeof more.body.data !== 'string') return stop(fileFailure(more, m));
+        if (more.body.size !== data.size || more.body.mtime !== data.mtime) return stop('这个文件刚被改动过，点刷新图标重新读一次。');
+        parts.push(more.body.data);
+        next = more.body.next; preview.got = Math.min(data.size, next || data.size);
+      }
+      data.base64 = parts.join('');
+    }
+    preview.data = data; preview.state = 'ready';
+    renderPreview();
+  }
+  const bytesOf = (base64) => Uint8Array.from(atob(base64), (ch) => ch.charCodeAt(0));
+  function saveFile() {
+    const data = preview.data;
+    if (!data) return;
+    const blob = typeof data.base64 === 'string' ? new Blob([bytesOf(data.base64)], { type: data.mime || 'application/octet-stream' }) : new Blob([data.text || ''], { type: 'text/plain;charset=utf-8' });
+    const link = node('a'), url = URL.createObjectURL(blob);
+    link.href = url; link.download = data.name || 'file';
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  // ---- PDF -----------------------------------------------------------------
+  // A phone browser shows only the first page of an embedded PDF, so pages are
+  // drawn onto canvases by pdf.js (loaded the first time a PDF is opened). Each
+  // page holds its place from the start and is drawn when it comes near the
+  // screen; pages far away give their memory back.
+  let pdfLibrary = null;
+  function dropPdf() {
+    const pdf = preview.pdf;
+    preview.pdf = null;
+    if (!pdf) return;
+    pdf.watch && pdf.watch.disconnect();
+    try { pdf.task.destroy(); } catch (_) { /* Already gone. */ }
+  }
+  async function showPdf(box, data, call) {
+    const status = node('p', 'pv-note', '正在打开 PDF…');
+    box.append(status);
+    try {
+      if (!pdfLibrary) {
+        pdfLibrary = await import(new URL('pdf.min.js' + assetVersion, document.baseURI).href);
+        pdfLibrary.GlobalWorkerOptions.workerSrc = new URL('pdf.worker.min.js' + assetVersion, document.baseURI).href;
+      }
+      const task = pdfLibrary.getDocument({ data: bytesOf(data.base64), isEvalSupported: false, enableXfa: false, useWasm: false, verbosity: 0 });
+      const pdf = { task, pages: new Map(), watch: null };
+      preview.pdf = pdf;
+      const doc = await task.promise;
+      if (call !== preview.call || preview.pdf !== pdf) return;
+      status.remove();
+      const first = await doc.getPage(1), base = first.getViewport({ scale: 1 });
+      const pages = node('div', 'pv-pdf');
+      pages.setAttribute('aria-label', `PDF，共 ${doc.numPages} 页`);
+      const draw = async (holder) => {
+        const number = Number(holder.dataset.page);
+        if (pdf.pages.has(number) || preview.pdf !== pdf) return;
+        pdf.pages.set(number, true);
+        const page = number === 1 ? first : await doc.getPage(number), natural = page.getViewport({ scale: 1 });
+        const width = holder.clientWidth || 320;
+        // Sharp on a dense screen, but never more pixels than a phone can hold in one canvas.
+        const scale = Math.min((width / natural.width) * Math.min(window.devicePixelRatio || 1, 2), Math.sqrt(5e6 / (natural.width * natural.height)));
+        const view = page.getViewport({ scale }), canvas = node('canvas');
+        canvas.width = Math.floor(view.width); canvas.height = Math.floor(view.height);
+        canvas.setAttribute('role', 'img'); canvas.setAttribute('aria-label', `第 ${number} 页`);
+        await page.render({ canvas, canvasContext: canvas.getContext('2d'), viewport: view }).promise.catch(() => {});
+        if (preview.pdf !== pdf) return;
+        holder.replaceChildren(canvas);
+        // Keep about a dozen pages drawn; the ones furthest from this one are emptied.
+        if (pdf.pages.size > 12) {
+          const far = [...pdf.pages.keys()].sort((a, b) => Math.abs(b - number) - Math.abs(a - number))[0];
+          pdf.pages.delete(far);
+          const old = pages.querySelector(`[data-page="${far}"]`), drawn = old && old.querySelector('canvas');
+          if (drawn) { drawn.width = 0; drawn.height = 0; old.replaceChildren(node('span', 'pv-page-number', String(far))); }
+        }
+      };
+      pdf.watch = new IntersectionObserver((entries) => { for (const entry of entries) if (entry.isIntersecting) draw(entry.target); }, { root: previewBody, rootMargin: '600px 0px' });
+      for (let number = 1; number <= doc.numPages; number++) {
+        const holder = node('div', 'pv-page');
+        holder.dataset.page = String(number);
+        holder.style.aspectRatio = `${base.width} / ${base.height}`;
+        holder.append(node('span', 'pv-page-number', String(number)));
+        pages.append(holder);
+        pdf.watch.observe(holder);
+      }
+      box.append(pages);
+      pdf.count = doc.numPages;
+      const metaLine = $('preview-path').querySelector('.pv-meta');
+      if (metaLine) metaLine.textContent += ` · 共 ${doc.numPages} 页`;
+    } catch (_) {
+      if (call !== preview.call) return;
+      status.className = 'pv-empty';
+      status.textContent = '这个 PDF 没能在这里打开。可以点上面的下载图标存到手机里再看。';
+    }
+  }
+
+  function renderPreview() {
+    if (!preview.open) return;
+    const data = preview.data, m = byId(preview.machineId), sheet = !docked.matches;
+    const parts = Core.splitPath(preview.path);
+    $('preview-name').textContent = preview.path ? (data && data.name) || parts.name : '预览';
+    // The folder a file is in, cut from the left so the end of it stays readable.
+    const meta = !preview.path ? '' : [m && machines.length > 1 ? m.label : '', data && data.kind !== 'dir' && data.size ? Core.sizeText(data.size) : '', preview.pdf && preview.pdf.count ? `共 ${preview.pdf.count} 页` : ''].filter(Boolean).join(' · ');
+    $('preview-path').replaceChildren(...(meta ? [node('span', 'pv-meta', meta)] : []), ...(parts.dir && preview.path ? [node('span', 'pv-where', '\u200e' + parts.dir + '\u200e')] : []));
+    $('preview-path').title = preview.path;
+    $('preview-back').hidden = !preview.stack.length;
+    const actions = $('preview-actions');
+    actions.replaceChildren();
+    const add = (icon, label, onClick) => { const button = iconButton(icon, label); button.addEventListener('click', onClick); actions.append(button); return button; };
+    if (preview.state === 'ready' && data.kind === 'markdown') add(preview.source ? 'eye' : 'code', preview.source ? '看排好版的样子' : '看原文', () => { preview.source = !preview.source; renderPreview(); });
+    if (preview.path) {
+      const copy = add('copy', '复制文件路径', () => copyText(copy, preview.path, '复制文件路径'));
+      if (preview.state === 'ready' && (typeof data.base64 === 'string' || typeof data.text === 'string')) add('download', '下载到这台设备', saveFile);
+      add('refresh', '重新读取这个文件', loadPreview);
+    }
+    if (!sheet) add(preview.full ? 'shrink' : 'expand', preview.full ? '恢复成侧栏' : '放大到整页', () => { preview.full = !preview.full; placePanel(); });
+    add('close', '关闭预览', closePreview);
+
+    const progress = $('preview-progress');
+    progress.hidden = !(preview.state === 'loading' && preview.total > 0);
+    if (!progress.hidden) {
+      progress.textContent = `正在读取 ${Core.sizeText(preview.got)} / ${Core.sizeText(preview.total)}`;
+      progress.style.setProperty('--done', Math.round(preview.got / preview.total * 100) + '%');
+    }
+    const body = previewBody;
+    body.dataset.machine = preview.machineId;
+    if (!changed(body, [preview.state, preview.path, preview.machineId, preview.error, preview.source, data && [data.mtime, data.size, data.kind]])) return;
+    dropPdf();
+    body.replaceChildren(); body.scrollTop = 0;
+    body.className = 'preview-body';
+    const say = (icon, title, text) => {
+      const box = node('div', 'pv-empty'), art = node('div', 'pv-empty-art');
+      art.innerHTML = svg(icon);
+      box.append(art, node('strong', '', title));
+      if (text) box.append(node('p', '', text));
+      body.append(box);
+    };
+    if (preview.state === 'empty') return say('file', '点一个文件路径', '队长的回复、回执和「待我处理」里的文件路径都可以点，内容会显示在这里。');
+    if (preview.state === 'loading') { const box = node('div', 'pv-empty'), spin = node('span', 'spinner'); box.setAttribute('role', 'status'); box.append(spin, node('p', '', `正在从 ${m ? m.label : '电脑'} 读取…`)); body.append(box); return; }
+    if (preview.state === 'error') { say('alert', '没能打开', preview.error); body.firstChild.setAttribute('role', 'alert'); return; }
+    if (data.kind === 'dir') {
+      body.classList.add('is-list');
+      if (!data.entries.length) return say('folder', '这个文件夹是空的');
+      const list = node('div', 'pv-dir');
+      list.setAttribute('role', 'list');
+      for (const entry of data.entries) {
+        const row = node('button', 'pv-dir-row'); row.type = 'button'; row.setAttribute('role', 'listitem');
+        const icon = node('span', 'pv-dir-icon'); icon.innerHTML = svg(entry.dir ? 'folder' : 'file'); icon.setAttribute('aria-hidden', 'true');
+        row.append(icon, node('span', 'pv-dir-name', entry.name));
+        if (entry.dir) { const arrow = node('span', 'pv-dir-arrow'); arrow.innerHTML = svg('chevron'); arrow.setAttribute('aria-hidden', 'true'); row.append(arrow); }
+        row.addEventListener('click', () => openPreview(preview.machineId, Core.resolvePath(preview.path.replace(/[\\/]+$/, ''), entry.name)));
+        list.append(row);
+      }
+      body.append(list);
+      if (data.more) body.append(node('p', 'pv-note', `还有 ${data.more} 项没有列出来。`));
+    } else if (data.kind === 'markdown' && !preview.source) {
+      body.append(markdownNode(data.text, { className: 'pv-md' }));
+    } else if (data.kind === 'markdown' || data.kind === 'text') {
+      const wrap = node('div', 'pv-code'), total = data.text.split('\n').length;
+      const gutter = node('pre', 'pv-gutter', Array.from({ length: total }, (_, i) => i + 1).join('\n')); gutter.setAttribute('aria-hidden', 'true');
+      const source = node('pre', 'pv-src');
+      copyClean(new DOMParser().parseFromString('<pre>' + Core.highlightCode(data.text, data.kind === 'markdown' ? 'plain' : data.lang || 'plain') + '</pre>', 'text/html').body.firstChild, source);
+      wrap.append(gutter, source);
+      body.append(wrap);
+    } else if (data.kind === 'image') {
+      const image = node('img', 'pv-image');
+      image.alt = data.name; image.src = `data:${data.mime || 'image/png'};base64,${data.base64}`;
+      image.title = '点一下看原始大小';
+      image.addEventListener('click', () => image.classList.toggle('actual'));
+      body.classList.add('is-image');
+      body.append(image);
+    } else if (data.kind === 'pdf') {
+      body.classList.add('is-pdf');
+      showPdf(body, data, preview.call);
+    } else if (data.kind === 'toolarge') {
+      say('file', data.name, `这个文件有 ${Core.sizeText(data.size)}，超过了能在这里看的上限（${Core.sizeText(data.limit)}），没有读取。它还在 ${m.label} 上，路径可以用上面的复制图标复制。`);
+    } else {
+      say('file', data.name, `${Core.sizeText(data.size)} · 这种文件不能在这里预览（不是文字、图片或 PDF）。它还在 ${m.label} 上，路径可以用上面的复制图标复制。`);
+    }
+    if (data.truncated) body.append(node('p', 'pv-note', `文件有 ${Core.sizeText(data.size)}，这里只显示了前 1 MB。`));
+    if (preview.line > 0 && body.querySelector('.pv-src')) requestAnimationFrame(() => { body.scrollTop = Math.max(0, (preview.line - 4) * 20); });
+  }
+
+  // The sheet follows the finger: up to the full screen, down past a third to close.
+  // From its handle and title always; from the content only when that is scrolled to its top.
+  {
+    let pull = null;
+    const tall = () => shell.clientHeight;
+    const begin = (y) => { pull = { y, from: panel.getBoundingClientRect().height, at: Date.now(), last: y, moved: false }; };
+    const move = (y) => {
+      if (!pull) return;
+      pull.moved = pull.moved || Math.abs(y - pull.y) > 6;
+      if (!pull.moved) return;
+      pull.speed = (y - pull.last) / Math.max(1, Date.now() - pull.at); pull.last = y; pull.at = Date.now();
+      panel.classList.add('dragging');
+      panel.style.height = Math.max(80, Math.min(tall(), pull.from - (y - pull.y))) + 'px';
+    };
+    const end = () => {
+      if (!pull) return;
+      const drag = pull; pull = null;
+      panel.classList.remove('dragging');
+      if (!drag.moved) return;
+      const height = panel.getBoundingClientRect().height, share = height / tall(), flick = drag.speed || 0;
+      panel.style.removeProperty('height');
+      if (flick > 0.6 || share < 0.34) return closePreview();
+      preview.snap = flick < -0.6 || share > 0.78 ? 'full' : 'half';
+      panel.dataset.snap = preview.snap;
+    };
+    const sheetNow = () => preview.open && !docked.matches;
+    for (const handle of [$('preview-grip'), panel.querySelector('.preview-title')]) {
+      handle.addEventListener('pointerdown', (event) => { if (!sheetNow() || event.button > 0) return; begin(event.clientY); handle.setPointerCapture(event.pointerId); });
+      handle.addEventListener('pointermove', (event) => { if (pull) { move(event.clientY); if (pull && pull.moved) event.preventDefault(); } });
+      handle.addEventListener('pointerup', end);
+      handle.addEventListener('pointercancel', end);
+    }
+    // A tap on the handle steps between half and full height.
+    $('preview-grip').addEventListener('click', () => { if (!sheetNow()) return; preview.snap = preview.snap === 'full' ? 'half' : 'full'; panel.dataset.snap = preview.snap; });
+    let touch = null;
+    previewBody.addEventListener('touchstart', (event) => { touch = sheetNow() && event.touches.length === 1 ? { y: event.touches[0].clientY, x: event.touches[0].clientX, top: scrollTopUnder(event.target) <= 0 } : null; }, { passive: true });
+    previewBody.addEventListener('touchmove', (event) => {
+      if (!touch || event.touches.length !== 1) return;
+      const y = event.touches[0].clientY, dy = y - touch.y, dx = event.touches[0].clientX - touch.x;
+      if (!pull) { if (!(touch.top && dy > 8 && dy > Math.abs(dx) * 1.5)) return; begin(touch.y); }
+      move(y);
+      if (event.cancelable) event.preventDefault();
+    }, { passive: false });
+    previewBody.addEventListener('touchend', end);
+    previewBody.addEventListener('touchcancel', end);
+  }
+  // How far the list under the finger is scrolled (the body itself, or a table or code block inside it).
+  function scrollTopUnder(target) {
+    let top = 0;
+    for (let el = target; el && el !== panel; el = el.parentElement) top = Math.max(top, el.scrollTop || 0);
+    return top;
+  }
+
+  // ---- wide screens: the desktop app's layout ----------------------------------
+  // A tablet lying on its side has room for what the desktop shows: the sidebar
+  // (pages, each computer's Captain with its sessions under it, quota, the tool
+  // row) on the left, the page in the middle, the preview on the right. The
+  // conversation keeps its phone look. Below that width nothing changes.
+  const sideIcons = { captain: 'crown', attention: 'attention', board: 'board', todo: 'todo', overview: 'overview' };
+  document.querySelectorAll('[data-side-view]').forEach((button) => {
+    button.querySelector('.side-icon').innerHTML = svg(sideIcons[button.dataset.sideView]);
+    button.addEventListener('click', () => { showView(button.dataset.sideView); if (view === 'todo') $('todo-text').focus(); });
+  });
+  const KEY_SIDEBAR = 'agentdeck-hub-sidebar';
+  let sidebarClosed = stored(KEY_SIDEBAR) === 'closed';
+  function applyLayout() {
+    const isWide = wide.matches;
+    shell.classList.toggle('wide', isWide);
+    shell.classList.toggle('sidebar-closed', isWide && sidebarClosed);
+    // The tool row sits at the foot of the sidebar there, as on the desktop; on a phone it stays in the header.
+    const actions = document.querySelector('.header-actions');
+    if (isWide && actions.parentElement !== $('side-foot')) $('side-foot').append(actions);
+    else if (!isWide && actions.parentElement !== $('app-header')) $('pane-toggle').before(actions);
+    const toggle = $('side-toggle'), label = sidebarClosed ? '展开侧边栏' : '收起侧边栏';
+    toggle.title = label; toggle.setAttribute('aria-label', label); toggle.setAttribute('aria-expanded', String(!sidebarClosed));
+    // The session list is in the sidebar there, so the list page has nothing to add.
+    if (isWide && view === 'sessions' && machines.length) showView('captain');
+    placePanel();
+    if (machines.length) render();
+  }
+  $('side-toggle').addEventListener('click', () => { sidebarClosed = !sidebarClosed; store(KEY_SIDEBAR, sidebarClosed ? 'closed' : 'open'); applyLayout(); });
+  wide.addEventListener('change', applyLayout);
+  docked.addEventListener('change', applyLayout);
+
+  function renderSidebar() {
+    if (!wide.matches) return;
+    document.querySelectorAll('[data-side-view]').forEach((button) => {
+      if (button.dataset.sideView === view) button.setAttribute('aria-current', 'page'); else button.removeAttribute('aria-current');
+    });
+    const list = $('side-sessions');
+    if (changed(list, [view, target, output && [output.machineId, output.id], machines.map((m) => [m.id, m.label, m.state, m.snap && m.snap.captain && [m.snap.captain.id, m.snap.captain.status], m.snap && m.snap.sessions.map((s) => [s.id, s.title, s.status, s.isMain]), seatSignature(m)])])) {
+      const focused = list.contains(document.activeElement) ? document.activeElement.dataset.row : '';
+      list.replaceChildren();
+      for (const m of machines) {
+        const group = node('div', 'side-group'), head = node('div', 'side-captain');
+        const captain = m.snap && m.snap.captain && m.snap.captain.id ? m.snap.captain : null, online = m.state === 'online';
+        const row = node('button', 'side-row is-captain'); row.type = 'button'; row.dataset.row = m.id + ':captain';
+        const crown = node('span', 'side-crown'); crown.innerHTML = svg('crown'); crown.setAttribute('aria-hidden', 'true');
+        const status = online ? (captain ? captain.status : 'unavailable') : '';
+        const dot = node('span', online ? 'status-dot ' + status : 'dot tone-' + Core.STATES[m.state].tone); dot.setAttribute('aria-hidden', 'true');
+        const seat = online && m.relay ? Core.currentSeat(m.relay) : null;
+        const state = online ? (seat ? Core.seatLabel(seat) : statusNames[status] || '') : Core.STATES[m.state].short;
+        row.append(crown, dot, node('span', 'side-title', `${m.label} 队长`), node('span', 'side-state', state));
+        row.setAttribute('aria-label', `${m.label} 队长，${online ? statusNames[status] || '空闲' : Core.STATES[m.state].label}${seat ? '，在用 ' + Core.seatLabel(seat) : ''}`);
+        row.title = online ? `${statusNames[status] || '空闲'}${seat ? ' · ' + Core.seatLabel(seat) + ' ' + Core.seatQuotaText(seat) : ''}` : Core.STATES[m.state].label;
+        if (view === 'captain' && target === m.id) row.setAttribute('aria-current', 'true');
+        // A computer that is not answering opens its card, where it says why and takes the login.
+        row.addEventListener('click', () => { if (online) { setTarget(m.id); showView('captain'); } else { setFilter(m.id); showView('overview'); } });
+        head.append(row);
+        if (online && m.relay && m.relay.captainId) {
+          const swap = iconButton('swap', `切换 ${m.label} 队长的账号`, 'side-switch');
+          swap.dataset.switch = m.id; swap.setAttribute('aria-haspopup', 'dialog');
+          swap.addEventListener('click', () => openSwitch(m));
+          head.append(swap);
+        }
+        group.append(head);
+        const crew = (m.snap ? m.snap.sessions : []).filter((s) => !s.isMain);
+        if (crew.length) {
+          // Sessions hang under their Captain on a gold line, as in the desktop sidebar; those at work come first.
+          const box = node('div', 'side-crew');
+          for (const session of [...crew.filter((s) => s.status === 'working'), ...crew.filter((s) => s.status !== 'working')]) {
+            const item = node('button', 'side-row'); item.type = 'button'; item.dataset.row = m.id + ':' + session.id;
+            const mark = node('span', 'status-dot ' + session.status); mark.setAttribute('aria-hidden', 'true');
+            item.append(mark, node('span', 'side-title', session.title), node('span', 'side-state', statusNames[session.status] || '空闲'));
+            item.title = session.title;
+            if (view === 'output' && output && output.machineId === m.id && output.id === session.id) item.setAttribute('aria-current', 'true');
+            item.addEventListener('click', () => openOutput(m, session));
+            box.append(item);
+          }
+          group.append(box);
+        }
+        list.append(group);
+      }
+      if (focused) list.querySelector(`[data-row="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
+    }
+    // Quota of the computer the conversation is with, at the foot like the desktop sidebar.
+    const quotaBox = $('side-quota'), m = byId(target), now = Math.floor(Date.now() / 60000);
+    if (changed(quotaBox, [target, m && m.state, m && m.quota, m && m.quotaFailed, [...openQuota], machines.length, now])) {
+      const focused = quotaBox.contains(document.activeElement) ? document.activeElement.getAttribute('aria-controls') : '';
+      quotaBox.replaceChildren();
+      if (m && m.state === 'online' && m.quota) {
+        const section = quotaSection(m, 'side-');
+        if (machines.length > 1) section.querySelector('h3').textContent = `额度 · ${m.label}`;
+        quotaBox.append(section);
+      }
+      if (focused) document.getElementById(focused)?.previousElementSibling?.focus({ preventScroll: true });
+    }
+    $('side-version').textContent = m && m.meta.appVersion ? 'V' + m.meta.appVersion : '';
+    $('side-version').title = machines.filter((x) => x.meta.appVersion).map((x) => `${x.label} 上的 AgentDeck ${x.meta.appVersion}`).join('，');
+  }
+
   // ---- shell ---------------------------------------------------------------
   function showView(next) {
     if (view === 'output' && next !== 'output') { outputRequest++; output = null; $('output-text').textContent = ''; }
@@ -1364,9 +1890,10 @@
     renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
     renderAttention();
+    renderSidebar();
   }
   $('refresh').addEventListener('click', refreshAll);
-  $('back').addEventListener('click', () => showView('sessions'));
+  $('back').addEventListener('click', () => showView(wide.matches ? 'captain' : 'sessions'));
   {
     const label = $('logout-all').title;
     armed($('logout-all'), label, '再点一次，确认在这部手机上退出所有电脑', () => logout(machines.filter((m) => m.state === 'online')));
@@ -1389,7 +1916,7 @@
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
     machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '', todos: null, todosReady: null, todosAt: 0,
       meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
-    machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); $('machine-cards').append(m.card); });
+    machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); m.card.dataset.machine = m.id; $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);
     filter = byId(saved) ? saved : 'all';
     // With nothing chosen, work goes to the default machine (Mac) until the user picks another.
@@ -1397,6 +1924,7 @@
     // Open where the user left off; a bookmark ending in #todo (or another tab's name) opens that tab.
     const asked = location.hash.slice(1), last = stored(KEYS.view);
     showView(TABS.includes(asked) ? asked : TABS.includes(last) ? last : 'overview');
+    applyLayout();
     refreshAll();
   }
   start();

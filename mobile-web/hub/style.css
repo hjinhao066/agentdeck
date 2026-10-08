@@ -465,3 +465,190 @@ button.todo-done-toggle { width: 100%; min-height: 44px; margin: 14px 0 6px; pad
 .todo-empty-art svg { width: 28px; height: 28px; }
 .todo-empty strong { color: var(--text); font-size: 15px; font-weight: 650; }
 @media (prefers-reduced-motion: reduce) { .todo-check svg, .todo-chev svg, .todo-text { transition: none; } }
+
+/* Markdown: one look for Captain replies, receipts, 待我处理 details and previewed files. */
+.md { min-width: 0; font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; white-space: normal; }
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md p { margin: 0 0 .6em; }
+.md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 1em 0 .4em; font-weight: 650; line-height: 1.4; letter-spacing: -.2px; }
+.md h1 { font-size: 1.3em; } .md h2 { font-size: 1.18em; } .md h3 { font-size: 1.06em; }
+.md h4, .md h5, .md h6 { font-size: 1em; }
+.md ul, .md ol { margin: 0 0 .6em; padding-left: 1.45em; }
+.md li + li { margin-top: .2em; }
+.md li > ul, .md li > ol { margin: .2em 0 0; }
+.md strong { font-weight: 680; }
+.md del { color: var(--muted); }
+.md blockquote { margin: 0 0 .6em; padding: 2px 0 2px 12px; border-left: 3px solid var(--line-strong); color: var(--secondary); }
+.md hr { height: 0; margin: .9em 0; border: 0; border-top: 1px solid var(--line-strong); }
+.md code { padding: 1px 5px; border-radius: 6px; background: var(--soft); font: .88em/1.5 var(--mono); }
+.md-pre { position: relative; margin: 0 0 .6em; }
+.md pre.md-code { margin: 0; padding: 12px 48px 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--raised); font: 12.5px/1.65 var(--mono); white-space: pre; overflow-x: auto; overscroll-behavior-x: contain; }
+.md pre.md-code code { padding: 0; background: none; font: inherit; }
+.md-copy { position: absolute; top: 0; right: 0; color: var(--muted); }
+.md-copy svg { width: 17px; height: 17px; }
+/* A table keeps a readable width per column and scrolls sideways inside its frame when the screen is narrower than that. */
+.md-table { max-width: 100%; margin: 0 0 .6em; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; overscroll-behavior-x: contain; }
+.md-table:focus-visible { outline-offset: 0; }
+.md-table table { width: 100%; min-width: calc(var(--cols, 2) * 6.5em); border-collapse: collapse; font-size: .93em; line-height: 1.55; }
+.md-table th, .md-table td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; overflow-wrap: break-word; }
+.md-table th + th, .md-table td + td { border-left: 1px solid var(--line); }
+.md-table th { background: var(--raised); font-weight: 650; white-space: nowrap; }
+.md-table tr:last-child td { border-bottom: 0; }
+.md-table .short { white-space: nowrap; }
+.md-table .al-c { text-align: center; } .md-table .al-r { text-align: right; }
+.tok-c { color: var(--muted); } .tok-s { color: var(--ok); } .tok-n { color: var(--prio); } .tok-k { color: var(--accent); }
+/* A file path opens its preview; a web link opens a new tab. */
+.file-link, .web-link { color: var(--accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; border-radius: 4px; -webkit-tap-highlight-color: transparent; }
+.file-link { text-decoration-style: dotted; }
+.file-link::before { content: ""; display: inline-block; width: 1em; height: 1em; margin-right: 3px; vertical-align: -.14em; background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z'/%3E%3Cpath d='M14 3v5h5'/%3E%3C/svg%3E") center / contain no-repeat; }
+.file-link:hover, .web-link:hover { background: var(--accent-soft); }
+.bubble-md h1, .bubble-md h2, .bubble-md h3 { color: var(--text); }
+.receipt .receipt-text { margin-top: 4px; font-size: 13px; color: var(--secondary); }
+.receipt .receipt-text p { margin-top: 0; }
+.task-receipt.md { font-size: 12.5px; }
+.at-ask-text, .at-ask-text p { display: inline; margin: 0; font-size: inherit; }
+.md.at-text { font-size: 13.5px; line-height: 1.7; }
+.at-files li .file-link { display: inline-block; padding: 6px 0; }
+
+/* File preview. On a phone: a sheet from the bottom with a handle, half the screen, dragged up to all of it or down to close. */
+.preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); color: var(--text); }
+.preview.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; width: 100%; max-width: 680px; height: 62%; max-height: 100%; margin: 0 auto; border-radius: 22px 22px 0 0;
+  box-shadow: 0 -8px 40px rgb(0 0 0 / .28); overflow: hidden; transition: height .22s ease-out, border-radius .22s; animation: sheet-up .22s ease-out; }
+.preview.sheet[data-snap="full"] { height: 100%; padding-top: env(safe-area-inset-top); border-radius: 0; }
+.preview.sheet.dragging { transition: none; }
+.preview-scrim { position: fixed; inset: 0; z-index: 29; background: rgb(12 10 8 / .5); }
+.preview-grip { display: none; }
+.preview.sheet .preview-grip { display: flex; justify-content: center; flex: none; padding: 9px 0 3px; touch-action: none; cursor: grab; }
+.preview-grip span { width: 40px; height: 5px; border-radius: 3px; background: var(--line-strong); }
+.preview-head { display: flex; flex: none; flex-wrap: wrap; align-items: center; padding: 2px 4px 2px 14px; border-bottom: 1px solid var(--line); }
+.preview-head > #preview-back { margin-left: -10px; }
+.preview-title { flex: 1 1 150px; min-width: 0; display: flex; flex-direction: column; justify-content: center; min-height: 48px; padding: 4px 0; }
+.preview.sheet .preview-title { touch-action: none; }
+.preview-title strong { font-size: 15px; font-weight: 650; line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
+.preview-title strong:focus-visible { outline: 0; }
+.preview-path { display: flex; gap: 6px; min-width: 0; font: 11px/1.5 var(--mono); color: var(--muted); white-space: nowrap; }
+.pv-meta { flex: none; }
+/* The folder is cut from its left end, so the part next to the file name stays. */
+.pv-where { min-width: 0; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.preview-actions { display: flex; flex: none; margin-left: auto; }
+.preview-actions svg, #preview-back svg { width: 20px; height: 20px; }
+.preview-progress { position: relative; flex: none; margin: 0; padding: 6px 16px 7px; font-size: 12px; color: var(--secondary); font-variant-numeric: tabular-nums; }
+.preview-progress::after { content: ""; position: absolute; left: 0; bottom: 0; width: var(--done, 0%); height: 2px; background: var(--accent); transition: width .2s; }
+.preview-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 14px 16px calc(20px + env(safe-area-inset-bottom)); scrollbar-color: var(--accent) transparent; scrollbar-width: thin; }
+.preview-body:focus-visible { outline-offset: -2px; }
+.preview-body.is-pdf { padding: 10px 10px calc(16px + env(safe-area-inset-bottom)); background: var(--soft); }
+.preview-body.is-list { padding-top: 4px; }
+.pv-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 44px 16px 24px; text-align: center; color: var(--secondary); font-size: 13.5px; line-height: 1.7; }
+.pv-empty strong { color: var(--text); font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+.pv-empty p { max-width: 34em; overflow-wrap: anywhere; }
+.pv-empty-art { display: grid; place-items: center; width: 60px; height: 60px; margin-bottom: 4px; border-radius: 18px; background: var(--accent-soft); color: var(--accent); }
+.pv-empty-art svg { width: 28px; height: 28px; }
+.pv-empty[role="alert"] .pv-empty-art { background: var(--bad-soft); color: var(--bad); }
+.pv-note { margin-top: 12px; font-size: 12px; line-height: 1.6; color: var(--muted); }
+.pv-md { font-size: 15px; }
+.pv-code { display: flex; align-items: flex-start; min-width: max-content; font: 12.5px/20px var(--mono); }
+.pv-gutter { flex: none; margin: 0; padding: 0 10px 0 0; border-right: 1px solid var(--line); color: var(--muted); text-align: right; font: inherit; -webkit-user-select: none; user-select: none; }
+.pv-src { flex: 1; margin: 0; padding-left: 12px; font: inherit; white-space: pre; }
+/* In the narrow sheet lines wrap and the numbers step aside. */
+.preview.sheet .pv-code { min-width: 0; }
+.preview.sheet .pv-gutter { display: none; }
+.preview.sheet .pv-src { padding-left: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-image { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 6px; cursor: zoom-in; }
+.pv-image.actual { max-width: none; cursor: zoom-out; }
+.pv-pdf { display: grid; gap: 10px; }
+.pv-page { display: grid; place-items: center; width: 100%; border-radius: 3px; background: #fff; box-shadow: 0 0 0 1px var(--line); overflow: hidden; }
+.pv-page canvas { display: block; width: 100%; height: 100%; }
+.pv-page-number { color: #9a9a9a; font: 12px var(--mono); }
+.pv-dir-row { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 6px 4px; border: 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; font-size: 15px; }
+.pv-dir-row:hover { background: var(--soft); }
+.pv-dir-icon { color: var(--muted); } .pv-dir-icon svg { width: 20px; height: 20px; }
+.pv-dir-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pv-dir-arrow { color: var(--muted); } .pv-dir-arrow svg { width: 16px; height: 16px; }
+@media (prefers-reduced-motion: reduce) { .preview.sheet { transition: none; animation: none; } .preview-progress::after { transition: none; } }
+
+/* Wide screens (a tablet on its side, a laptop): the desktop app's layout. Sidebar on the left, the page, the preview on the right.
+   Narrower than this, everything above stays exactly as it is. */
+.sidebar, .wide-only, .docked-only, .lanes-head { display: none; }
+.center { display: contents; }
+.app.wide { flex-direction: row; max-width: none; }
+.app.wide .center { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.app.wide .sidebar { display: flex; flex: 0 0 288px; flex-direction: column; min-width: 0; min-height: 0; padding: env(safe-area-inset-top) 0 0 env(safe-area-inset-left); border-right: 1px solid var(--line); background: var(--surface); }
+.app.wide.sidebar-closed .sidebar { display: none; }
+.app.wide .wide-only { display: inline-flex; }
+.app.wide .navigation { display: none; }
+.side-head { display: flex; align-items: center; gap: 9px; flex: none; min-height: 48px; padding: 0 16px; }
+.side-head strong { font-size: 16px; font-weight: 650; letter-spacing: -.3px; }
+.side-nav { display: grid; gap: 2px; flex: none; padding: 2px 8px 8px; }
+.side-nav button { display: flex; align-items: center; gap: 11px; width: 100%; min-height: 44px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: var(--secondary); font-size: 15px; text-align: left; }
+.side-nav button:hover, .side-row:hover { background: var(--raised); }
+.side-nav button[aria-current="page"] { background: var(--soft); color: var(--text); font-weight: 600; }
+.side-icon svg { width: 19px; height: 19px; }
+.side-nav [data-side-view="captain"] .side-icon { color: var(--crown); }
+.side-name { flex: 1; min-width: 0; }
+.side-count { position: static; flex: none; min-width: 20px; height: 20px; line-height: 20px; }
+.side-count.nav-badge { background: var(--soft); color: var(--secondary); }
+.side-sessions { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 8px 8px 10px; border-top: 1px solid var(--line); scrollbar-color: var(--accent) transparent; scrollbar-width: thin; }
+.side-group + .side-group { margin-top: 8px; }
+.side-captain { display: flex; align-items: center; }
+.side-row { display: flex; flex: 1; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 44px; padding: 0 10px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font-size: 14px; text-align: left; }
+.side-row[aria-current="true"] { background: var(--soft); }
+.side-row.is-captain .side-title { font-weight: 600; }
+.side-crown { display: flex; flex: none; color: var(--crown); } .side-crown svg { width: 15px; height: 15px; }
+.side-row .status-dot, .side-row .dot { flex: none; }
+.status-dot.working, .status-dot.input, .status-dot.quota, .status-dot.asking, .status-dot.queued, .status-dot.waiting { background: var(--warn); }
+.status-dot.idle, .status-dot.unavailable { background: var(--off); }
+.status-dot.failed { background: var(--bad); }
+.side-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-state { flex: none; max-width: 46%; overflow: hidden; text-overflow: ellipsis; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.side-switch { color: var(--muted); } .side-switch svg { width: 18px; height: 18px; }
+/* Sessions hang under their Captain on a gold line. */
+.side-crew { margin: 0 0 0 17px; padding-left: 5px; border-left: 1.5px solid color-mix(in srgb, var(--crown) 60%, transparent); }
+.side-crew .side-row { font-size: 13.5px; color: var(--secondary); }
+.side-quota { flex: none; max-height: 42%; overflow-y: auto; overscroll-behavior: contain; padding: 0 14px 6px; border-top: 1px solid var(--line); }
+.side-quota:empty { display: none; }
+.side-quota .quota { --quota-cell: 70px; --quota-gap: 8px; margin-top: 0; padding-top: 8px; border-top: 0; }
+.side-quota .quota-reset { font-size: 11px; }
+.side-quota .quota-line { gap: 4px; }
+.side-quota .quota-detail { padding-left: 8px; }
+.side-foot { display: flex; align-items: center; flex: none; padding: 2px 4px max(2px, env(safe-area-inset-bottom)) 14px; border-top: 1px solid var(--line); }
+.side-version { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); color: var(--muted); }
+/* The top bar: sidebar switch, the computer switch, and the preview pane's switch at the far end. */
+.app.wide .app-header { min-height: 52px; padding: max(4px, env(safe-area-inset-top)) 8px 4px; border-bottom: 1px solid var(--line); }
+.app.wide .brand { display: none; }
+.app.wide .app-header[data-view="output"] .brand, .app.wide .app-header[data-view="todo"] .brand { display: flex; margin-left: 6px; }
+.app.wide .app-header .brand-mark { display: none; }
+.app.wide #pane-toggle { margin-left: auto; }
+.app.wide:not(.sidebar-closed) #back { display: none; }
+.app.wide .notice { margin: 10px 28px 0; }
+.app.wide main { padding: 22px 28px 28px; container: page / inline-size; }
+.app.wide main.fill { padding: 8px 20px 12px; }
+.app.wide .view { width: 100%; max-width: 980px; margin: 0 auto; }
+.app.wide #overview-view, .app.wide #board-view { max-width: 1320px; }
+.app.wide .captain-view { max-width: 860px; }
+/* Each page opens with its name, as on the desktop. */
+.app.wide .view:not(.captain-view):not(#output-view)::before { content: attr(aria-label); display: block; margin: 0 4px 14px; font-size: 22px; font-weight: 650; line-height: 1.3; letter-spacing: -.4px; }
+.app.wide #machine-cards { grid-template-columns: repeat(auto-fit, minmax(min(100%, 400px), 1fr)); align-items: start; }
+.app.wide .todo-form { top: -22px; margin: -8px 0 0; padding: 8px 0 6px; }
+.app.wide .chips { flex-wrap: wrap; overflow: visible; margin: 10px 0 14px; padding: 0; }
+.app.wide .bubble.mine { max-width: 76%; }
+.app.wide .output { min-height: 0; }
+@media (min-width: 1180px) and (min-height: 600px) {
+  .app.wide .docked-only { display: inline-flex; }
+  /* The preview stands beside the page, like the desktop side pane. */
+  .app.pane-open .preview { flex: 0 0 clamp(380px, 36%, 520px); border-left: 1px solid var(--line); padding-top: env(safe-area-inset-top); }
+  .app.pane-full .center { display: none; }
+  .app.pane-full .preview { flex: 1 1 auto; border-left: 0; }
+  .app.pane-open .preview-head { min-height: 52px; }
+}
+/* The board with room to spare: one column per status, as on the desktop board. */
+@container page (min-width: 900px) {
+  .lanes-head, .project { display: grid; grid-template-columns: repeat(var(--lanes, 5), minmax(0, 440px)); column-gap: 12px; }
+  .lanes-head { position: sticky; top: -22px; z-index: 1; padding: 8px 4px; background: var(--bg); font-size: 12px; font-weight: 600; color: var(--muted); }
+  .project { grid-auto-flow: row dense; align-items: start; }
+  .project-heading { grid-column: 1 / -1; margin-top: 6px; }
+  .task-card { grid-column: var(--lane, 1); }
+  .task-owner { margin-left: 0; }
+}

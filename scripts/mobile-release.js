@@ -13,7 +13,8 @@ const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null,
 const quote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
 const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const PUBLIC_ORIGIN = 'https://agentdeck.18-139-28-180.sslip.io';
-const FILES = ['index.html', 'core.js', 'app.js', 'style.css', 'machines.json'];
+// pdf.min.js and pdf.worker.min.js are pdf.js (Apache-2.0), fetched by the page only when a PDF is opened.
+const FILES = ['index.html', 'core.js', 'app.js', 'style.css', 'machines.json', 'pdf.min.js', 'pdf.worker.min.js'];
 function privateJSON(file) {
   try { return readJSON(file); }
   catch { throw new Error('Cannot read private mobile configuration/credentials'); }
@@ -45,7 +46,7 @@ function build(repo, directory, expected = {}) {
   const metadata = { version, commit, builtAt: new Date().toISOString() };
   fs.mkdirSync(directory, { recursive: true });
   for (const name of FILES) {
-    let bytes = execFileSync('git', ['show', `${commit}:mobile-web/hub/${name}`], { cwd: repo });
+    let bytes = execFileSync('git', ['show', `${commit}:mobile-web/hub/${name}`], { cwd: repo, maxBuffer: 16 * 1024 * 1024 });
     if (name === 'index.html') {
       let html = bytes.toString('utf8');
       if (!html.includes('</head>')) throw new Error('Hub index is missing </head>');

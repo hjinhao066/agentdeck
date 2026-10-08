@@ -23,8 +23,15 @@
   }
 
   // ---- text helpers ----
-  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  const isWide = (ch) => /[ᄀ-ᅟ⺀-鿿가-힣豈-﫿＀-｠￠-￦]/.test(ch);
+  // Markdown, code colouring, file kinds and how broken lines join are the phone
+  // hub's rules (mobile-web/hub/core.js, "Reading text"): one renderer for the
+  // desktop and the phone. Looked up when called, so the load order of the two
+  // files does not matter.
+  const reading = () => (typeof module === 'object' && module.exports ? require('./mobile-web/hub/core.js') : globalThis.HubCore);
+  const shared = (name) => (...args) => reading()[name](...args);
+  const esc = shared('esc'), isWide = shared('isWide'), joinGap = shared('joinGap'), pipeTable = shared('pipeTable');
+  const fileKind = shared('fileKind'), languageFor = shared('languageFor'), imageMime = shared('imageMime'), extOf = shared('extOf');
+  const highlightCode = shared('highlightCode'), tidyReply = shared('tidyReply'), renderMarkdown = shared('renderMarkdown');
   function visibleWidth(s) {
     let w = 0;
     for (const ch of String(s)) w += isWide(ch) ? 2 : 1;
@@ -113,14 +120,6 @@
     return blocks;
   }
 
-  // What goes between two pieces of a line the terminal broke. It breaks at a
-  // space when it can, so the space comes back unless both sides are Chinese
-  // (a run cut at the right edge) or one of them is punctuation that sits tight.
-  const TIGHT = /[\u2018-\u201f\u2026\u3000-\u303f\uff00-\uffef]/;
-  function joinGap(before, after) {
-    const a = String(before).slice(-1), b = String(after)[0] || '';
-    return !a || !b || /\s/.test(a) || (isWide(a) && isWide(b)) || TIGHT.test(a) || TIGHT.test(b) ? '' : ' ';
-  }
   const TABLE_ROW = /^\s*[|│]/;
 
   // Terminals hard-wrap long paragraphs; glue them back so the chat bubble can
@@ -147,8 +146,6 @@
   // rules can still be read: a cell wrapped over several rows is one cell again.
   // A table cut off by the screen edge is left as it is.
   const BOX_TOP = /^\s*┌[─┬]*┬[─┬]*┐\s*$/, BOX_MID = /^\s*├[─┼]+┤\s*$/, BOX_END = /^\s*└[─┴]+┘\s*$/, BOX_ROW = /^\s*│.*│\s*$/;
-  const pipeRow = (cells) => '| ' + cells.map((c) => c.replace(/\|/g, '\\|')).join(' | ') + ' |';
-  const pipeTable = (rows, indent = '') => [pipeRow(rows[0]), '|' + rows[0].map(() => ' --- ').join('|') + '|', ...rows.slice(1).map(pipeRow)].map((l) => indent + l);
   function boxTables(lines) {
     const out = [];
     for (let i = 0; i < lines.length; i++) {
@@ -437,55 +434,6 @@
   }
 
   // ---- files ----
-  const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg', 'avif']);
-  const LANG = {
-    js: 'js', mjs: 'js', cjs: 'js', jsx: 'js', ts: 'js', tsx: 'js', json: 'json', css: 'css', html: 'html', htm: 'html',
-    py: 'py', sh: 'sh', bash: 'sh', zsh: 'sh', rb: 'py', yml: 'py', yaml: 'py', toml: 'py', ini: 'py', conf: 'py',
-    go: 'js', rs: 'js', java: 'js', c: 'js', h: 'js', cpp: 'js', swift: 'js', kt: 'js', php: 'js', sql: 'sql', lua: 'sql',
-  };
-  function extOf(name) { const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(name)); return m ? m[1].toLowerCase() : ''; }
-  function fileKind(name) {
-    const ext = extOf(name);
-    if (ext === 'md' || ext === 'markdown') return 'markdown';
-    if (ext === 'pdf') return 'pdf';
-    if (IMAGE_EXT.has(ext)) return 'image';
-    return 'text';
-  }
-  function languageFor(name) { return LANG[extOf(name)] || 'plain'; }
-  const IMAGE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif' };
-  function imageMime(name) { return IMAGE_MIME[extOf(name)] || null; }
-
-  // ---- code highlighting (small, generic, always escaped) ----
-  const KEYWORDS = new Set(('function const let var return if else for while switch case break continue class new import from export default async await try catch finally throw typeof in of ' +
-    'def lambda None True False self elif with as pass raise yield fn pub struct impl enum match use mod func type interface package null undefined true false nil void int string bool ' +
-    'select insert update delete create table where join group order by limit and or not then end').split(' '));
-  function highlightCode(code, lang) {
-    if (lang === 'plain') return esc(code);
-    const hashComment = lang === 'py' || lang === 'sh';
-    const lineComment = lang === 'sql' ? '--' : '//';
-    const parts = [
-      '/\\*[\\s\\S]*?\\*/',
-      hashComment ? '#[^\\n]*' : (lang === 'plain' || lang === 'json' || lang === 'html' ? '(?!)' : lineComment.replace(/[/-]/g, '\\$&') + '[^\\n]*'),
-      '"(?:\\\\.|[^"\\\\\\n])*"', "'(?:\\\\.|[^'\\\\\\n])*'", '`(?:\\\\.|[^`\\\\])*`',
-      '\\b\\d[\\d_.]*\\b', '[A-Za-z_][A-Za-z0-9_]*',
-    ];
-    const re = new RegExp(parts.map((p) => '(' + p + ')').join('|'), 'g');
-    let out = '', last = 0, m;
-    while ((m = re.exec(code))) {
-      out += esc(code.slice(last, m.index));
-      const t = m[0];
-      let cls = null;
-      if (m[1] || m[2]) cls = 'c';
-      else if (m[3] || m[4] || m[5]) cls = 's';
-      else if (m[6]) cls = 'n';
-      else if (KEYWORDS.has(t)) cls = 'k';
-      out += cls ? `<span class="tok-${cls}">${esc(t)}</span>` : esc(t);
-      last = m.index + t.length;
-      if (t.length === 0) re.lastIndex++;
-    }
-    return out + esc(code.slice(last));
-  }
-
   // ---- what a reply reads as in the chat view ----
   // A reply is read off the terminal screen and saved as it was read. What the
   // chat view shows is the agent's words only: `clean` is the phone hub's
@@ -500,194 +448,6 @@
     const head = text.split(/\n[ \t]*\n/)[0].split('\n');
     if (head.length > 1 && /^\S/.test(head[0]) && head.slice(1).some((l) => DIFF_ROW.test(l))) text = '    ' + text;
     return clean(text, said || '', prompt || '');
-  }
-
-  // The shown reply as Markdown for the page. The TUI already drew the agent's
-  // Markdown as plain rows, so the structure is read back from their shape:
-  // a short line standing alone or right above a list is a section title, rows
-  // of │ cells are a table, and "key: value" records repeating the same keys
-  // (how the TUI draws a table too wide for it) are a table again.
-  const leading = (l) => /^ */.exec(l)[0].length;
-  // A reply drawn two columns in keeps that indent on every row except the first
-  // row of each paragraph (the shared rules trim it): take it off the rest too.
-  function dedent(lines) {
-    const inner = lines.filter((l, i) => l.trim() && i > 0 && lines[i - 1].trim());
-    const cut = inner.length ? Math.min(...inner.map(leading)) : 0;
-    return cut ? lines.map((l) => l.slice(Math.min(cut, leading(l)))) : lines;
-  }
-  const NOT_TITLE_END = /[。．.！!？?；;，,、：:…~～]$/;
-  // opening: the reply's first line, where a short one is more often "好的" than a title
-  function titleLike(line, aboveList, opening) {
-    const t = line.trim(), n = [...t].length;
-    if (n < (opening && !aboveList ? 4 : 2) || n > (aboveList ? 48 : 32)) return false;
-    if (/^(?:[-*+•>|#│]|\d+[.)]\s|```|~~~)/.test(t) || NOT_TITLE_END.test(t)) return false;
-    if (!/[A-Za-z一-鿿]/.test(t) || /^[^\s:：]{1,12}: \S/.test(t)) return false;
-    if (/https?:\/\/|\w\/\w|[~.]?\/[\w.-]+\/|\.[A-Za-z]{1,5}(?:\s|$)|\\|`|\*\*/.test(t)) return false;   // a path, a file, code, or already styled
-    if (/^[\x20-\x7e]+$/.test(t) && (!/^[A-Z0-9]/.test(t) || /[=$<>{}[\];|&]|--|\.\w{1,5}$/.test(t))) return false;   // a command, a file name
-    return true;
-  }
-  // "│ a │ b │ │ c │ d │": rows the terminal drew, possibly glued onto one line.
-  function boxRows(lines) {
-    const rows = lines.flatMap((l) => l.trim().split('│ │')).map((r) => r.replace(/^\s*│?|│?\s*$/g, '').split('│').map((c) => c.trim()));
-    return rows.length && rows[0].length > 1 && rows.every((r) => r.length === rows[0].length) ? pipeTable(rows) : null;
-  }
-  // "版本: 1.2.0 / Mac: 已装 / 版本: 1.2.1 / Mac: …": the first key repeats, every
-  // record holds the same keys in the same order. A key is what the records
-  // share right before each colon, so records glued together by reflow still split.
-  function recordRows(lines) {
-    const text = lines.join('\n');
-    const lead = /^([^\s:：]{1,12}): /.exec(text);
-    if (!lead) return null;
-    const records = text.split(lead[1] + ': ').slice(1);
-    if (records.length < 2) return null;
-    const parts = records.map((r) => r.split(/: /));
-    const count = parts[0].length;
-    if (count < 2 || count > 8 || parts.some((p) => p.length !== count)) return null;
-    const keys = [lead[1]];
-    for (let k = 0; k < count - 1; k++) {
-      // the longest ending the records share, without spaces
-      const ends = parts.map((p) => /[^\s:：]{0,12}$/.exec(p[k])[0]);
-      let key = ends[0];
-      for (const e of ends) while (key && !e.endsWith(key)) key = key.slice(1);
-      if (!key) return null;
-      keys.push(key);
-    }
-    const rows = parts.map((p) => p.map((v, k) => (k < count - 1 ? v.slice(0, v.length - keys[k + 1].length) : v).replace(/\s+/g, ' ').trim()));
-    return pipeTable([keys, ...rows]);
-  }
-  function tidyReply(text) {
-    const lines = dedent(String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n'));
-    const blocks = [];          // { lines, code } split on empty lines; a fenced block stays whole
-    let cur = null, fence = false;
-    for (const line of lines) {
-      const mark = /^\s*(```|~~~)/.test(line);
-      if (fence || mark) {
-        if (!cur || !cur.code) blocks.push((cur = { lines: [], code: true }));
-        cur.lines.push(line);
-        if (mark) { fence = !fence; if (!fence) cur = null; }
-      } else if (!line.trim()) cur = null;
-      else { if (!cur) blocks.push((cur = { lines: [] })); cur.lines.push(line); }
-    }
-    return blocks.map((b, at) => {
-      if (b.code) return b.lines.join('\n');
-      const table = b.lines.every((l) => BOX_ROW.test(l)) ? boxRows(b.lines) : recordRows(b.lines);
-      if (table) return table.join('\n');
-      const aboveList = b.lines.length > 1 && LIST_ITEM.test(b.lines[1]);
-      // right above a sentence too: the terminal only breaks a line that is full, so a short first line was meant as one
-      const aboveText = b.lines.length > 1 && !aboveList && (NOT_TITLE_END.test(b.lines[1].trim()) || [...b.lines[1].trim()].length > 32);
-      const title = (b.lines.length === 1 ? at < blocks.length - 1 : aboveList || aboveText) && titleLike(b.lines[0], aboveList, at === 0);
-      return (title ? ['### ' + b.lines[0].trim(), ...b.lines.slice(1)] : b.lines).join('\n');
-    }).join('\n\n');
-  }
-
-  // ---- markdown (for previewing .md files) ----
-  const SAFE_URL = /^(https?:\/\/|mailto:)/i;
-  function inline(src) {
-    let s = esc(String(src).replace(/\u0000/g, ''));
-    const codes = [];
-    s = s.replace(/`([^`\n]+)`/g, (_, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
-    s = s.replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, (all, text, url) => {
-      const raw = url.replace(/&amp;/g, '&');
-      return SAFE_URL.test(raw) ? `<a href="${esc(raw)}" data-ext="1">${text}</a>` : text;
-    });
-    s = s.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:!?]|$)/g, '$1<em>$2</em>');
-    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => `<code>${codes[i]}</code>`);
-  }
-  const tableAt = (lines, i) => /^\s*\|.*\|\s*$/.test(lines[i]) && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1] || '');
-  // A list from line `start`: items nest by their indent, an indented line that
-  // is not an item continues the one above it (a terminal wraps long items that
-  // way), and one empty line between two items does not end the list.
-  const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
-  function listAt(lines, start) {
-    const root = { lists: [] };
-    const open = [];                 // lists being filled, outermost first
-    const item = () => { const l = open[open.length - 1]; return l.items[l.items.length - 1]; };
-    let i = start;
-    for (; i < lines.length; i++) {
-      const line = lines[i];
-      if (!line.trim()) {
-        if (LIST_ITEM.test(lines[i + 1] || '')) continue;
-        break;
-      }
-      const m = LIST_ITEM.exec(line);
-      const indent = /^\s*/.exec(line)[0].length;
-      if (!m) {
-        if (indent < 2 || /^\s*(#{1,6}\s|```|~~~|>)/.test(line) || tableAt(lines, i)) break;
-        while (open.length && open[open.length - 1].indent >= indent) open.pop();
-        if (!open.length) break;
-        item().text.push(line.trim());
-        continue;
-      }
-      const ordered = /\d/.test(m[2]);
-      while (open.length && open[open.length - 1].indent > indent) open.pop();
-      let list = open[open.length - 1];
-      if (!list || list.indent < indent || list.ordered !== ordered) {
-        if (list && list.indent === indent) open.pop();       // bullets turning into numbers start a list of their own
-        list = { indent, ordered, first: ordered ? parseInt(m[2], 10) : 1, items: [] };
-        (open.length ? item() : root).lists.push(list);
-        open.push(list);
-      }
-      list.items.push({ text: [m[3].trim()], lists: [] });
-    }
-    const render = (list) => {
-      const tag = list.ordered ? 'ol' : 'ul';
-      return `<${tag}${list.ordered && list.first !== 1 ? ` start="${list.first}"` : ''}>` + list.items.map((it) =>
-        `<li>${inline(it.text.reduce((a, b) => a + joinGap(a, b) + b))}${it.lists.map(render).join('')}</li>`).join('') + `</${tag}>`;
-    };
-    return { html: root.lists.map(render).join('\n'), next: i };
-  }
-  // breaks: keep single newlines inside a paragraph (agent replies come from a
-  // terminal, where a line break is usually meant).
-  function renderMarkdown(src, opts) {
-    const breaks = !!(opts && opts.breaks);
-    const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
-    const html = [];
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-      const fence = /^\s*(```|~~~)\s*([\w+-]*)/.exec(line);
-      if (fence) {
-        const body = [];
-        i++;
-        while (i < lines.length && !/^\s*(```|~~~)\s*$/.test(lines[i])) body.push(lines[i++]);
-        i++;
-        const lang = LANG[fence[2]] || 'plain';
-        html.push(`<pre class="md-code"><code data-lang="${esc(fence[2])}">${highlightCode(body.join('\n'), lang)}</code></pre>`);
-        continue;
-      }
-      const h = /^(#{1,6})\s+(.*)$/.exec(line);
-      if (h) { html.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
-      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { html.push('<hr>'); i++; continue; }
-      if (/^\s*>/.test(line)) {
-        const q = [];
-        while (i < lines.length && /^\s*>/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
-        html.push(`<blockquote>${inline(q.join(' '))}</blockquote>`);
-        continue;
-      }
-      if (tableAt(lines, i)) {
-        const cells = (l) => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
-        const head = cells(line);
-        i += 2;
-        const rows = [];
-        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(cells(lines[i++]));
-        // wrapped so a wide table scrolls inside the text instead of stretching it
-        html.push('<div class="md-table"><table><thead><tr>' + head.map((c) => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>' +
-          rows.map((r) => '<tr>' + head.map((_, k) => `<td>${inline(r[k] || '')}</td>`).join('') + '</tr>').join('') + '</tbody></table></div>');
-        continue;
-      }
-      if (LIST_ITEM.test(line)) {
-        const list = listAt(lines, i);
-        html.push(list.html);
-        i = list.next;
-        continue;
-      }
-      if (!line.trim()) { i++; continue; }
-      const para = [];
-      while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*(```|~~~)|\s*>|\s*([-*+]|\d+[.)])\s)/.test(lines[i]) && !tableAt(lines, i)) para.push(lines[i++].trim());
-      if (!para.length) { para.push(lines[i++]); }
-      html.push(`<p>${breaks ? para.map(inline).join('<br>') : inline(para.join(' '))}</p>`);
-    }
-    return html.join('\n');
   }
 
   // ---- artifacts: files and links the agents mentioned in their replies ----

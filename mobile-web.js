@@ -6,6 +6,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const net = require('node:net');
 const QuotaCore = require('./quota-core');
+const FilePreview = require('./file-preview-core');
 const fsSync = require('node:fs');
 
 const DEFAULT_PORT = 43121;
@@ -212,11 +213,14 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, machine = {}, uploadDir = '', now = Date.now }) {
+  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, machine = {}, uploadDir = '', now = Date.now, preview = null }) {
     this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos };
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
+    // File previews: { home, roots, denied } for file-preview-core, or null for none.
+    this.preview = preview;
+    this.previewTexts = { at: 0, texts: [] };
     // 待我处理: the list, and the user's read / reply / tick from the phone.
     const { getAttention, writeAttention } = arguments[0] || {};
     Object.assign(this.sources, { getAttention, writeAttention });
@@ -430,6 +434,22 @@ class MobileWebServer {
     const file = path.join(this.uploadDir, id);
     try { return (await fs.lstat(file)).isFile() ? file : null; } catch (_) { return null; }
   }
+  // What the Captain, the receipts and 待我处理 said: only a path named there
+  // (or one inside the report folders) can be previewed. What the user typed
+  // on the phone is left out, so writing a path into a message opens nothing.
+  // Kept for a few seconds: a PDF arrives in many pieces.
+  async namedTexts() {
+    if (this.now() - this.previewTexts.at < 3000 && this.previewTexts.at <= this.now()) return this.previewTexts.texts;
+    const texts = [], add = (value) => { if (typeof value === 'string' && value) texts.push(value); };
+    const safe = async (read) => { try { return read ? await read() : null; } catch (_) { return null; } };
+    const [captain, sessions, cards, attention] = await Promise.all([safe(this.sources.getCaptain), safe(this.sources.getSessions), safe(this.sources.getTasks), safe(this.sources.getAttention)]);
+    for (const turn of Array.isArray(captain?.turns) ? captain.turns : []) add(turn?.reply);
+    for (const session of Array.isArray(sessions) ? sessions : []) add(session?.receipt);
+    for (const card of Array.isArray(cards) ? cards : []) add(card?.latest_receipt);
+    for (const item of attentionView(attention, this.now()).items) { add(item.title); add(item.ask); add(item.detail); item.files.forEach(add); }
+    this.previewTexts = { at: this.now(), texts };
+    return texts;
+  }
   async read(req, type, limit) {
     if (!type.test(req.headers['content-type'] || '')) throw { status: 415 };
     const chunks = await new Promise((resolve, reject) => {
@@ -483,7 +503,7 @@ class MobileWebServer {
     // Fixed, non-sensitive fields only; no hostname, exact app version, token,
     // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
-      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : [])],
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : [])],
         machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
@@ -624,6 +644,22 @@ class MobileWebServer {
       try { item = await this.sources.writeTodos(input); }
       catch (err) { return this.json(res, 400, { error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) || '没有记下。' }); }
       return this.json(res, 200, { item });
+    }
+    // Previewing a file the conversation named. A POST, so the path travels in
+    // the body (never a URL) and the request carries the device's CSRF token.
+    // Read only; file-preview-core decides what may be read and how much.
+    // The answer is JSON (pictures and PDFs as base64 pieces): the entry proxy lets nothing else through.
+    if (req.method === 'POST' && route === '/api/file' && this.preview) {
+      let body;
+      try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
+      const offset = body.offset === undefined ? 0 : body.offset;
+      if (Object.keys(body).some((key) => key !== 'path' && key !== 'offset') || typeof body.path !== 'string' || !Number.isSafeInteger(offset) || offset < 0) return this.json(res, 400, { error: 'Invalid request.', code: 'invalid' });
+      if (!this.writeCredential(req, res, prefixed)) return;
+      let result;
+      try { result = await FilePreview.readPreview(body.path, { ...this.preview, texts: await this.namedTexts(), offset }); }
+      catch (_) { result = { ok: false, code: 'denied' }; }
+      if (result.ok) return this.json(res, 200, result);
+      return this.json(res, result.code === 'invalid' ? 400 : result.code === 'missing' ? 404 : 403, { error: result.code === 'missing' ? 'File not found.' : result.code === 'invalid' ? 'Invalid request.' : 'This file cannot be previewed.', code: result.code });
     }
     if (req.method === 'POST' && route === '/api/upload' && this.uploadDir) {
       let data;
