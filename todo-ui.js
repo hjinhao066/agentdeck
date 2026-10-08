@@ -355,8 +355,12 @@
     // Esc (the dialog's own cancel) throws the draft away, like ×.
     dlg.addEventListener('cancel', (e) => { e.preventDefault(); closeQuick(true); });
     // The panel fills the dialog box, so a click that lands on the dialog itself is on the dimmed outside.
-    // It only puts the box away: the words wait for the next shortcut.
-    dlg.addEventListener('pointerdown', (e) => { if (e.target === dlg) { e.preventDefault(); closeQuick(false); } });
+    // It only puts the box away: the words wait for the next shortcut. Closing on the click (pressed and
+    // released outside) keeps that click from reaching whatever sits underneath, and a text selection
+    // dragged out of the input does not count.
+    let downOutside = false;
+    dlg.addEventListener('pointerdown', (e) => { downOutside = e.target === dlg; if (downOutside) e.preventDefault(); });
+    dlg.addEventListener('click', (e) => { if (e.target === dlg && downOutside) closeQuick(false); downOutside = false; });
     quick = { dlg, input, add, status, list, fresh: null };
   }
   function quickOpen() { return !!(quick && quick.dlg.open); }

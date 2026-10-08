@@ -326,17 +326,41 @@ test('a click anywhere outside closes it and keeps the half-typed words for next
   await page.keyboard.press(quickKey);
   await quickInput().fill('手滑点到别处');
   const box = await quick().boundingBox();
-  for (const [x, y] of [[box.x - 30, box.y + box.height / 2], [box.x + box.width + 30, box.y + box.height / 2], [box.x + box.width / 2, box.y + box.height + 20]]) {
+  const view = await page.evaluate(() => ({ width: innerWidth, height: innerHeight }));
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  // Above, below, left, right, just past each edge, and the far corners (over the sidebar and the terminal).
+  const outside = [[cx, box.y - 12], [cx, box.y + box.height + 12], [box.x - 12, cy], [box.x + box.width + 12, cy],
+    [60, view.height - 60], [view.width - 40, view.height - 40], [60, 120], [view.width - 40, 120]];
+  await page.evaluate(() => { window.__underClicks = 0; document.addEventListener('click', (e) => { if (!e.target.closest('#todoQuick')) window.__underClicks++; }, true); });
+  for (const [x, y] of outside) {
     await page.mouse.click(x, y);
-    await expect(quick()).toBeHidden();
+    await expect(quick(), `click at ${Math.round(x)},${Math.round(y)}`).toBeHidden();
     await expect(termFocus()).toBeFocused();
     await page.keyboard.press(quickKey);
+    await expect(quick()).toBeVisible();
     await expect(quickInput()).toHaveValue('手滑点到别处');
   }
-  // A click inside (the list, the title) leaves it open.
+  // The click that closed the box never reached what is underneath (no sidebar entry or page opened).
+  expect(await page.evaluate(() => window.__underClicks)).toBe(0);
+  await expect(page.locator('#pageView')).toBeHidden();
+  // A click inside — the title, the padding at each edge, the list — leaves it open.
+  const inside = [[cx, box.y + 4], [cx, box.y + box.height - 4], [box.x + 4, cy], [box.x + box.width - 4, cy]];
+  for (const [x, y] of inside) {
+    await page.mouse.click(x, y);
+    await expect(quick(), `click at ${Math.round(x)},${Math.round(y)}`).toBeVisible();
+  }
   await quick().locator('.todo-quick-title').click();
+  await quick().locator('.todo-quick-list .todo-section').first().click();
+  // Selecting text in the input and letting go outside the box is not a click outside.
+  const field = await quickInput().boundingBox();
+  await page.mouse.move(field.x + field.width - 10, field.y + field.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width + 40, field.y + field.height / 2, { steps: 5 });
+  await page.mouse.up();
   await expect(quick()).toBeVisible();
+  await expect(quickInput()).toHaveValue('手滑点到别处');
   await quickInput().press('Escape');
+  await expect(quick()).toBeHidden();
   expect(stored().some((t) => t.text === '手滑点到别处')).toBe(false);
 });
 
