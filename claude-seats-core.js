@@ -9,6 +9,20 @@
     { id: 'us', name: 'US', icon: '🇺🇸', configDir: '~/.claude-us' },
     { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2' },
   ];
+  // The account a seat is meant to hold (seat settings, local config only). Strict
+  // enough to go into a shell command unquoted; anything else is no expectation at all.
+  function cleanEmail(value) {
+    const email = typeof value === 'string' ? value.trim() : '';
+    return email.length <= 254 && /^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$/.test(email) ? email : '';
+  }
+  // What the seat lists show about who is actually signed in to a seat.
+  function accountCheck(expected, info) {
+    if (!info?.loggedIn) return { state: 'login', text: '需登录' };
+    const actual = cleanEmail(info.loginEmail), want = cleanEmail(expected);
+    if (!actual) return { state: 'unknown', text: '账号未识别' };
+    if (want && actual.toLowerCase() !== want.toLowerCase()) return { state: 'mismatch', text: `登成了 ${actual}，应为 ${want}` };
+    return { state: 'ok', text: actual };
+  }
   function codexCommand(effort = 'high') {
     return `codex --model gpt-6.1-sol --no-daemon -c model_reasoning_effort=${effort === 'xhigh' ? 'xhigh' : 'high'} --dangerously-bypass-approvals-and-sandbox`;
   }
@@ -26,10 +40,10 @@
     const seats = (Array.isArray(value) ? value : DEFAULTS).slice(0, 8).filter((s) => {
       if (!s || !/^[a-zA-Z0-9_-]{1,40}$/.test(s.id) || ids.has(s.id) || typeof s.configDir !== 'string' || !s.configDir.trim() || /[\x00-\x1f]/.test(s.configDir)) return false;
       ids.add(s.id); return true;
-    }).map((s) => ({ id: s.id, name: String(s.name || s.id).slice(0, 80), icon: String(s.icon || DEFAULTS.find((d) => d.id === s.id)?.icon || '').slice(0, 12), configDir: s.configDir.trim() }));
+    }).map((s) => ({ id: s.id, name: String(s.name || s.id).slice(0, 80), icon: String(s.icon || DEFAULTS.find((d) => d.id === s.id)?.icon || '').slice(0, 12), configDir: s.configDir.trim(), email: cleanEmail(s.email) }));
     // Upgrade saved two-seat profiles without changing names, paths or active seat.
-    if (seats.length === 2 && ids.has('cn') && ids.has('us')) seats.push({ ...DEFAULTS[2] });
-    return seats.length ? seats : DEFAULTS.map((s) => ({ ...s }));
+    if (seats.length === 2 && ids.has('cn') && ids.has('us')) seats.push({ ...DEFAULTS[2], email: '' });
+    return seats.length ? seats : DEFAULTS.map((s) => ({ ...s, email: '' }));
   }
   function active(config) {
     const seats = normalize(config.claudeSeats);
@@ -93,6 +107,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, cleanEmail, accountCheck, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
 
 });

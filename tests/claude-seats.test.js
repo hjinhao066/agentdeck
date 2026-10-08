@@ -107,7 +107,7 @@ test('account links and relative config dirs are rejected before launch', (t) =>
   assert.throws(() => M.seatEnvironment({}, S.normalize()[1], home), /符号链接/);
   assert.throws(() => setup(home), /登录文件不能是符号链接/);
 });
-test('metadata yields only a masked email and no credential material', async (t) => {
+test('metadata yields the signed-in email for the seat lists and no credential material', async (t) => {
   const home = fixture(t), [cn, us] = S.normalize(); setup(home);
   fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"}}');
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"}}');
@@ -120,7 +120,9 @@ test('metadata yields only a masked email and no credential material', async (t)
   assert.equal(b.credentialKey, crypto.createHash('sha256').update(M.credentialLocation(us, home).keychainService).digest('hex').slice(0, 16));
   assert.notEqual(a.credentialKey, b.credentialKey);
   assert.equal(S.maskEmail('broken'), '');
-  assert.ok(!JSON.stringify(a).includes('cn@example.test'));
+  // The full address is shown so CN/US/US2 accounts can be told apart; a signed-out seat shows none.
+  assert.equal(a.loginEmail, 'cn@example.test'); assert.equal(b.loginEmail, '');
+  assert.doesNotMatch(a.loginBase, /--email/);
   assert.equal(queried.length, 2);
 });
 test('launch reasserts the seat after shell overrides and handles spaces/quotes', (t) => {
@@ -298,7 +300,7 @@ test('saved CN/US profiles gain US2 without changing names, directories or colum
   legacy[1].name = 'My US'; legacy[0].configDir = '/custom/cn';
   const migrated = S.normalize(legacy);
   assert.deepEqual(migrated.slice(0, 2), legacy);
-  assert.deepEqual(migrated[2], { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2' });
+  assert.deepEqual(migrated[2], { id: 'us2', name: 'US2', icon: '🇺🇸', configDir: '~/.claude-us2', email: '' });
   assert.deepEqual(S.normalize(migrated), migrated);
   const col = { claudeSeatId: 'us', claudeConfigDir: '/pinned/us' };
   S.bindColumn(col, { claudeSeats: migrated, activeClaudeSeatId: 'us2' });
@@ -425,4 +427,64 @@ test('a running session holding the config lock is waited for; a dead lock is re
   assert.deepEqual(await M.trustWorktree(cn, home, second, { root }), { ok: true, changed: true });
   // each worktree is recorded under the path as given and its real path (they differ when the temp dir has an 8.3 short name)
   assert.deepEqual(Object.keys(readJson(file).projects).sort(), [...new Set([dir, second].flatMap((d) => [claudeKey(d), realKey(d)]))].sort());
+});
+
+test('each seat remembers the account it should hold; the source ships no address', () => {
+  assert.deepEqual(S.normalize().map((s) => s.email), ['', '', '']);
+  // Saved before the field existed: no expectation, and the added US2 has none either.
+  const saved = [{ id: 'cn', name: 'CN', configDir: '~/.claude' }, { id: 'us', name: 'US', configDir: '~/elsewhere', email: 'us@example.com' }];
+  assert.deepEqual(S.normalize(saved).map((s) => s.email), ['', 'us@example.com', '']);
+  assert.deepEqual(S.normalize(S.normalize(saved)), S.normalize(saved));
+  // An emptied field stays empty; a typed one is kept; nonsense is no expectation.
+  assert.equal(S.normalize([{ id: 'cn', configDir: '~/.claude', email: '' }])[0].email, '');
+  assert.equal(S.normalize([{ id: 'cn', configDir: '~/.claude', email: ' Me@Example.com ' }])[0].email, 'Me@Example.com');
+  for (const bad of ['me', 'a@b', 'a b@c.com', "x'@y.com", 'a@b.com; rm -rf ~', 42]) assert.equal(S.cleanEmail(bad), '', String(bad));
+});
+test('account check names a wrong login plainly and keeps 需登录 for a signed-out seat', () => {
+  assert.deepEqual(S.accountCheck('a@x.com', { loggedIn: false, loginEmail: 'b@x.com' }), { state: 'login', text: '需登录' });
+  assert.deepEqual(S.accountCheck('a@x.com', { loggedIn: true, loginEmail: '' }), { state: 'unknown', text: '账号未识别' });
+  assert.deepEqual(S.accountCheck('cn@example.com', { loggedIn: true, loginEmail: 'us@example.com' }),
+    { state: 'mismatch', text: '登成了 us@example.com，应为 cn@example.com' });
+  assert.deepEqual(S.accountCheck('A@X.com', { loggedIn: true, loginEmail: 'a@x.com' }), { state: 'ok', text: 'a@x.com' });
+  assert.deepEqual(S.accountCheck('', { loggedIn: true, loginEmail: 'a@x.com' }), { state: 'ok', text: 'a@x.com' });
+});
+test('auth status is read through the seat environment, read-only, and survives the signed-out exit code', async (t) => {
+  const home = fixture(t), [cn, us] = S.normalize(), calls = [];
+  const fake = (answer) => (file, args, options, done) => { calls.push({ file, args, env: options.env }); done(answer.error, answer.stdout); };
+  const env = { PATH: '/bin', CLAUDE_CONFIG_DIR: '/wrong', CLAUDE_CODE_OAUTH_TOKEN: 'fake', AGENTDECK_TOKEN: 'x' };
+  assert.deepEqual(await M.readAuthStatus(us, home, env, fake({ stdout: '{"loggedIn":true,"email":"us@example.com"}' })), { loggedIn: true, email: 'us@example.com' });
+  assert.deepEqual(calls[0].args, ['auth', 'status', '--json']);
+  assert.equal(calls[0].env.CLAUDE_CONFIG_DIR, path.join(home, '.claude-us'));
+  assert.equal(calls[0].env.CLAUDE_CODE_OAUTH_TOKEN, undefined); assert.equal(calls[0].env.AGENTDECK_TOKEN, undefined);
+  // CN is the default directory: no CLAUDE_CONFIG_DIR at all. Signed out exits 1 but still answers.
+  assert.deepEqual(await M.readAuthStatus(cn, home, env, fake({ error: Object.assign(new Error('exit 1'), { code: 1 }), stdout: '{"loggedIn":false}' })), { loggedIn: false, email: '' });
+  assert.ok(!('CLAUDE_CONFIG_DIR' in calls[1].env));
+  assert.equal(await M.readAuthStatus(us, home, env, fake({ error: new Error('ENOENT'), stdout: '' })), null);
+  assert.equal(await M.readAuthStatus(us, home, env, fake({ stdout: 'not json' })), null);
+});
+test('the CLI answer wins over stale metadata and is asked at most once per seat per ten minutes', async (t) => {
+  const home = fixture(t), [cn, us] = S.normalize([{ id: 'cn', configDir: '~/.claude', email: 'cn@example.com' }, { id: 'us', configDir: '~/.claude-us' }]); setup(home);
+  fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"old@example.com"}}');
+  fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.com"}}');
+  let clock = 1000, runs = 0;
+  const answers = { cn: { loggedIn: true, email: 'us@example.com' }, us: { loggedIn: false, email: '' } };
+  const auth = M.authStatusCache(async (seat) => { runs++; return answers[seat.id]; }, () => clock);
+  const keychain = async () => true;
+  const a = await M.seatInfo(cn, home, 'darwin', keychain, auth);
+  assert.equal(a.loginEmail, 'us@example.com');
+  assert.deepEqual(S.accountCheck(a.email, a), { state: 'mismatch', text: '登成了 us@example.com，应为 cn@example.com' });
+  assert.equal((await M.seatInfo(us, home, 'darwin', keychain, auth)).loginEmail, '');
+  assert.equal(runs, 2);
+  clock += 9 * 60_000; await M.seatInfo(cn, home, 'darwin', keychain, auth); assert.equal(runs, 2);
+  await M.seatInfo(cn, home, 'darwin', keychain, auth, true); assert.equal(runs, 3);   // 刷新登录状态
+  // Signing in again rewrites the seat's account record: asked again at once.
+  fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.com"}}');
+  answers.cn = { loggedIn: true, email: 'cn@example.com' };
+  assert.equal((await M.seatInfo(cn, home, 'darwin', keychain, auth)).loginEmail, 'cn@example.com'); assert.equal(runs, 4);
+  clock += 11 * 60_000; await M.seatInfo(cn, home, 'darwin', keychain, auth); assert.equal(runs, 5);
+  // No CLI answer: the seat's own metadata, never another seat's.
+  assert.equal((await M.seatInfo(us, home, 'darwin', keychain, M.authStatusCache(async () => null))).loginEmail, 'us@example.com');
+  // Without credentials nothing is asked and nothing is shown.
+  const before = runs;
+  assert.equal((await M.seatInfo(cn, home, 'darwin', async () => false, auth)).loginEmail, ''); assert.equal(runs, before);
 });

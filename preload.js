@@ -88,7 +88,7 @@ contextBridge.exposeInMainWorld('deck', {
   chatgptWebStatus: (id) => ipcRenderer.invoke('chatgpt-web:status', { id }),
 
   ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir }),
-  claudeSeats: () => ipcRenderer.invoke('seats:list'),
+  claudeSeats: (fresh) => ipcRenderer.invoke('seats:list', { fresh: fresh === true }),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),
   captainHandoff: (payload) => ipcRenderer.invoke('seats:handoff', payload),

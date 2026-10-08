@@ -56,7 +56,8 @@ test.beforeEach(async ({}, testInfo) => {
   fs.writeFileSync(path.join(home, '.claude.json'), '{"oauthAccount":{"emailAddress":"cn@example.test"},"hasCompletedOnboarding":true,"lastOnboardingVersion":"2.1.289"}');
   fs.writeFileSync(path.join(home, '.claude-us', '.claude.json'), '{"oauthAccount":{"emailAddress":"us@example.test"},"hasCompletedOnboarding":true}');
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
-    claudeSeats: require('../../claude-seats-core').normalize().slice(0, 2), // saved legacy profile
+    // Saved legacy profile; CN expects another address than its stand-in login, so it is on the wrong account.
+    claudeSeats: require('../../claude-seats-core').normalize().slice(0, 2).map((s) => ({ ...s, email: s.id === 'us' ? 'us@example.test' : 'cn@example.com' })),
     perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     columns: [
@@ -90,11 +91,15 @@ test('fresh Captain receives its complete multiline briefing after input is read
   const expected = await page.evaluate(() => MainCore.instructions(env.platform));
   expect(promptsFor(cn)).toContain(expected);
 });
-test('rotation exposes current seat and masked emails; an unlogged seat cannot replace Captain', async () => {
+test('rotation shows each seat\'s signed-in email and flags a wrong account; an unlogged seat cannot replace Captain', async () => {
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu')).toContainText('当前：CN');
-  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"]')).toHaveAttribute('title', 'CN · c***@example.test');
-  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toHaveAttribute('title', 'US · u***@example.test');
+  const wrong = '登成了 cn@example.test，应为 cn@example.com';
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"]')).toHaveAttribute('title', 'CN · ' + wrong);
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"] .seat-account.mismatch')).toHaveText(wrong);
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toHaveAttribute('title', 'US · us@example.test');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"] .seat-account.ok')).toHaveText('us@example.test');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"]')).toContainText('需登录');
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"]')).toBeDisabled();
   await screenshot('relay-cn-us-chatgpt');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
@@ -245,6 +250,49 @@ test('settings rename all placeholders in one config and survive renderer reload
   await composer.fill('keep draft');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
   await expect(page.locator('#toast')).toContainText('再交班');
+});
+test('seat settings keep the account each seat should hold and copy a login command pre-filled with it', async () => {
+  // The sidebar row of a seat on the wrong account is red and says so.
+  await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('data-account', 'mismatch');
+  await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('aria-label', /登成了 cn@example\.test，应为 cn@example\.com/);
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-account', '');
+  await page.locator('#settingsBtn').click();
+  await page.locator('#claudeSeatsSettings').click();
+  const settings = page.locator('#claudeSeatSettings');
+  await expect(settings.locator('[data-seat-id="cn"] .seat-account.mismatch')).toHaveText('登成了 cn@example.test，应为 cn@example.com');
+  await expect(settings.locator('[data-seat-id="us"] .seat-account.ok')).toHaveText('us@example.test');
+  await expect(settings.locator('[data-seat-id="us2"] .seat-account.login')).toHaveText('需登录');
+  await expect(settings.locator('input[data-seat-email="cn"]')).toHaveValue('cn@example.com');
+  await expect(settings.locator('input[data-seat-email="us2"]')).toHaveValue('');
+  for (const [name, size, theme] of [['seat-email-tablet', [820, 1180], 'dark'], ['seat-email-desktop', [1440, 900], 'dark'], ['seat-email-desktop-light', [1440, 900], 'light']]) {
+    await application.evaluate(({ BrowserWindow }, [w, h]) => BrowserWindow.getAllWindows()[0].setContentSize(w, h), size);
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(size[0]);
+    await page.evaluate((t) => { document.documentElement.dataset.theme = t; document.querySelector('#claudeSeatSettings [data-seat-id="cn"]').scrollIntoView({ block: 'start' }); }, theme);
+    await screenshot(name);
+  }
+  await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
+  const copy = settings.locator('[data-seat-id="cn"] .seat-login-copy');
+  await expect(copy).toHaveAttribute('aria-label', '复制登录命令（应登录 cn@example.com）');
+  await copy.click();
+  expect(await page.evaluate(() => window.deck.clipboardRead())).toMatch(/claude auth login --email cn@example\.com$/);
+  expect(await copy.innerHTML()).toContain("points=\"20 6 9 17 4 12\"");   // copied: a tick for a moment
+  await expect(page.locator('#toast')).toContainText('授权页右上角的账号要是 cn@example.com');
+  // An address typed but not yet saved is the one the command carries; a bad one is refused on save.
+  await settings.locator('input[data-seat-email="us"]').fill('other@example.test');
+  await settings.locator('[data-seat-id="us"] .seat-login-copy').click();
+  expect(await page.evaluate(() => window.deck.clipboardRead())).toMatch(/claude auth login --email other@example\.test$/);
+  await settings.locator('input[data-seat-email="us2"]').fill('not an email');
+  await settings.getByRole('button', { name: '保存设置' }).click();
+  await expect(page.locator('#toast')).toContainText('应登录邮箱格式不对');
+  await expect(settings).toBeVisible();
+  await settings.locator('input[data-seat-email="us2"]').fill('');
+  await settings.getByRole('button', { name: '保存设置' }).click();
+  await expect(settings).toBeHidden();
+  expect(await page.evaluate(() => config.claudeSeats.map((s) => s.email))).toEqual(['cn@example.com', 'other@example.test', '']);
+  // US now holds an account other than us@example.test: flagged on the next refresh, nothing signed out.
+  await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-account', 'mismatch');
+  expect(JSON.parse(fs.readFileSync(path.join(home, '.claude-us', '.claude.json'))).oauthAccount.emailAddress).toBe('us@example.test');
+  expect(fs.existsSync(path.join(home, '.claude-us', '.credentials.json'))).toBe(true);
 });
 test('native usage observations stay in the producing seat directory', async () => {
   await page.evaluate((id) => {

@@ -3809,6 +3809,7 @@ document.getElementById('quotaRefresh').addEventListener('click', async (e) => {
   finally { button.disabled = false; button.classList.remove('spinning'); }
 });
 window.addEventListener('claude-seat-usage', () => readQuotaCache().catch(() => {}));
+window.addEventListener('claude-seat-accounts', () => renderQuotaBar());
 readQuotaCache().catch(() => {});
 battery.every('quotaCache', () => readQuotaCache().catch(() => {}));
 syncChromeState();
@@ -4075,6 +4076,8 @@ function renderQuotaBar() {
       const crown = el('span', 'quota-captain'); crown.innerHTML = ICONS.crown;
       fill(name, [seat ? seatLabel : NAMES[provider], ...(captain ? [crown] : [])]);
       const state = q.authStatus === 'logged-out' ? 'danger' : q.out ? 'exhausted' : q.state;
+      // Signed in to an account other than the one this seat is set to hold.
+      const wrong = seat && ClaudeSeats.accountCheck(seat.id)?.state === 'mismatch' ? ClaudeSeats.accountCheck(seat.id).text : '';
       const recovery = q.recoveryAt > now ? q.recoveryAt : null;
       // Always a 5h and a 7d cell: % + reset time over a thin bar. Used up = ⊘ + reset time;
       // No numeric windows: show the row status in 5h. Account-wide blocks with a reset keep their recovery time.
@@ -4114,10 +4117,13 @@ function renderQuotaBar() {
           copy.innerHTML = copied ? ICONS.check : ICONS.copy;
           copy.title = copied ? '已复制' : '复制登录命令'; copy.setAttribute('aria-label', copy.title);
           login.append(command, copy); lines.push(login);
+          const expected = seat && config.claudeSeats.find((s) => s.id === seat.id)?.email;
+          if (expected) lines.push(el('span', 'qt-note', `授权页右上角的账号要是 ${expected}`));
         }
       }
       else if (blockedOnly) lines.unshift(recovery ? resetText('qt-note out', '已用尽，预计 ', recovery, '恢复') : el('span', 'qt-note out', '已用尽，恢复时间未知'));
       else if (!q.cells.length) lines.push(el('span', 'qt-note', state === 'normal' ? '未见用尽，此来源不提供百分比' : '暂无额度数据，等待下次采样'));
+      if (wrong) lines.unshift(el('span', 'qt-note out', wrong));
       const warm = seat ? ClaudeSeats.warmupDetail(seat.id) : '';
       if (seat) {
         // warmupDetail = optional warm-up line + the rotation plan, whose first part repeats who is in use.
@@ -4141,9 +4147,10 @@ function renderQuotaBar() {
         ...q.cells.map((c) => `${c.key === '5h' ? '5 小时' : '每周'}剩余 ${c.remaining}%${c.resetAt > now ? `（${shortReset(c.resetAt)} 重置）` : ''}`)].filter(Boolean).join('，');
       item.dataset.state = state;
       item.dataset.authStatus = q.authStatus || '';
+      item.dataset.account = wrong ? 'mismatch' : '';
       item.dataset.loginCommand = q.loginCommand || '';
       tip.dataset.loginCommand = q.loginCommand ? 'true' : '';
-      item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
+      item.setAttribute('aria-label', `${seat ? seat.name : NAMES[provider]}${captain ? '（队长）' : ''}：${wrong ? wrong + '，' : ''}${q.statusText}${brief ? '，' + brief : ''}；${sampled}`);
       // Config dir, model and the full evidence line: kept for diagnosis, never shown on hover.
       item.dataset.detail = `状态：${q.statusText} · ${sampled}\n` + q.detail + warm;
       if (bar.children[index + 1] !== item) bar.insertBefore(item, bar.children[index + 1] || null);

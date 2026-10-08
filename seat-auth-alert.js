@@ -10,7 +10,9 @@ const FAST_RECHECK_MS = 10 * 60_000, SLOW_RECHECK_MS = 2 * 60_000;
 const quote = (value, platform) => "'" + value.replace(/'/g, platform === 'win32' ? "''" : "'\\''") + "'";
 function loginCommand(provider, seat, home, platform = process.platform) {
   const variable = provider === 'Claude' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
-  const command = provider === 'Claude' ? 'claude auth login' : 'codex login';
+  // --email pre-fills the sign-in page; the browser may still be on another claude.ai account.
+  const email = provider === 'Claude' && S.cleanEmail(seat.email);
+  const command = provider === 'Claude' ? 'claude auth login' + (email ? ' --email ' + email : '') : 'codex login';
   const standard = provider === 'Claude' ? '~/.claude' : '~/.codex';
   const dir = S.configDir(seat, home, platform), base = S.configDir({ configDir: standard }, home, platform);
   const same = platform === 'win32' ? dir.toLowerCase() === base.toLowerCase() : dir === base;
@@ -20,6 +22,10 @@ function loginCommand(provider, seat, home, platform = process.platform) {
   // Keep simple ~/ paths readable and expandable; shell-quote every other path.
   const value = /^~\/[a-zA-Z0-9_./-]+$/.test(seat.configDir) ? seat.configDir : quote(dir, platform);
   return `${variable}=${value} ${command}`;
+}
+function loginHint(email) {
+  email = S.cleanEmail(email);
+  return email ? `授权页右上角的账号要是 ${email}，不是就先在网页里切换账号再授权。\n` : '';
 }
 function authFailure(message) {
   return typeof message === 'string' && (/\bnot (?:logged|signed) in\b|未登录|尚未登录|请先登录/i.test(message) ||
@@ -45,6 +51,7 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
     if (previous && sample.at <= previous.lastAt) return false;
     const next = { ...(previous || { receipts: state[key]?.receipts || [] }), provider: sample.provider, seatId: seat.id, name: seat.name,
       configDir: seat.configDir, lastAt: sample.at };
+    if (sample.provider === 'Claude') next.email = S.cleanEmail(seat.email);
     let changedStatus = false, alert, recovered;
     if (sample.authStatus === 'logged-in') {
       if (next.status === 'logged-out') recovered = { provider: sample.provider, seatId: seat.id, configDir: seat.configDir, alertId: next.alertId };
@@ -61,7 +68,7 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
           const command = loginCommand(sample.provider, seat, home, platform);
           const name = sample.provider === 'Claude' ? `Claude ${seat.name}（${seat.id}）席位` : 'Codex 席位';
           alert = { id: id(), provider: sample.provider, seatId: seat.id,
-            message: `${name}掉登录了，派到这里的任务会失败或排队。请现在打开终端运行：\n${command}\n完成网页登录后，AgentDeck 会自动检查恢复；队长请把受影响的任务改派到其他已登录席位。` };
+            message: `${name}掉登录了，派到这里的任务会失败或排队。请现在打开终端运行：\n${command}\n${loginHint(sample.provider === 'Claude' && seat.email)}完成网页登录后，AgentDeck 会自动检查恢复；队长请把受影响的任务改派到其他已登录席位。` };
           next.notified = true; next.receipts = [...(next.receipts || []), alert];
           next.alertId = alert.id; next.deliveryFailureReported = false; next.cancellationFailureReported = false;
         }
@@ -116,4 +123,4 @@ function createSeatAuthMonitor({ state = {}, saveState, onAlert, onStatus, onRec
     },
   };
 }
-module.exports = { CONFIRM_MS, FAST_RECHECK_MS, SLOW_RECHECK_MS, loginCommand, authFailure, createSeatAuthMonitor };
+module.exports = { CONFIRM_MS, FAST_RECHECK_MS, SLOW_RECHECK_MS, loginCommand, loginHint, authFailure, createSeatAuthMonitor };
