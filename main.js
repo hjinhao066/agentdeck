@@ -1270,8 +1270,13 @@ app.whenReady().then(async () => {
     } : (seat, options) => quotaWarmupRunner.run(seat, options),
   });
   handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
+  // Reported on every status tick: parse config.json again only when the file changed.
+  let warmupIdleConfig = { key: '', cfg: {} };
   handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
-    const cfg = seatConfig(), col = cfg.columns?.find((c) => c.id === colId);
+    let key = '';
+    try { const stat = fs.statSync(configPath); key = `${stat.ino}:${stat.size}:${stat.mtimeMs}`; } catch (_) {}
+    if (!key || key !== warmupIdleConfig.key) warmupIdleConfig = { key, cfg: seatConfig() };
+    const cfg = warmupIdleConfig.cfg, col = cfg.columns?.find((c) => c.id === colId);
     if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
     const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
     // The seat is kept here (reported every status tick) so a keystroke never rereads config.json.
