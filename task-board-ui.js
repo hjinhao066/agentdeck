@@ -16,7 +16,8 @@
 // card it waits on. A 高优先级 card (the user named it urgent) carries a solid
 // flag mark and leads its column; the drawer's flag button sets or clears it.
 // Only running work moves, and nothing moves under the
-// system's reduce-motion setting.
+// system's reduce-motion setting. The page's fourth tab, Token 用量, swaps the
+// board for the usage chart (token-usage-ui.js) under the same toolbar.
 (function () {
   'use strict';
   const U = window.TaskBoardUICore;
@@ -60,6 +61,7 @@
   let host = null;
   let alertEl, viewEl, projectsEl, gridEl, headsEl, lanesEl, linksEl, meterEl, scrollEl, statusEl, summaryEl, emptyEl, refreshBtn, detailEl, liveEl;
   let open = false;
+  let mode = 'tasks';         // 'tasks' (the board) or 'tokens' (Token 用量)
   let cards = [];
   let board = null;
   let filter = { project: U.ALL };
@@ -448,7 +450,7 @@
   }
   function drawLinks() {
     linksEl.innerHTML = '';
-    if (!open || !board || !board.links.length || gridEl.hidden) return;
+    if (!open || mode === 'tokens' || !board || !board.links.length || gridEl.hidden) return;
     const origin = gridEl.getBoundingClientRect();
     const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.left - origin.left, y: r.top - origin.top, w: r.width, h: r.height }; };
     // stacked (narrow) cells leave the lines only the board's left margin; side by side they share the column gap
@@ -898,6 +900,27 @@
     if (hadFocus) { const box = detailEl.querySelector('textarea'); if (box) box.focus({ preventScroll: true }); }
   }
 
+  // The board or Token 用量 under one toolbar: the tab, the title and what the page holds.
+  const MODES = { tasks: { kicker: '全部任务', title: '任务看板' }, tokens: { kicker: '本机各模型', title: 'Token 用量' } };
+  function setMode(next) {
+    if (!MODES[next]) next = 'tasks';
+    const changed = next !== mode;
+    mode = next;
+    viewEl.dataset.mode = mode;
+    viewEl.setAttribute('aria-label', MODES[mode].title);
+    viewEl.querySelector('.tbv-kicker').textContent = MODES[mode].kicker;
+    viewEl.querySelector('.tbv-heading h1').textContent = MODES[mode].title;
+    viewEl.querySelectorAll('.board-mode button[data-view]').forEach((b) => {
+      if (b.dataset.view !== 'tasks' && b.dataset.view !== 'tokens') return;
+      const on = b.dataset.view === mode;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-pressed', String(on));
+    });
+    if (!open) return;
+    if (mode === 'tokens') { closeDetail(false); hotId = null; linksEl.innerHTML = ''; window.TokenUsageUI.show(); }
+    else { window.TokenUsageUI.hide(); if (changed) render(); }
+  }
+
   function setOpen(next) {
     if (next === open) return;
     open = next;
@@ -909,6 +932,7 @@
       if (api() && api().onChange) unsubscribe = api().onChange(() => refresh());
       render();
       refresh();
+      if (mode === 'tokens') window.TokenUsageUI.show();
       if (!reduceMotion()) scrollEl.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: EASE });
     } else {
       if (unsubscribe) { try { unsubscribe(); } catch (_) {} }
@@ -918,6 +942,7 @@
       closeDetail(false);
       linksEl.innerHTML = '';
       refreshBtn.classList.remove('busy');
+      window.TokenUsageUI.hide();
     }
     host.onToggle(open);
     if (open) viewEl.focus({ preventScroll: true });
@@ -954,10 +979,11 @@
     // the lines follow the cards whenever the board is laid out again (window, drawer, zoom)
     new ResizeObserver(queueLinks).observe(lanesEl);
     viewEl.querySelector('.tbv-close').onclick = () => { setOpen(false); host.focusToggle(); };
-    // 架构图 / 自由画布 leave the board for the board view in that mode.
+    // 架构图 / 自由画布 leave the board for the board view in that mode; 任务看板 / Token 用量 switch in place.
     viewEl.querySelectorAll('.board-mode button[data-view]').forEach((b) => {
-      if (b.dataset.view !== 'tasks') b.onclick = () => host.showBoard(b.dataset.view);
+      b.onclick = () => (MODES[b.dataset.view] ? setMode(b.dataset.view) : host.showBoard(b.dataset.view));
     });
+    window.TokenUsageUI.init({ prefs: () => host.tokenPrefs(), savePrefs: (p) => host.saveTokenPrefs(p), announce });
     viewEl.addEventListener('keydown', (e) => {
       if (e.key !== 'Escape') return;
       e.preventDefault(); e.stopPropagation();
@@ -968,9 +994,12 @@
   window.TaskBoardUI = {
     init,
     isOpen: () => open,
-    open: () => setOpen(true),
+    // open() shows the board; open('tokens') shows Token 用量.
+    open: (which) => { setMode(which === 'tokens' ? 'tokens' : 'tasks'); setOpen(true); },
+    mode: () => mode,
     close: () => setOpen(false),
-    toggle: () => setOpen(!open),
+    // the sidebar's 任务看板 entry: closes the board, or brings it back from Token 用量
+    toggle: () => { if (open && mode === 'tasks') setOpen(false); else { setMode('tasks'); setOpen(true); } },
     redraw: () => { if (open) render(); },
   };
 })();

@@ -192,6 +192,7 @@ if (saved) {
       completedOpen: v.completedOpen === true,
     };
   }
+  if (saved.tokenUsageView?.days === 30) config.tokenUsageView = { days: 30 };
   // Artifacts: the projects the user folded away
   config.artifactsCollapsed = (Array.isArray(saved.artifactsCollapsed) ? saved.artifactsCollapsed : []).filter((k) => typeof k === 'string' && k.length <= 120).slice(0, 500);
   if (saved.activeView === 'board') config.activeView = 'board';
@@ -4570,6 +4571,8 @@ TaskBoardUI.init({
   },
   prefs: () => config.taskBoardView,
   savePrefs: (prefs) => { config.taskBoardView = prefs; saveConfig(); },
+  tokenPrefs: () => config.tokenUsageView,
+  saveTokenPrefs: (prefs) => { config.tokenUsageView = { days: prefs.days === 30 ? 30 : 7 }; saveConfig(); },
   copy: (text) => window.deck.clipboardWrite(text),
   renderBadge: (badgeEl, col) => window.AgentInfo.renderBadge(badgeEl, window.AgentInfo.resolveAgentInfo(col, terms.get(col.id) || null, null), 'sidebar', config.claudeSeats),
   openSession: openTaskSession,
@@ -4586,6 +4589,7 @@ TaskBoardUI.init({
   focusToggle: () => { const b = document.getElementById('taskBoardBtn'); if (b) b.focus(); },
 });
 document.getElementById('boardTasksTab').addEventListener('click', () => TaskBoardUI.open());
+document.getElementById('boardTokensTab').addEventListener('click', () => TaskBoardUI.open('tokens'));
 // View restoration comes last because showView() closes the search/broadcast
 // overlays, whose DOM bindings are initialized just above.
 showView(config.activeView);

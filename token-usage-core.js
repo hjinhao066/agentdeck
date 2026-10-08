@@ -346,7 +346,7 @@
       const x = n / units[u][1];
       const s = x >= 100 ? x.toFixed(0) : x >= 10 ? x.toFixed(1) : x.toFixed(2);
       if (Number(s) >= 1000 && u < units.length - 1) { u++; continue; }
-      return s.replace(/\.?0+$/, '') + units[u][0];
+      return (s.includes('.') ? s.replace(/\.?0+$/, '') : s) + units[u][0]; // 890M stays 890M; 1.20B is 1.2B
     }
   }
   function formatFull(n) { return Math.max(0, Math.round(Number(n) || 0)).toLocaleString('en-US'); }

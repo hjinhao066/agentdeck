@@ -125,7 +125,9 @@ test('days: local calendar keys, ranges ending today, axis labels and every-7th-
 });
 
 test('numbers: three significant digits with K/M/B, full numbers with commas, shares', () => {
-  const cases = [[0, '0'], [856, '856'], [15500, '15.5K'], [86_300_000, '86.3M'], [774_000_000, '774M'], [1_240_000_000, '1.24B'], [999_950, '1M'], [50_000_000, '50M'], [1_200_000_000, '1.2B'], [-5, '0']];
+  const cases = [[0, '0'], [856, '856'], [15500, '15.5K'], [86_300_000, '86.3M'], [774_000_000, '774M'], [1_240_000_000, '1.24B'], [999_950, '1M'], [50_000_000, '50M'], [1_200_000_000, '1.2B'], [-5, '0'],
+    // whole numbers keep their zeros (a real 889,602,667 once showed as 89M)
+    [889_602_667, '890M'], [100_000_000, '100M'], [200_000, '200K'], [10_000_000_000, '10B'], [2_000_000_000, '2B']];
   for (const [n, s] of cases) assert.equal(C.formatShort(n), s, String(n));
   assert.equal(C.formatFull(1234567), '1,234,567');
   assert.equal(C.formatPct(1, 3), '33.3%');
