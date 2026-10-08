@@ -212,8 +212,8 @@ try {
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
 const HOME = os.homedir();
-// 每日进展 (版本更新 panel): the nightly daily-progress tool's JSON, read only and
-// cleaned to counts (HubCore.progressDays). A test profile reads its own folder.
+// 每日进展 (版本更新 panel and the 每日进展 page): the nightly daily-progress tool's JSON,
+// read only and cleaned (HubCore.progressDays: no card ids). A test profile reads its own folder.
 const PROGRESS_DIR = tudArg ? path.join(app.getPath('userData'), 'daily-progress') : path.join(HOME, 'reports', 'daily-progress');
 async function readDailyProgress() {
   const { progressDays, PROGRESS_LIMITS } = require('./mobile-web/hub/core.js');

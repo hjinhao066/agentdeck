@@ -728,6 +728,7 @@ button.todo-done-toggle { width: 100%; min-height: 44px; margin: 14px 0 6px; pad
 
 /* ---- 版本更新: 每日进展 on top, then every version on one line, newest first ---- */
 .app-header[data-view="releases"] .brand strong, .app-header[data-view="releases"] .brand-caption { display: inline; }
+.app-header[data-view="progress"] .brand strong { display: inline; }
 .releases-entry { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; margin-top: 12px; padding: 0 8px 0 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--text); font-size: 15px; text-align: left; }
 .releases-entry:hover { background: var(--raised); }
 .releases-entry-icon { display: flex; color: var(--secondary); } .releases-entry-icon svg { width: 20px; height: 20px; }
@@ -737,6 +738,18 @@ button.todo-done-toggle { width: 100%; min-height: 44px; margin: 14px 0 6px; pad
 .releases-entry-chev { display: flex; color: var(--muted); } .releases-entry-chev svg { width: 18px; height: 18px; }
 .rn-pending { color: var(--accent); font-weight: 600; }
 .releases { max-width: 720px; }
+
+/* 每日进展 page (progress.css): the shared view on the hub's palette. */
+.dpv-host {
+  --dpv-surface: var(--surface); --dpv-raised: var(--raised); --dpv-hover: var(--raised);
+  --dpv-line: var(--line); --dpv-hair: var(--line); --dpv-text: var(--text); --dpv-text-2: var(--secondary); --dpv-muted: var(--muted);
+  --dpv-accent: var(--accent); --dpv-accent-soft: var(--accent-soft); --dpv-focus: var(--focus);
+  --dpv-ok: var(--ok); --dpv-ok-soft: var(--ok-soft); --dpv-warn: var(--warn);
+  --dpv-need: var(--bad); --dpv-need-soft: var(--bad-soft);
+  --dpv-mono: var(--mono); --dpv-radius: 16px; --dpv-tap: 44px;
+}
+.dpv-host .dpv-step svg { width: 18px; height: 18px; }
+#progress-entry + #releases-entry { margin-top: 8px; }
 
 .dp { margin-bottom: 20px; padding: 12px 14px 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
 .dp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

@@ -100,6 +100,9 @@
     todo.appendChild(todoCount);
     setTodoCount(todoOpen);
     todo.title = `待办：你自己要做的事，打一句话回车就存（在 AgentDeck 里按 ${window.TodoUI ? window.TodoUI.shortcutLabel() : '⌘T'} 速记）`;
+    // 每日进展: the nightly statistics as a page (the 版本更新 panel keeps its small card).
+    const progress = navRow('progress', 'progress', '每日进展', '', () => host.togglePage('progress'));
+    progress.title = '每日进展：每天完成了几件、各项目推进、交付了什么';
     topEl.append(
       navRow('new', 'newChat', '新对话', '⌘N', () => host.addAndFocusColumn()),
       captain,
@@ -107,6 +110,7 @@
       tasks,
       slot,
       todo,
+      progress,
       navRow('schedule', 'clock', 'Schedule', '', () => host.togglePage('schedule')),
       navRow('artifacts', 'artifacts', 'Artifacts', '', () => host.togglePage('artifacts')),
       navRow('skills', 'skills', 'Skills', '', () => host.togglePage('skills')),

@@ -1,12 +1,12 @@
 # 手机总台部署与版本核对
 
-`mobile-web/hub/` 是独立交付物：VPS `/srv/agentdeck-hub` 的九个静态文件（含版本更新页的 `releases.js` 和它读的 `release-notes.json`，后者构建时取自仓库根目录；含 PDF 阅读用的 `pdf.min.js`、`pdf.worker.min.js`，即 pdf.js 6.4.299 legacy 版，Apache-2.0，打开 PDF 时才加载）不会随着 Mac/Windows 安装应用而更新。`/mac/*` 与 `/win/*` 的 JSON API、登录和退出由各自现役应用经 SSH 反向隧道实时提供；不属于静态部署。当前 Caddy 用 VPS 回环 43122/43123，静态更新不用改 Caddy 或隧道。同 VPS 的 Hermes 有 WireGuard 路由，与这两个前缀不同。
+`mobile-web/hub/` 是独立交付物：VPS `/srv/agentdeck-hub` 的十一个静态文件（含版本更新页的 `releases.js` 和它读的 `release-notes.json`，每日进展页的 `progress.js`、`progress.css`，后者构建时取自仓库根目录；含 PDF 阅读用的 `pdf.min.js`、`pdf.worker.min.js`，即 pdf.js 6.4.299 legacy 版，Apache-2.0，打开 PDF 时才加载）不会随着 Mac/Windows 安装应用而更新。`/mac/*` 与 `/win/*` 的 JSON API、登录和退出由各自现役应用经 SSH 反向隧道实时提供；不属于静态部署。当前 Caddy 用 VPS 回环 43122/43123，静态更新不用改 Caddy 或隧道。同 VPS 的 Hermes 有 WireGuard 路由，与这两个前缀不同。
 
 ## 发版门禁
 
 现有 `node scripts/release.js …` 在桌面包校验完成后自动执行 `scripts/mobile-release.js deploy`。普通发版与 `--prepared` 均不可跳过；缓存命中仍执行。`--dry-run` 只列计划。
 
-1. 从干净 checkout 的已提交 Git blob 构建九个文件，校验 CSP，给生成的 `index.html` 嵌入 `agentdeck-version`、`agentdeck-commit`、`agentdeck-builtAt` meta；JS/CSS URL 带提交号，避免刷新后复用旧资源。源码与页面样式不改。
+1. 从干净 checkout 的已提交 Git blob 构建十一个文件，校验 CSP，给生成的 `index.html` 嵌入 `agentdeck-version`、`agentdeck-commit`、`agentdeck-builtAt` meta；JS/CSS URL 带提交号，避免刷新后复用旧资源。源码与页面样式不改。
 2. 写出 `release.json`，记录完整版本、40 位提交号、UTC 构建时间和五文件 SHA256。与发版版本/提交不一致时在上传前停止。
 3. SSH 管理身份经 `sudo -n` 操作 `/srv`；远端目录锁防并发部署。记录原始符号链接作为回滚点（相对/绝对链接均保留原文）。已有总台不存在或不是链接则停止，不盲目覆盖目录。
 4. tar 上传到唯一 release 目录，原子切链接。从 **`https://agentdeck.18-139-28-180.sslip.io/` 公网入口**读取真实 HTML、五文件与 manifest，精确核对版本/提交/时间/字节及 `Cache-Control: no-store`；每次读取带随机查询参数、禁重定向、10 秒超时。认证只过 Caddy Basic，不请求电脑登录 token。

@@ -13,7 +13,7 @@ const FilePreview = require('../../file-preview-core');
 const BatteryCore = require('../../battery-core');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
-const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/releases.js': ['releases.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/releases.js': ['releases.js', 'text/javascript; charset=utf-8'], '/progress.js': ['progress.js', 'text/javascript; charset=utf-8'], '/progress.css': ['progress.css', 'text/css; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release-notes.json': ['release-notes.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
 // The headers the VPS adds to the static hub (design §3.5); the hub must work under them.
 const HUB_HEADERS = { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",

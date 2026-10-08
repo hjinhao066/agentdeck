@@ -3986,6 +3986,19 @@ button.todo-done-toggle:hover { background: var(--icon-hover-bg); color: var(--t
 .dp-empty-title { margin-top: 6px; color: var(--text); font-size: 13.5px; font-weight: 600; }
 .dp-empty { margin-top: 2px; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
 
+/* 每日进展 page (mobile-web/hub/progress.css): the shared view on this page's palette. */
+.page:has(> .page-body > .dpv-host) { max-width: 1180px; }
+.dpv-host {
+  --dpv-surface: var(--card-bg); --dpv-raised: var(--pill-bg); --dpv-hover: var(--icon-hover-bg);
+  --dpv-line: var(--border); --dpv-hair: var(--hairline); --dpv-text: var(--text); --dpv-text-2: var(--text-2); --dpv-muted: var(--muted);
+  --dpv-accent: var(--accent); --dpv-accent-soft: var(--accent-soft); --dpv-focus: var(--accent);
+  --dpv-ok: var(--rn-done); --dpv-ok-soft: color-mix(in srgb, var(--rn-done) 13%, transparent);
+  --dpv-warn: var(--rn-doing); --dpv-need: var(--rn-need); --dpv-need-soft: color-mix(in srgb, var(--rn-need) 12%, transparent);
+  --dpv-mono: var(--mono); --dpv-radius: 14px; --dpv-tap: 32px;
+}
+.dpv-refresh.busy svg { animation: tbv-spin .8s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .dpv-refresh.busy svg { animation: none; } }
+
 /* Every version on one line: planned ones on dashed dots, the newest release lit. */
 .rn-line { margin: 0; padding: 0; list-style: none; }
 .rn-group { padding: 0 0 8px 62px; color: var(--muted); font-size: 11.5px; font-weight: 600; letter-spacing: .04em; }

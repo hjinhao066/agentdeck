@@ -49,6 +49,7 @@
     battery: '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><rect x="4.6" y="9.6" width="4.6" height="4.8" rx=".6" fill="currentColor" stroke="none"/>',
     minus: '<path d="M5 12h14"/>',
     swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
+    progress: '<path d="M3 3v18h18"/><path d="M8 17v-4M13 17V9M18 17V6"/>',
     history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3.5 2"/>',
     left: '<path d="m15 5-7 7 7 7"/>',
     right: '<path d="m9 5 7 7-7 7"/>',
@@ -139,8 +140,9 @@
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
   for (const [id, icon] of [['settings-open', 'gear'], ['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
-  document.querySelector('.releases-entry-icon').innerHTML = svg('history');
-  document.querySelector('.releases-entry-chev').innerHTML = svg('chevron');
+  document.querySelector('#releases-entry .releases-entry-icon').innerHTML = svg('history');
+  document.querySelector('#progress-entry .releases-entry-icon').innerHTML = svg('progress');
+  document.querySelectorAll('.releases-entry-chev').forEach((chev) => { chev.innerHTML = svg('chevron'); });
   // Scrolled up to read: new replies do not pull the page down; this button shows instead, with a dot when something new came in.
   const awayFromEnd = () => { const el = $('captain-turns'); return el.scrollHeight - el.scrollTop - el.clientHeight > 160; };
   function updateJump() { const away = awayFromEnd(); $('jump').hidden = !away; if (!away) { $('jump').classList.remove('fresh'); $('jump').title = '回到最新'; $('jump').setAttribute('aria-label', '回到最新'); } }
@@ -271,8 +273,8 @@
       // 待我处理: every poll while its tab or the 队长 chat (whose replies read reports) is open,
       // otherwise every 30 seconds for the tab's count.
       if (view === 'attention' || view === 'captain' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
-      // 每日进展 changes once a night: read it when 版本更新 is open, at most once a minute (refresh reads it again).
-      if (view === 'releases' && (m.forceProgress || !m.progressAt || Date.now() - m.progressAt > 60000)) { m.forceProgress = false; await loadProgress(m); }
+      // 每日进展 changes once a night: read it when 版本更新 or 每日进展 is open, at most once a minute (refresh reads it again).
+      if ((view === 'releases' || view === 'progress') && (m.forceProgress || !m.progressAt || Date.now() - m.progressAt > 60000)) { m.forceProgress = false; await loadProgress(m); }
     }
     m.busy = false;
     m.nextAt = Date.now() + Core.pollInterval(m.state, filter === 'all' || filter === m.id);
@@ -307,7 +309,7 @@
   function renderBar() {
     const bar = $('machine-bar');
     // One list for both computers on the 待办 tab, so there is nothing to pick there.
-    bar.hidden = view === 'output' || view === 'todo' || view === 'releases';
+    bar.hidden = view === 'output' || view === 'todo' || view === 'releases' || view === 'progress';
     $('app-header').dataset.view = view;
     const online = machines.filter((m) => m.state === 'online').length;
     const picking = view === 'captain';
@@ -2141,10 +2143,10 @@
   // (pages, each computer's Captain with its sessions under it, quota, the tool
   // row) on the left, the page in the middle, the preview on the right. The
   // conversation keeps its phone look. Below that width nothing changes.
-  const sideIcons = { captain: 'crown', attention: 'attention', board: 'board', todo: 'todo', overview: 'overview' };
+  const sideIcons = { captain: 'crown', attention: 'attention', board: 'board', todo: 'todo', progress: 'progress', overview: 'overview' };
   document.querySelectorAll('[data-side-view]').forEach((button) => {
     button.querySelector('.side-icon').innerHTML = svg(sideIcons[button.dataset.sideView]);
-    button.addEventListener('click', () => { showView(button.dataset.sideView); if (view === 'todo') $('todo-text').focus(); });
+    button.addEventListener('click', () => { if (button.dataset.sideView === 'progress') { openProgress(); return; } showView(button.dataset.sideView); if (view === 'todo') $('todo-text').focus(); });
   });
   const KEY_SIDEBAR = 'agentdeck-hub-sidebar';
   let sidebarClosed = stored(KEY_SIDEBAR) === 'closed';
@@ -2294,24 +2296,41 @@
     });
   }
 
+  // ---- 每日进展 --------------------------------------------------------------
+  // The same statistics as on 版本更新, as a page of their own (DailyProgressView,
+  // shared with the desktop): the day's overview, then one card per thing done.
+  let progressDay = 0;
+  function renderProgress(focus) {
+    if (view !== 'progress') return;
+    const box = $('progress'), progress = progressView();
+    // Record what is drawn, so the next poll does not rebuild the page (and lose the scroll or focus) for nothing.
+    if (!changed(box, [progress, progressDay]) && !focus) return;
+    DailyProgressView.render(box, {
+      core: Core, progress, dayIndex: progressDay, now: new Date(), focus: focus || '',
+      buttonClass: 'icon-button', icon: svg,
+      setDay: (i, key) => { progressDay = i; renderProgress(key); },
+    });
+  }
+
   // ---- shell ---------------------------------------------------------------
   function showView(next) {
     if (view === 'output' && next !== 'output') { outputRequest++; output = null; $('output-text').textContent = ''; }
     view = next;
     if (TABS.includes(view)) store(KEYS.view, view);
-    ['overview', 'captain', 'todo', 'sessions', 'board', 'output', 'releases'].forEach((name) => { $(name + '-view').hidden = name !== view; });
+    ['overview', 'captain', 'todo', 'sessions', 'board', 'output', 'releases', 'progress'].forEach((name) => { $(name + '-view').hidden = name !== view; });
     document.querySelectorAll('[data-view]').forEach((button) => {
       if (button.dataset.view === (view === 'output' ? 'sessions' : view)) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     });
-    $('back').hidden = view !== 'output' && view !== 'releases';
-    const backLabel = view === 'releases' ? '返回总览' : '返回会话列表';
+    $('back').hidden = view !== 'output' && view !== 'releases' && view !== 'progress';
+    const backLabel = view === 'releases' || view === 'progress' ? '返回总览' : '返回会话列表';
     $('back').title = backLabel; $('back').setAttribute('aria-label', backLabel);
     $('attention-view').hidden = view !== 'attention';
     if (view === 'attention') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
     $('main').classList.toggle('fill', view === 'captain');
     if (view === 'todo') { $('brand-title').textContent = '待办'; $('brand-caption').textContent = '两台电脑同一份'; }
     else if (view === 'releases') { $('brand-title').textContent = '版本更新'; $('brand-caption').textContent = ''; }
+    else if (view === 'progress') { $('brand-title').textContent = '每日进展'; $('brand-caption').textContent = ''; }
     else if (view !== 'output') { $('brand-title').textContent = 'AgentDeck'; $('brand-caption').textContent = '总台'; }
     $('main').scrollTop = 0;
     render();
@@ -2320,16 +2339,19 @@
     if (view === 'todo') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
   }
   function render() {
-    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet(); renderSettings(); renderReleases();
+    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet(); renderSettings(); renderReleases(); renderProgress();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
     renderAttention();
     renderSidebar();
   }
   $('refresh').addEventListener('click', refreshAll);
-  $('back').addEventListener('click', () => showView(view === 'releases' ? 'overview' : wide.matches ? 'captain' : 'sessions'));
+  $('back').addEventListener('click', () => showView(view === 'releases' || view === 'progress' ? 'overview' : wide.matches ? 'captain' : 'sessions'));
   // Opening 版本更新 reads 每日进展 at once rather than on the next poll.
   const openReleases = () => { notesDay = 0; showView('releases'); machines.forEach((m) => { if (m.state === 'online') { m.forceProgress = true; m.nextAt = 0; } }); };
   $('releases-entry').addEventListener('click', openReleases);
+  // 每日进展 opens on the newest day and reads the statistics at once.
+  function openProgress() { progressDay = 0; showView('progress'); machines.forEach((m) => { if (m.state === 'online') { m.forceProgress = true; m.nextAt = 0; } }); }
+  $('progress-entry').addEventListener('click', openProgress);
   $('side-version').addEventListener('click', openReleases);
   {
     const label = $('logout-all').title;
@@ -2360,7 +2382,7 @@
     target = filter !== 'all' ? filter : (machines.find((m) => m.default) || machines[0]).id;
     // Open where the user left off; a bookmark ending in #todo (or another tab's name) opens that tab.
     const asked = location.hash.slice(1), last = stored(KEYS.view);
-    showView(TABS.includes(asked) || asked === 'releases' ? asked : TABS.includes(last) ? last : 'overview');
+    showView(TABS.includes(asked) || asked === 'releases' || asked === 'progress' ? asked : TABS.includes(last) ? last : 'overview');
     applyLayout();
     refreshAll();
     loadNotes();

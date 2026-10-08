@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="dark light">
   <title>AgentDeck 总台</title>
+  <link rel="stylesheet" href="progress.css">
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
   <script src="releases.js" defer></script>
+  <script src="progress.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -20,6 +22,7 @@
         <button type="button" data-side-view="attention"><span class="side-icon" aria-hidden="true"></span><span class="side-name">待我处理</span><span class="nav-attention-dot" aria-hidden="true" hidden></span><span class="side-count nav-attention" aria-hidden="true" hidden></span></button>
         <button type="button" data-side-view="board"><span class="side-icon" aria-hidden="true"></span><span class="side-name">任务看板</span></button>
         <button type="button" data-side-view="todo"><span class="side-icon" aria-hidden="true"></span><span class="side-name">待办</span><span class="side-count nav-badge" aria-hidden="true" hidden></span></button>
+        <button type="button" data-side-view="progress"><span class="side-icon" aria-hidden="true"></span><span class="side-name">每日进展</span></button>
         <button type="button" data-side-view="overview"><span class="side-icon" aria-hidden="true"></span><span class="side-name">总览</span></button>
       </nav>
       <div id="side-sessions" class="side-sessions" role="group" aria-label="队长和会话"></div>
@@ -44,10 +47,14 @@
     <main id="main">
       <section id="overview-view" class="view" aria-label="总览">
         <div id="machine-cards" class="stack"></div>
+        <button id="progress-entry" class="releases-entry" type="button"><span class="releases-entry-icon" aria-hidden="true"></span><span class="releases-entry-name">每日进展</span><span class="releases-entry-meta">每天完成了几件、交付了什么</span><span class="releases-entry-chev" aria-hidden="true"></span></button>
         <button id="releases-entry" class="releases-entry" type="button"><span class="releases-entry-icon" aria-hidden="true"></span><span class="releases-entry-name">版本更新</span><span id="releases-entry-meta" class="releases-entry-meta"></span><span class="releases-entry-chev" aria-hidden="true"></span></button>
       </section>
       <section id="releases-view" class="view" aria-label="版本更新" hidden>
         <div id="releases" class="releases"></div>
+      </section>
+      <section id="progress-view" class="view" aria-label="每日进展" hidden>
+        <div id="progress" class="dpv-host"></div>
       </section>
       <section id="attention-view" class="view" aria-label="待我处理" hidden>
         <p id="attention-sources" class="board-sources"></p>

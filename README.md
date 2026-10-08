@@ -248,6 +248,22 @@ icon puts one version on the clipboard as plain text. The versions come from
 `mobile-web/hub/releases.js`, both shared with the phone hub; see 发版流程 for
 how a release updates the file.
 
+## 每日进展
+
+The 每日进展 entry in the sidebar opens a page over the deck (Esc or × closes
+it, the refresh icon reads the files again). On top, one overview card for the
+day: how many things were finished, projects moved, sessions sent and cards
+created; deliveries, cards waiting on the user, rework and rejected reviews;
+the last days as columns (click one, or use the arrows); highlights (versions
+fully delivered, the project that moved most, how the day compares); each
+project's progress and what was delivered, with its time. Below it, one card per
+thing the day touched, grouped by project: finished, to check, in progress or
+waiting on the user, with its title and one-line result. It reads the same
+nightly files as the 版本更新 card (`~/reports/daily-progress/YYYY-MM-DD.json`,
+cleaned by `HubCore.progressDays`, no card ids) and the phone hub shows the same
+page from 总览; both are drawn by `mobile-web/hub/progress.js` with
+`mobile-web/hub/progress.css`, each end mapping its own colours.
+
 ## Skills
 
 The Skills page scans the shared originals in `~/.agents/skills` and each tool's

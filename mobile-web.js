@@ -594,7 +594,7 @@ class MobileWebServer {
     if (req.method === 'GET' && route === '/api/quota') return this.json(res, 200, quotaView(this.sources.getQuota ? await this.sources.getQuota() : null, this.now()));
     if (req.method === 'GET' && route === '/api/sessions') return this.json(res, 200, { sessions: await this.sources.getSessions() });
     if (req.method === 'GET' && route === '/api/tasks') return this.json(res, 200, { cards: await this.sources.getTasks() });
-    // 每日进展 for the hub's 版本更新 page: counts only, cleaned again by the page.
+    // 每日进展 for the hub's 版本更新 and 每日进展 pages: counts, short lines and card words (no ids), cleaned again by the page.
     if (req.method === 'GET' && route === '/api/progress') return this.json(res, 200, this.sources.getProgress ? await this.sources.getProgress() : { days: [] });
     if (req.method === 'GET' && route === '/api/output') {
       const id = url.searchParams.get('id');

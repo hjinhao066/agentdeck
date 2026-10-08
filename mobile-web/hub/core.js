@@ -1104,9 +1104,11 @@
 });
 
 // 每日进展: the nightly statistics the daily-progress tool writes to
-// ~/reports/daily-progress/YYYY-MM-DD.json (AgentDeck never recounts). Only
-// counts, project names and short delivery lines leave the file: no card
-// titles, results or session ids. Desktop and phone read the same shape.
+// ~/reports/daily-progress/YYYY-MM-DD.json (AgentDeck never recounts). What
+// leaves the file: counts, project names, short delivery lines with their
+// time, and each card the day touched as project, title, short result and
+// state (the same words the task board shows). No card ids or session ids.
+// Desktop and phone read the same shape.
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
@@ -1116,7 +1118,43 @@
   const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : Array.isArray(value) ? value.length : 0;
   const line = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '';
   const realDay = (s) => DAY.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z')) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
-  const PROGRESS_LIMITS = { days: 14, projects: 40, deliveries: 5 };
+  const PROGRESS_LIMITS = { days: 14, projects: 40, deliveries: 5, delivered: 20, items: 150 };
+  // A card's state on the day's page: finished that day, or still open (in progress, to check, waiting on the user).
+  const ITEM_STATES = ['done', 'review', 'doing', 'needs_user'];
+  const clock = (value) => { const m = /(\d{1,2}):(\d{2})/.exec(typeof value === 'string' ? value : ''); return m && +m[1] < 24 && +m[2] < 60 ? m[1].padStart(2, '0') + ':' + m[2] : ''; };
+  function cleanItem(x, project, state) {
+    if (!x || typeof x !== 'object') return null;
+    const item = { project: line(project ?? x.project, 40), title: line(x.title, 120), result: line(x.result, 140), state: state || x.state };
+    return item.project && item.title && ITEM_STATES.includes(item.state) ? item : null;
+  }
+  // Each card once: still waiting on the user, else finished that day, else open. Null when the
+  // file names no cards at all (a build that only sent counts), so the page can say so.
+  function progressItems(raw) {
+    if (Array.isArray(raw.items)) return raw.items.map((x) => cleanItem(x)).filter(Boolean).slice(0, PROGRESS_LIMITS.items);
+    const projects = (Array.isArray(raw.projects) ? raw.projects : []).filter((p) => p && typeof p === 'object');
+    if (!projects.some((p) => ['done', 'doing', 'needs_user'].some((k) => Array.isArray(p[k])))) return null;
+    const seen = new Set(), items = [];
+    for (const p of projects) {
+      const lists = [['needs_user', () => 'needs_user'], ['done', () => 'done'], ['doing', (x) => (x.status === 'review' ? 'review' : 'doing')]];
+      for (const [key, stateOf] of lists) {
+        for (const x of Array.isArray(p[key]) ? p[key] : []) {
+          const id = x && typeof x.id === 'string' ? x.id : '';
+          if (id && seen.has(id)) continue;
+          const item = cleanItem(x, p.project ?? p.name, x && stateOf(x));
+          if (!item) continue;
+          if (id) seen.add(id);
+          items.push(item);
+        }
+      }
+    }
+    return items.slice(0, PROGRESS_LIMITS.items);
+  }
+  // What was delivered, earliest first, with the clock time the log gave it (blank when it gave none).
+  function progressDelivered(raw) {
+    const list = Array.isArray(raw.delivered) ? raw.delivered : Array.isArray(raw.deliveries) ? raw.deliveries : [];
+    return list.map((d) => d && typeof d === 'object' ? { time: clock(d.time), text: line(d.text, 80) } : null).filter((d) => d && d.text)
+      .sort((a, b) => (a.time || '99') < (b.time || '99') ? -1 : (a.time || '99') > (b.time || '99') ? 1 : 0).slice(0, PROGRESS_LIMITS.delivered);
+  }
 
   // Cleaning twice gives the same day (the desktop cleans in main and again in the page).
   function progressDay(raw) {
@@ -1131,7 +1169,7 @@
       date: raw.date, partial: raw.partial === true,
       summary: { projects: count(s.projects), done: count(s.done), created: count(s.created), sessions: count(s.sessions),
         reject: count(s.reject), rework: count(s.rework), needsUser: count(s.needs_user ?? s.needsUser), deliveries: count(s.deliveries) },
-      projects, deliveries,
+      projects, deliveries, delivered: progressDelivered(raw), items: progressItems(raw),
     };
   }
   // Newest first, one entry per date, at most two weeks.
@@ -1148,5 +1186,19 @@
     const today = local(now), yesterday = local(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
     return `${date.slice(5)} ${date === today ? '今天' : date === yesterday ? '昨天' : '周' + week}`;
   }
-  return { progressDay, progressDays, progressLabel, PROGRESS_LIMITS };
+  // Up to three things worth a glance on the day: what shipped, the project that moved most,
+  // and how the day compares with the others shown. `days` newest first, as progressDays gives them.
+  function progressHighlights(days, index) {
+    const day = days && days[index];
+    if (!day) return [];
+    const s = day.summary, out = [];
+    day.delivered.filter((d) => /全部交付完成|已发布|已上线/.test(d.text)).slice(-2).forEach((d) => out.push({ kind: 'ship', text: d.text }));
+    const top = day.projects[0];
+    if (top && top.done && s.done) out.push({ kind: 'top', text: `${top.name} 完成 ${top.done} 件，占全天 ${Math.round(top.done * 100 / s.done)}%` });
+    const others = days.filter((d) => d !== day), prev = days[index + 1];
+    if (others.length >= 2 && s.done > 0 && others.every((d) => d.summary.done < s.done)) out.push({ kind: 'trend', text: `最近 ${days.length} 天里完成最多的一天` });
+    else if (prev && s.done > prev.summary.done) out.push({ kind: 'trend', text: `比前一天多完成 ${s.done - prev.summary.done} 件` });
+    return out.slice(0, 3);
+  }
+  return { progressDay, progressDays, progressLabel, progressHighlights, PROGRESS_LIMITS, PROGRESS_ITEM_STATES: ITEM_STATES };
 });

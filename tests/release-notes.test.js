@@ -89,18 +89,19 @@ test('copy text and the 待你定 count', () => {
   assert.equal(H.pendingCount(null), 0);
 });
 
-// 每日进展: the daily-progress tool's JSON, reduced to counts.
+// 每日进展: the daily-progress tool's JSON, reduced to counts, short lines and each card's words (tests/daily-progress.test.js has the cards).
 const sampleDay = (date, done, extra = {}) => ({ date, partial: false, summary: { projects: 2, done, created: 3, sessions: 4, reject: 1, rework: 2, needs_user: 1, deliveries: 1 },
   projects: [{ project: 'small', done: [{ id: 't-1', title: '秘密标题', result: '结果' }], created: [], doing: [], sessions: 1, reject: 0, rework: 0, needs_user: [] },
     { project: 'agentdeck', done: [{}, {}, {}], created: [{}], doing: [], sessions: 3, reject: 1, rework: 2, needs_user: [] }],
   deliveries: [{ time: '22:33', text: 'AgentDeck 1.8 全部交付完成', versions: ['1.8'] }], ...extra });
 
-test('a progress day keeps counts, project names and delivery lines only', () => {
+test('a progress day keeps counts, project names, delivery lines and card words, never card ids', () => {
   const day = H.progressDay(sampleDay('2026-10-07', 4));
   assert.deepEqual(day.summary, { projects: 2, done: 4, created: 3, sessions: 4, reject: 1, rework: 2, needsUser: 1, deliveries: 1 });
   assert.deepEqual(day.projects.map((p) => [p.name, p.done, p.created, p.sessions]), [['agentdeck', 3, 1, 3], ['small', 1, 0, 1]]);
   assert.deepEqual(day.deliveries, ['AgentDeck 1.8 全部交付完成']);
-  assert.ok(!JSON.stringify(day).includes('秘密标题'));
+  assert.deepEqual(day.items, [{ project: 'small', title: '秘密标题', result: '结果', state: 'done' }]);
+  assert.ok(!JSON.stringify(day).includes('t-1'));
   assert.equal(H.progressDay({ date: '2026-02-30', summary: {} }), null);
   assert.equal(H.progressDay({ date: '2026-10-07' }), null);
   assert.equal(H.progressDay(sampleDay('2026-10-07', -1)).summary.done, 0);

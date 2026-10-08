@@ -15,7 +15,7 @@ const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 
 const PUBLIC_ORIGIN = 'https://agentdeck.18-139-28-180.sslip.io';
 // pdf.min.js and pdf.worker.min.js are pdf.js (Apache-2.0), fetched by the page only when a PDF is opened.
 // release-notes.json (版本更新) is the repository's one copy at the root, shared with the desktop app.
-const FILES = ['index.html', 'core.js', 'releases.js', 'app.js', 'style.css', 'machines.json', 'pdf.min.js', 'pdf.worker.min.js', 'release-notes.json'];
+const FILES = ['index.html', 'core.js', 'releases.js', 'progress.js', 'progress.css', 'app.js', 'style.css', 'machines.json', 'pdf.min.js', 'pdf.worker.min.js', 'release-notes.json'];
 const source = (name) => name === 'release-notes.json' ? name : `mobile-web/hub/${name}`;
 function privateJSON(file) {
   try { return readJSON(file); }
@@ -56,7 +56,7 @@ function build(repo, directory, expected = {}) {
           /<style[\s>]|\sstyle\s*=|\son[a-z]+\s*=/i.test(html)) throw new Error('Hub CSP lint failed: inline scripts/styles/event handlers');
       const tags = Object.entries(metadata).map(([key, value]) => `  <meta name="agentdeck-${key}" content="${value}">`).join('\n');
       // A refreshed phone cannot reuse JS/CSS cached from another release.
-      html = html.replace(/((?:src|href)="(?:core\.js|releases\.js|app\.js|style\.css))"/g, `$1?v=${commit}"`);
+      html = html.replace(/((?:src|href)="(?:core\.js|releases\.js|progress\.js|progress\.css|app\.js|style\.css))"/g, `$1?v=${commit}"`);
       bytes = Buffer.from(html.replace('</head>', `${tags}\n</head>`));
     }
     fs.writeFileSync(path.join(directory, name), bytes);
