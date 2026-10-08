@@ -37,7 +37,8 @@
     for (const ch of String(s)) w += isWide(ch) ? 2 : 1;
     return w;
   }
-  const rtrim = (s) => s.replace(/\s+$/, '');
+  // trimEnd strips exactly what /\s+$/ does, without its quadratic backtracking on a long blank run.
+  const rtrim = (s) => s.trimEnd();
   // Old prompt recordings could treat xterm SGR mouse reports as typed text
   // after dropping ESC[. Only scrub runs of reports, so a quoted single
   // sequence in an actual prompt remains intact.
@@ -69,7 +70,13 @@
     return false;
   }
 
-  function promptGlyphs(s) { return s.replace(/^[\s│┃|>❯›$%#]+/, '').replace(/[\s│┃|]+$/, ''); }
+  // The tail is cut by a loop: /[\s│┃|]+$/ backtracks quadratically on a long blank run.
+  function promptGlyphs(s) {
+    const head = s.replace(/^[\s│┃|>❯›$%#]+/, '');
+    let end = head.length;
+    while (end > 0 && /[\s│┃|]/.test(head[end - 1])) end--;
+    return head.slice(0, end);
+  }
 
   // Index of the last row of the echoed prompt, or -1 if it can't be found.
   function findPromptEcho(lines, userText) {
@@ -213,7 +220,8 @@
     let lines = turnLines(screenLines, userText);
     // a bare shell prompt left on the last row is not output
     while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
-    if (lines.length && /(?:@\S+.*|\S+)\s[%$#>]$/.test(lines[lines.length - 1].trim()) && lines[lines.length - 1].trim().length < 80) lines.pop();
+    // Length first: on one long joined line the prompt pattern backtracks quadratically.
+    if (lines.length && lines[lines.length - 1].trim().length < 80 && /(?:@\S+.*|\S+)\s[%$#>]$/.test(lines[lines.length - 1].trim())) lines.pop();
     const hasBullets = lines.some((l) => BULLET.test(l));
     let kept;
     if (hasBullets) {
