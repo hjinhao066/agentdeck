@@ -8,6 +8,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const { execFile, execFileSync, spawn } = require('node:child_process');
 const { promisify } = require('node:util');
+const { releaseGap } = require('../mobile-web/hub/core.js');
 const execFileAsync = promisify(execFile);
 
 const sha = (data) => crypto.createHash('sha256').update(data).digest('hex');
@@ -97,6 +98,16 @@ function planRelease(repo, options) {
   }
   return { version, label, previous, branch: `release/${options.prepared ? version : label}`, baseCommit, merges, worktree, output,
     ...(options.prepared ? { prepared: true } : {}), ...(options.packageOnly ? { packageOnly: true } : {}) };
+}
+
+// 版本更新: the release must be written down as the newest entry of release-notes.json
+// (what changed, in plain words) before anything is tested or built.
+function checkReleaseNotes(directory, version) {
+  let notes;
+  try { notes = JSON.parse(fs.readFileSync(path.join(directory, 'release-notes.json'), 'utf8')); }
+  catch { throw new Error(`release-notes.json 不存在或不是合法 JSON：发版前先写好 ${version} 的更新内容`); }
+  const gap = releaseGap(notes, version);
+  if (gap) throw new Error(gap);
 }
 
 function isolatedEnv(env = process.env) {
@@ -243,6 +254,7 @@ async function release(repo, options, runCommand = run) {
     console.log(JSON.stringify({ ...plan, dryRun: true, steps: [
       ...(plan.prepared ? ['verify clean prepared release checkout (no merges or version changes)'] :
         ['create owned release worktree', 'merge branches in order (stop on conflict)', 'commit package + lock version']),
+      'check release-notes.json names this version as the newest release (版本更新)',
       'npm ci + Electron preparation (lock/platform cache)', 'machine test lock: npm test then npm run test:smoke (one worker); audit in parallel',
       'npm run dist:mac -- --publish never (unchanged-input cache)',
       'SHA256 + verified DMG mount/signature/packaged source in parallel',
@@ -339,6 +351,7 @@ async function release(repo, options, runCommand = run) {
       }
       report.commit = git(plan.worktree, 'rev-parse', 'HEAD');
     });
+    await step('release-notes', () => checkReleaseNotes(plan.worktree, plan.version));
     const stateDir = path.dirname(path.resolve(plan.worktree, git(plan.worktree, 'rev-parse', '--git-path', 'fast-release.json')));
     const depsState = path.join(stateDir, 'fast-release-deps.json');
     const depsKey = sha(fs.readFileSync(path.join(plan.worktree, 'package-lock.json'))) + `-${process.platform}-${process.arch}-${process.version}`;
@@ -452,4 +465,4 @@ if (require.main === module) {
   Promise.resolve().then(() => release(git(process.cwd(), 'rev-parse', '--show-toplevel'), parseArgs(process.argv.slice(2))))
     .catch((error) => { console.error(`\x1b[31mRELEASE FAILED: ${error.message}\x1b[0m`); process.exitCode = 1; });
 }
-module.exports = { parseArgs, planRelease, isolatedEnv, withTestLock, included, verifyArchive, fingerprint, cachedBuild, installer, release, deployMobileGate };
+module.exports = { parseArgs, planRelease, checkReleaseNotes, isolatedEnv, withTestLock, included, verifyArchive, fingerprint, cachedBuild, installer, release, deployMobileGate };

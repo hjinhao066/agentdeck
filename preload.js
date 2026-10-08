@@ -12,6 +12,10 @@ contextBridge.exposeInMainWorld('deck', {
   onMobileRequest: (cb) => ipcRenderer.on('mobile-web:request', (_e, m) => cb(m)),
   mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
+  // 版本更新 page: this build's release-notes.json (read only).
+  releaseNotes: () => ipcRenderer.invoke('release-notes:read', {}),
+  // 每日进展: counts from the nightly daily-progress files (read only).
+  dailyProgress: () => ipcRenderer.invoke('daily-progress:read', {}),
   memoryPressure: () => ipcRenderer.invoke('memory-pressure'),
   // Battery mode: whether the Mac runs on battery now, and a push when it changes.
   powerState: () => ipcRenderer.sendSync('power-state'),

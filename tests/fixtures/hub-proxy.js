@@ -13,8 +13,8 @@ const FilePreview = require('../../file-preview-core');
 const BatteryCore = require('../../battery-core');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
-const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
+const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/releases.js': ['releases.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release-notes.json': ['release-notes.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
 // The headers the VPS adds to the static hub (design §3.5); the hub must work under them.
 const HUB_HEADERS = { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -36,12 +36,12 @@ function readJson(req) {
 // todos: this machine's answer to api/todos, as the phone view mobile-web.js sends
 // (live items plus bare deletion marks); null is an older build without the route.
 // files: { home, … } for file-preview-core, the real rules over a stand-in home folder; null is a build without api/file.
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null }) {
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null, progress = null }) {
   // plainCookie: WebKit refuses Secure cookies over http, even on localhost.
   const base = `/${id}/`, cookieName = plainCookie ? `agentdeck_${id}` : `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, quota, files, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '', busy: false, queued: [],
+    requests: [], messages: [], sessions, cards, outputs, quota, files, progress, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '', busy: false, queued: [],
     releaseQueued() { machine.busy = false; machine.captain.turns.push(...machine.queued.splice(0)); },
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
@@ -113,6 +113,8 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (req.method === 'GET' && url.pathname === '/api/sessions') return json(res, 200, { sessions: machine.sessions });
     if (req.method === 'GET' && url.pathname === '/api/captain') return json(res, 200, machine.captain || { turns: [], status: 'unavailable' });
     if (req.method === 'GET' && url.pathname === '/api/tasks') return json(res, 200, { cards: machine.cards });
+    // 每日进展: null plays a build from before api/progress (404).
+    if (req.method === 'GET' && url.pathname === '/api/progress' && machine.progress) return json(res, 200, { days: machine.progress });
     // Display values only, like quotaView() in mobile-web.js; the account is already masked.
     if (req.method === 'GET' && url.pathname === '/api/quota') return json(res, 200, { rows: machine.quota, version: appVersion, now: Date.now() });
     // 待我处理, like mobile-web.js: read, reply, tick or put back one item.
@@ -335,7 +337,8 @@ async function startHub({ port = 0, machines = defaults(), directory = HUB, plai
     if (!fake) {
       const asset = req.method === 'GET' && STATIC[req.url.split('?')[0]];
       if (!asset) { res.writeHead(404, HUB_HEADERS); return res.end(); }
-      const file = path.join(directory, asset[0]);
+      // The source tree keeps release-notes.json at the repository root; a built hub has it beside the page.
+      const file = asset[0] === 'release-notes.json' && directory === HUB ? path.join(HUB, '..', '..', asset[0]) : path.join(directory, asset[0]);
       if (!fs.existsSync(file)) { res.writeHead(404, HUB_HEADERS); return res.end(); }
       res.writeHead(200, { ...HUB_HEADERS, 'Content-Type': asset[1] });
       return res.end(fs.readFileSync(file));

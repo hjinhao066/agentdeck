@@ -957,3 +957,174 @@
 
   return { esc, isWide, joinGap, pipeTable, extOf, fileKind, languageFor, imageMime, sizeText, findLinks, splitPath, resolvePath, shortPath, highlightCode, tidyReply, renderMarkdown, BOX_ROW };
 });
+
+// 版本更新: release-notes.json at the repository root is the one file a release
+// edits (what each version changed, what comes next). The desktop page and the
+// phone hub read it through releaseNotes(), which keeps only well-formed
+// entries, so a damaged file shows less instead of breaking the page.
+// releaseProblems() names every rule a file breaks, for the unit test and the
+// release script; releaseGap() is the release script's question: is the
+// version being released written down as the newest one?
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const VERSION = /^[1-9]\d*\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$/;
+  const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+  // Each state is one of the shared status colours: green done, yellow at work, grey not started, orange needs the user.
+  const ITEM_STATES = { done: '做完了', doing: '在做', planned: '计划', pending: '待你定' };
+  const PLAN_STATES = { doing: '正在做', planned: '计划', later: '待排' };
+  const LIMITS = { title: 30, item: 60, note: 120, suggestion: 40, released: [3, 6], upcoming: [1, 12] };
+  const parts = (v) => typeof v === 'string' && VERSION.test(v) ? v.split('.').map(Number).concat(0).slice(0, 3) : null;
+  function compareVersions(a, b) {
+    const x = parts(a), y = parts(b);
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+    return 0;
+  }
+  const sameVersion = (a, b) => !!parts(a) && !!parts(b) && compareVersions(a, b) === 0;
+  // How a release is named to people: 1.9.0 is 1.9, a patch keeps its third number.
+  const versionLabel = (v) => { const p = parts(v); return p ? (p[2] ? p.join('.') : p[0] + '.' + p[1]) : ''; };
+  const realDay = (s) => {
+    const m = DAY.exec(typeof s === 'string' ? s : '');
+    if (!m) return false;
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+  };
+  const shortDate = (s) => realDay(s) ? s.slice(5) : '';
+  const text = (value, max) => typeof value === 'string' && !/[\x00-\x1f\x7f]/.test(value) && value.trim() && value.trim().length <= max ? value.trim() : '';
+  const list = (value) => Array.isArray(value) ? value : [];
+
+  function releasedEntry(entry) {
+    if (!entry || !parts(entry.version) || !realDay(entry.date) || !text(entry.title, LIMITS.title)) return null;
+    const items = list(entry.items).map((item) => text(item, LIMITS.item)).filter(Boolean);
+    return items.length ? { version: entry.version, date: entry.date, title: text(entry.title, LIMITS.title), items } : null;
+  }
+  function upcomingEntry(entry) {
+    if (!entry || (entry.version !== '' && !parts(entry.version)) || !PLAN_STATES[entry.status] || !text(entry.title, LIMITS.title)) return null;
+    const items = list(entry.items).filter((item) => item && ITEM_STATES[item.state] && text(item.text, LIMITS.item))
+      .map((item) => ({ text: text(item.text, LIMITS.item), state: item.state, suggestion: text(item.suggestion, LIMITS.suggestion) }));
+    return items.length ? { version: entry.version, status: entry.status, title: text(entry.title, LIMITS.title), note: text(entry.note, LIMITS.note), items } : null;
+  }
+  function releaseNotes(value) {
+    if (!value || value.schema !== 1) return null;
+    const released = list(value.released).map(releasedEntry).filter(Boolean);
+    const upcoming = list(value.upcoming).map(upcomingEntry).filter(Boolean);
+    return released.length || upcoming.length ? { updated: realDay(value.updated) ? value.updated : '', released, upcoming } : null;
+  }
+
+  function releaseProblems(value) {
+    const problems = [];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return ['不是一个 JSON 对象'];
+    if (value.schema !== 1) problems.push('schema 必须是 1');
+    if (!realDay(value.updated)) problems.push('updated 要写成 YYYY-MM-DD');
+    const released = list(value.released), upcoming = list(value.upcoming);
+    if (!released.length) problems.push('released 至少要有一版');
+    released.forEach((entry, i) => {
+      const name = `released[${i}]${entry && entry.version ? ' ' + entry.version : ''}`;
+      if (!entry || !parts(entry.version)) { problems.push(`${name}：version 要写成 1.9 或 1.2.4`); return; }
+      if (!realDay(entry.date)) problems.push(`${name}：date 要写成 YYYY-MM-DD`);
+      if (!text(entry.title, LIMITS.title)) problems.push(`${name}：title 要有，最多 ${LIMITS.title} 字`);
+      const items = list(entry.items);
+      if (items.length < LIMITS.released[0] || items.length > LIMITS.released[1]) problems.push(`${name}：要写 ${LIMITS.released[0]}–${LIMITS.released[1]} 条`);
+      items.forEach((item, k) => { if (!text(item, LIMITS.item)) problems.push(`${name} 第 ${k + 1} 条：一句话，最多 ${LIMITS.item} 字`); });
+      const prev = released[i - 1];
+      if (prev && parts(prev.version)) {
+        if (compareVersions(entry.version, prev.version) >= 0) problems.push(`${name}：版本要从新到旧排，比上一条 ${prev.version} 旧`);
+        if (realDay(prev.date) && realDay(entry.date) && entry.date > prev.date) problems.push(`${name}：日期不能比更新的 ${prev.version} 晚`);
+      }
+    });
+    const latest = released.find((entry) => entry && parts(entry.version));
+    let lastNumbered = latest ? latest.version : null, unnumbered = false;
+    upcoming.forEach((entry, i) => {
+      const name = `upcoming[${i}]${entry && entry.version ? ' ' + entry.version : ''}`;
+      if (!entry || (entry.version !== '' && !parts(entry.version))) { problems.push(`${name}：version 写版本号，还没排进版本的写空字符串`); return; }
+      if (entry.version) {
+        if (unnumbered) problems.push(`${name}：有版本号的排在「还没排进哪一版」前面`);
+        if (latest && compareVersions(entry.version, latest.version) <= 0) problems.push(`${name}：${entry.version} 已经发布了，从 upcoming 里删掉`);
+        else if (lastNumbered && compareVersions(entry.version, lastNumbered) <= 0) problems.push(`${name}：接下来的版本要从近到远排`);
+        lastNumbered = entry.version;
+      } else unnumbered = true;
+      if (!PLAN_STATES[entry.status]) problems.push(`${name}：status 只能是 ${Object.keys(PLAN_STATES).join(' / ')}`);
+      if (!text(entry.title, LIMITS.title)) problems.push(`${name}：title 要有，最多 ${LIMITS.title} 字`);
+      if (entry.note !== undefined && !text(entry.note, LIMITS.note)) problems.push(`${name}：note 最多 ${LIMITS.note} 字`);
+      const items = list(entry.items);
+      if (items.length < LIMITS.upcoming[0] || items.length > LIMITS.upcoming[1]) problems.push(`${name}：要写 ${LIMITS.upcoming[0]}–${LIMITS.upcoming[1]} 条`);
+      items.forEach((item, k) => {
+        const where = `${name} 第 ${k + 1} 条`;
+        if (!item || !text(item.text, LIMITS.item)) problems.push(`${where}：text 一句话，最多 ${LIMITS.item} 字`);
+        if (!item || !ITEM_STATES[item.state]) problems.push(`${where}：state 只能是 ${Object.keys(ITEM_STATES).join(' / ')}（用户还没拍板的写 pending）`);
+        if (item && item.suggestion !== undefined && !text(item.suggestion, LIMITS.suggestion)) problems.push(`${where}：suggestion 最多 ${LIMITS.suggestion} 字`);
+      });
+    });
+    return problems;
+  }
+  // The release script stops on any answer: the file must be valid and its newest release must be this one.
+  function releaseGap(value, version) {
+    const problems = releaseProblems(value);
+    if (problems.length) return `release-notes.json 有问题：${problems.slice(0, 5).join('；')}`;
+    const latest = value.released[0];
+    if (!sameVersion(latest.version, version)) {
+      return `release-notes.json 最新一版是 ${latest.version}，还没写 ${versionLabel(version)} 的更新内容：先在 released 最前面加上这一版（日期、标题、3–6 条大白话），并把它从 upcoming 里拿掉，再发版`;
+    }
+    return '';
+  }
+  // What a copy button puts on the clipboard: plain text anyone can paste anywhere.
+  function releaseText(entry) {
+    if (!entry) return '';
+    if (entry.date) return [`AgentDeck ${entry.version}（${entry.date}）${entry.title}`, ...entry.items.map((item) => '- ' + item)].join('\n');
+    const head = entry.version ? `AgentDeck ${entry.version}（${PLAN_STATES[entry.status]}）${entry.title}` : entry.title;
+    return [head, ...(entry.note ? [entry.note] : []), ...entry.items.map((item) => `- [${ITEM_STATES[item.state]}] ${item.text}${item.suggestion ? `（${item.suggestion}）` : ''}`)].join('\n');
+  }
+  const pendingCount = (notes) => notes ? notes.upcoming.reduce((n, entry) => n + entry.items.filter((item) => item.state === 'pending').length, 0) : 0;
+
+  return { ITEM_STATES, PLAN_STATES, compareVersions, sameVersion, versionLabel, shortDate, releaseNotes, releaseProblems, releaseGap, releaseText, pendingCount };
+});
+
+// 每日进展: the nightly statistics the daily-progress tool writes to
+// ~/reports/daily-progress/YYYY-MM-DD.json (AgentDeck never recounts). Only
+// counts, project names and short delivery lines leave the file: no card
+// titles, results or session ids. Desktop and phone read the same shape.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const DAY = /^\d{4}-\d{2}-\d{2}$/;
+  const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : Array.isArray(value) ? value.length : 0;
+  const line = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '';
+  const realDay = (s) => DAY.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z')) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+  const PROGRESS_LIMITS = { days: 14, projects: 40, deliveries: 5 };
+
+  // Cleaning twice gives the same day (the desktop cleans in main and again in the page).
+  function progressDay(raw) {
+    if (!raw || typeof raw !== 'object' || !realDay(raw.date) || !raw.summary || typeof raw.summary !== 'object') return null;
+    const s = raw.summary;
+    const projects = (Array.isArray(raw.projects) ? raw.projects : []).map((p) => p && line(p.project ?? p.name, 40) ? {
+      name: line(p.project ?? p.name, 40), done: count(p.done), created: count(p.created), doing: count(p.doing), sessions: count(p.sessions),
+      reject: count(p.reject), rework: count(p.rework), needsUser: count(p.needs_user ?? p.needsUser),
+    } : null).filter(Boolean).sort((a, b) => b.done - a.done || b.sessions - a.sessions || a.name.localeCompare(b.name)).slice(0, PROGRESS_LIMITS.projects);
+    const deliveries = (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((d) => line(typeof d === 'string' ? d : d && d.text, 60)).filter(Boolean).slice(0, PROGRESS_LIMITS.deliveries);
+    return {
+      date: raw.date, partial: raw.partial === true,
+      summary: { projects: count(s.projects), done: count(s.done), created: count(s.created), sessions: count(s.sessions),
+        reject: count(s.reject), rework: count(s.rework), needsUser: count(s.needs_user ?? s.needsUser), deliveries: count(s.deliveries) },
+      projects, deliveries,
+    };
+  }
+  // Newest first, one entry per date, at most two weeks.
+  function progressDays(list) {
+    const seen = new Set();
+    return (Array.isArray(list) ? list : []).map(progressDay).filter((d) => d && !seen.has(d.date) && seen.add(d.date))
+      .sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, PROGRESS_LIMITS.days);
+  }
+  // 10-07 周三, with 今天 / 昨天 when it is one of those (dates are the statistics' own local days).
+  function progressLabel(date, now = new Date()) {
+    if (!realDay(date)) return '';
+    const day = new Date(date + 'T12:00:00Z'), week = '日一二三四五六'[day.getUTCDay()];
+    const local = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const today = local(now), yesterday = local(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+    return `${date.slice(5)} ${date === today ? '今天' : date === yesterday ? '昨天' : '周' + week}`;
+  }
+  return { progressDay, progressDays, progressLabel, PROGRESS_LIMITS };
+});

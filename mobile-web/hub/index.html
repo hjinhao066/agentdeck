@@ -7,6 +7,7 @@
   <title>AgentDeck 总台</title>
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
+  <script src="releases.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -23,7 +24,7 @@
       </nav>
       <div id="side-sessions" class="side-sessions" role="group" aria-label="队长和会话"></div>
       <div id="side-quota" class="side-quota"></div>
-      <div id="side-foot" class="side-foot"><span id="side-version" class="side-version"></span></div>
+      <div id="side-foot" class="side-foot"><button id="side-version" class="side-version" type="button">版本更新</button></div>
     </aside>
     <div class="center">
     <header id="app-header" class="app-header">
@@ -43,6 +44,10 @@
     <main id="main">
       <section id="overview-view" class="view" aria-label="总览">
         <div id="machine-cards" class="stack"></div>
+        <button id="releases-entry" class="releases-entry" type="button"><span class="releases-entry-icon" aria-hidden="true"></span><span class="releases-entry-name">版本更新</span><span id="releases-entry-meta" class="releases-entry-meta"></span><span class="releases-entry-chev" aria-hidden="true"></span></button>
+      </section>
+      <section id="releases-view" class="view" aria-label="版本更新" hidden>
+        <div id="releases" class="releases"></div>
       </section>
       <section id="attention-view" class="view" aria-label="待我处理" hidden>
         <p id="attention-sources" class="board-sources"></p>

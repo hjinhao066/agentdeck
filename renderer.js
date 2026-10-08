@@ -156,6 +156,8 @@ if (saved) {
   config.globalViewMode = 'term';
   if (saved.theme) config.theme = saved.theme;
   config.calmMotion = saved.calmMotion === true;
+  // The version whose 版本更新 page was last opened; a newer install lights a dot on the version button.
+  if (typeof saved.releaseNotesSeen === 'string') config.releaseNotesSeen = saved.releaseNotesSeen;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
   // widths from the old, narrower sidebar fall back to the new default
@@ -862,12 +864,22 @@ function buildChrome() {
   sideBtn.setAttribute('aria-label', sideBtn.title);
   tbRight.append(sideBtn);
 
-  const brand = document.createElement('span');
+  // The version opens 版本更新: what each version changed and what comes next.
+  const brand = document.createElement('button');
+  brand.type = 'button';
+  brand.id = 'releaseNotesBtn';
   brand.className = 'nav-brand';
   brand.textContent = `V${env.version}`;
   const versionDetails = [`AgentDeck v${env.version}`, env.build].filter(Boolean).join(' · ');
-  brand.title = versionDetails;
-  brand.setAttribute('aria-label', versionDetails);
+  brand.title = `版本更新：每版改了什么、接下来做什么（${versionDetails}）`;
+  brand.setAttribute('aria-label', `版本更新，你在用 AgentDeck ${env.version}`);
+  brand.setAttribute('aria-haspopup', 'dialog');
+  brand.setAttribute('aria-expanded', 'false');
+  brand.classList.toggle('unseen', config.releaseNotesSeen !== env.version);
+  brand.onclick = () => {
+    if (config.releaseNotesSeen !== env.version) { config.releaseNotesSeen = env.version; brand.classList.remove('unseen'); saveConfig(); }
+    ReleaseNotesUI.toggle();
+  };
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
   const settingsBtn = railBtn(ICONS.gear, '设置', openNotificationSettings);
@@ -3769,7 +3781,7 @@ const deckHost = {
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
   onCapChanged: renderBatteryIndicator, // the tooltip names the live cap
   clipboardWrite: (text) => window.deck.clipboardWrite(text),
-  platform: env.platform, home: env.home,
+  platform: env.platform, home: env.home, version: env.version,
   focusedId: () => focusedId,
   setFocused: (id) => { focusedId = id; syncNav(); },
   layout: () => { updateColumnStyles(); fitAll(); syncChromeState(); },
@@ -3812,6 +3824,7 @@ window.deck.onParkForRestart(async (sessions) => {
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
+ReleaseNotesUI.init(deckHost);
 TodoUI.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
 renderQuotaBar();

@@ -894,3 +894,14 @@ test('api/battery carries the temporary boost: shown as fixed fields, set with b
   assert.equal((await post(status, '/api/battery', { boost: false }, auth)).status, 200);
   assert.deepEqual(battery.calls, [{ boost: true, boostMinutes: 120 }, { boost: false }]);
 });
+
+test('api/progress hands the phone the daily counts behind login; without a source it is empty, not an error', async (t) => {
+  const days = [{ date: '2026-10-07', summary: { done: 58 } }];
+  const { status, auth } = await start(t, {}, { getProgress: () => ({ days }) });
+  assert.equal((await request(status, '/api/progress')).status, 401);
+  assert.deepEqual(JSON.parse((await request(status, '/api/progress', { headers: auth })).text), { days });
+  assert.ok(JSON.parse((await request(status, '/api/info')).text).capabilities.includes('progress'));
+  const bare = await start(t);
+  assert.deepEqual(JSON.parse((await request(bare.status, '/api/progress', { headers: bare.auth })).text), { days: [] });
+  assert.ok(!JSON.parse((await request(bare.status, '/api/info')).text).capabilities.includes('progress'));
+});

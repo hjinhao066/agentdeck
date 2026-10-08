@@ -113,6 +113,8 @@
       "crew-map.js",
       "task-board-ui-core.js",
       "task-board-ui.js",
+      "release-notes.json",
+      "release-notes-ui.js",
       "version-progress-core.js",
       "version-progress.js",
       "side-pane.js",

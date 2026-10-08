@@ -49,6 +49,9 @@
     battery: '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><rect x="4.6" y="9.6" width="4.6" height="4.8" rx=".6" fill="currentColor" stroke="none"/>',
     minus: '<path d="M5 12h14"/>',
     swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3.5 2"/>',
+    left: '<path d="m15 5-7 7 7 7"/>',
+    right: '<path d="m9 5 7 7-7 7"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
   const providerIcons = {
@@ -64,6 +67,8 @@
   const TABS = ['overview', 'captain', 'todo', 'sessions', 'board'];
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
+  // 版本更新: release-notes.json published with this page (undefined while it loads, null if it could not be read).
+  let notes, notesDay = 0;
   // Images picked for the next message; each was uploaded to the computer it will be sent to.
   let attachments = [];
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
@@ -134,6 +139,8 @@
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
   for (const [id, icon] of [['settings-open', 'gear'], ['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
+  document.querySelector('.releases-entry-icon').innerHTML = svg('history');
+  document.querySelector('.releases-entry-chev').innerHTML = svg('chevron');
   // Scrolled up to read: new replies do not pull the page down; this button shows instead, with a dot when something new came in.
   const awayFromEnd = () => { const el = $('captain-turns'); return el.scrollHeight - el.scrollTop - el.clientHeight > 160; };
   function updateJump() { const away = awayFromEnd(); $('jump').hidden = !away; if (!away) { $('jump').classList.remove('fresh'); $('jump').title = '回到最新'; $('jump').setAttribute('aria-label', '回到最新'); } }
@@ -219,7 +226,7 @@
   function settle(m, result, verdict = Core.classify(result)) {
     m.state = verdict.state; m.detail = verdict.detail || '';
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
-    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; m.battery = null; m.batteryOld = false; m.batteryWant = null; }
+    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; m.battery = null; m.batteryOld = false; m.batteryWant = null; m.progress = null; m.progressState = ''; m.progressAt = 0; }
     // A machine that no longer accepts this phone must not keep showing its board.
     if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; m.todos = null; m.todosReady = null; m.todosAt = 0; }
     return verdict;
@@ -263,6 +270,8 @@
       // 设置: while the settings sheet is open, this computer's battery setting is read again on every turn (the desktop may have changed it).
       if (settings.open) await loadBattery(m);
       if (view === 'attention' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
+      // 每日进展 changes once a night: read it when 版本更新 is open, at most once a minute (refresh reads it again).
+      if (view === 'releases' && (m.forceProgress || !m.progressAt || Date.now() - m.progressAt > 60000)) { m.forceProgress = false; await loadProgress(m); }
     }
     m.busy = false;
     m.nextAt = Date.now() + Core.pollInterval(m.state, filter === 'all' || filter === m.id);
@@ -270,7 +279,7 @@
     if (output && output.machineId === m.id && view === 'output') loadOutput(true);
     if (m.again) poll(m);
   }
-  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; poll(m); }); }
+  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; m.forceProgress = true; poll(m); }); if (notes === null) loadNotes(); }
   function renderBusy() {
     const busy = machines.some((m) => m.busy);
     $('refresh').classList.toggle('refreshing', busy);
@@ -297,7 +306,7 @@
   function renderBar() {
     const bar = $('machine-bar');
     // One list for both computers on the 待办 tab, so there is nothing to pick there.
-    bar.hidden = view === 'output' || view === 'todo';
+    bar.hidden = view === 'output' || view === 'todo' || view === 'releases';
     $('app-header').dataset.view = view;
     const online = machines.filter((m) => m.state === 'online').length;
     const picking = view === 'captain';
@@ -2152,8 +2161,68 @@
       }
       if (focused) document.getElementById(focused)?.previousElementSibling?.focus({ preventScroll: true });
     }
-    $('side-version').textContent = m && m.meta.appVersion ? 'V' + m.meta.appVersion : '';
-    $('side-version').title = machines.filter((x) => x.meta.appVersion).map((x) => `${x.label} 上的 AgentDeck ${x.meta.appVersion}`).join('，');
+    // The version opens 版本更新, as on the desktop.
+    const versions = machines.filter((x) => x.meta.appVersion).map((x) => `${x.label} 上的 AgentDeck ${x.meta.appVersion}`).join('，');
+    $('side-version').textContent = m && m.meta.appVersion ? 'V' + m.meta.appVersion : '版本更新';
+    $('side-version').title = '版本更新：每版改了什么、接下来做什么' + (versions ? `（${versions}）` : '');
+    $('side-version').setAttribute('aria-label', '版本更新' + (versions ? `，${versions}` : ''));
+    if (view === 'releases') $('side-version').setAttribute('aria-current', 'page'); else $('side-version').removeAttribute('aria-current');
+  }
+
+
+  // ---- 版本更新 --------------------------------------------------------------
+  // 每日进展 and every version, built by ReleasesView as on the desktop. The
+  // release notes are published with this page, not asked of a computer. 每日进展
+  // is the Mac's nightly statistics (api/progress): a computer on an older build
+  // answers 404 and the card says to upgrade; nothing else on the page changes.
+  async function loadNotes() {
+    try {
+      const response = await fetch('release-notes.json', { cache: 'no-store', redirect: 'error' });
+      notes = response.ok ? Core.releaseNotes(await response.json()) : null;
+    } catch (_) { notes = null; }
+    render();
+  }
+  async function loadProgress(m) {
+    const result = await request(m, 'api/progress');
+    m.progressAt = Date.now();
+    if (result.status === 200 && result.body) { m.progress = Core.progressDays(result.body.days); m.progressState = 'ready'; }
+    else { m.progress = null; m.progressState = result.status === 404 ? 'old' : 'error'; }
+  }
+  // The computer whose statistics are shown: the default one (Mac) first, any other that has days.
+  function progressView() {
+    const order = [...machines].sort((a, b) => Number(b.default) - Number(a.default));
+    const ready = order.find((m) => m.state === 'online' && m.progress && m.progress.length);
+    if (ready) return { state: 'ready', days: ready.progress, source: ready.label };
+    const first = order[0];
+    if (!first || first.state === 'unknown' || (first.state === 'online' && !first.progressState)) return { state: 'loading', days: [] };
+    if (first.state === 'upgrade' || first.progressState === 'old') return { state: 'old', days: [] };
+    if (first.state !== 'online') return { state: 'offline', days: [] };
+    return { state: first.progressState === 'error' ? 'error' : 'none', days: [] };
+  }
+  function renderReleases(focus) {
+    const latest = notes && notes.released[0], pending = Core.pendingCount(notes);
+    const target = byId(filter) || machines.find((m) => m.default) || machines[0];
+    const version = target && target.meta.appVersion;
+    const meta = $('releases-entry-meta');
+    if (changed(meta, [version, latest && latest.version, pending])) {
+      meta.replaceChildren();
+      if (version) meta.append(node('span', 'releases-entry-version', 'V' + version));
+      if (pending) meta.append(node('span', 'rn-pending', pending + ' 件待你定'));
+      $('releases-entry').setAttribute('aria-label', '版本更新与每日进展' + (version ? `，${target.label} 在用 ${version}` : '') + (pending ? `，${pending} 件待你定` : ''));
+    }
+    if (view === 'releases') $('brand-caption').textContent = latest ? '最新 ' + latest.version : '';
+    const box = $('releases'), progress = progressView();
+    if (view !== 'releases') return;
+    // Always record what is drawn, so the next poll does not rebuild (and drop a copy check) after a day was picked.
+    if (!changed(box, [notes === undefined ? 'loading' : notes, progress, notesDay, machines.map((m) => [m.label, m.meta.appVersion])]) && !focus) return;
+    ReleasesView.render(box, {
+      core: Core, notes, progress, dayIndex: notesDay, now: new Date(), focus: focus || '',
+      buttonClass: 'icon-button', icon: svg,
+      copy: (text, button, label) => copyText(button, text, label),
+      using: (v) => { const on = machines.filter((m) => m.meta.appVersion && Core.sameVersion(v, m.meta.appVersion)); return on.length ? on.map((m) => m.label).join('、') + ' 在用' : ''; },
+      setDay: (i, key) => { notesDay = i; renderReleases(key); },
+      notesMissing: ['没读到版本更新内容', '手机这边没取到更新说明，多半是网络不稳。点右上角的刷新再试一次；电脑上的 AgentDeck 不受影响。'],
+    });
   }
 
   // ---- shell ---------------------------------------------------------------
@@ -2161,16 +2230,19 @@
     if (view === 'output' && next !== 'output') { outputRequest++; output = null; $('output-text').textContent = ''; }
     view = next;
     if (TABS.includes(view)) store(KEYS.view, view);
-    ['overview', 'captain', 'todo', 'sessions', 'board', 'output'].forEach((name) => { $(name + '-view').hidden = name !== view; });
+    ['overview', 'captain', 'todo', 'sessions', 'board', 'output', 'releases'].forEach((name) => { $(name + '-view').hidden = name !== view; });
     document.querySelectorAll('[data-view]').forEach((button) => {
       if (button.dataset.view === (view === 'output' ? 'sessions' : view)) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     });
-    $('back').hidden = view !== 'output';
+    $('back').hidden = view !== 'output' && view !== 'releases';
+    const backLabel = view === 'releases' ? '返回总览' : '返回会话列表';
+    $('back').title = backLabel; $('back').setAttribute('aria-label', backLabel);
     $('attention-view').hidden = view !== 'attention';
     if (view === 'attention') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
     $('main').classList.toggle('fill', view === 'captain');
     if (view === 'todo') { $('brand-title').textContent = '待办'; $('brand-caption').textContent = '两台电脑同一份'; }
+    else if (view === 'releases') { $('brand-title').textContent = '版本更新'; $('brand-caption').textContent = ''; }
     else if (view !== 'output') { $('brand-title').textContent = 'AgentDeck'; $('brand-caption').textContent = '总台'; }
     $('main').scrollTop = 0;
     render();
@@ -2179,13 +2251,17 @@
     if (view === 'todo') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
   }
   function render() {
-    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet(); renderSettings();
+    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet(); renderSettings(); renderReleases();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
     renderAttention();
     renderSidebar();
   }
   $('refresh').addEventListener('click', refreshAll);
-  $('back').addEventListener('click', () => showView(wide.matches ? 'captain' : 'sessions'));
+  $('back').addEventListener('click', () => showView(view === 'releases' ? 'overview' : wide.matches ? 'captain' : 'sessions'));
+  // Opening 版本更新 reads 每日进展 at once rather than on the next poll.
+  const openReleases = () => { notesDay = 0; showView('releases'); machines.forEach((m) => { if (m.state === 'online') { m.forceProgress = true; m.nextAt = 0; } }); };
+  $('releases-entry').addEventListener('click', openReleases);
+  $('side-version').addEventListener('click', openReleases);
   {
     const label = $('logout-all').title;
     armed($('logout-all'), label, '再点一次，确认在这部手机上退出所有电脑', () => logout(machines.filter((m) => m.state === 'online')));
@@ -2207,7 +2283,7 @@
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
     machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '', todos: null, todosReady: null, todosAt: 0,
-      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
+      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, progress: null, progressState: '', progressAt: 0, forceProgress: false, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
     machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); m.card.dataset.machine = m.id; $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);
     filter = byId(saved) ? saved : 'all';
@@ -2215,9 +2291,10 @@
     target = filter !== 'all' ? filter : (machines.find((m) => m.default) || machines[0]).id;
     // Open where the user left off; a bookmark ending in #todo (or another tab's name) opens that tab.
     const asked = location.hash.slice(1), last = stored(KEYS.view);
-    showView(TABS.includes(asked) ? asked : TABS.includes(last) ? last : 'overview');
+    showView(TABS.includes(asked) || asked === 'releases' ? asked : TABS.includes(last) ? last : 'overview');
     applyLayout();
     refreshAll();
+    loadNotes();
   }
   start();
 })();
