@@ -33,10 +33,11 @@ test('both computers on one page: needs first, then reports, newest first; finis
     { id: 'win', label: 'Windows', items: Core.cleanAttention({ items: data.win }) },
   ]);
   assert.deepEqual(merged.needs.map((i) => i.key), ['mac:at-m1-decide', 'mac:at-m2-login', 'win:at-w1-held']);
-  assert.deepEqual(merged.reports.map((i) => i.key), ['mac:at-m3-report', 'mac:at-m4-report']);
-  assert.deepEqual(merged.done.map((i) => i.key), ['win:at-w2-done', 'win:at-w3-other']);
+  assert.deepEqual(merged.reports.map((i) => i.key), ['mac:at-m5-chat', 'mac:at-m3-report']);
+  assert.deepEqual(merged.done.map((i) => i.key), ['mac:at-m4-report', 'win:at-w2-done', 'win:at-w3-other']);
   assert.equal(merged.needs[2].machineLabel, 'Windows');
-  assert.deepEqual(merged.counts, { need: 3, reports: 2, unreadReports: 1, badge: 4 });
+  assert.deepEqual([merged.reports[0].turn, merged.done[0].doneBy], ['mac-t5', 'chat']);
+  assert.deepEqual(merged.counts, { need: 3, reports: 2, unreadReports: 2, badge: 3 }, 'the number is 要你处理 only');
 });
 
 test('a reply or tick that did not go through says why, in words', () => {

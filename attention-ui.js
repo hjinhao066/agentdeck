@@ -15,6 +15,7 @@
   const opened = new Set();          // item ids whose details are unfolded
   const drafts = new Map();          // item id -> reply being written (its composer is open)
   const busy = new Set();            // item ids with a reply or tick on its way
+  const kept = new Set();            // reports read on this visit: they stay in place until the page is left
   let syncing = false, syncAgain = false;
   let redrawWaiting = false;
 
@@ -91,12 +92,15 @@
     const c = counts();
     const badge = row.querySelector('.nav-row-badge');
     if (badge) {
-      badge.hidden = !c.badge;
-      badge.textContent = c.badge > 99 ? '99+' : String(c.badge || '');
+      badge.hidden = !c.need;
+      badge.textContent = c.need > 99 ? '99+' : String(c.need || '');
       badge.classList.toggle('need', c.need > 0);
     }
+    // Reports not yet seen: a dot of their own, never added to the number.
+    const dot = row.querySelector('.nav-row-dot');
+    if (dot) dot.hidden = !c.unreadReports;
     row.title = A.badgeTitle(c);
-    row.setAttribute('aria-label', c.badge ? A.badgeTitle(c) : '待我处理');
+    row.setAttribute('aria-label', c.need || c.unreadReports ? A.badgeTitle(c) : '待我处理');
   }
 
   // ---- what else knows when an item is settled ---------------------------------
@@ -153,11 +157,12 @@
     if (message.op !== 'need' && message.op !== 'report') throw new Error('inbox 只有 need、report、list、resolve。');
     const card = input.card ? await cardOf(input.card) : null;
     const col = input.session ? sessionOf(input.session) : null;
+    const turn = message.op === 'report' && caller ? saidIn(caller.id, now) : '';
     const { item, created } = A.add(s, {
       kind: message.op, type: input.type, title: input.title, ask: input.ask, options: input.options, detail: input.detail, files: input.files,
       project: input.project || (card && card.project) || (col && col.project) || '',
       card: input.card, cardTitle: card && card.title, session: input.session, sessionTitle: col && host.columnLabel(col),
-      sessionWaiting: col ? sessionWaiting(col.id) === true : false, source: 'captain',
+      sessionWaiting: col ? sessionWaiting(col.id) === true : false, turn, source: 'captain',
     }, now);
     if (created) save();
     const out = { done: true, result: A.addedText(item, created) };
@@ -167,6 +172,14 @@
       out.visible = host.captainColumnVisible(caller.id);
     }
     return out;
+  }
+  // The 队长 turn a report is said in: the one under way when it is filed, or
+  // one that has just ended (the chat closes a turn after a quiet moment).
+  // An older turn is not this report's: the report then waits in 没看.
+  function saidIn(colId, now) {
+    const id = host.terms.get(colId) && host.terms.get(colId).captainTurnId;
+    const turn = id && window.ChatUI ? window.ChatUI.turnsOf(colId).find((t) => t.id === id) : null;
+    return turn && (!turn.done || now - (turn.end || 0) <= 120_000) ? turn.id : '';
   }
   // notify-user: the alert goes out as before; the user also finds it here.
   function fromNotify(text) {
@@ -187,6 +200,7 @@
     if (!window.MainSession || !window.MainSession.exists()) throw new Error('还没有队长：回复要交给队长，先在侧边栏创建队长。');
     const notice = window.MainSession.userNotice(A.replyNotice(item, body));
     A.reply(load(), id, body, from, Date.now(), notice);
+    kept.delete(id);
     save();
     return item;
   }
@@ -209,11 +223,12 @@
     return n;
   }
   function reopen(id) {
+    kept.delete(id);
     const { changed } = A.reopen(load(), id, Date.now());
     if (changed) save();
   }
-  function markRead(ids) {
-    if (A.markRead(load(), ids, Date.now())) save();
+  function markRead(ids, via) {
+    if (A.markRead(load(), ids, Date.now(), via)) save();
   }
 
   // ---- the phone -----------------------------------------------------------------------
@@ -221,7 +236,7 @@
   async function mobileWrite(input) {
     const op = input && input.op;
     const id = input && input.id;
-    if (op === 'read') { markRead(Array.isArray(input.ids) ? input.ids.slice(0, 100) : []); return { ok: true }; }
+    if (op === 'read') { markRead(Array.isArray(input.ids) ? input.ids.slice(0, 100) : [], input.via); return { ok: true }; }
     if (typeof id !== 'string' || !A.ID.test(id)) throw new Error('没有这一条。');
     if (op === 'reply') await reply(id, input.text, 'phone');
     else if (op === 'done') tick(id);
@@ -258,21 +273,48 @@
   }
 
   // An unread item counts as read once most of it has stayed on screen for a
-  // moment. Measured on a timer rather than observed: it holds while the
-  // window is in the background and painting is throttled.
+  // moment (SEEN_MS). Measured on a timer rather than observed: it holds while
+  // the window is in the background and painting is throttled.
+  const SEEN_MS = 1500;
   const seenSince = new Map();
+  const onScreen = (node, box) => {
+    const r = node.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
+    return r.height > 0 && shown >= Math.min(r.height * 0.6, box.height * 0.5);
+  };
   function checkSeen() {
+    checkChatSeen();
     const scroller = document.getElementById('pageView');
-    if (!visible() || document.hidden || !scroller || !view) { seenSince.clear(); return; }
+    if (!visible() || document.hidden || !scroller || !view) { seenSince.clear(); kept.clear(); return; }
     const box = scroller.getBoundingClientRect(), now = Date.now(), ready = [];
     for (const node of view.querySelectorAll('.at-card.unread:not(.done)')) {
-      const r = node.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
       const id = node.dataset.id;
-      if (shown < Math.min(r.height * 0.6, box.height * 0.5)) { seenSince.delete(id); continue; }
+      if (!onScreen(node, box)) { seenSince.delete(id); continue; }
       if (!seenSince.has(id)) seenSince.set(id, now);
-      else if (now - seenSince.get(id) >= 1500) ready.push(id);
+      else if (now - seenSince.get(id) >= SEEN_MS) ready.push(id);
     }
-    if (ready.length) { ready.forEach((id) => seenSince.delete(id)); markRead(ready); }
+    if (!ready.length) return;
+    ready.forEach((id) => { seenSince.delete(id); if (find(id) && find(id).kind === 'report') kept.add(id); });
+    markRead(ready);
+  }
+  // A report 队长 also said in its chat is read once that reply has stayed on
+  // screen for the same moment: the 队长 conversation showing in the deck
+  // (chat view), the turn finished, most of its reply in view.
+  const chatSince = new Map();
+  function checkChatSeen() {
+    const linked = A.unseenByTurn(load());
+    const captainCol = host.columns().find((c) => c.isMain);
+    if (!linked.size || !captainCol || document.hidden || !host.captainColumnVisible(captainCol.id)) { chatSince.clear(); return; }
+    const turns = window.ChatUI ? window.ChatUI.turnsOf(captainCol.id) : [];
+    const now = Date.now(), ready = [];
+    for (const [turnId, ids] of linked) {
+      const turn = turns.find((t) => t.id === turnId);
+      const node = turn && turn.done && host.terms.get(captainCol.id).wrap.querySelector(`.msg.assistant[data-turn="${CSS.escape(turnId)}"]`);
+      const scroller = node && !node.closest('[hidden]') && node.closest('.chat-scroll');
+      if (!scroller || !onScreen(node, scroller.getBoundingClientRect())) { chatSince.delete(turnId); continue; }
+      if (!chatSince.has(turnId)) chatSince.set(turnId, now);
+      else if (now - chatSince.get(turnId) >= SEEN_MS) { chatSince.delete(turnId); ready.push(...ids); }
+    }
+    if (ready.length) markRead(ready, 'chat');
   }
 
   async function act(id, fn) {
@@ -379,7 +421,10 @@
   function liveSession(item) { return item.session && host.columns().some((c) => c.id === item.session) ? item.session : ''; }
 
   function cardNode(item, now) {
-    const card = el('article', `at-card at-${item.kind}` + (item.readAt ? '' : ' unread') + (item.done ? ' done' : ''));
+    // A report read on this visit stays as it was, reply included, until the page is left.
+    const stay = item.done && kept.has(item.id);
+    const shut = item.done && !stay;
+    const card = el('article', `at-card at-${item.kind}` + (item.readAt ? '' : ' unread') + (shut ? ' done' : '') + (stay ? ' seen' : ''));
     card.dataset.id = item.id;
     const top = el('div', 'at-top');
     if (!item.done && !item.readAt) {
@@ -387,7 +432,7 @@
       dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', '未读'); dot.title = '未读';
       top.appendChild(dot);
     }
-    if (item.done) {
+    if (shut) {
       const mark = el('span', 'at-check');
       mark.innerHTML = host.ICONS.check;
       mark.setAttribute('aria-hidden', 'true');
@@ -395,12 +440,13 @@
     }
     // A finished 要你处理 already has its tick; the plain label would read as still pending.
     const kind = A.label(item);
-    if (!(item.done && kind === A.TYPES.other)) top.appendChild(el('span', 'at-kind', kind));
+    if (!(shut && kind === A.TYPES.other)) top.appendChild(el('span', 'at-kind', kind));
+    if (stay) top.appendChild(el('span', 'at-seen', '已读'));
     const meta = el('span', 'at-meta');
     if (item.project) meta.appendChild(el('span', 'at-project', item.project));
-    const time = el('time', 'at-when', A.when(item.done ? item.doneAt : item.created, now));
-    time.dateTime = new Date(item.done ? item.doneAt : item.created).toISOString();
-    time.title = (item.done ? '完成于 ' : '登记于 ') + new Date(item.done ? item.doneAt : item.created).toLocaleString();
+    const time = el('time', 'at-when', A.when(shut ? item.doneAt : item.created, now));
+    time.dateTime = new Date(shut ? item.doneAt : item.created).toISOString();
+    time.title = (shut ? '完成于 ' : '登记于 ') + new Date(shut ? item.doneAt : item.created).toLocaleString();
     meta.appendChild(time);
     if (item.source === 'card') meta.appendChild(el('span', 'at-from', '来自任务看板'));
     top.append(meta, el('span', 'at-spacer'));
@@ -408,7 +454,7 @@
     const live = liveSession(item);
     if (live) tools.appendChild(iconButton('chat', '跳到对应的会话', () => { window.Pages.hide(); window.ChatUI.reveal(live); }, 'jump:' + item.id));
     tools.appendChild(copyButton('复制这一条', copyText(item), 'copy:' + item.id));
-    if (item.done) tools.appendChild(iconButton('restore', '放回待处理', () => reopen(item.id), 'reopen:' + item.id));
+    if (shut) tools.appendChild(iconButton('restore', item.kind === 'report' ? '放回没看' : '放回待处理', () => reopen(item.id), 'reopen:' + item.id));
     top.appendChild(tools);
     card.appendChild(top);
 
@@ -435,7 +481,7 @@
       }
       card.appendChild(ask);
     }
-    if (item.done) {
+    if (shut) {
       const last = item.replies[item.replies.length - 1];
       card.appendChild(el('div', 'at-done-text', A.doneText(item) + (last ? '：' + last.text.replace(/\s+/g, ' ') : '')));
     }
@@ -451,7 +497,7 @@
       card.appendChild(more);
       if (isOpen) card.appendChild(detailBlock(item, now));
     }
-    if (!item.done) {
+    if (!shut) {
       if (drafts.has(item.id)) card.appendChild(composer(item));
       else {
         const actions = el('footer', 'at-actions');
@@ -465,7 +511,8 @@
           ? (item.source === 'card' ? '从这里勾掉；任务看板上的卡片不变' : '勾掉并告诉队长你已经处理了')
           : '看过了，没有问题';
         answer.disabled = done.disabled = busy.has(item.id);
-        actions.append(answer, done);
+        actions.append(answer);
+        if (!stay) actions.append(done);
         card.appendChild(actions);
       }
     }
@@ -484,56 +531,72 @@
     return head;
   }
 
+  // One column: its heading, then its items or a line saying it is empty.
+  function column(cls, title, count, empty, items, now, extra) {
+    const col = el('section', 'at-col ' + cls);
+    col.appendChild(section(cls, title, count || null, '', extra));
+    col.querySelector('h2').id = 'at-h-' + cls;
+    col.setAttribute('aria-labelledby', 'at-h-' + cls);
+    if (!items.length) col.appendChild(el('p', 'at-col-empty', empty));
+    else {
+      const list = el('div', 'at-list');
+      items.forEach((item) => list.appendChild(cardNode(item, now)));
+      col.appendChild(list);
+    }
+    return col;
+  }
+
   function render(frame, h) {
     host = h || host;
+    // A fresh visit (the page was left: its old body is gone): what was read last time is in 已读 now.
+    if (!view || !view.isConnected) kept.clear();
     const now = Date.now();
     const v = A.view(load());
+    // Reports read on this visit stay where the user is reading them.
+    const stay = v.done.filter((i) => kept.has(i.id));
+    const reports = A.sorted([...v.reports, ...stay]);
+    const done = v.done.filter((i) => !kept.has(i.id));
     let body = null;
     keepingFocus(() => {
-      body = frame('待我处理', '你不在时交回来的事，处理完自动归到已完成。');
+      body = frame('待我处理', '要你处理的事回复或办完才打勾；队长的汇报你在这里或队长对话里看过，就归到已读。');
       body.classList.add('at-page');
       view = body;
-      const open = v.needs.length + v.reports.length;
-      if (!open) {
+      if (!v.needs.length && !reports.length) {
         const empty = el('div', 'page-empty at-empty');
         const ico = el('span', 'ico page-empty-ico');
         ico.innerHTML = host.ICONS.inbox;
         empty.append(ico, el('strong', null, '都处理完了'),
-          el('span', null, '队长交给你拍板、登录、付款或回答的事，以及它向你汇报的结论，都会出现在这里。'));
+          el('span', null, '队长交给你拍板、登录、付款或回答的事，以及你不在时它汇报的结论，都会出现在这里。'));
         body.appendChild(empty);
+      } else {
+        const cols = el('div', 'at-cols');
+        cols.appendChild(column('at-sec-need', '要你处理', v.needs.length, '没有要你处理的事。', v.needs, now));
+        let all = null;
+        if (v.reports.length) {
+          all = btn('全部看过了', () => { const n = tickReports(); if (n) host.showToast(`${n} 条汇报归到已读`); }, 'at-all');
+          all.dataset.fk = 'all-reports';
+          all.title = '把这一栏的汇报都标成看过，归到已读（可以放回）';
+        }
+        cols.appendChild(column('at-sec-report', '做完了你还没看', v.reports.length, '汇报你都看过了。', reports, now, all));
+        body.appendChild(cols);
       }
-      if (v.needs.length) {
-        body.appendChild(section('at-sec-need', '要你处理', v.needs.length, '只有你能做的事。处理完点「已处理」，或者直接回复。'));
-        const list = el('div', 'at-list');
-        v.needs.forEach((item) => list.appendChild(cardNode(item, now)));
-        body.appendChild(list);
-      }
-      if (v.reports.length) {
-        const all = btn('全部知道了', () => { const n = tickReports(); if (n) host.showToast(`${n} 条汇报归到已完成`); }, 'at-all');
-        all.dataset.fk = 'all-reports';
-        all.title = '把下面的结果汇报都标成看过，归到已完成（可以放回）';
-        body.appendChild(section('at-sec-report', '结果汇报', v.reports.length, '你不在时跑出来的结论。有问题就回复，没问题点「知道了」。', all));
-        const list = el('div', 'at-list');
-        v.reports.forEach((item) => list.appendChild(cardNode(item, now)));
-        body.appendChild(list);
-      }
-      if (v.done.length) {
+      if (done.length) {
         const toggle = el('button', 'at-done-toggle');
         toggle.type = 'button'; toggle.dataset.fk = 'done-toggle';
         toggle.setAttribute('aria-expanded', String(showDone));
         const chev = el('span', 'ico');
         chev.innerHTML = host.ICONS[showDone ? 'chevDown' : 'chevRight'];
-        toggle.append(chev, el('span', 'at-done-title', '已完成'), el('span', 'at-count', String(v.done.length)));
+        toggle.append(chev, el('span', 'at-done-title', '已完成和已读'), el('span', 'at-count', String(done.length)));
         toggle.addEventListener('click', () => { showDone = !showDone; doneLimit = 30; redraw(); });
         const head = el('div', 'at-section at-sec-done');
         head.appendChild(toggle);
         body.appendChild(head);
         if (showDone) {
           const list = el('div', 'at-list at-done-list');
-          v.done.slice(0, doneLimit).forEach((item) => list.appendChild(cardNode(item, now)));
+          done.slice(0, doneLimit).forEach((item) => list.appendChild(cardNode(item, now)));
           body.appendChild(list);
-          if (v.done.length > doneLimit) {
-            const more = btn(`再显示 ${Math.min(30, v.done.length - doneLimit)} 条`, () => { doneLimit += 30; redraw(); }, 'at-more-done');
+          if (done.length > doneLimit) {
+            const more = btn(`再显示 ${Math.min(30, done.length - doneLimit)} 条`, () => { doneLimit += 30; redraw(); }, 'at-more-done');
             more.dataset.fk = 'more-done';
             body.appendChild(more);
           }

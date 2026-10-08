@@ -118,13 +118,22 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       const body = await readJson(req);
       machine.attentionWrites.push(body);
       if (machine.attentionRefuse) return json(res, 409, { error: machine.attentionRefuse });
-      if (body && body.op === 'read' && Array.isArray(body.ids)) { machine.attention.forEach((i) => { if (body.ids.includes(i.id) && !i.readAt) i.readAt = Date.now(); }); return json(res, 200, { ok: true, item: null }); }
+      // Read: a need loses its dot; a report goes to 已读 (attention-core markRead).
+      if (body && body.op === 'read' && Array.isArray(body.ids)) {
+        const now = Date.now();
+        machine.attention.forEach((i) => {
+          if (!body.ids.includes(i.id) || i.done) return;
+          if (!i.readAt) i.readAt = now;
+          if (i.kind === 'report') Object.assign(i, { done: true, doneAt: now, doneBy: body.via === 'chat' ? 'chat' : 'seen', doneText: body.via === 'chat' ? '你在队长对话里看过了' : '你看过了' });
+        });
+        return json(res, 200, { ok: true, item: null });
+      }
       const item = body && machine.attention.find((i) => i.id === body.id);
       if (!item) return json(res, 400, { error: 'Invalid request.' });
       const now = Date.now();
       if (body.op === 'reply' && typeof body.text === 'string' && body.text.trim()) Object.assign(item, { done: true, doneAt: now, doneText: '你已回复', readAt: item.readAt || now, replies: [...(item.replies || []), { text: body.text.trim(), at: now, from: 'phone', seen: false }] });
       else if (body.op === 'done') Object.assign(item, { done: true, doneAt: now, doneText: item.kind === 'report' ? '你看过了' : '你标记已处理', readAt: item.readAt || now });
-      else if (body.op === 'reopen') Object.assign(item, { done: false, doneAt: 0, doneText: '' });
+      else if (body.op === 'reopen') Object.assign(item, { done: false, doneAt: 0, doneText: '', doneBy: '', ...(item.kind === 'report' ? { readAt: 0 } : {}) });
       else return json(res, 400, { error: 'Invalid request.' });
       return json(res, 200, { ok: true, item });
     }
@@ -278,7 +287,8 @@ function relayFixture(currentId = 'us') {
   ] };
 }
 // 待我处理 items as each computer's api/attention sends them: Mac has a decision,
-// a login and two reports (one about a card), Windows a held card 队长 asks about with
+// a login, two unseen reports (one about a card, one said in 队长's reply mac-t5) and
+// one the user already read in the chat; Windows a held card 队长 asks about with
 // quick answers, and two older finished ones.
 function attentionFixture() {
   const ago = (minutes) => Date.now() - minutes * 60000;
@@ -291,7 +301,9 @@ function attentionFixture() {
       item('at-m2-login', 'need', '等你登录或授权', '小红书要你在 Mac 的 Chrome 里登录一次', 40, { ask: '登录后点「已处理」，抓取会自己接着跑', project: 'xhs-harvest' }),
       item('at-m3-report', 'report', '结果汇报', '小福助手排查报告回来了：结论是完全正常，但这个结论我还不认，已让它补查两件', 25, { project: '小福助手',
         detail: '补查一：用妹妹那份真实 Excel 走一遍上传→识别→写入。\n补查二：识别失败时有没有提示。', files: ['/Users/jinhao/reports/xiaofu/check.md', '/Users/jinhao/reports/xiaofu/recheck-plan.md'], cardTitle: '小福助手 Excel 识别' }),
-      item('at-m4-report', 'report', '结果汇报', '「登录改成 1」的会话卡在确认窗口，我已替它点了「是」', 70, { project: 'agentdeck', readAt: ago(60), sessionTitle: '登录取证' }),
+      item('at-m4-report', 'report', '结果汇报', '「登录改成 1」的会话卡在确认窗口，我已替它点了「是」', 70, { project: 'agentdeck', readAt: ago(60), sessionTitle: '登录取证',
+        done: true, doneAt: ago(60), doneBy: 'chat', doneText: '你在队长对话里看过了' }),
+      item('at-m5-chat', 'report', '结果汇报', '手机总台在做界面，双机说明文档已提交回执', 9, { project: 'agentdeck', turn: 'mac-t5' }),
     ],
     win: [
       item('at-w1-held', 'need', '验收卡住了', 'Muse 冒烟测试验收没过 2 次，已经停下', 95, { ask: '还要继续做吗？', options: ['换个做法再试', '先放着', '不做了'], project: 'muse', cardTitle: 'Muse 冒烟测试',

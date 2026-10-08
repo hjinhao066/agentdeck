@@ -86,7 +86,10 @@ the middle:
   待我处理 collects decisions, login/payment requests and reports that the Captain
   files; each question is shown first, with one-tap answers when the Captain
   offers them. Reply to each item with its original context for the Captain, or
-  tick it into the folded 已完成 section. Board cards that stop for the user go to
+  tick it into the folded 已完成 section. Two columns: 要你处理 (the sidebar number;
+  only a reply or 已处理 ticks it) and 做完了你还没看 (a blue dot): a Captain report is
+  read once its Captain reply, or the report itself, was on screen for 1.5 s on the
+  desktop or the phone hub. Board cards that stop for the user go to
   the Captain first, never straight onto this page. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows

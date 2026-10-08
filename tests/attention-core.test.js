@@ -21,7 +21,7 @@ test('captain items: need and report, validated, newest first with needs ahead o
   const v = A.view(s);
   assert.deepEqual(v.needs.map((i) => i.id), [need.id, older.id]);
   assert.deepEqual(v.reports.map((i) => i.id), [report.id]);
-  assert.deepEqual(v.counts, { need: 2, reports: 1, unreadReports: 1, unread: 3, badge: 3, open: 3 });
+  assert.deepEqual(v.counts, { need: 2, reports: 1, unreadReports: 1, unread: 3, badge: 2, open: 3 }, 'the number is 要你处理 only');
   assert.equal(A.label(need), '等你登录或授权');
   assert.equal(A.label(report), '结果汇报');
   assert.equal(report.detail, '补查两件：\n1. 上传\n2. 识别');
@@ -52,8 +52,13 @@ test('reading, ticking, reopening and 队长 resolving', () => {
   const n = A.add(s, { kind: 'need', type: 'decide', title: '1.5 先出四项还是等 Todo', ask: '回复「先出」或「等」' }, T0, rnd()).item;
   assert.equal(A.markRead(s, [r.id, 'at-missing'], T0 + 5), 1);
   assert.equal(A.counts(s).badge, 1, 'a read report no longer counts; an open need still does');
-  A.resolve(s, r.id, 'user', '', T0 + 6);
+  assert.deepEqual([r.done, r.doneBy, r.readAt], [true, 'seen', T0 + 5], 'a report seen on the page goes to 已读');
+  assert.equal(A.resolve(s, r.id, 'user', '', T0 + 6).changed, false);
   assert.equal(A.doneText(r), '你看过了');
+  // Reading a need only takes its dot away: it stays until it is answered or done.
+  assert.equal(A.markRead(s, [n.id], T0 + 5), 1);
+  assert.deepEqual([n.done, n.readAt, A.counts(s).need], [false, T0 + 5, 1]);
+  assert.equal(A.markRead(s, [n.id], T0 + 6), 0);
   A.resolve(s, n.id, 'captain', '用户口头说了先出', T0 + 7);
   assert.equal(A.doneText(n), '队长标记已解决：用户口头说了先出');
   assert.equal(A.counts(s).open, 0);
@@ -129,7 +134,7 @@ test('migration: the board items 1.9 filed by itself go once, 队长 hears which
     { id: 'at-mine-001', kind: 'need', type: 'decide', title: '队长自己登记的', ask: '选 A 还是 B？', card: 't-audit', source: 'captain', created: T0 },
   ] };
   const s = A.normalize(raw);
-  assert.equal(s.version, 2);
+  assert.equal(s.version, 3);
   const { changed, moved } = A.migrate(s, raw.version);
   assert.equal(changed, true);
   assert.deepEqual(moved.map((i) => i.id), ['at-old-0001', 'at-old-0002'], 'the open unanswered ones');
@@ -206,7 +211,7 @@ test('list text for 队长 and the phone view', () => {
   const r = A.add(s, { kind: 'report', title: '额度兜底调研回来了', files: ['/Users/x/report.md'] }, T0 - 60_000, rnd()).item;
   A.reply(s, r.id, '看过了，按推荐的来', 'desktop', T0 + 1, 'attention-x');
   const text = A.listText(s, false, T0 + 2);
-  assert.match(text, /待我处理：1 件要用户处理，0 条结果汇报。/);
+  assert.match(text, /待我处理：1 件要用户处理，0 条结果汇报用户还没看。/);
   assert.match(text, new RegExp(`- ${n.id}【要你处理·等你付款】DeepSeek 余额剩 ¥10（项目 agentdeck，卡片 t-9，刚刚，用户未读）`));
   assert.match(text, /要用户做：充值或告诉队长停用兜底/);
   assert.doesNotMatch(text, /额度兜底调研/);
@@ -221,6 +226,56 @@ test('list text for 队长 and the phone view', () => {
   assert.equal('notice' in phone.items[1].replies[0], false);
   assert.equal(phone.counts.badge, 1);
   assert.equal(A.badgeTitle(phone.counts), '待我处理：1 件要你处理');
+});
+
+test('two columns: a report filed with its 队长 turn is read when that reply is seen; 要你处理 never is', () => {
+  const s = fresh();
+  const said = A.add(s, { kind: 'report', title: '迁移预检通过', turn: 'tq1abc' }, T0, rnd()).item;
+  const away = A.add(s, { kind: 'report', title: '夜里跑完的回归', turn: 'tq2def' }, T0 + 1, rnd()).item;
+  const loose = A.add(s, { kind: 'report', title: '没有对应回复的汇报' }, T0 + 2, rnd()).item;
+  const need = A.add(s, { kind: 'need', title: '要你拍板', ask: '迁移还是保留？', turn: 'tq1abc' }, T0 + 3, rnd()).item;
+  assert.equal(need.turn, '', 'only a report is tied to a reply');
+  assert.equal(A.add(s, { kind: 'report', title: 'x', turn: '../bad' }, T0, rnd()).item.turn, '');
+  A.resolve(s, s.items[s.items.length - 1].id, 'captain', '', T0 + 4);
+  assert.deepEqual([...A.unseenByTurn(s)], [['tq1abc', [said.id]], ['tq2def', [away.id]]]);
+  assert.deepEqual(A.counts(s), { need: 1, reports: 3, unreadReports: 3, unread: 4, badge: 1, open: 4 });
+  assert.equal(A.badgeTitle(A.counts(s)), '待我处理：1 件要你处理，3 条汇报你还没看');
+  // The user saw the reply the first report was said in: it goes to 已读, not to 没看.
+  assert.equal(A.markRead(s, A.unseenByTurn(s).get('tq1abc'), T0 + 10, 'chat'), 1);
+  assert.deepEqual([said.done, said.doneBy, A.doneText(said)], [true, 'chat', '你在队长对话里看过了']);
+  assert.deepEqual(A.view(s).reports.map((i) => i.id), [loose.id, away.id]);
+  assert.equal(A.markRead(s, [need.id], T0 + 11, 'chat'), 1);
+  assert.equal(need.done, false, 'reading never ticks what needs the user');
+  assert.equal(A.badgeTitle(A.counts(s)), '待我处理：1 件要你处理，2 条汇报你还没看');
+  // Put back: a report returns to 没看.
+  A.reopen(s, said.id, T0 + 12);
+  assert.deepEqual([said.done, said.readAt], [false, 0]);
+  A.resolve(s, need.id, 'user', '', T0 + 13);
+  assert.equal(A.badgeTitle(A.counts(s)), '待我处理：没有要你处理的事，3 条汇报你还没看');
+  // What the phone gets: the turn, and how a finished item was finished.
+  A.markRead(s, [away.id], T0 + 14);
+  const phone = A.phoneView(s).items;
+  assert.equal(phone.find((i) => i.id === said.id).turn, 'tq1abc');
+  assert.equal(phone.find((i) => i.id === away.id).doneBy, 'seen');
+  // Answering a report already seen: the record says the user replied.
+  A.reply(s, away.id, '再跑一次', 'phone', T0 + 15, 'attention-y');
+  assert.deepEqual([away.doneBy, A.doneText(away)], ['reply', '你已回复']);
+  // Saved and read back, the link survives.
+  assert.equal(A.normalize(JSON.parse(JSON.stringify(s))).items.find((i) => i.id === said.id).turn, 'tq1abc');
+});
+
+test('migration to version 3: a report already read leaves 没看; unread ones and needs stay', () => {
+  const raw = { version: 2, items: [
+    { id: 'at-v2-read', kind: 'report', title: '读过没点知道了', created: T0, readAt: T0 + 5 },
+    { id: 'at-v2-new1', kind: 'report', title: '还没看', created: T0 + 1 },
+    { id: 'at-v2-need', kind: 'need', title: '读过的要你处理', created: T0, readAt: T0 + 5 },
+  ] };
+  const s = A.normalize(raw);
+  assert.deepEqual(A.migrate(s, raw.version).changed, true);
+  assert.deepEqual(s.items.map((i) => [i.id, i.done, i.doneBy]), [['at-v2-read', true, 'seen'], ['at-v2-new1', false, ''], ['at-v2-need', false, '']]);
+  assert.equal(s.items[0].doneAt, T0 + 5);
+  assert.deepEqual(A.migrate(s, 3), { changed: false, moved: [] });
+  assert.equal(A.migrate(A.normalize({ version: 2, items: [raw.items[1]] }), 2).changed, false);
 });
 
 test('times read the way the page shows them', () => {

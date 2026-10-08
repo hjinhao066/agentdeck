@@ -263,7 +263,7 @@
     const groups = [], list = (Array.isArray(turns) ? turns : []).filter((turn) => turn && typeof turn === 'object');
     const said = list.map((turn) => typeof turn.user === 'string' ? turn.user : '').join('\n');
     let group = null, last = 0;
-    const open = (turn, user, images) => { group = { id: turn.id, user, images, replies: [], pending: false, interrupted: false }; groups.push(group); };
+    const open = (turn, user, images) => { group = { id: turn.id, user, images, replies: [], said: [], pending: false, interrupted: false }; groups.push(group); };
     for (const turn of list) {
       const isUser = !turn.kind && (typeof turn.user === 'string' && turn.user || Array.isArray(turn.images) && turn.images.length);
       if (isUser) open(turn, typeof turn.user === 'string' ? turn.user : '', Array.isArray(turn.images) ? turn.images.filter((id) => typeof id === 'string') : []);
@@ -272,12 +272,14 @@
       if (turn.kind) continue;
       const reply = cleanReply(turn.reply, said, typeof turn.user === 'string' ? turn.user : '');
       if (reply) group.replies.push(reply);
+      // The finished turns whose words this bubble shows: seeing it reads the reports filed with them.
+      if (reply && turn.done && typeof turn.id === 'string') group.said.push(turn.id);
       group.pending = !turn.done && !turn.interrupted;
       group.interrupted = !!turn.interrupted;
     }
     // A round with nothing to read (only dispatching happened) leaves no trace.
     return groups.filter((g) => g.user || g.images.length || g.replies.length || g.pending || g.interrupted)
-      .map((g) => ({ id: g.id, user: g.user, images: g.images, reply: g.replies.join('\n\n'), pending: g.pending, interrupted: g.interrupted }));
+      .map((g) => ({ id: g.id, user: g.user, images: g.images, reply: g.replies.join('\n\n'), said: g.said, pending: g.pending, interrupted: g.interrupted }));
   }
 
   // ---- quota ---------------------------------------------------------------
@@ -462,7 +464,8 @@
 
 // 待我处理 on the phone: each computer's list, cleaned field by field again
 // (a computer's answer is data, not trusted markup), then merged into one page:
-// 要你处理 first, then 结果汇报, newest first; 已完成 by when it was finished.
+// 要你处理 and 做完了你还没看 (reports not yet seen), newest first; 已完成和已读
+// by when it was finished.
 // Each item keeps the computer it came from: a reply goes to that computer only.
 (function (root, factory) {
   const api = factory();
@@ -470,6 +473,8 @@
   else Object.assign(root.HubCore, api);
 })(typeof self !== 'undefined' ? self : this, () => {
   const ID = /^at-[a-z0-9-]{4,40}$/;
+  const TURN = /^[A-Za-z0-9_-]{1,160}$/;
+  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'];
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
   const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').slice(0, max) : '';
   const line = (value, max) => text(value, max).replace(/\s+/g, ' ').trim();
@@ -482,8 +487,10 @@
         options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
         files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
         project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-        source: item.source === 'card' ? 'card' : 'captain', created: time(item.created), readAt: time(item.readAt),
+        source: item.source === 'card' ? 'card' : 'captain', turn: item.kind === 'report' && typeof item.turn === 'string' && TURN.test(item.turn) ? item.turn : '',
+        created: time(item.created), readAt: time(item.readAt),
         done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0, doneText: item.done === true ? line(item.doneText, 200) : '',
+        doneBy: item.done === true && DONE_BY.includes(item.doneBy) ? item.doneBy : '',
         replies: (Array.isArray(item.replies) ? item.replies : []).slice(-3).filter((r) => r && typeof r.text === 'string')
           .map((r) => ({ text: text(r.text, 1000), at: time(r.at), from: r.from === 'phone' ? 'phone' : 'desktop', seen: r.seen === true })),
       }));
@@ -499,7 +506,8 @@
     const reports = open.filter((i) => i.kind === 'report').sort(byNew);
     const done = all.filter((i) => i.done).sort((a, b) => b.doneAt - a.doneAt || (a.key < b.key ? -1 : 1));
     const unreadReports = reports.filter((i) => !i.readAt).length;
-    return { needs, reports, done, counts: { need: needs.length, reports: reports.length, unreadReports, badge: needs.length + unreadReports } };
+    // The number is 要你处理 only; unread reports show as a dot of their own.
+    return { needs, reports, done, counts: { need: needs.length, reports: reports.length, unreadReports, badge: needs.length } };
   }
   // Why a reply or tick did not go through, in words.
   function attentionFailure(result, name) {

@@ -534,3 +534,11 @@ test('new forwards --worktree only when asked, and worktree clean lists without 
   assert.match(outside.stderr, /temp directory/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('inbox help and the Captain briefing say a report is read once the user saw it in the chat', async () => {
+  const help = await runCli(['inbox', 'help'], {});
+  assert.equal(help.code, 0);
+  assert.match(help.stdout, /汇报自动挂到你这一轮回复：用户在对话里看过这轮回复就算已读，不进「做完了你还没看」/);
+  const M = require('../main-core');
+  for (const platform of ['darwin', 'win32']) assert.match(M.instructions(platform, '', false, 30), /report（挂到本轮回复，用户在对话里看过即算已读，结论也要在回复里说）/);
+});

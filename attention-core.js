@@ -1,6 +1,10 @@
-// 待我处理: what the AI hands back to the user. Two kinds of item:
-//   need   要你处理: something only the user can do (decide, log in, pay, answer)
-//   report 结果汇报: the short conclusion 队长 would otherwise only say in its chat
+// 待我处理: what the AI hands back to the user. Two kinds of item, in two columns:
+//   need   要你处理: something only the user can do (decide, log in, pay, answer);
+//          it stays until it is answered or done, reading it changes nothing.
+//   report 做完了你还没看: a short conclusion 队长 reported. It is filed with
+//          the 队长 turn it was said in; once the user has seen it (that turn's
+//          reply in the 队长 chat, or the item itself, on screen for a moment,
+//          desktop or phone) it is read and leaves the column (`markRead`).
 // Items come from 队长 only (`inbox need|report`, and every `notify-user`).
 // A card that stops for the user (需要你, held after two failed rounds) is not
 // filed here by the program: 队长 hears about it on the receipt channel, judges
@@ -12,6 +16,7 @@
 //
 // An item leaves 待处理 and is ticked into 已完成 when:
 //   - the user ticks it (已处理 / 知道了) or replies to it (the reply goes to 队长);
+//   - a report: the user has seen it (in the chat or on the page);
 //   - 队长 resolves it (`inbox resolve`);
 //   - the card it names is done or archived (need items only: a report is
 //     usually about a card that just finished);
@@ -25,7 +30,7 @@
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
 
-  const VERSION = 2;
+  const VERSION = 3;
   const KINDS = ['need', 'report'];
   // What a need item asks of the user, in the words the page shows.
   const TYPES = {
@@ -41,7 +46,7 @@
   const KEEP_DONE = 200;
   const ID = /^at-[a-z0-9-]{4,40}$/;
   const REF = /^[A-Za-z0-9_-]{1,160}$/;
-  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session'];
+  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'];
   const SOURCES = ['captain', 'notify', 'card'];
 
   const isTime = (v) => Number.isSafeInteger(v) && v > 0;
@@ -72,6 +77,8 @@
       session: typeof raw.session === 'string' && REF.test(raw.session) ? raw.session : '',
       sessionTitle: clip(line(raw.sessionTitle), LIMITS.title),
       sessionWaiting: raw.sessionWaiting === true,
+      // The 队长 chat turn a report was said in: seeing that reply reads it.
+      turn: raw.kind === 'report' && typeof raw.turn === 'string' && REF.test(raw.turn) ? raw.turn : '',
       source: SOURCES.includes(raw.source) ? raw.source : 'captain',
       key: typeof raw.key === 'string' ? raw.key.slice(0, 400) : '',
       created: raw.created,
@@ -140,7 +147,7 @@
     const item = normalizeItem({
       id: newId(now, random), kind, type, title, ask, options, detail, files, project,
       card: input.card || '', cardTitle: input.cardTitle, session: input.session || '', sessionTitle: input.sessionTitle,
-      sessionWaiting: input.sessionWaiting === true, source: SOURCES.includes(input.source) ? input.source : 'captain', key: input.key || '',
+      sessionWaiting: input.sessionWaiting === true, turn: input.turn, source: SOURCES.includes(input.source) ? input.source : 'captain', key: input.key || '',
       created: now, updated: now,
     });
     store.items.push(item);
@@ -159,22 +166,37 @@
     finish(item, by, note, now);
     return { item, changed: true };
   }
-  // Back to 待处理 from 已完成; it counts as read, the user just looked at it.
+  // Back to 待处理 from 已完成. A need counts as read, the user just looked at
+  // it; a report goes back to 没看, which is what putting one back means.
   function reopen(store, id, now) {
     const item = byId(store, id);
     if (!item) throw new Error('这一条已经不在了。');
     if (!item.done) return { item, changed: false };
     item.done = false; item.doneAt = 0; item.doneBy = ''; item.doneNote = ''; item.updated = now;
-    item.readAt = item.readAt || now;
+    item.readAt = item.kind === 'report' ? 0 : item.readAt || now;
     return { item, changed: true };
   }
-  function markRead(store, ids, now) {
+  // Seen on screen. A report is then read and leaves 没看 (`via` 'chat': its
+  // 队长 reply was seen, otherwise the item itself); a need only loses its dot.
+  function markRead(store, ids, now, via) {
     let changed = 0;
     for (const id of ids || []) {
       const item = byId(store, id);
-      if (item && !item.readAt) { item.readAt = now; changed++; }
+      if (!item || item.done) continue;
+      if (item.kind === 'report') { finish(item, via === 'chat' ? 'chat' : 'seen', '', now); changed++; }
+      else if (!item.readAt) { item.readAt = now; changed++; }
     }
     return changed;
+  }
+  // Unread reports by the 队长 turn they were said in: what a seen reply reads.
+  function unseenByTurn(store) {
+    const out = new Map();
+    for (const item of store.items) {
+      if (item.done || item.kind !== 'report' || !item.turn) continue;
+      if (!out.has(item.turn)) out.set(item.turn, []);
+      out.get(item.turn).push(item.id);
+    }
+    return out;
   }
   // The user's own words on an item. It is ticked at once: what they asked for
   // (「我回复了，它就打勾归到已完成」). `notice` is the receipt that carries it to 队长.
@@ -186,7 +208,8 @@
     if ([...body].length > LIMITS.reply) throw new Error(`回复最多 ${LIMITS.reply} 字。`);
     item.replies.push({ text: body, at: now, from: from === 'phone' ? 'phone' : 'desktop', notice: notice || '', seen: false });
     if (item.replies.length > 20) item.replies = item.replies.slice(-20);
-    if (!item.done) finish(item, 'reply', '你已回复，交给队长了', now);
+    // A report only seen so far is answered now: the reply is what the record says.
+    if (!item.done || item.doneBy === 'seen' || item.doneBy === 'chat') finish(item, 'reply', '你已回复，交给队长了', now);
     else item.updated = now;
     if (!item.readAt) item.readAt = now;
     return { item };
@@ -241,10 +264,15 @@
   // cards they were (`toCaptain`), so it can ask the user properly where it
   // must; one the user answered stays in 已完成 as the record of that answer,
   // its pasted receipt moved into the details.
+  // Version 2 kept a read report open until 知道了; version 3 files it as read.
   function migrate(store, fromVersion) {
-    if (Number(fromVersion) >= 2) return { changed: false, moved: [] };
+    if (Number(fromVersion) >= 3) return { changed: false, moved: [] };
     const moved = [];
     let changed = false;
+    for (const item of store.items) {
+      if (item.kind === 'report' && !item.done && item.readAt) { finish(item, 'seen', '', item.readAt); changed = true; }
+    }
+    if (Number(fromVersion) >= 2) return { changed, moved };
     store.items = store.items.filter((item) => {
       if (item.source !== 'card') return true;
       changed = true;
@@ -278,7 +306,7 @@
 
   // ---- what the page shows ------------------------------------------------
   const label = (item) => (item.kind === 'report' ? REPORT_LABEL : TYPES[item.type] || TYPES.other);
-  // 要你处理 first, then 结果汇报; newest first inside each.
+  // 要你处理 first, then 没看的汇报; newest first inside each.
   function sorted(items) {
     const rank = (i) => (i.kind === 'need' ? 0 : 1);
     return items.slice().sort((a, b) => rank(a) - rank(b) || b.created - a.created || (a.id < b.id ? -1 : 1));
@@ -289,11 +317,12 @@
     const reports = open.filter((i) => i.kind === 'report').length;
     const unreadReports = open.filter((i) => i.kind === 'report' && !i.readAt).length;
     const unread = open.filter((i) => !i.readAt).length;
-    return { need, reports, unreadReports, unread, badge: need + unreadReports, open: open.length };
+    // The badge's number is 要你处理 only; unread reports are a separate dot.
+    return { need, reports, unreadReports, unread, badge: need, open: open.length };
   }
   function badgeTitle(c) {
-    if (!c.badge) return '待我处理：没有要你处理的事';
-    return '待我处理：' + [c.need && `${c.need} 件要你处理`, c.unreadReports && `${c.unreadReports} 条新汇报`].filter(Boolean).join('，');
+    if (!c.need && !c.unreadReports) return '待我处理：没有要你处理的事';
+    return '待我处理：' + [c.need ? `${c.need} 件要你处理` : '没有要你处理的事', c.unreadReports && `${c.unreadReports} 条汇报你还没看`].filter(Boolean).join('，');
   }
   function view(store) {
     const open = sorted(store.items.filter((i) => !i.done));
@@ -304,7 +333,7 @@
       counts: counts(store),
     };
   }
-  const DONE_TEXT = { user: '你标记已处理', reply: '你已回复', captain: '队长标记已解决', card: '任务那边已解决', session: '会话的问题已答复' };
+  const DONE_TEXT = { user: '你标记已处理', reply: '你已回复', captain: '队长标记已解决', card: '任务那边已解决', session: '会话的问题已答复', seen: '你看过了', chat: '你在队长对话里看过了' };
   function doneText(item) {
     const who = item.kind === 'report' && item.doneBy === 'user' ? '你看过了' : DONE_TEXT[item.doneBy] || '已完成';
     return item.doneNote && item.doneNote !== who && item.doneBy !== 'reply' && item.doneBy !== 'user' ? `${who}：${item.doneNote}` : who;
@@ -350,7 +379,7 @@
     const v = view(store);
     const open = [...v.needs, ...v.reports];
     const row = (i) => {
-      const meta = [i.project && '项目 ' + i.project, i.card && '卡片 ' + i.card, i.session && '会话 ' + i.session, when(i.created, now), !i.done && !i.readAt ? '用户未读' : ''].filter(Boolean).join('，');
+      const meta = [i.project && '项目 ' + i.project, i.card && '卡片 ' + i.card, i.session && '会话 ' + i.session, when(i.created, now), !i.done && !i.readAt && i.kind === 'need' ? '用户未读' : ''].filter(Boolean).join('，');
       const lines = [`- ${i.id}【${i.kind === 'need' ? '要你处理·' : ''}${label(i)}】${i.title}（${meta}）`];
       if (i.ask) lines.push('  要用户做：' + i.ask);
       if (i.options.length) lines.push('  可选回答：' + i.options.join(' / '));
@@ -359,7 +388,7 @@
       if (last) lines.push('  用户回复：' + clip(line(last.text), 200));
       return lines.join('\n');
     };
-    const out = [open.length ? `待我处理：${v.needs.length} 件要用户处理，${v.reports.length} 条结果汇报。` : '待我处理：没有未解决的条目。'];
+    const out = [open.length ? `待我处理：${v.needs.length} 件要用户处理，${v.reports.length} 条结果汇报用户还没看。` : '待我处理：没有未解决的条目。'];
     open.forEach((i) => out.push(row(i)));
     if (all && v.done.length) {
       out.push('', `最近解决的 ${Math.min(30, v.done.length)} 条：`);
@@ -389,7 +418,7 @@
       id: item.id, kind: item.kind, label: label(item), title: item.title, ask: item.ask, options: item.options.slice(),
       detail: clip(item.detail, 4000),
       files: item.files.slice(0, 10), project: item.project, cardTitle: item.cardTitle, sessionTitle: item.sessionTitle,
-      source: item.source, created: item.created, readAt: item.readAt, done: item.done, doneAt: item.doneAt,
+      source: item.source, turn: item.turn, created: item.created, readAt: item.readAt, done: item.done, doneAt: item.doneAt, doneBy: item.doneBy,
       doneText: item.done ? doneText(item) : '',
       replies: item.replies.slice(-3).map((r) => ({ text: clip(r.text, 1000), at: r.at, from: r.from, seen: r.seen })),
     };
@@ -399,6 +428,6 @@
     return { items: [...v.needs, ...v.reports, ...v.done.slice(0, doneLimit)].map(phoneItem), counts: v.counts };
   }
 
-  return { VERSION, KINDS, TYPES, REPORT_LABEL, LIMITS, KEEP_DONE, ID, normalize, normalizeItem, newId, add, resolve, reopen, markRead, reply, markRepliesSeen, prune,
+  return { VERSION, KINDS, TYPES, REPORT_LABEL, LIMITS, KEEP_DONE, ID, normalize, normalizeItem, newId, add, resolve, reopen, markRead, unseenByTurn, reply, markRepliesSeen, prune,
     notifyItem, syncCards, migrate, syncSessions, label, sorted, counts, badgeTitle, view, doneText, when, refs, replyNotice, doneNotice, listText, addedText, phonePush, phoneItem, phoneView };
 });

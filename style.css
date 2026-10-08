@@ -153,6 +153,9 @@ body.is-mac #navHead { padding-left: 80px; }   /* traffic lights */
   font-size: calc(11px * var(--sidebar-scale, 1)); font-weight: 600; font-variant-numeric: tabular-nums;
 }
 .nav-row-badge.need { background: var(--at-need); color: var(--at-need-ink); }
+/* Reports the user has not seen yet: a blue dot, kept apart from the number of what needs them. */
+.nav-row-dot { flex: 0 0 auto; width: 8px; height: 8px; margin: 0 3px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.nav-row-dot:not([hidden]) + .nav-row-badge { margin-left: 2px; }
 .nav-search { position: relative; cursor: text; }
 .nav-search:focus-within { background: var(--pill-bg-hover); color: var(--text); }
 .nav-search input {
@@ -1632,6 +1635,12 @@ body.linking-board .board-port.out::before {
 :root, :root[data-theme="dark"] { --at-need: #ffa066; --at-need-ink: #2a1300; --at-need-bg: rgba(255, 138, 76, .12); --at-need-rim: rgba(255, 138, 76, .32); }
 :root[data-theme="light"] { --at-need: #c2410c; --at-need-ink: #ffffff; --at-need-bg: rgba(249, 115, 22, .09); --at-need-rim: rgba(234, 88, 12, .28); }
 .at-page { display: flex; flex-direction: column; }
+/* Two columns side by side when there is room: 要你处理 | 做完了你还没看; stacked when narrow. */
+.page:has(> .page-body.at-page) { max-width: 1240px; }
+.at-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 24px 28px; align-items: start; }
+.at-col { min-width: 0; }
+.at-col > .at-section { margin-top: 0; min-height: 30px; }
+.at-col-empty { padding: 16px; border: 1px dashed var(--border); border-radius: 12px; color: var(--muted); font-size: 13px; line-height: 1.6; }
 .at-section { display: flex; align-items: flex-end; gap: 12px; margin: 28px 0 10px; }
 .at-page > .at-section:first-child { margin-top: 0; }
 .at-section-titles { flex: 1; min-width: 0; }
@@ -1652,6 +1661,8 @@ body.linking-board .board-port.out::before {
 .at-top { display: flex; align-items: center; gap: 8px; min-height: 28px; }
 .at-unread { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .at-check { display: inline-flex; color: var(--st-done); }
+/* A report read on this visit: it keeps its place and its reply until the page is left. */
+.at-seen { flex: 0 0 auto; color: var(--muted); font-size: 12px; }
 .at-check svg { width: 15px; height: 15px; }
 .at-kind {
   flex: 0 0 auto; display: inline-flex; align-items: center; height: 22px; padding: 0 9px; border-radius: 999px;

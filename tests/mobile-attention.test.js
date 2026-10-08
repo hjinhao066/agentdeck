@@ -10,8 +10,8 @@ const ITEMS = [
   { id: 'at-mabc-1', kind: 'need', label: '等你拍板', title: '网页端登录改成 1 有风险', ask: '回复「仍要 1」或「登录一次长期有效」', detail: '第一行\n第二行\u0007', files: ['/Users/x/facts.md'],
     project: 'agentdeck', cardTitle: '登录改 1', sessionTitle: '', source: 'captain', created: 1000, readAt: 0, done: false, doneAt: 0, doneText: '',
     replies: [], notice: 'attention-secret', key: 'needs:t-1:e', options: ['仍要 1', '登录一次长期有效', '仍要 1', '很'.repeat(30), 7] },
-  { id: 'at-mabc-2', kind: 'report', label: '结果汇报', title: '小福助手排查报告回来了', ask: '', detail: '', files: [], project: '', created: 900, readAt: 0, done: false, replies: [] },
-  { id: 'at-mabc-3', kind: 'report', label: '结果汇报', title: '旧汇报', created: 800, readAt: 850, done: true, doneAt: 860, doneText: '你看过了',
+  { id: 'at-mabc-2', kind: 'report', label: '结果汇报', title: '小福助手排查报告回来了', ask: '', detail: '', files: [], project: '', created: 900, readAt: 0, done: false, replies: [], turn: 'tq1abc' },
+  { id: 'at-mabc-3', kind: 'report', label: '结果汇报', title: '旧汇报', created: 800, readAt: 850, done: true, doneAt: 860, doneText: '你看过了', doneBy: 'seen', turn: 'bad turn',
     replies: [{ text: '好', at: 855, from: 'phone', seen: true, notice: 'attention-x' }] },
   { id: '../evil', kind: 'need', title: 'x', created: 1 },
   { id: 'at-mabc-4', kind: 'todo', title: 'x', created: 1 },
@@ -56,7 +56,9 @@ test('api/attention lists items field by field: no receipt ids, keys or foreign 
   assert.deepEqual(res.json.items[1].options, [], 'a report has no answers to pick');
   assert.equal('notice' in done.replies[0], false);
   assert.deepEqual(done.replies[0], { text: '好', at: 855, from: 'phone', seen: true });
-  assert.deepEqual(res.json.counts, { need: 1, reports: 1, unreadReports: 1, badge: 2 });
+  assert.deepEqual(res.json.counts, { need: 1, reports: 1, unreadReports: 1, badge: 1 }, 'the number is 要你处理 only');
+  // The 队长 turn a report was said in, and how a finished one was finished: the phone reads them with the chat.
+  assert.deepEqual([need.turn, res.json.items[1].turn, done.turn, done.doneBy, need.doneBy], ['', 'tq1abc', '', 'seen', '']);
 });
 
 test('POST api/attention needs the device, CSRF and same origin, and takes only read / reply / done / reopen', async (t) => {
@@ -72,7 +74,7 @@ test('POST api/attention needs the device, CSRF and same origin, and takes only 
   assert.equal((await post({ op: 'done', id: 'at-mabc-1' }, { Origin: 'https://evil.example' })).status, 403);
   for (const bad of [{ op: 'delete', id: 'at-mabc-1' }, { op: 'done', id: '../x' }, { op: 'reply', id: 'at-mabc-1', text: '  ' },
     { op: 'reply', id: 'at-mabc-1', text: 'x'.repeat(4001) }, { op: 'done', id: 'at-mabc-1', extra: 1 }, { op: 'read', ids: 'at-mabc-1' },
-    { op: 'read', ids: Array.from({ length: 101 }, (_, i) => 'at-mabc-' + i) }]) {
+    { op: 'read', ids: Array.from({ length: 101 }, (_, i) => 'at-mabc-' + i) }, { op: 'read', ids: ['at-mabc-2'], via: 'phone' }, { op: 'read', ids: ['at-mabc-2'], extra: 1 }]) {
     assert.equal((await post(bad)).status, 400, JSON.stringify(bad).slice(0, 80));
   }
   assert.deepEqual(writes, [], 'nothing reached the desktop');
@@ -82,10 +84,11 @@ test('POST api/attention needs the device, CSRF and same origin, and takes only 
   assert.equal(replied.json.item.doneText, '你已回复');
   assert.equal(replied.json.item.replies[0].text, '登录一次长期有效');
   assert.equal((await post({ op: 'read', ids: ['at-mabc-2', 'at-mabc-2'] })).status, 200);
+  assert.equal((await post({ op: 'read', ids: ['at-mabc-2'], via: 'chat' })).status, 200, 'seen in the 队长 chat');
   assert.equal((await post({ op: 'done', id: 'at-mabc-2' })).status, 200);
   assert.equal((await post({ op: 'reopen', id: 'at-mabc-3' })).status, 200);
   assert.deepEqual(writes, [{ op: 'reply', id: 'at-mabc-1', text: '登录一次长期有效' }, { op: 'read', ids: ['at-mabc-2'] },
-    { op: 'done', id: 'at-mabc-2' }, { op: 'reopen', id: 'at-mabc-3' }]);
+    { op: 'read', ids: ['at-mabc-2'], via: 'chat' }, { op: 'done', id: 'at-mabc-2' }, { op: 'reopen', id: 'at-mabc-3' }]);
   const refused = await post({ op: 'reply', id: 'at-mabc-9', text: '你好' });
   assert.equal(refused.status, 409);
   assert.equal(refused.json.error, '还没有队长：回复要交给队长。');
