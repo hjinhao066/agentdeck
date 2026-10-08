@@ -261,7 +261,7 @@
     box.id = 'captainCrewList';
     box.hidden = !open;
     const waiting = waitlist();
-    const groups = open ? SC.crewModelGroups(crew.map(memberIdentity), host.config.claudeSeats) : [];
+    const groups = open ? crewGroups(crew) : [];
     if (open) {
       const byId = new Map(crew.map((c) => [c.id, c]));
       const collapsed = collapsedModels();
@@ -275,6 +275,9 @@
     return box;
   }
   const waitlist = () => window.MainSession.state()?.waitlist || [];
+  // One place builds the crew groups: the list and the status-tick check must read the
+  // same seat config, or a renamed seat never matches its own key and re-renders every tick.
+  const crewGroups = (cols) => SC.crewModelGroups(cols.map(memberIdentity), host.config.claudeSeats);
   function memberIdentity(col) {
     const entry = host.terms && host.terms.get ? host.terms.get(col.id) : null;
     const info = window.AgentInfo && window.AgentInfo.resolveAgentInfo(col, entry, entry && entry.lastScreen);
@@ -407,7 +410,7 @@
     if (crewHead.open && !document.body.classList.contains('reordering') && !listEl.querySelector('[contenteditable="true"]')) {
       const cols = crewHead.ids.map((id) => host.columns().find((c) => c.id === id)).filter(Boolean);
       const waiting = waitlist();
-      if (crewShownKey(SC.crewModelGroups(cols.map(memberIdentity)), waiting) !== crewHead.shown) { render(); return; }
+      if (crewShownKey(crewGroups(cols), waiting) !== crewHead.shown) { render(); return; }
     }
     const text = [n.working && `${n.working} 干活中`, n.quota && `${n.quota} 额度用尽/等待`, n.input && `${n.input} 停在确认`, n.done && `${n.done} 完成`, n.failed && `${n.failed} 失败`, supplement && `${supplement} 待补充`, waiting && `${waiting} 排队`]
       .filter(Boolean).join(' · ') || `${crewHead.ids.length} 个`;
