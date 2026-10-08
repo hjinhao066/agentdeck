@@ -91,6 +91,56 @@
     return `电池模式：开（电池供电），同时最多开 ${cap} 个会话（设置上限 ${baseCap}）${busy}；超出的新会话排队，接电后自动补位`;
   }
 
+  // A change asked for from outside the settings page (the phone hub, the Captain's `settings battery`).
+  // Strict where the settings box clamps: a stray 99 or "banana" is refused with a reason, never quietly turned into 10 or 自动.
+  // Returns { change: { mode?, cap? } } with at least one field, or { error }.
+  function parseChange(input) {
+    const source = input && typeof input === 'object' && !Array.isArray(input) ? input : null;
+    if (!source) return { error: '需要 mode（auto 或 off）和/或 cap（1–10）。' };
+    const extra = Object.keys(source).find((key) => key !== 'mode' && key !== 'cap');
+    if (extra) return { error: `不认识的项：${extra}。只能改 mode 和 cap。` };
+    const change = {};
+    if (source.mode !== undefined) {
+      if (source.mode !== 'auto' && source.mode !== 'off') return { error: 'mode 只能是 auto（自动）或 off（不限制）。' };
+      change.mode = source.mode;
+    }
+    if (source.cap !== undefined) {
+      const raw = source.cap;
+      const n = typeof raw === 'number' ? raw : typeof raw === 'string' && /^\d{1,3}$/.test(raw.trim()) ? Number(raw) : NaN;
+      if (!Number.isInteger(n) || n < CAP_MIN || n > CAP_MAX) return { error: `cap 要是 ${CAP_MIN}–${CAP_MAX} 的整数。` };
+      change.cap = n;
+    }
+    if (!Object.keys(change).length) return { error: '需要 mode（auto 或 off）和/或 cap（1–10）。' };
+    return { change };
+  }
+
+  // Everything a remote screen needs about the setting, one plain object (JSON-safe).
+  function readout(prefs, baseCap, working) {
+    const mode = normalizeMode(prefs?.mode), cap = normalizeCap(prefs?.cap);
+    const onBattery = prefs?.onBattery === true;
+    const base = Number.isInteger(baseCap) && baseCap > 0 ? baseCap : 30;
+    const live = effectiveCap(base, { mode, cap, onBattery });
+    return {
+      mode, cap, capMin: CAP_MIN, capMax: CAP_MAX, onBattery, active: isActive(mode, onBattery),
+      baseCap: base, effectiveCap: live.cap, limited: live.limited,
+      ...(Number.isInteger(working) && working >= 0 ? { working } : {}),
+    };
+  }
+
+  // The read-only view for the Captain's `settings battery`: what is set, what the power is, what applies now.
+  function settingsText(view) {
+    const lines = [
+      `电池模式：${view.mode === 'off' ? '关（不限制）' : '自动（没插电时省电）'}`,
+      `电池并发上限：${view.cap}（可设 ${view.capMin}–${view.capMax}${view.mode === 'off' ? '，现在不生效' : ''}）`,
+      `现在供电：${view.onBattery ? '电池' : '接电源'}`,
+      view.active
+        ? `现在生效：电池供电，同时最多开 ${view.effectiveCap} 个会话（设置上限 ${view.baseCap}）；超出的新会话排队`
+        : `现在生效：不限制，同时最多开 ${view.effectiveCap} 个会话`,
+    ];
+    if (view.working !== undefined) lines.push(`现在 ${view.working} 个在干活`);
+    return lines.join('\n');
+  }
+
   // The live state of this page: power source + settings, with change listeners.
   function create() {
     const s = { onBattery: false, mode: MODE_DEFAULT, cap: CAP_DEFAULT };
@@ -130,7 +180,7 @@
 
   return {
     MODE_DEFAULT, CAP_DEFAULT, CAP_MIN, CAP_MAX, POLL, TASK_NOTE,
-    normalizeMode, normalizeCap, isActive, effectiveCap, pollMs, withTaskNote, queueReason, describe, statusLine, create,
+    normalizeMode, normalizeCap, isActive, effectiveCap, pollMs, withTaskNote, queueReason, describe, statusLine, parseChange, readout, settingsText, create,
     shared: create(),
   };
 });

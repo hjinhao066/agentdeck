@@ -534,3 +534,34 @@ test('new forwards --worktree only when asked, and worktree clean lists without 
   assert.match(outside.stderr, /temp directory/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('settings battery: no flags reads, flags send a validated change, bad flags never reach the app', async () => {
+  const dir = controlDir('agentdeck-settings-cli-');
+  const server = serve(dir, () => ({ done: true, result: '电池模式：自动' }));
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' };
+  try {
+    assert.equal((await runCli(['settings', 'battery'], env)).stdout, '电池模式：自动\n');
+    assert.equal((await runCli(['settings', 'battery', '--mode', 'off'], env)).code, 0);
+    assert.equal((await runCli(['settings', 'battery', '--cap', '10'], env)).code, 0);
+    assert.equal((await runCli(['settings', 'battery', '--mode=auto', '--cap=1'], env)).code, 0);
+    assert.deepEqual(server.requests.map(({ action, op, input }) => ({ action, op, input })), [
+      { action: 'main-settings', op: 'battery', input: {} },
+      { action: 'main-settings', op: 'battery', input: { mode: 'off' } },
+      { action: 'main-settings', op: 'battery', input: { cap: 10 } },
+      { action: 'main-settings', op: 'battery', input: { mode: 'auto', cap: 1 } },
+    ]);
+    for (const args of [['settings'], ['settings', 'sound'], ['settings', 'battery', 'off'], ['settings', 'battery', '--mode'], ['settings', 'battery', '--mode', 'on'],
+      ['settings', 'battery', '--mode', 'OFF'], ['settings', 'battery', '--cap'], ['settings', 'battery', '--cap', '0'], ['settings', 'battery', '--cap', '11'],
+      ['settings', 'battery', '--cap', '2.5'], ['settings', 'battery', '--cap', 'many'], ['settings', 'battery', '--cap', '-1'], ['settings', 'battery', '--limit', '3']]) {
+      const result = await runCli(args, env);
+      assert.equal(result.code, 1, args.join(' '));
+      assert.match(result.stderr, /settings/, args.join(' '));
+    }
+    assert.equal(server.requests.length, 4);
+    const denied = await runCli(['settings', 'battery'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
+    assert.match(denied.stderr, /Only conductor-managed terminals/);
+    const help = (await runCli(['help'], {})).stdout;
+    assert.match(help, /settings battery \[--mode off\|auto\] \[--cap 1-10\]/);
+    assert.match(help, /no flags = read only; flags take effect at once and are saved/);
+  } finally { server.stop(); }
+});

@@ -595,6 +595,20 @@ On battery (`battery-core.js` holds the numbers; the page, main process and test
 - `ledger` and `quota` end with one extra line only while battery mode is active: the live cap and how many
   sessions work. Plugged in or 不限制 they print word for word what they did before.
 
+**Changing it from elsewhere** (the desktop settings box is not the only way; the page stays the one owner of the
+setting, so these go through it and never edit `config.json` behind its back):
+
+- **Phone / tablet hub**: the gear icon in the hub's top bar opens 设置, one card per computer with 电池模式
+  (自动 / 关) and the 电池并发上限 stepper (− / +, 1–10). A tap is applied at once through `GET/POST <prefix>api/battery`
+  (login, CSRF and same-origin checks like every write; body only `mode` and/or `cap`, validated on the desktop). A computer
+  on an older build answers 404 and the card says to update it instead of showing controls.
+- **Captain**: `node "$AGENTDECK_BOARD_CLI" settings battery` reads (mode, limit, power source, what applies now);
+  `settings battery --mode off|auto [--cap 1-10]` changes it. Out-of-range or unknown values are refused with a reason,
+  never clamped.
+- Either way (`MainSession.setBattery`): the shared state changes, the live cap follows and waiting work that now fits opens,
+  `config.json` is written immediately, and an open desktop settings box shows the new values. Lowering the limit never
+  stops running sessions. `off` lifts the limit while keeping the saved number for later.
+
 Tests simulate the power source: unit tests inject a `BatteryCore` state; the E2E starts on AC and emits
 `powerMonitor` events (`AGENTDECK_TEST_POWER=battery` starts a test instance on battery).
 

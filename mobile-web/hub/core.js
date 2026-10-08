@@ -363,6 +363,44 @@
         startedAt: time(raw.startedAt), finishedAt: time(raw.finishedAt), error: text(raw.error, 200) } : null;
     return { captainId: text(data && data.captainId, 256), currentId: id(data && data.currentId), switching: !!(data && data.switching === true) || !!(job && job.status === 'switching'), seats, job };
   }
+  // ---- 电池模式 ---------------------------------------------------------------
+  // One computer's battery setting. The phone may change only the mode (自动 / 关) and the
+  // battery limit (1–10); anything else in the answer is dropped.
+  function cleanBattery(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const int = (value, min, max, fallback) => Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+    return {
+      mode: data.mode === 'off' ? 'off' : 'auto', cap: int(data.cap, 1, 10, 3), capMin: 1, capMax: 10,
+      onBattery: data.onBattery === true, active: data.active === true,
+      baseCap: int(data.baseCap, 1, 1000, 30), effectiveCap: int(data.effectiveCap, 1, 1000, 30),
+      working: Number.isInteger(data.working) && data.working >= 0 ? Math.min(data.working, 1000) : null,
+    };
+  }
+  // The setting with a change the user just made but the computer has not confirmed yet laid over it.
+  function batteryWith(battery, want) {
+    if (!battery) return null;
+    const mode = want && want.mode ? want.mode : battery.mode, cap = want && want.cap ? want.cap : battery.cap;
+    const active = mode === 'auto' && battery.onBattery;
+    return { ...battery, mode, cap, active, effectiveCap: active ? Math.min(battery.baseCap, cap) : battery.baseCap };
+  }
+  // What the setting does right now, in one sentence.
+  function batteryState(battery) {
+    if (!battery) return '';
+    const power = battery.onBattery ? '电池供电' : '接着电源';
+    const busy = battery.working === null ? '' : `，现在 ${battery.working} 个在干活`;
+    if (battery.mode === 'off') return `${power}。电池模式已关，不限制${busy}。`;
+    if (battery.active) return `${power}。同时最多开 ${battery.effectiveCap} 个会话，多的新活排队${busy}。`;
+    return `${power}。现在不限制；改成电池供电后，同时最多开 ${battery.cap} 个会话${busy}。`;
+  }
+  // Why a change did not go through, in words for this computer.
+  function batteryRefusal(result, label) {
+    if (result && result.timedOut) return `${label} 没有及时回应。设置不一定改上了，稍后回来看一眼。`;
+    if (result && result.failed) return `连不上 ${label}。`;
+    if (result && result.status === 401) return `${label} 需要重新登录。`;
+    if (result && result.status === 404) return `${label} 的 AgentDeck 是旧版，不能在这里改电池模式。`;
+    if (result && result.body && typeof result.body.error === 'string' && result.body.error) return result.body.error.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 160);
+    return `${label} 没有改成。`;
+  }
   // "Claude US", "ChatGPT": the name people know the account by.
   const seatLabel = (seat) => !seat ? '' : seat.provider === 'Codex' ? seat.name || 'ChatGPT' : /^claude\b/i.test(seat.name) ? seat.name : 'Claude ' + (seat.name || seat.id);
   const currentSeat = (relay) => relay ? relay.seats.find((seat) => seat.current) || null : null;
@@ -456,7 +494,7 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoWriter, todoBlock, todoFailure, cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  return { cleanTodos, mergeTodos, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 

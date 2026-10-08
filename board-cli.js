@@ -181,6 +181,8 @@ function usage() {
     '  queue cancel --task-id <card-or-queue-id> cancel an unsent request\n' +
     '                                           new on a queued card replaces a changed command/model; task move to done/todo cancels it\n' +
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
+    '  settings battery [--mode off|auto] [--cap 1-10]   电池模式: no flags = read only; flags take effect at once and are saved\n' +
+    '                                           (off = 不限制, auto = 没插电时按 --cap 限制同时干活的会话数)\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
@@ -513,6 +515,23 @@ async function main() {
     return;
   }
 
+  if (action === 'settings') {
+    if (args._[1] !== 'battery' || args._.length > 2) fail('settings only has battery: settings battery [--mode off|auto] [--cap 1-10].');
+    const extra = Object.keys(args).find((key) => key !== '_' && key !== 'mode' && key !== 'cap');
+    if (extra) fail(`settings battery does not take --${extra}. Use --mode off|auto and/or --cap 1-10.`);
+    const input = {};
+    if (args.mode !== undefined) {
+      if (args.mode !== 'off' && args.mode !== 'auto') fail('settings battery --mode is off or auto.');
+      input.mode = args.mode;
+    }
+    if (args.cap !== undefined) {
+      if (typeof args.cap !== 'string' || !/^\d{1,3}$/.test(args.cap) || Number(args.cap) < 1 || Number(args.cap) > 10) fail('settings battery --cap is a whole number from 1 to 10.');
+      input.cap = Number(args.cap);
+    }
+    const response = await request({ action: 'main-settings', op: 'battery', input }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
   if (action === 'quota' || action === 'briefing' || action === 'handoff') {
     const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);

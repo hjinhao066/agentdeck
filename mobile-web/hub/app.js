@@ -45,6 +45,9 @@
     paneRight: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/>',
     paneLeft: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
     down: '<path d="M12 5v14m0 0-5.5-5.5M12 19l5.5-5.5"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
+    battery: '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><rect x="4.6" y="9.6" width="4.6" height="4.8" rx=".6" fill="currentColor" stroke="none"/>',
+    minus: '<path d="M5 12h14"/>',
     swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
@@ -130,7 +133,7 @@
     savedTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
-  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
+  for (const [id, icon] of [['settings-open', 'gear'], ['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
   // Scrolled up to read: new replies do not pull the page down; this button shows instead, with a dot when something new came in.
   const awayFromEnd = () => { const el = $('captain-turns'); return el.scrollHeight - el.scrollTop - el.clientHeight > 160; };
   function updateJump() { const away = awayFromEnd(); $('jump').hidden = !away; if (!away) { $('jump').classList.remove('fresh'); $('jump').title = '回到最新'; $('jump').setAttribute('aria-label', '回到最新'); } }
@@ -216,7 +219,7 @@
   function settle(m, result, verdict = Core.classify(result)) {
     m.state = verdict.state; m.detail = verdict.detail || '';
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
-    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; }
+    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; m.battery = null; m.batteryOld = false; m.batteryWant = null; }
     // A machine that no longer accepts this phone must not keep showing its board.
     if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; m.todos = null; m.todosReady = null; m.todosAt = 0; }
     return verdict;
@@ -257,6 +260,8 @@
         m.quotaAt = Date.now();
       }
       // 待我处理: every poll while its tab is open, otherwise every 30 seconds for the tab's count.
+      // 设置: while the settings sheet is open, this computer's battery setting is read again on every turn (the desktop may have changed it).
+      if (settings.open) await loadBattery(m);
       if (view === 'attention' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
     }
     m.busy = false;
@@ -706,6 +711,127 @@
     if (moved && dialog.open) title.focus({ preventScroll: true });
     else if (focused) dialog.querySelector(`[data-seat-id="${focused}"], [data-action="${focused}"]`)?.focus({ preventScroll: true });
   }
+
+  // ---- settings ------------------------------------------------------------
+  // 电池模式 is the first setting: each computer has its own, so the sheet lists every computer.
+  // A tap is applied at once (the computer saves it and its queue follows); the page never keeps a copy.
+  const settings = node('dialog', 'sheet');
+  settings.id = 'settings-sheet'; settings.setAttribute('aria-labelledby', 'settings-title');
+  document.querySelector('.app').append(settings);
+
+  async function loadBattery(m) {
+    const result = await request(m, 'api/battery');
+    // 404: an older build without the setting; the sheet says so instead of showing controls that cannot work.
+    if (result.status === 200 && result.body && Core.cleanBattery(result.body)) {
+      m.batteryOld = false; m.batteryFailed = false;
+      if (!m.batteryWant && !m.batterySaving) m.battery = Core.cleanBattery(result.body);
+    } else if (result.status === 404) { m.battery = null; m.batteryOld = true; m.batteryFailed = false; } else m.batteryFailed = true;
+    m.batteryAt = Date.now();
+    renderSettings();
+  }
+  function wantBattery(m, change) {
+    m.batteryWant = { ...(m.batteryWant || {}), ...change };
+    m.batteryNote = ''; m.batteryError = '';
+    clearTimeout(m.batteryTimer);
+    // The cap stepper waits a moment so three quick taps are one request.
+    m.batteryTimer = setTimeout(() => saveBattery(m), change.mode !== undefined ? 0 : 350);
+    renderSettings();
+  }
+  async function saveBattery(m) {
+    if (m.batterySaving) { m.batteryAgain = true; return; }
+    const sending = m.batteryWant;
+    if (!sending) return;
+    m.batterySaving = true; m.batteryAgain = false;
+    renderSettings();
+    const result = await post(m, 'api/battery', sending);
+    m.batterySaving = false;
+    if (result.status === 200 && result.body && Core.cleanBattery(result.body)) {
+      m.battery = Core.cleanBattery(result.body); m.batteryOld = false;
+      if (m.batteryWant === sending) m.batteryWant = null;
+      m.batteryNote = m.batteryWant ? '' : '已生效，已写入这台电脑的设置。';
+    } else {
+      m.batteryWant = null; m.batteryNote = '';
+      m.batteryError = Core.batteryRefusal(result, m.label);
+      if (result.status === 404) { m.battery = null; m.batteryOld = true; }
+    }
+    renderSettings();
+    if (m.batteryError && !m.batteryOld) loadBattery(m);
+    if (m.batteryAgain && m.batteryWant) saveBattery(m);
+  }
+  function batteryBlock(m) {
+    const block = node('section', 'set-block'); block.dataset.machine = m.id;
+    const title = node('h3', 'set-title'); title.innerHTML = svg('battery'); title.append('电池模式');
+    block.append(title);
+    const line = (className, value) => { const el = node('p', className, value); block.append(el); return el; };
+    if (m.state !== 'online') { line('set-note', `${m.label} ${Core.STATES[m.state].label}。连上以后才能看和改。`); return block; }
+    if (m.batteryOld) { line('set-note warn', `${m.label} 的 AgentDeck 还是旧版，更新到新版后才能在这里调整电池模式。先在那台电脑的设置里改，或等它升级。`); return block; }
+    if (!m.battery) { line('set-note', m.batteryFailed ? `暂时读不到 ${m.label} 的电池设置，稍后会自动重试。` : `正在读取 ${m.label} 的电池设置…`); return block; }
+    const view = Core.batteryWith(m.battery, m.batteryWant), off = view.mode === 'off';
+    line('set-lead', '自动：没插电时限制同时干活的会话数。关：不限制，想让队员全速跑就关掉。');
+    const group = node('div', 'segmented'); group.setAttribute('role', 'radiogroup'); group.setAttribute('aria-label', `${m.label} 电池模式`);
+    for (const [value, name] of [['auto', '自动'], ['off', '关']]) {
+      const option = node('button', 'segment', name); option.type = 'button'; option.setAttribute('role', 'radio');
+      option.setAttribute('aria-checked', String(view.mode === value)); option.dataset.mode = value;
+      option.addEventListener('click', () => { if (view.mode !== value) wantBattery(m, { mode: value }); });
+      group.append(option);
+    }
+    block.append(group);
+    const row = node('div', 'set-row' + (off ? ' dimmed' : ''));
+    const label = node('div', 'set-row-label'), name = node('span', 'set-row-name', '电池并发上限'); name.id = `battery-cap-label-${m.id}`;
+    label.append(name, node('span', 'set-row-hint', off ? '电池模式已关，这个数现在不生效' : `没插电时最多同时开几个会话（${view.capMin}–${view.capMax}）`));
+    const stepper = node('div', 'stepper'); stepper.setAttribute('role', 'group'); stepper.setAttribute('aria-labelledby', name.id);
+    const less = iconButton('minus', '减少电池并发上限', 'step'), more = iconButton('plus', '增加电池并发上限', 'step');
+    less.dataset.step = 'down'; more.dataset.step = 'up';
+    less.disabled = off || view.cap <= view.capMin; more.disabled = off || view.cap >= view.capMax;
+    less.addEventListener('click', () => wantBattery(m, { cap: Math.max(view.capMin, view.cap - 1) }));
+    more.addEventListener('click', () => wantBattery(m, { cap: Math.min(view.capMax, view.cap + 1) }));
+    const value = node('output', 'step-value', String(view.cap)); value.setAttribute('aria-live', 'polite'); value.dataset.cap = String(view.cap);
+    stepper.append(less, value, more); row.append(label, stepper); block.append(row);
+    line('set-state', Core.batteryState(view));
+    const feedback = m.batterySaving || m.batteryWant ? '正在保存…' : m.batteryNote || '';
+    if (feedback || m.batteryError) {
+      const el = node('p', 'set-feedback' + (m.batteryError ? ' bad' : ''));
+      el.setAttribute('role', m.batteryError ? 'alert' : 'status');
+      if (!m.batteryError && !m.batterySaving && !m.batteryWant) el.innerHTML = svg('check');
+      el.append(m.batteryError || feedback); block.append(el);
+    }
+    return block;
+  }
+  function renderSettings() {
+    if (!settings.open) return;
+    const now = machines.map((m) => [m.id, m.label, m.state, m.battery, m.batteryOld, m.batteryFailed, m.batteryWant, m.batterySaving, m.batteryNote, m.batteryError]);
+    if (!changed(settings, now)) return;
+    const focused = settings.contains(document.activeElement) ? [document.activeElement.dataset.mode, document.activeElement.dataset.step, document.activeElement.dataset.action].filter(Boolean).join('|') : '';
+    const focusedMachine = focused ? document.activeElement.closest('[data-machine]')?.dataset.machine : '';
+    const body = node('div', 'sheet-body'), head = node('div', 'sheet-head'), title = node('h2', '', '设置');
+    title.id = 'settings-title'; title.tabIndex = -1;
+    const close = iconButton('close', '关闭'); close.dataset.action = 'close';
+    close.addEventListener('click', () => settings.close());
+    head.append(title, close); body.append(head);
+    for (const m of machines) {
+      const card = node('div', 'set-card'); card.dataset.machine = m.id;
+      const top = node('div', 'set-card-head'); top.append(glyph(m), node('strong', '', m.label), pill(m.state));
+      card.append(top, batteryBlock(m)); body.append(card);
+    }
+    settings.replaceChildren(body);
+    if (focused) {
+      const [mode, step, action] = focused.split('|');
+      const scope = focusedMachine ? settings.querySelector(`[data-machine="${focusedMachine}"]`) : settings;
+      const target = mode ? scope.querySelector(`[data-mode="${mode}"]`) : step ? (scope.querySelector(`[data-step="${step}"]:not(:disabled)`) || scope.querySelector('[data-step]:not(:disabled)')) : settings.querySelector(`[data-action="${action}"]`);
+      (target || settings.querySelector('[data-action="close"]'))?.focus({ preventScroll: true });
+    }
+  }
+  function openSettings() {
+    signatures.delete(settings);
+    if (!settings.open) settings.showModal();
+    renderSettings();
+    // Always show what each computer says now, not what was on screen last.
+    machines.forEach((m) => { if (m.state === 'online') loadBattery(m); });
+    settings.querySelector('#settings-title')?.focus({ preventScroll: true });
+  }
+  $('settings-open').addEventListener('click', openSettings);
+  settings.addEventListener('close', () => { render(); $('settings-open').focus({ preventScroll: true }); });
+  settings.addEventListener('click', (event) => { if (event.target === settings) settings.close(); });
 
   // ---- captain -------------------------------------------------------------
   // One round: what the user said on the right, then one bubble on the left with
@@ -2012,7 +2138,7 @@
     if (view === 'todo') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
   }
   function render() {
-    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet();
+    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet(); renderSettings();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
     renderAttention();
     renderSidebar();

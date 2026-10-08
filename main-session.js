@@ -551,6 +551,31 @@
     const line = Bat().statusLine(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
     return line ? '\n' + line : '';
   }
+  // The setting as the phone hub and the Captain's `settings battery` see it; null when this build has no battery mode.
+  function batteryReadout() {
+    if (!Bat()) return null;
+    const s = state();
+    return Bat().readout(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
+  }
+  // A remote change (phone, Captain): same effect as saving the settings box. The shared state notifies
+  // syncEffectiveCap, which lifts or lowers the live cap and starts waiting work that now fits; the config is
+  // written at once (not on the 150 ms timer) so the main process and a restart see it, and an open settings box shows it.
+  function setBattery(input) {
+    if (!Bat()) throw new Error('这个版本没有电池模式。');
+    const parsed = Bat().parseChange(input);
+    if (parsed.error) throw new Error(parsed.error);
+    if (parsed.change.mode !== undefined) host.config.batteryMode = parsed.change.mode;
+    if (parsed.change.cap !== undefined) host.config.batteryConcurrency = parsed.change.cap;
+    Bat().shared.set({ mode: host.config.batteryMode, cap: host.config.batteryConcurrency });
+    syncEffectiveCap();
+    host.flushConfig();
+    if ($('batteryMode')) {
+      $('batteryMode').value = Bat().normalizeMode(host.config.batteryMode);
+      $('batteryConcurrency').value = Bat().normalizeCap(host.config.batteryConcurrency);
+      syncBatteryField();
+    }
+    return batteryReadout();
+  }
   function initDialog() {
     const settings = $('notificationSettings');
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
@@ -2491,6 +2516,13 @@
         return { done: true, result: briefingText() };
       case 'main-quota':
         return { done: true, result: host.quotaText() + batteryLine() };
+      case 'main-settings': {
+        if (message.op !== 'battery') throw new Error('settings 目前只有 battery。');
+        const changed = message.input && Object.keys(message.input).length > 0;
+        const view = changed ? setBattery(message.input) : batteryReadout();
+        if (!view) throw new Error('这个版本没有电池模式。');
+        return { done: true, result: (changed ? '已生效并写入设置：\n' : '') + Bat().settingsText(view) };
+      }
       case 'main-handoff': {
         const built = await window.deck.captainHandoff(handoffSnapshot('refresh'));
         // A later restart points 队长 at this file again.
@@ -2836,6 +2868,7 @@
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onPower, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
     isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice,
+    batteryReadout, setBattery,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),
 

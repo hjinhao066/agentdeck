@@ -436,6 +436,30 @@ button.at-done-toggle { display: flex; align-items: center; gap: 8px; width: 100
 .secondary:hover { background: var(--soft); }
 @keyframes sheet-up { from { transform: translateY(24px); opacity: .6; } }
 @keyframes rotate { to { transform: rotate(360deg); } }
+/* 设置: one card per computer; the battery block is the first setting in it. */
+.set-card { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--raised); }
+.set-card-head { display: flex; align-items: center; gap: 10px; min-width: 0; margin-bottom: 10px; }
+.set-card-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.set-card-head .pill { margin-left: auto; flex: none; }
+.set-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
+.set-title svg { width: 18px; height: 18px; color: var(--secondary); }
+.set-lead, .set-note, .set-state { margin-top: 8px; font-size: 13px; line-height: 1.65; color: var(--secondary); overflow-wrap: anywhere; }
+.set-note.warn { padding: 10px 12px; border-radius: 12px; background: var(--warn-soft); color: var(--warn); }
+.set-state { color: var(--text); }
+.segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-top: 12px; padding: 4px; border-radius: 14px; background: var(--soft); }
+.segment { min-height: 44px; border: 0; border-radius: 10px; background: transparent; color: var(--secondary); font-size: 15px; font-weight: 600; }
+.segment[aria-checked="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow); }
+.set-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
+.set-row.dimmed .set-row-label, .set-row.dimmed .step-value { opacity: .5; }
+.set-row-label { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.set-row-name { font-size: 14px; font-weight: 600; }
+.set-row-hint { font-size: 12px; line-height: 1.5; color: var(--muted); }
+.stepper { flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 2px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--surface); }
+.stepper .icon-button:disabled { opacity: .35; cursor: not-allowed; }
+.step-value { min-width: 34px; text-align: center; font: 650 18px/1 var(--mono); font-variant-numeric: tabular-nums; }
+.set-feedback { display: flex; align-items: center; gap: 6px; margin-top: 8px; font-size: 12.5px; color: var(--ok); }
+.set-feedback svg { width: 14px; height: 14px; }
+.set-feedback.bad { color: var(--bad); font-weight: 550; }
 @media (prefers-reduced-motion: reduce) { .refreshing svg, .typing i, .sheet[open] { animation: none; } .spinner { animation-duration: 2.4s; } .icon-button, .text-button, .seat-option { transition: none; } }
 /* Tiny phones: the switch gets its own line instead of clipping the names. */
 @media (max-width: 359px) { .app-header { flex-wrap: wrap; } .brand { display: none; } .machine-bar { order: 3; flex: 1 0 100%; margin: 0; } .stats { grid-template-columns: 1fr 1fr; } }

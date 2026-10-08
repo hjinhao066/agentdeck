@@ -94,6 +94,18 @@ function todoRequest(body) {
   return { op: 'update', id: body.id, done: body.done, ...(base ? { base } : {}) };
 }
 const RELAY_REASONS = ['', 'current', 'login', 'onboarding', 'exhausted', 'low', 'unknown'];
+// The battery setting as the phone may see it: fixed fields only.
+function batteryView(data) {
+  const int = (v, min, max, fallback) => Number.isInteger(v) && v >= min && v <= max ? v : fallback;
+  return {
+    mode: data?.mode === 'off' ? 'off' : 'auto',
+    cap: int(data?.cap, 1, 10, 3), capMin: 1, capMax: 10,
+    onBattery: data?.onBattery === true, active: data?.active === true,
+    baseCap: int(data?.baseCap, 1, 1000, 30), effectiveCap: int(data?.effectiveCap, 1, 1000, 30),
+    ...(Number.isInteger(data?.working) && data.working >= 0 ? { working: Math.min(data.working, 1000) } : {}),
+  };
+}
+
 function relayView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
   const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
@@ -222,8 +234,8 @@ class MobileWebServer {
     this.preview = preview;
     this.previewTexts = { at: 0, texts: [] };
     // 待我处理: the list, and the user's read / reply / tick from the phone.
-    const { getAttention, writeAttention } = arguments[0] || {};
-    Object.assign(this.sources, { getAttention, writeAttention });
+    const { getAttention, writeAttention, getBattery, setBattery } = arguments[0] || {};
+    Object.assign(this.sources, { getAttention, writeAttention, getBattery, setBattery });
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
@@ -503,7 +515,7 @@ class MobileWebServer {
     // Fixed, non-sensitive fields only; no hostname, exact app version, token,
     // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
-      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : [])],
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : []), ...(this.sources.getBattery && this.sources.setBattery ? ['battery'] : [])],
         machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
@@ -628,6 +640,22 @@ class MobileWebServer {
       if (!started || started.started !== true || !/^[a-z0-9]{1,40}$/.test(started.id || '')) return this.json(res, 409, { started: false, error: '没有切换。' });
       return this.json(res, 200, { started: true, id: started.id });
     }
+    // 电池模式: this computer's own battery setting, read and changed from the phone. The change takes
+    // effect on the desktop at once (queue limit, saved config); only mode and cap exist, both validated there.
+    if (req.method === 'GET' && route === '/api/battery' && this.sources.getBattery) {
+      const view = await this.sources.getBattery();
+      return view ? this.json(res, 200, batteryView(view)) : this.json(res, 404, { error: 'Not found.' });
+    }
+    if (req.method === 'POST' && route === '/api/battery' && this.sources.setBattery) {
+      let body;
+      try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
+      if (Object.keys(body).some((key) => key !== 'mode' && key !== 'cap') || (body.mode === undefined && body.cap === undefined)) return this.json(res, 400, { error: 'Invalid request.' });
+      if (!this.writeCredential(req, res, prefixed)) return;
+      let view;
+      try { view = await this.sources.setBattery(body); }
+      catch (err) { return this.json(res, 400, { error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200) || '没有改成。' }); }
+      return this.json(res, 200, batteryView(view));
+    }
     // 随手记待办: the same login, Origin, Fetch Metadata and CSRF checks as a
     // message to the Captain, re-checked after the body is read.
     if (req.method === 'GET' && route === '/api/todos' && this.sources.getTodos) {
@@ -687,4 +715,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
+module.exports = { MobileWebServer, batteryView, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };

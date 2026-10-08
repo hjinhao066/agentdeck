@@ -3520,6 +3520,10 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
       result = AttentionUI.mobileView();
     } else if (op === 'attention-write') {
       result = await AttentionUI.mobileWrite(input);
+    } else if (op === 'battery') {
+      result = MainSession.batteryReadout();
+    } else if (op === 'battery-set') {
+      result = MainSession.setBattery(input);
     } else if (op === 'relay') {
       result = ClaudeSeats.mobileState();
     } else if (op === 'relay-switch') {
