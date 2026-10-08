@@ -148,7 +148,11 @@ test('a briefing of exactly 10000 characters reaches a paste-taking agent whole,
 
 test('an ordinary prompt one character past 8000 still goes to a worker as a file', async () => {
   await launch();
-  const inside = '活'.repeat(M.LONG_PROMPT), long = '活'.repeat(M.LONG_PROMPT + 1);
+  // The worker reads lines, and a line past ~1 KB goes out as a file whatever its length (line-mode pointer), so the text is
+  // broken into lines of 300 characters: the length rule is what this test judges.
+  const lines = (length) => [...'活'.repeat(length)].map((c, i) => (i % 300 === 299 && i < length - 1 ? '\n' : c)).join('');
+  const inside = lines(M.LONG_PROMPT), long = lines(M.LONG_PROMPT + 1);
+  expect([inside.length, long.length]).toEqual([M.LONG_PROMPT, M.LONG_PROMPT + 1]);
   await page.evaluate(([i, t]) => sendWhenReady(columns.find((c) => c.id === i), t, { silent: true }), [WORKER, inside]);
   await expect.poll(() => received(WORKER).length, { timeout: 40000 }).toBe(1);
   expect(received(WORKER)[0]).toBe(inside);
