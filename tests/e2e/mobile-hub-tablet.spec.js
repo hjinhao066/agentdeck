@@ -139,6 +139,13 @@ test('phone: unchanged bottom tabs, and a file opens in a sheet that goes full s
   const reply = page.locator('#captain-turns .bubble-md').last();
   await expect(reply.locator('table')).toBeVisible();
   expect(await noOverflow()).toBe(true);
+  // Scrolled up to read: a button brings the newest reply back.
+  const jump = page.getByRole('button', { name: '回到最新' });
+  await expect(jump).toBeHidden();
+  await page.locator('#captain-turns').evaluate((el) => { el.scrollTop = 0; });
+  await expect(jump).toBeVisible();
+  await jump.click();
+  await expect(jump).toBeHidden();
   // A table wider than the bubble scrolls inside its own frame.
   expect(await reply.locator('.md-table').evaluate((el) => el.getBoundingClientRect().right <= innerWidth)).toBe(true);
   await fileLink('review.md').click();

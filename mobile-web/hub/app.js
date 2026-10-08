@@ -44,6 +44,7 @@
     eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/>',
     paneRight: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/>',
     paneLeft: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
+    down: '<path d="M12 5v14m0 0-5.5-5.5M12 19l5.5-5.5"/>',
     swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
@@ -127,7 +128,12 @@
     savedTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
-  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back']]) $(id).innerHTML = svg(icon);
+  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
+  // Scrolled up to read: new replies do not pull the page down; this button shows instead, with a dot when something new came in.
+  const awayFromEnd = () => { const el = $('captain-turns'); return el.scrollHeight - el.scrollTop - el.clientHeight > 160; };
+  function updateJump() { const away = awayFromEnd(); $('jump').hidden = !away; if (!away) { $('jump').classList.remove('fresh'); $('jump').title = '回到最新'; $('jump').setAttribute('aria-label', '回到最新'); } }
+  $('captain-turns').addEventListener('scroll', updateJump, { passive: true });
+  $('jump').addEventListener('click', () => { const el = $('captain-turns'); el.scrollTo({ top: el.scrollHeight, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); $('jump').classList.remove('fresh'); });
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.querySelector('.nav-icon').innerHTML = svg(button.dataset.view);
     button.addEventListener('click', () => {
@@ -816,6 +822,8 @@
         conversation.append(row);
       }
       conversation.scrollTop = follow ? conversation.scrollHeight : scrollTop;
+      if (!follow) { $('jump').classList.add('fresh'); $('jump').title = '有新内容，回到最新'; $('jump').setAttribute('aria-label', '有新内容，回到最新'); }
+      updateJump();
     }
     updateComposer();
   }
