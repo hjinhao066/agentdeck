@@ -289,3 +289,28 @@ test('Claude background tools keep workers busy while the Captain can keep its p
   assert.equal(classify(screen, { hasWorked: true }, 'claude', true), 'done');
   assert.equal(classify('1 shell, 1 monitor still running\n❯ \nbypass permissions on', { hasWorked: true }, 'claude'), 'done');
 });
+
+// 10-08 Windows Captain c1791498056671206, 49 columns: ConPTY leaves full rows to
+// autowrap, so the finished-turn row, prompt and footer read as one wrapped line
+// that starts with ✻ and ends in the footer's "…". It was 'working' for good and
+// held every phone message. The suggestion and the reply prose are shortened.
+test('Windows Captain: finished turn, wrapped into its truncated footer, is done', () => {
+  const rows = [
+    '  2. Reply prose ends here.                      ',
+    '                                                 ',
+    { text: '✻ Cooked for 1m 4s · done 3:22 PM · 1 shell still' },
+    { text: '  running                                        ' },
+    { text: '                                                 ' },
+    { text: '─'.repeat(49) },
+    { text: '❯ suggestion                                     ' },
+    { text: '─'.repeat(49) },
+    { text: '  Context: [█░░░░░░░░░░░░░░░] 87k/1.0M (9%) | …  ' },
+    '  Model: Sonnet 5.5 | Thinking: high | Session…  ',
+    '  ⏵⏵ bypass permissions on · 1 shell · ← 1 age…  ',
+  ];
+  const live = statusScreen(terminal(rows));
+  assert.equal(classify(live, { state: 'working', hasWorked: true }, 'claude', true), 'done');
+  for (const marker of ['✻ Cooking… (3s · ↓ 1.2k tokens · esc to interrupt)', '✻ Cooking (3s · esc to interrupt)']) {
+    assert.equal(classify(statusScreen(terminal([...rows.slice(0, 2), { text: marker }, ...rows.slice(4)])), { hasWorked: true }, 'claude', true), 'working', marker);
+  }
+});
