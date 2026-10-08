@@ -139,7 +139,7 @@ async function request(command, waitForCompletion, authOverride) {
   fail(`Timed out waiting for board request ${id}.`, 2);
 }
 
-const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer'];
+const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'main-answer', 'main-todo'];
 
 // 待我处理: what the user should come back to. Plain words for 队长, who files the items.
 const INBOX_HELP = [
@@ -229,6 +229,8 @@ function usage() {
     'Captain only (队长, the main session):\n' +
     '  discuss start --topic "题目" [--gemini] [--participants-file path] [--summarizer id]\n' +
     '  discuss status [--id id] | wait --id id | resume --id id [--retry job-id] | cancel --id id\n' +
+    '  todo list                                personal Todo items and AI state\n' +
+    '  todo status --id td-… --task-id todo-… --status working|needs_user|done|failed [--message "Reason"] [--files path1,path2]\n' +
     '  notify-user --message "User action needed" [--urgent]   local alert; urgent also sends Bark\n' +
     '  notify-user --test                        Bark 【测试】 notification, shared volume setting (default 4)\n' +
     '  inbox need|report|list|resolve            the user\'s 待我处理 page; inbox help for details\n' +
@@ -404,6 +406,18 @@ async function main() {
   }
 
   // ---- main session ----
+  if (action === 'todo') {
+    const op = args._[1];
+    if (!['list', 'status'].includes(op)) fail('todo requires list or status.');
+    if (op === 'status' && (typeof args.id !== 'string' || typeof args['task-id'] !== 'string' || !['working', 'needs_user', 'done', 'failed'].includes(args.status) ||
+        (args.message !== undefined && typeof args.message !== 'string') || (args.files !== undefined && typeof args.files !== 'string'))) fail('todo status requires --id, --task-id and a valid --status.');
+    const response = await request({ action: 'main-todo', op, ...(op === 'status' ? { input: {
+      id: args.id, taskId: args['task-id'], status: args.status, message: args.message || '',
+      files: args.files ? args.files.split(',').map((file) => file.trim()).filter(Boolean) : [],
+    } } : {}) }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
   if (action === 'queue') {
     const op = args._[1];
     if (!['list', 'cancel'].includes(op)) fail('queue requires list or cancel.');

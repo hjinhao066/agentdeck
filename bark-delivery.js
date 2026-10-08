@@ -27,12 +27,12 @@ function digest(pending) {
   }
   if (included < pending.length) lines.push(`另有 ${pending.length - included} 项，请在 AgentDeck 查看本机提醒。`);
   return { title: 'AgentDeck · 待补发提醒', message: lines.join('\n'),
-    level: pending.some((p) => p.level === 'critical') ? 'critical' : 'active' };
+    level: pending.some((p) => p.level === 'critical') ? 'critical' : pending.some((p) => p.level === 'timeSensitive') ? 'timeSensitive' : 'active' };
 }
 function normalizeState(state) {
   return { pending: (Array.isArray(state?.pending) ? state.pending : []).filter((p) => p &&
     typeof p.key === 'string' && typeof p.message === 'string' && p.message.length <= 4000 &&
-    typeof p.title === 'string' && ['active', 'critical'].includes(p.level) && Number.isFinite(p.createdAt)),
+    typeof p.title === 'string' && ['active', 'timeSensitive', 'critical'].includes(p.level) && Number.isFinite(p.createdAt)),
     retryAt: Number.isFinite(state?.retryAt) ? state.retryAt : 0,
     lastError: typeof state?.lastError === 'string' ? state.lastError : '',
     inflight: state?.inflight || null, uncertain: state?.uncertain === true };

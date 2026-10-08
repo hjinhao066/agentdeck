@@ -1,12 +1,13 @@
 'use strict';
 // 随手记待办: the user's own short to-dos, shared by the desktop page, the
-// phone hub and (read-only for now) the Captain and other agents.
+// phone hub and the Captain's AI-task backend.
 //
 // Storage is ~/.agents/boards/todos/, synced between Mac and Windows by the
 // ~/.agents git job every 30 minutes. A git conflict there stops the whole
 // sync, so each computer writes only its own file, <deviceId>.json, holding
 // the complete list as that computer sees it. Reading merges every file: for
-// each id the copy with the latest `updated` wins. A deletion is kept as
+// each id the copy with the latest `updated` wins, while AI state for the
+// same text version is merged by its own `ai.updated`. A deletion is kept as
 // `deleted: true` so an older copy on the other computer cannot bring it back.
 // Personal to-dos never live with the agents' task cards in boards/tasks/.
 const fs = require('fs');
@@ -49,7 +50,8 @@ function normalizeItem(raw) {
     created: isTime(raw.created) ? raw.created : raw.updated, updated: raw.updated, deleted,
     source: typeof raw.source === 'string' && SOURCE.test(raw.source) ? raw.source : 'desktop',
     device: typeof raw.device === 'string' && DEVICE.test(raw.device) ? raw.device : '',
-    // Reserved for 交给 AI. This version only carries it along unchanged.
+    textUpdated: isTime(raw.textUpdated) ? raw.textUpdated : (isTime(raw.created) ? raw.created : raw.updated),
+    textDevice: typeof raw.textDevice === 'string' && DEVICE.test(raw.textDevice) ? raw.textDevice : (typeof raw.device === 'string' && DEVICE.test(raw.device) ? raw.device : ''),
     ai: raw.ai === undefined ? null : raw.ai };
   return item;
 }
@@ -61,12 +63,31 @@ function newer(a, b) {
   return JSON.stringify(a) > JSON.stringify(b);
 }
 function merge(lists) {
-  const byId = new Map();
+  const byId = new Map(), copies = new Map();
   for (const list of lists) for (const raw of Array.isArray(list) ? list : []) {
     const item = normalizeItem(raw);
     if (!item) continue;
+    if (!copies.has(item.id)) copies.set(item.id, []);
+    copies.get(item.id).push(item);
     const seen = byId.get(item.id);
-    if (!seen || newer(item, seen)) byId.set(item.id, item);
+    const winner = !seen || newer(item, seen) ? item : seen;
+    const other = winner === item ? seen : item;
+    // A phone checkbox can carry a not-yet-synced item via `base`. Wait for
+    // its original copy before assigning an AI owner; preserve its AI state.
+    if (winner.awaitingOrigin === true && other && other.awaitingOrigin !== true && other.text === winner.text && other.textDevice && Date.parse(other.updated) >= Date.parse(winner.originUpdated)) {
+      byId.set(item.id, { ...winner, textDevice: other.textDevice, textUpdated: other.textUpdated, ai: other.ai, awaitingOrigin: false });
+    } else byId.set(item.id, winner);
+  }
+  // Select AI only after the winning text version is known. A pairwise merge
+  // can lose a completed state when a third, differently edited copy is read
+  // between the owner and a stale checkbox; file order must not matter.
+  for (const [id, winner] of byId) {
+    let ai = winner.ai;
+    for (const copy of copies.get(id)) {
+      if (copy.text !== winner.text || copy.textUpdated !== winner.textUpdated || !isTime(copy.ai?.updated)) continue;
+      if (!ai || !isTime(ai.updated) || newer(copy.ai, ai)) ai = copy.ai;
+    }
+    if (ai !== winner.ai) byId.set(id, { ...winner, ai });
   }
   return byId;
 }
@@ -82,7 +103,7 @@ const PHONE_DONE_LIMIT = 200;
 function phoneView(items) {
   const live = sorted(items.filter((t) => !t.deleted));
   const open = live.filter((t) => !t.done), done = live.filter((t) => t.done).slice(0, PHONE_DONE_LIMIT);
-  const pick = (t) => ({ id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated });
+  const pick = (t) => ({ id: t.id, text: t.text, done: t.done, doneAt: t.doneAt, created: t.created, updated: t.updated, ...(t.ai ? { ai: t.ai } : {}) });
   return [...open.map(pick), ...done.map(pick), ...items.filter((t) => t.deleted).map((t) => ({ id: t.id, deleted: true, updated: t.updated }))];
 }
 
@@ -146,7 +167,7 @@ class TodoStore {
     return this.mutate((byId) => {
       const at = this.stamp();
       const item = { id: 'td-' + crypto.randomUUID(), text: clean, done: false, doneAt: null, created: at, updated: at,
-        deleted: false, source, device: this.deviceId, ai: null };
+        deleted: false, source, device: this.deviceId, textUpdated: at, textDevice: this.deviceId, ai: null };
       byId.set(item.id, item);
       return item;
     });
@@ -168,7 +189,9 @@ class TodoStore {
         seen = normalizeItem({ id, text: b.text, done: b.done === true, doneAt: b.doneAt, created: b.created, updated: b.updated, deleted: false, source, ai: null });
         if (!current && !seen) throw new Error('Invalid to-do.');
       }
-      if (!current) current = seen;
+      // A copy built from what the phone saw does not know who wrote that text:
+      // it waits for the original file (merge) before any AI owner is assigned.
+      if (!current) current = seen && { ...seen, awaitingOrigin: true, originUpdated: seen.updated };
       else if (seen && !current.deleted && Date.parse(seen.updated) > Date.parse(current.updated)) {
         // The phone saw a later version than this computer's copy (the other
         // computer changed it less than one git sync ago). Start from what the
@@ -176,10 +199,13 @@ class TodoStore {
         // newer stamp and cover that edit. A deleted copy here stays deleted,
         // and fields the phone never sees are kept.
         current = { ...current, text: seen.text, done: seen.done, doneAt: seen.doneAt, updated: seen.updated };
+        if (seen.text !== byId.get(id).text) Object.assign(current, { ai: null, awaitingOrigin: true, originUpdated: seen.updated });
       }
       if (!current) throw new Error('这条待办已经不在了，刷新一下。');
       const next = { ...current, updated: this.stamp(current.updated), device: this.deviceId };
-      if (text !== undefined) next.text = text;
+      if (text !== undefined && text !== current.text) {
+        next.text = text; next.textUpdated = next.updated; next.textDevice = this.deviceId; next.ai = null; next.awaitingOrigin = false;
+      }
       if (done !== undefined && done !== current.done) { next.done = done; next.doneAt = done ? next.updated : null; }
       if (deleted !== undefined) next.deleted = deleted;
       byId.set(id, next);
@@ -187,6 +213,18 @@ class TodoStore {
     });
   }
   remove({ id } = {}) { return this.update({ id, deleted: true }); }
+  // AI writes never change text ownership or the user's completion checkbox.
+  writeAi(id, change) {
+    todoId(id);
+    return this.mutate((byId) => {
+      const current = byId.get(id);
+      if (!current || current.deleted) throw new Error('这条待办已经不在了。');
+      const ai = change(current);
+      const next = { ...current, ai, updated: this.stamp(current.updated) };
+      byId.set(id, next);
+      return next;
+    });
+  }
 }
 
 module.exports = { TodoStore, merge, normalizeItem, cleanText, sorted, phoneView, TEXT_MAX, VERSION };
