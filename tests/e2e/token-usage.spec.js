@@ -10,6 +10,10 @@ const C = require('../../token-usage-core');
 // profile never reads the real home). Set AGENTDECK_TOKEN_USAGE_SHOTS to a
 // folder to keep PNGs of both themes.
 const shots = process.env.AGENTDECK_TOKEN_USAGE_SHOTS;
+// Each test starts its own Electron. With twenty agent sessions running (load
+// average 400-500) the page alone takes ~15 s to load, so the 60 s default is too
+// tight; the scan itself takes under 2 s.
+test.describe.configure({ timeout: 120000 });
 let application, page, profile;
 const errors = [];
 
@@ -72,10 +76,10 @@ function seed(home) {
 }
 
 let fixture;
-async function launch() {
+async function launch(config = {}) {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-token-usage-'));
   fixture = seed(path.join(profile, 'usage-home'));
-  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', columns: [] }));
+  fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', columns: [], ...config }));
   const env = { ...process.env, ZDOTDIR: profile }; delete env.ELECTRON_RUN_AS_NODE;
   for (const k of Object.keys(env)) if (k.startsWith('AGENTDECK_') && !k.startsWith('AGENTDECK_TEST')) delete env[k];
   application = await electron.launch({
@@ -84,7 +88,15 @@ async function launch() {
   });
   page = await application.firstWindow(); errors.length = 0;
   page.on('pageerror', (e) => errors.push(e.message));
-  await expect.poll(() => page.evaluate(() => typeof TaskBoardUI !== 'undefined' && typeof TokenUsageUI !== 'undefined')).toBe(true);
+  // a busy machine (twenty agent sessions) can take well over 5 s to load the page
+  await expect.poll(() => page.evaluate(() => typeof TaskBoardUI !== 'undefined' && typeof TokenUsageUI !== 'undefined'), { timeout: 30000 }).toBe(true);
+}
+// Token 用量 open with its numbers drawn.
+async function openTokens(days) {
+  await page.evaluate(() => TaskBoardUI.open('tokens'));
+  const view = page.locator('#taskBoardView');
+  await expect(view.locator('.tu-hero-num')).toHaveText(C.formatShort(rangeTotal(days)), { timeout: 30000 });
+  return view;
 }
 test.afterEach(async () => {
   if (application) await closeElectron(application);
@@ -107,7 +119,7 @@ const geometry = () => page.evaluate(() => [...document.querySelectorAll('.tu-co
   };
 }));
 
-test('Token 用量 tab: totals, biggest model at the bottom, horizontal labels, hover, day table, range, sources, both themes', async () => {
+test('7 days: totals, biggest model at the bottom, totals on the caps, hover, day table, sources, refresh icon, both themes', async () => {
   await launch();
   await resize(1440, 900);
   await page.locator('#navTop .nav-row[data-nav="tasks"]').click();
@@ -131,7 +143,7 @@ test('Token 用量 tab: totals, biggest model at the bottom, horizontal labels, 
   // one column per day; each cap carries its day's total; the empty day keeps a stub and no number
   await expect(view.locator('.tu-col')).toHaveCount(7);
   const empty = C.addDays(fixture.today, -3);
-  let cols = await geometry();
+  const cols = await geometry();
   for (const c of cols) {
     if (c.day === empty) { expect(c.stub).toBe(true); expect(c.label).toBeNull(); continue; }
     expect(c.label.text, c.day).toBe(C.formatShort(dayTotal(c.day)));
@@ -195,33 +207,38 @@ test('Token 用量 tab: totals, biggest model at the bottom, horizontal labels, 
   await page.evaluate(() => applyTheme('light'));
   await page.waitForTimeout(400);
   await screenshot('after-light-1440');
+  expect(errors).toEqual([]);
+});
 
-  // 30 days: every number stays horizontal and whole, none overlaps another or a column
+// Every label overlapping another label or another day's column, and every turned label.
+const labelProblems = (cols, w) => {
+  const out = [];
+  const hit = (a, b) => a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+  const labels = cols.filter((c) => c.label);
+  for (const c of labels) if (c.label.transform !== 'none' || c.label.rotate !== null) out.push(`${w}px: ${c.day} label is turned`);
+  labels.forEach((x, i) => {
+    labels.slice(i + 1).forEach((y) => { if (hit(x.label, y.label)) out.push(`${w}px: ${x.day} and ${y.day} labels overlap`); });
+    for (const c of cols) if (c !== x && c.segs.some((s) => hit(x.label, s))) out.push(`${w}px: ${x.day} label covers ${c.day}'s column`);
+  });
+  return out;
+};
+
+test('30 days: every total horizontal and whole at three widths, none over another; too narrow, the chart scrolls inside its box at today', async () => {
+  await launch();
+  await resize(1440, 900);
+  const view = await openTokens(7);
+  const chart = view.locator('.tu-chart');
   await view.locator('.tu-range button[data-days="30"]').click();
   await expect(view.locator('.tu-col')).toHaveCount(30);
   await expect(view.locator('.tu-hero-num')).toHaveText(C.formatShort(rangeTotal(30)));
   await expect.poll(() => page.evaluate(() => config.tokenUsageView && config.tokenUsageView.days)).toBe(30);
   for (const [w, h] of [[1440, 900], [1024, 760], [720, 760]]) {
     await resize(w, h);
-    await page.waitForTimeout(150);
-    cols = await geometry();
-    const labels = cols.filter((c) => c.label);
-    for (const c of labels) { expect(c.label.transform).toBe('none'); expect(c.label.rotate).toBeNull(); }
-    for (let i = 0; i < labels.length; i++) {
-      for (let j = i + 1; j < labels.length; j++) {
-        const a = labels[i].label, b = labels[j].label;
-        const hit = a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
-        expect(hit, `${w}px: ${labels[i].day} and ${labels[j].day} labels overlap`).toBe(false);
-      }
-      for (const c of cols) {
-        if (c === labels[i]) continue;
-        for (const s of c.segs) {
-          const a = labels[i].label;
-          const hit = a.l < s.r && a.r > s.l && a.t < s.b && a.b > s.t;
-          expect(hit, `${w}px: ${labels[i].day} label covers ${c.day}'s column`).toBe(false);
-        }
-      }
-    }
+    // the chart is redrawn for the new width before it is measured
+    await expect.poll(() => chart.evaluate((n) => Math.abs(Number(n.querySelector('svg').getAttribute('width')) - Math.max(n.clientWidth, 22 * 30 + 12)) <= 2)).toBe(true);
+    const cols = await geometry();
+    expect(cols.filter((c) => c.label).length).toBe(29);
+    expect(labelProblems(cols, w)).toEqual([]);
     if (w === 1440) { await screenshot('after-light-1440-30d'); await page.evaluate(() => applyTheme('dark')); await page.waitForTimeout(300); await screenshot('after-dark-1440-30d'); await page.evaluate(() => applyTheme('light')); }
     // nothing in the toolbar is cut: the title stays whole or, too narrow for it, gives way to the lit tab
     const cut = await page.evaluate(() => [...document.querySelectorAll('#taskBoardView .tbv-heading h1, #taskBoardView .board-mode button, .tu-range button, .tu-legend-name')]
@@ -234,9 +251,18 @@ test('Token 用量 tab: totals, biggest model at the bottom, horizontal labels, 
   expect(scroll.sw).toBeGreaterThan(scroll.cw);
   expect(scroll.left + scroll.cw).toBeGreaterThanOrEqual(scroll.sw - 2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await resize(1440, 900);
+  expect(errors).toEqual([]);
+});
 
-  // back to the board in place; the sidebar entry also brings the board back from Token 用量
+test('tabs: 任务看板 and Token 用量 switch in place, the sidebar entry brings the board back, the crew map opens Token 用量 with its range remembered', async () => {
+  await launch({ tokenUsageView: { days: 30 } });
+  await resize(1440, 900);
+  await page.locator('#navTop .nav-row[data-nav="tasks"]').click();
+  const view = page.locator('#taskBoardView');
+  const tab = view.locator('.board-mode button[data-view="tokens"]');
+  await tab.click();
+  await expect(view).toHaveAttribute('data-mode', 'tokens');
+  await expect(view.locator('.tu-hero-num')).toHaveText(C.formatShort(rangeTotal(30)), { timeout: 30000 });
   await view.locator('.board-mode button[data-view="tasks"]').click();
   await expect(view).toHaveAttribute('data-mode', 'tasks');
   await expect(view.locator('.tbv-body')).toBeVisible();

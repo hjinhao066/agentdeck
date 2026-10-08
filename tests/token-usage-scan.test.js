@@ -39,8 +39,11 @@ test('scan: every source summed per local day and model; a linked seat directory
   write(path.join(home, 'Downloads', 'usage-events-2026-10-08.csv'), [
     'Date,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost',
     `"${at(TODAY, 8)}","Included","grok-4.7","No","0","10","20","5","35","Included"`,
+    `"${at(TODAY, 8)}","Included","grok-4.7","No","0","10","20","5","35","Included"`,
     `"${at(TODAY, 8)}","Included","auto","No","","","","","","Included"`,
   ]);
+  // the same export downloaded again: nothing more
+  fs.copyFileSync(path.join(home, 'Downloads', 'usage-events-2026-10-08.csv'), path.join(home, 'Downloads', 'usage-events-2026-10-08 (1).csv'));
   write(path.join(home, '.gemini', 'tmp', 'proj', 'chats', 'session-1.json'), ['{}']);
   const cacheFile = path.join(home, 'cache', 'usage.json');
   const r = await scan({ home, cacheFile, now: NOW });
@@ -51,12 +54,12 @@ test('scan: every source summed per local day and model; a linked seat directory
   assert.equal(totalOf(r, TODAY, 'deepseek:deepseek-v4-pro'), 9);
   assert.equal(totalOf(r, TODAY, 'codex:gpt-5.5'), 1020 + 530, 'the compaction call counts');
   assert.deepEqual(r.days[TODAY]['codex:gpt-5.5'], [200, 50, 1300, 0]);
-  assert.equal(totalOf(r, TODAY, 'cursor:grok-4.7'), 35);
+  assert.equal(totalOf(r, TODAY, 'cursor:grok-4.7'), 70, 'two identical requests in one export are two requests');
   const src = Object.fromEntries(r.sources.map((s) => [s.id, s]));
   assert.equal(src.claude.state, 'ok');
   assert.equal(src.claude.records, 3);
   assert.equal(src.codex.records, 2);
-  assert.equal(src.cursor.missing, 1);
+  assert.equal(src.cursor.missing, 1, 'a row without numbers in two copies of one export is one row');
   assert.equal(src.antigravity.state, 'none');
   assert.equal(src['gemini-cli'].state, 'unsupported');
   assert.equal(src['chatgpt-web'].state, 'none');

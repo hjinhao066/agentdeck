@@ -109,6 +109,21 @@ test('Cursor CSV: one record per billed row; quoted commas; a row with no token 
   assert.equal(C.cursorCsv('a,b\n1,2').ok, false);
 });
 
+test('Cursor CSV: two identical requests in one export are two requests; reading the export again, or an overlapping one, adds nothing', () => {
+  const head = 'Date,Kind,Model,Max Mode,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens,Total Tokens,Cost';
+  const row = '"2026-10-06T18:00:00.000Z","Included","auto","No","0","100","0","10","110","Included"';
+  const other = '"2026-10-06T19:00:00.000Z","Included","auto","No","0","5","0","5","10","Included"';
+  const recs = (text) => C.cursorCsv(text).records.map((r) => ({ ...r, source: 'cursor' }));
+  const total = (list) => C.mergeRecords(list).reduce((s, r) => s + sum(r), 0);
+  const twice = [head, row, row].join('\n');
+  assert.equal(total(recs(twice)), 220, 'the review case: 110 + 110');
+  assert.equal(total([...recs(twice), ...recs(twice)]), 220, 'the same export read twice');
+  // a later export repeats the first one's rows and adds a new one
+  assert.equal(total([...recs(twice), ...recs([head, row, row, other].join('\n'))]), 230);
+  // an export that holds the row once overlaps the first occurrence only
+  assert.equal(total([...recs(twice), ...recs([head, row].join('\n'))]), 220);
+});
+
 test('days: local calendar keys, ranges ending today, axis labels and every-7th-day ticks when columns are narrow', () => {
   assert.equal(C.addDays('2026-10-31', 1), '2026-11-01');
   assert.equal(C.addDays('2026-11-02', -2), '2026-10-31');

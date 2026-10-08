@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const C = require('./token-usage-core');
 
-const CACHE_VERSION = 1;
+const CACHE_VERSION = 2;   // 2: a Cursor row is keyed by its line and its occurrence in the file
 const KEEP_DAYS = 62;          // the view shows 30 days; a little more is kept
 const CHUNK = 8 * 1024 * 1024;
 
@@ -146,6 +146,7 @@ function readCursorCsv(file, entry) {
   const parsed = C.cursorCsv(fs.readFileSync(file, 'utf8'));
   entry.recs = parsed.ok ? parsed.records.map(pack) : [];
   entry.missing = parsed.missing;
+  entry.missingKeys = parsed.ok ? parsed.missingKeys : [];
   entry.csv = parsed.ok;
 }
 
@@ -239,10 +240,12 @@ async function scan({ home, cacheFile, now = Date.now(), extraClaude = [] } = {}
   }
   const all = [];
   const perSource = {};
+  const cursorMissing = new Set();     // rows without numbers, each once however many exports hold it
   for (const entry of Object.values(cache.files)) {
     for (const a of entry.recs || []) if (a[1] >= fromMs) all.push(unpack(a, entry.source));
-    if (entry.source === 'cursor') report.cursor.missing += entry.missing || 0;
+    if (entry.source === 'cursor') for (const k of entry.missingKeys || []) cursorMissing.add(k);
   }
+  report.cursor.missing = cursorMissing.size;
   const merged = C.mergeRecords(all);
   for (const r of merged) {
     const s = perSource[r.source] || (perSource[r.source] = { records: 0, lastTs: 0 });

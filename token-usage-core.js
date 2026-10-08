@@ -255,9 +255,11 @@
     out.push(cur);
     return out;
   }
-  // Each row is one billed request; the whole line is its identity, so the
-  // same export read twice (or two overlapping exports) count once. A row the
-  // bill gives no tokens for is counted as missing, never as 0.
+  // Each row is one billed request. Its identity is the whole line plus which
+  // occurrence of that line it is in the file (two identical requests in one
+  // export are two requests), so the same export read twice, or two exports that
+  // overlap, still count each request once. A row the bill gives no tokens for
+  // is counted as missing, never as 0.
   function cursorCsv(text) {
     const lines = String(text || '').split(/\r?\n/).filter((l) => l.trim());
     if (!lines.length) return { records: [], missing: 0, ok: false };
@@ -267,17 +269,21 @@
     if (at.date < 0 || at.model < 0 || at.input < 0 || at.output < 0) return { records: [], missing: 0, ok: false };
     const records = [];
     let missing = 0;
+    const missingKeys = [];
     const cell = (row, i) => (i >= 0 ? String(row[i] || '').trim() : '');
+    const seen = new Map();
     for (const line of lines.slice(1)) {
       const row = csvRow(line);
       const ts = Date.parse(cell(row, at.date));
       if (!Number.isFinite(ts)) continue;
+      const nth = (seen.get(line) || 0) + 1;
+      seen.set(line, nth);
       const raw = [cell(row, at.input), cell(row, at.output), cell(row, at.read), cell(row, at.write)];
-      if (raw.every((v) => v === '' || v === '-')) { missing++; continue; }
+      if (raw.every((v) => v === '' || v === '-')) { missing++; missingKeys.push(`${line}#${nth}`); continue; }
       const n = (v) => num(Number(String(v).replace(/,/g, '')));
-      records.push({ key: line, ts, model: cell(row, at.model) || 'unknown', input: n(raw[0]), output: n(raw[1]), cacheRead: n(raw[2]), cacheWrite: n(raw[3]) });
+      records.push({ key: `${line}#${nth}`, ts, model: cell(row, at.model) || 'unknown', input: n(raw[0]), output: n(raw[1]), cacheRead: n(raw[2]), cacheWrite: n(raw[3]) });
     }
-    return { records, missing, ok: true };
+    return { records, missing, missingKeys, ok: true };
   }
 
   // ---- merging and daily sums ----
