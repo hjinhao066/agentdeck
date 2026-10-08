@@ -10,6 +10,9 @@ test.describe.configure({ mode: 'serial' });
 test.beforeAll(async () => {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-notify-'));
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({
+    // This file tests alerts, not rotation: a profile with no logged-in Claude seat would otherwise hand the
+    // Captain to Codex ("claude-unavailable") right after its first reply, replacing the column that should alert.
+    perpetualCaptain: { enabled: false },
     theme: 'dark', fitWindow: true, fitCols: 2,
     mainSession: { colId: 'captain', cmd: '', crewMarked: true },
     columns: [
