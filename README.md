@@ -981,11 +981,15 @@ output, avoiding startup input loss. Later prompts keep the existing delivery ch
 `captain-briefing-paste.spec.js` sends the Captain briefing, and one grown to
 exactly 10,000 characters, through a real PTY to stand-in agents and compares
 what reached their stdin with what was sent. `real-cli-briefing.spec.js` is
-skipped unless `AGENTDECK_REAL_CLI=claude,codex` names an installed CLI. It then
+skipped unless `AGENTDECK_REAL_CLI` names installed CLIs. With `claude,codex` it
 runs that real CLI as the Captain with an empty config directory and a local
 stand-in for its model API (no login, no quota), and compares the CLI's own model
-request with the briefing. Run it on each platform before raising
-`MainCore.BRIEFING_LIMIT`, and when a Captain CLI changes how it takes a paste.
+request with the briefing. With `cursor,agy` it uses that CLI's own login
+read-only (a little quota) and checks that the model can answer codes hidden from
+the first to the last line of a 10,000-character text. Run it on each platform
+before raising `MainCore.BRIEFING_LIMIT`, and when a Captain CLI changes how it
+takes a paste. Results so far, including the real Codex TUI on Windows mangling
+pasted prompts of any length, are in `docs/captain-briefing-checklist.md`.
 ConPTY reset evidence, replay filtering and deck navigation fixes apply only on
 Windows; macOS keeps its existing reset, status and navigation behavior.
 
