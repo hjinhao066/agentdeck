@@ -12,6 +12,9 @@ const { startHub } = require('../fixtures/hub-proxy');
 const notes = JSON.parse(fs.readFileSync(path.join(__dirname, '../../release-notes.json'), 'utf8'));
 const pending = notes.upcoming.flatMap((e) => e.items).filter((i) => i.state === 'pending').length;
 const latest = notes.released[0];
+// The Mac runs this build, which release-notes.test.js keeps equal to the newest
+// release, so the newest version carries the 「Mac 在用」 mark.
+const macVersion = require('../../package.json').version;
 const shots = process.env.AGENTDECK_RELEASE_NOTES_SHOTS;
 const day = (date, done, sessions, projects) => ({ date, partial: false,
   summary: { projects: projects.length, done, created: done - 3, sessions, reject: 5, rework: 9, needsUser: 2, deliveries: 2 },
@@ -22,7 +25,7 @@ const DAYS = [day('2026-10-07', 58, 51, [['agentdeck', 33], ['秋招', 4], ['exp
 let hub, context, page, problems;
 
 async function open(browser, size, { theme = 'dark', progress = DAYS } = {}) {
-  hub = await startHub({ machines: [{ id: 'mac', label: 'Mac', platform: 'darwin', appVersion: '1.9.0', progress }, { id: 'win', label: 'Windows', platform: 'win32', appVersion: '1.8.0' }] });
+  hub = await startHub({ machines: [{ id: 'mac', label: 'Mac', platform: 'darwin', appVersion: macVersion, progress }, { id: 'win', label: 'Windows', platform: 'win32', appVersion: '1.8.0' }] });
   hub.machines.win.setMode('legacy');
   context = await browser.newContext({ viewport: size, isMobile: size.width < 600, hasTouch: true, colorScheme: theme, permissions: ['clipboard-read', 'clipboard-write'] });
   page = await context.newPage();
@@ -34,7 +37,7 @@ async function open(browser, size, { theme = 'dark', progress = DAYS } = {}) {
   await card.getByLabel('Mac 的登录 token').fill(hub.machines.mac.token);
   await card.getByRole('button', { name: '登录 Mac', exact: true }).click();
   await expect(page.getByRole('article', { name: 'Windows', exact: true })).toContainText('需要升级 AgentDeck');
-  await expect(page.locator('#releases-entry')).toContainText('V1.9.0');
+  await expect(page.locator('#releases-entry')).toContainText('V' + macVersion);
 }
 const noOverflow = () => page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && document.body.scrollWidth <= innerWidth
   && [...document.querySelectorAll('#releases *')].every((el) => el.getBoundingClientRect().right <= innerWidth + 0.5));
@@ -50,7 +53,7 @@ test.afterEach(async () => {
 test('phone: the version row on 总览 opens 每日进展 and every version, newest first; copy turns into a check', async ({ browser }) => {
   await open(browser, { width: 390, height: 844 });
   const entry = page.locator('#releases-entry');
-  await expect(entry).toHaveAttribute('aria-label', `版本更新与每日进展，Mac 在用 1.9.0，${pending} 件待你定`);
+  await expect(entry).toHaveAttribute('aria-label', `版本更新与每日进展，Mac 在用 ${macVersion}，${pending} 件待你定`);
   expect((await entry.boundingBox()).height).toBeGreaterThanOrEqual(44);
   await entry.click();
   await expect(page.locator('#releases-view')).toBeVisible();
@@ -130,7 +133,7 @@ for (const theme of ['dark', 'light']) {
   test(`tablet on its side (${theme}): the version at the foot of the sidebar opens the same page`, async ({ browser }) => {
     await open(browser, { width: 1366, height: 1024 }, { theme });
     const version = page.locator('#side-version');
-    await expect(version).toHaveText('V1.9.0');
+    await expect(version).toHaveText('V' + macVersion);
     await version.click();
     await expect(version).toHaveAttribute('aria-current', 'page');
     await expect(page.locator('#releases .dp-big')).toHaveText('58');
