@@ -96,7 +96,7 @@ test('child environment strips routing tokens, paid credentials and cloud infere
     GEMINI_BASE_URL: 'private', DEEPSEEK_API_KEY: 'private', GOOGLE_APPLICATION_CREDENTIALS: 'private', GOOGLE_CLOUD_PROJECT: 'private',
     AWS_BEARER_TOKEN_BEDROCK: 'private', AZURE_OPENAI_ENDPOINT: 'private', CLAUDE_CODE_API_BASE_URL: 'private', CLAUDE_CODE_USE_BEDROCK: '1', CLAUDECODE: '1' };
   const clean = childEnvironment(env, { configDir: '~/.claude-us' }, '/fake');
-  assert.equal(clean.PATH, 'path'); assert.equal(clean.CLAUDE_CONFIG_DIR, '/fake/.claude-us');
+  assert.equal(clean.PATH, 'path'); assert.equal(clean.CLAUDE_CONFIG_DIR, path.resolve('/fake/.claude-us'));
   for (const key of Object.keys(env).filter((key) => key !== 'PATH')) assert.equal(clean[key], undefined, key);
   assert.equal(env.AGENTDECK_CONTROL_TOKEN, 'private');
 });
