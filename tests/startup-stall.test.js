@@ -9,6 +9,7 @@ const path = require('path');
 const vm = require('vm');
 const B = require('../board-core');
 const M = require('../main-core');
+const S = require('../sleep-resume-core');
 const tick = async () => { for (let i = 0; i < 8; i++) await new Promise(setImmediate); };
 
 const renderer = fs.readFileSync(path.resolve(__dirname, '../renderer.js'), 'utf8');
@@ -25,7 +26,8 @@ function world(cmd = 'claude --model opus') {
   const entry = { alive: true, state: 'plain', lastScreen: echo(cmd), lastOutputAt: now, launchedAt: now,
     term: { modes: { bracketedPasteMode: true } } };
   const terms = new Map([[worker.id, entry]]);
-  const window = { MainCore: M, BoardCore: B, deck: { saveConfigSync() {}, onTaskStart() {}, onTaskReview() {}, onTaskRework() {},
+  const clock = S.createClock(() => now);
+  const window = { MainCore: M, BoardCore: B, SleepResume: { ...S, clock }, deck: { saveConfigSync() {}, onTaskStart() {}, onTaskReview() {}, onTaskRework() {},
     taskBoard: async (name, input) => { boardCalls.push({ name, ...input }); return { card: {}, notices: [] }; } }, ChatUI: {
     addCard() {}, updateCard() {}, turnsOf: () => [],
     async sendPrompt(col, text) { delivered.push(text); return { id: 'turn-' + delivered.length }; },
@@ -58,6 +60,13 @@ function world(cmd = 'claude --model opus') {
       }
     },
     tick() { return this.api.onTick(worker.id, entry); },
+    // The machine sleeps: wall clock jumps, nothing runs. `events: false` models a suspend/resume
+    // event that never reached the page (only the clock jump shows).
+    sleep(ms, { events = true } = {}) {
+      if (events) this.api.onPower(true, now);
+      now += ms;
+      if (events) this.api.onPower(false, now);
+    },
   };
 }
 
@@ -172,4 +181,53 @@ test('the other readiness check (managed tasks) also refuses a launch line that 
   assert.equal(w.context.terminalIdle(w.worker, w.entry), false, 'the echoed word codex is not the agent');
   w.screen(echo('codex --yolo') + '\n>_ OpenAI Codex (v0.1)\n› ');
   assert.equal(w.context.terminalIdle(w.worker, w.entry), true);
+});
+
+// A computer asleep through the first seconds of a start must not read as a hang
+// (1.8 Opus review: slept 10 minutes, woke, banner drawn 1.5 s later, task marked failed).
+for (const [cmd, sleepMin] of [['claude --model opus', 10], ['codex --yolo', 10], ['agy', 4], ['cursor-agent --force', 10]]) {
+  const banner = /cursor/.test(cmd) ? '\nCursor Agent\n→ Add a follow-up' : BANNER;
+  test(`${cmd}: sleeping ${sleepMin} minutes during the first seconds is not a startup failure`, async () => {
+    const w = world(cmd); const task = w.dispatch(BODY);
+    await w.advance(2_000);
+    w.sleep(sleepMin * MIN);
+    await w.advance(1_500);
+    assert.equal(task.status, 'queued', 'still waiting, not failed, on the first check after waking');
+    w.screen(echo(cmd) + banner);
+    await w.advance(5_000);
+    assert.equal(task.status, 'working'); assert.equal(w.delivered.length, 1);
+    assert.equal(w.boardCalls.filter((c) => c.type === 'failed').length, 0);
+    assert.equal(w.config.mainSession.pending.length, 0, 'the Captain hears nothing');
+  });
+}
+
+test('sleep whose suspend/resume events never reached the page is still taken off the wait', async () => {
+  const w = world(); const task = w.dispatch(BODY);
+  await w.advance(2_000);
+  w.sleep(10 * MIN, { events: false });
+  await w.advance(1_500);
+  assert.equal(task.status, 'queued');
+  w.screen(echo('claude --model opus') + BANNER);
+  await w.advance(5_000);
+  assert.equal(task.status, 'working'); assert.equal(w.delivered.length, 1);
+});
+
+test('a real hang is still reported: only awake time counts, before and after a sleep', async () => {
+  const w = world(); const task = w.dispatch(BODY);
+  await w.advance(100_000);                       // 1m40 awake
+  w.sleep(30 * MIN);
+  await w.advance(70_000);                        // 2m50 awake in total: not yet
+  assert.equal(task.status, 'queued'); assert.deepEqual(w.delivered, []);
+  await w.advance(20_000);                        // 3m10 awake: over the 3-minute limit
+  assert.equal(task.status, 'failed'); assert.equal(task.receipt.source, 'startup');
+  assert.match(task.receipt.failed, /3 分钟/, 'the receipt states awake minutes, not 30+ minutes of wall time');
+  assert.deepEqual(w.delivered, []);
+});
+
+test('a start that was hung before the sleep is reported soon after waking', async () => {
+  const w = world(); const task = w.dispatch(BODY);
+  await w.advance(2 * MIN + 55_000);
+  w.sleep(20 * MIN);
+  await w.advance(10_000);
+  assert.equal(task.status, 'failed'); assert.equal(task.receipt.source, 'startup');
 });
