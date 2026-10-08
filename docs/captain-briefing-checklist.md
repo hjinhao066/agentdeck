@@ -6,7 +6,8 @@
 
 - 原有规则一行没删、一个字没改：四种组合共 260 行基线文本，逐字原样保留 260 行，缺失 0 行，顺序不变。这次没有做任何压缩改写，所以不存在“等义不等义”的判断。
 - 只新增两行，都是 DeepSeek 兜底说明（见第 3 节）。
-- 一次粘贴上限由 8000 提到 10000（`MainCore.LONG_PROMPT`，全仓唯一一处）。
+- 只有队长提示词的一次粘贴上限提到 10000（`MainCore.BRIEFING_LIMIT`）。其他所有提示词、发给任何 CLI 的，仍是 8000 字以上存文件（`MainCore.LONG_PROMPT`），行为和改动前一样。
+- 10000 字能不能完整收到，第 6 节是实测结果：Claude Code（默认队长）在 Mac、CI macOS、CI Windows Server 2022／2025 上，10000 字都一字不差到了模型；Codex 在 Mac 上同样一字不差，但在 CI Windows 上任何长度都收不好（含 200 字和改动前 7990 字的原文），是改动前就有的问题；Cursor 在本机 Mac 上实测通过；agy 因额度用尽只证到 CLI 收下、没证到模型；用户自己的 Windows 电脑全部需在 Windows 机器上验证。
 
 | 组合 | 基线行数 | 基线字数 | 现行数 | 现字数 | 加「读看板继续。」后 | 距上限 | 缺失行 |
 |---|---|---|---|---|---|---|---|
@@ -123,38 +124,122 @@ Windows 版只有命令行前缀不同（`node "$env:AGENTDECK_BOARD_CLI"`）；
 
 上一轮同时删掉的其它文字（Antigravity 行里三个模型的全名和 Gemini 用尽后的分工、Claude Code 行的「Opus 留给 UI、最关键的代码和终审；重要代码用 Sonnet。」）也都原样在第 1 节的对应行里。
 
-## 5. 与 8000 有关的地方
+## 5. 上限是怎么改的
+
+第一版把所有提示词的上限一起提到了 10000，审查指出没有证据证明每个 CLI、两个平台都能完整收下。真正需要更大上限的只有队长提示词，所以改成只放宽它：
 
 | 位置 | 原来 | 现在 |
 |---|---|---|
-| `main-core.js` `LONG_PROMPT` | 没有（数字散在两处） | `10000`，唯一定义；另加 `SAVER_RESUME`（省上下文清空后追加的「读看板继续。」） |
-| `chat-ui.js` `sendPrompt` | `const LONG_PROMPT = 8000`，超过就存文件、只发指针 | 读 `MainCore.LONG_PROMPT` |
-| `main-session.js` `enqueue`（排队的活） | `body.length > 8000` 先存文件 | 读 `M.LONG_PROMPT` |
-| `main-session.js` 省上下文重发 | `briefingText() + '\n\n读看板继续。'` | `briefingText() + M.SAVER_RESUME`，文字不变 |
-| `main-core.js`、`main-session.js` 注释 | 写着 8000 | 改为指向 `LONG_PROMPT` |
-| `README.md` 三处 | 8000／8,000／“会超出上限” | 10,000，并写明常量名 |
-| `tests/main-core.test.js`、`task-priority.test.js`、`launchers.test.js` | 断言 `<= 8000` | 断言 `<= M.LONG_PROMPT` |
+| `main-core.js` | 没有常量（8000 散在两处） | `LONG_PROMPT = 8000`：普通提示词，数值不变；`BRIEFING_LIMIT = 10000`：只给队长提示词；`SAVER_RESUME`：省上下文清空后追加的「读看板继续。」 |
+| `chat-ui.js` `sendPrompt` | `const LONG_PROMPT = 8000`，超过就存文件、只发指针 | `prompt.length > (o.inlineLimit \|\| MainCore.LONG_PROMPT)`：不带 `inlineLimit` 的调用和原来完全一样 |
+| `main-session.js` 三处发队长提示词（首次、清空上下文后重发、省上下文重发） | 走普通上限 | 各带 `inlineLimit: M.BRIEFING_LIMIT`；全仓只有这三处带 |
+| `main-session.js` `enqueue`（排队的活） | `body.length > 8000` 先存文件 | 读 `M.LONG_PROMPT`，仍是 8000 |
+| `main-core.js`、`main-session.js` 注释，`README.md` | 写着 8000 或“会超出上限” | 写明两个上限各管什么 |
+| `tests/main-core.test.js`、`task-priority.test.js`、`launchers.test.js` | 断言提示词 `<= 8000` | 断言 `<= M.BRIEFING_LIMIT` |
 | `tests/paste-image-prompt.test.js` | 按 `const LONG_PROMPT = 8000;` 截取源码 | 改截取锚点，替身环境带上 `MainCore` |
 | `tests/queue-dispatch.test.js` | 9000 字触发存文件 | `M.LONG_PROMPT + 1` 字 |
-| `tests/e2e/workspace.spec.js` | 9618 字的“超长消息” | 12018 字（否则新上限下不再存文件） |
+| `tests/e2e/workspace.spec.js` 超长消息用例 | 9618 字存文件 | 不变（第一版改过，已改回）：它现在正好证明普通提示词在 8000–10000 之间仍然存文件 |
 
-没有动、也不该动的 8000：手机端单条消息上限（`mobile-web.js`、`main-session.js` 的 `sendMessage`／`mobileMessages` 校验、`mobile-web/` 页面的 `maxlength`、`docs/mobile-web.md` 及其测试）。那是手机接口的输入校验，不是粘贴上限；8000 字以内的手机消息在新上限下照样整段粘贴。其余 8000 都是毫秒超时。
+没有动、也不该动的 8000：手机端单条消息上限（`mobile-web.js`、`main-session.js` 的 `sendMessage`／`mobileMessages` 校验、`mobile-web/` 页面的 `maxlength`、`docs/mobile-web.md` 及其测试）。那是手机接口的输入校验。其余 8000 都是毫秒超时。
 
-## 6. 单测
+## 6. 10000 字完整接收的证据
 
-`tests/captain-briefing-limit.test.js`（新增，7 条）：
+受影响的只有队长那一列：队长提示词现在是 8367（Mac）／8427（Windows）字，超过了普通上限。要证明的是：当队长的 CLI 能把最长 10000 字的提示词一字不差收下并交给模型。其他 CLI 作为队员收到的提示词没有变化（普通提示词仍是 8000 字以上存文件，见第 7 节）。
 
-1. 上限是 10000；Mac／Windows × 两种回执方式 × 并发上限 5／30／50，提示词加「读看板继续。」都在上限内。超限时的报错写明：调高 `LONG_PROMPT`，不要删规则。
-2. 省上下文重发的原文（提示词 + 「读看板继续。」）经真实的 `ChatUI.sendPrompt` 代码整段粘贴：不存文件，一次粘贴加一次回车，结尾段和「读看板继续。」是粘贴内容的最后一句。Mac、Windows 各两种回执方式。
-3. 提示词长到正好 10000 字仍整段粘贴；10001 字才降级为文件指针（此时粘贴内容里没有「读看板继续」，全文在文件里）。Mac、Windows 都测。
-4. `chat-ui.js` 和排队逻辑都读同一个常量，源码里没有第二份数字。
-5. DeepSeek 兜底说明的每个要点都在，Mac、Windows 两份。
-6. 第 4 节四处限定条件和规则 1–17 的编号都在。
-7. 各家订阅额度全部用尽时，DeepSeek 命令（带或不带 `--model opus`）仍判为可开，不排队，并通过模型检查。
+### 6.1 一览：哪些已实证，哪些待 Windows
 
-把 `LONG_PROMPT` 改回 8000 复跑，上面第 1–3 条和三个旧文件里的长度断言共 6 条失败，说明这些测试确实卡在这个数上。
+“CI Windows”是 GitHub Actions 的 Windows Server 2022／2025 虚拟机：原生 Windows、经 ConPTY，跑的是 AgentDeck 源码。它不是用户自己的 Windows 电脑，下表最后一列单独列出。
 
-## 7. 自己复核
+| 当队长的 CLI | 本机 Mac | CI macOS 14 | CI Windows Server 2022／2025 | 用户自己的 Windows 电脑 |
+|---|---|---|---|---|
+| 替身 agent（只测 AgentDeck → 终端这一段） | ✅ 键入、括号粘贴都逐字一致 | ✅ 同左 | ✅ 两台都逐字一致，粘贴标记完整 | **需在 Windows 机器上验证** |
+| Claude Code（默认队长，各 Claude 席位） | ✅ 8367、10000 字逐字一致（2.1.291／2.1.294，假接口） | ✅ 同左（2.1.292／2.1.293） | ✅ 8427、10000 字逐字一致；200～10000 五档全部一次提交（2.1.292／2.1.293） | **需在 Windows 机器上验证** |
+| Codex（ChatGPT Relay 默认队长命令 `codex --no-daemon`） | ✅ 8367、10000 字逐字一致；五档全部一次提交（0.160.1／0.161.0） | ✅ 同左 | ❌ 任何长度都收不好，改动前的 7990 字原文也一样（见 6.3），不是这次改动造成的 | **需在 Windows 机器上验证**（CI 结果说明很可能同样有问题） |
+| Cursor（本机登录，Auto 模型） | ✅ 10000 字里的 10 个代码，模型全部答对 | 未测（CI 没有登录） | 未测（CI 没有登录） | **需在 Windows 机器上验证** |
+| agy（Gemini 3.8 Flash，本机登录） | ⚠️ CLI 收下并提交了整段（会话记录显示到最后一个代码和问题），但额度用尽，模型没有回答：没证到模型 | 未测（CI 没有登录） | 未测（CI 没有登录） | **需在 Windows 机器上验证** |
+| DeepSeek 兜底 claude-ds | 未单独跑：脚本最后 `exec claude`，就是 Claude Code 本体，见 Claude Code 一行；单独跑要按量扣钱 | 不适用 | 不适用（仅 Mac） | 不适用（仅 Mac） |
+| Grok CLI | 未测：用户订阅已取消 | 未测 | 未测 | 未测 |
+| Codex 原生队长宿主（可选模式，`codex-captain-host.js`） | 未测 | 未测 | 未测 | **需在 Windows 机器上验证** |
+
+### 6.2 逐条记录
+
+每一行都是 AgentDeck 自己经真实窗口、真实 PTY（Windows 上是 ConPTY）发出，按队长提示词的发法（`inlineLimit: MainCore.BRIEFING_LIMIT`），对端把收到的与发出的比较：
+
+| 机器 | 对端 | 进入方式 | 内容 | 发出 | 收到 | 结果 | 来源 |
+|---|---|---|---|---|---|---|---|
+| 本机 Mac（Darwin 24.6.0） | 替身·按行读 | 键入 | 首次提示词／10000 字 | 8367／10000 | 8367／10000 | 逐字一致 | 本机 E2E（2026-10-08） |
+| 本机 Mac（Darwin 24.6.0） | 替身·记录原始字节 | 括号粘贴 | 首次提示词／10000 字 | 8367／10000 | 8367／10000 | 逐字一致，粘贴标记完整 | 本机 E2E（2026-10-08） |
+| CI macOS 14（Darwin 23.6.0） | 替身（两种） | 键入／括号粘贴 | 首次提示词／10000 字 | 8367／10000 | 8367／10000 | 逐字一致 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| CI Windows Server 2022（10.0.20348） | 替身·按行读 | 键入 | 首次提示词／10000 字 | 8427／10000 | 8427／10000 | 逐字一致 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| CI Windows Server 2022（10.0.20348） | 替身·记录原始字节 | 括号粘贴 | 首次提示词／10000 字 | 8427／10000 | 8427／10000 | 逐字一致，粘贴标记完整 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| CI Windows Server 2025（10.0.26100） | 替身·按行读 | 键入 | 首次提示词／10000 字 | 8427／10000 | 8427／10000 | 逐字一致 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| CI Windows Server 2025（10.0.26100） | 替身·记录原始字节 | 括号粘贴 | 首次提示词／10000 字 | 8427／10000 | 8427／10000 | 逐字一致，粘贴标记完整 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| 本机 Mac（Darwin 24.6.0） | 真实 Claude Code 2.1.291／2.1.294（假接口） | 括号粘贴 | 首次提示词／10000 字 | 8367／10000 | 8367／10000 | 模型请求里逐字一致 | 本机 E2E（2026-10-08） |
+| CI macOS 14（Darwin 23.6.0） | 真实 Claude Code 2.1.292（假接口） | 括号粘贴 | 首次提示词／10000 字 | 8367／10000 | 8367／10000 | 模型请求里逐字一致 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| CI Windows Server 2022（10.0.20348） | 真实 Claude Code 2.1.292（假接口） | 括号粘贴 | 首次提示词／10000 字 | 8427／10000 | 8427／10000 | 模型请求里逐字一致 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| CI Windows Server 2025（10.0.26100） | 真实 Claude Code 2.1.292（假接口） | 括号粘贴 | 首次提示词／10000 字 | 8427／10000 | 8427／10000 | 模型请求里逐字一致 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| 本机 Mac（Darwin 24.6.0） | 真实 Codex 0.160.1／0.161.0（假接口） | 括号粘贴 | 首次提示词／10000 字 | 8367／10000 | 8367／10000 | 模型请求里逐字一致 | 本机 E2E（2026-10-08） |
+| CI macOS 14（Darwin 23.6.0） | 真实 Codex 0.160.1（假接口） | 括号粘贴 | 首次提示词／10000 字 | 8367／10000 | 8367／10000 | 模型请求里逐字一致 | [run 37588169178](https://github.com/hjinhao066/agentdeck/actions/runs/37588169178) |
+| CI Windows Server 2022（10.0.20348） | 真实 Codex 0.160.1 `--no-daemon`（假接口） | 括号粘贴 | 首次提示词 | 8427 | 0 | ❌ 进了输入框但一直没提交；中段被 Codex 识别成「[Pasted Content 2474 chars]」 | [run 37589124183](https://github.com/hjinhao066/agentdeck/actions/runs/37589124183) |
+| CI Windows Server 2025（10.0.26100） | 真实 Codex 0.160.1 `--no-daemon`（假接口） | 括号粘贴 | 首次提示词 | 8427 | 0 | ❌ 同上（「[Pasted Content 2884 chars]」） | [run 37589124183](https://github.com/hjinhao066/agentdeck/actions/runs/37589124183) |
+| 本机 Mac（Darwin 24.6.0） | 真实 Cursor 2026.10.01-e373342（本机登录，Auto） | 括号粘贴 | 10000 字中性文字，藏 10 个代码 | 10000 | 模型答出 10/10 | ✅ 整段到了模型（不是逐字比较） | 本机 E2E（2026-10-08） |
+| 本机 Mac（Darwin 24.6.0） | 真实 agy 1.3.1（本机登录，Gemini 3.8 Flash） | 括号粘贴 | 同上 | 10000 | 模型未回答 | ⚠️ CLI 提交了整段，会话记录显示到最后一个代码和问题；随后报「Individual quota reached」，没证到模型 | 本机 E2E（2026-10-08） |
+
+- Cursor 第一次用 Grok 4.7 模型跑时，Cursor 报「You're out of usage」，改用 Auto 模型后通过；输入框里显示「[Pasted text #1 +57 lines]」，是整段粘贴进去的。
+- agy 前两次跑停在“是否信任这个文件夹”的启动对话框上（AgentDeck 按规则不往启动对话框里打字），测试里改为替它确认后，第三次提交成功，但 Gemini 额度已经用尽（状态行 0/100）。额度恢复后可用 `AGENTDECK_REAL_CLI=agy` 重跑。
+- CI 的 Codex 第一次失败是 Codex 在管理员终端里拒绝启动共享后台服务；按 AgentDeck 的启动方式加上 `--no-daemon` 后（提交 c363d72），出现的就是下面 6.3 说的输入问题。
+
+### 6.3 长度阶梯：区分“这次改动造成的”和“本来就有的”
+
+同一台机器上，同一个 CLI，依次收 200 字、4000 字、改动前的 Windows 队长提示词原文（7990 字，取自 `64043df`）、现在的 Windows 队长提示词（8427 字）、10000 字。如果只有超过 8000 的才出错，就是这次提上限造成的；如果改动前的 7990 字也一样出错，就是本来就有的。
+
+| 机器 | CLI | 200 | 4000 | 7990（改动前原文） | 8427（现在） | 10000 | 来源 |
+|---|---|---|---|---|---|---|---|
+| CI Windows Server 2022（10.0.20348） | Codex 0.161.0 | ❌ 收到 199（丢 1 个换行） | ⚠️ 首个回车被吞，再按一次后逐字一致 | ❌ 收到 7982（「——」一带错乱） | ❌ 收到 8418（同上） | ⚠️ 首个回车被吞，再按一次后逐字一致 | [run 37814857576](https://github.com/hjinhao066/agentdeck/actions/runs/37814857576) |
+| CI Windows Server 2022（10.0.20348） | Codex 0.161.0（复跑） | ❌ 收到 199（丢 1 个换行，键入方式） | ✅ 一次提交，逐字一致 | ❌ 收到 7982（「——」一带错乱） | ❌ 收到 8418（同上） | ❌ 收到 9999（丢 1 个换行） | [run 37817639186](https://github.com/hjinhao066/agentdeck/actions/runs/37817639186) |
+| CI Windows Server 2025（10.0.26100） | Codex 0.161.0 | ❌ 收到 199（丢 1 个换行） | ⚠️ 首个回车被吞，再按一次后逐字一致 | ❌ 收到 7981 | ❌ 收到 8417 | ⚠️ 首个回车被吞，再按一次后逐字一致 | [run 37814857576](https://github.com/hjinhao066/agentdeck/actions/runs/37814857576) |
+| CI Windows Server 2025（10.0.26100） | Codex 0.161.0（复跑） | ✅ 一次提交，逐字一致 | ❌ 收到 3999（丢 1 个换行） | ❌ 收到 7982（「——」一带错乱） | ❌ 收到 8418（同上） | ⚠️ 首个回车被吞，再按一次后逐字一致 | [run 37817639186](https://github.com/hjinhao066/agentdeck/actions/runs/37817639186) |
+| CI Windows Server 2022（10.0.20348） | Claude Code 2.1.293 | ✅ | ✅ | ✅ | ✅ | ✅ | [run 37814857576](https://github.com/hjinhao066/agentdeck/actions/runs/37814857576) |
+| CI Windows Server 2025（10.0.26100） | Claude Code 2.1.293 | ✅ | ✅ | ✅ | ✅ | ✅ | [run 37814857576](https://github.com/hjinhao066/agentdeck/actions/runs/37814857576) |
+| CI macOS 14（Darwin 23.6.0） | Codex 0.161.0／Claude Code 2.1.293 | ✅ | ✅ | ✅ | ✅ | ✅ | [run 37814857576](https://github.com/hjinhao066/agentdeck/actions/runs/37814857576) |
+| 本机 Mac（Darwin 24.6.0） | Codex 0.161.0 | ✅ | ✅ | ✅ | ✅ | ✅ | 本机 E2E（2026-10-08） |
+
+- ✅ 表示 AgentDeck 一次回车就提交、模型请求里逐字一致。测试用 4 个 Codex 实例各 5 档，共 20 次，只有 2 次是这样。
+- **改动前的 7990 字原文在 Windows 上 4 次全错，和现在的 8427 字错法一样**（都在规则 5 的「——」一带错乱）。200 字、4000 字也会丢换行或吞回车。所以这不是这次把上限提到 10000 造成的，也和长度无关：Codex 在 Windows 上本来就收不全 AgentDeck 粘贴进去的提示词。
+- 同一台 Windows 机器上，记录原始字节的替身逐字收到了同样的内容（含「——」和全部换行），Claude Code 五档全对。说明 AgentDeck 到 ConPTY 这一段没有问题，丢字发生在 Codex 自己的 Windows 输入处理里（推测与 ConPTY 把输入转成按键事件、Codex 自带的“快速输入当粘贴”判断有关，没有进一步验证）。
+- 这个问题不只影响队长：同一条发送路径也用于派给 Codex 队员的普通任务（200 字也丢了换行）。建议另开一张卡单独处理；本卡没有改它。
+- CI 的 Windows Server 虚拟机和用户的桌面环境可能不同（Windows 版本、终端组件、Codex 版本），所以这一结论还要在用户自己的 Windows 电脑上确认。
+- 原始记录：CI 日志里每个 Windows 任务的 [ladder] 和 [ladder-diff] 行。诊断脚本在临时分支 `ci-probe/t-0e2ef693`（不合并），只在这次取证时用。
+
+### 6.4 两类对端各证明什么
+
+- 替身 agent（`tests/e2e/captain-briefing-paste.spec.js`，随 `npm run test:e2e` 跑）：把 stdin 收到的东西原样记下，证明 AgentDeck 到终端这一段不丢不乱。一个按行读（键入方式），一个像 Claude Code 那样要求括号粘贴并记录原始字节。
+- 真实 CLI（`tests/e2e/real-cli-briefing.spec.js`，默认跳过）：`AGENTDECK_REAL_CLI=claude,codex` 时真实的 Claude Code／Codex 当队长，用空的配置目录，模型接口指向本机的假接口，不登录、不耗额度，逐字比较 CLI 自己发给“模型”的那段文字。`AGENTDECK_REAL_CLI=cursor,agy` 时用本机已登录的 Cursor／agy（只读，不加 --force 之类的放权参数，会用掉一点额度），发一段 10000 字的中性文字，第一行到最后一行藏 10 个代码，要求模型全部改小写回答：模型答全了，说明整段都到了模型。这一种不是逐字比较。
+
+## 7. 测试
+
+单测 `tests/captain-briefing-limit.test.js`（8 条）：
+
+1. `LONG_PROMPT` 是 8000、`BRIEFING_LIMIT` 是 10000；Mac／Windows × 两种回执方式 × 并发上限 5／30／50，提示词加「读看板继续。」都在 10000 内。超限时的报错写明：调高上限并重新取证，不要删规则。
+2. 省上下文重发的原文经真实的 `ChatUI.sendPrompt` 代码整段粘贴：不存文件，一次粘贴加一次回车，「读看板继续。」是最后一句。Mac、Windows 各两种回执方式。
+3. 提示词正好 10000 字仍整段粘贴；10001 字才降级为文件指针。Mac、Windows 都测。
+4. 普通提示词对每个 CLI（Claude、Codex、Cursor、agy、Grok、DeepSeek）都还是 8000 整段粘贴，8001、9618、10000 字存文件。
+5. 全仓只有队长提示词的三处发送带更大的上限；排队逻辑读普通上限；源码里没有第二份数字。
+6. DeepSeek 兜底说明的每个要点都在，Mac、Windows 两份。
+7. 第 4 节四处限定条件和规则 1–17 的编号都在。
+8. 各家订阅额度全部用尽时，DeepSeek 命令（带或不带 `--model opus`）仍判为可开，并通过模型检查。
+
+E2E：
+
+- `tests/e2e/captain-briefing-paste.spec.js`（5 条，随 `npm run test:e2e` 跑）：队长首次提示词、正好 10000 字的提示词，分别到按行读的替身和括号粘贴的替身，逐字比较；10001 字存文件且文件内容完整；普通提示词 8000 整段、8001 存文件。
+- `tests/e2e/real-cli-briefing.spec.js`（4 条，默认跳过）：真实 Claude Code、真实 Codex 当队长（假接口），首次提示词和 10000 字提示词；真实 Cursor、agy（本机登录）10000 字带代码的文字。
+- 原有的 `captain-token-saver.spec.js`、`captain-rebrief.spec.js`、`workspace.spec.js`：CI macOS 27 条全过（[run 37586823915](https://github.com/hjinhao066/agentdeck/actions/runs/37586823915)）；Windows 上 `captain-token-saver.spec.js` 两条和 `workspace.spec.js` 的拖文件夹一条失败，这三条在改动前的 main 上同样失败（[run 37543370164](https://github.com/hjinhao066/agentdeck/actions/runs/37543370164)）。本机 Mac 这三个文件 27 条全过（2026-10-08）。
+
+单测：`npm test` 全量 1311 条，1298 过、0 失败、13 跳过（本副本没装依赖，借主仓库的 node_modules 跑）。
+
+## 8. 自己复核
+
+规则有没有丢：
 
 ```bash
 mkdir -p /tmp/briefing-base && git archive 64043df main-core.js quota-core.js claude-seats-core.js | tar -x -C /tmp/briefing-base
@@ -167,16 +252,25 @@ for (const p of ["darwin", "win32"]) for (const legacy of [false, true]) {
 }'
 ```
 
-`git diff 64043df -- main-core.js` 里，规则文本只有新增行，没有删除行。
+10000 字能不能收全（在要验证的那台机器上跑，Windows 用 PowerShell 时把变量写成 `$env:AGENTDECK_REAL_CLI = "claude,codex"`）：
 
-## 8. 已知边界和没有验证的部分
+```bash
+npx playwright test tests/e2e/captain-briefing-paste.spec.js
+AGENTDECK_REAL_CLI=claude,codex npx playwright test tests/e2e/real-cli-briefing.spec.js
+```
 
-- 没有在真实 Claude Code／Codex 终端里粘贴 10000 字实测（仓库约定真实 CLI 冒烟要用户明确要求并用隔离配置）。依据是：AgentDeck 自己的输入通道上限是 100 万字符；现有 7990 字的提示词早已走同一条“大段粘贴”路径；新提示词只比它长约 440 字。
-- E2E 只跑了覆盖这次改动的三个文件：`tests/e2e/workspace.spec.js`（含改过长度的超长消息用例）、`captain-token-saver.spec.js`、`captain-rebrief.spec.js`，27 条全部通过。全量 E2E 没有跑。
-- 自动验收（`--verify`）遇到 DeepSeek 执行会话：命令不带 `--model` 时程序认不出它是哪家模型，卡片会停在 review 并写明原因，需要队长手动派审查（规则 13 已有这个分支）；带 `--model opus` 时按 Anthropic 家族处理，审查者从 Google／OpenAI 里选。这是现有行为，本次没有改。
-- `claude-ds` 本身是否可用、`--model opus` 是否映射正确，以共享记忆为准，本次没有启动它。
+每条通过的用例都会打印一行 `[briefing-paste]` 或 `[real-cli]`，写明平台、系统版本、CLI 版本、发出和收到的字数。
 
-## 9. 1.6 集成补充
+## 9. 已知边界和没有验证的部分
+
+- **用户自己的 Windows 电脑：以上所有 CLI 都需在 Windows 机器上验证。** 在那台机器的仓库里（PowerShell）：`npx playwright test tests/e2e/captain-briefing-paste.spec.js`，然后 `$env:AGENTDECK_REAL_CLI = "claude,codex,cursor,agy"; npx playwright test tests/e2e/real-cli-briefing.spec.js`。CI 的 Windows Server 虚拟机是原生 Windows，但不是用户的桌面环境。
+- Codex 在 Windows 上收不全提示词（6.3）：改动前就有，本卡没修，建议另开卡。修好之前，Windows 上用 Codex 当队长（ChatGPT Relay）时，队长提示词会被改字或停在输入框里，改动前的 7990 字也一样。
+- agy：模型层面没证到（额度用尽），额度恢复后用 `AGENTDECK_REAL_CLI=agy` 重跑。
+- Cursor、agy 只在本机 Mac 上测过，CI 上没有登录不能测。
+- Grok CLI、Codex 原生队长宿主没有测；claude-ds 没有单独跑（就是 Claude Code 本体）。
+- 全量 E2E 没有跑，只跑了和这次改动相关的文件。
+
+## 10. 1.6 集成补充
 
 上面的逐行基线对照、字符数及定向 E2E 结果记录的是 `3959659` 独立审查时的状态。
 1.6 同时合入「待我处理」：队长提示词的一条命令从 `notify-user` 改为 `inbox`，

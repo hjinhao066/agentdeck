@@ -85,9 +85,13 @@
   const TOKEN_SAVER_DEFAULT = 150_000;
   // A prompt up to this many characters is pasted whole. A longer one is saved as
   // a file and the agent gets its opening plus "read this file first"
-  // (ChatUI.sendPrompt). The Captain briefing has to fit: a pointer hides its rules
-  // and its closing paragraph. When it no longer fits, raise this, never drop a rule.
-  const LONG_PROMPT = 10000;
+  // (ChatUI.sendPrompt).
+  const LONG_PROMPT = 8000;
+  // The Captain briefing alone is pasted whole up to this length: a pointer hides
+  // its rules and its closing paragraph. Every other prompt, for every agent,
+  // keeps LONG_PROMPT. When the briefing no longer fits, raise this and prove the
+  // new length arrives whole (docs/captain-briefing-checklist.md); never drop a rule.
+  const BRIEFING_LIMIT = 10000;
   // What the token saver adds after the briefing once the context is cleared.
   const SAVER_RESUME = '\n\n读看板继续。';
   // The last moment the outgoing context still holds the user's words: decisions go to the file the handoff quotes.
@@ -96,7 +100,7 @@
   // opening only points at `handoff`; the concurrency and release habits are unchanged.
   const AUTONOMOUS_CONTINUATION = '开工先跑 handoff，照它的「接手动作」做：没有待办就简短回复「队长已就绪」等用户指令，不自行立项；Relay、清空或重启后有已授权待办，核对后主动续接，不要等用户说“继续”，被暂停或取消的不续派。按 quota：额度紧时保持 3–5 个活并行，额度多时开十几个。发版时测试全过并进入打包后停止派新活，等现有任务收尾；包就绪后让长任务停在安全点记进度，短任务等收尾；存档后直接安装并重启。安装只用正式 restart-agentdeck.sh／rollback-agentdeck.sh 或发版入口，禁临时脚本；待核对不能 complete，版本启动核验后才结卡。';
   // Alias of the briefing's last paragraph. Do not paste it again after the
-  // briefing: it is already there, and the repeat uses up the room under LONG_PROMPT.
+  // briefing: it is already there, and the repeat uses up the room under BRIEFING_LIMIT.
   const REBRIEF_NOTE = AUTONOMOUS_CONTINUATION;
   function contextResetCommand(provider, text) {
     if (typeof text !== 'string' || /[\r\n]/.test(text)) return false;
@@ -1063,7 +1067,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
