@@ -621,6 +621,9 @@ function setupBoardControl() {
       'discussion-command.js', 'discussion-runner.js', 'discussion-core.js', 'discussion-store.js', 'discussion-privacy.js', 'discussion-participants.js',
       'claude-seats-core.js', 'claude-seats-main.js', 'quota-claude.js', 'quota-core.js', 'quota-codex.js', 'relay-handoff-core.js',
       'side-main.js', 'chat-core.js', 'main-core.js', 'auto-verify-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
+    // chat-core.js reads its Markdown and file-kind rules from the phone hub's rule file, at this relative path.
+    fs.mkdirSync(path.join(toolsDir, 'mobile-web', 'hub'), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, 'mobile-web', 'hub', 'core.js'), path.join(toolsDir, 'mobile-web', 'hub', 'core.js'));
     fs.copyFileSync(path.join(__dirname, 'docs', 'discuss.md'), path.join(toolsDir, 'discuss.md'));
     boardCliPath = path.join(toolsDir, 'agentdeck-board.js');
     fs.copyFileSync(path.join(__dirname, 'board-cli.js'), boardCliPath);
@@ -976,6 +979,9 @@ app.whenReady().then(async () => {
     writeAttention: (input) => requestMobile('attention-write', input),
     // Like pasted screenshots, phone images reach the Captain as file paths.
     uploadDir: path.join(app.getPath('userData'), 'mobile-uploads'),
+    // Files the phone may preview: what the conversation named, plus the report folders; this app's own data never.
+    // A test profile's report folder is inside the profile.
+    preview: tudArg ? { home: HOME, roots: [path.join(app.getPath('userData'), 'reports')] } : { home: HOME, denied: [app.getPath('userData')] },
     getBoardVersion: () => boardVersionOf(taskStore.dir),
     machine: { platform: process.platform, hostname: os.hostname(), appVersion: app.getVersion() },
     saveSettings: (settings) => {

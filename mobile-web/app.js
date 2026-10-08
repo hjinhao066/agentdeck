@@ -28,6 +28,7 @@
     done: '<circle cx="12" cy="12" r="9"/><path d="m8 12.3 2.8 2.8L16.2 9.5"/>',
     arrow: '<path d="M5 12h14m-5-5 5 5-5 5"/>',
     reload: '<rect x="2.5" y="2.5" width="19" height="19" rx="4"/><path d="M17.4 12a5.4 5.4 0 1 1-5.4-5.4c1.5 0 3 .6 4 1.6l1.4 1.4"/><path d="M17.4 6.6v3h-3"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
   };
   // The desktop's provider marks (agent-info.js PROVIDER_ICONS), so both ends show the same icons.
   const providerIcons = {
@@ -73,7 +74,7 @@
   $('drawer-captain').querySelector('.row-icon').innerHTML = svg('crown');
   $('quota-entry').querySelector('.row-icon').innerHTML = svg('gauge');
   $('quota-entry').querySelector('.row-chevron').innerHTML = svg('chevron');
-  $('attach').innerHTML = svg('image');
+  $('attach').innerHTML = svg('plus');
   $('theme').querySelector('.row-icon').innerHTML = svg('moon');
   $('logout').querySelector('.row-icon').innerHTML = svg('logout');
   const tabs = [...document.querySelectorAll('.tab')];

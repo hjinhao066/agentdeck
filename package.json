@@ -98,6 +98,7 @@
       "fleet-ui.js",
       "task-heartbeat.js",
       "mobile-web.js",
+      "file-preview-core.js",
       "mobile-web/**",
       "claude-seats-core.js",
       "perpetual-captain-core.js",

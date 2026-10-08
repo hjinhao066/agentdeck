@@ -11,7 +11,23 @@
 </head>
 <body>
   <div class="app">
+    <!-- Wide screens (a tablet lying on its side) are laid out like the desktop app: this sidebar, the page, and the preview pane on the right. -->
+    <aside id="sidebar" class="sidebar" aria-label="侧边栏">
+      <div class="side-head"><span class="brand-mark" aria-hidden="true"></span><strong>AgentDeck</strong></div>
+      <nav class="side-nav" aria-label="页面">
+        <button type="button" data-side-view="captain"><span class="side-icon" aria-hidden="true"></span><span class="side-name">队长</span></button>
+        <button type="button" data-side-view="attention"><span class="side-icon" aria-hidden="true"></span><span class="side-name">待我处理</span><span class="side-count nav-attention" aria-hidden="true" hidden></span></button>
+        <button type="button" data-side-view="board"><span class="side-icon" aria-hidden="true"></span><span class="side-name">任务看板</span></button>
+        <button type="button" data-side-view="todo"><span class="side-icon" aria-hidden="true"></span><span class="side-name">待办</span><span class="side-count nav-badge" aria-hidden="true" hidden></span></button>
+        <button type="button" data-side-view="overview"><span class="side-icon" aria-hidden="true"></span><span class="side-name">总览</span></button>
+      </nav>
+      <div id="side-sessions" class="side-sessions" role="group" aria-label="队长和会话"></div>
+      <div id="side-quota" class="side-quota"></div>
+      <div id="side-foot" class="side-foot"><span id="side-version" class="side-version"></span></div>
+    </aside>
+    <div class="center">
     <header id="app-header" class="app-header">
+      <button id="side-toggle" class="icon-button wide-only" type="button" title="收起侧边栏" aria-label="收起侧边栏" aria-expanded="true" aria-controls="sidebar"></button>
       <button id="back" class="icon-button" type="button" title="返回会话列表" aria-label="返回会话列表" hidden></button>
       <div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong id="brand-title">AgentDeck</strong><span id="brand-caption" class="brand-caption">总台</span></div>
       <div id="machine-bar" class="machine-bar" role="group" aria-label="选择电脑"></div>
@@ -20,6 +36,7 @@
         <button id="theme" class="icon-button" type="button" title="切换主题" aria-label="切换主题"></button>
         <button id="logout-all" class="icon-button" type="button" title="全部退出：在这部手机上退出所有已登录的电脑" aria-label="全部退出：在这部手机上退出所有已登录的电脑"></button>
       </div>
+      <button id="pane-toggle" class="icon-button docked-only" type="button" title="打开右侧预览栏" aria-label="打开右侧预览栏" aria-expanded="false" aria-controls="preview"></button>
     </header>
     <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
     <main id="main">
@@ -33,9 +50,13 @@
       <section id="captain-view" class="view captain-view" aria-label="队长对话" hidden>
         <div class="sr-only"><h1 id="captain-title"></h1><span id="captain-status"></span></div>
         <div id="captain-turns" class="turns" role="region" aria-label="队长对话记录" tabindex="0"></div>
+        <button id="jump" class="icon-button jump" type="button" title="回到最新" aria-label="回到最新" hidden></button>
         <form id="message-form" class="composer">
           <label class="sr-only" for="message">给队长的消息</label>
+          <div id="attachments" class="attachments" role="list" aria-label="待发送的图片" hidden></div>
           <div class="composer-box">
+            <button id="attach" class="icon-button" type="button" title="添加图片" aria-label="添加图片"></button>
+            <input id="image-input" type="file" accept="image/*" multiple hidden>
             <textarea id="message" name="message" rows="1" maxlength="8000" aria-describedby="send-hint"></textarea>
             <button id="clear" class="icon-button" type="button" title="清空草稿" aria-label="清空草稿" hidden></button>
             <button id="send" class="icon-button send-button" type="submit" aria-describedby="send-hint" disabled></button>
@@ -78,6 +99,19 @@
       <button type="button" data-view="sessions"><span class="nav-icon" aria-hidden="true"></span><span>会话</span></button>
       <button type="button" data-view="board"><span class="nav-icon" aria-hidden="true"></span><span>看板</span></button>
     </nav>
+    </div>
+    <!-- A file or folder the conversation named. Beside the page on a wide screen; on a phone a sheet that rises from the bottom. -->
+    <div id="preview-scrim" class="preview-scrim" hidden></div>
+    <section id="preview" class="preview" aria-labelledby="preview-name" hidden>
+      <div id="preview-grip" class="preview-grip" aria-hidden="true"><span></span></div>
+      <header class="preview-head">
+        <button id="preview-back" class="icon-button" type="button" title="回到上一个文件" aria-label="回到上一个文件" hidden></button>
+        <div class="preview-title"><strong id="preview-name" tabindex="-1"></strong><span id="preview-path" class="preview-path"></span></div>
+        <div id="preview-actions" class="preview-actions"></div>
+      </header>
+      <p id="preview-progress" class="preview-progress" role="status" aria-live="polite" hidden></p>
+      <div id="preview-body" class="preview-body" tabindex="0"></div>
+    </section>
   </div>
 </body>
 </html>

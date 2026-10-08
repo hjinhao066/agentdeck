@@ -517,3 +517,388 @@
   }
   return { cleanAttention, mergeAttention, attentionFailure };
 });
+
+// Reading text, for the desktop and the phone alike: the one Markdown renderer
+// (Captain replies, receipts, 待我处理 details and previewed .md files), code
+// colouring, what kind of file a name is, and the file paths and web links a
+// text names. Everything that goes out as HTML is escaped here first; no tag
+// or attribute in the output comes from the text itself.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  const isWide = (ch) => /[ᄀ-ᅟ⺀-鿿가-힣豈-﫿＀-｠￠-￦]/.test(ch);
+  // What goes between two pieces of a line the terminal broke. It breaks at a
+  // space when it can, so the space comes back unless both sides are Chinese
+  // (a run cut at the right edge) or one of them is punctuation that sits tight.
+  const TIGHT = /[\u2018-\u201f\u2026\u3000-\u303f\uff00-\uffef]/;
+  function joinGap(before, after) {
+    const a = String(before).slice(-1), b = String(after)[0] || '';
+    return !a || !b || /\s/.test(a) || (isWide(a) && isWide(b)) || TIGHT.test(a) || TIGHT.test(b) ? '' : ' ';
+  }
+  const pipeRow = (cells) => '| ' + cells.map((c) => c.replace(/\|/g, '\\|')).join(' | ') + ' |';
+  const pipeTable = (rows, indent = '') => [pipeRow(rows[0]), '|' + rows[0].map(() => ' --- ').join('|') + '|', ...rows.slice(1).map(pipeRow)].map((l) => indent + l);
+
+  // ---- what kind of file a name is ----
+  const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg', 'avif']);
+  const LANG = {
+    js: 'js', mjs: 'js', cjs: 'js', jsx: 'js', ts: 'js', tsx: 'js', json: 'json', css: 'css', html: 'html', htm: 'html',
+    py: 'py', sh: 'sh', bash: 'sh', zsh: 'sh', rb: 'py', yml: 'py', yaml: 'py', toml: 'py', ini: 'py', conf: 'py',
+    go: 'js', rs: 'js', java: 'js', c: 'js', h: 'js', cpp: 'js', swift: 'js', kt: 'js', php: 'js', sql: 'sql', lua: 'sql',
+  };
+  function extOf(name) { const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(name)); return m ? m[1].toLowerCase() : ''; }
+  function fileKind(name) {
+    const ext = extOf(name);
+    if (ext === 'md' || ext === 'markdown') return 'markdown';
+    if (ext === 'pdf') return 'pdf';
+    if (IMAGE_EXT.has(ext)) return 'image';
+    return 'text';
+  }
+  function languageFor(name) { return LANG[extOf(name)] || 'plain'; }
+  const IMAGE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml', avif: 'image/avif' };
+  function imageMime(name) { return IMAGE_MIME[extOf(name)] || null; }
+  function sizeText(n) {
+    if (!Number.isFinite(n) || n < 0) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(1) + ' MB';
+  }
+
+  // ---- file paths and web links in a text ----
+  // A path is taken only when it starts where files live (~/, /Users/, /tmp/,
+  // C:\ …), so "/mac/api/relay" or "和/或" never turn into links. It ends at
+  // white space, quotes, brackets and Chinese punctuation; a sentence's own
+  // full stop or comma right after it is not part of it. "a.md:12" keeps its line.
+  const STOP = '\\s\\u0000<>"\'`|*?，。；：、！？（）【】「」『』《》…';
+  const URL_AT = new RegExp('https?://[^' + STOP.replace('?', '').replace('*', '') + ']+', 'gi');
+  const PATH_AT = new RegExp('(?:~/|/(?:Users|home|tmp|private|var|opt|Volumes|Applications|Library|etc|usr|mnt|srv)/|[A-Za-z]:[\\\\/])[^' + STOP + ']*', 'g');
+  const TAIL = /[.,;:!?)\]}>'"\\]+$/;
+  function trimLink(text, url) {
+    let out = text.replace(TAIL, (tail) => {
+      // a closing bracket that pairs with one inside the link belongs to it
+      const open = (text.match(/\(/g) || []).length, close = (text.match(/\)/g) || []).length;
+      return url && tail[0] === ')' && close <= open ? tail[0] : '';
+    });
+    // "…/a.md里面写了": the name ends with its extension
+    const glued = /^(.*?\.[A-Za-z0-9]{1,8})(?=[\u3400-\u9fff])/.exec(url ? '' : out);
+    if (glued && !/[\\/]/.test(out.slice(glued[1].length))) out = glued[1];
+    return out;
+  }
+  function findLinks(text) {
+    const source = String(text == null ? '' : text), found = [];
+    for (const m of source.matchAll(URL_AT)) {
+      const value = trimLink(m[0], true);
+      if (value.length > 10) found.push({ kind: 'url', text: value, start: m.index, end: m.index + value.length });
+    }
+    for (const m of source.matchAll(PATH_AT)) {
+      const before = source[m.index - 1] || '';
+      // in the middle of a word, a URL or a longer path: not the start of a path
+      if (/[\w/.~:\\-]/.test(before) || found.some((f) => m.index >= f.start && m.index < f.end)) continue;
+      const value = trimLink(m[0], false);
+      const line = /:(\d+)(?::\d+)?$/.exec(value);
+      const path = line ? value.slice(0, line.index) : value;
+      // the root alone ("~/", "/tmp/", "C:\") names no file
+      if (path.replace(/^(?:~|\/[A-Za-z]+|[A-Za-z]:)[\\/]?/, '').replace(/[\\/]+$/, '').length < 1 || path.length > 1024) continue;
+      found.push({ kind: 'file', text: value, path, line: line ? Number(line[1]) : 0, start: m.index, end: m.index + value.length });
+    }
+    return found.sort((a, b) => a.start - b.start);
+  }
+  // Folder and name of a path as the page shows them; either slash.
+  function splitPath(value) {
+    const clean = String(value).replace(/[\\/]+$/, ''), cut = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+    return { dir: cut > 0 ? clean.slice(0, cut) : clean.slice(0, cut + 1), name: clean.slice(cut + 1) || clean };
+  }
+  // A long path as a link shows its end: "…/agentdeck-1.8/review.md". The whole path stays in the tooltip.
+  function shortPath(value, max = 40) {
+    const text = String(value || '');
+    if ([...text].length <= max) return text;
+    const parts = text.split(/(?<=[\\/])/);
+    let tail = parts.pop();
+    while (parts.length && [...(parts[parts.length - 1] + tail)].length <= max - 2) tail = parts.pop() + tail;
+    return '…/' + tail.replace(/^[\\/]+/, '');
+  }
+  // A link inside a previewed file, read against that file's folder: "../a.md", "shots/1.png".
+  function resolvePath(base, target) {
+    const value = String(target || '').trim().replace(/^file:\/\//i, '').replace(/[#?].*$/, '');
+    if (!value) return '';
+    if (/^(?:~[\\/]|\/|[A-Za-z]:[\\/])/.test(value)) return value;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return '';
+    const sep = base.includes('\\') && !base.includes('/') ? '\\' : '/';
+    const parts = base.split(/[\\/]/);
+    for (const part of value.split(/[\\/]/)) {
+      if (!part || part === '.') continue;
+      if (part === '..') { if (parts.length > 1) parts.pop(); } else parts.push(part);
+    }
+    return parts.join(sep);
+  }
+
+  // ---- code colouring (small, generic, always escaped) ----
+  const KEYWORDS = new Set(('function const let var return if else for while switch case break continue class new import from export default async await try catch finally throw typeof in of ' +
+    'def lambda None True False self elif with as pass raise yield fn pub struct impl enum match use mod func type interface package null undefined true false nil void int string bool ' +
+    'select insert update delete create table where join group order by limit and or not then end').split(' '));
+  function highlightCode(code, lang) {
+    if (lang === 'plain') return esc(code);
+    const hashComment = lang === 'py' || lang === 'sh';
+    const lineComment = lang === 'sql' ? '--' : '//';
+    const parts = [
+      '/\\*[\\s\\S]*?\\*/',
+      hashComment ? '#[^\\n]*' : (lang === 'plain' || lang === 'json' || lang === 'html' ? '(?!)' : lineComment.replace(/[/-]/g, '\\$&') + '[^\\n]*'),
+      '"(?:\\\\.|[^"\\\\\\n])*"', "'(?:\\\\.|[^'\\\\\\n])*'", '`(?:\\\\.|[^`\\\\])*`',
+      '\\b\\d[\\d_.]*\\b', '[A-Za-z_][A-Za-z0-9_]*',
+    ];
+    const re = new RegExp(parts.map((p) => '(' + p + ')').join('|'), 'g');
+    let out = '', last = 0, m;
+    while ((m = re.exec(code))) {
+      out += esc(code.slice(last, m.index));
+      const t = m[0];
+      let cls = null;
+      if (m[1] || m[2]) cls = 'c';
+      else if (m[3] || m[4] || m[5]) cls = 's';
+      else if (m[6]) cls = 'n';
+      else if (KEYWORDS.has(t)) cls = 'k';
+      out += cls ? `<span class="tok-${cls}">${esc(t)}</span>` : esc(t);
+      last = m.index + t.length;
+      if (t.length === 0) re.lastIndex++;
+    }
+    return out + esc(code.slice(last));
+  }
+
+  // ---- a reply read off a terminal, as Markdown ----
+  // The TUI already drew the agent's Markdown as plain rows, so the structure
+  // is read back from their shape: a short line standing alone or right above a
+  // list is a section title, rows of │ cells are a table, and "key: value"
+  // records repeating the same keys (how the TUI draws a table too wide for it)
+  // are a table again.
+  const BOX_ROW = /^\s*│.*│\s*$/;
+  const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/;
+  const leading = (l) => /^ */.exec(l)[0].length;
+  // A reply drawn two columns in keeps that indent on every row except the first
+  // row of each paragraph (the shared rules trim it): take it off the rest too.
+  function dedent(lines) {
+    const inner = lines.filter((l, i) => l.trim() && i > 0 && lines[i - 1].trim());
+    const cut = inner.length ? Math.min(...inner.map(leading)) : 0;
+    return cut ? lines.map((l) => l.slice(Math.min(cut, leading(l)))) : lines;
+  }
+  const NOT_TITLE_END = /[。．.！!？?；;，,、：:…~～]$/;
+  // opening: the reply's first line, where a short one is more often "好的" than a title
+  function titleLike(line, aboveList, opening) {
+    const t = line.trim(), n = [...t].length;
+    if (n < (opening && !aboveList ? 4 : 2) || n > (aboveList ? 48 : 32)) return false;
+    if (/^(?:[-*+•>|#│]|\d+[.)]\s|```|~~~)/.test(t) || NOT_TITLE_END.test(t)) return false;
+    if (!/[A-Za-z一-鿿]/.test(t) || /^[^\s:：]{1,12}: \S/.test(t)) return false;
+    if (/https?:\/\/|\w\/\w|[~.]?\/[\w.-]+\/|\.[A-Za-z]{1,5}(?:\s|$)|\\|`|\*\*/.test(t)) return false;   // a path, a file, code, or already styled
+    if (/^[\x20-\x7e]+$/.test(t) && (!/^[A-Z0-9]/.test(t) || /[=$<>{}[\];|&]|--|\.\w{1,5}$/.test(t))) return false;   // a command, a file name
+    return true;
+  }
+  // "│ a │ b │ │ c │ d │": rows the terminal drew, possibly glued onto one line.
+  function boxRows(lines) {
+    const rows = lines.flatMap((l) => l.trim().split('│ │')).map((r) => r.replace(/^\s*│?|│?\s*$/g, '').split('│').map((c) => c.trim()));
+    return rows.length && rows[0].length > 1 && rows.every((r) => r.length === rows[0].length) ? pipeTable(rows) : null;
+  }
+  // "版本: 1.2.0 / Mac: 已装 / 版本: 1.2.1 / Mac: …": the first key repeats, every
+  // record holds the same keys in the same order. A key is what the records
+  // share right before each colon, so records glued together by reflow still split.
+  function recordRows(lines) {
+    const text = lines.join('\n');
+    const lead = /^([^\s:：]{1,12}): /.exec(text);
+    if (!lead) return null;
+    const records = text.split(lead[1] + ': ').slice(1);
+    if (records.length < 2) return null;
+    const parts = records.map((r) => r.split(/: /));
+    const count = parts[0].length;
+    if (count < 2 || count > 8 || parts.some((p) => p.length !== count)) return null;
+    const keys = [lead[1]];
+    for (let k = 0; k < count - 1; k++) {
+      // the longest ending the records share, without spaces
+      const ends = parts.map((p) => /[^\s:：]{0,12}$/.exec(p[k])[0]);
+      let key = ends[0];
+      for (const e of ends) while (key && !e.endsWith(key)) key = key.slice(1);
+      if (!key) return null;
+      keys.push(key);
+    }
+    const rows = parts.map((p) => p.map((v, k) => (k < count - 1 ? v.slice(0, v.length - keys[k + 1].length) : v).replace(/\s+/g, ' ').trim()));
+    return pipeTable([keys, ...rows]);
+  }
+  function tidyReply(text) {
+    const lines = dedent(String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n'));
+    const blocks = [];          // { lines, code } split on empty lines; a fenced block stays whole
+    let cur = null, fence = false;
+    for (const line of lines) {
+      const mark = /^\s*(```|~~~)/.test(line);
+      if (fence || mark) {
+        if (!cur || !cur.code) blocks.push((cur = { lines: [], code: true }));
+        cur.lines.push(line);
+        if (mark) { fence = !fence; if (!fence) cur = null; }
+      } else if (!line.trim()) cur = null;
+      else { if (!cur) blocks.push((cur = { lines: [] })); cur.lines.push(line); }
+    }
+    return blocks.map((b, at) => {
+      if (b.code) return b.lines.join('\n');
+      const table = b.lines.every((l) => BOX_ROW.test(l)) ? boxRows(b.lines) : recordRows(b.lines);
+      if (table) return table.join('\n');
+      const aboveList = b.lines.length > 1 && LIST_ITEM.test(b.lines[1]);
+      // right above a sentence too: the terminal only breaks a line that is full, so a short first line was meant as one
+      const aboveText = b.lines.length > 1 && !aboveList && (NOT_TITLE_END.test(b.lines[1].trim()) || [...b.lines[1].trim()].length > 32);
+      const title = (b.lines.length === 1 ? at < blocks.length - 1 : aboveList || aboveText) && titleLike(b.lines[0], aboveList, at === 0);
+      return (title ? ['### ' + b.lines[0].trim(), ...b.lines.slice(1)] : b.lines).join('\n');
+    }).join('\n\n');
+  }
+
+  // ---- Markdown ----
+  // Text is escaped first and every tag is written here, so nothing in the
+  // source can become markup. Pieces that must not be styled again (code, links,
+  // escaped punctuation) are set aside behind a NUL-marked number and put back last.
+  const SAFE_URL = /^(https?:\/\/|mailto:)/i;
+  // next to Chinese text a star needs no space around it: "这是*重点*内容"
+  const EM_BEFORE = '(^|[\\s(（“"「【：，。、\\u3400-\\u9fff])', EM_AFTER = '(?=[\\s).,;:!?，。；：、）”"」】\\u3400-\\u9fff]|$)';
+  const EM_STAR = new RegExp(EM_BEFORE + '\\*([^*\\s][^*\\n]*)\\*' + EM_AFTER, 'g'), EM_BAR = new RegExp(EM_BEFORE + '_([^_\\s][^_\\n]*)_' + EM_AFTER, 'g');
+  function inline(src, opts) {
+    const held = [], links = !!(opts && opts.links);
+    const hold = (html) => '\u0000' + (held.push(html) - 1) + '\u0000';
+    let s = String(src).replace(/\u0000/g, '');
+    s = s.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${esc(c)}</code>`));
+    s = s.replace(/\\([\\`*_{}[\]()#+.!|~>-])/g, (_, c) => hold(esc(c)));
+    // a picture is named, not loaded: the page decides what opening it means
+    s = s.replace(/!?\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"\n]*")?\)/g, (all, text, url) => {
+      const label = text || url;
+      if (SAFE_URL.test(url)) return hold(`<a href="${esc(url)}" data-ext="1">`) + label + hold('</a>');
+      if (links && !/^[a-z][a-z0-9+.-]*:/i.test(url) && !/^#/.test(url)) return hold(`<a data-file="${esc(url)}" data-rel="1">`) + label + hold('</a>');
+      return label;
+    });
+    if (links) {
+      // bare web links and file paths, as they stand in the text
+      let out = '', last = 0;
+      for (const link of findLinks(s)) {
+        if (link.start < last) continue;
+        const shown = esc(link.text);
+        out += s.slice(last, link.start) + hold(link.kind === 'url' ? `<a href="${esc(link.text)}" data-ext="1">${shown}</a>`
+          : `<a data-file="${esc(link.path)}"${link.line ? ` data-line="${link.line}"` : ''}>${shown}</a>`);
+        last = link.end;
+      }
+      s = out + s.slice(last);
+    }
+    s = esc(s).replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>').replace(/(^|[^\w\\])__([^_\n]+)__(?!\w)/g, '$1<strong>$2</strong>')
+      .replace(/~~([^~\n]+)~~/g, '<del>$1</del>').replace(EM_STAR, '$1<em>$2</em>').replace(EM_BAR, '$1<em>$2</em>');
+    return s.replace(/\u0000(\d+)\u0000/g, (_, i) => held[i]);
+  }
+  const TABLE_ROW = /^\s*\|.*\|\s*$/;
+  const TABLE_RULE = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
+  // A header row and its |---| rule. While a reply is still being written the
+  // rule may be half there, or not there yet: a row of cells that ends the text
+  // is already drawn as a table, so it never shows as bars and dashes.
+  function tableAt(lines, i) {
+    if (!TABLE_ROW.test(lines[i])) return false;
+    const next = lines[i + 1];
+    if (next === undefined) return i === lines.length - 1 && lines[i].split('|').length > 3 && !TABLE_RULE.test(lines[i]);
+    if (TABLE_RULE.test(next) && next.includes('|')) return true;
+    return i + 1 === lines.length - 1 && /^\s*\|[\s:|-]*$/.test(next);
+  }
+  // A list from line `start`: items nest by their indent, an indented line that
+  // is not an item continues the one above it (a terminal wraps long items that
+  // way), and one empty line between two items does not end the list.
+  function listAt(lines, start, opts) {
+    const root = { lists: [] };
+    const open = [];                 // lists being filled, outermost first
+    const item = () => { const l = open[open.length - 1]; return l.items[l.items.length - 1]; };
+    let i = start;
+    for (; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) {
+        if (LIST_ITEM.test(lines[i + 1] || '')) continue;
+        break;
+      }
+      const m = LIST_ITEM.exec(line);
+      const indent = /^\s*/.exec(line)[0].length;
+      if (!m) {
+        if (indent < 2 || /^\s*(#{1,6}\s|```|~~~|>)/.test(line) || tableAt(lines, i)) break;
+        while (open.length && open[open.length - 1].indent >= indent) open.pop();
+        if (!open.length) break;
+        item().text.push(line.trim());
+        continue;
+      }
+      const ordered = /\d/.test(m[2]);
+      while (open.length && open[open.length - 1].indent > indent) open.pop();
+      let list = open[open.length - 1];
+      if (!list || list.indent < indent || list.ordered !== ordered) {
+        if (list && list.indent === indent) open.pop();       // bullets turning into numbers start a list of their own
+        list = { indent, ordered, first: ordered ? parseInt(m[2], 10) : 1, items: [] };
+        (open.length ? item() : root).lists.push(list);
+        open.push(list);
+      }
+      list.items.push({ text: [m[3].trim()], lists: [] });
+    }
+    // "- [ ] 待办" and "- [x] 做完的" keep their box as a mark in front
+    const boxed = (text) => text.replace(/^\[( |x|X)\]\s+/, (_, mark) => (mark === ' ' ? '☐ ' : '☑ '));
+    const render = (list) => {
+      const tag = list.ordered ? 'ol' : 'ul';
+      return `<${tag}${list.ordered && list.first !== 1 ? ` start="${list.first}"` : ''}>` + list.items.map((it) =>
+        `<li>${inline(boxed(it.text.reduce((a, b) => a + joinGap(a, b) + b)), opts)}${it.lists.map(render).join('')}</li>`).join('') + `</${tag}>`;
+    };
+    return { html: root.lists.map(render).join('\n'), next: i };
+  }
+  // breaks: keep single newlines inside a paragraph (agent replies come from a
+  // terminal, where a line break is usually meant).
+  // links: web links and file paths in the text become links too (data-file
+  // carries the path; the page decides what opening one means).
+  function renderMarkdown(src, opts) {
+    const breaks = !!(opts && opts.breaks);
+    const lines = String(src == null ? '' : src).replace(/\r\n?/g, '\n').split('\n');
+    while (lines.length > 1 && !lines[lines.length - 1].trim()) lines.pop();
+    const html = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const fence = /^\s*(```|~~~)\s*([\w+-]*)/.exec(line);
+      if (fence) {
+        const body = [];
+        i++;
+        while (i < lines.length && !/^\s*(```|~~~)\s*$/.test(lines[i])) body.push(lines[i++]);
+        i++;
+        const lang = LANG[fence[2]] || 'plain';
+        html.push(`<pre class="md-code"><code data-lang="${esc(fence[2])}">${highlightCode(body.join('\n'), lang)}</code></pre>`);
+        continue;
+      }
+      const h = /^(#{1,6})\s+(.*)$/.exec(line);
+      if (h) { html.push(`<h${h[1].length}>${inline(h[2].replace(/\s+#+\s*$/, ''), opts)}</h${h[1].length}>`); i++; continue; }
+      if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) { html.push('<hr>'); i++; continue; }
+      if (/^\s*>/.test(line)) {
+        const q = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) q.push(lines[i++].replace(/^\s*>\s?/, ''));
+        // a quote holding a list, a table or several paragraphs is laid out like any other text
+        const plain = q.every((l) => l.trim() && !/^\s*(?:[-*+]\s|\d+[.)]\s|#{1,6}\s|```|~~~|>|\|)/.test(l));
+        html.push(`<blockquote>${plain ? (breaks ? q.map((l) => inline(l, opts)).join('<br>') : inline(q.join(' '), opts)) : renderMarkdown(q.join('\n'), opts)}</blockquote>`);
+        continue;
+      }
+      if (tableAt(lines, i)) {
+        const cells = (l) => l.trim().replace(/^\||\|$/g, '').split(/(?<!\\)\|/).map((c) => c.trim().replace(/\\\|/g, '|'));
+        const head = cells(line);
+        const rule = TABLE_RULE.test(lines[i + 1] || '') ? cells(lines[i + 1]) : [];
+        const side = head.map((_, k) => { const r = rule[k] || ''; return /^:-+:$/.test(r) ? ' class="al-c"' : /-:$/.test(r) ? ' class="al-r"' : ''; });
+        i += lines[i + 1] === undefined ? 1 : 2;
+        const rows = [];
+        // the last row may still be on its way: it needs no closing bar
+        while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(cells(lines[i++]));
+        // wrapped so a wide table scrolls inside the text instead of stretching it
+        html.push('<div class="md-table"><table><thead><tr>' + head.map((c, k) => `<th${side[k]}>${inline(c, opts)}</th>`).join('') + '</tr></thead><tbody>' +
+          rows.map((r) => '<tr>' + head.map((_, k) => `<td${side[k]}>${inline(r[k] || '', opts)}</td>`).join('') + '</tr>').join('') + '</tbody></table></div>');
+        continue;
+      }
+      if (LIST_ITEM.test(line)) {
+        const list = listAt(lines, i, opts);
+        html.push(list.html);
+        i = list.next;
+        continue;
+      }
+      if (!line.trim()) { i++; continue; }
+      const para = [];
+      while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|\s*(```|~~~)|\s*>|\s*([-*+]|\d+[.)])\s)/.test(lines[i]) && !tableAt(lines, i)) para.push(lines[i++].trim());
+      if (!para.length) { para.push(lines[i++]); }
+      html.push(`<p>${breaks ? para.map((l) => inline(l, opts)).join('<br>') : inline(para.join(' '), opts)}</p>`);
+    }
+    return html.join('\n');
+  }
+
+  return { esc, isWide, joinGap, pipeTable, extOf, fileKind, languageFor, imageMime, sizeText, findLinks, splitPath, resolvePath, shortPath, highlightCode, tidyReply, renderMarkdown, BOX_ROW };
+});

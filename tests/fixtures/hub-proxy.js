@@ -9,9 +9,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
+const FilePreview = require('../../file-preview-core');
+
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
+  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
 // The headers the VPS adds to the static hub (design §3.5); the hub must work under them.
 const HUB_HEADERS = { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -32,12 +34,13 @@ function readJson(req) {
 // (a hostile machine: every answer is a 307 to machine.redirectTo, e.g. a path on the other machine).
 // todos: this machine's answer to api/todos, as the phone view mobile-web.js sends
 // (live items plus bare deletion marks); null is an older build without the route.
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false }) {
+// files: { home, … } for file-preview-core, the real rules over a stand-in home folder; null is a build without api/file.
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null }) {
   // plainCookie: WebKit refuses Secure cookies over http, even on localhost.
   const base = `/${id}/`, cookieName = plainCookie ? `agentdeck_${id}` : `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, quota, boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '', busy: false, queued: [],
+    requests: [], messages: [], sessions, cards, outputs, quota, files, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '', busy: false, queued: [],
     releaseQueued() { machine.busy = false; machine.captain.turns.push(...machine.queued.splice(0)); },
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
@@ -83,7 +86,7 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (machine.mode === 'legacy') return json(res, 401, { error: 'Unauthorized.' });
     if (req.method === 'POST' && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: 'Same origin required.' });
     // Unauthenticated capability probe; fixed, non-sensitive fields only.
-    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', ...(machine.todos ? ['todos'] : [])], machine: { id, label, platform }, appVersion });
+    if (req.method === 'GET' && url.pathname === '/api/info') return json(res, 200, { app: 'agentdeck', apiVersion: 2, capabilities: ['snapshot', 'basePath', ...(machine.todos ? ['todos'] : []), ...(machine.files ? ['files'] : [])], machine: { id, label, platform }, appVersion });
     if (req.method === 'POST' && url.pathname === '/login') {
       const body = await readJson(req);
       const ban = Math.ceil((machine.bannedUntil - Date.now()) / 1000);
@@ -125,6 +128,16 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       else return json(res, 400, { error: 'Invalid request.' });
       return json(res, 200, { ok: true, item });
     }
+    // File previews, decided by the real rules (file-preview-core) from what this machine's Captain, receipts and 待我处理 said.
+    if (req.method === 'POST' && url.pathname === '/api/file' && machine.files) {
+      const body = await readJson(req);
+      machine.fileReads.push(body);
+      if (!body || typeof body.path !== 'string') return json(res, 400, { error: 'Invalid request.', code: 'invalid' });
+      const texts = [...(machine.captain ? machine.captain.turns.map((turn) => turn.reply) : []), ...machine.sessions.map((s) => s.receipt), ...machine.cards.map((c) => c.latest_receipt),
+        ...(machine.attention || []).flatMap((item) => [item.title, item.ask, item.detail, ...(item.files || [])])];
+      const result = await FilePreview.readPreview(body.path, { ...machine.files, texts, offset: body.offset || 0 });
+      return result.ok ? json(res, 200, result) : json(res, result.code === 'invalid' ? 400 : result.code === 'missing' ? 404 : 403, { error: 'refused', code: result.code });
+    }
     if (req.method === 'GET' && url.pathname === '/api/relay' && machine.relay) return json(res, 200, relayState());
     if (req.method === 'POST' && url.pathname === '/api/relay' && machine.relay) {
       const body = await readJson(req);
@@ -165,13 +178,29 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       const session = machine.sessions.find((s) => s.id === url.searchParams.get('id') && !s.isMain);
       return session ? json(res, 200, { id: session.id, title: session.title, text: machine.outputs[session.id] || '' }) : json(res, 404, { error: 'Session not found.' });
     }
+    if (req.method === 'POST' && url.pathname === '/api/upload') {
+      const parts = [];
+      req.on('data', (chunk) => parts.push(chunk));
+      await new Promise((resolve) => req.on('end', resolve));
+      const data = Buffer.concat(parts);
+      const starts = (bytes, offset = 0) => data.length >= offset + bytes.length && bytes.every((byte, i) => data[offset + i] === byte);
+      const isImage = starts([0xff, 0xd8, 0xff]) || starts([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) ||
+        (starts([0x47, 0x49, 0x46, 0x38]) && (data[4] === 0x37 || data[4] === 0x39) && data[5] === 0x61) ||
+        (starts([0x52, 0x49, 0x46, 0x46]) && starts([0x57, 0x45, 0x42, 0x50], 8));
+      if (!isImage) return json(res, 415, { error: 'Only JPEG, PNG, GIF or WebP images are accepted.' });
+      const id = crypto.randomBytes(16).toString('hex') + '.png';
+      machine.uploads = machine.uploads || [];
+      machine.uploads.push({ id, bytes: data.length });
+      return json(res, 200, { id });
+    }
     if (req.method === 'POST' && url.pathname === '/api/captain') {
       const body = await readJson(req);
-      if (!body || Object.keys(body).some((key) => key !== 'message') || typeof body.message !== 'string' || !body.message.trim()) return json(res, 400, { error: 'Message required (maximum 8000 characters).' });
+      const images = Array.isArray(body?.images) ? body.images : [];
+      if (!body || Object.keys(body).some((key) => key !== 'message' && key !== 'images') || typeof body.message !== 'string' || !(body.message.trim() || images.length) || body.message.length > 8000) return json(res, 400, { error: 'Message required (maximum 8000 characters).' });
       if (!machine.captain) return json(res, 500, { error: 'Local service unavailable.' });
       machine.messages.push(body.message);
       // A busy Captain (machine.busy): the desktop accepts the message and types it in only once the Captain is idle (releaseQueued).
-      const turn = { id: 'turn-' + machine.messages.length, ts: Date.now(), user: body.message, reply: '', done: false, interrupted: false };
+      const turn = { id: 'turn-' + machine.messages.length, ts: Date.now(), user: body.message, images, reply: '', done: false, interrupted: false };
       if (machine.busy) machine.queued.push(turn); else machine.captain.turns.push(turn);
       return json(res, 200, { queued: true });
     }
