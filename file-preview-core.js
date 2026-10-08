@@ -104,6 +104,13 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts
   if (target) line = '';
   else if (line) { lexical = lexical.replace(/:\d+(?::\d+)?$/, ''); target = await real(lexical); }
   const same = (a, b) => fold(a, platform) === fold(b, platform);
+  // A named path counts where it really is: its folders resolved (/tmp is /private/tmp on a Mac), its own name
+  // kept. So naming a symbolic link names the link, never the file it points to: that one has to be allowed itself.
+  const realMentioned = [];
+  for (const entry of mentioned) {
+    const dir = await real(path.dirname(entry));
+    if (dir) realMentioned.push(path.join(dir, path.basename(entry)));
+  }
   const named = (value) => [...mentioned].some((entry) => same(entry, value));
   // Under a named folder: the folder has to be at least two levels below home, or one below the temp folder.
   const depth = (entry, base) => inside(entry, base, platform) ? path.relative(base, entry).split(path.sep).filter(Boolean).length : 0;
@@ -112,6 +119,9 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts
   const inRoots = (value) => realRoots.some((dir) => inside(value, dir, platform));
   const secret = (value) => secretPath(value, { home: realHome, denied: realDenied, platform });
   const byName = named(lexical) || underNamed(lexical);
+  const realNamed = (value) => realMentioned.some((entry) => same(entry, value));
+  const realUnder = (value) => realMentioned.some((entry) => inside(value, entry, platform) && !same(value, entry)
+    && (depth(entry, realHome) >= 2 || temps.some((dir) => depth(entry, dir) >= 1)));
   if (!target) {
     // Say "gone" only for a path that could have been read; anything else is simply refused.
     // Where it would be: the nearest folder that exists, resolved, plus the rest of the name.
@@ -121,9 +131,9 @@ async function readPreview(raw, { home = os.homedir(), roots, denied = [], texts
     return refuse(!secret(would) && !secret(lexical) && (inRoots(would) || byName) ? 'missing' : 'denied');
   }
   if (secret(target) || secret(lexical)) return refuse('denied');
-  // A named path may point anywhere in the home or temp folder, never at system files.
+  // Decided on the real path only. A named one may be anywhere in the home or temp folder, never a system file.
   const reachable = inside(target, realHome, platform) || temps.some((dir) => inside(target, dir, platform));
-  if (!(inRoots(target) || ((byName || named(target) || underNamed(target)) && reachable))) return refuse('denied');
+  if (!(inRoots(target) || ((realNamed(target) || realUnder(target)) && reachable))) return refuse('denied');
 
   let stat;
   try { stat = await fs.stat(target); } catch (_) { return refuse('missing'); }

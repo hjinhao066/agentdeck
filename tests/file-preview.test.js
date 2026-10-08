@@ -111,6 +111,10 @@ test('a symbolic link cannot carry a read out of the report folders', { skip: pr
   fs.symlinkSync('/etc/hosts', hosts);
   assert.deepEqual(await h.read(key, { texts: [`看 ${key}`] }), { ok: false, code: 'denied' });
   assert.deepEqual(await h.read(hosts, { texts: [`看 ${hosts}`] }), { ok: false, code: 'denied' });
+  // naming the link is not naming the file behind it: that file is not named, so it stays closed
+  const decoy = link('Documents/tax.txt', 'Documents/plan/report.md');
+  assert.deepEqual(await h.read(decoy, { texts: [`报告在 ${decoy}`] }), { ok: false, code: 'denied' });
+  assert.deepEqual(await h.read(path.join(h.root, 'reports/review/innocent.md'), { texts: [`看 ${path.join(h.root, 'reports/review/innocent.md')}`] }), { ok: false, code: 'denied' });
   // a link that stays inside the report folders is an ordinary file
   assert.equal((await h.read(link('reports/review/review-20261008.md', 'reports/latest.md'))).kind, 'markdown');
 });

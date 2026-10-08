@@ -587,7 +587,7 @@ for (const theme of ['dark', 'light']) {
     // A short reply is a small bubble, not a full-width block.
     const short = conversation.locator('.bubble:not(.mine)', { hasText: '收到，开始处理。' });
     expect((await short.boundingBox()).width).toBeLessThan(220);
-    expect(await short.locator('.bubble-text').evaluate((el) => el.getClientRects().length && el.scrollHeight <= parseFloat(getComputedStyle(el).lineHeight) + 1)).toBe(true);
+    expect(await short.locator('.bubble-md p').evaluate((el) => el.getClientRects().length && el.scrollHeight <= parseFloat(getComputedStyle(el).lineHeight) + 1)).toBe(true);
     const toggle = conversation.getByRole('button', { name: '展开全文', exact: true });
     await expect(toggle).toBeVisible();
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
