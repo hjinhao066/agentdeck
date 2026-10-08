@@ -80,7 +80,9 @@ test('outside the report folders nothing is read unless the conversation named i
   assert.deepEqual(await h.read(tax, { texts: [`都在 ${path.join(h.root, 'Documents')}/ 里`] }), { ok: false, code: 'denied' });
   assert.deepEqual(await h.read(tax, { texts: [`都在 ${h.root}/ 里`] }), { ok: false, code: 'denied' });
   // a system file stays out even when named
-  assert.deepEqual(await h.read('/etc/hosts', { texts: ['看 /etc/hosts'] }), { ok: false, code: 'denied' });
+  // (on Windows '/etc/hosts' is a drive-relative name that does not exist, so name a file that really is a system file)
+  const hosts = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/drivers/etc/hosts') : '/etc/hosts';
+  assert.deepEqual(await h.read(hosts, { texts: [`看 ${hosts}`] }), { ok: false, code: 'denied' });
 });
 
 test('../ cannot climb out of a report folder', async (t) => {
