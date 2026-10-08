@@ -610,6 +610,15 @@
     const clean = String(value).replace(/[\\/]+$/, ''), cut = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
     return { dir: cut > 0 ? clean.slice(0, cut) : clean.slice(0, cut + 1), name: clean.slice(cut + 1) || clean };
   }
+  // A long path as a link shows its end: "…/agentdeck-1.8/review.md". The whole path stays in the tooltip.
+  function shortPath(value, max = 40) {
+    const text = String(value || '');
+    if ([...text].length <= max) return text;
+    const parts = text.split(/(?<=[\\/])/);
+    let tail = parts.pop();
+    while (parts.length && [...(parts[parts.length - 1] + tail)].length <= max - 2) tail = parts.pop() + tail;
+    return '…/' + tail.replace(/^[\\/]+/, '');
+  }
   // A link inside a previewed file, read against that file's folder: "../a.md", "shots/1.png".
   function resolvePath(base, target) {
     const value = String(target || '').trim().replace(/^file:\/\//i, '').replace(/[#?].*$/, '');
@@ -891,5 +900,5 @@
     return html.join('\n');
   }
 
-  return { esc, isWide, joinGap, pipeTable, extOf, fileKind, languageFor, imageMime, sizeText, findLinks, splitPath, resolvePath, highlightCode, tidyReply, renderMarkdown, BOX_ROW };
+  return { esc, isWide, joinGap, pipeTable, extOf, fileKind, languageFor, imageMime, sizeText, findLinks, splitPath, resolvePath, shortPath, highlightCode, tidyReply, renderMarkdown, BOX_ROW };
 });

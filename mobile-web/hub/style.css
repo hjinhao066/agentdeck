@@ -511,7 +511,7 @@ button.todo-done-toggle { width: 100%; min-height: 44px; margin: 14px 0 6px; pad
 .task-receipt.md { font-size: 12.5px; }
 .at-ask-text, .at-ask-text p { display: inline; margin: 0; font-size: inherit; }
 .md.at-text { font-size: 13.5px; line-height: 1.7; }
-.at-files li .file-link { display: inline-block; padding: 6px 0; }
+.at-files li .file-link { display: inline-block; padding: 6px 0; font-family: var(--sans); font-size: 13.5px; }
 
 /* File preview. On a phone: a sheet from the bottom with a handle, half the screen, dragged up to all of it or down to close. */
 .preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); color: var(--text); }

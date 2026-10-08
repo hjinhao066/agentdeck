@@ -1386,7 +1386,9 @@
           el = node('a', 'web-link'); el.href = href; el.target = '_blank'; el.rel = 'noopener noreferrer';
         } else if (file) {
           // Opens the preview: a control, not a place to go.
-          el = node('a', 'file-link'); el.dataset.file = file; el.setAttribute('role', 'button'); el.tabIndex = 0;
+          el = node('a', 'file-link'); el.dataset.file = file; el.setAttribute('role', 'button'); el.tabIndex = 0; el.title = file;
+          // A bare path is shown by its end; a link with its own words keeps them.
+          if (!child.hasAttribute('data-rel') && child.textContent.startsWith(file)) { el.textContent = Core.shortPath(child.textContent); target.append(el); el.dataset.line = String(parseInt(child.getAttribute('data-line'), 10) || 0); continue; }
           if (child.getAttribute('data-line')) el.dataset.line = String(parseInt(child.getAttribute('data-line'), 10) || 0);
           if (child.hasAttribute('data-rel')) el.dataset.rel = '1';
         } else el = node('span');
@@ -1420,8 +1422,8 @@
   }
   // One path on its own line (待我处理 lists its files that way): the whole line opens it.
   function fileEntry(path) {
-    const link = node('a', 'file-link', path);
-    link.dataset.file = path; link.setAttribute('role', 'button'); link.tabIndex = 0;
+    const link = node('a', 'file-link', Core.shortPath(path, 48));
+    link.dataset.file = path; link.title = path; link.setAttribute('role', 'button'); link.tabIndex = 0;
     return link;
   }
   // A tap on a file path opens it from the computer the text came from.

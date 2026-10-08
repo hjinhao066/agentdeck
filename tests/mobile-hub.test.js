@@ -391,3 +391,10 @@ test('a drag moves the page only where nothing scrolls or the list is at that en
   assert.equal(Core.dragMovesPage(list(600), -30), true);
   assert.equal(Core.dragMovesPage(list(600), 30), false);
 });
+
+test('a long file path is shown by its end, the file name always whole', () => {
+  assert.equal(Core.shortPath('/private/tmp/demo-AVkB5K/jinhao/reports/agentdeck-1.8/review-20261008.md'), '…/agentdeck-1.8/review-20261008.md');
+  assert.equal(Core.shortPath('~/reports/a.md'), '~/reports/a.md');
+  assert.equal(Core.shortPath('C:\\Users\\hjinh\\reports\\agentdeck-1.8\\very-long-file-name-here.md'), '…/very-long-file-name-here.md');
+  assert.equal(Core.shortPath('/Users/me/reports/' + 'x'.repeat(60) + '.md'), '…/' + 'x'.repeat(60) + '.md');
+});
