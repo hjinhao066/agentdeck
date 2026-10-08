@@ -212,6 +212,24 @@ try {
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
 const HOME = os.homedir();
+// 每日进展 (版本更新 panel): the nightly daily-progress tool's JSON, read only and
+// cleaned to counts (HubCore.progressDays). A test profile reads its own folder.
+const PROGRESS_DIR = tudArg ? path.join(app.getPath('userData'), 'daily-progress') : path.join(HOME, 'reports', 'daily-progress');
+async function readDailyProgress() {
+  const { progressDays, PROGRESS_LIMITS } = require('./mobile-web/hub/core.js');
+  let names;
+  try { names = (await fs.promises.readdir(PROGRESS_DIR)).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().reverse().slice(0, PROGRESS_LIMITS.days); }
+  catch (_) { return { days: [] }; }
+  const raw = [];
+  for (const name of names) {
+    try {
+      const file = path.join(PROGRESS_DIR, name);
+      if ((await fs.promises.stat(file)).size > 4 * 1024 * 1024) continue;
+      raw.push(JSON.parse(await fs.promises.readFile(file, 'utf8')));
+    } catch (_) { /* A file being written or damaged is skipped. */ }
+  }
+  return { days: progressDays(raw) };
+}
 
 // Retired watch-ai spool directory, kept only to remove old column dumps.
 const WATCH_SPOOL = path.join(HOME, '.local', 'share', 'watch-ai', 'agentdeck');
@@ -950,6 +968,7 @@ app.whenReady().then(async () => {
   mobileWeb = new MobileWebServer({
     getSessions: () => requestMobile('sessions'),
     getTasks: () => taskStore.list(),
+    getProgress: () => readDailyProgress(),
     // The phone records, reads and ticks to-dos; it never edits text or deletes.
     getTodos: () => todoStore.phone(),
     writeTodos: (input) => {
@@ -1396,6 +1415,7 @@ app.whenReady().then(async () => {
     try { return JSON.parse(await fs.promises.readFile(path.join(__dirname, 'release-notes.json'), 'utf8')); }
     catch (_) { return null; }
   });
+  handleMain('daily-progress:read', () => readDailyProgress());
 
   // Test profiles never read the user's quota caches or conversation logs.
   handleMain('quota:local', async () => {

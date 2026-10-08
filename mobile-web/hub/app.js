@@ -47,6 +47,8 @@
     down: '<path d="M12 5v14m0 0-5.5-5.5M12 19l5.5-5.5"/>',
     swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
     history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3.5 2"/>',
+    left: '<path d="m15 5-7 7 7 7"/>',
+    right: '<path d="m9 5 7 7-7 7"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
   const providerIcons = {
@@ -63,7 +65,7 @@
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
   // 版本更新: release-notes.json published with this page (undefined while it loads, null if it could not be read).
-  let notes, notesTab = 'released';
+  let notes, notesDay = 0;
   // Images picked for the next message; each was uploaded to the computer it will be sent to.
   let attachments = [];
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
@@ -221,7 +223,7 @@
   function settle(m, result, verdict = Core.classify(result)) {
     m.state = verdict.state; m.detail = verdict.detail || '';
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
-    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; }
+    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; m.progress = null; m.progressState = ''; m.progressAt = 0; }
     // A machine that no longer accepts this phone must not keep showing its board.
     if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; m.todos = null; m.todosReady = null; m.todosAt = 0; }
     return verdict;
@@ -263,6 +265,8 @@
       }
       // 待我处理: every poll while its tab is open, otherwise every 30 seconds for the tab's count.
       if (view === 'attention' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
+      // 每日进展 changes once a night: read it when 版本更新 is open, at most once a minute (refresh reads it again).
+      if (view === 'releases' && (m.forceProgress || !m.progressAt || Date.now() - m.progressAt > 60000)) { m.forceProgress = false; await loadProgress(m); }
     }
     m.busy = false;
     m.nextAt = Date.now() + Core.pollInterval(m.state, filter === 'all' || filter === m.id);
@@ -270,7 +274,7 @@
     if (output && output.machineId === m.id && view === 'output') loadOutput(true);
     if (m.again) poll(m);
   }
-  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; poll(m); }); if (notes === null) loadNotes(); }
+  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; m.forceProgress = true; poll(m); }); if (notes === null) loadNotes(); }
   function renderBusy() {
     const busy = machines.some((m) => m.busy);
     $('refresh').classList.toggle('refreshing', busy);
@@ -2000,9 +2004,10 @@
 
 
   // ---- 版本更新 --------------------------------------------------------------
-  // What each version changed and what comes next. The notes are published with
-  // this page, not asked of a computer, so an older or offline Mac changes nothing
-  // here; each computer's own version is only marked on the release it runs.
+  // 每日进展 and every version, built by ReleasesView as on the desktop. The
+  // release notes are published with this page, not asked of a computer. 每日进展
+  // is the Mac's nightly statistics (api/progress): a computer on an older build
+  // answers 404 and the card says to upgrade; nothing else on the page changes.
   async function loadNotes() {
     try {
       const response = await fetch('release-notes.json', { cache: 'no-store', redirect: 'error' });
@@ -2010,94 +2015,47 @@
     } catch (_) { notes = null; }
     render();
   }
-  function notesCopy(entry, label) {
-    const button = iconButton('copy', label, 'rn-copy');
-    button.addEventListener('click', () => copyText(button, Core.releaseText(entry), label));
-    return button;
+  async function loadProgress(m) {
+    const result = await request(m, 'api/progress');
+    m.progressAt = Date.now();
+    if (result.status === 200 && result.body) { m.progress = Core.progressDays(result.body.days); m.progressState = 'ready'; }
+    else { m.progress = null; m.progressState = result.status === 404 ? 'old' : 'error'; }
   }
-  function releasedList() {
-    const list = node('ol', 'rn-line');
-    notes.released.forEach((entry, i) => {
-      const li = node('li', 'rn-ver' + (i === 0 ? ' latest' : ''));
-      const when = node('div', 'rn-when');
-      const date = node('time', 'rn-date', Core.shortDate(entry.date)); date.dateTime = entry.date;
-      when.append(node('span', 'rn-num', entry.version), date);
-      const body = node('div', 'rn-body'), head = node('div', 'rn-head');
-      head.append(node('h3', 'rn-title', entry.title));
-      const using = machines.filter((m) => m.meta.appVersion && Core.sameVersion(entry.version, m.meta.appVersion));
-      if (using.length) head.append(node('span', 'rn-mine', using.map((m) => m.label).join('、') + ' 在用'));
-      head.append(notesCopy(entry, `复制 ${entry.version} 的更新内容`));
-      const items = node('ul', 'rn-items');
-      entry.items.forEach((text) => items.append(node('li', '', text)));
-      body.append(head, items);
-      li.append(when, node('span', 'rn-node'), body);
-      list.append(li);
-    });
-    return list;
+  // The computer whose statistics are shown: the default one (Mac) first, any other that has days.
+  function progressView() {
+    const order = [...machines].sort((a, b) => Number(b.default) - Number(a.default));
+    const ready = order.find((m) => m.state === 'online' && m.progress && m.progress.length);
+    if (ready) return { state: 'ready', days: ready.progress, source: ready.label };
+    const first = order[0];
+    if (!first || first.state === 'unknown' || (first.state === 'online' && !first.progressState)) return { state: 'loading', days: [] };
+    if (first.state === 'upgrade' || first.progressState === 'old') return { state: 'old', days: [] };
+    if (first.state !== 'online') return { state: 'offline', days: [] };
+    return { state: first.progressState === 'error' ? 'error' : 'none', days: [] };
   }
-  function upcomingList() {
-    const box = node('div', 'rn-plans');
-    for (const entry of notes.upcoming) {
-      const plan = node('article', 'rn-plan'); plan.dataset.status = entry.status;
-      const head = node('div', 'rn-head');
-      if (entry.version) head.append(node('span', 'rn-num', entry.version));
-      head.append(node('h3', 'rn-title', entry.title), node('span', 'rn-status', Core.PLAN_STATES[entry.status]));
-      head.append(notesCopy(entry, entry.version ? `复制 ${entry.version} 的计划` : '复制这几件的清单'));
-      plan.append(head);
-      if (entry.note) plan.append(node('p', 'rn-note', entry.note));
-      const rows = node('ul', 'rn-tasks');
-      for (const item of entry.items) {
-        const row = node('li', 'rn-task'); row.dataset.state = item.state;
-        const state = node('span', 'rn-state');
-        state.append(node('i', 'rn-dot'), node('span', '', Core.ITEM_STATES[item.state]));
-        const what = node('span', 'rn-what', item.text);
-        if (item.suggestion) what.append(node('small', 'rn-suggest', item.suggestion));
-        row.append(state, what);
-        rows.append(row);
-      }
-      plan.append(rows);
-      box.append(plan);
-    }
-    return box;
-  }
-  function renderReleases() {
+  function renderReleases(focus) {
     const latest = notes && notes.released[0], pending = Core.pendingCount(notes);
+    const target = byId(filter) || machines.find((m) => m.default) || machines[0];
+    const version = target && target.meta.appVersion;
     const meta = $('releases-entry-meta');
-    if (changed(meta, [latest && latest.version, pending])) {
+    if (changed(meta, [version, latest && latest.version, pending])) {
       meta.replaceChildren();
-      if (latest) meta.append(node('span', '', '最新 ' + latest.version));
+      if (version) meta.append(node('span', 'releases-entry-version', 'V' + version));
       if (pending) meta.append(node('span', 'rn-pending', pending + ' 件待你定'));
-      $('releases-entry').setAttribute('aria-label', '版本更新' + (latest ? '，最新 ' + latest.version : '') + (pending ? `，${pending} 件待你定` : ''));
+      $('releases-entry').setAttribute('aria-label', '版本更新与每日进展' + (version ? `，${target.label} 在用 ${version}` : '') + (pending ? `，${pending} 件待你定` : ''));
     }
     if (view === 'releases') $('brand-caption').textContent = latest ? '最新 ' + latest.version : '';
-    const box = $('releases');
-    if (view !== 'releases' || !changed(box, [notes === undefined ? 'loading' : notes, notesTab, machines.map((m) => [m.label, m.meta.appVersion])])) return;
-    box.replaceChildren();
-    if (notes === undefined) { box.append(node('p', 'rn-empty', '正在读取…')); return; }
-    if (!notes) {
-      const empty = node('div', 'rn-empty');
-      empty.append(node('strong', '', '没读到版本更新内容'), node('span', '', '手机这边没取到更新说明，多半是网络不稳。点右上角的刷新再试一次；电脑上的 AgentDeck 不受影响。'));
-      box.append(empty);
-      return;
-    }
-    box.dataset.tab = notesTab;
-    const tabs = node('div', 'rn-tabs'); tabs.setAttribute('role', 'group'); tabs.setAttribute('aria-label', '看哪一部分');
-    for (const [key, label] of [['released', '已发布'], ['upcoming', '接下来']]) {
-      const button = node('button', 'segment', label); button.type = 'button'; button.id = 'rn-tab-' + key;
-      button.setAttribute('aria-pressed', String(notesTab === key)); button.setAttribute('aria-controls', 'rn-' + key);
-      if (key === 'upcoming' && pending) { button.append(node('span', 'rn-badge', String(pending))); button.setAttribute('aria-label', `接下来，${pending} 件待你定`); }
-      button.addEventListener('click', () => { notesTab = key; renderReleases(); $('rn-tab-' + key).focus(); $('main').scrollTop = 0; });
-      tabs.append(button);
-    }
-    const released = node('section', 'rn-released'); released.id = 'rn-released'; released.setAttribute('aria-label', '已发布');
-    released.append(node('h2', 'rn-h', '已发布'), releasedList());
-    const upcoming = node('section', 'rn-upcoming'); upcoming.id = 'rn-upcoming'; upcoming.setAttribute('aria-label', '接下来');
-    const head = node('h2', 'rn-h');
-    head.append(node('span', 'rn-h-name', '接下来'));
-    if (pending) head.append(node('span', 'rn-pending', pending + ' 件待你定'));
-    if (notes.updated) head.append(node('span', 'rn-updated', Core.shortDate(notes.updated) + ' 更新'));
-    upcoming.append(head, upcomingList());
-    box.append(tabs, released, upcoming);
+    const box = $('releases'), progress = progressView();
+    if (view !== 'releases') return;
+    // Always record what is drawn, so the next poll does not rebuild (and drop a copy check) after a day was picked.
+    if (!changed(box, [notes === undefined ? 'loading' : notes, progress, notesDay, machines.map((m) => [m.label, m.meta.appVersion])]) && !focus) return;
+    ReleasesView.render(box, {
+      core: Core, notes, progress, dayIndex: notesDay, now: new Date(), focus: focus || '',
+      buttonClass: 'icon-button', icon: svg,
+      copy: (text, button, label) => copyText(button, text, label),
+      using: (v) => { const on = machines.filter((m) => m.meta.appVersion && Core.sameVersion(v, m.meta.appVersion)); return on.length ? on.map((m) => m.label).join('、') + ' 在用' : ''; },
+      setDay: (i, key) => { notesDay = i; renderReleases(key); },
+      notesMissing: ['没读到版本更新内容', '手机这边没取到更新说明，多半是网络不稳。点右上角的刷新再试一次；电脑上的 AgentDeck 不受影响。'],
+    });
   }
 
   // ---- shell ---------------------------------------------------------------
@@ -2133,8 +2091,10 @@
   }
   $('refresh').addEventListener('click', refreshAll);
   $('back').addEventListener('click', () => showView(view === 'releases' ? 'overview' : wide.matches ? 'captain' : 'sessions'));
-  $('releases-entry').addEventListener('click', () => showView('releases'));
-  $('side-version').addEventListener('click', () => showView('releases'));
+  // Opening 版本更新 reads 每日进展 at once rather than on the next poll.
+  const openReleases = () => { notesDay = 0; showView('releases'); machines.forEach((m) => { if (m.state === 'online') { m.forceProgress = true; m.nextAt = 0; } }); };
+  $('releases-entry').addEventListener('click', openReleases);
+  $('side-version').addEventListener('click', openReleases);
   {
     const label = $('logout-all').title;
     armed($('logout-all'), label, '再点一次，确认在这部手机上退出所有电脑', () => logout(machines.filter((m) => m.state === 'online')));
@@ -2156,7 +2116,7 @@
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
     machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '', todos: null, todosReady: null, todosAt: 0,
-      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
+      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, progress: null, progressState: '', progressAt: 0, forceProgress: false, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
     machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); m.card.dataset.machine = m.id; $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);
     filter = byId(saved) ? saved : 'all';

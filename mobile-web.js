@@ -213,8 +213,8 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, machine = {}, uploadDir = '', now = Date.now, preview = null }) {
-    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos };
+  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, getProgress, machine = {}, uploadDir = '', now = Date.now, preview = null }) {
+    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, getProgress };
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
@@ -503,7 +503,7 @@ class MobileWebServer {
     // Fixed, non-sensitive fields only; no hostname, exact app version, token,
     // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
-      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : [])],
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : []), ...(this.sources.getProgress ? ['progress'] : [])],
         machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
@@ -574,6 +574,8 @@ class MobileWebServer {
     if (req.method === 'GET' && route === '/api/quota') return this.json(res, 200, quotaView(this.sources.getQuota ? await this.sources.getQuota() : null, this.now()));
     if (req.method === 'GET' && route === '/api/sessions') return this.json(res, 200, { sessions: await this.sources.getSessions() });
     if (req.method === 'GET' && route === '/api/tasks') return this.json(res, 200, { cards: await this.sources.getTasks() });
+    // 每日进展 for the hub's 版本更新 page: counts only, cleaned again by the page.
+    if (req.method === 'GET' && route === '/api/progress') return this.json(res, 200, this.sources.getProgress ? await this.sources.getProgress() : { days: [] });
     if (req.method === 'GET' && route === '/api/output') {
       const id = url.searchParams.get('id');
       if (!id || id.length > 256 || /[\x00-\x1f]/.test(id)) return this.json(res, 400, { error: 'Session id required.' });

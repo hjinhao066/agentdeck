@@ -865,10 +865,12 @@ function buildChrome() {
   const versionDetails = [`AgentDeck v${env.version}`, env.build].filter(Boolean).join(' · ');
   brand.title = `版本更新：每版改了什么、接下来做什么（${versionDetails}）`;
   brand.setAttribute('aria-label', `版本更新，你在用 AgentDeck ${env.version}`);
+  brand.setAttribute('aria-haspopup', 'dialog');
+  brand.setAttribute('aria-expanded', 'false');
   brand.classList.toggle('unseen', config.releaseNotesSeen !== env.version);
   brand.onclick = () => {
     if (config.releaseNotesSeen !== env.version) { config.releaseNotesSeen = env.version; brand.classList.remove('unseen'); saveConfig(); }
-    deckHost.togglePage('releases');
+    ReleaseNotesUI.toggle();
   };
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
@@ -3798,6 +3800,7 @@ window.deck.onParkForRestart(async (sessions) => {
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
+ReleaseNotesUI.init(deckHost);
 TodoUI.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
 renderQuotaBar();

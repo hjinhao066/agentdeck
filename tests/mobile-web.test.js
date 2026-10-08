@@ -819,3 +819,14 @@ test('without the relay sources there is no api/relay route', async (t) => {
   assert.equal((await request(bare.status, '/api/relay', { headers: bare.auth })).status, 404);
   assert.equal((await post(bare.status, '/api/relay', { seatId: 'cn' }, bare.auth)).status, 404);
 });
+
+test('api/progress hands the phone the daily counts behind login; without a source it is empty, not an error', async (t) => {
+  const days = [{ date: '2026-10-07', summary: { done: 58 } }];
+  const { status, auth } = await start(t, {}, { getProgress: () => ({ days }) });
+  assert.equal((await request(status, '/api/progress')).status, 401);
+  assert.deepEqual(JSON.parse((await request(status, '/api/progress', { headers: auth })).text), { days });
+  assert.ok(JSON.parse((await request(status, '/api/info')).text).capabilities.includes('progress'));
+  const bare = await start(t);
+  assert.deepEqual(JSON.parse((await request(bare.status, '/api/progress', { headers: bare.auth })).text), { days: [] });
+  assert.ok(!JSON.parse((await request(bare.status, '/api/info')).text).capabilities.includes('progress'));
+});

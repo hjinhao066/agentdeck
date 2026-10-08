@@ -1025,3 +1025,51 @@
 
   return { ITEM_STATES, PLAN_STATES, compareVersions, sameVersion, versionLabel, shortDate, releaseNotes, releaseProblems, releaseGap, releaseText, pendingCount };
 });
+
+// 每日进展: the nightly statistics the daily-progress tool writes to
+// ~/reports/daily-progress/YYYY-MM-DD.json (AgentDeck never recounts). Only
+// counts, project names and short delivery lines leave the file: no card
+// titles, results or session ids. Desktop and phone read the same shape.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const DAY = /^\d{4}-\d{2}-\d{2}$/;
+  const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : Array.isArray(value) ? value.length : 0;
+  const line = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '';
+  const realDay = (s) => DAY.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z')) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+  const PROGRESS_LIMITS = { days: 14, projects: 40, deliveries: 5 };
+
+  // Cleaning twice gives the same day (the desktop cleans in main and again in the page).
+  function progressDay(raw) {
+    if (!raw || typeof raw !== 'object' || !realDay(raw.date) || !raw.summary || typeof raw.summary !== 'object') return null;
+    const s = raw.summary;
+    const projects = (Array.isArray(raw.projects) ? raw.projects : []).map((p) => p && line(p.project ?? p.name, 40) ? {
+      name: line(p.project ?? p.name, 40), done: count(p.done), created: count(p.created), doing: count(p.doing), sessions: count(p.sessions),
+      reject: count(p.reject), rework: count(p.rework), needsUser: count(p.needs_user ?? p.needsUser),
+    } : null).filter(Boolean).sort((a, b) => b.done - a.done || b.sessions - a.sessions || a.name.localeCompare(b.name)).slice(0, PROGRESS_LIMITS.projects);
+    const deliveries = (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((d) => line(typeof d === 'string' ? d : d && d.text, 60)).filter(Boolean).slice(0, PROGRESS_LIMITS.deliveries);
+    return {
+      date: raw.date, partial: raw.partial === true,
+      summary: { projects: count(s.projects), done: count(s.done), created: count(s.created), sessions: count(s.sessions),
+        reject: count(s.reject), rework: count(s.rework), needsUser: count(s.needs_user ?? s.needsUser), deliveries: count(s.deliveries) },
+      projects, deliveries,
+    };
+  }
+  // Newest first, one entry per date, at most two weeks.
+  function progressDays(list) {
+    const seen = new Set();
+    return (Array.isArray(list) ? list : []).map(progressDay).filter((d) => d && !seen.has(d.date) && seen.add(d.date))
+      .sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, PROGRESS_LIMITS.days);
+  }
+  // 10-07 周三, with 今天 / 昨天 when it is one of those (dates are the statistics' own local days).
+  function progressLabel(date, now = new Date()) {
+    if (!realDay(date)) return '';
+    const day = new Date(date + 'T12:00:00Z'), week = '日一二三四五六'[day.getUTCDay()];
+    const local = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const today = local(now), yesterday = local(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+    return `${date.slice(5)} ${date === today ? '今天' : date === yesterday ? '昨天' : '周' + week}`;
+  }
+  return { progressDay, progressDays, progressLabel, PROGRESS_LIMITS };
+});

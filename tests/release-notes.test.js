@@ -87,3 +87,43 @@ test('copy text and the 待你定 count', () => {
   assert.equal(H.pendingCount(clean), pending);
   assert.equal(H.pendingCount(null), 0);
 });
+
+// 每日进展: the daily-progress tool's JSON, reduced to counts.
+const sampleDay = (date, done, extra = {}) => ({ date, partial: false, summary: { projects: 2, done, created: 3, sessions: 4, reject: 1, rework: 2, needs_user: 1, deliveries: 1 },
+  projects: [{ project: 'small', done: [{ id: 't-1', title: '秘密标题', result: '结果' }], created: [], doing: [], sessions: 1, reject: 0, rework: 0, needs_user: [] },
+    { project: 'agentdeck', done: [{}, {}, {}], created: [{}], doing: [], sessions: 3, reject: 1, rework: 2, needs_user: [] }],
+  deliveries: [{ time: '22:33', text: 'AgentDeck 1.8 全部交付完成', versions: ['1.8'] }], ...extra });
+
+test('a progress day keeps counts, project names and delivery lines only', () => {
+  const day = H.progressDay(sampleDay('2026-10-07', 4));
+  assert.deepEqual(day.summary, { projects: 2, done: 4, created: 3, sessions: 4, reject: 1, rework: 2, needsUser: 1, deliveries: 1 });
+  assert.deepEqual(day.projects.map((p) => [p.name, p.done, p.created, p.sessions]), [['agentdeck', 3, 1, 3], ['small', 1, 0, 1]]);
+  assert.deepEqual(day.deliveries, ['AgentDeck 1.8 全部交付完成']);
+  assert.ok(!JSON.stringify(day).includes('秘密标题'));
+  assert.equal(H.progressDay({ date: '2026-02-30', summary: {} }), null);
+  assert.equal(H.progressDay({ date: '2026-10-07' }), null);
+  assert.equal(H.progressDay(sampleDay('2026-10-07', -1)).summary.done, 0);
+  assert.deepEqual(H.progressDay(day), day);
+});
+
+test('progress days are newest first, one per date, two weeks at most; labels say 今天 / 昨天', () => {
+  const list = [sampleDay('2026-10-05', 1), sampleDay('2026-10-07', 3), sampleDay('2026-10-07', 9), null, { date: 'x' },
+    ...Array.from({ length: 20 }, (_, k) => sampleDay(`2026-09-${String(k + 1).padStart(2, '0')}`, k))];
+  const days = H.progressDays(list);
+  assert.equal(days.length, 14);
+  assert.deepEqual(days.slice(0, 2).map((d) => [d.date, d.summary.done]), [['2026-10-07', 3], ['2026-10-05', 1]]);
+  const now = new Date(2026, 9, 8, 13, 0);
+  assert.equal(H.progressLabel('2026-10-08', now), '10-08 今天');
+  assert.equal(H.progressLabel('2026-10-07', now), '10-07 昨天');
+  assert.equal(H.progressLabel('2026-10-05', now), '10-05 周一');
+  assert.equal(H.progressLabel('nope', now), '');
+});
+
+test('the shared panel script ships to the hub and loads on both pages', () => {
+  assert.match(fs.readFileSync(path.join(ROOT, 'scripts/mobile-release.js'), 'utf8'), /'releases\.js'/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'mobile-web/hub/index.html'), 'utf8'), /<script src="releases\.js" defer><\/script>/);
+  assert.match(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'), /<script src="mobile-web\/hub\/releases\.js"><\/script>/);
+  const view = require('../mobile-web/hub/releases.js');
+  assert.equal(typeof view.render, 'function');
+  assert.match(view.PROGRESS_EMPTY.old[0], /旧版/);
+});

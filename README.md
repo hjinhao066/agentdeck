@@ -227,14 +227,21 @@ the middle:
 
 ## 版本更新
 
-Click the version (`V1.9.0`) at the foot of the sidebar to open 版本更新: each
-released version's changes in plain words, newest first, and on the right what
-comes next (正在做 / 计划, with the items still waiting on the user marked
-待你定). A dot on the version means this version's page has not been opened
-yet. Narrow windows switch between 已发布 and 接下来. The copy icon puts one
-version as plain text on the clipboard. Everything comes from
-`release-notes.json` at the repository root, the same file the phone hub shows;
-see 发版流程 for how a release updates it.
+Click the version (`V1.9.0`) at the foot of the sidebar: a panel rises beside
+the sidebar (Esc, the × icon, the version again or a click outside closes it).
+On top, 每日进展: one day's finished cards as a big number, the last days as
+columns (click one, or use the arrows), then rework, rejected reviews, cards
+waiting on the user, deliveries and the busiest projects. It only reads the
+nightly statistics in `~/reports/daily-progress/YYYY-MM-DD.json` (written by
+`~/.agents/tools/daily-progress/`; AgentDeck never recounts) and says so when
+there are none yet. Below it, every version on one line, newest first: planned
+ones (正在做 / 计划, items still waiting on the user marked 待你定) on dashed
+dots, then the released ones with their changes in plain words. A dot on the
+version button means this version's panel has not been opened yet. The copy
+icon puts one version on the clipboard as plain text. The versions come from
+`release-notes.json` at the repository root and the panel content is drawn by
+`mobile-web/hub/releases.js`, both shared with the phone hub; see 发版流程 for
+how a release updates the file.
 
 ## Skills
 
@@ -977,7 +984,7 @@ npm run dist:mac
 
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
-**发版必须先写「版本更新」**：在仓库根目录的 `release-notes.json` 里，把这一版加到 `released` 最前面（版本号如 `2.0`、日期 `YYYY-MM-DD`、一句标题、3–6 条写给用户看的大白话，每条不超过 60 字），并把它从 `upcoming` 里拿掉；顺手更新 `upcoming`（接下来做什么，用户还没拍板的写 `"state": "pending"`，界面上显示「待你定」）和 `updated`。只改这一个文件，桌面端（侧栏底部点版本号）和手机总台（总览最下面、平板侧栏底部的版本号）都读它。漏改有两道提醒：`npm test` 里的 `tests/release-notes.test.js` 要求最新一条等于 package.json 的版本；`scripts/release.js` 合完分支、升完版本号后先查这一条，不对就停下，不进测试和打包。规则写在 `mobile-web/hub/core.js` 的 `releaseProblems`。
+**发版必须先写「版本更新」**：在仓库根目录的 `release-notes.json` 里，把这一版加到 `released` 最前面（版本号如 `2.0`、日期 `YYYY-MM-DD`、一句标题、3–6 条写给用户看的大白话，每条不超过 60 字），并把它从 `upcoming` 里拿掉；顺手更新 `upcoming`（接下来做什么，用户还没拍板的写 `"state": "pending"`，界面上显示「待你定」）和 `updated`。只改这一个文件，桌面端（侧栏底部点版本号）和手机总台（总览最下面、平板侧栏底部的版本号）都读它（每日进展另读本机统计文件，不在这个文件里）。漏改有两道提醒：`npm test` 里的 `tests/release-notes.test.js` 要求最新一条等于 package.json 的版本；`scripts/release.js` 合完分支、升完版本号后先查这一条，不对就停下，不进测试和打包。规则写在 `mobile-web/hub/core.js` 的 `releaseProblems`。
 
 本机 Mac 可用一条命令准备发版（先收齐已验收的分支，避免边合边反复测试、打包）：
 

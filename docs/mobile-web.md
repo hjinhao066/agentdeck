@@ -141,6 +141,7 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | GET | `/api/relay` | `{captainId,currentId,switching,seats,job,now}` 队长所在账号和可换的账号。`seats[]` 只有 `id,name,provider,account(已打码),current,selectable,reason,weekly,recoveryAt,cells`；`reason` 为 `current/login/onboarding/exhausted/low/unknown/''`，只有 `''` 和 `unknown` 可选。`job` 是手机发起的最近一次切换 `{id,status:switching|done|failed,fromId,fromName,targetId,targetName,startedAt,finishedAt,error}`，只在内存里，应用重启后为 `null` |
 | POST | `/api/relay` | `{seatId, expectCurrent?}` + CSRF，发起手动切换（桌面端 Relay 的同一条路径）。立即返回 `{started:true,id}`，结果轮询 GET。桌面端拒绝时 409 `{started:false,error}`，`error` 是可直接给用户看的原因，队长不变 |
 | GET | `/api/image?id=…` | 已登录设备读取自己上传的图片 |
+| GET | `/api/progress` | `{days}` 每日进展：本机 `~/reports/daily-progress/` 里最近 14 天的统计，只读，只有计数、项目名和交付短句（`HubCore.progressDays`），不含卡片标题和结果；Windows 等没有统计的电脑返回空列表；有这个接口时 `api/info` 的 capabilities 带 `progress` |
 | GET | `/api/todos` | `{items}` 随手记待办：未删除的只有 `id,text,done,doneAt,created,updated`，删除的只有 `{id,deleted,updated}`，见 [todo.md](todo.md) |
 | POST | `/api/todos` | `{op:'add',text}` 或 `{op:'update',id,done,base?}` + CSRF，返回 `{item}`；只能记和勾，不能删、不能改字 |
 | POST | `/api/file` | `{path, offset?}` + CSRF，只读预览一个文件或文件夹，见下文「文件和链接预览」。返回 JSON：Markdown/文本/代码的正文（最多 1MB）、图片和 PDF 的 base64 分片（每片 768KB，`next` 为下一片位置；图片上限 12MB，PDF 32MB）、文件夹列表，或只有文件名和大小（不能预览的类型、超限的文件）。拒绝 403 `{code:'denied'}`，不存在 404 `{code:'missing'}`。`api/info` 的 `capabilities` 带 `files` |
