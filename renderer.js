@@ -3053,16 +3053,18 @@ const cwdInput = document.getElementById('cwdInput');
 const cmdInput = document.getElementById('cmdInput');
 const dlgTitle = document.getElementById('dlgTitle');
 const cmdLockedHint = document.getElementById('cmdLockedHint');
-let editIndex = null;
+// The column itself, not its position: 队长 opens and archives sessions while the dialog is open.
+let editColumn = null;
 
 function openDialog(idx) {
-  editIndex = (typeof idx === 'number') ? idx : null;
-  dlgTitle.textContent = editIndex === null ? '添加列' : '编辑列';
-  titleInput.value = editIndex === null ? '' : columnLabel(columns[editIndex]);
-  cwdInput.value = editIndex === null ? '' : (columns[editIndex].cwd || '');
-  cmdInput.value = editIndex === null ? '' : (columns[editIndex].cmd || '');
+  if (typeof idx === 'number' && !columns[idx]) return;   // that column is already gone
+  editColumn = typeof idx === 'number' ? columns[idx] : null;
+  dlgTitle.textContent = editColumn === null ? '添加列' : '编辑列';
+  titleInput.value = editColumn === null ? '' : columnLabel(editColumn);
+  cwdInput.value = editColumn === null ? '' : (editColumn.cwd || '');
+  cmdInput.value = editColumn === null ? '' : (editColumn.cmd || '');
   // A 网页版 ChatGPT session has no launch command to change.
-  const web = editIndex !== null && columns[editIndex].executor === 'chatgpt-web';
+  const web = editColumn !== null && editColumn.executor === 'chatgpt-web';
   cmdInput.disabled = web;
   dlg.querySelectorAll('.preset').forEach((b) => { b.disabled = web; });
   cmdLockedHint.hidden = !web;
@@ -3079,12 +3081,17 @@ document.getElementById('dlgSave').onclick = () => {
   const title = titleInput.value.trim() || 'Agent';
   const cwd = cwdInput.value.trim();
   const cmd = cmdInput.value.trim();
-  if (editIndex === null) {
+  if (editColumn === null) {
     addColumn({ title, displayTitle: titleInput.value.trim() ? title : '', cwd, cmd, manualTitle: titleInput.value.trim() !== '' });
     dlg.close();
     return;
   }
-  const col = columns[editIndex];
+  const col = editColumn;
+  if (!columns.includes(col)) {
+    showToast(`「${columnLabel(col)}」已经关闭或归档，修改没有保存`);
+    dlg.close();
+    return;
+  }
   const needsRespawn = (col.cwd || '') !== cwd || (col.cmd || '') !== cmd;
   const titleChanged = title !== columnLabel(col);
   if ((col.cmd || '') !== cmd) {
