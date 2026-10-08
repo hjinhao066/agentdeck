@@ -19,6 +19,7 @@ const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const { registerScheduleFeedIpc } = require('./schedule-feed');
 const BoardCore = require('./board-core');
+const AutomationCore = require('./automation-core');
 const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
@@ -340,6 +341,7 @@ const managedSessions = new Map(); // columnId -> unguessable board-control toke
 const receiptSessions = new Map(); // every column: submission only, never control
 let boardControlDir = '';
 let boardCliPath = '';
+let automation = null; // 自动回执入口: its own token, on/off switch and rate limit (automation-core.js)
 let boardRendererReady = false;
 const pendingBoardCommands = new Map(); // requestId -> { command, delivered }
 
@@ -538,6 +540,17 @@ function processBoardRequests() {
       catch (_) { try { fs.unlinkSync(file); } catch (_) {} continue; }
       try { fs.unlinkSync(file); } catch (_) {}
       const action = String(request.action || '');
+      // The 自动回执入口 token is checked before any terminal token: it reaches only its own
+      // three commands, and no terminal token reaches them.
+      const gate = AutomationCore.screen(automation, request, { queued: Array.from(pendingBoardCommands.values()).filter((p) => p.command.automation).length });
+      if (gate.kind === 'reject') { writeBoardResponse(request.id, { done: true, error: gate.error }); continue; }
+      if (gate.kind === 'local') { writeBoardResponse(request.id, { done: true, result: gate.result }); continue; }
+      if (gate.kind === 'forward') {
+        if (pendingBoardCommands.size >= 256) writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
+        else if (!pendingBoardCommands.has(gate.command.id)) pendingBoardCommands.set(gate.command.id, { command: gate.command, delivered: false });
+        continue;
+      }
+      delete request.automation; // Set only by the gate above, never by a caller.
       const submitOnly = Array.from(receiptSessions.entries()).find(([, token]) => token === request.token);
       const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token) || submitOnly;
       if (!caller) {
@@ -607,6 +620,7 @@ function setupBoardControl() {
       }
     }
     clearCredentials(boardControlDir);
+    automation = AutomationCore.load(boardControlDir);
     const listenerInstance = ReceiptListener.initialize(boardControlDir);
     receiptListeners = ReceiptListener.createRegistry(boardControlDir, listenerInstance, (callerId, alive) => {
       // At most one undelivered status per Captain while the renderer reloads.
@@ -617,7 +631,7 @@ function setupBoardControl() {
       pendingBoardCommands.set(id, { command: { id, callerId, action: 'main-receipt-listener-status', alive, nativeWeb: true }, delivered: false });
       dispatchPendingBoardCommands();
     });
-    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js', 'chatgpt-web-executor.js', 'receipt-listener-core.js', 'worktree-core.js',
+    for (const file of ['board-credentials.js', 'automation-core.js', 'security.js', 'chatgpt-web-core.js', 'chatgpt-web-executor.js', 'receipt-listener-core.js', 'worktree-core.js',
       'discussion-command.js', 'discussion-runner.js', 'discussion-core.js', 'discussion-store.js', 'discussion-privacy.js', 'discussion-participants.js',
       'claude-seats-core.js', 'claude-seats-main.js', 'quota-claude.js', 'quota-core.js', 'quota-codex.js', 'relay-handoff-core.js',
       'side-main.js', 'chat-core.js', 'main-core.js', 'auto-verify-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
@@ -1027,6 +1041,17 @@ app.whenReady().then(async () => {
       } catch (_) {}
     }
     return status;
+  });
+  // 自动回执入口 (settings): stop it or change its token. The token itself is never sent to the page.
+  handleMain('automation:settings', (_event, input) => {
+    if (!automation) throw new Error('自动回执入口没有启动。');
+    if (input !== undefined) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid automation setting.');
+      if (typeof input.enabled === 'boolean') AutomationCore.setEnabled(automation, input.enabled);
+      else if (input.reset === true) AutomationCore.reset(automation);
+      else throw new Error('Invalid automation setting.');
+    }
+    return AutomationCore.publicStatus(automation);
   });
   onMain('mobile-web:response', (_event, payload) => {
     const pending = mobileRequests.get(payload?.requestId);

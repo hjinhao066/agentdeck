@@ -1157,7 +1157,7 @@
     if (item.done) { const ok = node('span', 'at-ok'); ok.innerHTML = svg('done'); ok.setAttribute('aria-hidden', 'true'); top.append(ok); }
     if (!(item.done && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
     const when = item.done ? item.doneAt : item.created;
-    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
+    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
     if (when) meta.title = (item.done ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
     card.append(top, node('h3', 'at-title', item.title));

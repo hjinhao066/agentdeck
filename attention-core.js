@@ -39,7 +39,7 @@
   const ID = /^at-[a-z0-9-]{4,40}$/;
   const REF = /^[A-Za-z0-9_-]{1,160}$/;
   const DONE_BY = ['user', 'reply', 'captain', 'card', 'session'];
-  const SOURCES = ['captain', 'notify', 'card'];
+  const SOURCES = ['captain', 'notify', 'card', 'automation'];
 
   const isTime = (v) => Number.isSafeInteger(v) && v > 0;
   // One line: runs of whitespace (line breaks too) become one space.
@@ -67,6 +67,7 @@
       sessionTitle: clip(line(raw.sessionTitle), LIMITS.title),
       sessionWaiting: raw.sessionWaiting === true,
       source: SOURCES.includes(raw.source) ? raw.source : 'captain',
+      automation: raw.source === 'automation' ? clip(line(raw.automation), 40) : '',
       key: typeof raw.key === 'string' ? raw.key.slice(0, 400) : '',
       created: raw.created,
       updated: isTime(raw.updated) ? raw.updated : raw.created,
@@ -125,7 +126,7 @@
     const item = normalizeItem({
       id: newId(now, random), kind, type, title, ask, detail, files, project,
       card: input.card || '', cardTitle: input.cardTitle, session: input.session || '', sessionTitle: input.sessionTitle,
-      sessionWaiting: input.sessionWaiting === true, source: SOURCES.includes(input.source) ? input.source : 'captain', key: input.key || '',
+      sessionWaiting: input.sessionWaiting === true, source: SOURCES.includes(input.source) ? input.source : 'captain', automation: input.automation, key: input.key || '',
       created: now, updated: now,
     });
     store.items.push(item);
@@ -332,7 +333,7 @@
 
   // ---- what 队长 is told ---------------------------------------------------
   function refs(item) {
-    return [item.project && '项目：' + item.project, item.card && `卡片 ${item.card}${item.cardTitle ? '「' + item.cardTitle + '」' : ''}`,
+    return [item.source === 'automation' && item.automation && '来自自动任务：' + item.automation, item.project && '项目：' + item.project, item.card && `卡片 ${item.card}${item.cardTitle ? '「' + item.cardTitle + '」' : ''}`,
       item.session && `会话 ${item.session}${item.sessionTitle ? '「' + item.sessionTitle + '」' : ''}`].filter(Boolean).join('，');
   }
   // The user's reply, with the item it answers, as one receipt for 队长.
@@ -356,7 +357,7 @@
     const v = view(store);
     const open = [...v.needs, ...v.reports];
     const row = (i) => {
-      const meta = [i.project && '项目 ' + i.project, i.card && '卡片 ' + i.card, i.session && '会话 ' + i.session, when(i.created, now), !i.done && !i.readAt ? '用户未读' : ''].filter(Boolean).join('，');
+      const meta = [i.source === 'automation' && i.automation && '来自自动任务：' + i.automation, i.project && '项目 ' + i.project, i.card && '卡片 ' + i.card, i.session && '会话 ' + i.session, when(i.created, now), !i.done && !i.readAt ? '用户未读' : ''].filter(Boolean).join('，');
       const lines = [`- ${i.id}【${i.kind === 'need' ? '要你处理·' : ''}${label(i)}】${i.title}（${meta}）`];
       if (i.ask) lines.push('  要用户做：' + i.ask);
       if (i.done) lines.push('  ' + doneText(i) + '（' + when(i.doneAt, now) + '）');
@@ -384,7 +385,7 @@
     return {
       id: item.id, kind: item.kind, label: label(item), title: item.title, ask: item.ask, detail: clip(item.detail, 4000),
       files: item.files.slice(0, 10), project: item.project, cardTitle: item.cardTitle, sessionTitle: item.sessionTitle,
-      source: item.source, created: item.created, readAt: item.readAt, done: item.done, doneAt: item.doneAt,
+      source: item.source, automation: item.automation, created: item.created, readAt: item.readAt, done: item.done, doneAt: item.doneAt,
       doneText: item.done ? doneText(item) : '',
       replies: item.replies.slice(-3).map((r) => ({ text: clip(r.text, 1000), at: r.at, from: r.from, seen: r.seen })),
     };

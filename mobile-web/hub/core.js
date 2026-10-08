@@ -481,7 +481,8 @@
         title: line(item.title, 300), ask: line(item.ask, 1000), detail: text(item.detail, 4000),
         files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
         project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-        source: item.source === 'card' ? 'card' : 'captain', created: time(item.created), readAt: time(item.readAt),
+        source: item.source === 'card' ? 'card' : item.source === 'automation' ? 'automation' : 'captain', automation: item.source === 'automation' ? line(item.automation, 40) : '',
+        created: time(item.created), readAt: time(item.readAt),
         done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0, doneText: item.done === true ? line(item.doneText, 200) : '',
         replies: (Array.isArray(item.replies) ? item.replies : []).slice(-3).filter((r) => r && typeof r.text === 'string')
           .map((r) => ({ text: text(r.text, 1000), at: time(r.at), from: r.from === 'phone' ? 'phone' : 'desktop', seen: r.seen === true })),

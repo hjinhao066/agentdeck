@@ -701,6 +701,7 @@ function openNotificationSettings() {
   updateBarkPolicyStatus();
   MainSession.openSettings();
   updateMobileWebSettings();
+  updateAutomationSettings();
   dialog.showModal();
 }
 async function updateMobileWebSettings(input) {
@@ -740,6 +741,21 @@ document.getElementById('mobileWebCopyGateway').addEventListener('click', (event
   const button = event.currentTarget, original = button.innerHTML;
   button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
   setTimeout(() => { button.innerHTML = original; button.title = '复制入口口令'; button.setAttribute('aria-label', '复制入口口令'); }, 1400);
+});
+async function updateAutomationSettings(input) {
+  const toggle = document.getElementById('automationEnabled');
+  toggle.disabled = true;
+  try {
+    const status = await window.deck.automationSettings(input);
+    toggle.checked = status.enabled;
+    const last = status.lastUsedAt ? `最近一次：${new Date(status.lastUsedAt).toLocaleString()}，${status.lastSource}（应用启动以来共 ${status.uses} 次）` : '应用启动以来还没有脚本用过';
+    document.getElementById('automationStatus').textContent = `${status.enabled ? '已开启，仅本机' : '已停用，脚本发来的自动回执都会被拒绝'}；${last}`;
+  } catch (error) { document.getElementById('automationStatus').textContent = error.message; }
+  finally { toggle.disabled = false; }
+}
+document.getElementById('automationEnabled').addEventListener('change', (event) => updateAutomationSettings({ enabled: event.target.checked }));
+document.getElementById('automationReset').addEventListener('click', () => {
+  if (confirm('重置自动回执令牌？旧令牌立即失效；定时脚本每次运行都会读取新令牌，不用改脚本。')) updateAutomationSettings({ reset: true });
 });
 async function updateBarkPolicyStatus() {
   const node = document.getElementById('barkPolicyStatus');
@@ -3545,6 +3561,13 @@ window.deck.onBoardCommand(async (message) => {
           : { done: true, childId: existingChild.taskId, result: existingChild.taskId });
       return;
     }
+  }
+  // 自动回执入口: main.js built this command itself from an authenticated automation token. It has no calling session.
+  if (message.automation && String(message.action || '').startsWith('automation-')) {
+    Promise.resolve().then(() => MainSession.automation(message)).then(
+      (response) => respondBoard(message.id, response),
+      (error) => respondBoard(message.id, { done: true, error: error.message }));
+    return;
   }
   const caller = columns.find((col) => col.id === message.callerId);
   if (['complete', 'ask', 'progress', 'session-exit'].includes(message.action) && caller) {

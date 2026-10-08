@@ -61,6 +61,7 @@
       "board-cli.js",
       "receipt-listener-core.js",
       "board-credentials.js",
+      "automation-core.js",
       "codex-captain-driver.js",
       "scripts/codex-captain-host.js",
       "chat-core.js",
