@@ -289,6 +289,32 @@ test('agy can use its tested legacy models while every other CLI still rejects o
   }
 });
 
+test('Haiku 5.x and up is allowed everywhere; Haiku 4.x and older, a bare haiku alias, and every Claude 3/4 id stay refused', () => {
+  // Claude Code needs the full id and --effort (measured: claude 2.1.294 takes it on claude-haiku-5-5); Cursor lists
+  // claude-haiku-5-5-<tier> and claude-haiku-5-5-thinking-<tier>
+  for (const cmd of ['claude --dangerously-skip-permissions --model claude-haiku-5-5 --effort medium',
+    'claude --model=claude-haiku-5-5 --effort high', 'claude --model "claude-haiku-5-5"', 'claude --model claude-haiku-5',
+    'cursor-agent --force --model claude-haiku-5-5-medium', 'cursor-agent --force --model claude-haiku-5-5-thinking-max',
+    'claude --model claude-haiku-6-0', 'claude --model claude-haiku-10-1', 'codex --model haiku-5.5']) {
+    const r = M.checkCommand(cmd);
+    assert.equal(r.cmd, cmd, cmd);
+    assert.ok(!r.error, cmd);
+  }
+  // Opus/Sonnet 5.5 are unchanged, and Claude Code is not made to carry --effort by the check
+  for (const cmd of ['claude --model claude-opus-5-5 --effort max', 'claude --model claude-sonnet-5-5', 'claude --model claude-haiku-5-5',
+    'cursor-agent --force --model claude-sonnet-5-5-high']) assert.equal(M.checkCommand(cmd).cmd, cmd, cmd);
+  for (const cmd of ['claude --model claude-haiku-4-5', 'claude --model claude-haiku-4-5-20251001', 'claude --model=claude-haiku-4.5',
+    'claude --model claude-3-haiku', 'claude --model claude-3-haiku-20240307', 'claude --model claude-3-5-haiku-20241022',
+    'claude --model haiku', 'claude --model claude-haiku', 'claude --model claude-haiku-20250101',
+    'cursor-agent --force --model haiku-4.5', 'cursor-agent --model claude-haiku-4-5-medium', 'codex --model claude-haiku-3-5',
+    'claude --model claude-opus-4-8', 'claude --model claude-sonnet-4-6', 'claude --model claude-4-haiku']) {
+    const r = M.checkCommand(cmd);
+    assert.ok(r.error && !r.cmd, cmd);
+    assert.match(r.error, /Haiku 4\.x 及更早[\s\S]*claude-haiku-5-5/, 'tells 队长 Haiku 5.5 is the one to use');
+    assert.match(r.error, /gemini-3\.8-flash-high[\s\S]*claude-opus-5-5-high/, 'and what else to use');
+  }
+});
+
 test('sessions 队长 opened before they were marked are found from its first card', () => {
   const columns = [{ id: 'c1790997115851448' }, { id: 'c1780813940263781' }, { id: 'c179099695406244', isMain: true }, { id: 'odd' }];
   const tasks = [

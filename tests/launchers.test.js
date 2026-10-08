@@ -185,13 +185,14 @@ test('队长 knows the providers, only verified models, and the routing preferen
   // only models the CLIs listed on the owner's accounts
   const named = new Set(text.match(/\b(?:gemini|claude|grok)-[a-z0-9.-]*\d[a-z0-9.-]*/g));
   assert.deepEqual([...named].sort(), [
-    'claude-opus-4-6-thinking',
+    'claude-haiku-5-5', 'claude-opus-4-6-thinking',
     'claude-opus-5-5', 'claude-opus-5-5-high', 'claude-opus-5-5-max', 'claude-opus-5-5-medium',
     'claude-opus-5-5-xhigh', 'claude-sonnet-4-6', 'claude-sonnet-5-5', 'claude-sonnet-5-5-high',
     'claude-sonnet-5-5-max', 'claude-sonnet-5-5-medium', 'claude-sonnet-5-5-xhigh',
     'gemini-3.8-flash-high', 'gemini-3.8-flash-low', 'gemini-3.8-flash-medium', 'grok-4.7-high-fast',
   ]);
-  assert.match(text, /Claude Code、Cursor、Codex 命令仍禁止 Claude 4\.x 和 Haiku/);
+  assert.match(text, /Claude Code、Cursor、Codex 命令仍禁止 Claude 4\.x 和 Haiku 4\.x 及更早（Haiku 5\.5 可用[^\n]*claude-haiku-5-5/);
+  assert.ok(!/Claude 4\.x 和 Haiku。/.test(text), 'Haiku 5.5 is no longer banned');
   // Antigravity has no 5.5 models
   const agyLine = text.split('\n').find((l) => l.includes('Antigravity：'));
   assert.ok(!/5-5|5\.5/.test(agyLine));
@@ -202,11 +203,12 @@ test('队长 knows the providers, only verified models, and the routing preferen
   assert.match(route('UI 设计'), /Opus 5\.5[^\n]*最关键核心代码[^\n]*最终审核/);
   assert.match(route('重要代码'), /Sonnet 5\.5[^\n]*核心改动/);
   assert.match(route('批量写代码'), /GPT-6\.1 Sol[^\n]*写测试[^\n]*CI/);
-  assert.match(route('简单的轻量代码'), /GPT-6 Luna/);
+  assert.match(route('简单的轻量代码'), /^   - Haiku 5\.5[^\n]*--model claude-haiku-5-5[^\n]*--effort[^\n]*额度不够[^\n]*GPT-6 Luna/);
+  assert.ok(!route('简单的轻量代码').startsWith('   - Codex GPT-6 Luna'), 'Luna is the fallback, not the first choice');
   assert.match(route('检索、整理'), /Gemini 3\.8 Flash[^\n]*中文[^\n]*不用 Gemini 3\.1 Pro/);
   assert.match(route('检索、整理'), /Gemini 周额度用尽时[^\n]*GPT-OSS[^\n]*Sonnet 4\.6[^\n]*Opus 4\.6/);
   assert.match(route('脏活'), /Cursor Grok 4\.7[^\n]*抓数据/);
-  assert.match(text, /Claude Code：[^\n]*--model claude-opus-5-5 --effort high[^\n]*--model claude-sonnet-5-5[^\n]*开工后用 peek/);
+  assert.match(text, /Claude Code：[^\n]*--model claude-opus-5-5 --effort high[^\n]*--model claude-sonnet-5-5[^\n]*--model claude-haiku-5-5[^\n]*开工后用 peek/);
   assert.match(text, /Cursor CLI：[^\n]*1–2 分钟可能没有任何输出[^\n]*别急着判定卡死/);
   // The standalone Grok subscription is gone; quota is passive and read-only.
   assert.match(text, /独立的 Grok CLI[^\n]*不要用它派活/);
