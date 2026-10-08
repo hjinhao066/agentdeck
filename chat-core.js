@@ -320,6 +320,26 @@
     return /^Pasting(?:…|\.{3})$/.test(rows.at(-1) || '');
   }
 
+  // A terminal that has not asked for bracketed paste reads typed text a line at a time, and the
+  // tty drops everything past its line limit (1024 bytes on macOS). Stay well under it.
+  const LINE_MODE_BYTES = 1000;
+  const utf8Length = (text) => new TextEncoder().encode(String(text)).length;
+  // Bytes of the longest line once the text is typed (newlines become Enter).
+  function longestLineBytes(text) {
+    return String(text || '').split(/\r?\n|\r/).reduce((max, line) => Math.max(max, utf8Length(line)), 0);
+  }
+  // The start of text that fits maxBytes, never cutting a character in half.
+  function clipBytes(text, maxBytes) {
+    let used = 0;
+    let out = '';
+    for (const ch of String(text || '')) {
+      used += utf8Length(ch);
+      if (used > maxBytes) break;
+      out += ch;
+    }
+    return out;
+  }
+
   // Answers to a permission menu or y/n prompt are not new questions.
   function isPromptAnswer(line) {
     const t = String(line || '').trim();
@@ -558,7 +578,7 @@
   }
 
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it

@@ -105,7 +105,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Automatic sends go through `sendWhenReady`/`agentInForeground`: never type
   prose into a column whose foreground process is a shell (unless it is a plain
   shell column a Schedule targets on purpose). Prompts are never truncated; long
-  ones go out as a file via `prompt:save-long`.
+  ones go out as a file via `prompt:save-long`. A terminal without bracketed paste reads
+  line by line and the tty drops what a line holds past ~1 KB, so a line over `ChatCore.LINE_MODE_BYTES`
+  there goes out the same way, as one short pointer line.
 - The status lines under a chat composer are read from the rows below the TUI's
   input box; `extractReply` must keep cutting that box and everything below it.
 - 队长 (main session, `main-session.js`/`main-core.js`): exactly one column with
