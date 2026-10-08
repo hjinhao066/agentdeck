@@ -192,6 +192,16 @@ function initPower() {
 }
 onMain('power-state', (e) => { e.returnValue = { onBattery: power.snapshot().onBattery }; });
 
+// Whether the user has the window in front (focused; blurred, minimized or hidden is not).
+// 待我处理 counts an item as seen only meanwhile (docs/attention.md).
+let windowInFront = false;
+function setWindowInFront(on) {
+  if (windowInFront === on) return;
+  windowInFront = on;
+  send('window:front', { on });
+}
+onMain('window-front', (e) => { e.returnValue = windowInFront; });
+
 // node-pty is a native module compiled against a specific Electron/Node ABI.
 // After an Electron upgrade without a rebuild, requiring it throws and the app
 // would otherwise just show a blank window. Surface a clear, actionable error.
@@ -837,6 +847,12 @@ function createWindow() {
   // keeps rendering but is transparent and click-through, so a test run never
   // covers the user's apps or catches their clicks.
   if (tudArg) win.once('ready-to-show', () => { hideTestWindow(win); win.showInactive(); });
+  // A test window never takes the focus (focusable: false): it counts as in front, and
+  // blur()/focus() stand for the user leaving and coming back without touching the screen.
+  windowInFront = !!tudArg;
+  win.on('focus', () => setWindowInFront(true));
+  for (const away of ['blur', 'minimize', 'hide']) win.on(away, () => setWindowInFront(false));
+  if (tudArg) { win.blur = () => win.emit('blur'); win.focus = () => win.emit('focus'); }
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   win.webContents.on('will-navigate', (event) => event.preventDefault());
   win.webContents.on('will-attach-webview', (event) => event.preventDefault());

@@ -19,6 +19,14 @@ const run = (command) => page.evaluate((c) => window.deck.ptyInput('captain', c 
 const items = () => page.evaluate(() => (config.attention && config.attention.items || []).map((i) => ({ id: i.id, kind: i.kind, title: i.title, done: i.done, doneBy: i.doneBy, doneNote: i.doneNote, readAt: i.readAt, source: i.source, card: i.card, turn: i.turn })));
 const pending = () => page.evaluate(() => MainSession.state().pending.map((p) => ({ title: p.title, summary: p.summary })));
 const card = (title) => page.locator('.at-card', { hasText: title });
+// The user leaving the window for another app and coming back: BrowserWindow.blur()/focus().
+// The test window never takes the real focus, so neither touches the screen.
+const windowDoes = (call) => application.evaluate(({ BrowserWindow }, c) => { const w = BrowserWindow.getAllWindows()[0]; w[c](); return w.isVisible(); }, call);
+// Most of it in view through the given boxes and the window (the rule the page applies).
+const inView = (selector, clips) => page.evaluate(([s, c]) => {
+  const el = document.querySelector(s);
+  return !!el && HubCore.mostlyShown(el.getBoundingClientRect(), [...c.map((x) => el.closest(x).getBoundingClientRect()), { left: 0, top: 0, right: innerWidth, bottom: innerHeight, width: innerWidth, height: innerHeight }]);
+}, [selector, clips]);
 const RECEIPT = '验收完成，判定【通过】。会话回执逐项核实均属实：登录一年有效已生效';
 async function shot(name) {
   const dir = process.env.AGENTDECK_ATTENTION_SHOTS;
@@ -318,6 +326,27 @@ test('a report 队长 said in a reply the user saw is read; one filed while the 
   await expect.poll(async () => (await items()).find((i) => i.id === said.id).doneBy, { timeout: 15000 }).toBe('chat');
   await expect(page.locator('#attentionBtn .nav-row-dot')).toBeHidden();
 
+  // The window loses the focus while 队长 answers (still visible, the page not hidden):
+  // the reply in full view is not read, however long it stays; back in front, a full
+  // 1.5 s counted from then reads it.
+  expect(await windowDoes('blur')).toBe(true);
+  await box.fill(`node "${CLI}" inbox report --title "回归跑完了，你切走时队长在对话里说过"`);
+  await box.press('Enter');
+  await expect.poll(async () => (await items()).find((i) => i.title === '回归跑完了，你切走时队长在对话里说过'), { timeout: 20000 }).toBeTruthy();
+  const behind = (await items()).find((i) => i.title === '回归跑完了，你切走时队长在对话里说过');
+  expect(behind.turn).toBeTruthy();
+  await expect.poll(() => page.evaluate((t) => !!ChatUI.turnsOf('captain').find((x) => x.id === t)?.done, behind.turn), { timeout: 30000 }).toBe(true);
+  const reply = `.msg.assistant[data-turn="${behind.turn}"]`;
+  await expect.poll(() => inView(reply, ['.chat-scroll', '#deck'])).toBe(true);
+  await page.waitForTimeout(3500);
+  expect(await page.evaluate(() => document.hidden)).toBe(false);
+  expect(await inView(reply, ['.chat-scroll', '#deck'])).toBe(true);
+  expect((await items()).find((i) => i.id === behind.id)).toMatchObject({ done: false, doneBy: '' });
+  const chatBack = Date.now();
+  await windowDoes('focus');
+  await expect.poll(async () => (await items()).find((i) => i.id === behind.id).doneBy, { timeout: 15000 }).toBe('chat');
+  expect((await items()).find((i) => i.id === behind.id).readAt - chatBack).toBeGreaterThanOrEqual(1500);
+
   // Away from the conversation (another page in front): the next report waits in 没看, a dot, not a number.
   await page.evaluate(() => Pages.show('schedule'));
   await run(`node "${CLI}" inbox report --title "夜里跑完的回归：全部通过"`);
@@ -331,11 +360,22 @@ test('a report 队长 said in a reply the user saw is read; one filed while the 
   await expect(row).toHaveAttribute('title', '待我处理：没有要你处理的事，1 条汇报你还没看');
 
   // Opened here and looked at, it is read too; it keeps its place until the page is left.
+  // Not while the window is out of focus (the review's case: visible, the page not hidden,
+  // 3.5 s on screen); back in front, only after a full 1.5 s counted from then.
+  expect(await windowDoes('blur')).toBe(true);
   await row.click();
   const waiting = page.locator('.at-sec-report .at-card', { hasText: '夜里跑完的回归' });
   await expect(waiting).toHaveClass(/\bunread\b/);
   await shot('desktop-6-unseen-dark');
+  expect(await inView(`.at-card[data-id="${away.id}"]`, ['#pageView'])).toBe(true);
+  await page.waitForTimeout(3500);
+  expect(await page.evaluate(() => document.hidden)).toBe(false);
+  expect((await items()).find((i) => i.id === away.id)).toMatchObject({ done: false, doneBy: '' });
+  await expect(waiting).toHaveClass(/\bunread\b/);
+  const pageBack = Date.now();
+  await windowDoes('focus');
   await expect.poll(async () => (await items()).find((i) => i.id === away.id).doneBy, { timeout: 15000 }).toBe('seen');
+  expect((await items()).find((i) => i.id === away.id).readAt - pageBack).toBeGreaterThanOrEqual(1500);
   await expect(waiting).toHaveClass(/\bseen\b/);
   await expect(row.locator('.nav-row-dot')).toBeHidden();
   await page.evaluate(() => Pages.hide());

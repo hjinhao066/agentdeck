@@ -273,10 +273,15 @@
   }
 
   // An unread item counts as read once most of it has stayed on screen for a
-  // moment (SEEN_MS). Measured on a timer rather than observed: it holds while
-  // the window is in the background and painting is throttled.
+  // moment (SEEN_MS) while the user has the window in front: focused (main's
+  // focus/blur, so a click in the side pane still counts), shown, not minimized.
+  // Leaving clears every count at once; back in front, each starts again from 0.
+  // Measured on a timer rather than observed, so throttled painting does not matter.
   const SEEN_MS = 1500;
   const seenSince = new Map();
+  let inFront = true;
+  const attending = () => inFront && !document.hidden;
+  function stopCounting() { seenSince.clear(); chatSince.clear(); }
   // Mostly in view through every box that cuts it, sideways too (HubCore.mostlyShown).
   const windowBox = () => ({ left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight, width: window.innerWidth, height: window.innerHeight });
   const onScreen = (node, ...clips) => window.HubCore.mostlyShown(node.getBoundingClientRect(), [...clips.map((c) => c.getBoundingClientRect()), windowBox()]);
@@ -284,6 +289,7 @@
     checkChatSeen();
     const scroller = document.getElementById('pageView');
     if (!visible() || document.hidden || !scroller || !view) { seenSince.clear(); kept.clear(); return; }
+    if (!attending()) { seenSince.clear(); return; }
     const now = Date.now(), ready = [];
     for (const node of view.querySelectorAll('.at-card.unread:not(.done)')) {
       const id = node.dataset.id;
@@ -304,7 +310,7 @@
   function checkChatSeen() {
     const linked = A.unseenByTurn(load());
     const captainCol = host.columns().find((c) => c.isMain);
-    if (!linked.size || !captainCol || document.hidden || !host.captainColumnVisible(captainCol.id)) { chatSince.clear(); return; }
+    if (!linked.size || !captainCol || !attending() || !host.captainColumnVisible(captainCol.id)) { chatSince.clear(); return; }
     const turns = window.ChatUI ? window.ChatUI.turnsOf(captainCol.id) : [];
     const now = Date.now(), ready = [];
     for (const [turnId, ids] of linked) {
@@ -613,6 +619,9 @@
     // Cards change on disk (this machine, the other one through git, a worker's receipt).
     if (window.TaskBoard && window.TaskBoard.onChange) window.TaskBoard.onChange(() => refresh());
     setInterval(() => refresh(), 30_000);
+    inFront = window.deck.windowInFront();
+    window.deck.onWindowFront((on) => { inFront = on; if (!on) stopCounting(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) stopCounting(); });
     setInterval(checkSeen, 500);
     setTimeout(() => refresh(), 1500);
   }
