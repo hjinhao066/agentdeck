@@ -81,13 +81,14 @@
     const dot = el('span', 'cn-dot');
     captain.insertBefore(dot, captain.querySelector('.nav-row-label').nextSibling);
     captainRow = { el: captain, dot };
-    // 待我处理: what the AI handed back to the user; the badge counts what still needs them.
+    // 待我处理: what the AI handed back to the user. The number counts what still
+    // needs them; a dot beside it says some reports are not seen yet.
     const attention = navRow('attention', 'inbox', '待我处理', '', () => host.togglePage('attention'));
     attention.id = 'attentionBtn';
+    const attentionDot = el('span', 'nav-row-dot');
     const attentionBadge = el('span', 'nav-row-badge');
-    attentionBadge.hidden = true;
-    attentionBadge.setAttribute('aria-hidden', 'true');
-    attention.appendChild(attentionBadge);
+    for (const n of [attentionDot, attentionBadge]) { n.hidden = true; n.setAttribute('aria-hidden', 'true'); }
+    attention.append(attentionDot, attentionBadge);
     const tasks = navRow('tasks', 'tasks', '任务看板', '', () => host.toggleTaskBoard());
     tasks.id = 'taskBoardBtn';
     tasks.setAttribute('aria-label', '任务看板');

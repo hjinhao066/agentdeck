@@ -266,10 +266,11 @@
         else if (quota.status === 404) { m.quota = null; m.quotaFailed = false; } else m.quotaFailed = true;
         m.quotaAt = Date.now();
       }
-      // 待我处理: every poll while its tab is open, otherwise every 30 seconds for the tab's count.
       // 设置: while the settings sheet is open, this computer's battery setting is read again on every turn (the desktop may have changed it).
       if (settings.open) await loadBattery(m);
-      if (view === 'attention' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
+      // 待我处理: every poll while its tab or the 队长 chat (whose replies read reports) is open,
+      // otherwise every 30 seconds for the tab's count.
+      if (view === 'attention' || view === 'captain' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
       // 每日进展 changes once a night: read it when 版本更新 is open, at most once a minute (refresh reads it again).
       if (view === 'releases' && (m.forceProgress || !m.progressAt || Date.now() - m.progressAt > 60000)) { m.forceProgress = false; await loadProgress(m); }
     }
@@ -916,6 +917,7 @@
     const row = node('article', 'turn');
     row.dataset.machine = m.id;
     if (group.id) row.dataset.turnId = group.id;
+    if (group.said && group.said.length) row.dataset.said = group.said.join(' ');
     if (group.user || group.images.length) {
       const prompt = mineBubble(group.user, '');
       if (group.images.length) prompt.append(node('span', 'bubble-state', `附 ${group.images.length} 张图片（在这台电脑上查看）`));
@@ -1282,42 +1284,71 @@
   async function sendAttentionReply(item) {
     const text = (attentionDrafts.get(item.key) || '').trim();
     if (!text || attentionBusy.has(item.key)) return;
-    if (await attentionWrite(item, { op: 'reply', text }, `已交给 ${item.machineLabel} 的队长，这一条打勾归到已完成。`)) attentionDrafts.delete(item.key);
+    if (await attentionWrite(item, { op: 'reply', text }, `已交给 ${item.machineLabel} 的队长，这一条打勾归到已完成。`)) { attentionDrafts.delete(item.key); attentionKept.delete(item.key); }
     renderAttention();
   }
   // An unread item counts as read once most of it has stayed on screen for a
   // moment. Measured on a timer rather than observed: it holds when the browser
   // throttles painting.
   const attentionSeenSince = new Map();
+  // Reports read on this visit stay where the user is reading them until the tab is left.
+  const attentionKept = new Set();
+  const SEEN_MS = 1500;
+  // Mostly in view through its scroll area and the window, on both axes (the same rule as the desktop).
+  const onScreen = (el, box) => Core.mostlyShown(el.getBoundingClientRect(), [box, { left: 0, top: 0, right: innerWidth, bottom: innerHeight, width: innerWidth, height: innerHeight }]);
   function checkAttentionSeen() {
-    if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); return; }
+    checkCaptainSeen();
+    if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); attentionKept.clear(); return; }
     const box = $('main').getBoundingClientRect(), now = Date.now(), ready = [];
     for (const el of document.querySelectorAll('#attention-lists .at-item.unread')) {
-      const r = el.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
       const key = el.dataset.key;
-      if (shown < Math.min(r.height * 0.6, box.height * 0.5)) { attentionSeenSince.delete(key); continue; }
+      if (!onScreen(el, box)) { attentionSeenSince.delete(key); continue; }
       if (!attentionSeenSince.has(key)) attentionSeenSince.set(key, now);
-      else if (now - attentionSeenSince.get(key) >= 1500) ready.push(key);
+      else if (now - attentionSeenSince.get(key) >= SEEN_MS) ready.push(key);
     }
     if (ready.length) markAttentionRead(ready);
   }
+  // A report 队长 also said in its chat is read once that reply has stayed on
+  // screen here for the same moment, as on the desktop.
+  const captainSeenSince = new Map();
+  function checkCaptainSeen() {
+    const m = byId(target);
+    const unseen = m && m.state === 'online' && Array.isArray(m.attention) ? m.attention.filter((i) => i.kind === 'report' && !i.done && i.turn) : [];
+    if (document.hidden || view !== 'captain' || !unseen.length) { captainSeenSince.clear(); return; }
+    const box = $('captain-turns').getBoundingClientRect(), now = Date.now(), ready = [];
+    for (const row of $('captain-turns').querySelectorAll(`.turn[data-said][data-machine="${CSS.escape(m.id)}"]`)) {
+      const said = row.dataset.said.split(' '), ids = unseen.filter((i) => said.includes(i.turn)).map((i) => m.id + ':' + i.id);
+      const reply = row.querySelector('.reply'), key = row.dataset.turnId;
+      if (!ids.length || !reply || !onScreen(reply, box)) { captainSeenSince.delete(key); continue; }
+      if (!captainSeenSince.has(key)) captainSeenSince.set(key, now);
+      else if (now - captainSeenSince.get(key) >= SEEN_MS) { captainSeenSince.delete(key); ready.push(...ids); }
+    }
+    if (ready.length) markAttentionRead(ready, 'chat');
+  }
   setInterval(checkAttentionSeen, 500);
-  async function markAttentionRead(keys) {
+  async function markAttentionRead(keys, via) {
     for (const m of machines) {
       if (m.state !== 'online' || !Array.isArray(m.attention)) continue;
-      const items = m.attention.filter((i) => keys.includes(m.id + ':' + i.id) && !i.readAt);
+      const items = m.attention.filter((i) => keys.includes(m.id + ':' + i.id) && !i.readAt && !i.done);
       if (!items.length) continue;
-      // Read here at once; the computer's next answer says the same, or brings the dot back if it did not take it.
-      items.forEach((i) => { i.readAt = Date.now(); attentionSeenSince.delete(m.id + ':' + i.id); });
+      // Read here at once (a report goes to 已读); the computer's next answer says the
+      // same, or brings it back if it did not take it.
+      const now = Date.now();
+      items.forEach((i) => {
+        i.readAt = now; attentionSeenSince.delete(m.id + ':' + i.id);
+        if (i.kind !== 'report') return;
+        Object.assign(i, { done: true, doneAt: now, doneBy: via === 'chat' ? 'chat' : 'seen', doneText: via === 'chat' ? '你在队长对话里看过了' : '你看过了' });
+        if (via !== 'chat') attentionKept.add(m.id + ':' + i.id);
+      });
       renderAttention();
-      await post(m, 'api/attention', { op: 'read', ids: items.map((i) => i.id) });
+      await post(m, 'api/attention', { op: 'read', ids: items.map((i) => i.id), ...(via === 'chat' ? { via } : {}) });
     }
   }
   const attentionTyping = () => !!document.activeElement && $('attention-lists').contains(document.activeElement) && document.activeElement.classList.contains('at-reply');
   function attentionCopy(item) {
     const label = '复制这一条';
     const button = iconButton('copy', label, 'at-copy');
-    const text = [item.title, item.ask && '要你做：' + item.ask, item.detail, item.files.join('\n')].filter(Boolean).join('\n\n');
+    const text = [item.title, item.ask && '要你做：' + item.ask, item.options.length && '可选回答：' + item.options.join(' / '), item.detail, item.files.join('\n')].filter(Boolean).join('\n\n');
     button.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(text); } catch (_) { setAttentionHint('无法复制。可以长按文字手动选择。', true); return; }
       button.innerHTML = svg('check'); button.classList.add('copied'); button.title = '已复制'; button.setAttribute('aria-label', '已复制');
@@ -1326,20 +1357,46 @@
     return button;
   }
   function attentionCard(item, multi, now) {
-    const card = node('article', `at-item at-${item.kind}` + (item.done ? ' done' : item.readAt ? '' : ' unread'));
+    // A report read on this visit stays as it was, reply included, until the tab is left.
+    const stay = item.done && attentionKept.has(item.key), shut = item.done && !stay;
+    const card = node('article', `at-item at-${item.kind}` + (shut ? ' done' : stay ? ' seen' : item.readAt ? '' : ' unread'));
     card.dataset.key = item.key; card.dataset.machine = item.machineId;
     const top = node('div', 'at-top');
     if (!item.done && !item.readAt) { const dot = node('span', 'at-unread'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', '未读'); top.append(dot); }
-    if (item.done) { const ok = node('span', 'at-ok'); ok.innerHTML = svg('done'); ok.setAttribute('aria-hidden', 'true'); top.append(ok); }
-    if (!(item.done && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
-    const when = item.done ? item.doneAt : item.created;
+    if (shut) { const ok = node('span', 'at-ok'); ok.innerHTML = svg('done'); ok.setAttribute('aria-hidden', 'true'); top.append(ok); }
+    if (!(shut && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
+    if (stay) top.append(node('span', 'at-seen', '已读'));
+    const when = shut ? item.doneAt : item.created;
     const meta = node('span', 'at-meta', [multi && item.machineLabel, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
-    if (when) meta.title = (item.done ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
+    if (when) meta.title = (shut ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
-    card.append(top, node('h3', 'at-title', item.title));
-    if (item.ask && !item.done) { const ask = node('div', 'at-ask'); ask.append(node('b', '', '要你做'), markdownNode(item.ask, { reply: true, className: 'at-ask-text' })); card.append(ask); }
+    // An open need with a question: the question is the biggest thing on the card,
+    // its answers right under it; the title above says what it is about, and the
+    // chip already says what kind of answer it wants.
+    const asking = !!(item.ask && !item.done), busy = attentionBusy.has(item.key);
+    card.append(top, node('h3', 'at-title' + (asking ? ' at-about' : ''), item.title));
+    if (asking) {
+      const ask = node('div', 'at-ask');
+      ask.setAttribute('role', 'group'); ask.setAttribute('aria-label', item.label + '：' + item.ask);
+      ask.append(markdownNode(item.ask, { reply: true, className: 'at-ask-text' }));
+      if (item.options.length) {
+        const quick = node('div', 'at-quick');
+        for (const option of item.options) {
+          const b = node('button', 'at-option', option); b.type = 'button'; b.disabled = busy;
+          b.title = `回复「${option}」，交给 ${item.machineLabel} 的队长`;
+          b.addEventListener('click', async () => {
+            if (attentionBusy.has(item.key)) return;
+            if (await attentionWrite(item, { op: 'reply', text: option }, `已回复「${option}」，交给 ${item.machineLabel} 的队长。`)) attentionDrafts.delete(item.key);
+            renderAttention();
+          });
+          quick.append(b);
+        }
+        ask.append(quick);
+      }
+      card.append(ask);
+    }
     const last = item.replies[item.replies.length - 1];
-    if (item.done) card.append(node('p', 'at-done-text', item.doneText + (last ? '：' + last.text.replace(/\s+/g, ' ') : '')));
+    if (shut) card.append(node('p', 'at-done-text', item.doneText + (last ? '：' + last.text.replace(/\s+/g, ' ') : '')));
     const more = item.detail || item.files.length || item.cardTitle || item.sessionTitle || item.replies.length;
     if (more) {
       const open = attentionOpen.has(item.key), id = 'at-detail-' + item.key.replace(/[^\w-]/g, '_');
@@ -1363,9 +1420,8 @@
         card.append(box);
       }
     }
-    const busy = attentionBusy.has(item.key);
     if (attentionErrors.has(item.key)) { const error = node('p', 'at-error', attentionErrors.get(item.key)); error.setAttribute('role', 'alert'); card.append(error); }
-    if (!item.done && attentionDrafts.has(item.key)) {
+    if (!shut && attentionDrafts.has(item.key)) {
       const form = node('form', 'at-compose');
       const label = node('label', 'sr-only', '回复「' + item.title + '」'); label.htmlFor = 'reply-' + item.key.replace(/[^\w-]/g, '_');
       const box = node('textarea', 'at-reply'); box.id = label.htmlFor; box.rows = 3; box.maxLength = 4000;
@@ -1383,16 +1439,19 @@
       card.append(form);
     } else {
       const actions = node('div', 'at-actions');
-      if (!item.done) {
-        const answer = node('button', 'text-button', '回复'); answer.type = 'button'; answer.dataset.answer = item.key; answer.disabled = busy;
+      if (!shut) {
+        // With answers to pick from, writing one's own is the fallback.
+        const answer = node('button', 'text-button' + (item.options.length ? ' quiet' : ''), item.options.length ? '写别的回复' : '回复'); answer.type = 'button'; answer.dataset.answer = item.key; answer.disabled = busy;
         answer.addEventListener('click', () => { attentionDrafts.set(item.key, ''); renderAttention(); $('attention-lists').querySelector(`[data-key="${CSS.escape(item.key)}"] .at-reply`)?.focus(); });
         const done = node('button', 'text-button quiet', item.kind === 'need' ? '已处理' : '知道了'); done.type = 'button'; done.disabled = busy;
         done.title = item.kind === 'need' ? (item.source === 'card' ? '从这里勾掉；任务看板上的卡片不变' : '勾掉并告诉队长你已经处理了') : '看过了，没有问题';
         done.addEventListener('click', () => attentionWrite(item, { op: 'done' }, item.kind === 'need' ? '已勾掉，归到已完成。' : '已归到已完成。'));
-        actions.append(answer, done);
+        actions.append(answer);
+        if (!stay) actions.append(done);
       } else {
-        const back = iconButton('restore', '放回待处理', 'at-restore'); back.disabled = busy;
-        back.addEventListener('click', () => attentionWrite(item, { op: 'reopen' }, '已放回待处理。'));
+        const backLabel = item.kind === 'report' ? '放回没看' : '放回待处理';
+        const back = iconButton('restore', backLabel, 'at-restore'); back.disabled = busy;
+        back.addEventListener('click', () => { attentionKept.delete(item.key); attentionWrite(item, { op: 'reopen' }, `已${backLabel}。`); });
         actions.append(back);
       }
       actions.append(node('span', 'at-spacer'), attentionCopy(item));
@@ -1403,16 +1462,18 @@
   function renderAttention() {
     const lists = $('attention-lists'), sources = attentionSources(), now = Date.now();
     const { needs, reports, done, counts } = Core.mergeAttention(sources);
+    // The number counts 要你处理 only; reports not yet seen are a dot of their own.
     for (const badge of document.querySelectorAll('.nav-attention')) {
-      badge.textContent = counts.badge > 99 ? '99+' : String(counts.badge); badge.hidden = !counts.badge;
+      badge.textContent = counts.need > 99 ? '99+' : String(counts.need); badge.hidden = !counts.need;
       badge.classList.toggle('need', counts.need > 0);
     }
-    $('attention-tab').setAttribute('aria-label', counts.badge ? '待我处理，' + [counts.need && `${counts.need} 件要你处理`, counts.unreadReports && `${counts.unreadReports} 条新汇报`].filter(Boolean).join('，') : '待我处理');
+    for (const dot of document.querySelectorAll('.nav-attention-dot')) dot.hidden = !counts.unreadReports;
+    $('attention-tab').setAttribute('aria-label', counts.need || counts.unreadReports ? '待我处理，' + [counts.need ? `${counts.need} 件要你处理` : '没有要你处理的事', counts.unreadReports && `${counts.unreadReports} 条汇报你还没看`].filter(Boolean).join('，') : '待我处理');
     const missing = machines.filter((m) => !(m.state === 'online' && Array.isArray(m.attention)));
     const why = (m) => m.attention === 'missing' && m.state === 'online' ? `${m.label} 的 AgentDeck 还没有这个页面` : `${m.label} ${Core.STATES[m.state].label}`;
     $('attention-sources').textContent = !sources.length ? (machines.some((m) => m.state === 'online') ? '正在读取…' : '还没有连上任何一台电脑。')
       : missing.length ? `现在只看得到 ${sources.map((m) => m.label).join('、')} 交回来的事；${missing.map(why).join('，')}。` : `${sources.map((m) => m.label).join(' 和 ')} 交回来的事都在这里，回复只发给那条所在的电脑。`;
-    if (!changed(lists, [view === 'attention', needs, reports, done, attentionDoneOpen, [...attentionDrafts.keys()], [...attentionOpen], [...attentionBusy], [...attentionErrors], attentionHint, attentionHintError, sources.length, Math.floor(now / 60000)])) return;
+    if (!changed(lists, [view === 'attention', needs, reports, done, [...attentionKept], attentionDoneOpen, [...attentionDrafts.keys()], [...attentionOpen], [...attentionBusy], [...attentionErrors], attentionHint, attentionHintError, sources.length, Math.floor(now / 60000)])) return;
     // Rebuilding under someone typing would drop their caret and their input method's state.
     if (attentionTyping()) { attentionWaiting = true; signatures.delete(lists); return; }
     attentionWaiting = false;
@@ -1422,39 +1483,47 @@
     hint.setAttribute('role', 'status'); hint.setAttribute('aria-live', 'polite'); hint.hidden = !attentionHint;
     lists.append(hint);
     const multi = sources.length > 1;
-    if (!needs.length && !reports.length && sources.length) {
+    // Reports read on this visit stay in their column; the rest of 已读 is folded below.
+    const stay = done.filter((i) => attentionKept.has(i.key));
+    const shownReports = [...reports, ...stay].sort((a, b) => b.created - a.created || (a.key < b.key ? -1 : 1));
+    const history = done.filter((i) => !attentionKept.has(i.key));
+    if (!needs.length && !shownReports.length && sources.length) {
       const box = node('div', 'at-empty'), art = node('div', 'at-empty-art'); art.innerHTML = svg('attention');
-      box.append(art, node('strong', '', '都处理完了'), node('p', '', '队长交给你拍板、登录、付款或回答的事，以及它向你汇报的结论，都会出现在这里。'));
+      box.append(art, node('strong', '', '都处理完了'), node('p', '', '队长交给你拍板、登录、付款或回答的事，以及你不在时它汇报的结论，都会出现在这里。'));
       lists.append(box);
+    } else if (sources.length) {
+      const cols = node('div', 'at-cols');
+      const column = (cls, title, count, empty, items, extra) => {
+        const col = node('section', 'at-col ' + cls), head = node('div', 'at-section ' + cls), titles = node('div', 'at-section-titles'), h = node('h2', '');
+        h.id = 'at-h-' + cls; col.setAttribute('aria-labelledby', h.id);
+        h.append(node('span', '', title));
+        if (count) h.append(node('span', 'at-count', String(count)));
+        titles.append(h);
+        head.append(titles);
+        if (extra) head.append(extra);
+        col.append(head);
+        if (!items.length) col.append(node('p', 'at-col-empty', empty));
+        items.forEach((item) => col.append(attentionCard(item, multi, now)));
+        cols.append(col);
+      };
+      column('at-sec-need', '要你处理', needs.length, '没有要你处理的事。', needs);
+      let all = null;
+      if (reports.length) {
+        all = node('button', 'text-button quiet at-all', '全部看过了'); all.type = 'button';
+        all.title = '把这一栏的汇报都标成看过，归到已读（可以放回）';
+        all.addEventListener('click', async () => { for (const item of reports) if (!(await attentionWrite(item, { op: 'done' }))) return; setAttentionHint(`${reports.length} 条汇报归到已读。`); });
+      }
+      column('at-sec-report', '做完了你还没看', reports.length, '汇报你都看过了。', shownReports, all);
+      lists.append(cols);
     }
-    const section = (cls, title, count, note, extra) => {
-      const head = node('div', 'at-section ' + cls), titles = node('div', 'at-section-titles'), h = node('h2', '');
-      h.append(node('span', '', title), node('span', 'at-count', String(count)));
-      titles.append(h);
-      if (note) titles.append(node('p', '', note));
-      head.append(titles);
-      if (extra) head.append(extra);
-      lists.append(head);
-    };
-    if (needs.length) {
-      section('at-sec-need', '要你处理', needs.length, '只有你能做的事。处理完点「已处理」，或者直接回复。');
-      needs.forEach((item) => lists.append(attentionCard(item, multi, now)));
-    }
-    if (reports.length) {
-      const all = node('button', 'text-button quiet at-all', '全部知道了'); all.type = 'button';
-      all.title = '把结果汇报都标成看过，归到已完成（可以放回）';
-      all.addEventListener('click', async () => { for (const item of reports) if (!(await attentionWrite(item, { op: 'done' }))) return; setAttentionHint(`${reports.length} 条汇报归到已完成。`); });
-      section('at-sec-report', '结果汇报', reports.length, '你不在时跑出来的结论。有问题就回复，没问题点「知道了」。', all);
-      reports.forEach((item) => lists.append(attentionCard(item, multi, now)));
-    }
-    if (done.length) {
+    if (history.length) {
       const toggle = node('button', 'at-done-toggle'); toggle.type = 'button'; toggle.dataset.more = 'done-toggle';
       toggle.setAttribute('aria-expanded', String(attentionDoneOpen));
       const chev = node('span', 'at-chev' + (attentionDoneOpen ? ' open' : '')); chev.innerHTML = svg('chevron');
-      toggle.append(chev, node('span', '', '已完成'), node('span', 'at-count', String(done.length)));
+      toggle.append(chev, node('span', '', '已完成和已读'), node('span', 'at-count', String(history.length)));
       toggle.addEventListener('click', () => { attentionDoneOpen = !attentionDoneOpen; renderAttention(); });
       lists.append(toggle);
-      if (attentionDoneOpen) done.slice(0, 60).forEach((item) => lists.append(attentionCard(item, multi, now)));
+      if (attentionDoneOpen) history.slice(0, 60).forEach((item) => lists.append(attentionCard(item, multi, now)));
     }
     if (focused) lists.querySelector(`[data-answer="${CSS.escape(focused)}"], [data-more="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   }

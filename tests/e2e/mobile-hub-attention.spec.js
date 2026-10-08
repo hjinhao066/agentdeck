@@ -7,12 +7,12 @@ const { startHub, attentionFixture } = require('../fixtures/hub-proxy');
 // Nothing here touches a real AgentDeck, the VPS or the shared boards.
 let hub, context, page, problems;
 
-async function open(browser, theme = 'dark') {
+async function open(browser, theme = 'dark', viewport = { width: 390, height: 844 }) {
   hub = await startHub();
   const data = attentionFixture();
   hub.machines.mac.attention = data.mac;
   hub.machines.win.attention = data.win;
-  context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, colorScheme: theme, permissions: ['clipboard-read', 'clipboard-write'] });
+  context = await browser.newContext({ viewport, isMobile: viewport.width < 600, hasTouch: true, colorScheme: theme, permissions: ['clipboard-read', 'clipboard-write'] });
   page = await context.newPage();
   problems = [];
   page.on('pageerror', (error) => problems.push(String(error)));
@@ -41,17 +41,31 @@ test.afterEach(async () => {
   expect(seen).toEqual([]);
 });
 
-test('both computers on one page: what needs you first, then reports; reply, tick and put back go to that computer only', async ({ browser }) => {
+test('both computers on one page: 要你处理, then 做完了你还没看; reply, tick and put back go to that computer only', async ({ browser }) => {
   await open(browser);
-  // 3 things need the user, 1 report is unread.
-  await expect(tab()).toHaveAttribute('aria-label', '待我处理，3 件要你处理，1 条新汇报');
-  await expect(tab().locator('.nav-attention')).toHaveText('4');
+  // 3 things need the user: the number. 2 reports not seen yet: a dot of their own.
+  await expect(tab()).toHaveAttribute('aria-label', '待我处理，3 件要你处理，2 条汇报你还没看');
+  await expect(tab().locator('.nav-attention')).toHaveText('3');
+  await expect(tab().locator('.nav-attention-dot')).toBeVisible();
   await tab().click();
   const lists = page.locator('#attention-lists');
-  await expect(lists.locator('.at-section h2')).toHaveText(['要你处理3', '结果汇报2']);
-  await expect(lists.locator('.at-item .at-title')).toHaveText([/网页端登录改成「1」/, /小红书要你/, /Muse 冒烟测试/, /小福助手排查报告/, /登录改成 1」的会话/]);
+  // Stacked on a phone: 要你处理 above 做完了你还没看. The report already read in the chat is not there.
+  await expect(lists.locator('.at-section h2')).toHaveText(['要你处理3', '做完了你还没看2']);
+  await expect(lists.locator('.at-cols .at-item .at-title')).toHaveText([/网页端登录改成「1」/, /小红书要你/, /Muse 冒烟测试/, /手机总台在做界面/, /小福助手排查报告/]);
+  const [needBox, reportBox] = await lists.locator('.at-col').evaluateAll((all) => all.map((c) => c.getBoundingClientRect().toJSON()));
+  expect(reportBox.top).toBeGreaterThan(needBox.bottom - 1);
   await expect(item('Muse 冒烟测试').locator('.at-meta')).toContainText('Windows · muse');
-  await expect(item('网页端登录改成「1」').locator('.at-ask')).toContainText('要你做回复「仍要 1」');
+  await expect(item('网页端登录改成「1」').locator('.at-ask')).toContainText('回复「仍要 1」');
+  // 队长's question is the biggest text on the card, its answers right under it; writing one's own is the fallback.
+  const muse = item('Muse 冒烟测试');
+  await expect(muse.locator('.at-ask')).toHaveAttribute('aria-label', '验收卡住了：还要继续做吗？');
+  await expect(muse.locator('.at-ask .at-ask-text')).toHaveText('还要继续做吗？');
+  await expect(muse.locator('.at-quick button')).toHaveText(['换个做法再试', '先放着', '不做了']);
+  await expect(muse.getByRole('button', { name: '写别的回复' })).toBeVisible();
+  await expect(muse.getByRole('button', { name: '回复', exact: true })).toHaveCount(0);
+  const [askSize, titleSize] = await muse.evaluate((el) => ['.at-ask-text', '.at-title'].map((s) => parseFloat(getComputedStyle(el.querySelector(s)).fontSize)));
+  expect(askSize).toBeGreaterThan(titleSize);
+  await expect(muse.locator('.at-detail')).toHaveCount(0);
   await expect(page.locator('#attention-sources')).toContainText('回复只发给那条所在的电脑');
   await shot('phone-1-list-dark');
 
@@ -66,6 +80,10 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   await item('小福助手排查报告').scrollIntoViewIfNeeded();
   await expect.poll(() => hub.machines.mac.attentionWrites.filter((w) => w.op === 'read').flatMap((w) => w.ids)).toContain('at-m3-report');
   await expect(item('小福助手排查报告').locator('.at-unread')).toHaveCount(0);
+  // Read, it keeps its place (and its reply) while the tab stays open.
+  await expect(item('小福助手排查报告')).toHaveClass(/\bseen\b/);
+  await expect(item('小福助手排查报告').locator('.at-seen')).toHaveText('已读');
+  await expect(item('小福助手排查报告').getByRole('button', { name: '回复', exact: true })).toBeVisible();
 
   // Reply: it goes to Mac with the item, and the item is ticked into 已完成.
   await item('网页端登录改成「1」').getByRole('button', { name: '回复', exact: true }).click();
@@ -78,7 +96,7 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   expect(hub.machines.mac.attentionWrites.filter((w) => w.op === 'reply')).toEqual([{ op: 'reply', id: 'at-m1-decide', text: '改成登录一次长期有效，别设成 1' }]);
   expect(hub.machines.win.attentionWrites.filter((w) => w.op !== 'read')).toEqual([]);
   await expect(lists.locator('.at-section h2').first()).toHaveText('要你处理2');
-  await expect(page.getByRole('button', { name: /已完成/ })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByRole('button', { name: /已完成和已读/ })).toHaveAttribute('aria-expanded', 'false');
   await expect(item('网页端登录改成「1」')).toHaveCount(0);
 
   // Tick the Windows card item: only Windows hears about it.
@@ -86,8 +104,8 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   await expect.poll(() => hub.machines.win.attentionWrites.filter((w) => w.op === 'done')).toEqual([{ op: 'done', id: 'at-w1-held' }]);
   await expect(tab().locator('.nav-attention')).toHaveText('1');
 
-  // 已完成 is folded; open it, put one back.
-  const toggle = page.getByRole('button', { name: /已完成/ });
+  // 已完成和已读 is folded; open it, put one back.
+  const toggle = page.getByRole('button', { name: /已完成和已读/ });
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
   await toggle.click();
   await expect(item('Windows 隧道守护脚本').locator('.at-done-text')).toHaveText('你已回复：好，开机自启也一起配上');
@@ -96,6 +114,7 @@ test('both computers on one page: what needs you first, then reports; reply, tic
   await expect(item('网页端登录改成「1」').locator('.at-ok svg')).toHaveCount(1);
   // A finished plain 要你处理 drops its label; a typed one keeps it.
   await expect(item('Bark 推送').locator('.at-kind')).toHaveCount(0);
+  await expect(item('「登录改成 1」的会话').locator('.at-done-text')).toHaveText('你在队长对话里看过了');
   await expect(item('网页端登录改成「1」').locator('.at-kind')).toHaveText('等你拍板');
   await shot('phone-3-done-dark');
   await item('Muse 冒烟测试').getByRole('button', { name: '放回待处理' }).click();
@@ -115,6 +134,13 @@ test('both computers on one page: what needs you first, then reports; reply, tic
     expect(b.text, JSON.stringify(b)).not.toMatch(/^(复制|已复制|删除|编辑|刷新|关闭|放回)$/);
     if (b.icon) { expect(b.text).toBe(''); expect(b.label).toBeTruthy(); expect(b.title).toBeTruthy(); expect(b.w).toBeGreaterThanOrEqual(44); }
   }
+
+  // A quick answer is one tap: it goes to Windows only as an ordinary reply, and the item is ticked.
+  await item('Muse 冒烟测试').getByRole('button', { name: '先放着', exact: true }).click();
+  await expect(page.locator('.at-hint')).toContainText('已回复「先放着」，交给 Windows 的队长');
+  await expect.poll(() => hub.machines.win.attentionWrites.filter((w) => w.op === 'reply')).toEqual([{ op: 'reply', id: 'at-w1-held', text: '先放着' }]);
+  expect(hub.machines.mac.attentionWrites.filter((w) => w.op === 'reply')).toHaveLength(1);
+  await expect(lists.locator('.at-section h2').first()).toHaveText('要你处理1');
 });
 
 test('light theme, a refused reply keeps the draft, and an older computer without the page is named', async ({ browser }) => {
@@ -131,4 +157,40 @@ test('light theme, a refused reply keeps the draft, and an older computer withou
   await expect(item('小福助手排查报告').getByRole('alert')).toHaveText('Mac 上还没有队长。先到那台电脑的 AgentDeck 里创建队长，再回来回复。草稿还在。');
   await expect(item('小福助手排查报告').getByRole('textbox')).toHaveValue('补查完了告诉我');
   await shot('phone-4-light');
+});
+
+test('a report said in the 队长 reply the phone shows is read there; it never reaches 没看', async ({ browser }) => {
+  await open(browser);
+  await page.getByRole('navigation', { name: '主导航' }).locator('[data-view="captain"]').click();
+  // The Mac round that ends with the reply at-m5-chat was said in (turn mac-t5).
+  const round = page.locator('#captain-turns .turn[data-machine="mac"]', { hasText: 'Mac 队长测试回复' });
+  await expect(round).toHaveAttribute('data-said', 'mac-t5');
+  await round.locator('.reply').scrollIntoViewIfNeeded();
+  await expect.poll(() => hub.machines.mac.attentionWrites.filter((w) => w.op === 'read'), { timeout: 15000 }).toEqual([{ op: 'read', ids: ['at-m5-chat'], via: 'chat' }]);
+  expect(hub.machines.win.attentionWrites).toEqual([]);
+  // One report is still unseen: the dot stays, the number is still only 要你处理.
+  await expect(tab().locator('.nav-attention')).toHaveText('3');
+  await expect(tab().locator('.nav-attention-dot')).toBeVisible();
+  await tab().click();
+  await expect(page.locator('#attention-lists .at-sec-report h2')).toHaveText('做完了你还没看1');
+  await expect(page.locator('#attention-lists .at-cols').getByText('手机总台在做界面')).toHaveCount(0);
+});
+
+test('a tablet shows 要你处理 and 做完了你还没看 side by side', async ({ browser }) => {
+  for (const viewport of [{ width: 1024, height: 1366 }, { width: 1366, height: 1024 }]) {
+    await open(browser, 'dark', viewport);
+    await page.locator('.side-nav [data-side-view="attention"]').click();
+    await expect(page.locator('.side-nav .nav-attention')).toHaveText('3');
+    await expect(page.locator('.side-nav .nav-attention-dot')).toBeVisible();
+    const lists = page.locator('#attention-lists');
+    await expect(lists.locator('.at-section h2')).toHaveText(['要你处理3', '做完了你还没看2']);
+    const [needBox, reportBox] = await lists.locator('.at-col').evaluateAll((all) => all.map((c) => c.getBoundingClientRect().toJSON()));
+    expect(reportBox.left).toBeGreaterThan(needBox.right);
+    expect(Math.abs(reportBox.top - needBox.top)).toBeLessThan(2);
+    await shot(`tablet-${viewport.width}x${viewport.height}-dark`);
+    const seen = problems;
+    await context.close(); context = null;
+    await hub.close(); hub = null;
+    expect(seen).toEqual([]);
+  }
 });

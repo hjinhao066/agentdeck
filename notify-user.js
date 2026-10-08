@@ -17,10 +17,11 @@ function createNotifyUser({ getConfig, notifications, fetchImpl = fetch, deliver
         (command.test && !command.urgent)) throw new Error('notify-user requires --message (1–4000 characters) and optional --urgent.');
     notifications.show({ id: command.callerId, turnId, state: 'input', reply: command.message, visible });
     const local = '已处理本机提醒（遵循通知/声音设置、前台静音及30秒间隔）。';
-    if (!command.urgent) return local;
+    // `bark` is a phone push with its own title and level (待我处理 items); without it only --urgent reaches the phone.
+    if (!command.urgent && !command.bark) return local;
     const result = await sendBark(command.test
       ? { message: `AgentDeck 加急通知测试，音量 ${Policy.settings(config.barkNotifications).criticalVolume}`, title: '【测试】', level: 'critical' }
-      : { message: command.message, level: 'critical', dedupeKey: command.dedupeKey });
+      : command.bark || { message: command.message, level: 'critical', dedupeKey: command.dedupeKey });
 
     const message = local + '\n' + result.message;
     return structured ? { ...result, message } : message;

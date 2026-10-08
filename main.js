@@ -9,7 +9,7 @@ const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = re
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createResultMonitor } = require('./install-result');
-const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
+const { phonePush } = require('./attention-core');
 const { createQuotaLowBark } = require('./quota-low-bark');
 const { createSeatAuthMonitor, authFailure } = require('./seat-auth-alert');
 const BarkPolicy = require('./bark-policy');
@@ -106,7 +106,6 @@ handleMain('todos:request', (_event, payload) => {
   return { item };
 });
 let fleetClient = null;
-let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'move', 'archive', 'update', 'priority', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree'].includes(payload.op)) throw new Error('Invalid task board operation.');
   const result = taskStore[payload.op](payload.input || {});
@@ -655,7 +654,7 @@ function setupBoardControl() {
     if (!boardRendererReady) return false;
     send('task-board:start', input);
     return false; // Renderer acknowledges through the durable dispatched marker.
-  }, onChange: () => { send('task-board:changed', {}); notifyNeedsUserCards(); },
+  }, onChange: () => { send('task-board:changed', {}); },
   // Automatic verification: the renderer opens the reviewer / sends the rework,
   // then marks the durable claim delivered. Off when the local setting says so.
   onReview: (input) => { if (!boardRendererReady) return false; send('task-board:review', input); return false; },
@@ -1323,43 +1322,6 @@ app.whenReady().then(async () => {
     }
     return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
   });
-  const needsUserBarkPath = path.join(app.getPath('userData'), 'needs-user-bark-state.json');
-  let needsUserBarkState = { entries: {} };
-  let needsUserBarkStateLoaded = false;
-  try {
-    if (fs.statSync(needsUserBarkPath).size <= 65536) {
-      const value = JSON.parse(fs.readFileSync(needsUserBarkPath, 'utf8'));
-      if (value && typeof value.entries === 'object' && !Array.isArray(value.entries)) {
-        const entries = {};
-        for (const [id, entry] of Object.entries(value.entries)) {
-          if (/^[A-Za-z0-9_-]{1,160}$/.test(id) && typeof entry === 'string' && entry.length <= 200) entries[id] = entry;
-        }
-        needsUserBarkState = { entries };
-        needsUserBarkStateLoaded = true;
-      }
-    }
-  } catch (_) {}
-  if (tudArg) app.testNeedsUserAlerts = [];
-  const sendNeedsUserBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
-    ...(tudArg ? { keyHome: app.getPath('userData') } : {}),
-    ...(tudArg ? { fetchImpl: async (_url, options) => {
-      const { device_key, ...payload } = JSON.parse(options.body);
-      app.testNeedsUserAlerts.push(payload);
-      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
-    } } : {}) });
-  const observeNeedsUser = createNeedsUserBark({ state: needsUserBarkState, sendBark: sendNeedsUserBark,
-    suppressInitial: !needsUserBarkStateLoaded,
-    onError: (message) => send('toast', { text: message }),
-    saveState: (value) => {
-      fs.writeFileSync(needsUserBarkPath + '.tmp', JSON.stringify(value), { mode: 0o600 });
-      fs.renameSync(needsUserBarkPath + '.tmp', needsUserBarkPath);
-    } });
-  notifyNeedsUserCards = () => {
-    try {
-      observeNeedsUser(taskStore.list(), { enabled: barkEnabled(notificationConfig), ready: barkReady(notificationConfig) });
-    } catch (_) { send('toast', { text: '需要你的手机提醒没能记下，未发送。' }); }
-  };
-  notifyNeedsUserCards();
 
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
@@ -1381,7 +1343,6 @@ app.whenReady().then(async () => {
     checkQuotaBark();
     queueAuthReceipts();
     pumpBark().catch(() => {});
-    notifyNeedsUserCards();
   };
   onMain('save-config', (_e, cfg) => { try { writeConfig(cfg); } catch (_) {} });
   onMain('save-config-sync', (e, cfg) => { try { writeConfig(cfg); e.returnValue = true; } catch (_) { e.returnValue = false; } });
@@ -1493,11 +1454,14 @@ app.whenReady().then(async () => {
       try { result = await pending.notifyPromise; }
       catch (err) { error = err.message; }
     }
-    // 待我处理: a newly filed need item alerts the user the same way notify-user does.
+    // 待我处理: a newly filed need item alerts the user here and on the phone.
+    // The phone hears 队长's own question and quick answers, never a receipt.
     if (action === 'main-inbox' && pending.command.op === 'need' && turnId && !error) {
       const input = pending.command.input || {};
       const message = [input.title, input.ask].filter((v) => typeof v === 'string' && v.trim()).join('\n').slice(0, 4000);
-      pending.notifyPromise ||= notifyUser({ callerId: pending.command.callerId, id: pending.command.id, message, urgent: input.urgent === true }, visible === true, turnId);
+      const urgent = input.urgent === true;
+      pending.notifyPromise ||= notifyUser({ callerId: pending.command.callerId, id: pending.command.id, message, urgent,
+        bark: { ...phonePush(input), level: urgent ? 'critical' : 'active' } }, visible === true, turnId);
       try { result = (typeof result === 'string' ? result + '\n' : '') + await pending.notifyPromise; }
       catch (err) { result = (typeof result === 'string' ? result + '\n' : '') + '本机提醒没发出：' + err.message; }
     }

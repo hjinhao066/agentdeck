@@ -125,8 +125,8 @@ test('injected dispatch cards, notices and receipts fold into one round: one mes
   ]);
   // Only what was said: no task titles, receipts, notices or tool steps.
   assert.deepEqual(groups, [
-    { id: 'u1', user: '看一下进度', images: [], reply: '进度如下\n\n文档也好了', pending: false, interrupted: false },
-    { id: 'u2', user: '再查一次', images: [], reply: '', pending: true, interrupted: false },
+    { id: 'u1', user: '看一下进度', images: [], reply: '进度如下\n\n文档也好了', said: ['r1', 'r2'], pending: false, interrupted: false },
+    { id: 'u2', user: '再查一次', images: [], reply: '', said: [], pending: true, interrupted: false },
   ]);
 });
 
@@ -135,7 +135,7 @@ test('a round where the Captain only dispatched work shows nothing on its side',
   const task = (id, ts) => ({ id, ts, kind: 'task', task: { title: '活', summary: '做完了' }, done: true });
   // After a message: the message alone. With no message at all: no round.
   assert.deepEqual(Core.groupTurns([{ id: 'u1', ts: t, user: '派一下', reply: '', done: true }, task('k1', t + 1000)]),
-    [{ id: 'u1', user: '派一下', images: [], reply: '', pending: false, interrupted: false }]);
+    [{ id: 'u1', user: '派一下', images: [], reply: '', said: [], pending: false, interrupted: false }]);
   assert.deepEqual(Core.groupTurns([task('k1', t), { id: 'n1', ts: t + 1000, kind: 'notice', reply: '已切换座位', done: true }]), []);
   // A reply that is nothing but terminal residue is no reply.
   assert.deepEqual(Core.groupTurns([{ id: 'r1', ts: t, reply: 'Ran 2 shell commands\n\nUpdate available! Run: brew upgrade claude-code@latest', done: true }]), []);
