@@ -3045,6 +3045,8 @@ function toggleHelp() {
   else helpDlg.showModal();
 }
 document.getElementById('helpClose').onclick = () => helpDlg.close();
+document.getElementById('helpX').innerHTML = ICONS.close;
+document.getElementById('helpX').onclick = () => helpDlg.close();
 
 // ---- Add / edit dialog ----
 const dlg = document.getElementById('colDialog');
