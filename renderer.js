@@ -2436,11 +2436,23 @@ function findLinks(text) {
   // filename with a :line suffix. The main process anchors these to the
   // column's live shell cwd before resolving.
   const relRe = /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?|[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g;
-  while ((m = relRe.exec(text))) {
-    const s = m.index, e = trimTrail(text, s, s + m[0].length);
-    if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
-    if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
-    out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+  // A match lies inside one run of the characters relRe can match and holds a
+  // ".ext": search each such run on its own and skip runs without one, or runs
+  // a URL or absolute path already covers (every match there would overlap it).
+  // Same matches as one pass over the line, but a long run (a base64 blob, a
+  // hash, a long URL) no longer makes the pattern backtrack quadratically.
+  const runRe = /[\w.+@%:/-]+/g;
+  let run;
+  while ((run = runRe.exec(text))) {
+    if (!/\.[A-Za-z0-9]/.test(run[0])) continue;
+    if (out.some((o) => run.index >= o.start && run.index + run[0].length <= o.end)) continue;
+    relRe.lastIndex = 0;
+    while ((m = relRe.exec(run[0]))) {
+      const s = run.index + m.index, e = trimTrail(text, s, s + m[0].length);
+      if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
+      if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
+      out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
+    }
   }
   return out;
 }
