@@ -56,10 +56,8 @@ test('night urgent and active reminders stay local, deduplicate durably and merg
   await expect.poll(async () => (await status()).queuedCount).toBe(1);
   await urgent('请确认另一席位授权。');
   await expect.poll(async () => (await status()).queuedCount).toBe(2);
-  await page.evaluate(async () => {
-    const added = await window.deck.taskBoard('add', { project: '离线测试', title: '决定课程材料', detail: '需要用户选择。' });
-    await window.deck.taskBoard('move', { id: added.card.id, status: 'needs_user' });
-  });
+  await page.evaluate((command) => window.deck.ptyInput('captain', command + '\r'),
+    `node "${CLI}" inbox need --title "决定课程材料" --ask "选哪份课程材料？"`);
   await expect.poll(async () => (await status()).queuedCount, { timeout: 10000 }).toBe(3);
   expect(pending()).toHaveLength(3);
   expect(pending().filter((item) => item.message === 'US 席位需要重新登录。')).toHaveLength(1);
@@ -70,7 +68,6 @@ test('night urgent and active reminders stay local, deduplicate durably and merg
   await expect.poll(async () => (await status()).queuedCount).toBe(3);
   await clock(at(day, 9, 59), true); expect(await digests()).toHaveLength(0);
   expect(await application.evaluate(({ app }) => app.testCaptainAlerts.filter((event) => event.type === 'bark'))).toHaveLength(0);
-  expect(await application.evaluate(({ app }) => app.testNeedsUserAlerts)).toHaveLength(0);
   await clock(at(day, 10), true);
   expect(await digests()).toHaveLength(1);
   const [digest] = await digests();
@@ -78,6 +75,7 @@ test('night urgent and active reminders stay local, deduplicate durably and merg
   expect(digest.body).toContain('3 项提醒');
   expect(digest.body).toContain('US 席位需要重新登录。');
   expect(digest.body).toContain('决定课程材料');
+  expect(digest.body).toContain('选哪份课程材料？');
   expect(pending()).toHaveLength(0);
   await clock(at(day, 10, 1), true); expect(await digests()).toHaveLength(1);
 });

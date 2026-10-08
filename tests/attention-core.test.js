@@ -231,3 +231,11 @@ test('times read the way the page shows them', () => {
   assert.equal(A.when(new Date(2026, 9, 5, 22, 0).getTime(), now), '昨天 22:00');
   assert.equal(A.when(new Date(2026, 9, 1, 8, 0).getTime(), now), '10/1 08:00');
 });
+
+test('the phone hears 队长的问题 and quick answers under the item title, never the detail', () => {
+  assert.deepEqual(A.phonePush({ title: '确认密码策略', ask: '选 8 位还是 12 位？', options: ['8 位', '12 位', '8 位', ''], detail: '验收完成，判定【通过】' }),
+    { title: '确认密码策略', message: '选 8 位还是 12 位？\n可选回答：8 位 / 12 位' });
+  assert.deepEqual(A.phonePush({ title: '去登录 Claude' }), { title: '去登录 Claude', message: '去登录 Claude' });
+  assert.equal(A.phonePush({ title: 'x'.repeat(150) }).title.length, 100);
+  assert.equal(A.phonePush({ title: '  多行\n标题  ', ask: '问\n题' }).message, '问 题');
+});

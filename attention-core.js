@@ -374,6 +374,15 @@
   }
 
   // ---- the phone ----------------------------------------------------------
+  // What a phone push says about a new need: 队长's own question and its quick
+  // answers, under the item's title. Never the card's receipt or the detail.
+  function phonePush(input) {
+    const title = clip(line(input && input.title), 100);
+    const ask = clip(line(input && input.ask), LIMITS.ask);
+    const options = optionList(input && input.options);
+    const message = [ask || title, options.length ? '可选回答：' + options.join(' / ') : ''].filter(Boolean).join('\n');
+    return { title, message };
+  }
   // Display fields only; no captain notice ids.
   function phoneItem(item) {
     return {
@@ -391,5 +400,5 @@
   }
 
   return { VERSION, KINDS, TYPES, REPORT_LABEL, LIMITS, KEEP_DONE, ID, normalize, normalizeItem, newId, add, resolve, reopen, markRead, reply, markRepliesSeen, prune,
-    notifyItem, syncCards, migrate, syncSessions, label, sorted, counts, badgeTitle, view, doneText, when, refs, replyNotice, doneNotice, listText, addedText, phoneItem, phoneView };
+    notifyItem, syncCards, migrate, syncSessions, label, sorted, counts, badgeTitle, view, doneText, when, refs, replyNotice, doneNotice, listText, addedText, phonePush, phoneItem, phoneView };
 });

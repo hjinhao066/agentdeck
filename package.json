@@ -70,7 +70,6 @@
       "quota-codex.js",
       "quota-low-bark.js",
       "seat-auth-alert.js",
-      "needs-user-bark.js",
       "quota-claude.js",
       "chat-ui.js",
       "sidebar-core.js",
