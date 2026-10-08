@@ -9,6 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { validId } = require('../security');
@@ -20,6 +21,8 @@ function handlerSource(start) {
   const end = source.indexOf('\n  });', begin) + '\n  });'.length;
   return source.slice(begin, end);
 }
+// The view of config.json the idle report reads, declared above the quota warm-up.
+const view = (/\n {2}let seatView = [\s\S]*?\n {2}};\n/.exec(source) || [''])[0];
 
 test('typing into the 队长 column does not reread config.json for every key', () => {
   const handlers = {};
@@ -29,13 +32,13 @@ test('typing into the 队长 column does not reread config.json for every key', 
     handleMain: (name, fn) => { handlers[name] = fn; },
     onMain: (name, fn) => { handlers[name] = fn; },
     seatConfig: () => { configReads++; return { mainSession: { colId: 'cap' }, activeClaudeSeatId: 'cn', columns: [{ id: 'cap', isMain: true, claudeSeatId: 'us' }] }; },
-    validId,
+    validId, fs, configPath: path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-input-config-')), 'config.json'),
     ptys: new Map([['cap', { write: (data) => writes.push(data) }], ['worker', { write: (data) => writes.push(data) }]]),
     quotaWarmup: { cancel: (seatId) => cancels.push(seatId), tick: async () => {} },
     warmupCaptain: { id: '', idle: false, at: 0 },
     Date,
   });
-  vm.runInContext(handlerSource("handleMain('seats:warmup-idle'"), context);
+  vm.runInContext(view + handlerSource("handleMain('seats:warmup-idle'"), context);
   vm.runInContext(handlerSource("onMain('pty:input'"), context);
 
   // The status tick reports the idle 队长 (this reads the config once, as before).

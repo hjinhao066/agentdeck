@@ -21,8 +21,8 @@ function handlerSource(start) {
   const end = source.indexOf('\n  });', begin) + '\n  });'.length;
   return source.slice(begin, end);
 }
-// State the handler keeps between reports, declared right above it.
-const state = (/\n {2}let warmupIdleConfig = [^\n]*\n/.exec(source) || [''])[0];
+// The view of config.json the handler reads, declared above the quota warm-up.
+const view = (/\n {2}let seatView = [\s\S]*?\n {2}};\n/.exec(source) || [''])[0];
 
 function captain(t) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-idle-config-'));
@@ -44,7 +44,7 @@ function captain(t) {
     warmupCaptain: { id: '', idle: false, at: 0, seatId: '' },
     Date,
   });
-  vm.runInContext(state + handlerSource("handleMain('seats:warmup-idle'"), context);
+  vm.runInContext(view + handlerSource("handleMain('seats:warmup-idle'"), context);
   return { report: (colId, idle) => handlers['seats:warmup-idle'](null, { colId, idle }), parses: () => parses, write, config, cancels, context };
 }
 

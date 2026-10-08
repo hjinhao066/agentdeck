@@ -1247,20 +1247,33 @@ app.whenReady().then(async () => {
     };
   }
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
+  // What the 队长's idle report (every status tick) and the quota warm-up (every 30 s)
+  // read from config.json: parsed again only when the file changed, and only these
+  // fields are kept, not the archived sessions and task bodies around them.
+  let seatView = { key: '', cfg: {} };
+  const seatViewConfig = () => {
+    let key = '';
+    try { const stat = fs.statSync(configPath); key = `${stat.ino}:${stat.size}:${stat.mtimeMs}`; } catch (_) {}
+    if (!key || key !== seatView.key) {
+      const { mainSession, activeClaudeSeatId, columns, claudeSeats, quotas, quotaWarmup: warmup, perpetualCaptain } = seatConfig();
+      seatView = { key, cfg: { mainSession: mainSession && { colId: mainSession.colId }, activeClaudeSeatId, columns, claudeSeats, quotas, quotaWarmup: warmup, perpetualCaptain } };
+    }
+    return seatView.cfg;
+  };
   let warmupCaptain = { id: '', idle: false, at: 0, seatId: '' };
   const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
-    warmupCaptain.id === seatConfig().mainSession?.colId ? warmupCaptain.id : '';
+    warmupCaptain.id === seatViewConfig().mainSession?.colId ? warmupCaptain.id : '';
   quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
   if (tudArg) { app.testWarmupRuns = []; app.testWarmupResults = []; }
   quotaWarmup = createWarmupService({
     stateFile: path.join(app.getPath('userData'), 'quota-warmup-state.json'),
     logFile: path.join(app.getPath('userData'), 'quota-warmup.log'),
-    getSettings: () => seatConfig().quotaWarmup,
-    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatConfig().perpetualCaptain).threshold,
-    getSeats: () => ClaudeSeatsCore.normalize(seatConfig().claudeSeats),
+    getSettings: () => seatViewConfig().quotaWarmup,
+    getThreshold: () => PerpetualCaptainCore.normalizeSettings(seatViewConfig().perpetualCaptain).threshold,
+    getSeats: () => ClaudeSeatsCore.normalize(seatViewConfig().claudeSeats),
     readSeat: async (seat) => ({ ...await seatInfo(seat, seatHome, tudArg ? 'test' : process.platform),
-      quota: seatConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
-    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
+      quota: seatViewConfig().quotas?.[QuotaCore.seatKey(seat.id)], usage: readUsage(seat, seatHome) }),
+    occupied: (seats) => occupiedClaudeSeats({ seats, columns: seatViewConfig().columns || [], ptys, home: seatHome, idleCaptainId: idleCaptainId() },
       tudArg ? async () => [] : undefined),
     run: tudArg ? async (seat) => {
       // Isolated UI tests can supply deterministic results from the Electron
@@ -1270,13 +1283,8 @@ app.whenReady().then(async () => {
     } : (seat, options) => quotaWarmupRunner.run(seat, options),
   });
   handleMain('seats:warmup-status', () => quotaWarmup.snapshot());
-  // Reported on every status tick: parse config.json again only when the file changed.
-  let warmupIdleConfig = { key: '', cfg: {} };
   handleMain('seats:warmup-idle', (_e, { colId, idle }) => {
-    let key = '';
-    try { const stat = fs.statSync(configPath); key = `${stat.ino}:${stat.size}:${stat.mtimeMs}`; } catch (_) {}
-    if (!key || key !== warmupIdleConfig.key) warmupIdleConfig = { key, cfg: seatConfig() };
-    const cfg = warmupIdleConfig.cfg, col = cfg.columns?.find((c) => c.id === colId);
+    const cfg = seatViewConfig(), col = cfg.columns?.find((c) => c.id === colId);
     if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
     const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
     // The seat is kept here (reported every status tick) so a keystroke never rereads config.json.
