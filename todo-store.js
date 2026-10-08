@@ -151,8 +151,9 @@ class TodoStore {
       return item;
     });
   }
-  // `base` lets the phone change an item this computer has not received yet
-  // (written on the other computer less than one git sync ago).
+  // `base` is the item as the phone saw it. It lets the phone change an item this
+  // computer has not received yet, or has only an older copy of (written on the
+  // other computer less than one git sync ago).
   update({ id, text, done, deleted, base, source = 'desktop' } = {}) {
     todoId(id);
     if (text !== undefined) text = cleanText(text);
@@ -161,10 +162,20 @@ class TodoStore {
     if (!SOURCE.test(source)) throw new Error('Invalid source.');
     return this.mutate((byId) => {
       let current = byId.get(id);
-      if (!current && base) {
+      let seen = null;
+      if (base) {
         const b = typeof base === 'object' && !Array.isArray(base) ? base : {};
-        current = normalizeItem({ id, text: b.text, done: b.done === true, doneAt: b.doneAt, created: b.created, updated: b.updated, deleted: false, source, ai: null });
-        if (!current) throw new Error('Invalid to-do.');
+        seen = normalizeItem({ id, text: b.text, done: b.done === true, doneAt: b.doneAt, created: b.created, updated: b.updated, deleted: false, source, ai: null });
+        if (!current && !seen) throw new Error('Invalid to-do.');
+      }
+      if (!current) current = seen;
+      else if (seen && !current.deleted && Date.parse(seen.updated) > Date.parse(current.updated)) {
+        // The phone saw a later version than this computer's copy (the other
+        // computer changed it less than one git sync ago). Start from what the
+        // phone saw, or this computer's older text would be written back with a
+        // newer stamp and cover that edit. A deleted copy here stays deleted,
+        // and fields the phone never sees are kept.
+        current = { ...current, text: seen.text, done: seen.done, doneAt: seen.doneAt, updated: seen.updated };
       }
       if (!current) throw new Error('这条待办已经不在了，刷新一下。');
       const next = { ...current, updated: this.stamp(current.updated), device: this.deviceId };
