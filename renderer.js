@@ -2595,6 +2595,8 @@ function removeCol(col) {
 function detachColumn(col, keepReplay) {
   const t = terms.get(col.id);
   const idx = columns.indexOf(col);
+  // Its place in the deck the user sees: 队长's background sessions are in `columns` but not there.
+  const deckIdx = deckColumns().indexOf(col);
   if (selectedBoardId === col.id) {
     restoreBoardTerminal();
     selectedBoardId = null;
@@ -2614,7 +2616,7 @@ function detachColumn(col, keepReplay) {
   // the user happens to click another column.
   if (focusedId === col.id) {
     focusedId = null;
-    if (columns.length) focusColumnByIndex(Math.min(Math.max(idx, 0), columns.length - 1));
+    if (columns.length) focusColumnByIndex(deckIdx >= 0 ? deckIdx : Math.min(Math.max(idx, 0), columns.length - 1));
   }
   updateColumnStyles();
 }
@@ -4331,7 +4333,8 @@ document.addEventListener('keydown', (e) => {
     addAndFocusColumn();
   } else if (k === 'w' || k === 'W') {
     const idx = columns.findIndex((c) => c.id === focusedId);
-    if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(idx); }
+    const deckIdx = deckColumns().findIndex((c) => c.id === focusedId);   // background sessions are not in the deck
+    if (idx >= 0) { removeCol(columns[idx]); focusColumnByIndex(deckIdx >= 0 ? deckIdx : idx); }
   } else if (k === 'f' || k === 'F') {
     if (ChatUI.isChatMode(focusedId)) ChatUI.focusSearch(); else openSearch();
   } else if (e.shiftKey && (k === 'b' || k === 'B')) {
