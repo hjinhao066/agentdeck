@@ -118,8 +118,11 @@ test('a listener that really stopped polling is still dropped, and says why when
   registry.dispose();
 });
 
+// On Windows child.kill() ends the process outright and never runs a signal handler,
+// so there is no "why it left" message to read; the check only applies to POSIX.
+const noSignalHandlers = process.platform === 'win32' ? { skip: 'Windows terminates the process without running signal handlers' } : {};
 for (const signal of ['SIGTERM', 'SIGHUP']) {
-  test(`${signal} makes the waiting CLI say why it left`, async (t) => {
+  test(`${signal} makes the waiting CLI say why it left`, noSignalHandlers, async (t) => {
     const { dir } = profile(t);
     const waiting = cli(t, dir);
     await firstRequest(dir);
