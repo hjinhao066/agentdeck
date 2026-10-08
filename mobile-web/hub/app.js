@@ -731,10 +731,11 @@
   }
   function wantBattery(m, change) {
     m.batteryWant = { ...(m.batteryWant || {}), ...change };
+    if (m.batteryWant.boost !== true) delete m.batteryWant.boostMinutes;
     m.batteryNote = ''; m.batteryError = '';
     clearTimeout(m.batteryTimer);
     // The cap stepper waits a moment so three quick taps are one request.
-    m.batteryTimer = setTimeout(() => saveBattery(m), change.mode !== undefined ? 0 : 350);
+    m.batteryTimer = setTimeout(() => saveBattery(m), change.cap !== undefined ? 350 : 0);
     renderSettings();
   }
   async function saveBattery(m) {
@@ -758,6 +759,43 @@
     if (m.batteryError && !m.batteryOld) loadBattery(m);
     if (m.batteryAgain && m.batteryWant) saveBattery(m);
   }
+  // 临时拉满: the main way to get full strength on battery. It lifts the battery limit for a while and ends by itself
+  // (at the chosen time, when plugged in) or with the × here; the battery mode below stays as it was.
+  const BOOST_CHOICES = [['open', '直到取消'], ['2h', '2 小时'], ['today', '今天 23:59']];
+  function boostBox(m, view) {
+    const box = node('div', 'boost-box'); box.dataset.boosting = String(view.boost);
+    const head = node('div', 'boost-head'), name = node('strong', '', '临时拉满');
+    head.append(name); box.append(head);
+    const text = (className, value) => { const el = node('p', className, value); box.append(el); return el; };
+    if (view.boost) {
+      const status = node('div', 'boost-status');
+      const cancel = iconButton('close', `取消 ${m.label} 的临时拉满`, 'boost-cancel'); cancel.dataset.action = 'boost-cancel';
+      cancel.addEventListener('click', () => wantBattery(m, { boost: false }));
+      status.append(node('span', 'boost-on', `已临时拉满（${Core.boostEndText(view.boostUntil)}）`), cancel);
+      box.append(status);
+      text('set-note', `电池下也同时开到 ${view.baseCap} 个会话。接上电源、到时间或点 × 后恢复省电上限 ${view.cap}。`);
+    } else if (view.active) {
+      text('set-lead', `电池供电时也按正常上限 ${view.baseCap} 开会话，不再被省电上限 ${view.cap} 卡住。接上电源或到时间自动恢复；省电模式本身不变。`);
+      const choice = m.boostChoice || 'open';
+      const group = node('div', 'segmented three'); group.setAttribute('role', 'radiogroup'); group.setAttribute('aria-label', `${m.label} 拉满多久`);
+      for (const [value, label] of BOOST_CHOICES) {
+        const option = node('button', 'segment', label); option.type = 'button'; option.setAttribute('role', 'radio'); option.dataset.choice = value;
+        option.setAttribute('aria-checked', String(choice === value));
+        option.addEventListener('click', () => { m.boostChoice = value; signatures.delete(settings); renderSettings(); });
+        group.append(option);
+      }
+      box.append(group);
+      const go = node('button', 'primary', '临时拉满'); go.type = 'button'; go.dataset.action = 'boost-on';
+      go.addEventListener('click', () => {
+        const minutes = choice === '2h' ? 120 : choice === 'today' ? Core.minutesToEndOfDay(Date.now()) : 0;
+        wantBattery(m, { boost: true, ...(minutes ? { boostMinutes: minutes } : {}) });
+      });
+      box.append(go);
+    } else {
+      text('set-note', view.mode === 'off' ? '电池模式已关，本来就不限制，不需要拉满。' : '现在接着电源，本来就不限制，不需要拉满。');
+    }
+    return box;
+  }
   function batteryBlock(m) {
     const block = node('section', 'set-block'); block.dataset.machine = m.id;
     const title = node('h3', 'set-title'); title.innerHTML = svg('battery'); title.append('电池模式');
@@ -767,6 +805,7 @@
     if (m.batteryOld) { line('set-note warn', `${m.label} 的 AgentDeck 还是旧版，更新到新版后才能在这里调整电池模式。先在那台电脑的设置里改，或等它升级。`); return block; }
     if (!m.battery) { line('set-note', m.batteryFailed ? `暂时读不到 ${m.label} 的电池设置，稍后会自动重试。` : `正在读取 ${m.label} 的电池设置…`); return block; }
     const view = Core.batteryWith(m.battery, m.batteryWant), off = view.mode === 'off';
+    if (view.boostSupported) block.append(boostBox(m, view));
     line('set-lead', '自动：没插电时限制同时干活的会话数。关：不限制，想让队员全速跑就关掉。');
     const group = node('div', 'segmented'); group.setAttribute('role', 'radiogroup'); group.setAttribute('aria-label', `${m.label} 电池模式`);
     for (const [value, name] of [['auto', '自动'], ['off', '关']]) {
@@ -799,10 +838,11 @@
   }
   function renderSettings() {
     if (!settings.open) return;
-    const now = machines.map((m) => [m.id, m.label, m.state, m.battery, m.batteryOld, m.batteryFailed, m.batteryWant, m.batterySaving, m.batteryNote, m.batteryError]);
+    const now = machines.map((m) => [m.id, m.label, m.state, m.battery, m.batteryOld, m.batteryFailed, m.batteryWant, m.batterySaving, m.batteryNote, m.batteryError, m.boostChoice]);
     if (!changed(settings, now)) return;
-    const focused = settings.contains(document.activeElement) ? [document.activeElement.dataset.mode, document.activeElement.dataset.step, document.activeElement.dataset.action].filter(Boolean).join('|') : '';
-    const focusedMachine = focused ? document.activeElement.closest('[data-machine]')?.dataset.machine : '';
+    const active = settings.contains(document.activeElement) ? document.activeElement : null;
+    const focusKind = active ? ['mode', 'choice', 'step', 'action'].find((k) => active.dataset[k]) : '';
+    const focused = focusKind ? { kind: focusKind, value: active.dataset[focusKind], machine: active.closest('[data-machine]')?.dataset.machine || '' } : null;
     const body = node('div', 'sheet-body'), head = node('div', 'sheet-head'), title = node('h2', '', '设置');
     title.id = 'settings-title'; title.tabIndex = -1;
     const close = iconButton('close', '关闭'); close.dataset.action = 'close';
@@ -815,9 +855,10 @@
     }
     settings.replaceChildren(body);
     if (focused) {
-      const [mode, step, action] = focused.split('|');
-      const scope = focusedMachine ? settings.querySelector(`[data-machine="${focusedMachine}"]`) : settings;
-      const target = mode ? scope.querySelector(`[data-mode="${mode}"]`) : step ? (scope.querySelector(`[data-step="${step}"]:not(:disabled)`) || scope.querySelector('[data-step]:not(:disabled)')) : settings.querySelector(`[data-action="${action}"]`);
+      const scope = focused.machine ? settings.querySelector(`.set-card[data-machine="${focused.machine}"]`) || settings : settings;
+      let target = scope.querySelector(`[data-${focused.kind}="${focused.value}"]:not(:disabled)`);
+      // A stepper button that just reached its end hands the finger to the other one.
+      if (!target && focused.kind === 'step') target = scope.querySelector('[data-step]:not(:disabled)');
       (target || settings.querySelector('[data-action="close"]'))?.focus({ preventScroll: true });
     }
   }

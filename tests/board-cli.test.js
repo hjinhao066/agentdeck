@@ -561,7 +561,38 @@ test('settings battery: no flags reads, flags send a validated change, bad flags
     const denied = await runCli(['settings', 'battery'], { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
     assert.match(denied.stderr, /Only conductor-managed terminals/);
     const help = (await runCli(['help'], {})).stdout;
-    assert.match(help, /settings battery \[--mode off\|auto\] \[--cap 1-10\]/);
+    assert.match(help, /settings battery \[--boost on\|off \[--for 90m\|2h \| --until 23:59\]\] \[--mode off\|auto\] \[--cap 1-10\]/);
+    assert.match(help, /临时拉满[\s\S]*用户说「强度拉满」/);
     assert.match(help, /no flags = read only; flags take effect at once and are saved/);
+  } finally { server.stop(); }
+});
+
+test('settings battery --boost: on/off, with an optional length or clock time, checked before anything is requested', async () => {
+  const dir = controlDir('agentdeck-boost-cli-');
+  const server = serve(dir, () => ({ done: true, result: 'ok' }));
+  const env = { AGENTDECK_CONTROL_DIR: dir, AGENTDECK_CONTROL_TOKEN: 'captain-test' };
+  const inputs = () => server.requests.map((r) => r.input);
+  try {
+    assert.equal((await runCli(['settings', 'battery', '--boost', 'on'], env)).code, 0);
+    assert.equal((await runCli(['settings', 'battery', '--boost', 'off'], env)).code, 0);
+    assert.equal((await runCli(['settings', 'battery', '--boost', 'on', '--for', '90m'], env)).code, 0);
+    assert.equal((await runCli(['settings', 'battery', '--boost', 'on', '--for', '2h'], env)).code, 0);
+    assert.equal((await runCli(['settings', 'battery', '--boost', 'on', '--until', '23:59'], env)).code, 0);
+    assert.deepEqual(inputs().slice(0, 4), [{ boost: true }, { boost: false }, { boost: true, boostMinutes: 90 }, { boost: true, boostMinutes: 120 }]);
+    // 23:59 today (or tomorrow when it has passed): between 1 minute and 24 hours from now.
+    const until = inputs()[4];
+    assert.equal(until.boost, true);
+    assert.ok(Number.isInteger(until.boostMinutes) && until.boostMinutes >= 1 && until.boostMinutes <= 1440, JSON.stringify(until));
+    const now = new Date(), end = new Date(now); end.setHours(23, 59, 0, 0);
+    if (end > now) assert.ok(Math.abs(until.boostMinutes - Math.ceil((end - now) / 60000)) <= 1);
+    const sent = server.requests.length;
+    for (const args of [['--boost'], ['--boost', 'yes'], ['--boost', 'ON'], ['--for', '2h'], ['--until', '23:59'], ['--boost', 'off', '--for', '2h'],
+      ['--boost', 'on', '--for', '2h', '--until', '23:59'], ['--boost', 'on', '--for', '0m'], ['--boost', 'on', '--for', '49h'], ['--boost', 'on', '--for', '2d'],
+      ['--boost', 'on', '--for', 'long'], ['--boost', 'on', '--until', '24:00'], ['--boost', 'on', '--until', '9am'], ['--boost', 'on', '--until', '12:60']]) {
+      const result = await runCli(['settings', 'battery', ...args], env);
+      assert.equal(result.code, 1, args.join(' '));
+      assert.match(result.stderr, /settings battery/, args.join(' '));
+    }
+    assert.equal(server.requests.length, sent);
   } finally { server.stop(); }
 });

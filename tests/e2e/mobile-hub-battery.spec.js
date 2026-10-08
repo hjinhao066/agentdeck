@@ -71,7 +71,7 @@ for (const theme of ['dark', 'light']) {
     await expect(sheet().getByRole('heading', { name: '设置', level: 2 })).toBeVisible();
 
     // Mac: what it says now (battery, limit 3, 2 working), mode 自动 chosen.
-    await expect(macBlock().locator('.segment[aria-checked="true"]')).toHaveText('自动');
+    await expect(macBlock().locator('.segment[data-mode][aria-checked="true"]')).toHaveText('自动');
     await expect(macBlock().locator('.step-value')).toHaveText('3');
     await expect(macBlock().locator('.set-state')).toHaveText('电池供电。同时最多开 3 个会话，多的新活排队，现在 2 个在干活。');
     // Windows is an older build: words, no controls that cannot work.
@@ -83,7 +83,7 @@ for (const theme of ['dark', 'light']) {
     // 关: sent at once; the computer's state follows; the number greys out but stays.
     await macBlock().getByRole('radio', { name: '关' }).click();
     await expect.poll(() => mac.batteryWrites).toEqual([{ mode: 'off' }]);
-    await expect(macBlock().locator('.segment[aria-checked="true"]')).toHaveText('关');
+    await expect(macBlock().locator('.segment[data-mode][aria-checked="true"]')).toHaveText('关');
     await expect(macBlock().locator('.set-state')).toHaveText('电池供电。电池模式已关，不限制，现在 2 个在干活。');
     await expect(macBlock().locator('.set-feedback')).toContainText('已生效，已写入这台电脑的设置');
     await expect(macBlock().locator('.set-row')).toHaveClass(/dimmed/);
@@ -125,7 +125,7 @@ for (const theme of ['dark', 'light']) {
     mac.battery.refuse = '这台电脑的设置现在写不进去。';
     await macBlock().getByRole('radio', { name: '自动' }).click();
     await expect(macBlock().getByRole('alert')).toContainText('这台电脑的设置现在写不进去。');
-    await expect(macBlock().locator('.segment[aria-checked="true"]')).toHaveText('关');
+    await expect(macBlock().locator('.segment[data-mode][aria-checked="true"]')).toHaveText('关');
     mac.battery.refuse = '';
     await shot(`battery-390-${theme}-4-refused`);
 
@@ -153,16 +153,92 @@ test('settings: a computer that is offline is named and cannot be changed; comin
   await page.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('button', { name: '刷新全部电脑', exact: true }).click();
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(macBlock().locator('.segment')).toHaveCount(2);
+  await expect(macBlock().locator('.segment[data-mode]')).toHaveCount(2);
 });
 
 test('settings on a tablet: the same sheet, readable and operable at 1180 wide', async ({ browser }) => {
   test.setTimeout(90000);
   await open(browser, { viewport: { width: 1180, height: 820 } });
   await page.getByRole('button', { name: '设置', exact: true }).click();
-  await expect(macBlock().locator('.segment[aria-checked="true"]')).toHaveText('自动');
+  await expect(macBlock().locator('.segment[data-mode][aria-checked="true"]')).toHaveText('自动');
   await auditSheet();
   await macBlock().getByRole('radio', { name: '关' }).click();
   await expect.poll(() => hub.machines.mac.battery.mode).toBe('off');
   await shot('battery-1180-dark-1-open');
+});
+
+for (const theme of ['dark', 'light']) {
+  test(`settings: 临时拉满 is the main control: pick how long, one tap on, an × takes it back, plugged in it is not needed (${theme})`, async ({ browser }) => {
+    test.setTimeout(90000);
+    await open(browser, { theme });
+    const { mac } = hub.machines;
+    await page.getByRole('button', { name: '设置', exact: true }).click();
+    const box = () => macBlock().locator('.boost-box');
+    // Off: the lead says what it does, three lengths (直到取消 chosen), one worded main action.
+    await expect(box().locator('strong')).toHaveText('临时拉满');
+    await expect(box()).toContainText('电池供电时也按正常上限 30 开会话，不再被省电上限 3 卡住');
+    await expect(box().getByRole('radio')).toHaveText(['直到取消', '2 小时', '今天 23:59']);
+    await expect(box().getByRole('radio', { name: '直到取消' })).toHaveAttribute('aria-checked', 'true');
+    await auditSheet();
+    await shot(`boost-390-${theme}-1-off`);
+
+    // 2 小时 → on: one request, with the length; the card says so and the battery mode below is unchanged.
+    await box().getByRole('radio', { name: '2 小时' }).click();
+    await expect(box().getByRole('radio', { name: '2 小时' })).toHaveAttribute('aria-checked', 'true');
+    await box().getByRole('button', { name: '临时拉满', exact: true }).click();
+    await expect.poll(() => mac.batteryWrites).toEqual([{ boost: true, boostMinutes: 120 }]);
+    await expect(box().locator('.boost-on')).toHaveText(/^已临时拉满（到 \d\d:\d\d）$/);
+    await expect(box()).toHaveAttribute('data-boosting', 'true');
+    await expect(box()).toContainText('电池下也同时开到 30 个会话。接上电源、到时间或点 × 后恢复省电上限 3');
+    await expect(macBlock().locator('.set-state')).toContainText('已临时拉满：同时最多开 30 个会话，不受省电上限 3 限制');
+    await expect(macBlock().locator('.segment[data-mode][aria-checked="true"]')).toHaveText('自动');
+    expect([mac.battery.mode, mac.battery.cap, mac.battery.boost]).toEqual(['auto', 3, true]);
+    await auditSheet();
+    await shot(`boost-390-${theme}-2-on`);
+
+    // × cancels (icon, named, 44px); the battery limit is back.
+    const cancel = box().getByRole('button', { name: '取消 Mac 的临时拉满', exact: true });
+    await expect(cancel).toHaveAttribute('title', '取消 Mac 的临时拉满');
+    await expect(cancel).toHaveText('');
+    await cancel.click();
+    await expect.poll(() => mac.battery.boost).toBe(false);
+    expect(mac.batteryWrites.at(-1)).toEqual({ boost: false });
+    await expect(box()).toHaveAttribute('data-boosting', 'false');
+    await expect(macBlock().locator('.set-state')).toContainText('同时最多开 3 个会话，多的新活排队');
+
+    // The last length stays chosen; 直到取消 sends no end time. The keyboard reaches and operates it.
+    await expect(box().getByRole('radio', { name: '2 小时' })).toHaveAttribute('aria-checked', 'true');
+    await box().getByRole('radio', { name: '直到取消' }).click();
+    await box().getByRole('button', { name: '临时拉满', exact: true }).focus();
+    await page.keyboard.press('Enter');
+    await expect.poll(() => mac.batteryWrites.at(-1)).toEqual({ boost: true });
+    await expect(box().locator('.boost-on')).toHaveText('已临时拉满（直到取消或接电源）');
+
+    // The computer ends it itself (plugged in): the card follows on the next read and explains.
+    mac.battery.boost = false; mac.battery.onBattery = false;
+    await expect(box()).toContainText('现在接着电源，本来就不限制，不需要拉满', { timeout: 15000 });
+    await expect(box().getByRole('button')).toHaveCount(0);
+    await shot(`boost-390-${theme}-3-plugged`);
+  });
+}
+
+test('settings: 今天 23:59 sends the minutes left today; a refusal is said in words', async ({ browser }) => {
+  test.setTimeout(90000);
+  await open(browser);
+  const { mac } = hub.machines;
+  await page.getByRole('button', { name: '设置', exact: true }).click();
+  const box = () => macBlock().locator('.boost-box');
+  await box().getByRole('radio', { name: '今天 23:59' }).click();
+  await box().getByRole('button', { name: '临时拉满', exact: true }).click();
+  await expect.poll(() => mac.batteryWrites.length).toBe(1);
+  const { boost, boostMinutes } = mac.batteryWrites[0];
+  expect(boost).toBe(true);
+  const now = new Date(), end = new Date(now); end.setHours(23, 59, 0, 0);
+  expect(Math.abs(boostMinutes - Math.max(1, Math.ceil((end - now) / 60000)))).toBeLessThanOrEqual(2);
+  await box().getByRole('button', { name: '取消 Mac 的临时拉满', exact: true }).click();
+  await expect.poll(() => mac.battery.boost).toBe(false);
+  mac.battery.refuse = '这台电脑现在不能拉满。';
+  await box().getByRole('button', { name: '临时拉满', exact: true }).click();
+  await expect(macBlock().getByRole('alert')).toContainText('这台电脑现在不能拉满。');
+  await expect(box()).toHaveAttribute('data-boosting', 'false');
 });

@@ -148,7 +148,10 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       if (machine.battery.refuse) return json(res, 400, { error: machine.battery.refuse });
       const parsed = BatteryCore.parseChange(body);
       if (parsed.error) return json(res, 400, { error: parsed.error });
-      Object.assign(machine.battery, parsed.change);
+      const { boost, boostMinutes, ...plain } = parsed.change;
+      Object.assign(machine.battery, plain);
+      if (boost === true && !BatteryCore.isActive(machine.battery.mode, machine.battery.onBattery)) return json(res, 400, { error: '现在不需要拉满：本来就不限制。' });
+      if (boost !== undefined) { machine.battery.boost = boost; machine.battery.boostUntil = boost && boostMinutes ? Date.now() + boostMinutes * 60000 : 0; }
       return json(res, 200, BatteryCore.readout(machine.battery, machine.battery.baseCap, machine.battery.working));
     }
     if (req.method === 'GET' && url.pathname === '/api/relay' && machine.relay) return json(res, 200, relayState());

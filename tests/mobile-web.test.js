@@ -838,10 +838,10 @@ test('api/battery shows the battery setting to a logged-in phone only, as fixed 
   assert.equal(response.status, 200);
   assert.doesNotMatch(response.text, /someone|secret|command/);
   // Out-of-range or malformed values read as the defaults; an unknown count of working sessions is left out.
-  assert.deepEqual(JSON.parse(response.text), { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: true, active: true, baseCap: 30, effectiveCap: 3 });
+  assert.deepEqual(JSON.parse(response.text), { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: true, active: true, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 3 });
   battery.data.cap = 6; battery.data.working = 4; battery.data.mode = 'off'; battery.data.active = false;
   assert.deepEqual(JSON.parse((await request(status, '/api/battery', { headers: auth })).text),
-    { mode: 'off', cap: 6, capMin: 1, capMax: 10, onBattery: true, active: false, baseCap: 30, effectiveCap: 3, working: 4 });
+    { mode: 'off', cap: 6, capMin: 1, capMax: 10, onBattery: true, active: false, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 3, working: 4 });
 });
 
 test('api/info announces the battery capability only when this build can change it', async (t) => {
@@ -879,4 +879,18 @@ test('without the battery sources there is no api/battery route, so an older bui
   const bare = await start(t);
   assert.equal((await request(bare.status, '/api/battery', { headers: bare.auth })).status, 404);
   assert.equal((await post(bare.status, '/api/battery', { mode: 'off' }, bare.auth)).status, 404);
+});
+
+test('api/battery carries the temporary boost: shown as fixed fields, set with boost and boostMinutes only', async (t) => {
+  const battery = batterySources({ boost: true, boostUntil: 1_800_000_000_000 });
+  const { status, auth } = await start(t, {}, battery.options);
+  const view = JSON.parse((await request(status, '/api/battery', { headers: auth })).text);
+  assert.deepEqual([view.boost, view.boostUntil], [true, 1_800_000_000_000]);
+  battery.data.boost = 'yes'; battery.data.boostUntil = -5;
+  const junk = JSON.parse((await request(status, '/api/battery', { headers: auth })).text);
+  assert.deepEqual([junk.boost, junk.boostUntil], [false, null]);
+  for (const body of [{ boost: true, minutes: 5 }, { boostUntil: 5 }]) assert.equal((await post(status, '/api/battery', body, auth)).status, 400, JSON.stringify(body));
+  assert.equal((await post(status, '/api/battery', { boost: true, boostMinutes: 120 }, auth)).status, 200);
+  assert.equal((await post(status, '/api/battery', { boost: false }, auth)).status, 200);
+  assert.deepEqual(battery.calls, [{ boost: true, boostMinutes: 120 }, { boost: false }]);
 });

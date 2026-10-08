@@ -181,8 +181,11 @@ function usage() {
     '  queue cancel --task-id <card-or-queue-id> cancel an unsent request\n' +
     '                                           new on a queued card replaces a changed command/model; task move to done/todo cancels it\n' +
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
-    '  settings battery [--mode off|auto] [--cap 1-10]   电池模式: no flags = read only; flags take effect at once and are saved\n' +
-    '                                           (off = 不限制, auto = 没插电时按 --cap 限制同时干活的会话数)\n' +
+    '  settings battery [--boost on|off [--for 90m|2h | --until 23:59]] [--mode off|auto] [--cap 1-10]\n' +
+    '                                           电池模式: no flags = read only; flags take effect at once and are saved.\n' +
+    '                                           --boost on = 临时拉满: on battery, open sessions up to the normal limit instead of the battery cap\n' +
+    '                                           (用户说「强度拉满」); ends at --for/--until, when plugged in, or --boost off. The battery mode itself stays on.\n' +
+    '                                           --mode off = 不限制 for good, auto = 没插电时按 --cap 限制同时干活的会话数\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
@@ -517,9 +520,30 @@ async function main() {
 
   if (action === 'settings') {
     if (args._[1] !== 'battery' || args._.length > 2) fail('settings only has battery: settings battery [--mode off|auto] [--cap 1-10].');
-    const extra = Object.keys(args).find((key) => key !== '_' && key !== 'mode' && key !== 'cap');
-    if (extra) fail(`settings battery does not take --${extra}. Use --mode off|auto and/or --cap 1-10.`);
+    const extra = Object.keys(args).find((key) => !['_', 'mode', 'cap', 'boost', 'for', 'until'].includes(key));
+    if (extra) fail(`settings battery does not take --${extra}. Use --boost on|off, --mode off|auto and/or --cap 1-10.`);
     const input = {};
+    if (args.boost !== undefined) {
+      if (args.boost !== 'on' && args.boost !== 'off') fail('settings battery --boost is on or off.');
+      input.boost = args.boost === 'on';
+    }
+    if (args.for !== undefined || args.until !== undefined) {
+      if (input.boost !== true) fail('settings battery --for / --until only go with --boost on.');
+      if (args.for !== undefined && args.until !== undefined) fail('settings battery: give --for or --until, not both.');
+      if (args.for !== undefined) {
+        const m = typeof args.for === 'string' ? /^(\d{1,4})([mh])$/.exec(args.for) : null;
+        const minutes = m ? Number(m[1]) * (m[2] === 'h' ? 60 : 1) : 0;
+        if (!m || minutes < 1 || minutes > 2880) fail('settings battery --for is a length like 90m or 2h (up to 48h).');
+        input.boostMinutes = minutes;
+      } else {
+        const m = typeof args.until === 'string' ? /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(args.until) : null;
+        if (!m) fail('settings battery --until is a clock time today like 23:59 (the next one if it has passed).');
+        const now = new Date(), end = new Date(now);
+        end.setHours(Number(m[1]), Number(m[2]), 0, 0);
+        if (end <= now) end.setDate(end.getDate() + 1);
+        input.boostMinutes = Math.max(1, Math.ceil((end - now) / 60000));
+      }
+    }
     if (args.mode !== undefined) {
       if (args.mode !== 'off' && args.mode !== 'auto') fail('settings battery --mode is off or auto.');
       input.mode = args.mode;

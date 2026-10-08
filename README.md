@@ -595,6 +595,17 @@ On battery (`battery-core.js` holds the numbers; the page, main process and test
 - `ledger` and `quota` end with one extra line only while battery mode is active: the live cap and how many
   sessions work. Plugged in or 不限制 they print word for word what they did before.
 
+**临时拉满 (boost)**: the main way to get full strength while away from the charger, and it leaves battery mode alone.
+When the user tells the Captain 「强度拉满」, the Captain runs `settings battery --boost on [--for 2h | --until 23:59]`
+(`--boost off` takes it back). While it is on, battery power no longer lowers the live cap (`BatteryCore.effectiveCap`:
+the settings cap still rules), waiting work opens at once, and the battery mode, its limit, the calm UI and the slower
+polling stay as they were. It ends by itself when the Mac is plugged in (and does not come back on unplugging), when 不限制
+is chosen, at its end time, or when someone cancels it. It is kept as `config.batteryBoost = { until }` (0 = no end time) so a
+restart keeps it, unless it has ended. Asking for it while nothing limits (plugged in, or mode 关) is refused with a reason.
+It shows as 已临时拉满 in: the sidebar battery icon (tooltip and name), the desktop settings box (a row with an × that cancels
+it), the phone hub's 设置 card (a 临时拉满 box with the length 直到取消 / 2 小时 / 今天 23:59, one button to start it and an ×
+to cancel), and the Captain's `ledger` / `quota` line.
+
 **Changing it from elsewhere** (the desktop settings box is not the only way; the page stays the one owner of the
 setting, so these go through it and never edit `config.json` behind its back):
 

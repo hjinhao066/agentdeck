@@ -101,6 +101,7 @@ function batteryView(data) {
     mode: data?.mode === 'off' ? 'off' : 'auto',
     cap: int(data?.cap, 1, 10, 3), capMin: 1, capMax: 10,
     onBattery: data?.onBattery === true, active: data?.active === true,
+    boost: data?.boost === true, boostUntil: Number.isSafeInteger(data?.boostUntil) && data.boostUntil > 0 ? data.boostUntil : null,
     baseCap: int(data?.baseCap, 1, 1000, 30), effectiveCap: int(data?.effectiveCap, 1, 1000, 30),
     ...(Number.isInteger(data?.working) && data.working >= 0 ? { working: Math.min(data.working, 1000) } : {}),
   };
@@ -649,7 +650,7 @@ class MobileWebServer {
     if (req.method === 'POST' && route === '/api/battery' && this.sources.setBattery) {
       let body;
       try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
-      if (Object.keys(body).some((key) => key !== 'mode' && key !== 'cap') || (body.mode === undefined && body.cap === undefined)) return this.json(res, 400, { error: 'Invalid request.' });
+      if (Object.keys(body).some((key) => !['mode', 'cap', 'boost', 'boostMinutes'].includes(key)) || (body.mode === undefined && body.cap === undefined && body.boost === undefined)) return this.json(res, 400, { error: 'Invalid request.' });
       if (!this.writeCredential(req, res, prefixed)) return;
       let view;
       try { view = await this.sources.setBattery(body); }

@@ -80,7 +80,7 @@ test('the phone and the Captain change battery mode live: the queue follows, the
   await working(1);
 
   // ---- what the phone reads: the real setting, the real power source ----
-  expect(await phoneGet()).toEqual({ mode: 'auto', cap: 1, capMin: 1, capMax: 10, onBattery: true, active: true, baseCap: 30, effectiveCap: 1, working: 1 });
+  expect(await phoneGet()).toEqual({ mode: 'auto', cap: 1, capMin: 1, capMax: 10, onBattery: true, active: true, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 1, working: 1 });
   expect((await (await phone.get(url + '/api/info')).json()).capabilities).toContain('battery');
 
   // ---- new work past the limit waits ----
@@ -173,4 +173,82 @@ test('the phone and the Captain change battery mode live: the queue follows, the
   expect((await phone.post(url + '/api/battery', { data: { mode: 'off' }, headers: { Origin: url } })).status()).toBe(403);
   await stranger.dispose();
   expect(configOnDisk().batteryMode).toBe('auto');
+});
+
+const power = (event) => application.evaluate(({ powerMonitor }, event) => { powerMonitor.emit(event); }, event);
+
+test('临时拉满: the Captain (or the phone) lifts the battery limit for a while; the battery mode stays; the desktop shows it and takes it back; plugging in ends it', async () => {
+  test.setTimeout(150000);
+  // State from the test above: battery mode 自动, limit 3, three working, 远程丁 still waiting.
+  expect(await opened('远程丁')).toBe(false);
+  expect(await phoneGet()).toMatchObject({ mode: 'auto', cap: 3, active: true, boost: false, effectiveCap: 3 });
+  const read = await viaCaptain(['settings', 'battery']);
+  expect(read.stdout).toContain('临时拉满：关');
+
+  // ---- the Captain: 强度拉满 for two hours ----
+  const on = await viaCaptain(['settings', 'battery', '--boost', 'on', '--for', '2h']);
+  expect(on.code).toBe(0);
+  expect(on.stdout).toContain('已生效并写入设置');
+  expect(on.stdout).toMatch(/临时拉满：开（到 \d\d:\d\d）/);
+  await expect.poll(() => opened('远程丁'), { timeout: 20000 }).toBe(true);            // waiting work opens at the normal limit
+  expect(await page.evaluate(() => MainCore.MAX_ACTIVE)).toBe(30);
+  const saved = configOnDisk();
+  expect(saved).toMatchObject({ batteryMode: 'auto', batteryConcurrency: 3 });         // the battery setting itself is untouched
+  expect(saved.batteryBoost.until).toBeGreaterThan(Date.now() + 100 * 60000);
+  expect(saved.batteryBoost.until).toBeLessThanOrEqual(Date.now() + 120 * 60000);
+  const seen = await phoneGet();
+  expect(seen).toMatchObject({ mode: 'auto', cap: 3, active: true, boost: true, effectiveCap: 30 });
+  expect(seen.boostUntil).toBe(saved.batteryBoost.until);
+  await expect(page.locator('#batteryIndicator')).toHaveAttribute('aria-label', '电池模式已临时拉满，点击调整');
+  await expect(page.locator('#batteryIndicator')).toHaveAttribute('title', /已临时拉满（到 \d\d:\d\d）[\s\S]*同时最多开 30 个会话/);
+  expect((await viaCaptain(['settings', 'battery'])).stdout).toMatch(/临时拉满：开/);
+  expect((await viaCaptain(['ledger'])).stdout).toMatch(/电池模式：已临时拉满（到 \d\d:\d\d），同时最多开 30 个会话/);
+
+  // ---- the desktop box shows it, with an × that takes it back ----
+  await page.locator('#settingsBtn').click();
+  await expect(page.locator('#batteryBoostRow')).toBeVisible();
+  await expect(page.locator('#batteryBoostText')).toContainText('已临时拉满');
+  const cancel = page.locator('#batteryBoostCancel');
+  await expect(cancel).toHaveAttribute('title', '取消临时拉满，恢复省电上限');
+  await expect(cancel).toHaveAttribute('aria-label', '取消临时拉满，恢复省电上限');
+  await expect(cancel).toHaveText('');
+  expect((await cancel.boundingBox()).width).toBeGreaterThanOrEqual(24);
+  await page.locator('#batteryBoostRow').scrollIntoViewIfNeeded();
+  await shot('boost-1-desktop-box-on.png');
+  await cancel.focus();
+  await page.keyboard.press('Enter');                                                   // keyboard works too
+  await expect(page.locator('#batteryBoostRow')).toBeHidden();
+  expect(await page.evaluate(() => MainCore.MAX_ACTIVE)).toBe(3);
+  expect(configOnDisk().batteryBoost).toBeUndefined();
+  expect(configOnDisk()).toMatchObject({ batteryMode: 'auto', batteryConcurrency: 3 });
+  expect(await phoneGet()).toMatchObject({ boost: false, effectiveCap: 3 });
+  await page.locator('#notificationSettingsClose').click();
+  await queueWork('远程戊', 'q-remote-e');
+  expect(await opened('远程戊')).toBe(false);                                           // the battery limit is back
+
+  // ---- the phone turns it on (no end time); the Captain turns it off ----
+  const phoneOn = await phonePost({ boost: true });
+  expect(phoneOn.status()).toBe(200);
+  expect(await phoneOn.json()).toMatchObject({ boost: true, boostUntil: null, effectiveCap: 30 });
+  await expect.poll(() => opened('远程戊'), { timeout: 20000 }).toBe(true);
+  expect(configOnDisk().batteryBoost).toEqual({ until: 0 });
+  const captainOff = await viaCaptain(['settings', 'battery', '--boost', 'off']);
+  expect(captainOff.stdout).toContain('临时拉满：关');
+  await expect.poll(() => page.evaluate(() => MainCore.MAX_ACTIVE)).toBe(3);
+  expect((await phonePost({ boost: false })).status()).toBe(200);                       // off when already off is fine
+
+  // ---- plugging in ends a boost; nothing is limiting then, so a new one is refused ----
+  expect((await phonePost({ boost: true })).status()).toBe(200);
+  await power('on-ac');
+  await expect.poll(() => phoneGet().then((v) => v.boost)).toBe(false);
+  await expect.poll(() => configOnDisk().batteryBoost, { timeout: 10000 }).toBeUndefined();
+  const refused = await phonePost({ boost: true });
+  expect(refused.status()).toBe(400);
+  expect((await refused.json()).error).toContain('现在不需要拉满');
+  const refusedCli = await viaCaptain(['settings', 'battery', '--boost', 'on']);
+  expect(refusedCli.code).toBe(1);
+  expect(refusedCli.stderr).toContain('现在不需要拉满');
+  await power('on-battery');
+  await expect.poll(() => phoneGet().then((v) => [v.onBattery, v.boost])).toEqual([true, false]);   // unplugging does not bring it back
+  expect(await page.evaluate(() => MainCore.MAX_ACTIVE)).toBe(3);
 });

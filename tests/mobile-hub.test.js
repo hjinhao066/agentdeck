@@ -400,13 +400,13 @@ test('a long file path is shown by its end, the file name always whole', () => {
 });
 
 // ---- 设置 · 电池模式 ----
-const batteryAnswer = (extra = {}) => ({ mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: true, active: true, baseCap: 30, effectiveCap: 3, working: 2, ...extra });
+const batteryAnswer = (extra = {}) => ({ mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: true, active: true, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 3, working: 2, ...extra });
 
 test('cleanBattery keeps only the fields the phone may show and falls back to the defaults for junk', () => {
   assert.deepEqual(Core.cleanBattery(batteryAnswer({ command: 'claude --x', path: '/Users/me' })),
-    { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: true, active: true, baseCap: 30, effectiveCap: 3, working: 2 });
+    { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: true, active: true, boostSupported: true, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 3, working: 2 });
   assert.deepEqual(Core.cleanBattery({ mode: 'weird', cap: 99, onBattery: 'yes', active: 1, baseCap: 0, effectiveCap: 'x', working: -4 }),
-    { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: false, active: false, baseCap: 30, effectiveCap: 30, working: null });
+    { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: false, active: false, boostSupported: false, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 30, working: null });
   for (const bad of [null, undefined, 'x', 7, []]) assert.equal(Core.cleanBattery(bad), null);
   assert.equal(Core.cleanBattery(batteryAnswer({ mode: 'off' })).mode, 'off');
 });
@@ -457,4 +457,26 @@ test('the settings sheet is wired for icon actions: gear to open, × to close, �
   const css = fs.readFileSync(path.join(__dirname, '../mobile-web/hub/style.css'), 'utf8');
   assert.match(css, /\.segment \{ min-height: 44px;/);
   assert.match(css, /\.icon-button \{[^}]*width: 44px; height: 44px;/);
+});
+
+test('boost on the phone: an older build shows no control, a tap is laid over the answer, the end time reads plainly', () => {
+  assert.equal(Core.cleanBattery({ mode: 'auto', cap: 3, onBattery: true, active: true }).boostSupported, false);
+  const base = Core.cleanBattery(batteryAnswer());
+  assert.deepEqual([base.boostSupported, base.boost, base.boostUntil], [true, false, null]);
+  const on = Core.batteryWith(base, { boost: true });
+  assert.deepEqual([on.boost, on.boostUntil, on.effectiveCap], [true, null, 30]);
+  const timed = Core.batteryWith(base, { boost: true, boostMinutes: 120 });
+  assert.ok(timed.boostUntil > Date.now() + 119 * 60000 && timed.boostUntil <= Date.now() + 120 * 60000);
+  assert.equal(Core.batteryWith(Core.cleanBattery(batteryAnswer({ boost: true, effectiveCap: 30 })), { boost: false }).effectiveCap, 3);
+  // Nothing limits on the mains or with the mode off, so a boost shows as off there.
+  assert.equal(Core.batteryWith(Core.cleanBattery(batteryAnswer({ boost: true })), { mode: 'off' }).boost, false);
+  assert.equal(Core.batteryWith(Core.cleanBattery(batteryAnswer({ onBattery: false, active: false, boost: true })), null).boost, false);
+  assert.match(Core.batteryState(Core.cleanBattery(batteryAnswer({ boost: true, effectiveCap: 30 }))), /^电池供电。已临时拉满：同时最多开 30 个会话，不受省电上限 3 限制，现在 2 个在干活。$/);
+  assert.equal(Core.boostEndText(null), '直到取消或接电源');
+  assert.equal(Core.boostEndText(new Date(2026, 9, 8, 23, 59).getTime()), '到 23:59');
+  assert.equal(Core.minutesToEndOfDay(new Date(2026, 9, 8, 23, 0).getTime()), 59);
+  assert.equal(Core.minutesToEndOfDay(new Date(2026, 9, 8, 23, 59, 30).getTime()), 1);
+  const app = fs.readFileSync(path.join(__dirname, '../mobile-web/hub/app.js'), 'utf8');
+  assert.match(app, /iconButton\('close', `取消 \$\{m\.label\} 的临时拉满`, 'boost-cancel'\)/);
+  assert.match(app, /if \(view\.boostSupported\) block\.append\(boostBox\(m, view\)\)/);
 });

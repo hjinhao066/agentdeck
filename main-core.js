@@ -258,7 +258,7 @@
       `   ${cli} task add --project "项目" --title "标题" [--detail "说明"] [--depends 卡片id,卡片id] [--verify] [--priority high]；task list [--project "项目"] [--status todo|doing|review|needs_user|done]；task move --id 卡片id --status 状态；task priority --id 卡片或会话id --level high|normal；task archive --done [--project "项目"]`,
       `   ${cli} queue list；queue cancel --task-id 卡片或排队id；同卡 new 换命令/模型会替换，移到 done/todo 撤队`,
       `   ${cli} quota   只读各家订阅额度；派活前可跑 quota，避开已用尽或快用尽的；未知不代表可用`,
-      `   ${cli} settings battery [--mode off|auto] [--cap 1-10]   电池模式：不带参数只读；用户要拉满强度就 --mode off，或调 --cap，立即生效`,
+      `   ${cli} settings battery [--boost on|off [--for 2h|--until 23:59]] [--mode off|auto] [--cap 1-10]   电池模式：不带参数只读；用户说「强度拉满」就 --boost on（临时越过电池上限，接电源或到时间自动恢复），说恢复或不要了就 --boost off；立即生效`,
       `   ${cli} new --title "标题" --task "任务正文" [--project "项目名"] [--reviews id[,id]] [--task-id id] [--cwd 目录] [--worktree 仓库] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "启动命令"]   --seat 为已登录 Claude 席位；默认同队长；网页仅公开调研，先审查敏感信息；--web-mode deep-research；禁 --seat/--command`,
       `   ${cli} tell --to 会话id --message "指令" [--replace] [--now]   发给已有会话；--replace 替换未送达的补充；--now 先中断，就绪后发送，可与 --replace 同用；普通补充合并发送`,
       `   ${cli} stop --id 会话id   发送 Esc，中断当前操作，保留终端；未发送的补充指令取消`,

@@ -140,8 +140,8 @@ AgentDeck 更新后，点标题栏右上角「重新加载页面」图标（带�
 | POST | `/api/upload` | 原始图片字节 + CSRF，返回 `{id}` |
 | GET | `/api/relay` | `{captainId,currentId,switching,seats,job,now}` 队长所在账号和可换的账号。`seats[]` 只有 `id,name,provider,account(已打码),current,selectable,reason,weekly,recoveryAt,cells`；`reason` 为 `current/login/onboarding/exhausted/low/unknown/''`，只有 `''` 和 `unknown` 可选。`job` 是手机发起的最近一次切换 `{id,status:switching|done|failed,fromId,fromName,targetId,targetName,startedAt,finishedAt,error}`，只在内存里，应用重启后为 `null` |
 | POST | `/api/relay` | `{seatId, expectCurrent?}` + CSRF，发起手动切换（桌面端 Relay 的同一条路径）。立即返回 `{started:true,id}`，结果轮询 GET。桌面端拒绝时 409 `{started:false,error}`，`error` 是可直接给用户看的原因，队长不变 |
-| GET | `/api/battery` | `{mode:auto/off,cap,capMin:1,capMax:10,onBattery,active,baseCap,effectiveCap,working?}` 这台电脑的电池模式：设置的模式和电池并发上限、现在是否电池供电、是否正在限制、实际生效的同时会话数。固定字段，没有路径和命令。旧版没有这个路由（404）；`/api/info` 的 `capabilities` 含 `battery` 表示可读可改 |
-| POST | `/api/battery` | `{mode?, cap?}`（至少一个）+ CSRF，立即生效并写回配置；返回和 GET 一样的 JSON。`mode` 只能是 `auto` / `off`，`cap` 是 1–10 的整数；多余的键、范围外的值 400（`error` 是可直接给用户看的原因），什么都不改。走渲染进程 `MainSession.setBattery`，和桌面设置页、队长的 `settings battery` 是同一条路径 |
+| GET | `/api/battery` | `{mode:auto/off,cap,capMin:1,capMax:10,onBattery,active,boost,boostUntil,baseCap,effectiveCap,working?}` 这台电脑的电池模式：设置的模式和电池并发上限、现在是否电池供电、是否正在限制、实际生效的同时会话数。`boost` 是临时拉满（只在电池供电且模式为自动时才可能为真），`boostUntil` 是结束时间（毫秒）或 `null`。固定字段，没有路径和命令。旧版没有这个路由（404）；`/api/info` 的 `capabilities` 含 `battery` 表示可读可改 |
+| POST | `/api/battery` | `{mode?, cap?, boost?, boostMinutes?}`（至少一个）+ CSRF，立即生效并写回配置；返回和 GET 一样的 JSON。`mode` 只能是 `auto` / `off`，`cap` 是 1–10 的整数；`boost` 是布尔值，`boostMinutes`（1–2880）只能和 `boost:true` 一起给，不给就是不限时；没有限制可解除时（接着电源、模式关）要拉满返回 400；多余的键、范围外的值 400（`error` 是可直接给用户看的原因），什么都不改。走渲染进程 `MainSession.setBattery`，和桌面设置页、队长的 `settings battery` 是同一条路径 |
 | GET | `/api/image?id=…` | 已登录设备读取自己上传的图片 |
 | GET | `/api/todos` | `{items}` 随手记待办：未删除的只有 `id,text,done,doneAt,created,updated`，删除的只有 `{id,deleted,updated}`，见 [todo.md](todo.md) |
 | POST | `/api/todos` | `{op:'add',text}` 或 `{op:'update',id,done,base?}` + CSRF，返回 `{item}`；只能记和勾，不能删、不能改字 |

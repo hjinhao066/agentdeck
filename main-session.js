@@ -541,8 +541,32 @@
   // Power source, setting or cap changed: new live cap, refreshed queue cards, then fill any free slot.
   function syncEffectiveCap() {
     M.MAX_ACTIVE = capInfo().cap;
+    syncBoost();
     refreshWaitingNotes();
     return pump();
+  }
+  // 临时拉满 (a boost over the battery limit) is kept in config.batteryBoost = { until } (until 0 = no end time) so a
+  // restart keeps it; plugging in, 不限制 and the end time clear it. This runs on every change of the shared state.
+  let boostTimer = 0;
+  function syncBoost() {
+    const snap = batteryNow();
+    const saved = host.config.batteryBoost;
+    if (snap.boost) {
+      if (!saved || saved.until !== snap.boostUntil) { host.config.batteryBoost = { until: snap.boostUntil || 0 }; save(); }
+    } else if (saved) { delete host.config.batteryBoost; save(); }
+    if (typeof clearTimeout === 'function') clearTimeout(boostTimer);
+    boostTimer = 0;
+    if (snap.boost && snap.boostUntil > 0 && typeof setTimeout === 'function') {
+      boostTimer = setTimeout(() => { if (!Bat().shared.expireBoost(Date.now())) syncBoost(); }, Math.min(2 ** 31 - 1, Math.max(1000, snap.boostUntil - Date.now())));
+    }
+    renderBoostRow(snap);
+  }
+  // The settings box shows the boost and takes it back with one click.
+  function renderBoostRow(snap = batteryNow()) {
+    const row = $('batteryBoostRow');
+    if (!row || !Bat()) return;
+    row.hidden = !snap.boost;
+    if ($('batteryBoostText')) $('batteryBoostText').textContent = `已临时拉满（${Bat().boostUntilText(snap.boostUntil)}）：电池下也按正常上限同时开会话`;
   }
   // One line for ledger/quota while battery mode is on; plugged in or set to 不限制 they print exactly what they always did.
   function batteryLine() {
@@ -554,6 +578,7 @@
   // The setting as the phone hub and the Captain's `settings battery` see it; null when this build has no battery mode.
   function batteryReadout() {
     if (!Bat()) return null;
+    Bat().shared.expireBoost(Date.now());
     const s = state();
     return Bat().readout(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
   }
@@ -564,9 +589,15 @@
     if (!Bat()) throw new Error('这个版本没有电池模式。');
     const parsed = Bat().parseChange(input);
     if (parsed.error) throw new Error(parsed.error);
+    const { boost, boostMinutes } = parsed.change;
+    if (boost === true) {
+      const mode = parsed.change.mode !== undefined ? parsed.change.mode : batteryNow().mode;
+      if (!Bat().isActive(mode, batteryNow().onBattery)) throw new Error(`现在不需要拉满：${mode === 'off' ? '电池模式已关' : '现在接着电源'}，本来就不限制。`);
+    }
     if (parsed.change.mode !== undefined) host.config.batteryMode = parsed.change.mode;
     if (parsed.change.cap !== undefined) host.config.batteryConcurrency = parsed.change.cap;
-    Bat().shared.set({ mode: host.config.batteryMode, cap: host.config.batteryConcurrency });
+    Bat().shared.set({ mode: host.config.batteryMode, cap: host.config.batteryConcurrency,
+      ...(boost === undefined ? {} : { boost, boostUntil: boost === true && boostMinutes ? Date.now() + boostMinutes * 60000 : 0 }) });
     syncEffectiveCap();
     host.flushConfig();
     if ($('batteryMode')) {
@@ -580,6 +611,7 @@
     const settings = $('notificationSettings');
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
     if ($('batteryMode')) $('batteryMode').onchange = syncBatteryField;
+    if ($('batteryBoostCancel')) $('batteryBoostCancel').onclick = () => { try { setBattery({ boost: false }); } catch (error) { host.showToast(error.message); } };
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
       if (!$('concurrencyCap').reportValidity()) return;
@@ -627,6 +659,7 @@
       $('batteryMode').value = Bat().normalizeMode(host.config.batteryMode);
       $('batteryConcurrency').value = Bat().normalizeCap(host.config.batteryConcurrency);
       syncBatteryField();
+      renderBoostRow();
     }
     if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffOverview);
     const resumeBox = $('resumeOnRestart');
@@ -2858,6 +2891,12 @@
     }
     loadResumeManifest();
     initDialog();
+    // A boost kept in the config comes back after a restart (not when plugged in, or past its end time).
+    if (Bat() && host.config.batteryBoost && Number.isFinite(host.config.batteryBoost.until)) {
+      Bat().shared.set({ boost: true, boostUntil: host.config.batteryBoost.until });
+      Bat().shared.expireBoost(Date.now());
+      syncEffectiveCap();
+    }
     Bat()?.shared.onChange(syncEffectiveCap);
     window.deck.onTasksChanged?.(() => { refreshPriority(); });
     refreshPriority();
