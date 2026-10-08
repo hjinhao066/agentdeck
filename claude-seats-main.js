@@ -218,11 +218,13 @@ async function seatInfo(seat, home, platform = process.platform, keychain = cred
   // The CLI's answer wins; without it, the account recorded in the seat's own metadata.
   const auth = present && authStatus ? await authStatus(seat, [loc.dir, rawEmail, accountKey].join('|'), fresh) : null;
   const loginEmail = !present ? '' : auth ? auth.email : rawEmail;
+  // Credentials on disk do not make a seat signed in when the CLI itself says it is not.
+  const signedOut = present && auth?.loggedIn === false;
   return { ...seat, configDir: loc.dir, maskedEmail: email, loginEmail, accountKey, onboardingComplete: onboardingComplete(seat, home),
     // Without --email: the settings row adds the address typed there.
     loginBase: loginCommand('Claude', { ...seat, email: '' }, home, platform === 'test' ? process.platform : platform),
-    credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present,
-    loginReason: typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
+    credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present && !signedOut,
+    loginReason: signedOut ? `${seat.name}（${seat.id}）：Claude 登录状态显示此席位未登录` : typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
     authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
 
 }

@@ -488,3 +488,16 @@ test('the CLI answer wins over stale metadata and is asked at most once per seat
   const before = runs;
   assert.equal((await M.seatInfo(cn, home, 'darwin', async () => false, auth)).loginEmail, ''); assert.equal(runs, before);
 });
+test('credentials on disk do not make a seat signed in when the CLI says loggedIn:false', async (t) => {
+  const home = fixture(t), [us] = S.normalize([{ id: 'us', configDir: '~/.claude-us' }]); setup(home);
+  const present = async () => ({ present: true });
+  const info = await M.seatInfo(us, home, 'darwin', present, M.authStatusCache(async () => ({ loggedIn: false, email: '' })));
+  assert.equal(info.loggedIn, false);
+  assert.equal(info.loginEmail, '');
+  assert.match(info.loginReason, /未登录/);
+  assert.deepEqual(S.accountCheck(info.maskedEmail, info), { state: 'login', text: '需登录' });
+  // The CLI cannot answer: credentials still count, as before.
+  assert.equal((await M.seatInfo(us, home, 'darwin', present, M.authStatusCache(async () => null))).loggedIn, true);
+  // The CLI says signed in: unchanged.
+  assert.equal((await M.seatInfo(us, home, 'darwin', present, M.authStatusCache(async () => ({ loggedIn: true, email: 'us@example.com' })))).loggedIn, true);
+});
