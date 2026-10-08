@@ -113,6 +113,11 @@
   // be written twice (same running total), which is skipped. A file that has
   // records never counts its token_count events. input_tokens includes the
   // cached part; total = input_tokens + output_tokens.
+  // A context compaction is a model call too: it has its own record (the line
+  // right before `compacted`) but no token_count event, so tools that read only
+  // token_count (ccusage 20.0.26) come out 0.4–1.4% lower than this. Checked on
+  // 10-01..10-08: every extra record was a compaction (99% of the tokens) or a
+  // turn's last response before the session stopped; no response id repeats.
   function codexBuckets(u) {
     const cached = num(u.cached_input_tokens), write = num(u.cache_write_input_tokens);
     return { input: Math.max(0, num(u.input_tokens) - cached - write), output: num(u.output_tokens), cacheRead: cached, cacheWrite: write };
@@ -321,8 +326,9 @@
     if (gpt) return ['GPT-' + gpt[1], ...(gpt[2] ? gpt[2].split('-').map(cap) : [])].join(' ');
     const agm = /^antigravity-m(\d+)$/.exec(m);
     if (agm) return 'Antigravity M' + agm[1];
-    m = m.replace(/^deepseek/, 'DeepSeek').replace(/^gpt-oss/, 'GPT-OSS');
-    return m.split('-').map((w) => (/^v\d/.test(w) || /^\d+b$/.test(w) ? w.toUpperCase() : cap(w))).join(' ');
+    const words = (w) => w.split('-').map((x) => (/^v\d/.test(x) || /^\d+b$/.test(x) ? x.toUpperCase() : cap(x)));
+    if (m.startsWith('gpt-oss')) return ['GPT-OSS', ...words(m.slice(8)).filter(Boolean)].join(' ');
+    return words(m.replace(/^deepseek/, 'DeepSeek')).join(' ');
   }
   function sourceName(source) { return SOURCES[source] ? SOURCES[source].name : source; }
 

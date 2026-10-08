@@ -171,9 +171,14 @@ async function scan({ home, cacheFile, now = Date.now(), extraClaude = [] } = {}
     const sig = `${st.size}:${Math.round(st.mtimeMs)}`;
     if (entry && entry.source !== source) entry = null;
     if (append) {
-      // An appended log keeps its start; a shorter or replaced file starts over.
-      if (entry && (st.size < (entry.offset || 0) || (entry.ino && st.ino && entry.ino !== st.ino))) entry = null;
-      if (entry && entry.size === st.size) return;
+      // An appended log keeps its start; a shorter or replaced file is read
+      // from the top. What the old file held still counts: records with an
+      // identity of their own are kept (reading them again merges by that
+      // identity), only token_count positions (ev:) are dropped.
+      if (entry && (st.size < (entry.offset || 0) || (entry.ino && st.ino && entry.ino !== st.ino))) {
+        entry = { source, offset: 0, recs: (entry.recs || []).filter((a) => a[1] >= fromMs && !String(a[0]).startsWith('ev:')) };
+      }
+      if (entry && entry.offset && entry.size === st.size) return;
     } else if (entry && entry.sig === sig) return;
     entry = entry || { source, offset: 0, recs: [] };
     try {
