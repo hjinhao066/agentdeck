@@ -28,7 +28,10 @@ async function open(browser, size, { theme = 'dark' } = {}) {
   const reply = ['验收完了，**可以发版**，报告：', files.report, '', '| 事 | 交给谁 |', '| --- | --- |', '| 修测试 | *Codex* |', '',
     '```sh', 'npm test', '```', '', `截图 ${path.join(home, 'reports/r/shot.png')} 安装包 ${path.join(home, 'reports/r/pack.zip')}`,
     `链接文件 ${path.join(home, 'reports/r/linked.md')} 密钥 ${files.key}`].join('\n');
-  mac.turns = [{ id: 'm1', ts: Date.now() - 60000, user: `看看 ${files.tax}`, reply: '', done: true, interrupted: false },
+  // Earlier rounds, so the conversation is taller than the screen.
+  const earlier = Array.from({ length: 8 }, (_, i) => [{ id: 'e' + i, ts: Date.now() - 900000 + i * 1000, user: `第 ${i + 1} 个问题`, reply: '', done: true, interrupted: false },
+    { id: 'r' + i, ts: Date.now() - 899000 + i * 1000, user: '', reply: `第 ${i + 1} 个回答，写得长一点，好让对话超过一屏。`.repeat(3), done: true, interrupted: false }]).flat();
+  mac.turns = [...earlier, { id: 'm1', ts: Date.now() - 60000, user: `看看 ${files.tax}`, reply: '', done: true, interrupted: false },
     { id: 'm2', ts: Date.now() - 50000, user: '', reply, done: true, interrupted: false }];
   mac.files = { home, tmp: path.join(home, 'none') };
   hub = await startHub({ machines: [mac, win] });
