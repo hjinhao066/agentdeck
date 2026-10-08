@@ -13,7 +13,7 @@ const FilePreview = require('../../file-preview-core');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
+  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release-notes.json': ['release-notes.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
 // The headers the VPS adds to the static hub (design §3.5); the hub must work under them.
 const HUB_HEADERS = { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -313,7 +313,8 @@ async function startHub({ port = 0, machines = defaults(), directory = HUB, plai
     if (!fake) {
       const asset = req.method === 'GET' && STATIC[req.url.split('?')[0]];
       if (!asset) { res.writeHead(404, HUB_HEADERS); return res.end(); }
-      const file = path.join(directory, asset[0]);
+      // The source tree keeps release-notes.json at the repository root; a built hub has it beside the page.
+      const file = asset[0] === 'release-notes.json' && directory === HUB ? path.join(HUB, '..', '..', asset[0]) : path.join(directory, asset[0]);
       if (!fs.existsSync(file)) { res.writeHead(404, HUB_HEADERS); return res.end(); }
       res.writeHead(200, { ...HUB_HEADERS, 'Content-Type': asset[1] });
       return res.end(fs.readFileSync(file));

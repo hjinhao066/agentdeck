@@ -120,6 +120,7 @@
   }
   function markPage(name) {
     topEl.querySelectorAll('.nav-row[data-nav]').forEach((b) => b.classList.toggle('active', b.dataset.nav === name));
+    document.getElementById('releaseNotesBtn')?.classList.toggle('active', name === 'releases');
   }
 
   // ---- list ----

@@ -46,6 +46,7 @@
     paneLeft: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
     down: '<path d="M12 5v14m0 0-5.5-5.5M12 19l5.5-5.5"/>',
     swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3.5 2"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
   const providerIcons = {
@@ -61,6 +62,8 @@
   const TABS = ['overview', 'captain', 'todo', 'sessions', 'board'];
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
+  // 版本更新: release-notes.json published with this page (undefined while it loads, null if it could not be read).
+  let notes, notesTab = 'released';
   // Images picked for the next message; each was uploaded to the computer it will be sent to.
   let attachments = [];
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
@@ -131,6 +134,8 @@
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
   for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
+  document.querySelector('.releases-entry-icon').innerHTML = svg('history');
+  document.querySelector('.releases-entry-chev').innerHTML = svg('chevron');
   // Scrolled up to read: new replies do not pull the page down; this button shows instead, with a dot when something new came in.
   const awayFromEnd = () => { const el = $('captain-turns'); return el.scrollHeight - el.scrollTop - el.clientHeight > 160; };
   function updateJump() { const away = awayFromEnd(); $('jump').hidden = !away; if (!away) { $('jump').classList.remove('fresh'); $('jump').title = '回到最新'; $('jump').setAttribute('aria-label', '回到最新'); } }
@@ -265,7 +270,7 @@
     if (output && output.machineId === m.id && view === 'output') loadOutput(true);
     if (m.again) poll(m);
   }
-  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; poll(m); }); }
+  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; poll(m); }); if (notes === null) loadNotes(); }
   function renderBusy() {
     const busy = machines.some((m) => m.busy);
     $('refresh').classList.toggle('refreshing', busy);
@@ -292,7 +297,7 @@
   function renderBar() {
     const bar = $('machine-bar');
     // One list for both computers on the 待办 tab, so there is nothing to pick there.
-    bar.hidden = view === 'output' || view === 'todo';
+    bar.hidden = view === 'output' || view === 'todo' || view === 'releases';
     $('app-header').dataset.view = view;
     const online = machines.filter((m) => m.state === 'online').length;
     const picking = view === 'captain';
@@ -1985,8 +1990,114 @@
       }
       if (focused) document.getElementById(focused)?.previousElementSibling?.focus({ preventScroll: true });
     }
-    $('side-version').textContent = m && m.meta.appVersion ? 'V' + m.meta.appVersion : '';
-    $('side-version').title = machines.filter((x) => x.meta.appVersion).map((x) => `${x.label} 上的 AgentDeck ${x.meta.appVersion}`).join('，');
+    // The version opens 版本更新, as on the desktop.
+    const versions = machines.filter((x) => x.meta.appVersion).map((x) => `${x.label} 上的 AgentDeck ${x.meta.appVersion}`).join('，');
+    $('side-version').textContent = m && m.meta.appVersion ? 'V' + m.meta.appVersion : '版本更新';
+    $('side-version').title = '版本更新：每版改了什么、接下来做什么' + (versions ? `（${versions}）` : '');
+    $('side-version').setAttribute('aria-label', '版本更新' + (versions ? `，${versions}` : ''));
+    if (view === 'releases') $('side-version').setAttribute('aria-current', 'page'); else $('side-version').removeAttribute('aria-current');
+  }
+
+
+  // ---- 版本更新 --------------------------------------------------------------
+  // What each version changed and what comes next. The notes are published with
+  // this page, not asked of a computer, so an older or offline Mac changes nothing
+  // here; each computer's own version is only marked on the release it runs.
+  async function loadNotes() {
+    try {
+      const response = await fetch('release-notes.json', { cache: 'no-store', redirect: 'error' });
+      notes = response.ok ? Core.releaseNotes(await response.json()) : null;
+    } catch (_) { notes = null; }
+    render();
+  }
+  function notesCopy(entry, label) {
+    const button = iconButton('copy', label, 'rn-copy');
+    button.addEventListener('click', () => copyText(button, Core.releaseText(entry), label));
+    return button;
+  }
+  function releasedList() {
+    const list = node('ol', 'rn-line');
+    notes.released.forEach((entry, i) => {
+      const li = node('li', 'rn-ver' + (i === 0 ? ' latest' : ''));
+      const when = node('div', 'rn-when');
+      const date = node('time', 'rn-date', Core.shortDate(entry.date)); date.dateTime = entry.date;
+      when.append(node('span', 'rn-num', entry.version), date);
+      const body = node('div', 'rn-body'), head = node('div', 'rn-head');
+      head.append(node('h3', 'rn-title', entry.title));
+      const using = machines.filter((m) => m.meta.appVersion && Core.sameVersion(entry.version, m.meta.appVersion));
+      if (using.length) head.append(node('span', 'rn-mine', using.map((m) => m.label).join('、') + ' 在用'));
+      head.append(notesCopy(entry, `复制 ${entry.version} 的更新内容`));
+      const items = node('ul', 'rn-items');
+      entry.items.forEach((text) => items.append(node('li', '', text)));
+      body.append(head, items);
+      li.append(when, node('span', 'rn-node'), body);
+      list.append(li);
+    });
+    return list;
+  }
+  function upcomingList() {
+    const box = node('div', 'rn-plans');
+    for (const entry of notes.upcoming) {
+      const plan = node('article', 'rn-plan'); plan.dataset.status = entry.status;
+      const head = node('div', 'rn-head');
+      if (entry.version) head.append(node('span', 'rn-num', entry.version));
+      head.append(node('h3', 'rn-title', entry.title), node('span', 'rn-status', Core.PLAN_STATES[entry.status]));
+      head.append(notesCopy(entry, entry.version ? `复制 ${entry.version} 的计划` : '复制这几件的清单'));
+      plan.append(head);
+      if (entry.note) plan.append(node('p', 'rn-note', entry.note));
+      const rows = node('ul', 'rn-tasks');
+      for (const item of entry.items) {
+        const row = node('li', 'rn-task'); row.dataset.state = item.state;
+        const state = node('span', 'rn-state');
+        state.append(node('i', 'rn-dot'), node('span', '', Core.ITEM_STATES[item.state]));
+        const what = node('span', 'rn-what', item.text);
+        if (item.suggestion) what.append(node('small', 'rn-suggest', item.suggestion));
+        row.append(state, what);
+        rows.append(row);
+      }
+      plan.append(rows);
+      box.append(plan);
+    }
+    return box;
+  }
+  function renderReleases() {
+    const latest = notes && notes.released[0], pending = Core.pendingCount(notes);
+    const meta = $('releases-entry-meta');
+    if (changed(meta, [latest && latest.version, pending])) {
+      meta.replaceChildren();
+      if (latest) meta.append(node('span', '', '最新 ' + latest.version));
+      if (pending) meta.append(node('span', 'rn-pending', pending + ' 件待你定'));
+      $('releases-entry').setAttribute('aria-label', '版本更新' + (latest ? '，最新 ' + latest.version : '') + (pending ? `，${pending} 件待你定` : ''));
+    }
+    if (view === 'releases') $('brand-caption').textContent = latest ? '最新 ' + latest.version : '';
+    const box = $('releases');
+    if (view !== 'releases' || !changed(box, [notes === undefined ? 'loading' : notes, notesTab, machines.map((m) => [m.label, m.meta.appVersion])])) return;
+    box.replaceChildren();
+    if (notes === undefined) { box.append(node('p', 'rn-empty', '正在读取…')); return; }
+    if (!notes) {
+      const empty = node('div', 'rn-empty');
+      empty.append(node('strong', '', '没读到版本更新内容'), node('span', '', '手机这边没取到更新说明，多半是网络不稳。点右上角的刷新再试一次；电脑上的 AgentDeck 不受影响。'));
+      box.append(empty);
+      return;
+    }
+    box.dataset.tab = notesTab;
+    const tabs = node('div', 'rn-tabs'); tabs.setAttribute('role', 'group'); tabs.setAttribute('aria-label', '看哪一部分');
+    for (const [key, label] of [['released', '已发布'], ['upcoming', '接下来']]) {
+      const button = node('button', 'segment', label); button.type = 'button'; button.id = 'rn-tab-' + key;
+      button.setAttribute('aria-pressed', String(notesTab === key)); button.setAttribute('aria-controls', 'rn-' + key);
+      if (key === 'upcoming' && pending) { button.append(node('span', 'rn-badge', String(pending))); button.setAttribute('aria-label', `接下来，${pending} 件待你定`); }
+      button.addEventListener('click', () => { notesTab = key; renderReleases(); $('rn-tab-' + key).focus(); $('main').scrollTop = 0; });
+      tabs.append(button);
+    }
+    const released = node('section', 'rn-released'); released.id = 'rn-released'; released.setAttribute('aria-label', '已发布');
+    released.append(node('h2', 'rn-h', '已发布'), releasedList());
+    const upcoming = node('section', 'rn-upcoming'); upcoming.id = 'rn-upcoming'; upcoming.setAttribute('aria-label', '接下来');
+    const head = node('h2', 'rn-h');
+    head.append(node('span', 'rn-h-name', '接下来'));
+    if (pending) head.append(node('span', 'rn-pending', pending + ' 件待你定'));
+    if (notes.updated) head.append(node('span', 'rn-updated', Core.shortDate(notes.updated) + ' 更新'));
+    upcoming.append(head, upcomingList());
+    box.append(tabs, released, upcoming);
   }
 
   // ---- shell ---------------------------------------------------------------
@@ -1994,16 +2105,19 @@
     if (view === 'output' && next !== 'output') { outputRequest++; output = null; $('output-text').textContent = ''; }
     view = next;
     if (TABS.includes(view)) store(KEYS.view, view);
-    ['overview', 'captain', 'todo', 'sessions', 'board', 'output'].forEach((name) => { $(name + '-view').hidden = name !== view; });
+    ['overview', 'captain', 'todo', 'sessions', 'board', 'output', 'releases'].forEach((name) => { $(name + '-view').hidden = name !== view; });
     document.querySelectorAll('[data-view]').forEach((button) => {
       if (button.dataset.view === (view === 'output' ? 'sessions' : view)) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     });
-    $('back').hidden = view !== 'output';
+    $('back').hidden = view !== 'output' && view !== 'releases';
+    const backLabel = view === 'releases' ? '返回总览' : '返回会话列表';
+    $('back').title = backLabel; $('back').setAttribute('aria-label', backLabel);
     $('attention-view').hidden = view !== 'attention';
     if (view === 'attention') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
     $('main').classList.toggle('fill', view === 'captain');
     if (view === 'todo') { $('brand-title').textContent = '待办'; $('brand-caption').textContent = '两台电脑同一份'; }
+    else if (view === 'releases') { $('brand-title').textContent = '版本更新'; $('brand-caption').textContent = ''; }
     else if (view !== 'output') { $('brand-title').textContent = 'AgentDeck'; $('brand-caption').textContent = '总台'; }
     $('main').scrollTop = 0;
     render();
@@ -2012,13 +2126,15 @@
     if (view === 'todo') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
   }
   function render() {
-    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet();
+    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet(); renderReleases();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
     renderAttention();
     renderSidebar();
   }
   $('refresh').addEventListener('click', refreshAll);
-  $('back').addEventListener('click', () => showView(wide.matches ? 'captain' : 'sessions'));
+  $('back').addEventListener('click', () => showView(view === 'releases' ? 'overview' : wide.matches ? 'captain' : 'sessions'));
+  $('releases-entry').addEventListener('click', () => showView('releases'));
+  $('side-version').addEventListener('click', () => showView('releases'));
   {
     const label = $('logout-all').title;
     armed($('logout-all'), label, '再点一次，确认在这部手机上退出所有电脑', () => logout(machines.filter((m) => m.state === 'online')));
@@ -2048,9 +2164,10 @@
     target = filter !== 'all' ? filter : (machines.find((m) => m.default) || machines[0]).id;
     // Open where the user left off; a bookmark ending in #todo (or another tab's name) opens that tab.
     const asked = location.hash.slice(1), last = stored(KEYS.view);
-    showView(TABS.includes(asked) ? asked : TABS.includes(last) ? last : 'overview');
+    showView(TABS.includes(asked) || asked === 'releases' ? asked : TABS.includes(last) ? last : 'overview');
     applyLayout();
     refreshAll();
+    loadNotes();
   }
   start();
 })();

@@ -1390,6 +1390,12 @@ app.whenReady().then(async () => {
     platform: process.platform, home: HOME, version: app.getVersion(),
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
   }; });
+  // 版本更新 page: the release notes packaged with this build. Read only, from
+  // a fixed path; the page cleans it again (HubCore.releaseNotes) before showing it.
+  handleMain('release-notes:read', async () => {
+    try { return JSON.parse(await fs.promises.readFile(path.join(__dirname, 'release-notes.json'), 'utf8')); }
+    catch (_) { return null; }
+  });
 
   // Test profiles never read the user's quota caches or conversation logs.
   handleMain('quota:local', async () => {

@@ -34,8 +34,9 @@ test('sidebar footer shows the runtime version with accessible build details', a
   const details = [`AgentDeck v${info.version}`, info.build].filter(Boolean).join(' · ');
 
   await expect(label).toHaveText(`V${info.version}`);
-  await expect(label).toHaveAttribute('title', details);
-  await expect(label).toHaveAttribute('aria-label', details);
+  // The label is the 版本更新 button; the build details stay in its tooltip.
+  await expect(label).toHaveAttribute('title', `版本更新：每版改了什么、接下来做什么（${details}）`);
+  await expect(label).toHaveAttribute('aria-label', `版本更新，你在用 AgentDeck ${info.version}`);
   expect(info.version).toMatch(/^\d+\.\d+\.\d+/);
   expect(info.build).toContain(info.platform);
 

@@ -631,7 +631,9 @@ button.todo-done-toggle { width: 100%; min-height: 44px; margin: 14px 0 6px; pad
 .side-quota .quota-line { gap: 4px; }
 .side-quota .quota-detail { padding-left: 8px; }
 .side-foot { display: flex; align-items: center; flex: none; padding: 2px 4px max(2px, env(safe-area-inset-bottom)) 14px; border-top: 1px solid var(--line); }
-.side-version { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); color: var(--muted); }
+/* The version opens 版本更新, as on the desktop. */
+.side-version { flex: 0 1 auto; min-width: 0; min-height: 44px; margin: 0 auto 0 -8px; padding: 0 8px; border: 0; border-radius: 10px; background: transparent; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 11px var(--mono); color: var(--muted); text-align: left; }
+.side-version:hover, .side-version[aria-current="page"] { background: var(--soft); color: var(--text); }
 /* The top bar: sidebar switch, the computer switch, and the preview pane's switch at the far end. */
 .app.wide .app-header { min-height: 52px; padding: max(4px, env(safe-area-inset-top)) 8px 4px; border-bottom: 1px solid var(--line); }
 .app.wide .brand { display: none; }
@@ -674,3 +676,69 @@ button.todo-done-toggle { width: 100%; min-height: 44px; margin: 14px 0 6px; pad
 .captain-view { position: relative; }
 .jump { position: absolute; right: 10px; bottom: 76px; z-index: 3; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--surface); box-shadow: var(--shadow); color: var(--text); }
 .jump.fresh::after { content: ""; position: absolute; top: 6px; right: 6px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); }
+
+/* ---- 版本更新: released versions on a line, what comes next in cards ---- */
+.app-header[data-view="releases"] .brand strong, .app-header[data-view="releases"] .brand-caption { display: inline; }
+.releases-entry { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; margin-top: 12px; padding: 0 8px 0 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--text); font-size: 15px; text-align: left; }
+.releases-entry:hover { background: var(--raised); }
+.releases-entry-icon { display: flex; color: var(--secondary); } .releases-entry-icon svg { width: 20px; height: 20px; }
+.releases-entry-name { flex: none; font-weight: 600; }
+.releases-entry-meta { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 2px 8px; flex: 1; min-width: 0; color: var(--muted); font-size: 12.5px; }
+.releases-entry-chev { display: flex; color: var(--muted); } .releases-entry-chev svg { width: 18px; height: 18px; }
+.rn-pending { color: var(--accent); font-weight: 600; }
+#releases-view { container: notes / inline-size; }
+.releases { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px 36px; }
+.rn-tabs { display: flex; gap: 2px; justify-self: start; padding: 3px; border-radius: 15px; background: var(--raised); border: 1px solid var(--line); }
+.rn-tabs .segment { padding: 0 16px; font-size: 14px; }
+.rn-badge { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 99px; background: var(--accent); color: var(--accent-ink); font-size: 11px; font-weight: 650; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.releases[data-tab="released"] .rn-upcoming, .releases[data-tab="upcoming"] .rn-released { display: none; }
+.rn-h { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; font-size: 12.5px; font-weight: 600; color: var(--muted); }
+.rn-updated { margin-left: auto; font-weight: 400; font-variant-numeric: tabular-nums; }
+.rn-released .rn-h, .rn-h-name { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.rn-head { display: flex; align-items: center; gap: 8px; min-height: 44px; }
+.rn-title { flex: 1; min-width: 0; font-size: 16px; font-weight: 650; line-height: 1.4; letter-spacing: -.2px; text-wrap: balance; }
+.rn-num { font: 650 17px/1.3 var(--mono); letter-spacing: -.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.rn-copy { margin-right: -8px; color: var(--muted); } .rn-copy svg { width: 19px; height: 19px; }
+.rn-line { margin: 0; padding: 0; list-style: none; }
+.rn-ver { display: grid; grid-template-columns: 50px 14px minmax(0, 1fr); column-gap: 8px; }
+.rn-when { padding-top: 11px; text-align: right; }
+.rn-when .rn-num { display: block; font-size: 15px; }
+.rn-date { display: block; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.rn-node { position: relative; }
+.rn-node::before { content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; margin-left: -.5px; background: var(--line-strong); }
+.rn-node::after { content: ""; position: absolute; top: 17px; left: 50%; width: 9px; height: 9px; margin-left: -4.5px; border-radius: 50%; background: var(--bg); box-shadow: inset 0 0 0 1.5px var(--muted); }
+.rn-ver:first-child .rn-node::before { top: 21px; }
+.rn-ver:last-child .rn-node::before { bottom: auto; height: 21px; }
+.rn-ver.latest .rn-node::after { background: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.rn-body { min-width: 0; padding-bottom: 22px; }
+.rn-mine { flex: none; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.rn-items { margin: 2px 0 0; padding: 0; list-style: none; }
+.rn-items li { position: relative; padding: 2px 0 2px 14px; color: var(--secondary); font-size: 14.5px; line-height: 1.6; text-wrap: pretty; }
+.rn-items li::before { content: ""; position: absolute; top: .86em; left: 2px; width: 4px; height: 4px; border-radius: 50%; background: var(--muted); }
+.rn-plans { display: grid; gap: 12px; }
+.rn-plan { padding: 6px 14px 8px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); }
+.rn-plan[data-status="doing"] { box-shadow: inset 0 2px 0 var(--warn); }
+.rn-plan .rn-title { font-size: 15.5px; }
+.rn-status { flex: none; padding: 2px 9px; border-radius: 99px; background: var(--off-soft); color: var(--off); font-size: 12px; font-weight: 550; white-space: nowrap; }
+.rn-plan[data-status="doing"] .rn-status { background: var(--warn-soft); color: var(--warn); }
+.rn-note { margin: 0 0 4px; color: var(--muted); font-size: 13px; line-height: 1.6; text-wrap: pretty; }
+.rn-tasks { margin: 0; padding: 0; list-style: none; }
+.rn-task { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 14.5px; line-height: 1.55; }
+.rn-task:first-child { border-top: 0; }
+.rn-state { display: inline-flex; align-items: center; gap: 6px; height: 22px; color: var(--off); font-size: 12.5px; white-space: nowrap; }
+.rn-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--off); }
+.rn-what { min-width: 0; text-wrap: pretty; }
+.rn-suggest { display: block; margin-top: 2px; color: var(--muted); font-size: 12.5px; }
+.rn-task[data-state="done"] .rn-state { color: var(--ok); } .rn-task[data-state="done"] .rn-dot { background: var(--ok); box-shadow: none; }
+.rn-task[data-state="done"] .rn-what { color: var(--secondary); }
+.rn-task[data-state="doing"] .rn-state { color: var(--warn); } .rn-task[data-state="doing"] .rn-dot { background: var(--warn); box-shadow: 0 0 0 3px var(--warn-soft); }
+.rn-task[data-state="pending"] .rn-state { color: var(--accent); font-weight: 650; } .rn-task[data-state="pending"] .rn-dot { background: var(--accent); box-shadow: none; }
+.rn-empty { display: grid; justify-items: center; gap: 6px; max-width: 300px; margin: 48px auto; color: var(--secondary); font-size: 14px; line-height: 1.7; text-align: center; }
+.rn-empty strong { color: var(--text); font-size: 16px; font-weight: 600; }
+/* Room for both: released on the left, next on the right, no switch. */
+@container notes (min-width: 820px) {
+  .releases { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); align-items: start; }
+  .rn-tabs { display: none; }
+  .releases[data-tab] .rn-released, .releases[data-tab] .rn-upcoming { display: block; grid-row: 1; }
+  .rn-released .rn-h, .rn-h-name { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+}

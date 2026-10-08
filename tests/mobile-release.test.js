@@ -20,6 +20,7 @@ async function fixture(t) {
   const repo = path.join(root, 'repo'), remote = path.join(root, 'remote'), output = path.join(root, 'output');
   fs.mkdirSync(repo); fs.mkdirSync(remote);
   fs.cpSync(path.join(__dirname, '../mobile-web/hub'), path.join(repo, 'mobile-web/hub'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '../release-notes.json'), path.join(repo, 'release-notes.json'));
   writeJSON(path.join(repo, 'package.json'), { version: '1.2.0' });
   git(repo, 'init', '-q'); git(repo, 'config', 'user.name', 'Fixture'); git(repo, 'config', 'user.email', 'fixture@example.invalid');
   git(repo, 'config', 'core.hooksPath', path.join(root, 'no-hooks')); git(repo, 'config', 'commit.gpgsign', 'false');
@@ -82,7 +83,7 @@ test('deploy uploads a real fake remote directory, verifies public bytes and pre
   assert.equal(fs.readlinkSync(path.join(remote, 'agentdeck-hub')), report.remoteRelease);
   assert.equal(fs.readFileSync(path.join(remote, previous, 'index.html'), 'utf8'), stamped(old));
   assert.equal(fs.existsSync(path.join(remote, '.agentdeck-mobile-deploy.lock')), false);
-  assert.deepEqual(requests, ['/', '/core.js', '/app.js', '/style.css', '/machines.json', '/pdf.min.js', '/pdf.worker.min.js', '/release.json']);
+  assert.deepEqual(requests, ['/', '/core.js', '/app.js', '/style.css', '/machines.json', '/pdf.min.js', '/pdf.worker.min.js', '/release-notes.json', '/release.json']);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'mobile-deploy-result.json'))), report);
 });
 
