@@ -539,6 +539,21 @@ class MobileWebServer {
       res.setHeader('Set-Cookie', this.cookie('', 0, prefixed));
       return this.json(res, 200, { authenticated: false });
     }
+    // 续期：手机每次打开总台时调一次，把这台设备的有效期从现在重新算起，并用同一个 cookie 值重发 cookie。
+    // 用得越勤越不会过期（Safari 对服务端设的 cookie 可能另有上限，重发也能把它重新计时）。
+    if (req.method === 'POST' && route === '/renew') {
+      if (credential.bearer) return this.json(res, 400, { error: 'Device cookie required.' });
+      const name = this.cookieName(prefixed);
+      const value = String(req.headers.cookie || '').split(';').map((s) => s.trim()).filter((s) => s.startsWith(name + '='))
+        .map((s) => s.slice(name.length + 1)).find((candidate) => /^[a-f0-9]{64}$/.test(candidate) && hash(candidate) === credential.hash);
+      const device = this.settings.devices.find((entry) => entry.hash === credential.hash);
+      if (!value || !device) return this.json(res, 401, { error: 'Unauthorized.' });
+      const before = device.expiresAt;
+      device.expiresAt = this.now() + DEVICE_LIFETIME;
+      try { await this.persist(); } catch (_) { device.expiresAt = before; return this.json(res, 500, { error: 'Could not remember this device.' }); }
+      res.setHeader('Set-Cookie', this.cookie(value, undefined, prefixed));
+      return this.json(res, 200, { authenticated: true });
+    }
     if (req.method === 'GET' && route === '/api/snapshot') {
       const [captain, sessions] = await Promise.all([this.sources.getCaptain ? this.sources.getCaptain() : null, this.sources.getSessions()]);
       let boardVersion = '';

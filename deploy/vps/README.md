@@ -8,7 +8,7 @@
 | --- | --- |
 | `Caddyfile.agentdeck` | 站点段落（BEGIN/END 标记之间）。Caddy 2.6.x 语法 |
 | `caddyfile_block.py` | 只替换 Caddyfile 里这一个站点；还原；取出现有入口口令（不打印） |
-| `install-caddy-site.sh` | 备份 → 取口令 → 换段落 → `caddy validate` → reload。`--check` 只校验 |
+| `install-caddy-site.sh` | 备份 → 取口令 → 生成登录 cookie 随机串文件 → 换段落 → `caddy validate` → reload。`--check` 只校验 |
 | `rollback-caddy-site.sh` | 只还原这一段，其他站点的后续改动保留 |
 | `sshd_agentdeck-tunnel-win.conf` | Windows 隧道账号的 sshd 受限片段 |
 | `tunnel-account.sh` | 建/删账号 `agentdeck-tunnel-win`，写受限 authorized_keys，`sshd -t` 后才 reload；`verify` 只读复核 sshd 实际生效的限制 |
@@ -76,6 +76,19 @@ CADDY_BIN=$PWD/caddy node --test --test-concurrency=1 tests/vps-caddy.test.js te
    ss -ltnp | grep -E ':4312[23] '                      # 只应绑定 127.0.0.1
    ! grep -q '"uri"' /var/log/caddy/agentdeck-access.log && echo "access log has no URI"
    ```
+
+## 入口登录页与长期 cookie（2026-10-08 起）
+
+浏览器自带的 Basic 弹框 iOS 不会长期记住（Safari 只在当次会话里留着，添加到主屏幕的网页更不记），所以每次都要输。现在入口改成：
+
+- `/gate/` 登录页（`mobile-web/hub/gate/`，随总台静态文件一起发布，免登录）：输一次账号口令，`POST /gate/login` 带 `Authorization: Basic`，Caddy 用原来的 `basicauth` 校验，通过才发 `__Host-agentdeck_gate` cookie（随机 64 位十六进制，400 天，HttpOnly+Secure+SameSite=Lax）。口令错误是 401，且没有 `WWW-Authenticate`，不弹原生框。
+- 随机串在 `/etc/caddy/agentdeck-gate.caddy`（一行 `vars gate_secret …`，root:caddy 0640），由 `install-caddy-site.sh` 第一次安装时生成，之后保留。不在仓库、不在日志里。
+- 没有有效 cookie：页面导航 302 到 `/gate/`；其他请求 `401 {"gate":"login"}`（总台脚本据此重新加载）。带 `Authorization: Basic` 的请求照旧校验（脚本、curl、`npm run mobile:check`）。
+- cookie 不会转给任何一台电脑（`header_up Cookie` 把它从请求里摘掉）。打开总台首页时 cookie 续期。
+- `POST /mac/renew`、`/win/renew`（手机每次打开总台调一次，让电脑端把设备 cookie 重新计 30 天）加入允许 `Set-Cookie` 的路径。需要电脑端 AgentDeck 装上新版；旧版返回 404，总台忽略。
+- 注意：`handle` 里的指令会被 Caddy 重排，登录接口必须在 `route` 里写 `basicauth` → `header` → `respond`，否则口令错了也会收到 cookie（测试 `vps-gate.test.js` 专门盖着）。
+- 让所有手机重新登录：`rm /etc/caddy/agentdeck-gate.caddy` 后重跑 `install-caddy-site.sh`。
+- 上线顺序：先发布总台静态文件（含 `gate/`），再 `install-caddy-site.sh`；反过来会有一小段时间 `/gate/` 404。回滚见下。
 
 ## 回滚
 

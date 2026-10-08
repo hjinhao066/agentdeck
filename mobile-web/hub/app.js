@@ -187,6 +187,8 @@
       const response = await fetch(m.basePath + path, { credentials: 'same-origin', cache: 'no-store', ...options, redirect: 'error', signal: controller.signal });
       let body = null;
       try { body = await response.json(); } catch (_) { /* Non-JSON answers are classified by status. */ }
+      // The entry's own login cookie is gone (expired or revoked): reload, and the entry shows its login page.
+      if (response.status === 401 && body && body.gate === 'login') { location.reload(); return { failed: true }; }
       return { status: response.status, body, retryAfter: Number(response.headers.get('Retry-After')) || 0 };
     } catch (_) { return controller.signal.aborted ? { timedOut: true } : { failed: true }; }
     finally { clearTimeout(timer); }
@@ -220,6 +222,9 @@
       m.snap = result.body; m.csrf = String(result.body.csrfToken || '');
       m.hostname = String(result.body.machine.hostname || '');
       m.meta = Core.metaOf(result.body, Date.now()); saveMeta();
+      // Once per page load: ask the computer to start this phone's 30 days again, so a phone in regular use stays logged in.
+      // Older builds answer 404; nothing to do then.
+      if (!m.renewed) { m.renewed = true; post(m, 'renew', {}); }
       if (m.snap.boardVersion !== m.boardVersion || !m.cards) {
         const tasks = await request(m, 'api/tasks');
         if (tasks.status === 200 && tasks.body && Array.isArray(tasks.body.cards)) { m.cards = tasks.body.cards; m.boardVersion = m.snap.boardVersion; }
@@ -1383,7 +1388,11 @@
 
   async function start() {
     let list = [];
-    try { list = Core.machineList(await (await fetch('machines.json', { cache: 'no-store', redirect: 'error' })).json()); } catch (_) { /* Reported below. */ }
+    try {
+      const response = await fetch('machines.json', { cache: 'no-store', redirect: 'error' });
+      if (response.status === 401) { location.reload(); return; }
+      list = Core.machineList(await response.json());
+    } catch (_) { /* Reported below. */ }
     if (!list.length) { notice('没有读到电脑列表（machines.json）。请刷新重试。', true); return; }
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }

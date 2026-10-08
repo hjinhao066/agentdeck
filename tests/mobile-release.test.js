@@ -82,7 +82,7 @@ test('deploy uploads a real fake remote directory, verifies public bytes and pre
   assert.equal(fs.readlinkSync(path.join(remote, 'agentdeck-hub')), report.remoteRelease);
   assert.equal(fs.readFileSync(path.join(remote, previous, 'index.html'), 'utf8'), stamped(old));
   assert.equal(fs.existsSync(path.join(remote, '.agentdeck-mobile-deploy.lock')), false);
-  assert.deepEqual(requests, ['/', '/core.js', '/app.js', '/style.css', '/machines.json', '/release.json']);
+  assert.deepEqual(requests, ['/', '/core.js', '/app.js', '/style.css', '/machines.json', '/gate/index.html', '/gate/gate.js', '/gate/gate.css', '/release.json']);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(output, 'mobile-deploy-result.json'))), report);
 });
 

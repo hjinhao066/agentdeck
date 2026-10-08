@@ -875,3 +875,24 @@ test('a computer without the switch (older AgentDeck), offline or with no Captai
   await nav('队长');
   await expect(page.locator('#captain-seat')).toBeHidden();
 });
+
+test('a phone in regular use renews each computer once per visit, and a lost entrance login reloads to the entrance', async ({ browser }) => {
+  await open(browser);
+  const { mac, win } = hub.machines;
+  await expect(machineCard('Mac')).toContainText('在线');
+  await expect(machineCard('Windows')).toContainText('在线');
+  // Several polls later it is still one renew per computer for this page load.
+  await refresh(); await refresh();
+  await expect.poll(() => mac.posts('renew').length).toBe(1);
+  await expect.poll(() => win.posts('renew').length).toBe(1);
+  await page.waitForTimeout(500);
+  expect(mac.posts('renew')).toHaveLength(1); expect(win.posts('renew')).toHaveLength(1);
+
+  // The entrance answers {"gate":"login"} (its own cookie is gone): the page reloads instead of showing "upgrade" or "login".
+  let reloads = 0;
+  page.on('load', () => { reloads += 1; });
+  await page.route('**/mac/api/snapshot', (route) => route.fulfill({ status: 401, contentType: 'application/json', body: '{"gate":"login"}' }));
+  await refresh();
+  await expect.poll(() => reloads).toBeGreaterThan(0);
+  await page.unroute('**/mac/api/snapshot');
+});

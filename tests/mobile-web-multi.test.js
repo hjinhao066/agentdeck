@@ -682,3 +682,61 @@ test('each computer switches only its own Captain: api/relay answers under its o
   assert.deepEqual([switched.status, JSON.parse(switched.text)], [200, { started: true, id: 'job1' }]);
   assert.deepEqual([macRelay.calls, winRelay.calls], [[], [{ seatId: 'cn', expectCurrent: 'chatgpt' }]]);
 });
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test('登录一次后隔天、隔几周再开都不用再登录：设备记录跨重启保留，每次打开续期 30 天', async (t) => {
+  let now = 1_700_000_000_000;
+  const m = await start(t, '/mac/', 'Mac', {}, { now: () => now });
+  const first = await login(m);
+  const value = first.cookie.split('=')[1];
+
+  // 关掉页面隔天再开：同一个 cookie 直接就是已登录，不需要 token。
+  now += DAY_MS;
+  assert.equal((await get(m, 'api/snapshot', { Cookie: first.cookie })).status, 200, 'next day');
+
+  // 手机每次打开总台调一次 renew：同一个 cookie 值，重新计 30 天，服务端记录也跟着续上。
+  let cookie = first.cookie, csrf = first.csrf;
+  for (let week = 1; week <= 4; week++) {
+    now += 20 * DAY_MS; // 每次隔 20 天；不续期的话第二次就已经超过 30 天
+    const renewed = await post(m, 'renew', {}, { Cookie: cookie, 'X-CSRF-Token': csrf });
+    assert.equal(renewed.status, 200, `renew after ${week * 20} days`);
+    assert.deepEqual(JSON.parse(renewed.text), { authenticated: true });
+    assert.equal(renewed.headers['set-cookie'][0], `__Secure-agentdeck_mac=${value}; HttpOnly; Secure; SameSite=Strict; Path=/mac/; Max-Age=2592000`);
+    const device = m.saved.at(-1).devices.find((d) => d.hash === crypto.createHash('sha256').update(value).digest('hex'));
+    assert.equal(device.expiresAt, now + 30 * DAY_MS);
+    assert.equal(m.saved.at(-1).devices.length, 1, 'renew never adds a device');
+  }
+
+  // 重启应用后记录还在。
+  const stored = m.saved.at(-1);
+  await m.server.close();
+  const restarted = machine({ now: () => now });
+  t.after(() => restarted.server.close());
+  restarted.status = await restarted.server.configure(stored);
+  restarted.base = '/mac/';
+  assert.equal((await get(restarted, 'api/snapshot', { Cookie: first.cookie })).status, 200, 'still logged in after the app restarts');
+
+  // 超过 30 天一次都没打开才会掉。
+  now += 30 * DAY_MS + 1;
+  assert.equal((await get(restarted, 'api/snapshot', { Cookie: first.cookie })).status, 401);
+});
+
+test('renew 只给已登录设备：要 CSRF、不接受 token 直登、没有 cookie 或 cookie 过期都不续', async (t) => {
+  let now = 1_700_000_000_000;
+  const m = await start(t, '/win/', 'Windows', {}, { now: () => now });
+  const { cookie, csrf } = await login(m);
+  assert.equal((await post(m, 'renew', {}, { Cookie: cookie })).status, 403, 'CSRF token required');
+  assert.equal((await post(m, 'renew', {})).status, 401, 'no credential');
+  assert.equal((await post(m, 'renew', {}, { Authorization: `Bearer ${m.status.token}` })).status, 403, 'bearer without its CSRF token');
+  const bearer = JSON.parse((await get(m, 'api/snapshot', { Authorization: `Bearer ${m.status.token}` })).text).csrfToken;
+  const refused = await post(m, 'renew', {}, { Authorization: `Bearer ${m.status.token}`, 'X-CSRF-Token': bearer });
+  assert.equal(refused.status, 400);
+  assert.equal(refused.headers['set-cookie'], undefined);
+  assert.equal((await post(m, 'renew', {}, { Cookie: cookie, 'X-CSRF-Token': 'x'.repeat(64) })).status, 403);
+  assert.equal((await get(m, 'renew', { Cookie: cookie })).status, 404, 'GET is not a route');
+  now += 31 * DAY_MS;
+  const late = await post(m, 'renew', {}, { Cookie: cookie, 'X-CSRF-Token': csrf });
+  assert.equal(late.status, 401, 'an expired device has to log in again');
+  assert.equal(late.headers['set-cookie'], undefined);
+});

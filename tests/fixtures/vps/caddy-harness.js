@@ -94,21 +94,22 @@ class FakeMachine {
   }
 }
 
-function substitute(text, { siteAddress, authFile, logFile, hubRoot, macPort, winPort }) {
+function substitute(text, { siteAddress, authFile, gateFile, logFile, hubRoot, macPort, winPort }) {
   const replaced = text
     .replace(`${PROD_DOMAIN} {`, `${siteAddress} {`)
     .replaceAll('/etc/caddy/agentdeck-basicauth.caddy', authFile)
+    .replaceAll('/etc/caddy/agentdeck-gate.caddy', gateFile)
     .replaceAll('/var/log/caddy/agentdeck-access.log', logFile)
     .replaceAll('/srv/agentdeck-hub', hubRoot)
     .replaceAll('127.0.0.1:43122 {', `127.0.0.1:${macPort} {`)
     .replaceAll('127.0.0.1:43123 {', `127.0.0.1:${winPort} {`);
-  for (const needle of [siteAddress, authFile, logFile, hubRoot, `127.0.0.1:${macPort} {`, `127.0.0.1:${winPort} {`]) {
+  for (const needle of [siteAddress, authFile, gateFile, logFile, hubRoot, `127.0.0.1:${macPort} {`, `127.0.0.1:${winPort} {`]) {
     if (!replaced.includes(needle)) throw new Error(`test substitution failed for ${needle}`);
   }
   return replaced;
 }
 
-async function startStack(caddy, { hubDir } = {}) {
+async function startStack(caddy, { hubDir, https = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-vps-'));
   const mac = new FakeMachine('mac', '__Secure-agentdeck_mac', '/mac/');
   const win = new FakeMachine('win', '__Secure-agentdeck_win', '/win/');
@@ -116,27 +117,33 @@ async function startStack(caddy, { hubDir } = {}) {
   const port = await freePort();
   const hubRoot = path.join(dir, 'hub');
   fs.cpSync(hubDir || path.join(__dirname, 'hub'), hubRoot, { recursive: true });
+  // The real login page, so the tests run what ships.
+  fs.cpSync(path.join(REPO, 'mobile-web', 'hub', 'gate'), path.join(hubRoot, 'gate'), { recursive: true });
   const authFile = path.join(dir, 'agentdeck-basicauth.caddy');
   const hash = execFileSync(caddy.bin, ['hash-password', '--plaintext', AUTH_PASS], { encoding: 'utf8' }).trim();
   fs.writeFileSync(authFile, `basicauth {\n\t${AUTH_USER} ${hash}\n}\n`);
+  const gateFile = path.join(dir, 'agentdeck-gate.caddy');
+  const gateSecret = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(gateFile, `vars gate_secret ${gateSecret}\n`);
   const logFile = path.join(dir, 'access.log');
   // localhost (not a custom name) so a real browser treats Secure cookies as allowed on plain HTTP.
-  const siteAddress = `http://localhost:${port}`;
-  const body = substitute(fs.readFileSync(SNIPPET, 'utf8'), { siteAddress, authFile, logFile, hubRoot, macPort: mac.port, winPort: win.port });
+  // https: Caddy's own internal certificate (nothing is added to any trust store); WebKit only stores Secure cookies over https.
+  const siteAddress = `${https ? 'https' : 'http'}://localhost:${port}`;
+  const body = substitute(fs.readFileSync(SNIPPET, 'utf8'), { siteAddress, authFile, gateFile, logFile, hubRoot, macPort: mac.port, winPort: win.port });
   const caddyfile = path.join(dir, 'Caddyfile');
-  fs.writeFileSync(caddyfile, `{\n\tadmin off\n\tauto_https off\n}\n${body}`);
+  fs.writeFileSync(caddyfile, https ? `{\n\tadmin off\n\tskip_install_trust\n\tlocal_certs\n}\n${body}` : `{\n\tadmin off\n\tauto_https off\n}\n${body}`);
   const validate = spawnSync(caddy.bin, ['validate', '--config', caddyfile, '--adapter', 'caddyfile'], { encoding: 'utf8' });
   if (validate.status !== 0) {
     await mac.stop(); await win.stop();
     fs.rmSync(dir, { recursive: true, force: true });
     throw new Error(`caddy validate failed: ${validate.stderr}`);
   }
-  const child = spawn(caddy.bin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], { stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(caddy.bin, ['run', '--config', caddyfile, '--adapter', 'caddyfile'], { stdio: ['ignore', 'ignore', 'pipe'], env: { ...process.env, XDG_DATA_HOME: path.join(dir, 'caddy-data'), XDG_CONFIG_HOME: path.join(dir, 'caddy-config') } });
   let stderr = '';
   child.stderr.on('data', (c) => { stderr += c; });
   await waitForPort(port);
   const stack = {
-    dir, port, mac, win, hubRoot, logFile, caddyfile, siteAddress,
+    dir, port, mac, win, hubRoot, logFile, gateSecret, gateFile, caddyfile, siteAddress,
     get stderr() { return stderr; },
     async stop() {
       const exited = new Promise((resolve) => child.once('exit', resolve));
@@ -163,10 +170,11 @@ async function waitForPort(port, timeoutMs = 10000) {
 }
 
 // Raw request: the path is sent exactly as given (no client-side normalisation).
-function request(port, rawPath, { method = 'GET', headers = {}, body, auth = true, timeout = 8000 } = {}) {
+function request(port, rawPath, { method = 'GET', headers = {}, body, auth = true, gate = null, timeout = 8000 } = {}) {
   const h = { ...headers };
   if (auth === true) h.Authorization = 'Basic ' + Buffer.from(`${AUTH_USER}:${AUTH_PASS}`).toString('base64');
   else if (typeof auth === 'string') h.Authorization = auth;
+  if (gate) h.Cookie = `__Host-agentdeck_gate=${gate}`;
   return new Promise((resolve, reject) => {
     const req = http.request({ host: '127.0.0.1', port, method, path: rawPath, headers: { Host: `localhost:${port}`, ...h }, timeout }, (res) => {
       const chunks = [];

@@ -38,23 +38,26 @@ test('Caddy 分流与前缀', { skip }, async (t) => {
     assert.equal(fmt.stdout, text, 'run `caddy fmt --overwrite deploy/vps/Caddyfile.agentdeck`');
   });
 
-  await t.test('没有 basicauth（或口令错误）时，所有路径都 401，后端收不到任何请求', async () => {
+  await t.test('没有登录 cookie 也没有 Basic 头（或口令错误）时，所有路径都 401（含糊路径 404），后端收不到任何请求', async () => {
     wipe(s.mac, s.win);
     const paths = ['/', '/index.html', '/machines.json', '/app.js', '/mac/', '/mac/api/snapshot', '/mac/api/info', '/win/', '/win/api/snapshot', '/win/api/info',
-      '/win/login', '/mac', '/win', '/nope', '/.secret', '/mac/../win/api/snapshot', '//mac/api/snapshot', '/MAC/api/snapshot'];
+      '/win/login', '/mac', '/win', '/nope', '/.secret'];
     for (const p of paths) {
       for (const method of ['GET', 'POST', 'HEAD', 'OPTIONS']) {
         const r = await req(p, { auth: false, method });
         assert.equal(r.status, 401, `${method} ${p}`);
-        assert.match(r.headers['www-authenticate'], /^Basic /, `${method} ${p} must ask for credentials`);
+        assert.equal(r.headers['www-authenticate'], undefined, `${method} ${p} must not trigger the browser's own login box`);
       }
+    }
+    for (const p of ['/mac/../win/api/snapshot', '//mac/api/snapshot', '/MAC/api/snapshot']) {
+      assert.equal((await req(p, { auth: false })).status, p === '/MAC/api/snapshot' ? 401 : 404, p);
     }
     const wrong = await req('/mac/api/snapshot', { auth: 'Basic ' + Buffer.from(`${H.AUTH_USER}:wrong`).toString('base64') });
     assert.equal(wrong.status, 401);
     assert.equal(s.mac.requests.length + s.win.requests.length, 0);
   });
 
-  await t.test('带 basicauth：/ 是静态总台，带全部安全头；点文件不外泄', async () => {
+  await t.test('带登录凭据（Basic 头）：/ 是静态总台，带全部安全头；点文件不外泄', async () => {
     const root = await req('/');
     assert.equal(root.status, 200);
     assert.match(root.text, /hub placeholder/);
@@ -267,11 +270,11 @@ test('Caddy 分流与前缀', { skip }, async (t) => {
     }
   });
 
-  await t.test('Set-Cookie 只在 POST login/logout 放行：其他路径、其他方法、别台的 cookie 名一律 blocked，夹带不进来', async () => {
+  await t.test('Set-Cookie 只在 POST login/logout/renew 放行：其他路径、其他方法、别台的 cookie 名一律 blocked，夹带不进来', async () => {
     const own = (machine, extra = '') => `${machine.cookieName}=${'a'.repeat(64)}; Path=${machine.cookiePath}; HttpOnly; Secure; SameSite=Strict; Max-Age=60${extra}`;
     for (const [prefix, machine, other] of [['/win/', s.win, s.mac], ['/mac/', s.mac, s.win]]) {
       // Own cookie on a path that is not login/logout, or not POST: blocked, no cookie reaches the browser.
-      for (const [method, p] of [['GET', 'api/snapshot'], ['POST', 'api/captain'], ['GET', 'login'], ['POST', 'login/'], ['POST', 'login/x'], ['POST', 'logoutx'], ['POST', 'api/login'], ['GET', 'logout']]) {
+      for (const [method, p] of [['GET', 'api/snapshot'], ['POST', 'api/captain'], ['GET', 'login'], ['POST', 'login/'], ['POST', 'login/x'], ['POST', 'logoutx'], ['POST', 'api/login'], ['GET', 'logout'], ['GET', 'renew'], ['POST', 'renew/'], ['POST', 'renewx']]) {
         machine.scripted = { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': own(machine) }, body: '{}' };
         const r = await req(`${prefix}${p}`, { method });
         assert.equal(r.status, 403, `${method} ${prefix}${p}`);
@@ -279,7 +282,7 @@ test('Caddy 分流与前缀', { skip }, async (t) => {
         assert.equal(r.text, '{"error":"blocked"}');
       }
       // Login/logout with the other machine's cookie name, or a bomb cookie alone: blocked.
-      for (const p of ['login', 'logout']) {
+      for (const p of ['login', 'logout', 'renew']) {
         for (const cookie of [own(other), `bomb=${'x'.repeat(4000)}; Path=/; Secure`, `${machine.cookieName}x=1; Path=/`]) {
           machine.scripted = { status: 200, headers: { 'Content-Type': 'application/json', 'Set-Cookie': cookie }, body: '{}' };
           const r = await req(`${prefix}${p}`, { method: 'POST' });
@@ -288,7 +291,7 @@ test('Caddy 分流与前缀', { skip }, async (t) => {
         }
       }
       // The two real paths: own cookie passes verbatim; a failed login (401, no cookie) passes with the app's own body.
-      for (const p of ['login', 'logout']) {
+      for (const p of ['login', 'logout', 'renew']) {
         machine.scripted = { status: 200, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Set-Cookie': own(machine) }, body: '{"ok":true}' };
         const r = await req(`${prefix}${p}`, { method: 'POST' });
         assert.equal(r.status, 200, `${prefix}${p}`);
@@ -388,7 +391,8 @@ test('浏览器级 cookie 隔离：两台各自的 cookie 只发给各自的前�
   assert.equal((await call('/win/login', 'POST')).status, 200);
   const jar = await context.cookies(); // no URL filter: Secure cookies are hidden from http:// URLs
   const byName = Object.fromEntries(jar.map((c) => [c.name, c]));
-  assert.deepEqual(Object.keys(byName).sort(), ['__Secure-agentdeck_mac', '__Secure-agentdeck_win']);
+  // 打开总台首页时 Caddy 顺带续期入口 cookie（Path=/）；它不属于任何一台电脑，下面断言它不会转给电脑。
+  assert.deepEqual(Object.keys(byName).sort(), ['__Host-agentdeck_gate', '__Secure-agentdeck_mac', '__Secure-agentdeck_win']);
   for (const [name, p] of [['__Secure-agentdeck_mac', '/mac/'], ['__Secure-agentdeck_win', '/win/']]) {
     assert.equal(byName[name].path, p);
     assert.equal(byName[name].httpOnly, true);

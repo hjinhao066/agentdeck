@@ -9,7 +9,7 @@
 1. 从干净 checkout 的已提交 Git blob 构建五个文件，校验 CSP，给生成的 `index.html` 嵌入 `agentdeck-version`、`agentdeck-commit`、`agentdeck-builtAt` meta；JS/CSS URL 带提交号，避免刷新后复用旧资源。源码与页面样式不改。
 2. 写出 `release.json`，记录完整版本、40 位提交号、UTC 构建时间和五文件 SHA256。与发版版本/提交不一致时在上传前停止。
 3. SSH 管理身份经 `sudo -n` 操作 `/srv`；远端目录锁防并发部署。记录原始符号链接作为回滚点（相对/绝对链接均保留原文）。已有总台不存在或不是链接则停止，不盲目覆盖目录。
-4. tar 上传到唯一 release 目录，原子切链接。从 **`https://agentdeck.18-139-28-180.sslip.io/` 公网入口**读取真实 HTML、五文件与 manifest，精确核对版本/提交/时间/字节及 `Cache-Control: no-store`；每次读取带随机查询参数、禁重定向、10 秒超时。认证只过 Caddy Basic，不请求电脑登录 token。
+4. tar 上传到唯一 release 目录，原子切链接。从 **`https://agentdeck.18-139-28-180.sslip.io/` 公网入口**读取真实 HTML、总台文件（含 `gate/` 登录页三个文件）与 manifest，精确核对版本/提交/时间/字节及 `Cache-Control: no-store`；每次读取带随机查询参数、禁重定向、10 秒超时。认证用 `Authorization: Basic` 头过入口（入口仍接受），不请求电脑登录 token。
 5. 上传/公网核对最多 3 次，共用同一个候选 release 和部署前回滚点；失败恢复原链接，核对 readlink，再释放自己的锁并退出非零。报告区分 `rollback=restored` 与 `rollback=failed`；后者需按报告的 `previous` 人工恢复，不自动无限重试。SSH 操作各有 60 秒上限。取消时也尝试恢复；断网/进程强杀不能保证远端恢复，不能把失败回执当成功。
 
 `mobile-deploy-result.json` 记录尝试次数、旧链接、线上元信息、结果与回滚状态；`mobile-deploy.log` 记录命令结果。发版报告手机步骤缺失/未部署/失败/线上不符一律 🔴，整个 release 非零退出。每次运行先移除旧成功回执，避免空命令复用历史结果。旧 release 不自动删除，保证回滚点不被保留策略清走；可在验收后手工清理非现役且不再需要的 release。

@@ -175,6 +175,8 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       if (machine.busy) machine.queued.push(turn); else machine.captain.turns.push(turn);
       return json(res, 200, { queued: true });
     }
+    // Like mobile-web.js: the phone asks for a fresh 30 days; the same cookie value comes back.
+    if (req.method === 'POST' && url.pathname === '/renew') return json(res, 200, { authenticated: true }, { 'Set-Cookie': cookie(current, 30 * 24 * 60 * 60) });
     if (req.method === 'POST' && url.pathname === '/logout') {
       machine.devices.delete(current);
       return json(res, 200, { authenticated: false }, { 'Set-Cookie': cookie('', 0) });

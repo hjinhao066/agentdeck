@@ -9,13 +9,16 @@
 # 只替换 BEGIN/END 标记之间的内容，不动其他站点。口令哈希不在这里：
 # 由下面 import 的 /etc/caddy/agentdeck-basicauth.caddy 提供（脚本从现有站点段落里原样取出，不打印）。
 #
+# 入口登录（第一层）：不再用浏览器自带的基础认证弹框（iOS 不会长期记住，每次都要重输）。
+# 改成一个登录页 /gate/：输一次账号口令，Caddy 校验通过后发一个随机长串 cookie（__Host-agentdeck_gate，
+# 400 天，HttpOnly+Secure），之后每次打开自动放行，每次打开总台还会续期。cookie 的值是安装脚本生成的
+# 随机串，放在 /etc/caddy/agentdeck-gate.caddy（一行 `vars gate_secret ...`），不是口令本身，也不在 git 里。
+# 带 Authorization: Basic 头的请求（curl、npm run mobile:check）仍然照旧校验口令，不经过登录页。
+#
 # 路径前缀不剥掉（用 handle，不是 handle_path）：AgentDeck 自己校验并去掉前缀。
 
 # BEGIN agentdeck-three-ends (managed by deploy/vps; do not edit between markers)
 agentdeck.18-139-28-180.sslip.io {
-	# 第一层：全站 basicauth，覆盖静态总台、/mac/*、/win/*，也覆盖 404 路径。
-	import /etc/caddy/agentdeck-basicauth.caddy
-
 	# 访问日志不记 URI、请求头、响应头、登录用户名。
 	log {
 		output file /var/log/caddy/agentdeck-access.log {
@@ -41,33 +44,92 @@ agentdeck.18-139-28-180.sslip.io {
 	}
 
 	route {
+		# 入口 cookie 的随机串（只有这一行 `vars gate_secret ...`），放在最前面，后面的匹配器才能用 {http.vars.gate_secret}。
+		import /etc/caddy/agentdeck-gate.caddy
+
 		# route 保证下面严格按书写顺序执行（裸 handle 会按匹配器特异度重排，守卫会跑到代理后面）。
 		# 含 ./、../ 或 // 的路径一律 404（用 expression 匹配原始路径；path_regexp 看到的是清理后的路径，拦不住）。Caddy 按"清理后"的路径选后端，却把原始路径转给后端，
 		# 两者不一致会让后端看到 /mac/../win/... 这种含糊路径；浏览器本来就不会发这种路径。
 		@ambiguous expression {http.request.orig_uri.path}.matches('//|(^|/)\\.\\.?(/|$)')
 		respond @ambiguous 404
 
-		# 代理段：去掉 Authorization，覆盖 Host / X-Forwarded-*，X-Forwarded-For 只放连接 IP。
+		# ---- 入口登录（第一层）----
+		# 登录接口：POST /gate/login，仍用 basicauth 校验账号口令（页面脚本把它们放进 Authorization 头），
+		# 通过才发 cookie。校验失败是 401，handle_errors 里会去掉 WWW-Authenticate，浏览器不弹原生框。
+		@gate_login {
+			method POST
+			path /gate/login
+		}
+		handle @gate_login {
+			# 里面必须用 route：handle 里的指令会被 Caddy 按固定顺序重排，header 会跑到 basicauth 前面，
+			# 口令错了也会收到 cookie。
+			route {
+				import /etc/caddy/agentdeck-basicauth.caddy
+				header Set-Cookie "__Host-agentdeck_gate={http.vars.gate_secret}; Path=/; Max-Age=34560000; HttpOnly; Secure; SameSite=Lax"
+				header Cache-Control no-store
+				respond 204
+			}
+		}
+
+		# 登录页本身（静态，无数据无密钥）必须免登录，否则没 cookie 的人进不来。只开 /gate/ 这一个目录。
+		handle /gate/* {
+			root * /srv/agentdeck-hub
+			header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
+			file_server {
+				hide .*
+			}
+		}
+
+		# 没带有效 cookie、但带了 Authorization: Basic 的（脚本和 curl）：照旧校验口令，错了就是 401。
+		@basic_only {
+			header Authorization Basic*
+			not header Cookie *__Host-agentdeck_gate={http.vars.gate_secret}*
+		}
+		route @basic_only {
+			import /etc/caddy/agentdeck-basicauth.caddy
+		}
+
+		# 既没有有效 cookie、也没带 Basic 头：整页导航跳到登录页，其余请求（总台的 fetch）回 401 JSON，
+		# 总台脚本看到 {"gate":"login"} 就重新加载页面，落到登录页。
+		@denied_page {
+			method GET
+			header Accept *text/html*
+			not header Cookie *__Host-agentdeck_gate={http.vars.gate_secret}*
+			not header Authorization Basic*
+		}
+		redir @denied_page /gate/ 302
+		@denied {
+			not header Cookie *__Host-agentdeck_gate={http.vars.gate_secret}*
+			not header Authorization Basic*
+		}
+		handle @denied {
+			header Content-Type "application/json; charset=utf-8"
+			header Cache-Control no-store
+			respond `{"gate":"login"}` 401
+		}
+
+		# 代理段：去掉 Authorization 和入口 cookie（__Host-agentdeck_gate，Path=/ 会发给所有前缀，不能让某台电脑拿到它），覆盖 Host / X-Forwarded-*，X-Forwarded-For 只放连接 IP。
 		# 目标不可达时（隧道断开）3 秒内失败，由 handle_errors 统一返回 502 {"offline":true}。
 		#
 		# 放行规则（四个 reverse_proxy 一致，只有登录/登出多一条 Set-Cookie 放行）：
 		#   - 只放行状态码 2xx/4xx/5xx 且 Content-Type 恰好是 application/json（或带参数）的响应；
 		#     3xx、1xx、304 一律换成 403 {"error":"blocked"}，后端不能用跳转把总台的 fetch 引到另一台机器。
 		#   - 两条 Content-Type 是「或」：不能写成 application/json*，那会把 application/json<script> 也放出去。
-		#   - Set-Cookie 只有 POST /<前缀>/login、/<前缀>/logout 才放行，且必须是本机的 cookie 名；
-		#     其余路径带 Set-Cookie 的响应一律 403（Caddy 2.6 没法逐条核对多个 Set-Cookie 的值，只能缩小到这两个路径）。
+		#   - Set-Cookie 只有 POST /<前缀>/login、/logout、/renew 才放行，且必须是本机的 cookie 名；
+		#     其余路径带 Set-Cookie 的响应一律 403（Caddy 2.6 没法逐条核对多个 Set-Cookie 的值，只能缩小到这三个路径）。
 		#   - header_down 只在 copy_response 抄响应时生效，拦下来的那一支（handle_response 兜底）自己再写头。
 		#     sandbox 让文档变成不透明源，读不到同源的另一个前缀；default-src 'none' 让脚本跑不起来。
 		handle /mac/* {
 			@mac_auth {
 				method POST
-				path /mac/login /mac/logout
+				path /mac/login /mac/logout /mac/renew
 			}
 			handle @mac_auth {
 				reverse_proxy 127.0.0.1:43122 {
 					header_up -Authorization
 					header_up -Forwarded
 					header_up -X-Real-IP
+					header_up Cookie `^__Host-agentdeck_gate=[^;]*;?\s*|;\s*__Host-agentdeck_gate=[^;]*()` "$1"
 					header_up Host agentdeck.18-139-28-180.sslip.io
 					header_up X-Forwarded-Proto https
 					header_up X-Forwarded-For {remote_host}
@@ -127,6 +189,7 @@ agentdeck.18-139-28-180.sslip.io {
 					header_up -Authorization
 					header_up -Forwarded
 					header_up -X-Real-IP
+					header_up Cookie `^__Host-agentdeck_gate=[^;]*;?\s*|;\s*__Host-agentdeck_gate=[^;]*()` "$1"
 					header_up Host agentdeck.18-139-28-180.sslip.io
 					header_up X-Forwarded-Proto https
 					header_up X-Forwarded-For {remote_host}
@@ -176,13 +239,14 @@ agentdeck.18-139-28-180.sslip.io {
 		handle /win/* {
 			@win_auth {
 				method POST
-				path /win/login /win/logout
+				path /win/login /win/logout /win/renew
 			}
 			handle @win_auth {
 				reverse_proxy 127.0.0.1:43123 {
 					header_up -Authorization
 					header_up -Forwarded
 					header_up -X-Real-IP
+					header_up Cookie `^__Host-agentdeck_gate=[^;]*;?\s*|;\s*__Host-agentdeck_gate=[^;]*()` "$1"
 					header_up Host agentdeck.18-139-28-180.sslip.io
 					header_up X-Forwarded-Proto https
 					header_up X-Forwarded-For {remote_host}
@@ -242,6 +306,7 @@ agentdeck.18-139-28-180.sslip.io {
 					header_up -Authorization
 					header_up -Forwarded
 					header_up -X-Real-IP
+					header_up Cookie `^__Host-agentdeck_gate=[^;]*;?\s*|;\s*__Host-agentdeck_gate=[^;]*()` "$1"
 					header_up Host agentdeck.18-139-28-180.sslip.io
 					header_up X-Forwarded-Proto https
 					header_up X-Forwarded-For {remote_host}
@@ -289,8 +354,11 @@ agentdeck.18-139-28-180.sslip.io {
 		}
 
 		# 其余一律是静态总台。安全头在这里加，总台不用内联脚本和样式。
+		# 打开总台首页时把入口 cookie 续期一次（用得越勤越不过期）。
 		handle {
 			root * /srv/agentdeck-hub
+			@gate_index path / /index.html
+			header @gate_index Set-Cookie "__Host-agentdeck_gate={http.vars.gate_secret}; Path=/; Max-Age=34560000; HttpOnly; Secure; SameSite=Lax"
 			header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
 			file_server {
 				hide .*
@@ -303,6 +371,7 @@ agentdeck.18-139-28-180.sslip.io {
 	# 后端自己返回的 4xx/5xx（含 AgentDeck 的 JSON 401）不经过这里，原样透传。
 	handle_errors {
 		header -Server
+		header -WWW-Authenticate
 		header Cache-Control no-store
 		header X-Content-Type-Options nosniff
 		@offline expression {http.error.status_code} in [502, 503, 504]

@@ -5,6 +5,7 @@
 ADDRESS="${AGENTDECK_ADDRESS:-agentdeck.18-139-28-180.sslip.io}"
 CADDYFILE="${CADDYFILE:-/etc/caddy/Caddyfile}"
 AUTH_FILE="${AGENTDECK_AUTH_FILE:-/etc/caddy/agentdeck-basicauth.caddy}"
+GATE_FILE="${AGENTDECK_GATE_FILE:-/etc/caddy/agentdeck-gate.caddy}"
 LOG_FILE="${AGENTDECK_LOG_FILE:-/var/log/caddy/agentdeck-access.log}"
 HUB_ROOT="${AGENTDECK_HUB_ROOT:-/srv/agentdeck-hub}"
 BACKUP_ROOT="${AGENTDECK_BACKUP_ROOT:-/var/backups/agentdeck-three-ends}"
@@ -18,6 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SNIPPET="$SCRIPT_DIR/Caddyfile.agentdeck"
 BLOCK_PY="$SCRIPT_DIR/caddyfile_block.py"
 SNIPPET_AUTH_PATH=/etc/caddy/agentdeck-basicauth.caddy
+SNIPPET_GATE_PATH=/etc/caddy/agentdeck-gate.caddy
 SNIPPET_LOG_PATH=/var/log/caddy/agentdeck-access.log
 SNIPPET_HUB_PATH=/srv/agentdeck-hub
 
@@ -39,11 +41,11 @@ as_service_user() {
 
 # The snippet hard-codes the production paths; substitute only when the environment overrides them.
 render_snippet() { # $1 = output file
-  python3 - "$SNIPPET" "$1" "$AUTH_FILE" "$LOG_FILE" "$HUB_ROOT" "$SNIPPET_AUTH_PATH" "$SNIPPET_LOG_PATH" "$SNIPPET_HUB_PATH" <<'PY'
+  python3 - "$SNIPPET" "$1" "$AUTH_FILE" "$LOG_FILE" "$HUB_ROOT" "$SNIPPET_AUTH_PATH" "$SNIPPET_LOG_PATH" "$SNIPPET_HUB_PATH" "$GATE_FILE" "$SNIPPET_GATE_PATH" <<'PY'
 import sys
-src, out, auth, log, hub, d_auth, d_log, d_hub = sys.argv[1:]
+src, out, auth, log, hub, d_auth, d_log, d_hub, gate, d_gate = sys.argv[1:]
 text = open(src, encoding="utf-8").read()
-for new, old in ((auth, d_auth), (log, d_log), (hub, d_hub)):
+for new, old in ((auth, d_auth), (gate, d_gate), (log, d_log), (hub, d_hub)):
     text = text.replace(old, new)
 open(out, "w", encoding="utf-8").write(text)
 PY

@@ -178,7 +178,7 @@ function caddyEnv(d, extra = {}) {
   const reloadScript = path.join(d, 'reload.sh');
   fs.writeFileSync(reloadScript, `#!/bin/sh\necho x >> "${reloads}"\nif [ -n "$RELOAD_FAIL_FIRST" ] && [ "$(wc -l < "${reloads}")" -le 1 ]; then exit 1; fi\nif [ -n "$RELOAD_FAIL_AT" ] && [ "$(wc -l < "${reloads}")" -eq "$RELOAD_FAIL_AT" ]; then exit 1; fi\n`, { mode: 0o755 });
   return {
-    CADDYFILE: path.join(d, 'Caddyfile'), AGENTDECK_AUTH_FILE: path.join(d, 'agentdeck-basicauth.caddy'),
+    CADDYFILE: path.join(d, 'Caddyfile'), AGENTDECK_AUTH_FILE: path.join(d, 'agentdeck-basicauth.caddy'), AGENTDECK_GATE_FILE: path.join(d, 'agentdeck-gate.caddy'),
     AGENTDECK_LOG_FILE: path.join(d, 'log', 'agentdeck-access.log'), AGENTDECK_HUB_ROOT: path.join(d, 'hub'),
     AGENTDECK_BACKUP_ROOT: path.join(d, 'backups'), CADDY_BIN: caddy && caddy.bin, RELOAD_CMD: reloadScript, VALIDATE_AS: '',
     AGENTDECK_ALLOW_NON_ROOT: '1', ...extra,
@@ -193,7 +193,7 @@ test('install-caddy-site.sh --check：只校验，什么都不改', { skip: skip
   assert.match(r.stdout, /caddy validate: ok/);
   assert.ok(!(r.stdout + r.stderr).includes(HASH));
   assert.equal(read(path.join(d, 'Caddyfile')), ORIGINAL);
-  assert.ok(!fs.existsSync(path.join(d, 'agentdeck-basicauth.caddy')) && !fs.existsSync(path.join(d, 'backups')));
+  assert.ok(!fs.existsSync(path.join(d, 'agentdeck-basicauth.caddy')) && !fs.existsSync(path.join(d, 'agentdeck-gate.caddy')) && !fs.existsSync(path.join(d, 'backups')));
   assert.equal(reloadCount(d), 0);
   assert.deepEqual(fs.readdirSync(d).filter((f) => f.startsWith('.')), [], 'no stray candidate files');
 });
@@ -210,6 +210,11 @@ test('install-caddy-site.sh：备份、取出口令、只换这一段、校验�
   assert.match(after, new RegExp(`import ${path.join(d, 'agentdeck-basicauth.caddy').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   assert.equal(read(path.join(d, 'agentdeck-basicauth.caddy')), `basicauth {\n\tphone ${HASH}\n}\n`);
   assert.equal(mode(path.join(d, 'agentdeck-basicauth.caddy')), '600');
+  const gate = read(path.join(d, 'agentdeck-gate.caddy'));
+  assert.match(gate, /^vars gate_secret [0-9a-f]{64}\n$/, 'a fresh random secret for the login cookie');
+  assert.equal(mode(path.join(d, 'agentdeck-gate.caddy')), '600');
+  assert.ok(!(inst.stdout + inst.stderr).includes(gate.trim().split(' ')[2]), 'the secret is never printed');
+  assert.ok(after.includes(path.join(d, 'agentdeck-gate.caddy')) && !after.includes(gate.trim().split(' ')[2]), 'the Caddyfile imports the file, it does not contain the secret');
   const [bk] = fs.readdirSync(path.join(d, 'backups'));
   assert.equal(read(path.join(d, 'backups', bk, 'Caddyfile')), ORIGINAL);
   assert.equal(read(path.join(d, 'backups', bk, 'old-block.caddy')), OLD_BLOCK);
@@ -226,9 +231,11 @@ test('install-caddy-site.sh：备份、取出口令、只换这一段、校验�
   assert.equal(read(path.join(d, 'Caddyfile')), ORIGINAL.replace('other.example.com {', 'other.example.com {\n\theader X-Edited yes'));
   assert.equal(reloadCount(d), 2);
   assert.ok(fs.existsSync(path.join(d, 'agentdeck-basicauth.caddy')), 'auth file kept');
+  assert.equal(read(path.join(d, 'agentdeck-gate.caddy')), gate, 'gate file kept (phones stay logged in across a rollback and reinstall)');
 
   // installing again after a rollback works
   assert.equal(run(path.join(VPS, 'install-caddy-site.sh'), [], env).status, 0);
+  assert.equal(read(path.join(d, 'agentdeck-gate.caddy')), gate, 'reinstall keeps the same secret');
 });
 
 test('install-caddy-site.sh：现役写法（import 口令文件）--check 通过不改文件；安装原样迁移哈希；回滚还原 import 行', { skip: skipCaddy }, (t) => {

@@ -43,9 +43,13 @@ AgentDeck。它用系统 SSH，登录 Mac 后自动启动、失败每约 10 秒�
 可选的 `vps-access.json`（0600）含 `username`、`password`，只供可信桌面设置显示/复制
 Caddy 入口口令，网页 API 从不读取或返回它。密钥及以上本地文件禁止提交仓库。
 
-手机第一次使用有两步：打开私人地址，输入 Caddy 入口账号/口令；随后输入桌面设置中
-复制的登录 token。浏览器记住设备 30 天，之后无需反复输入 token。
-Caddy Basic 凭据由浏览器管理，重启浏览器后可能再问入口口令。
+手机第一次使用有两步：打开私人地址，在入口登录页（`/gate/`）输入一次入口账号/口令；随后输入桌面设置中
+复制的登录 token。入口登录成功后 Caddy 发一个随机长串 cookie（`__Host-agentdeck_gate`，400 天，HttpOnly+Secure，
+值是安装时随机生成的，不是口令；存在 VPS `/etc/caddy/agentdeck-gate.caddy`），每次打开总台自动续期，之后不再出现任何输入框。
+各电脑的设备 cookie 30 天，手机每次打开总台调一次 `POST <前缀>/renew` 重新计 30 天，常用就不会过期。
+带 `Authorization: Basic` 头的请求（脚本、curl、`npm run mobile:check`）仍照旧校验口令，不经登录页。
+想让所有手机重新登录：删掉 VPS 上的 `agentdeck-gate.caddy` 再运行 `install-caddy-site.sh`。
+入口层原来用浏览器自带的 Basic 弹框，iOS Safari 和添加到主屏幕的网页都不会长期记住它，所以每次都要重输；已换成登录页。
 设置中的垃圾桶图标「吊销所有设备并更换登录 token」会立即拒绝全部旧设备、旧 token 和旧 CSRF。
 手机的退出图标只吊销当前设备；吊销 Caddy 凭据需另行换 VPS 的 bcrypt 哈希。
 

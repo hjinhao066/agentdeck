@@ -13,7 +13,8 @@ const save = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null,
 const quote = (s) => "'" + s.replace(/'/g, "'\\''") + "'";
 const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 const PUBLIC_ORIGIN = 'https://agentdeck.18-139-28-180.sslip.io';
-const FILES = ['index.html', 'core.js', 'app.js', 'style.css', 'machines.json'];
+// gate/ is the entrance's login page; the entrance serves it without a login (see deploy/vps/Caddyfile.agentdeck).
+const FILES = ['index.html', 'core.js', 'app.js', 'style.css', 'machines.json', 'gate/index.html', 'gate/gate.js', 'gate/gate.css'];
 function privateJSON(file) {
   try { return readJSON(file); }
   catch { throw new Error('Cannot read private mobile configuration/credentials'); }
@@ -56,6 +57,7 @@ function build(repo, directory, expected = {}) {
       html = html.replace(/((?:src|href)="(?:core\.js|app\.js|style\.css))"/g, `$1?v=${commit}"`);
       bytes = Buffer.from(html.replace('</head>', `${tags}\n</head>`));
     }
+    fs.mkdirSync(path.dirname(path.join(directory, name)), { recursive: true });
     fs.writeFileSync(path.join(directory, name), bytes);
   }
   const files = Object.fromEntries(FILES.map((name) => [name, digest(fs.readFileSync(path.join(directory, name)))]));
