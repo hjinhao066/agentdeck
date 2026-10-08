@@ -57,17 +57,33 @@
   function createClock(now) {
     const time = typeof now === 'function' ? now : () => Date.now();
     let asleep = false, wokeAt = 0, beatAt = time();
+    // Total time spent asleep, so a wall-clock wait can be cut down to the time the machine
+    // was awake (a start-up wait must not count a night's sleep). suspendedAt is the start of
+    // a sleep whose end has not been credited yet.
+    let slept = 0, suspendedAt = 0;
     return {
-      suspend() { asleep = true; },
-      resume(at) { asleep = false; wokeAt = Number.isFinite(at) ? at : time(); beatAt = time(); },
+      suspend() { if (!suspendedAt) suspendedAt = time(); asleep = true; },
+      resume(at) {
+        const t = time();
+        if (suspendedAt) slept += Math.max(0, t - suspendedAt);
+        else if (t - beatAt > IMPLICIT_WAKE_GAP) slept += t - beatAt; // the suspend event never came
+        suspendedAt = 0;
+        asleep = false; wokeAt = Number.isFinite(at) ? at : t; beatAt = t;
+      },
       // Ticks only run while awake, so a long silence before this one means
       // the machine slept, whether or not its events arrived (or arrived yet).
       beat() {
         const t = time();
-        if (t - beatAt > IMPLICIT_WAKE_GAP) { asleep = false; wokeAt = t; }
+        if (t - beatAt > IMPLICIT_WAKE_GAP) {
+          slept += Math.max(0, t - (suspendedAt || beatAt));
+          suspendedAt = 0;
+          asleep = false; wokeAt = t;
+        }
         beatAt = t;
       },
       snapshot() { return { asleep, wokeAt }; },
+      // Milliseconds asleep so far; a sleep still going (or woken but not yet seen) counts up to now.
+      sleptMs() { return slept + (suspendedAt ? Math.max(0, time() - suspendedAt) : 0); },
     };
   }
 

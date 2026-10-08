@@ -2207,6 +2207,7 @@ function buildColumn(col, isFresh) {
             if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
             if (prepared !== null) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, prepared), env.platform) + '\r');
             entry.launchedAt = Date.now();
+            entry.launchedSlept = window.SleepResume?.clock.sleptMs() || 0;
             entry.launchPending = false;
           };
           setTimeout(start, 700);
@@ -2729,6 +2730,7 @@ async function agentInForeground(col, allowShell) {
 function sendWhenReady(col, text, opts) {
   const o = opts || {};
   const started = Date.now();
+  const startedSlept = window.SleepResume?.clock.sleptMs() || 0;
   const id = col.id;
   let reminded = false;
   const check = async () => {
@@ -2763,8 +2765,13 @@ function sendWhenReady(col, text, opts) {
       // for a silent start has passed (see MainCore.startupLimit).
       const silent = MainCore.launchEchoOnly(entry.lastScreen);
       if (silent && o.onStartupFailed) {
-        const waited = Date.now() - (entry.launchedAt || started);
-        if (waited >= MainCore.startupLimit(col.cmd)) {
+        // Awake time only: a computer asleep through the first seconds of a start must not read as
+        // a hang. This loop wakes up first after a sleep, so let the clock see the gap before reading it.
+        const sleepClock = window.SleepResume?.clock;
+        sleepClock?.beat();
+        const sleptSince = entry.launchedAt ? (entry.launchedSlept ?? startedSlept) : startedSlept;
+        const waited = Date.now() - (entry.launchedAt || started) - Math.max(0, (sleepClock?.sleptMs() || 0) - sleptSince);
+        if (waited >=MainCore.startupLimit(col.cmd)) {
           o.onStartupFailed(MainCore.startupFailure({ screen: entry.lastScreen, cmd: col.cmd, waitedMs: waited }));
           return;
         }

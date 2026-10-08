@@ -56,6 +56,21 @@ test('clock: suspend and resume, plus a long silence as an implicit wake', () =>
   assert.deepEqual(clock.snapshot(), { asleep: false, wokeAt: now }, 'ticks coming back after a long silence mean it woke, even if its event is late');
 });
 
+test('clock: sleptMs adds up every sleep, with or without its events', () => {
+  let now = 1000;
+  const clock = S.createClock(() => now);
+  assert.equal(clock.sleptMs(), 0);
+  clock.suspend(); now += 600_000;
+  assert.equal(clock.sleptMs(), 600_000, 'a sleep still going counts up to now');
+  clock.resume(now); assert.equal(clock.sleptMs(), 600_000);
+  now += 5000; clock.beat(); assert.equal(clock.sleptMs(), 600_000, 'awake time adds nothing');
+  now += 120_000; clock.beat(); assert.equal(clock.sleptMs(), 600_000, 'a gap under the implicit-wake limit is not sleep');
+  now += 300_000; clock.beat(); assert.equal(clock.sleptMs(), 900_000, 'no events: the long silence is credited');
+  clock.suspend(); now += 400_000; clock.beat(); // late resume event: beat sees the gap first
+  clock.resume(now); assert.equal(clock.sleptMs(), 1_300_000, 'not counted twice');
+  now += 400_000; clock.resume(now); assert.equal(clock.sleptMs(), 1_700_000, 'resume without suspend, after a long silence');
+});
+
 test('evidence: the screen, or a sleep during the task that ended soon after waking', () => {
   const awake = { asleep: false, wokeAt: 100_000 };
   assert.equal(S.evidence({ screen: 'API Error: Connection lost mid-response', now: 101_000, clock: awake }), 'screen');
