@@ -176,3 +176,49 @@ test('an idle question with no command receipt is pushed once for that session',
   assert.equal(again.status, 'working');
   assert.equal(w.config.mainSession.pending.filter((p) => p.question).length, 1);
 });
+
+// 10-08 real layout: the turn is over ("done 12:05 PM"), a shell still runs, and the
+// prompt row carries Claude Code's gray suggestion. The status tick marks the entry
+// state 'working' + backgroundOnly (the light stays yellow for the shell).
+const SHELL_SCREEN = [
+  '  ⏺ 继续等测试。',
+  '',
+  '✻ Brewed for 1m 50s · done 12:05 PM · 1 shell still running',
+  '─'.repeat(69),
+  '❯\u00a0等接电后跑全量 E2E',
+  '─'.repeat(69),
+  '  Sonnet 5.5  5h 93% ↻15:00 · 7d 98%',
+  '  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents',
+].join('\n');
+
+test('an idle session whose only activity is a background shell takes a tell at once', async () => {
+  const w = world();
+  Object.assign(w.terms.get('worker'), { state: 'working', backgroundOnly: true, lastOutputAt: 1_000_000, lastScreen: SHELL_SCREEN });
+  const task = w.dispatch('WHILE THE SHELL RUNS');
+  await tick();
+  assert.deepEqual(w.delivered, ['WHILE THE SHELL RUNS']);
+  assert.equal(task.status, 'working');
+  assert.equal(w.config.mainSession.pending.length, 0);
+});
+
+test('the same shell screen with a real draft in the box waits, and says why', async () => {
+  const w = world();
+  w.setComposing(true);
+  Object.assign(w.terms.get('worker'), { state: 'working', backgroundOnly: true, lastOutputAt: 1_000_000, lastScreen: SHELL_SCREEN.replace('等接电后跑全量 E2E', '真实草稿') });
+  const task = w.dispatch('SHOULD WAIT');
+  await tick();
+  assert.equal(w.delivered.length, 0);
+  await w.advance(31 * 60_000);
+  assert.equal(task.status, 'queued');
+  assert.match(w.config.mainSession.pending[0].summary, /草稿/);
+});
+
+test('a working session without the background-only mark still holds the tell', async () => {
+  const w = world();
+  Object.assign(w.terms.get('worker'), { state: 'working', lastOutputAt: 1_000_000, lastScreen: SHELL_SCREEN });
+  const task = w.dispatch('NOT YET');
+  await tick(); await w.advance(31 * 60_000);
+  assert.equal(w.delivered.length, 0);
+  assert.equal(task.status, 'queued');
+  assert.match(w.config.mainSession.pending[0].summary, /终端仍显示在干活/);
+});

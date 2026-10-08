@@ -757,11 +757,21 @@
       (rows ? '\n终端最后几行：\n' + rows : '\n终端上什么都没有。');
   }
 
+  // A Claude worker whose turn is over keeps state 'working' while a background
+  // shell or monitor still runs ("✻ Brewed for 40s · done 8:27 AM · 1 shell still
+  // running"): the status light and the missing-receipt clock wait for that work.
+  // Its prompt is idle and takes input, so a tell must not wait for the shell.
+  // The renderer sets backgroundOnly on each status tick, and only when nothing
+  // but the background count makes the screen read as working.
+  function workingForSend(entry) {
+    return entry?.state === 'working' && !entry.backgroundOnly;
+  }
+
   // Why a queued tell still cannot be typed in. Empty when nothing here blocks it.
   function tellWaitReason({ entry, composing, foreground, screen, cmd } = {}) {
     const text = screen != null ? screen : entry?.lastScreen;
     if (!entry || entry.alive === false) return '终端已经退出';
-    if (entry.state === 'working' || terminalActivity(text, cmd || '') === 'working') return '终端仍显示在干活';
+    if (workingForSend(entry) || terminalActivity(text, cmd || '') === 'working') return '终端仍显示在干活';
     if (entry.state === 'input') return '停在确认提示上';
     if (entry.state === 'quota' || terminalActivity(text, cmd || '') === 'quota') return '额度用尽或正在等待额度';
     if (composing) return '输入框里有未发送的草稿';
@@ -1067,7 +1077,7 @@
   }
 
   return {
-    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
+    RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
     receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };

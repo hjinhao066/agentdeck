@@ -355,7 +355,7 @@ function bufferAppend(id, data) {
   return ++buf.sequence;
 }
 
-function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
+function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew) {
   if (!validId(id) || ptys.size >= 100) return;
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
@@ -386,7 +386,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
-  let terminalEnv = { ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  let terminalEnv = AgentSessions.crewEnvironment({ ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id }, crew);
   terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
 
   // Never inherit an outer deck's managed capability into an independent shell.
@@ -1413,7 +1413,7 @@ app.whenReady().then(async () => {
     quotaRead = null;
     return [...claudeQuotaRefresh.samples(), ...authSamples()].filter((s) => !seatId || s.seatId === seatId);
   });
-  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
+  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir, crew }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir, crew === true));
   // Only the trusted deck main frame can submit a native worker. No browser
   // credentials or Captain capability are passed into the skill subprocess.
   chatgptWebExecutor = createChatGPTWebExecutor({

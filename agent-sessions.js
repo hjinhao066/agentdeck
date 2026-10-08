@@ -136,6 +136,14 @@ function clearInheritedSessionIds(env) {
   return clean;
 }
 
+// A session the 队长 opened is driven by typed tells, so Claude Code's gray
+// "next step" suggestion in its input box only gets in the way. Claude Code
+// reads this variable ("0", "false", "no", "off" turn suggestions off); the
+// user's own settings and their manual terminals are left alone.
+function crewEnvironment(env, crew) {
+  return crew ? { ...env, CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION: '0' } : env;
+}
+
 function defaultRoots(home) {
   const base = home || '';
   return {
@@ -157,5 +165,5 @@ function resolveSessions(columns, options) {
 }
 
 module.exports = {
-  sameCwd, clearInheritedSessionIds, listCursor, listCodex, listAgy, assignSessions, defaultRoots, resolveSessions,
+  sameCwd, clearInheritedSessionIds, crewEnvironment, listCursor, listCodex, listAgy, assignSessions, defaultRoots, resolveSessions,
 };
