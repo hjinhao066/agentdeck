@@ -303,7 +303,7 @@ textarea:disabled { opacity: .6; }
 /* Details of one account: a sheet that rises over the drawer. */
 .quota-sheet-scrim { position: absolute; inset: 0; z-index: 1; background: var(--backdrop); }
 .quota-sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; max-height: 80%; overflow-y: auto; overscroll-behavior: contain; padding: 4px 6px calc(14px + env(safe-area-inset-bottom)) calc(18px + env(safe-area-inset-left)); border-radius: 18px 18px 0 0; background: var(--surface); box-shadow: var(--shadow); }
-.quota-sheet-head { display: flex; align-items: center; gap: 8px; min-height: 52px; }
+.quota-sheet-head { position: sticky; top: -4px; z-index: 1; display: flex; align-items: center; gap: 8px; min-height: 52px; margin: -4px -6px 0 calc(-18px - env(safe-area-inset-left)); padding: 4px 6px 0 calc(18px + env(safe-area-inset-left)); background: var(--surface); }
 .quota-sheet-head h2 { min-width: 0; font-size: 16px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .quota-sheet-captain { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 12px; color: var(--secondary); }
 .quota-sheet-head .icon-button { margin-left: auto; }
@@ -378,7 +378,8 @@ textarea:disabled { opacity: .6; }
 .sheet::backdrop { background: var(--backdrop); }
 .sheet[open] { display: flex; animation: sheet-up .22s ease-out; }
 .sheet-body { flex: 1; min-width: 0; max-height: 88dvh; overflow-y: auto; overscroll-behavior: contain; padding: 6px 16px calc(18px + env(safe-area-inset-bottom)); }
-.sheet-head { display: flex; align-items: center; gap: 10px; min-height: 60px; margin-right: -10px; }
+/* The title and its close button stay at the top while the list scrolls under them; the worded actions stay at the bottom. */
+.sheet-head { position: sticky; top: -6px; z-index: 2; display: flex; align-items: center; gap: 10px; min-height: 60px; margin: -6px -16px 0; padding: 6px 6px 0 16px; background: var(--surface); }
 .sheet-head h2 { flex: 1; min-width: 0; font-size: 18px; font-weight: 650; letter-spacing: -.3px; line-height: 1.35; overflow-wrap: anywhere; }
 .sheet-head h2:focus-visible { outline: 0; }
 .sheet-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 11px; background: var(--orange-soft); color: var(--crown); flex: none; }
@@ -424,7 +425,7 @@ textarea:disabled { opacity: .6; }
 .sheet[data-phase="switching"] :is(.sheet-lead, .sheet-elapsed), .sheet[data-phase="done"] .sheet-lead, .sheet[data-phase="failed"] .sheet-lead { text-align: center; }
 .sheet[data-phase="failed"] .sheet-lead { color: var(--red); font-weight: 550; }
 .sheet[data-phase="failed"] .sheet-note, .sheet[data-phase="switching"] .sheet-note:not(.warn) { text-align: center; }
-.sheet-actions { display: grid; gap: 8px; margin-top: 18px; }
+.sheet-actions { position: sticky; bottom: calc(-18px - env(safe-area-inset-bottom)); z-index: 2; display: grid; gap: 8px; margin: 18px -16px calc(-18px - env(safe-area-inset-bottom)); padding: 12px 16px calc(18px + env(safe-area-inset-bottom)); background: var(--surface); }
 .sheet .primary, .sheet .secondary { width: 100%; min-height: 48px; border-radius: 12px; font-size: 15px; font-weight: 650; }
 .sheet .primary { border: 0; background: var(--orange); color: var(--on-orange); }
 .sheet .secondary { border: 1px solid var(--line); background: transparent; color: var(--text); font-weight: 600; }

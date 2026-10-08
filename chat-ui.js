@@ -1345,8 +1345,12 @@
     if (o.cancelled && o.cancelled()) return false;
     const entry = host.terms.get(col.id);
     if (!entry || !entry.alive) { host.showToast(entry ? '这个终端已经退出了' : '终端还在启动，稍等一下'); return false; }
-    if (o.requireIdle && (entry.state === 'working' || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen, col.cmd))) return false;
+    if (o.requireIdle && (window.MainCore.workingForSend(entry) || entry.state === 'input' || entry.state === 'quota' || window.MainCore.terminalActivity(entry.lastScreen, col.cmd))) return false;
     if (prompt && prompt.length > (o.inlineLimit || window.MainCore.LONG_PROMPT)) return sendLong(col, prompt, atts, o);
+    // No bracketed paste: the terminal reads line by line and the tty drops what a line holds past
+    // ~1 KB. A line that long goes out as a file with a one-line pointer, never cut short.
+    const lineMode = !(entry.term.modes && entry.term.modes.bracketedPasteMode);
+    if (prompt && lineMode && C.longestLineBytes((o.prefix || '') + (atts || []).map(host.shellQuote).join(' ') + ' ' + prompt + (o.suffix || '')) > C.LINE_MODE_BYTES) return sendLong(col, prompt, atts, o);
     if (entry.sendingPrompt) return false;
     // guardUserInput (receipts, 队长's work for others): never into an input box
     // the user is typing in, because the Enter below would send their words
@@ -1386,6 +1390,7 @@
       window.deck.ptyInput(col.id, '\r');
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
+      entry.backgroundOnly = false;   // the turn just sent is real work, until the next status tick says otherwise
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();
       if (isCursor) {
@@ -1409,11 +1414,20 @@
   }
 
   // Resolves to the turn (or true) once the file is written and the pointer sent.
+  // A terminal without bracketed paste reads line by line, so there the pointer is one line that fits the tty limit.
   function sendLong(col, prompt, atts, o) {
     return window.deck.saveLongPrompt(prompt).then((file) => {
       if (!file) { host.showToast('长消息存文件失败，没有发送'); return false; }
+      const note = `（这条消息共 ${prompt.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
       const opening = prompt.slice(0, 300).replace(/\s+/g, ' ').trim();
-      const pointer = `${opening}…\n（这条消息共 ${prompt.length} 字，完整内容已存成文件，请先完整读取再照做：${file}）`;
+      const entry = host.terms.get(col.id);
+      let pointer = `${opening}…\n${note}`;
+      if (entry && !(entry.term.modes && entry.term.modes.bracketedPasteMode)) {
+        // only what shares the pointer's line counts: the end of the prefix and the start of the suffix
+        const fixed = String(o.prefix || '').split(/\r?\n|\r/).at(-1) + (atts || []).map(host.shellQuote).join(' ') + String(o.suffix || '').split(/\r?\n|\r/)[0] + note + '… ';
+        const fitting = C.clipBytes(opening, C.LINE_MODE_BYTES - C.utf8Length(fixed));
+        pointer = (fitting ? fitting + '…' : '') + note;
+      }
       // the bubble keeps the opening and the file; the full text is in the file
       const shown = prompt.slice(0, 2000) + `\n…（全文 ${prompt.length} 字，见附件）`;
       return sendPrompt(col, '', atts, { ...o, prefix: (o.prefix || '') + pointer + ' ', display: shown, displayAtts: [...(atts || []), file] });

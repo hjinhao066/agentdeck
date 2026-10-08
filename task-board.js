@@ -27,12 +27,9 @@ function brief(value, count = 2) {
   const parts = String(value || '').trim().split(/(?<=[。！？.!?])|\r?\n/u).map((part) => part.trim()).filter(Boolean);
   return parts.slice(0, count).join(' ').slice(0, 500);
 }
-// needs_user_entry is the updated time of this visit. Later edits keep it, so a
-// restart can tell this visit from the next time the card enters 需要你.
-function finishStatus(card, previous) {
+function finishStatus(card) {
   touch(card);
-  if (card.status === 'needs_user' && previous !== 'needs_user') card.needs_user_entry = card.updated;
-  else if (card.status !== 'needs_user') delete card.user_question;
+  if (card.status !== 'needs_user') delete card.user_question;
 }
 function localSessions(config) {
   const tasks = config.mainSession?.tasks || [];
@@ -282,7 +279,6 @@ class TaskStore {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id);
       if (input.updated !== undefined && input.updated !== card.updated) throw new Error('Card changed since it was read. Reload before editing.');
-      const previous = card.status;
       const wasReview = card.status === 'review';
       const wasHeld = card.flag === 'held';
       if (input.status === 'doing') {
@@ -307,7 +303,7 @@ class TaskStore {
       if (card.review_reject) card.review_reject.delivered = true;
       // CLI moves are Captain decisions, not requests for an automatic model.
       if (input.suppressDispatch && input.status === 'doing') card.dispatch_claim = { key: crypto.randomUUID(), owner: os.hostname(), delivered: true, created: new Date().toISOString() };
-      finishStatus(card, previous);
+      finishStatus(card);
       return { card, notices: card.flag === 'held' ? [`卡片 ${card.id} 连续失败 2 次，已挂起；请队长拍板。`] : [] };
     });
   }
@@ -430,7 +426,6 @@ class TaskStore {
       if (card.last_event === eventKey || card.attempt_closed && !resumed && !['complete', 'failed'].includes(input.type)) return { card, ignored: true, notices: [] };
       const authoritative = input.type === 'complete' && input.source === 'command' && /:failed:(?:quota|process|automatic):/.test(card.last_event || '');
       if (card.flag === 'held' && !authoritative) return { card, ignored: true, notices: [] };
-      const previous = card.status;
       const notices = [];
       // Automatic and explicitly declared reviewers use the same verdict flow: a plain failure,
       // or a "不通过" complete, is a rejection; a complete with no clear verdict is
@@ -488,7 +483,7 @@ class TaskStore {
         card.attempt_closed = true;
         notices.push(`卡片 ${card.id} 失败：${reason}${card.flag === 'held' ? '；连续失败 2 次，已挂起，不再自动重试。' : ''}`);
       }
-      card.last_event = eventKey; finishStatus(card, previous);
+      card.last_event = eventKey; finishStatus(card);
       return { card, notices };
     });
   }
@@ -540,7 +535,6 @@ class TaskStore {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id);
       if (card.dispatch_session_id !== input.session_id) return { card, ignored: true, notices: [] };
-      const previous = card.status;
       const notices = [];
       if (input.failed) {
         this.failure(card, input.session_id, text(input.failed, 'dispatcher failure', true), false, input.source);
@@ -553,7 +547,7 @@ class TaskStore {
         else delete card.user_question;
         if (!question.trim()) notices.push(`卡片 ${card.id} 调度已结束，尚未派出执行会话，请队长安排。`);
       }
-      card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; finishStatus(card, previous); return { card, notices };
+      card.dispatch_session_id = null; card.dispatch_host = null; card.dispatch_bound_at = null; finishStatus(card); return { card, notices };
     });
   }
   // A restart continues the same card. It does not close the attempt, archive

@@ -117,6 +117,9 @@ async function launch() {
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 20000 }).toBe(7);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 30000 }).toBe(7);
   await expect.poll(() => fs.existsSync(control)).toBe(true);
+  // The Captain's start-up output ends with working -> done. Any state change rebuilds the architecture map's cards
+  // (a new element for each), so a card read while that happens is a detached one with no size and no style.
+  await expect.poll(() => page.evaluate(() => terms.get('cap').state), { timeout: 30000 }).toBe('done');
   await page.setViewportSize({ width: 1440, height: 900 });
 }
 test.afterEach(async () => {

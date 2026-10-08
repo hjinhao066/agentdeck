@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createNotifyUser, createBarkSender } = require('../notify-user');
+const { phonePush } = require('../attention-core');
 
 
 function harness(fetchImpl) {
@@ -170,4 +171,29 @@ test('blank and absent key settings use the same private Captain key without rea
   const explicit = createBarkSender({ getConfig: () => ({ barkKeyFile: path.join(dir, 'missing') }), keyHome: dir,
     fetchImpl: () => assert.fail('must not fall back from an explicit invalid key') });
   assert.equal((await explicit({ message: 'seat offline' })).ok, false);
+});
+
+test('an inbox need pushes the question and quick answers under its title, never the card receipt', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-inbox-push-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const file = path.join(dir, 'key'); fs.writeFileSync(file, 'fake_inbox_key');
+  const input = { title: '确认密码策略', ask: '选 8 位还是 12 位？', options: ['8 位', '12 位'],
+    detail: '验收完成，判定【通过】。队员回执原文第二句。' };
+  const h = harness(); h.config.barkKeyFile = file;
+  const push = (extra = {}) => h.notify({ message: [input.title, input.ask].join('\n'), bark: { ...phonePush(input), level: 'active' }, ...extra }, true, 'turn-1');
+
+  assert.match(await push(), /本机提醒[\s\S]*Bark 提醒已发送/);
+  assert.equal(h.alerts.length, 1);
+  assert.equal(h.calls.length, 1);
+  const sent = JSON.parse(h.calls[0][1].body);
+  assert.deepEqual(sent, { device_key: 'fake_inbox_key', title: '确认密码策略',
+    body: '选 8 位还是 12 位？\n可选回答：8 位 / 12 位', level: 'active', sound: 'minuet' });
+  assert.doesNotMatch(sent.body, /验收完成|队员回执/);
+
+  h.calls.length = 0;
+  assert.match(await push({ urgent: true, bark: { ...phonePush(input), level: 'critical' } }), /Bark 紧急提醒已发送/);
+  const urgent = JSON.parse(h.calls[0][1].body);
+  assert.equal(urgent.level, 'critical');
+  assert.equal(urgent.volume, 4);
+  assert.equal(urgent.title, '确认密码策略');
 });

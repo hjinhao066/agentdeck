@@ -7,6 +7,7 @@
   <title>AgentDeck 总台</title>
   <link rel="stylesheet" href="style.css">
   <script src="core.js" defer></script>
+  <script src="releases.js" defer></script>
   <script src="app.js" defer></script>
 </head>
 <body>
@@ -16,14 +17,14 @@
       <div class="side-head"><span class="brand-mark" aria-hidden="true"></span><strong>AgentDeck</strong></div>
       <nav class="side-nav" aria-label="页面">
         <button type="button" data-side-view="captain"><span class="side-icon" aria-hidden="true"></span><span class="side-name">队长</span></button>
-        <button type="button" data-side-view="attention"><span class="side-icon" aria-hidden="true"></span><span class="side-name">待我处理</span><span class="side-count nav-attention" aria-hidden="true" hidden></span></button>
+        <button type="button" data-side-view="attention"><span class="side-icon" aria-hidden="true"></span><span class="side-name">待我处理</span><span class="nav-attention-dot" aria-hidden="true" hidden></span><span class="side-count nav-attention" aria-hidden="true" hidden></span></button>
         <button type="button" data-side-view="board"><span class="side-icon" aria-hidden="true"></span><span class="side-name">任务看板</span></button>
         <button type="button" data-side-view="todo"><span class="side-icon" aria-hidden="true"></span><span class="side-name">待办</span><span class="side-count nav-badge" aria-hidden="true" hidden></span></button>
         <button type="button" data-side-view="overview"><span class="side-icon" aria-hidden="true"></span><span class="side-name">总览</span></button>
       </nav>
       <div id="side-sessions" class="side-sessions" role="group" aria-label="队长和会话"></div>
       <div id="side-quota" class="side-quota"></div>
-      <div id="side-foot" class="side-foot"><span id="side-version" class="side-version"></span></div>
+      <div id="side-foot" class="side-foot"><button id="side-version" class="side-version" type="button">版本更新</button></div>
     </aside>
     <div class="center">
     <header id="app-header" class="app-header">
@@ -32,6 +33,7 @@
       <div class="brand"><span class="brand-mark" aria-hidden="true"></span><strong id="brand-title">AgentDeck</strong><span id="brand-caption" class="brand-caption">总台</span></div>
       <div id="machine-bar" class="machine-bar" role="group" aria-label="选择电脑"></div>
       <div class="header-actions">
+        <button id="settings-open" class="icon-button" type="button" title="设置" aria-label="设置" aria-haspopup="dialog"></button>
         <button id="refresh" class="icon-button" type="button" title="刷新全部电脑" aria-label="刷新全部电脑"></button>
         <button id="theme" class="icon-button" type="button" title="切换主题" aria-label="切换主题"></button>
         <button id="logout-all" class="icon-button" type="button" title="全部退出：在这部手机上退出所有已登录的电脑" aria-label="全部退出：在这部手机上退出所有已登录的电脑"></button>
@@ -42,6 +44,10 @@
     <main id="main">
       <section id="overview-view" class="view" aria-label="总览">
         <div id="machine-cards" class="stack"></div>
+        <button id="releases-entry" class="releases-entry" type="button"><span class="releases-entry-icon" aria-hidden="true"></span><span class="releases-entry-name">版本更新</span><span id="releases-entry-meta" class="releases-entry-meta"></span><span class="releases-entry-chev" aria-hidden="true"></span></button>
+      </section>
+      <section id="releases-view" class="view" aria-label="版本更新" hidden>
+        <div id="releases" class="releases"></div>
       </section>
       <section id="attention-view" class="view" aria-label="待我处理" hidden>
         <p id="attention-sources" class="board-sources"></p>
@@ -93,7 +99,7 @@
     </main>
     <nav class="navigation" aria-label="主导航">
       <button type="button" data-view="overview" aria-current="page"><span class="nav-icon" aria-hidden="true"></span><span>总览</span></button>
-      <button type="button" data-view="attention" id="attention-tab"><span class="nav-icon" aria-hidden="true"></span><span class="nav-attention" aria-hidden="true" hidden></span><span>待我处理</span></button>
+      <button type="button" data-view="attention" id="attention-tab"><span class="nav-icon" aria-hidden="true"></span><span class="nav-attention-dot" aria-hidden="true" hidden></span><span class="nav-attention" aria-hidden="true" hidden></span><span>待我处理</span></button>
       <button type="button" data-view="captain"><span class="nav-icon" aria-hidden="true"></span><span>队长</span></button>
       <button type="button" data-view="todo"><span class="nav-icon" aria-hidden="true"></span><span class="nav-badge" aria-hidden="true" hidden></span><span>待办</span></button>
       <button type="button" data-view="sessions"><span class="nav-icon" aria-hidden="true"></span><span>会话</span></button>

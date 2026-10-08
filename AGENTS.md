@@ -105,7 +105,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Automatic sends go through `sendWhenReady`/`agentInForeground`: never type
   prose into a column whose foreground process is a shell (unless it is a plain
   shell column a Schedule targets on purpose). Prompts are never truncated; long
-  ones go out as a file via `prompt:save-long`.
+  ones go out as a file via `prompt:save-long`. A terminal without bracketed paste reads
+  line by line and the tty drops what a line holds past ~1 KB, so a line over `ChatCore.LINE_MODE_BYTES`
+  there goes out the same way, as one short pointer line.
 - The status lines under a chat composer are read from the rows below the TUI's
   input box; `extractReply` must keep cutting that box and everything below it.
 - 队长 (main session, `main-session.js`/`main-core.js`): exactly one column with
@@ -118,6 +120,14 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
   every column has a separate capability restricted to submitting its own
   complete/ask/progress commands. Nothing new
   is exposed to the page: the existing board request channel carries it.
+- 自动回执入口 (`automation-core.js`, `docs/automation-receipt.md`): the only door for scheduled
+  scripts that run in no AgentDeck terminal. Its own token (`board-control/automation.json`, mode
+  600, never shown or logged), checked by `AutomationCore.screen` before any terminal token. It may
+  tell 队长 (a notice labelled 「自动任务：名字」, never the user's words), add a 待办 card, and file a
+  结果汇报; nothing else (no `new`, `tell`, read, setting, 要你处理 or alert), no extra request
+  fields, rate limited, stoppable and resettable in Settings. A caller-supplied `automation` marker is
+  dropped; the page honors it only from the gate's own stamp (empty `callerId`). Never let a script
+  borrow the phone page, a terminal token or the user's identity.
 - Task boards (`task-board.js`, `task-heartbeat.js`): shared UTF-8 JSON in
   `~/.agents/boards/tasks`, fresh reads and atomic writes; invalid synced JSON
   is never overwritten. UI uses the fixed `TaskBoard` bridge documented in

@@ -83,9 +83,14 @@ the middle:
   then the 队长 row (once the Captain exists) with a folding arrow for the
   sessions it runs in the background, folders, loose sessions and 已归档.
   Every session is a live terminal column.
-  待我处理 collects decisions, login/payment requests and reports; reply to each
-  item with its original context for the Captain, or tick it into the folded
-  已完成 section. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
+  待我处理 collects decisions, login/payment requests and reports that the Captain
+  files; each question is shown first, with one-tap answers when the Captain
+  offers them. Reply to each item with its original context for the Captain, or
+  tick it into the folded 已完成 section. Two columns: 要你处理 (the sidebar number;
+  only a reply or 已处理 ticks it) and 做完了你还没看 (a blue dot): a Captain report is
+  read once its Captain reply, or the report itself, was on screen for 1.5 s on the
+  desktop or the phone hub. Board cards that stop for the user go to
+  the Captain first, never straight onto this page. The phone hub shows both computers' items. See [待我处理](docs/attention.md).
   Drag a session to reorder it, into a folder, out of one, or onto 已归档.
   Right-click or ⋯ for rename / move to folder / archive / delete. The deck shows
   sessions in exactly the sidebar order (队长 first, then folders, then loose
@@ -225,6 +230,24 @@ the middle:
 设备 token 登录及 CSRF 保护。聊天式界面：查看队长对话、会话、只读看板与队员输出，并给队长派活。
 部署、首次登录、吊销和回滚见 [手机网页端说明](docs/mobile-web.md)。
 
+## 版本更新
+
+Click the version (`V1.9.0`) at the foot of the sidebar: a panel rises beside
+the sidebar (Esc, the × icon, the version again or a click outside closes it).
+On top, 每日进展: one day's finished cards as a big number, the last days as
+columns (click one, or use the arrows), then rework, rejected reviews, cards
+waiting on the user, deliveries and the busiest projects. It only reads the
+nightly statistics in `~/reports/daily-progress/YYYY-MM-DD.json` (written by
+`~/.agents/tools/daily-progress/`; AgentDeck never recounts) and says so when
+there are none yet. Below it, every version on one line, newest first: planned
+ones (正在做 / 计划, items still waiting on the user marked 待你定) on dashed
+dots, then the released ones with their changes in plain words. A dot on the
+version button means this version's panel has not been opened yet. The copy
+icon puts one version on the clipboard as plain text. The versions come from
+`release-notes.json` at the repository root and the panel content is drawn by
+`mobile-web/hub/releases.js`, both shared with the phone hub; see 发版流程 for
+how a release updates the file.
+
 ## Skills
 
 The Skills page scans the shared originals in `~/.agents/skills` and each tool's
@@ -269,6 +292,7 @@ skipped.
 会话恢复干活时，自动生成的「已结束，未提交回执」提示会从回执栏及任务卡清除；真实命令回执保留。
 Codex 的状态行写着「Waiting for background terminal」（队员在 `sleep 300` 里等长任务）、「Waiting for agents」或「Compacting context」，或底栏有「N background terminal running」时，同样算还在干活：不发「已结束，未提交回执」，也不把会话标成已完成。队员真的干完、闲着超过三分钟没交回执，仍照常提醒。
 Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框上方的状态行会写「✻ Baked for 1m · done 8:27 AM · 1 shell, 1 monitor still running」（窄列会折成两行，中间可夹「Update available!」），输入框下方的自定义状态栏不带数字；这一行紧贴输入框时同样算还在干活（底栏的「N shell … still running」照旧认），不发「已结束，未提交回执」、不计自动归档。任务结束、状态行不再带数字后重新计三分钟，仍不交回执照常提醒。
+这种「回合已结束、只剩后台 shell / Monitor」的队员，圆点照旧黄色、回执计时照旧等，但输入框是空闲的：队长的 `tell` 立即送达，不再排「待补充」干等（真正在干活、停在确认提示、额度等待时仍然等）。Claude Code 输入框里灰色的「下一步建议」是 dim 文字，不算草稿；用户自己手打的字（默认颜色）仍算草稿，`tell` 不会盖上去。队长开的 Claude 会话启动时带 `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`（Claude Code 自带开关，对应设置项 `promptSuggestionEnabled`），不再显示这行建议；用户手开的终端和自己的 Claude 设置不动。
 睡眠或断网打断：会话停在提示符、屏幕写着「Your computer went to sleep mid-response」「Connection lost mid-response」「Can't reach the API server」（Claude），或「There was a network issue connecting to the server」「write: broken pipe」（agy）时，不算「已结束，未提交回执」，也不算已完成。程序等电脑醒来（系统睡眠/唤醒事件，或页面长时间没有轮询）并且网络在线后，再静置 15 秒，给它发一句简短的「接着做」（要求任务其实已做完就 complete）；之后每次间隔 30 秒、1 分钟、2 分钟、4 分钟，最多 4 次，睡眠期间和断网时一次都不发。会话重新干活并持续 1 分钟后这一轮清零，下一次睡眠重新计；每个任务累计最多 20 次。连续 4 次仍没恢复，向队长交一条「被睡眠或断网打断」异常回执（来源 sleep，不算验收不通过）。只有睡眠事件、屏幕上没有这些字样时（任务干到一半睡眠，醒来 10 分钟内回合结束且没回执），只发 1 次，仍无效就回到原来的三分钟规则。队长 stop、你自己按 Esc 中断、已经交过回执或已关闭的任务不会被续接；屏幕上引号、代码、diff 里引用这些英文不算。规则在 `sleep-resume-core.js`，会话侧在 `main-session.js` 的 `sleepResumeStep`。
 Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；运行中的回合需静默至少 10 秒才判空闲。
 提交完成回执后，任务仍为完成，但 Cursor 会话只要还在运行就继续显示「干活中」。
@@ -409,8 +433,12 @@ again with the current provider, model and effort instructions.
   no xhigh/max), Claude Code takes `--effort`. Before a session starts, `new`
   checks the command: an Antigravity `--effort` is folded into the model id (agy
   otherwise silently switches to another model) and a missing `--model` gets
-  Flash; Claude 4.x and Haiku models are refused with a message telling the 队长
-  what to use instead.
+  Flash; Claude 4.x and Haiku 4.x or older (including the bare `haiku` alias) are
+  refused with a message telling the 队长 what to use instead. Haiku 5.5 is allowed
+  (Claude Code `--model claude-haiku-5-5 --effort medium|high`, measured on claude
+  2.1.294; Cursor's `claude-haiku-5-5-<tier>` and `claude-haiku-5-5-thinking-<tier>`
+  pass the check too) and is the 队长's first choice for simple, lightweight work;
+  Codex GPT-6 Luna is the fallback when Claude quota runs short.
   On macOS/Linux, app launches invoke the Codex binary directly so a shell
   function that adds `--yolo` cannot duplicate the explicit bypass flag.
   The 队长 can read observed subscription quotas with `quota` and switches
@@ -566,6 +594,23 @@ again with the current provider, model and effort instructions.
 - The heartbeat is the app's status loop: it checks each dispatched column's state
   every 1.5 s and never copies a column's full output into the 队长.
 
+### 自动回执入口 (scheduled scripts)
+
+A job that runs on this computer without any AgentDeck terminal (launchd, Task
+Scheduler, cron: the nightly bug hunt is one) has no terminal token, so the
+Captain commands refuse it. It uses its own door instead:
+`node <config>/board-control/tools/agentdeck-board.js automation receipt|task-add|inbox-report|status --source <script name> ...`
+(`automation help`). The door has a token of its own that the app makes and keeps
+(`board-control/automation.json`, mode 600, never shown on screen), works only on
+this computer, and can do exactly three things, each marked 「自动任务：<名字>」 and
+never shown as the user's words: tell the Captain (a receipt it reads as a notice,
+not as an order), add a 待办 card (it starts nothing), file a 结果汇报 on
+待我处理. It cannot dispatch work, `tell`, read a conversation or change a setting;
+extra fields are refused, and it is rate limited (6 a minute per name, 12 in all).
+Settings has a switch to stop it and a button to reset the token. An older
+AgentDeck has no such door and the command fails, so a script should fall back to
+a report and a local notification. See [自动回执入口](docs/automation-receipt.md).
+
 ### Battery mode (电池模式)
 
 Settings → 电池模式 → 没插电时: **省电** (default) or **不限制**, plus how many sessions may be open at
@@ -594,6 +639,31 @@ On battery (`battery-core.js` holds the numbers; the page, main process and test
   what is limited, click it to open settings at 电池模式.
 - `ledger` and `quota` end with one extra line only while battery mode is active: the live cap and how many
   sessions work. Plugged in or 不限制 they print word for word what they did before.
+
+**临时拉满 (boost)**: the main way to get full strength while away from the charger, and it leaves battery mode alone.
+When the user tells the Captain 「强度拉满」, the Captain runs `settings battery --boost on [--for 2h | --until 23:59]`
+(`--boost off` takes it back). While it is on, battery power no longer lowers the live cap (`BatteryCore.effectiveCap`:
+the settings cap still rules), waiting work opens at once, and the battery mode, its limit, the calm UI and the slower
+polling stay as they were. It ends by itself when the Mac is plugged in (and does not come back on unplugging), when 不限制
+is chosen, at its end time, or when someone cancels it. It is kept as `config.batteryBoost = { until }` (0 = no end time) so a
+restart keeps it, unless it has ended. Asking for it while nothing limits (plugged in, or mode 关) is refused with a reason.
+It shows as 已临时拉满 in: the sidebar battery icon (tooltip and name), the desktop settings box (a row with an × that cancels
+it), the phone hub's 设置 card (a 临时拉满 box with the length 直到取消 / 2 小时 / 今天 23:59, one button to start it and an ×
+to cancel), and the Captain's `ledger` / `quota` line.
+
+**Changing it from elsewhere** (the desktop settings box is not the only way; the page stays the one owner of the
+setting, so these go through it and never edit `config.json` behind its back):
+
+- **Phone / tablet hub**: the gear icon in the hub's top bar opens 设置, one card per computer with 电池模式
+  (自动 / 关) and the 电池并发上限 stepper (− / +, 1–10). A tap is applied at once through `GET/POST <prefix>api/battery`
+  (login, CSRF and same-origin checks like every write; body only `mode` and/or `cap`, validated on the desktop). A computer
+  on an older build answers 404 and the card says to update it instead of showing controls.
+- **Captain**: `node "$AGENTDECK_BOARD_CLI" settings battery` reads (mode, limit, power source, what applies now);
+  `settings battery --mode off|auto [--cap 1-10]` changes it. Out-of-range or unknown values are refused with a reason,
+  never clamped.
+- Either way (`MainSession.setBattery`): the shared state changes, the live cap follows and waiting work that now fits opens,
+  `config.json` is written immediately, and an open desktop settings box shows the new values. Lowering the limit never
+  stops running sessions. `off` lifts the limit while keeping the saved number for later.
 
 Tests simulate the power source: unit tests inject a `BatteryCore` state; the E2E starts on AC and emits
 `powerMonitor` events (`AGENTDECK_TEST_POWER=battery` starts a test instance on battery).
@@ -966,6 +1036,8 @@ npm run dist:mac
 
 冒烟故意不包含已知容易超时的路径：队长并发上限和自动归档等待、屏幕回执的三分钟兜底、通知静默窗、十一路架构图验收、席位轮换，以及会整应用重启的用例。这些仍留在全量里。
 
+**发版必须先写「版本更新」**：在仓库根目录的 `release-notes.json` 里，把这一版加到 `released` 最前面（版本号如 `2.0`、日期 `YYYY-MM-DD`、一句标题、3–6 条写给用户看的大白话，每条不超过 60 字），并把它从 `upcoming` 里拿掉；顺手更新 `upcoming`（接下来做什么，用户还没拍板的写 `"state": "pending"`，界面上显示「待你定」）和 `updated`。只改这一个文件，桌面端（侧栏底部点版本号）和手机总台（总览最下面、平板侧栏底部的版本号）都读它（每日进展另读本机统计文件，不在这个文件里）。漏改有两道提醒：`npm test` 里的 `tests/release-notes.test.js` 要求最新一条等于 package.json 的版本；`scripts/release.js` 合完分支、升完版本号后先查这一条，不对就停下，不进测试和打包。规则写在 `mobile-web/hub/core.js` 的 `releaseProblems`。
+
 本机 Mac 可用一条命令准备发版（先收齐已验收的分支，避免边合边反复测试、打包）：
 
 ```sh
@@ -988,7 +1060,7 @@ node scripts/release.js 1.2.4 --prepared --package-only --output /Users/jinhao/r
 
 该选项保留完整单测、单 worker 冒烟、audit、正式 `dist:mac -- --publish never`、SHA256、DMG 挂载校验、签名和包内运行文件逐字节校验，沿用输入一致时的测试/构建缓存；不生成安装脚本，也不构建、上传或核对手机总台。计划固定记录 `packageOnly: true`，同一输出目录不能切换模式；JSON/Markdown 成功状态为 `package-ready`，手机状态为 `deferred`，不能据此称手机部署或线上验收通过。`--dry-run` 明列跳过和延期事项；不带此选项的默认流程保持以下手机部署门禁。
 
-流程：同步 package.json 与 lockfile 版本 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
+流程：同步 package.json 与 lockfile 版本 → 核对 `release-notes.json` 最新一条就是这一版 → 依赖安装/原生模块检查/Electron 准备 → 持全机锁依次跑单测和单 worker 冒烟，audit 并行 → 签名 DMG → SHA256 与强制校验挂载/签名/全部运行文件逐字节核对并行 → 生成安装脚本 → **自动构建/上传手机总台，保留精确回滚点，从公网核对版本、提交、构建时间和资源字节** → JSON/Markdown 逐步耗时报告。手机步骤最多尝试 3 次，失败恢复部署前链接并停止，退出非零；未部署、缺回执、线上版本不符均在发版报告标 🔴。桌面构建命中缓存也不能跳过手机部署。`--dry-run` 不部署。详情见 [手机部署与核对](docs/mobile-release.md)。测试锁统一为 `/tmp/agentdeck-test.lock`，owner 记录进程、分支和时间；失败或取消会释放自己的锁，锁等待时长单列入报告。其他测试命令也须持这把锁。脚本不会删除别人的锁；只有超过 40 分钟且 owner 进程确已退出时才能人工清理。
 
 `release.js` 自己持锁，直接运行它即可，不要在外层再拿同一把锁。单独运行 `npm test` 或 E2E 命令时，用 shell 加外层锁，结束时删除自己的 owner 文件并释放目录。
 

@@ -263,7 +263,7 @@
     const groups = [], list = (Array.isArray(turns) ? turns : []).filter((turn) => turn && typeof turn === 'object');
     const said = list.map((turn) => typeof turn.user === 'string' ? turn.user : '').join('\n');
     let group = null, last = 0;
-    const open = (turn, user, images) => { group = { id: turn.id, user, images, replies: [], pending: false, interrupted: false }; groups.push(group); };
+    const open = (turn, user, images) => { group = { id: turn.id, user, images, replies: [], said: [], pending: false, interrupted: false }; groups.push(group); };
     for (const turn of list) {
       const isUser = !turn.kind && (typeof turn.user === 'string' && turn.user || Array.isArray(turn.images) && turn.images.length);
       if (isUser) open(turn, typeof turn.user === 'string' ? turn.user : '', Array.isArray(turn.images) ? turn.images.filter((id) => typeof id === 'string') : []);
@@ -272,12 +272,14 @@
       if (turn.kind) continue;
       const reply = cleanReply(turn.reply, said, typeof turn.user === 'string' ? turn.user : '');
       if (reply) group.replies.push(reply);
+      // The finished turns whose words this bubble shows: seeing it reads the reports filed with them.
+      if (reply && turn.done && typeof turn.id === 'string') group.said.push(turn.id);
       group.pending = !turn.done && !turn.interrupted;
       group.interrupted = !!turn.interrupted;
     }
     // A round with nothing to read (only dispatching happened) leaves no trace.
     return groups.filter((g) => g.user || g.images.length || g.replies.length || g.pending || g.interrupted)
-      .map((g) => ({ id: g.id, user: g.user, images: g.images, reply: g.replies.join('\n\n'), pending: g.pending, interrupted: g.interrupted }));
+      .map((g) => ({ id: g.id, user: g.user, images: g.images, reply: g.replies.join('\n\n'), said: g.said, pending: g.pending, interrupted: g.interrupted }));
   }
 
   // ---- quota ---------------------------------------------------------------
@@ -362,6 +364,61 @@
       ? { id: raw.id, status: raw.status, fromId: id(raw.fromId), fromName: text(raw.fromName, 80), targetId: id(raw.targetId), targetName: text(raw.targetName, 80),
         startedAt: time(raw.startedAt), finishedAt: time(raw.finishedAt), error: text(raw.error, 200) } : null;
     return { captainId: text(data && data.captainId, 256), currentId: id(data && data.currentId), switching: !!(data && data.switching === true) || !!(job && job.status === 'switching'), seats, job };
+  }
+  // ---- 电池模式 ---------------------------------------------------------------
+  // One computer's battery setting. The phone may change only the mode (自动 / 关) and the
+  // battery limit (1–10); anything else in the answer is dropped.
+  function cleanBattery(data) {
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const int = (value, min, max, fallback) => Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+    return {
+      mode: data.mode === 'off' ? 'off' : 'auto', cap: int(data.cap, 1, 10, 3), capMin: 1, capMax: 10,
+      onBattery: data.onBattery === true, active: data.active === true,
+      // An older build without 临时拉满 sends no `boost`: the phone then shows no boost control at all.
+      boostSupported: typeof data.boost === 'boolean', boost: data.boost === true,
+      boostUntil: Number.isSafeInteger(data.boostUntil) && data.boostUntil > 0 ? data.boostUntil : null,
+      baseCap: int(data.baseCap, 1, 1000, 30), effectiveCap: int(data.effectiveCap, 1, 1000, 30),
+      working: Number.isInteger(data.working) && data.working >= 0 ? Math.min(data.working, 1000) : null,
+    };
+  }
+  // The setting with a change the user just made but the computer has not confirmed yet laid over it.
+  function batteryWith(battery, want) {
+    if (!battery) return null;
+    const mode = want && want.mode ? want.mode : battery.mode, cap = want && want.cap ? want.cap : battery.cap;
+    const active = mode === 'auto' && battery.onBattery;
+    const boost = active && (want && typeof want.boost === 'boolean' ? want.boost : battery.boost);
+    const boostUntil = want && typeof want.boost === 'boolean' ? (want.boost && want.boostMinutes ? Date.now() + want.boostMinutes * 60000 : null) : battery.boostUntil;
+    return { ...battery, mode, cap, active, boost, boostUntil: boost ? boostUntil : null, effectiveCap: active && !boost ? Math.min(battery.baseCap, cap) : battery.baseCap };
+  }
+  // "到 23:59" / "直到取消或接电源": when a 临时拉满 ends.
+  function boostEndText(until) {
+    if (!Number.isFinite(until) || until <= 0) return '直到取消或接电源';
+    const d = new Date(until), pad = (n) => String(n).padStart(2, '0');
+    return `到 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+  // Minutes from `now` to today 23:59 (the next one when it has passed); the phone's clock, same person, same day.
+  function minutesToEndOfDay(now) {
+    const end = new Date(now); end.setHours(23, 59, 0, 0);
+    return Math.max(1, Math.ceil((end.getTime() - now) / 60000));
+  }
+  // What the setting does right now, in one sentence.
+  function batteryState(battery) {
+    if (!battery) return '';
+    const power = battery.onBattery ? '电池供电' : '接着电源';
+    const busy = battery.working === null ? '' : `，现在 ${battery.working} 个在干活`;
+    if (battery.mode === 'off') return `${power}。电池模式已关，不限制${busy}。`;
+    if (battery.boost) return `${power}。已临时拉满：同时最多开 ${battery.effectiveCap} 个会话，不受省电上限 ${battery.cap} 限制${busy}。`;
+    if (battery.active) return `${power}。同时最多开 ${battery.effectiveCap} 个会话，多的新活排队${busy}。`;
+    return `${power}。现在不限制；改成电池供电后，同时最多开 ${battery.cap} 个会话${busy}。`;
+  }
+  // Why a change did not go through, in words for this computer.
+  function batteryRefusal(result, label) {
+    if (result && result.timedOut) return `${label} 没有及时回应。设置不一定改上了，稍后回来看一眼。`;
+    if (result && result.failed) return `连不上 ${label}。`;
+    if (result && result.status === 401) return `${label} 需要重新登录。`;
+    if (result && result.status === 404) return `${label} 的 AgentDeck 是旧版，不能在这里改电池模式。`;
+    if (result && result.body && typeof result.body.error === 'string' && result.body.error) return result.body.error.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 160);
+    return `${label} 没有改成。`;
   }
   // "Claude US", "ChatGPT": the name people know the account by.
   const seatLabel = (seat) => !seat ? '' : seat.provider === 'Codex' ? seat.name || 'ChatGPT' : /^claude\b/i.test(seat.name) ? seat.name : 'Claude ' + (seat.name || seat.id);
@@ -456,13 +513,14 @@
     return `${name} 没有记下这条（HTTP ${result.status}）。`;
   }
 
-  return { cleanTodos, mergeTodos, todoWriter, todoBlock, todoFailure, cleanRelay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
+  return { cleanTodos, mergeTodos, todoWriter, todoBlock, todoFailure, cleanRelay, cleanBattery, batteryWith, batteryState, batteryRefusal, boostEndText, minutesToEndOfDay, seatLabel, currentSeat, seatQuotaText, seatReason, seatSpoken, relayOutcome, relayRefusal, elapsedText, TIMEOUT, STATES, machineList, classify, classifyInfo, pollInterval, sendBlock, sendFailure, userTurnIds, settleOutbox, repeatedSend, dragMovesPage, ago, metaOf, cleanMeta, mergeCards, ownerLabel,
     groupTurns, cleanReply, cleanQuota, shortReset, longReset, sampledText, percentText, cellLevel, dimmed, windowName, emptyText, quotaCells, quotaNote, cellSpoken, quotaLabel, quotaState };
 });
 
 // 待我处理 on the phone: each computer's list, cleaned field by field again
 // (a computer's answer is data, not trusted markup), then merged into one page:
-// 要你处理 first, then 结果汇报, newest first; 已完成 by when it was finished.
+// 要你处理 and 做完了你还没看 (reports not yet seen), newest first; 已完成和已读
+// by when it was finished.
 // Each item keeps the computer it came from: a reply goes to that computer only.
 (function (root, factory) {
   const api = factory();
@@ -470,6 +528,8 @@
   else Object.assign(root.HubCore, api);
 })(typeof self !== 'undefined' ? self : this, () => {
   const ID = /^at-[a-z0-9-]{4,40}$/;
+  const TURN = /^[A-Za-z0-9_-]{1,160}$/;
+  const DONE_BY = ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'];
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : 0;
   const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ' ').slice(0, max) : '';
   const line = (value, max) => text(value, max).replace(/\s+/g, ' ').trim();
@@ -479,10 +539,13 @@
       .map((item) => ({
         id: item.id, kind: item.kind, label: line(item.label, 20) || (item.kind === 'need' ? '要你处理' : '结果汇报'),
         title: line(item.title, 300), ask: line(item.ask, 1000), detail: text(item.detail, 4000),
+        options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
         files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
         project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-        source: item.source === 'card' ? 'card' : 'captain', created: time(item.created), readAt: time(item.readAt),
+        source: item.source === 'card' ? 'card' : item.source === 'automation' ? 'automation' : 'captain', automation: item.source === 'automation' ? line(item.automation, 40) : '', turn: item.kind === 'report' && typeof item.turn === 'string' && TURN.test(item.turn) ? item.turn : '',
+        created: time(item.created), readAt: time(item.readAt),
         done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0, doneText: item.done === true ? line(item.doneText, 200) : '',
+        doneBy: item.done === true && DONE_BY.includes(item.doneBy) ? item.doneBy : '',
         replies: (Array.isArray(item.replies) ? item.replies : []).slice(-3).filter((r) => r && typeof r.text === 'string')
           .map((r) => ({ text: text(r.text, 1000), at: time(r.at), from: r.from === 'phone' ? 'phone' : 'desktop', seen: r.seen === true })),
       }));
@@ -498,7 +561,8 @@
     const reports = open.filter((i) => i.kind === 'report').sort(byNew);
     const done = all.filter((i) => i.done).sort((a, b) => b.doneAt - a.doneAt || (a.key < b.key ? -1 : 1));
     const unreadReports = reports.filter((i) => !i.readAt).length;
-    return { needs, reports, done, counts: { need: needs.length, reports: reports.length, unreadReports, badge: needs.length + unreadReports } };
+    // The number is 要你处理 only; unread reports show as a dot of their own.
+    return { needs, reports, done, counts: { need: needs.length, reports: reports.length, unreadReports, badge: needs.length } };
   }
   // Why a reply or tick did not go through, in words.
   function attentionFailure(result, name) {
@@ -515,7 +579,20 @@
     if (result.status === 502) return `${name} 离线，这条没有发出去。`;
     return `${name} 没有接受（HTTP ${result.status}）。`;
   }
-  return { cleanAttention, mergeAttention, attentionFailure };
+  // Whether most of an item or a reply is in front of the user. `rect` is cut by
+  // every box that clips it, on both axes: its scroll area (clips[0], also the
+  // measure of "most"), then the deck, the window. A reply slid sideways out of
+  // the deck, or showing only a sliver, is not seen however tall it is.
+  // Rects are { left, top, right, bottom, width, height } (getBoundingClientRect).
+  function mostlyShown(rect, clips) {
+    const boxes = (clips || []).filter(Boolean);
+    if (!rect || !boxes.length || !(rect.width > 0) || !(rect.height > 0)) return false;
+    let { left, top, right, bottom } = rect;
+    for (const c of boxes) { left = Math.max(left, c.left); top = Math.max(top, c.top); right = Math.min(right, c.right); bottom = Math.min(bottom, c.bottom); }
+    const w = right - left, h = bottom - top, area = boxes[0];
+    return w > 0 && h > 0 && h >= Math.min(rect.height * 0.6, area.height * 0.5) && w >= Math.min(rect.width * 0.6, area.width * 0.5);
+  }
+  return { cleanAttention, mergeAttention, attentionFailure, mostlyShown };
 });
 
 // Reading text, for the desktop and the phone alike: the one Markdown renderer
@@ -901,4 +978,175 @@
   }
 
   return { esc, isWide, joinGap, pipeTable, extOf, fileKind, languageFor, imageMime, sizeText, findLinks, splitPath, resolvePath, shortPath, highlightCode, tidyReply, renderMarkdown, BOX_ROW };
+});
+
+// 版本更新: release-notes.json at the repository root is the one file a release
+// edits (what each version changed, what comes next). The desktop page and the
+// phone hub read it through releaseNotes(), which keeps only well-formed
+// entries, so a damaged file shows less instead of breaking the page.
+// releaseProblems() names every rule a file breaks, for the unit test and the
+// release script; releaseGap() is the release script's question: is the
+// version being released written down as the newest one?
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const VERSION = /^[1-9]\d*\.(0|[1-9]\d*)(?:\.(0|[1-9]\d*))?$/;
+  const DAY = /^(\d{4})-(\d{2})-(\d{2})$/;
+  // Each state is one of the shared status colours: green done, yellow at work, grey not started, orange needs the user.
+  const ITEM_STATES = { done: '做完了', doing: '在做', planned: '计划', pending: '待你定' };
+  const PLAN_STATES = { doing: '正在做', planned: '计划', later: '待排' };
+  const LIMITS = { title: 30, item: 60, note: 120, suggestion: 40, released: [3, 6], upcoming: [1, 12] };
+  const parts = (v) => typeof v === 'string' && VERSION.test(v) ? v.split('.').map(Number).concat(0).slice(0, 3) : null;
+  function compareVersions(a, b) {
+    const x = parts(a), y = parts(b);
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
+    return 0;
+  }
+  const sameVersion = (a, b) => !!parts(a) && !!parts(b) && compareVersions(a, b) === 0;
+  // How a release is named to people: 1.9.0 is 1.9, a patch keeps its third number.
+  const versionLabel = (v) => { const p = parts(v); return p ? (p[2] ? p.join('.') : p[0] + '.' + p[1]) : ''; };
+  const realDay = (s) => {
+    const m = DAY.exec(typeof s === 'string' ? s : '');
+    if (!m) return false;
+    const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+    return d.getUTCFullYear() === +m[1] && d.getUTCMonth() === +m[2] - 1 && d.getUTCDate() === +m[3];
+  };
+  const shortDate = (s) => realDay(s) ? s.slice(5) : '';
+  const text = (value, max) => typeof value === 'string' && !/[\x00-\x1f\x7f]/.test(value) && value.trim() && value.trim().length <= max ? value.trim() : '';
+  const list = (value) => Array.isArray(value) ? value : [];
+
+  function releasedEntry(entry) {
+    if (!entry || !parts(entry.version) || !realDay(entry.date) || !text(entry.title, LIMITS.title)) return null;
+    const items = list(entry.items).map((item) => text(item, LIMITS.item)).filter(Boolean);
+    return items.length ? { version: entry.version, date: entry.date, title: text(entry.title, LIMITS.title), items } : null;
+  }
+  function upcomingEntry(entry) {
+    if (!entry || (entry.version !== '' && !parts(entry.version)) || !PLAN_STATES[entry.status] || !text(entry.title, LIMITS.title)) return null;
+    const items = list(entry.items).filter((item) => item && ITEM_STATES[item.state] && text(item.text, LIMITS.item))
+      .map((item) => ({ text: text(item.text, LIMITS.item), state: item.state, suggestion: text(item.suggestion, LIMITS.suggestion) }));
+    return items.length ? { version: entry.version, status: entry.status, title: text(entry.title, LIMITS.title), note: text(entry.note, LIMITS.note), items } : null;
+  }
+  function releaseNotes(value) {
+    if (!value || value.schema !== 1) return null;
+    const released = list(value.released).map(releasedEntry).filter(Boolean);
+    const upcoming = list(value.upcoming).map(upcomingEntry).filter(Boolean);
+    return released.length || upcoming.length ? { updated: realDay(value.updated) ? value.updated : '', released, upcoming } : null;
+  }
+
+  function releaseProblems(value) {
+    const problems = [];
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return ['不是一个 JSON 对象'];
+    if (value.schema !== 1) problems.push('schema 必须是 1');
+    if (!realDay(value.updated)) problems.push('updated 要写成 YYYY-MM-DD');
+    const released = list(value.released), upcoming = list(value.upcoming);
+    if (!released.length) problems.push('released 至少要有一版');
+    released.forEach((entry, i) => {
+      const name = `released[${i}]${entry && entry.version ? ' ' + entry.version : ''}`;
+      if (!entry || !parts(entry.version)) { problems.push(`${name}：version 要写成 1.9 或 1.2.4`); return; }
+      if (!realDay(entry.date)) problems.push(`${name}：date 要写成 YYYY-MM-DD`);
+      if (!text(entry.title, LIMITS.title)) problems.push(`${name}：title 要有，最多 ${LIMITS.title} 字`);
+      const items = list(entry.items);
+      if (items.length < LIMITS.released[0] || items.length > LIMITS.released[1]) problems.push(`${name}：要写 ${LIMITS.released[0]}–${LIMITS.released[1]} 条`);
+      items.forEach((item, k) => { if (!text(item, LIMITS.item)) problems.push(`${name} 第 ${k + 1} 条：一句话，最多 ${LIMITS.item} 字`); });
+      const prev = released[i - 1];
+      if (prev && parts(prev.version)) {
+        if (compareVersions(entry.version, prev.version) >= 0) problems.push(`${name}：版本要从新到旧排，比上一条 ${prev.version} 旧`);
+        if (realDay(prev.date) && realDay(entry.date) && entry.date > prev.date) problems.push(`${name}：日期不能比更新的 ${prev.version} 晚`);
+      }
+    });
+    const latest = released.find((entry) => entry && parts(entry.version));
+    let lastNumbered = latest ? latest.version : null, unnumbered = false;
+    upcoming.forEach((entry, i) => {
+      const name = `upcoming[${i}]${entry && entry.version ? ' ' + entry.version : ''}`;
+      if (!entry || (entry.version !== '' && !parts(entry.version))) { problems.push(`${name}：version 写版本号，还没排进版本的写空字符串`); return; }
+      if (entry.version) {
+        if (unnumbered) problems.push(`${name}：有版本号的排在「还没排进哪一版」前面`);
+        if (latest && compareVersions(entry.version, latest.version) <= 0) problems.push(`${name}：${entry.version} 已经发布了，从 upcoming 里删掉`);
+        else if (lastNumbered && compareVersions(entry.version, lastNumbered) <= 0) problems.push(`${name}：接下来的版本要从近到远排`);
+        lastNumbered = entry.version;
+      } else unnumbered = true;
+      if (!PLAN_STATES[entry.status]) problems.push(`${name}：status 只能是 ${Object.keys(PLAN_STATES).join(' / ')}`);
+      if (!text(entry.title, LIMITS.title)) problems.push(`${name}：title 要有，最多 ${LIMITS.title} 字`);
+      if (entry.note !== undefined && !text(entry.note, LIMITS.note)) problems.push(`${name}：note 最多 ${LIMITS.note} 字`);
+      const items = list(entry.items);
+      if (items.length < LIMITS.upcoming[0] || items.length > LIMITS.upcoming[1]) problems.push(`${name}：要写 ${LIMITS.upcoming[0]}–${LIMITS.upcoming[1]} 条`);
+      items.forEach((item, k) => {
+        const where = `${name} 第 ${k + 1} 条`;
+        if (!item || !text(item.text, LIMITS.item)) problems.push(`${where}：text 一句话，最多 ${LIMITS.item} 字`);
+        if (!item || !ITEM_STATES[item.state]) problems.push(`${where}：state 只能是 ${Object.keys(ITEM_STATES).join(' / ')}（用户还没拍板的写 pending）`);
+        if (item && item.suggestion !== undefined && !text(item.suggestion, LIMITS.suggestion)) problems.push(`${where}：suggestion 最多 ${LIMITS.suggestion} 字`);
+      });
+    });
+    return problems;
+  }
+  // The release script stops on any answer: the file must be valid and its newest release must be this one.
+  function releaseGap(value, version) {
+    const problems = releaseProblems(value);
+    if (problems.length) return `release-notes.json 有问题：${problems.slice(0, 5).join('；')}`;
+    const latest = value.released[0];
+    if (!sameVersion(latest.version, version)) {
+      return `release-notes.json 最新一版是 ${latest.version}，还没写 ${versionLabel(version)} 的更新内容：先在 released 最前面加上这一版（日期、标题、3–6 条大白话），并把它从 upcoming 里拿掉，再发版`;
+    }
+    return '';
+  }
+  // What a copy button puts on the clipboard: plain text anyone can paste anywhere.
+  function releaseText(entry) {
+    if (!entry) return '';
+    if (entry.date) return [`AgentDeck ${entry.version}（${entry.date}）${entry.title}`, ...entry.items.map((item) => '- ' + item)].join('\n');
+    const head = entry.version ? `AgentDeck ${entry.version}（${PLAN_STATES[entry.status]}）${entry.title}` : entry.title;
+    return [head, ...(entry.note ? [entry.note] : []), ...entry.items.map((item) => `- [${ITEM_STATES[item.state]}] ${item.text}${item.suggestion ? `（${item.suggestion}）` : ''}`)].join('\n');
+  }
+  const pendingCount = (notes) => notes ? notes.upcoming.reduce((n, entry) => n + entry.items.filter((item) => item.state === 'pending').length, 0) : 0;
+
+  return { ITEM_STATES, PLAN_STATES, compareVersions, sameVersion, versionLabel, shortDate, releaseNotes, releaseProblems, releaseGap, releaseText, pendingCount };
+});
+
+// 每日进展: the nightly statistics the daily-progress tool writes to
+// ~/reports/daily-progress/YYYY-MM-DD.json (AgentDeck never recounts). Only
+// counts, project names and short delivery lines leave the file: no card
+// titles, results or session ids. Desktop and phone read the same shape.
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === 'object' && module.exports) Object.assign(module.exports, api);
+  else Object.assign(root.HubCore, api);
+})(typeof self !== 'undefined' ? self : this, () => {
+  const DAY = /^\d{4}-\d{2}-\d{2}$/;
+  const count = (value) => Number.isSafeInteger(value) && value >= 0 ? value : Array.isArray(value) ? value.length : 0;
+  const line = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '';
+  const realDay = (s) => DAY.test(s || '') && !Number.isNaN(Date.parse(s + 'T00:00:00Z')) && new Date(s + 'T00:00:00Z').toISOString().slice(0, 10) === s;
+  const PROGRESS_LIMITS = { days: 14, projects: 40, deliveries: 5 };
+
+  // Cleaning twice gives the same day (the desktop cleans in main and again in the page).
+  function progressDay(raw) {
+    if (!raw || typeof raw !== 'object' || !realDay(raw.date) || !raw.summary || typeof raw.summary !== 'object') return null;
+    const s = raw.summary;
+    const projects = (Array.isArray(raw.projects) ? raw.projects : []).map((p) => p && line(p.project ?? p.name, 40) ? {
+      name: line(p.project ?? p.name, 40), done: count(p.done), created: count(p.created), doing: count(p.doing), sessions: count(p.sessions),
+      reject: count(p.reject), rework: count(p.rework), needsUser: count(p.needs_user ?? p.needsUser),
+    } : null).filter(Boolean).sort((a, b) => b.done - a.done || b.sessions - a.sessions || a.name.localeCompare(b.name)).slice(0, PROGRESS_LIMITS.projects);
+    const deliveries = (Array.isArray(raw.deliveries) ? raw.deliveries : []).map((d) => line(typeof d === 'string' ? d : d && d.text, 60)).filter(Boolean).slice(0, PROGRESS_LIMITS.deliveries);
+    return {
+      date: raw.date, partial: raw.partial === true,
+      summary: { projects: count(s.projects), done: count(s.done), created: count(s.created), sessions: count(s.sessions),
+        reject: count(s.reject), rework: count(s.rework), needsUser: count(s.needs_user ?? s.needsUser), deliveries: count(s.deliveries) },
+      projects, deliveries,
+    };
+  }
+  // Newest first, one entry per date, at most two weeks.
+  function progressDays(list) {
+    const seen = new Set();
+    return (Array.isArray(list) ? list : []).map(progressDay).filter((d) => d && !seen.has(d.date) && seen.add(d.date))
+      .sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, PROGRESS_LIMITS.days);
+  }
+  // 10-07 周三, with 今天 / 昨天 when it is one of those (dates are the statistics' own local days).
+  function progressLabel(date, now = new Date()) {
+    if (!realDay(date)) return '';
+    const day = new Date(date + 'T12:00:00Z'), week = '日一二三四五六'[day.getUTCDay()];
+    const local = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const today = local(now), yesterday = local(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+    return `${date.slice(5)} ${date === today ? '今天' : date === yesterday ? '昨天' : '周' + week}`;
+  }
+  return { progressDay, progressDays, progressLabel, PROGRESS_LIMITS };
 });

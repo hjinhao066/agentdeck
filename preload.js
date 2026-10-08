@@ -9,9 +9,14 @@ contextBridge.exposeInMainWorld('deck', {
   onParkForRestart: (cb) => ipcRenderer.on('park-for-restart', (_e, m) => cb(m && m.sessions)),
   parkForRestartDone: () => ipcRenderer.send('park-for-restart-done'),
   mobileWebSettings: (input) => ipcRenderer.invoke('mobile-web:settings', input),
+  automationSettings: (input) => ipcRenderer.invoke('automation:settings', input),
   onMobileRequest: (cb) => ipcRenderer.on('mobile-web:request', (_e, m) => cb(m)),
   mobileRespond: (payload) => ipcRenderer.send('mobile-web:response', payload),
   envInfo: () => ipcRenderer.sendSync('env-info-sync'),
+  // 版本更新 page: this build's release-notes.json (read only).
+  releaseNotes: () => ipcRenderer.invoke('release-notes:read', {}),
+  // 每日进展: counts from the nightly daily-progress files (read only).
+  dailyProgress: () => ipcRenderer.invoke('daily-progress:read', {}),
   memoryPressure: () => ipcRenderer.invoke('memory-pressure'),
   // Battery mode: whether the Mac runs on battery now, and a push when it changes.
   powerState: () => ipcRenderer.sendSync('power-state'),
@@ -87,7 +92,7 @@ contextBridge.exposeInMainWorld('deck', {
   chatgptWebCancel: (id) => ipcRenderer.invoke('chatgpt-web:cancel', { id }),
   chatgptWebStatus: (id) => ipcRenderer.invoke('chatgpt-web:status', { id }),
 
-  ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir }),
+  ptySpawn: (id, cwd, cols, rows, managed, seatId, configDir, crew) => ipcRenderer.send('pty:spawn', { id, cwd, cols, rows, managed, seatId, configDir, crew }),
   claudeSeats: (fresh) => ipcRenderer.invoke('seats:list', { fresh: fresh === true }),
   validateClaudeSeats: (seats) => ipcRenderer.invoke('seats:validate', { seats }),
   captainCheckpoint: (payload) => ipcRenderer.invoke('seats:checkpoint', payload),

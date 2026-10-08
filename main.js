@@ -9,7 +9,7 @@ const { clearCredentials, removeCredentials, writeCredentials, ttyFromPty } = re
 const { createNotifications } = require('./notifications');
 const { createBarkSender, createNotifyUser } = require('./notify-user');
 const { createResultMonitor } = require('./install-result');
-const { createNeedsUserBark, barkEnabled, barkReady } = require('./needs-user-bark');
+const { phonePush } = require('./attention-core');
 const { createQuotaLowBark } = require('./quota-low-bark');
 const { createSeatAuthMonitor, authFailure } = require('./seat-auth-alert');
 const BarkPolicy = require('./bark-policy');
@@ -19,6 +19,7 @@ const { registerSideIpc, loadAllChats } = require('./side-main');
 const { registerSkillsIpc } = require('./skills-core');
 const { registerScheduleFeedIpc } = require('./schedule-feed');
 const BoardCore = require('./board-core');
+const AutomationCore = require('./automation-core');
 const { createCodexLauncher } = require('./codex-launch');
 const ClaudeSeatsCore = require('./claude-seats-core');
 const QuotaCore = require('./quota-core');
@@ -106,7 +107,6 @@ handleMain('todos:request', (_event, payload) => {
   return { item };
 });
 let fleetClient = null;
-let notifyNeedsUserCards = () => {};
 handleMain('task-board:request', (_event, payload) => {
   if (!payload || !['list', 'add', 'move', 'archive', 'update', 'priority', 'reorder', 'bind', 'event', 'dispatch', 'claim', 'dispatched', 'dispatchWait', 'dispatcherReceipt', 'identity', 'resumeNote', 'reviewDispatched', 'reviewBlocked', 'reworkDispatched', 'noteWorktree'].includes(payload.op)) throw new Error('Invalid task board operation.');
   const result = taskStore[payload.op](payload.input || {});
@@ -212,6 +212,24 @@ try {
 const isMac = process.platform === 'darwin';
 const isWin = process.platform === 'win32';
 const HOME = os.homedir();
+// 每日进展 (版本更新 panel): the nightly daily-progress tool's JSON, read only and
+// cleaned to counts (HubCore.progressDays). A test profile reads its own folder.
+const PROGRESS_DIR = tudArg ? path.join(app.getPath('userData'), 'daily-progress') : path.join(HOME, 'reports', 'daily-progress');
+async function readDailyProgress() {
+  const { progressDays, PROGRESS_LIMITS } = require('./mobile-web/hub/core.js');
+  let names;
+  try { names = (await fs.promises.readdir(PROGRESS_DIR)).filter((n) => /^\d{4}-\d{2}-\d{2}\.json$/.test(n)).sort().reverse().slice(0, PROGRESS_LIMITS.days); }
+  catch (_) { return { days: [] }; }
+  const raw = [];
+  for (const name of names) {
+    try {
+      const file = path.join(PROGRESS_DIR, name);
+      if ((await fs.promises.stat(file)).size > 4 * 1024 * 1024) continue;
+      raw.push(JSON.parse(await fs.promises.readFile(file, 'utf8')));
+    } catch (_) { /* A file being written or damaged is skipped. */ }
+  }
+  return { days: progressDays(raw) };
+}
 
 // Retired watch-ai spool directory, kept only to remove old column dumps.
 const WATCH_SPOOL = path.join(HOME, '.local', 'share', 'watch-ai', 'agentdeck');
@@ -340,6 +358,7 @@ const managedSessions = new Map(); // columnId -> unguessable board-control toke
 const receiptSessions = new Map(); // every column: submission only, never control
 let boardControlDir = '';
 let boardCliPath = '';
+let automation = null; // 自动回执入口: its own token, on/off switch and rate limit (automation-core.js)
 let boardRendererReady = false;
 const pendingBoardCommands = new Map(); // requestId -> { command, delivered }
 
@@ -355,7 +374,7 @@ function bufferAppend(id, data) {
   return ++buf.sequence;
 }
 
-function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
+function spawnPty(id, cwd, cols, rows, managed, seatId, configDir, crew) {
   if (!validId(id) || ptys.size >= 100) return;
   // Captain notifications replace legacy watch-ai spools, avoiding double
   // alerts and persistent plaintext terminal output in a shared directory.
@@ -386,7 +405,7 @@ function spawnPty(id, cwd, cols, rows, managed, seatId, configDir) {
   receiptSessions.set(id, receiptToken);
   if (token) managedSessions.set(id, token);
   else managedSessions.delete(id);
-  let terminalEnv = { ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id };
+  let terminalEnv = AgentSessions.crewEnvironment({ ...AgentSessions.clearInheritedSessionIds(ENV), AGENTDECK_COL_ID: id, AGENTDECK_TERMINAL_ID: id }, crew);
   terminalEnv = seatEnvironment(terminalEnv, selectedSeat, seatHome);
 
   // Never inherit an outer deck's managed capability into an independent shell.
@@ -538,6 +557,17 @@ function processBoardRequests() {
       catch (_) { try { fs.unlinkSync(file); } catch (_) {} continue; }
       try { fs.unlinkSync(file); } catch (_) {}
       const action = String(request.action || '');
+      // The 自动回执入口 token is checked before any terminal token: it reaches only its own
+      // three commands, and no terminal token reaches them.
+      const gate = AutomationCore.screen(automation, request, { queued: Array.from(pendingBoardCommands.values()).filter((p) => p.command.automation).length });
+      if (gate.kind === 'reject') { writeBoardResponse(request.id, { done: true, error: gate.error }); continue; }
+      if (gate.kind === 'local') { writeBoardResponse(request.id, { done: true, result: gate.result }); continue; }
+      if (gate.kind === 'forward') {
+        if (pendingBoardCommands.size >= 256) writeBoardResponse(request.id, { done: true, error: 'Board request queue is full. Retry later.' });
+        else if (!pendingBoardCommands.has(gate.command.id)) pendingBoardCommands.set(gate.command.id, { command: gate.command, delivered: false });
+        continue;
+      }
+      delete request.automation; // Set only by the gate above, never by a caller.
       const submitOnly = Array.from(receiptSessions.entries()).find(([, token]) => token === request.token);
       const caller = Array.from(managedSessions.entries()).find(([, token]) => token === request.token) || submitOnly;
       if (!caller) {
@@ -559,7 +589,7 @@ function processBoardRequests() {
       // main-* actions are honored only for the 队长 (main session) column; the renderer
       // checks the caller before doing anything.
       if (!['create-child', 'spawn-child', 'wait', 'send', 'progress', 'complete', 'ask', 'session-exit', 'status',
-        'main-ledger', 'main-quota', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user', 'main-discuss-receipt', 'main-inbox'].includes(action)) {
+        'main-ledger', 'main-quota', 'main-settings', 'main-briefing', 'main-handoff', 'main-task', 'main-queue', 'main-new', 'main-tell', 'main-read', 'main-peek', 'main-receipts', 'main-receipts-snapshot', 'main-receipts-ack', 'main-answer', 'main-stop', 'main-archive', 'main-notify-user', 'main-discuss-receipt', 'main-inbox'].includes(action)) {
         writeBoardResponse(request.id, { done: true, error: `Unsupported board action: ${action}` });
         continue;
       }
@@ -607,6 +637,7 @@ function setupBoardControl() {
       }
     }
     clearCredentials(boardControlDir);
+    automation = AutomationCore.load(boardControlDir);
     const listenerInstance = ReceiptListener.initialize(boardControlDir);
     receiptListeners = ReceiptListener.createRegistry(boardControlDir, listenerInstance, (callerId, alive) => {
       // At most one undelivered status per Captain while the renderer reloads.
@@ -617,7 +648,7 @@ function setupBoardControl() {
       pendingBoardCommands.set(id, { command: { id, callerId, action: 'main-receipt-listener-status', alive, nativeWeb: true }, delivered: false });
       dispatchPendingBoardCommands();
     });
-    for (const file of ['board-credentials.js', 'security.js', 'chatgpt-web-core.js', 'chatgpt-web-executor.js', 'receipt-listener-core.js', 'worktree-core.js',
+    for (const file of ['board-credentials.js', 'automation-core.js', 'security.js', 'chatgpt-web-core.js', 'chatgpt-web-executor.js', 'receipt-listener-core.js', 'worktree-core.js',
       'discussion-command.js', 'discussion-runner.js', 'discussion-core.js', 'discussion-store.js', 'discussion-privacy.js', 'discussion-participants.js',
       'claude-seats-core.js', 'claude-seats-main.js', 'quota-claude.js', 'quota-core.js', 'quota-codex.js', 'relay-handoff-core.js',
       'side-main.js', 'chat-core.js', 'main-core.js', 'auto-verify-core.js']) fs.copyFileSync(path.join(__dirname, file), path.join(toolsDir, file));
@@ -637,7 +668,7 @@ function setupBoardControl() {
     if (!boardRendererReady) return false;
     send('task-board:start', input);
     return false; // Renderer acknowledges through the durable dispatched marker.
-  }, onChange: () => { send('task-board:changed', {}); notifyNeedsUserCards(); },
+  }, onChange: () => { send('task-board:changed', {}); },
   // Automatic verification: the renderer opens the reviewer / sends the rework,
   // then marks the durable claim delivered. Off when the local setting says so.
   onReview: (input) => { if (!boardRendererReady) return false; send('task-board:review', input); return false; },
@@ -950,6 +981,7 @@ app.whenReady().then(async () => {
   mobileWeb = new MobileWebServer({
     getSessions: () => requestMobile('sessions'),
     getTasks: () => taskStore.list(),
+    getProgress: () => readDailyProgress(),
     // The phone records, reads and ticks to-dos; it never edits text or deletes.
     getTodos: () => todoStore.phone(),
     writeTodos: (input) => {
@@ -974,6 +1006,9 @@ app.whenReady().then(async () => {
     // Which account the Captain is on, and moving it to another: the desktop's own manual switch.
     getRelay: () => requestMobile('relay'),
     switchRelay: (input) => requestMobile('relay-switch', input),
+    // 电池模式: the desktop page owns the setting; the phone reads and changes it through the same code as the settings box.
+    getBattery: () => requestMobile('battery'),
+    setBattery: (input) => requestMobile('battery-set', input),
     // 待我处理: the same list and actions as the desktop page.
     getAttention: () => requestMobile('attention'),
     writeAttention: (input) => requestMobile('attention-write', input),
@@ -1027,6 +1062,17 @@ app.whenReady().then(async () => {
       } catch (_) {}
     }
     return status;
+  });
+  // 自动回执入口 (settings): stop it or change its token. The token itself is never sent to the page.
+  handleMain('automation:settings', (_event, input) => {
+    if (!automation) throw new Error('自动回执入口没有启动。');
+    if (input !== undefined) {
+      if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).length !== 1) throw new Error('Invalid automation setting.');
+      if (typeof input.enabled === 'boolean') AutomationCore.setEnabled(automation, input.enabled);
+      else if (input.reset === true) AutomationCore.reset(automation);
+      else throw new Error('Invalid automation setting.');
+    }
+    return AutomationCore.publicStatus(automation);
   });
   onMain('mobile-web:response', (_event, payload) => {
     const pending = mobileRequests.get(payload?.requestId);
@@ -1301,43 +1347,6 @@ app.whenReady().then(async () => {
     }
     return sendRelayBark({ message, title: 'AgentDeck · 永动机', level: 'active' });
   });
-  const needsUserBarkPath = path.join(app.getPath('userData'), 'needs-user-bark-state.json');
-  let needsUserBarkState = { entries: {} };
-  let needsUserBarkStateLoaded = false;
-  try {
-    if (fs.statSync(needsUserBarkPath).size <= 65536) {
-      const value = JSON.parse(fs.readFileSync(needsUserBarkPath, 'utf8'));
-      if (value && typeof value.entries === 'object' && !Array.isArray(value.entries)) {
-        const entries = {};
-        for (const [id, entry] of Object.entries(value.entries)) {
-          if (/^[A-Za-z0-9_-]{1,160}$/.test(id) && typeof entry === 'string' && entry.length <= 200) entries[id] = entry;
-        }
-        needsUserBarkState = { entries };
-        needsUserBarkStateLoaded = true;
-      }
-    }
-  } catch (_) {}
-  if (tudArg) app.testNeedsUserAlerts = [];
-  const sendNeedsUserBark = createBarkSender({ getConfig: () => notificationConfig, delivery: barkDelivery,
-    ...(tudArg ? { keyHome: app.getPath('userData') } : {}),
-    ...(tudArg ? { fetchImpl: async (_url, options) => {
-      const { device_key, ...payload } = JSON.parse(options.body);
-      app.testNeedsUserAlerts.push(payload);
-      return { ok: true, status: 200, json: async () => ({ code: 200 }) };
-    } } : {}) });
-  const observeNeedsUser = createNeedsUserBark({ state: needsUserBarkState, sendBark: sendNeedsUserBark,
-    suppressInitial: !needsUserBarkStateLoaded,
-    onError: (message) => send('toast', { text: message }),
-    saveState: (value) => {
-      fs.writeFileSync(needsUserBarkPath + '.tmp', JSON.stringify(value), { mode: 0o600 });
-      fs.renameSync(needsUserBarkPath + '.tmp', needsUserBarkPath);
-    } });
-  notifyNeedsUserCards = () => {
-    try {
-      observeNeedsUser(taskStore.list(), { enabled: barkEnabled(notificationConfig), ready: barkReady(notificationConfig) });
-    } catch (_) { send('toast', { text: '需要你的手机提醒没能记下，未发送。' }); }
-  };
-  notifyNeedsUserCards();
 
   onMain('load-config-sync', (e) => {
     try { e.returnValue = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, 'utf-8')) : null; quotaSeatConfig = e.returnValue?.claudeSeats; }
@@ -1359,7 +1368,6 @@ app.whenReady().then(async () => {
     checkQuotaBark();
     queueAuthReceipts();
     pumpBark().catch(() => {});
-    notifyNeedsUserCards();
   };
   onMain('save-config', (_e, cfg) => { try { writeConfig(cfg); } catch (_) {} });
   onMain('save-config-sync', (e, cfg) => { try { writeConfig(cfg); e.returnValue = true; } catch (_) { e.returnValue = false; } });
@@ -1390,6 +1398,13 @@ app.whenReady().then(async () => {
     platform: process.platform, home: HOME, version: app.getVersion(),
     build: [process.versions.electron && `Electron ${process.versions.electron}`, process.platform, process.arch].filter(Boolean).join(' · '),
   }; });
+  // 版本更新 page: the release notes packaged with this build. Read only, from
+  // a fixed path; the page cleans it again (HubCore.releaseNotes) before showing it.
+  handleMain('release-notes:read', async () => {
+    try { return JSON.parse(await fs.promises.readFile(path.join(__dirname, 'release-notes.json'), 'utf8')); }
+    catch (_) { return null; }
+  });
+  handleMain('daily-progress:read', () => readDailyProgress());
 
   // Test profiles never read the user's quota caches or conversation logs.
   handleMain('quota:local', async () => {
@@ -1413,7 +1428,7 @@ app.whenReady().then(async () => {
     quotaRead = null;
     return [...claudeQuotaRefresh.samples(), ...authSamples()].filter((s) => !seatId || s.seatId === seatId);
   });
-  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir));
+  onMain('pty:spawn', (_e, { id, cwd, cols, rows, managed, seatId, configDir, crew }) => spawnPty(id, cwd, cols, rows, !!managed, seatId, configDir, crew === true));
   // Only the trusted deck main frame can submit a native worker. No browser
   // credentials or Captain capability are passed into the skill subprocess.
   chatgptWebExecutor = createChatGPTWebExecutor({
@@ -1464,15 +1479,18 @@ app.whenReady().then(async () => {
       try { result = await pending.notifyPromise; }
       catch (err) { error = err.message; }
     }
-    // 待我处理: a newly filed need item alerts the user the same way notify-user does.
+    // 待我处理: a newly filed need item alerts the user here and on the phone.
+    // The phone hears 队长's own question and quick answers, never a receipt.
     if (action === 'main-inbox' && pending.command.op === 'need' && turnId && !error) {
       const input = pending.command.input || {};
       const message = [input.title, input.ask].filter((v) => typeof v === 'string' && v.trim()).join('\n').slice(0, 4000);
-      pending.notifyPromise ||= notifyUser({ callerId: pending.command.callerId, id: pending.command.id, message, urgent: input.urgent === true }, visible === true, turnId);
+      const urgent = input.urgent === true;
+      pending.notifyPromise ||= notifyUser({ callerId: pending.command.callerId, id: pending.command.id, message, urgent,
+        bark: { ...phonePush(input), level: urgent ? 'critical' : 'active' } }, visible === true, turnId);
       try { result = (typeof result === 'string' ? result + '\n' : '') + await pending.notifyPromise; }
       catch (err) { result = (typeof result === 'string' ? result + '\n' : '') + '本机提醒没发出：' + err.message; }
     }
-    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read' || action === 'main-inbox';
+    const verbatim = action === 'main-briefing' || action === 'main-handoff' || action === 'main-quota' || action === 'main-settings' || action === 'main-peek' || action === 'main-receipts' || action === 'main-receipts-snapshot' || action === 'main-receipts-ack' || action === 'main-task' || action === 'main-queue' || action === 'main-read' || action === 'main-inbox';
     pendingBoardCommands.delete(requestId);
     if (action === 'seat-auth-alert' && pending?.command.nativeSeatAuth === true) {
       if (!error) {

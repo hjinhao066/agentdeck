@@ -16,12 +16,14 @@
       <h2 id="notificationSettingsTitle">设置 · 队长</h2>
       <button type="button" class="rail-btn" id="notificationSettingsClose" title="关闭设置" aria-label="关闭设置"></button>
     </div>
+    <!-- Only this part scrolls: the title with its close button and the save bar stay on screen. -->
+    <div class="notify-settings-body">
+    <h3>提醒</h3>
     <p>队长回复结束或需要你确认时提醒；手动终端中你亲自提交的那一轮结束时也提醒。</p>
     <label class="notify-setting"><span>系统通知</span><input type="checkbox" role="switch" id="captainNotifyEnabled" aria-label="系统通知" /></label>
     <label class="notify-setting"><span>提示音</span><input type="checkbox" role="switch" id="captainSoundEnabled" aria-label="提示音" /></label>
     <label class="notify-setting"><span>选择提示音</span><select id="captainSoundTone" aria-label="选择提示音"><option value="Glass">Glass</option><option value="Tink">Tink</option></select></label>
     <p class="notify-settings-note">队员安静地在后台工作。正在前台看该会话时静音；30 秒内不重复响铃。Windows 使用系统默认提示音。</p>
-    <label class="notify-setting"><span>需要你推到手机</span><input type="checkbox" role="switch" id="needsUserBark" aria-label="需要你推到手机" checked /></label>
     <label class="bark-key-setting" for="barkKeyFile">Bark 本机密钥文件路径（barkKeyFile）</label>
     <input type="text" id="barkKeyFile" placeholder="~/.secrets/bark-key.txt" autocomplete="off" spellcheck="false" aria-describedby="barkKeyNote" />
     <p id="barkKeyNote">这里只保存路径，文件仅含设备 key；支持绝对路径和 ~/。留空沿用本机队长已有的密钥位置。手机需开启 Bark 重要警告权限。加急通知音量统一由下面设置。队长可用 notify-user --test 发送【测试】通知。</p>
@@ -61,10 +63,13 @@
     <label for="batteryConcurrency">省电时最多同时开几个会话（1–10，默认 3）</label>
     <input id="batteryConcurrency" type="number" min="1" max="10" step="1" inputmode="numeric" required autocomplete="off" aria-describedby="batteryModeNote" />
     <p id="batteryModeNote" class="hint">没插电时多的新任务先排队，已在跑的不打断；插上电立刻恢复。</p>
+    <div id="batteryBoostRow" class="boost-row" hidden role="status">
+      <span id="batteryBoostText"></span>
+      <button type="button" class="rail-btn" id="batteryBoostCancel" title="取消临时拉满，恢复省电上限" aria-label="取消临时拉满，恢复省电上限"></button>
+    </div>
     <h3>重启后续上</h3>
     <label class="sd-check"><input id="resumeOnRestart" type="checkbox" />重启后自动续上在跑的队员</label>
     <p class="hint">退出前记下在干活的队员，并在时限内退出。能续上原对话的用各家自己的 resume；续不上的新开会话，并重发卡片任务和最后回执。</p>
-    <button id="csSave" class="btn primary" type="button">保存设置</button>
     <h3>手机网页端</h3>
     <label class="notify-setting"><span>本地网页服务</span><input type="checkbox" role="switch" id="mobileWebEnabled" aria-label="本地网页服务" /></label>
     <p class="hint">服务只监听本机。远程访问需已配置的私人 HTTPS 隧道；开启后登录 Mac 会自动启动 AgentDeck。首次登录使用 token，随后记住设备。</p>
@@ -87,8 +92,18 @@
       <button id="mobileWebRevoke" class="rail-btn" type="button" title="吊销所有设备并更换登录 token" aria-label="吊销所有设备并更换登录 token"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></svg></button>
       <p id="mobileWebDevices" class="hint"></p>
     </div>
+    <h3>自动回执</h3>
+    <label class="notify-setting"><span>允许本机定时脚本发自动回执</span><input type="checkbox" role="switch" id="automationEnabled" aria-label="允许本机定时脚本发自动回执" /></label>
+    <p class="hint">只在本机，用单独的令牌（不显示）。定时脚本（如夜间挖虫）只能给队长发一条标明「自动任务：名字」的回执、建待办卡片、在「待我处理」登记结果汇报；不能派活，也不能改设置。重置后旧令牌立即失效，脚本下次运行会自动读到新的。</p>
+    <button id="automationReset" class="rail-btn" type="button" title="重置自动回执令牌" aria-label="重置自动回执令牌"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg></button>
+    <p id="automationStatus" class="hint" role="status"></p>
     <h3>Claude 席位与 Relay</h3>
-    <button id="claudeSeatsSettings" class="seat-icon" type="button" title="席位设置" aria-label="席位设置"></button>
+    <div class="notify-setting"><span>席位、登录和 Relay</span><button id="claudeSeatsSettings" class="seat-icon" type="button" title="席位设置" aria-label="席位设置"></button></div>
+    </div>
+    <div class="notify-settings-foot">
+      <p id="csDirty" class="notify-settings-dirty" role="status"></p>
+      <button id="csSave" class="btn primary" type="button" title="保存队长省上下文、交接、并发、电池和重启续上这几项">保存设置</button>
+    </div>
   </dialog>
   <nav id="colNav" aria-label="对话列表">
     <div id="navHead"></div>
@@ -465,8 +480,8 @@
   </dialog>
 
   <!-- Shortcuts & tips (help button in the sidebar, or Cmd+/) -->
-  <dialog id="helpDialog">
-    <h3>快捷键与使用提示</h3>
+  <dialog id="helpDialog" aria-labelledby="helpDialogTitle">
+    <div class="dialog-head"><h3 id="helpDialogTitle">快捷键与使用提示</h3><button type="button" class="btn tool-action" id="helpX" title="关闭 (Esc)" aria-label="关闭快捷键与使用提示"></button></div>
     <div class="help-section">界面</div>
     <div class="help-grid">
       <span>左右滑动</span><span>中间区域两指左右滑动，在各个对话之间切换（每个对话就是一个真实终端）</span>
@@ -560,6 +575,7 @@
   <script src="chat-core.js"></script>
   <!-- the phone hub's pure rules: the chat view takes terminal residue out of a reply with the same cleanReply -->
   <script src="mobile-web/hub/core.js"></script>
+  <script src="mobile-web/hub/releases.js"></script>
   <script src="claude-seats-core.js"></script>
   <script src="agent-info.js"></script>
   <script src="quota-core.js"></script>
@@ -589,6 +605,7 @@
   <script src="fleet-ui.js"></script>
   <script src="task-board-ui-core.js"></script>
   <script src="task-board-ui.js"></script>
+  <script src="release-notes-ui.js"></script>
   <script src="version-progress-core.js"></script>
   <script src="version-progress.js"></script>
   <script src="renderer.js"></script>

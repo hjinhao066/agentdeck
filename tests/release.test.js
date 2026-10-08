@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const { execFileSync, fork } = require('node:child_process');
 const { once } = require('node:events');
 const asar = require('@electron/asar');
-const { parseArgs, planRelease, isolatedEnv, withTestLock, verifyArchive, fingerprint, cachedBuild, installer, release } = require('../scripts/release');
+const { parseArgs, planRelease, checkReleaseNotes, isolatedEnv, withTestLock, verifyArchive, fingerprint, cachedBuild, installer, release } = require('../scripts/release');
 const digest = (data) => crypto.createHash('sha256').update(data).digest('hex');
 const git = (repo, ...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
 const write = (file, value) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, value); };
@@ -18,7 +18,10 @@ function mobileReceipt(args, cwd) {
   write(path.join(args[args.indexOf('--output') + 1], 'mobile-deploy-result.json'),
     JSON.stringify({ status: 'passed', release: stamp, online: stamp }));
 }
-function fixture(t, version = '1.1.11') {
+// release-notes.json naming `version` as the newest release, as the release script requires.
+const notesFor = (version) => JSON.stringify({ schema: 1, updated: '2026-10-05', upcoming: [],
+  released: [{ version, date: '2026-10-05', title: 'Fixture', items: ['one', 'two', 'three'] }] });
+function fixture(t, version = '1.1.11', notes = version.replace(/^(\d+)\.(\d+)\.\d+$/, (_, a, b) => `${a}.${Number(b) + 1}`)) {
   // Keep os.tmpdir()'s own spelling. Windows CI's temp is an 8.3 alias (RUNNER~1);
   // pre-resolving it would hide the checkout containment check.
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-release-test-'));
@@ -34,6 +37,7 @@ function fixture(t, version = '1.1.11') {
   write(path.join(repo, 'package.json'), JSON.stringify({ name: 'fixture', version, main: 'main.js', dependencies: {}, build: { files: ['main.js', 'mobile-web/**'] } }));
   write(path.join(repo, 'package-lock.json'), JSON.stringify({ version, packages: { '': { version } } }));
   write(path.join(repo, 'main.js'), 'module.exports = "baseline";\n');
+  write(path.join(repo, 'release-notes.json'), notesFor(notes));
   write(path.join(repo, 'mobile-web/app.js'), 'window.fixture = true;\n');
   git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'baseline');
   const options = parseArgs(['--worktree', path.join(root, 'release'), '--output', path.join(root, 'output')]);
@@ -309,7 +313,7 @@ test('full isolated rehearsal: serial tests with parallel audit, cache reuse, da
 });
 
 test('prepared release runs packaging gates while preserving checkout, commit and metadata', { skip: process.platform !== 'darwin' }, async (t) => {
-  const { root, repo } = fixture(t, '1.2.0');
+  const { root, repo } = fixture(t, '1.2.0', '1.2.0');
   git(repo, 'checkout', '-qb', 'release/1.2.0');
   const options = parseArgs(['--prepared', '--output', path.join(root, 'output')]);
   const refs = git(repo, 'show-ref'), worktrees = git(repo, 'worktree', 'list', '--porcelain');
@@ -358,7 +362,7 @@ test('prepared release runs packaging gates while preserving checkout, commit an
 });
 
 test('package-only rehearsal retains desktop gates and verification, creates no installer and never deploys mobile', { skip: process.platform !== 'darwin' }, async (t) => {
-  const { root, repo } = fixture(t, '1.2.4');
+  const { root, repo } = fixture(t, '1.2.4', '1.2.4');
   git(repo, 'checkout', '-qb', 'release/1.2.4');
   const options = parseArgs(['--prepared', '--package-only', '--output', path.join(root, 'output')]);
   const commit = git(repo, 'rev-parse', 'HEAD');
@@ -439,4 +443,17 @@ test('generated installer delegates to the formal bounded installer with pinned 
   assert.match(script, /--sha256/); assert.match(script, /--asar-sha256/);
   assert.match(script, /--version '1\.2\.0'/);
   assert.doesNotMatch(script, /launchctl|KeepAlive|while|until/);
+});
+
+test('release stops until release-notes.json names the version as the newest release', (t) => {
+  const { repo } = fixture(t, '1.9.0', '1.9');
+  assert.doesNotThrow(() => checkReleaseNotes(repo, '1.9.0'));
+  assert.throws(() => checkReleaseNotes(repo, '2.0.0'), /最新一版是 1\.9，还没写 2\.0 的更新内容/);
+  write(path.join(repo, 'release-notes.json'), JSON.stringify({ schema: 1, updated: '2026-10-05', upcoming: [], released: [{ version: '2.0', date: '2026-10-05', title: 'x', items: ['only one'] }] }));
+  assert.throws(() => checkReleaseNotes(repo, '2.0.0'), /要写 3–6 条/);
+  fs.unlinkSync(path.join(repo, 'release-notes.json'));
+  assert.throws(() => checkReleaseNotes(repo, '2.0.0'), /不存在/);
+  // The repository's own file always describes the version in package.json.
+  const root = path.join(__dirname, '..');
+  assert.doesNotThrow(() => checkReleaseNotes(root, JSON.parse(fs.readFileSync(path.join(root, 'package.json'))).version));
 });

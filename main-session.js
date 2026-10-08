@@ -81,6 +81,30 @@
     save();
     return taskId;
   }
+  // 自动回执入口: what a scheduled script on this computer may do, and nothing else.
+  // main.js already checked the token, the allowed fields and the rate; these
+  // commands have no calling session (callerId is empty), cannot hand out work
+  // and are never shown as the user's words.
+  async function automation(message) {
+    const from = message && message.automation;
+    if (!from || message.callerId || typeof from.source !== 'string' || from.label !== '自动任务：' + from.source) throw new Error('自动回执：来源无效。');
+    const s = state();
+    if (message.action === 'automation-receipt') {
+      if (!s || !mainCol()) throw new Error('队长还没创建或启动，这条自动回执没有送达。');
+      const taskId = 'auto-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      s.pending.push({ taskId, colId: s.colId, title: from.label, ts: Date.now(), summary: String(message.message || ''), source: 'command', automation: from.source });
+      save();
+      return { done: true, result: '已交给队长：' + from.label + '。' };
+    }
+    if (message.action === 'automation-task-add') {
+      // Always a plain 待办 card; the board starts nothing from there.
+      const detail = '【' + from.label + '】本机定时脚本经自动回执入口登记，不是用户本人建的。' + (message.detail ? '\n\n' + message.detail : '');
+      const { card } = await boardRequest('add', { project: message.project, title: message.title, detail });
+      return { done: true, result: '已建卡 ' + card.id + '（项目 ' + card.project + '，待办，没有开始做）。' };
+    }
+    if (message.action === 'automation-inbox-report') return window.AttentionUI.automation(message);
+    throw new Error('自动回执入口不支持这个命令。');
+  }
   async function boardRequest(op, input) {
     const result = await window.deck.taskBoard(op, input);
     if (op === 'move' && ['done', 'todo'].includes(result.card?.status)) cancelWaiting((w) => w.metadata?.boardId === result.card.id, '卡片已移到' + result.card.status + '，取消排队。');
@@ -541,8 +565,32 @@
   // Power source, setting or cap changed: new live cap, refreshed queue cards, then fill any free slot.
   function syncEffectiveCap() {
     M.MAX_ACTIVE = capInfo().cap;
+    syncBoost();
     refreshWaitingNotes();
     return pump();
+  }
+  // 临时拉满 (a boost over the battery limit) is kept in config.batteryBoost = { until } (until 0 = no end time) so a
+  // restart keeps it; plugging in, 不限制 and the end time clear it. This runs on every change of the shared state.
+  let boostTimer = 0;
+  function syncBoost() {
+    const snap = batteryNow();
+    const saved = host.config.batteryBoost;
+    if (snap.boost) {
+      if (!saved || saved.until !== snap.boostUntil) { host.config.batteryBoost = { until: snap.boostUntil || 0 }; save(); }
+    } else if (saved) { delete host.config.batteryBoost; save(); }
+    if (typeof clearTimeout === 'function') clearTimeout(boostTimer);
+    boostTimer = 0;
+    if (snap.boost && snap.boostUntil > 0 && typeof setTimeout === 'function') {
+      boostTimer = setTimeout(() => { if (!Bat().shared.expireBoost(Date.now())) syncBoost(); }, Math.min(2 ** 31 - 1, Math.max(1000, snap.boostUntil - Date.now())));
+    }
+    renderBoostRow(snap);
+  }
+  // The settings box shows the boost and takes it back with one click.
+  function renderBoostRow(snap = batteryNow()) {
+    const row = $('batteryBoostRow');
+    if (!row || !Bat()) return;
+    row.hidden = !snap.boost;
+    if ($('batteryBoostText')) $('batteryBoostText').textContent = `已临时拉满（${Bat().boostUntilText(snap.boostUntil)}）：电池下也按正常上限同时开会话`;
   }
   // One line for ledger/quota while battery mode is on; plugged in or set to 不限制 they print exactly what they always did.
   function batteryLine() {
@@ -551,10 +599,47 @@
     const line = Bat().statusLine(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
     return line ? '\n' + line : '';
   }
+  // The setting as the phone hub and the Captain's `settings battery` see it; null when this build has no battery mode.
+  function batteryReadout() {
+    if (!Bat()) return null;
+    Bat().shared.expireBoost(Date.now());
+    const s = state();
+    return Bat().readout(batteryNow(), baseCap(), s ? M.activeCrew(s.tasks, crewIds()).size : undefined);
+  }
+  // A remote change (phone, Captain): same effect as saving the settings box. The shared state notifies
+  // syncEffectiveCap, which lifts or lowers the live cap and starts waiting work that now fits; the config is
+  // written at once (not on the 150 ms timer) so the main process and a restart see it, and an open settings box shows it.
+  function setBattery(input) {
+    if (!Bat()) throw new Error('这个版本没有电池模式。');
+    const parsed = Bat().parseChange(input);
+    if (parsed.error) throw new Error(parsed.error);
+    const { boost, boostMinutes } = parsed.change;
+    if (boost === true) {
+      const mode = parsed.change.mode !== undefined ? parsed.change.mode : batteryNow().mode;
+      if (!Bat().isActive(mode, batteryNow().onBattery)) throw new Error(`现在不需要拉满：${mode === 'off' ? '电池模式已关' : '现在接着电源'}，本来就不限制。`);
+    }
+    if (parsed.change.mode !== undefined) host.config.batteryMode = parsed.change.mode;
+    if (parsed.change.cap !== undefined) host.config.batteryConcurrency = parsed.change.cap;
+    Bat().shared.set({ mode: host.config.batteryMode, cap: host.config.batteryConcurrency,
+      ...(boost === undefined ? {} : { boost, boostUntil: boost === true && boostMinutes ? Date.now() + boostMinutes * 60000 : 0 }) });
+    syncEffectiveCap();
+    host.flushConfig();
+    if ($('batteryMode')) {
+      $('batteryMode').value = Bat().normalizeMode(host.config.batteryMode);
+      $('batteryConcurrency').value = Bat().normalizeCap(host.config.batteryConcurrency);
+      syncBatteryField();
+    }
+    return batteryReadout();
+  }
   function initDialog() {
     const settings = $('notificationSettings');
     $('csEnabled').onchange = () => { $('csThreshold').disabled = !$('csEnabled').checked; };
     if ($('batteryMode')) $('batteryMode').onchange = syncBatteryField;
+    // These few wait for 保存设置 (the switches above save on change), so the save bar says when they are edited.
+    for (const id of ['csEnabled', 'csThreshold', 'handoffBudget', 'concurrencyCap', 'batteryMode', 'batteryConcurrency', 'resumeOnRestart']) {
+      $(id)?.addEventListener?.('input', () => { if ($('csDirty')) $('csDirty').textContent = '有改动还没保存'; });
+    }
+    if ($('batteryBoostCancel')) $('batteryBoostCancel').onclick = () => { try { setBattery({ boost: false }); } catch (error) { host.showToast(error.message); } };
     $('csSave').onclick = () => {
       if ($('csEnabled').checked && !$('csThreshold').reportValidity()) return;
       if (!$('concurrencyCap').reportValidity()) return;
@@ -574,6 +659,7 @@
       cancelTokenSaving();
       tokenSaverPaused = false;
       save();
+      if ($('csDirty')) $('csDirty').textContent = '';
       settings.close();
     };
     settings.addEventListener('keydown', (e) => e.stopPropagation());
@@ -602,10 +688,12 @@
       $('batteryMode').value = Bat().normalizeMode(host.config.batteryMode);
       $('batteryConcurrency').value = Bat().normalizeCap(host.config.batteryConcurrency);
       syncBatteryField();
+      renderBoostRow();
     }
     if ($('handoffBudget')) $('handoffBudget').value = M.handoffBudget(host.config.captainHandoffOverview);
     const resumeBox = $('resumeOnRestart');
     if (resumeBox) resumeBox.checked = window.RestartResume.resumeEnabled(host.config);
+    if ($('csDirty')) $('csDirty').textContent = '';
   }
   // 不限制: the battery count does not apply, so it is greyed out and not required (like the token-saver threshold).
   function syncBatteryField() {
@@ -2352,7 +2440,7 @@
       dispatch(col, text, host.columnLabel(col));
       return { done: true, result: `「${host.columnLabel(col)}」已归档，已恢复它并把指令发过去，它准备好后会收到。` };
     }
-    const busy = entry && (entry.state === 'working' || entry.state === 'quota');
+    const busy = entry && (M.workingForSend(entry) || entry.state === 'quota');
     if (message.replace) cancelSupplement(col.id);
     if (message.now) {
       await handle({ action: 'main-stop', to: col.id, keepQueued: true }, caller);
@@ -2491,6 +2579,13 @@
         return { done: true, result: briefingText() };
       case 'main-quota':
         return { done: true, result: host.quotaText() + batteryLine() };
+      case 'main-settings': {
+        if (message.op !== 'battery') throw new Error('settings 目前只有 battery。');
+        const changed = message.input && Object.keys(message.input).length > 0;
+        const view = changed ? setBattery(message.input) : batteryReadout();
+        if (!view) throw new Error('这个版本没有电池模式。');
+        return { done: true, result: (changed ? '已生效并写入设置：\n' : '') + Bat().settingsText(view) };
+      }
       case 'main-handoff': {
         const built = await window.deck.captainHandoff(handoffSnapshot('refresh'));
         // A later restart points 队长 at this file again.
@@ -2826,6 +2921,12 @@
     }
     loadResumeManifest();
     initDialog();
+    // A boost kept in the config comes back after a restart (not when plugged in, or past its end time).
+    if (Bat() && host.config.batteryBoost && Number.isFinite(host.config.batteryBoost.until)) {
+      Bat().shared.set({ boost: true, boostUntil: host.config.batteryBoost.until });
+      Bat().shared.expireBoost(Date.now());
+      syncEffectiveCap();
+    }
     Bat()?.shared.onChange(syncEffectiveCap);
     window.deck.onTasksChanged?.(() => { refreshPriority(); });
     refreshPriority();
@@ -2835,7 +2936,8 @@
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onPower, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
     parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
-    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice,
+    isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation,
+    batteryReadout, setBattery,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
     isPriority: sessionHigh, isHigh, setPriority: (id, level) => setPriority(id, level, true),
 

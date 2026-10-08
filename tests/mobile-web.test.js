@@ -819,3 +819,89 @@ test('without the relay sources there is no api/relay route', async (t) => {
   assert.equal((await request(bare.status, '/api/relay', { headers: bare.auth })).status, 404);
   assert.equal((await post(bare.status, '/api/relay', { seatId: 'cn' }, bare.auth)).status, 404);
 });
+
+// ---- 电池模式 (api/battery) ----
+function batterySources(state = {}) {
+  const calls = [];
+  const data = { mode: 'auto', cap: 3, onBattery: true, active: true, baseCap: 30, effectiveCap: 3, working: 2, ...state };
+  return { calls, data, options: {
+    getBattery: () => data,
+    setBattery: (input) => { calls.push(input); if (data.refuse) throw new Error(data.refuse); Object.assign(data, input); return data; },
+  } };
+}
+
+test('api/battery shows the battery setting to a logged-in phone only, as fixed fields and nothing else', async (t) => {
+  const battery = batterySources({ secret: '/Users/someone/.claude', command: 'claude --secret', cap: 99, working: -1, baseCap: 'x' });
+  const { status, auth } = await start(t, {}, battery.options);
+  for (const headers of [{}, { Authorization: 'Bearer wrong' }]) assert.equal((await request(status, '/api/battery', { headers })).status, 401);
+  const response = await request(status, '/api/battery', { headers: auth });
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(response.text, /someone|secret|command/);
+  // Out-of-range or malformed values read as the defaults; an unknown count of working sessions is left out.
+  assert.deepEqual(JSON.parse(response.text), { mode: 'auto', cap: 3, capMin: 1, capMax: 10, onBattery: true, active: true, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 3 });
+  battery.data.cap = 6; battery.data.working = 4; battery.data.mode = 'off'; battery.data.active = false;
+  assert.deepEqual(JSON.parse((await request(status, '/api/battery', { headers: auth })).text),
+    { mode: 'off', cap: 6, capMin: 1, capMax: 10, onBattery: true, active: false, boost: false, boostUntil: null, baseCap: 30, effectiveCap: 3, working: 4 });
+});
+
+test('api/info announces the battery capability only when this build can change it', async (t) => {
+  const bare = await start(t);
+  assert.doesNotMatch((await request(bare.status, '/api/info')).text, /battery/);
+  const readOnly = await start(t, {}, { getBattery: () => ({}) });
+  assert.doesNotMatch((await request(readOnly.status, '/api/info')).text, /battery/);
+  const full = await start(t, {}, batterySources().options);
+  assert.ok(JSON.parse((await request(full.status, '/api/info')).text).capabilities.includes('battery'));
+});
+
+test('POST api/battery needs the device, CSRF token and same origin; takes only mode and cap; passes a refusal on as an error', async (t) => {
+  const battery = batterySources();
+  const { status, auth } = await start(t, {}, battery.options);
+  assert.equal((await post(status, '/api/battery', { mode: 'off' })).status, 401);
+  assert.equal((await post(status, '/api/battery', { mode: 'off' }, { Authorization: auth.Authorization })).status, 403);
+  assert.equal((await post(status, '/api/battery', { mode: 'off' }, { ...auth, Origin: 'https://evil.example' })).status, 403);
+  for (const body of [{}, { extra: 1 }, { mode: 'off', command: 'x' }, { cap: 3, baseCap: 5 }, { concurrencyCap: 5 }]) {
+    assert.equal((await post(status, '/api/battery', body, auth)).status, 400, JSON.stringify(body));
+  }
+  assert.deepEqual(battery.calls, []);
+  const ok = await post(status, '/api/battery', { mode: 'off' }, auth);
+  assert.equal(ok.status, 200);
+  assert.equal(JSON.parse(ok.text).mode, 'off');
+  assert.deepEqual(battery.calls, [{ mode: 'off' }]);
+  assert.equal((await post(status, '/api/battery', { cap: 5, mode: 'auto' }, auth)).status, 200);
+  assert.deepEqual(battery.calls[1], { cap: 5, mode: 'auto' });
+  // The desktop's own validation has the last word (a cap outside 1–10, a mode it does not know).
+  battery.data.refuse = 'cap 要是 1–10 的整数。\n';
+  const refused = await post(status, '/api/battery', { cap: 99 }, auth);
+  assert.deepEqual([refused.status, JSON.parse(refused.text)], [400, { error: 'cap 要是 1–10 的整数。' }]);
+});
+
+test('without the battery sources there is no api/battery route, so an older build answers 404', async (t) => {
+  const bare = await start(t);
+  assert.equal((await request(bare.status, '/api/battery', { headers: bare.auth })).status, 404);
+  assert.equal((await post(bare.status, '/api/battery', { mode: 'off' }, bare.auth)).status, 404);
+});
+
+test('api/battery carries the temporary boost: shown as fixed fields, set with boost and boostMinutes only', async (t) => {
+  const battery = batterySources({ boost: true, boostUntil: 1_800_000_000_000 });
+  const { status, auth } = await start(t, {}, battery.options);
+  const view = JSON.parse((await request(status, '/api/battery', { headers: auth })).text);
+  assert.deepEqual([view.boost, view.boostUntil], [true, 1_800_000_000_000]);
+  battery.data.boost = 'yes'; battery.data.boostUntil = -5;
+  const junk = JSON.parse((await request(status, '/api/battery', { headers: auth })).text);
+  assert.deepEqual([junk.boost, junk.boostUntil], [false, null]);
+  for (const body of [{ boost: true, minutes: 5 }, { boostUntil: 5 }]) assert.equal((await post(status, '/api/battery', body, auth)).status, 400, JSON.stringify(body));
+  assert.equal((await post(status, '/api/battery', { boost: true, boostMinutes: 120 }, auth)).status, 200);
+  assert.equal((await post(status, '/api/battery', { boost: false }, auth)).status, 200);
+  assert.deepEqual(battery.calls, [{ boost: true, boostMinutes: 120 }, { boost: false }]);
+});
+
+test('api/progress hands the phone the daily counts behind login; without a source it is empty, not an error', async (t) => {
+  const days = [{ date: '2026-10-07', summary: { done: 58 } }];
+  const { status, auth } = await start(t, {}, { getProgress: () => ({ days }) });
+  assert.equal((await request(status, '/api/progress')).status, 401);
+  assert.deepEqual(JSON.parse((await request(status, '/api/progress', { headers: auth })).text), { days });
+  assert.ok(JSON.parse((await request(status, '/api/info')).text).capabilities.includes('progress'));
+  const bare = await start(t);
+  assert.deepEqual(JSON.parse((await request(bare.status, '/api/progress', { headers: bare.auth })).text), { days: [] });
+  assert.ok(!JSON.parse((await request(bare.status, '/api/info')).text).capabilities.includes('progress'));
+});

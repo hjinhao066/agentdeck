@@ -1,6 +1,6 @@
 {
   "name": "agentdeck",
-  "version": "1.9.0",
+  "version": "2.0.0",
   "description": "TweetDeck-style multi-column deck for terminal AI agents",
   "main": "main.js",
   "scripts": {
@@ -61,6 +61,7 @@
       "board-cli.js",
       "receipt-listener-core.js",
       "board-credentials.js",
+      "automation-core.js",
       "codex-captain-driver.js",
       "scripts/codex-captain-host.js",
       "chat-core.js",
@@ -70,7 +71,6 @@
       "quota-codex.js",
       "quota-low-bark.js",
       "seat-auth-alert.js",
-      "needs-user-bark.js",
       "quota-claude.js",
       "chat-ui.js",
       "sidebar-core.js",
@@ -113,6 +113,8 @@
       "crew-map.js",
       "task-board-ui-core.js",
       "task-board-ui.js",
+      "release-notes.json",
+      "release-notes-ui.js",
       "version-progress-core.js",
       "version-progress.js",
       "side-pane.js",

@@ -10,10 +10,11 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 
 const FilePreview = require('../../file-preview-core');
+const BatteryCore = require('../../battery-core');
 
 const HUB = path.join(__dirname, '..', '..', 'mobile-web', 'hub');
-const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
+const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'], '/core.js': ['core.js', 'text/javascript; charset=utf-8'], '/releases.js': ['releases.js', 'text/javascript; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/style.css': ['style.css', 'text/css; charset=utf-8'], '/pdf.min.js': ['pdf.min.js', 'text/javascript; charset=utf-8'], '/pdf.worker.min.js': ['pdf.worker.min.js', 'text/javascript; charset=utf-8'], '/machines.json': ['machines.json', 'application/json; charset=utf-8'], '/release-notes.json': ['release-notes.json', 'application/json; charset=utf-8'], '/release.json': ['release.json', 'application/json; charset=utf-8'] };
 // The headers the VPS adds to the static hub (design §3.5); the hub must work under them.
 const HUB_HEADERS = { 'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
   'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' };
@@ -35,12 +36,12 @@ function readJson(req) {
 // todos: this machine's answer to api/todos, as the phone view mobile-web.js sends
 // (live items plus bare deletion marks); null is an older build without the route.
 // files: { home, … } for file-preview-core, the real rules over a stand-in home folder; null is a build without api/file.
-async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null }) {
+async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0', battery = null, sessions = [], turns = [], cards = [], outputs = {}, captain = true, quota = [], relay = null, todos = [], plainCookie = false, files = null, progress = null }) {
   // plainCookie: WebKit refuses Secure cookies over http, even on localhost.
   const base = `/${id}/`, cookieName = plainCookie ? `agentdeck_${id}` : `__Secure-agentdeck_${id}`;
   const csrfSecret = crypto.randomBytes(32);
   const machine = { id, label, mode: 'online', token: crypto.randomBytes(32).toString('hex'), devices: new Set(), failures: 0, bannedUntil: 0,
-    requests: [], messages: [], sessions, cards, outputs, quota, files, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '', busy: false, queued: [],
+    requests: [], messages: [], sessions, cards, outputs, quota, files, progress, fileReads: [], boardVersion: 'b1', todos: todos ? todos.map((t) => ({ ...t })) : null, todoWrites: [], todoRefuse: '', busy: false, queued: [],
     releaseQueued() { machine.busy = false; machine.captain.turns.push(...machine.queued.splice(0)); },
     captain: captain ? { id: `${id}-captain`, title: '队长', status: (sessions.find((s) => s.isMain) || { status: 'idle' }).status, turns } : null,
     setMode(mode) { machine.mode = mode; },
@@ -49,6 +50,8 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     // The Captain's accounts (null: an older build without api/relay). A switch
     // stays "switching" until the test ends it with finishRelay, like the desktop
     // which answers at once and reports the outcome later.
+    // 电池模式 (null: an older build without api/battery, which answers 404). The real rules come from battery-core.
+    battery: battery ? { mode: 'auto', cap: 3, onBattery: false, baseCap: 30, working: 2, refuse: '', ...battery } : null, batteryWrites: [],
     relay: relay ? { currentId: relay.currentId, seats: relay.seats.map((seat) => ({ ...seat })), job: null, refuse: '' } : null, switches: [],
     finishRelay(ok, error = '') {
       const job = machine.relay.job;
@@ -110,6 +113,8 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
     if (req.method === 'GET' && url.pathname === '/api/sessions') return json(res, 200, { sessions: machine.sessions });
     if (req.method === 'GET' && url.pathname === '/api/captain') return json(res, 200, machine.captain || { turns: [], status: 'unavailable' });
     if (req.method === 'GET' && url.pathname === '/api/tasks') return json(res, 200, { cards: machine.cards });
+    // 每日进展: null plays a build from before api/progress (404).
+    if (req.method === 'GET' && url.pathname === '/api/progress' && machine.progress) return json(res, 200, { days: machine.progress });
     // Display values only, like quotaView() in mobile-web.js; the account is already masked.
     if (req.method === 'GET' && url.pathname === '/api/quota') return json(res, 200, { rows: machine.quota, version: appVersion, now: Date.now() });
     // 待我处理, like mobile-web.js: read, reply, tick or put back one item.
@@ -118,13 +123,22 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
       const body = await readJson(req);
       machine.attentionWrites.push(body);
       if (machine.attentionRefuse) return json(res, 409, { error: machine.attentionRefuse });
-      if (body && body.op === 'read' && Array.isArray(body.ids)) { machine.attention.forEach((i) => { if (body.ids.includes(i.id) && !i.readAt) i.readAt = Date.now(); }); return json(res, 200, { ok: true, item: null }); }
+      // Read: a need loses its dot; a report goes to 已读 (attention-core markRead).
+      if (body && body.op === 'read' && Array.isArray(body.ids)) {
+        const now = Date.now();
+        machine.attention.forEach((i) => {
+          if (!body.ids.includes(i.id) || i.done) return;
+          if (!i.readAt) i.readAt = now;
+          if (i.kind === 'report') Object.assign(i, { done: true, doneAt: now, doneBy: body.via === 'chat' ? 'chat' : 'seen', doneText: body.via === 'chat' ? '你在队长对话里看过了' : '你看过了' });
+        });
+        return json(res, 200, { ok: true, item: null });
+      }
       const item = body && machine.attention.find((i) => i.id === body.id);
       if (!item) return json(res, 400, { error: 'Invalid request.' });
       const now = Date.now();
       if (body.op === 'reply' && typeof body.text === 'string' && body.text.trim()) Object.assign(item, { done: true, doneAt: now, doneText: '你已回复', readAt: item.readAt || now, replies: [...(item.replies || []), { text: body.text.trim(), at: now, from: 'phone', seen: false }] });
       else if (body.op === 'done') Object.assign(item, { done: true, doneAt: now, doneText: item.kind === 'report' ? '你看过了' : '你标记已处理', readAt: item.readAt || now });
-      else if (body.op === 'reopen') Object.assign(item, { done: false, doneAt: 0, doneText: '' });
+      else if (body.op === 'reopen') Object.assign(item, { done: false, doneAt: 0, doneText: '', doneBy: '', ...(item.kind === 'report' ? { readAt: 0 } : {}) });
       else return json(res, 400, { error: 'Invalid request.' });
       return json(res, 200, { ok: true, item });
     }
@@ -137,6 +151,19 @@ async function fakeMachine({ id, label, platform, hostname, appVersion = '1.2.0'
         ...(machine.attention || []).flatMap((item) => [item.title, item.ask, item.detail, ...(item.files || [])])];
       const result = await FilePreview.readPreview(body.path, { ...machine.files, texts, offset: body.offset || 0 });
       return result.ok ? json(res, 200, result) : json(res, result.code === 'invalid' ? 400 : result.code === 'missing' ? 404 : 403, { error: 'refused', code: result.code });
+    }
+    if (req.method === 'GET' && url.pathname === '/api/battery' && machine.battery) return json(res, 200, BatteryCore.readout(machine.battery, machine.battery.baseCap, machine.battery.working));
+    if (req.method === 'POST' && url.pathname === '/api/battery' && machine.battery) {
+      const body = await readJson(req);
+      machine.batteryWrites.push(body);
+      if (machine.battery.refuse) return json(res, 400, { error: machine.battery.refuse });
+      const parsed = BatteryCore.parseChange(body);
+      if (parsed.error) return json(res, 400, { error: parsed.error });
+      const { boost, boostMinutes, ...plain } = parsed.change;
+      Object.assign(machine.battery, plain);
+      if (boost === true && !BatteryCore.isActive(machine.battery.mode, machine.battery.onBattery)) return json(res, 400, { error: '现在不需要拉满：本来就不限制。' });
+      if (boost !== undefined) { machine.battery.boost = boost; machine.battery.boostUntil = boost && boostMinutes ? Date.now() + boostMinutes * 60000 : 0; }
+      return json(res, 200, BatteryCore.readout(machine.battery, machine.battery.baseCap, machine.battery.working));
     }
     if (req.method === 'GET' && url.pathname === '/api/relay' && machine.relay) return json(res, 200, relayState());
     if (req.method === 'POST' && url.pathname === '/api/relay' && machine.relay) {
@@ -278,7 +305,9 @@ function relayFixture(currentId = 'us') {
   ] };
 }
 // 待我处理 items as each computer's api/attention sends them: Mac has a decision,
-// a login and two reports (one about a card), Windows a held card and an older finished one.
+// a login, two unseen reports (one about a card, one said in 队长's reply mac-t5) and
+// one the user already read in the chat; Windows a held card 队长 asks about with
+// quick answers, and two older finished ones.
 function attentionFixture() {
   const ago = (minutes) => Date.now() - minutes * 60000;
   const item = (id, kind, label, title, minutes, extra = {}) => ({ id, kind, label, title, ask: '', detail: '', files: [], project: '', cardTitle: '', sessionTitle: '', source: 'captain',
@@ -290,10 +319,13 @@ function attentionFixture() {
       item('at-m2-login', 'need', '等你登录或授权', '小红书要你在 Mac 的 Chrome 里登录一次', 40, { ask: '登录后点「已处理」，抓取会自己接着跑', project: 'xhs-harvest' }),
       item('at-m3-report', 'report', '结果汇报', '小福助手排查报告回来了：结论是完全正常，但这个结论我还不认，已让它补查两件', 25, { project: '小福助手',
         detail: '补查一：用妹妹那份真实 Excel 走一遍上传→识别→写入。\n补查二：识别失败时有没有提示。', files: ['/Users/jinhao/reports/xiaofu/check.md', '/Users/jinhao/reports/xiaofu/recheck-plan.md'], cardTitle: '小福助手 Excel 识别' }),
-      item('at-m4-report', 'report', '结果汇报', '「登录改成 1」的会话卡在确认窗口，我已替它点了「是」', 70, { project: 'agentdeck', readAt: ago(60), sessionTitle: '登录取证' }),
+      item('at-m4-report', 'report', '结果汇报', '「登录改成 1」的会话卡在确认窗口，我已替它点了「是」', 70, { project: 'agentdeck', readAt: ago(60), sessionTitle: '登录取证',
+        done: true, doneAt: ago(60), doneBy: 'chat', doneText: '你在队长对话里看过了' }),
+      item('at-m5-chat', 'report', '结果汇报', '手机总台在做界面，双机说明文档已提交回执', 9, { project: 'agentdeck', turn: 'mac-t5' }),
     ],
     win: [
-      item('at-w1-held', 'need', '验收卡住了', '「Muse 冒烟测试」验收没过 2 次，已经停下', 95, { ask: '决定还做不做、要不要换个做法（回复会交给队长）。', project: 'muse', source: 'card', cardTitle: 'Muse 冒烟测试' }),
+      item('at-w1-held', 'need', '验收卡住了', 'Muse 冒烟测试验收没过 2 次，已经停下', 95, { ask: '还要继续做吗？', options: ['换个做法再试', '先放着', '不做了'], project: 'muse', cardTitle: 'Muse 冒烟测试',
+        detail: '最近一次结果：不通过，冒烟脚本第 3 步截图缺失。' }),
       item('at-w2-done', 'report', '结果汇报', 'Windows 隧道守护脚本 dry-run 通过了', 300, { readAt: ago(290), done: true, doneAt: ago(280), doneText: '你已回复', replies: [{ text: '好，开机自启也一起配上', at: ago(280), from: 'phone', seen: true }] }),
       item('at-w3-other', 'need', '要你处理', 'Windows 的 Bark 推送要你在手机上点一次允许', 420, { readAt: ago(410), done: true, doneAt: ago(400), doneText: '你标记已处理' }),
     ],
@@ -305,6 +337,12 @@ function withRelay() {
   return [{ ...mac, relay: relayFixture('us') }, { ...win, relay: relayFixture('chatgpt') }];
 }
 
+// Mac has the battery setting (on battery, limit 3, 2 working); Windows is an older build without api/battery.
+function withBattery(extra = {}) {
+  const [mac, win] = defaults();
+  return [{ ...mac, battery: { onBattery: true, cap: 3, working: 2, ...extra } }, win];
+}
+
 async function startHub({ port = 0, machines = defaults(), directory = HUB, plainCookie = false } = {}) {
   const fakes = {};
   for (const options of machines) fakes[options.id] = await fakeMachine({ ...options, plainCookie });
@@ -313,7 +351,8 @@ async function startHub({ port = 0, machines = defaults(), directory = HUB, plai
     if (!fake) {
       const asset = req.method === 'GET' && STATIC[req.url.split('?')[0]];
       if (!asset) { res.writeHead(404, HUB_HEADERS); return res.end(); }
-      const file = path.join(directory, asset[0]);
+      // The source tree keeps release-notes.json at the repository root; a built hub has it beside the page.
+      const file = asset[0] === 'release-notes.json' && directory === HUB ? path.join(HUB, '..', '..', asset[0]) : path.join(directory, asset[0]);
       if (!fs.existsSync(file)) { res.writeHead(404, HUB_HEADERS); return res.end(); }
       res.writeHead(200, { ...HUB_HEADERS, 'Content-Type': asset[1] });
       return res.end(fs.readFileSync(file));
@@ -334,7 +373,7 @@ async function startHub({ port = 0, machines = defaults(), directory = HUB, plai
     async close() { await close(proxy); for (const fake of Object.values(fakes)) await fake.close(); } };
 }
 
-module.exports = { startHub, fakeMachine, HUB_HEADERS, relayFixture, withRelay, attentionFixture };
+module.exports = { startHub, fakeMachine, HUB_HEADERS, relayFixture, withRelay, withBattery, attentionFixture };
 
 // node tests/fixtures/hub-proxy.js → a local hub to click through by hand.
 if (require.main === module) startHub({ port: Number(process.env.PORT) || 0, machines: withRelay() }).then((hub) => {

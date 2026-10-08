@@ -116,7 +116,7 @@ let config = {
   claudeSeats: ClaudeSeatsCore.normalize(), activeClaudeSeatId: 'cn', captainRelayLabel: 'Relay',
   captainRelayCodex: { name: 'ChatGPT', command: ClaudeSeatsCore.CODEX_COMMAND }, captainRelayClaudeCommand: '',
   captainNotifications: NotificationPolicy.normalizeSettings(),
-  claudeQuotaAlert: { thresholdPercent: 2 }, barkKeyFile: '', needsUserBark: true,
+  claudeQuotaAlert: { thresholdPercent: 2 }, barkKeyFile: '',
   barkNotifications: BarkPolicy.settings(),
   perpetualCaptain: PerpetualCaptainCore.normalizeSettings(), perpetualCaptainState: PerpetualCaptainCore.normalizeState(), barkKeyFile: '',
   quotaWarmup: QuotaWarmupCore.normalizeSettings(),
@@ -133,7 +133,6 @@ config.sidebarFontSize = SidebarCore.normalizeFontSize(saved?.sidebarFontSize);
 config.quotas = saved?.quotas && typeof saved.quotas === 'object' ? saved.quotas : {};
 if (saved) {
   if (typeof saved.barkKeyFile === 'string') config.barkKeyFile = saved.barkKeyFile;
-  if (typeof saved.needsUserBark === 'boolean') config.needsUserBark = saved.needsUserBark;
   config.barkNotifications = BarkPolicy.settings(saved.barkNotifications);
   if (saved.claudeQuotaAlert && typeof saved.claudeQuotaAlert === 'object') {
     config.claudeQuotaAlert = { thresholdPercent: QuotaCore.percent(saved.claudeQuotaAlert.thresholdPercent) ?? 2 };
@@ -156,6 +155,8 @@ if (saved) {
   config.globalViewMode = 'term';
   if (saved.theme) config.theme = saved.theme;
   config.calmMotion = saved.calmMotion === true;
+  // The version whose 版本更新 page was last opened; a newer install lights a dot on the version button.
+  if (typeof saved.releaseNotesSeen === 'string') config.releaseNotesSeen = saved.releaseNotesSeen;
   if (saved.fitWindow !== undefined) config.fitWindow = saved.fitWindow;
   if (FIT_COLS_CHOICES.includes(saved.fitCols)) config.fitCols = saved.fitCols;
   // widths from the old, narrower sidebar fall back to the new default
@@ -170,6 +171,8 @@ if (saved) {
   config.resumeOnRestart = window.RestartResume.resumeEnabled(saved);
   config.mainSession = saved.mainSession && typeof saved.mainSession === 'object' ? saved.mainSession : null;
   config.captainHistory = Array.isArray(saved.captainHistory) ? saved.captainHistory : [];
+  // 待我处理 (attention-ui.js normalizes and migrates it); without this every restart emptied the page.
+  if (saved.attention && typeof saved.attention === 'object') config.attention = saved.attention;
   config.captainTokenSaver = MainCore.tokenSaverSettings(saved.captainTokenSaver);
   config.concurrencyCap = MainCore.concurrencyCap(saved.concurrencyCap);
   config.batteryMode = BatteryCore.normalizeMode(saved.batteryMode);
@@ -550,7 +553,8 @@ function terminalIdle(col, entry) {
 }
 const WEB_QUEUED_TIP = '排队中：前面还有网页调研在跑';
 const DOT_TIP = { plain: '未开始', working: '干活中…', quota: '额度用尽/等待', input: '等你回复！', done: '已完成', failed: '没做成', stopped: '已中断', exited: '已退出' };
-function classify(text, entry, cmd, isCaptain = false) {
+// withoutBackground: read the screen as if no background shell/monitor were counted.
+function classify(text, entry, cmd, isCaptain = false, withoutBackground = false) {
   if (cmd === 'chatgpt-web') return entry?.webExecutorState || 'plain';
   text = MainCore.codexStatusScreen(text, cmd);
   const activity = MainCore.terminalActivity(text, cmd);
@@ -567,12 +571,19 @@ function classify(text, entry, cmd, isCaptain = false) {
   }
   if (WORKING_RE.test(text) || (/\bcursor-agent\b/i.test(cmd || '') && MainCore.cursorBusy(text))) return 'working';
   if (NEEDS_INPUT_RE.test(lines.slice(-20).join('\n'))) return 'input';
-  if (!isCaptain && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
+  if (!isCaptain && !withoutBackground && MainCore.claudeBackgroundTasks(text, cmd)) return 'working';
   // After submission, an unrecognised/empty Cursor screen is initialization
   // or work without a ready prompt, never evidence that the turn finished.
   if (/\bcursor-agent\b/i.test(cmd || '') && entry?.hasWorked) return 'working';
   if (AGENT_IDLE_RE.test(text)) return (entry && entry.hasWorked) ? 'done' : 'plain';
   return 'plain';
+}
+// The turn is over and only a background shell/monitor keeps the dot yellow: the
+// prompt takes a tell (MainCore.workingForSend), while the dot and the receipt
+// clocks keep waiting for that work.
+function backgroundOnlyState(st, isCaptain, text, entry, cmd) {
+  return st === 'working' && !isCaptain && MainCore.claudeBackgroundTasks(text, cmd) &&
+    classify(text, entry, cmd, false, true) !== 'working';
 }
 function setDot(entry, state) {
   if (!entry || !entry.dot) return;
@@ -688,7 +699,6 @@ function openNotificationSettings() {
   document.getElementById('captainSoundTone').value = settings.tone;
   document.getElementById('captainSoundTone').disabled = env.platform !== 'darwin';
   document.getElementById('barkKeyFile').value = config.barkKeyFile;
-  document.getElementById('needsUserBark').checked = config.needsUserBark !== false;
   const bark = BarkPolicy.settings(config.barkNotifications);
   document.getElementById('barkCriticalVolume').value = bark.criticalVolume;
   document.getElementById('barkSleepEnabled').checked = bark.sleepEnabled;
@@ -701,6 +711,7 @@ function openNotificationSettings() {
   updateBarkPolicyStatus();
   MainSession.openSettings();
   updateMobileWebSettings();
+  updateAutomationSettings();
   dialog.showModal();
 }
 async function updateMobileWebSettings(input) {
@@ -741,6 +752,21 @@ document.getElementById('mobileWebCopyGateway').addEventListener('click', (event
   button.innerHTML = ICONS.check; button.title = '已复制'; button.setAttribute('aria-label', '已复制');
   setTimeout(() => { button.innerHTML = original; button.title = '复制入口口令'; button.setAttribute('aria-label', '复制入口口令'); }, 1400);
 });
+async function updateAutomationSettings(input) {
+  const toggle = document.getElementById('automationEnabled');
+  toggle.disabled = true;
+  try {
+    const status = await window.deck.automationSettings(input);
+    toggle.checked = status.enabled;
+    const last = status.lastUsedAt ? `最近一次：${new Date(status.lastUsedAt).toLocaleString()}，${status.lastSource}（应用启动以来共 ${status.uses} 次）` : '应用启动以来还没有脚本用过';
+    document.getElementById('automationStatus').textContent = `${status.enabled ? '已开启，仅本机' : '已停用，脚本发来的自动回执都会被拒绝'}；${last}`;
+  } catch (error) { document.getElementById('automationStatus').textContent = error.message; }
+  finally { toggle.disabled = false; }
+}
+document.getElementById('automationEnabled').addEventListener('change', (event) => updateAutomationSettings({ enabled: event.target.checked }));
+document.getElementById('automationReset').addEventListener('click', () => {
+  if (confirm('重置自动回执令牌？旧令牌立即失效；定时脚本每次运行都会读取新令牌，不用改脚本。')) updateAutomationSettings({ reset: true });
+});
 async function updateBarkPolicyStatus() {
   const node = document.getElementById('barkPolicyStatus');
   try {
@@ -768,7 +794,6 @@ function saveNotificationSettings() {
     tone: document.getElementById('captainSoundTone').value,
   });
   config.barkKeyFile = document.getElementById('barkKeyFile').value.trim();
-  config.needsUserBark = document.getElementById('needsUserBark').checked;
   config.barkNotifications = BarkPolicy.settings({ ...config.barkNotifications,
     criticalVolume: document.getElementById('barkCriticalVolume').valueAsNumber,
     sleepEnabled: document.getElementById('barkSleepEnabled').checked,
@@ -854,12 +879,22 @@ function buildChrome() {
   sideBtn.setAttribute('aria-label', sideBtn.title);
   tbRight.append(sideBtn);
 
-  const brand = document.createElement('span');
+  // The version opens 版本更新: what each version changed and what comes next.
+  const brand = document.createElement('button');
+  brand.type = 'button';
+  brand.id = 'releaseNotesBtn';
   brand.className = 'nav-brand';
   brand.textContent = `V${env.version}`;
   const versionDetails = [`AgentDeck v${env.version}`, env.build].filter(Boolean).join(' · ');
-  brand.title = versionDetails;
-  brand.setAttribute('aria-label', versionDetails);
+  brand.title = `版本更新：每版改了什么、接下来做什么（${versionDetails}）`;
+  brand.setAttribute('aria-label', `版本更新，你在用 AgentDeck ${env.version}`);
+  brand.setAttribute('aria-haspopup', 'dialog');
+  brand.setAttribute('aria-expanded', 'false');
+  brand.classList.toggle('unseen', config.releaseNotesSeen !== env.version);
+  brand.onclick = () => {
+    if (config.releaseNotesSeen !== env.version) { config.releaseNotesSeen = env.version; brand.classList.remove('unseen'); saveConfig(); }
+    ReleaseNotesUI.toggle();
+  };
   const themeBtn = railBtn(ICONS.moon, '切换主题', () => applyTheme(config.theme === 'dark' ? 'light' : 'dark'));
   themeBtn.id = 'themeBtn';
   const settingsBtn = railBtn(ICONS.gear, '设置', openNotificationSettings);
@@ -2189,7 +2224,7 @@ function buildColumn(col, isFresh) {
         const boundSeat = col.executor === 'chatgpt-web' ? {} : ClaudeSeatsCore.bindColumn(col, config);
         flushConfig();
 
-        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir);
+        window.deck.ptySpawn(col.id, col.cwd || env.home, term.cols, term.rows, col.role !== 'manual' || !!col.isMain, boundSeat.id, boundSeat.configDir, !!col.captainCrew && !col.isMain);
         if (col.executor === 'chatgpt-web') terms.get(col.id).webExecutorReady = true;
 
         if (launch && col.executor !== 'chatgpt-web') {
@@ -2207,6 +2242,7 @@ function buildColumn(col, isFresh) {
             if (env.platform === 'win32' && !MainCore.isWindowsShellPrompt(entry.lastScreen)) { setTimeout(start, 250); return; }
             if (prepared !== null) window.deck.ptyInput(spawnId, BoardCore.reportAgentExit(seatLaunchCommand(col, prepared), env.platform) + '\r');
             entry.launchedAt = Date.now();
+            entry.launchedSlept = window.SleepResume?.clock.sleptMs() || 0;
             entry.launchPending = false;
           };
           setTimeout(start, 700);
@@ -2729,6 +2765,7 @@ async function agentInForeground(col, allowShell) {
 function sendWhenReady(col, text, opts) {
   const o = opts || {};
   const started = Date.now();
+  const startedSlept = window.SleepResume?.clock.sleptMs() || 0;
   const id = col.id;
   let reminded = false;
   const check = async () => {
@@ -2743,7 +2780,7 @@ function sendWhenReady(col, text, opts) {
       return;
     }
     if (entry && entry.alive) {
-      const idle = !entry.sendingPrompt && entry.state !== 'input' && entry.state !== 'working' && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
+      const idle = !entry.sendingPrompt && entry.state !== 'input' && !MainCore.workingForSend(entry) && entry.state !== 'quota' && !MainCore.terminalActivity(entry.lastScreen, col.cmd);
       const quiet = Date.now() - (entry.lastOutputAt || 0);
       const isCursor = (window.BoardCore && window.BoardCore.inferAgentType(col.cmd) === 'Cursor') || /cursor-agent\b/i.test(col.cmd || '');
       // Cursor CLI initializes its TUI asynchronously and enables bracketed paste mode (?2004h)
@@ -2751,9 +2788,10 @@ function sendWhenReady(col, text, opts) {
       // and do not fall back to quiet inference for known Cursor CLI.
       const cursorReady = isCursor && terminalIdle(col, entry) && !!(entry.term && entry.term.modes && entry.term.modes.bracketedPasteMode);
       // unknown agents never show a recognizable idle footer: settle for quiet output (known Cursor waits for real readiness)
-      // A finished turn (state done) with a prompt row is ready even when the
-      // row still shows Claude's suggestion and cursor blink keeps lastOutputAt fresh.
-      const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || (entry.state === 'done' && MainCore.promptRowIdle(entry.lastScreen)) || (Date.now() - started > 15000 && quiet > 3000));
+      // A finished turn (state done, or only a background shell still running) with a
+      // prompt row is ready even when the row still shows Claude's suggestion and
+      // cursor blink keeps lastOutputAt fresh.
+      const ready = isCursor ? cursorReady : (!col.cmd || AGENT_IDLE_RE.test(entry.lastScreen || '') || ((entry.state === 'done' || entry.backgroundOnly) && MainCore.promptRowIdle(entry.lastScreen)) || (Date.now() - started > 15000 && quiet > 3000));
       // ConPTY can show a fresh TUI before its startup input has settled.
       // Typing immediately can lose the prompt's leading bytes before the CLI reads them.
       const settled = env.platform !== 'win32' || entry.hasWorked || quiet >= 500;
@@ -2763,8 +2801,13 @@ function sendWhenReady(col, text, opts) {
       // for a silent start has passed (see MainCore.startupLimit).
       const silent = MainCore.launchEchoOnly(entry.lastScreen);
       if (silent && o.onStartupFailed) {
-        const waited = Date.now() - (entry.launchedAt || started);
-        if (waited >= MainCore.startupLimit(col.cmd)) {
+        // Awake time only: a computer asleep through the first seconds of a start must not read as
+        // a hang. This loop wakes up first after a sleep, so let the clock see the gap before reading it.
+        const sleepClock = window.SleepResume?.clock;
+        sleepClock?.beat();
+        const sleptSince = entry.launchedAt ? (entry.launchedSlept ?? startedSlept) : startedSlept;
+        const waited = Date.now() - (entry.launchedAt || started) - Math.max(0, (sleepClock?.sleptMs() || 0) - sleptSince);
+        if (waited >=MainCore.startupLimit(col.cmd)) {
           o.onStartupFailed(MainCore.startupFailure({ screen: entry.lastScreen, cmd: col.cmd, waitedMs: waited }));
           return;
         }
@@ -3045,6 +3088,8 @@ function toggleHelp() {
   else helpDlg.showModal();
 }
 document.getElementById('helpClose').onclick = () => helpDlg.close();
+document.getElementById('helpX').innerHTML = ICONS.close;
+document.getElementById('helpX').onclick = () => helpDlg.close();
 
 // ---- Add / edit dialog ----
 const dlg = document.getElementById('colDialog');
@@ -3520,6 +3565,10 @@ window.deck.onMobileRequest(async ({ id, op, input }) => {
       result = AttentionUI.mobileView();
     } else if (op === 'attention-write') {
       result = await AttentionUI.mobileWrite(input);
+    } else if (op === 'battery') {
+      result = MainSession.batteryReadout();
+    } else if (op === 'battery-set') {
+      result = MainSession.setBattery(input);
     } else if (op === 'relay') {
       result = ClaudeSeats.mobileState();
     } else if (op === 'relay-switch') {
@@ -3545,6 +3594,13 @@ window.deck.onBoardCommand(async (message) => {
           : { done: true, childId: existingChild.taskId, result: existingChild.taskId });
       return;
     }
+  }
+  // 自动回执入口: main.js built this command itself from an authenticated automation token. It has no calling session.
+  if (message.automation && String(message.action || '').startsWith('automation-')) {
+    Promise.resolve().then(() => MainSession.automation(message)).then(
+      (response) => respondBoard(message.id, response),
+      (error) => respondBoard(message.id, { done: true, error: error.message }));
+    return;
   }
   const caller = columns.find((col) => col.id === message.callerId);
   if (['complete', 'ask', 'progress', 'session-exit'].includes(message.action) && caller) {
@@ -3688,6 +3744,7 @@ document.getElementById('searchClose').innerHTML = ICONS.close;
 document.getElementById('bcastSend').innerHTML = ICONS.send;
 document.getElementById('bcastClose').innerHTML = ICONS.close;
 document.getElementById('notificationSettingsClose').innerHTML = ICONS.close;
+document.getElementById('batteryBoostCancel').innerHTML = ICONS.close;
 const closeNotificationSettings = () => {
   if (!saveNotificationSettings()) showToast('上课时段有一行格式不对，这一项没改；其他设置已保存。');
   flushConfig();
@@ -3707,7 +3764,7 @@ document.getElementById('barkCalendarRefresh').addEventListener('click', async (
   catch (_) { document.getElementById('barkPolicyStatus').textContent = '刷新失败，请稍后重试。'; }
   finally { button.disabled = false; }
 });
-['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'needsUserBark', 'barkCriticalVolume', 'barkSleepEnabled', 'barkSleepStart', 'barkSleepEnd', 'barkClassesEnabled', 'barkClassCalendarIds', 'barkClassFilters', 'barkWeeklyClasses'].forEach((id) => {
+['captainNotifyEnabled', 'captainSoundEnabled', 'captainSoundTone', 'barkKeyFile', 'barkCriticalVolume', 'barkSleepEnabled', 'barkSleepStart', 'barkSleepEnd', 'barkClassesEnabled', 'barkClassCalendarIds', 'barkClassFilters', 'barkWeeklyClasses'].forEach((id) => {
   document.getElementById(id).addEventListener('change', saveNotificationSettings);
 });
 buildChrome();
@@ -3722,7 +3779,8 @@ function renderBatteryIndicator() {
   document.querySelectorAll('.battery-indicator').forEach((b) => {
     b.hidden = !snap.active;
     b.title = tip;
-    b.setAttribute('aria-label', '电池模式已启用，点击调整');
+    b.setAttribute('aria-label', snap.boost ? '电池模式已临时拉满，点击调整' : '电池模式已启用，点击调整');
+    b.classList.toggle('boosted', snap.boost === true);
   });
 }
 function openBatterySettings() {
@@ -3745,7 +3803,7 @@ const deckHost = {
   shellQuote, showToast, jumpToColumn, setNavCollapsed, ICONS, navItems, syncNav,
   onCapChanged: renderBatteryIndicator, // the tooltip names the live cap
   clipboardWrite: (text) => window.deck.clipboardWrite(text),
-  platform: env.platform, home: env.home,
+  platform: env.platform, home: env.home, version: env.version,
   focusedId: () => focusedId,
   setFocused: (id) => { focusedId = id; syncNav(); },
   layout: () => { updateColumnStyles(); fitAll(); syncChromeState(); },
@@ -3788,6 +3846,7 @@ window.deck.onParkForRestart(async (sessions) => {
 ClaudeSeats.init(deckHost);
 ChatUI.init(deckHost);
 Pages.init(deckHost);
+ReleaseNotesUI.init(deckHost);
 TodoUI.init(deckHost);
 render(!(Array.isArray(saved && saved.columns) && saved.columns.length));
 renderQuotaBar();
@@ -4182,7 +4241,8 @@ battery.every('statusTick', () => {
     const cursorScreen = /\bcursor-agent\b/i.test(cmd || '') ? liveText : text;
     entry.lastScreen = cursorScreen;
     if (entry.alive) {
-      let st = classify(liveText, entry, cmd, !!columns.find((c) => c.id === id)?.isMain);
+      const isMainCol = !!columns.find((c) => c.id === id)?.isMain;
+      let st = classify(liveText, entry, cmd, isMainCol);
       if (st === 'working' || st === 'input' || st === 'quota') {
         entry.hasWorked = true;
         entry.idleTicks = 0;
@@ -4221,6 +4281,7 @@ battery.every('statusTick', () => {
         }
       }
       entry.state = st;
+      entry.backgroundOnly = backgroundOnlyState(st, isMainCol, liveText, entry, cmd);
       setDot(entry, st);
       maybeNotifyState(id, entry, st);
       if (st === 'input' && columns.find((c) => c.id === id)?.isMain) attn++;

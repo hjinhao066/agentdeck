@@ -45,7 +45,13 @@
     paneRight: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M15 4v16"/>',
     paneLeft: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M9 4v16"/>',
     down: '<path d="M12 5v14m0 0-5.5-5.5M12 19l5.5-5.5"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
+    battery: '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 11v2"/><rect x="4.6" y="9.6" width="4.6" height="4.8" rx=".6" fill="currentColor" stroke="none"/>',
+    minus: '<path d="M5 12h14"/>',
     swap: '<path d="M4 8h14m0 0-3.5-3.5M18 8l-3.5 3.5M20 16H6m0 0 3.5-3.5M6 16l3.5 3.5"/>',
+    history: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3.5 2"/>',
+    left: '<path d="m15 5-7 7 7 7"/>',
+    right: '<path d="m9 5 7 7-7 7"/>',
   };
   // The desktop's provider marks, so the phone shows the same icons as the desktop quota rows.
   const providerIcons = {
@@ -61,6 +67,8 @@
   const TABS = ['overview', 'captain', 'todo', 'sessions', 'board'];
 
   let machines = [], filter = 'all', target = '', view = 'overview', output = null, outputRequest = 0;
+  // 版本更新: release-notes.json published with this page (undefined while it loads, null if it could not be read).
+  let notes, notesDay = 0;
   // Images picked for the next message; each was uploaded to the computer it will be sent to.
   let attachments = [];
   let sending = false, sendStatus = '', boardFilter = 'all', copyTimer, outboxId = 0;
@@ -130,7 +138,9 @@
     savedTheme = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
     applyTheme(savedTheme); store(KEYS.theme, savedTheme);
   });
-  for (const [id, icon] of [['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
+  for (const [id, icon] of [['settings-open', 'gear'], ['refresh', 'refresh'], ['logout-all', 'logout'], ['back', 'back'], ['copy', 'copy'], ['send', 'send'], ['clear', 'trash'], ['attach', 'plus'], ['todo-add', 'plus'], ['side-toggle', 'paneLeft'], ['pane-toggle', 'paneRight'], ['preview-back', 'back'], ['jump', 'down']]) $(id).innerHTML = svg(icon);
+  document.querySelector('.releases-entry-icon').innerHTML = svg('history');
+  document.querySelector('.releases-entry-chev').innerHTML = svg('chevron');
   // Scrolled up to read: new replies do not pull the page down; this button shows instead, with a dot when something new came in.
   const awayFromEnd = () => { const el = $('captain-turns'); return el.scrollHeight - el.scrollTop - el.clientHeight > 160; };
   function updateJump() { const away = awayFromEnd(); $('jump').hidden = !away; if (!away) { $('jump').classList.remove('fresh'); $('jump').title = '回到最新'; $('jump').setAttribute('aria-label', '回到最新'); } }
@@ -216,7 +226,7 @@
   function settle(m, result, verdict = Core.classify(result)) {
     m.state = verdict.state; m.detail = verdict.detail || '';
     if (verdict.retryAfter) m.banUntil = Date.now() + verdict.retryAfter * 1000;
-    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; }
+    if (m.state !== 'online') { m.snap = null; m.csrf = ''; m.quota = null; m.quotaFailed = false; m.quotaAt = 0; m.relay = null; m.relayAt = 0; m.battery = null; m.batteryOld = false; m.batteryWant = null; m.progress = null; m.progressState = ''; m.progressAt = 0; }
     // A machine that no longer accepts this phone must not keep showing its board.
     if (m.state === 'login' || m.state === 'upgrade') { m.cards = null; m.boardVersion = null; m.todos = null; m.todosReady = null; m.todosAt = 0; }
     return verdict;
@@ -256,8 +266,13 @@
         else if (quota.status === 404) { m.quota = null; m.quotaFailed = false; } else m.quotaFailed = true;
         m.quotaAt = Date.now();
       }
-      // 待我处理: every poll while its tab is open, otherwise every 30 seconds for the tab's count.
-      if (view === 'attention' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
+      // 设置: while the settings sheet is open, this computer's battery setting is read again on every turn (the desktop may have changed it).
+      if (settings.open) await loadBattery(m);
+      // 待我处理: every poll while its tab or the 队长 chat (whose replies read reports) is open,
+      // otherwise every 30 seconds for the tab's count.
+      if (view === 'attention' || view === 'captain' || !m.attentionAt || Date.now() - m.attentionAt > 30000) await loadAttention(m);
+      // 每日进展 changes once a night: read it when 版本更新 is open, at most once a minute (refresh reads it again).
+      if (view === 'releases' && (m.forceProgress || !m.progressAt || Date.now() - m.progressAt > 60000)) { m.forceProgress = false; await loadProgress(m); }
     }
     m.busy = false;
     m.nextAt = Date.now() + Core.pollInterval(m.state, filter === 'all' || filter === m.id);
@@ -265,7 +280,7 @@
     if (output && output.machineId === m.id && view === 'output') loadOutput(true);
     if (m.again) poll(m);
   }
-  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; poll(m); }); }
+  function refreshAll() { machines.forEach((m) => { m.forceQuota = true; m.forceProgress = true; poll(m); }); if (notes === null) loadNotes(); }
   function renderBusy() {
     const busy = machines.some((m) => m.busy);
     $('refresh').classList.toggle('refreshing', busy);
@@ -292,7 +307,7 @@
   function renderBar() {
     const bar = $('machine-bar');
     // One list for both computers on the 待办 tab, so there is nothing to pick there.
-    bar.hidden = view === 'output' || view === 'todo';
+    bar.hidden = view === 'output' || view === 'todo' || view === 'releases';
     $('app-header').dataset.view = view;
     const online = machines.filter((m) => m.state === 'online').length;
     const picking = view === 'captain';
@@ -707,6 +722,168 @@
     else if (focused) dialog.querySelector(`[data-seat-id="${focused}"], [data-action="${focused}"]`)?.focus({ preventScroll: true });
   }
 
+  // ---- settings ------------------------------------------------------------
+  // 电池模式 is the first setting: each computer has its own, so the sheet lists every computer.
+  // A tap is applied at once (the computer saves it and its queue follows); the page never keeps a copy.
+  const settings = node('dialog', 'sheet');
+  settings.id = 'settings-sheet'; settings.setAttribute('aria-labelledby', 'settings-title');
+  document.querySelector('.app').append(settings);
+
+  async function loadBattery(m) {
+    const result = await request(m, 'api/battery');
+    // 404: an older build without the setting; the sheet says so instead of showing controls that cannot work.
+    if (result.status === 200 && result.body && Core.cleanBattery(result.body)) {
+      m.batteryOld = false; m.batteryFailed = false;
+      if (!m.batteryWant && !m.batterySaving) m.battery = Core.cleanBattery(result.body);
+    } else if (result.status === 404) { m.battery = null; m.batteryOld = true; m.batteryFailed = false; } else m.batteryFailed = true;
+    m.batteryAt = Date.now();
+    renderSettings();
+  }
+  function wantBattery(m, change) {
+    m.batteryWant = { ...(m.batteryWant || {}), ...change };
+    if (m.batteryWant.boost !== true) delete m.batteryWant.boostMinutes;
+    m.batteryNote = ''; m.batteryError = '';
+    clearTimeout(m.batteryTimer);
+    // The cap stepper waits a moment so three quick taps are one request.
+    m.batteryTimer = setTimeout(() => saveBattery(m), change.cap !== undefined ? 350 : 0);
+    renderSettings();
+  }
+  async function saveBattery(m) {
+    if (m.batterySaving) { m.batteryAgain = true; return; }
+    const sending = m.batteryWant;
+    if (!sending) return;
+    m.batterySaving = true; m.batteryAgain = false;
+    renderSettings();
+    const result = await post(m, 'api/battery', sending);
+    m.batterySaving = false;
+    if (result.status === 200 && result.body && Core.cleanBattery(result.body)) {
+      m.battery = Core.cleanBattery(result.body); m.batteryOld = false;
+      if (m.batteryWant === sending) m.batteryWant = null;
+      m.batteryNote = m.batteryWant ? '' : '已生效，已写入这台电脑的设置。';
+    } else {
+      m.batteryWant = null; m.batteryNote = '';
+      m.batteryError = Core.batteryRefusal(result, m.label);
+      if (result.status === 404) { m.battery = null; m.batteryOld = true; }
+    }
+    renderSettings();
+    if (m.batteryError && !m.batteryOld) loadBattery(m);
+    if (m.batteryAgain && m.batteryWant) saveBattery(m);
+  }
+  // 临时拉满: the main way to get full strength on battery. It lifts the battery limit for a while and ends by itself
+  // (at the chosen time, when plugged in) or with the × here; the battery mode below stays as it was.
+  const BOOST_CHOICES = [['open', '直到取消'], ['2h', '2 小时'], ['today', '今天 23:59']];
+  function boostBox(m, view) {
+    const box = node('div', 'boost-box'); box.dataset.boosting = String(view.boost);
+    const head = node('div', 'boost-head'), name = node('strong', '', '临时拉满');
+    head.append(name); box.append(head);
+    const text = (className, value) => { const el = node('p', className, value); box.append(el); return el; };
+    if (view.boost) {
+      const status = node('div', 'boost-status');
+      const cancel = iconButton('close', `取消 ${m.label} 的临时拉满`, 'boost-cancel'); cancel.dataset.action = 'boost-cancel';
+      cancel.addEventListener('click', () => wantBattery(m, { boost: false }));
+      status.append(node('span', 'boost-on', `已临时拉满（${Core.boostEndText(view.boostUntil)}）`), cancel);
+      box.append(status);
+      text('set-note', `电池下也同时开到 ${view.baseCap} 个会话。接上电源、到时间或点 × 后恢复省电上限 ${view.cap}。`);
+    } else if (view.active) {
+      text('set-lead', `电池供电时也按正常上限 ${view.baseCap} 开会话，不再被省电上限 ${view.cap} 卡住。接上电源或到时间自动恢复；省电模式本身不变。`);
+      const choice = m.boostChoice || 'open';
+      const group = node('div', 'segmented three'); group.setAttribute('role', 'radiogroup'); group.setAttribute('aria-label', `${m.label} 拉满多久`);
+      for (const [value, label] of BOOST_CHOICES) {
+        const option = node('button', 'segment', label); option.type = 'button'; option.setAttribute('role', 'radio'); option.dataset.choice = value;
+        option.setAttribute('aria-checked', String(choice === value));
+        option.addEventListener('click', () => { m.boostChoice = value; signatures.delete(settings); renderSettings(); });
+        group.append(option);
+      }
+      box.append(group);
+      const go = node('button', 'primary', '临时拉满'); go.type = 'button'; go.dataset.action = 'boost-on';
+      go.addEventListener('click', () => {
+        const minutes = choice === '2h' ? 120 : choice === 'today' ? Core.minutesToEndOfDay(Date.now()) : 0;
+        wantBattery(m, { boost: true, ...(minutes ? { boostMinutes: minutes } : {}) });
+      });
+      box.append(go);
+    } else {
+      text('set-note', view.mode === 'off' ? '电池模式已关，本来就不限制，不需要拉满。' : '现在接着电源，本来就不限制，不需要拉满。');
+    }
+    return box;
+  }
+  function batteryBlock(m) {
+    const block = node('section', 'set-block'); block.dataset.machine = m.id;
+    const title = node('h3', 'set-title'); title.innerHTML = svg('battery'); title.append('电池模式');
+    block.append(title);
+    const line = (className, value) => { const el = node('p', className, value); block.append(el); return el; };
+    if (m.state !== 'online') { line('set-note', `${m.label} ${Core.STATES[m.state].label}。连上以后才能看和改。`); return block; }
+    if (m.batteryOld) { line('set-note warn', `${m.label} 的 AgentDeck 还是旧版，更新到新版后才能在这里调整电池模式。先在那台电脑的设置里改，或等它升级。`); return block; }
+    if (!m.battery) { line('set-note', m.batteryFailed ? `暂时读不到 ${m.label} 的电池设置，稍后会自动重试。` : `正在读取 ${m.label} 的电池设置…`); return block; }
+    const view = Core.batteryWith(m.battery, m.batteryWant), off = view.mode === 'off';
+    if (view.boostSupported) block.append(boostBox(m, view));
+    line('set-lead', '自动：没插电时限制同时干活的会话数。关：不限制，想让队员全速跑就关掉。');
+    const group = node('div', 'segmented'); group.setAttribute('role', 'radiogroup'); group.setAttribute('aria-label', `${m.label} 电池模式`);
+    for (const [value, name] of [['auto', '自动'], ['off', '关']]) {
+      const option = node('button', 'segment', name); option.type = 'button'; option.setAttribute('role', 'radio');
+      option.setAttribute('aria-checked', String(view.mode === value)); option.dataset.mode = value;
+      option.addEventListener('click', () => { if (view.mode !== value) wantBattery(m, { mode: value }); });
+      group.append(option);
+    }
+    block.append(group);
+    const row = node('div', 'set-row' + (off ? ' dimmed' : ''));
+    const label = node('div', 'set-row-label'), name = node('span', 'set-row-name', '电池并发上限'); name.id = `battery-cap-label-${m.id}`;
+    label.append(name, node('span', 'set-row-hint', off ? '电池模式已关，这个数现在不生效' : `没插电时最多同时开几个会话（${view.capMin}–${view.capMax}）`));
+    const stepper = node('div', 'stepper'); stepper.setAttribute('role', 'group'); stepper.setAttribute('aria-labelledby', name.id);
+    const less = iconButton('minus', '减少电池并发上限', 'step'), more = iconButton('plus', '增加电池并发上限', 'step');
+    less.dataset.step = 'down'; more.dataset.step = 'up';
+    less.disabled = off || view.cap <= view.capMin; more.disabled = off || view.cap >= view.capMax;
+    less.addEventListener('click', () => wantBattery(m, { cap: Math.max(view.capMin, view.cap - 1) }));
+    more.addEventListener('click', () => wantBattery(m, { cap: Math.min(view.capMax, view.cap + 1) }));
+    const value = node('output', 'step-value', String(view.cap)); value.setAttribute('aria-live', 'polite'); value.dataset.cap = String(view.cap);
+    stepper.append(less, value, more); row.append(label, stepper); block.append(row);
+    line('set-state', Core.batteryState(view));
+    const feedback = m.batterySaving || m.batteryWant ? '正在保存…' : m.batteryNote || '';
+    if (feedback || m.batteryError) {
+      const el = node('p', 'set-feedback' + (m.batteryError ? ' bad' : ''));
+      el.setAttribute('role', m.batteryError ? 'alert' : 'status');
+      if (!m.batteryError && !m.batterySaving && !m.batteryWant) el.innerHTML = svg('check');
+      el.append(m.batteryError || feedback); block.append(el);
+    }
+    return block;
+  }
+  function renderSettings() {
+    if (!settings.open) return;
+    const now = machines.map((m) => [m.id, m.label, m.state, m.battery, m.batteryOld, m.batteryFailed, m.batteryWant, m.batterySaving, m.batteryNote, m.batteryError, m.boostChoice]);
+    if (!changed(settings, now)) return;
+    const active = settings.contains(document.activeElement) ? document.activeElement : null;
+    const focusKind = active ? ['mode', 'choice', 'step', 'action'].find((k) => active.dataset[k]) : '';
+    const focused = focusKind ? { kind: focusKind, value: active.dataset[focusKind], machine: active.closest('[data-machine]')?.dataset.machine || '' } : null;
+    const body = node('div', 'sheet-body'), head = node('div', 'sheet-head'), title = node('h2', '', '设置');
+    title.id = 'settings-title'; title.tabIndex = -1;
+    const close = iconButton('close', '关闭'); close.dataset.action = 'close';
+    close.addEventListener('click', () => settings.close());
+    head.append(title, close); body.append(head);
+    for (const m of machines) {
+      const card = node('div', 'set-card'); card.dataset.machine = m.id;
+      const top = node('div', 'set-card-head'); top.append(glyph(m), node('strong', '', m.label), pill(m.state));
+      card.append(top, batteryBlock(m)); body.append(card);
+    }
+    settings.replaceChildren(body);
+    if (focused) {
+      const scope = focused.machine ? settings.querySelector(`.set-card[data-machine="${focused.machine}"]`) || settings : settings;
+      let target = scope.querySelector(`[data-${focused.kind}="${focused.value}"]:not(:disabled)`);
+      // A stepper button that just reached its end hands the finger to the other one.
+      if (!target && focused.kind === 'step') target = scope.querySelector('[data-step]:not(:disabled)');
+      (target || settings.querySelector('[data-action="close"]'))?.focus({ preventScroll: true });
+    }
+  }
+  function openSettings() {
+    signatures.delete(settings);
+    if (!settings.open) settings.showModal();
+    renderSettings();
+    // Always show what each computer says now, not what was on screen last.
+    machines.forEach((m) => { if (m.state === 'online') loadBattery(m); });
+    settings.querySelector('#settings-title')?.focus({ preventScroll: true });
+  }
+  $('settings-open').addEventListener('click', openSettings);
+  settings.addEventListener('close', () => { render(); $('settings-open').focus({ preventScroll: true }); });
+  settings.addEventListener('click', (event) => { if (event.target === settings) settings.close(); });
+
   // ---- captain -------------------------------------------------------------
   // One round: what the user said on the right, then one bubble on the left with
   // the Captain's words. Dispatching, receipts and tool steps are not shown.
@@ -740,6 +917,7 @@
     const row = node('article', 'turn');
     row.dataset.machine = m.id;
     if (group.id) row.dataset.turnId = group.id;
+    if (group.said && group.said.length) row.dataset.said = group.said.join(' ');
     if (group.user || group.images.length) {
       const prompt = mineBubble(group.user, '');
       if (group.images.length) prompt.append(node('span', 'bubble-state', `附 ${group.images.length} 张图片（在这台电脑上查看）`));
@@ -1106,42 +1284,71 @@
   async function sendAttentionReply(item) {
     const text = (attentionDrafts.get(item.key) || '').trim();
     if (!text || attentionBusy.has(item.key)) return;
-    if (await attentionWrite(item, { op: 'reply', text }, `已交给 ${item.machineLabel} 的队长，这一条打勾归到已完成。`)) attentionDrafts.delete(item.key);
+    if (await attentionWrite(item, { op: 'reply', text }, `已交给 ${item.machineLabel} 的队长，这一条打勾归到已完成。`)) { attentionDrafts.delete(item.key); attentionKept.delete(item.key); }
     renderAttention();
   }
   // An unread item counts as read once most of it has stayed on screen for a
   // moment. Measured on a timer rather than observed: it holds when the browser
   // throttles painting.
   const attentionSeenSince = new Map();
+  // Reports read on this visit stay where the user is reading them until the tab is left.
+  const attentionKept = new Set();
+  const SEEN_MS = 1500;
+  // Mostly in view through its scroll area and the window, on both axes (the same rule as the desktop).
+  const onScreen = (el, box) => Core.mostlyShown(el.getBoundingClientRect(), [box, { left: 0, top: 0, right: innerWidth, bottom: innerHeight, width: innerWidth, height: innerHeight }]);
   function checkAttentionSeen() {
-    if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); return; }
+    checkCaptainSeen();
+    if (document.hidden || view !== 'attention') { attentionSeenSince.clear(); attentionKept.clear(); return; }
     const box = $('main').getBoundingClientRect(), now = Date.now(), ready = [];
     for (const el of document.querySelectorAll('#attention-lists .at-item.unread')) {
-      const r = el.getBoundingClientRect(), shown = Math.min(r.bottom, box.bottom) - Math.max(r.top, box.top);
       const key = el.dataset.key;
-      if (shown < Math.min(r.height * 0.6, box.height * 0.5)) { attentionSeenSince.delete(key); continue; }
+      if (!onScreen(el, box)) { attentionSeenSince.delete(key); continue; }
       if (!attentionSeenSince.has(key)) attentionSeenSince.set(key, now);
-      else if (now - attentionSeenSince.get(key) >= 1500) ready.push(key);
+      else if (now - attentionSeenSince.get(key) >= SEEN_MS) ready.push(key);
     }
     if (ready.length) markAttentionRead(ready);
   }
+  // A report 队长 also said in its chat is read once that reply has stayed on
+  // screen here for the same moment, as on the desktop.
+  const captainSeenSince = new Map();
+  function checkCaptainSeen() {
+    const m = byId(target);
+    const unseen = m && m.state === 'online' && Array.isArray(m.attention) ? m.attention.filter((i) => i.kind === 'report' && !i.done && i.turn) : [];
+    if (document.hidden || view !== 'captain' || !unseen.length) { captainSeenSince.clear(); return; }
+    const box = $('captain-turns').getBoundingClientRect(), now = Date.now(), ready = [];
+    for (const row of $('captain-turns').querySelectorAll(`.turn[data-said][data-machine="${CSS.escape(m.id)}"]`)) {
+      const said = row.dataset.said.split(' '), ids = unseen.filter((i) => said.includes(i.turn)).map((i) => m.id + ':' + i.id);
+      const reply = row.querySelector('.reply'), key = row.dataset.turnId;
+      if (!ids.length || !reply || !onScreen(reply, box)) { captainSeenSince.delete(key); continue; }
+      if (!captainSeenSince.has(key)) captainSeenSince.set(key, now);
+      else if (now - captainSeenSince.get(key) >= SEEN_MS) { captainSeenSince.delete(key); ready.push(...ids); }
+    }
+    if (ready.length) markAttentionRead(ready, 'chat');
+  }
   setInterval(checkAttentionSeen, 500);
-  async function markAttentionRead(keys) {
+  async function markAttentionRead(keys, via) {
     for (const m of machines) {
       if (m.state !== 'online' || !Array.isArray(m.attention)) continue;
-      const items = m.attention.filter((i) => keys.includes(m.id + ':' + i.id) && !i.readAt);
+      const items = m.attention.filter((i) => keys.includes(m.id + ':' + i.id) && !i.readAt && !i.done);
       if (!items.length) continue;
-      // Read here at once; the computer's next answer says the same, or brings the dot back if it did not take it.
-      items.forEach((i) => { i.readAt = Date.now(); attentionSeenSince.delete(m.id + ':' + i.id); });
+      // Read here at once (a report goes to 已读); the computer's next answer says the
+      // same, or brings it back if it did not take it.
+      const now = Date.now();
+      items.forEach((i) => {
+        i.readAt = now; attentionSeenSince.delete(m.id + ':' + i.id);
+        if (i.kind !== 'report') return;
+        Object.assign(i, { done: true, doneAt: now, doneBy: via === 'chat' ? 'chat' : 'seen', doneText: via === 'chat' ? '你在队长对话里看过了' : '你看过了' });
+        if (via !== 'chat') attentionKept.add(m.id + ':' + i.id);
+      });
       renderAttention();
-      await post(m, 'api/attention', { op: 'read', ids: items.map((i) => i.id) });
+      await post(m, 'api/attention', { op: 'read', ids: items.map((i) => i.id), ...(via === 'chat' ? { via } : {}) });
     }
   }
   const attentionTyping = () => !!document.activeElement && $('attention-lists').contains(document.activeElement) && document.activeElement.classList.contains('at-reply');
   function attentionCopy(item) {
     const label = '复制这一条';
     const button = iconButton('copy', label, 'at-copy');
-    const text = [item.title, item.ask && '要你做：' + item.ask, item.detail, item.files.join('\n')].filter(Boolean).join('\n\n');
+    const text = [item.title, item.ask && '要你做：' + item.ask, item.options.length && '可选回答：' + item.options.join(' / '), item.detail, item.files.join('\n')].filter(Boolean).join('\n\n');
     button.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(text); } catch (_) { setAttentionHint('无法复制。可以长按文字手动选择。', true); return; }
       button.innerHTML = svg('check'); button.classList.add('copied'); button.title = '已复制'; button.setAttribute('aria-label', '已复制');
@@ -1150,20 +1357,46 @@
     return button;
   }
   function attentionCard(item, multi, now) {
-    const card = node('article', `at-item at-${item.kind}` + (item.done ? ' done' : item.readAt ? '' : ' unread'));
+    // A report read on this visit stays as it was, reply included, until the tab is left.
+    const stay = item.done && attentionKept.has(item.key), shut = item.done && !stay;
+    const card = node('article', `at-item at-${item.kind}` + (shut ? ' done' : stay ? ' seen' : item.readAt ? '' : ' unread'));
     card.dataset.key = item.key; card.dataset.machine = item.machineId;
     const top = node('div', 'at-top');
     if (!item.done && !item.readAt) { const dot = node('span', 'at-unread'); dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', '未读'); top.append(dot); }
-    if (item.done) { const ok = node('span', 'at-ok'); ok.innerHTML = svg('done'); ok.setAttribute('aria-hidden', 'true'); top.append(ok); }
-    if (!(item.done && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
-    const when = item.done ? item.doneAt : item.created;
-    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
-    if (when) meta.title = (item.done ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
+    if (shut) { const ok = node('span', 'at-ok'); ok.innerHTML = svg('done'); ok.setAttribute('aria-hidden', 'true'); top.append(ok); }
+    if (!(shut && item.label === '要你处理')) top.append(node('span', 'at-kind', item.label));
+    if (stay) top.append(node('span', 'at-seen', '已读'));
+    const when = shut ? item.doneAt : item.created;
+    const meta = node('span', 'at-meta', [multi && item.machineLabel, item.automation && '自动任务：' + item.automation, item.project, Core.ago(when, now)].filter(Boolean).join(' · '));
+    if (when) meta.title = (shut ? '完成于 ' : '登记于 ') + new Date(when).toLocaleString();
     top.append(meta);
-    card.append(top, node('h3', 'at-title', item.title));
-    if (item.ask && !item.done) { const ask = node('div', 'at-ask'); ask.append(node('b', '', '要你做'), markdownNode(item.ask, { reply: true, className: 'at-ask-text' })); card.append(ask); }
+    // An open need with a question: the question is the biggest thing on the card,
+    // its answers right under it; the title above says what it is about, and the
+    // chip already says what kind of answer it wants.
+    const asking = !!(item.ask && !item.done), busy = attentionBusy.has(item.key);
+    card.append(top, node('h3', 'at-title' + (asking ? ' at-about' : ''), item.title));
+    if (asking) {
+      const ask = node('div', 'at-ask');
+      ask.setAttribute('role', 'group'); ask.setAttribute('aria-label', item.label + '：' + item.ask);
+      ask.append(markdownNode(item.ask, { reply: true, className: 'at-ask-text' }));
+      if (item.options.length) {
+        const quick = node('div', 'at-quick');
+        for (const option of item.options) {
+          const b = node('button', 'at-option', option); b.type = 'button'; b.disabled = busy;
+          b.title = `回复「${option}」，交给 ${item.machineLabel} 的队长`;
+          b.addEventListener('click', async () => {
+            if (attentionBusy.has(item.key)) return;
+            if (await attentionWrite(item, { op: 'reply', text: option }, `已回复「${option}」，交给 ${item.machineLabel} 的队长。`)) attentionDrafts.delete(item.key);
+            renderAttention();
+          });
+          quick.append(b);
+        }
+        ask.append(quick);
+      }
+      card.append(ask);
+    }
     const last = item.replies[item.replies.length - 1];
-    if (item.done) card.append(node('p', 'at-done-text', item.doneText + (last ? '：' + last.text.replace(/\s+/g, ' ') : '')));
+    if (shut) card.append(node('p', 'at-done-text', item.doneText + (last ? '：' + last.text.replace(/\s+/g, ' ') : '')));
     const more = item.detail || item.files.length || item.cardTitle || item.sessionTitle || item.replies.length;
     if (more) {
       const open = attentionOpen.has(item.key), id = 'at-detail-' + item.key.replace(/[^\w-]/g, '_');
@@ -1187,9 +1420,8 @@
         card.append(box);
       }
     }
-    const busy = attentionBusy.has(item.key);
     if (attentionErrors.has(item.key)) { const error = node('p', 'at-error', attentionErrors.get(item.key)); error.setAttribute('role', 'alert'); card.append(error); }
-    if (!item.done && attentionDrafts.has(item.key)) {
+    if (!shut && attentionDrafts.has(item.key)) {
       const form = node('form', 'at-compose');
       const label = node('label', 'sr-only', '回复「' + item.title + '」'); label.htmlFor = 'reply-' + item.key.replace(/[^\w-]/g, '_');
       const box = node('textarea', 'at-reply'); box.id = label.htmlFor; box.rows = 3; box.maxLength = 4000;
@@ -1207,16 +1439,19 @@
       card.append(form);
     } else {
       const actions = node('div', 'at-actions');
-      if (!item.done) {
-        const answer = node('button', 'text-button', '回复'); answer.type = 'button'; answer.dataset.answer = item.key; answer.disabled = busy;
+      if (!shut) {
+        // With answers to pick from, writing one's own is the fallback.
+        const answer = node('button', 'text-button' + (item.options.length ? ' quiet' : ''), item.options.length ? '写别的回复' : '回复'); answer.type = 'button'; answer.dataset.answer = item.key; answer.disabled = busy;
         answer.addEventListener('click', () => { attentionDrafts.set(item.key, ''); renderAttention(); $('attention-lists').querySelector(`[data-key="${CSS.escape(item.key)}"] .at-reply`)?.focus(); });
         const done = node('button', 'text-button quiet', item.kind === 'need' ? '已处理' : '知道了'); done.type = 'button'; done.disabled = busy;
         done.title = item.kind === 'need' ? (item.source === 'card' ? '从这里勾掉；任务看板上的卡片不变' : '勾掉并告诉队长你已经处理了') : '看过了，没有问题';
         done.addEventListener('click', () => attentionWrite(item, { op: 'done' }, item.kind === 'need' ? '已勾掉，归到已完成。' : '已归到已完成。'));
-        actions.append(answer, done);
+        actions.append(answer);
+        if (!stay) actions.append(done);
       } else {
-        const back = iconButton('restore', '放回待处理', 'at-restore'); back.disabled = busy;
-        back.addEventListener('click', () => attentionWrite(item, { op: 'reopen' }, '已放回待处理。'));
+        const backLabel = item.kind === 'report' ? '放回没看' : '放回待处理';
+        const back = iconButton('restore', backLabel, 'at-restore'); back.disabled = busy;
+        back.addEventListener('click', () => { attentionKept.delete(item.key); attentionWrite(item, { op: 'reopen' }, `已${backLabel}。`); });
         actions.append(back);
       }
       actions.append(node('span', 'at-spacer'), attentionCopy(item));
@@ -1227,16 +1462,18 @@
   function renderAttention() {
     const lists = $('attention-lists'), sources = attentionSources(), now = Date.now();
     const { needs, reports, done, counts } = Core.mergeAttention(sources);
+    // The number counts 要你处理 only; reports not yet seen are a dot of their own.
     for (const badge of document.querySelectorAll('.nav-attention')) {
-      badge.textContent = counts.badge > 99 ? '99+' : String(counts.badge); badge.hidden = !counts.badge;
+      badge.textContent = counts.need > 99 ? '99+' : String(counts.need); badge.hidden = !counts.need;
       badge.classList.toggle('need', counts.need > 0);
     }
-    $('attention-tab').setAttribute('aria-label', counts.badge ? '待我处理，' + [counts.need && `${counts.need} 件要你处理`, counts.unreadReports && `${counts.unreadReports} 条新汇报`].filter(Boolean).join('，') : '待我处理');
+    for (const dot of document.querySelectorAll('.nav-attention-dot')) dot.hidden = !counts.unreadReports;
+    $('attention-tab').setAttribute('aria-label', counts.need || counts.unreadReports ? '待我处理，' + [counts.need ? `${counts.need} 件要你处理` : '没有要你处理的事', counts.unreadReports && `${counts.unreadReports} 条汇报你还没看`].filter(Boolean).join('，') : '待我处理');
     const missing = machines.filter((m) => !(m.state === 'online' && Array.isArray(m.attention)));
     const why = (m) => m.attention === 'missing' && m.state === 'online' ? `${m.label} 的 AgentDeck 还没有这个页面` : `${m.label} ${Core.STATES[m.state].label}`;
     $('attention-sources').textContent = !sources.length ? (machines.some((m) => m.state === 'online') ? '正在读取…' : '还没有连上任何一台电脑。')
       : missing.length ? `现在只看得到 ${sources.map((m) => m.label).join('、')} 交回来的事；${missing.map(why).join('，')}。` : `${sources.map((m) => m.label).join(' 和 ')} 交回来的事都在这里，回复只发给那条所在的电脑。`;
-    if (!changed(lists, [view === 'attention', needs, reports, done, attentionDoneOpen, [...attentionDrafts.keys()], [...attentionOpen], [...attentionBusy], [...attentionErrors], attentionHint, attentionHintError, sources.length, Math.floor(now / 60000)])) return;
+    if (!changed(lists, [view === 'attention', needs, reports, done, [...attentionKept], attentionDoneOpen, [...attentionDrafts.keys()], [...attentionOpen], [...attentionBusy], [...attentionErrors], attentionHint, attentionHintError, sources.length, Math.floor(now / 60000)])) return;
     // Rebuilding under someone typing would drop their caret and their input method's state.
     if (attentionTyping()) { attentionWaiting = true; signatures.delete(lists); return; }
     attentionWaiting = false;
@@ -1246,39 +1483,47 @@
     hint.setAttribute('role', 'status'); hint.setAttribute('aria-live', 'polite'); hint.hidden = !attentionHint;
     lists.append(hint);
     const multi = sources.length > 1;
-    if (!needs.length && !reports.length && sources.length) {
+    // Reports read on this visit stay in their column; the rest of 已读 is folded below.
+    const stay = done.filter((i) => attentionKept.has(i.key));
+    const shownReports = [...reports, ...stay].sort((a, b) => b.created - a.created || (a.key < b.key ? -1 : 1));
+    const history = done.filter((i) => !attentionKept.has(i.key));
+    if (!needs.length && !shownReports.length && sources.length) {
       const box = node('div', 'at-empty'), art = node('div', 'at-empty-art'); art.innerHTML = svg('attention');
-      box.append(art, node('strong', '', '都处理完了'), node('p', '', '队长交给你拍板、登录、付款或回答的事，以及它向你汇报的结论，都会出现在这里。'));
+      box.append(art, node('strong', '', '都处理完了'), node('p', '', '队长交给你拍板、登录、付款或回答的事，以及你不在时它汇报的结论，都会出现在这里。'));
       lists.append(box);
+    } else if (sources.length) {
+      const cols = node('div', 'at-cols');
+      const column = (cls, title, count, empty, items, extra) => {
+        const col = node('section', 'at-col ' + cls), head = node('div', 'at-section ' + cls), titles = node('div', 'at-section-titles'), h = node('h2', '');
+        h.id = 'at-h-' + cls; col.setAttribute('aria-labelledby', h.id);
+        h.append(node('span', '', title));
+        if (count) h.append(node('span', 'at-count', String(count)));
+        titles.append(h);
+        head.append(titles);
+        if (extra) head.append(extra);
+        col.append(head);
+        if (!items.length) col.append(node('p', 'at-col-empty', empty));
+        items.forEach((item) => col.append(attentionCard(item, multi, now)));
+        cols.append(col);
+      };
+      column('at-sec-need', '要你处理', needs.length, '没有要你处理的事。', needs);
+      let all = null;
+      if (reports.length) {
+        all = node('button', 'text-button quiet at-all', '全部看过了'); all.type = 'button';
+        all.title = '把这一栏的汇报都标成看过，归到已读（可以放回）';
+        all.addEventListener('click', async () => { for (const item of reports) if (!(await attentionWrite(item, { op: 'done' }))) return; setAttentionHint(`${reports.length} 条汇报归到已读。`); });
+      }
+      column('at-sec-report', '做完了你还没看', reports.length, '汇报你都看过了。', shownReports, all);
+      lists.append(cols);
     }
-    const section = (cls, title, count, note, extra) => {
-      const head = node('div', 'at-section ' + cls), titles = node('div', 'at-section-titles'), h = node('h2', '');
-      h.append(node('span', '', title), node('span', 'at-count', String(count)));
-      titles.append(h);
-      if (note) titles.append(node('p', '', note));
-      head.append(titles);
-      if (extra) head.append(extra);
-      lists.append(head);
-    };
-    if (needs.length) {
-      section('at-sec-need', '要你处理', needs.length, '只有你能做的事。处理完点「已处理」，或者直接回复。');
-      needs.forEach((item) => lists.append(attentionCard(item, multi, now)));
-    }
-    if (reports.length) {
-      const all = node('button', 'text-button quiet at-all', '全部知道了'); all.type = 'button';
-      all.title = '把结果汇报都标成看过，归到已完成（可以放回）';
-      all.addEventListener('click', async () => { for (const item of reports) if (!(await attentionWrite(item, { op: 'done' }))) return; setAttentionHint(`${reports.length} 条汇报归到已完成。`); });
-      section('at-sec-report', '结果汇报', reports.length, '你不在时跑出来的结论。有问题就回复，没问题点「知道了」。', all);
-      reports.forEach((item) => lists.append(attentionCard(item, multi, now)));
-    }
-    if (done.length) {
+    if (history.length) {
       const toggle = node('button', 'at-done-toggle'); toggle.type = 'button'; toggle.dataset.more = 'done-toggle';
       toggle.setAttribute('aria-expanded', String(attentionDoneOpen));
       const chev = node('span', 'at-chev' + (attentionDoneOpen ? ' open' : '')); chev.innerHTML = svg('chevron');
-      toggle.append(chev, node('span', '', '已完成'), node('span', 'at-count', String(done.length)));
+      toggle.append(chev, node('span', '', '已完成和已读'), node('span', 'at-count', String(history.length)));
       toggle.addEventListener('click', () => { attentionDoneOpen = !attentionDoneOpen; renderAttention(); });
       lists.append(toggle);
-      if (attentionDoneOpen) done.slice(0, 60).forEach((item) => lists.append(attentionCard(item, multi, now)));
+      if (attentionDoneOpen) history.slice(0, 60).forEach((item) => lists.append(attentionCard(item, multi, now)));
     }
     if (focused) lists.querySelector(`[data-answer="${CSS.escape(focused)}"], [data-more="${CSS.escape(focused)}"]`)?.focus({ preventScroll: true });
   }
@@ -1985,8 +2230,68 @@
       }
       if (focused) document.getElementById(focused)?.previousElementSibling?.focus({ preventScroll: true });
     }
-    $('side-version').textContent = m && m.meta.appVersion ? 'V' + m.meta.appVersion : '';
-    $('side-version').title = machines.filter((x) => x.meta.appVersion).map((x) => `${x.label} 上的 AgentDeck ${x.meta.appVersion}`).join('，');
+    // The version opens 版本更新, as on the desktop.
+    const versions = machines.filter((x) => x.meta.appVersion).map((x) => `${x.label} 上的 AgentDeck ${x.meta.appVersion}`).join('，');
+    $('side-version').textContent = m && m.meta.appVersion ? 'V' + m.meta.appVersion : '版本更新';
+    $('side-version').title = '版本更新：每版改了什么、接下来做什么' + (versions ? `（${versions}）` : '');
+    $('side-version').setAttribute('aria-label', '版本更新' + (versions ? `，${versions}` : ''));
+    if (view === 'releases') $('side-version').setAttribute('aria-current', 'page'); else $('side-version').removeAttribute('aria-current');
+  }
+
+
+  // ---- 版本更新 --------------------------------------------------------------
+  // 每日进展 and every version, built by ReleasesView as on the desktop. The
+  // release notes are published with this page, not asked of a computer. 每日进展
+  // is the Mac's nightly statistics (api/progress): a computer on an older build
+  // answers 404 and the card says to upgrade; nothing else on the page changes.
+  async function loadNotes() {
+    try {
+      const response = await fetch('release-notes.json', { cache: 'no-store', redirect: 'error' });
+      notes = response.ok ? Core.releaseNotes(await response.json()) : null;
+    } catch (_) { notes = null; }
+    render();
+  }
+  async function loadProgress(m) {
+    const result = await request(m, 'api/progress');
+    m.progressAt = Date.now();
+    if (result.status === 200 && result.body) { m.progress = Core.progressDays(result.body.days); m.progressState = 'ready'; }
+    else { m.progress = null; m.progressState = result.status === 404 ? 'old' : 'error'; }
+  }
+  // The computer whose statistics are shown: the default one (Mac) first, any other that has days.
+  function progressView() {
+    const order = [...machines].sort((a, b) => Number(b.default) - Number(a.default));
+    const ready = order.find((m) => m.state === 'online' && m.progress && m.progress.length);
+    if (ready) return { state: 'ready', days: ready.progress, source: ready.label };
+    const first = order[0];
+    if (!first || first.state === 'unknown' || (first.state === 'online' && !first.progressState)) return { state: 'loading', days: [] };
+    if (first.state === 'upgrade' || first.progressState === 'old') return { state: 'old', days: [] };
+    if (first.state !== 'online') return { state: 'offline', days: [] };
+    return { state: first.progressState === 'error' ? 'error' : 'none', days: [] };
+  }
+  function renderReleases(focus) {
+    const latest = notes && notes.released[0], pending = Core.pendingCount(notes);
+    const target = byId(filter) || machines.find((m) => m.default) || machines[0];
+    const version = target && target.meta.appVersion;
+    const meta = $('releases-entry-meta');
+    if (changed(meta, [version, latest && latest.version, pending])) {
+      meta.replaceChildren();
+      if (version) meta.append(node('span', 'releases-entry-version', 'V' + version));
+      if (pending) meta.append(node('span', 'rn-pending', pending + ' 件待你定'));
+      $('releases-entry').setAttribute('aria-label', '版本更新与每日进展' + (version ? `，${target.label} 在用 ${version}` : '') + (pending ? `，${pending} 件待你定` : ''));
+    }
+    if (view === 'releases') $('brand-caption').textContent = latest ? '最新 ' + latest.version : '';
+    const box = $('releases'), progress = progressView();
+    if (view !== 'releases') return;
+    // Always record what is drawn, so the next poll does not rebuild (and drop a copy check) after a day was picked.
+    if (!changed(box, [notes === undefined ? 'loading' : notes, progress, notesDay, machines.map((m) => [m.label, m.meta.appVersion])]) && !focus) return;
+    ReleasesView.render(box, {
+      core: Core, notes, progress, dayIndex: notesDay, now: new Date(), focus: focus || '',
+      buttonClass: 'icon-button', icon: svg,
+      copy: (text, button, label) => copyText(button, text, label),
+      using: (v) => { const on = machines.filter((m) => m.meta.appVersion && Core.sameVersion(v, m.meta.appVersion)); return on.length ? on.map((m) => m.label).join('、') + ' 在用' : ''; },
+      setDay: (i, key) => { notesDay = i; renderReleases(key); },
+      notesMissing: ['没读到版本更新内容', '手机这边没取到更新说明，多半是网络不稳。点右上角的刷新再试一次；电脑上的 AgentDeck 不受影响。'],
+    });
   }
 
   // ---- shell ---------------------------------------------------------------
@@ -1994,16 +2299,19 @@
     if (view === 'output' && next !== 'output') { outputRequest++; output = null; $('output-text').textContent = ''; }
     view = next;
     if (TABS.includes(view)) store(KEYS.view, view);
-    ['overview', 'captain', 'todo', 'sessions', 'board', 'output'].forEach((name) => { $(name + '-view').hidden = name !== view; });
+    ['overview', 'captain', 'todo', 'sessions', 'board', 'output', 'releases'].forEach((name) => { $(name + '-view').hidden = name !== view; });
     document.querySelectorAll('[data-view]').forEach((button) => {
       if (button.dataset.view === (view === 'output' ? 'sessions' : view)) button.setAttribute('aria-current', 'page');
       else button.removeAttribute('aria-current');
     });
-    $('back').hidden = view !== 'output';
+    $('back').hidden = view !== 'output' && view !== 'releases';
+    const backLabel = view === 'releases' ? '返回总览' : '返回会话列表';
+    $('back').title = backLabel; $('back').setAttribute('aria-label', backLabel);
     $('attention-view').hidden = view !== 'attention';
     if (view === 'attention') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
     $('main').classList.toggle('fill', view === 'captain');
     if (view === 'todo') { $('brand-title').textContent = '待办'; $('brand-caption').textContent = '两台电脑同一份'; }
+    else if (view === 'releases') { $('brand-title').textContent = '版本更新'; $('brand-caption').textContent = ''; }
     else if (view !== 'output') { $('brand-title').textContent = 'AgentDeck'; $('brand-caption').textContent = '总台'; }
     $('main').scrollTop = 0;
     render();
@@ -2012,13 +2320,17 @@
     if (view === 'todo') machines.forEach((m) => { if (m.state === 'online') m.nextAt = 0; });
   }
   function render() {
-    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet();
+    renderBusy(); renderBar(); renderOverview(); renderCaptain(); renderTodos(); renderSessions(); renderBoard(); renderSheet(); renderSettings(); renderReleases();
     $('logout-all').disabled = !machines.some((m) => m.state === 'online');
     renderAttention();
     renderSidebar();
   }
   $('refresh').addEventListener('click', refreshAll);
-  $('back').addEventListener('click', () => showView(wide.matches ? 'captain' : 'sessions'));
+  $('back').addEventListener('click', () => showView(view === 'releases' ? 'overview' : wide.matches ? 'captain' : 'sessions'));
+  // Opening 版本更新 reads 每日进展 at once rather than on the next poll.
+  const openReleases = () => { notesDay = 0; showView('releases'); machines.forEach((m) => { if (m.state === 'online') { m.forceProgress = true; m.nextAt = 0; } }); };
+  $('releases-entry').addEventListener('click', openReleases);
+  $('side-version').addEventListener('click', openReleases);
   {
     const label = $('logout-all').title;
     armed($('logout-all'), label, '再点一次，确认在这部手机上退出所有电脑', () => logout(machines.filter((m) => m.state === 'online')));
@@ -2040,7 +2352,7 @@
     let meta = {};
     try { meta = JSON.parse(stored(KEYS.meta)) || {}; } catch (_) { /* Start without remembered metadata. */ }
     machines = list.map((m) => ({ ...m, state: 'unknown', detail: '', snap: null, csrf: '', cards: null, boardVersion: null, hostname: '', todos: null, todosReady: null, todosAt: 0,
-      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
+      meta: Core.cleanMeta(meta[m.id]), quota: null, quotaFailed: false, quotaAt: 0, forceQuota: false, relay: null, relayFailed: false, relayAt: 0, relayJob: null, relayTimer: 0, progress: null, progressState: '', progressAt: 0, forceProgress: false, current: false, nextAt: 0, busy: false, again: false, banUntil: 0, loginError: '', loginBusy: false, logoutBusy: false, card: node('article', 'machine-card') }));
     machines.forEach((m) => { m.card.setAttribute('aria-label', m.label); m.card.dataset.machine = m.id; $('machine-cards').append(m.card); });
     const saved = stored(KEYS.machine);
     filter = byId(saved) ? saved : 'all';
@@ -2048,9 +2360,10 @@
     target = filter !== 'all' ? filter : (machines.find((m) => m.default) || machines[0]).id;
     // Open where the user left off; a bookmark ending in #todo (or another tab's name) opens that tab.
     const asked = location.hash.slice(1), last = stored(KEYS.view);
-    showView(TABS.includes(asked) ? asked : TABS.includes(last) ? last : 'overview');
+    showView(TABS.includes(asked) || asked === 'releases' ? asked : TABS.includes(last) ? last : 'overview');
     applyLayout();
     refreshAll();
+    loadNotes();
   }
   start();
 })();

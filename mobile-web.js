@@ -94,6 +94,19 @@ function todoRequest(body) {
   return { op: 'update', id: body.id, done: body.done, ...(base ? { base } : {}) };
 }
 const RELAY_REASONS = ['', 'current', 'login', 'onboarding', 'exhausted', 'low', 'unknown'];
+// The battery setting as the phone may see it: fixed fields only.
+function batteryView(data) {
+  const int = (v, min, max, fallback) => Number.isInteger(v) && v >= min && v <= max ? v : fallback;
+  return {
+    mode: data?.mode === 'off' ? 'off' : 'auto',
+    cap: int(data?.cap, 1, 10, 3), capMin: 1, capMax: 10,
+    onBattery: data?.onBattery === true, active: data?.active === true,
+    boost: data?.boost === true, boostUntil: Number.isSafeInteger(data?.boostUntil) && data.boostUntil > 0 ? data.boostUntil : null,
+    baseCap: int(data?.baseCap, 1, 1000, 30), effectiveCap: int(data?.effectiveCap, 1, 1000, 30),
+    ...(Number.isInteger(data?.working) && data.working >= 0 ? { working: Math.min(data.working, 1000) } : {}),
+  };
+}
+
 function relayView(data, now) {
   const time = (value) => Number.isSafeInteger(value) && value > 0 ? value : null;
   const text = (value, max) => typeof value === 'string' ? value.replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, max) : '';
@@ -127,25 +140,32 @@ function attentionView(data, now) {
     .map((item) => ({
       id: item.id, kind: item.kind, label: line(item.label, 20) || (item.kind === 'need' ? '要你处理' : '结果汇报'),
       title: line(item.title, 300), ask: line(item.ask, 1000), detail: text(item.detail, 4000),
+      options: item.kind === 'need' ? [...new Set((Array.isArray(item.options) ? item.options : []).map((o) => line(o, 24)).filter(Boolean))].slice(0, 6) : [],
       files: (Array.isArray(item.files) ? item.files : []).map((f) => line(f, 1024)).filter(Boolean).slice(0, 10),
       project: line(item.project, 120), cardTitle: line(item.cardTitle, 300), sessionTitle: line(item.sessionTitle, 300),
-      source: ['captain', 'notify', 'card'].includes(item.source) ? item.source : 'captain',
+      source: ['captain', 'notify', 'card', 'automation'].includes(item.source) ? item.source : 'captain',
+      // The 队长 chat turn a report was said in (an id the captain history already shows).
+      turn: item.kind === 'report' && typeof item.turn === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(item.turn) ? item.turn : '',
+      automation: item.source === 'automation' ? line(item.automation, 40) : '',
       created: time(item.created), readAt: time(item.readAt), done: item.done === true, doneAt: item.done === true ? time(item.doneAt) : 0,
       doneText: item.done === true ? line(item.doneText, 200) : '',
+      doneBy: item.done === true && ['user', 'reply', 'captain', 'card', 'session', 'seen', 'chat'].includes(item.doneBy) ? item.doneBy : '',
       replies: (Array.isArray(item.replies) ? item.replies : []).slice(-3).filter((r) => r && typeof r.text === 'string')
         .map((r) => ({ text: text(r.text, 1000), at: time(r.at), from: r.from === 'phone' ? 'phone' : 'desktop', seen: r.seen === true })),
     }));
   const open = items.filter((item) => !item.done);
   const need = open.filter((item) => item.kind === 'need').length;
   const unreadReports = open.filter((item) => item.kind === 'report' && !item.readAt).length;
-  return { items, counts: { need, reports: open.length - need, unreadReports, badge: need + unreadReports }, now };
+  return { items, counts: { need, reports: open.length - need, unreadReports, badge: need }, now };
 }
-// What the phone may do to an item: mark some read, reply, tick, put back.
+// What the phone may do to an item: mark some read (via 'chat': their 队长
+// reply was seen in the conversation), reply, tick, put back.
 function attentionRequest(body) {
   const keys = Object.keys(body);
   if (body.op === 'read') {
-    if (keys.some((key) => key !== 'op' && key !== 'ids') || !Array.isArray(body.ids) || body.ids.length > 100 || body.ids.some((id) => typeof id !== 'string' || !ATTENTION_ID.test(id))) return null;
-    return { op: 'read', ids: [...new Set(body.ids)] };
+    if (keys.some((key) => !['op', 'ids', 'via'].includes(key)) || !Array.isArray(body.ids) || body.ids.length > 100 || body.ids.some((id) => typeof id !== 'string' || !ATTENTION_ID.test(id))) return null;
+    if (body.via !== undefined && body.via !== 'chat') return null;
+    return { op: 'read', ids: [...new Set(body.ids)], ...(body.via ? { via: body.via } : {}) };
   }
   if (typeof body.id !== 'string' || !ATTENTION_ID.test(body.id)) return null;
   if (body.op === 'reply') {
@@ -213,8 +233,8 @@ function loginPage(nonce) {
 }
 
 class MobileWebServer {
-  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, machine = {}, uploadDir = '', now = Date.now, preview = null }) {
-    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos };
+  constructor({ getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, getProgress, machine = {}, uploadDir = '', now = Date.now, preview = null }) {
+    this.sources = { getSessions, getTasks, getOutput, getCaptain, getQuota, sendCaptain, getRelay, switchRelay, saveSettings, getBoardVersion, getTodos, writeTodos, getProgress };
     this.machine = { platform: machine.platform || process.platform, hostname: machine.hostname || '', appVersion: machine.appVersion || '' };
     this.uploadDir = uploadDir ? path.resolve(uploadDir) : '';
     this.uploading = Promise.resolve();
@@ -222,8 +242,8 @@ class MobileWebServer {
     this.preview = preview;
     this.previewTexts = { at: 0, texts: [] };
     // 待我处理: the list, and the user's read / reply / tick from the phone.
-    const { getAttention, writeAttention } = arguments[0] || {};
-    Object.assign(this.sources, { getAttention, writeAttention });
+    const { getAttention, writeAttention, getBattery, setBattery } = arguments[0] || {};
+    Object.assign(this.sources, { getAttention, writeAttention, getBattery, setBattery });
     this.settings = { enabled: false, token: '', port: DEFAULT_PORT, publicOrigin: '', devices: [] };
     this.server = null;
     this.error = '';
@@ -503,7 +523,7 @@ class MobileWebServer {
     // Fixed, non-sensitive fields only; no hostname, exact app version, token,
     // device or app data.
     if (req.method === 'GET' && route === '/api/info') {
-      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : [])],
+      return this.json(res, 200, { app: 'agentdeck', apiVersion: API_VERSION, capabilities: ['snapshot', 'basePath', ...(this.sources.getTodos && this.sources.writeTodos ? ['todos'] : []), ...(this.preview ? ['files'] : []), ...(this.sources.getBattery && this.sources.setBattery ? ['battery'] : []), ...(this.sources.getProgress ? ['progress'] : [])],
         machine: { id: this.settings.basePath ? this.settings.basePath.slice(1, -1) : 'local', label: this.machineLabel(), platform: this.machine.platform } });
     }
     if (route === '/login' && req.method === 'POST') {
@@ -574,6 +594,8 @@ class MobileWebServer {
     if (req.method === 'GET' && route === '/api/quota') return this.json(res, 200, quotaView(this.sources.getQuota ? await this.sources.getQuota() : null, this.now()));
     if (req.method === 'GET' && route === '/api/sessions') return this.json(res, 200, { sessions: await this.sources.getSessions() });
     if (req.method === 'GET' && route === '/api/tasks') return this.json(res, 200, { cards: await this.sources.getTasks() });
+    // 每日进展 for the hub's 版本更新 page: counts only, cleaned again by the page.
+    if (req.method === 'GET' && route === '/api/progress') return this.json(res, 200, this.sources.getProgress ? await this.sources.getProgress() : { days: [] });
     if (req.method === 'GET' && route === '/api/output') {
       const id = url.searchParams.get('id');
       if (!id || id.length > 256 || /[\x00-\x1f]/.test(id)) return this.json(res, 400, { error: 'Session id required.' });
@@ -627,6 +649,22 @@ class MobileWebServer {
       catch (err) { return this.json(res, 409, { started: false, error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200) || '没有切换。' }); }
       if (!started || started.started !== true || !/^[a-z0-9]{1,40}$/.test(started.id || '')) return this.json(res, 409, { started: false, error: '没有切换。' });
       return this.json(res, 200, { started: true, id: started.id });
+    }
+    // 电池模式: this computer's own battery setting, read and changed from the phone. The change takes
+    // effect on the desktop at once (queue limit, saved config); only mode and cap exist, both validated there.
+    if (req.method === 'GET' && route === '/api/battery' && this.sources.getBattery) {
+      const view = await this.sources.getBattery();
+      return view ? this.json(res, 200, batteryView(view)) : this.json(res, 404, { error: 'Not found.' });
+    }
+    if (req.method === 'POST' && route === '/api/battery' && this.sources.setBattery) {
+      let body;
+      try { body = await this.body(req); } catch (err) { return this.json(res, err.status || 400, { error: 'Invalid request.' }); }
+      if (Object.keys(body).some((key) => !['mode', 'cap', 'boost', 'boostMinutes'].includes(key)) || (body.mode === undefined && body.cap === undefined && body.boost === undefined)) return this.json(res, 400, { error: 'Invalid request.' });
+      if (!this.writeCredential(req, res, prefixed)) return;
+      let view;
+      try { view = await this.sources.setBattery(body); }
+      catch (err) { return this.json(res, 400, { error: String(err?.message || '').replace(/[\x00-\x1f\x7f]/g, ' ').trim().slice(0, 200) || '没有改成。' }); }
+      return this.json(res, 200, batteryView(view));
     }
     // 随手记待办: the same login, Origin, Fetch Metadata and CSRF checks as a
     // message to the Captain, re-checked after the body is read.
@@ -687,4 +725,4 @@ class MobileWebServer {
   }
 }
 
-module.exports = { MobileWebServer, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };
+module.exports = { MobileWebServer, batteryView, relayView, attentionView, attentionRequest, DEFAULT_PORT, LOGIN_LIMITS, IMAGE_LIMITS, boardVersionOf, supportsLoginItem, withEndpoint, readEndpoint, persistable, TOKEN };

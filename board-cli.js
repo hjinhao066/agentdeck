@@ -64,9 +64,9 @@ function listenerStopped() {
   return { done: true, result, listenerStopped: true };
 }
 
-async function request(command, waitForCompletion) {
+async function request(command, waitForCompletion, authOverride) {
   if (receiptListener && !receiptListener.valid()) return listenerStopped();
-  const auth = resolveBoardAuth({
+  const auth = authOverride || resolveBoardAuth({
     env: process.env, tty: controllingTerminal(), filename: __filename, action: command.action,
   });
   const controlDir = auth.controlDir;
@@ -78,7 +78,7 @@ async function request(command, waitForCompletion) {
   const id = `${Date.now()}-${process.pid}-${crypto.randomBytes(6).toString('hex')}`;
   const requestFile = path.join(controlDir, 'requests', `${id}.json`);
   const responseFile = path.join(controlDir, 'responses', `${id}.json`);
-  const timeoutMs = Math.max(5000, Number(command.timeoutMs) || (waitForCompletion ? 6 * 60 * 60 * 1000 : 30000));
+  const timeoutMs = Math.max(5000, Number(authOverride?.timeoutMs || command.timeoutMs) || (waitForCompletion ? 6 * 60 * 60 * 1000 : 30000));
   const deadline = command.expiresAt === undefined ? Date.now() + timeoutMs : Math.min(Date.now() + timeoutMs, command.expiresAt);
   // CLI shell tools inject their current conversation id. Attach it only to
   // authenticated worker submissions; the receiver binds its own provider.
@@ -130,6 +130,11 @@ async function request(command, waitForCompletion) {
   }
   // The request may still be in the app's queue; it will not be run past its
   // deadline. Rarely it took effect just before, so look before sending it again.
+  if (authOverride) {
+    // An automatic task is not worth a late, surprise delivery: it falls back by itself.
+    try { fs.unlinkSync(requestFile); } catch (_) {}
+    fail('AgentDeck 没有回应自动回执（没在运行，或版本太旧）。', 2);
+  }
   if (LATE_GUARDED.includes(command.action)) fail(`Timed out waiting for board request ${id}. 这条命令过期后不会再被执行；重发前先用 ledger 确认它是否刚好已经生效。`, 2);
   fail(`Timed out waiting for board request ${id}.`, 2);
 }
@@ -139,10 +144,13 @@ const LATE_GUARDED = ['main-new', 'main-tell', 'main-stop', 'main-archive', 'mai
 // 待我处理: what the user should come back to. Plain words for 队长, who files the items.
 const INBOX_HELP = [
   'inbox：用户的「待我处理」页（桌面侧边栏和手机总台都有），用户不在电脑前时，回来一条条看、就地回复。',
-  '  inbox need --title "一句话说明" --ask "要用户做什么" [--type decide|login|pay|question|review|other] [--urgent]',
-  '      要用户介入的事：等用户拍板、登录或授权、付款、回答问题、验收卡住。同时发本机提醒；--urgent 再加 Bark 紧急提醒，仅需用户登录/授权或付款时用。',
+  '  inbox need --title "一句话说明" --ask "一句明确的问题" [--options "回答1|回答2|回答3"] [--type decide|login|pay|question|review|other] [--urgent]',
+  '      要用户介入的事：等用户拍板、登录或授权、付款、回答问题、验收卡住。同时发本机提醒和手机提醒：手机上标题是 --title，正文是 --ask 和可选回答，不含队员回执；--urgent 让手机提醒走紧急通道，仅需用户登录/授权或付款时用。',
+  '      --ask 写成用户一眼知道要答什么的一句问题；--options 是页面上的快捷回复按钮（最多 6 个，每个最多 24 字，用 | 分隔），用户点一下就回复你，也能自己写。',
+  '      看板卡片停在「需要你」或连续失败挂起时，程序不会替你问用户：你先判断是否真要用户定，要的话这样登记并带 --card；不要把队员回执原文当问题贴给用户，原文放 --detail。',
   '  inbox report --title "一句话结论"',
   '      结果汇报：你在对话里告诉用户的那种短结论（含你没认的结论、你替队员做的决定）。用户回来能回头看、逐条回复。',
+  '      汇报自动挂到你这一轮回复：用户在对话里看过这轮回复就算已读，不进「做完了你还没看」；所以结论也要在这轮回复里说。',
   '  共用可选：--detail "展开后看的细节和证据" --files 路径1,路径2 --project 项目 --card 卡片id --session 会话id',
   '      --card：need 在这张卡完成时自动打勾；--session：登记时这个会话正停在提问或确认上，答完后自动打勾。',
   '  inbox list [--all]                          未解决的条目和 id；--all 再列最近解决的',
@@ -151,6 +159,56 @@ const INBOX_HELP = [
   '标题和要求写用户看得懂的大白话中文，一句话说清；内部 id 放 --card/--session，不要当主要信息。',
   '',
 ].join('\n');
+
+// 自动回执入口: for scheduled scripts (launchd, Task Scheduler, cron) that run in no
+// AgentDeck terminal. Its own token, read from AgentDeck's config folder; it can only do
+// the three things below, each marked as coming from a named automatic task.
+const AUTOMATION_HELP = [
+  'automation：本机定时脚本的「自动回执」入口（不属于任何 AgentDeck 终端，不用终端令牌）。',
+  '  automation receipt --source 脚本名 --message "要告诉队长的话"',
+  '      给队长一条自动回执，队长看到的是「自动任务：脚本名」，不是用户的话。',
+  '  automation task-add --source 脚本名 --project 项目 --title "标题" [--detail "说明"]',
+  '      建一张待办卡片（只是记下来，不会自动开始做）。',
+  '  automation inbox-report --source 脚本名 --title "一句话结论" [--detail "细节"] [--files 路径1,路径2] [--project 项目]',
+  '      在用户的「待我处理」页登记一条结果汇报，标明来自哪个自动任务。',
+  '  automation status                          这个入口现在能不能用',
+  '--source 是脚本名字：1–40 个字，字母、数字、空格和 . _ - 。',
+  '它不能派活、不能 tell、不能读对话、不能改设置；每分钟条数有限（同一个脚本名每分钟 6 条）。',
+  '令牌由 AgentDeck 自己生成，存在它的配置目录里（权限 600）；在 AgentDeck 设置的「自动回执」可以停用或重置。',
+  '旧版 AgentDeck 没有这个入口，命令会报错，脚本应改成只写报告加本机通知。',
+  '',
+].join('\n');
+
+const AUTOMATION_FLAGS = {
+  status: [], receipt: ['source', 'message'], 'task-add': ['source', 'project', 'title', 'detail'],
+  'inbox-report': ['source', 'title', 'detail', 'files', 'project'],
+};
+
+async function automationCommand(args) {
+  const Automation = require('./automation-core'); // loaded only here: every other command runs without it
+  const op = args._[1];
+  if (!op || op === 'help' || args.help) { process.stdout.write(AUTOMATION_HELP); return; }
+  const flags = AUTOMATION_FLAGS[op];
+  if (!flags) fail('automation takes receipt, task-add, inbox-report or status. Run automation help.');
+  if (args._.length > 2) fail(`automation ${op}: put text in --flags "..." (quote it).`);
+  const extra = Object.keys(args).find((key) => key !== '_' && !flags.includes(key));
+  if (extra) fail(`automation ${op} does not take --${extra}. Run automation help.`);
+  const input = {};
+  for (const key of flags) {
+    if (args[key] === undefined) continue;
+    if (typeof args[key] !== 'string') fail(`automation ${op} --${key} requires a value.`);
+    input[key] = key === 'files' ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : args[key];
+  }
+  const action = 'automation-' + op;
+  try { Automation.validate(action, input); } catch (error) { fail(error.message); }
+  // The door's own token, never a terminal's: only the config folder says where it is.
+  const controlDir = resolveBoardAuth({ env: process.env, tty: '', filename: __filename, action: 'main-ledger' }).controlDir;
+  const credentials = Automation.readCredentials(controlDir);
+  if (!credentials) fail('这个 AgentDeck 没有自动回执入口（没有找到令牌）：AgentDeck 没启动过，或版本太旧。');
+  if (!credentials.enabled) fail('自动回执入口已在 AgentDeck 设置里停用。');
+  const response = await request({ action, ...input }, false, { controlDir, token: credentials.token, timeoutMs: op === 'status' ? 8000 : 20000 });
+  process.stdout.write(`${response.result || ''}\n`);
+}
 
 function usage() {
   process.stdout.write(
@@ -163,6 +221,11 @@ function usage() {
     '  complete --result "One to three sentences" [--files path1,path2] [--failed "Reason"]\n' +
     '  ask --question "Decision needed from the Captain"\n' +
     '  status\n\n' +
+    'Scheduled scripts on this computer (no terminal needed; automation help for details):\n' +
+    '  automation receipt --source name --message "text"        a receipt for the Captain, shown as 自动任务：name\n' +
+    '  automation task-add --source name --project P --title T [--detail D]   a 待办 card; starts nothing\n' +
+    '  automation inbox-report --source name --title T [--detail D] [--files a,b] [--project P]   a 结果汇报 for the user\n' +
+    '  automation status                                        whether the entry is open\n\n' +
     'Captain only (队长, the main session):\n' +
     '  discuss start --topic "题目" [--gemini] [--participants-file path] [--summarizer id]\n' +
     '  discuss status [--id id] | wait --id id | resume --id id [--retry job-id] | cancel --id id\n' +
@@ -181,6 +244,11 @@ function usage() {
     '  queue cancel --task-id <card-or-queue-id> cancel an unsent request\n' +
     '                                           new on a queued card replaces a changed command/model; task move to done/todo cancels it\n' +
     '  quota                                    passive subscription status, one Claude seat/provider per line\n' +
+    '  settings battery [--boost on|off [--for 90m|2h | --until 23:59]] [--mode off|auto] [--cap 1-10]\n' +
+    '                                           电池模式: no flags = read only; flags take effect at once and are saved.\n' +
+    '                                           --boost on = 临时拉满: on battery, open sessions up to the normal limit instead of the battery cap\n' +
+    '                                           (用户说「强度拉满」); ends at --for/--until, when plugged in, or --boost off. The battery mode itself stays on.\n' +
+    '                                           --mode off = 不限制 for good, auto = 没插电时按 --cap 限制同时干活的会话数\n' +
     '  briefing                                 current Captain instructions, read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
     '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
@@ -205,6 +273,8 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   const action = args._[0];
   if (!action || action === 'help' || args.help) { usage(); return; }
+
+  if (action === 'automation') { await automationCommand(args); return; }
 
   if (action === 'discuss') {
     // The existing read-only action authenticates the Captain even when this
@@ -235,7 +305,7 @@ async function main() {
     const op = args._[1];
     if (!op || op === 'help') { process.stdout.write(INBOX_HELP); return; }
     if (!['need', 'report', 'list', 'resolve'].includes(op)) fail('inbox takes need, report, list or resolve. Run inbox help.');
-    const allowed = { need: ['title', 'ask', 'type', 'detail', 'files', 'project', 'card', 'session', 'urgent'],
+    const allowed = { need: ['title', 'ask', 'options', 'type', 'detail', 'files', 'project', 'card', 'session', 'urgent'],
       report: ['title', 'detail', 'files', 'project', 'card', 'session'], list: ['all'], resolve: ['id', 'note'] }[op];
     const extra = Object.keys(args).find((key) => key !== '_' && !allowed.includes(key));
     if (extra) fail(`inbox ${op} does not take --${extra}. Run inbox help.`);
@@ -247,8 +317,10 @@ async function main() {
         if (args[key] !== true) fail(`--${key} takes no value.`);
         input[key] = true;
       } else if (typeof args[key] !== 'string' || !args[key].trim()) fail(`inbox ${op} --${key} requires a value.`);
-      else input[key] = key === 'files' ? args.files.split(',').map((p) => p.trim()).filter(Boolean) : args[key];
+      else input[key] = key === 'files' ? args.files.split(',').map((p) => p.trim()).filter(Boolean)
+        : key === 'options' ? args.options.split(/[|｜]/).map((o) => o.trim()).filter(Boolean) : args[key];
     }
+    if (input.options && !input.ask) fail('inbox need --options requires --ask "一句明确的问题".');
     if ((op === 'need' || op === 'report') && !input.title) fail(`inbox ${op} requires --title "一句话结论".`);
     if (op === 'resolve' && !input.id) fail('inbox resolve requires --id <条目id> (see inbox list).');
     const response = await request({ action: 'main-inbox', op, input }, false);
@@ -513,6 +585,44 @@ async function main() {
     return;
   }
 
+  if (action === 'settings') {
+    if (args._[1] !== 'battery' || args._.length > 2) fail('settings only has battery: settings battery [--mode off|auto] [--cap 1-10].');
+    const extra = Object.keys(args).find((key) => !['_', 'mode', 'cap', 'boost', 'for', 'until'].includes(key));
+    if (extra) fail(`settings battery does not take --${extra}. Use --boost on|off, --mode off|auto and/or --cap 1-10.`);
+    const input = {};
+    if (args.boost !== undefined) {
+      if (args.boost !== 'on' && args.boost !== 'off') fail('settings battery --boost is on or off.');
+      input.boost = args.boost === 'on';
+    }
+    if (args.for !== undefined || args.until !== undefined) {
+      if (input.boost !== true) fail('settings battery --for / --until only go with --boost on.');
+      if (args.for !== undefined && args.until !== undefined) fail('settings battery: give --for or --until, not both.');
+      if (args.for !== undefined) {
+        const m = typeof args.for === 'string' ? /^(\d{1,4})([mh])$/.exec(args.for) : null;
+        const minutes = m ? Number(m[1]) * (m[2] === 'h' ? 60 : 1) : 0;
+        if (!m || minutes < 1 || minutes > 2880) fail('settings battery --for is a length like 90m or 2h (up to 48h).');
+        input.boostMinutes = minutes;
+      } else {
+        const m = typeof args.until === 'string' ? /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(args.until) : null;
+        if (!m) fail('settings battery --until is a clock time today like 23:59 (the next one if it has passed).');
+        const now = new Date(), end = new Date(now);
+        end.setHours(Number(m[1]), Number(m[2]), 0, 0);
+        if (end <= now) end.setDate(end.getDate() + 1);
+        input.boostMinutes = Math.max(1, Math.ceil((end - now) / 60000));
+      }
+    }
+    if (args.mode !== undefined) {
+      if (args.mode !== 'off' && args.mode !== 'auto') fail('settings battery --mode is off or auto.');
+      input.mode = args.mode;
+    }
+    if (args.cap !== undefined) {
+      if (typeof args.cap !== 'string' || !/^\d{1,3}$/.test(args.cap) || Number(args.cap) < 1 || Number(args.cap) > 10) fail('settings battery --cap is a whole number from 1 to 10.');
+      input.cap = Number(args.cap);
+    }
+    const response = await request({ action: 'main-settings', op: 'battery', input }, false);
+    process.stdout.write(`${response.result || ''}\n`);
+    return;
+  }
   if (action === 'quota' || action === 'briefing' || action === 'handoff') {
     const response = await request({ action: 'main-' + action }, false);
     process.stdout.write(`${response.result || ''}\n`);

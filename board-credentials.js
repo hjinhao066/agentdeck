@@ -159,4 +159,5 @@ function resolveBoardAuth({ env, tty, filename, action, home, platform }) {
 module.exports = {
   clearCredentials, removeCredentials, writeCredentials, readCredentials, readCredentialsByTty,
   resolveBoardAuth, controllingTerminal, ttyFromPid, ttyFromPty, isTtyPath, defaultControlDir,
+  readJsonPrivate, writeJsonPrivate,
 };
