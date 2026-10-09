@@ -46,19 +46,21 @@ test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the 
   let app, page;
   const controlOf = async (id, timeout = 30000) => {
     const file = path.join(envDir, id + '.json');
+    const since = Date.now();
     try {
       await expect.poll(() => fs.existsSync(file), { timeout, message: `terminal ${id} holds a control capability` }).toBe(true);
     } catch (error) {
       // What the terminal looked like, for a run on another machine.
       const seen = await page?.evaluate((colId) => {
         const col = columns.find((c) => c.id === colId), entry = terms.get(colId);
-        return { col: col && { cmd: col.cmd, subCaptain: col.subCaptain, captainCrew: col.captainCrew, isMain: col.isMain },
-          entry: entry && { alive: entry.alive, state: entry.state, launchPending: entry.launchPending, exitReason: entry.exitReason,
+        return { now: Date.now(), col: col && { cmd: col.cmd, subCaptain: col.subCaptain, captainCrew: col.captainCrew, isMain: col.isMain },
+          entry: entry && { alive: entry.alive, state: entry.state, launchPending: entry.launchPending, launchedAt: entry.launchedAt, exitReason: entry.exitReason,
             screen: String(entry.lastScreen || '').split('\n').slice(-15).join('\n') }, columns: columns.map((c) => c.id) };
       }, id).catch((e) => ({ unavailable: e.message }));
-      console.log(`[sub-captain diag] ${id}: ${JSON.stringify(seen)}`);
+      console.log(`[sub-captain diag] ${id} after ${Date.now() - since} ms: ${JSON.stringify(seen)}`);
       throw error;
     }
+    console.log(`[sub-captain timing] ${id} control capability after ${Date.now() - since} ms`);
     return JSON.parse(fs.readFileSync(file, 'utf8'));
   };
   const ok = async (env, args) => {
