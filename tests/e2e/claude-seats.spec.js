@@ -313,6 +313,7 @@ test('terminal draft also blocks Relay without discarding typing', async () => {
 
 });
 test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and returns to CN', async () => {
+  test.setTimeout(150000);   // the whole briefing is typed first, so the continuation note arrives later
   test.setTimeout(120000);
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="chatgpt"]')).toHaveAttribute('title', 'ChatGPT · Codex GPT-6.1 Sol');
@@ -320,8 +321,8 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
   await expect.poll(() => page.evaluate(() => config.mainSession.relayTargetId), { timeout: 20000 }).toBe('chatgpt');
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => page.evaluate((i) => /Codex CLI/.test(terms.get(i)?.lastScreen || ''), id), { timeout: 20000 }).toBe(true);
-  await expect.poll(() => promptsFor(id).some((p) => p.startsWith('你是刚接任的队长：') && p.includes('handoff') && p.includes('读看板继续')), { timeout: 20000 }).toBe(true);
-  await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 你是刚接任的队长：'), id), { timeout: 20000 }).toBe(true);
+  await expect.poll(() => promptsFor(id).some((p) => p.startsWith('你是刚接任的队长：') && p.includes('handoff') && p.includes('读看板继续')), { timeout: 60000 }).toBe(true);
+  await expect.poll(() => page.evaluate((i) => terms.get(i)?.lastScreen.includes('> 你是刚接任的队长：'), id), { timeout: 60000 }).toBe(true);
   async function board(args, expected) {
     await idle(id);
     await page.evaluate(([i, a]) => window.deck.ptyInput(i, 'BOARD ' + JSON.stringify(a) + '\r'), [id, args]);
@@ -345,6 +346,7 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
 
 
 test('sidebar flags follow Captain Relay immediately while workers retain their seat and directory', async () => {
+  test.setTimeout(150000);   // the 60 s default is less than the briefing poll below
   const captainFlag = () => page.locator('.captain-item .agent-seat-label');
   const workerFlag = page.locator('[data-col-id="seat-worker"] .agent-seat-label');
   await expect(captainFlag()).toHaveText('🇨🇳 CN');
@@ -366,7 +368,8 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   // The new seat must finish its continuation briefing before a direct TUI
   // command; otherwise readline batches /model into that first prompt.
   const fresh = await page.evaluate(() => config.mainSession.colId);
-  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('你是刚接任的队长：')), { timeout: 20000 }).toBe(true);
+  // The whole briefing (not a file pointer) is typed into the line-reading stand-in first, so the note follows later.
+  await expect.poll(() => promptsFor(fresh).some(p => p.startsWith('你是刚接任的队长：')), { timeout: 60000 }).toBe(true);
   await idle(fresh);
   await page.evaluate(() => { window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'); window.deck.ptyInput('seat-worker', '/model Opus 5.5\r'); });
   await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');

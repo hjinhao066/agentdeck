@@ -56,6 +56,14 @@ test('the Captain briefing may be 10000 characters; every other prompt keeps the
   }
 });
 
+test('no briefing line passes the line-reading limit, so a terminal that takes plain keys still gets it whole', () => {
+  for (const platform of PLATFORMS) for (const legacy of [false, true]) for (const cap of [5, 30, 50]) {
+    const longest = ChatCore.longestLineBytes(M.instructions(platform, '', legacy, cap));
+    assert.ok(longest <= ChatCore.LINE_MODE_BYTES,
+      `${platform}${legacy ? ' legacy' : ''}：队长提示词有一行 ${longest} 字节，超过行模式上限 ${ChatCore.LINE_MODE_BYTES}，会变成文件指针。把长规则拆成几行，不要删内容`);
+  }
+});
+
 test('the token saver resend reaches the Captain whole on Mac and Windows, closing and 读看板继续 included', async () => {
   await Promise.all(PLATFORMS.flatMap((platform) => [false, true].map(async (legacy) => {
     const text = M.instructions(platform, '', legacy) + M.SAVER_RESUME, t = terminal();
