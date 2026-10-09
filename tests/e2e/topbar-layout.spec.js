@@ -98,9 +98,9 @@ test('top bar keeps only the core controls, the free layout is an icon and quota
   const g = await expectTidy();
   expect(g.ids).toEqual(['boardViewBtn', 'navCollapseBtn', '新对话 (Cmd+N)', '0', '2', '3', '4', '5', 'globalViewToggle', 'sideToggleBtn']);
   await expect(page.locator('#broadcastBtn')).toBeVisible(); // moved to the sidebar footer
-  await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-name')).toHaveText('🇨🇳 CN');
+  await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-name')).toHaveText('cn');   // the account behind the seat (cn@example.test)
   await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-captain svg')).toBeVisible();
-  await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('aria-label', /^🇨🇳 CN（队长）：/);
+  await expect(page.locator('#quotaBar [data-seat-id="cn"]')).toHaveAttribute('aria-label', /^cn（队长）：/);
   await expect(page.locator('#quotaBar [data-provider="Codex"]')).toHaveAttribute('data-state', 'danger');
 });
 

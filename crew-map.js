@@ -112,6 +112,10 @@
     if (col) {
       const inner = el('span');
       host.renderBadge(inner, col);
+      // A card has no room for an account name beside the model (nothing in this row may be cut):
+      // the label is hidden here (.cm-agent) and the capsule's hover text names the account instead.
+      const seat = inner.querySelector?.('.agent-seat-label');
+      if (seat) inner.title = [inner.title, seat.title].filter(Boolean).join('\n');
       if (!inner.hidden && inner.childNodes.length) { b.appendChild(inner); return b; }
     }
     b.textContent = [node.provider, node.model].filter(Boolean).join(' · ');

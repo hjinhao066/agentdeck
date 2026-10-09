@@ -16,7 +16,7 @@
 }
 ```
 
-CN是中国 Google 邮箱的 Claude 订阅，US是美国 Google 邮箱的订阅，US2（美国二号）是第三个独立席位；US 和 US2 同用 🇺🇸，界面同时显示名称区分。
+CN、US、US2 是三个独立的配置目录（席位代号）。哪个目录里登的是哪个账号由程序自己识别：界面各处显示该目录实际登录的账号名（邮箱 @ 前那段）和套餐，不显示固定的席位名或旗帜；席位代号只出现在悬停提示和 `--seat` 参数里。账号换了目录或目录换了账号，显示跟着账号走。
 只在本机读取账号元数据，界面接收各席位实际登录的邮箱（用来分辨登没登错号），不接收凭据。本机已用真实 CLI 只读核对，CN 和 US 都已登录 Pro；账号元数据和凭据位置独立。
 没有配置时使用上述默认值；旧版只含 cn/us 的配置自动补入 us2，保留自定义名称、目录及活动席位。其他自定义列表保持原样（最多 8 席）；每列的 `claudeSeatId` 与 `claudeConfigDir` 在首次启动时绑定并持久保存。以后改活动席位或席位设置只影响新会话；原队员、恢复会话和重开会话仍用原目录。Relay 只为替换后的队长重新绑定目录，不写登录凭据。
 
@@ -84,7 +84,7 @@ AgentDeck 把路径展开成固定绝对路径；默认CN保持 `CLAUDE_CONFIG_D
 
 队长 CLI 可用 `node "$AGENTDECK_BOARD_CLI" quota` 查看各席位，或
 `node "$AGENTDECK_BOARD_CLI" new --title "任务" --task "具体任务" --agent claude --seat us2`
-指定新队员。`--seat` 接受配置中的稳定 id；未登录/不存在时报清晰错误且不开列，已用尽时按该席位排队，排队及重启都保留选定目录。省略时仍用当前活动席位。
+指定新队员。`--seat` 接受账号名（邮箱 @ 前那段）或完整邮箱，也接受目录代号 `cn` / `us` / `us2`。写账号时，程序按当时各目录实际登录的账号找到对应目录，目录换了号，解析跟着变；没有哪个目录登着这个账号，或者两个目录登的是同一个账号，就报错并列出当前各目录的账号，不猜、不开列。未登录时报清晰错误且不开列，已用尽时按该席位排队，排队及重启都保留选定目录。省略时仍用当前活动席位。`ledger` 每个 Claude 会话写「账号:账号名（目录代号）」，`quota` 每行写账号名和「席位：目录代号」。
 
 恢复和重开同样只回原席位，从不换号：`tell` 把已归档会话叫回来、侧边栏点恢复、应用重启、`restartWorker`、`respawnColumn`
 都用该列保存的 `claudeSeatId`/`claudeConfigDir` 启动。原席位已不在席位设置里，或确定未登录（席位列表给出未登录原因：
@@ -103,7 +103,7 @@ Claude 队长行右侧的Relay图标打开席位选择，标注当前席位。�
 用所选席位启动 → 重发队长提示词和「读看板继续」。未完成回复记为 interrupted；
 回执、提问、等待队列和正在跑的队员都保留。任何存档错误都保留原队长。
 新会话默认当前席位；已有会话（包括归档后恢复）继续使用原席位。
-Relay 只重开队长列，不重启 AgentDeck。侧边栏 Claude 模型标签右侧的旗帜表示该会话实际绑定的 CN/US/US2 席位，悬停或聚焦可查看账号名与目录；其他 provider 不显示 Claude 旗帜。
+Relay 只重开队长列，不重启 AgentDeck。侧边栏 Claude 模型标签右侧是该会话绑定的席位里实际登录的账号名（放不下时从左边省略），悬停或聚焦可查看完整邮箱、套餐、席位代号与目录；其他 provider 不显示。
 
 ChatGPT 接力仍使用 `isMain` 列和新建的专属控制 token；队长能力与 provider 无关。
 启动 Codex 使用 `--no-daemon` 保留本列环境，丢失环境时只从本列私有能力文件恢复控制通道；绕过 shell 的 codex() 函数，避免重复追加 bypass 参数。`ledger/new/tell/receipts`
@@ -201,7 +201,7 @@ usagePath；不会读取或返回 token。现有全局 ccstatusline 缓存和第
 
 主进程 `readUsage(seat, home)` 或页面的受限
 `deck.claudeSeatUsage(seatId)` 返回经过白名单过滤的用量。
-`deck.claudeSeats(fresh)` 返回配置目录、打码邮箱、实际登录邮箱（`loginEmail`）、不带邮箱的登录命令（`loginBase`）、不可逆账号指纹、登录凭据存在状态及 usagePath，
+`deck.claudeSeats(fresh)` 返回配置目录、打码邮箱、实际登录邮箱（`loginEmail`）、目录里记录的账号（`accountEmail`，掉登录后仍保留，用来显示是哪个账号掉的）、套餐（`plan`，如 `Max 20x` / `Pro`，取自该目录 `.claude.json` 的 `oauthAccount.organizationType` 与 `organizationRateLimitTier`；CLI 说登的是另一个账号时改用 `claude auth status` 的 `subscriptionType`）、不带邮箱的登录命令（`loginBase`）、不可逆账号指纹、登录凭据存在状态及 usagePath，
 不返回凭据。`claude-seat-changed` 事件的 detail 是 `{seatId}`，
 供额度区立即刷新。1.0.0 的 quota-bar 已合入，同一配置的各席位显示独立一行（1.1.x 起额度从顶栏移到侧边栏底部）；无真实数据时显示未知。Relay 不主动发送用量查询。
 

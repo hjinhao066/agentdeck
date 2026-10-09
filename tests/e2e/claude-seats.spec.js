@@ -93,19 +93,28 @@ test('fresh Captain receives its complete multiline briefing after input is read
 });
 test('rotation shows each seat\'s signed-in email and flags a wrong account; an unlogged seat cannot replace Captain', async () => {
   await page.locator('.claude-seat-rotate').click();
-  await expect(page.locator('#claudeSeatMenu')).toContainText('当前：CN');
+  // Seats are listed by the account signed in behind each directory, never by the fixed CN / US / US2.
+  await expect(page.locator('#claudeSeatMenu .seat-current')).toHaveText('当前：cn');
   const wrong = '登成了 cn@example.test，应为 cn@example.com';
-  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"]')).toHaveAttribute('title', 'CN · ' + wrong);
-  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"] .seat-account.mismatch')).toHaveText(wrong);
-  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toHaveAttribute('title', 'US · us@example.test');
-  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"] .seat-account.ok')).toHaveText('us@example.test');
-  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"]')).toContainText('需登录');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"] .seat-who')).toHaveText('cn@example.test · 当前');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"]')).toHaveAttribute('title', 'cn@example.test · 席位 cn · ~/.claude · ' + wrong);
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"] .seat-account.mismatch')).toHaveText(wrong + ' · 席位 cn');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toHaveAttribute('title', 'us@example.test · 席位 us · ~/.claude-us');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"] .seat-who')).toHaveText('us@example.test');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"] .seat-account.ok')).toHaveText('席位 us');
+  // Nobody signed in, no account on record: 未登录, with the seat code and directory in the hover text.
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"] .seat-who')).toHaveText('未登录');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"] .seat-account')).toHaveText('席位 us2');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"]')).toHaveAttribute('title', /^未登录 · 席位 us2 · ~\/\.claude-us2 · /);
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us2"]')).toBeDisabled();
+  await expect(page.locator('#claudeSeatMenu')).not.toContainText(/🇨🇳|🇺🇸|CN|US/);
   await screenshot('relay-cn-us-chatgpt');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
   fs.unlinkSync(path.join(home, '.claude-us', '.credentials.json'));
   await page.locator('.claude-seat-rotate').click();
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toBeDisabled();
+  // Login lost, the directory still records whose it was: the row keeps the account and asks for a login.
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"] .seat-who')).toHaveText('us@example.test · 需登录');
   expect(await page.evaluate(() => config.mainSession.colId)).toBe(cn);
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(false);
 });
@@ -213,7 +222,7 @@ test('quota banner switches once and preserves the interrupted Captain turn', as
   });
   await page.evaluate((id) => sendWhenReady(columns.find((c) => c.id === id), 'wait for quota', { guardUserInput: true }), cn);
   const banner = page.locator(`.column[data-col-id="${cn}"] .seat-quota-banner`);
-  await expect(banner).toContainText('CN额度用尽', { timeout: 20000 });
+  await expect(banner).toContainText('cn额度用尽，下一可用席位 us', { timeout: 20000 });   // account names, not CN / US
   await screenshot('quota-relay');
   await expect(banner.locator('button.quota-seat-action')).toBeEnabled();
   await banner.locator('button.quota-seat-action').click();
@@ -236,7 +245,9 @@ test('settings rename all placeholders in one config and survive renderer reload
   await page.reload();
   await expect(page.locator('.claude-seat-rotate')).toBeEnabled({ timeout: 20000 });
   await page.locator('.claude-seat-rotate').click();
-  await expect(page.locator('#claudeSeatMenu')).toContainText('当前：甲席');
+  // The lists go by account; the name given to a seat is its code, beside the id `--seat` takes.
+  await expect(page.locator('#claudeSeatMenu .seat-current')).toHaveText('当前：cn');
+  await expect(page.locator('#claudeSeatMenu button[data-seat-id="cn"] .seat-account')).toContainText('席位 甲席（cn）');
   await expect(page.locator('#claudeSeatMenu button[data-seat-id="us"]')).toContainText('乙席');
   await page.locator('#claudeSeatMenu button[aria-label="关闭"]').click();
   await expect(page.locator('#claudeSeatMenu')).toBeHidden();
@@ -259,9 +270,14 @@ test('seat settings keep the account each seat should hold and copy a login comm
   await page.locator('#settingsBtn').click();
   await page.locator('#claudeSeatsSettings').click();
   const settings = page.locator('#claudeSeatSettings');
-  await expect(settings.locator('[data-seat-id="cn"] .seat-account.mismatch')).toHaveText('登成了 cn@example.test，应为 cn@example.com');
-  await expect(settings.locator('[data-seat-id="us"] .seat-account.ok')).toHaveText('us@example.test');
-  await expect(settings.locator('[data-seat-id="us2"] .seat-account.login')).toHaveText('需登录');
+  // Each row is headed by the account signed in there; the seat code follows it.
+  await expect(settings.locator('[data-seat-id="cn"] .seat-setting-head strong')).toHaveText('cn@example.test');
+  await expect(settings.locator('[data-seat-id="cn"] .seat-account.mismatch')).toHaveText('登成了 cn@example.test，应为 cn@example.com · 席位 cn');
+  await expect(settings.locator('[data-seat-id="us"] .seat-setting-head strong')).toHaveText('us@example.test');
+  await expect(settings.locator('[data-seat-id="us"] .seat-setting-head strong')).toHaveAttribute('title', 'us@example.test · 席位 us · ~/.claude-us');
+  await expect(settings.locator('[data-seat-id="us"] .seat-account.ok')).toHaveText('席位 us');
+  await expect(settings.locator('[data-seat-id="us2"] .seat-setting-head strong')).toHaveText('未登录');
+  await expect(settings.locator('[data-seat-id="us2"] .seat-account.login')).toHaveText('席位 us2');
   await expect(settings.locator('input[data-seat-email="cn"]')).toHaveValue('cn@example.com');
   await expect(settings.locator('input[data-seat-email="us2"]')).toHaveValue('');
   for (const [name, size, theme] of [['seat-email-tablet', [820, 1180], 'dark'], ['seat-email-desktop', [1440, 900], 'dark'], ['seat-email-desktop-light', [1440, 900], 'light']]) {
@@ -345,22 +361,23 @@ test('ChatGPT Relay keeps Captain capabilities for ledger/new/tell/receipts and 
 });
 
 
-test('sidebar flags follow Captain Relay immediately while workers retain their seat and directory', async () => {
+test('sidebar account labels follow Captain Relay immediately while workers retain their seat and directory', async () => {
   test.setTimeout(150000);   // the 60 s default is less than the briefing poll below
   const captainFlag = () => page.locator('.captain-item .agent-seat-label');
   const workerFlag = page.locator('[data-col-id="seat-worker"] .agent-seat-label');
-  await expect(captainFlag()).toHaveText('🇨🇳 CN');
-  await expect(workerFlag).toHaveText('🇨🇳 CN');
-  await expect(captainFlag()).toHaveAttribute('title', '当前账号：CN · ~/.claude');
-  await expect(captainFlag()).toHaveAttribute('aria-label', '当前账号：CN · ~/.claude');
+  // A session's seat is named by the account signed in behind it; the seat code and directory are in the hover text.
+  await expect(captainFlag()).toHaveText('cn');
+  await expect(workerFlag).toHaveText('cn');
+  await expect(captainFlag()).toHaveAttribute('title', '当前账号：cn@example.test · 席位 cn · ~/.claude');
+  await expect(captainFlag()).toHaveAttribute('aria-label', '当前账号：cn@example.test · 席位 cn · ~/.claude');
   await page.evaluate(() => window.deck.ptyInput(config.mainSession.colId, '/model Opus 5.5\r'));
   await expect(page.locator('.captain-item .agent-model-label')).toHaveText('Opus 5.5');
   await idle(cn);
   const before = fs.readFileSync(path.join(home, '.claude/.credentials.json'), 'utf8');
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us'))).toBe(true);
-  await expect(captainFlag()).toHaveText('🇺🇸 US');
-  await expect(captainFlag()).toHaveAttribute('title', '当前账号：US · ~/.claude-us');
-  await expect(workerFlag).toHaveText('🇨🇳 CN');
+  await expect(captainFlag()).toHaveText('us');
+  await expect(captainFlag()).toHaveAttribute('title', '当前账号：us@example.test · 席位 us · ~/.claude-us');
+  await expect(workerFlag).toHaveText('cn');
   expect(await page.evaluate(() => columns.find(c => c.id === 'seat-worker').claudeConfigDir)).toBe('~/.claude');
   expect(await page.evaluate(() => window.deck.ptyIsAlive('seat-worker'))).toBe(true);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).filter(r => r.colId === 'seat-worker')).toHaveLength(1);
@@ -385,13 +402,16 @@ test('sidebar flags follow Captain Relay immediately while workers retain their 
   });
   await expect.poll(() => capture('seat-env.jsonl')).toContain(id);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find(r => r.colId === id).configDir).toBe(null);
-  await expect(page.locator(`[data-col-id="${id}"] .agent-seat-label`)).toHaveAttribute('title', '当前账号：CN · ~/.claude');
+  await expect(page.locator(`[data-col-id="${id}"] .agent-seat-label`)).toHaveAttribute('title', '当前账号：cn@example.test · 席位 cn · ~/.claude');
 });
 
 test('US2 is migrated into settings and quota, then new --seat and Relay use its isolated login', async () => {
   const row = page.locator('#quotaBar [data-seat-id="us2"]');
-  await expect(row.locator('.quota-name')).toHaveText('🇺🇸 US2');
-  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-name')).toHaveText('🇺🇸 US');
+  // Nobody is signed in to US2 yet: the row says so, with the seat code and directory in its detail.
+  await expect(row.locator('.quota-name')).toHaveText('未登录');
+  await expect(row.getByRole('tooltip', { includeHidden: true })).toContainText(/席位us2.*目录~\/\.claude-us2/);
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-name')).toHaveText('us');
+  await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-name')).toHaveText('cn');
   await page.locator('#settingsBtn').click();
   await page.locator('#claudeSeatsSettings').click();
   await expect(page.locator('#claudeSeatSettings [data-seat-id="us2"] input').nth(0)).toHaveValue('US2');
@@ -402,17 +422,32 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
     await page.evaluate(([id, command]) => window.deck.ptyInput(id, 'BOARD ' + JSON.stringify(command) + '\r'), [cn, args]);
     await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\n/g, ''), cn), { timeout: 20000 }).toContain(text);
   }
-  await board(['quota'], 'US2');
+  await board(['quota'], '未登录（席位 us2）');
   await board(['new', '--title', 'US2 not logged', '--task', 'finish', '--seat', 'us2', '--command', FAKE], 'US2 未登录');
+  // An account no directory holds: refused, with every directory and its account, nothing opened.
+  await idle(cn);
+  await page.evaluate(([id, command]) => window.deck.ptyInput(id, 'BOARD ' + JSON.stringify(command) + '\r'), [cn, ['new', '--title', 'Nobody there', '--task', 'finish', '--seat', 'nobody.here', '--command', FAKE]]);
+  // The terminal wraps the line wherever it is full (a wide character can leave a gap): compare without spaces.
+  await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s/g, ''), cn), { timeout: 20000 }).toContain('没有哪个目录登着这个账号，没有派。当前各目录登录的账号：cn→cn；us→us；us2→未登录。');
+  expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'Nobody there'))).toBe(false);
   expect(await page.evaluate(() => columns.some((c) => c.displayTitle === 'US2 not logged'))).toBe(false);
   const dir = path.join(home, '.claude-us2');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '.credentials.json'), '{}'); // fake isolated login
-  fs.writeFileSync(path.join(dir, '.claude.json'), '{"oauthAccount":{"emailAddress":"us2@example.test"}}');
+  // The paid account signs in here: the plan is read from the directory's own account record.
+  fs.writeFileSync(path.join(dir, '.claude.json'), '{"oauthAccount":{"emailAddress":"paid.account2@example.test","organizationType":"claude_max","organizationRateLimitTier":"default_claude_max_20x"}}');
   require('../../claude-seats-main').writeUsage({ id: 'us2', configDir: '~/.claude-us2' }, home, { at: Date.now(), windows: [
     { key: 'fiveHour', remaining: 100, resetText: 'in 1h' }, { key: 'weekly', remaining: 100, resetText: 'in 4d' },
   ] });
   await page.evaluate(() => ClaudeSeats.refresh());
+  // The row now goes by that account, with the Max gem; the other accounts carry none.
+  await expect(row.locator('.seat-acct')).toHaveText('paid.account2');
+  await expect(row.locator('.quota-icon .quota-plan svg')).toBeVisible();   // the Max gem, on the row's lead icon
+  await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-plan')).toHaveCount(0);
+  await expect(row.getByRole('tooltip', { includeHidden: true })).toContainText(/账号paid\.account2@example\.test.*套餐Max 20x.*席位us2.*目录~\/\.claude-us2/);
+  await expect(row).toHaveAttribute('aria-label', /^paid\.account2 Max 20x：/);
+  await board(['quota'], '（Max 20x）');
+  expect(await page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s/g, ''), cn)).toContain('账号：paid.account2@example.test（Max20x）');
   await board(['new', '--title', 'US2 startup input', '--task', 'input is ready', '--seat', 'us2', '--command', `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --onboarding-probe`], '已开新会话');
   const startupWorker = await page.evaluate(() => columns.find((c) => c.displayTitle === 'US2 startup input').id);
   await expect.poll(() => capture('prompt-columns.jsonl')).toContain('input is ready');
@@ -441,11 +476,17 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
   await expect.poll(() => capture('seat-env.jsonl')).toContain(worker);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === worker)).toMatchObject({ configDir: dir, authOverridePresent: false });
   await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
-  await expect(page.locator('.nav-crew .crew-model-flag[aria-label="当前账号：US2"]')).toHaveText('🇺🇸 US2');
+  await expect(page.locator('.nav-crew .crew-model-flag[aria-label^="当前账号：paid.account2@example.test · 套餐 Max 20x · 席位 us2"]')).toHaveText('paid.account2');
+  await board(['ledger'], '（us2）');
+  expect(await page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s/g, ''), cn)).toContain('账号:paid.account2（us2）');
   await idle(cn);
   expect(await page.evaluate(() => ClaudeSeats.switchSeat('us2'))).toBe(true);
-  await expect(page.locator('.captain-item .agent-seat-label')).toHaveText('🇺🇸 US2');
-  await expect(row.locator('.quota-name')).toContainText('US2');
+  await expect(page.locator('.captain-item .agent-seat-label')).toHaveText('paid.account2');
+  // The row 队长 is on leads with the crown; the Max gem stays with the account.
+  await expect(row.locator('.quota-icon.quota-captain > svg')).toBeVisible();
+  await expect(row.locator('.quota-name')).toHaveText('paid.account2');
+  await expect(row.locator('.quota-icon.quota-captain .quota-plan svg')).toBeVisible();
+  await expect(page.locator('#quotaBar [data-seat-id="cn"] .quota-captain')).toHaveCount(0);
   const id = await page.evaluate(() => config.mainSession.colId);
   await expect.poll(() => capture('seat-env.jsonl')).toContain(id);
   expect(capture('seat-env.jsonl').trim().split('\n').map(JSON.parse).find((r) => r.colId === id).configDir).toBe(dir);
@@ -459,4 +500,9 @@ test('US2 is migrated into settings and quota, then new --seat and Relay use its
     expect(geometry.scroll <= geometry.width && geometry.values >= geometry.name, JSON.stringify({ width, geometry })).toBe(true);
   }
   await screenshot('us2-seat-quota-and-sidebar');
+  // 队长 can name the account instead of the directory: the session lands in the directory that holds it now.
+  await idle(id);
+  await page.evaluate(([c, command]) => window.deck.ptyInput(c, 'BOARD ' + JSON.stringify(command) + '\r'), [id, ['new', '--title', 'By account name', '--task', 'go', '--seat', 'paid.account2', '--command', FAKE]]);
+  await expect.poll(() => page.evaluate(() => columns.find((c) => c.displayTitle === 'By account name')?.claudeSeatId), { timeout: 20000 }).toBe('us2');
+  expect(await page.evaluate(() => columns.find((c) => c.displayTitle === 'By account name').claudeConfigDir)).toBe('~/.claude-us2');
 });

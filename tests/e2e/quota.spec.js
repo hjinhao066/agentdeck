@@ -38,7 +38,7 @@ test('passive live screens show remaining quota, provider icons and accessible d
 
   await expect(page.locator('#quotaBar [data-seat-id="us"]')).toHaveAttribute('data-state', 'unknown');
   await expect(page.locator('#quotaBar [data-seat-id="us"] .quota-values')).toHaveText('未知—');
-  await expect(page.locator('#quotaBar [data-seat-id="us2"] .quota-name')).toHaveText('🇺🇸 US2');
+  await expect(page.locator('#quotaBar [data-seat-id="us2"] .quota-name')).toHaveText('未登录');   // nobody signed in to that directory
   await expect(badge('Codex').locator('.quota-values')).toContainText('8%');
   for (const provider of ['Cursor', 'Antigravity']) await expect(badge(provider)).toHaveAttribute('data-state', 'normal');
   // No number: the 5h cell shows the status word, 7d reads —; the details still say 未见用尽.
@@ -109,8 +109,8 @@ test('passive live screens show remaining quota, provider icons and accessible d
   await expect(badge('Claude').getByRole('tooltip')).not.toContainText(/配置目录|模型/);
   await expect(badge('Cursor')).toHaveAttribute('aria-label', /^Grok 4\.7：/);
   await expect(badge('Antigravity')).toHaveAttribute('aria-label', /^Gemini：/);
-  await expect(badge('Claude').locator('.quota-name')).toHaveText('🇨🇳 CN');
-  await expect(badge('Claude')).toHaveAttribute('data-detail', /模型：claude-opus-5-5-high；账号：cn?\*\*\*@example.test/);
+  await expect(badge('Claude').locator('.quota-name')).toHaveText('cn');   // the account behind the seat, not its fixed name
+  await expect(badge('Claude')).toHaveAttribute('data-detail', /模型：claude-opus-5-5-high；账号：cn@example\.test/);
   // The isolated profile is barred from reading the user's real quota caches.
   expect((await page.evaluate(() => window.deck.quotaLocal())).filter(q => q.windows).map(q => q.seatId)).toEqual(['cn']);
   // Quota tracks Grok on Cursor, while model badges already choose that family.
@@ -209,7 +209,7 @@ test('Captain quota CLI returns all three Claude seats and changes no tasks, rec
   fs.writeFileSync(script, `require('fs').writeFileSync(process.argv[2],require('child_process').execFileSync(process.execPath,[process.env.AGENTDECK_BOARD_CLI,'quota'],{encoding:'utf8'}));`);
   const command = `node "${script}" "${output}"`;
   await page.evaluate(({ id, command }) => window.deck.ptyInput(id, command + '\r'), { id, command });
-  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ 🇨🇳 CN：19%[^\n]*\nClaude \/ 🇺🇸 US：未知[^\n]*\nClaude \/ 🇺🇸 US2：未知[^\n]*\nCodex \/ ChatGPT：8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
+  await expect.poll(() => fs.existsSync(output) && fs.readFileSync(output, 'utf8')).toMatch(/Claude \/ cn：剩 19% · 席位：cn；[^\n]*账号：cn@example\.test[^\n]*\nClaude \/ 未登录（席位 us）：未知[^\n]*\nClaude \/ 未登录（席位 us2）：未知[^\n]*\nCodex \/ ChatGPT：剩 8%[^\n]*\nCursor \/ Grok 4.7：已用尽[^\n]*\nAntigravity \/ Gemini：已用尽/);
   expect(fs.readFileSync(output, 'utf8').trim().split('\n')).toHaveLength(6);
   const after = await page.evaluate(() => [config.mainSession.tasks, config.mainSession.pending, config.boardResponses]);
   expect(after.slice(0, 2)).toEqual(before.slice(0, 2));

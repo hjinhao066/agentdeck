@@ -187,7 +187,8 @@ function readAuthStatus(seat, home, env, execFileImpl = execFile) {
       }, (_error, stdout) => {
         try {
           const value = JSON.parse(stdout);
-          resolve(typeof value?.loggedIn === 'boolean' ? { loggedIn: value.loggedIn, email: value.loggedIn ? S.cleanEmail(value.email) : '' } : null);
+          const plan = value?.loggedIn === true ? S.planName(value.subscriptionType) : '';
+          resolve(typeof value?.loggedIn === 'boolean' ? { loggedIn: value.loggedIn, email: value.loggedIn ? S.cleanEmail(value.email) : '', ...(plan ? { plan } : {}) } : null);
         } catch (_) { resolve(null); }
       });
     } catch (_) { resolve(null); }
@@ -207,9 +208,13 @@ function authStatusCache(read, now = Date.now) {
 }
 async function seatInfo(seat, home, platform = process.platform, keychain = credentialStatus, authStatus = null, fresh = false) {
   const loc = credentialLocation(seat, home);
-  let email = '', rawEmail = '', accountKey = '';
+  let email = '', rawEmail = '', accountKey = '', recordedPlan = '';
   try {
-    if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) rawEmail = S.cleanEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
+    if (fs.statSync(loc.metadataPath).size <= 8 * 1024 * 1024) {
+      const account = JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount;
+      rawEmail = S.cleanEmail(account?.emailAddress);
+      recordedPlan = S.planName(account?.organizationType, account?.organizationRateLimitTier);
+    }
     email = S.maskEmail(rawEmail);
     accountKey = usageAccountKey(loc) || '';
   } catch (_) {}
@@ -218,15 +223,26 @@ async function seatInfo(seat, home, platform = process.platform, keychain = cred
   // The CLI's answer wins; without it, the account recorded in the seat's own metadata.
   const auth = present && authStatus ? await authStatus(seat, [loc.dir, rawEmail, accountKey].join('|'), fresh) : null;
   const loginEmail = !present ? '' : auth ? auth.email : rawEmail;
+  // The plan recorded beside the account, unless the CLI says another account is signed in here.
+  const moved = !!auth?.email && auth.email.toLowerCase() !== rawEmail.toLowerCase();
+  const plan = moved ? auth.plan || '' : recordedPlan || auth?.plan || '';
   // Credentials on disk do not make a seat signed in when the CLI itself says it is not.
   const signedOut = present && auth?.loggedIn === false;
-  return { ...seat, configDir: loc.dir, maskedEmail: email, loginEmail, accountKey, onboardingComplete: onboardingComplete(seat, home),
+  return { ...seat, configDir: loc.dir, maskedEmail: email, loginEmail, accountEmail: loginEmail || rawEmail, plan, accountKey, onboardingComplete: onboardingComplete(seat, home),
     // Without --email: the settings row adds the address typed there.
     loginBase: loginCommand('Claude', { ...seat, email: '' }, home, platform === 'test' ? process.platform : platform),
     credentialKey: crypto.createHash('sha256').update(loc.keychainService).digest('hex').slice(0, 16), loggedIn: !!present && !signedOut,
     loginReason: signedOut ? `${seat.name}（${seat.id}）：Claude 登录状态显示此席位未登录` : typeof status === 'object' ? status.loginReason ? `${seat.name}（${seat.id}）：${status.loginReason}` : '' : present ? '' : `${seat.name}（${seat.id}）：没有登录凭据`,
     authReason: typeof status === 'object' ? status.authReason ? `${seat.name}（${seat.id}）：${status.authReason}` : '' : '', usagePath: loc.usagePath };
 
+}
+// The address recorded in a seat directory's own account file; '' when there is none. Read only.
+function recordedAccount(seat, home) {
+  try {
+    const loc = credentialLocation(seat, home);
+    if (fs.statSync(loc.metadataPath).size > 8 * 1024 * 1024) return '';
+    return S.cleanEmail(JSON.parse(fs.readFileSync(loc.metadataPath, 'utf8')).oauthAccount?.emailAddress);
+  } catch (_) { return ''; }
 }
 const USAGE_SOURCES = ['Claude /usage', 'Claude 会话状态行'];
 function sanitizeUsage(value) {
@@ -363,4 +379,4 @@ function registerSeatsIpc({ handleMain, home, userData, getSeats, getCaptainId, 
 
   });
 }
-module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialStatus, readAuthStatus, authStatusCache, seatInfo, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };
+module.exports = { directory, credentialLocation, onboardingComplete, initializeOnboarding, trustWorktree, seatEnvironment, credentialStatus, readAuthStatus, authStatusCache, seatInfo, recordedAccount, usageAccountKey, sanitizeUsage, writeUsage, readUsage, handoff, checkpoint, registerSeatsIpc };

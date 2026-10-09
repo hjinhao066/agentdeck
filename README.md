@@ -155,9 +155,12 @@ the middle:
   separate terminal status if that agent is still running or waiting. Cursor's
   session status stays working while its terminal is busy, retaining the receipt.
 - **Subscription quota**: a compact 额度 block at the bottom of the sidebar has
-  one row per provider: a brand-coloured icon plus name (Claude seats show only
-  the flag, with a crown on the Captain's seat), then a 5h and a 7d cell, with
-  "5h / 7d" named once in the header. Each cell is remaining % + reset time over
+  one row per provider: a brand-coloured icon plus name (a Claude seat shows the
+  account signed in behind its directory, the part before the @; a Max plan is
+  a small gem on the corner of the row's lead icon, so the name keeps its whole
+  column; the row the Captain is on leads with a crown instead of the provider
+  icon), then a 5h and a 7d cell, with "5h 剩余 / 7d 剩余" named once in the
+  header: every number is what is left, never what is used. Each cell is remaining % + reset time over
   a thin bar; used up is ⊘ + reset time in red with the row tinted red, a window
   with no number is — over an empty bar. If the whole row has no numeric windows
   or recovery time, the 5h cell shows 正常 / 已用尽 / 未知 / 过期 instead. With the
@@ -380,8 +383,9 @@ token_usage_record、没写 token_count，ccusage 只读后者所以漏掉了它
 队长行的 Relay 图标可选 CN 🇨🇳、US 🇺🇸、US2 🇺🇸（美国二号）三个独立 Claude 席位，
 或 ChatGPT（Codex GPT-6.1 Sol）：
 先存进度看板，再重开队长读看板继续，运行中的队员保持原席位。
-侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。旧 CN/US 配置自动补 US2，额度区同时显示旗帜与名称以区分 US/US2；未登录 US2 不影响现有席位。
-用户登录步骤见 [Claude 席位](CLAUDE_SEATS.md)；队长 `new --agent claude --seat us2` 可指定席位，`quota` 显示三席独立额度。默认开启「永动机」：
+侧边栏底部齿轮统一配置席位名称、目录和 Relay 名称。旧 CN/US 配置自动补 US2；未登录 US2 不影响现有席位。
+侧边栏里出现席位的地方（额度行、队长行和会话上的席位标签、队员分组、Relay 面板、席位设置、轮换和额度用尽提示）都显示这个目录里实际登录的账号名（邮箱 @ 前那段），不显示固定的 CN / US / US2；席位代号只在悬停提示和 `--seat us2` 里出现。账号名放不下时从左边省略、保住结尾，悬停看完整邮箱、套餐、席位代号和目录。目录里没人登录、也没有账号记录时显示「未登录」。Max 套餐的账号在额度行行首图标的角上带一个小宝石（悬停详情里写套餐），跟账号走，不跟目录走，不占账号名的宽度；皇冠只表示队长正在用这一行。额度列头写「5h 剩余 / 7d 剩余」，队长的 `quota` 输出写「5h 剩 98%」：所有百分比都是剩余，不是已用。手机网页端同样按账号名列席位，但只下发邮箱 @ 前那段，完整邮箱不下发。
+用户登录步骤见 [Claude 席位](CLAUDE_SEATS.md)；队长 `new --agent claude --seat <账号名>` 可指定用哪个账号（也接受 `cn` / `us` / `us2` 目录代号；按当时各目录实际登录的账号解析），`quota` 显示三席独立额度。默认开启「永动机」：
 当前 Claude 的可信 5 小时剩余 ≤3% 或真实限流时，在队长空闲后自动接力
 下一个可用 Claude 席位（US2 → US → CN → US2，未登录或用尽跳过）；没有已确认可用的 Claude 席位时交给 Codex GPT-6.1 Sol，恢复后优先回 Claude。
 额度区的手动轮换按钮只在 Claude 席位之间切换；所有 Claude 席位用尽后的 Codex 接力由永动机执行，或从 Relay 菜单明确选择。

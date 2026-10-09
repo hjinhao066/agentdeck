@@ -318,7 +318,7 @@ function usage() {
     '  briefing --topic <name>|all|list          one of the Captain rule files (models, dispatch, review, inbox,\n' +
     '                                           sessions, capacity, release, handoff, commands), read-only\n' +
     '  handoff                                  current Relay handoff from live state; also refreshes the handoff file\n' +
-    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--sub-captain] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
+    '  new --title "One line" --task "Task" [--project "Project"] [--reviews id[,id]] [--task-id <card-id>] [--cwd path] [--sub-captain] [--worktree repo] [--base ref] [--branch name] [--priority high] [--seat account|cn|us|us2] [--agent claude|agy|cursor|grok|codex|chatgpt-web | --command "launch"] [--web-mode chat|deep-research]\n' +
     '                                           model and effort go inside --command (…--model claude-opus-5-5 --effort high); new has no --model/--effort/--verify\n' +
     '                                           --sub-captain (needs --project): a 小队长 that opens its own children with create-child;\n' +
     '                                           their receipts go to it, not to you; ledger nests them under it\n' +
@@ -602,7 +602,8 @@ async function main() {
     }
     for (const key of ['project', 'task-id']) if (args[key] !== undefined && (typeof args[key] !== 'string' || !args[key].trim())) fail(`new --${key} requires a value.`);
     if (args.reviews !== undefined && (typeof args.reviews !== 'string' || !args.reviews.split(',').every((id) => /^[A-Za-z0-9_-]{1,160}$/.test(id.trim())))) fail('new --reviews requires session ids separated by commas.');
-    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(args.seat))) fail('new --seat requires a seat id.');
+    // A seat code, or the account signed in there (the part before the @, or the whole address).
+    if (args.seat !== undefined && (typeof args.seat !== 'string' || !/^[A-Za-z0-9._%+@-]{1,254}$/.test(args.seat) || /\.\./.test(args.seat))) fail('new --seat requires an account name or a seat id.');
     if (args['web-mode'] !== undefined && (!['chat', 'deep-research'].includes(args['web-mode']) || args.agent !== 'chatgpt-web')) fail('new --web-mode requires --agent chatgpt-web and chat or deep-research.');
     if (args.priority !== undefined && !['high', 'normal'].includes(args.priority)) fail('new --priority is high or normal.');
     if (args['sub-captain'] !== undefined && args['sub-captain'] !== true) fail('new --sub-captain takes no value.');

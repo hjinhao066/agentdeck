@@ -69,6 +69,9 @@ const main = { id: 'main', isMain: true };
 const worker = { id: 'w1', captainCrew: true };
 let workerSeat = 'us';
 let renders = 0;
+// Who is signed in behind each seat directory (what seats:list reports). Seats are shown by this.
+let accounts = {};
+const signedIn = (email) => ({ loggedIn: true, loginEmail: email, accountEmail: email, plan: 'Pro' });
 const host = {
   ICONS: {}, navItems: new Map(), config: { crewOpen: true, claudeSeats: defaultSeats() },
   folders: () => [], columns: () => [main, worker], archived: () => [],
@@ -82,6 +85,7 @@ const win = {
     resolveAgentInfo: (col) => col.isMain ? { provider: 'Claude', shortModel: 'Opus' } : { provider: 'Claude', shortModel: 'Opus 5.5', seat: { id: workerSeat } },
     iconProviderFor: () => 'Claude', renderBadge() {}, PROVIDER_ICONS: {},
   },
+  ClaudeSeats: { described: (list) => list.map((s) => ({ ...s, info: accounts[s.id] || { loggedIn: false } })), rotationButton: () => new Node('button') },
   SidebarCore: require('../sidebar-core.js'),
   TodoUI: { shortcutLabel: () => '⌘⇧N' },
   addEventListener() {}, getSelection: () => ({ removeAllRanges() {}, addRange() {} }),
@@ -100,7 +104,9 @@ const openMenu = () => {
   assert.ok(menuOpen(), 'menu is open');
 };
 const idleTicks = (n = 3) => { renders = 0; for (let i = 0; i < n; i++) Sidebar.refreshCrew(); return renders; };
+const seatLabel = () => byId.navList.querySelector('.crew-model-flag');
 function setup(seats, seatId, cols = [main, worker]) {
+  accounts = { cn: signedIn('cn-account@example.com'), us: signedIn('work-account@example.com'), 'work-2': signedIn('spare-account@example.com') };
   host.config.claudeSeats = seats;
   host.columns = () => cols;
   workerSeat = seatId;
@@ -111,8 +117,11 @@ test('a status tick with nothing changed does not rebuild the sidebar or close i
   const seats = defaultSeats();
   seats[1] = { id: 'us', name: '工作号', icon: '💼', configDir: '~/.claude-us' }; // user renamed this seat in 席位设置
   setup(seats, 'us');
-  // The crew list shows the seat the user named.
-  assert.ok(byId.navList.textContent.includes('工作号'), 'crew group shows the renamed seat');
+  // The crew list names the group by the account signed in behind the seat; the name the
+  // user gave the seat is its code, in the hover text.
+  assert.strictEqual(seatLabel().textContent, 'work-account', 'crew group shows the account behind the seat');
+  assert.ok(!byId.navList.textContent.includes('工作号') && !byId.navList.textContent.includes('💼'), 'no fixed seat name or icon in the list');
+  assert.match(seatLabel().title, /work-account@example\.com.*席位 工作号（us）.*~\/\.claude-us/);
   openMenu();
   assert.strictEqual(idleTicks(), 0, 'status ticks with no change rebuilt the sidebar');
   assert.ok(menuOpen(), 'context menu was closed by an idle status tick');
@@ -121,7 +130,8 @@ test('a status tick with nothing changed does not rebuild the sidebar or close i
 test('a seat with a non-default id does not rebuild the sidebar on idle ticks', () => {
   const seats = [...defaultSeats(), { id: 'work-2', name: '备用号', icon: '🧰', configDir: '~/.claude-work2' }];
   setup(seats, 'work-2');
-  assert.ok(byId.navList.textContent.includes('备用号'), 'crew group shows the custom seat');
+  assert.strictEqual(seatLabel().textContent, 'spare-account', 'crew group shows the account behind the custom seat');
+  assert.match(seatLabel().title, /席位 备用号（work-2）/);
   openMenu();
   assert.strictEqual(idleTicks(), 0, 'status ticks with no change rebuilt the sidebar');
   assert.ok(menuOpen(), 'context menu was closed by an idle status tick');
@@ -134,7 +144,7 @@ test('default seats keep behaving: idle ticks leave the sidebar alone', () => {
   assert.ok(menuOpen());
 });
 
-test('real changes still refresh the sidebar: rename, icon, seat move, working state', () => {
+test('real changes still refresh the sidebar: rename, another account, seat move, working state', () => {
   const seats = defaultSeats();
   setup(seats, 'us');
   assert.strictEqual(idleTicks(), 0);
@@ -144,15 +154,30 @@ test('real changes still refresh the sidebar: rename, icon, seat move, working s
   renders = 0;
   Sidebar.refreshCrew();
   assert.ok(renders >= 1, 'a renamed seat must redraw the list');
-  assert.ok(byId.navList.textContent.includes('新名字'), 'new name is shown');
+  assert.ok(seatLabel().title.includes('席位 新名字（us）'), 'new seat name is in the hover text');
+  assert.strictEqual(seatLabel().textContent, 'work-account', 'the list still shows the account');
   assert.strictEqual(idleTicks(), 0, 'quiet again after the rename was drawn');
 
-  // ...and the same for a changed icon.
+  // A changed icon is shown nowhere in the list any more: nothing to redraw.
   host.config.claudeSeats = host.config.claudeSeats.map((s) => (s.id === 'us' ? { ...s, icon: '🔥' } : s));
+  assert.strictEqual(idleTicks(), 0, 'a seat icon is not part of the list');
+  assert.ok(!byId.navList.textContent.includes('🔥'));
+
+  // The seat directory is signed in to another account: the next tick redraws with its name.
+  accounts.us = signedIn('other-account@example.com');
   renders = 0;
   Sidebar.refreshCrew();
-  assert.ok(renders >= 1, 'a changed seat icon must redraw the list');
-  assert.ok(byId.navList.textContent.includes('🔥'), 'new icon is shown');
+  assert.ok(renders >= 1, 'another account behind the seat must redraw the list');
+  assert.strictEqual(seatLabel().textContent, 'other-account', 'the new account is shown');
+  assert.strictEqual(idleTicks(), 0, 'quiet again after the new account was drawn');
+
+  // Signed out, nothing recorded: the group says so, and the hover text still names the seat and directory.
+  accounts.us = { loggedIn: false };
+  Sidebar.refreshCrew();
+  assert.strictEqual(seatLabel().textContent, '未登录');
+  assert.match(seatLabel().title, /未登录.*席位 新名字（us）.*~\/\.claude-us/);
+  accounts.us = signedIn('work-account@example.com');
+  Sidebar.refreshCrew();
   assert.strictEqual(idleTicks(), 0);
 
   // A member moves to another seat: it lands in another group, so the tick redraws.

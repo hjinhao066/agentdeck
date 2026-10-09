@@ -239,13 +239,18 @@ function createSeatGate({ occupied }) {
   };
 }
 function officialUsage(data, seat, service, at) {
-  const windows = [['fiveHour', '5 小时', data?.five_hour], ['weekly', '每周', data?.seven_day]].map(([key, label, w]) => {
-    const absolute = typeof w?.resets_at === 'number' || typeof w?.resets_at === 'string' && /^\d{4}-\d\d-\d\dT/.test(w.resets_at);
+  if (!data || typeof data !== 'object' || !['five_hour', 'seven_day'].some((key) => key in data)) throw new Error('invalid-usage');
+  const windows = [['fiveHour', '5 小时', data.five_hour], ['weekly', '每周', data.seven_day]].map(([key, label, w]) => {
+    // An account nobody has used since its last reset has no running window: the answer
+    // then carries no reset time (or no window at all). It is still a signed-in answer,
+    // and whatever windows it does give are shown.
+    if (w == null || (w.utilization == null && w.resets_at == null)) return null;
+    const absolute = typeof w.resets_at === 'number' || typeof w.resets_at === 'string' && /^\d{4}-\d\d-\d\dT/.test(w.resets_at);
     const resetAt = absolute ? Q.resetTime(w.resets_at, at) : null;
-    if (Q.percent(w?.utilization) === null || !resetAt) throw new Error('invalid-usage');
+    if (Q.percent(w.utilization) === null || (w.resets_at != null && !resetAt)) throw new Error('invalid-usage');
     return { key, label, used: w.utilization, remaining: Math.round((100 - w.utilization) * 10) / 10,
-      exhausted: w.utilization === 100, resetAt, resetText: new Date(resetAt).toISOString() };
-  });
+      exhausted: w.utilization === 100, resetAt, resetText: resetAt ? new Date(resetAt).toISOString() : '' };
+  }).filter(Boolean);
   return { provider: 'Claude', scope: 'claude', seatId: seat.id, configDir: seat.configDir,
     credentialKey: createHash('sha256').update(service).digest('hex').slice(0, 16),
     at, source: Q.CLAUDE_OAUTH_SOURCE, confidence: '高（官方采样）', official: true, windows };
@@ -342,6 +347,9 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
         try { value = await read(entry.seat, home); } catch (_) {}
         if (!stopped && entries.get(entry.seat.id) === entry) {
           const usage = boundUsage(entry.seat, home, value && { ...value, at: now(), source: Q.CLAUDE_OAUTH_SOURCE });
+          // The usage service accepted this seat's own token: signed in, even when it gave no number to show.
+          let answered = false;
+          try { answered = !usage && value?.authStatus === 'logged-in' && value.configDir === M.credentialLocation(entry.seat, home).dir; } catch (_) {}
           if (usage) {
             entry.usage = usage; entry.failures = 0; entry.failure = null;
             try { write(entry.seat, home, usage); } catch (_) {}
@@ -351,11 +359,11 @@ function createRefresh({ home, getSeats, read = readSeat, write = M.writeUsage, 
             entry.failure = { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
               at: now(), failureOnly: true, failures: entry.failures, checkedAt: now(),
               ...(loggedOut ? { authStatus: 'logged-out' } : {}),
-              failure: '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
+              failure: answered ? '已登录，这个账号暂时没有额度数字（还没开始用）' : '用量查询失败，等待 Claude 刷新凭据或网络恢复' };
           }
           // Only actual polls are evidence; cached samples exposed by samples()
           // must never advance a logout confirmation or manufacture a recovery.
-          try { onSample(usage ? { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
+          try { onSample(usage || answered ? { provider: 'Claude', scope: 'claude', seatId: entry.seat.id, configDir: entry.seat.configDir,
             at: now(), checkedAt: now(), authStatus: 'logged-in' } : entry.failure); } catch (_) {}
         }
       })().finally(() => { entry.pending = null; });

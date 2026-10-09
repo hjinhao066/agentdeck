@@ -118,7 +118,7 @@ test('idle seats refresh independently every five minutes; failure retains sampl
   for (const seat of seats) assert.ok(!fs.readFileSync(M.credentialLocation(seat, home).usagePath, 'utf8').includes('fake-'));
   const store = {};
   for (const sample of poller.samples()) Q.observe(store, sample, now);
-  assert.equal(Q.summary(store, 'Claude', now, seats[0]).displayLabel, '5h 25% ↻未知 · 7d 60% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now, seats[0]).displayLabel, '5h 剩 25% ↻未知 · 7d 剩 60% ↻未知');
   assert.equal(Q.summary(store, 'Claude', now, seats[1]).state, 'unknown');
 });
 test('refresh coalesces concurrent ticks, does not apply removed seats, and tolerates cache-write failure', async (t) => {
@@ -154,7 +154,7 @@ test('bound server samples retain explicit screen exhaustion; empty and unbound 
   const sample = (at, windows) => ({ ...Q.cacheClaude({ source: Q.CLAUDE_OAUTH_SOURCE, windows }, at), seatId: seat.id, configDir: seat.configDir, accountKey: 'fake-account', accountBound: true });
   Q.observe(store, { provider: 'Claude', scope: 'claude', seatId: seat.id, at: now - 1000, source: '会话屏幕', exhausted: true, windows: [] }, now);
   Q.observe(store, sample(now, [{ key: 'weekly', remaining: 60 }]), now);
-  assert.equal(Q.summary(store, 'Claude', now, seat).displayLabel, '5h 已用尽 ↻未知 · 7d 60% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now, seat).displayLabel, '5h 已用尽 ↻未知 · 7d 剩 60% ↻未知');
   assert.equal(Q.summary(store, 'Claude', now + C.INTERVAL_MS + 1000, seat).state, 'exhausted');
   Q.observe(store, sample(now + 1, []), now + 1);
   assert.equal(Q.summary(store, 'Claude', now + 1, seat).state, 'exhausted');
@@ -170,7 +170,7 @@ test('official numbers remain current between successful polls; rereading an old
   Q.observe(store, api, now);
   Q.observe(store, { ...api, at: now + 1000, official: false, source: '会话屏幕', windows: [{ label: '每周', remaining: 55 }] }, now + 1000);
   Q.observe(store, api, now + 1000);
-  assert.equal(Q.summary(store, 'Claude', now + 1000, seat).displayLabel, '7d 70% ↻未知');
+  assert.equal(Q.summary(store, 'Claude', now + 1000, seat).displayLabel, '7d 剩 70% ↻未知');
   Q.observe(store, { ...api, at: now + 2000, official: false, source: '会话屏幕', exhausted: true, windows: [] }, now + 2000);
   Q.observe(store, api, now + 2000);
   assert.equal(Q.summary(store, 'Claude', now + 2000, seat).state, 'exhausted');
@@ -267,7 +267,7 @@ test('display after three consecutive failures retains last remaining percentage
   const read = async () => { await poller.tick(); for (const sample of poller.samples()) Q.observe(store, sample, time); };
   await read();
   const before = Q.summary(store, 'Claude', time, seat), windows = structuredClone(store[Q.seatKey(seat.id)].sample.windows);
-  assert.match(before.displayLabel, /5h 91% ↻.* · 7d 90% ↻/);
+  assert.match(before.displayLabel, /5h 剩 91% ↻.* · 7d 剩 90% ↻/);
   failed = true;
   for (let failures = 1; failures <= 3; failures++) {
     time += C.INTERVAL_MS; await read();
@@ -286,8 +286,8 @@ test('display after three consecutive failures retains last remaining percentage
     assert.match(display.detail, /连续 3 次.*保留上次成功采样（数据已旧）/);
     assert.ok(display.detail.includes(new Date(sampledAt).toLocaleString()));
   }
-  assert.match(Q.text(store, time, [seat]), /5h 91% ↻.*7d 90% ↻.*数据已旧/);
-  assert.doesNotMatch(Q.text(store, time, [seat]), /5h 9%|7d 10%|fake-secret/);
+  assert.match(Q.text(store, time, [seat]), /5h 剩 91% ↻.*7d 剩 90% ↻.*数据已旧/);
+  assert.doesNotMatch(Q.text(store, time, [seat]), /5h 剩 9%|7d 剩 10%|fake-secret/);
   failed = false; time += C.INTERVAL_MS; await read();
   assert.equal(store[Q.seatKey(seat.id)].officialStatus.failures, 0);
   assert.equal(store[Q.seatKey(seat.id)].sample.at, time);
@@ -573,3 +573,70 @@ test('token refresh posts only to the pinned Claude Code token URL and drops aut
   assert.ok(!JSON.stringify(ok).includes('fake-refresh-token'));
 });
 
+// ---- a signed-in account with no running 5-hour window (US2 shown as 未登录 after signing in) ----
+test('a usage answer without a 5-hour reset time is still an answer: windows it has are kept, nothing is invented', async (t) => {
+  const seat = S.normalize()[2], now = Date.now(), weekly = new Date(now + 4 * 86400000).toISOString();
+  // Just signed in, not used yet: the 5-hour window has not started, so it has no reset time.
+  const fresh = C.officialUsage({ five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 12, resets_at: weekly } }, seat, 'service', now);
+  assert.deepEqual(fresh.windows.map((w) => [w.key, w.remaining, w.resetAt, w.resetText]), [['fiveHour', 100, null, ''], ['weekly', 88, Date.parse(weekly), weekly]]);
+  // No 5-hour window at all: the weekly one is still shown.
+  for (const five_hour of [null, undefined, { utilization: null, resets_at: null }]) {
+    const partial = C.officialUsage({ five_hour, seven_day: { utilization: 12, resets_at: weekly } }, seat, 'service', now);
+    assert.deepEqual(partial.windows.map((w) => w.key), ['weekly']);
+  }
+  // Neither window: no numbers, but not an error.
+  assert.deepEqual(C.officialUsage({ five_hour: null, seven_day: null }, seat, 'service', now).windows, []);
+  // Still refused: not a usage answer at all, an impossible percentage, or a reset time that is not a time.
+  for (const bad of [{}, null, 'x', { five_hour: { utilization: 120, resets_at: null }, seven_day: null }, { five_hour: { utilization: 'many' }, seven_day: null },
+    { five_hour: { utilization: 5, resets_at: 'soon' }, seven_day: null }, { five_hour: { resets_at: weekly }, seven_day: null }]) {
+    assert.throws(() => C.officialUsage(bad, seat, 'service', now), /invalid-usage/);
+  }
+  const usage = await C.requestUsage('fake-access', transport(200, JSON.stringify({ five_hour: { utilization: 0, resets_at: null }, seven_day: { utilization: 12, resets_at: weekly } }), []));
+  assert.equal(usage.authStatus, 'logged-in');
+  assert.deepEqual(usage.windows, [{ key: 'fiveHour', remaining: 100, resetText: '' }, { key: 'weekly', remaining: 88, resetText: weekly }]);
+  const none = await C.requestUsage('fake-access', transport(200, JSON.stringify({ five_hour: null, seven_day: null }), []));
+  assert.equal(none.authStatus, 'logged-in'); assert.deepEqual(none.windows, []);
+  // The numbers survive the trip to the sidebar: 5h 100% with an unknown reset, never 未登录 or 已用尽.
+  const store = {}, home = fixture(t), loc = M.credentialLocation(seat, home);
+  const sample = { ...Q.cacheClaude({ ...usage, source: Q.CLAUDE_OAUTH_SOURCE }, now), seatId: seat.id, configDir: seat.configDir, accountKey: M.usageAccountKey(loc), credentialKey: 'key', accountBound: true, official: true };
+  assert.equal(Q.observe(store, sample, now), true);
+  const row = Q.summary(store, 'Claude', now, seat);
+  assert.equal(row.authStatus, undefined); assert.equal(row.out, false); assert.equal(row.fiveHour, 100); assert.equal(row.weekly, 88);
+  assert.deepEqual(row.cells.map((c) => [c.key, c.remaining, c.resetAt]), [['5h', 100, null], ['7d', 88, Date.parse(weekly)]]);
+});
+test('a seat that answers without any quota number is proven signed in, so its 未登录 clears', async (t) => {
+  const { createSeatAuthMonitor, CONFIRM_MS } = require('../seat-auth-alert');
+  const home = fixture(t), seat = S.normalize()[2], loc = M.credentialLocation(seat, home);
+  let now = Date.now(), mode = 'out';
+  const statuses = [];
+  const monitor = createSeatAuthMonitor({ home, platform: 'darwin', saveState: () => {}, onStatus: (s) => statuses.push(s.authStatus) });
+  const poller = C.createRefresh({ home, getSeats: () => [seat], now: () => now, onSample: (sample) => monitor.observe(seat, sample), read: async () => {
+    if (mode === 'out') return { authStatus: 'logged-out', configDir: loc.dir, at: now };
+    if (mode === 'network') return null;
+    // Signed in again, the account has not been used yet: HTTP 200, no window to show.
+    return bound(seat, home, { at: now, source: Q.CLAUDE_OAUTH_SOURCE, windows: [], authStatus: 'logged-in' });
+  } });
+  t.after(() => poller.dispose());
+  const state = () => monitor.samples().find((s) => s.seatId === seat.id)?.authStatus;
+  await poller.tick(); now += CONFIRM_MS + C.INTERVAL_MS; await poller.tick();
+  assert.equal(state(), 'logged-out');
+  // A failed query proves nothing either way.
+  mode = 'network'; now += C.INTERVAL_MS; await poller.tick();
+  assert.equal(state(), 'logged-out');
+  // The service accepts the seat's token but has no numbers yet: signed in.
+  mode = 'unused'; now += C.INTERVAL_MS; await poller.tick();
+  assert.equal(state(), 'logged-in');
+  assert.deepEqual(statuses, ['logged-out', 'logged-in']);
+  // What the row is told meanwhile: no numbers yet, and not a network failure.
+  const [failure] = poller.samples();
+  assert.equal(failure.failureOnly, true); assert.equal(failure.authStatus, undefined);
+  assert.match(failure.failure, /已登录/); assert.doesNotMatch(failure.failure, /查询失败/);
+  // An answer for another directory is not this seat's proof.
+  const other = createSeatAuthMonitor({ home, platform: 'darwin', saveState: () => {} });
+  let clock = Date.now(), step = 0;
+  const stray = C.createRefresh({ home, getSeats: () => [seat], now: () => clock, onSample: (sample) => other.observe(seat, sample),
+    read: async () => step++ < 2 ? { authStatus: 'logged-out', configDir: loc.dir } : { windows: [], authStatus: 'logged-in', configDir: loc.dir + '-other', accountKey: M.usageAccountKey(loc) } });
+  t.after(() => stray.dispose());
+  await stray.tick(); clock += CONFIRM_MS + C.INTERVAL_MS; await stray.tick(); clock += C.INTERVAL_MS; await stray.tick();
+  assert.equal(other.samples()[0].authStatus, 'logged-out');
+});

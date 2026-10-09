@@ -905,3 +905,21 @@ test('api/progress hands the phone the daily counts behind login; without a sour
   assert.deepEqual(JSON.parse((await request(bare.status, '/api/progress', { headers: bare.auth })).text), { days: [] });
   assert.ok(!JSON.parse((await request(bare.status, '/api/info')).text).capabilities.includes('progress'));
 });
+
+test('the phone gets seat account names but never a whole address, whatever the desktop hands over', () => {
+  const { quotaView, relayView } = require('../mobile-web');
+  const quota = quotaView({ version: '2.0.1', rows: [
+    { key: 'Claude:us2', provider: 'Claude', name: 'Claude taylor0421us', short: 'taylor0421us', flag: '', status: 'normal', account: 'taylor0421us@example.com', cells: [{ key: '5h', remaining: 98 }] },
+    // A desktop that put the whole address in a name: only the part before the @ gets through.
+    { key: 'Claude:cn', provider: 'Claude', name: 'Claude taylor0421@example.com', short: 'taylor0421@example.com', flag: '', status: 'normal', account: 'taylor0421@example.com', cells: [] },
+  ] }, 1);
+  assert.deepEqual(quota.rows.map((r) => [r.name, r.short, r.account]), [['Claude taylor0421us', 'taylor0421us', 't***@example.com'], ['Claude taylor0421', 'taylor0421', 't***@example.com']]);
+  const relay = relayView({ captainId: 'c1', currentId: 'us2', seats: [
+    { id: 'us2', name: 'taylor0421us', provider: 'Claude', account: 'taylor0421us@example.com', current: true, reason: 'current' },
+    { id: 'cn', name: 'taylor0421@example.com', provider: 'Claude', account: 'taylor0421@example.com', selectable: true, reason: '' },
+    { id: 'us', name: '未登录（us）', provider: 'Claude', account: '', reason: 'login' },
+  ], job: { id: 'j1', status: 'done', fromId: 'cn', fromName: 'taylor0421@example.com', targetId: 'us2', targetName: 'taylor0421us' } }, 1);
+  assert.deepEqual(relay.seats.map((s) => [s.name, s.account]), [['taylor0421us', 't***@example.com'], ['taylor0421', 't***@example.com'], ['未登录（us）', '']]);
+  assert.deepEqual([relay.job.fromName, relay.job.targetName], ['taylor0421', 'taylor0421us']);
+  assert.doesNotMatch(JSON.stringify([quota, relay]), /[^*]@/);
+});
