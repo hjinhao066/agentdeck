@@ -54,7 +54,10 @@ test('an idle 队长 reporting every tick parses an unchanged config.json once',
   assert.equal(c.parses(), 1, 'ten reports, one parse');
   assert.equal(c.context.warmupCaptain.id, 'cap');
   assert.equal(c.context.warmupCaptain.idle, true);
-  assert.equal(c.context.warmupCaptain.seatId, 'us');
+  // Turning busy cancels the warm-up of the 队长's seat, still without a parse.
+  assert.equal(c.report('cap', false), true);
+  assert.deepEqual(c.cancels, ['us']);
+  assert.equal(c.parses(), 1);
 });
 
 test('a changed config.json is read again at the next report', (t) => {

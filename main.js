@@ -1261,7 +1261,7 @@ app.whenReady().then(async () => {
     };
   }
   checkQuotaBark(); // A fresh low sample at launch alerts once, across relaunches too.
-  let warmupCaptain = { id: '', idle: false, at: 0, seatId: '' };
+  let warmupCaptain = { id: '', idle: false, at: 0 };
   const idleCaptainId = () => warmupCaptain.idle && Date.now() - warmupCaptain.at <= 5000 &&
     warmupCaptain.id === seatViewConfig().mainSession?.colId ? warmupCaptain.id : '';
   quotaWarmupRunner = createQuotaWarmupRunner({ home: seatHome, env: ENV });
@@ -1288,9 +1288,8 @@ app.whenReady().then(async () => {
     const cfg = seatViewConfig(), col = cfg.columns?.find((c) => c.id === colId);
     if (!validId(colId) || colId !== cfg.mainSession?.colId || !col?.isMain || !ptys.has(colId) || typeof idle !== 'boolean') return false;
     const changed = warmupCaptain.id !== colId || warmupCaptain.idle !== idle;
-    // The seat is kept here (reported every status tick) so a keystroke never rereads config.json.
-    warmupCaptain = { id: colId, idle, at: Date.now(), seatId: col.claudeSeatId || cfg.activeClaudeSeatId };
-    if (!idle) quotaWarmup.cancel(warmupCaptain.seatId);
+    warmupCaptain = { id: colId, idle, at: Date.now() };
+    if (!idle) quotaWarmup.cancel(col.claudeSeatId || cfg.activeClaudeSeatId);
     else if (changed) quotaWarmup.tick().catch(() => {});
     return true;
   });
@@ -1458,7 +1457,9 @@ app.whenReady().then(async () => {
   onMain('pty:input', (_e, { id, data }) => {
     if (id === warmupCaptain.id) {
       warmupCaptain.idle = false;
-      quotaWarmup.cancel(warmupCaptain.seatId);
+      // The seat it uses now; the cached view costs one stat per key, a parse only after a change.
+      const cfg = seatViewConfig(), col = cfg.columns?.find((c) => c.id === id);
+      quotaWarmup.cancel(col?.claudeSeatId || cfg.activeClaudeSeatId);
     }
     const p = ptys.get(id); if (p) p.write(data);
   });
