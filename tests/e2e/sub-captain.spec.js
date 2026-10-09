@@ -31,8 +31,8 @@ function cli(controlEnv, args) {
   });
 }
 
-test('sub-captain: receipts, ledger, sidebar and hand-back through the real board-cli', async ({}, testInfo) => {
-  test.setTimeout(240000);
+test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the real board-cli', async ({}, testInfo) => {
+  test.setTimeout(300000);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-sub-captain-'));
   const envDir = path.join(profile, 'control-env');
   fs.mkdirSync(envDir);
@@ -56,21 +56,28 @@ test('sub-captain: receipts, ledger, sidebar and hand-back through the real boar
     return r.stdout;
   };
   const idIn = (text) => (/(c-board-[a-z0-9]+)/.exec(text) || [])[1];
+  // Receipts in the order they come: keep listening until the expected one is among them.
+  const receiptsUntil = async (env, text) => {
+    let all = '';
+    for (let i = 0; i < 6 && !all.includes(text); i++) all += await ok(env, ['receipts', '--wait', '--timeout', '60']);
+    return all;
+  };
+  const launch = () => electron.launch({
+    executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
+    args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`],
+    env: cleanEnv({ ZDOTDIR: profile, AGENTDECK_TEST_CONTROL_ENV_DIR: envDir }),
+  });
   try {
-    app = await electron.launch({
-      executablePath: process.env.AGENTDECK_TEST_EXECUTABLE || undefined,
-      args: [...(process.env.AGENTDECK_TEST_EXECUTABLE ? [] : [path.resolve(__dirname, '../..')]), `--test-user-data=${profile}`],
-      env: cleanEnv({ ZDOTDIR: profile, AGENTDECK_TEST_CONTROL_ENV_DIR: envDir }),
-    });
-    const page = await app.firstWindow();
-    const captain = await controlOf('captain');
+    app = await launch();
+    let page = await app.firstWindow();
+    let captain = await controlOf('captain');
 
     // The Captain opens a sub-captain. It finishes its first instruction at once (stand-in),
     // so the Captain gets the sub-captain's own receipt: that one is the Captain's.
     const opened = await ok(captain, ['new', '--title', '秋招小队长', '--task', '统筹秋招', '--project', '秋招', '--sub-captain']);
     const subId = idIn(opened);
     expect(subId, opened).toBeTruthy();
-    const sub = await controlOf(subId);
+    let sub = await controlOf(subId);
 
     // The sub-captain opens a child; create-child answers at once with the child's id.
     const made = await ok(sub, ['create-child', '--title', '子会话A', '--task', '做子会话A']);
@@ -102,7 +109,7 @@ test('sub-captain: receipts, ledger, sidebar and hand-back through the real boar
     expect(ledger.slice(subLine + 1).find((l) => l.includes(childId))).toMatch(/^\s+└\s*c-board-/);
     expect(await ok(captain, ['peek', '--id', childId, '--lines', '20'])).toContain('GOT');
     await ok(captain, ['tell', '--to', childId, '--message', '总队长补一句']);
-    expect(await ok(sub, ['receipts', '--wait', '--timeout', '60'])).toContain('stand-in finished 总队长补一句');
+    expect(await receiptsUntil(sub, 'stand-in finished 总队长补一句')).toContain('stand-in finished 总队长补一句');
     expect(await ok(captain, ['receipts'])).not.toContain('总队长补一句');
 
     // C: the sidebar shows the children under the sub-captain, folded by an icon button.
@@ -141,6 +148,24 @@ test('sub-captain: receipts, ledger, sidebar and hand-back through the real boar
     await expect(page.locator(`.nav-crew .colnav-item[data-col-id="${subId}"] button.sub-fold`)).toHaveAttribute('aria-expanded', 'true');
     await expect(page.locator(`#subCrew-${subId} .colnav-item`)).toHaveCount(2);
 
+    // After an AgentDeck restart the hierarchy is still there: the sub-captain gets its
+    // control capability back, still reaches its child, and still gets the child's receipts.
+    await closeElectron(app);
+    app = null;
+    for (const id of ['captain', subId]) fs.rmSync(path.join(envDir, id + '.json'), { force: true });
+    app = await launch();
+    page = await app.firstWindow();
+    captain = await controlOf('captain');
+    sub = await controlOf(subId);
+    expect(await ok(sub, ['ledger'])).toContain(childId);
+    const relaunched = (await ok(captain, ['ledger'])).split('\n');
+    expect(relaunched.slice(relaunched.findIndex((l) => l.startsWith(subId)) + 1).find((l) => l.includes(childId))).toMatch(/^\s+└\s*c-board-/);
+    await ok(sub, ['tell', '--to', childId, '--message', '重启后再做一轮']);
+    expect(await receiptsUntil(sub, 'stand-in finished 重启后再做一轮')).toContain('stand-in finished 重启后再做一轮');
+    expect(await ok(captain, ['receipts'])).not.toContain('重启后再做一轮');
+    await page.evaluate(() => { config.crewOpen = true; Sidebar.render(); });
+    await expect(page.locator(`#subCrew-${subId} .colnav-item`)).toHaveCount(2, { timeout: 15000 });
+
     // D: archiving the sub-captain keeps the child running and hands it to the Captain.
     expect(await ok(captain, ['archive', '--id', subId])).toContain('已结束终端并归档');
     expect(await page.evaluate((id) => !!terms.get(id)?.alive && !columns.find((c) => c.id === id).subCaptainId, childId)).toBe(true);
@@ -148,7 +173,7 @@ test('sub-captain: receipts, ledger, sidebar and hand-back through the real boar
     expect(handed).toContain('交回');
     expect(handed).toContain(childId);
     await ok(captain, ['tell', '--to', childId, '--message', '交回后再做一点']);
-    expect(await ok(captain, ['receipts', '--wait', '--timeout', '60'])).toContain('stand-in finished 交回后再做一点');
+    expect(await receiptsUntil(captain, 'stand-in finished 交回后再做一点')).toContain('stand-in finished 交回后再做一点');
     await expect(page.locator(`.nav-crew .colnav-item[data-col-id="${childId}"]`)).toHaveCount(1);
   } finally {
     if (app) await closeElectron(app);
