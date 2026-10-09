@@ -362,4 +362,4 @@ class SharedStore {
   }
 }
 
-module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard };
+module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard, historyReceipt, withoutMovedCopies };

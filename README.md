@@ -1359,7 +1359,14 @@ the same field stay as two copies and the card shows 冲突. The sidebar section
 
 The service is `node sync-server.js --data <dir> --token-file <path>`. Bind it
 to the WireGuard address when it is deployed; the default listen address is
-loopback. Each desktop keeps its settings in `userData/fleet.json` (not the
+loopback. A hub file too large for the service to load (Node reads at most
+~512 MB into one string) is rewritten small by
+`node scripts/fleet-store-compact.js <old store.json> <new store.json>`: it walks
+the file entry by entry, applies the rules the service applies when it loads a
+file (upload receipts name their transcript, copies kept only for card-state
+moves go), keeps cards, devices, transcripts and rewritten versions, only reads
+the old file and never replaces an existing one. Point `--data` at the new file's
+folder and keep the old file as the rollback. Each desktop keeps its settings in `userData/fleet.json` (not the
 deck `config.json`, which the window rewrites):
 
 ```json
