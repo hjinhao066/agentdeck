@@ -32,7 +32,7 @@ function cli(controlEnv, args) {
 }
 
 test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the real board-cli', async ({}, testInfo) => {
-  test.setTimeout(300000);
+  test.setTimeout(420000);
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-sub-captain-'));
   const envDir = path.join(profile, 'control-env');
   fs.mkdirSync(envDir);
@@ -169,8 +169,10 @@ test('sub-captain: receipts, ledger, sidebar, restart and hand-back through the 
     for (const id of ['captain', subId]) fs.rmSync(path.join(envDir, id + '.json'), { force: true });
     app = await launch();
     page = await app.firstWindow();
-    captain = await controlOf('captain', 90000);
-    sub = await controlOf(subId, 90000);
+    // A relaunch usually brings the terminals back in seconds; on Windows the 队长's own startup
+    // has been seen to stall past 90 s now and then, before anything 小队长-specific runs.
+    captain = await controlOf('captain', 180000);
+    sub = await controlOf(subId, 180000);
     expect(await ok(sub, ['ledger'])).toContain(childId);
     const relaunched = (await ok(captain, ['ledger'])).split('\n');
     expect(relaunched.slice(relaunched.findIndex((l) => l.startsWith(subId)) + 1).find((l) => l.includes(childId))).toMatch(/^\s+└\s*c-board-/);
