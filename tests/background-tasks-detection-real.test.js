@@ -92,6 +92,15 @@ test('Claude 2.1.294: the effort hint and a named rule under the status row do n
   assert.equal(M.claudeBackgroundTasks(['✻ Worked for 2s · done 11:09 PM', '                  ◐ medium · /effort', ...REAL_2_1_294.slice(3), '  ⏵⏵ bypass permissions on'].join('\n'), CMD), false);
 });
 
+test('a live spinner right under a finished turn row is not taken for a folded part of that row', () => {
+  for (const spinner of ['· Thinking… (esc to interrupt)', '* Brewing… (3s · ↓ 12 tokens)', '✢ Considering...']) {
+    const live = worker(['✻ Brewed for 12s', spinner]);
+    assert.equal(tick(live).state, 'working', spinner);
+  }
+  // A real fold may still start with the separator.
+  assert.equal(M.claudeBackgroundTasks(worker(['✻ Churned for 3m 55s', '· done 9:16 PM · 1 shell still running']), CMD), true);
+});
+
 test('only the background-agent wait is blanked: another live "Waiting for …" spinner is still work', () => {
   const live = worker(['⏺ 正在调接口。', '', '✻ Waiting for the API response… (12s · esc to interrupt)']);
   assert.equal(tick(live).state, 'working');

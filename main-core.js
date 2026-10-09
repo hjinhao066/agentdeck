@@ -887,7 +887,9 @@
   const CLAUDE_DONE_ROW = /^\s*[✻✽✳✶✢✺*]\s*[^\s·]+\s+for\s+(?:\d+h\s*)?(?:\d+m\s*)?\d+s\b/;
   const CLAUDE_WAIT_ROW = /^\s*[✻✽✳✶✢✺*·]\s*Waiting\s+for\b/i;
   const CLAUDE_CHROME = /^\s*(?:$|[─━═]{3,}|Update available\b|[◐◑◒◓○]\s+\S+\s+·\s+\/effort\s*$)/i;
-  const CLAUDE_FOLD_END = /^\s*(?:[─━═]{3,}|Update available\b|[◐◑◒◓○]\s+\S+\s+·\s+\/effort\s*$|[⏺●❯›>⎿✻✽✳✶✢✺∴])/i;
+  // A fold ends at chrome, a new item, or a live spinner ("· Thinking…"); a folded row
+  // may itself start with the "·" separator.
+  const CLAUDE_FOLD_END = /^\s*(?:[─━═]{3,}|Update available\b|[◐◑◒◓○]\s+\S+\s+·\s+\/effort\s*$|[⏺●❯›>⎿✻✽✳✶✢✺∴]|[·*]\s*\S+(?:…|\.\.\.))/i;
   const CLAUDE_BG_RUNNING = /\b[1-9]\d*\s+(?:shells?|monitors?|tasks?|agents?)\b[^\n]*\bstill running\b/i;
   const CLAUDE_BG_WAITING = /\bWaiting for [1-9]\d* background\b/i;
   // Each status row with the rows it was folded onto: { start, end, text }.
