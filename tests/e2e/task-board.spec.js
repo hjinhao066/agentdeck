@@ -366,7 +366,8 @@ test('Codex completed screen releases ordinary tell and tell --now after a Capta
     expect(ledger.split('\n').find((line) => line.startsWith(w.session))).toContain('已完成');
     const message = now ? 'Immediate Codex rework delivered' : 'Ordinary Codex rework delivered';
     await command(['tell', '--to', w.session, '--message', message, ...(now ? ['--now'] : [])]);
-    await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term), w.session), { timeout: 15000 }).toContain('GOT ' + message);
+    // A narrow column breaks the stand-in's line across rows (Windows' background desktop is small): read it unbroken.
+    await expect.poll(() => page.evaluate((id) => dumpScreen(terms.get(id).term).replace(/\s+/g, ''), w.session), { timeout: 15000 }).toContain(('GOT ' + message).replace(/\s+/g, ''));
     await expect.poll(() => page.evaluate((id) => config.mainSession.tasks.findLast((t) => t.colId === id)?.status, w.session)).toBe('working');
     await expect.poll(() => page.evaluate((id) => terms.get(id).state, w.session)).toBe('done');
     expect((await card(c.id)).attempt_closed).toBe(false);
