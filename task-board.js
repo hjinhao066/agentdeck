@@ -257,7 +257,7 @@ class TaskStore {
     return (card.session_id && this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) && !card.attempt_closed &&
       !session?.failed && !(session?.lastReceipt?.failed && !session.active) &&
       !['failed', 'quota', 'held'].includes(card.flag) && !/:failed:/.test(card.last_event || '')) ||
-      sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id);
+      sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id && AutoVerify.reviewAttemptRound(card.id, s.boardAttempt) >= (card.review_round || 0));
   }
   failure(card, attempt, reason, rework, source = '') {
     const duplicate = card.last_failure_attempt === attempt;
@@ -389,7 +389,11 @@ class TaskStore {
       const explicitReview = Array.isArray(input.reviews) && input.reviews.length > 0;
       if (explicitReview && input.review_round !== (card.review_round || 0)) throw new Error('这张卡片已经不在这一轮待验收了，审查会话没有开。');
       if (explicitReview && card.exec_receipt && !input.reviews.includes(card.exec_receipt.session_id)) throw new Error('--reviews must include the original execution session.');
-      const review = explicitReview || card.status === 'review';
+      // The executor told to do more while its receipt waits for (or is with) a reviewer:
+      // that round is void, and the executor is working on the card again, not reviewing it.
+      const execResume = !explicitReview && card.status === 'review' && card.verify === true && card.exec_receipt?.session_id === input.session_id;
+      const review = !execResume && (explicitReview || card.status === 'review');
+      if (execResume) card.status = 'doing';
       if (explicitReview) {
         if (!card.exec_receipt) {
           if (!input.exec_receipt || !input.reviews.includes(input.exec_receipt.session_id)) throw new Error('Review requires the original execution receipt.');
@@ -405,7 +409,7 @@ class TaskStore {
         review_session: review, review_verdict: explicitReview, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
       card.flag = null;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
-      if (review && card.review_claim) card.review_claim.delivered = true;
+      if ((review || execResume) && card.review_claim) card.review_claim.delivered = true;
       // Someone (the Captain, or the automatic rework itself) took the card on.
       if (card.review_block) card.review_block = null;
       if (card.review_reject) card.review_reject.delivered = true;
@@ -416,6 +420,14 @@ class TaskStore {
   event(input) {
     return this.mutate((docs) => {
       const card = this.find(docs, input.id);
+      if (this.supersedesReview(card, input)) {
+        // The executor was told more and handed in a new receipt while a reviewer holds
+        // the card: the review of the old receipt is void. The executor takes the card
+        // back (the old reviewer's later words are then ignored) and the receipt below
+        // starts the next round, which is due its own reviewer.
+        Object.assign(card, { session_id: input.session_id, attempt_id: input.attempt_id, session_host: os.hostname(), session_bound_at: Date.now(), assignee: card.exec_receipt.assignee || card.assignee,
+          review_session: false, review_verdict: false, attempt_closed: false, last_event: null, flag: null, resource_failure: null });
+      }
       if (card.session_id !== input.session_id || card.attempt_id !== input.attempt_id) return { card, ignored: true, notices: [] };
       if (!['started', 'ask', 'complete', 'failed', 'fallback'].includes(input.type)) throw new Error('Invalid task event.');
       // A resource stop is already final for runtime failures from this attempt.
@@ -579,6 +591,13 @@ class TaskStore {
     });
   }
   // ---- automatic verification ----
+  // A written receipt from the original executor that differs from the one under
+  // review, while a reviewer (automatic or manual) holds the card in review.
+  supersedesReview(card, input) {
+    const exec = card.exec_receipt;
+    return input.type === 'complete' && input.source === 'command' && card.verify === true && card.status === 'review' && card.review_session === true && !card.archived && !card.flag &&
+      !!exec && exec.session_id === input.session_id && card.session_id !== input.session_id && !(exec.attempt_id === input.attempt_id && exec.text === input.message);
+  }
   // A card is due a reviewer once per round: verify card, in review through the
   // execution's own complete (it has a round number and receipt), nobody has
   // taken the review, and this round has no claim or block yet.
