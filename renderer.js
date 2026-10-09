@@ -2393,6 +2393,54 @@ function trimTrail(text, s, e) {
   while (e > s && /[\s.,;:!?)\]}>'"]/.test(text[e - 1])) e--;
   return e;
 }
+// The relative file references in one run of [\w.+@%:/-], i.e. the matches of
+//   /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?
+//    |[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g
+// ("dir/…/name.ext[:line[:col]]" or "name.ext:line[:col]"), found in one pass.
+// That pattern backtracked across the rest of the run from every position: a
+// 20,000-character token with a dot in it (a JWT, a dotted version list) took
+// seconds to half a minute.
+function relativeLinks(run) {
+  const n = run.length, out = [];
+  const isDigit = (i) => { const c = run.charCodeAt(i); return c >= 48 && c <= 57; };   // NaN past the end
+  const isAlnum = (i) => { const c = run.charCodeAt(i) | 32; return isDigit(i) || (c >= 97 && c <= 122); };
+  const isW = (i) => isAlnum(i) || '_.+@%-'.includes(run[i] || ' ');   // [\w.+@%-]
+  // From the right: wEnd, the end of the [\w.+@%-] stretch at i; aEnd, the end of
+  // the letters and digits at i; dot, the stretch's last "." before a letter or
+  // digit, at i or later; name, where the last usable "name.ext" starts among the
+  // stretches reachable from i through "stretch/" steps (the regex's greedy
+  // directory part settles on the last one).
+  const wEnd = new Int32Array(n + 1), aEnd = new Int32Array(n + 1), dot = new Int32Array(n + 1).fill(-1), name = new Int32Array(n + 1).fill(-1);
+  wEnd[n] = n; aEnd[n] = n;
+  for (let i = n - 1; i >= 0; i--) {
+    aEnd[i] = isAlnum(i) ? aEnd[i + 1] : i;
+    if (!isW(i)) { wEnd[i] = i; continue; }
+    wEnd[i] = wEnd[i + 1];
+    dot[i] = dot[i + 1] >= 0 ? dot[i + 1] : run[i] === '.' && isAlnum(i + 1) ? i : -1;
+    const next = run[wEnd[i]] === '/' ? name[wEnd[i] + 1] : -1;
+    name[i] = next >= 0 ? next : run[i] !== '.' && dot[i] >= 0 ? i : -1;
+  }
+  const lineSuffix = (p) => {   // (?::\d+(?::\d+)?)?
+    if (run[p] !== ':' || !isDigit(p + 1)) return p;
+    let e = p + 1;
+    while (isDigit(e)) e++;
+    if (run[e] === ':' && isDigit(e + 1)) { e++; while (isDigit(e)) e++; }
+    return e;
+  };
+  for (let s = 0; s < n;) {
+    let e = -1;
+    const q = isW(s) && run[wEnd[s]] === '/' ? name[wEnd[s] + 1] : -1;
+    // "dir/…/name.ext": up to 8 letters or digits after the dot, then an optional :line[:col]
+    if (q >= 0) e = lineSuffix(dot[q] + 1 + Math.min(aEnd[dot[q] + 1] - dot[q] - 1, 8));
+    // "name.ext:line": the extension is all of the stretch after its last dot
+    else if (isW(s) && run[s] !== '.' && dot[s] >= 0 && aEnd[dot[s] + 1] === wEnd[s] && wEnd[s] - dot[s] - 1 <= 8 &&
+      run[wEnd[s]] === ':' && isDigit(wEnd[s] + 1)) e = lineSuffix(wEnd[s]);
+    if (e < 0) { s++; continue; }
+    out.push({ index: s, text: run.slice(s, e) });
+    s = e;
+  }
+  return out;
+}
 function findLinks(text) {
   const out = [];
   let m;
@@ -2433,22 +2481,18 @@ function findLinks(text) {
   // Relative references the agents print constantly: "src/renderer.js:406",
   // "main.js:128". To stay quiet on ordinary prose ("and/or", "Node.js"), a
   // candidate needs either a slash-path ending in a dotted filename, or a bare
-  // filename with a :line suffix. The main process anchors these to the
-  // column's live shell cwd before resolving.
-  const relRe = /(?:\.{1,2}\/)?(?:[\w.+@%-]+\/)+[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}(?::\d+(?::\d+)?)?|[\w+@%-][\w.+@%-]*\.[A-Za-z0-9]{1,8}:\d+(?::\d+)?/g;
-  // A match lies inside one run of the characters relRe can match and holds a
+  // filename with a :line suffix (relativeLinks has the exact rules). The main
+  // process anchors these to the column's live shell cwd before resolving.
+  // A match lies inside one run of the characters it can contain and holds a
   // ".ext": search each such run on its own and skip runs without one, or runs
   // a URL or absolute path already covers (every match there would overlap it).
-  // Same matches as one pass over the line, but a long run (a base64 blob, a
-  // hash, a long URL) no longer makes the pattern backtrack quadratically.
   const runRe = /[\w.+@%:/-]+/g;
   let run;
   while ((run = runRe.exec(text))) {
     if (!/\.[A-Za-z0-9]/.test(run[0])) continue;
     if (out.some((o) => run.index >= o.start && run.index + run[0].length <= o.end)) continue;
-    relRe.lastIndex = 0;
-    while ((m = relRe.exec(run[0]))) {
-      const s = run.index + m.index, e = trimTrail(text, s, s + m[0].length);
+    for (const rel of relativeLinks(run[0])) {
+      const s = run.index + rel.index, e = trimTrail(text, s, s + rel.text.length);
       if (s > 0 && /[\w/~.\\-]/.test(text[s - 1])) continue; // mid-token or tail of an absolute path
       if (out.some((o) => s < o.end && e > o.start)) continue; // overlaps a URL or absolute path
       out.push({ start: s, end: e, text: text.slice(s, e), kind: 'file' });
