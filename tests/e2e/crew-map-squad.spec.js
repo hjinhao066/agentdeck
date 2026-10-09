@@ -24,7 +24,7 @@ const WORKING = '✻ Working… (12s · esc to interrupt)';
 const CREW = [
   ['lead', 'agentdeck', '2.0.1 发版小队长', 'working', '', ['⏺ 3 个队员在打包，Windows 包回来就合更新说明', WORKING]],
   ['c1mac', '', '打包 macOS 并公证', null, 'lead', ['⏺ notarytool 已提交，等 Apple 回执', WORKING]],
-  ['c2win', '', '打包 Windows 安装包', null, 'lead', ['⏺ 已交给小队长'], { taskCompleted: true, result: 'Windows 安装包已签名，SHA 写进 release-c3notes。' }],
+  ['c2win', '', '打包 Windows 安装包', null, 'lead', ['⏺ 已交给小队长'], { taskCompleted: true, result: 'Windows 安装包已签名，SHA 写进 release-notes。' }],
   ['c3notes', '', '写 2.0.1 更新说明', null, 'lead', ['要不要写 Windows 已知问题？', '❯ 1. 写', '  2. 不写']],
   ['c4cert', '', '签名证书续期', null, 'c1mac', ['⏺ 证书 30 天后到期，先续上', WORKING]],
   ['w1', 'agentdeck', 'crew-map 横排布局重做', 'working', '', ['⏺ 正在跑 crew-map 端到端测试', WORKING]],
@@ -144,7 +144,7 @@ test('a 小队长 heads its crew: the crew hangs under it a step in, on a pocket
     expect(m.nodes.c4cert).toMatchObject({ parent: 'c1mac', depth: 2, project: 'agentdeck' });
     expect(m.nodes.lead).toMatchObject({ leader: true, crew: 3, parent: '' });
     expect(m.nodes.c1mac).toMatchObject({ leader: true, crew: 1 });
-    expect(m.nodes.c2win).toMatchObject({ status: 'done', line: 'Windows 安装包已签名，SHA 写进 release-c3notes。' });
+    expect(m.nodes.c2win).toMatchObject({ status: 'done', line: 'Windows 安装包已签名，SHA 写进 release-notes。' });
     expect(m.nodes.c3notes.status).toBe('input');
     // 队长's lines go to the sessions it sent; each 小队长's to its crew; only 队长's own crew report back to it
     expect(m.dispatch).toEqual(['lead', 'q1', 'w1', 'w2', 'w3']);
