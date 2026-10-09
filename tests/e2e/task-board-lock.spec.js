@@ -33,7 +33,7 @@ function liveChild() {
 
 test('lock unit tests, including many crashing processes, pass on this platform', () => {
   const run = spawnSync(process.execPath, ['--test', path.join('tests', 'task-board-stale-lock.test.js')], { cwd: ROOT, encoding: 'utf8', timeout: 170_000 });
-  expect(run.stdout + run.stderr).toMatch(/# fail 0/);
+  expect(run.stdout + run.stderr).toMatch(/(?:# |ℹ )pass 12\b[\s\S]*(?:# |ℹ )fail 0\b/);
   expect(run.status).toBe(0);
 });
 
