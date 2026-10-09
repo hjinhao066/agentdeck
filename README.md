@@ -305,6 +305,8 @@ Claude 队员回合结束后还有后台 shell / Monitor 在跑时，输入框�
 
 登录抖动：干活中的 Claude 会话屏幕上出现 Claude Code 自己的「Not logged in · Please run /login」时，先现查一次（不用缓存）这列绑定的席位是否登录。确定没登录（或查不出）照旧马上给队长一条「未登录」回执；核实是登录的，就按短暂故障处理：不发回执，约一分钟后用同一套续接规则发一次「接着做（登录已恢复）……」（不打在草稿上，睡眠、断网时不发），只发这一次。之后在这句下面又出现同样的报错，就交「未登录」失败回执并写明已自动续接过一次。这句一出现在屏幕上，它上面的旧报错就只算历史：状态灯、「已结束，未提交回执」、文字提问、静默看门狗都只看这句之后的新输出（这句还没画出来时旧报错不算第二次）。会话重新干活满 1 分钟后这一轮清零。会话侧在 `main-session.js` 的 `loginBlipStep`。
 
+打指令时滚轮照常：程序往会话里打回执、任务或提醒，到按下回车为止（对方一直在画屏时最长约 3 秒），你在这个终端按的键和鼠标点击先等着，回车之后再跟上，不会混进它打的字里；滚轮、不按键的鼠标移动、焦点切换和终端替程序答的询问（光标位置、终端类型等）不等。Claude Code 2.1 在 AgentDeck 里是全屏界面、接管鼠标，往上翻全靠把滚轮送给它，以前这段时间里滚轮也被扣住，翻不动、过几秒才一下跳过去。
+
 指令没提交：程序打进会话的指令按下回车后，约 2.5 秒、屏幕静下来时再看一眼输入框。自己的文字（或折叠成「[Pasted text #1 …]」的粘贴）还停在框里，就再按一次回车，并在诊断日志（系统临时目录 `agentdeck-notify.log`）记一行 `sent->enter-again`，不记指令内容。只补一次；框里是菜单、用户正在打字或看不到这段文字时都不按。
 Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；运行中的回合需静默至少 10 秒才判空闲。
 提交完成回执后，任务仍为完成，但 Cursor 会话只要还在运行就继续显示「干活中」。
@@ -1190,6 +1192,8 @@ npm run dist:mac
 **Mac 压力下的 E2E 分流：** 跑 E2E 时用 `node scripts/e2e-auto.js tests/e2e/a.spec.js [b.spec.js] [-- playwright 参数]`：带 Windows 平台跳过标记（`test.skip(process.platform === 'win32', …)`）的 spec 走本机排队锁；其余 spec 在 Windows 在线时合成一组、经 ssh 在后台（非桌面会话，不弹窗）派到 Windows 跑，ssh 或远端准备失败时自动改走本机排队锁。Windows 测的是当前工作区（没提交的改动也会带过去）；测试在 Windows 上真失败就是失败，不会悄悄换 Mac 重跑，只在 Windows 才不通过的 spec 要加上面的跳过标记。看本机队列：`node scripts/e2e-auto.js --status`。
 
 **Windows 后台执行：** Windows 上每个任务有自己的检出目录（`agentdeck-e2e-win\checkouts\<运行号>`），依赖按 lockfile 分目录（`deps\<哈希>`，哈希不含根 `version`；同一 lockfile 只装一次，其他任务等它装完复用，等锁有日志、25 分钟超时后退出码 15 并自动改走 Mac；每次任务结束后只留最近用过的 2 份、正在被用的不删，新装前可用空间不足 2 GB 退出码 16 并改走 Mac），所以 `AGENTDECK_E2E_SLOTS` 大于 1 时几组可以同时跑，互不覆盖。进程优先级没有调低。验证没有窗口跑到桌面的办法：`scripts/verify-windows-background.ps1`（ssh 登录在会话 0，看不到桌面会话的窗口，所以证据是「所有测试进程都在会话 0、桌面会话里没有新的测试进程」）。
+
+**终端滚动/切换/悬停测速：** `node scripts/perf-terminal-scroll.js [--app <源码目录>] [--cols 16 --lines 30000] [--replica <userData 目录>] [--out 结果.json]` 开一个隔离实例（`--test-user-data`，窗口不抢焦点），量滚轮、Shift+PageUp、侧栏切换会话、在终端上移动鼠标从输入到画面的时间、掉帧和主进程/页面 CPU。`--replica` 把一份真实配置的布局、对话和终端存档复制进临时目录（席位、通知、Bark、手机页、定时、预热、快捷键全关），每列换成按 Claude Code 2.1 实测行为写的替身（`tests/e2e/fixtures/claude-like-agent.js`：全屏、接管鼠标、滚轮重画一屏），另外量「全屏 agent 里滚轮到画面」和「程序正往里打字时滚轮到画面」。用完删掉临时目录，不打印复制的内容。
 
 **性能基准：** `node scripts/perf-e2e-benchmark.js --mode win --groups N --sha <提交> --out <目录> <spec…>` 与 `--mode mac …` 对同一提交实测，只输出实测值。实测结果见 `docs/e2e-windows-background.md`（Windows 单组比 Mac 慢；并行吞吐倍数因 Windows 一直有别的会话的任务而没能测到干净数据，所以没给倍数）。
 

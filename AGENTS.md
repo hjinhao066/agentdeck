@@ -60,7 +60,9 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
 - Automatic input (队长 receipts, work handed to a session) must never go through
   an input box holding text the user has not sent: gate on `userComposing` and pass
   `guardUserInput` to `ChatUI.sendPrompt`. Never press Enter on the user's behalf
-  for text that is not AgentDeck's own.
+  for text that is not AgentDeck's own. Keys and clicks that arrive while it types
+  wait for its Enter; wheel, pointer moves, focus and terminal replies never wait
+  (`ChatCore.passesInputHold`): full-screen agents are scrolled by the wheel.
 - Screen-based completion is a quiet-output heuristic, not proof of task success.
 - Do not log prompts, tokens or terminal contents. Do not commit local settings,
   session output, screenshots containing user data, keys, or installed bundles.

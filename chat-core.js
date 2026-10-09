@@ -606,8 +606,33 @@
     return { total: seen.size, groups: list };
   }
 
+  // While AgentDeck types a receipt or a task into a terminal (guardUserInput), what the user
+  // does there waits for its Enter. Only input that can put text in the box or act on it has to
+  // wait. A wheel tick, a pointer move without a button (SGR mouse reports), focus in/out and the
+  // terminal's answers to the program's own queries (cursor position, device attributes, mode
+  // reports, OSC/DCS replies) go straight through: Claude Code 2.1 runs full-screen with the
+  // mouse taken and is scrolled by those wheel reports, so holding them froze scrolling for the
+  // whole delivery (up to 3 s while the agent keeps drawing).
+  const HOLD_FREE = /^(?:\x1b\[<(\d+);\d+;\d+[Mm]|\x1b\[[IO]|\x1b\[\??\d+;\d+(?:;\d+)?R|\x1b\[[?>=][\d;]*c|\x1b\[\??\d+;\d+\$y|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\)/;
+  function passesInputHold(data) {
+    if (!data) return false;
+    for (let i = 0; i < data.length;) {
+      const m = HOLD_FREE.exec(data.slice(i));
+      if (!m) return false;
+      if (m[1] !== undefined) {
+        // SGR button code: low bits the button (3 = none), +32 motion, +64 wheel, +4/8/16 modifiers
+        const b = Number(m[1]);
+        const wheel = (b & 64) && !(b & 32) && !(b & 128);
+        const move = (b & 32) && (b & 3) === 3 && !(b & 64);
+        if (!wheel && !move) return false;
+      }
+      i += m[0].length;
+    }
+    return true;
+  }
+
   return {
-    normalizeViewMode, toggleGlobalView, RENDER_STEP, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
+    normalizeViewMode, toggleGlobalView, RENDER_STEP, passesInputHold, visibleWidth, collectArtifacts, artifactName, pathKey, deliveryReceipts, collectDeliveries, extractReply, cutInputBox, pasteBusy, promptLeftInBox, LINE_MODE_BYTES, utf8Length, longestLineBytes, clipBytes, isPromptAnswer, isSecretPrompt, isChrome, reflow,
     emptyChat, normalizeChat, addTurn, closeOpenTurns, mergeChats, windowStart, searchChats,
     fileKind, languageFor, imageMime, extOf, highlightCode, renderMarkdown, esc,
     // the reply as the chat view shows it

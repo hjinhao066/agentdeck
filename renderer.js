@@ -2320,8 +2320,9 @@ function buildColumn(col, isFresh) {
       entry.typing = trackPrompt.typing;
       entry.flushHeld = () => held.splice(0).forEach(forwardInput);
       // While AgentDeck types a receipt or a task into this box (about half a
-      // second), your keys wait and follow right after its Enter.
-      term.onData((d) => { if (entry.injecting) held.push(d); else forwardInput(d); });
+      // second), your keys wait and follow right after its Enter. The wheel,
+      // pointer moves and the terminal's own replies do not wait (ChatCore.passesInputHold).
+      term.onData((d) => { if (entry.injecting && !ChatCore.passesInputHold(d)) held.push(d); else forwardInput(d); });
     }
     term.onResize(({ cols, rows }) => window.deck.ptyResize(col.id, cols, rows));
     if (deckEl.firstElementChild === wrap) { if (!ChatUI.focusInput(col.id)) term.focus(); focusedId = col.id; } // focus leftmost on boot
