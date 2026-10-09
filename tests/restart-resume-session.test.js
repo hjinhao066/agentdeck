@@ -349,3 +349,13 @@ test('a worker already archived before startup is restored only by ordinary disp
   assert.equal(app.sends.length, 1);
   assert.equal(app.sends[0].deliveredText, 'ordinary restore instruction');
 });
+
+test('a crew column with no task record (respawned under a new id, or its old records pruned) reopens plainly instead of throwing', async (t) => {
+  const w = world(t);
+  w.config.mainSession.tasks = [];
+  const app = w.boot();
+  // respawnColumn and restartWorker pass isFresh; a restore or app restart does not
+  assert.equal(app.api.restartLaunch(w.col, true).mode, 'leave');
+  w.col.modelSessionId = '11111111-1111-4111-8111-111111111111'; w.col.modelSessionOwner = w.col.id; w.col.modelSessionCwd = '';
+  assert.equal(app.api.restartLaunch(w.col, false).mode, 'leave');
+});

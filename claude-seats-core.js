@@ -55,6 +55,24 @@
     column.claudeConfigDir ||= seat?.configDir;
     return { ...seat, id: column.claudeSeatId, configDir: column.claudeConfigDir || '' };
   }
+  // A launch line whose program is Claude: bare, quoted or by path, optionally after `command`.
+  const CLAUDE_LAUNCH_RE = /^(?:command\s+)?((?:"[^"]*claude"|'[^']*claude'|[^\s]*claude))(\s|$)/;
+  function claudeLaunch(command) { return CLAUDE_LAUNCH_RE.test(String(command || '')); }
+  // Why a Claude session must not start on the seat it is bound to ('' when it may). Restored and
+  // reopened sessions only ever go back to their own seat, never another one. Only a definite answer
+  // blocks: a seat gone from the settings, or one whose login is known to be missing (seats:list
+  // loginReason). An unreadable Keychain or a seat list that did not load is not a logout.
+  function launchBlock(column, config, infos) {
+    if (!claudeLaunch(column?.cmd)) return '';
+    const id = column.claudeSeatId || active(config).id;
+    const seat = normalize(config.claudeSeats).find((s) => s.id === id);
+    if (!seat) return `席位 ${id} 已不在席位设置里`;
+    // The seat now points at another directory: its login says nothing about this session's.
+    if (column.claudeConfigDir && column.claudeConfigDir !== seat.configDir) return '';
+    const info = (Array.isArray(infos) ? infos : []).find((s) => s?.id === seat.id);
+    if (!info || info.loggedIn || !info.loginReason) return '';
+    return `席位 ${seat.name}（${seat.email || info.maskedEmail || seat.id}）未登录`;
+  }
   function maskEmail(email) {
     if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+$/.test(email)) return '';
     const [name, domain] = email.split('@');
@@ -70,7 +88,7 @@
   function launchCommand(command, seat, home, platform) {
     // Reassert after shell profiles, and bypass a claude alias/function that
     // could route back to the other login. Other providers keep their launch.
-    const match = String(command).match(/^(?:command\s+)?((?:"[^"]*claude"|'[^']*claude'|[^\s]*claude))(\s|$)/);
+    const match = String(command).match(CLAUDE_LAUNCH_RE);
     if (!match || !seat) return command;
     const dir = configDir(seat, home, platform);
     const standard = configDir({ configDir: '~/.claude' }, home, platform);
@@ -107,6 +125,6 @@
     }
     return windows.length ? { at: now, source: 'Claude 会话状态行', windows } : null;
   }
-  return { normalize, cleanEmail, accountCheck, active, bindColumn, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
+  return { normalize, cleanEmail, accountCheck, active, bindColumn, claudeLaunch, launchBlock, maskEmail, configDir, launchCommand, usage, footerUsage, codexCommand, relayCodexCommand, CODEX_COMMAND, CLAUDE_COMMAND };
 
 });

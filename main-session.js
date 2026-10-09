@@ -1772,11 +1772,21 @@
     const R = window.RestartResume;
     const task = col && latestTask(col.id);
     if (col?.executor === 'chatgpt-web') return { mode: 'leave' };
-    if (!R || !col || !R.resumeEnabled(host.config) || !col.captainCrew || col.isMain ||
-        coldTasks.get(col.id) !== task?.id || (isFresh && !task.resumeFallback)) return { mode: 'leave' };
+    // No task record (respawned under a new id, or old records pruned): nothing to resume.
+    if (!R || !col || !task || !R.resumeEnabled(host.config) || !col.captainCrew || col.isMain ||
+        coldTasks.get(col.id) !== task.id || (isFresh && !task.resumeFallback)) return { mode: 'leave' };
     const owner = col.modelSessionOwner === col.id && col.modelSessionCwd === (col.cwd || '') &&
       !host.columns().some((c) => c !== col && String(c.modelSessionId || '').toLowerCase() === String(col.modelSessionId || '').toLowerCase() && R.providerOf(c.cmd) === R.providerOf(col.cmd));
     return R.launchChoice({ cmd: col.cmd, sessionId: owner && !task.resumeFallback ? col.modelSessionId : null, task, enabled: true });
+  }
+  // Its Claude never started (ClaudeSeatsCore.launchBlock): work running in it or sent to it fails
+  // with the seat named. Nothing is typed into its shell and it is never moved to another seat.
+  function launchBlocked(col, reason) {
+    const s = state();
+    if (!s || !col || isMain(col)) return;
+    for (const t of s.tasks) {
+      if (t.colId === col.id && t.status !== 'waiting') settle(t, { summary: '', files: [], images: [], failed: reason, explicit: true, source: 'startup' });
+    }
   }
   function notePtySurvived(col) {
     if (!col) return;
@@ -2415,7 +2425,12 @@
     let restored = false;
     if (!col) {
       const old = archivedCrew(message.to);
-      if (old) { col = host.restoreArchived(old.id, false, true); restored = true; }
+      if (old) {
+        // Back on its own seat or not at all: a seat that is gone or signed out restores nothing.
+        const blocked = window.ClaudeSeatsCore.launchBlock(old, host.config, await Promise.resolve(window.deck.claudeSeats?.()).catch(() => []));
+        if (blocked) throw new Error(`「${host.columnLabel(old)}」没有恢复：${blocked}，不会换到别的席位。请用户先登录这个席位（席位设置里有复制登录命令的图标）再 tell；急的话用 new --task-id … --seat 另一个已登录席位 改派。`);
+        col = host.restoreArchived(old.id, false, true); restored = true;
+      }
     }
     if (!col) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
     if (col.executor === 'chatgpt-web') window.ChatGPTWebCore.validatePublicTask(text);
@@ -2935,7 +2950,7 @@
 
   window.MainSession = {
     init, open, create, clearContext, openSettings, checkpointForSeatSwitch, handoffSnapshot, relayIdle, relayEffort, handle, submit, onTick, onPower, onTurnStarted, onTurnDone, onContextCommand, onContextCommandSent, onOutput, outgoingPrefix, renderCard, skipsResume,
-    parkForRestart, noteColdColumn, notePtySurvived, restartLaunch,
+    parkForRestart, noteColdColumn, notePtySurvived, restartLaunch, launchBlocked,
     isMain, isMainId, mainCol, state, sendMessage, settleArchivedWorktree, syncEffectiveCap, dispatchWeb, userNotice, automation,
     batteryReadout, setBattery,
     // 高优先级: isPriority(session column), isHigh(queued request or dispatch record), setPriority(id, 'high'|'normal') from the user's click
