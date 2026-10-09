@@ -11,6 +11,11 @@ Applies to all AI tools and all files in this repository, on Windows and macOS.
    platforms share this repository; do not create divergent Windows/Mac copies.
 3. Implement the complete change and add regression tests for meaningful bugs.
    Feature branches run `npm test` plus the E2E specs that cover the change.
+   **Run E2E only through `npm run e2e -- <spec>` (or `npm run test:smoke` /
+   `test:e2e`), never bare `playwright test`**: one machine-wide queue lets a single
+   group run at a time so 20 sessions do not stall the Mac; wait for your turn, do
+   not remove its lock. To use the Windows PC instead, `node scripts/e2e-remote-win.js
+   <branch> <spec>` (README 「E2E 排队与 Windows 远程跑」).
    A patch release runs `npm test` and `npm run test:smoke` (see README 发版流程).
    Full `npm run test:e2e` runs overnight or on another machine. Run `npm audit`
    before packaging. Run the packaged E2E suite when runtime, preload, native
