@@ -4711,7 +4711,7 @@ document.getElementById('searchClose').onclick = () => closeSearch();
 
 // The board view opens on the 终端架构图; the old free canvas is its second tab.
 function boardCanvasMode() { return CrewMap.mode() === 'canvas'; }
-CrewMap.init({
+const crewMapHost = {
   config, terms, columnLabel, findColumn: (id) => columns.find((c) => c.id === id) || (config.archived || []).find((a) => a.id === id),
   columns: () => columns,
   mainCol: () => MainSession.mainCol(),
@@ -4734,7 +4734,10 @@ CrewMap.init({
     showView('terminals');
     whenMounted(col, () => setTimeout(() => jumpToColumn(col), 40));
   },
-});
+};
+// init draws the map for the first time. A throw there (2.0.2: an empty map on the hidden board view) must not stop
+// this script before 任务看板, its tabs and the saved view below are set up.
+try { CrewMap.init(crewMapHost); } catch (error) { console.error('终端架构图首次绘制失败：', error); }
 // 任务看板 covers whichever view is showing; opening it hides any page. The
 // crew map's 架构图 / 自由画布 / 任务看板 tabs and the board's own tabs switch
 // between the two: the map shows the sessions running now, the board every task.
