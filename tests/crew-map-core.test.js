@@ -1223,3 +1223,66 @@ test('小队长 (its own fields): only a live column marked subCaptain leads: un
   const both = C.buildCrewMap(official({ columns: [...columns, col('g1', '签名公证', { captainCrew: false, taskId: 'T-g1', parentTaskId: 'T-k1', state: 'working' }), ...[]].map((c) => (c.id === 'k1' ? { ...c, taskId: 'T-k1' } : c)) }));
   assert.deepEqual([both.nodes.find((n) => n.id === 'g1').parent, both.nodes.find((n) => n.id === 'g1').depth, both.nodes.find((n) => n.id === 'g1').project], ['k1', 2, '秋招']);
 });
+
+// ---- 智能一页 for a window (arrangePage): what crew-map.js arranges, untouched by hand ----
+// crew-map.js's own sizes: NODE, GRID and TIGHT, the fit's 8px inset, no header wider than its cards.
+const ARRANGE = { nodeW: 280, nodeH: 110, captainW: 440, captainH: 112, gapX: 24, clusterGap: 32, fanY: 48, gapY: 20, pad: 16, lane: 12,
+  padX: 16, padBottom: 16, rowGap: 12, reviewGap: 36, headH: 68, rails: true, railX: 8, entryTop: 20,
+  fold: false, collapsedProjects: {}, order: [], grid: true, center: true, tray: true, headW: {},
+  tightly: { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 }, inset: { top: 8, right: 8, bottom: 8, left: 8 }, returns: false };
+// The window dragged: the arrangement made for each width in turn, the one in use carried along as the app carries it.
+function sweep(map, widths, h, dpr = 1) {
+  let current = {};
+  return widths.map((w) => { const r = C.arrangePage(map, { w, h }, { ...ARRANGE, dpr }, current); current = { plan: r.plan, planW: w }; return r.plan.page ? 'row' : 'lanes'; });
+}
+const switches = (modes) => modes.filter((m, i) => i && m !== modes[i - 1]).length;
+// small projects of one to four cards, the mixes the review swept (six of one or two cards is common)
+const SMALL = { '2-1-2-1-2-1': { a: 2, b: 1, c: 2, d: 1, e: 1, f: 2 }, '1x6': { a: 1, b: 1, c: 1, d: 1, e: 1, f: 1 }, '2x5': { a: 2, b: 2, c: 2, d: 2, e: 2 }, '3-2-2-1-1': { a: 3, b: 2, c: 2, d: 1, e: 1 }, '4-2-1-1-1-1': { a: 4, b: 2, c: 1, d: 1, e: 1, f: 1 } };
+
+test('智能一页 does not flip between one row and lanes while the window is dragged: one change at most each way, none from a few pixels back and forth', () => {
+  const widths = []; for (let w = 1180; w <= 1340; w += 2) widths.push(w);
+  // (a 1x screen and a 2x one: there one row may shrink to 80% of the map's own 100%, here only to what keeps its text readable)
+  for (const dpr of [1, 2]) for (const h of [730, 780, 815]) for (const [name, spec] of Object.entries(SMALL)) {
+    const map = crewOf(spec);
+    const there = sweep(map, widths, h, dpr), back = sweep(map, widths.slice().reverse(), h, dpr);
+    assert.ok(switches(there) <= 1, `${name} at ${h}, ${dpr}x: wider, ${switches(there)} changes ${there.join(' ')}`);
+    assert.ok(switches(back) <= 1, `${name} at ${h}, ${dpr}x: narrower, ${switches(back)} changes`);
+    // at any width, 4px back and forth a few times: whatever it settled on stays
+    for (let w = 1180; w <= 1340; w += 8) {
+      const modes = sweep(map, [w, w + 4, w, w + 4, w, w + 4, w], h, dpr).slice(1);
+      assert.equal(switches(modes), 0, `${name} at ${w}x${h}, ${dpr}x: ${modes.join(' ')}`);
+    }
+  }
+});
+
+// The smallest text on the map (a card's model, account, time and chips: 11.5 on the canvas) is never shown under 10
+// device px: the least a map is shown at, on one page or in lanes, is the larger of 80% (lanes: 100%) of its own 100%
+// and what that asks of the screen.
+test('智能一页 keeps the smallest text at 10 device px or more: on a 1x screen what would need less stands in lanes that large and scrolls; 2x screens as before', () => {
+  const FIT = C.BASE_SCALE, inset = ARRANGE.inset;
+  assert.ok(Math.abs(C.readableScale(1) * 11.5 - 10) < 1e-9 && Math.abs(C.readableScale(2) * 11.5 * 2 - 10) < 1e-9);
+  // in the map's own percent: 1x 124% both ways; 125% Windows scaling 99% / 100%; 2x 80% / 100% as before
+  const pct = (dpr) => { const s = C.scalesFor(dpr); return [Math.round(s.floor / FIT * 100), Math.round(s.lanes / FIT * 100), Math.round(s.max / FIT * 100)]; };
+  assert.deepEqual([pct(1), pct(1.25), pct(1.5), pct(2), pct(3)], [[124, 124, 140], [99, 100, 140], [83, 100, 140], [80, 100, 140], [80, 100, 140]]);
+  const shownAt = (map, view, dpr) => {
+    const r = C.arrangePage(map, view, { ...ARRANGE, dpr }, {});
+    const lim = C.fitLimits(r, dpr);
+    return { ...r, scale: C.computeFit(C.fitBounds(map, r.lay, ARRANGE, false), view, inset, lim).scale, lim };
+  };
+  // the screenshots' 24 sessions on a 1920x1080 window (the map's page 1668 x 912)
+  const big = crewOf({ agentdeck: 15, 秋招: 3, kenke: 2, fuqing: 2, daily: 1, other: 1 });
+  const retina = shownAt(big, { w: 1668, h: 912 }, 2), plain = shownAt(big, { w: 1668, h: 912 }, 1);
+  assert.equal(!!retina.plan.page, true);
+  assert.ok(retina.scale < FIT && retina.scale >= FIT * C.PAGE_MIN_SCALE - 1e-9, `2x: one row a little under 100% (${retina.scale / FIT})`);
+  assert.equal(!!plain.plan.page, false, '1x: one row would need its text under 10px');
+  assert.ok(plain.scale * 11.5 >= 10 - 1e-9, `1x: the smallest text at ${plain.scale * 11.5}px`);
+  assert.equal(plain.pageFits, false, 'it does not show whole that large: it scrolls');
+  // a small map: as before on both, up to 140%
+  const small = crewOf({ alpha: 2, beta: 1 });
+  for (const dpr of [1, 2]) assert.ok(Math.abs(shownAt(small, { w: 1260, h: 814 }, dpr).scale - FIT * C.PAGE_MAX_SCALE) < 1e-9);
+  // on a 1x screen no arrangement is shown under the readable scale, whatever the window
+  for (const [w, h] of [[1188, 732], [1260, 814], [1668, 912], [1000, 700]]) for (const spec of [{ agentdeck: 11, 秋招: 3, skills: 1 }, { a: 2, b: 1, c: 2, d: 1, e: 1, f: 2 }, { big: 20, s1: 2, s2: 1, s3: 3 }]) {
+    const r = shownAt(crewOf(spec), { w, h }, 1);
+    assert.ok(r.scale * 11.5 >= 10 - 1e-9, `${JSON.stringify(spec)} at ${w}x${h}: ${(r.scale * 11.5).toFixed(2)}px`);
+  }
+});

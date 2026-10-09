@@ -578,7 +578,7 @@
     const projects = ordered(map.projects, o.order).filter((p) => frame(p, o, shown, 1));
     if (!projects.length) return { lanes: [], caps: {}, scale: 1, fits: true };
     const W = Math.max(1, size.w), H = Number.isFinite(size.h) ? Math.max(1, size.h) : Infinity;
-    const minScale = Number.isFinite(o.minScale) ? o.minScale : PAGE_MIN_SCALE;
+    const minScale = Number.isFinite(o.minScale) ? o.minScale : PAGE_MIN_SCALE, cap = Math.max(1, minScale);
     // every project's frame at each width it can take (a folded frame has one)
     const choices = projects.map((p) => {
       const one = frame(p, o, shown, 1);
@@ -591,7 +591,7 @@
     const score = (pick) => {
       const width = Math.max(o.captainW, pick.reduce((a, f) => a + f.w, 0) + (pick.length - 1) * gap) + edge;
       const height = o.captainH + o.fanY + Math.max(...pick.map((f) => f.h)) + edge;
-      const s = Math.min(1, W / width, H / height);
+      const s = Math.min(cap, W / width, H / height);
       const rows = pick.map((f) => (f.collapsed ? 0 : f.rows.length)).sort((a, b) => b - a);
       const excess = Math.max(0, rows[0] - Math.max(1, rows[1] || 0) - 1);
       const extra = pick.reduce((a, f) => a + (f.collapsed ? 0 : f.cols - 1), 0);
@@ -627,6 +627,74 @@
       if (idx.every((i) => i >= 0)) { const r = score(pickOf(idx)); if (r.fits && r.value >= best.value - PAGE_KEEP) best = { ...r, idx }; }
     }
     return { lanes: projects.map((p) => [p.key]), caps: Object.fromEntries(projects.map((p, k) => [p.key, choices[k][best.idx[k]].cols])), scale: best.s, fits: best.fits };
+  }
+
+  // ---- 智能一页 for a window ----
+  // WRAP_GAIN: one row of frames gives way to lanes when they show the whole map at least this much larger (off any
+  // N/(N-1): six one-card frames against five lanes is exactly 6/5); WRAP_KEEP: either way, the arrangement in use
+  // stays until the other is that much better again, so dragging the window back and forth over a width never flips it.
+  const WRAP_GAIN = 1.22, WRAP_KEEP = 1.03;
+  // The smallest text on the map (a card's model, account, time and chips: 11.5 on the canvas, nothing smaller) is
+  // never shown under READABLE_PX device pixels: readableScale is the scale (drawn units) that asks for on a screen
+  // of that density.
+  const SMALLEST_TEXT = 11.5, READABLE_PX = 10;
+  const readableScale = (dpr) => READABLE_PX / (SMALLEST_TEXT * Math.max(0.5, Number(dpr) || 1));
+  // The least a map is shown at: on one page, PAGE_MIN_SCALE of its own 100% or what keeps that text readable, the
+  // larger; in lanes (what a map too big for one page falls back to), 100% or that. 1x screen: 124% for both.
+  function scalesFor(dpr) {
+    const FIT = BASE_SCALE, max = FIT * PAGE_MAX_SCALE, readable = readableScale(dpr);
+    return { floor: Math.min(max, Math.max(FIT * PAGE_MIN_SCALE, readable)), lanes: Math.min(max, Math.max(FIT, readable)), max };
+  }
+  // the least and most the view shows an arrangement r ({ plan, pageFits }) at, on a screen of that density
+  function fitLimits(r, dpr) {
+    const s = scalesFor(dpr);
+    return r.pageFits ? { min: r.plan && r.plan.page ? s.floor : s.lanes, max: s.max } : { min: s.lanes, max: s.lanes };
+  }
+  // Everything a layout takes on the canvas, the way the view fits it: frames, cards, 队长, the fold and every line
+  // (the return lines only when shown), with 16 around.
+  function fitBounds(map, lay, opts, returns) {
+    const boxes = [lay.captain, ...lay.groups, ...lay.nodes.values(), lay.fold].filter(Boolean);
+    const points = routes(map, lay, opts).filter((r) => r.type !== 'return' || returns).flatMap((r) => r.points);
+    return {
+      left: Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 16,
+      top: Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 16,
+      right: Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 16,
+      bottom: Math.max(...boxes.map((b) => b.y + b.h), ...points.map((p) => p[1])) + 16,
+    };
+  }
+  // The arrangement 智能一页 makes for a window, untouched by hand: every project across one row (planPage), or
+  // the same columns in lanes (planAcross), roomy or tight. view: { w, h }, the viewport in screen px; o: the
+  // layout options, with o.tightly (what the tight lanes change), o.inset (the fit's inset) and o.returns (the
+  // return lines are shown, o.dpr: the screen's density); current: { plan, planW }, the arrangement in use and
+  // the width it was made for. Returns { plan, lay, pageFits }: pageFits, the whole map shows on one page.
+  function arrangePage(map, view, o, current = {}) {
+    const FIT = BASE_SCALE, inset = { top: 0, right: 0, bottom: 0, left: 0, ...o.inset }, plan = current.plan || null, sc = scalesFor(o.dpr);
+    const build = (p) => layout(map, { ...o, ...(p.tight ? o.tightly : {}), lanes: p.lanes, caps: p.caps });
+    const scaleOf = (l, max) => computeFit(fitBounds(map, l, o, o.returns), view, inset, { min: 0, max }).scale;
+    // the whole layout shows in this window at `least` of the drawn size or more; how large the fit shows it
+    const whole = (l, least) => scaleOf(l, 1) >= least - 1e-9;
+    const shown = (l) => scaleOf(l, sc.max);
+    const page = (k) => ({ w: (view.w - inset.left - inset.right) / k, h: (view.h - inset.top - inset.bottom) / k });
+    const onePage = planPage(map, page(FIT), { ...o, minScale: sc.floor / FIT, keep: plan && plan.page ? plan : null });
+    // the same columns in lanes, as many across as the window holds at the lanes' scale: roomy while the whole map
+    // shows that large, tight when only that brings it all in
+    const pick = (tight) => {
+      const p = planAcross(map, page(sc.lanes), { ...o, ...(tight ? o.tightly : {}), caps: onePage.caps, keep: plan && !plan.page && current.planW === view.w && !!plan.tight === tight ? plan : null });
+      const next = { lanes: p.lanes, caps: p.caps, tight };
+      return { plan: next, lay: build(next) };
+    };
+    let lanes = pick(false), lanesFit = whole(lanes.lay, sc.lanes);
+    if (!lanesFit) { const tight = pick(true); if (whole(tight.lay, sc.lanes)) { lanes = tight; lanesFit = true; } }
+    // one row stands while it shows the map about as large as the lanes would: a row that fits only shrunk wraps
+    // instead, like lines of text, when the lanes show the whole map clearly larger
+    const wrapAt = !plan ? WRAP_GAIN : plan.page ? WRAP_GAIN * WRAP_KEEP : WRAP_GAIN / WRAP_KEEP;
+    if (onePage.fits) {
+      const next = { lanes: onePage.lanes, caps: onePage.caps, tight: false, page: true };
+      const l = build(next);
+      if (whole(l, sc.floor) && !(lanesFit && shown(lanes.lay) >= shown(l) * wrapAt)) return { plan: next, lay: l, pageFits: true };
+    }
+    // taller than a page even then: the lanes at their scale, panned down
+    return { plan: lanes.plan, lay: lanes.lay, pageFits: lanesFit };
   }
 
   // The order the user has put the project frames in, read from where they stand now the way
@@ -930,5 +998,5 @@
     return Math.round(((210 + (1 + h % 1009) * 137.508) % 360) * 10) / 10;
   }
 
-  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, PAGE_MAX_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, pockets, planPage, planAcross, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
+  return { STATUS_LABEL, ACTIVE, PAGE_COLUMNS, PAGE_MIN_SCALE, PAGE_MAX_SCALE, MIN_SCALE, MAX_SCALE, BASE_SCALE, zoomPercent, zoomStep, projectHue, nodeStatus, receiptLine, receiptFull, cardLine, isCollapsed, trayProjects, traySummary, reopenOnActivity, computeFit, returnKind, detectReviews, buildCrewMap, layout, pockets, planPage, planAcross, arrangePage, fitBounds, fitLimits, readableScale, scalesFor, WRAP_GAIN, WRAP_KEEP, orderByPlace, constrainPosition, translateProject, applyPositions, routes, spine, tidy, nestRanks, normalizeSaved, signature, summaryLine };
 });
