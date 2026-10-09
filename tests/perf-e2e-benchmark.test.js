@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
 const { parseArgs, summarizeSamples, newProcesses, snapshotField, throughputFactor, queueWait } = require('../scripts/perf-e2e-benchmark');
 
 const SHA = 'a'.repeat(40);
@@ -35,7 +36,8 @@ test('queue wait is read from the queue line', () => {
 });
 test('arguments need a mode, a full commit id, an output folder and a spec', () => {
   assert.deepEqual(parseArgs(['--mode', 'win', '--groups', '2', '--sha', SHA, '--out', '/tmp/x', 'tests/e2e/a.spec.js']),
-    { mode: 'win', groups: 2, sha: SHA, out: '/tmp/x', host: 'winpc', specs: ['tests/e2e/a.spec.js'] });
+    // --out is resolved for this system: /tmp/x on macOS, <drive>:\tmp\x on Windows.
+    { mode: 'win', groups: 2, sha: SHA, out: path.resolve('/tmp/x'), host: 'winpc', specs: ['tests/e2e/a.spec.js'] });
   assert.throws(() => parseArgs(['--mode', 'win', '--sha', 'HEAD', '--out', '/tmp/x', 'a.spec.js']), /full commit id/);
   assert.throws(() => parseArgs(['--mode', 'x', '--sha', SHA, '--out', '/tmp/x', 'a.spec.js']), /mode/);
   assert.throws(() => parseArgs(['--mode', 'mac', '--sha', SHA, '--out', '/tmp/x']), /spec/);
