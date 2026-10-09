@@ -250,13 +250,14 @@ class TaskStore {
     return this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) || this.sessionOpen(card.dispatch_session_id, false, sessions, card.dispatch_host, card.dispatch_bound_at) ||
       sessions.some((s) => !s.archived && (s.boardId === card.id || s.dispatcherCardId === card.id));
   }
-  activeAttempt(card, skipOtherSessions = false) {
+  // self: the session being bound is not "another" session on the card.
+  activeAttempt(card, self = '') {
     const sessions = this.sessions();
     const session = sessions.find((s) => s.id === card.session_id);
     return (card.session_id && this.sessionOpen(card.session_id, card.attempt_closed, sessions, card.session_host, card.last_event ? 0 : card.session_bound_at) && !card.attempt_closed &&
       !session?.failed && !(session?.lastReceipt?.failed && !session.active) &&
       !['failed', 'quota', 'held'].includes(card.flag) && !/:failed:/.test(card.last_event || '')) ||
-      (!skipOtherSessions && sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id));
+      sessions.some((s) => !s.archived && s.active && s.boardId === card.id && s.id !== card.session_id && s.id !== self);
   }
   failure(card, attempt, reason, rework, source = '') {
     const duplicate = card.last_failure_attempt === attempt;
@@ -274,25 +275,22 @@ class TaskStore {
     card.flag = card.consecutive_failures >= 2 ? 'held' : 'failed';
     card.latest_receipt = sentence(reason);
   }
-  move(input) {
+  // tellFrom (bind only, never from IPC): a Captain tell took this done, archived or
+  // held card back to doing. The failure count stays, so the hold still counts.
+  move(input, tellFrom = '') {
     if (!STATUSES.includes(input.status)) throw new Error('Invalid status.');
     return this.mutate((docs) => {
       const card = this.find(docs, input.id);
       if (input.updated !== undefined && input.updated !== card.updated) throw new Error('Card changed since it was read. Reload before editing.');
       const wasReview = card.status === 'review';
       const wasHeld = card.flag === 'held';
-      const isAutoRecover = input._autoRecoverReason !== undefined;
       if (input.status === 'doing') {
         if (card.depends_on.some((id) => this.find(docs, id).status !== 'done')) throw new Error('Predecessor cards are not all done.');
         if (wasReview) this.failure(card, card.review_round && card.exec_receipt ? AutoVerify.reviewAttemptId(card.id, card.review_round) : 'reject-' + (card.attempt_id || card.updated), '验收不通过，已打回返工', true);
-        else { card.flag = null; if (wasHeld && !isAutoRecover) card.consecutive_failures = 0; }
+        else { card.flag = null; if (wasHeld && !tellFrom) card.consecutive_failures = 0; }
       } else card.flag = null;
       card.status = input.status;
-      // Record auto-recovery from done/archived/held
-      if (isAutoRecover && input.status === 'doing') {
-        card.last_auto_recovered_at = new Date().toISOString();
-        card.last_auto_recovered_from = input._autoRecoverReason;
-      }
+      if (tellFrom) { card.last_auto_recovered_at = new Date().toISOString(); card.last_auto_recovered_from = tellFrom; }
       if (wasHeld && input.status === 'todo') card.consecutive_failures = 0;
       if (input.status === 'done') card.consecutive_failures = 0;
       // Keep unarchived sessions as an occupancy fence, including a finished
@@ -380,14 +378,18 @@ class TaskStore {
       return { card, notices: [] };
     });
   }
+  // tell: the Captain told this session to carry on (main-tell, automatic rework). That
+  // is an explicit decision to work on: a done, archived or held card goes back to doing
+  // first, a card waiting for review goes back to execution instead of making its own
+  // worker the reviewer, and a reviewer still bound to the card is replaced. The result
+  // names that reviewer (replaced_session) so the caller ends its terminal.
   bind(input) {
     idValue(input.session_id); idValue(input.attempt_id);
-    // Auto-move done/archived/held cards back to doing when binding
-    const list = this.list({ archived: true });
-    const card = list.find(c => c.id === input.id);
-    if (card && (card.archived || card.flag === 'held' || card.status === 'done')) {
-      const priorStatus = card.status;
-      this.move({ id: input.id, status: 'doing', _autoRecoverReason: priorStatus });
+    if (input.tell === true) {
+      const card = this.list({ archived: true }).find((c) => c.id === input.id);
+      if (card && (card.archived || card.flag === 'held' || card.status === 'done')) {
+        this.move({ id: input.id, status: 'doing', suppressDispatch: true }, card.archived ? 'archived' : card.flag === 'held' ? 'held' : 'done');
+      }
     }
     return this.mutate((docs) => {
       const card = this.find(docs, input.id); this.ready(docs, card);
@@ -397,21 +399,14 @@ class TaskStore {
         return { card, notices: [] };
       }
       const explicitReview = Array.isArray(input.reviews) && input.reviews.length > 0;
-      const reworkingFromReview = card.status === 'review' && !explicitReview;
-      // When reworking from review, the old review session needs to be stopped
-      // Temporarily clear session_id and skip other session checks to allow the bind
-      const savedSessionId = reworkingFromReview ? card.session_id : null;
-      if (reworkingFromReview) card.session_id = '';
-      try {
-        if (this.activeAttempt(card, reworkingFromReview)) throw new Error('Card already has an active execution or verification session.');
-      } finally {
-        if (reworkingFromReview) card.session_id = savedSessionId;
-      }
+      const takeBack = input.tell === true && !explicitReview && !(card.review_session === true && card.session_id === input.session_id);
+      const replaced = takeBack && card.review_session === true && card.session_id ? card.session_id : null;
+      if (this.activeAttempt(replaced ? { ...card, attempt_closed: true } : card, input.session_id)) throw new Error('Card already has an active execution or verification session.');
       if (input.assignee === null || typeof input.assignee !== 'object' || typeof input.assignee.agent !== 'string' || typeof input.assignee.model !== 'string') throw new Error('assignee requires agent and model.');
       if (explicitReview && input.review_round !== (card.review_round || 0)) throw new Error('这张卡片已经不在这一轮待验收了，审查会话没有开。');
       if (explicitReview && card.exec_receipt && !input.reviews.includes(card.exec_receipt.session_id)) throw new Error('--reviews must include the original execution session.');
-      // When binding without explicit review (rework/supplement), clear the old review_session
-      const review = explicitReview || (card.status === 'review' && !reworkingFromReview);
+      if (takeBack && card.status === 'review') card.status = 'doing';
+      const review = explicitReview || card.status === 'review';
       if (explicitReview) {
         if (!card.exec_receipt) {
           if (!input.exec_receipt || !input.reviews.includes(input.exec_receipt.session_id)) throw new Error('Review requires the original execution receipt.');
@@ -423,11 +418,8 @@ class TaskStore {
       if (/:fallback:/.test(card.last_event || '')) card.latest_receipt = '';
       if (card.dispatch_wait && card.latest_receipt === card.dispatch_wait) card.latest_receipt = '';
       if (input.worktree) card.worktree = Worktree.normalizeRecord(input.worktree);
-      const reviewSessionId = reworkingFromReview ? card.session_id : null;
       Object.assign(card, { session_id: input.session_id, session_host: os.hostname(), session_bound_at: Date.now(), attempt_id: input.attempt_id, assignee: input.assignee,
         review_session: review, review_verdict: explicitReview, attempt_closed: false, last_event: null, dispatch_session_id: null, dispatch_host: null, dispatch_bound_at: null, dispatch_wait: null, resource_failure: null });
-      // When reworking from review, record which session was doing the review so it can be cleaned up
-      if (reviewSessionId && !card.review_stop_session_id) card.review_stop_session_id = reviewSessionId;
       card.flag = null;
       if (card.dispatch_claim) card.dispatch_claim.delivered = true;
       if (review && card.review_claim) card.review_claim.delivered = true;
@@ -435,10 +427,7 @@ class TaskStore {
       if (card.review_block) card.review_block = null;
       if (card.review_reject) card.review_reject.delivered = true;
       touch(card);
-      const result = { card, notices: [] };
-      // When reworking from review, indicate that the old review session should be stopped
-      if (reviewSessionId) result.stopSession = reviewSessionId;
-      return result;
+      return { card, notices: [], ...(replaced ? { replaced_session: replaced } : {}) };
     });
   }
   event(input) {
