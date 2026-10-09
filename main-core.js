@@ -860,6 +860,15 @@
     }
     return source === 'quota' ? 'quota' : '';
   }
+  // AgentDeck's one 「接着做」 after a login blip (SleepResume.LOGIN_MARK, same text). Once it is on
+  // screen, the error rows above it were answered: only what the session printed after it counts.
+  const LOGIN_NUDGE_MARK = '接着做（登录已恢复）';
+  function loginNudgeAt(lines) {
+    const flat = (text) => String(text || '').replace(/\s+/g, '');
+    for (let i = lines.length - 1; i >= 0; i--) if (flat(lines[i] + (lines[i + 1] || '')).includes(LOGIN_NUDGE_MARK)) return i;
+    return -1;
+  }
+  function loginNudgeShown(screen) { return loginNudgeAt(String(screen || '').split('\n')) >= 0; }
   // A CLI's own error row, as it reads on one line. A narrow column wraps it
   // ("⎿  Not logged in · Please run" over "/login"), so a row naming a resource is
   // also read with up to two plain rows under it. Returns { text, rows } or null.
@@ -977,8 +986,9 @@
     screen = codexStatusScreen(screen, cmd);
     const lines = String(screen || '').split('\n').slice(-20);
     let quota = -1, resumed = -1, working = -1, queued = false;
+    const answered = loginNudgeAt(lines);
     lines.forEach((line, i) => {
-      if (resourceRow(lines, i)) quota = i;
+      if (i > answered && resourceRow(lines, i)) quota = i;
       if (/^\s*[⏺✻✽●]*\s*(?:usage limit reset\b|automatic continue cancel(?:led|ed)\b)/i.test(line)) resumed = i;
       if (/^\s*[⏺✻✽✳✶✢✺●*·]*\s*Doing\s*(?:…|\.\.\.)/i.test(line)) working = i;
       if (/^\s*[│┃]?\s*→[^\n]*\bctrl\+c to stop\s*[│┃]?\s*$/i.test(line)) working = i;
@@ -1001,7 +1011,7 @@
     screen = codexStatusScreen(screen, cmd);
     if (terminalActivity(screen) !== 'quota') return null;
     const lines = String(screen || '').split('\n'), found = [];
-    for (let i = 0; i < lines.length; i++) {
+    for (let i = loginNudgeAt(lines) + 1; i < lines.length; i++) {
       const row = resourceRow(lines, i);
       if (row) { found.push(row.text); i += row.rows - 1; }
     }
@@ -1013,21 +1023,6 @@
   function resourceKind(screen, cmd) {
     const receipt = resourceReceipt(screen, cmd);
     return receipt ? resourceFailure(receipt.failed, 'quota') : '';
-  }
-  // After AgentDeck typed `marker` (its 「接着做」 nudge) into a session: is a login error on screen
-  // newer than it? The error the nudge answered stays above it; one below it, or one still on
-  // screen after the nudge has scrolled away, is a new report. The marker may wrap onto a second row.
-  function loginErrorAfter(screen, cmd, marker) {
-    const lines = codexStatusScreen(screen, cmd).split('\n');
-    const flat = (text) => String(text || '').replace(/\s+/g, '');
-    const mark = flat(marker);
-    let nudge = -1, error = -1;
-    for (let i = 0; i < lines.length; i++) {
-      if (mark && flat(lines[i] + (lines[i + 1] || '')).includes(mark)) nudge = i;
-      const row = resourceRow(lines, i);
-      if (row && resourceFailure(row.text, 'automatic') === 'auth') error = i;
-    }
-    return error > nudge;
   }
 
   // Conservative silence windows: status spinners may stay busy during deep thinking.
@@ -1123,7 +1118,7 @@
 
   return {
     RECEIPT_CONTRACT, commandReceipt, STATUS, EFFORT, CURSOR_MODELS, MAX_ACTIVE, PRIORITY_MARK, highFirst, concurrencyCap, HANDOFF_BUDGET_DEFAULT, HANDOFF_BUDGET_MIN, HANDOFF_BUDGET_MAX, handoffBudget, admission, fillQueue, queueNote, queueTitle, ARCHIVE_AFTER, TOKEN_SAVER_DEFAULT, LONG_PROMPT, BRIEFING_LIMIT, SAVER_RESUME, ARCHIVE_PROMPT, AUTONOMOUS_CONTINUATION, REBRIEF_NOTE, contextResetCommand, contextResetEvidence, codexContextFooter, tokenSaverSettings, contextTokens, activeCrew, archivable, needsCardCheck, crewOrder, isShellProcess, afterReplay, windowsAgentOutput, isWindowsShellPrompt, windowsCodexReady, boardCli, dispatcherInstructions, instructions, parseReceipt, draftBlocks, inputBoxText, promptRowIdle, implicitCaptainQuestion, workingForSend, tellWaitReason, answerKeys, afterContract, resourceFailure, terminalActivity, claudeBackgroundTasks, backgroundCommandStatus, resourceReceipt,
-    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginErrorAfter, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
+    receiptsForModel, silenceTimeout, launchEchoOnly, startupLimit, startupFailure, exceptionReason, resourceKind, loginNudgeShown, LOGIN_NUDGE_MARK, statusLabel, ledgerText, readText, resetNote, relayNote, restartNote, LISTENER_SUPERSEDED, freshCommand, checkCommand, openedByCaptain, normalizeHistory, historyText, cursorActivity, cursorBusy, codexStatusScreen, codexLiveStatus, MAX_SUMMARY, MAX_HISTORY,
     quotaResumed,
   };
 });

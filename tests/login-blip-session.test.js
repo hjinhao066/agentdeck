@@ -37,13 +37,21 @@ test('core: a login blip waits about a minute, gets one nudge, then gives up; it
   assert.match(S.failure({ ...rec, attempts: 1 }), /登录/);
 });
 
-test('MainCore: the login error counts again only below the nudge; the old one above it is history', () => {
+test('MainCore: once the nudge is on screen, only what follows it counts; the error above it is history', () => {
   assert.equal(M.resourceKind(AUTH, 'claude'), 'auth');
   assert.equal(M.resourceKind('all done' + PROMPT, 'claude'), '');
-  assert.equal(M.loginErrorAfter(WORKING_AGAIN, 'claude', S.LOGIN_MARK), false);
-  assert.equal(M.loginErrorAfter(AGAIN, 'claude', S.LOGIN_MARK), true);
+  assert.equal(M.LOGIN_NUDGE_MARK, S.LOGIN_MARK, 'one marker text in both modules');
+  // above the nudge: answered, the screen is the session's work again
+  assert.equal(M.resourceKind(WORKING_AGAIN, 'claude'), '');
+  assert.equal(M.terminalActivity(WORKING_AGAIN, 'claude'), '');
+  assert.equal(M.resourceReceipt(WORKING_AGAIN, 'claude'), null);
+  // below it: a new report, and only that one is quoted
+  assert.equal(M.resourceKind(AGAIN, 'claude'), 'auth');
+  assert.equal(M.resourceReceipt(AGAIN, 'claude').failed, '未登录：⎿  Not logged in · Please run /login');
   // the nudge scrolled away but an error is still visible: it came after
-  assert.equal(M.loginErrorAfter('  ⎿  Not logged in · Please run /login\n✻ Baked for 1s' + PROMPT, 'claude', S.LOGIN_MARK), true);
+  assert.equal(M.resourceKind('  ⎿  Not logged in · Please run /login\n✻ Baked for 1s' + PROMPT, 'claude'), 'auth');
+  assert.equal(M.loginNudgeShown(WORKING_AGAIN), true);
+  assert.equal(M.loginNudgeShown(AUTH), false);
 });
 
 function world({ infos = [signedIn], cmd = 'claude --dangerously-skip-permissions --model claude-opus-5-5' } = {}) {
@@ -80,7 +88,10 @@ function world({ infos = [signedIn], cmd = 'claude --dangerously-skip-permission
   app.tick = () => { clock.beat(); app.api.onTick(worker.id, entry); };
   app.run = async (ms) => { for (let t = 0; t < ms; t += 1000) { app.now += 1000; app.tick(); await tick(); } };
   // what the status loop does with an error row on screen: the column reads as a resource wait
-  app.screen = (s) => { entry.lastScreen = s; entry.state = M.terminalActivity(s, cmd) === 'quota' ? 'quota' : 'done'; entry.lastOutputAt = app.now; };
+  app.screen = (s) => {
+    entry.lastScreen = s; entry.lastOutputAt = app.now;
+    entry.state = M.terminalActivity(s, cmd) === 'quota' ? 'quota' : /esc to interrupt/.test(s) ? 'working' : 'done';
+  };
   return app;
 }
 
@@ -113,12 +124,38 @@ test('the same Not logged in after the 接着做 is a failure receipt', async ()
   await w.run(62_000);
   assert.equal(w.sends.length, 1);
   w.sends[0].opts.onSent(null);
+  // the TUI has not drawn the nudge yet: the old error alone is not a second report
+  await w.run(5000);
+  assert.equal(w.task.status, 'working');
   w.screen(AGAIN);
   await w.run(3000);
   assert.equal(w.task.status, 'failed');
   assert.match(w.task.receipt.failed, /^未登录：/);
   assert.match(w.task.receipt.failed, /接着做/);
   assert.equal(M.exceptionReason(w.task.receipt), 'auth');
+  assert.equal(w.sends.length, 1);
+});
+
+// Review 5ca1705 (review-evidence/review-login-blip-hang.test.js): after the nudge the agent answers
+// briefly and stops without a receipt, the old error still in the last 20 rows. The task hung in
+// working for an hour; it must end the way the same ending without that old row does.
+const SHORT_REPLY = '\n⏺ 我看了一下，上一步其实已经做完了，请确认是否需要我继续。\n\n✻ Worked for 3s' + PROMPT;
+const IDLE_AFTER = 'work so far\n  ⎿  Not logged in · Please run /login\n✻ Baked for 1s\n' + NUDGED + SHORT_REPLY;
+test('after the 接着做, a short reply and no receipt ends like any other turn: the old error above it does not hold the task', async () => {
+  const w = world();
+  w.screen(AUTH);
+  await w.run(62_000);
+  assert.equal(w.sends.length, 1);
+  w.sends[0].opts.onSent(null);
+  w.screen(IDLE_AFTER);
+  await w.run(10 * MINUTE);
+  const control = world();
+  control.screen('work so far\n' + NUDGED + SHORT_REPLY);
+  await control.run(10 * MINUTE);
+  assert.equal(control.task.status, 'stopped');
+  assert.equal(w.task.status, control.task.status, 'not stuck in working');
+  assert.equal(JSON.stringify(w.state.pending.map((p) => p.summary)), JSON.stringify(control.state.pending.map((p) => p.summary)));
+  assert.ok(w.state.pending.some((p) => /已结束，未提交回执/.test(p.summary)));
   assert.equal(w.sends.length, 1);
 });
 

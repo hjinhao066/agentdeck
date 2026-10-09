@@ -2171,7 +2171,9 @@
   // A credential blip (10-08 18:02-18:03: three US2 sessions within 40 s, one went on by itself).
   // Only for a working Claude task. The seat is checked once per episode, fresh. Signed in: the
   // sleep rules carry it as evidence 'login' (about a minute, then one 「接着做」); the same error
-  // below that nudge is a failure receipt. Not signed in, or no answer: the ordinary 未登录 receipt.
+  // below that nudge is a failure receipt. Error rows above the nudge are history (MainCore), so
+  // after it the session's turn ends, asks or goes quiet like any other. Not signed in, or no
+  // answer: the ordinary 未登录 receipt.
   const loginChecks = new Map(); // task id -> 'pending' | true | false (never saved)
   function loginBlipStep(col, entry, task) {
     const sr = window.SleepResume;
@@ -2179,7 +2181,9 @@
     if (!window.ClaudeSeatsCore?.claudeLaunch(col.cmd) || M.resourceKind(entry.lastScreen, col.cmd) !== 'auth') return false;
     const blip = task.loginBlip;
     if (blip?.attempts) {
-      if (!M.loginErrorAfter(entry.lastScreen, col.cmd, sr.LOGIN_MARK)) return true;   // the error it answered, above it
+      // An error above the nudge no longer counts (MainCore reads only what follows it), so this one
+      // is new. Until the nudge shows up on screen, the error is still the old one: give it a minute.
+      if (!M.loginNudgeShown(entry.lastScreen) && Date.now() - blip.lastAt < 60_000) return true;
       settle(task, { summary: '', files: [], images: [], failed: M.resourceReceipt(entry.lastScreen, col.cmd).failed + '\n' + sr.failure(blip), explicit: true, source: 'quota' });
       return true;
     }
