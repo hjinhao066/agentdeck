@@ -840,14 +840,14 @@ test('clearing the Captain resets only its model context: work, receipts and que
 
   // a fresh agent gets the default instructions again, plus where the old conversation is
   const received = () => fs.readFileSync(path.join(profile, 'received-columns.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(JSON.parse).filter((p) => p.colId === fresh).map((p) => p.text).join('\n');
-  await expect.poll(received, { timeout: 30000 }).toContain('claude-opus-5-5-max');
+  await expect.poll(received, { timeout: 30000 }).toContain('红线，每一轮都守：');
   await expect.poll(received, { timeout: 15000 }).toContain(`read --id ${oldCaptainId}`);
   // then the question reaches it by itself
   await expect.poll(received, { timeout: 20000 }).toContain('向你提问：用 SQLite 可以吗');
   expect(received()).toContain('previously sent receipt not acknowledged');
   expect(received()).toContain('(y/n)');
   const text = received();
-  expect(text.indexOf('claude-opus-5-5-max')).toBeLessThan(text.indexOf('向你提问：用 SQLite 可以吗'));
+  expect(text.indexOf('红线，每一轮都守：')).toBeLessThan(text.indexOf('向你提问：用 SQLite 可以吗'));
 
   // The carried confirmation excerpt makes the stand-in ask for permission
   // too. Answer it like a user; receipts must wait while this prompt is live.
@@ -897,8 +897,9 @@ test('a restored Captain gets the current provider and effort instructions', asy
   await closeElectron(application);
   application = null;
   await launch();
-  await expect.poll(() => capturedPrompts().slice(captureStart).join('\n'), { timeout: 30000 }).toContain('claude-opus-5-5-max');
-  await expect.poll(() => capturedPrompts().slice(captureStart).join('\n'), { timeout: 15000 }).toContain('gemini-3.8-flash-high');
+  // The core prompt points at the models rule file, where providers, models and effort tiers live (briefing --topic models).
+  await expect.poll(() => capturedPrompts().slice(captureStart).join('\n'), { timeout: 30000 }).toContain('红线，每一轮都守：');
+  await expect.poll(() => capturedPrompts().slice(captureStart).join('\n'), { timeout: 15000 }).toContain('- models：派活选模型、定档位');
 });
 
 test('after a restart the conversation from before the clear is still listed and readable', async () => {
