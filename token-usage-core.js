@@ -202,16 +202,26 @@
   const first = (f, k) => (f && f.has(k) ? f.get(k)[0] : undefined);
   const firstNum = (f, k) => { const v = first(f, k); return typeof v === 'number' ? v : 0; };
   const decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder() : null;
-  // The steps table's metadata: field 9 is the model call's usage {1 model,
-  // 2 fresh input, 3 output incl. thinking, 5 cache read, 11 response id};
-  // fields 7 / 8 / 1 are timestamps {1 seconds, 2 nanos}. Verified against the
-  // ccusage 20.0.26 Antigravity adapter on this machine's logs.
+  // The steps table's metadata. Field 9 is the step's model call's usage
+  // {1 model, 2 fresh input, 3 output (= 9 thinking + 10 visible), 5 cache read,
+  // 11 response id}; field 28 holds the calls the step made (a retried request
+  // among them), each in its field 2 with the same layout. A call is in 9, in 28,
+  // or in both (the same response id): every call counts once. A call in 28 may
+  // carry no model number (protobuf leaves out 0); its model is '' here and the
+  // scanner gives it the model of the conversation's step before it (else after
+  // it), as ccusage 20.0.26 does. Fields 7 / 8 / 1 are timestamps {1 seconds,
+  // 2 nanos}. Returns [] for a step without usage.
   function antigravityStep(bytes) {
     const f = pbFields(bytes);
-    const ub = first(f, 9);
-    if (!(ub instanceof Uint8Array)) return null;
-    const u = pbFields(ub);
-    if (!u || !u.has(1)) return null;
+    if (!f) return [];
+    const usages = [];
+    const u9 = first(f, 9);
+    if (u9 instanceof Uint8Array) usages.push(u9);
+    for (const r of (f.get(28) || [])) {
+      const rf = r instanceof Uint8Array ? pbFields(r) : null;
+      for (const u of (rf && rf.get(2)) || []) if (u instanceof Uint8Array) usages.push(u);
+    }
+    if (!usages.length) return [];
     let ts = 0;
     for (const k of [7, 8, 1]) {
       const tb = first(f, k);
@@ -220,13 +230,31 @@
       const s = firstNum(t, 1);
       if (s > 0) { ts = s * 1000 + Math.floor(firstNum(t, 2) / 1e6); break; }
     }
-    if (!ts) return null;
-    const rid = first(u, 11);
-    return {
-      key: rid instanceof Uint8Array && decoder ? decoder.decode(rid) : '',
-      ts, model: antigravityModel(firstNum(u, 1)),
-      input: num(firstNum(u, 2)), output: num(firstNum(u, 3)), cacheRead: num(firstNum(u, 5)), cacheWrite: 0,
-    };
+    if (!ts) return [];
+    const out = [];
+    const seen = new Set();
+    usages.forEach((ub, i) => {
+      const u = pbFields(ub);
+      if (!u) return;
+      const rid = first(u, 11);
+      const key = rid instanceof Uint8Array && decoder ? decoder.decode(rid) : '';
+      if (key && seen.has(key)) return;   // field 28 restating field 9
+      if (key) seen.add(key);
+      const r = { key, ts, model: u.has(1) ? antigravityModel(firstNum(u, 1)) : '',
+        input: num(firstNum(u, 2)), output: num(firstNum(u, 3)), cacheRead: num(firstNum(u, 5)), cacheWrite: 0 };
+      if (!key) r.n = i;                    // the caller names it by file, step and position
+      if (r.input + r.output + r.cacheRead > 0 || r.model) out.push(r);
+    });
+    return out;
+  }
+  // A conversation's calls in step order: one without a model takes the model of
+  // the call before it, or, at the start, of the first call after it.
+  function fillAntigravityModels(records) {
+    let last = '';
+    for (const r of records) { if (r.model) last = r.model; else if (last) r.model = last; }
+    const firstModel = (records.find((r) => r.model) || {}).model || 'unknown';
+    for (const r of records) if (!r.model) r.model = firstModel;
+    return records;
   }
   // Antigravity names a model by number (1000 + placeholder id for the Gemini
   // previews). Names as ccusage 20.0.26 reports them.
@@ -472,7 +500,7 @@
   return {
     BUCKETS, BUCKET_LABELS, SOURCES, PROVIDERS, SLOTS, OTHER, ANTIGRAVITY_MODELS, providerOf,
     dayKey, addDays, dayStart, dayRange, dayTitle, axisLabel, axisTicks,
-    claudeRecords, claudeMayCount, codexState, codexMayCount, codexLine, pbFields, antigravityStep, antigravityModel, cursorCsv, csvRow,
+    claudeRecords, claudeMayCount, codexState, codexMayCount, codexLine, pbFields, antigravityStep, fillAntigravityModels, antigravityModel, cursorCsv, csvRow,
     mergeRecords, dailySums, seriesKey, modelLabel, sourceName,
     formatShort, formatFull, formatPct, niceScale, dayModels, dayTotal, dayBuckets, providerTotals, assignColors, stack, placeLabels,
   };

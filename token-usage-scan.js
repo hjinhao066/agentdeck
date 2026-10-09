@@ -14,7 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const C = require('./token-usage-core');
 
-const CACHE_VERSION = 2;   // 2: a Cursor row is keyed by its line and its occurrence in the file
+const CACHE_VERSION = 3;   // 2: a Cursor row is keyed by its line and its occurrence; 3: Antigravity retried calls
 const KEEP_DAYS = 62;          // the view shows 30 days; a little more is kept
 const CHUNK = 8 * 1024 * 1024;
 
@@ -131,15 +131,15 @@ function readAntigravityDb(file, entry) {
   if (!Db) throw new Error('sqlite unavailable');
   const db = new Db(file, { readOnly: true });
   try {
-    const recs = [];
+    const calls = [];
     const rows = db.prepare('SELECT idx, metadata FROM steps WHERE metadata IS NOT NULL ORDER BY idx').all();
     for (const row of rows) {
-      const r = C.antigravityStep(row.metadata instanceof Uint8Array ? row.metadata : new Uint8Array(row.metadata));
-      if (!r) continue;
-      if (!r.key) r.key = `${path.basename(file)}#${row.idx}`;
-      recs.push(pack(r));
+      for (const r of C.antigravityStep(row.metadata instanceof Uint8Array ? row.metadata : new Uint8Array(row.metadata))) {
+        if (!r.key) r.key = `${path.basename(file)}#${row.idx}` + (r.n ? `#${r.n}` : '');
+        calls.push(r);
+      }
     }
-    entry.recs = recs;
+    entry.recs = C.fillAntigravityModels(calls).map(pack);
   } finally { db.close(); }
 }
 function readCursorCsv(file, entry) {

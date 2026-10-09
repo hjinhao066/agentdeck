@@ -116,23 +116,26 @@ test('scan: Antigravity conversation databases (steps.metadata protobuf), re-rea
   const varint = (n) => { const b = []; do { let x = n % 128; n = Math.floor(n / 128); if (n) x |= 0x80; b.push(x); } while (n); return b; };
   const msg = (fields) => Buffer.from(fields.flatMap(([f, v]) => (typeof v === 'number' ? [...varint(f * 8), ...varint(v)] : [...varint(f * 8 + 2), ...varint(v.length), ...v])));
   const step = (secs, input, id) => msg([[7, [...msg([[1, secs]])]], [9, [...msg([[1, 1318], [2, input], [3, 10], [5, 100], [11, [...Buffer.from(id)]]])]]]);
+  // a step whose only usage is a retried request in field 28, without a model number
+  const retryStep = (secs, input, id) => msg([[8, [...msg([[1, secs]])]], [28, [...msg([[2, [...msg([[2, input], [3, 10], [5, 100], [11, [...Buffer.from(id)]]])]]])]]]);
   const file = path.join(dir, 'c1.db');
   const db = new Db(file);
   db.exec('CREATE TABLE steps (idx INTEGER, metadata BLOB)');
   const secs = Math.floor(new Date(2026, 9, 8, 9).getTime() / 1000);
   db.prepare('INSERT INTO steps VALUES (?, ?)').run(0, step(secs, 1000, 'a'));
   db.prepare('INSERT INTO steps VALUES (?, ?)').run(1, null);
+  db.prepare('INSERT INTO steps VALUES (?, ?)').run(3, retryStep(secs + 30, 500, 'retry-1'));
   db.close();
   const cacheFile = path.join(home, 'c.json');
   let r = await scan({ home, cacheFile, now: NOW });
-  assert.equal(totalOf(r, TODAY, 'antigravity:gemini-3.8-flash-high'), 1110);
+  assert.equal(totalOf(r, TODAY, 'antigravity:gemini-3.8-flash-high'), 1110 + 610, 'the retried request counts, under the conversation\'s model');
   const db2 = new Db(file);
   db2.prepare('INSERT INTO steps VALUES (?, ?)').run(2, step(secs + 60, 2000, 'b'));
   db2.close();
   const later = Date.now() / 1000 + 5;
   fs.utimesSync(file, later, later);
   r = await scan({ home, cacheFile, now: NOW });
-  assert.equal(totalOf(r, TODAY, 'antigravity:gemini-3.8-flash-high'), 1110 + 2110);
+  assert.equal(totalOf(r, TODAY, 'antigravity:gemini-3.8-flash-high'), 1110 + 610 + 2110);
   assert.equal(r.sources.find((s) => s.id === 'antigravity').state, 'ok');
 });
 

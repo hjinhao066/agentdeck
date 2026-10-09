@@ -84,14 +84,34 @@ function pb(fields) {
   return Uint8Array.from(out);
 }
 
-test('Antigravity: a step\'s usage (field 9) with its time (field 7) and model number; a step without usage is not a record', () => {
+test('Antigravity: a step\'s usage (field 9) with its time (field 7) and model number; a step without usage gives no record', () => {
   const t = 1759900000;
   const meta = pb([[7, pb([[1, t], [2, 250e6]])], [9, pb([[1, 1318], [2, 1200], [3, 340], [5, 56000], [11, 'resp-ag-1']])]]);
-  const r = C.antigravityStep(meta);
+  const [r, more] = C.antigravityStep(meta);
   assert.deepEqual({ ...r }, { key: 'resp-ag-1', ts: t * 1000 + 250, model: 'gemini-3.8-flash-high', input: 1200, output: 340, cacheRead: 56000, cacheWrite: 0 });
-  assert.equal(C.antigravityStep(pb([[7, pb([[1, t]])]])), null);
-  assert.equal(C.antigravityStep(Uint8Array.from([0xff, 0xff])), null, 'bytes that do not parse are skipped');
+  assert.equal(more, undefined);
+  assert.deepEqual(C.antigravityStep(pb([[7, pb([[1, t]])]])), []);
+  assert.deepEqual(C.antigravityStep(Uint8Array.from([0xff, 0xff])), [], 'bytes that do not parse are skipped');
   assert.equal(C.antigravityModel(1999), 'antigravity-m999');
+});
+
+test('Antigravity: a retried request in field 28 counts — alone (no model number), next to field 9 once, and every retry of a step', () => {
+  // the review case, 10-02 conversation 21fca3cb step 11: only field 28, no model, 58,220 + 3,525 + 20,419 = 82,164 tokens
+  const t = 1790961215;
+  const retry = (input, out, read, id, model) => pb([...(model ? [[1, model]] : []), [2, input], [3, out], [5, read], [6, 24], [9, 1992], [10, 1533], [11, id]]);
+  const only = C.antigravityStep(pb([[1, pb([[1, t - 31]])], [8, pb([[1, t]])], [28, pb([[2, retry(58220, 3525, 20419, 'IOa_av37I7adqtsPwsiMoQM')], [4, '47941f890430839b']])]]));
+  assert.equal(only.length, 1);
+  assert.deepEqual([only[0].key, only[0].model, sum(only[0]), only[0].ts], ['IOa_av37I7adqtsPwsiMoQM', '', 82164, t * 1000], 'time from field 8 before field 1');
+  // field 28 restating field 9 (the same response id) counts once
+  const both = C.antigravityStep(pb([[7, pb([[1, t]])], [9, retry(100, 10, 1000, 'r1', 1016)], [28, pb([[2, retry(100, 10, 1000, 'r1')]])]]));
+  assert.deepEqual(both.map((r) => [r.key, r.model]), [['r1', 'gemini-3.1-pro']]);
+  // two retries in one step, plus the step's own call
+  const two = C.antigravityStep(pb([[7, pb([[1, t]])], [9, retry(1, 1, 1, 'a', 1318)], [28, pb([[2, retry(5, 5, 5, 'b')], [2, retry(7, 7, 7, 'c')]])]]));
+  assert.deepEqual(two.map((r) => [r.key, sum(r)]), [['a', 3], ['b', 15], ['c', 21]]);
+  // a retry takes the model of the conversation's call before it, or at the start of the one after it
+  const calls = C.fillAntigravityModels([{ model: '' }, { model: 'gemini-3.1-pro' }, { model: '' }, { model: 'claude-opus-4-6' }, { model: '' }]);
+  assert.deepEqual(calls.map((c) => c.model), ['gemini-3.1-pro', 'gemini-3.1-pro', 'gemini-3.1-pro', 'claude-opus-4-6', 'claude-opus-4-6']);
+  assert.deepEqual(C.fillAntigravityModels([{ model: '' }]).map((c) => c.model), ['unknown']);
 });
 
 test('Cursor CSV: one record per billed row; quoted commas; a row with no token numbers is missing, not 0', () => {

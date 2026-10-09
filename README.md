@@ -327,7 +327,7 @@ Cursor 的活动标记优先于输入占位符，整个屏幕都参与判定；�
 Codex、Antigravity，以及放进「下载」文件夹的 Cursor 官方用量表；Gemini CLI 和网页版 ChatGPT 不留用量数字，标「无数据」。
 扫描在独立的后台进程里做，只读新增的日志行（首次约 10 秒，之后不到 1 秒），结果缓存在 `token-usage-cache.json`；
 日志被删后已读到的数字仍保留。Codex 比 ccusage 多出 0.4–1.4%：上下文压缩也是一次模型调用，Codex 只给它写了
-token_usage_record、没写 token_count，ccusage 只读后者所以漏掉了它们；这里照算。代码在 `token-usage-core.js`
+token_usage_record、没写 token_count，ccusage 只读后者所以漏掉了它们；这里照算。Antigravity 每一步的用量在 metadata 字段 9，重试的请求在字段 28（可能只有它、也可能和 9 重复），按请求编号各算一次；重试请求不带模型号时归到同一对话前一次调用的模型（就是该次生成实际用的模型），逐日合计与 ccusage 一致。代码在 `token-usage-core.js`
 （解析和计算）、`token-usage-scan.js`（扫描）、`token-usage-main.js`（`token-usage:get`）、`token-usage-ui.js`（界面）。
 终端架构图（星图外观，日夜两套，和任务看板同一片天空）：队长在顶部居中，下面是项目框。
 项目框横排：项目按顺序从左到右排开，窗口宽度放得下几个就排几个、最多 4 个，窄了自动减栏；排满一行，
