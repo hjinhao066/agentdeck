@@ -1562,10 +1562,11 @@
     }
     host.archiveColumn(col, { quiet: true });
   }
-  // `tell` to a background session that was archived brings it back first.
-  function archivedCrew(ref) {
+  // `tell` to a background session that was archived brings it back first. A 小队长 (sub) also
+  // finds its own archived children filed into a folder: still its children, as its ledger lists them.
+  function archivedCrew(ref, sub = null) {
     const key = String(ref || '').trim();
-    const list = (host.config.archived || []).filter((a) => a.captainCrew);
+    const list = (host.config.archived || []).filter((a) => a.captainCrew || (sub && a.subCaptainId === sub.id));
     const byId = list.find((a) => a.id === key);
     if (byId) return byId;
     const byTitle = list.filter((a) => host.columnLabel(a) === key);
@@ -2672,7 +2673,7 @@
     let col = findTarget(message.to);
     let restored = false;
     if (!col) {
-      const old = archivedCrew(message.to);
+      const old = archivedCrew(message.to, isSubCaptain(caller) ? caller : null);
       if (old) {
         // Back on its own seat or not at all: a seat that is gone or signed out restores nothing.
         const blocked = window.ClaudeSeatsCore.launchBlock(old, host.config, await Promise.resolve(window.deck.claudeSeats?.()).catch(() => []));
@@ -2806,7 +2807,7 @@
   const SUB_ACTIONS = ['create-child', 'main-receipts', 'main-ledger', 'main-tell', 'main-peek', 'main-read', 'main-answer', 'main-stop', 'main-archive', 'main-receipt-listener-status'];
   function ownChild(sub, ref) {
     const key = String(ref || '').trim();
-    const target = findTarget(key) || archivedCrew(key);
+    const target = findTarget(key) || archivedCrew(key, sub);
     if (target && target.subCaptainId === sub.id) return target;
     // read --id <task id> fetches an undelivered instruction of one of its children
     const mine = (id) => [...host.columns(), ...(host.config.archived || [])].some((c) => c.id === id && c.subCaptainId === sub.id);
@@ -3160,7 +3161,7 @@
         const key = String(message.to || '').trim();
         const old = (host.config.captainHistory || []).find((h) => h.id === key) || window.ChatUI.captainArchives().find((chat) => chat.id === key);
         // An archived session keeps its saved chat (restoring it does not need the terminal).
-        const shelved = !old && archivedCrew(key);
+        const shelved = !old && archivedCrew(key, sub);
         if (shelved) return { done: true, result: M.readText(`${host.columnLabel(shelved)}（已归档，tell 可恢复）`, window.ChatUI.turnsOf(shelved.id), message.turns, find) };
         if (!old) throw new Error(`找不到会话：${String(message.to).slice(0, 80)}。先用 ledger 看 id。`);
         return { done: true, result: M.readText('清空前的队长对话', window.ChatUI.turnsOf(old.id), message.turns, find) };

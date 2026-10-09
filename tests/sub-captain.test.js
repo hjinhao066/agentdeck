@@ -519,3 +519,19 @@ test('discuss is the Captain\'s only: a sub-captain\'s token is refused', async 
   assert.notEqual(fromSub.code, 0, `discuss ran for the sub-captain: ${fromSub.out.trim()}`);
   assert.match(fromSub.err, /只有队长能用/);
 });
+
+// A child the user filed into a folder (captainCrew false) is still its sub-captain's (subCaptainId).
+// Archived, the sub-captain's ledger offers it as 「tell 会先自动恢复」; tell must then find it.
+test('a sub-captain can tell its archived child that had been filed into a folder, as its ledger offers', async () => {
+  const r = runtime();
+  const sub = await r.subCaptain();
+  const kid = await r.child(sub, '子会话A');
+  kid.captainCrew = false; kid.folderId = 'f1';
+  r.leave(kid, 'archive');
+  assert.match(await r.text('main-ledger', sub), new RegExp(`已归档的子会话（tell 会先自动恢复）：${kid.id}`), 'the ledger offers it');
+  assert.match(await r.text('main-tell', sub, { to: kid.id, message: '回来再做一点' }), /已恢复|已发给/);
+  // Someone else's archived session in a folder is still not the sub-captain's.
+  const other = { id: 'c-board-other', title: '别人的', subCaptainId: 'c-board-someone-else', archivedAt: Date.now() };
+  r.config.archived.unshift(other);
+  await assert.rejects(r.text('main-tell', sub, { to: other.id, message: 'x' }), /不是你开的子会话/);
+});
