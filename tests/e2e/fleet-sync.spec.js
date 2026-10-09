@@ -39,7 +39,7 @@ test('shows the other computer offline, a kept conflict, and a visible sync erro
     theme: 'dark', fitWindow: true, columns: [column],
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks: [] },
   }));
-  const env = { ...process.env, AGENTDECK_FLEET_URL: server.url, AGENTDECK_FLEET_TOKEN_FILE: tokenFile, AGENTDECK_FLEET_SYNC_MS: '200' };
+  const env = { ...process.env, AGENTDECK_FLEET_URL: server.url, AGENTDECK_FLEET_TOKEN_FILE: tokenFile, AGENTDECK_FLEET_SYNC_MS: '200', AGENTDECK_FLEET_START_DELAY_MS: '1000' };
   delete env.ELECTRON_RUN_AS_NODE;
   for (const key of Object.keys(env)) if (key.startsWith('AGENTDECK_') && !key.startsWith('AGENTDECK_TEST') && !key.startsWith('AGENTDECK_FLEET_')) delete env[key];
   const errors = [];
