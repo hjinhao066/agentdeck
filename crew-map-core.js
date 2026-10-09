@@ -89,14 +89,16 @@
 
   // input: {
   //   captain: { id, title, alive, state, provider, model } | null,
-  //   columns: [{ id, title, alive, state, live, provider, model, lastReceipt, captainCrew, taskId, parentTaskId, subCaptain, taskCompleted, result }],
-  //   archived: [{ id, title, provider, model, lastReceipt, captainCrew, archivedAt, taskId, parentTaskId, subCaptain, taskCompleted, result }],
+  //   columns: [{ id, title, alive, state, live, provider, model, lastReceipt, captainCrew, subCaptain, subCaptainId, taskId, parentTaskId, taskCompleted, result }],
+  //   archived: [{ id, title, provider, model, lastReceipt, captainCrew, archivedAt, subCaptain, subCaptainId, taskId, parentTaskId, taskCompleted, result }],
   //   tasks: config.mainSession.tasks, showArchived
   // }
-  // 小队长: a session on the map that handed work on to sessions of its own (board-cli create-child:
-  // the child's parentTaskId is its taskId) is their 小队长. Its crew stands under it in its project
-  // (node.parent, node.depth), its lines come from it ('squad' edges), and what they hand back goes to
-  // it, not to 队长. node.crew: how many it leads on the map; node.leader: it is a 小队长.
+  // 小队长: a session 队长 opened with `new --sub-captain` (column.subCaptain) leads the sessions it opens
+  // (their column.subCaptainId is its column id, until they are handed back to 队长), but only while it is
+  // still a live column marked subCaptain. The older create-child records count too (the child's
+  // parentTaskId is its parent's taskId). Its crew stands under it in its project (node.parent,
+  // node.depth), its lines come from it ('squad' edges), and what they hand back or ask goes to it, not
+  // to 队长. node.crew: how many it leads on the map; node.leader: it is a 小队长.
   function buildCrewMap(input) {
     const tasks = (Array.isArray(input.tasks) ? input.tasks : []).filter((t) => t && typeof t === 'object');
     const live = new Map((input.columns || []).map((c) => [c.id, c]));
@@ -117,8 +119,13 @@
     });
     // A 小队长's crew comes with it, however deep, though 队长 never handed them a card.
     const sessions = [...(input.columns || []), ...(input.archived || [])];
+    const leaders = new Set((input.columns || []).filter((c) => c.subCaptain === true).map((c) => c.id));
     const byTask = new Map(sessions.filter((c) => c.taskId).map((c) => [c.taskId, c.id]));
-    const parentOf = (c) => { const id = c.parentTaskId ? byTask.get(c.parentTaskId) : ''; return id && id !== c.id ? id : ''; };
+    const parentOf = (c) => {
+      if (c.subCaptainId && c.subCaptainId !== c.id && leaders.has(c.subCaptainId)) return c.subCaptainId;
+      const id = c.parentTaskId ? byTask.get(c.parentTaskId) : '';
+      return id && id !== c.id ? id : '';
+    };
     for (let grew = true; grew;) {
       grew = false;
       sessions.forEach((c) => { if (!byCol.has(c.id) && byCol.has(parentOf(c))) { byCol.set(c.id, []); grew = true; } });
@@ -225,6 +232,8 @@
       n.leader = n.crew > 0 || n.subCaptain;
       n.depth = 0;
       for (let p = n.parent; p; p = byId.get(p).parent) n.depth++;
+      // a crew member asks its 小队长
+      if (n.parent && n.detail === '在问队长') n.detail = '在问小队长';
     });
     const captainId = input.captain ? input.captain.id : '';
     const review = reviews.edges.filter((e) => shown.has(e.from) && shown.has(e.to));

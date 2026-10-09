@@ -1164,3 +1164,62 @@ test('智能一页 shows a map that fits as large as its page holds it: up to 14
   assert.equal(C.computeFit({ left: 0, top: 0, right: 400, bottom: 300 }, { w: 1260, h: 814 }, inset, limits).scale, FIT * 1.4);
   assert.equal(C.computeFit({ left: 0, top: 0, right: 3000, bottom: 752 }, { w: 1260, h: 814 }, inset, limits).scale, FIT * 0.8);
 });
+
+// The 小队长 fields as the 小队长 branch writes them (agentdeck/t-24f65178 @5289170): the 小队长's column has
+// subCaptain: true; each session it opens has subCaptainId = its column id, deleted when that session is handed
+// back to 队长. Otherwise they are 队长's crew like any other: a card in 队长's list, the 小队长's project.
+const official = (extra = {}) => ({
+  captain,
+  columns: [
+    col('sub', '秋招小队长', { project: '秋招', subCaptain: true, state: 'working' }),
+    col('k1', 'Lenovo GFLP 简历改写', { project: '秋招', subCaptainId: 'sub', state: 'working' }),
+    col('k2', 'JD 抓取：AI PM 岗位 40 条', { project: '秋招', subCaptainId: 'sub', state: 'done' }),
+    col('k3', '面试准备包：STAR 故事库', { project: '秋招', subCaptainId: 'sub', state: 'done' }),
+    col('w1', '投递记录表', { project: '秋招', state: 'working' }),
+  ],
+  tasks: [
+    task('t-sub', 'sub', 'working', 10), task('t-k1', 'k1', 'working', 20),
+    task('t-k2', 'k2', 'done', 30, { receipt: { summary: '40 条 JD 已去重，表格交给小队长。', files: [], explicit: true } }),
+    task('t-k3', 'k3', 'asking', 40, { receipt: { question: '自我介绍要中英双语各一版吗？', files: [] } }),
+    task('t-w1', 'w1', 'working', 50),
+  ],
+  ...extra,
+});
+
+test('小队长 (its own fields): subCaptainId names the live 小队长 a session reports to; its crew hang under it, ask it and hand back to it', () => {
+  const map = C.buildCrewMap(official());
+  const node = (id) => map.nodes.find((n) => n.id === id);
+  assert.deepEqual(['k1', 'k2', 'k3', 'w1'].map((id) => [node(id).parent, node(id).depth]), [['sub', 1], ['sub', 1], ['sub', 1], ['', 0]]);
+  assert.deepEqual([node('sub').leader, node('sub').crew, node('w1').leader], [true, 3, false]);
+  const of = (type) => map.edges.filter((e) => e.type === type).map((e) => `${e.from}>${e.to}`).sort();
+  assert.deepEqual(of('dispatch'), ['cap>sub', 'cap>w1']);
+  assert.deepEqual(of('squad'), ['sub>k1', 'sub>k2', 'sub>k3']);
+  // what they hand back or ask goes to the 小队长: no line back to 队长, and the question is the 小队长's to answer
+  assert.deepEqual(of('return'), []);
+  assert.equal(node('k2').line, '40 条 JD 已去重，表格交给小队长。');
+  assert.deepEqual([node('k3').status, node('k3').detail, node('k3').line], ['input', '在问小队长', '提问：自我介绍要中英双语各一版吗？']);
+  // laid out like any 小队长: its block heads the frame, its crew a step in under it
+  const lay = C.layout(map, { ...ROOM, caps: { 秋招: 2 } }), b = (id) => lay.nodes.get(id);
+  assert.deepEqual(['k1', 'k2', 'k3'].map((id) => [b(id).x - b('sub').x, b(id).y > b('sub').y]), [[24, true], [24, true], [24, true]]);
+  assert.equal(C.pockets(lay).length, 1);
+});
+
+test('小队长 (its own fields): only a live column marked subCaptain leads: unmarked, archived, gone, itself or handed back, the session stands under 队长', () => {
+  const columns = official().columns;
+  const flat = (map) => map.nodes.every((n) => !n.parent) && !map.edges.some((e) => e.type === 'squad');
+  // the flag is what makes a 小队长
+  assert.ok(flat(C.buildCrewMap(official({ columns: columns.map((c) => (c.id === 'sub' ? { ...c, subCaptain: false } : c)) }))));
+  // archived (its column is no longer live; the app hands its crew back to 队长 then), or gone
+  const sub = columns.find((c) => c.id === 'sub');
+  assert.ok(flat(C.buildCrewMap(official({ columns: columns.filter((c) => c !== sub), archived: [{ ...sub, archivedAt: 5 }], showArchived: true }))));
+  assert.ok(flat(C.buildCrewMap(official({ columns: columns.filter((c) => c !== sub) }))));
+  // a 小队长 naming itself leads nobody
+  assert.equal(C.buildCrewMap({ captain, tasks: [], columns: [col('x', 'X', { project: 'p', subCaptain: true, subCaptainId: 'x', state: 'working' })] }).nodes[0].parent, '');
+  // handed back (subCaptainId deleted): under 队长 again, and the 小队长 leads one fewer
+  const back = C.buildCrewMap(official({ columns: columns.map((c) => (c.id === 'k1' ? { ...c, subCaptainId: undefined } : c)) }));
+  assert.deepEqual([back.nodes.find((n) => n.id === 'k1').parent, back.nodes.find((n) => n.id === 'sub').crew], ['', 2]);
+  assert.ok(back.edges.some((e) => e.type === 'dispatch' && e.to === 'k1'));
+  // create-child's records still count alongside (parentTaskId)
+  const both = C.buildCrewMap(official({ columns: [...columns, col('g1', '签名公证', { captainCrew: false, taskId: 'T-g1', parentTaskId: 'T-k1', state: 'working' }), ...[]].map((c) => (c.id === 'k1' ? { ...c, taskId: 'T-k1' } : c)) }));
+  assert.deepEqual([both.nodes.find((n) => n.id === 'g1').parent, both.nodes.find((n) => n.id === 'g1').depth, both.nodes.find((n) => n.id === 'g1').project], ['k1', 2, '秋招']);
+});

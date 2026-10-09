@@ -98,8 +98,9 @@
     const s = host.mainState();
     const terms = host.terms;
     const info = (col) => host.agentInfo(col, terms.get(col.id)) || {};
-    // who handed a session its work (create-child), and what it handed back: a 小队长 and its crew
-    const squad = (c) => ({ taskId: c.taskId || '', parentTaskId: c.parentTaskId || '', subCaptain: c.subCaptain === true, taskCompleted: !!c.taskCompleted, result: c.result || '' });
+    // a 小队长 and its crew: the flag `new --sub-captain` sets, the 小队长 a session reports to
+    // (subCaptainId), and the older create-child records (parentTaskId, what it handed back)
+    const squad = (c) => ({ subCaptain: c.subCaptain === true, subCaptainId: c.subCaptainId || '', taskId: c.taskId || '', parentTaskId: c.parentTaskId || '', taskCompleted: !!c.taskCompleted, result: c.result || '' });
     const columns = host.columns().filter((c) => !c.isMain).map((c) => {
       const entry = terms.get(c.id);
       const i = info(c);
@@ -201,7 +202,7 @@
         if (node.returned) {
           const back = el('i', 'cm-returned');
           back.setAttribute('role', 'img');
-          back.title = '结果已交回队长';
+          back.title = node.parent ? '结果已交回小队长' : '结果已交回队长';
           back.setAttribute('aria-label', back.title);
           back.innerHTML = '<svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.2 3.6 3.4 6.4l2.8 2.8"/><path d="M3.6 6.4h6.1a3 3 0 0 1 0 6H8"/></svg>';
           foot.append(back);

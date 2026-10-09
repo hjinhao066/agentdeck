@@ -4,12 +4,13 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// 终端架构图 · 小队长分层: a session 队长 sent that handed work on with create-child (its crew's
-// parentTaskId is its taskId) heads its crew on the map. The crew hangs under it a step in, on a
-// pocket of its own, the 小队长's own lines running down to each; 队长's lines go to the 小队长, not
-// past it, and nothing a crew member hands back runs back to 队长. Real renderer, isolated userData,
-// PTYs running only stand-in TUIs. Every picture is kept in the test's own output folder, and in
-// AGENTDECK_CREW_MAP_SHOTS when that is set.
+// 终端架构图 · 小队长分层. A 小队长 is a session 队长 opened with `new --sub-captain` (its column has
+// subCaptain: true); each session it opens carries its column id (subCaptainId) and a card in 队长's list like
+// any crew. The older create-child records still count (a worker of its parent's task: parentTaskId). On the
+// map the crew hangs under its 小队长 a step in, on a pocket of its own, the 小队长's own lines running down to
+// each; 队长's lines go to the 小队长, not past it, and nothing a crew member hands back or asks runs back to
+// 队长. Real renderer, isolated userData, PTYs running only stand-in TUIs. Every picture is kept in the test's
+// own output folder, and in AGENTDECK_CREW_MAP_SHOTS when that is set.
 const SCREEN = path.join(__dirname, 'fixtures', 'screen-agent.js');
 const FAKE = `node "${path.join(__dirname, 'fixtures', 'fake-agent.js')}" --captain-statusline`;
 const shots = process.env.AGENTDECK_CREW_MAP_SHOTS;
@@ -19,19 +20,26 @@ let application, page, profile;
 const errors = [];
 
 const WORKING = '✻ Working… (12s · esc to interrupt)';
-// [id, project, title, status of 队长's card for it (null: none, create-child's crew), 小队长 id, screen rows, extra record]
+// [id, project, title, status of 队长's card for it (null: none), screen rows, its record]. 2.0.2 发版小队长 leads three
+// sessions it opened (subCaptainId); 签名证书续期 is the create-child kind, a worker of 打包 macOS's task.
 // (create-child's column ids are 'c' and the time they were made: the map lists a crew in that order)
 const CREW = [
-  ['lead', 'agentdeck', '2.0.2 发版小队长', 'working', '', ['⏺ 3 个队员在打包，Windows 包回来就合更新说明', WORKING]],
-  ['c1mac', '', '打包 macOS 并公证', null, 'lead', ['⏺ notarytool 已提交，等 Apple 回执', WORKING]],
-  ['c2win', '', '打包 Windows 安装包', null, 'lead', ['⏺ 已交给小队长'], { taskCompleted: true, result: 'Windows 安装包已签名，SHA 写进 release-notes。' }],
-  ['c3notes', '', '写 2.0.2 更新说明', null, 'lead', ['要不要写 Windows 已知问题？', '❯ 1. 写', '  2. 不写']],
-  ['c4cert', '', '签名证书续期', null, 'c1mac', ['⏺ 证书 30 天后到期，先续上', WORKING]],
-  ['w1', 'agentdeck', 'crew-map 横排布局重做', 'working', '', ['⏺ 正在跑 crew-map 端到端测试', WORKING]],
-  ['w2', 'agentdeck', 'Bark 提醒去重', 'done', '', ['⏺ 已提交回执']],
-  ['w3', 'agentdeck', '侧栏额度深色修正', 'working', '', ['⏺ 深色下额度条对比度调到 4.5:1', WORKING]],
-  ['q1', '秋招', 'Lenovo GFLP 简历改写', 'working', '', ['⏺ 按 JD 关键词重写项目经历第 2 段', WORKING]],
+  ['lead', 'agentdeck', '2.0.2 发版小队长', 'working', ['⏺ 3 个队员在打包，Windows 包回来就合更新说明', WORKING], { subCaptain: true }],
+  ['c1mac', 'agentdeck', '打包 macOS 并公证', 'working', ['⏺ notarytool 已提交，等 Apple 回执', WORKING], { subCaptainId: 'lead' }],
+  ['c2win', 'agentdeck', '打包 Windows 安装包', 'done', ['⏺ 已交给小队长'], { subCaptainId: 'lead' }],
+  ['c3notes', 'agentdeck', '写 2.0.2 更新说明', 'asking', ['⏺ 问小队长：更新说明要不要写 Windows 已知问题？'], { subCaptainId: 'lead' }],
+  ['c4cert', '', '签名证书续期', null, ['⏺ 证书 30 天后到期，先续上', WORKING], { role: 'worker', captainCrew: false, parentTaskId: 'T-c1mac', taskTitle: '签名证书续期', initialPromptSent: true }],
+  ['w1', 'agentdeck', 'crew-map 横排布局重做', 'working', ['⏺ 正在跑 crew-map 端到端测试', WORKING]],
+  ['w2', 'agentdeck', 'Bark 提醒去重', 'done', ['⏺ 已提交回执']],
+  ['w3', 'agentdeck', '侧栏额度深色修正', 'working', ['⏺ 深色下额度条对比度调到 4.5:1', WORKING]],
+  ['q1', '秋招', 'Lenovo GFLP 简历改写', 'working', ['⏺ 按 JD 关键词重写项目经历第 2 段', WORKING]],
 ];
+const RECEIPT = {
+  c2win: { summary: 'Windows 安装包已签名，SHA 写进 release-notes。', files: [], explicit: true },
+  c3notes: { question: '更新说明要不要写 Windows 已知问题？', files: [] },
+  w2: { summary: '同一轮只推一次，30 秒内不重复响铃。', files: [], explicit: true },
+};
+const SUB_FIELDS = (record) => Object.fromEntries(Object.entries(record || {}).filter(([k]) => k === 'subCaptain' || k === 'subCaptainId'));
 
 async function launch() {
   profile = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-map-squad-'));
@@ -40,17 +48,15 @@ async function launch() {
   const command = `node "${SCREEN}" "${specFile}"`;
   const columns = [{ id: 'cap', title: '队长', displayTitle: '队长', manualTitle: true, cmd: FAKE, cwd: profile, width: 460, role: 'manual', isMain: true }];
   const tasks = [];
-  CREW.forEach(([id, project, title, status, parent, screen, extra = {}], i) => {
+  CREW.forEach(([id, project, title, status, screen, record = {}], i) => {
     screens[id] = { title, model: 'Sonnet 5.5', screen };
-    columns.push({ id, title, displayTitle: title, manualTitle: true, cmd: command, cwd: profile, width: 460, taskId: 'T-' + id, ...extra,
-      // what create-child records: a worker of its 小队长's task, with no card from 队长 and no project of its own
-      ...(parent ? { role: 'worker', captainCrew: false, parentTaskId: 'T-' + parent, taskTitle: title, initialPromptSent: true } : { role: 'manual', captainCrew: true, project }) });
+    columns.push({ id, title, displayTitle: title, manualTitle: true, cmd: command, cwd: profile, width: 460, taskId: 'T-' + id, role: 'manual', captainCrew: true, project, ...record });
     if (!status) return;
     const sentAt = now - (90 - i * 5) * 60_000;
     // (finished a few minutes ago: one done over 10 minutes ago is archived once its terminal has been quiet a
     // minute, and on a slow machine that comes before every terminal has drawn)
     tasks.push({ id: 'task-' + id, colId: id, gen: 1, status, title, project, sentAt, startedAt: sentAt + 30_000, doneAt: now - (status === 'done' ? 3 : 40 - i) * 60_000, turnId: '',
-      receipt: status === 'done' ? { summary: '同一轮只推一次，30 秒内不重复响铃。', files: [], explicit: true } : null });
+      receipt: RECEIPT[id] || null, ...SUB_FIELDS(record) });
   });
   fs.writeFileSync(specFile, JSON.stringify(screens));
   // These are layout states, not restartable tasks with a saved instruction.
@@ -67,8 +73,11 @@ async function launch() {
   await expect.poll(() => page.evaluate(() => typeof config === 'undefined' ? null : config.resumeOnRestart), { timeout: 30000 }).toBe(false);
   await expect.poll(() => page.evaluate(() => typeof terms !== 'undefined' && terms.size), { timeout: 30000 }).toBe(CREW.length + 1);
   await expect.poll(() => page.evaluate(() => [...terms.values()].filter((t) => /Claude Code/.test(t.lastScreen || '')).length), { timeout: 120000 }).toBe(CREW.length + 1);
-  // the stand-ins read as they are drawn: at work, waiting on a choice
-  await expect.poll(() => page.evaluate(() => ['c1mac', 'c3notes', 'c4cert'].map((id) => terms.get(id).state)), { timeout: 30000 }).toEqual(['working', 'input', 'working']);
+  // the stand-ins read as they are drawn: at work
+  await expect.poll(() => page.evaluate(() => ['c1mac', 'c4cert'].map((id) => terms.get(id).state)), { timeout: 30000 }).toEqual(['working', 'working']);
+  // The 小队长 branch keeps subCaptain and subCaptainId on a column when the app loads its sessions; until it is
+  // merged the app drops fields it does not know, so they are put back on the live columns here, as that branch has them.
+  await page.evaluate((fields) => { for (const [id, f] of fields) Object.assign(columns.find((c) => c.id === id), f); }, CREW.map((r) => [r[0], SUB_FIELDS(r[5])]).filter(([, f]) => Object.keys(f).length));
 }
 test.beforeAll(launch);
 test.afterAll(async () => {
@@ -117,7 +126,8 @@ const read = () => page.evaluate(() => {
   const map = CrewMap.lastMap(), lay = CrewMap.layout();
   const rect = (n) => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, right: r.right, bottom: r.bottom }; };
   return {
-    nodes: Object.fromEntries(map.nodes.map((n) => [n.id, { parent: n.parent, depth: n.depth, leader: n.leader, crew: n.crew, status: n.status, line: n.line, project: n.project }])),
+    nodes: Object.fromEntries(map.nodes.map((n) => [n.id, { parent: n.parent, depth: n.depth, leader: n.leader, crew: n.crew, status: n.status, detail: n.detail, line: n.line, project: n.project }])),
+    said: Object.fromEntries([...document.querySelectorAll('.cm-node:not(.kind-captain)')].map((n) => [n.dataset.nodeId, { status: n.querySelector('.cm-status-text').textContent, back: (n.querySelector('.cm-returned') || {}).title || '' }])),
     edges: map.edges.map((e) => `${e.type}:${e.from}>${e.to}`).sort(),
     boxes: Object.fromEntries([...lay.nodes].map(([id, b]) => [id, { x: b.x, y: b.y, w: b.w, h: b.h }])),
     frame: (({ x, y, w, h }) => ({ x, y, w, h }))(lay.groups.find((g) => g.key === 'agentdeck')),
@@ -139,13 +149,17 @@ test('a 小队长 heads its crew: the crew hangs under it a step in, on a pocket
   for (const theme of ['dark', 'light']) {
     await open(1512, 982, theme);
     const m = await read();
-    // who leads whom, from create-child's records: two levels under 2.0.2 发版小队长
+    // who leads whom: the 小队长's own fields (subCaptain, subCaptainId) for its three, create-child's record one level further
     expect(m.nodes.c1mac).toMatchObject({ parent: 'lead', depth: 1, project: 'agentdeck' });
     expect(m.nodes.c4cert).toMatchObject({ parent: 'c1mac', depth: 2, project: 'agentdeck' });
     expect(m.nodes.lead).toMatchObject({ leader: true, crew: 3, parent: '' });
     expect(m.nodes.c1mac).toMatchObject({ leader: true, crew: 1 });
     expect(m.nodes.c2win).toMatchObject({ status: 'done', line: 'Windows 安装包已签名，SHA 写进 release-notes。' });
-    expect(m.nodes.c3notes.status).toBe('input');
+    // what a crew member asks or hands back is its 小队长's: the card says so
+    expect(m.nodes.c3notes).toMatchObject({ status: 'input', detail: '在问小队长' });
+    expect(m.said.c3notes.status).toBe('在问小队长');
+    expect(m.said.c2win.back).toBe('结果已交回小队长');
+    expect(m.said.w2.back).toBe('结果已交回队长');
     // 队长's lines go to the sessions it sent; each 小队长's to its crew; only 队长's own crew report back to it
     expect(m.dispatch).toEqual(['lead', 'q1', 'w1', 'w2', 'w3']);
     expect(m.squad).toEqual(['c1mac>c4cert', 'lead>c1mac', 'lead>c2win', 'lead>c3notes']);
