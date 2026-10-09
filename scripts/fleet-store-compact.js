@@ -4,16 +4,16 @@
 // 0x1fffffe8 characters into one string; the live hub reached 608 MB on
 // 2026-10-09). The file is read as bytes and walked entry by entry, so no part
 // of it has to fit in one string. Each upload receipt that copied a whole
-// transcript becomes a receipt naming it, and transcript copies kept only because
-// a dispatch card's state moved are dropped: the same rules the hub applies when
-// it loads a file it can read (shared-store.js). Cards, devices, transcripts and
-// rewritten versions are kept as they are. The input is only read, and an
-// existing output file is never replaced.
+// transcript becomes a receipt naming it, transcript copies kept only because a
+// dispatch card's state moved are dropped, and a version a later save rewrote keeps
+// only the turns rewritten: the same rules the hub applies when it loads a file it
+// can read (shared-store.js). Cards, devices and transcripts are kept as they are.
+// The input is only read, and an existing output file is never replaced.
 //
 //   node scripts/fleet-store-compact.js <old store.json> <new store.json>
 const fs = require('fs');
 const path = require('path');
-const { SharedStore, historyReceipt, withoutMovedCopies } = require('../shared-store');
+const { SharedStore, historyReceipt, compactHistory } = require('../shared-store');
 
 const QUOTE = 0x22, SLASH = 0x5c, OPEN = 0x7b, CLOSE = 0x7d, LIST = 0x5b, LIST_END = 0x5d, COLON = 0x3a, COMMA = 0x2c;
 const space = (byte) => byte === 0x20 || byte === 0x0a || byte === 0x0d || byte === 0x09;
@@ -96,7 +96,7 @@ function compact(buf, now = Date.now()) {
       for (const [id, a, b] of members(buf, from, to)) {
         const record = parse(buf, a, b);
         stats.history++;
-        const kept = record && typeof record === 'object' ? withoutMovedCopies(record) : record;
+        const kept = record && typeof record === 'object' ? compactHistory(record) : record;
         stats.copiesBefore += Array.isArray(record && record.alternatives) ? record.alternatives.length : 0;
         stats.copiesAfter += Array.isArray(kept && kept.alternatives) ? kept.alternatives.length : 0;
         history[id] = kept;

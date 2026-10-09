@@ -59,7 +59,7 @@ test('the compacted file keeps cards, devices and transcripts, names each upload
   assert.equal(hub.data.seq, 42);
   const kept = hub.data.history['cap-1@dev-mac'];
   assert.deepEqual(kept.turns, old.history['cap-1@dev-mac'].turns);
-  assert.deepEqual(kept.alternatives.map((alt) => alt.turns[1].reply), ['最早的回复'], 'the rewritten reply stays, the card-move copy goes');
+  assert.deepEqual(kept.alternatives.map((alt) => alt.changed), [[{ index: 1, turn: old.history['cap-1@dev-mac'].alternatives[0].turns[1] }]], 'the rewritten reply stays (that turn only), the card-move copy goes');
   assert.deepEqual(hub.data.history['cap-2@dev-win'], old.history['cap-2@dev-win']);
   assert.deepEqual({ ...hub.data.ops['op-hist-0002'].body }, { sessionId: 'cap-1', deviceId: 'dev-mac', contentHash: kept.contentHash, updatedAt: kept.updatedAt, duplicate: true });
   assert.deepEqual(hub.data.ops['op-task-0001'].body, old.ops['op-task-0001'].body);

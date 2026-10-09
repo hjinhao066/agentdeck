@@ -1364,7 +1364,7 @@ loopback. A hub file too large for the service to load (Node reads at most
 `node scripts/fleet-store-compact.js <old store.json> <new store.json>`: it walks
 the file entry by entry, applies the rules the service applies when it loads a
 file (upload receipts name their transcript, copies kept only for card-state
-moves go), keeps cards, devices, transcripts and rewritten versions, only reads
+moves go, a rewritten version keeps the turns rewritten), keeps cards, devices and transcripts, only reads
 the old file and never replaces an existing one. Point `--data` at the new file's
 folder and keep the old file as the rollback. Each desktop keeps its settings in `userData/fleet.json` (not the
 deck `config.json`, which the window rewrites):
@@ -1408,8 +1408,10 @@ file written by an older hub has its whole-record receipts shrunk when it loads.
 (Copies per save of a growing chat took the live hub file to 608 MB, past what
 Node can read, on 2026-10-09.)
 All conflicting alternatives and captain turns are retained. Older transcript
-prefixes cannot shorten newer history; divergent saves retain the prior version
-in the history record's `alternatives`. A dispatch card's state moving on inside
+prefixes cannot shorten newer history; a divergent save keeps the earlier version
+in the history record's `alternatives` as its hash, time, length and the turns
+the save rewrote or dropped (with their index), not a whole copy; whole copies an
+older hub kept are reduced that way when it loads. A dispatch card's state moving on inside
 a turn (its `task` field) is the same turn going on, not a divergent save, so no
 copy is kept; copies an older hub kept that way are dropped when it loads. A
 round asks for transcripts by hash (`/v1/snapshot?history=hash`) and fetches

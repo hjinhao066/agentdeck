@@ -106,7 +106,7 @@ test('a save that rewrites a reply still keeps the version it replaced', (t) => 
   push('op-rewrite-0000', rewritten);
   const record = store.data.history['cap-1@dev-mac'];
   assert.equal(record.alternatives.length, 1);
-  assert.equal(record.alternatives[0].turns[1].reply, first[1].reply);
+  assert.deepEqual(record.alternatives[0].changed, [{ index: 1, turn: first[1] }], 'the turn as it was before the rewrite');
 });
 
 test('a hub file with copies kept for card-status moves drops them when it loads; real rewrites stay', (t) => {

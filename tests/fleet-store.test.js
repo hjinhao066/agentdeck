@@ -147,7 +147,7 @@ test('older captain uploads cannot shorten history and divergent saves retain bo
   push('op-history-diverged', 'c', [{ ...first, reply: 'different' }]);
   const record = hub.snapshot().history[0];
   assert.equal(record.turns[0].reply, 'different');
-  assert.deepEqual(record.alternatives[0].turns, [first, second]);
+  assert.deepEqual(record.alternatives[0].changed, [{ index: 0, turn: first }, { index: 1, turn: second }]);
 });
 
 test('a late operation replay remains idempotent after more than two thousand other operations', (t) => {

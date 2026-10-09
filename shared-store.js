@@ -81,19 +81,31 @@ function turnExtends(next, previous, moving = false) {
     return same(next[key], value);
   });
 }
-function savedOver(previous, next) {
-  const turns = Array.isArray(previous && previous.turns) ? previous.turns : [];
-  const later = Array.isArray(next && next.turns) ? next.turns : [];
-  return turns.every((turn, i) => turnExtends(later[i], turn, true));
+// An earlier version a save rewrote: its identity, its length and only the turns
+// that save rewrote or dropped, each with its index. (A whole copy per rewrite of a
+// long captain chat grew the hub by the whole chat each time.)
+function rewrittenVersion(previous, laterTurns) {
+  const { turns, alternatives, ...head } = previous;
+  const later = Array.isArray(laterTurns) ? laterTurns : [];
+  const changed = [];
+  turns.forEach((turn, index) => { if (!turnExtends(later[index], turn, true)) changed.push({ index, turn }); });
+  return { ...head, turnCount: turns.length, changed };
 }
-// Copies an older hub kept each time only card states moved: each is dropped when
-// the version saved after it carries it on. A version a later save rewrote stays.
-function withoutMovedCopies(record) {
+// What an older hub kept as whole copies: a copy kept only because card states
+// moved is dropped (the version after it carries it on); one a later save rewrote
+// keeps only the turns that save rewrote. Already-reduced versions stay as they are.
+function compactHistory(record) {
   const alternatives = Array.isArray(record.alternatives) ? record.alternatives : [];
-  if (!alternatives.length) return record;
+  if (!alternatives.some((alt) => alt && Array.isArray(alt.turns))) return record;
   const chain = [...alternatives, record];
-  const kept = alternatives.filter((alt, i) => !savedOver(alt, chain[i + 1]));
-  return kept.length === alternatives.length ? record : { ...record, alternatives: kept };
+  const kept = [];
+  alternatives.forEach((alt, i) => {
+    if (!alt || !Array.isArray(alt.turns)) { kept.push(alt); return; }
+    const later = (chain.slice(i + 1).find((version) => Array.isArray(version && version.turns)) || {}).turns || [];
+    if (alt.turns.every((turn, j) => turnExtends(later[j], turn, true))) return;
+    kept.push(rewrittenVersion(alt, later));
+  });
+  return { ...record, alternatives: kept };
 }
 
 // The answer kept for a replayed transcript upload names the record, it does not
@@ -181,7 +193,7 @@ class SharedStore {
       if (record && typeof record === 'object') saved.body = historyReceipt(record, saved.body.duplicate);
       if (typeof saved.at !== 'string') saved.at = at;
     }
-    for (const [key, record] of Object.entries(data.history)) if (record && typeof record === 'object') data.history[key] = withoutMovedCopies(record);
+    for (const [key, record] of Object.entries(data.history)) if (record && typeof record === 'object') data.history[key] = compactHistory(record);
     data.seq = Number.isInteger(data.seq) ? data.seq : 0;
     return data;
   }
@@ -331,8 +343,7 @@ class SharedStore {
     if (existing) {
       record.alternatives = existing.alternatives || [];
       if (!existing.turns.every((turn, i) => turnExtends(cleanTurns[i], turn, true))) {
-        const { alternatives, ...previous } = existing;
-        record.alternatives = [...record.alternatives, previous];
+        record.alternatives = [...record.alternatives, rewrittenVersion(existing, cleanTurns)];
       }
     }
     this.data.history[key] = record;
@@ -362,4 +373,4 @@ class SharedStore {
   }
 }
 
-module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard, historyReceipt, withoutMovedCopies };
+module.exports = { SharedStore, LEASE_MS, MUTABLE_KEYS, isDeviceId, isSessionId, stripSecrets, publicCard, historyReceipt, compactHistory };
