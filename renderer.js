@@ -3913,7 +3913,9 @@ function statusScreen(term) {
   for (let y = buf.baseY; y < buf.baseY + term.rows; y++) {
     const line = buf.getLine(y);
     const text = line ? line.translateToString(false) : '';
-    if (line?.isWrapped && lines.length) lines[lines.length - 1] += text;
+    // ConPTY leaves a full row to autowrap, so the spinner row under it reads as wrapped too:
+    // glued to the end of that row it no longer starts a line and the turn looked done.
+    if (line?.isWrapped && lines.length && !/^[✻✽✳✶✢✺∴*·⠀-⣿]\s+\S/.test(text)) lines[lines.length - 1] += text;
     else lines.push(text);
   }
   let text = lines.map((line) => line.trimEnd()).join('\n');

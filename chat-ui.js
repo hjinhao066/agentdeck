@@ -1167,7 +1167,17 @@
     const sawOutput = (entry.lastOutputAt || 0) - open.startedAt > 600;
     // state done already waited out the status debounce. Cursor blink keeps
     // lastOutputAt fresh and must not hold a finished turn open.
-    if ((entry.state === 'done' && sawOutput) || quiet >= 6000) finalizeTurn(id);
+    if ((entry.state === 'done' && sawOutput) || quiet >= 6000) {
+      // Claude can sit seconds after Enter before its first spinner (a recap after a long
+      // idle, a prompt hook; slower under Windows ConPTY). Closed then, the turn kept an
+      // empty reply for good: wait a while for one.
+      if (Date.now() - open.startedAt < REPLY_WAIT && !replySoFar(entry, open)) return;
+      finalizeTurn(id);
+    }
+  }
+  const REPLY_WAIT = 30_000;
+  function replySoFar(entry, open) {
+    try { return !!C.extractReply(readLines(entry.term, open.marker), open.sent, entry.term.cols); } catch (_) { return true; }
   }
   function onExit(id) { finalizeTurn(id); }
 
@@ -1390,6 +1400,7 @@
       window.deck.ptyInput(col.id, '\r');
       host.manualPromptSent(col.id, turn, o.userInitiated === true);
       entry.state = 'working';
+      entry.idleTicks = 0;            // restart the working→done debounce: the old idle count would end this turn on the next tick
       entry.backgroundOnly = false;   // the turn just sent is real work, until the next status tick says otherwise
       entry.hasWorked = true;
       entry.lastOutputAt = Date.now();

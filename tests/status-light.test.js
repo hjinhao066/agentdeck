@@ -318,3 +318,26 @@ test('Windows Captain: finished turn, wrapped into its truncated footer, is done
     assert.equal(classify(statusScreen(terminal([...rows.slice(0, 2), { text: marker }, ...rows.slice(4)])), { hasWorked: true }, 'claude', true), 'working', marker);
   }
 });
+
+// 19:05 the same day: the echoed prompt's last row was full, so ConPTY let it autowrap and
+// the spinner row under it carried the wrap flag. Glued to the end of the prompt it no
+// longer started a line, read as done, and the phone message's turn closed with no reply.
+test('Windows Captain: a spinner row flagged as wrapped under a full row is working', () => {
+  const rows = [
+    '❯ 【连通测试 WEBTEST-190509-3853】这是 Mac       ',
+    { text: '  要空格），后面加「手机公网闭环通了」。         ' },
+    { text: '· Nebulizing…                                    ' },
+    { text: '  ⎿  Tip: Run claude --continue or claude        ' },
+    '     --resume to resume a conversation',
+    { text: '─'.repeat(49) },
+    { text: '❯                                                ' },
+    { text: '─'.repeat(49) },
+    '  Model: Sonnet 5.5 | Thinking: high | Session…  ',
+    '  ⏵⏵ bypass permissions on · 1 shell · ← 1 age…  ',
+  ];
+  assert.equal(classify(statusScreen(terminal(rows)), { state: 'working', hasWorked: true }, 'claude', true), 'working');
+  // a finished row starting the same way stays done
+  rows[2] = { text: '✻ Cooked for 3s · done 7:05 PM · 1 shell still   ' };
+  rows[3] = { text: '  running                                        ' };
+  assert.equal(classify(statusScreen(terminal(rows)), { state: 'working', hasWorked: true }, 'claude', true), 'done');
+});
