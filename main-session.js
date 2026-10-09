@@ -2701,7 +2701,11 @@
           + (waiting ? `\n排队等空位：${waiting}` : '') + batteryLine() + (history ? '\n' + history : '') };
       }
       case 'main-receipts-snapshot': {
-        for (const item of s.pending) {
+        // Filter receipts based on caller hierarchy (same as main-receipts)
+        const filteredPending = caller && caller.parentTaskId
+          ? s.pending.filter((r) => r.parentColId === caller.id)
+          : s.pending.filter((r) => !r.parentColId);
+        for (const item of filteredPending) {
           if (!item.receiptId) {
             s.receiptSeq = (Number.isSafeInteger(s.receiptSeq) ? s.receiptSeq : 0) + 1;
             item.receiptId = 'r-' + Date.now().toString(36) + '-' + s.receiptSeq.toString(36);
@@ -2709,13 +2713,20 @@
         }
         save();
         host.flushConfig?.();
-        return { done: true, result: JSON.stringify({ receipts: s.pending.slice(0, 50) }) };
+        return { done: true, result: JSON.stringify({ receipts: filteredPending.slice(0, 50) }) };
       }
       case 'main-receipts-ack': {
         if (!Array.isArray(message.receiptIds) || message.receiptIds.length > 50 || message.receiptIds.some((id) => typeof id !== 'string' || !/^[a-z0-9-]{1,100}$/.test(id))) throw new Error('Invalid receipt ids.');
+        // Filter ack receipts based on caller hierarchy
+        const filteredPending = caller && caller.parentTaskId
+          ? s.pending.filter((r) => r.parentColId === caller.id)
+          : s.pending.filter((r) => !r.parentColId);
         const ids = new Set(message.receiptIds);
-        const count = s.pending.length;
-        s.pending = s.pending.filter((p) => !ids.has(p.receiptId));
+        const count = filteredPending.length;
+        s.pending = s.pending.filter((p) => !(ids.has(p.receiptId) && (
+          (caller && caller.parentTaskId && p.parentColId === caller.id) ||
+          (!caller || !caller.parentTaskId) && !p.parentColId
+        )));
         save();
         host.flushConfig?.();
         return { done: true, result: JSON.stringify({ acknowledged: count - s.pending.length }) };
@@ -2739,11 +2750,23 @@
           if (current && current.id !== message.watcher && current.seq > seq) return { done: true, result: M.LISTENER_SUPERSEDED };
           listener = { id: message.watcher, seq, at: now, colId: s.colId };
         }
-        if (!s.pending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
+        // Filter receipts based on caller hierarchy
+        // Main captain sees receipts with no parentColId (root-level receipts)
+        // Sub-captain sees receipts where parentColId === their colId (receipts from their children)
+        const filteredPending = caller && caller.parentTaskId
+          ? s.pending.filter((r) => r.parentColId === caller.id)
+          : s.pending.filter((r) => !r.parentColId);
+        if (!filteredPending.length) return { done: true, result: message.wait ? '' : '没有新的回执。' };
         // The CLI has the text once this returns. Record that before the copy
         // into inflight so the same config save survives relaunch and Relay.
-        rememberReceiptsSeen(s.pending);
-        const text = takePending(false, undefined, true);
+        rememberReceiptsSeen(filteredPending);
+        const text = M.receiptsForModel(filteredPending);
+        // Remove filtered receipts from pending
+        const filteredSet = new Set(filteredPending.map((p) => p.receiptId));
+        const turnId = window.ChatUI.turnsOf(s.colId).findLast((t) => t.kind !== 'task' && !t.done)?.id || '';
+        s.inflight = [...s.inflight, ...filteredPending.map(({ viaChannel: old, ...p }) => ({ ...p, deliveryTurnId: turnId, takenAt: Date.now(), ...(true ? { viaChannel: true } : {}) }))];
+        s.pending = s.pending.filter((p) => !filteredSet.has(p.receiptId));
+        save();
         return { done: true, result: text || '没有新的回执。' };
       }
       case 'main-peek': {

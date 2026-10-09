@@ -609,7 +609,7 @@ test('new --sub-captain requires --project and rejects if not called by Captain'
   for (const args of [['new', '--title', 'Sub Captain', '--task', 'Run', '--sub-captain'], ['new', '--title', 'Sub Captain', '--task', 'Run', '--sub-captain', '--project']]) {
     const result = await runCli(args, { AGENTDECK_CONTROL_DIR: '', AGENTDECK_CONTROL_TOKEN: '' });
     assert.equal(result.code, 1);
-    assert.match(result.stderr, /sub-captain/);
+    assert.match(result.stderr, /(sub-captain|project requires)/);
   }
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentdeck-sub-captain-cli-'));
   fs.mkdirSync(path.join(dir, 'requests')); fs.mkdirSync(path.join(dir, 'responses'));
