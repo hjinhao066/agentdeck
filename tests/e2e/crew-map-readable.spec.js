@@ -36,6 +36,9 @@ async function launch(crew) {
     tasks.push({ id: 'task-' + id, colId: id, gen: 1, status: st, title, project, sentAt, startedAt: sentAt + 30_000, doneAt: now - 3 * 60_000, turnId: '', receipt: null, important: i === 0 });
   });
   fs.writeFileSync(specFile, JSON.stringify(screens));
+  // the default seat's directory records the account signed in there (no credentials): every card names it
+  fs.mkdirSync(path.join(profile, 'seats-home'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'agentdeck.dev@example.test' }, hasCompletedOnboarding: true }));
   // These are layout states, not restartable tasks with a saved instruction.
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3, columns,
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks } }));
@@ -122,8 +125,8 @@ for (const [name, spec, [w, h]] of [
     await open(w, h, theme, crew.length); await settled();
     const g = await read(), type = await typePx();
     readable(type);
-    // the smallest there are among them: a card's model, time and 高优 chip
-    for (const k of ['.agent-model-label', '.cm-time', '.cm-prio span']) expect(type.some((t) => t.kind === k), k).toBe(true);
+    // the smallest there are among them: a card's model, account, time and 高优 chip
+    for (const k of ['.agent-model-label', '.seat-acct bdi', '.cm-time', '.cm-prio span']) expect(type.some((t) => t.kind === k), k).toBe(true);
     // as large as it may be shown, at least: 10 / 11.5 of the drawn size (124% of the map's own 100%)
     expect(g.scale).toBeGreaterThanOrEqual(10 / 11.5 - 1e-6);
     expect(g.label).toBe(`${Math.round(g.scale / 0.7 * 100)}%`);

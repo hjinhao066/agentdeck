@@ -77,6 +77,10 @@ async function launch(cards = CREW) {
     tasks.push({ id: 'task-' + id, colId: id, gen: 1, status: st, title, project, sentAt, startedAt: sentAt + 30_000, doneAt: now - (st === 'done' ? 3 + i % 3 : 60 - i * 2) * 60_000, turnId: '', receipt, ...progress });
   });
   fs.writeFileSync(specFile, JSON.stringify(screens));
+  // the default seat's directory records the account signed in there (a stand-in record, no credentials): cards
+  // name the seat by that account, as the sidebar does
+  fs.mkdirSync(path.join(profile, 'seats-home'), { recursive: true });
+  fs.writeFileSync(path.join(profile, 'seats-home', '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'agentdeck.dev@example.test' }, hasCompletedOnboarding: true }));
   // These are layout states, not restartable tasks with a saved instruction.
   fs.writeFileSync(path.join(profile, 'config.json'), JSON.stringify({ perpetualCaptain: { enabled: false }, resumeOnRestart: false, theme: 'dark', fitWindow: true, fitCols: 3, columns,
     mainSession: { colId: 'cap', cmd: FAKE, gen: 1, pending: [], inflight: [], fresh: false, crewMarked: true, waitlist: [], tasks } }));
@@ -311,13 +315,15 @@ test('a card reads in three layers and its line is news: never a CLI update noti
     return line.isConnected ? line.getAnimations().map((a) => [...new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k)))].filter((k) => ['opacity', 'transform'].includes(k)).sort()) : 'rebuilt';
   }, round++)).toEqual([['opacity', 'transform']]);
   await expect(page.locator('.cm-node[data-node-id="w23"] .cm-meta > .cm-line')).toHaveText(/^已核完 42 项，没有误删/);
-  // the account behind the seat is a small text tag on the card (a seat's flag stays in the sidebar), named
-  // in full on hover; it gives way first: a long account name is cut with an ellipsis, never the status or the model
+  // the account signed in behind the seat is a small text tag on the card: the part of its address before the @,
+  // as the sidebar names it (never a fixed seat name or flag), named in full on hover; it gives way first: a long
+  // account name is cut, from the left, never the status or the model
+  await expect.poll(() => page.evaluate(() => [...new Set([...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => n.textContent.trim()))]), { timeout: 15000 }).toEqual(['agentdeck.dev']);
   const seats = await page.evaluate(() => [...document.querySelectorAll('.cm-node:not(.kind-captain) .agent-seat-label')].map((n) => [n.textContent.trim(), n.getAttribute('aria-label') || '', getComputedStyle(n).display, n.scrollWidth <= n.clientWidth]));
   expect(seats.length).toBeGreaterThan(0);
   for (const [text, label, display, whole] of seats) {
-    expect(text).toBeTruthy(); expect(text).not.toMatch(/\p{Regional_Indicator}|\p{Extended_Pictographic}/u);
-    expect(label).toMatch(/^当前账号：/); expect(display).not.toBe('none'); expect(whole, `${text} shows whole`).toBe(true);
+    expect(text).not.toMatch(/\p{Regional_Indicator}|\p{Extended_Pictographic}/u);
+    expect(label).toMatch(/^当前账号：agentdeck\.dev@example\.test · /); expect(display).not.toBe('none'); expect(whole, `${text} shows whole`).toBe(true);
   }
   const long = await page.evaluate(() => {
     const n = document.querySelector('.cm-node[data-node-id="w2"]'), seat = n.querySelector('.agent-seat-label'), st = n.querySelector('.cm-status'), model = n.querySelector('.agent-model-label'), more = n.querySelector('.cm-more');
@@ -327,6 +333,8 @@ test('a card reads in three layers and its line is news: never a CLI update noti
       inside: r(seat).left >= r(st).right && r(seat).right <= r(more).left + 0.5, letters: r(seat).width >= 28, named: /^当前账号：/.test(seat.title) };
   });
   expect(long).toEqual({ seatCut: true, ellipsis: 'ellipsis', statusCut: false, modelCut: false, inside: true, letters: true, named: true });
+  // (cut from the left, as everywhere an account is named: the end that tells hjinhao066us from hjinhao066 stays)
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('.cm-node[data-node-id="w2"] .agent-seat-label')).direction)).toBe('rtl');
   // 队长's tally and the bar of the whole crew under it
   const fleet = await page.evaluate(() => [...document.querySelectorAll('.cm-node.kind-captain .cm-fleet i')].map((i) => [i.className, Number(i.style.flexGrow)]));
   expect(fleet).toEqual([['st-working', 15], ['st-input', 2], ['st-queued', 2], ['st-failed', 2], ['st-stopped', 1], ['st-done', 2]]);
