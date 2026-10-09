@@ -13,10 +13,11 @@
 //   can, no frame much taller than the rest (CrewMapCore.planPage). The same
 //   frames can also stand in lanes at 100%, as many across as the window holds,
 //   the rest under the lane that ends highest (CrewMapCore.planAcross): when
-//   the one row fits only shrunk and the lanes show the whole map at least a
-//   fifth larger (WRAP_GAIN: six small frames squeezed into one thin row), the
-//   frames wrap like lines of text. A map too big for one page either way
-//   stands in lanes at 100% and is panned.
+//   the one row fits only shrunk and the lanes show the whole map clearly
+//   larger (C.WRAP_GAIN: six small frames squeezed into one thin row), the
+//   frames wrap like lines of text, and stay so until one row is clearly
+//   better again (C.WRAP_KEEP). A map too big for one page either way stands
+//   in lanes and is panned (CrewMapCore.arrangePage).
 //   Once the user drags a card or a frame, that plan is kept under their
 //   moves until they tidy or go back to 智能一页, so a window resize never
 //   pulls the ground from under a hand-placed map.
@@ -45,7 +46,6 @@
   const MOVE_MS = 280;    // frames and cards gliding to a new place (shorter than the view's own glide)
   const GRAIN = 28;       // canvas px between the dots of the grid under the map
   const RESIZE_MS = 160;  // a window resized: how long it rests before the map arranges itself once more
-  const WRAP_GAIN = 1.2;  // one row of frames gives way to lanes when they show the whole map at least a fifth larger
   // Spacing given up when the roomy map just misses the window at 100% and this brings all of it in.
   const TIGHT = { captainH: 104, fanY: 40, rowGap: 10, padBottom: 12 };
   const DRAG_PX = 4;
@@ -498,23 +498,16 @@
   }
   // Actual bounds of a layout, including manual moves, gap-routed lines and optional return cables.
   const FIT_INSET = { top: 8, right: 8, bottom: 8, left: 8 };
-  function fitBounds(l) {
-    const boxes = [l.captain, ...l.groups, ...l.nodes.values(), l.fold].filter(Boolean);
-    const points = C.routes(lastMap, l, dims).filter((r) => r.type !== 'return' || showReturn).flatMap((r) => r.points);
-    return {
-      left: Math.min(...boxes.map((b) => b.x), ...points.map((p) => p[0])) - 16,
-      top: Math.min(...boxes.map((b) => b.y), ...points.map((p) => p[1])) - 16,
-      right: Math.max(...boxes.map((b) => b.x + b.w), ...points.map((p) => p[0])) + 16,
-      bottom: Math.max(...boxes.map((b) => b.y + b.h), ...points.map((p) => p[1])) + 16,
-    };
-  }
+  // the screen's density: how many device pixels a CSS pixel takes (the least scale keeps text readable on it)
+  const density = () => window.devicePixelRatio || 1;
+  const fitBounds = (l) => C.fitBounds(lastMap, l, dims, showReturn);
   function fit(smooth) {
     if (!lay) return;
     const bounds = fitBounds(lay), inset = FIT_INSET;
     // A map that shows whole fills the window, centred: as large as the page holds it, up to PAGE_MAX_SCALE of its
-    // own 100% (智能一页's one-row plan goes down to PAGE_MIN_SCALE to fit). A map taller than a page: lanes at 100%.
-    const limits = pageFits ? { min: plan && plan.page ? FIT * C.PAGE_MIN_SCALE : FIT, max: FIT * C.PAGE_MAX_SCALE } : { min: FIT, max: FIT };
-    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, limits);
+    // own 100%, never so small that a card's smallest text is under 10 device px (C.fitLimits). A map taller than
+    // a page: lanes at their scale, from the top.
+    view = C.computeFit(bounds, { w: vpEl.clientWidth, h: vpEl.clientHeight }, inset, C.fitLimits({ plan, pageFits }, density()));
     // too tall for the window: start at the top (队长 and the first rows), not mid-map
     if ((bounds.bottom - bounds.top) * view.scale > vpEl.clientHeight - inset.top - inset.bottom) {
       view.y = inset.top - bounds.top * view.scale;
@@ -560,46 +553,19 @@
     const tightly = { ...TIGHT, captainH: TIGHT.captainH + (capWrap ? CAP_ROW : 0) };
     const build = (p) => C.layout(map, { ...base, ...(p.tight ? tightly : {}), lanes: p.lanes, caps: p.caps });
     // the whole layout shows in this window at `least` of the drawn size or more
-    const whole = (l, least = FIT) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= least - 1e-9;
-    // how large the fit would show it (up to PAGE_MAX_SCALE of the map's own 100%)
-    const shown = (l) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: FIT * C.PAGE_MAX_SCALE }).scale;
+    const whole = (l, least) => C.computeFit(fitBounds(l), { w: vw, h: vh }, FIT_INSET, { min: 0, max: 1 }).scale >= least - 1e-9;
     const pinned = hasManual() ? saved().plan : null;
     if (pinned) {
-      const l = build(pinned), keys = new Set(pinned.lanes.flat());
+      const l = build(pinned), keys = new Set(pinned.lanes.flat()), sc = C.scalesFor(density());
       // still the same projects on the canvas: the hand-placed map keeps its ground
-      if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l, pinned.page ? FIT * C.PAGE_MIN_SCALE : FIT); return l; }
+      if (l.groups.length === keys.size && l.groups.every((g) => keys.has(g.key))) { plan = pinned; pageFits = whole(l, pinned.page ? sc.floor : sc.lanes); return l; }
     }
     if (!hasManual() && saved().plan) { saved().plan = null; host.save(); }   // nothing hand-placed is left to stand on it
-    const size = { w: (vw - FIT_INSET.left - FIT_INSET.right) / FIT, h: (vh - FIT_INSET.top - FIT_INSET.bottom) / FIT };
-    // 智能一页: every project across one row, its columns chosen to show the whole map on one page
-    const onePage = C.planPage(map, size, { ...base, keep: plan && plan.page ? plan : null });
-    // The same columns in lanes at 100%: as many frames across as the window holds, the rest under them.
-    // Roomy while the whole map shows at 100%; tight when only that brings it all in.
-    const pick = (tight) => {
-      const p = C.planAcross(map, size, { ...base, ...(tight ? tightly : {}), caps: onePage.caps, keep: plan && !plan.page && planW === vw && !!plan.tight === tight ? plan : null });
-      const next = { lanes: p.lanes, caps: p.caps, tight };
-      return { plan: next, lay: build(next) };
-    };
-    let chosen = pick(false);
-    let lanesFit = whole(chosen.lay);
-    if (!lanesFit) { const tight = pick(true); if (whole(tight.lay)) { chosen = tight; lanesFit = true; } }
-    // One row stands while it shows the map about as large as the lanes would: a row that fits only shrunk wraps
-    // instead, like lines of text, when the lanes show the whole map clearly larger (WRAP_GAIN).
-    if (onePage.fits) {
-      const next = { lanes: onePage.lanes, caps: onePage.caps, tight: false, page: true };
-      const l = build(next);
-      if (whole(l, FIT * C.PAGE_MIN_SCALE) && !(lanesFit && shown(chosen.lay) >= shown(l) * WRAP_GAIN)) {
-        plan = next; planW = vw; pageFits = true;
-        if (hasManual()) { saved().plan = plan; host.save(); }
-        return l;
-      }
-    }
-    // Taller than a page even then: the lanes at 100%, panned down.
-    pageFits = lanesFit;
-    plan = chosen.plan;
-    planW = vw;
+    // 智能一页 for this window (CrewMapCore.arrangePage): one row or lanes, the one in use kept while it is nearly as good
+    const r = C.arrangePage(map, { w: vw, h: vh }, { ...base, tightly, inset: FIT_INSET, returns: showReturn, dpr: density() }, { plan, planW });
+    plan = r.plan; planW = vw; pageFits = r.pageFits;
     if (hasManual()) { saved().plan = plan; host.save(); }
-    return chosen.lay;
+    return r.lay;
   }
   function zoomAt(cx, cy, factor) {
     const scale = Math.min(C.MAX_SCALE, Math.max(C.MIN_SCALE, view.scale * factor));
@@ -937,7 +903,7 @@
     host.save();
     render({ smooth: true });
     setUndo(snap);
-    say(pageFits ? '' : '一页放不下：保持 100% 大小，其余部分向下滚动查看');
+    say(pageFits ? '' : `一页放不下：保持 ${C.zoomPercent(view.scale)}% 大小，其余部分向下滚动查看`);
   }
   function undoArrange() {
     const u = undo;
@@ -1025,6 +991,9 @@
     // A window being resized: the map arranges itself at once, then (if the size moved on meanwhile) once
     // more when the window has rested RESIZE_MS, gliding there; a size it was already arranged for does nothing.
     let resizeT = 0, resizeAt = 0;
+    // the window moved to a screen of another density: the least the map may show at moves with it
+    const watchDensity = () => matchMedia(`(resolution: ${density()}dppx)`).addEventListener('change', () => { watchDensity(); if (lay) render({ smooth: true }); }, { once: true });
+    watchDensity();
     new ResizeObserver(() => {
       const ready = () => host.visible() && vpEl.clientWidth && !drag && vpEl.clientWidth + 'x' + vpEl.clientHeight !== drawnFor;
       clearTimeout(resizeT);
